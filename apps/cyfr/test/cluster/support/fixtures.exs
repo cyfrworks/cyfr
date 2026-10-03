@@ -30,19 +30,23 @@ defmodule Cyfr.Cluster.Fixtures do
               Arca.Cache,
               Arca.Cache.Keys,
               Arca.ExecutionEvents,
-              Cyfr.Actor,
-              Cyfr.Authority.Budget,
-              Cyfr.Boot,
-              Cyfr.Execution,
-              Cyfr.Execution.Events,
-              Cyfr.UUID7,
+              Prima.Actor,
+              Prima.Authority.Budget,
+              Prima.Boot,
+              Prima.Test.AuthorityFixtures,
+              Crucible,
+              Crucible.Events,
+              Prima.UUID7,
+              CyfrWeb.ContextGuard,
               Sanctum.Authority.BudgetCounter,
               Sanctum.Caller,
               Sanctum.Context,
               Sanctum.Provisioning,
               Sanctum.Session,
               Sanctum.Tenancy.Athanors,
-              Sanctum.Tenancy.Users
+              Sanctum.Tenancy.Users,
+              Sanctum.Test.ConsentFixtures,
+              Sanctum.TestContext
             ]}
 
   @doc """
@@ -55,11 +59,11 @@ defmodule Cyfr.Cluster.Fixtures do
   """
   @spec athanor!(String.t()) :: map()
   def athanor!(label) do
-    id = Cyfr.UUID7.generate_id("ath")
+    id = Prima.UUID7.generate_id("ath")
     slug = "cell-#{label}-#{unique_of(id)}"
 
     {:ok, athanor} =
-      Arca.Athanors.insert(Cyfr.Actor.system(), %{
+      Arca.Athanors.insert(Prima.Actor.system(), %{
         id: id,
         kind: "group",
         name: "Cluster #{label}",
@@ -74,9 +78,57 @@ defmodule Cyfr.Cluster.Fixtures do
     id |> String.split("_") |> List.last() |> String.replace("-", "") |> String.slice(0, 20)
   end
 
+  @doc """
+  A stored grant in `athanor_id` whose policy names a storage path the
+  grammar no longer admits (`data//secrets/`), as a head committed before
+  the grammar refused that spelling reads. Spelled `:revoked`, the same
+  grant leaves every list the boot check of stored grants reads. Answers
+  its reference.
+  """
+  @spec noncanonical_grant!(String.t(), String.t(), :active | :revoked) :: String.t()
+  def noncanonical_grant!(athanor_id, label, status \\ :active) do
+    id = "rg-#{label}-#{unique_of(athanor_id)}"
+    ref = "catalyst:local.#{id}"
+
+    policy =
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          ref => %{
+            "limits" => Prima.Test.AuthorityFixtures.limits_map(),
+            "edges" => %{
+              "@ingress" => %{
+                "storage" => %{"paths" => ["data/ok/", "data//secrets/"], "actions" => ["read"]}
+              }
+            }
+          }
+        }
+      })
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.seed_head!(
+        %{Sanctum.TestContext.local() | athanor_id: athanor_id},
+        %{id: id, kind: :owner, source_ref: ref, label: "default", status: status},
+        %{
+          id: "cons-#{id}",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: "sha256:shape-#{id}",
+          commit_digest: "sha256:commit-#{id}",
+          resolved_policy: policy,
+          activation: %{ref => "sha256:act-#{id}"},
+          vault_refs: []
+        }
+      )
+
+    ref
+  end
+
   @doc "An actor in `athanor_id`, as every fixture here writes under."
   @spec actor(String.t()) :: struct()
-  def actor(athanor_id), do: Cyfr.Actor.in_athanor(athanor_id)
+  def actor(athanor_id), do: Prima.Actor.in_athanor(athanor_id)
 
   @doc "A thread of `athanor_id`, with no turn holding it."
   @spec thread!(String.t(), String.t()) :: map()
@@ -97,7 +149,8 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc """
   Accept a message on `thread_id` that opens an `accepted` turn, and answer
   the turn and the thread's consumed sequence — what a claimant names in
-  its compare-and-set.
+  its compare-and-set. The turn is a person's message from the console, so
+  its origin is `interactive`.
   """
   @spec accept!(String.t(), String.t(), String.t()) :: map()
   def accept!(athanor_id, thread_id, text) do
@@ -107,9 +160,16 @@ defmodule Cyfr.Cluster.Fixtures do
           author: "usr_cluster",
           kind: "text",
           content: text,
-          client_id: "cluster-#{System.unique_integer([:positive])}"
+          # Unique across the cell: the counter restarts on every member.
+          client_id: "cluster-#{node()}-#{System.unique_integer([:positive])}"
         },
-        turn: %{agent: "agent:local.aqua", requested_by: "system", model: nil, options: %{}}
+        turn: %{
+          agent: "agent:local.aqua",
+          requested_by: "system",
+          model: nil,
+          options: %{},
+          origin: :interactive
+        }
       })
 
     {:ok, thread} = Arca.ThreadStorage.get(actor(athanor_id), thread_id)
@@ -121,15 +181,23 @@ defmodule Cyfr.Cluster.Fixtures do
   claim is taken in the same transaction naming the sequence the claimant
   read, and `turns.runner_id` becomes this member's boot.
 
-  Answers `{:ok, turn}` or the refusal — `{:error, {:busy, holder}}` when
-  another turn holds the thread, `{:error, :stale}` when a peer accepted
-  the next message first.
+  Answers `{:ok, turn}` or the refusal — `{:error, {:held_elsewhere,
+  holder}}` when another turn holds the thread, `{:error, :stale}` when a
+  peer accepted the next message first.
   """
   @spec start_turn(String.t(), String.t(), non_neg_integer(), pos_integer(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def start_turn(athanor_id, turn_id, turn_seq, fence, opts \\ []) do
     attrs =
-      with_root(%{fence: fence, turn_seq: turn_seq}, Keyword.get(opts, :root, false), athanor_id)
+      with_root(
+        %{
+          fence: fence,
+          turn_seq: turn_seq,
+          recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+        },
+        Keyword.get(opts, :root, false),
+        {athanor_id, turn_id}
+      )
 
     case Arca.TurnStorage.start(actor(athanor_id), turn_id, attrs) do
       {:ok, turn} -> {:ok, %{id: turn.id, status: turn.status, runner_id: turn.runner_id}}
@@ -139,20 +207,38 @@ defmodule Cyfr.Cluster.Fixtures do
 
   # A turn that will be suspended needs the root execution a real one
   # carries: `suspend/3` closes the attempt's running interval, and a turn
-  # with no attempt has none to close.
+  # with no attempt has none to close. The root records the origin the
+  # turn was accepted under (`accept!/3`'s).
   defp with_root(attrs, false, _athanor_id), do: attrs
 
-  defp with_root(attrs, true, athanor_id) do
+  defp with_root(attrs, true, {athanor_id, turn_id}) do
     {:ok, %{execution: execution, attempt: attempt}} =
-      Arca.Execution.admit(%{
-        id: Cyfr.UUID7.execution_id(),
-        reference: "formula:local.cluster-turn:1.0.0",
-        user_id: "usr_cluster",
-        athanor_id: athanor_id,
-        component_type: "formula"
-      })
+      Arca.Execution.admit(
+        %{
+          id: Prima.UUID7.execution_id(),
+          reference: "agent:local.aqua",
+          user_id: "usr_cluster",
+          athanor_id: athanor_id,
+          component_type: "agent",
+          kind: "turn",
+          turn_id: turn_id,
+          origin: :interactive
+        },
+        standing(athanor_id)
+      )
 
     Map.merge(attrs, %{root_execution_id: execution.id, attempt: attempt.attempt})
+  end
+
+  # A root's admission reads its athanor's standing now and checks it again
+  # in the admission transaction, as `Crucible.Record` does.
+  defp standing(athanor_id) do
+    {:ok, grant} =
+      Sanctum.ExecutionStanding.capture(
+        Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+      )
+
+    [grant: grant, verify: &Sanctum.ExecutionStanding.verify/1]
   end
 
   @doc """
@@ -190,7 +276,11 @@ defmodule Cyfr.Cluster.Fixtures do
   """
   @spec recover_turn(String.t(), String.t(), pos_integer()) :: {:ok, map()} | {:error, term()}
   def recover_turn(athanor_id, turn_id, fence) do
-    case Arca.TurnStorage.recover(actor(athanor_id), turn_id, %{fence: fence}) do
+    case Arca.TurnStorage.recover(actor(athanor_id), turn_id, %{
+           fence: fence,
+           grant: :stored,
+           verify: &Sanctum.ExecutionStanding.verify/1
+         }) do
       {:ok, turn} -> {:ok, turn(turn)}
       other -> other
     end
@@ -225,17 +315,17 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "A pending approval on `thread_id`, as a row a decision is a compare-and-set on."
   @spec approval!(String.t(), String.t()) :: String.t()
   def approval!(athanor_id, thread_id) do
-    {:ok, thread} = Arca.ThreadStorage.get(actor(athanor_id), thread_id)
-    id = Cyfr.UUID7.generate_id("msg")
+    id = Prima.UUID7.generate_id("msg")
 
-    Arca.ThreadStorage.insert_message!(actor(athanor_id), thread, %{
-      id: id,
-      author: "usr_cluster",
-      kind: "approval",
-      status: "pending",
-      content: "may I?",
-      approval_id: id
-    })
+    {:ok, _row} =
+      Arca.ThreadStorage.append(actor(athanor_id), thread_id, %{
+        id: id,
+        author: "usr_cluster",
+        kind: "approval",
+        status: "pending",
+        content: "may I?",
+        approval_id: id
+      })
 
     id
   end
@@ -260,15 +350,18 @@ defmodule Cyfr.Cluster.Fixtures do
     end
   end
 
-  @doc "Spend `turn_id`'s recovery budget down to the cap, as three recoveries would."
+  @doc "Spend `turn_id`'s recovery budget down to its stored limit, as that many recoveries would."
   @spec spend_recoveries(String.t(), String.t()) :: :ok
   def spend_recoveries(athanor_id, turn_id) do
     import Ecto.Query, only: [from: 2]
 
     {1, _} =
       Arca.Repo.update_all(
-        from(t in Arca.Schemas.Turn, where: t.id == ^turn_id and t.athanor_id == ^athanor_id),
-        set: [recovery_attempts: Arca.TurnStorage.recovery_cap()]
+        from(t in Arca.Schemas.Turn,
+          where: t.id == ^turn_id and t.athanor_id == ^athanor_id,
+          update: [set: [recovery_attempts: t.recovery_limit]]
+        ),
+        []
       )
 
     :ok
@@ -294,7 +387,7 @@ defmodule Cyfr.Cluster.Fixtures do
 
   @doc "This member's boot id."
   @spec boot() :: String.t()
-  def boot, do: Cyfr.Boot.id()
+  def boot, do: Prima.Boot.id()
 
   # ---------------------------------------------------------------------------
   # Budgets, rates and schedules — the tenant's durable ceilings
@@ -303,6 +396,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc """
   A root execution of `athanor_id` carrying the invocation reservation its
   authority's budget names, so both members can charge against one cap.
+  It is a run started over the API, so its origin is `programmatic`.
   """
   @spec budget!(String.t(), pos_integer()) :: map()
   def budget!(athanor_id, cap) do
@@ -311,13 +405,14 @@ defmodule Cyfr.Cluster.Fixtures do
     {:ok, %{execution: root, attempt: attempt}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "formula:local.cluster:1.0.0",
           user_id: "usr_cluster",
           athanor_id: athanor_id,
-          component_type: "formula"
+          component_type: "formula",
+          origin: :programmatic
         },
-        reservation: %{budget_id: budget_id, cap: cap}
+        [reservation: %{budget_id: budget_id, cap: cap}] ++ standing(athanor_id)
       )
 
     %{budget_id: budget_id, root: root.id, attempt: attempt.attempt}
@@ -344,7 +439,10 @@ defmodule Cyfr.Cluster.Fixtures do
   @spec try_acquire(String.t(), pos_integer()) :: :ok | {:error, atom()}
   def try_acquire(budget_id, cap),
     do:
-      Sanctum.Authority.BudgetCounter.try_acquire(%Cyfr.Authority.Budget{id: budget_id, cap: cap})
+      Sanctum.Authority.BudgetCounter.try_acquire(%Prima.Authority.Budget{
+        id: budget_id,
+        cap: cap
+      })
 
   @doc "Claim one of `bucket`'s allowance from this member."
   @spec take_rate(String.t(), String.t(), non_neg_integer(), pos_integer()) :: term()
@@ -378,8 +476,8 @@ defmodule Cyfr.Cluster.Fixtures do
   scoped owner a fill runs under. `{:ok, claim}` or
   `{:error, :provisioning_busy}` — what a second first touch is answered.
   """
-  @spec take_estate(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def take_estate(athanor_id, entry_kind) do
+  @spec take_athanor(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def take_athanor(athanor_id, entry_kind) do
     case Sanctum.Provisioning.take_claim(athanor_id, entry_kind) do
       {:ok, claim} -> {:ok, %{owner: claim.owner, fence: claim.fence, attempt: claim.attempt}}
       other -> other
@@ -387,8 +485,8 @@ defmodule Cyfr.Cluster.Fixtures do
   end
 
   @doc "What this member sees of `athanor_id`'s filling: `:ready | :filling | :failed | :unfilled | :unavailable`."
-  @spec estate_status(String.t()) :: atom()
-  def estate_status(athanor_id),
+  @spec athanor_status(String.t()) :: atom()
+  def athanor_status(athanor_id),
     do:
       Sanctum.Provisioning.status(
         Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
@@ -411,7 +509,7 @@ defmodule Cyfr.Cluster.Fixtures do
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.id, "Cluster #{n}")
 
     {:ok, session} =
-      Sanctum.Session.create(%{
+      Sanctum.TestContext.create_session(%{
         Sanctum.Context.build(
           user_id: user.id,
           athanor_id: group.id,
@@ -445,25 +543,190 @@ defmodule Cyfr.Cluster.Fixtures do
   @spec memo?(binary()) :: boolean()
   def memo?(hash), do: Arca.Cache.match(Arca.Cache.Keys.match_established(hash)) != []
 
+  @doc """
+  The context a request holding `token` is established with on this
+  member, as a term: what a context read before a retirement looks like
+  when it is used again after one.
+  """
+  @spec context(String.t()) :: {:ok, Sanctum.Context.t()} | {:error, term()}
+  def context(token), do: Sanctum.Caller.establish(token)
+
+  @doc """
+  A process on this member holding `token`'s context the way a mounted
+  console socket holds it: established once, watching the standing
+  announcements, and held to `CyfrWeb.ContextGuard.check/1` before each
+  action (`act/1`).
+  """
+  @spec hold_context(String.t()) :: pid()
+  def hold_context(token) do
+    owner = self()
+
+    pid =
+      spawn(fn ->
+        {:ok, ctx} = Sanctum.Caller.establish(token)
+        watch = CyfrWeb.ContextGuard.watch(ctx)
+        send(owner, {:held, self()})
+        held(watch)
+      end)
+
+    receive do
+      {:held, ^pid} -> pid
+    after
+      10_000 -> raise "the held context never established"
+    end
+  end
+
+  defp held(%{context: ctx} = watch) do
+    receive do
+      {:act, from} ->
+        case CyfrWeb.ContextGuard.check(ctx) do
+          {:ok, fresh} ->
+            send(from, {:acted, :ok})
+            held(%{watch | context: fresh})
+
+          {:error, reason} ->
+            send(from, {:acted, {:error, reason}})
+            refused(reason)
+        end
+
+      message ->
+        case CyfrWeb.ContextGuard.standing(message, watch) do
+          {:ok, watch} -> held(watch)
+          # A mounted view that is refused lets go: nothing more is acted on.
+          {:refused, reason} -> refused(reason)
+          :ignore -> held(watch)
+        end
+    end
+  end
+
+  defp refused(reason) do
+    receive do
+      {:act, from} -> send(from, {:acted, {:error, reason}})
+      _message -> :ok
+    end
+
+    refused(reason)
+  end
+
+  @doc "One action on a held context (`hold_context/1`): `:ok`, or the guard's refusal."
+  @spec act(pid()) :: :ok | {:error, term()}
+  def act(pid) do
+    send(pid, {:act, self()})
+
+    receive do
+      {:acted, result} -> result
+    after
+      10_000 -> {:error, :timeout}
+    end
+  end
+
+  @doc "Deny the person `user_id` from this member: the one-transaction eject."
+  @spec deny!(String.t()) :: String.t()
+  def deny!(user_id) do
+    {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+    {:ok, denied} = Sanctum.Tenancy.Users.deny(user)
+    denied.status
+  end
+
+  @doc "Allow the person `user_id` again from this member."
+  @spec allow!(String.t()) :: String.t()
+  def allow!(user_id) do
+    {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+    {:ok, allowed} = Sanctum.Tenancy.Users.allow(user)
+    allowed.status
+  end
+
+  @doc "Issue a key from `ctx` on this member: the issuance rereads the rows its binding names."
+  @spec issue_key(Sanctum.Context.t()) :: {:ok, String.t()} | {:error, term()}
+  def issue_key(ctx) do
+    name = "cluster-#{System.unique_integer([:positive])}"
+
+    # Issuing a key is a sensitive change, confirmed as its person confirms
+    # it (`Sanctum.TestContext.confirmed/3`), on this member.
+    issuing =
+      Sanctum.TestContext.confirmed(ctx, :credential_issuance, %{
+        operation: "key.create",
+        arguments: %{name: name},
+        resource: name
+      })
+
+    case Sanctum.ApiKey.create(issuing, %{name: name}) do
+      {:ok, %{api_key: key}} -> {:ok, key}
+      other -> other
+    end
+  end
+
+  @doc """
+  Mint an asset credential from `ctx` on this member, for one tincture
+  version's release digest.
+  """
+  @spec mint_asset(Sanctum.Context.t()) :: {:ok, String.t()} | {:error, term()}
+  def mint_asset(ctx) do
+    digest = "sha256:" <> String.duplicate("a", 64)
+
+    case Sanctum.TinctureAuth.mint_asset_credential(ctx, digest) do
+      {:ok, %{credential: credential}} -> {:ok, credential}
+      other -> other
+    end
+  end
+
+  @doc "What the asset credential `credential` opens on this member: its athanor, or the refusal."
+  @spec open_asset(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def open_asset(credential) do
+    case Sanctum.TinctureAuth.verify_asset_credential(credential, client_ip: "127.0.0.1") do
+      {:ok, authority} -> {:ok, authority.athanor_id}
+      other -> other
+    end
+  end
+
   @doc "Archive `athanor_id` from this member, which announces the invalidation."
   @spec archive!(String.t()) :: atom()
   def archive!(athanor_id) do
-    {:ok, athanor} = Arca.Athanors.get(Cyfr.Actor.system(), athanor_id)
+    {:ok, athanor} = Arca.Athanors.get(Prima.Actor.system(), athanor_id)
     {:ok, archived} = Sanctum.Tenancy.Athanors.archive(athanor)
     archived.status
   end
 
-  @doc "An execution of `athanor_id` with `n` durable events after its start."
+  @doc """
+  Archive `athanor_id` from this member with its announcement lost: the
+  transition commits, and no member is told.
+  """
+  @spec archive_unheard!(String.t()) :: String.t()
+  def archive_unheard!(athanor_id) do
+    {:ok, change} =
+      Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), athanor_id,
+        verify: fn _rows -> :ok end
+      )
+
+    change.athanors |> Enum.find(&(&1.id == athanor_id)) |> Map.fetch!(:status)
+  end
+
+  @doc "Reopen `athanor_id` from this member."
+  @spec reopen!(String.t()) :: String.t()
+  def reopen!(athanor_id) do
+    {:ok, athanor} = Arca.Athanors.get(Prima.Actor.system(), athanor_id)
+    {:ok, reopened} = Sanctum.Tenancy.Athanors.unarchive(athanor)
+    reopened.status
+  end
+
+  @doc """
+  An execution of `athanor_id` with `n` durable events after its start: a
+  run started over the API, so its origin is `programmatic`.
+  """
   @spec stream!(String.t(), pos_integer()) :: map()
   def stream!(athanor_id, n) do
     {:ok, %{execution: execution}} =
-      Arca.Execution.admit(%{
-        id: Cyfr.UUID7.execution_id(),
-        reference: "reagent:local.cluster-stream:0.1.0",
-        user_id: "usr_cluster",
-        athanor_id: athanor_id,
-        component_type: "reagent"
-      })
+      Arca.Execution.admit(
+        %{
+          id: Prima.UUID7.execution_id(),
+          reference: "reagent:local.cluster-stream:0.1.0",
+          user_id: "usr_cluster",
+          athanor_id: athanor_id,
+          component_type: "reagent",
+          origin: :programmatic
+        },
+        standing(athanor_id)
+      )
 
     seqs =
       for i <- 1..n do
@@ -472,7 +735,7 @@ defmodule Cyfr.Cluster.Fixtures do
             data: %{"step" => "s#{i}"}
           )
 
-        :ok = Cyfr.Execution.Events.publish(execution.id, execution, "step.closed", row.seq, %{})
+        :ok = Crucible.Events.publish(execution.id, execution, "step.closed", row.seq, %{})
         row.seq
       end
 
@@ -490,7 +753,7 @@ defmodule Cyfr.Cluster.Fixtures do
           data: %{"more" => i}
         )
 
-      :ok = Cyfr.Execution.Events.publish(execution_id, execution, "step.closed", row.seq, %{})
+      :ok = Crucible.Events.publish(execution_id, execution, "step.closed", row.seq, %{})
       row.seq
     end
   end
@@ -499,7 +762,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @spec replay(String.t(), String.t(), non_neg_integer()) :: [String.t()]
   def replay(athanor_id, execution_id, after_seq) do
     execution_id
-    |> Cyfr.Execution.events_since({after_seq, 0}, athanor_id)
+    |> Crucible.events_since({after_seq, 0}, athanor_id)
     |> Enum.map(& &1.sequence)
   end
 
@@ -511,7 +774,7 @@ defmodule Cyfr.Cluster.Fixtures do
   def claim_occurrence(schedule_id, next_run) do
     {:ok, schedule} = Arca.CronSchedule.get_for_daemon(schedule_id)
 
-    case Arca.ScheduleOccurrences.claim(schedule, Cyfr.Boot.id(), next_run) do
+    case Arca.ScheduleOccurrences.claim(schedule, Prima.Boot.id(), next_run) do
       {:ok, occurrence} ->
         {:ok, %{id: occurrence.id, state: occurrence.state, claimed_by: occurrence.claimed_by}}
 

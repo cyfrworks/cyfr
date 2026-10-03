@@ -14,30 +14,42 @@ defmodule Emissary.MCP.Router do
 
   ## Authorization Model
 
-  The Router gates; the dispatcher authorizes. For a declared action the
-  Router asks `Cyfr.Ops.Catalog.authorize_declared_action/4` before
-  validating remaining fields, so an unauthorized caller receives the
-  catalog's access refusal rather than a schema-detail error. Discovery
-  still reads the same annotations through `Cyfr.Ops.Visibility`.
+  The Router decides nothing; the gate authorizes, once, and records the
+  call as one admission decision under the call id the request's context
+  carries (`ctx.call_id`), or one it mints. A `tools/call`
+  of a tool the table holds goes to `Grimoire.call_external/4` with the
+  caller's arguments as sent, and the gate authorizes the declared action
+  before it casts the remaining fields, so an unauthorized caller
+  receives the access refusal rather than a schema-detail error. What the
+  gate refused before any handler ran (`stage: :admission`) is answered
+  as a JSON-RPC error by its class; what the tool itself answered is a
+  failed tool result, except an authentication, permission or consent
+  refusal, which keeps its JSON-RPC code wherever it was raised.
+  Discovery reads the same annotations through `Grimoire.Visibility`.
   Handlers keep only the residual checks an annotation cannot express
   (tenant presence, ownership, definition authority, the domain's finer
   consent arms).
 
-  Authentication itself happens earlier, in `EmissaryWeb.Plugs.Authenticate`.
+  Authentication itself happens earlier, in `CyfrWeb.Plugs.Authenticate`.
 
   ## Public Tool Actions
 
   The anonymous surface — which tool actions a caller with no credential may
   reach — is the set of actions annotated `auth: :anonymous`, read through
-  `Cyfr.Ops.Visibility`, which also decides what such a caller may
+  `Grimoire.Visibility`, which also decides what such a caller may
   *see*. Discovery and invocation read one declaration: when each held its
   own list, discovery advertised writes that invocation refused.
 
   ## Resource Methods
 
-  `resources/list`, `resources/templates/list` are intentionally unauthenticated
-  at the Router level. Resource metadata is non-sensitive; individual `resources/read`
-  handlers enforce their own authorization.
+  `resources/list` and `resources/templates/list` are unauthenticated
+  metadata. `resources/read` is an ordinary operation call:
+  `Grimoire.resolve_resource/1` names the operation that
+  declares the URI's scheme, and the Router calls it once through
+  `Grimoire.call_external/4` with the URI as its one argument —
+  the same gate, plane, authentication, permission and runner a
+  `tools/call` gets. The Router makes no authorization decision of its
+  own; it renders the answer.
 
   ## Dispatch Flow
 
@@ -46,8 +58,7 @@ defmodule Emissary.MCP.Router do
 
   require Logger
 
-  alias Cyfr.Ops.Catalog
-  alias Emissary.MCP.{Message, Protocol, ResourceRegistry}
+  alias Prima.MCP.{Message, Protocol}
 
   @server_capabilities %{
     # `listChanged: true` is a promise to actually push. It is true for tools
@@ -96,13 +107,17 @@ defmodule Emissary.MCP.Router do
 
   For requests, returns `{:ok, result}` or `{:error, code, message}`.
   For notifications, returns `:ok`.
+
+  Whatever origin `ctx` arrives with, the request is dispatched as
+  `programmatic` (`Prima.Origin`): MCP is a programmatic surface, and
+  nothing a client sends names another.
   """
   def dispatch(ctx, %Message{type: :request} = msg) do
-    dispatch_method(ctx, msg.method, msg.params, msg.id)
+    dispatch_method(programmatic(ctx), msg.method, msg.params, msg.id)
   end
 
   def dispatch(ctx, %Message{type: :notification} = msg) do
-    dispatch_notification(ctx, msg.method, msg.params)
+    dispatch_notification(programmatic(ctx), msg.method, msg.params)
   end
 
   def dispatch(_ctx, %Message{type: :response}) do
@@ -114,6 +129,9 @@ defmodule Emissary.MCP.Router do
     # MCP spec: client error responses return 202
     :ok
   end
+
+  # This entry's origin, over whatever the context arrived with.
+  defp programmatic(%Sanctum.Context{} = ctx), do: %{ctx | origin: :programmatic}
 
   # ============================================================================
   # Lifecycle Methods
@@ -141,107 +159,56 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
 
   defp dispatch_method(ctx, "tools/list", params, _id) do
-    Catalog.list_tools()
-    |> Cyfr.Ops.Visibility.filter_for_context(ctx)
+    Grimoire.list_tools()
+    |> Grimoire.visible_tools(ctx)
     |> paginate("tools", params)
   end
 
   defp dispatch_method(ctx, "tools/call", params, _id) do
     name = params["name"]
+    arguments = Map.get(params, "arguments", %{})
 
     unless is_binary(name) do
-      {:error, :invalid_params, "Missing required field: name"}
+      refused(
+        ctx,
+        :invalid_params,
+        :invalid_params,
+        "Missing required field: name",
+        nil,
+        arguments
+      )
     else
       # Check tool existence first — unknown tools are protocol errors per spec
-      case Catalog.get_tool(name) do
+      case Grimoire.get_tool(name) do
         {:error, :not_found} ->
-          {:error, :invalid_params, "Unknown tool: #{name}"}
+          refused(
+            ctx,
+            :invalid_params,
+            {:not_found, "tool", name},
+            "Unknown tool: #{name}",
+            name,
+            arguments
+          )
 
         {:ok, tool_def} ->
-          arguments = Map.get(params, "arguments", %{})
+          has_output_schema = Map.has_key?(tool_def, "outputSchema")
 
-          case Catalog.authorize_declared_action(name, ctx, arguments) do
+          case Grimoire.call_external(name, ctx, arguments,
+                 runner: :supervised,
+                 call_id: ctx.call_id
+               ) do
+            {:ok, result} ->
+              {:ok, call_result(name, result, has_output_schema)}
+
             {:error, reason} ->
-              if Sanctum.Unauthorized.reason?(reason) do
-                {:error, Sanctum.Unauthorized.code(reason),
-                 Sanctum.Unauthorized.message(reason, ctx.auth_method)}
+              if protocol_refusal?(reason) do
+                protocol_error(ctx, reason, :tools_call)
               else
-                {:error, :invalid_params, Cyfr.Refusal.message(reason)}
-              end
-
-            :ok ->
-              case Catalog.validate_arguments(name, arguments) do
-                {:error, reason} ->
-                  {:error, :invalid_params, Cyfr.Refusal.message(reason)}
-
-                {:ok, arguments} ->
-                  has_output_schema = Map.has_key?(tool_def, "outputSchema")
-
-                  case Catalog.call_external(name, ctx, arguments, runner: :supervised) do
-                    {:ok, result} ->
-                      text =
-                        case Jason.encode(result) do
-                          {:ok, encoded} ->
-                            encoded
-
-                          {:error, encode_error} ->
-                            require Logger
-
-                            Logger.error(
-                              "[MCP.Router] Tool #{name} returned non-JSON-encodable result: #{inspect(encode_error)}"
-                            )
-
-                            ~s({"error":"Tool returned non-serializable result"})
-                        end
-
-                      call_result = %{
-                        "content" => [%{"type" => "text", "text" => text}],
-                        "isError" => false
-                      }
-
-                      # A tool that declares an outputSchema also answers in structuredContent,
-                      # so a client gets the typed value without re-parsing the text block.
-                      call_result =
-                        if has_output_schema and is_map(result) do
-                          Map.put(call_result, "structuredContent", result)
-                        else
-                          call_result
-                        end
-
-                      {:ok, call_result}
-
-                    # An authorization refusal is a protocol-level error with
-                    # the auth code, not a tool result: a client branches on
-                    # `-33004` (and the CLI on `-33001`) where an isError text
-                    # block gives it nothing to branch on. Raised or returned,
-                    # it arrives as the `Sanctum.Unauthorized` vocabulary and
-                    # is rendered here — the wire boundary.
-                    {:error, reason} ->
-                      cond do
-                        Sanctum.Unauthorized.reason?(reason) ->
-                          {:error, Sanctum.Unauthorized.code(reason),
-                           Sanctum.Unauthorized.message(reason, ctx.auth_method)}
-
-                        # Return the consent signal as a JSON-RPC code with structured error.data.
-                        Emissary.MCP.ConsentSignal.signal?(reason) ->
-                          {tag, _} = reason
-
-                          {:error, tag, Emissary.MCP.ConsentSignal.message(reason),
-                           Emissary.MCP.ConsentSignal.data(reason)}
-
-                        true ->
-                          {:ok,
-                           %{
-                             "content" => [
-                               %{
-                                 "type" => "text",
-                                 "text" => format_error_reason(reason)
-                               }
-                             ],
-                             "isError" => true
-                           }}
-                      end
-                  end
+                {:ok,
+                 %{
+                   "content" => [%{"type" => "text", "text" => Grimoire.render(reason)}],
+                   "isError" => true
+                 }}
               end
           end
       end
@@ -250,17 +217,17 @@ defmodule Emissary.MCP.Router do
 
   # ============================================================================
   # Resource Methods
-  # Intentionally unauthenticated at Router level — resource metadata is
-  # non-sensitive. Individual read handlers enforce their own authorization.
+  # The lists are unauthenticated metadata; a read is admitted by the
+  # declared operation's gate (`read_resource/3`).
   # ============================================================================
 
   defp dispatch_method(_ctx, "resources/list", params, _id) do
-    resources = ResourceRegistry.list_resources()
+    resources = Grimoire.list_resources()
     paginate(resources, "resources", params)
   end
 
   defp dispatch_method(_ctx, "resources/templates/list", params, _id) do
-    templates = ResourceRegistry.list_resource_templates()
+    templates = Grimoire.list_resource_templates()
     paginate(templates, "resourceTemplates", params)
   end
 
@@ -271,10 +238,26 @@ defmodule Emissary.MCP.Router do
         read_resource(ctx, uri, id)
 
       %{"uri" => _} ->
-        {:error, :invalid_params, ~s(resources/read requires a non-empty string "uri")}
+        refused(
+          ctx,
+          :invalid_params,
+          :invalid_params,
+          ~s(resources/read requires a non-empty string "uri"),
+          nil,
+          %{},
+          "resources/read"
+        )
 
       _ ->
-        {:error, :invalid_params, ~s(resources/read requires a "uri" parameter)}
+        refused(
+          ctx,
+          :invalid_params,
+          :invalid_params,
+          ~s(resources/read requires a "uri" parameter),
+          nil,
+          %{},
+          "resources/read"
+        )
     end
   end
 
@@ -282,19 +265,72 @@ defmodule Emissary.MCP.Router do
   # Unknown Method
   # ============================================================================
 
-  defp dispatch_method(_ctx, method, _params, _id) do
-    {:error, :method_not_found, "Unknown method: #{method}"}
+  defp dispatch_method(ctx, method, _params, _id) do
+    refused(
+      ctx,
+      :method_not_found,
+      :method_not_found,
+      "Unknown method: #{method}",
+      nil,
+      %{},
+      method
+    )
   end
 
+  # A refusal this router makes before the gate — a request that names
+  # no tool, a tool or method the table does not know, a read that names
+  # no resource — is the request's admission decision, recorded under its
+  # call id (the pipeline's, or one minted here for a caller that arrived
+  # with none) with the names the request said, and answered as the
+  # protocol error it is: `code` is the wire's, `reason` the refusal's.
+  defp refused(ctx, code, reason, message, tool, input, method \\ "tools/call") do
+    record_refusal(ctx, reason, tool, input, method)
+    {:error, code, message}
+  end
+
+  defp record_refusal(ctx, reason, tool, input, method) do
+    input = if is_map(input) and not is_struct(input), do: input, else: %{}
+
+    # Under the pipeline's call id, or one the decision mints for a caller
+    # that arrived with none.
+    decision =
+      Grimoire.refused_decision(ctx, reason,
+        call_id: ctx.call_id,
+        plane: :external,
+        tool: tool,
+        action: input_action(input)
+      )
+
+    Grimoire.open_decision(ctx, decision, %{method: method, input: input})
+  end
+
+  defp input_action(%{"action" => action}) when is_binary(action), do: action
+  defp input_action(_input), do: nil
+
   defp read_resource(ctx, uri, _id) do
-    case ResourceRegistry.read(ctx, uri) do
+    read =
+      with {:ok, tool, action} <- Grimoire.resolve_resource(uri) do
+        Grimoire.call_external(tool, ctx, %{"action" => action, "uri" => uri},
+          runner: :supervised,
+          call_id: ctx.call_id,
+          method: "resources/read"
+        )
+      else
+        # A URI no declared operation reads: refused here, before the gate,
+        # and answered below by its class like every other refusal.
+        {:error, reason} = refused ->
+          record_refusal(ctx, reason, nil, %{"uri" => uri}, "resources/read")
+          refused
+      end
+
+    case read do
       {:ok, content} ->
-        mime_type = Map.get(content, :mimeType, Cyfr.MediaType.json())
+        mime_type = Map.get(content, :mimeType, Prima.MediaType.json())
         encoded = encode_content(content)
 
         # Per MCP spec: binary content uses "blob" field, text uses "text" field
         content_entry =
-          if Cyfr.MediaType.binary_mime?(mime_type) do
+          if Prima.MediaType.binary_mime?(mime_type) do
             %{"uri" => uri, "mimeType" => mime_type, "blob" => encoded}
           else
             %{"uri" => uri, "mimeType" => mime_type, "text" => encoded}
@@ -302,57 +338,77 @@ defmodule Emissary.MCP.Router do
 
         {:ok, cacheable(%{"contents" => [content_entry]}, @resource_ttl_ms, @resource_scope)}
 
+      # Each refusal answers by its class: an authorization refusal with
+      # the auth codes, a store outage as unavailable, an absent resource
+      # as the MCP resource error.
       {:error, reason} ->
-        Logger.warning("[MCP.Router] resource read failed: #{inspect(reason)}")
-
-        cond do
-          # An authz refusal or a store outage is not "not found".
-          Sanctum.Unauthorized.reason?(reason) ->
-            {:error, Sanctum.Unauthorized.code(reason),
-             Sanctum.Unauthorized.message(reason, ctx.auth_method)}
-
-          reason == :database_error ->
-            {:error, :internal_error, "Failed to read resource: the store could not answer"}
-
-          # A typed tool refusal renders through its vocabulary.
-          Cyfr.Refusal.reason?(reason) ->
-            {:error, :resource_not_found, Cyfr.Refusal.message(reason)}
-
-          # A binary reason is a handler's crafted, client-safe diagnosis
-          # ("Invalid URI format: …", "No provider found for scheme …").
-          is_binary(reason) ->
-            {:error, :resource_not_found, reason}
-
-          # Anything else is an internal term (an exit tuple, a struct) —
-          # logged above, never reflected.
-          true ->
-            {:error, :resource_not_found, "Resource not found or unreadable"}
-        end
+        protocol_error(ctx, reason, :resources_read)
     end
   end
 
-  # Render known typed errors through Cyfr.Ops.Error and pass client-safe
-  # strings through. Log unknown internal terms and return a generic reply.
-  defp format_error_reason(reason) when is_binary(reason), do: reason
+  defp call_result(name, result, has_output_schema) do
+    text =
+      case Jason.encode(result) do
+        {:ok, encoded} ->
+          encoded
 
-  defp format_error_reason(reason) do
-    # One renderer for every typed vocabulary (`Cyfr.Ops.Error.render/2`
-    # — Unauthorized, `Cyfr.Refusal`, OCI errors); `nil` means the term is
-    # internal and must not be reflected.
-    case Cyfr.Ops.Error.render(reason) do
-      nil ->
-        Logger.warning("[MCP.Router] tool call failed: #{inspect(reason)}")
-        "The tool call failed."
+        {:error, encode_error} ->
+          Logger.error(
+            "[MCP.Router] Tool #{name} returned non-JSON-encodable result: #{inspect(encode_error)}"
+          )
 
-      message ->
-        message
+          ~s({"error":"Tool returned non-serializable result"})
+      end
+
+    call_result = %{
+      "content" => [%{"type" => "text", "text" => text}],
+      "isError" => false
+    }
+
+    # A tool that declares an outputSchema also answers in structuredContent,
+    # so a client gets the typed value without re-parsing the text block.
+    if has_output_schema and is_map(result),
+      do: Map.put(call_result, "structuredContent", result),
+      else: call_result
+  end
+
+  # Which refusals are protocol errors rather than a failed tool result:
+  # everything the gate refused before the tool ran — the caller's
+  # authorization, the arguments, the action — answered by its class; and,
+  # raised or returned by the tool itself, an authorization refusal or a
+  # consent signal, which a client branches on (`-33004`, and the CLI on
+  # `-33001`) where an isError text block gives it nothing to branch on.
+  defp protocol_refusal?(%Prima.Refusal{stage: :admission}), do: true
+  defp protocol_refusal?(%Prima.Refusal{reason: reason}), do: protocol_refusal?(reason)
+
+  defp protocol_refusal?(reason),
+    do: Sanctum.Unauthorized.reason?(reason) or Prima.ConsentSignal.signal?(reason)
+
+  # A refusal answered as a JSON-RPC error: the code its class (or its
+  # row's override, or a consent signal's tag) answers with, and its
+  # sentence — an authorization refusal's worded for the caller's
+  # credential, a consent signal's with its `error.data`.
+  defp protocol_error(ctx, reason, where) do
+    refusal = Grimoire.classify(reason)
+    code = Message.refusal_code(refusal, where, Grimoire.code_override(refusal))
+    inner = refusal.reason
+
+    cond do
+      Sanctum.Unauthorized.reason?(inner) ->
+        {:error, code, Sanctum.Unauthorized.message(inner, ctx.auth_method)}
+
+      Prima.ConsentSignal.signal?(inner) ->
+        {:error, code, refusal.message, Prima.ConsentSignal.data(inner)}
+
+      true ->
+        {:error, code, refusal.message}
     end
   end
 
   defp encode_content(%{content: content}) when is_binary(content), do: content
 
-  defp encode_content(%{content: content}), do: Cyfr.Json.safe_encode(content)
-  defp encode_content(content) when is_map(content), do: Cyfr.Json.safe_encode(content)
+  defp encode_content(%{content: content}), do: Prima.Json.safe_encode(content)
+  defp encode_content(content) when is_map(content), do: Prima.Json.safe_encode(content)
 
   # ============================================================================
   # Notifications
@@ -362,7 +418,7 @@ defmodule Emissary.MCP.Router do
   # confines that notification to stdio — "on Streamable HTTP, closing the SSE
   # response stream is itself the cancellation signal and no
   # `notifications/cancelled` message is expected" — and this server speaks
-  # only Streamable HTTP. `EmissaryWeb.MCPController` cancels on stream close;
+  # only Streamable HTTP. `Emissary.Web.MCPController` cancels on stream close;
   # accepting the notification as well would be a second, unspecified way in.
   defp dispatch_notification(_ctx, method, _params) do
     require Logger
@@ -438,6 +494,6 @@ defmodule Emissary.MCP.Router do
   # `cursor` as the only parameter, and nothing in this repository — no client,
   # no guide, no test — ever sent it. The view it produced is still reachable
   # where it is actually used, through the `tools` tool
-  # (`Emissary.MCP.Tools.SystemProvider`), which is how a running component
+  # (`Grimoire.Provider`), which is how a running component
   # discovers what it may call.
 end

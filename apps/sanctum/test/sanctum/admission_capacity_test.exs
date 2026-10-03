@@ -6,7 +6,7 @@ defmodule Sanctum.AdmissionCapacityTest do
   What a full server does at the door.
 
   `CYFR_MINT_PER_HOUR` bounds how fast strangers arrive and
-  `CYFR_MAX_ATHANORS` how many estates the server holds. Nothing is shared
+  `CYFR_MAX_ATHANORS` how many athanors the server holds. Nothing is shared
   server-wide for a person to land in, so a sign-in whose athanor cannot be
   minted is refused rather than admitted to a session with nowhere to work.
   An operator is not a stranger and is minted past both.
@@ -16,12 +16,8 @@ defmodule Sanctum.AdmissionCapacityTest do
   alias Sanctum.SignIn
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-
-    previous = Application.get_env(:sanctum, :caps, [])
-    on_exit(fn -> Application.put_env(:sanctum, :caps, previous) end)
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     :ok
   end
@@ -36,7 +32,7 @@ defmodule Sanctum.AdmissionCapacityTest do
     }
   end
 
-  defp at_capacity!, do: Application.put_env(:sanctum, :caps, max_athanors: 1)
+  defp at_capacity!, do: Sanctum.Test.Settings.put("max_athanors", 1)
 
   test "a stranger the caps refuse is turned away, with no athanor and no session" do
     n = System.unique_integer([:positive])
@@ -45,7 +41,7 @@ defmodule Sanctum.AdmissionCapacityTest do
     assert {:error, {:limit_reached, :max_athanors, 1}} = SignIn.admitted(info(n), :allowed)
 
     # Nothing half-made. The person's row is written before the mint is
-    # attempted, so the estate is what to look for — under their minted id,
+    # attempted, so the athanor is what to look for — under their minted id,
     # never the IdP identity they arrived with.
     {:ok, user} = Users.get_by_identity("github|https://github.com|cap-#{n}")
     assert {:error, :not_found} = Athanors.get_by_owner(user.id)

@@ -12,17 +12,20 @@ defmodule Cyfr.Telemetry.Catalog do
 
   - `:audit` — `Arca.AuditHandler` → audit sinks. Its roster **derives**
     from this table (`consumed_by(:audit)`).
-  - `:bridge` — `Prism.TelemetryBridge` → console PubSub. Pinned equal by
-    test.
-  - `:metrics` — `EmissaryWeb.Telemetry` metric definitions. Pinned equal
+  - `:bridge` — `Cyfr.TelemetryBridge` → `Cyfr.Bus`. Its attach is this
+    roster (`consumed_by(:bridge)`).
+  - `:metrics` — `CyfrWeb.Telemetry` metric definitions. Pinned equal
     by test.
   - `:log` — a dedicated Logger attach (`Cyfr.Application`).
-  - `:notes` — `Cyfr.ScheduleNotes`, which files a completed schedule's
-    outcome as a note when the schedule asked for it. Pinned by test.
-  - `:estate` — `Compendium.Provisioning`, the component domain's answer
+  - `:athanor` — `Compendium.Provisioning`, the component domain's answer
     to the identity domain's "this athanor needs filling". A foundation
     below the host announces and never calls up, and this is the one
     event whose consumer does work rather than fan out.
+  - `:projection` — `Compendium.ProjectionReconciler`, which reconciles
+    the component registry and the agent index when a seeded root's unit
+    changes. Its attach is this roster (`consumed_by(:projection)`), and
+    it only hastens work every read's barrier and the periodic recovery
+    would do anyway.
   - `:operator` — consciously unconsumed by shipped machinery: kept for an
     operator's own monitoring attach, or pinned by tests. The `note` says
     why it earns its place; no event is orphaned silently.
@@ -76,11 +79,24 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:audit],
       note: "a provider answered a different namespace than the stored identity"
     },
+    [:cyfr, :sanctum, :identity, :not_descendant] => %{
+      consumers: [:audit],
+      note:
+        "a directory served a log that does not contain the head this home verified; " <>
+          "the cache was left as it was, and the trail keeps the evidence"
+    },
+    [:cyfr, :sanctum, :identity, :stale] => %{
+      consumers: [:operator],
+      note:
+        "a remote person's protected work paused past the identity freshness bound, " <>
+          "naming the bound: for an operator's outage alarm, kept off the audit trail " <>
+          "since an unreachable directory raises it on every paused request"
+    },
     [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap] => %{consumers: [:audit]},
     [:cyfr, :sanctum, :platform_context] => %{consumers: [:audit]},
     [:cyfr, :sanctum, :notify] => %{
       consumers: [:bridge],
-      note: "the tray fan-in: what an estate's members, or the operator, see happened"
+      note: "the tray fan-in: what an athanor's members, or the operator, see happened"
     },
     [:cyfr, :sanctum, :caller, :invalidated] => %{
       consumers: [:bridge],
@@ -98,7 +114,7 @@ defmodule Cyfr.Telemetry.Catalog do
     },
     [:cyfr, :sanctum, :membership, :changed] => %{
       consumers: [:bridge],
-      note: "which estates a person may now reach"
+      note: "which athanors a person may now reach"
     },
     [:cyfr, :sanctum, :vault, :entry_changed] => %{
       consumers: [:bridge],
@@ -110,10 +126,37 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:bridge],
       note: "what serves an archived athanor from outside any tenant topic must stop"
     },
+    [:cyfr, :sanctum, :confirmation, :opened] => %{
+      consumers: [:bridge],
+      note:
+        "a pending confirmation of a sensitive change was opened; its person's clients " <>
+          "hear the ref, the operation and the expiry, never the secret the asking request " <>
+          "holds, the arguments or the preview"
+    },
+    [:cyfr, :sanctum, :confirmation, :confirmed] => %{
+      consumers: [:bridge],
+      note: "a pending confirmation was proven; the asking client repeats its change"
+    },
+    [:cyfr, :sanctum, :confirmation, :consumed] => %{
+      consumers: [:bridge],
+      note: "a confirmed change was decided, consuming its confirmation"
+    },
+    [:cyfr, :sanctum, :confirmation, :cancelled] => %{
+      consumers: [:bridge],
+      note: "a pending confirmation was cancelled by its person"
+    },
+    [:cyfr, :sanctum, :confirmation, :voided] => %{
+      consumers: [:bridge],
+      note: "a pending confirmation was voided with the client or credential that confirmed it"
+    },
+    [:cyfr, :sanctum, :confirmation, :expired] => %{
+      consumers: [:bridge],
+      note: "a pending confirmation expired unconsumed"
+    },
     [:cyfr, :sanctum, :api_keys, :changed] => %{consumers: [:bridge]},
     [:cyfr, :sanctum, :webhooks, :changed] => %{consumers: [:bridge]},
     [:cyfr, :sanctum, :provisioning, :fill_requested] => %{
-      consumers: [:estate],
+      consumers: [:athanor],
       note:
         "an athanor needs filling; the component domain fills it " <>
           "(`Compendium.Provisioning`) — the identity domain owns the claim and the " <>
@@ -199,10 +242,17 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:operator],
       note: "a guest event could not reach its subscribers; the execution itself continues"
     },
+    [:cyfr, :storage_projection, :changed] => %{
+      consumers: [:projection],
+      note:
+        "a unit under a seeded root changed, committed: the root's epoch, and whether the " <>
+          "bytes the change names are served yet. The component domain's reconciler " <>
+          "re-derives its projection of the root from it; a lost one costs a read's barrier"
+    },
     [:cyfr, :storage_gc, :sweep] => %{
       consumers: [:operator],
       note:
-        "one estate's staged-revision sweep: prefixes examined, collected, kept and repaired, " <>
+        "one athanor's staged-revision sweep: prefixes examined, collected, kept and repaired, " <>
           "moves still pending and errors, so an operator sees staging that is not draining"
     },
     [:cyfr, :opus, :execution, :unreaped_kill] => %{
@@ -214,25 +264,25 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :execution, :child, :admission] => %{
       consumers: [:operator],
       note:
-        "a child run's step span (`Cyfr.Execution.StepSpans`): the call of run_child to the " <>
+        "a child run's step span (`Crucible.StepSpans`): the call of run_child to the " <>
           "guest's start; `mix cyfr.bench.step` reads it for the per-step latency baseline"
     },
     [:cyfr, :execution, :child, :first_delta] => %{
       consumers: [:operator],
       note:
-        "a child run's step span (`Cyfr.Execution.StepSpans`): the guest's start to its " <>
+        "a child run's step span (`Crucible.StepSpans`): the guest's start to its " <>
           "first streamed delta; `mix cyfr.bench.step` reads it for time to first delta"
     },
     [:cyfr, :execution, :child, :completion] => %{
       consumers: [:operator],
       note:
-        "a child run's step span (`Cyfr.Execution.StepSpans`): the guest's start to its " <>
+        "a child run's step span (`Crucible.StepSpans`): the guest's start to its " <>
           "completed row; `mix cyfr.bench.step` reads it for the per-step latency baseline"
     },
     [:cyfr, :execution, :run_child] => %{
       consumers: [:operator],
       note:
-        "a child run's whole call as its caller waits on it (`Cyfr.Execution.StepSpans`); " <>
+        "a child run's whole call as its caller waits on it (`Crucible.StepSpans`); " <>
           "`mix cyfr.bench.step` reads it for the per-step total"
     },
     [:cyfr, :opus, :execution, :unsigned] => %{
@@ -242,6 +292,10 @@ defmodule Cyfr.Telemetry.Catalog do
           "the operator's posture made visible at the moment it is exercised, so " <>
           "'we allow unsigned pulls' does not read the same as 'we have none'"
     },
+    # A tincture invoking one of its dependencies (`Crucible.invoke_tincture/3`),
+    # whichever surface asked.
+    [:cyfr, :crucible, :tincture, :invoke, :start] => %{consumers: [:bridge, :metrics]},
+    [:cyfr, :crucible, :tincture, :invoke, :stop] => %{consumers: [:bridge, :metrics]},
 
     # ——— guest activity (high-frequency observability) ———
     [:cyfr, :opus, :http, :request] => %{
@@ -292,8 +346,10 @@ defmodule Cyfr.Telemetry.Catalog do
     # ——— schedules ———
     [:cyfr, :schedules, :fired] => %{consumers: [:bridge]},
     [:cyfr, :schedules, :completed] => %{
-      consumers: [:notes],
-      note: "a schedule with `keep_outcome` in its metadata files the run's output as a note"
+      consumers: [:operator],
+      note:
+        "a schedule's occurrence completed, for operator metrics; what keeps the outcome as " <>
+          "a note is the committed `Cyfr.Bus.ScheduleCompleted` message, not this event"
     },
     [:cyfr, :schedules, :failed] => %{consumers: [:bridge]},
     [:cyfr, :schedules, :scheduler, :load_failed] => %{
@@ -313,10 +369,19 @@ defmodule Cyfr.Telemetry.Catalog do
       note: "scheduler self-alarm: a failure could not be recorded on the schedule row"
     },
 
-    # ——— MCP transport & tinctures & webhooks ———
+    # ——— admission decisions ———
+    [:cyfr, :grimoire, :decision, :admitted] => %{consumers: [:metrics]},
+    [:cyfr, :grimoire, :decision, :refused] => %{consumers: [:metrics]},
+    [:cyfr, :grimoire, :decision, :lost] => %{
+      consumers: [:metrics, :operator],
+      note:
+        "an admission decision or its completion the decision log could not write within " <>
+          "its budget: the operation's result stands and nothing is retried, so this is " <>
+          "the one signal of a gap in the trail, counted for an operator to alert on"
+    },
+
+    # ——— MCP transport & webhooks ———
     [:cyfr, :emissary, :request] => %{consumers: [:bridge, :metrics]},
-    [:cyfr, :emissary, :tincture, :invoke, :start] => %{consumers: [:bridge, :metrics]},
-    [:cyfr, :emissary, :tincture, :invoke, :stop] => %{consumers: [:bridge, :metrics]},
     [:cyfr, :emissary, :webhook, :invoke, :start] => %{consumers: [:metrics]},
     [:cyfr, :emissary, :webhook, :invoke, :stop] => %{consumers: [:metrics]},
     [:cyfr, :emissary, :webhook, :verify_succeeded] => %{consumers: [:metrics]},
@@ -366,6 +431,31 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :aqua, :approval] => %{
       consumers: [:audit],
       note: "a person approved or declined an agent's proposed action"
+    },
+
+    # ——— the bus ———
+    [:cyfr, :bus, :publish_refused] => %{
+      consumers: [:operator],
+      note:
+        "a tenant publish whose topic, actor and payload disagreed on the athanor, or whose " <>
+          "payload is not the topic's struct, was refused: a bug above the bus and possibly " <>
+          "a leak, counted by the payload's type and never its content"
+    },
+    [:cyfr, :bus, :bridge_dropped] => %{
+      consumers: [:operator],
+      note:
+        "a bridged event that named no athanor, or lacked what its message needs, had " <>
+          "nowhere to go and was dropped: counted, so a producer that stops naming its " <>
+          "tenant shows up as a rising count rather than a quiet console"
+    },
+
+    # ——— platform settings ———
+    [:cyfr, :platform_settings, :stale_served] => %{
+      consumers: [:operator],
+      note:
+        "a `serve` setting answered its last value because its cache had expired " <>
+          "and the store could not answer (`Arca.PlatformSettings.effective/1`): " <>
+          "counted, so a store outage that settings rode through is still seen"
     },
 
     # ——— record sink ———

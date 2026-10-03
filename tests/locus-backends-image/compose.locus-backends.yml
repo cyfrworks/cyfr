@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered over docker-compose.yml by the backends image tests
+# (tests/locus-backends-image/harness.py): the locus-backends service keeps
+# every setting compose gives it, its security options, tmpfs mounts,
+# network and limits among them (compose appends a list and refuses an
+# entry named twice, so none of those is named here). This adds only the
+# image under test, a loopback port, the probe backend (probe-backend.mjs)
+# and the residue canary (tests/fixtures/residue-canary.go), read-only, and
+# the two settings a test chooses: the backend pool's uid range and the
+# per-backend memory bound (empty for the default). The container takes the
+# name compose gives it from the project, so a run does not meet a deployed
+# cyfr-locus-backends on the same host. The harness is the control plane:
+# it supplies the backends key as CYFR_LOCUS_BACKENDS_KEY through the
+# environment compose interpolates, which the shipped service reads as
+# LOCUS_BACKENDS_KEY, and signs every request with it.
+services:
+  locus-backends:
+    image: ${BACKENDS_IMAGE:?set BACKENDS_IMAGE}
+    container_name: !reset null
+    pull_policy: never
+    ports:
+      - "127.0.0.1::4101"
+    volumes:
+      - ${PROBE_DIR:?set PROBE_DIR}:/probe:ro
+      - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro
+    entrypoint: ["cyfr-keeper", "serve", "--pool", "backends:${BACKENDS_POOL:?set BACKENDS_POOL}", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+    environment:
+      - LOCUS_BACKENDS_MEMORY_BYTES=${LOCUS_BACKENDS_MEMORY_BYTES:-}

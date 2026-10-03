@@ -6,13 +6,12 @@ defmodule Arca.McpLogTest do
 
   alias Arca.McpLog
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 
-  defp log_attrs(overrides \\ %{}) do
+  defp log_attrs(overrides) do
     Map.merge(
       %{
         id: "req_#{:rand.uniform(1_000_000)}",
@@ -29,66 +28,43 @@ defmodule Arca.McpLogTest do
     )
   end
 
-  describe "record/1" do
-    test "inserts a valid MCP log" do
-      attrs = log_attrs()
-      assert {:ok, log} = McpLog.record(attrs)
-      assert log.id == attrs.id
-      assert log.status == "pending"
-      assert log.tool == "execution"
-    end
+  # A row as the request log writes one: the projection of an admission
+  # decision, appended with it in one transaction.
+  defp seed(overrides \\ %{}) do
+    attrs = log_attrs(overrides)
+    actor = %{Prima.Actor.in_athanor(attrs.athanor_id) | user_id: attrs.user_id}
 
-    test "validates status inclusion" do
-      assert {:error, changeset} = McpLog.record(log_attrs(%{status: "bogus"}))
-      refute changeset.valid?
-      assert {"is invalid", _} = changeset.errors[:status]
-    end
+    decision =
+      Prima.Decision.new(
+        call_id: attrs.id,
+        request_id: attrs.request_id,
+        plane: :external,
+        tool: attrs.tool,
+        action: attrs.action,
+        inserted_at: attrs.timestamp,
+        admission: :admitted
+      )
 
-    test "rejects missing required fields" do
-      assert {:error, changeset} = McpLog.record(%{})
-      refute changeset.valid?
-    end
+    :ok = Arca.DecisionLog.append(actor, decision, mcp_log: Map.delete(attrs, :athanor_id))
+    {:ok, attrs}
   end
 
-  describe "record_update/3" do
-    test "updates an existing log" do
-      {:ok, log} = McpLog.record(log_attrs(%{id: "req_upd_1"}))
+  describe "the projection" do
+    test "a row is written with its decision, under the decision's call id" do
+      {:ok, attrs} = seed()
+      platform = Arca.Test.Actor.platform(user_id: "admin")
 
-      actor = Arca.Test.Actor.platform(user_id: "admin")
+      assert %{id: id, status: "pending", tool: "execution"} =
+               McpLog.get_tenant(platform, attrs.id)
 
-      assert {:ok, updated} =
-               McpLog.record_update(actor, log.id, %{
-                 status: "success",
-                 duration_ms: 42
-               })
+      assert id == attrs.id
 
-      assert updated.status == "success"
-      assert updated.duration_ms == 42
+      assert {:ok, %{call_id: ^id}} =
+               Arca.DecisionLog.get(Prima.Actor.in_athanor(attrs.athanor_id), attrs.id)
     end
 
-    test "returns not_found for missing log" do
-      actor = Arca.Test.Actor.platform(user_id: "admin")
-
-      assert {:error, :not_found} =
-               McpLog.record_update(actor, "req_nonexistent", %{
-                 status: "success"
-               })
-    end
-
-    test "cross-tenant update returns not_found" do
-      {:ok, _} =
-        McpLog.record(log_attrs(%{id: "req_cross", athanor_id: "ath_a"}))
-
-      other_tenant = %Cyfr.Actor{
-        athanor_id: "ath_b",
-        user_id: "u",
-        authenticated: true,
-        scope: :athanor,
-        system: false
-      }
-
-      assert {:error, :not_found} =
-               McpLog.record_update(other_tenant, "req_cross", %{status: "success"})
+    test "a row outside the status vocabulary is refused before any write" do
+      assert_raise ArgumentError, ~r/invalid mcp_log/, fn -> seed(%{status: "bogus"}) end
     end
   end
 
@@ -97,8 +73,8 @@ defmodule Arca.McpLogTest do
       t1 = DateTime.add(DateTime.utc_now(), -60, :second)
       t2 = DateTime.utc_now()
 
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_l1", timestamp: t1}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_l2", timestamp: t2}))
+      {:ok, _} = seed(log_attrs(%{id: "req_l1", timestamp: t1}))
+      {:ok, _} = seed(log_attrs(%{id: "req_l2", timestamp: t2}))
 
       {:ok, logs} = McpLog.list(athanor_id: "ath_test")
       ids = Enum.map(logs, & &1.id)
@@ -110,16 +86,16 @@ defmodule Arca.McpLogTest do
     end
 
     test "filters by user_id" do
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_fu1", user_id: "alice"}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_fu2", user_id: "bob"}))
+      {:ok, _} = seed(log_attrs(%{id: "req_fu1", user_id: "alice"}))
+      {:ok, _} = seed(log_attrs(%{id: "req_fu2", user_id: "bob"}))
 
       {:ok, logs} = McpLog.list(athanor_id: "ath_test", user_id: "alice")
       assert Enum.all?(logs, &(&1.user_id == "alice"))
     end
 
     test "filters by status" do
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_fs1", status: "success"}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_fs2", status: "error"}))
+      {:ok, _} = seed(log_attrs(%{id: "req_fs1", status: "success"}))
+      {:ok, _} = seed(log_attrs(%{id: "req_fs2", status: "error"}))
 
       {:ok, logs} = McpLog.list(athanor_id: "ath_test", status: "error")
       assert logs != []
@@ -129,9 +105,9 @@ defmodule Arca.McpLogTest do
     # The chain key: an ingress request and every in-chain call beneath it
     # share one `request_id` while each row keeps its own `id`.
     test "filters by request_id, returning a whole chain" do
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_root_a", request_id: "req_root_a"}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "call_a1", request_id: "req_root_a"}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_root_b", request_id: "req_root_b"}))
+      {:ok, _} = seed(log_attrs(%{id: "req_root_a", request_id: "req_root_a"}))
+      {:ok, _} = seed(log_attrs(%{id: "call_a1", request_id: "req_root_a"}))
+      {:ok, _} = seed(log_attrs(%{id: "req_root_b", request_id: "req_root_b"}))
 
       {:ok, logs} = McpLog.list(athanor_id: "ath_test", request_id: "req_root_a")
       assert logs != []
@@ -141,8 +117,8 @@ defmodule Arca.McpLogTest do
     end
 
     test "filters by tool" do
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_ft1", tool: "storage"}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_ft2", tool: "execution"}))
+      {:ok, _} = seed(log_attrs(%{id: "req_ft1", tool: "storage"}))
+      {:ok, _} = seed(log_attrs(%{id: "req_ft2", tool: "execution"}))
 
       {:ok, logs} = McpLog.list(athanor_id: "ath_test", tool: "storage")
       assert logs != []
@@ -151,8 +127,8 @@ defmodule Arca.McpLogTest do
 
     test "filters by since" do
       old_time = DateTime.add(DateTime.utc_now(), -3600, :second)
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_since1", timestamp: old_time}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_since2", timestamp: DateTime.utc_now()}))
+      {:ok, _} = seed(log_attrs(%{id: "req_since1", timestamp: old_time}))
+      {:ok, _} = seed(log_attrs(%{id: "req_since2", timestamp: DateTime.utc_now()}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
       {:ok, logs} = McpLog.list(athanor_id: "ath_test", since: cutoff)
@@ -163,7 +139,7 @@ defmodule Arca.McpLogTest do
 
     test "respects limit" do
       for i <- 1..5 do
-        {:ok, _} = McpLog.record(log_attrs(%{id: "req_lim_#{i}"}))
+        {:ok, _} = seed(log_attrs(%{id: "req_lim_#{i}"}))
       end
 
       {:ok, logs} = McpLog.list(athanor_id: "ath_test", limit: 2)
@@ -174,17 +150,17 @@ defmodule Arca.McpLogTest do
   describe "get_tenant/2" do
     test "platform scope returns log without tenant filtering" do
       {:ok, log} =
-        McpLog.record(log_attrs(%{id: "req_plat", athanor_id: "ath_x"}))
+        seed(log_attrs(%{id: "req_plat", athanor_id: "ath_x"}))
 
       platform = Arca.Test.Actor.platform(user_id: "admin")
 
-      assert %McpLog{id: "req_plat"} = McpLog.get_tenant(platform, log.id)
+      assert %{id: "req_plat"} = McpLog.get_tenant(platform, log.id)
     end
 
     test "athanor scope filters by tenant" do
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_t1", athanor_id: "ath_a"}))
+      {:ok, _} = seed(log_attrs(%{id: "req_t1", athanor_id: "ath_a"}))
 
-      match = %Cyfr.Actor{
+      match = %Prima.Actor{
         athanor_id: "ath_a",
         user_id: "u",
         authenticated: true,
@@ -194,7 +170,7 @@ defmodule Arca.McpLogTest do
 
       miss = %{match | athanor_id: "ath_b"}
 
-      assert %McpLog{} = McpLog.get_tenant(match, "req_t1")
+      assert %{id: _} = McpLog.get_tenant(match, "req_t1")
       assert is_nil(McpLog.get_tenant(miss, "req_t1"))
     end
   end
@@ -202,8 +178,8 @@ defmodule Arca.McpLogTest do
   describe "delete_before/2" do
     test "deletes logs before cutoff scoped by tenant" do
       old_time = DateTime.add(DateTime.utc_now(), -7200, :second)
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_del1", timestamp: old_time}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_del2", timestamp: DateTime.utc_now()}))
+      {:ok, _} = seed(log_attrs(%{id: "req_del1", timestamp: old_time}))
+      {:ok, _} = seed(log_attrs(%{id: "req_del2", timestamp: DateTime.utc_now()}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
       {:ok, count} = McpLog.delete_before(cutoff, athanor_id: "ath_test")
@@ -212,14 +188,14 @@ defmodule Arca.McpLogTest do
       platform = Arca.Test.Actor.platform(user_id: "admin")
 
       assert is_nil(McpLog.get_tenant(platform, "req_del1"))
-      assert %McpLog{} = McpLog.get_tenant(platform, "req_del2")
+      assert %{id: _} = McpLog.get_tenant(platform, "req_del2")
     end
 
     test "respects tenant scoping" do
       old_time = DateTime.add(DateTime.utc_now(), -7200, :second)
 
       {:ok, _} =
-        McpLog.record(
+        seed(
           log_attrs(%{
             id: "req_delt1",
             timestamp: old_time,
@@ -228,7 +204,7 @@ defmodule Arca.McpLogTest do
         )
 
       {:ok, _} =
-        McpLog.record(
+        seed(
           log_attrs(%{
             id: "req_delt2",
             timestamp: old_time,
@@ -245,15 +221,15 @@ defmodule Arca.McpLogTest do
       # ath_a record deleted
       assert is_nil(McpLog.get_tenant(platform, "req_delt1"))
       # ath_b record untouched
-      assert %McpLog{} = McpLog.get_tenant(platform, "req_delt2")
+      assert %{id: _} = McpLog.get_tenant(platform, "req_delt2")
     end
   end
 
   describe "stats/1" do
     test "returns aggregated stats" do
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_st1", status: "success", duration_ms: 100}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_st2", status: "success", duration_ms: 200}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_st3", status: "error", duration_ms: 50}))
+      {:ok, _} = seed(log_attrs(%{id: "req_st1", status: "success", duration_ms: 100}))
+      {:ok, _} = seed(log_attrs(%{id: "req_st2", status: "success", duration_ms: 200}))
+      {:ok, _} = seed(log_attrs(%{id: "req_st3", status: "error", duration_ms: 50}))
 
       {:ok, stats} = McpLog.stats(athanor_id: "ath_test")
       assert stats.total >= 3
@@ -265,12 +241,10 @@ defmodule Arca.McpLogTest do
       old_time = DateTime.add(DateTime.utc_now(), -7200, :second)
 
       {:ok, _} =
-        McpLog.record(log_attrs(%{id: "req_sts1", timestamp: old_time, status: "success"}))
+        seed(log_attrs(%{id: "req_sts1", timestamp: old_time, status: "success"}))
 
       {:ok, _} =
-        McpLog.record(
-          log_attrs(%{id: "req_sts2", timestamp: DateTime.utc_now(), status: "success"})
-        )
+        seed(log_attrs(%{id: "req_sts2", timestamp: DateTime.utc_now(), status: "success"}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
       {:ok, stats} = McpLog.stats(athanor_id: "ath_test", since: cutoff)
@@ -285,10 +259,10 @@ defmodule Arca.McpLogTest do
       actor_b = Arca.Test.Actor.local(athanor_id: "ath_b", user_id: "user_b")
 
       {:ok, _} =
-        McpLog.record(log_attrs(%{id: "req_iso_a", athanor_id: actor_a.athanor_id}))
+        seed(log_attrs(%{id: "req_iso_a", athanor_id: actor_a.athanor_id}))
 
       {:ok, _} =
-        McpLog.record(log_attrs(%{id: "req_iso_b", athanor_id: actor_b.athanor_id}))
+        seed(log_attrs(%{id: "req_iso_b", athanor_id: actor_b.athanor_id}))
 
       {:ok, logs_a} = McpLog.list(athanor_id: actor_a.athanor_id)
       {:ok, logs_b} = McpLog.list(athanor_id: actor_b.athanor_id)
@@ -307,7 +281,7 @@ defmodule Arca.McpLogTest do
       actor_b = Arca.Test.Actor.local(athanor_id: "ath_b", user_id: "user_b")
 
       {:ok, _} =
-        McpLog.record(
+        seed(
           log_attrs(%{
             id: "req_iso_s1",
             athanor_id: actor_a.athanor_id,
@@ -316,7 +290,7 @@ defmodule Arca.McpLogTest do
         )
 
       {:ok, _} =
-        McpLog.record(
+        seed(
           log_attrs(%{
             id: "req_iso_s2",
             athanor_id: actor_b.athanor_id,

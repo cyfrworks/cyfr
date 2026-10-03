@@ -6,12 +6,31 @@ defmodule Opus.HttpStreamHandlerTest do
 
   alias Opus.HttpStreamHandler
   alias Opus.Test.EdgeFixtures
-  alias Opus.Test.ScriptedHost
+  alias Opus.Test.{ScriptedHost, ScriptedKeeper}
+
+  @pins %{"localhost" => "127.0.0.1", "api.openai.com" => "127.0.0.1"}
 
   # The host client of an attempt on a scripted host for `component_ref`,
-  # which takes every request from the rate and records every refusal.
-  defp attached_host(component_ref, _limits) do
-    ScriptedHost.attempt!(ScriptedHost.start!(), component_ref: component_ref).client
+  # routed as a runner's is through a relay joined in this VM, whose
+  # service end takes every request from the rate and connects to the pin;
+  # the host pins every address from `pins` and records every refusal. The
+  # attempt's authority is `limits` under an edge reaching the loopback
+  # names these tests use, so the handler's own edge decides each refusal;
+  # a request that is refused a connection fails fast and on this machine.
+  defp attached_host(component_ref, limits, pins \\ @pins) do
+    host = ScriptedHost.start!()
+    ScriptedHost.pins(host, pins)
+
+    relay_edge =
+      EdgeFixtures.edge(domains: ["localhost", "api.openai.com"], methods: ["GET", "POST"])
+
+    host
+    |> ScriptedHost.attempt!(
+      component_ref: component_ref,
+      authority: ScriptedKeeper.authority(relay_edge, limits)
+    )
+    |> ScriptedKeeper.relayed!()
+    |> Map.fetch!(:client)
   end
 
   # ============================================================================
@@ -113,15 +132,18 @@ defmodule Opus.HttpStreamHandlerTest do
       assert decoded["error"]["message"] =~ "Invalid JSON"
     end
 
-    test "blocks private IP (localhost)", %{stream_ns: _ns} do
-      # Need to allow localhost domain first
+    test "a private address the host refuses to pin is refused", %{stream_ns: _ns} do
+      # Need to allow localhost domain first; the private-address policy is
+      # the host's, which refuses it here.
       edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["POST"])
 
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits()),
+          attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits(), %{
+            "localhost" => :denied
+          }),
           "catalyst:local.test:1.0.0"
         )
 
@@ -203,10 +225,9 @@ defmodule Opus.HttpStreamHandlerTest do
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, request_fn} = stream_ns["request"]
 
-      # The request will fail at DNS/connection level, but the handle will be
-      # created before the async task fails. We need to test the limit.
-      # To reliably test the limit, we use a domain that will be allowed but
-      # fail to connect — that still creates the handle.
+      # The request will fail at the connection, but the handle is created
+      # before the async task fails: the host pins the domain to the
+      # loopback, where nothing listens on 443.
 
       # Create 3 streams (they'll fail to connect but handles are created)
       request =
@@ -223,15 +244,9 @@ defmodule Opus.HttpStreamHandlerTest do
           Jason.decode!(result)
         end
 
-      # First 3 should succeed (have "handle" key), 4th should fail
-      # Note: some may fail at DNS level instead, so we check for either handle or DNS error
-      stream_limit_errors =
-        Enum.filter(results, fn r ->
-          r["error"]["type"] == "stream_limit"
-        end)
-
-      # At least one should be a stream limit error (the 4th)
-      assert stream_limit_errors != []
+      # The first 3 have a handle, the 4th is over the limit.
+      assert [%{"handle" => _}, %{"handle" => _}, %{"handle" => _}, %{"error" => error}] = results
+      assert error["type"] == "stream_limit"
     end
   end
 
@@ -306,7 +321,7 @@ defmodule Opus.HttpStreamHandlerTest do
       # A "0s" consented timeout makes the derived deadline elapse immediately;
       # the 60s fallback would never fire within test time.
       edge =
-        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
 
       limits = EdgeFixtures.limits(timeout: "0s")
 
@@ -371,7 +386,7 @@ defmodule Opus.HttpStreamHandlerTest do
         end)
 
       edge =
-        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
 
       limits = EdgeFixtures.limits(max_response_size: 8)
 
@@ -410,7 +425,7 @@ defmodule Opus.HttpStreamHandlerTest do
   describe "what a read reports" do
     setup do
       edge =
-        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
 
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
@@ -502,7 +517,7 @@ defmodule Opus.HttpStreamHandlerTest do
         end)
 
       edge =
-        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
 
       {imports, exec_ref} =
         HttpStreamHandler.build_stream_imports(
@@ -529,6 +544,60 @@ defmodule Opus.HttpStreamHandlerTest do
       assert decoded["data"] == ""
       assert decoded["done"] == false
       assert micros >= 90_000
+
+      HttpStreamHandler.cleanup_registry(exec_ref)
+      Process.exit(server, :kill)
+      :gen_tcp.close(listen)
+    end
+  end
+
+  describe "a body past one credit window" do
+    test "streams whole: the relay sends on as the guest's reads grant credit" do
+      # Past the initial credit (`Prima.RunnerRelay.initial_credit/0`): the
+      # relay's service end holds the rest until the reads grant it back.
+      size = Prima.RunnerRelay.initial_credit() + 1_500_000
+      body = :binary.copy("0123456789abcdef", div(size, 16))
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      server =
+        spawn(fn ->
+          {:ok, sock} = :gen_tcp.accept(listen, 5_000)
+          _ = :gen_tcp.recv(sock, 0, 1_000)
+
+          :ok =
+            :gen_tcp.send(
+              sock,
+              "HTTP/1.1 200 OK\r\ncontent-length: #{byte_size(body)}\r\n" <>
+                "connection: close\r\n\r\n" <> body
+            )
+
+          Process.sleep(2_000)
+          :gen_tcp.close(sock)
+        end)
+
+      edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
+      limits = EdgeFixtures.limits(max_response_size: 16 * 1_048_576)
+
+      {imports, exec_ref} =
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          limits,
+          attached_host("catalyst:local.test-window:1.0.0", limits),
+          "catalyst:local.test-window:1.0.0"
+        )
+
+      %{"request" => {:fn, request_fn}, "read" => {:fn, read_fn}} =
+        imports["cyfr:http/streaming@0.1.0"]
+
+      request =
+        Jason.encode!(%{"method" => "GET", "url" => "http://localhost:#{port}/big", "body" => ""})
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      reads = read_until_done(read_fn, handle, 2_000)
+      assert List.last(reads)["status"] == 200
+      assert Enum.map_join(reads, & &1["data"]) == body
 
       HttpStreamHandler.cleanup_registry(exec_ref)
       Process.exit(server, :kill)

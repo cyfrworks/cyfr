@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.RedirectLiveTest do
   @moduledoc """
-  An athanor's chat (`/a/<route>`) is the chat zone with the estate named;
+  An athanor's chat (`/a/<route>`) is the chat zone with the athanor named;
   it forwards whatever query it was given.
   """
 
@@ -19,7 +19,7 @@ defmodule PrismWeb.RedirectLiveTest do
     {:ok, conn: conn, route: route, in_query: URI.encode_www_form(route)}
   end
 
-  test "/a/<route> forwards to the chat with the estate named first and the query kept",
+  test "/a/<route> forwards to the chat with the athanor named first and the query kept",
        %{conn: conn, route: route, in_query: in_query} do
     assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/a/#{route}")
     assert to == "/chat?a=#{in_query}"
@@ -27,7 +27,7 @@ defmodule PrismWeb.RedirectLiveTest do
     assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/a/#{route}?c=x&foo=1")
     assert to == "/chat?a=#{in_query}&c=x&foo=1"
 
-    # The path names the estate; a stray `a` in the query does not.
+    # The path names the athanor; a stray `a` in the query does not.
     assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/a/#{route}?a=other&c=x")
     assert to == "/chat?a=#{in_query}&c=x"
   end

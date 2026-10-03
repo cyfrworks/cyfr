@@ -1,0 +1,10 @@
+{
+  "name": "frame-neighbour",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "Another tincture on the same origin, whose script the frame-facts probe tries to load.",
+  "tincture": {
+    "entry": "index.html"
+  }
+}

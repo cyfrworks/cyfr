@@ -4,32 +4,36 @@
 defmodule Cyfr.Test.AttemptFixtures do
   @moduledoc """
   A real execution attempt reached through host calls: an admitted row, its
-  `Cyfr.Execution.Attempt` open with the calling process as its waiter, a
+  `Crucible.Attempt` open with the calling process as its waiter, a
   signed assignment, and a runner attached through
-  `Cyfr.Execution.Host.call/2`.
+  `Crucible.Host.call/2`.
 
   The attached map carries what a runner's client needs (the attempt's
   `athanor_id`, `execution_id`, `attempt`, `fence`, `generation` and
   `service`, the `boot` and `runner` presenting its calls, the `member`
   its assignment was issued by and every call is addressed to, the
-  attempt's `keys` as `Cyfr.WorkerAuth.attempt_keys/2` answers them and
+  attempt's `keys` as `Prima.WorkerAuth.attempt_keys/2` answers them and
   its `call_key`)
   together with the row's `record`, its `close` state, the attempt `pid`,
   the `ctx`, `authority` and `component_ref` it runs under, its `input`,
-  the signed `assignment` and the `secrets` attach answered.
+  the signed `assignment`, the `secrets` attach answered and the `grant`
+  the row was admitted under (`Sanctum.ExecutionStanding.capture/1` of
+  `ctx`, as a root's admission reads it).
   """
 
   import ExUnit.Assertions
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Execution.{Assignments, Attempt, Close, Delegation, Keys, Record}
+  alias Prima.Authority
+  alias Prima.Authority.Blob.Edge
+  alias Crucible.{Assignments, Attempt, Close, Delegation, Keys, Record}
 
   @doc """
   Admit, open, sign and attach. Options:
 
-  - `:ctx` — the admission context (default `Sanctum.TestContext.local/0`);
-  - `:authority` — default `Cyfr.Authority.zero/0`;
+  - `:ctx` — the admission context, required: the root records its origin
+    (`Sanctum.TestContext.via/2` names the admission path a case models),
+    and there is no default origin;
+  - `:authority` — default `Prima.Authority.zero/0`;
   - `:vault` — attributes of a vault entry to create
     (`Sanctum.Vault.create/2`); the authority's edge is bound to it and
     pinned to an active profile, so attach unseals its fields;
@@ -46,13 +50,13 @@ defmodule Cyfr.Test.AttemptFixtures do
     assignment's, which every host call presents (default this boot's id);
   - `:timeout_ms` — the run's timeout, from which its subtree deadline is
     set (default 60 s);
-  - `:worker` — the worker service's endpoint (`t:Cyfr.WorkerAPI.endpoint/0`)
+  - `:worker` — the worker service's endpoint (`t:Prima.WorkerAPI.endpoint/0`)
     the attempt kills its runner through (default none);
   - `:digest` — the digest of the component's artifact, in the assignment
     and the attempt (default the digest of the reference's own bytes);
   - `:input` — the input the row is admitted with (default
     `%{"fixture" => true}`); a formula's delegation roster is its
-    `sub_agents` (`Cyfr.Execution.Delegation.roster/1`);
+    `sub_agents` (`Crucible.Delegation.roster/1`);
   - `:declared_needs` and `:activation_digest` — the resolver's transition
     inputs its guest's children are stepped with (default `[]` and none);
   - `:reservation` — `true` to admit the row with the invocation
@@ -61,7 +65,12 @@ defmodule Cyfr.Test.AttemptFixtures do
   """
   @spec attached!(keyword()) :: map()
   def attached!(opts \\ []) do
-    ctx = Keyword.get_lazy(opts, :ctx, &Sanctum.TestContext.local/0)
+    ctx =
+      Keyword.get(opts, :ctx) ||
+        raise ArgumentError,
+              "attached!/1 needs :ctx, a context naming the admission path its root " <>
+                "was started through (Sanctum.TestContext.via/2)"
+
     {authority, entry} = authority(ctx, opts)
 
     component_type = Keyword.get(opts, :component_type, :catalyst)
@@ -72,13 +81,15 @@ defmodule Cyfr.Test.AttemptFixtures do
       end)
 
     limits = Keyword.get_lazy(opts, :limits, fn -> Authority.limits(authority) end)
-    digest = Keyword.get_lazy(opts, :digest, fn -> Cyfr.Digest.sha256(component_ref) end)
+    digest = Keyword.get_lazy(opts, :digest, fn -> Prima.Digest.sha256(component_ref) end)
     input = Keyword.get(opts, :input, %{"fixture" => true})
+    {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
 
     record =
       Record.new(ctx, component_ref, input,
         component_type: component_type,
-        reservation: reservation(authority, opts)
+        reservation: reservation(authority, opts),
+        grant: grant
       )
 
     service_id = Keyword.get(opts, :service_id, "wrk_fixture")
@@ -105,7 +116,8 @@ defmodule Cyfr.Test.AttemptFixtures do
         boot_id: boot_id,
         deadline: deadline,
         worker: Keyword.get(opts, :worker),
-        digest: digest
+        digest: digest,
+        grant: grant
       )
 
     {:ok, issued} =
@@ -132,7 +144,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         boot: boot_id,
         member: Keys.member(),
         deadline: deadline,
-        runner: Keyword.get_lazy(opts, :runner, fn -> Cyfr.UUID7.generate_id("runner") end),
+        runner: Keyword.get_lazy(opts, :runner, fn -> Prima.UUID7.generate_id("runner") end),
         keys: issued.attempt_keys,
         call_key: issued.attempt_keys.call,
         assignment: issued.assignment,
@@ -144,6 +156,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         component_ref: component_ref,
         entry: entry,
         input: input,
+        grant: grant,
         secrets: nil
       })
 
@@ -156,6 +169,61 @@ defmodule Cyfr.Test.AttemptFixtures do
   end
 
   @doc """
+  The grant options (`Arca.ExecutionStanding`) a test admits a root in
+  `athanor_id` under: the athanor's standing read now
+  (`Sanctum.ExecutionStanding.capture/1`), checked as admission checks it.
+  """
+  @spec standing(String.t()) :: keyword()
+  def standing(athanor_id) when is_binary(athanor_id),
+    do: [grant: grant(athanor_id), verify: &Sanctum.ExecutionStanding.verify/1]
+
+  @doc "The grant of `athanor_id` as a root's admission reads it now."
+  @spec grant(String.t()) :: Prima.ExecutionGrant.t()
+  def grant(athanor_id) when is_binary(athanor_id) do
+    {:ok, grant} =
+      Sanctum.ExecutionStanding.capture(
+        Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+      )
+
+    grant
+  end
+
+  @doc """
+  The grant options a test writes an admitted execution under: the stamp
+  its attempt stores, which must still stand.
+  """
+  @spec stored() :: keyword()
+  def stored, do: [grant: :stored, verify: &Sanctum.ExecutionStanding.verify/1]
+
+  @doc """
+  The grant options of a retirement — a failure, a cancel, a lapse: the
+  stamp its attempt stores, whether or not it still stands.
+  """
+  @spec retiring() :: keyword()
+  def retiring, do: [grant: :stored, verify: &Sanctum.ExecutionStanding.stamp_only/1]
+
+  @doc """
+  The host-stamped lineage of an in-chain call from a real execution: a
+  root admitted in `ctx`'s athanor under its standing grant and with its
+  origin, answered as `Grimoire.call_in_chain/5`'s `:lineage` — the
+  execution as parent and root, and the attempt that owns it — with
+  `extra` merged in. An in-chain call is admitted only under such an
+  attempt.
+  """
+  @spec lineage!(Sanctum.Context.t(), map()) :: map()
+  def lineage!(ctx, extra \\ %{}) do
+    record =
+      Record.new(ctx, "formula:local.lineage-fixture:0.1.0", %{}, component_type: :formula)
+
+    :ok = Record.write_started(record)
+
+    Map.merge(
+      %{parent_execution_id: record.id, root_execution_id: record.id, attempt: record.attempt},
+      extra
+    )
+  end
+
+  @doc """
   Sign and send one host call for `fixture`'s attempt, answering the decoded
   JSON. Options override the header's fields (`:runner`, `:boot`, `:nonce`,
   `:ts`, `:generation`, `:member`, `:fence`, `:service`) or the `:call_key`
@@ -164,12 +232,12 @@ defmodule Cyfr.Test.AttemptFixtures do
   @spec call(map(), String.t(), map(), keyword()) :: map()
   def call(fixture, op, args, opts \\ []) do
     body = Keyword.get_lazy(opts, :body, fn -> body(op, args) end)
-    fixture |> header(body, opts) |> Cyfr.Execution.Host.call(body) |> Jason.decode!()
+    fixture |> header(body, opts) |> Crucible.Host.call(body) |> Jason.decode!()
   end
 
   @doc "The JSON body of a host call of `op` with `args`."
   @spec body(String.t(), map()) :: String.t()
-  def body(op, args), do: Jason.encode!(%{"op" => op, "args" => args})
+  def body(op, args), do: Jason.encode!(%{"v" => 1, "op" => op, "args" => args})
 
   @doc "A signed header for `body` on `fixture`'s attempt; options as `call/4`'s."
   @spec header(map(), String.t(), keyword()) :: String.t()
@@ -189,12 +257,12 @@ defmodule Cyfr.Test.AttemptFixtures do
     }
 
     key = Keyword.get(opts, :call_key, fixture.call_key)
-    {:ok, header} = Cyfr.WorkerAuth.host_call_header(key, fields, body)
+    {:ok, header} = Prima.WorkerAuth.host_call_header(key, fields, body)
     header
   end
 
   @doc "The verified header fields a host call of `fixture`'s runner carries."
-  @spec caller(map()) :: Cyfr.WorkerAuth.host_call()
+  @spec caller(map()) :: Prima.WorkerAuth.host_call()
   def caller(fixture) do
     fixture
     |> Map.take([
@@ -221,8 +289,8 @@ defmodule Cyfr.Test.AttemptFixtures do
   """
   @spec current!(String.t(), String.t()) :: map()
   def current!(athanor_id, execution_id) do
-    %Arca.Schemas.ExecutionAttempt{} =
-      row = Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), execution_id)
+    %{attempt: _} =
+      row = Arca.ExecutionAttempts.current(Prima.Actor.in_athanor(athanor_id), execution_id)
 
     {:ok, generation} = Keys.generation()
 
@@ -290,15 +358,44 @@ defmodule Cyfr.Test.AttemptFixtures do
   @spec vault_authority!(Sanctum.Context.t(), map(), Authority.t()) ::
           {Authority.t(), Arca.Schemas.VaultEntry.t()}
   def vault_authority!(ctx, attrs, authority \\ Authority.zero()) do
-    {:ok, view} =
-      Sanctum.Vault.create(
-        ctx,
-        Map.put_new(attrs, :name, "attempt-fixture-#{System.unique_integer([:positive])}")
-      )
+    # The edge names what a consent would: the entry's fields, and for an
+    # OAuth entry its scopes (a fixture scope when the attrs name none).
+    # `:projection` in `attrs` replaces it whole.
+    {explicit, attrs} = Map.pop(attrs, :projection, :derived)
+
+    attrs =
+      if Map.get(attrs, :kind) == "oauth",
+        do: Map.put_new(attrs, :oauth_scopes, ["fixture.scope"]),
+        else: attrs
+
+    projection =
+      case explicit do
+        :derived ->
+          %{
+            fields: attrs |> Map.get(:fields, %{}) |> Map.keys() |> Enum.sort(),
+            scopes: attrs |> Map.get(:oauth_scopes, []) |> Enum.sort()
+          }
+
+        given ->
+          given
+      end
+
+    params = Map.put_new(attrs, :name, "attempt-fixture-#{System.unique_integer([:positive])}")
+
+    # Entering the credential is a sensitive change, confirmed as its
+    # person confirms it (`Sanctum.TestContext.confirmed/3`).
+    entering =
+      Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+        operation: "vault.create",
+        arguments: params,
+        resource: params.name
+      })
+
+    {:ok, view} = Sanctum.Vault.create(entering, params)
 
     {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
     {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
-    consent_id = Cyfr.UUID7.generate_id("cons")
+    consent_id = Prima.UUID7.generate_id("cons")
 
     {:ok, profile} =
       Arca.ProfileStorage.put(%{
@@ -310,7 +407,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         head_consent_id: consent_id
       })
 
-    vault = %{entry_id: entry.id, binding_digest: digest, projection: nil}
+    vault = %{entry_id: entry.id, binding_digest: digest, projection: projection}
 
     {%{
        authority

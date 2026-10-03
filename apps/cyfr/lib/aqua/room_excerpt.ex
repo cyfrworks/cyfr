@@ -24,14 +24,14 @@ defmodule Aqua.RoomExcerpt do
 
   @max_bytes 16 * 1024
   @rows 40
-  @agent_author Cyfr.Author.agent()
+  @agent_author Prima.Author.agent()
 
   @typedoc "Which room, and how the person sees it named."
   @type room :: %{
           required(:athanor_id) => String.t(),
           required(:thread_id) => String.t(),
           optional(:title) => String.t() | nil,
-          optional(:estate) => String.t() | nil
+          optional(:athanor) => String.t() | nil
         }
 
   @doc "The excerpt's byte bound — half the runner's message cap."
@@ -58,7 +58,7 @@ defmodule Aqua.RoomExcerpt do
 
   defp header(room, thread) do
     where =
-      [room[:estate], room[:title] || thread.title]
+      [room[:athanor], room[:title] || thread.title]
       |> Enum.reject(&(&1 in [nil, ""]))
       |> Enum.join(" · ")
 
@@ -109,7 +109,7 @@ defmodule Aqua.RoomExcerpt do
 
       cond do
         bytes + size <= @max_bytes -> {:cont, {[line | acc], bytes + size}}
-        acc == [] -> {:halt, {[Cyfr.Text.cut(line, @max_bytes - 3)], @max_bytes}}
+        acc == [] -> {:halt, {[Aqua.Text.cut(line, @max_bytes - 3)], @max_bytes}}
         true -> {:halt, {acc, bytes}}
       end
     end)

@@ -3,7 +3,7 @@
 
 defmodule Compendium.Builds.Provider do
   @moduledoc """
-  The `build` tool (`Cyfr.Ops.Provider`), under the `locus` service label:
+  The `build` tool (`Prima.Provider`), under the `compendium` service label:
 
   - `compile` — build a component by reference on the builds service,
     publish its output and register it (`Compendium.Builds.compile/3`);
@@ -13,22 +13,23 @@ defmodule Compendium.Builds.Provider do
   - `toolchains` — the toolchains the builds service reports
   - `status` — a started build's row
 
-  A build's progress and its completion leave from here: each step is
-  broadcast on the build's topic (`Cyfr.Bus.build/2`) and emitted on the
-  calling request's MCP progress stream (`Emissary.MCP.Progress`).
+  A build's progress leaves from here: each step is a `Cyfr.Bus.Progress`
+  on the build's topic and, when the build runs for an MCP request, on that
+  request's (`Cyfr.Bus.broadcast_progress/2`), where the transport streams
+  it to the caller.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   alias Compendium.Builds
   alias Sanctum.Context
 
   @impl true
-  def service, do: "locus"
+  def service, do: "compendium"
 
   @impl true
   def tools do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
 
     [
       Operation.tool(
@@ -107,11 +108,11 @@ defmodule Compendium.Builds.Provider do
   # Public (no permission): stateless validation of bytes the caller
   # supplies; no server-side data is exposed. The base64 input is bounded
   # by the shared memory ceiling's spelling
-  # (`Cyfr.Limits.default_max_memory_bytes/0`), so the two cannot drift
+  # (`Prima.Limits.default_max_memory_bytes/0`), so the two cannot drift
   # apart, and since decoding and walking the bytes is real CPU no build
   # accounts for, each caller identity has a rate, the anonymous public
   # sharing one.
-  @max_base64_size Cyfr.Limits.default_max_memory_bytes()
+  @max_base64_size Prima.Limits.default_max_memory_bytes()
   @validate_per_minute 10
 
   def handle("build", %Context{} = ctx, %{"action" => "validate", "wasm_base64" => wasm_base64})
@@ -172,7 +173,7 @@ defmodule Compendium.Builds.Provider do
     else
       case Base.decode64(wasm_base64) do
         {:ok, bytes} ->
-          case Compendium.WasmValidator.validate(bytes) do
+          case Prima.Wasm.validate(bytes) do
             {:ok, meta} ->
               {:ok,
                %{
@@ -184,7 +185,7 @@ defmodule Compendium.Builds.Provider do
                }}
 
             {:error, reason} ->
-              {:ok, %{valid: false, reason: to_string(reason)}}
+              {:ok, %{valid: false, reason: validation_failure(reason)}}
           end
 
         :error ->
@@ -193,29 +194,36 @@ defmodule Compendium.Builds.Provider do
     end
   end
 
+  # A refusal's tag, as the builder names it: a tuple reason carries the
+  # binary's own bytes or sizes after its tag, and only the tag is the
+  # answer.
+  defp validation_failure(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  defp validation_failure(reason) when is_tuple(reason) and is_atom(elem(reason, 0)),
+    do: Atom.to_string(elem(reason, 0))
+
   defp check_validate_rate(ctx) do
     who = ctx.user_id || ctx.athanor_id || "public"
 
-    case Cyfr.RateLimiter.check("build:validate:#{who}", @validate_per_minute, 60_000) do
+    case Prima.RateLimiter.check("build:validate:#{who}", @validate_per_minute, 60_000) do
       :ok -> :ok
       {:deny, retry_s} -> {:error, "Validation rate limit reached — retry in #{retry_s}s"}
     end
   end
 
   # The console follows the build's topic; an MCP caller that asked for
-  # progress follows its request's stream. Neither failing fails the build.
+  # progress follows its request's. Neither failing fails the build.
   defp send_progress(ctx, %{build_id: build_id, phase: phase, message: message}) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      Cyfr.Bus.build(build_id, ctx),
-      {:build_progress,
-       %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
-    )
+    actor = Context.actor(ctx)
 
-    Emissary.MCP.Progress.emit(ctx, %{
-      "build_id" => build_id,
-      "phase" => phase,
-      "message" => message
-    })
+    step =
+      Cyfr.Bus.Progress.new(actor, {:build, build_id},
+        request_id: ctx.request_id,
+        phase: phase,
+        message: message
+      )
+
+    _ = Cyfr.Bus.broadcast_progress(actor, step)
+    :ok
   end
 end

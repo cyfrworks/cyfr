@@ -33,7 +33,7 @@ defmodule Arca.TurnFenceRaceTest do
         {:ok, %{turn: turn}} =
           TurnStorage.accept_message(actor, thread.id, %{
             message: %{author: actor.user_id, content: "@aqua go"},
-            turn: %{agent: "aqua", requested_by: actor.user_id}
+            turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
           })
 
         {thread, turn}
@@ -46,6 +46,12 @@ defmodule Arca.TurnFenceRaceTest do
   test "a takeover waits behind a runner's write, lands after it, and the runner writes nothing more",
        %{actor: actor, turn: turn} do
     test = self()
+
+    # A running turn: a runner records steps only on one.
+    {:ok, turn} =
+      unboxed(fn ->
+        TurnStorage.start(actor, turn.id, %{fence: turn.fence, recovery_limit: 3})
+      end)
 
     runner =
       Task.async(fn ->
@@ -110,7 +116,7 @@ defmodule Arca.TurnFenceRaceTest do
       |> Enum.map(&Task.await(&1, 25_000))
 
     assert Enum.count(results, &match?({:ok, _}, &1)) == 1
-    assert [{:error, {:busy, held}}] = Enum.filter(results, &match?({:error, _}, &1))
+    assert [{:error, {:held_elsewhere, held}}] = Enum.filter(results, &match?({:error, _}, &1))
 
     {:ok, after_claim} = unboxed(fn -> Threads.get(actor, thread.id) end)
     assert after_claim.active_turn_id == held
@@ -124,7 +130,7 @@ defmodule Arca.TurnFenceRaceTest do
       unboxed(fn ->
         TurnStorage.accept_message(actor, thread.id, %{
           message: %{author: actor.user_id, content: "@aqua again"},
-          turn: %{agent: "aqua", requested_by: actor.user_id}
+          turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
         })
       end)
 

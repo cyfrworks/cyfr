@@ -1,0 +1,1536 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Arca.Providers.RecordsTest do
+  @moduledoc """
+  The record tools (`Arca.Providers.Records`) and its `retention` tool,
+  handed the caller's actor alone; and its files-resource reader, given
+  the roots the admitted caller may read.
+  """
+
+  use ExUnit.Case, async: false
+
+  alias Sanctum.Context
+  alias Arca.Providers.Records, as: MCP
+
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
+
+    # Use a test-specific base path to avoid polluting real config
+    test_path = Path.join(System.tmp_dir!(), "arca_mcp_test_#{:rand.uniform(100_000)}")
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
+
+    on_exit(fn ->
+      File.rm_rf!(test_path)
+
+      if original_base_path,
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
+    end)
+
+    {:ok, ctx: Sanctum.TestContext.local(:api), test_path: test_path}
+  end
+
+  # ============================================================================
+  # Tool Discovery
+  # ============================================================================
+
+  describe "tools/0" do
+    test "returns the four record tools and the retention tool" do
+      tools = MCP.tools()
+
+      assert Enum.map(tools, & &1.name) == [
+               "record",
+               "mcp_log",
+               "policy_log",
+               "decision",
+               "retention"
+             ]
+
+      assert MCP.service() == "arca"
+      refute Code.ensure_loaded?(Cyfr.Retention)
+    end
+
+    test "retention tool has 3 actions" do
+      tool = Enum.find(MCP.tools(), &(&1.name == "retention"))
+      actions = tool.input_schema["properties"]["action"]["enum"]
+      assert actions == ["get", "set", "cleanup"]
+    end
+
+    test "record tool has 3 read-only actions" do
+      tools = MCP.tools()
+      tool = Enum.find(tools, &(&1.name == "record"))
+      actions = tool.input_schema["properties"]["action"]["enum"]
+      assert actions == ["get", "list", "payload"]
+    end
+
+    test "each tool has required schema fields" do
+      for tool <- MCP.tools() do
+        assert is_binary(tool.name)
+        assert is_binary(tool.title)
+        assert is_binary(tool.description)
+        assert is_map(tool.input_schema)
+        assert tool.input_schema["type"] == "object"
+        assert "action" in tool.input_schema["required"]
+      end
+    end
+
+    test "the record tools and the retention tool take the actor" do
+      assert Prima.Provider.context_kind(MCP) == :actor
+    end
+  end
+
+  # ============================================================================
+  # The files resource
+  # ============================================================================
+
+  describe "the arca://files/{path} template" do
+    test "is advertised by the system provider that declares its read" do
+      refute function_exported?(MCP, :resource_templates, 0)
+      templates = Grimoire.Provider.resource_templates()
+      assert [%{uriTemplate: "arca://files/{path}"} = template] = templates
+
+      # Rendered from the layout table, so the advertised vocabulary can
+      # never drift from it.
+      for root <- Arca.Storage.tenant_roots() ++ Arca.Storage.key_read_roots() do
+        assert template.description =~ root <> "/"
+      end
+    end
+
+    test "the key roots are tenant roots" do
+      assert Arca.Storage.key_read_roots() == ["threads", "data"]
+      assert Arca.Storage.key_read_roots() -- Arca.Storage.tenant_roots() == []
+    end
+  end
+
+  describe "read/3" do
+    test "reads file resource", %{ctx: ctx} do
+      :ok = Arca.put(actor(ctx), ["data", "test.txt"], "hello world")
+
+      {:ok, result} = MCP.read(actor(ctx), "arca://files/data/test.txt", all_roots())
+      assert result.mimeType == "application/octet-stream"
+      assert Base.decode64!(result.content) == "hello world"
+    end
+
+    test "returns error for missing file", %{ctx: ctx} do
+      {:error, msg} = MCP.read(actor(ctx), "arca://files/data/missing.txt", all_roots())
+      assert err_msg(msg) =~ "not found"
+    end
+
+    test "an unknown resource is a typed argument refusal", %{ctx: ctx} do
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.read(actor(ctx), "arca://unknown/path", all_roots())
+
+      assert msg =~ "Unknown resource"
+    end
+
+    # The path is caller input — the boundary answers, it never raises.
+    test "a traversal path answers a typed error, never raises", %{ctx: ctx} do
+      {:error, msg} = MCP.read(actor(ctx), "arca://files/data/../aqua/agent.json", all_roots())
+      assert err_msg(msg) =~ "Invalid path"
+    end
+
+    test "an unknown root answers a typed error", %{ctx: ctx} do
+      {:error, msg} = MCP.read(actor(ctx), "arca://files/nope/x", all_roots())
+      assert err_msg(msg) =~ "Forbidden path"
+    end
+
+    test "an actor with no athanor is refused before any blob is read", %{ctx: ctx} do
+      :ok = Arca.put(actor(ctx), ["data", "x"], "bytes")
+
+      for tenantless <- [
+            Sanctum.Context.actor(Sanctum.Context.internal()),
+            %{actor(ctx) | athanor_id: nil},
+            %{actor(ctx) | athanor_id: ""}
+          ] do
+        assert {:error, :missing_tenant} =
+                 MCP.read(tenantless, "arca://files/data/x", all_roots())
+      end
+    end
+
+    test "the roots it is given are the reach, intersected with the tenant roots", %{ctx: ctx} do
+      :ok = Arca.put(actor(ctx), ["data", "reach.txt"], "g")
+      :ok = Arca.put(actor(ctx), ["threads", "thread_r", "reach.bin"], "t")
+      :ok = Arca.put(actor(ctx), ["aqua", "reach.md"], "a")
+
+      key_roots = Arca.Storage.key_read_roots()
+      assert {:ok, _} = MCP.read(actor(ctx), "arca://files/data/reach.txt", key_roots)
+      assert {:ok, _} = MCP.read(actor(ctx), "arca://files/threads/thread_r/reach.bin", key_roots)
+
+      # A root outside the list, a traversal out of a listed root and the
+      # empty path refuse before any read.
+      for uri <- [
+            "arca://files/aqua/reach.md",
+            "arca://files/data/../aqua/reach.md",
+            "arca://files/data/../threads/thread_r/reach.bin",
+            "arca://files/",
+            "arca://files///"
+          ] do
+        assert {:error, {:invalid_argument, msg}} = MCP.read(actor(ctx), uri, key_roots)
+        assert msg =~ "Forbidden path" or msg =~ "Invalid path", "#{uri}: #{msg}"
+      end
+
+      assert {:error, {:invalid_argument, "Forbidden path: aqua"}} =
+               MCP.read(actor(ctx), "arca://files/aqua/reach.md", key_roots)
+
+      # A root the layout does not know is no reach, whoever names it.
+      assert {:error, {:invalid_argument, "Forbidden path: cache"}} =
+               MCP.read(actor(ctx), "arca://files/cache/x", ["cache" | all_roots()])
+
+      assert {:ok, _} = MCP.read(actor(ctx), "arca://files/aqua/reach.md", all_roots())
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.read(actor(ctx), "arca://files/aqua/reach.md", [])
+    end
+  end
+
+  describe "record.payload" do
+    # A completed execution's result is a payload a member reads by the
+    # execution's id; another athanor reads nothing.
+    test "record.payload answers a retained result to a member of the athanor", %{ctx: ctx} do
+      exec = "exec_payload_#{System.unique_integer([:positive])}"
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.Execution, [
+          %{
+            id: exec,
+            athanor_id: ctx.athanor_id,
+            user_id: ctx.user_id,
+            reference: "reagent:local.pay:0.1.0",
+            status: "completed",
+            started_at: now
+          }
+        ])
+
+      {:ok, _} =
+        Arca.ExecutionPayloads.put(
+          Sanctum.Context.actor(ctx),
+          exec,
+          "result",
+          ~s({"answer":42}),
+          "api"
+        )
+
+      assert {:ok, %{execution_id: ^exec, kind: "result", bytes: 13, content: content}} =
+               MCP.handle("record", actor(ctx), %{"action" => "payload", "id" => exec})
+
+      assert Base.decode64!(content) == ~s({"answer":42})
+
+      assert {:error, {:not_found, "Payload", _}} =
+               MCP.handle("record", actor(ctx), %{
+                 "action" => "payload",
+                 "id" => exec,
+                 "kind" => "input"
+               })
+
+      assert {:error, {:not_found, "Payload", _}} =
+               MCP.handle("record", actor(%{ctx | athanor_id: "ath_elsewhere"}), %{
+                 "action" => "payload",
+                 "id" => exec
+               })
+    end
+
+    test "in-chain, record.payload answers the calling execution its own payload for its attempt",
+         %{ctx: ctx} do
+      exec = "exec_payload_#{System.unique_integer([:positive])}"
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.Execution, [
+          %{
+            id: exec,
+            athanor_id: ctx.athanor_id,
+            user_id: ctx.user_id,
+            reference: "formula:local.pay:0.1.0",
+            status: "running",
+            started_at: DateTime.utc_now(),
+            current_attempt: "att_1"
+          }
+        ])
+
+      {:ok, _} =
+        Arca.ExecutionPayloads.put(
+          Sanctum.Context.actor(ctx),
+          exec,
+          "input",
+          ~s({"given":1}),
+          "api"
+        )
+
+      guest = Context.enter_guest(ctx)
+
+      # The lineage the host stamps names the caller and its attempt.
+      stamped = %{
+        "action" => "payload",
+        "id" => exec,
+        "kind" => "input",
+        "parent_execution_id" => exec,
+        "attempt" => "att_1"
+      }
+
+      assert {:ok, %{content: content}} = MCP.handle("record", actor(guest), stamped)
+      assert Base.decode64!(content) == ~s({"given":1})
+
+      # Another execution's payload, a stale attempt, or no attempt at all.
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("record", actor(guest), %{
+                 stamped
+                 | "parent_execution_id" => "exec_other"
+               })
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("record", actor(guest), %{stamped | "attempt" => "att_0"})
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("record", actor(guest), Map.delete(stamped, "attempt"))
+
+      # A member names an attempt outright, and reads that attempt's.
+      member = %{"action" => "payload", "id" => exec, "kind" => "input", "attempt" => "att_1"}
+      assert {:ok, _} = MCP.handle("record", actor(ctx), member)
+
+      assert {:error, {:not_found, "Payload", _}} =
+               MCP.handle("record", actor(ctx), %{member | "attempt" => "att_0"})
+    end
+  end
+
+  # ============================================================================
+  # Retention Tool
+  # ============================================================================
+
+  describe "retention get action" do
+    test "get returns default settings", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("retention", actor(ctx), %{"action" => "get"})
+
+      assert result.action == "get"
+      assert is_map(result.settings)
+      assert result.settings["executions"] == 10_000
+      assert result.settings["builds"] == 100
+    end
+  end
+
+  describe "retention set action" do
+    test "set updates settings", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("retention", actor(ctx), %{
+          "action" => "set",
+          "settings" => %{"executions" => 5, "builds" => 3}
+        })
+
+      assert result.updated == true
+      assert result.settings["executions"] == 5
+      assert result.settings["builds"] == 3
+
+      # Verify persisted
+      {:ok, get_result} = MCP.handle("retention", actor(ctx), %{"action" => "get"})
+
+      assert get_result.settings["executions"] == 5
+    end
+
+    test "set refuses an unknown key and a bad value in today's words", %{ctx: ctx} do
+      assert {:error, {:invalid_argument, "Unknown retention setting: made_up"}} =
+               MCP.handle("retention", actor(ctx), %{
+                 "action" => "set",
+                 "settings" => %{"made_up" => 5}
+               })
+
+      assert {:error,
+              {:invalid_argument,
+               "Invalid value for retention setting executions — use a positive integer"}} =
+               MCP.handle("retention", actor(ctx), %{
+                 "action" => "set",
+                 "settings" => %{"executions" => 0}
+               })
+
+      assert {:error,
+              {:invalid_argument, "Missing required parameter: settings (must be a JSON object)"}} =
+               MCP.handle("retention", actor(ctx), %{"action" => "set"})
+    end
+  end
+
+  describe "retention cleanup action" do
+    test "cleanup runs with dry_run", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("retention", actor(ctx), %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions",
+          "dry_run" => true
+        })
+
+      assert result.action == "cleanup"
+      assert result.dry_run == true
+      assert is_integer(result.would_delete)
+    end
+
+    test "the cleanup vocabulary and settable keys are the retention roster", %{ctx: _ctx} do
+      # A kind added to Arca.Retention.kinds/0 must be on this surface the
+      # moment it exists — the enum fell two kinds behind once.
+      retention =
+        MCP.tools()
+        |> Enum.find(&(&1.name == "retention"))
+
+      roster = Enum.map(Arca.Retention.kinds(), & &1.key())
+
+      assert action_schema(retention, "cleanup")["properties"]["cleanup_type"]["enum"] == roster
+
+      assert action_schema(retention, "set")["properties"]["settings"]["properties"]
+             |> Map.keys()
+             |> Enum.sort() == Enum.sort(roster)
+    end
+
+    test "every kind is cleanable through the tool", %{ctx: ctx} do
+      for kind <- Arca.Retention.kinds() do
+        assert {:ok, %{deleted: n}} =
+                 MCP.handle("retention", actor(ctx), %{
+                   "action" => "cleanup",
+                   "cleanup_type" => kind.key()
+                 })
+
+        assert is_integer(n)
+      end
+    end
+
+    test "cleanup runs for executions", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("retention", actor(ctx), %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions"
+        })
+
+      assert result.action == "cleanup"
+      assert result.cleanup_type == "executions"
+      assert is_integer(result.deleted)
+    end
+
+    test "a kind whose store refuses renders as retention cleanup unavailable", %{ctx: ctx} do
+      Arca.ControlPlane.record(:lost)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+      assert {:error, {:unavailable, "Retention cleanup"} = reason} =
+               MCP.handle("retention", actor(ctx), %{
+                 "action" => "cleanup",
+                 "cleanup_type" => "staging_days"
+               })
+
+      assert err_msg(reason) =~ "unavailable"
+    end
+
+    test "returns error for invalid action", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("retention", actor(ctx), %{"action" => "invalid"})
+      assert err_msg(msg) =~ "Invalid retention action"
+    end
+  end
+
+  # The tool as the wire reaches it: the gate authorizes with the caller's
+  # context and hands the handler the actor it projects.
+  describe "retention through the gate" do
+    test "an actor with no athanor is refused, whatever its scope" do
+      platform =
+        Sanctum.internal_context(permissions: [:storage_read, :storage_write, :admin])
+
+      tenantless = %Context{
+        user_id: "no_tenant_user",
+        athanor_id: nil,
+        permissions: MapSet.new([:storage_read, :storage_write, :admin]),
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      }
+
+      for ctx <- [platform, tenantless],
+          args <- [
+            %{"action" => "get"},
+            %{"action" => "set", "settings" => %{"executions" => 5}},
+            %{"action" => "cleanup", "cleanup_type" => "executions"}
+          ] do
+        assert {:error, :missing_tenant} = Grimoire.call_external("retention", ctx, args),
+               "#{inspect(ctx.scope)} #{args["action"]}"
+      end
+    end
+
+    test "set answers the merged settings", %{ctx: ctx} do
+      assert {:ok, _} =
+               Grimoire.call_external("retention", ctx, %{
+                 "action" => "set",
+                 "settings" => %{"executions" => 5}
+               })
+
+      assert {:ok, %{action: "set", updated: true, settings: settings}} =
+               Grimoire.call_external("retention", ctx, %{
+                 "action" => "set",
+                 "settings" => %{"builds" => 3}
+               })
+
+      assert settings["executions"] == 5
+      assert settings["builds"] == 3
+      assert settings["mcp_log_days"] == Arca.Retention.McpLogs.default()
+      assert map_size(settings) == length(Arca.Retention.kinds())
+    end
+
+    test "corrupt settings render as corrupt, from every action", %{ctx: ctx} do
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.RetentionSettings, [
+          %{
+            athanor_id: ctx.athanor_id,
+            settings: ~s({"executions": 0}),
+            revision: 1,
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+
+      for args <- [
+            %{"action" => "get"},
+            %{"action" => "set", "settings" => %{"builds" => 3}},
+            %{"action" => "cleanup", "cleanup_type" => "executions"}
+          ] do
+        assert {:error, {:corrupt, {:settings, :retention}} = reason} =
+                 Grimoire.call_external("retention", ctx, args),
+               args["action"]
+
+        assert err_msg(reason) == "The stored retention settings are damaged."
+      end
+    end
+
+    test "settings that cannot be read render as unavailable", %{ctx: ctx} do
+      # Dropped inside the sandbox transaction, which rolls it back.
+      Arca.Repo.query!("DROP TABLE retention_settings")
+
+      assert {:error, {:unavailable, "Retention settings"} = reason} =
+               Grimoire.call_external("retention", ctx, %{"action" => "get"})
+
+      assert err_msg(reason) =~ "unavailable"
+    end
+  end
+
+  # ============================================================================
+  # Record Tool (Execution Records)
+  # ============================================================================
+
+  describe "record.get action" do
+    test "returns execution by id", %{ctx: ctx} do
+      exec_id = "exec_get_#{:rand.uniform(100_000)}"
+
+      # Create record via internal API (kernel-only operation)
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: exec_id,
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running",
+          input: "{}"
+        })
+
+      {:ok, result} =
+        MCP.handle("record", actor(ctx), %{
+          "action" => "get",
+          "id" => exec_id
+        })
+
+      assert result.id == exec_id
+      assert result.status == "running"
+    end
+
+    test "returns error for nonexistent execution", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("record", actor(ctx), %{
+          "action" => "get",
+          "id" => "nonexistent_id"
+        })
+
+      assert err_msg(msg) =~ "not found"
+    end
+
+    test "returns error without id", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("record", actor(ctx), %{"action" => "get"})
+      assert err_msg(msg) =~ "Missing required"
+    end
+  end
+
+  describe "record.list action" do
+    test "returns empty list when no executions", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("record", actor(ctx), %{"action" => "list"})
+      assert is_list(result.executions)
+    end
+
+    test "returns executions after recording", %{ctx: ctx} do
+      exec_id = "exec_list_#{:rand.uniform(100_000)}"
+
+      # Create record via internal API (kernel-only operation)
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: exec_id,
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running",
+          input: "{}"
+        })
+
+      {:ok, result} =
+        MCP.handle("record", actor(ctx), %{
+          "action" => "list"
+        })
+
+      ids = Enum.map(result.executions, & &1.id)
+      assert exec_id in ids
+    end
+
+    test "invalid action returns error", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("record", actor(ctx), %{"action" => "invalid"})
+      assert err_msg(msg) =~ "Invalid record action"
+    end
+  end
+
+  # ============================================================================
+  # Error Handling
+  # ============================================================================
+
+  describe "error handling" do
+    test "returns a typed not-found for an unknown tool", %{ctx: ctx} do
+      assert {:error, {:not_found, "tool", "unknown_tool"} = msg} =
+               MCP.handle("unknown_tool", actor(ctx), %{})
+
+      assert err_msg(msg) == "tool not found: unknown_tool"
+    end
+  end
+
+  # ============================================================================
+  # Authorization Rejection Tests
+  # ============================================================================
+
+  # ============================================================================
+  # Retention Authorization
+  # ============================================================================
+
+  describe "retention authorization with application API key" do
+    setup do
+      app_ctx = %Context{
+        user_id: "app_user",
+        namespace: "app_user",
+        athanor_id: "ath_test",
+        permissions: MapSet.new([:execute, :storage_read]),
+        scope: :athanor,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:ok, app_ctx: app_ctx}
+    end
+
+    test "can get retention settings", %{app_ctx: app_ctx} do
+      {:ok, result} = Grimoire.call_external("retention", app_ctx, %{"action" => "get"})
+      assert is_map(result.settings)
+    end
+
+    test "cannot set retention settings", %{app_ctx: app_ctx} do
+      # The dispatcher must enforce the declared :storage_write permission.
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_write}}} =
+               Grimoire.call_external("retention", app_ctx, %{
+                 "action" => "set",
+                 "settings" => %{"executions" => 5}
+               })
+    end
+
+    test "cannot run cleanup", %{app_ctx: app_ctx} do
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :admin}}} =
+               Grimoire.call_external("retention", app_ctx, %{
+                 "action" => "cleanup",
+                 "cleanup_type" => "executions"
+               })
+    end
+  end
+
+  describe "retention authorization with OIDC session" do
+    setup do
+      oidc_ctx = %Context{
+        user_id: "oidc_user",
+        namespace: "oidc_user",
+        athanor_id: "ath_test",
+        permissions: MapSet.new([:execute, :read, :write, :storage_read, :storage_write, :admin]),
+        scope: :athanor,
+        auth_method: :oidc,
+        api_key_type: nil,
+        authenticated: true
+      }
+
+      {:ok, oidc_ctx: oidc_ctx}
+    end
+
+    test "can set retention settings", %{oidc_ctx: oidc_ctx} do
+      {:ok, result} =
+        Grimoire.call_external("retention", oidc_ctx, %{
+          "action" => "set",
+          "settings" => %{"executions" => 5}
+        })
+
+      assert result.updated == true
+    end
+
+    test "can run cleanup", %{oidc_ctx: oidc_ctx} do
+      {:ok, result} =
+        Grimoire.call_external("retention", oidc_ctx, %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions",
+          "dry_run" => true
+        })
+
+      assert result.dry_run == true
+    end
+  end
+
+  # ============================================================================
+  # Record Authorization (non-admin denied)
+  # ============================================================================
+
+  describe "record authorization with non-admin context" do
+    setup do
+      non_admin_ctx = %Context{
+        user_id: "regular_user",
+        athanor_id: "ath_test",
+        permissions: MapSet.new([:execute, :storage_read]),
+        scope: :athanor,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:ok, non_admin_ctx: non_admin_ctx}
+    end
+
+    test "cross-tenant record.get returns not-found", %{ctx: _ctx} do
+      # Create execution in athanor alpha
+      ctx_a =
+        Sanctum.Context.build(
+          user_id: "user_a",
+          athanor_id: "ath_alpha",
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          namespace: "testns",
+          authenticated: true
+        )
+
+      exec_id = "exec_cross_tenant_#{:rand.uniform(100_000)}"
+
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: exec_id,
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx_a.user_id,
+          athanor_id: ctx_a.athanor_id,
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running",
+          input: "{}"
+        })
+
+      # Different tenant tries to get it
+      ctx_b =
+        Sanctum.Context.build(
+          user_id: "user_b",
+          athanor_id: "ath_beta",
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          namespace: "testns",
+          authenticated: true
+        )
+
+      {:error, msg} =
+        MCP.handle("record", actor(ctx_b), %{
+          "action" => "get",
+          "id" => exec_id
+        })
+
+      assert err_msg(msg) =~ "not found"
+
+      # Original tenant can still get it
+      {:ok, result} =
+        MCP.handle("record", actor(ctx_a), %{
+          "action" => "get",
+          "id" => exec_id
+        })
+
+      assert result.id == exec_id
+    end
+
+    test "any member can see the athanor's records", %{
+      ctx: ctx,
+      non_admin_ctx: non_admin_ctx
+    } do
+      # Create a record owned by one user via the internal API
+      exec_id = "exec_auth_#{:rand.uniform(100_000)}"
+
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: exec_id,
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running",
+          input: "{}"
+        })
+
+      # A fellow member of the same tenant can read it (members interchangeable).
+      assert {:ok, _result} =
+               MCP.handle("record", actor(non_admin_ctx), %{
+                 "action" => "get",
+                 "id" => exec_id
+               })
+    end
+  end
+
+  # ============================================================================
+  # Edge Cases: Retention
+  # ============================================================================
+
+  describe "retention edge cases" do
+    test "cleanup with unknown type returns error", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("retention", actor(ctx), %{
+          "action" => "cleanup",
+          "cleanup_type" => "unknown_type"
+        })
+
+      assert err_msg(msg) =~ "Cleanup failed" or err_msg(msg) =~ "Unknown cleanup_type"
+    end
+
+    test "defaults cleanup_type to executions", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("retention", actor(ctx), %{
+          "action" => "cleanup",
+          "dry_run" => true
+        })
+
+      assert result.cleanup_type == "executions"
+    end
+
+    test "cleanup with builds type works", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("retention", actor(ctx), %{
+          "action" => "cleanup",
+          "cleanup_type" => "builds",
+          "dry_run" => true
+        })
+
+      assert result.cleanup_type == "builds"
+    end
+
+    test "cleanup returns integer count when not dry_run", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("retention", actor(ctx), %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions",
+          "dry_run" => false
+        })
+
+      assert result.cleanup_type == "executions"
+      assert is_integer(result.deleted)
+    end
+  end
+
+  # ============================================================================
+  # Tool Discovery - Updated
+  # ============================================================================
+
+  # ============================================================================
+  # Tool Schema Hardening
+  # ============================================================================
+
+  describe "mcp_log tool schema" do
+    test "only exposes read-only actions" do
+      tools = MCP.tools()
+      tool = Enum.find(tools, &(&1.name == "mcp_log"))
+      actions = tool.input_schema["properties"]["action"]["enum"]
+      assert actions == ["list", "get", "correlate", "fan_outs", "stats"]
+
+      refute "log_started" in actions
+      refute "log_completed" in actions
+      refute "log_failed" in actions
+    end
+  end
+
+  describe "mcp_log rows" do
+    test "a row answers the refusal's class, never a JSON-RPC code", %{ctx: ctx} do
+      decision =
+        Prima.Decision.new(
+          call_id: Prima.UUID7.generate_id("call"),
+          request_id: Prima.UUID7.request_id(),
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          plane: :external,
+          tool: "storage",
+          action: "get",
+          inserted_at: DateTime.utc_now(),
+          admission: :refused,
+          refusal_class: :forbidden,
+          reason: "Not allowed."
+        )
+
+      :ok = Grimoire.open_decision(ctx, decision, %{input: %{}})
+
+      assert {:ok, row} =
+               MCP.handle("mcp_log", actor(ctx), %{"action" => "get", "id" => decision.call_id})
+
+      assert row.refusal_class == "forbidden"
+      assert row.error == "Not allowed."
+      refute Map.has_key?(row, :error_code)
+    end
+  end
+
+  describe "policy_log tool schema" do
+    test "only exposes read-only actions" do
+      tools = MCP.tools()
+      tool = Enum.find(tools, &(&1.name == "policy_log"))
+      actions = tool.input_schema["properties"]["action"]["enum"]
+      assert actions == ["list", "get", "correlate"]
+
+      refute "log" in actions
+    end
+  end
+
+  # ============================================================================
+  # MCP Log Write Actions Denied (kernel-only)
+  # ============================================================================
+
+  describe "retired write/delete verbs are unknown at dispatch" do
+    test "kernel-only and append-only verbs no longer exist on the surface", %{ctx: ctx} do
+      # Undeclared actions must be refused before handler dispatch.
+      retired = [
+        {"record", "record_start"},
+        {"record", "record_complete"},
+        {"mcp_log", "log_started"},
+        {"mcp_log", "log_completed"},
+        {"mcp_log", "log_failed"},
+        {"mcp_log", "delete"},
+        {"policy_log", "log"},
+        {"policy_log", "delete"}
+      ]
+
+      for {tool, verb} <- retired do
+        {:error, %Prima.Refusal{stage: :admission, reason: {:unknown_action, name_action}}} =
+          Grimoire.call_external(tool, ctx, %{"action" => verb})
+
+        assert name_action == "#{tool}.#{verb}"
+      end
+    end
+  end
+
+  # ============================================================================
+  # Edge Cases: Error Paths
+  # ============================================================================
+
+  describe "resource read error paths" do
+    test "reads a file whole", %{ctx: ctx} do
+      :ok = Arca.put(actor(ctx), ["data", "resource_test.txt"], "content")
+
+      {:ok, result} = MCP.read(actor(ctx), "arca://files/data/resource_test.txt", all_roots())
+      assert Base.decode64!(result.content) == "content"
+    end
+
+    test "handles nested path in resource URI", %{ctx: ctx} do
+      :ok = Arca.put(actor(ctx), ["data", "nested", "file.txt"], "nested content")
+
+      {:ok, result} = MCP.read(actor(ctx), "arca://files/data/nested/file.txt", all_roots())
+      assert Base.decode64!(result.content) == "nested content"
+    end
+  end
+
+  describe "correlate authorization" do
+    setup do
+      no_read_ctx = %Context{
+        user_id: "regular_user",
+        athanor_id: "ath_test",
+        permissions: MapSet.new([:execute]),
+        scope: :athanor,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:ok, no_read_ctx: no_read_ctx}
+    end
+
+    test "mcp_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_read}}} =
+               Grimoire.call_external("mcp_log", ctx, %{
+                 "action" => "correlate",
+                 "request_id" => "req_x"
+               })
+    end
+
+    test "policy_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_read}}} =
+               Grimoire.call_external("policy_log", ctx, %{
+                 "action" => "correlate",
+                 "request_id" => "req_x"
+               })
+    end
+
+    test "correlate succeeds for a :storage_read context", %{ctx: ctx} do
+      assert {:ok, %{request_id: "req_none"}} =
+               MCP.handle("mcp_log", actor(ctx), %{
+                 "action" => "correlate",
+                 "request_id" => "req_none"
+               })
+
+      assert {:ok, %{request_id: "req_none"}} =
+               MCP.handle("policy_log", actor(ctx), %{
+                 "action" => "correlate",
+                 "request_id" => "req_none"
+               })
+    end
+  end
+
+  describe "mcp_log.stats authorization" do
+    setup do
+      no_read_ctx = %Context{
+        user_id: "regular_user",
+        athanor_id: "ath_test",
+        permissions: MapSet.new([:execute]),
+        scope: :athanor,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:ok, no_read_ctx: no_read_ctx}
+    end
+
+    test "stats requires :storage_read like its siblings", %{no_read_ctx: ctx} do
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_read}}} =
+               Grimoire.call_external("mcp_log", ctx, %{"action" => "stats"})
+    end
+
+    test "stats succeeds for a :storage_read context", %{ctx: ctx} do
+      assert {:ok, result} = MCP.handle("mcp_log", actor(ctx), %{"action" => "stats"})
+      assert is_integer(result.total)
+      assert is_integer(result.errors)
+    end
+  end
+
+  # Walks every action each tool declares in its input schema and asserts the
+  # handler denies an unprivileged context. Pins authorization on all current
+  # actions and fails when a future action ships without an authorize call
+  # (an unauthorized probe must never fall through to a data-bearing path).
+  describe "declared tool actions all authorize" do
+    test "every declared action denies a context without permissions" do
+      no_perm_ctx = %Context{
+        user_id: "no_perm_user",
+        athanor_id: "ath_test",
+        permissions: MapSet.new(),
+        scope: :athanor,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      # Minimal args per action so the call reaches the authorize path
+      # instead of the missing-required-argument clause. A new action with
+      # required args must be added here — the "Unauthorized" assert below
+      # fails on the missing-arg error otherwise, forcing the pin.
+      extra_args = fn
+        {"retention", "get"} -> %{}
+        {"decision", action} when action in ["get", "get_global"] -> %{"call_id" => "guard_probe"}
+        {_, action} when action in ["get", "payload"] -> %{"id" => "guard_probe"}
+        {_, "correlate"} -> %{"request_id" => "guard_probe"}
+        {_, "fan_outs"} -> %{"request_ids" => ["guard_probe"]}
+        {_, "set"} -> %{"settings" => %{"executions" => 5}}
+        _ -> %{}
+      end
+
+      for tool <- MCP.tools(),
+          action <- tool.input_schema["properties"]["action"]["enum"] do
+        args = Map.put(extra_args.({tool.name, action}), "action", action)
+
+        case Grimoire.call_external(tool.name, no_perm_ctx, args) do
+          {:error, %Prima.Refusal{stage: :admission, reason: reason}} ->
+            assert Sanctum.Unauthorized.reason?(reason),
+                   "#{tool.name}.#{action} error is not a permission denial: #{inspect(reason)}"
+
+          {:error, reason} ->
+            assert Sanctum.Unauthorized.reason?(reason),
+                   "#{tool.name}.#{action} error is not a permission denial: #{inspect(reason)}"
+
+          other ->
+            flunk(
+              "#{tool.name}.#{action} succeeded for an unprivileged context: #{inspect(other)}"
+            )
+        end
+      end
+    end
+  end
+
+  describe "a storage outage is a refusal, never a crash" do
+    # `get_tenant/2` is db-rescued, so an outage answers
+    # `{:error, :database_error}`. Bound as the row it reaches
+    # `execution_to_map/1`, whose `is_struct or is_map` guard raises —
+    # and `list` answered the storage refusal while `get` answered "the
+    # tool crashed". Dropping the table inside the sandbox transaction is
+    # the outage: it rolls back with the test, on both adapters.
+    test "record.get", %{ctx: ctx} do
+      drop_executions!()
+
+      assert {:error, reason} =
+               MCP.handle("record", actor(ctx), %{"action" => "get", "id" => "exec_x"})
+
+      assert err_msg(reason) =~ "unavailable"
+    end
+
+    test "mcp_log.get", %{ctx: ctx} do
+      Arca.Repo.query!("DROP TABLE mcp_logs")
+
+      assert {:error, reason} =
+               MCP.handle("mcp_log", actor(ctx), %{"action" => "get", "id" => "req_x"})
+
+      assert err_msg(reason) =~ "unavailable"
+    end
+  end
+
+  # ============================================================================
+  # Decision Tool
+  # ============================================================================
+
+  describe "decision tool schema" do
+    test "declares the tenant readers and the platform admin's global readers" do
+      tool = Enum.find(MCP.tools(), &(&1.name == "decision"))
+
+      assert tool.input_schema["properties"]["action"]["enum"] ==
+               ["list", "get", "correlate", "list_global", "get_global"]
+
+      for operation <- tool.operations do
+        assert operation.kind == :read
+        assert operation.planes == [:external]
+        assert operation.permission == :storage_read
+
+        assert operation.scope ==
+                 if(operation.action in ["list_global", "get_global"], do: :platform)
+      end
+
+      assert action_schema(tool, "list")["properties"]["admission"]["enum"] ==
+               ["admitted", "refused"]
+    end
+  end
+
+  describe "decision tenant readers" do
+    setup %{ctx: ctx} do
+      other =
+        Sanctum.Context.build(
+          user_id: "user_other_decision",
+          athanor_id: "ath_other_decision",
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      request_id = Prima.UUID7.request_id()
+      admitted = append!(ctx, request_id: request_id)
+
+      refused =
+        append!(ctx, request_id: request_id, admission: :refused, refusal_class: :forbidden)
+
+      foreign = append!(other, request_id: request_id)
+
+      host =
+        append!(nil, request_id: request_id, admission: :refused, refusal_class: :unauthenticated)
+
+      {:ok,
+       other: other,
+       request_id: request_id,
+       admitted: admitted,
+       refused: refused,
+       foreign: foreign,
+       host: host}
+    end
+
+    test "list answers the caller's athanor's decisions and never the host's", %{
+      ctx: ctx,
+      request_id: request_id,
+      admitted: admitted,
+      refused: refused
+    } do
+      assert {:ok, %{decisions: rows}} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "list",
+                 "request_id" => request_id
+               })
+
+      assert ids(rows) == Enum.sort([admitted.call_id, refused.call_id])
+      assert Enum.all?(rows, &(&1["athanor_id"] == ctx.athanor_id))
+    end
+
+    test "list filters by admission and class, and refuses a name outside the vocabulary",
+         %{ctx: ctx, request_id: request_id, refused: refused} do
+      assert {:ok, %{decisions: [row]}} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "list",
+                 "request_id" => request_id,
+                 "refusal_class" => "forbidden"
+               })
+
+      assert row["call_id"] == refused.call_id
+
+      assert {:ok, %{decisions: [^row]}} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "list",
+                 "request_id" => request_id,
+                 "admission" => "refused"
+               })
+
+      assert {:error, {:invalid_argument, message}} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "list",
+                 "refusal_class" => "not_a_class"
+               })
+
+      assert message =~ "refusal_class"
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("decision", actor(ctx), %{"action" => "list", "since" => "yesterday"})
+    end
+
+    test "get renders every decision field under its own name", %{ctx: ctx, refused: refused} do
+      assert {:ok, %{decision: row}} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "get",
+                 "call_id" => refused.call_id
+               })
+
+      fields = Prima.Decision.__struct__() |> Map.from_struct() |> Map.keys()
+      assert Enum.sort(Map.keys(row)) == Enum.sort(Enum.map(fields, &Atom.to_string/1))
+
+      assert row["call_id"] == refused.call_id
+      assert row["plane"] == "external"
+      assert row["admission"] == "refused"
+      assert row["refusal_class"] == "forbidden"
+      assert row["completion"] == nil
+      assert {:ok, _, _} = DateTime.from_iso8601(row["inserted_at"])
+    end
+
+    test "get of another tenant's or the host's call id answers not found", %{
+      ctx: ctx,
+      foreign: foreign,
+      host: host
+    } do
+      for call_id <- [foreign.call_id, host.call_id, "call_missing"] do
+        assert {:error, {:not_found, "Decision", ^call_id} = reason} =
+                 MCP.handle("decision", actor(ctx), %{"action" => "get", "call_id" => call_id})
+
+        assert err_msg(reason) =~ "not found"
+      end
+    end
+
+    test "an actor with no athanor is refused", %{ctx: ctx} do
+      tenantless = %{actor(ctx) | athanor_id: nil}
+
+      assert {:error, :missing_tenant} =
+               MCP.handle("decision", tenantless, %{"action" => "list"})
+
+      assert {:error, :missing_tenant} =
+               MCP.handle("decision", tenantless, %{"action" => "get", "call_id" => "call_x"})
+    end
+
+    test "decision.correlate joins the request's decisions to its other legs", %{
+      ctx: ctx,
+      request_id: request_id,
+      admitted: admitted,
+      refused: refused
+    } do
+      assert {:ok, result} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "correlate",
+                 "request_id" => request_id
+               })
+
+      assert result.request_id == request_id
+      assert ids(result.decisions) == Enum.sort([admitted.call_id, refused.call_id])
+
+      for leg <- [:mcp_logs, :executions, :policy_logs],
+          do: assert(is_list(Map.fetch!(result, leg)))
+    end
+
+    test "mcp_log.correlate carries the decisions leg beside its own", %{
+      ctx: ctx,
+      request_id: request_id,
+      admitted: admitted,
+      refused: refused
+    } do
+      assert {:ok, result} =
+               MCP.handle("mcp_log", actor(ctx), %{
+                 "action" => "correlate",
+                 "request_id" => request_id
+               })
+
+      assert ids(result.decisions) == Enum.sort([admitted.call_id, refused.call_id])
+
+      assert Enum.sort(Map.keys(result) -- [:decisions]) == [
+               :executions,
+               :mcp_logs,
+               :policy_logs,
+               :request_id
+             ]
+    end
+
+    test "a storage outage is a refusal", %{ctx: ctx} do
+      Arca.Repo.query!("DROP TABLE decision_logs")
+
+      for args <- [
+            %{"action" => "get", "call_id" => "call_x"},
+            %{"action" => "list"},
+            %{"action" => "correlate", "request_id" => "req_x"}
+          ] do
+        assert {:error, {:unavailable, "Storage"}} = MCP.handle("decision", actor(ctx), args)
+      end
+    end
+  end
+
+  describe "decision global readers" do
+    setup %{ctx: ctx} do
+      request_id = Prima.UUID7.request_id()
+      tenant = append!(ctx, request_id: request_id)
+
+      host =
+        append!(nil, request_id: request_id, admission: :refused, refusal_class: :unauthenticated)
+
+      admin = %{ctx | platform_admin: true}
+
+      {:ok, request_id: request_id, tenant: tenant, host: host, admin: admin}
+    end
+
+    test "a platform admin reads every tenant's decisions and the host's", %{
+      admin: admin,
+      request_id: request_id,
+      tenant: tenant,
+      host: host
+    } do
+      assert {:ok, %{decisions: rows}} =
+               Grimoire.call_external("decision", admin, %{
+                 "action" => "list_global",
+                 "request_id" => request_id
+               })
+
+      assert ids(rows) == Enum.sort([tenant.call_id, host.call_id])
+
+      assert {:ok, %{decision: %{"call_id" => call_id, "athanor_id" => nil}}} =
+               Grimoire.call_external("decision", admin, %{
+                 "action" => "get_global",
+                 "call_id" => host.call_id
+               })
+
+      assert call_id == host.call_id
+    end
+
+    test "athanor_id none answers only the host's rows, an id only that athanor's", %{
+      ctx: ctx,
+      admin: admin,
+      request_id: request_id,
+      tenant: tenant,
+      host: host
+    } do
+      list = fn athanor ->
+        {:ok, %{decisions: rows}} =
+          MCP.handle("decision", actor(admin), %{
+            "action" => "list_global",
+            "request_id" => request_id,
+            "athanor_id" => athanor
+          })
+
+        ids(rows)
+      end
+
+      assert list.("none") == [host.call_id]
+      assert list.(ctx.athanor_id) == [tenant.call_id]
+      assert list.("ath_nobody") == []
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("decision", actor(admin), %{
+                 "action" => "list_global",
+                 "athanor_id" => ""
+               })
+    end
+
+    test "the gate refuses a caller without the operator capability", %{ctx: ctx, host: host} do
+      for args <- [
+            %{"action" => "list_global"},
+            %{"action" => "get_global", "call_id" => host.call_id}
+          ] do
+        assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
+                 Grimoire.call_external("decision", ctx, args)
+      end
+    end
+
+    test "the log refuses a caller without the operator capability on its own", %{
+      ctx: ctx,
+      host: host
+    } do
+      for args <- [
+            %{"action" => "list_global"},
+            %{"action" => "get_global", "call_id" => host.call_id}
+          ] do
+        assert {:error, :platform_admin_required = reason} =
+                 MCP.handle("decision", actor(ctx), args)
+
+        assert err_msg(reason) =~ "platform admin"
+      end
+    end
+  end
+
+  describe "decision through the gate" do
+    test "reading decisions records no decision", %{ctx: ctx} do
+      ref = make_ref()
+      test = self()
+
+      :telemetry.attach_many(
+        {__MODULE__, ref},
+        [[:cyfr, :grimoire, :decision, :admitted], [:cyfr, :grimoire, :decision, :refused]],
+        fn _event, _measurements, metadata, _ -> send(test, {ref, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+
+      request_id = Prima.UUID7.request_id()
+      ctx = %{ctx | request_id: request_id}
+      admin = %{ctx | platform_admin: true}
+
+      for {caller, args} <- [
+            {ctx, %{"action" => "list"}},
+            {ctx, %{"action" => "get", "call_id" => "call_missing"}},
+            {ctx, %{"action" => "correlate", "request_id" => request_id}},
+            {admin, %{"action" => "list_global"}},
+            {admin, %{"action" => "get_global", "call_id" => "call_missing"}}
+          ] do
+        Grimoire.call_external("decision", caller, args)
+      end
+
+      refute_received {^ref, _}
+      assert {:ok, []} = Arca.DecisionLog.correlate(actor(ctx), request_id)
+    end
+
+    test "no decision action is reachable from a running chain", %{ctx: ctx} do
+      tool = Enum.find(MCP.tools(), &(&1.name == "decision"))
+      actions = tool.input_schema["properties"]["action"]["enum"]
+      authority = granting(Enum.map(actions, &"decision.#{&1}"))
+
+      lineage =
+        ctx |> Cyfr.Test.AttemptFixtures.lineage!() |> Map.take([:parent_execution_id, :attempt])
+
+      guest = Sanctum.Context.enter_guest(%{ctx | platform_admin: true})
+
+      for action <- actions do
+        refute Grimoire.Catalog.in_chain_reachable?("decision", action)
+
+        args =
+          if action in ["get", "get_global"],
+            do: %{"action" => action, "call_id" => "call_x"},
+            else: %{"action" => action, "request_id" => "req_x"}
+
+        assert {:error, %Prima.Refusal{stage: :admission, message: message}} =
+                 Grimoire.call_in_chain("decision", guest, args, authority, lineage: lineage)
+
+        assert message =~ "not reachable from a running chain"
+      end
+    end
+  end
+
+  defp actor(ctx), do: Sanctum.Context.actor(ctx)
+
+  # One decision appended under `ctx`'s actor, or under none for the
+  # host's row, with `fields` over an admitted default.
+  defp append!(ctx, fields) do
+    decision =
+      Prima.Decision.new(
+        Keyword.merge(
+          [
+            call_id: Prima.UUID7.generate_id("call"),
+            user_id: ctx && ctx.user_id,
+            athanor_id: ctx && ctx.athanor_id,
+            plane: :external,
+            tool: "storage",
+            action: "get",
+            inserted_at: DateTime.utc_now(),
+            admission: :admitted
+          ],
+          fields
+        )
+      )
+
+    :ok = Arca.DecisionLog.append(ctx && actor(ctx), decision)
+    decision
+  end
+
+  defp ids(rows), do: rows |> Enum.map(& &1["call_id"]) |> Enum.sort()
+
+  defp granting(tools) do
+    alias Prima.Test.AuthorityFixtures
+    source = AuthorityFixtures.formula_ref()
+
+    {:ok, blob} =
+      AuthorityFixtures.graph_map()
+      |> put_in(["nodes", source, "edges", "@ingress", "tools"], Enum.sort(tools))
+      |> Prima.Authority.Blob.parse()
+
+    {:ok, authority} =
+      Prima.Authority.root(AuthorityFixtures.profile(), blob,
+        ceiling: AuthorityFixtures.ceiling()
+      )
+
+    authority
+  end
+
+  defp all_roots, do: Arca.Storage.tenant_roots()
+
+  # The provider answers typed reasons where the class is clear; the shared
+  # renderer is the one spelling of every sentence, so assert through it.
+  # Plain strings pass through unchanged.
+  defp err_msg(reason) do
+    Grimoire.Error.render(reason) ||
+      flunk("unrenderable refusal: #{inspect(reason)}")
+  end
+
+  # An outage, simulated: the table is gone. Postgres holds the tables that
+  # reference `executions` to it and drops them along; SQLite has no such
+  # clause and no such need.
+  #
+  # config:compile-runtime-ok — must match what `Arca.Repo` compiled
+  # against, as `Arca.TenantTables` does: the adapter is bound at compile
+  # time, so a runtime branch on `__adapter__/0` is one the compiler
+  # proves dead.
+  @drop_executions (case Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3) do
+                      Ecto.Adapters.Postgres -> "DROP TABLE executions CASCADE"
+                      _sqlite -> "DROP TABLE executions"
+                    end)
+
+  defp drop_executions!, do: Arca.Repo.query!(@drop_executions)
+
+  # One action's own declaration, as `Prima.Operation.cast/2` applies it;
+  # the tool's discovery schema merges every action into one flat object.
+  defp action_schema(tool, action) do
+    case Enum.find(tool.operations, &(&1.action == action)) do
+      nil ->
+        flunk("missing schema for #{tool.name}.#{action}")
+
+      operation ->
+        operation.args
+        |> Prima.Arg.schema()
+        |> put_in(["properties", "action"], %{"type" => "string", "const" => action})
+        |> Map.update!("required", &["action" | &1])
+    end
+  end
+end

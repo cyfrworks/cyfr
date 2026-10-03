@@ -1,0 +1,1992 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Grimoire.Catalog do
+  @moduledoc """
+  The operation table and the gate that dispatches through it.
+
+  At boot, before any supervisor starts, `load!/0` reads every provider
+  configured under `:cyfr, :tool_providers`, audits its declarations and
+  writes the table into Grimoire's own `:persistent_term`: the table
+  itself (`{Grimoire, :operations}`, tool name → `{provider, tool}`), the
+  sorted wire list `tools/list` serves (`{Grimoire, :tool_list}`), the
+  stream table (`{Grimoire, :streams}`, stream name → `{provider, stream}`,
+  from each provider's `Prima.Provider.streams/1`) and, through
+  `Grimoire.Resources`, the resource URI index (`{Grimoire, :resources}`). The term is this member's, written once;
+  nothing refreshes, rebuilds or invalidates it, and a process that dies
+  takes none of it along. Every lookup and every action enumeration reads
+  it. The proxied `server:tool` tools are no provider's declarations and
+  are not in it: they are the tenant's, cached per athanor by the proxy
+  port (`Grimoire.Proxy`).
+
+  Callers outside the gate enter through `Grimoire`; this module is its
+  implementation.
+
+  ## Usage
+
+      Grimoire.list_tools()
+      Grimoire.call_external("retention", context, %{"action" => "get"})
+
+  ## One node, honestly
+
+  The catalog routes calls within the local node.
+
+  ## The gate, as it is
+
+  Who may run an operation is decided once, here, and the answer has
+  three arms. A guest-planed context with no Authority is denied every
+  operation: a component reaches nothing by itself. A guest-planed
+  context with an Authority reaches the in-chain set — the actions whose
+  annotation names the `:in_chain` plane, derived from the declarations
+  and nothing else — and only through `Sanctum.Authority.step/3`, the
+  transition relation with a spawn's budget charged, which answers for the
+  chain's grants; the identity conjunct is then the caller's own
+  permission. An external-plane caller, a person or a
+  key, is judged by the annotations alone: plane, auth, permission,
+  consent class, scope. There is no rule that depends on which runner is
+  asking.
+
+  ## What a handler is given
+
+  The gate decides with the caller's full context. Only after
+  authentication, consent, argument validation and lineage have run does
+  the handler receive its input, projected once in `route/5`'s handler
+  closure: a provider declaring `context_kind: :actor`
+  (`Prima.Provider.context_kind/1`) is given `Sanctum.Context.actor/1`
+  of that context and nothing else, on either plane; every other provider
+  is given the context. The boot audit refuses a provider that declares
+  anything else.
+  """
+
+  @behaviour Sanctum.Grimoire
+  require Logger
+
+  alias Grimoire.Annotations
+  alias Grimoire.Error
+  alias Prima.Operation
+  alias Sanctum.Context
+
+  # Default tool execution timeout (5 minutes)
+  @tool_timeout_ms :timer.minutes(5)
+
+  # The operation table's three terms. `Grimoire.Resources` holds the fourth.
+  @operations {Grimoire, :operations}
+  @tool_list {Grimoire, :tool_list}
+  @streams {Grimoire, :streams}
+
+  # What a stream open is judged by: the default an action declares
+  # nothing beyond — a read, on the external plane, for a signed-in,
+  # claimed caller, with no permission, consent class or scope.
+  @stream_annotation %{kind: :read, planes: [:external]}
+
+  # ============================================================================
+  # The table
+  # ============================================================================
+
+  @doc """
+  Build the operation table from the configured providers and write it,
+  once, into this member's `:persistent_term`. Called by
+  `Cyfr.Application.start/2` after the ports are installed and before any
+  supervisor starts, so nothing that dispatches can run before the table
+  exists.
+
+  A provider that cannot load, or does not export `tools/0`, refuses the
+  boot: every consent shape is digested against the table, and a partial
+  table would read as the whole. Under test only, a run without the
+  sibling applications (one application's tests) says so with
+  `:tool_providers_lenient`, and each such provider is skipped with its
+  reason logged; a build for any other environment compiles neither that
+  setting's read nor `with_providers/2`. An action the
+  gates cannot classify, a handler input the gate cannot honour, and a
+  resource read the gate cannot name refuse the boot the same way.
+  """
+  @spec load!() :: :ok
+  def load! do
+    configured_providers()
+    |> loadable_roster!()
+    |> install!()
+  end
+
+  # The test seams: a planted provider and a lenient roster. Both are
+  # compiled into the test build alone, so no setting of a release can
+  # narrow its table or skip a provider it cannot load.
+  if Mix.env() == :test do
+    @doc false
+    # The table for a block, then the table as it was. A test that plants a
+    # probe provider runs it through here, synchronously (`async: false`):
+    # the planted providers join the configured roster, pass the same audits
+    # as a booted provider, and are gone when the block returns, however it
+    # returns.
+    @spec with_providers([module()], (-> result)) :: result when result: term()
+    def with_providers(providers, fun) when is_list(providers) and is_function(fun, 0) do
+      for provider <- providers, not loadable?(provider) do
+        raise ArgumentError,
+              "#{inspect(provider)} is not a provider: it does not export tools/0"
+      end
+
+      saved =
+        {:persistent_term.get(@operations), :persistent_term.get(@tool_list),
+         :persistent_term.get(@streams), Grimoire.Resources.table()}
+
+      try do
+        configured_providers()
+        |> loadable_roster!()
+        |> Enum.concat(providers)
+        |> Enum.uniq()
+        |> install!()
+
+        fun.()
+      after
+        {operations, tool_list, streams, resources} = saved
+        :persistent_term.put(@operations, operations)
+        :persistent_term.put(@tool_list, tool_list)
+        :persistent_term.put(@streams, streams)
+        Grimoire.Resources.put(resources)
+      end
+    end
+
+    # The roster without the configured providers that cannot load: a
+    # refusal, or — leniently — each skipped with its reason.
+    @spec without_unloadable!([module()], [module()]) :: [module()]
+    defp without_unloadable!(configured, missing) do
+      unless Application.get_env(:cyfr, :tool_providers_lenient, false),
+        do: refuse_unloadable!(missing)
+
+      for module <- missing do
+        Logger.warning(
+          "[Grimoire.Catalog] tool provider #{inspect(module)} skipped (lenient): " <>
+            unloadable_reason(module)
+        )
+      end
+
+      configured -- missing
+    end
+
+    defp unloadable_reason(module) do
+      if Code.ensure_loaded?(module),
+        do: "it does not export tools/0",
+        else: "the module is not available"
+    end
+  else
+    @spec without_unloadable!([module()], [module()]) :: no_return()
+    defp without_unloadable!(_configured, missing), do: refuse_unloadable!(missing)
+  end
+
+  # The configured providers this boot can load. One that cannot refuses
+  # the boot, the test build's lenient skip aside.
+  defp loadable_roster!(configured) do
+    case Enum.reject(configured, &loadable?/1) do
+      [] -> configured
+      missing -> without_unloadable!(configured, missing)
+    end
+  end
+
+  @spec refuse_unloadable!([module()]) :: no_return()
+  defp refuse_unloadable!(missing) do
+    raise "configured tool providers failed to load: #{inspect(missing)} — " <>
+            "a catalog missing a provider narrows every consent digest; refusing to boot"
+  end
+
+  defp install!(providers) do
+    audit!(audit_action_kinds(providers), "tool annotations failed the catalog audit", fn f ->
+      "#{f.tool}.#{f.action}: #{f.reason}"
+    end)
+
+    audit!(
+      audit_context_kinds(providers),
+      "provider handler inputs failed the catalog audit",
+      &"#{inspect(&1.provider)}: #{&1.reason}"
+    )
+
+    audit!(
+      audit_resource_schemes(providers),
+      "resource declarations failed the catalog audit",
+      &inspect/1
+    )
+
+    streams = stream_table!(providers)
+
+    operations =
+      for module <- providers, tool <- module.tools(), into: %{} do
+        {tool.name, {module, canonical(tool)}}
+      end
+
+    :persistent_term.put(@operations, operations)
+    :persistent_term.put(@tool_list, wire_list(operations))
+    :persistent_term.put(@streams, streams)
+    Grimoire.Resources.put(Grimoire.Resources.build(providers))
+
+    Logger.info(
+      "[Grimoire.Catalog] loaded #{map_size(operations)} tools from #{length(providers)} providers"
+    )
+
+    :ok
+  end
+
+  # Every provider's declared streams, by name. A declaration
+  # `Prima.Provider.streams/1` refuses, or one name two providers declare,
+  # refuses the boot: an open names a stream, and a name that could mean
+  # either would let one provider's grammar and bound admit the other's.
+  defp stream_table!(providers) do
+    declared =
+      for module <- providers,
+          stream <- declared_streams!(module),
+          do: {stream.name, {module, stream}}
+
+    audit!(
+      case for {name, entries} <- Enum.group_by(declared, &elem(&1, 0), &elem(elem(&1, 1), 0)),
+               length(entries) > 1,
+               do: %{stream: name, providers: entries} do
+        [] -> :ok
+        findings -> {:error, findings}
+      end,
+      "stream declarations failed the catalog audit",
+      &"#{&1.stream}: declared by #{inspect(&1.providers)}"
+    )
+
+    Map.new(declared)
+  end
+
+  defp declared_streams!(module) do
+    Prima.Provider.streams(module)
+  rescue
+    exception in ArgumentError ->
+      reraise "stream declarations failed the catalog audit; refusing to boot:\n  - " <>
+                Exception.message(exception),
+              __STACKTRACE__
+  end
+
+  defp audit!(:ok, _what, _line), do: :ok
+
+  defp audit!({:error, findings}, what, line) do
+    raise "#{what}; refusing to boot:\n" <>
+            Enum.map_join(findings, "\n", &("  - " <> line.(&1)))
+  end
+
+  # A tool as the table holds it: rebuilt from its operations, so the
+  # schema and annotations are the declarations' and nothing else.
+  defp canonical(tool) do
+    meta =
+      Operation.tool(
+        Map.fetch!(tool, :operations),
+        Map.to_list(Map.take(tool, [:description, :title, :icons, :output_schema]))
+      )
+
+    if meta.name != tool.name,
+      do: raise(ArgumentError, "registered tool identity does not match its operations")
+
+    meta
+  end
+
+  defp wire_list(operations) do
+    operations
+    |> Enum.map(fn {name, {_module, meta}} -> wire(name, meta) end)
+    |> Enum.sort_by(& &1["name"])
+  end
+
+  defp wire(name, meta) do
+    %{
+      "name" => name,
+      "description" => meta.description,
+      "inputSchema" => meta.input_schema
+    }
+    |> Prima.MapUtil.put_present("title", meta[:title])
+    |> Prima.MapUtil.put_present("icons", meta[:icons])
+    |> Prima.MapUtil.put_present("outputSchema", meta[:output_schema])
+    |> Prima.MapUtil.put_present("annotations", meta[:annotations])
+  end
+
+  @doc "The operation table: tool name → `{provider, tool}`."
+  @spec operations() :: %{String.t() => {module(), map()}}
+  def operations, do: :persistent_term.get(@operations)
+
+  @doc """
+  Every tool the table holds, as `tools/list` serves it, sorted by name.
+  """
+  @spec list_tools() :: [map()]
+  def list_tools, do: :persistent_term.get(@tool_list)
+
+  @doc """
+  Every stream the providers declare, as plain data sorted by name: what
+  a tincture's declaration is checked against
+  (`Compendium.Tincture.Rules.check_streams/2`) and what an open names.
+  """
+  @spec streams() :: [Prima.Provider.Stream.t()]
+  def streams do
+    :persistent_term.get(@streams)
+    |> Enum.map(fn {_name, {_module, stream}} -> stream end)
+    |> Enum.sort_by(& &1.name)
+  end
+
+  @doc """
+  Every declared stream with the provider that declares it, sorted by
+  name: what the host's boot check reads to name a stream's provider.
+  """
+  @spec stream_entries() :: [{module(), Prima.Provider.Stream.t()}]
+  def stream_entries do
+    :persistent_term.get(@streams)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(fn {_name, entry} -> entry end)
+  end
+
+  @doc "A stream's provider and its declaration, from the table."
+  @spec lookup_stream(String.t()) :: {:ok, {module(), Prima.Provider.Stream.t()}} | :miss
+  def lookup_stream(name) when is_binary(name) do
+    case :persistent_term.get(@streams) do
+      %{^name => entry} -> {:ok, entry}
+      _ -> :miss
+    end
+  end
+
+  @doc """
+  The gate's authorization of a stream open, as an action with no
+  declaration beyond the default is authorized (`@stream_annotation`):
+  the same auth, scope, permission and consent checks, on the external
+  plane. `name` is the operation name the refusal carries.
+  """
+  @spec authorize_stream(String.t(), Context.t()) ::
+          :ok | {:error, Sanctum.Unauthorized.reason()}
+  def authorize_stream(name, %Context{} = ctx) when is_binary(name) do
+    with :ok <- check_auth(name, ctx, @stream_annotation),
+         :ok <- check_scope(ctx, @stream_annotation),
+         :ok <- check_permission(ctx, @stream_annotation) do
+      check_consent(ctx, @stream_annotation, false)
+    end
+  end
+
+  @doc """
+  Prune a tools/list payload to the in-chain *plane*: actions whose plane
+  annotation includes `:in_chain`. Proxied `server:tool` entries are
+  in-chain by wiring and pass through whole; anything without an
+  annotation fails closed, mirroring `call_in_chain/5`.
+
+  This is the authority-less plane view, for surfaces where no chain
+  authority applies (the `tools.list component_ref` preview). The in-chain
+  catalogue a running chain sees is additionally grant-filtered in
+  `prune_in_chain_discovery/5`.
+  """
+  def in_chain_view(tool_defs) when is_list(tool_defs) do
+    tool_defs
+    |> Enum.map(&prune_to_in_chain/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp prune_to_in_chain(%{"name" => name} = tool_def) do
+    if String.contains?(name, ":") do
+      tool_def
+    else
+      actions = Annotations.actions_of(tool_def)
+
+      reachable =
+        for {action, %{planes: planes}} <- actions, :in_chain in planes, do: action
+
+      case {reachable, get_in(tool_def, ["inputSchema", "properties", "action", "enum"])} do
+        {[], _} ->
+          nil
+
+        {_, listed} when is_list(listed) ->
+          case Enum.filter(listed, &(&1 in reachable)) do
+            [] -> nil
+            ^listed -> tool_def
+            pruned -> restrict_tool(tool_def, pruned)
+          end
+
+        {_, _} ->
+          tool_def
+      end
+    end
+  end
+
+  defp prune_to_in_chain(_tool_def), do: nil
+
+  @doc "A tool's provider and its declarations, from the table."
+  @spec lookup(String.t()) :: {:ok, {module(), map()}} | :miss
+  def lookup(name) do
+    case operations() do
+      %{^name => entry} -> {:ok, entry}
+      _ -> :miss
+    end
+  end
+
+  @doc """
+  Get a specific tool's definition.
+
+  Returns `{:ok, tool_def}` or `{:error, :not_found}`.
+  """
+  def get_tool(name) do
+    case lookup(name) do
+      {:ok, {_module, meta}} -> {:ok, wire(name, meta)}
+      :miss -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  What `tool.action` is, for every caller that classifies an action: a
+  virtual hand's kind from `Grimoire.VirtualTools`; `:external` for an
+  upstream `server:tool`, which is namespaced and enumerates no verbs,
+  whatever the action; otherwise the catalogued tool's declared kind. No
+  default: an unknown tool or an undeclared action is nil, a visible gap.
+  """
+  @spec tool_kind(String.t(), String.t()) :: atom() | nil
+  def tool_kind(tool, action) when is_binary(tool) and is_binary(action) do
+    cond do
+      kind = Grimoire.VirtualTools.kind_for(tool, action) ->
+        kind
+
+      String.contains?(tool, ":") ->
+        :external
+
+      true ->
+        case get_tool(tool) do
+          {:ok, tool_def} -> Annotations.kind(tool_def, action)
+          {:error, :not_found} -> nil
+        end
+    end
+  end
+
+  def tool_kind(_tool, _action), do: nil
+
+  @doc """
+  The action verbs a tool has — a virtual hand's from `Grimoire.VirtualTools`,
+  a catalogued tool's `action` enum in declared order — and `[]` for a
+  tool neither holds. What a `tool.*` glob stands for.
+  """
+  @spec tool_actions(String.t()) :: [String.t()]
+  def tool_actions(tool) when is_binary(tool) do
+    if Grimoire.VirtualTools.tool?(tool) do
+      Grimoire.VirtualTools.actions_of(tool)
+    else
+      with {:ok, tool_def} <- get_tool(tool),
+           verbs when is_list(verbs) <-
+             get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) do
+        Enum.filter(verbs, &is_binary/1)
+      else
+        _ -> []
+      end
+    end
+  end
+
+  def tool_actions(_tool), do: []
+
+  @doc """
+  Restrict a wire tool definition to the selected actions.
+
+  A registered tool's schema is rebuilt from its declarations, so the
+  properties of hidden actions leave with them; a definition the catalog
+  does not own (a remote server's tool) narrows only its action enum.
+  """
+  @spec restrict_tool(map(), [String.t()]) :: map()
+  def restrict_tool(%{"name" => name} = tool_def, actions) when is_list(actions) do
+    operations =
+      case lookup(name) do
+        {:ok, {_module, %{operations: operations}}} when is_list(operations) -> operations
+        _ -> nil
+      end
+
+    Grimoire.Visibility.restrict_actions(tool_def, actions, operations)
+  end
+
+  @doc """
+  Call a tool from the **external plane** — an ingress outside any running
+  component: the HTTP MCP surface, console LiveViews, the CLI.
+
+  A context that has entered a guest closure is rejected here regardless of
+  its permissions: whichever entry it reaches, a guest-planed context can
+  never authorize an external-plane call. In-chain callers use
+  `call_in_chain/5`; there is deliberately no plane-ambiguous entry point —
+  a new call site must choose, at compile time.
+
+  How the handler is run is the adapter's choice (`:runner`): `:inline`
+  (the default) is a function call on the caller's own process — the
+  gate, the contract and the handler, nothing else — for the console and
+  the assistant, which already hold an authenticated context and a
+  process of their own; `:supervised` runs it in a task under a timeout,
+  registered under `ctx.request_id` so a transport whose caller
+  disconnects can stop it (`Grimoire.cancel_request/1`), for the wire.
+
+  Every call is one admission decision (`Grimoire.Decisions`), recorded
+  under `opts[:call_id]` — a `call_` id an entry minted before its own
+  checks — or, without one, an id the gate mints before its first check.
+  `opts[:method]` names the wire method the call's request-log row
+  records (default `"tools/call"`).
+  """
+  def call_external(name, ctx, args, opts \\ [])
+
+  def call_external(name, %Context{plane: :guest} = ctx, _args, opts) do
+    head_refused(name, ctx, opts, :external, Error.admission({:guest_plane_call, name}))
+  end
+
+  def call_external(name, %Context{} = ctx, args, opts) when is_map(args) do
+    # The plane is this function's name, never an option: a caller cannot
+    # reach the in-chain arm (its consent-class and proxied-tool rules, its
+    # authority) by passing what `call_in_chain/5` passes.
+    do_call(name, ctx, args, Keyword.drop(opts, [:in_chain, :authority]))
+  end
+
+  def call_external(name, %Context{} = ctx, _args, opts),
+    do: head_refused(name, ctx, opts, :external, not_an_object())
+
+  @doc """
+  Call a tool from **inside a running chain** — the only entry that accepts
+  an authority.
+
+  Authorization is a conjunction, decided once, at the gate
+  (`do_call/4`), in order: the calling execution's grant must still
+  stand; the action must be annotated in-chain-reachable; the caller's
+  own authorization applies through the guest-plane permission branch;
+  the arguments must cast; and the chain's authority must grant the tool
+  (or the matching tool server) through the transition relation. All of
+  it runs inside the control-plane fence, so a member that lost its slot
+  takes no budget, and every in-chain call is recorded as one admission
+  decision, a refusal included, whose parent call is `opts[:lineage]`'s
+  `call_id` — the call that admitted the calling execution. Each refusal
+  it makes carries `stage: :admission`. Guest-supplied lineage and call
+  keys are discarded before dispatch.
+
+  The grant is the one the calling execution's attempt stores, found by
+  the host-stamped `opts[:lineage]`: its `attempt` must be an open attempt
+  of its `parent_execution_id` in the caller's athanor, and the grant it
+  stores must stand (`Sanctum.ExecutionStanding.verify/1`). Absent or
+  mismatched lineage, or a grant whose athanor was archived, admits nothing;
+  nothing in `args` can supply it. The discovery predicates
+  (`in_chain_view/1`, `in_chain_reachable?/2`) read no lineage and admit
+  no call.
+
+  A `:spawn`-shaped call charges the root invoke budget inside the
+  transition step and releases it when the synchronous dispatch returns.
+
+  Options: `:guest_fn` (`:call` | `:spawn`, default `:call`), `:cancel_handle`
+  (a caller-owned name for this call, by which `Grimoire.cancel_call/1`
+  stops the supervised handler alone), plus `call_external/4`'s
+  options. The runner defaults to `:supervised` here: the handler runs on
+  a guest's behalf, and a crash or a hang inside it must not take the
+  chain's host process with it. A supervised handler that dies, exits or
+  times out answers `{:error, {:uncertain, _}}` unless the action is
+  declared `recovery: :replay_safe`: its effect may have happened.
+  """
+  def call_in_chain(name, ctx, args, authority, opts \\ [])
+
+  def call_in_chain(name, %Context{} = ctx, args, %Prima.Authority{} = authority, opts)
+      when is_map(args) do
+    guest_fn = Keyword.get(opts, :guest_fn, :call)
+
+    # An outbound call is an execution of its own: its id exists before
+    # the charge, so the hold names it as its holder and admission can
+    # stamp the hold admitted.
+    opts =
+      if String.contains?(name, ":") and guest_fn == :spawn,
+        do: Keyword.put_new_lazy(opts, :execution_id, &Prima.UUID7.execution_id/0),
+        else: opts
+
+    opts =
+      opts
+      |> Keyword.put_new(:runner, :supervised)
+      |> Keyword.put(:guest_fn, guest_fn)
+      |> with_charge_identity(guest_fn)
+      # The authority is conjoined at the gate (`route/5`), after the
+      # caller's own authorization and the arguments' cast: one decision.
+      |> Keyword.put(:authority, authority)
+
+    args =
+      Map.drop(args, [
+        "parent_execution_id",
+        "root_execution_id",
+        "thread_id",
+        "attempt",
+        "call_id",
+        "parent_call_id"
+      ])
+
+    do_call(name, ctx, args, opts)
+  end
+
+  def call_in_chain(name, %Context{} = ctx, _args, %Prima.Authority{}, opts),
+    do: head_refused(name, ctx, opts, :in_chain, not_an_object())
+
+  defp not_an_object, do: Error.admission({:invalid_argument, "Arguments must be an object"})
+
+  # A refusal at the entry's head — a guest plane, arguments that are not
+  # an object — made before `do_call/4` and its identity: recorded as the
+  # gate records every refusal, under the entry's call id or a fresh one,
+  # on the head's plane, with a request-log row when the caller has an
+  # athanor. The refusal is the answer either way.
+  defp head_refused(name, %Context{} = ctx, opts, plane, %Prima.Refusal{} = refusal) do
+    # An internal caller with no ingress request is its own root, as in
+    # `do_call/4`.
+    decision =
+      Grimoire.Decisions.refused(ctx, refusal,
+        call_id: Keyword.get(opts, :call_id),
+        request_id: ctx.request_id || Prima.UUID7.request_id(),
+        plane: plane,
+        parent_call_id: if(plane == :in_chain, do: parent_call_id(Keyword.get(opts, :lineage))),
+        tool: name
+      )
+
+    Grimoire.Decisions.open(ctx, decision, %{
+      method: Keyword.get(opts, :method) || "tools/call",
+      input: %{}
+    })
+
+    {:error, refusal}
+  end
+
+  # The calling execution's grant, found by the host's lineage: an open
+  # attempt of the parent execution, in the caller's own athanor, storing
+  # a grant that stands.
+  defp lineage_standing(%Context{} = ctx, %{attempt: attempt, parent_execution_id: parent})
+       when is_binary(attempt) and is_binary(parent) do
+    case Arca.ExecutionAttempts.standing?(Context.actor(ctx), attempt, parent,
+           grant: :stored,
+           verify: &Sanctum.ExecutionStanding.verify/1
+         ) do
+      true ->
+        :ok
+
+      {:error, reason} when reason in [:unavailable, :database_error] ->
+        {:error, {:unavailable, "The calling execution's standing"}}
+
+      _refused ->
+        {:error, :archived}
+    end
+  end
+
+  defp lineage_standing(_ctx, _lineage),
+    do: {:error, {:invalid_argument, "An in-chain call names the execution that makes it"}}
+
+  # A spawn-shaped call charges the reservation row beside the slot. The
+  # loop names the charge per dispatch; a call under a chain's attempt
+  # without one — a guest's own call, its attempt on the host-stamped
+  # lineage — is given a charge of its own, with no holder, so the row's
+  # deadline is the dispatcher's timeout. Under no attempt at all the
+  # slot alone is the hold.
+  defp with_charge_identity(opts, :spawn) do
+    case {Keyword.get(opts, :charge), get_in(opts, [:lineage, :attempt])} do
+      {%{id: _}, _} ->
+        opts
+
+      {nil, attempt} when is_binary(attempt) ->
+        Keyword.put(opts, :charge, %{
+          id: Prima.UUID7.generate_id("chg"),
+          attempt: attempt,
+          generation: 0,
+          holder_execution_id: Keyword.get(opts, :execution_id)
+        })
+
+      _ ->
+        opts
+    end
+  end
+
+  defp with_charge_identity(opts, _guest_fn), do: opts
+
+  # The hold an outbound execution's admission stamps: the reservation the
+  # chain's authority was minted with and the charge row taken at the gate.
+  defp hold_of(%Prima.Authority{budget: %{id: reservation_id}}, %{id: id}),
+    do: %{reservation_id: reservation_id, id: id}
+
+  defp hold_of(_authority, _charge), do: nil
+
+  # `opts[:charge]` is `%{id, attempt, generation, holder_execution_id}`;
+  # the row's deadline is the dispatcher's own timeout.
+  defp charge_row(:spawn, %Context{athanor_id: athanor_id} = ctx, authority, opts)
+       when is_binary(athanor_id) do
+    case Keyword.get(opts, :charge) do
+      %{id: _} = charge ->
+        deadline = DateTime.add(DateTime.utc_now(), @tool_timeout_ms, :millisecond)
+
+        case Arca.BudgetReservations.charge(Context.actor(ctx), authority.budget.id, charge, 1,
+               holder_deadline: deadline
+             ) do
+          :ok -> :ok
+          :exhausted -> {:error, :invoke_budget_exhausted}
+          :stale_attempt -> {:error, :invoke_budget_exhausted}
+          :released -> {:error, :invoke_budget_exhausted}
+          {:error, _} -> {:error, :invoke_budget_exhausted}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp charge_row(_guest_fn, _ctx, _authority, _opts), do: :ok
+
+  defp release_row(%Context{athanor_id: athanor_id} = ctx, authority, opts)
+       when is_binary(athanor_id) do
+    case Keyword.get(opts, :charge) do
+      %{id: id} -> Arca.BudgetReservations.release(Context.actor(ctx), authority.budget.id, id)
+      _ -> :ok
+    end
+  end
+
+  defp release_row(_ctx, _authority, _opts), do: :ok
+
+  # Host-supplied lineage, re-injected after the guest's own keys were
+  # dropped. This is the only channel a provider can trust for "which
+  # chain is calling" — the execution provider uses it to keep cancel,
+  # logs and list inside the caller's own subtree.
+  defp put_lineage(args, nil), do: args
+
+  defp put_lineage(args, lineage) when is_map(lineage) do
+    args
+    |> Prima.MapUtil.put_present("parent_execution_id", Map.get(lineage, :parent_execution_id))
+    |> Prima.MapUtil.put_present("root_execution_id", Map.get(lineage, :root_execution_id))
+    # The attempt of the calling execution, so a provider answering the
+    # caller its own payload knows which attempt's it is.
+    |> Prima.MapUtil.put_present("attempt", Map.get(lineage, :attempt))
+    # The thread an approved card came from — host-stamped like the
+    # execution ids, so a tool that records provenance reads it from here
+    # and never from what the model wrote.
+    |> Prima.MapUtil.put_present("thread_id", Map.get(lineage, :thread_id))
+  end
+
+  @doc """
+  Whether a running chain can reach `tool.action` at all.
+
+  An action reachable in-chain says so in its plane annotation; one without
+  an annotation, or without `:in_chain`, fails closed. Proxied `server:tool`
+  names are the `:external` bucket, in-chain by wiring.
+
+  This is the same predicate `call_in_chain/5` enforces per call, exposed so
+  the surfaces that *offer* actions — the agent capability matrix, the
+  prompt's approval section, proposal validation — offer only what the chain
+  could actually run, instead of handing someone a button that fails.
+  """
+  @spec in_chain_reachable?(String.t(), String.t() | nil) :: boolean()
+  def in_chain_reachable?(name, action) when is_binary(name) do
+    match?(:ok, check_in_chain_reachable(name, %{"action" => action}))
+  end
+
+  @doc """
+  Whether a running chain can run `tool.action` at all: through the
+  catalog (`in_chain_reachable?/2`), or through the host — an action
+  annotated `host: :intercepted`, which the formula host runs under the
+  chain's authority before any catalog call.
+  """
+  @spec chain_reachable?(String.t(), String.t() | nil) :: boolean()
+  def chain_reachable?(name, action) when is_binary(name) do
+    in_chain_reachable?(name, action) or host_intercepted?(name, action)
+  end
+
+  @doc "Whether the host, not the catalog, runs `tool.action` for a chain."
+  @spec host_intercepted?(String.t(), String.t() | nil) :: boolean()
+  def host_intercepted?(name, action) when is_binary(name) do
+    case lookup(name) do
+      {:ok, {_module, meta}} -> Annotations.host_intercepted?(meta, action)
+      :miss -> false
+    end
+  end
+
+  def host_intercepted?(_name, _action), do: false
+
+  @doc """
+  Whether this registry *knows* `tool.action` and says a chain may not run
+  it at all — the answer a surface needs before refusing to offer something.
+
+  Distinct from `not chain_reachable?/2`: a tool the registry has never
+  heard of (a virtual tool the formula dispatches itself, an external
+  `server:tool`) is not refused here, it is simply not this
+  registry's to judge.
+  """
+  @spec in_chain_refused?(String.t(), String.t() | nil) :: boolean()
+  def in_chain_refused?(name, action) when is_binary(name) do
+    not String.contains?(name, ":") and
+      match?({:ok, _}, lookup(name)) and
+      not chain_reachable?(name, action)
+  end
+
+  def in_chain_refused?(_name, _action), do: false
+
+  defp check_in_chain_reachable(name, args) do
+    if String.contains?(name, ":") do
+      :ok
+    else
+      action = args["action"] || args[:action]
+
+      case lookup(name) do
+        {:ok, {_module, meta}} ->
+          planes = Annotations.planes(meta, action)
+
+          cond do
+            is_nil(Annotations.annotation(meta, action)) ->
+              with {:ok, _} <- Operation.cast(meta, args),
+                   do: {:error, {:unknown_action, "#{name}.#{action}"}}
+
+            :in_chain in planes ->
+              :ok
+
+            true ->
+              {:error, "Tool action '#{name}.#{action}' is not reachable from a running chain"}
+          end
+
+        :miss ->
+          {:error, "Unknown tool: #{name}"}
+      end
+    end
+  end
+
+  # Discovery pruning for in-chain callers: `tools.list` shows a chain only
+  # what it can reach — internal actions through the same two questions
+  # `call_in_chain/5` asks per call (the :in_chain plane and the chain
+  # authority's tool grants), and external `server:tool` entries only when
+  # the authority's tool_servers grants cover them. Per-call enforcement
+  # stays with the transition relation; this keeps the catalogue from
+  # advertising what a call would be denied, and the untrusted upstream
+  # descriptions from reaching an agent that holds no grant.
+  defp prune_in_chain_discovery({:ok, %{tools: tools}}, "tools", args, ctx, authority)
+       when is_list(tools) do
+    if (args["action"] || args[:action]) == "list" do
+      {internal, external} =
+        Enum.split_with(tools, fn t -> not String.contains?(t["name"] || "", ":") end)
+
+      {:ok,
+       %{
+         tools:
+           granted_internal_tools(internal, authority) ++
+             granted_external_tools(ctx, authority, external)
+       }}
+    else
+      {:ok, %{tools: tools}}
+    end
+  end
+
+  defp prune_in_chain_discovery(result, _name, _args, _ctx, _authority), do: result
+
+  # The internal half of the same pruning: the plane question in_chain_view
+  # asks, conjoined with the authority's tool grants — mirroring dispatch,
+  # where check_in_chain_reachable runs before the transition's tool_bound.
+  # No resources, no catalogue: fail closed like the external arm.
+  defp granted_internal_tools(_internal, %{resources: :none}), do: []
+
+  defp granted_internal_tools(internal, authority) do
+    internal
+    |> Enum.map(&prune_to_granted(&1, authority))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp prune_to_granted(%{"name" => name} = tool_def, authority) do
+    actions = Annotations.actions_of(tool_def)
+
+    reachable =
+      for {action, %{planes: planes}} <- actions,
+          :in_chain in planes,
+          Prima.Authority.Transition.tool_granted?(authority, name, action),
+          do: action
+
+    case {reachable, get_in(tool_def, ["inputSchema", "properties", "action", "enum"])} do
+      {[], _} ->
+        nil
+
+      {_, listed} when is_list(listed) ->
+        case Enum.filter(listed, &(&1 in reachable)) do
+          [] -> nil
+          ^listed -> tool_def
+          pruned -> Grimoire.Visibility.restrict_actions(tool_def, pruned)
+        end
+
+      {_, _} ->
+        tool_def
+    end
+  end
+
+  defp granted_external_tools(_ctx, _authority, []), do: []
+
+  defp granted_external_tools(ctx, authority, external) do
+    case authority.resources do
+      %{tool_servers: [_ | _]} ->
+        external
+        |> Enum.group_by(fn t -> t["name"] |> String.split(":", parts: 2) |> hd() end)
+        |> Enum.flat_map(fn {server_name, tools} ->
+          digest = resolve_server_digest(ctx, server_name)
+
+          Enum.filter(tools, fn t ->
+            case String.split(t["name"], ":", parts: 2) do
+              [_, remote] ->
+                Prima.Authority.Transition.external_tool_granted?(authority, digest, remote)
+
+              _ ->
+                false
+            end
+          end)
+        end)
+        |> Enum.sort_by(& &1["name"])
+
+      _ ->
+        []
+    end
+  end
+
+  # The transition's target, and — for a proxied tool — the server row
+  # its digest was derived from, so dispatch speaks to that revision.
+  defp in_chain_target(ctx, name, args) do
+    case String.split(name, ":", parts: 2) do
+      [server_name, remote_tool] ->
+        # The edge names the server by digest, so patterns match the
+        # REMOTE tool name — the server prefix would make every pattern
+        # server-qualified twice.
+        {server, digest} = resolve_server(ctx, server_name)
+        {:ok, {:external_tool, %{server_digest: digest, tool: remote_tool}}, server}
+
+      _ ->
+        case args["action"] || args[:action] do
+          action when is_binary(action) and action != "" ->
+            {:ok, {:tool, %{tool: name, action: action}}, nil}
+
+          _ ->
+            {:error, "In-chain call to '#{name}' requires an action"}
+        end
+    end
+  end
+
+  # Within granted patterns an upstream server can rewrite tool
+  # descriptions at will, and agents feed those strings to a model holding
+  # the profile's authority. The config digest defends the transport;
+  # this defends nothing — it NAMES the residual: warn on drift from the
+  # consent-time baseline, never block (a legitimate server adds tools).
+  # Best-effort by design; a check failure must never affect dispatch.
+  defp warn_on_description_drift(ctx, authority, {:tool_server, digest}) do
+    with %{tool_servers: servers} <- authority.resources,
+         %{descriptions_digest: baseline} = grant when is_binary(baseline) <-
+           Enum.find(servers, &(&1.server_digest == digest)),
+         {:ok, tools} <- Grimoire.Proxy.impl!().server_tools(ctx, grant.server_name),
+         {:ok, live} <-
+           Sanctum.ToolServerDigest.descriptions_digest(tools, grant.tool_patterns) do
+      unless Plug.Crypto.secure_compare(live, baseline) do
+        Logger.warning(
+          "[Grimoire.Catalog] tool descriptions for server '#{grant.server_name}' drifted " <>
+            "from their consent-time baseline — treat upstream descriptions as untrusted"
+        )
+
+        :telemetry.execute(
+          [:cyfr, :sanctum, :tool_server, :description_drift],
+          %{count: 1},
+          %{server: grant.server_name, profile_id: authority.profile_id}
+        )
+      end
+
+      :ok
+    else
+      # Without a pinned baseline or tool server, skip the drift check.
+      nil ->
+        :ok
+
+      %{} ->
+        :ok
+
+      # The upstream could not be reached, or its tool list would not digest.
+      # That is a check that did not happen, and the whole point of the
+      # `rescue` below is that a check which never runs must not read like
+      # "no drift" — the same is true when the failure arrives as a value.
+      {:error, reason} ->
+        Logger.warning(
+          "[Grimoire.Catalog] description-drift check could not run: #{inspect(reason)}"
+        )
+
+        :telemetry.execute(
+          [:cyfr, :sanctum, :tool_server, :description_drift_check_failed],
+          %{count: 1},
+          %{}
+        )
+
+        :ok
+    end
+  rescue
+    # Log drift-check failures; the check remains best-effort.
+    e ->
+      Logger.warning(
+        "[Grimoire.Catalog] description-drift check failed: " <>
+          Exception.format(:error, e, __STACKTRACE__)
+      )
+
+      :telemetry.execute(
+        [:cyfr, :sanctum, :tool_server, :description_drift_check_failed],
+        %{count: 1},
+        %{}
+      )
+
+      :ok
+  end
+
+  defp warn_on_description_drift(_ctx, _authority, _resource), do: :ok
+
+  # The named server's row and its consent identity, derived from the
+  # row's stored configuration at every read: a cached digest is the copy
+  # someone forgets to drop when the row changes, and the row itself is
+  # handed on to dispatch so both see one revision. A missing or
+  # unreadable server resolves to no row and a digest no edge can name —
+  # fail closed, not fail absent.
+  defp resolve_server(ctx, server_name) do
+    with {:ok, server} <- Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), server_name),
+         {:ok, digest} <- Sanctum.ToolServerDigest.from_server(server) do
+      {server, digest}
+    else
+      _ -> {nil, "sha256:unresolved-server"}
+    end
+  end
+
+  defp resolve_server_digest(ctx, server_name), do: elem(resolve_server(ctx, server_name), 1)
+
+  @doc false
+  # The dispatch gate: enforce the action's access annotation — auth,
+  # permission, consent — before the handler runs. Handlers keep only the
+  # residual checks the annotation cannot express (tenant presence,
+  # ownership, definition authority, the domain's finer consent arms).
+  # Public solely so the discovery-parity test can ask the exact question
+  # dispatch answers without executing any handler.
+  @spec authorize_annotated_action(String.t(), map(), Context.t(), map(), boolean()) ::
+          :ok
+          | {:error,
+             Sanctum.Unauthorized.reason() | :action_missing | {:unknown_action, String.t()}}
+  def authorize_annotated_action(name, meta, ctx, args, in_chain? \\ false) do
+    action = args["action"] || args[:action]
+    annotation = Annotations.annotation(meta, action)
+
+    cond do
+      is_nil(action) ->
+        {:error, :action_missing}
+
+      is_nil(annotation) ->
+        # Default-deny: an action without an access declaration is not
+        # dispatchable, whatever the handler would have said.
+        {:error, {:unknown_action, "#{name}.#{action}"}}
+
+      not in_chain? and :external not in Annotations.planes(meta, action) ->
+        # An action a running chain alone may call is not served outside one.
+        {:error, {:unknown_action, "#{name}.#{action}"}}
+
+      true ->
+        with :ok <- check_auth(name, ctx, annotation),
+             :ok <- check_scope(ctx, annotation),
+             :ok <- check_permission(ctx, annotation) do
+          check_consent(ctx, annotation, in_chain?)
+        end
+    end
+  end
+
+  # A declared action is authorized before its remaining fields are
+  # validated. Missing or unknown action identity stays a cast error so
+  # every ingress reports the same refusal. Remote `server:tool` names
+  # keep their existing proxied authorization.
+  defp authorize_declared_action(name, ctx, args, in_chain?) do
+    if String.contains?(name, ":") do
+      :ok
+    else
+      case lookup(name) do
+        {:ok, {_module, meta}} -> authorize_declared_action(name, meta, ctx, args, in_chain?)
+        :miss -> :ok
+      end
+    end
+  end
+
+  defp authorize_declared_action(name, meta, ctx, args, in_chain?) when is_map(meta) do
+    action = args["action"] || args[:action]
+
+    if is_binary(action) and match?(%{}, Annotations.annotation(meta, action)) do
+      authorize_annotated_action(name, meta, ctx, args, in_chain?)
+    else
+      :ok
+    end
+  end
+
+  @doc "Validate a registered operation's arguments through its canonical declaration."
+  @spec validate_arguments(String.t(), term()) :: {:ok, map()} | {:error, term()}
+  def validate_arguments(name, args) do
+    case lookup(name) do
+      {:ok, {_module, meta}} -> Operation.cast(meta, args)
+      :miss -> {:error, {:not_found, "tool", name}}
+    end
+  end
+
+  # Remote tools carry their own schemas and are not local operation providers.
+  defp validate_chain_arguments(name, args) do
+    if String.contains?(name, ":"), do: {:ok, args}, else: validate_arguments(name, args)
+  end
+
+  # `scope: :platform` is the operator capability, not a widened tenant scope:
+  # the caller still works inside one athanor and only the membership fact
+  # (`platform_admin`) admits them.
+  defp check_scope(ctx, annotation) do
+    case Map.get(annotation, :scope) do
+      nil -> :ok
+      :platform when ctx.platform_admin -> :ok
+      :platform -> {:error, :platform_admin_required}
+    end
+  end
+
+  defp check_auth(name, ctx, annotation) do
+    if Grimoire.Visibility.admits?(annotation, ctx) do
+      :ok
+    else
+      {:error, {:tool_auth_required, name}}
+    end
+  end
+
+  defp check_permission(ctx, annotation) do
+    case Map.get(annotation, :permission) do
+      nil -> :ok
+      permission -> Context.require_permission(ctx, permission, :in_chain)
+    end
+  end
+
+  # Preserve typed consent refusals for rendering through Authz.message/1.
+  # In-chain interactive calls retain the surface check; the approved
+  # proposal supplies consent for the guest plane. Staging actions require
+  # the full surface and plane checks and are unavailable in-chain.
+  defp check_consent(ctx, annotation, in_chain?) do
+    case Map.get(annotation, :consent) do
+      nil ->
+        :ok
+
+      :interactive ->
+        interactive =
+          if in_chain?,
+            do: Sanctum.Consent.Authz.authorize_interactive_in_chain(ctx),
+            else: Sanctum.Consent.Authz.authorize_interactive(ctx)
+
+        case interactive do
+          {:ok, :interactive} -> :ok
+          {:error, refusal} -> {:error, {:consent_class_required, refusal}}
+        end
+
+      :staging ->
+        case Sanctum.Consent.Authz.authorize_staging(ctx) do
+          :ok -> :ok
+          {:error, refusal} -> {:error, {:consent_class_required, refusal}}
+        end
+    end
+  end
+
+  # The gate. Every call, on either plane, is decided here once: the
+  # caller's authorization and the arguments' cast and, for a chain's call,
+  # the calling execution's standing, the authority's step and its charge —
+  # inside the control-plane fence, before any handler runs. A refusal
+  # made here carries `stage: :admission`; what a handler or the call's
+  # own ending answers is the execution's.
+  #
+  # Each decision is recorded once (`Grimoire.Decisions`): a refusal where
+  # it is made, an admission after the last check and before the work
+  # runs, and the admitted work's completion on this process once it
+  # returns. The call's identity exists before the first check.
+  defp do_call(name, %Context{} = ctx, args, opts) when is_map(args) do
+    call_id = call_id!(Keyword.get(opts, :call_id))
+    inserted_at = DateTime.utc_now()
+
+    in_chain? = match?(%Prima.Authority{}, Keyword.get(opts, :authority))
+    opts = Keyword.put(opts, :in_chain, in_chain?)
+
+    # Every call belongs to an ingress request. One that arrived over a
+    # transport already carries it; an internal caller has none, so it becomes
+    # its own root. The handler is handed the admission it runs inside.
+    ctx = if is_nil(ctx.request_id), do: %{ctx | request_id: Prima.UUID7.request_id()}, else: ctx
+    ctx = %{ctx | call_id: call_id}
+
+    action = args["action"] || args[:action]
+    logged_args = if in_chain?, do: put_lineage(args, Keyword.get(opts, :lineage)), else: args
+
+    audit = %{
+      ctx: ctx,
+      call_id: call_id,
+      parent_call_id: if(in_chain?, do: parent_call_id(Keyword.get(opts, :lineage))),
+      plane: if(in_chain?, do: :in_chain, else: :external),
+      tool: bounded(name),
+      inserted_at: inserted_at,
+      recorded?: Grimoire.Decisions.recorded?(name, action),
+      projection: %{method: Keyword.get(opts, :method) || "tools/call", input: logged_args}
+    }
+
+    opts = opts |> Keyword.put(:action, action) |> Keyword.put(:audit, audit)
+
+    # A member that lost its cell slot dispatches nothing, catalogued or
+    # proxied, and takes no budget: the endpoint's plug refuses new
+    # requests, but a connected console, an in-process caller and a
+    # running chain's next call all arrive here without passing it.
+    outcome =
+      if Arca.ControlPlane.held?(),
+        do: route(name, ctx, args, opts, in_chain?),
+        else: refused(opts, args, Error.admission(:control_plane_lost))
+
+    settle(audit, outcome)
+  end
+
+  # The call's identity: the entry's, when it minted one before its own
+  # checks, else a new one (`Grimoire.Decisions.call_id!/1`).
+  defp call_id!(call_id), do: Grimoire.Decisions.call_id!(call_id)
+
+  # The call that admitted the calling execution, as the host stamped it
+  # on the lineage — never anything the guest's arguments carry.
+  defp parent_call_id(%{call_id: "call_" <> _ = call_id}), do: call_id
+  defp parent_call_id(_lineage), do: nil
+
+  # A decision's operation names, as stored (`Grimoire.Decisions.bounded/1`).
+  defp bounded(value), do: Grimoire.Decisions.bounded(value)
+
+  defp action_of(args), do: bounded(args["action"] || args[:action])
+
+  # The call admitted: its decision recorded, then the work run. The
+  # duration is the work's alone.
+  defp admitted(opts, args, run) do
+    decide(Keyword.fetch!(opts, :audit), :admitted, action_of(args), nil)
+    started = System.monotonic_time()
+    {result, meta} = run.()
+    elapsed = System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond)
+    {:admitted, result, meta, elapsed}
+  end
+
+  # The call refused before any work ran: its decision recorded, the
+  # refusal answered.
+  defp refused(opts, args, %Prima.Refusal{} = refusal) do
+    decide(Keyword.fetch!(opts, :audit), :refused, action_of(args), refusal)
+    {:refused, {:error, refusal}}
+  end
+
+  # Discovery and the audit's own reads are neither appended nor emitted.
+  defp decide(%{recorded?: false}, _admission, _action, _refusal), do: :ok
+
+  defp decide(audit, admission, action, refusal) do
+    ctx = audit.ctx
+
+    decision = %Prima.Decision{
+      call_id: audit.call_id,
+      parent_call_id: audit.parent_call_id,
+      request_id: ctx.request_id,
+      user_id: ctx.user_id,
+      athanor_id: ctx.athanor_id,
+      plane: audit.plane,
+      tool: audit.tool,
+      action: action,
+      inserted_at: audit.inserted_at,
+      admission: admission,
+      refusal_class: refusal && refusal.class,
+      reason: refusal && Grimoire.render(refusal)
+    }
+
+    Grimoire.Decisions.open(ctx, decision, audit.projection)
+  end
+
+  # The admitted work's completion, recorded by the process that ran it
+  # once it returned; the answer is the work's either way.
+  defp settle(_audit, {:refused, result}), do: result
+  defp settle(%{recorded?: false}, {:admitted, result, _meta, _elapsed}), do: result
+
+  defp settle(audit, {:admitted, result, meta, elapsed}) do
+    Grimoire.Decisions.close(audit.ctx, audit.call_id, %{
+      result: result,
+      duration_ms: elapsed,
+      routed_to: Map.get(meta, :routed_to)
+    })
+
+    result
+  end
+
+  # A chain's call: the calling execution's standing, the in-chain plane,
+  # the caller's own authorization, the cast, and then the authority's
+  # step on the target the cast arguments name — in that order, so a
+  # refusal of any earlier conjunct takes no budget.
+  defp route(name, ctx, args, opts, true = _in_chain?) do
+    authority = Keyword.fetch!(opts, :authority)
+    guest_fn = Keyword.get(opts, :guest_fn, :call)
+
+    with :ok <- lineage_standing(ctx, Keyword.get(opts, :lineage)),
+         :ok <- check_in_chain_reachable(name, args),
+         :ok <- authorize_declared_action(name, ctx, args, true),
+         {:ok, cast} <- validate_chain_arguments(name, args),
+         {:ok, target, server} <- in_chain_target(ctx, name, cast),
+         {:ok, resource} <- authority_step(authority, guest_fn, target) do
+      warn_on_description_drift(ctx, authority, resource)
+
+      # The server row the transition was judged on is the one dispatch
+      # speaks to — one revision per call, never a second read that a
+      # change in between could answer.
+      charged(name, ctx, cast, authority, guest_fn, Keyword.put(opts, :server, server))
+    else
+      # Recorded with the arguments as the caller sent them.
+      {:error, reason} -> refused(opts, args, Error.admission(reason))
+    end
+  end
+
+  defp route(name, ctx, args, opts, false = _in_chain?) do
+    case lookup(name) do
+      {:ok, {_module, meta}} ->
+        with :ok <- authorize_declared_action(name, ctx, args, false),
+             {:ok, cast} <- Operation.cast(meta, args) do
+          dispatch(name, ctx, cast, opts)
+        else
+          # Recorded with the arguments as the caller sent them.
+          {:error, reason} -> refused(opts, args, Error.admission(reason))
+        end
+
+      :miss ->
+        dispatch(name, ctx, args, opts)
+    end
+  end
+
+  defp authority_step(authority, guest_fn, target) do
+    case Sanctum.Authority.step(authority, guest_fn, target) do
+      {:allow_tool, resource} ->
+        {:ok, resource}
+
+      # Rostered reasons (`Prima.Refusal`), which the table renders in the
+      # authority vocabulary's own sentence and classes `forbidden`.
+      {:deny, reason} ->
+        {:error, {:invoke_denied, reason}}
+
+      {:invalid, {:malformed_target, _fun, _tag} = malformed} ->
+        {:error, {:invoke_invalid, malformed}}
+    end
+  end
+
+  # A spawn-shaped transition charged the invoke budget; this process
+  # holds the slot, and the executor's wall-clock kill would skip the
+  # `after` — the guard releases on :DOWN. With a charge identity the hold
+  # is a row too, reclaimable past the dispatcher's own timeout.
+  defp charged(name, ctx, args, authority, guest_fn, opts) do
+    case charge_row(guest_fn, ctx, authority, opts) do
+      :ok ->
+        if guest_fn == :spawn, do: Sanctum.Authority.guard_invoke(authority)
+
+        dispatch_opts =
+          opts
+          |> Keyword.put(:hold, hold_of(authority, Keyword.get(opts, :charge)))
+          |> Keyword.drop([:guest_fn, :charge, :authority])
+
+        try do
+          case dispatch(name, ctx, args, dispatch_opts) do
+            {:admitted, result, meta, elapsed} ->
+              {:admitted, prune_in_chain_discovery(result, name, args, ctx, authority), meta,
+               elapsed}
+
+            {:refused, _result} = refused ->
+              refused
+          end
+        after
+          if guest_fn == :spawn do
+            Sanctum.Authority.release_invoke(authority)
+            release_row(ctx, authority, opts)
+          end
+        end
+
+      {:error, reason} ->
+        # The slot the transition charged goes back: the row refused it.
+        Sanctum.Authority.BudgetCounter.release(authority.budget)
+        refused(opts, args, Error.admission({:invoke_denied, reason}))
+    end
+  end
+
+  # The admitted call, run: a catalogued tool's handler, or — on a miss —
+  # the proxy port for a `server:tool` name, once it has resolved the name
+  # and the call is admitted.
+  defp dispatch(name, ctx, args, opts) do
+    in_chain? = Keyword.fetch!(opts, :in_chain)
+    args = if in_chain?, do: put_lineage(args, Keyword.get(opts, :lineage)), else: args
+
+    case lookup(name) do
+      {:ok, {module, _meta}} ->
+        admitted(opts, args, fn ->
+          result =
+            execute_tool_call(name, ctx, opts, fn ->
+              module.handle(name, handler_input(module, ctx), args)
+            end)
+
+          # The row names the service that answered, as `system.status`
+          # names it.
+          {result, %{routed_to: Grimoire.Services.service_name(module)}}
+        end)
+
+      :miss ->
+        proxied(name, ctx, args, opts, in_chain?)
+    end
+  end
+
+  # A namespaced name (e.g. "notion:create_page") is asked of the proxy
+  # port: resolved first — the server, the tool, the plane — as part of
+  # the admission, then run.
+  defp proxied(name, ctx, args, opts, in_chain?) do
+    if String.contains?(name, ":") and not ctx.authenticated do
+      # External tools carry no per-tool requires_auth metadata; all of
+      # them require authentication. The HTTP router never routes unknown
+      # names here, so this guards the in-process callers (FormulaHandler,
+      # LiveViews). Bare unknown names fall through so they still produce
+      # "Unknown tool".
+      refused(opts, args, Error.admission({:tool_auth_required, name}))
+    else
+      # The caller's plane rides along: proxied tools are in-chain by
+      # declaration, and an external-plane call reaches one only when the
+      # server row opts in — enforced where the row is in hand, not left to
+      # the wiring.
+      plane = if in_chain?, do: :in_chain, else: :external
+      proxy = Grimoire.Proxy.impl!()
+
+      case proxy.resolve(name, ctx, plane, server: Keyword.get(opts, :server)) do
+        {:ok, target} ->
+          admitted(opts, args, fn ->
+            result =
+              execute_tool_call(name, ctx, opts, fn ->
+                proxy.dispatch(target, ctx, args, plane,
+                  execution_id: Keyword.get(opts, :execution_id),
+                  step: Keyword.get(opts, :step),
+                  hold: Keyword.get(opts, :hold),
+                  retention_class: Keyword.get(opts, :retention_class)
+                )
+              end)
+
+            {result, %{routed_to: "external:#{name}"}}
+          end)
+
+        {:error, :not_external} ->
+          refused(opts, args, Error.admission({:unknown_tool, name}))
+
+        {:error, reason} ->
+          refused(opts, args, Error.admission(reason))
+      end
+    end
+  end
+
+  # The one projection: after the gate has decided with the full context,
+  # an `:actor` provider is handed the actor alone — no credential, no
+  # permission set, no session reaches a handler that declared it needs
+  # none.
+  defp handler_input(module, ctx) do
+    case Prima.Provider.context_kind(module) do
+      :actor -> Context.actor(ctx)
+      :context -> ctx
+    end
+  end
+
+  @doc """
+  Check if a tool exists.
+  """
+  def exists?(name) do
+    case lookup(name) do
+      {:ok, _} -> true
+      :miss -> false
+    end
+  end
+
+  @doc """
+  Audit every internal provider's canonical operations and permissions.
+  `Prima.Operation` validates the declaration structure; this catalog
+  additionally requires each permission to be known by Sanctum.
+
+  The taxonomy is only as good as its coverage: an unannotated action has
+  no risk class and no reachability, so it cannot be reasoned about at
+  either gate. The catalog runs this at boot and refuses to start on any
+  finding.
+
+  Proxied `server:tool` tools are not audited: they are no provider's
+  declarations (the `mcp_servers` tool that manages the servers is, and
+  is audited). They are classified as `:external` by
+  `tool_kind/2` via namespacing, and get their plane from
+  `Grimoire.Proxy.default_planes/0`.
+
+  Returns `:ok` when all tools are clean, or `{:error, [missing]}` where
+  each entry is `%{provider: module, tool: name, action: verb, reason: r}`.
+  """
+  @spec audit_action_kinds([module()]) :: :ok | {:error, [map()]}
+  def audit_action_kinds(providers \\ available_providers()) do
+    missing =
+      providers
+      |> Enum.flat_map(fn module ->
+        Enum.flat_map(module.tools(), fn tool ->
+          audit_tool(module, tool)
+        end)
+      end)
+
+    case missing do
+      [] -> :ok
+      _ -> {:error, missing}
+    end
+  end
+
+  defp audit_tool(module, %{name: name, operations: operations})
+       when is_list(operations) and operations != [] do
+    Enum.flat_map(operations, fn operation ->
+      result =
+        try do
+          Operation.validate!(operation)
+
+          cond do
+            operation.tool != name ->
+              {:error, :invalid_operation}
+
+            Enum.count(operations, &(is_map(&1) and Map.get(&1, :action) == operation.action)) !=
+                1 ->
+              {:error, :invalid_operation}
+
+            not is_nil(operation.permission) and not known_permission?(operation.permission) ->
+              {:error, :invalid_permission}
+
+            true ->
+              :ok
+          end
+        rescue
+          ArgumentError -> {:error, :invalid_operation}
+        end
+
+      case result do
+        :ok ->
+          []
+
+        {:error, reason} ->
+          [
+            %{
+              provider: module,
+              tool: name,
+              action: if(is_map(operation), do: Map.get(operation, :action)),
+              reason: reason
+            }
+          ]
+      end
+    end)
+  end
+
+  defp audit_tool(module, tool),
+    do: [
+      %{provider: module, tool: Map.get(tool, :name), action: nil, reason: :missing_operations}
+    ]
+
+  @doc """
+  Audit every provider's declared handler input
+  (`c:Prima.Provider.context_kind/0`). A value outside
+  `:context | :actor`, or a declaration that cannot be read, is a finding:
+  the gate cannot tell what such a handler may be given, so the catalog
+  refuses to boot rather than hand it the full context by default.
+
+  Returns `:ok`, or `{:error, [%{provider: module, reason: :invalid_context_kind}]}`.
+  """
+  @spec audit_context_kinds([module()]) :: :ok | {:error, [map()]}
+  def audit_context_kinds(providers \\ available_providers()) do
+    findings =
+      for module <- providers,
+          not context_kind_valid?(module),
+          do: %{provider: module, reason: :invalid_context_kind}
+
+    if findings == [], do: :ok, else: {:error, findings}
+  end
+
+  defp context_kind_valid?(module) do
+    Prima.Provider.context_kind(module) in [:context, :actor]
+  rescue
+    _ -> false
+  end
+
+  @doc """
+  Audit the MCP resource surface against the operation table, so what
+  `resources/list` advertises and what `resources/read` can dispatch are
+  one declaration.
+
+  The findings:
+
+    * `:unowned_scheme` — a provider advertises a resource URI or template
+      whose scheme no operation of that provider declares in
+      `resource_schemes`;
+    * `:unadvertised_scheme` — an operation declares a scheme its provider
+      advertises no resource or template for;
+    * `:scheme_declared_twice` — two operations declare one scheme, so a
+      read of it could not name one gate;
+    * `:malformed_resource_uri` — an advertised URI or template names no
+      scheme;
+    * `:tool_registered_twice` — two providers (or one, twice) declare the
+      same tool name, which the catalog would otherwise overwrite silently.
+
+  Returns `:ok` or `{:error, findings}`; the catalog refuses to boot on
+  any finding.
+  """
+  @spec audit_resource_schemes([module()]) :: :ok | {:error, [map()]}
+  def audit_resource_schemes(providers \\ available_providers()) do
+    tools = for module <- providers, tool <- module.tools(), do: {module, tool}
+
+    declared =
+      for {module, tool} <- tools,
+          %Operation{} = operation <- Map.get(tool, :operations, []),
+          scheme <- operation.resource_schemes,
+          do: {scheme, module, "#{operation.tool}.#{operation.action}"}
+
+    {advertised, malformed} = advertised_schemes(providers)
+    owned = MapSet.new(declared, fn {scheme, module, _} -> {scheme, module} end)
+
+    findings =
+      malformed ++
+        for(
+          {scheme, module} <- advertised,
+          not MapSet.member?(owned, {scheme, module}),
+          do: %{provider: module, scheme: scheme, reason: :unowned_scheme}
+        ) ++
+        for(
+          {scheme, module, operation} <- declared,
+          {scheme, module} not in advertised,
+          do: %{
+            provider: module,
+            scheme: scheme,
+            operation: operation,
+            reason: :unadvertised_scheme
+          }
+        ) ++
+        for(
+          {scheme, owners} <- Enum.group_by(declared, &elem(&1, 0), &elem(&1, 2)),
+          length(owners) > 1,
+          do: %{scheme: scheme, operations: Enum.sort(owners), reason: :scheme_declared_twice}
+        ) ++
+        for(
+          {name, modules} <- Enum.group_by(tools, &elem(&1, 1).name, &elem(&1, 0)),
+          length(modules) > 1,
+          do: %{tool: name, providers: modules, reason: :tool_registered_twice}
+        )
+
+    if findings == [], do: :ok, else: {:error, findings}
+  end
+
+  # Every `{scheme, provider}` the providers advertise, and a finding for
+  # each advertised URI that names no scheme.
+  defp advertised_schemes(providers) do
+    entries =
+      for module <- providers,
+          {fun, key} <- [resources: :uri, resource_templates: :uriTemplate],
+          function_exported?(module, fun, 0),
+          entry <- apply(module, fun, []),
+          do: {module, Map.get(entry, key) || Map.get(entry, Atom.to_string(key))}
+
+    Enum.reduce(entries, {[], []}, fn {module, uri}, {advertised, malformed} ->
+      case Prima.Provider.resource_scheme(uri) do
+        {:ok, scheme} ->
+          {Enum.uniq(advertised ++ [{scheme, module}]), malformed}
+
+        :error ->
+          {advertised,
+           malformed ++ [%{provider: module, uri: uri, reason: :malformed_resource_uri}]}
+      end
+    end)
+  end
+
+  @doc """
+  Every `tool.action` declared `recovery: :replay_safe`, derived from the
+  declarations — the table's, or the named providers' — : the operations
+  a recovered turn may still dispatch past an uncertain step. There is no
+  second list.
+  """
+  @spec replay_safe_actions(:table | [module()]) :: [String.t()]
+  def replay_safe_actions(source \\ :table) do
+    source
+    |> declared_tools()
+    |> Enum.flat_map(fn tool ->
+      tool
+      |> Annotations.declared_actions()
+      |> Enum.filter(fn {_verb, annotation} ->
+        Annotations.recovery_of(annotation) == :replay_safe
+      end)
+      |> Enum.map(fn {verb, _} -> "#{tool.name}.#{verb}" end)
+    end)
+    |> Enum.sort()
+  end
+
+  # The tools a derivation reads: the table's, or — for an audit of
+  # providers not loaded — the named providers' own declarations.
+  defp declared_tools(:table), do: for({_name, {_module, tool}} <- operations(), do: tool)
+
+  defp declared_tools(providers) when is_list(providers),
+    do: Enum.flat_map(providers, & &1.tools())
+
+  # `Operation.validate!/1` has already established that a non-nil
+  # permission is an atom by the time the audit reaches this check.
+  defp known_permission?(permission),
+    do: Atom.to_string(permission) in Sanctum.Atoms.known_permissions()
+
+  @doc """
+  The planes an action may be annotated with.
+  """
+  @spec valid_planes() :: [Prima.Provider.plane()]
+  defdelegate valid_planes(), to: Operation
+
+  # ============================================================================
+  # Internal
+  # ============================================================================
+
+  # The handler runs under `async_nolink`, never `Task.async`. `Task.async` links,
+  # and the caller here is the request process, which does not trap exits — so a
+  # handler raising would propagate a link exit signal and kill the request
+  # outright, returning a bare 500 instead of a JSON-RPC error. A signal is not
+  # catchable by try/rescue, so the crash clauses below could never have fired for
+  # that case. Without a link, a crash arrives as `{:exit, reason}` from `yield/2`.
+  # The adapter's runner. Inline is the in-process call: the handler on the
+  # caller's own process, with a raised authorization refusal answered as
+  # the refusal it is and any other crash contained to this call.
+  defp execute_tool_call(name, ctx, opts, execute_fn) do
+    case Keyword.get(opts, :runner, :inline) do
+      :inline -> run_inline(name, execute_fn)
+      :supervised -> run_supervised(name, ctx, opts, execute_fn)
+    end
+  end
+
+  defp run_inline(name, execute_fn) do
+    execute_fn.()
+  rescue
+    refusal in Sanctum.UnauthorizedError ->
+      {:error, refusal.reason}
+
+    exception ->
+      Logger.error(
+        "[Grimoire.Catalog] Tool #{name} crashed: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      {:error, {:crashed, "Tool #{name} crashed"}}
+  catch
+    :exit, reason ->
+      Logger.error("[Grimoire.Catalog] Tool #{name} exited: #{inspect(reason)}")
+      {:error, {:exit, "Tool #{name} exited unexpectedly"}}
+  end
+
+  defp run_supervised(name, ctx, opts, execute_fn) do
+    case Keyword.get(opts, :cancel_handle) do
+      nil ->
+        supervise(name, ctx, opts, nil, execute_fn)
+
+      handle ->
+        # Claimed before the task exists, so a cancel that lands first is
+        # seen when the task registers, and the handler never runs.
+        case Grimoire.RunningTasks.claim(handle) do
+          :ok -> supervise(name, ctx, opts, handle, execute_fn)
+          :cancelled -> {:error, {:cancelled, "Tool #{name} was cancelled"}}
+        end
+    end
+  end
+
+  defp supervise(name, ctx, opts, handle, execute_fn) do
+    # Registered under the server-minted request id, which is also the
+    # request's progress topic (`Cyfr.Bus.progress/2`) — one identity per
+    # request across both subsystems. The transport cancels through this when its caller hangs up;
+    # a context without one (an internal call that bypassed `do_call/4`'s
+    # minting) simply is not cancellable that way — its caller cancels by
+    # handle.
+    #
+    # The claim is taken before the task exists and the task registers
+    # against it from inside itself before the handler runs, so a cancel
+    # that lands in between is seen at the registration and the handler
+    # never runs.
+    request_id = ctx.request_id
+    claim = if is_binary(request_id), do: Grimoire.RunningTasks.claim_request(request_id)
+
+    logger_metadata = Prima.LoggerContext.capture()
+
+    task =
+      Task.Supervisor.async_nolink(Grimoire.TaskSupervisor, fn ->
+        Prima.LoggerContext.restore(logger_metadata)
+
+        case register_task(request_id, claim, handle) do
+          :ok -> execute_fn.()
+          _refused -> exit(:cancelled)
+        end
+      end)
+
+    # An in-chain effect the handler may have made before it died is not
+    # undone by its death: unless the action is reviewed as replay-safe,
+    # the caller learns that the outcome is unknown, not that it failed.
+    uncertain? =
+      Keyword.get(opts, :in_chain, false) and
+        not replay_safe?(name, Keyword.get(opts, :action))
+
+    result =
+      case Task.yield(task, @tool_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, result} ->
+          result
+
+        {:exit, {%Sanctum.UnauthorizedError{reason: reason}, _stacktrace}} ->
+          # An authorization refusal that surfaced as a raise inside the
+          # handler (`Context.athanor!/1`, `require_tenant!/1`) is a
+          # refusal, not a crash: no error log, and the router answers it
+          # with the auth error code instead of an isError "crashed" text.
+          # The reason travels, not the sentence — the wire boundary renders
+          # it the same way it renders the returned form, which is how the
+          # raised one gets its own code rather than everything landing on
+          # `:insufficient_permissions`.
+          {:error, reason}
+
+        {:exit, {exception, stacktrace}} when is_exception(exception) ->
+          Logger.error(
+            "[Grimoire.Catalog] Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}"
+          )
+
+          # The tuple carries only the tool's name — the exception's own
+          # message can hold a query, a path, or the offending bytes, and
+          # this tuple renders verbatim on the wire (`Prima.Refusal.message/1`).
+          if uncertain?,
+            do: {:error, {:uncertain, "Tool #{name} crashed; its outcome is unknown"}},
+            else: {:error, {:crashed, "Tool #{name} crashed"}}
+
+        {:exit, :cancelled} ->
+          if uncertain?,
+            do: {:error, {:uncertain, "Tool #{name} was cancelled; its outcome is unknown"}},
+            else: {:error, {:cancelled, "Tool #{name} was cancelled"}}
+
+        {:exit, reason} ->
+          Logger.error("[Grimoire.Catalog] Tool #{name} exited: #{inspect(reason)}")
+
+          if uncertain?,
+            do: {:error, {:uncertain, "Tool #{name} exited; its outcome is unknown"}},
+            else: {:error, {:exit, "Tool #{name} exited unexpectedly"}}
+
+        nil ->
+          Logger.error("[Grimoire.Catalog] Tool #{name} timed out after #{@tool_timeout_ms}ms")
+
+          if uncertain?,
+            do: {:error, {:uncertain, "Tool #{name} timed out; its outcome is unknown"}},
+            else: {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
+      end
+
+    if claim, do: Grimoire.RunningTasks.unregister(request_id, claim)
+    if handle, do: Grimoire.RunningTasks.release_handle(handle)
+    result
+  end
+
+  # Run from inside the task. `:cancelled` or `:released` from either
+  # registration means the handler must not run.
+  defp register_task(request_id, claim, handle) do
+    with :ok <-
+           if(claim, do: Grimoire.RunningTasks.register(request_id, claim, self()), else: :ok) do
+      if handle, do: Grimoire.RunningTasks.register_handle(handle, self()), else: :ok
+    end
+  end
+
+  defp replay_safe?(name, action) when is_binary(action) do
+    case get_tool(name) do
+      {:ok, tool_def} -> Grimoire.Annotations.recovery(tool_def, action) == :replay_safe
+      _ -> false
+    end
+  end
+
+  defp replay_safe?(_name, _action), do: false
+
+  @doc """
+  Every provider named in config, loaded or not. The status roster reads
+  this set, so a configured provider that failed to load is reported as
+  such rather than silently absent.
+
+  The single reader of `:cyfr, :tool_providers` — config always sets the
+  key, so the default is an empty list, never a hidden second roster.
+  """
+  @spec configured_providers() :: [module()]
+  def configured_providers, do: Application.get_env(:cyfr, :tool_providers, [])
+
+  @doc """
+  The configured tool providers that are actually loadable, warning about
+  any that aren't (an app-scoped test run without the sibling apps).
+  """
+  @spec available_providers() :: [module()]
+  def available_providers do
+    configured_providers()
+    |> Enum.filter(fn module ->
+      if loadable?(module) do
+        true
+      else
+        Logger.warning(
+          "[Grimoire.Catalog] Tool provider #{inspect(module)} not available — skipping. " <>
+            "Check that the application is started and the module exists."
+        )
+
+        false
+      end
+    end)
+  end
+
+  @impl Sanctum.Grimoire
+  def providers_loaded do
+    case Enum.reject(configured_providers(), &loadable?/1) do
+      [] -> :ok
+      missing -> {:error, missing}
+    end
+  end
+
+  @doc """
+  Every `tool.action` served outside a running chain: the declared
+  actions whose planes include `:external`.
+  """
+  @spec external_tool_actions() :: [String.t()]
+  def external_tool_actions do
+    for tool <- declared_tools(:table),
+        {action, annotation} <- Annotations.actions_of(tool),
+        :external in Map.get(annotation, :planes, []),
+        do: "#{tool.name}.#{action}"
+  end
+
+  @doc """
+  Every `tool.action` annotated `host: :intercepted`: the actions a
+  formula's host runs under the chain's authority rather than dispatching
+  through the catalog, sorted.
+  """
+  @spec host_intercepted_actions() :: [String.t()]
+  def host_intercepted_actions do
+    Enum.sort(
+      for tool <- declared_tools(:table),
+          {action, _annotation} <- Annotations.actions_of(tool),
+          Annotations.host_intercepted?(tool, action),
+          do: "#{tool.name}.#{action}"
+    )
+  end
+
+  # Every `tool.action` the table holds — what a consent shape may name
+  # (`Sanctum.Grimoire`).
+  @impl Sanctum.Grimoire
+  def tool_actions do
+    for tool <- declared_tools(:table),
+        {action, _annotation} <- Annotations.actions_of(tool),
+        do: "#{tool.name}.#{action}"
+  end
+
+  # One `tool.action` as the standing rule reads it (`Sanctum.Grimoire`),
+  # classified as `tool_kind/2` classifies it: a virtual hand from its
+  # table, an upstream `server:tool` as external (it declares no standing
+  # and names no resource), a catalogued action from its operation. An
+  # action name holds no dot, so the pair splits at the last one, and a
+  # server's tool name keeps any dot of its own.
+  @impl Sanctum.Grimoire
+  def action_declaration(name) when is_binary(name) do
+    case String.split(name, ".") do
+      [_, _ | _] = parts ->
+        {tool, [action]} = Enum.split(parts, -1)
+        declaration(Enum.join(tool, "."), action)
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  defp declaration(tool, action) when tool == "" or action == "", do: {:error, :not_found}
+
+  defp declaration(tool, action) do
+    cond do
+      Grimoire.VirtualTools.tool?(tool) ->
+        case Grimoire.VirtualTools.action(tool, action) do
+          %{kind: kind} = declared ->
+            {:ok, %{kind: kind, standing: nil, resource: Map.get(declared, :resource)}}
+
+          nil ->
+            {:error, :not_found}
+        end
+
+      String.contains?(tool, ":") ->
+        {:ok, %{kind: :external, standing: nil, resource: nil}}
+
+      true ->
+        with {:ok, {_module, %{operations: operations}}} <- lookup(tool),
+             %Operation{} = operation <- Enum.find(operations, &(&1.action == action)) do
+          {:ok,
+           %{kind: operation.kind, standing: operation.standing, resource: operation.resource}}
+        else
+          _ -> {:error, :not_found}
+        end
+    end
+  end
+
+  # The external tool servers a grant may name (`Sanctum.Grimoire`). The
+  # proxied `server:tool` entries are the proxy port's (`Grimoire.Proxy`),
+  # so it is what describes them.
+  @impl Sanctum.Grimoire
+  def tool_server_candidates(%Context{} = ctx),
+    do: Grimoire.Proxy.impl!().consent_candidates(ctx)
+
+  @impl Sanctum.Grimoire
+  def tool_server_candidate(%Context{} = ctx, name) when is_binary(name),
+    do: Grimoire.Proxy.impl!().consent_candidate(ctx, name)
+
+  defp loadable?(module),
+    do: Code.ensure_loaded?(module) and function_exported?(module, :tools, 0)
+end

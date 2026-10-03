@@ -4,9 +4,9 @@
 defmodule Cyfr.GenServerCatchallTest do
   @moduledoc """
   Every named GenServer with a catch-all `handle_info/2` survives an
-  unexpected message and logs it BOUNDED.
+  unexpected message and logs its shape, bounded and without its values.
 
-  Discovers named GenServers using `Cyfr.UnexpectedMessage.log/3` and
+  Discovers named GenServers using `Prima.LoggerContext.unexpected/3` and
   requires each to have a behavioral probe or an explicit exemption.
   """
   use ExUnit.Case, async: false
@@ -18,32 +18,35 @@ defmodule Cyfr.GenServerCatchallTest do
   # Probed live: named, started by the app under test.
   @genservers [
     {Aqua.Loop.Worker, "Loop.Worker"},
-    {Cyfr.Ops.Catalog, "Catalog"},
-    {Emissary.MCP.ResourceRegistry, "ResourceRegistry"},
     {Arca.Cache.Sweeper, "Sweeper"},
-    {Prism.TelemetryBridge, "TelemetryBridge"},
+    {Cyfr.TelemetryBridge, "TelemetryBridge"},
+    {Aqua.ScheduleNotes, "ScheduleNotes"},
     {Cyfr.StandingWatch, "StandingWatch"},
+    {Cyfr.Platform.Settings, "Platform.Settings"},
     {Arca.AuditHandler, "AuditHandler"},
     {Prism.TinctureRegistry, "TinctureRegistry"},
     {Arca.RecordSink, "RecordSink"},
-    {Cyfr.RateLimiter, "RateLimiter"},
-    {Cyfr.Execution.Slots, "Slots"},
-    {Cyfr.Execution.Events.Sequence, "Events.Sequence"},
-    {Compendium.Provisioning, "Provisioning"}
+    {Arca.WriteTurn, "WriteTurn"},
+    {Prima.RateLimiter, "RateLimiter"},
+    {Crucible.Slots, "Slots"},
+    {Crucible.Events.Sequence, "Events.Sequence"},
+    {Compendium.Provisioning, "Provisioning"},
+    {Compendium.ProjectionReconciler, "ProjectionReconciler"}
   ]
 
   # Named adopters not probed live, each with the reason it cannot be:
   # gated off (returns :ignore) or not started in the test environment.
   @not_probed %{
     Cyfr.RetentionScheduler => "gated by :retention_scheduler_enabled",
-    Cyfr.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
+    Crucible.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
     Cyfr.Cell => "gated by :control_plane_claim_enabled",
-    Cyfr.Execution.Sweeper => "gated by :execution_sweeper_enabled",
-    Cyfr.Execution.ArchiveWatch => "gated by :execution_archive_watch_enabled",
-    Cyfr.Execution.WorkerWatch => "gated by :worker_watch_enabled",
-    Emissary.MCP.ExternalServerReconciler => "gated by :external_server_reconciler_enabled",
-    Emissary.MCP.Bridge => "started only when an MCP bridge URL and key are configured",
-    Emissary.MCP.RunningTasks => "probing would race real request tracking",
+    Crucible.Sweeper => "gated by :execution_sweeper_enabled",
+    Crucible.ArchiveWatch => "gated by :execution_archive_watch_enabled",
+    Crucible.WorkerWatch => "gated by :worker_watch_enabled",
+    Emissary.External.Reconciler => "gated by :external_server_reconciler_enabled",
+    Emissary.External.Backends =>
+      "started only when a backends service URL and key are configured",
+    Grimoire.RunningTasks => "probing would race real request tracking",
     Sanctum.Consent.Proof.Memory => "started only when the memory proof store is configured",
     Sanctum.Authority.BudgetGuard => "guards live invoke budgets"
   }
@@ -88,16 +91,15 @@ defmodule Cyfr.GenServerCatchallTest do
     # One unnamed buffer per execution, so it is probed on an instance of
     # its own. It reads the execution's row for its durable prefix when it
     # starts, so it needs the sandbox connection.
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
       :ok
     end
 
     for message <- [@unexpected_msg, {:random, "payload"}] do
       test "survives #{inspect(message)} and logs it" do
         id = "exec_catchall_#{System.unique_integer([:positive])}"
-        {:ok, pid} = GenServer.start_link(Cyfr.Execution.Events, {id, "ath_catchall"}, [])
+        {:ok, pid} = GenServer.start_link(Crucible.Events, {id, "ath_catchall"}, [])
 
         assert capture_log(fn ->
                  send(pid, unquote(Macro.escape(message)))
@@ -116,16 +118,16 @@ defmodule Cyfr.GenServerCatchallTest do
     for message <- [@unexpected_msg, {:random, "payload"}] do
       test "survives #{inspect(message)} and logs it" do
         ctx = Sanctum.TestContext.local()
-        record = Cyfr.Execution.Record.new(ctx, "catalyst:local.catchall:0.1.0", %{})
+        record = Crucible.Record.new(ctx, "catalyst:local.catchall:0.1.0", %{})
 
         {:ok, pid} =
-          Cyfr.Execution.Attempt.open(
+          Crucible.Attempt.open(
             execution_id: record.id,
             attempt: record.attempt,
             ctx: ctx,
-            authority: Cyfr.Authority.zero(),
+            authority: Prima.Authority.zero(),
             component_ref: "catalyst:local.catchall:0.1.0",
-            close: %Cyfr.Execution.Close{ctx: ctx, record: record}
+            close: %Crucible.Close{ctx: ctx, record: record}
           )
 
         assert capture_log(fn ->
@@ -154,9 +156,9 @@ defmodule Cyfr.GenServerCatchallTest do
 
       adopters =
         for dir <- @release_libs,
-            path <- Cyfr.Test.SourceTree.files!(Path.join([root, dir, "**/*.ex"])),
-            source = Cyfr.Test.SourceTree.read(path),
-            String.contains?(source, "Cyfr.UnexpectedMessage.log(__MODULE__"),
+            path <- Prima.Test.SourceTree.files!(Path.join([root, dir, "**/*.ex"])),
+            source = Prima.Test.SourceTree.read(path),
+            String.contains?(source, "Prima.LoggerContext.unexpected(__MODULE__"),
             # Two spellings register the app-wide name, and matching only the
             # first hid `Sanctum.Authority.BudgetGuard` — a real adopter —
             # from this roster entirely, which made its `@not_probed` row
@@ -169,22 +171,81 @@ defmodule Cyfr.GenServerCatchallTest do
       missing = Enum.reject(adopters, &MapSet.member?(rostered, &1))
 
       assert missing == [],
-             "named GenServers adopted Cyfr.UnexpectedMessage without joining this " <>
+             "named GenServers adopted Prima.LoggerContext.unexpected/3 without joining this " <>
                "test's roster (probe them, or excuse them with a reason): #{inspect(missing)}"
     end
   end
 
-  describe "the helper's inspect is bounded" do
+  describe "the helper logs a message's shape" do
+    # The line from the module prefix to its end: what the helper wrote,
+    # without the formatter's timestamp and level.
+    defp helper_line(log) do
+      [line] = Regex.run(~r/\[Cyfr\.GenServerCatchallTest\] unexpected message: .*/, log)
+      line
+    end
+
     test "a huge term logs a bounded line" do
       huge = %{blob: String.duplicate("x", 1_000_000), list: Enum.to_list(1..100_000)}
 
-      log = capture_log(fn -> Cyfr.UnexpectedMessage.log(__MODULE__, huge) end)
+      log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, huge) end)
 
       assert log =~ "unexpected message"
+      refute log =~ "xxxx"
 
-      assert String.length(log) < 2_000,
+      assert String.length(helper_line(log)) <= 200,
              "the unexpected-message line is unbounded (#{String.length(log)} chars) — " <>
                "the helper exists to keep a stray huge term out of the log"
+    end
+
+    test "a secret-bearing message logs its shape and never the secret" do
+      secret = "sk-live-4f9a1c2e7b0d4e6f8a1b3c5d7e9f0a2b"
+
+      messages = [
+        {:thread_event, %{"content" => secret}},
+        %{token: secret, athanor_id: "ath_1"},
+        %URI{userinfo: secret, host: "example.com"},
+        secret,
+        [secret, {:credential, secret}],
+        {secret, :tail}
+      ]
+
+      for message <- messages do
+        log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, message) end)
+
+        assert log =~ "unexpected message"
+        refute log =~ "sk-live", "the log carried the secret: #{log}"
+      end
+    end
+
+    test "the shape names the tuple's tag and arity, the struct's module and keys" do
+      log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, {:ping, 1, 2}) end)
+      assert helper_line(log) =~ "tuple :ping/3"
+
+      log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, %URI{host: "h"}) end)
+      assert helper_line(log) =~ "%URI{:authority, :fragment, :host"
+      refute log =~ ~s("h")
+
+      map = Map.new(1..20, &{:"key_#{String.pad_leading(to_string(&1), 2, "0")}", &1})
+      log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, map) end)
+      assert helper_line(log) =~ "map/20 [:key_01,"
+      assert log =~ ":key_10]"
+      refute log =~ ":key_11"
+    end
+
+    test "the level is the caller's" do
+      # The suite logs at :warning; this synchronous test lowers it and
+      # puts it back.
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        capture_log([level: :debug], fn ->
+          Prima.LoggerContext.unexpected(__MODULE__, :sibling_broadcast, :debug)
+        end)
+
+      assert log =~ "[debug]"
+      assert helper_line(log) =~ ":sibling_broadcast"
     end
   end
 end

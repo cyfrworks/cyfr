@@ -22,7 +22,6 @@ defmodule PrismWeb.McpServersLiveTest do
        %{conn: conn, athanor: athanor} do
     {view, html} = mount_athanor(conn, "/mcp-servers", athanor)
     assert html =~ "Add stdio server"
-    refute html =~ "Setup MCP Bridge"
 
     view |> element("button", "Add stdio server") |> render_click()
 
@@ -48,7 +47,7 @@ defmodule PrismWeb.McpServersLiveTest do
       })
       |> render_submit()
 
-    assert html =~ "No MCP bridge is configured"
+    assert html =~ "No backends service is configured"
     assert {:error, :not_found} = Arca.McpServerStorage.get(ctx(athanor), "github")
   end
 
@@ -74,7 +73,7 @@ defmodule PrismWeb.McpServersLiveTest do
       })
 
     {view, html} = mount_athanor(conn, "/mcp-servers", athanor)
-    assert html =~ "stdio (MCP bridge)"
+    assert html =~ "stdio (backends service)"
 
     html = view |> element("tr[phx-value-name=piped]") |> render_click()
     assert html =~ ~s(phx-click="restart")

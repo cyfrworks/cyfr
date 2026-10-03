@@ -6,7 +6,7 @@ defmodule Cyfr.Test.StepBench do
   The per-step latency of a turn's model step, measured in one BEAM
   against the real host path.
 
-  An estate is laid whose soul's model is `catalyst:local.step-stub`
+  An athanor is laid whose soul's model is `catalyst:local.step-stub`
   (`test_wasm/step_stub/`): a `model/chat@1` catalyst that reads its key,
   emits a few `text.delta` events and answers one text block at once, so
   the time measured is the host's and not a provider's. The stub's key is
@@ -14,11 +14,11 @@ defmodule Cyfr.Test.StepBench do
   model catalyst's is. Each step is one turn run by `Aqua.Loop` on a
   thread of its own: the loop claims the root, records and dispatches the
   chat step, and runs the catalyst as a child through
-  `Cyfr.Execution.run_child/5` — the chain's transition and invoke charge,
+  `Crucible.run_child/5` — the chain's transition and invoke charge,
   admission with its hold and step barriers, the vault unseal, the slot,
   the WASM runtime, the emit path and the terminal write.
 
-  The step's timings are the `Cyfr.Execution.StepSpans` events of its chat
+  The step's timings are the `Crucible.StepSpans` events of its chat
   step's child execution. Everything runs inside one SQL sandbox
   checkout, rolled back when the run ends, with storage and the seed tree
   in temporary directories removed with it.
@@ -75,13 +75,13 @@ defmodule Cyfr.Test.StepBench do
     # test's holds and reads on a wire no call crosses.
     Cyfr.Test.OpusService.wire!(proxy: Cyfr.Test.TwoServices.wire() != nil)
 
-    unless Cyfr.Execution.available?(),
+    unless Crucible.available?(),
       do:
         raise("the Opus worker service of this boot does not answer; run from the umbrella root")
 
     with_sandbox(fn ->
-      with_estate_env(fn ->
-        ctx = estate!()
+      with_athanor_env(fn ->
+        ctx = athanor!()
         measure(ctx, steps, warmup)
       end)
     end)
@@ -143,7 +143,7 @@ defmodule Cyfr.Test.StepBench do
     end
   end
 
-  defp with_estate_env(fun) do
+  defp with_athanor_env(fun) do
     run_dir = Path.join(System.tmp_dir!(), "step_bench_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path]
     previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
@@ -165,7 +165,7 @@ defmodule Cyfr.Test.StepBench do
   end
 
   # ---------------------------------------------------------------------------
-  # The estate
+  # The athanor
   # ---------------------------------------------------------------------------
 
   # A seed tree with the stub catalyst and a soul that runs on it.
@@ -197,7 +197,7 @@ defmodule Cyfr.Test.StepBench do
       "version" => @stub_version,
       "publisher" => "local",
       "description" => "A model/chat@1 catalyst that streams a few deltas and answers at once",
-      "contracts" => [Cyfr.Models.chat_contract()],
+      "contracts" => [Prima.Model.chat_contract()],
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:step-stub",
@@ -218,27 +218,34 @@ defmodule Cyfr.Test.StepBench do
     }
   end
 
-  defp estate! do
-    ctx = Sanctum.TestContext.local()
+  # A person chatting in Prism: each bench turn is an interactive one.
+  defp athanor! do
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
 
     if @soul not in minted or @stub not in minted,
-      do: raise("the bench estate minted #{inspect(minted)}, not the soul and #{@stub}")
+      do: raise("the bench athanor minted #{inspect(minted)}, not the soul and #{@stub}")
 
     bind_key!(ctx)
     ctx
   end
 
   defp bind_key!(ctx) do
-    {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
-        name: "step-stub key",
-        kind: "api_key",
-        fields: %{@key_field => "sk-step-stub"}
+    params = %{name: "step-stub key", kind: "api_key", fields: %{@key_field => "sk-step-stub"}}
+
+    # Entering the key is a sensitive change, confirmed as its person
+    # confirms it (`Sanctum.TestContext.confirmed/3`).
+    entering =
+      Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+        operation: "vault.create",
+        arguments: params,
+        resource: params.name
       })
+
+    {:ok, entry} = Sanctum.Vault.create(entering, params)
 
     {:ok, plan} = Plan.plan(ctx, %{ref: @stub})
     decisions = %{ref: @stub, bindings: [%{need: "api_key", entry_id: entry.id}]}
@@ -267,7 +274,7 @@ defmodule Cyfr.Test.StepBench do
     :ok =
       :telemetry.attach_many(
         handler,
-        Cyfr.Execution.StepSpans.events(),
+        Crucible.StepSpans.events(),
         fn event, %{duration: duration}, metadata, _config ->
           send(bench, {:step_span, metadata.execution_id, event, duration})
         end,
@@ -320,7 +327,7 @@ defmodule Cyfr.Test.StepBench do
   end
 
   defp spans(execution_id) do
-    Enum.reduce(Cyfr.Execution.StepSpans.events(), %{}, fn event, acc ->
+    Enum.reduce(Crucible.StepSpans.events(), %{}, fn event, acc ->
       receive do
         {:step_span, ^execution_id, ^event, duration} -> Map.put(acc, name(event), duration)
       after

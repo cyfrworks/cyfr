@@ -10,9 +10,8 @@ defmodule Sanctum.S3ClientIpTest do
 
   alias Sanctum.ClientIp
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     originals =
       for key <- [:trust_x_forwarded_for, :trusted_proxy_hops, :trusted_proxy_cidrs] do
@@ -48,13 +47,15 @@ defmodule Sanctum.S3ClientIpTest do
 
     test "trusted XFF resolves the RIGHTMOST untrusted hop, not the client-claimed left" do
       Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      # Chain is [claimed..., appended-by-proxy, socket]; with the default of
-      # 1 trusted hop (the socket peer), the proxy-appended entry wins.
+      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
+      # Chain is [claimed..., appended-by-proxy, socket]; with 1 trusted hop
+      # (the socket peer), the proxy-appended entry wins.
       assert ClientIp.resolve(conn({10, 0, 0, 5}, "1.2.3.4, 9.9.9.9")) == "9.9.9.9"
     end
 
     test "a client-prepended XFF entry cannot spoof the resolved IP" do
       Application.put_env(:sanctum, :trust_x_forwarded_for, true)
+      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
       # Attacker at 8.8.8.8 sends "X-Forwarded-For: 203.0.113.9"; Caddy appends
       # the peer it saw. The spoofed leftmost entry must never be selected.
       assert ClientIp.resolve(conn({172, 18, 0, 2}, "203.0.113.9, 8.8.8.8")) == "8.8.8.8"
@@ -94,6 +95,7 @@ defmodule Sanctum.S3ClientIpTest do
 
     test "XFF chains split across multiple header instances are joined" do
       Application.put_env(:sanctum, :trust_x_forwarded_for, true)
+      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
       assert ClientIp.resolve(conn({10, 0, 0, 5}, ["1.2.3.4", "203.0.113.9"])) == "203.0.113.9"
     end
 
@@ -125,10 +127,10 @@ defmodule Sanctum.S3ClientIpTest do
 
   describe "the closed bypass: allowlist is enforced, not skipped" do
     test "an allowlisted key with an unresolvable IP is REJECTED (was: bypassed)" do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =
-        Sanctum.ApiKey.create(ctx, %{name: "ip-key", ip_allowlist: ["203.0.113.0/24"]})
+        Sanctum.TestContext.create_key(ctx, %{name: "ip-key", ip_allowlist: ["203.0.113.0/24"]})
 
       # Resolve the missing IP before validation; 0.0.0.0 must fail this allowlist.
       no_ip = ClientIp.resolve(conn(nil))
@@ -142,10 +144,11 @@ defmodule Sanctum.S3ClientIpTest do
 
     test "a spoofed leftmost XFF entry cannot satisfy the allowlist behind a proxy" do
       Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      ctx = Sanctum.TestContext.local()
+      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =
-        Sanctum.ApiKey.create(ctx, %{name: "xff-key", ip_allowlist: ["203.0.113.0/24"]})
+        Sanctum.TestContext.create_key(ctx, %{name: "xff-key", ip_allowlist: ["203.0.113.0/24"]})
 
       # Attacker at 8.8.8.8 claims an allowlisted IP; the proxy appends the
       # real peer. Resolution must pick 8.8.8.8 and the allowlist must reject.

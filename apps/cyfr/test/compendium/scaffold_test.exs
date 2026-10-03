@@ -6,9 +6,8 @@ defmodule Compendium.ScaffoldTest do
 
   alias Compendium.Scaffold
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_scaffold_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
@@ -134,7 +133,7 @@ defmodule Compendium.ScaffoldTest do
 
     test "what scaffold writes, media discovery finds", %{ctx: ctx} do
       # The `public/media/` convention has one spelling
-      # (Cyfr.TinctureHelpers); the scaffolder's placeholders must land
+      # (Compendium.Tincture); the scaffolder's placeholders must land
       # exactly where discovery probes.
       assert {:ok, _} = Scaffold.create(ctx, "branded", "tincture", "0.1.0")
 
@@ -147,7 +146,7 @@ defmodule Compendium.ScaffoldTest do
         )
 
       assert %{icon: "public/media/icon.svg", previews: ["public/media/preview-1.svg"]} =
-               Cyfr.TinctureHelpers.discover_media_via_arca(ctx, version_segs)
+               Compendium.Tincture.media(ctx, version_segs)
     end
   end
 
@@ -272,6 +271,7 @@ defmodule Compendium.ScaffoldTest do
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
       assert File.exists?(Path.join(base, "package.json"))
+      assert File.exists?(Path.join(base, "package-lock.json"))
       assert File.exists?(Path.join(base, "tsconfig.json"))
       assert File.exists?(Path.join(base, "vite.config.ts"))
       # The source entry sits at the root; the build it feeds lands in dist/.
@@ -347,6 +347,134 @@ defmodule Compendium.ScaffoldTest do
     end
   end
 
+  # ============================================================================
+  # Vite Tincture Scaffold, and the lockfiles of the built templates
+  # ============================================================================
+
+  defp tincture_base(ctx, name),
+    do:
+      Arca.Adapters.Local.build_path(
+        Sanctum.Context.actor(ctx),
+        ["components", "tinctures", "local", name, "0.1.0"]
+      )
+
+  defp read_json(base, file), do: base |> Path.join(file) |> File.read!() |> Jason.decode!()
+
+  describe "scaffold for tincture with vite template" do
+    test "creates a Vite project that builds into dist/", %{ctx: ctx} do
+      assert {:ok, result} =
+               Scaffold.create(ctx, "vite-app", "tincture", "0.1.0", template: "vite")
+
+      base = tincture_base(ctx, "vite-app")
+
+      for file <-
+            ~w(package.json package-lock.json vite.config.js index.html src/main.js src/style.css) do
+        assert File.exists?(Path.join(base, file)), file
+      end
+
+      refute File.exists?(Path.join(base, "tsconfig.json"))
+      refute File.exists?(Path.join(base, "dist"))
+
+      manifest = read_json(base, "cyfr-manifest.json")
+      assert get_in(manifest, ["tincture", "build", "tool"]) == "vite"
+      assert get_in(manifest, ["tincture", "entry"]) == "dist/index.html"
+
+      assert File.read!(Path.join(base, "vite.config.js")) =~ ~s(base: "./")
+      assert Enum.any?(result.next_steps, &(&1 =~ "build.compile"))
+      assert Enum.any?(result.next_steps, &(&1 =~ "package-lock.json"))
+    end
+
+    test "every template the frame's rules list scaffolds, with the entry and build they name",
+         %{ctx: ctx} do
+      for template <- Compendium.tincture_templates() do
+        name = "every-" <> template.name
+        assert {:ok, _} = Scaffold.create(ctx, name, "tincture", "0.1.0", template: template.name)
+
+        tincture = read_json(tincture_base(ctx, name), "cyfr-manifest.json")["tincture"]
+        assert tincture["entry"] == template.entry
+        assert get_in(tincture, ["build", "tool"]) == template.build
+      end
+    end
+
+    test "a template the rules do not list is refused, naming the ones they do", %{ctx: ctx} do
+      assert {:error, message} =
+               Scaffold.create(ctx, "odd", "tincture", "0.1.0", template: "svelte")
+
+      assert message =~ "svelte"
+      for template <- Compendium.tincture_templates(), do: assert(message =~ template.name)
+      refute File.exists?(tincture_base(ctx, "odd"))
+    end
+  end
+
+  describe "the built templates' lockfiles" do
+    test "each ships the rules' lockfile, pinning exactly what its package manifest asks for",
+         %{ctx: ctx} do
+      for template <- ~w(vite react) do
+        name = "lock-" <> template
+        assert {:ok, _} = Scaffold.create(ctx, name, "tincture", "0.1.0", template: template)
+        base = tincture_base(ctx, name)
+
+        package = read_json(base, "package.json")
+        lock = read_json(base, Compendium.Tincture.Rules.lockfile())
+        root = lock["packages"][""]
+
+        # `npm ci` holds the lockfile's root to the package manifest.
+        assert lock["lockfileVersion"] == 3
+        assert lock["name"] == name and root["name"] == name
+        assert root["dependencies"] == package["dependencies"]
+        assert root["devDependencies"] == package["devDependencies"]
+
+        # Every package is pinned by version, source and integrity hash.
+        entries = Map.delete(lock["packages"], "")
+        assert map_size(entries) > 0
+
+        for {path, entry} <- entries do
+          assert String.starts_with?(path, "node_modules/"), path
+          assert is_binary(entry["version"]), path
+          assert "https://registry.npmjs.org/" <> _ = entry["resolved"]
+          assert "sha512-" <> _ = entry["integrity"]
+        end
+
+        # Every dependency a package names resolves inside the lockfile, or
+        # is one npm may skip (optional, or a peer it does not install).
+        for {path, entry} <- entries,
+            dep <- Map.keys(entry["dependencies"] || %{}) do
+          assert Enum.any?(lock_candidates(path, dep), &Map.has_key?(entries, &1)),
+                 "#{path} depends on #{dep}, which the lockfile does not hold"
+        end
+      end
+    end
+
+    test "the Vite lockfile holds Vite's closure alone, the React one React's beside it", %{
+      ctx: ctx
+    } do
+      assert {:ok, _} = Scaffold.create(ctx, "only-vite", "tincture", "0.1.0", template: "vite")
+      assert {:ok, _} = Scaffold.create(ctx, "with-react", "tincture", "0.1.0", template: "react")
+
+      vite = read_json(tincture_base(ctx, "only-vite"), "package-lock.json")["packages"]
+      react = read_json(tincture_base(ctx, "with-react"), "package-lock.json")["packages"]
+
+      assert Map.has_key?(vite, "node_modules/vite")
+      assert Map.has_key?(vite, "node_modules/esbuild")
+      refute Map.has_key?(vite, "node_modules/react")
+      refute Map.has_key?(vite, "node_modules/typescript")
+
+      for path <- Map.keys(vite), path != "", do: assert(react[path] == vite[path], path)
+      assert Map.has_key?(react, "node_modules/react-dom")
+      assert Map.has_key?(react, "node_modules/typescript")
+    end
+  end
+
+  # Where Node looks for `dep` from the package at `path`: its own
+  # node_modules, then each enclosing one, then the root's.
+  defp lock_candidates(path, dep) do
+    parts = String.split(path, "/node_modules/")
+
+    for n <- length(parts)..1//-1 do
+      Enum.join(Enum.take(parts, n), "/node_modules/") <> "/node_modules/" <> dep
+    end ++ ["node_modules/" <> dep]
+  end
+
   describe "scaffold for vanilla tincture (no template)" do
     test "unchanged - creates vanilla files", %{ctx: ctx} do
       assert {:ok, result} = Scaffold.create(ctx, "vanilla", "tincture", "0.1.0")
@@ -371,6 +499,9 @@ defmodule Compendium.ScaffoldTest do
       {:ok, raw} = File.read(Path.join(base, "cyfr-manifest.json"))
       {:ok, manifest} = Jason.decode(raw)
       refute Map.has_key?(manifest["tincture"] || %{}, "build")
+
+      # What the scaffold writes passes the publish check as it stands.
+      assert {:ok, _} = Compendium.TinctureValidator.validate(base)
     end
   end
 
@@ -411,6 +542,31 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, _} = Scaffold.create(ctx_other, "dup-check", "catalyst", "0.1.0")
       assert {:error, msg} = Scaffold.create(ctx_other, "dup-check", "catalyst", "0.1.0")
       assert msg =~ "already exists"
+    end
+  end
+
+  describe "every tincture template speaks the shipped SDK" do
+    # The retired SDK's calls: no template may show one.
+    @retired ~w(cyfr.mode cyfr.setTitle cyfr.getContext cyfr.on\( cyfr.off\( cyfr.query\()
+
+    test "the app source calls the SDK as it ships", %{ctx: ctx} do
+      for {template, file} <- [{nil, "app.js"}, {"vite", "src/main.js"}, {"react", "src/App.tsx"}] do
+        name = "sdk-#{template || "vanilla"}"
+        opts = if template, do: [template: template], else: []
+        assert {:ok, _} = Scaffold.create(ctx, name, "tincture", "0.1.0", opts)
+
+        source = File.read!(Path.join(tincture_base(ctx, name), file))
+
+        for call <- @retired, do: refute(source =~ call, "#{file} shows #{call}")
+
+        assert source =~ ~s{cyfr.invoke("c:local.my-component", "run", }, file
+        assert source =~ "cyfr.ready()", file
+      end
+
+      react = File.read!(Path.join(tincture_base(ctx, "sdk-react"), "src/App.tsx"))
+
+      for member <- ~w(invoke action stream open close title ready credential),
+          do: assert(react =~ ~r/^\s+#{member}\(/m, "App.tsx declares no cyfr.#{member}")
     end
   end
 end

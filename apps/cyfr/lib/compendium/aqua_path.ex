@@ -12,7 +12,7 @@ defmodule Compendium.AquaPath do
   `Arca.Storage.UnitLocator`):
 
       aqua/
-      ├── aqua.md                 # the soul — the one assistant an estate has
+      ├── aqua.md                 # the soul — the one assistant an athanor has
       ├── roles/<name>.md         # one frontmatter-markdown file per role
       └── skills/<name>/SKILL.md  # one Agent Skills package per scroll
 
@@ -26,15 +26,15 @@ defmodule Compendium.AquaPath do
 
   @root ["aqua"]
   @root_name hd(@root)
-  # The soul's reserved name is `Cyfr.AgentRef`'s: the consent source ref
+  # The soul's reserved name is `Prima.AgentRef`'s: the consent source ref
   # `agent:local.aqua` and the file at the root of the tree are one name.
-  @soul Cyfr.AgentRef.soul_name()
+  @soul Prima.AgentRef.soul_name()
   @soul_file @soul <> ".md"
   @roles "roles"
   @skills "skills"
   @skill_manifest "SKILL.md"
   # The one grammar for role and scroll names — the tool boundary
-  # (`Compendium.MCP.AquaTool.validate_name`) and the unit locator both
+  # (`Compendium.Providers.Aqua.validate_name`) and the unit locator both
   # speak it, so a name the tools refuse can never mint a unit.
   @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9_-]*\z/
 
@@ -67,7 +67,7 @@ defmodule Compendium.AquaPath do
 
   @doc "The soul's reserved name."
   @spec soul_name() :: String.t()
-  defdelegate soul_name(), to: Cyfr.AgentRef
+  defdelegate soul_name(), to: Prima.AgentRef
 
   @doc """
   Whether `name` is the soul's — reserved, never a role.

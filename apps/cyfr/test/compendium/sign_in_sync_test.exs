@@ -29,19 +29,18 @@ defmodule Compendium.SignInSyncTest do
   alias Sanctum.SignIn
   alias Sanctum.Tenancy.{Athanors, Users}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     bypass = Bypass.open()
     original_url = Application.get_env(:cyfr, :registry_url)
     original_scheme = Application.get_env(:cyfr, :registry_scheme)
     original_oci = Application.get_env(:cyfr, :oci_registry_url)
+    original_budget = Application.get_env(:cyfr, :returning_probe_ms)
 
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
     Application.put_env(:cyfr, :registry_scheme, "http")
     Application.put_env(:cyfr, :oci_registry_url, "registry.test")
-    Application.put_env(:cyfr, :returning_probe_ms, 300)
 
     on_exit(fn ->
       restore = fn key, value ->
@@ -53,7 +52,7 @@ defmodule Compendium.SignInSyncTest do
       restore.(:registry_url, original_url)
       restore.(:registry_scheme, original_scheme)
       restore.(:oci_registry_url, original_oci)
-      Application.delete_env(:cyfr, :returning_probe_ms)
+      restore.(:returning_probe_ms, original_budget)
     end)
 
     {:ok, bypass: bypass}
@@ -77,6 +76,11 @@ defmodule Compendium.SignInSyncTest do
       user
     end
   end
+
+  # The admitted context the sign-in paths hand the courtesy: the person
+  # the push tokens are stored as.
+  defp as(user),
+    do: Sanctum.Context.build(user_id: user.id, authenticated: true, auth_method: :oidc)
 
   defp json_resp(conn, status, body) do
     conn
@@ -106,16 +110,17 @@ defmodule Compendium.SignInSyncTest do
       })
 
       assert {:proceed, %{namespace: ns}, %{unsynced: [], probe: :ok}} =
-               SignInSync.complete(user, "github", "gho_access")
+               SignInSync.complete(as(user), user, "github", "gho_access")
 
       assert ns == "first#{n}"
       assert {:ok, %{namespace: ^ns, personal_athanor_id: pid}} = Users.get(user.id)
       assert {:ok, %{kind: "person", slug: ^ns}} = Athanors.get(pid)
 
       assert {:ok, %{token: "cyfr_pt_personal"}} =
-               CredentialStore.get(user.id, "registry.test", ns)
+               CredentialStore.get(as(user), "registry.test", ns)
 
-      assert {:ok, %{role: "admin"}} = CredentialStore.get(user.id, "registry.test", "stripe.com")
+      assert {:ok, %{role: "admin"}} =
+               CredentialStore.get(as(user), "registry.test", "stripe.com")
     end
 
     test "with a personal namespace but no token in the body: still recorded, nothing to sync", %{
@@ -126,10 +131,10 @@ defmodule Compendium.SignInSyncTest do
       probe_answers(bypass, 200, %{"personal_namespace" => %{"slug" => "tokenless#{n}"}})
 
       assert {:proceed, %{namespace: ns}, %{unsynced: [], probe: :ok}} =
-               SignInSync.complete(user, "github", "gho_access")
+               SignInSync.complete(as(user), user, "github", "gho_access")
 
       assert ns == "tokenless#{n}"
-      assert :not_found = CredentialStore.get(user.id, "registry.test", ns)
+      assert {:error, :not_found} = CredentialStore.get(as(user), "registry.test", ns)
     end
 
     test "with no personal namespace: signed in, nothing recorded, memberships cached",
@@ -142,12 +147,12 @@ defmodule Compendium.SignInSyncTest do
       })
 
       assert {:proceed, %{namespace: nil}, %{unsynced: [], probe: :ok}} =
-               SignInSync.complete(user, "github", "gho_access")
+               SignInSync.complete(as(user), user, "github", "gho_access")
 
       assert {:ok, %{namespace: nil}} = Users.get(user.id)
 
       assert {:ok, %{token: "cyfr_pt_m"}} =
-               CredentialStore.get(user.id, "registry.test", "acme.com")
+               CredentialStore.get(as(user), "registry.test", "acme.com")
     end
 
     test "the claim suggestion is the screen name, else the address's local part" do
@@ -179,7 +184,7 @@ defmodule Compendium.SignInSyncTest do
       })
 
       assert {:proceed, _, %{probe: :legal_required}} =
-               SignInSync.complete(user, "github", "gho_access")
+               SignInSync.complete(as(user), user, "github", "gho_access")
     end
 
     test "401, 5xx and no token each sign the person in with the reason reported", %{
@@ -189,13 +194,17 @@ defmodule Compendium.SignInSyncTest do
       probe_answers(bypass, 401, %{"error" => "invalid_access_token"})
 
       assert {:proceed, _, %{probe: :invalid_token}} =
-               SignInSync.complete(user, "github", "expired")
+               SignInSync.complete(as(user), user, "github", "expired")
 
       probe_answers(bypass, 500, %{"error" => "internal"}, repeat: true)
-      assert {:proceed, _, %{probe: :failed}} = SignInSync.complete(user, "github", "gho_access")
+
+      assert {:proceed, _, %{probe: :failed}} =
+               SignInSync.complete(as(user), user, "github", "gho_access")
+
       assert {:ok, %{namespace: nil}} = Users.get(user.id)
 
-      assert {:proceed, _, %{probe: :skipped}} = SignInSync.complete(user, "github", nil)
+      assert {:proceed, _, %{probe: :skipped}} =
+               SignInSync.complete(as(user), user, "github", nil)
     end
 
     test "a slug another identity here holds is reported, not recorded, and not a refusal", %{
@@ -209,7 +218,7 @@ defmodule Compendium.SignInSyncTest do
       })
 
       assert {:proceed, _, %{probe: :namespace_conflict}} =
-               SignInSync.complete(user, "github", "gho_access")
+               SignInSync.complete(as(user), user, "github", "gho_access")
 
       assert {:ok, %{namespace: nil}} = Users.get(user.id)
     end
@@ -219,7 +228,7 @@ defmodule Compendium.SignInSyncTest do
       user = person()
 
       assert {:proceed, %{namespace: nil}, %{unsynced: [], probe: :skipped}} =
-               SignInSync.complete(user, "github", "gho_access")
+               SignInSync.complete(as(user), user, "github", "gho_access")
     end
   end
 
@@ -232,10 +241,10 @@ defmodule Compendium.SignInSyncTest do
       })
 
       assert {:proceed, %{namespace: "returning-ok"}, %{unsynced: [], probe: :ok}} =
-               SignInSync.complete(user, "github", "gho_access")
+               SignInSync.complete(as(user), user, "github", "gho_access")
 
       assert {:ok, %{token: "cyfr_pt_fresh"}} =
-               CredentialStore.get(user.id, "registry.test", "returning-ok")
+               CredentialStore.get(as(user), "registry.test", "returning-ok")
     end
 
     test "proceeds when cyfr.run is down, refuses the token, answers 5xx, or was never asked", %{
@@ -244,22 +253,33 @@ defmodule Compendium.SignInSyncTest do
       user = person("returning-offline")
 
       Bypass.down(bypass)
-      assert {:proceed, _, %{probe: :failed}} = SignInSync.complete(user, "github", "gho_access")
+
+      assert {:proceed, _, %{probe: :failed}} =
+               SignInSync.complete(as(user), user, "github", "gho_access")
+
       Bypass.up(bypass)
 
       probe_answers(bypass, 401, %{"error" => "invalid_access_token"})
 
       assert {:proceed, _, %{probe: :invalid_token}} =
-               SignInSync.complete(user, "github", "expired")
+               SignInSync.complete(as(user), user, "github", "expired")
 
       probe_answers(bypass, 500, %{"error" => "internal"}, repeat: true)
-      assert {:proceed, _, %{probe: :failed}} = SignInSync.complete(user, "github", "gho_access")
 
-      assert {:proceed, _, %{probe: :skipped}} = SignInSync.complete(user, "github", nil)
+      assert {:proceed, _, %{probe: :failed}} =
+               SignInSync.complete(as(user), user, "github", "gho_access")
+
+      assert {:proceed, _, %{probe: :skipped}} =
+               SignInSync.complete(as(user), user, "github", nil)
+
       assert {:ok, %{namespace: "returning-offline"}} = Users.get(user.id)
     end
 
     test "is not held past the budget by a registry that never answers", %{bypass: bypass} do
+      # The one case the budget decides runs under a short one; every other
+      # case here probes under the shipped budget, so a loaded machine's
+      # slow answer does not decide its outcome.
+      Application.put_env(:cyfr, :returning_probe_ms, 300)
       user = person("returning-slow")
 
       Bypass.expect(bypass, "POST", "/v1/identity/probe", fn conn ->
@@ -267,7 +287,9 @@ defmodule Compendium.SignInSyncTest do
         json_resp(conn, 200, %{})
       end)
 
-      {us, result} = :timer.tc(fn -> SignInSync.complete(user, "github", "gho_access") end)
+      {us, result} =
+        :timer.tc(fn -> SignInSync.complete(as(user), user, "github", "gho_access") end)
+
       assert {:proceed, _, %{probe: :failed}} = result
       assert us < 1_500_000
       # The stranded handler must not fail the test as an unmet expectation.
@@ -281,12 +303,12 @@ defmodule Compendium.SignInSyncTest do
       probe_answers(bypass, 412, %{"errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED"}]})
 
       assert {:proceed, %{namespace: "returning-legal"}, %{probe: :legal_required}} =
-               SignInSync.complete(user, "github", "gho_access")
+               SignInSync.complete(as(user), user, "github", "gho_access")
 
       probe_answers(bypass, 200, %{"personal_namespace" => nil})
 
       assert {:proceed, %{namespace: "returning-legal"}, _} =
-               SignInSync.complete(user, "github", "x")
+               SignInSync.complete(as(user), user, "github", "x")
     end
   end
 
@@ -300,12 +322,12 @@ defmodule Compendium.SignInSyncTest do
         "memberships" => [%{"slug" => "acme.com", "token" => "cyfr_pt_m", "role" => "member"}]
       }
 
-      assert [] = SignInSync.absorb_probe(user.id, body)
+      assert [] = SignInSync.absorb_probe(as(user), body)
       assert {:ok, %{namespace: ns}} = Users.get(user.id)
       assert ns == "absorbed#{n}"
 
       assert {:ok, %{token: "cyfr_pt_m"}} =
-               CredentialStore.get(user.id, "registry.test", "acme.com")
+               CredentialStore.get(as(user), "registry.test", "acme.com")
     end
   end
 end

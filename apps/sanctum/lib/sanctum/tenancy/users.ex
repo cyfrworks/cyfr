@@ -3,10 +3,14 @@
 
 defmodule Sanctum.Tenancy.Users do
   @moduledoc """
-  The people this server knows (`Arca.Schemas.User`).
+  The people this server knows: each person is the plain map
+  `Arca.Users` answers for their row.
 
-  A row is written on the first admitted sign-in and touched on every later
-  one; the door, invited memberships and per-person preferences key off it.
+  A row is written on the first admitted sign-in, together with the
+  person's key set on their identity row (`Sanctum.Person`), and touched on
+  every later one; the door, invited memberships and per-person
+  preferences key off it. The person's identifier is on that identity row,
+  never on the `users` row (`identifier/1`).
   `deny/1` and `allow/1` are the operator's eject and re-admit: a denied
   person loses their sessions and API keys, their own athanor is archived
   (nothing deleted), their group rows are removed and the invitations their
@@ -18,17 +22,19 @@ defmodule Sanctum.Tenancy.Users do
 
   The statements are `Arca.Users`'. What stays here is the deciding: which
   provider claims are recorded and which are left as they stand, that a
-  person's id is minted with `Cyfr.PersonId.prefix/0` and that only an IdP
+  person's id is minted with `Prima.PersonId.prefix/0` and that only an IdP
   identity may sign in, what an eject costs the person, and what an
   unanswerable read should read as. A person is not a row inside an
   athanor — they exist before any athanor does and sit in several at once
-  — so every call runs as the server (`Cyfr.Actor.system/0`), which is
+  — so every call runs as the server (`Prima.Actor.system/0`), which is
   what `Arca.Users` requires and says why.
   """
 
-  alias Arca.Schemas.{ExternalIdentity, User}
   alias Sanctum.Auth.Identity
   alias Sanctum.Tenancy.{Athanors, Members}
+
+  @typedoc "A person's row, as the plain map `Arca.Users` answers."
+  @type user :: %{required(:id) => String.t(), optional(atom()) => term()}
 
   @typedoc """
   What the door admitted: `id` is the IdP identity key
@@ -44,7 +50,7 @@ defmodule Sanctum.Tenancy.Users do
 
   @doc """
   The person an admitted identity names: their row refreshed, or a new
-  person minted (an id of this server's, `Cyfr.PersonId.prefix/0`) with
+  person minted (an id of this server's, `Prima.PersonId.prefix/0`) with
   the identity recorded as theirs.
 
   `first_seen_at` is set once; `last_seen_at`, `email`, `email_verified`
@@ -53,9 +59,20 @@ defmodule Sanctum.Tenancy.Users do
   is not recorded as "it said no".
 
   An absent provider claim preserves the stored value, including name and email verification.
+
+  A new person is minted with their live and operational key set on a
+  `local` identity row (`Sanctum.Person.mint_keys/1`), unless `opts[:remote]`
+  names the identity another home holds the keys of, as the `cyfr` door
+  admits it: `%{identifier, directory_url, genesis_hash, head_hash}`. Then
+  their identity row is `remote` and holds no key. A person who already
+  exists keeps the provenance they were minted with, whichever door they
+  come through: `opts[:remote]` writes nothing for them.
   """
-  @spec upsert_from_provider(provider_info()) :: {:ok, User.t()} | {:error, term()}
-  def upsert_from_provider(%{id: key, provider: provider} = info) when is_binary(key) do
+  @spec upsert_from_provider(provider_info(), keyword()) :: {:ok, user()} | {:error, term()}
+  def upsert_from_provider(info, opts \\ [])
+
+  def upsert_from_provider(%{id: key, provider: provider} = info, opts)
+      when is_binary(key) and is_list(opts) do
     now = DateTime.utc_now()
 
     seen =
@@ -65,59 +82,116 @@ defmodule Sanctum.Tenancy.Users do
         last_seen_at: now,
         updated_at: now
       }
-      |> Cyfr.MapUtil.put_present(:email, Map.get(info, :email))
-      |> Cyfr.MapUtil.put_present(:display_name, Map.get(info, :name))
+      |> Prima.MapUtil.put_present(:email, Map.get(info, :email))
+      |> Prima.MapUtil.put_present(:display_name, Map.get(info, :name))
 
     case get_by_identity(key) do
       {:ok, user} ->
         Arca.Users.touch_identity(server(), key, now)
-        Arca.Users.update(server(), user, seen)
+        update(user, seen)
 
       {:error, :not_found} ->
-        first_sign_in(key, seen, now)
+        first_sign_in(key, seen, now, Keyword.get(opts, :remote))
 
       {:error, _} = err ->
         err
     end
   end
 
-  # The person and the identity that names them, minted together. A
-  # concurrent first sign-in of the same identity wins the unique index;
-  # the loser reads the person it minted.
-  defp first_sign_in(key, seen, now) do
+  # The person, the identity that names them and their identity row,
+  # minted together: a local person's live and operational key set is
+  # written by `Sanctum.Person.mint_keys/1` inside the transaction that
+  # writes the person row, after the installation guard admitted it, so no
+  # local person exists without their keys and a key set that cannot be
+  # minted refuses the sign-in; a remote person's row names their
+  # identifier and directory and holds no key. A concurrent first sign-in
+  # of the same identity wins the unique index; the loser reads the person
+  # it minted.
+  defp first_sign_in(key, seen, now, remote) do
     with {:ok, %{provider: provider, issuer: issuer, subject: subject}} <- Identity.parse(key) do
       user_attrs =
         Map.merge(seen, %{
-          id: Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix()),
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           first_seen_at: now,
           created_at: now,
           prefs: Jason.encode!(%{})
         })
 
-      Arca.Users.mint(server(), user_attrs, %{
-        key: key,
-        provider: provider,
-        issuer: issuer,
-        subject: subject,
-        first_seen_at: now,
-        last_seen_at: now
-      })
+      Arca.Users.mint(
+        server(),
+        user_attrs,
+        %{
+          key: key,
+          provider: provider,
+          issuer: issuer,
+          subject: subject,
+          first_seen_at: now,
+          last_seen_at: now
+        },
+        also: identity_row(remote)
+      )
     end
   end
 
+  defp identity_row(nil), do: &Sanctum.Person.mint_keys/1
+
+  defp identity_row(%{identifier: identifier, directory_url: directory_url} = remote) do
+    fn %{id: user_id} ->
+      case Arca.PersonIdentities.create(server(), %{
+             user_id: user_id,
+             provenance: "remote",
+             identifier: identifier,
+             directory_url: directory_url,
+             genesis_hash: remote[:genesis_hash],
+             head_hash: remote[:head_hash]
+           }) do
+        {:ok, _row} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  The person a person identifier names here, by their identity row
+  (`Arca.PersonIdentities.lookup_identifier/2`): a person admitted through
+  the `cyfr` door, or a local person once enrolled.
+  """
+  @spec get_by_identifier(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
+  def get_by_identifier(identifier) when is_binary(identifier) do
+    case Arca.PersonIdentities.lookup_identifier(server(), identifier) do
+      {:ok, %{user_id: user_id}} -> get(user_id)
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, _unanswered} -> {:error, :database_error}
+    end
+  end
+
+  @doc """
+  The person's identifier (`per_…`), read from their identity row beside
+  the `users` row (`Arca.PersonIdentities`), which the `users` row does not
+  carry: `{:ok, identifier}` once they are enrolled, or admitted from
+  another home; `{:ok, nil}` for a local person not yet enrolled;
+  `{:error, :not_found}` for a person with no identity row.
+  """
+  @spec identifier(String.t()) ::
+          {:ok, String.t() | nil} | {:error, :not_found | :cross_tenant | :database_error}
+  def identifier(user_id) when is_binary(user_id) do
+    with {:ok, row} <- Arca.PersonIdentities.get(server(), user_id),
+         do: {:ok, row.identifier}
+  end
+
   @doc "The person an IdP identity key names, if any."
-  @spec get_by_identity(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
+  @spec get_by_identity(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
   def get_by_identity(key), do: Arca.Users.get_by_identity(server(), key)
 
   @doc "Every IdP identity that names this person, oldest first."
-  @spec identities(String.t()) :: [ExternalIdentity.t()]
+  @spec identities(String.t()) :: [map()]
   def identities(user_id) when is_binary(user_id) do
     # Deliberate default: a display read of how a person has signed in —
     # an outage shows fewer providers, it grants nothing.
     rows_or_empty(Arca.Users.identities(server(), user_id))
   end
 
-  @spec get(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
+  @spec get(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
   def get(id), do: Arca.Users.get(server(), id)
 
   @doc """
@@ -127,7 +201,7 @@ defmodule Sanctum.Tenancy.Users do
   Here rather than beside a caller because it is a fact about the `users`
   row, and it is now read by two domains that must not depend on each
   other — the agent harness prefixing a group turn's lines, and tenancy
-  naming a pair estate after the two people in it.
+  naming a pair athanor after the two people in it.
   """
   @spec display_name(String.t() | nil) :: String.t()
   def display_name(nil), do: "someone"
@@ -141,7 +215,7 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc "Every identity that signed in with this (lowercased) email."
-  @spec list_by_email(String.t()) :: [User.t()]
+  @spec list_by_email(String.t()) :: [user()]
   def list_by_email(email) when is_binary(email) do
     # Deliberate default: an unanswerable read means "no identity known for
     # this address" — callers then take the invite path, which grants nothing.
@@ -154,7 +228,7 @@ defmodule Sanctum.Tenancy.Users do
   `Athanors.destroy/1` refuses one. `personal_athanor_id` is not an
   athanor-scoped column, so erasure would leave it naming a tombstone:
   the unique index would block minting a replacement, and
-  `unarchive_personal/1` would try to reopen a wiped shell.
+  `allow/1` would try to reopen a wiped shell.
 
   Fail-CLOSED on an unanswerable read — the default is `true`, so a
   database fault refuses an irreversible delete rather than permitting it.
@@ -175,7 +249,7 @@ defmodule Sanctum.Tenancy.Users do
 
   `:none` covers a person the server does not know, one whose furnace has
   not been minted yet, and an unanswerable read alike: every caller asks
-  so it may open something (a cross-estate note read, a copy out of a
+  so it may open something (a cross-athanor note read, a copy out of a
   private thread), and "could not tell" must read as "not yours" there.
   """
   @spec personal_athanor_id(String.t() | nil) :: {:ok, String.t()} | :none
@@ -192,7 +266,7 @@ defmodule Sanctum.Tenancy.Users do
   Whether `athanor_id` is this person's own athanor.
 
   The one predicate behind "is the caller at home": a running chain reads
-  notes across estates only from there, and an assistant's line is the
+  notes across athanors only from there, and an assistant's line is the
   person's to say aloud only when it was said there. Spelled once so the
   domains that ask it cannot drift from the row that answers.
   """
@@ -204,7 +278,7 @@ defmodule Sanctum.Tenancy.Users do
   def own_athanor?(_user_id, _athanor_id), do: false
 
   @doc "The identity whose cyfr.run namespace this is, if any."
-  @spec get_by_namespace(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
+  @spec get_by_namespace(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
   def get_by_namespace(namespace) when is_binary(namespace) and namespace != "",
     do: Arca.Users.get_by_namespace(server(), namespace)
 
@@ -212,7 +286,7 @@ defmodule Sanctum.Tenancy.Users do
   Everyone the server knows, newest first. A platform view, paged with
   `limit:` (default and ceiling `Arca.Users.max_page/0`) and `offset:`.
   """
-  @spec list(keyword()) :: [User.t()]
+  @spec list(keyword()) :: [user()]
   def list(opts \\ []) do
     # Deliberate default: the operator's people page — a display read that
     # decides nothing; an outage renders an empty page, not a refusal.
@@ -224,10 +298,10 @@ defmodule Sanctum.Tenancy.Users do
   every request reads for it (`Sanctum.Namespace`), so the write drops the
   cached slug.
   """
-  @spec set_namespace(User.t(), String.t()) :: {:ok, User.t()} | {:error, term()}
-  def set_namespace(%User{namespace: ns} = user, ns), do: {:ok, user}
+  @spec set_namespace(user(), String.t()) :: {:ok, user()} | {:error, term()}
+  def set_namespace(%{namespace: ns} = user, ns), do: {:ok, user}
 
-  def set_namespace(%User{} = user, namespace) when is_binary(namespace) do
+  def set_namespace(%{id: _} = user, namespace) when is_binary(namespace) do
     with {:ok, updated} <- update(user, %{namespace: namespace}) do
       Sanctum.Namespace.invalidate(updated.id)
       {:ok, updated}
@@ -235,16 +309,16 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc "Record the person's own athanor once minted."
-  @spec set_personal_athanor(User.t(), String.t()) :: {:ok, User.t()} | {:error, term()}
-  def set_personal_athanor(%User{} = user, athanor_id) when is_binary(athanor_id) do
+  @spec set_personal_athanor(user(), String.t()) :: {:ok, user()} | {:error, term()}
+  def set_personal_athanor(%{id: _} = user, athanor_id) when is_binary(athanor_id) do
     update(user, %{personal_athanor_id: athanor_id})
   end
 
   @doc "The person's preferences document (`mode`, `theme`), as a map."
-  @spec prefs(User.t()) :: map()
-  def prefs(%User{prefs: nil}), do: %{}
+  @spec prefs(user()) :: map()
+  def prefs(%{prefs: nil}), do: %{}
 
-  def prefs(%User{prefs: json}) when is_binary(json) do
+  def prefs(%{prefs: json}) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, map} when is_map(map) -> map
       _ -> %{}
@@ -252,94 +326,85 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc "Merge `patch` into the person's preferences."
-  @spec put_prefs(User.t(), map()) :: {:ok, User.t()} | {:error, term()}
-  def put_prefs(%User{} = user, patch) when is_map(patch) do
+  @spec put_prefs(user(), map()) :: {:ok, user()} | {:error, term()}
+  def put_prefs(%{id: _} = user, patch) when is_map(patch) do
     update(user, %{prefs: Jason.encode!(Map.merge(prefs(user), patch))})
   end
 
   @doc """
-  Eject a person from this server: mark them denied, revoke every session
-  and API key they created, archive their own athanor and remove their
-  group rows. The door entry that keeps them out is written by the caller
-  (`Sanctum.Door.Store.deny/4`) — this is the part that acts on what the
-  person already has.
+  Eject a person from this server, as one transaction
+  (`Arca.SecurityTransitions.deny_user/3`): mark them denied, revoke every
+  session and API key they created, archive their own athanor, every
+  frozen athanor they sit in and every group they leave empty (revoking
+  those athanors' keys), and remove their memberships, the invitations
+  their address still holds and their thread follows. Either all of it
+  commits or none of it does, and a failure is answered, never reported
+  as an eject. The door entry that keeps them out is written by the
+  caller (`Sanctum.Door.Store.deny/4`).
+
+  After the commit, and only from what it returned: the removed sessions'
+  established contexts are dropped and their revocation announced, every
+  archived athanor's members lose their cached contexts and the athanor's
+  archival is announced, and every roster the denial changed is told.
+  Denying a person already denied re-runs the retirement and checks it.
   """
-  @spec deny(User.t()) :: {:ok, User.t()} | {:error, term()}
-  def deny(%User{} = user) do
-    now = DateTime.utc_now()
+  @spec deny(user()) :: {:ok, user()} | {:error, term()}
+  def deny(%{id: user_id} = user) do
+    with {:ok, change} <-
+           Arca.SecurityTransitions.deny_user(server(), user_id, verify: fn _rows -> :ok end) do
+      Sanctum.Session.announce_revoked(user_id, change.revoked_session_hashes)
+      Athanors.announce_archived(change.archived_athanor_ids, change)
+      Members.announce_removed(user_id, change)
 
-    with {:ok, user} <- update(user, %{status: "denied", denied_at: now}) do
-      Sanctum.Session.revoke_all_for_user(user.id)
-      Sanctum.ApiKey.revoke_all_created_by(user.id)
-      archive_personal(user)
-      # Seats held for the address, not yet for the person: the sweep below
-      # goes by `user_id` and cannot see them.
-      Members.withdraw_invites_for_email(user.email)
+      :telemetry.execute([:cyfr, :sanctum, :door, :denied], %{count: 1}, %{
+        user_id: user_id,
+        email: user.email
+      })
 
-      # The status is written (the person is out at the door either way);
-      # what fails here is reported so the operator can retry, not hidden.
-      with :ok <- Members.remove_all_for_user(user.id) do
-        :telemetry.execute([:cyfr, :sanctum, :door, :denied], %{count: 1}, %{
-          user_id: user.id,
-          email: user.email
-        })
-
-        {:ok, user}
-      end
+      {:ok, standing(user, change.user)}
     end
   end
 
   @doc """
-  Reverse `deny/1` at the door: the person may sign in again, their own
-  athanor is reopened and they are seated in it again. Revoked sessions and
-  keys stay revoked, and the group seats the deny removed are not restored —
-  eject is permanent for groups; a member adds them again.
+  Reverse `deny/1` at the door, as one transaction
+  (`Arca.SecurityTransitions.allow_user/3`): the person may sign in again,
+  their own athanor is reopened — subject to the server's athanor cap,
+  whose refusal leaves them denied — and they are seated in it again.
+  Revoked sessions and keys stay revoked, and the group seats and
+  invitations the deny removed are not restored — eject is permanent for
+  groups; a member adds them again. A context read before the deny
+  cannot issue a credential after this: the person's generation moved
+  twice.
   """
-  @spec allow(User.t()) :: {:ok, User.t()} | {:error, term()}
-  def allow(%User{} = user) do
-    with {:ok, user} <- update(user, %{status: "active", denied_at: nil}),
-         :ok <- unarchive_personal(user) do
-      # The deny swept every membership by user id, their own seat included.
-      # Reopening the furnace without re-seating its owner would leave them
-      # locked out of it until their next sign-in re-provisioned the row.
-      reseat_personal(user)
-      {:ok, user}
+  @spec allow(user()) :: {:ok, user()} | {:error, term()}
+  def allow(%{id: user_id} = user) do
+    # The deny swept every membership by user id, their own seat included;
+    # the transition re-seats them, because reopening the furnace without
+    # its owner would leave them locked out of it until their next sign-in
+    # re-provisioned the row.
+    with {:ok, change} <-
+           Arca.SecurityTransitions.allow_user(server(), user_id, verify: &restorable/1) do
+      {:ok, standing(user, change.user)}
     end
   end
 
-  defp archive_personal(%User{personal_athanor_id: id}) when is_binary(id) do
-    case Athanors.get(id) do
-      {:ok, athanor} -> Athanors.archive(athanor, force: true)
-      _ -> :ok
-    end
+  # Taking the place of an archived athanor back has to ask for it, or
+  # archiving and reopening would be the way past `CYFR_MAX_ATHANORS`. The
+  # count runs inside the transition, with the athanor locked.
+  defp restorable(%{athanor: %{status: "archived"}}),
+    do: Sanctum.Tenancy.Caps.check_counted(:max_athanors, &Athanors.count/0)
+
+  defp restorable(_rows), do: :ok
+
+  # The caller's person, carrying the standing the transition committed.
+  defp standing(%{} = user, %{} = committed) do
+    %{
+      user
+      | status: committed.status,
+        denied_at: committed.denied_at,
+        security_generation: committed.security_generation
+    }
   end
-
-  defp archive_personal(_), do: :ok
-
-  defp unarchive_personal(%User{personal_athanor_id: id}) when is_binary(id) do
-    case Athanors.get(id) do
-      {:ok, %{status: "archived"} = athanor} ->
-        case Athanors.unarchive(athanor) do
-          {:ok, _} -> :ok
-          # The server is full: say so rather than report a person restored
-          # to a furnace that is still shut.
-          {:error, {:limit_reached, _key, _cap}} = err -> err
-          {:error, _} = err -> err
-        end
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp unarchive_personal(_), do: :ok
-
-  defp reseat_personal(%User{id: user_id, personal_athanor_id: id}) when is_binary(id) do
-    Members.ensure(user_id, scope: "athanor", athanor_id: id, added_by: "system")
-    :ok
-  end
-
-  defp reseat_personal(_), do: :ok
 
   # What the provider asserted about the address, kept as asserted: `true`
   # proved, `false` refused, `nil` never claimed. An issuer that does not
@@ -348,11 +413,13 @@ defmodule Sanctum.Tenancy.Users do
   defp verified_claim(false), do: false
   defp verified_claim(_), do: nil
 
-  defp update(%User{} = user, attrs), do: Arca.Users.update(server(), user, attrs)
+  # The row the person's id names is reread below and written as it
+  # stands: nothing else the caller's map carries reaches the write.
+  defp update(%{id: user_id}, attrs), do: Arca.Users.update(server(), user_id, attrs)
 
   # A person is not a row inside an athanor: the row is written before any
   # athanor exists and read from every one the person sits in.
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
 
   defp rows_or_empty({:ok, rows}), do: rows
   defp rows_or_empty({:error, _}), do: []

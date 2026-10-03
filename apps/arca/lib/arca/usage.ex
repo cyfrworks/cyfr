@@ -6,8 +6,8 @@ defmodule Arca.Usage do
   The usage-cache discipline, in one place: what every tenant write does
   to the cached counters (`account/4`, called from the `Arca` facade's
   write gate), and how the two enforcement surfaces read them back —
-  the athanor byte cap (`Cyfr.Caps`, the port) through
-  `athanor_bytes/1`, the public per-scope quota (`Cyfr.Execution.GuestStorage`)
+  the athanor byte cap (`Prima.Caps`, the port) through
+  `athanor_bytes/1`, the public per-scope quota (`Crucible.GuestStorage`)
   through `scope_usage/2` — under ONE TTL.
 
   The discipline: a successful create BUMPS the cached totals by what
@@ -28,9 +28,9 @@ defmodule Arca.Usage do
   admitted on one member raises that member's copy and no peer's. So a
   peer's `athanor_bytes/1` reads a total that is short by whatever its
   peers have written since the peer last walked the tree, and the athanor
-  byte cap it feeds (`Cyfr.Caps`, the port) can admit a write it would
+  byte cap it feeds (`Prima.Caps`, the port) can admit a write it would
   have refused. The direction is over-admission, not over-refusal, and it
-  is not a stale number in a report: it is the estate growing past a cap a
+  is not a stale number in a report: it is the athanor growing past a cap a
   tenant consented to.
 
   **The bound is `ttl_ms/0` — five minutes.** An entry is never extended:
@@ -42,7 +42,7 @@ defmodule Arca.Usage do
 
   Nothing about this fails open by accident. An unresolved tenant is
   `{:error, :no_athanor}` and never `{:ok, 0}` — a zero would read an
-  unresolved tenant as an empty estate and admit the write the cap was
+  unresolved tenant as an empty athanor and admit the write the cap was
   asked about — and a walk that cannot answer is returned raw and never
   cached, which the cap maps to `:storage_unverifiable` and refuses.
 
@@ -69,8 +69,8 @@ defmodule Arca.Usage do
   successful create, drop on a delete or a failed write. Called by
   `Arca`'s write gate for every mutation, so a new writer cannot forget.
   """
-  @spec account(Cyfr.Actor.t(), Arca.Storage.path(), term(), term()) :: :ok
-  def account(%Cyfr.Actor{athanor_id: athanor_id} = actor, path, kind, result)
+  @spec account(Prima.Actor.t(), Arca.Storage.path(), term(), term()) :: :ok
+  def account(%Prima.Actor{athanor_id: athanor_id} = actor, path, kind, result)
       when is_binary(athanor_id) and athanor_id != "" do
     if Arca.Storage.classify(path) == :tenant do
       whole = Arca.Cache.Keys.athanor_usage(actor)
@@ -111,8 +111,8 @@ defmodule Arca.Usage do
   maps it fail-closed (`:storage_unverifiable`), and the next check
   walks again.
   """
-  @spec athanor_bytes(Cyfr.Actor.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def athanor_bytes(%Cyfr.Actor{athanor_id: id} = actor) when is_binary(id) and id != "" do
+  @spec athanor_bytes(Prima.Actor.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def athanor_bytes(%Prima.Actor{athanor_id: id} = actor) when is_binary(id) and id != "" do
     key = Arca.Cache.Keys.athanor_usage(actor)
 
     case Arca.Cache.get(key) do
@@ -136,9 +136,9 @@ defmodule Arca.Usage do
 
   # An actor with no resolved athanor names no tree to walk. That is a
   # refusal, not a total of zero: answering `{:ok, 0}` would read an
-  # unresolved tenant as an empty estate, and the byte cap above would
+  # unresolved tenant as an empty athanor, and the byte cap above would
   # admit the write.
-  def athanor_bytes(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def athanor_bytes(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   One tenant scope's cached `%{files:, bytes:}` — or one scope walk on a
@@ -146,9 +146,9 @@ defmodule Arca.Usage do
   closed on them, the file-count backstop fails open — that asymmetry is
   the call sites' policy, not this cache's.
   """
-  @spec scope_usage(Cyfr.Actor.t(), String.t()) ::
+  @spec scope_usage(Prima.Actor.t(), String.t()) ::
           {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | {:error, term()}
-  def scope_usage(%Cyfr.Actor{athanor_id: athanor_id} = actor, scope)
+  def scope_usage(%Prima.Actor{athanor_id: athanor_id} = actor, scope)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(scope) do
     bytes_key = Arca.Cache.Keys.scope_usage_bytes(actor, scope)
     files_key = Arca.Cache.Keys.scope_usage_files(actor, scope)
@@ -170,25 +170,25 @@ defmodule Arca.Usage do
     end
   end
 
-  def scope_usage(%Cyfr.Actor{}, scope) when is_binary(scope), do: {:error, :no_athanor}
+  def scope_usage(%Prima.Actor{}, scope) when is_binary(scope), do: {:error, :no_athanor}
 
   @doc """
   Drop every cached counter for one athanor — the whole-tree total and
   all its scope pairs.
 
   This is also where a cell-wide invalidation lands: a member that hears
-  that a peer wrote to this athanor's estate drops its copy, and its next
+  that a peer wrote to this athanor's tree drops its copy, and its next
   read walks the tree and counts the peer's write. Without one, `ttl_ms/0`
   is the bound (see the module doc). On one member it is maintenance and
   test hygiene; the write path keeps itself coherent through `account/4`.
   """
-  @spec invalidate(Cyfr.Actor.t()) :: :ok | {:error, :no_athanor}
-  def invalidate(%Cyfr.Actor{athanor_id: athanor_id} = actor)
+  @spec invalidate(Prima.Actor.t()) :: :ok | {:error, :no_athanor}
+  def invalidate(%Prima.Actor{athanor_id: athanor_id} = actor)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(actor))
     Arca.Cache.delete_match(Arca.Cache.Keys.match_scope_usage(actor))
     :ok
   end
 
-  def invalidate(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def invalidate(%Prima.Actor{}), do: {:error, :no_athanor}
 end

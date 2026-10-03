@@ -6,9 +6,12 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/cyfr/codex/internal/ops"
+	"io"
+	"math"
+	"os"
 	"strings"
 
+	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
 	"github.com/spf13/cobra"
@@ -17,6 +20,10 @@ import (
 func init() {
 	profileGrantCmd.Flags().StringSlice("entry", nil,
 		"Bind a need to a vault entry non-interactively: need=entry_id (repeatable)")
+	profileGrantCmd.Flags().StringSlice("origin", nil,
+		"An origin the grant admits: interactive, programmatic, schedule or webhook "+
+			"(repeatable). Absent, a re-grant keeps the grant's origins and a first "+
+			"grant admits interactive alone")
 
 	profileCmd.AddCommand(profileGrantCmd)
 	profileCmd.AddCommand(profileListCmd)
@@ -103,9 +110,14 @@ var profileGrantCmd = &cobra.Command{
 	Use:   "grant <reference>",
 	Short: "Grant a component the vault entries it needs [interactive]",
 	Long: "Walks plan → preview → commit. You see what would be granted, pick " +
-		"a vault entry for each need, then approve exactly what was rendered.",
+		"a vault entry for each need, then approve exactly what was rendered.\n\n" +
+		"The grant admits the runs --origin names. With no --origin, a first grant " +
+		"admits interactive alone and a re-grant keeps the origins the grant " +
+		"already admits, so an agent, a script, a schedule or a webhook runs the " +
+		"component only under a grant that names its origin.",
 	Example: `  cyfr profile grant c:moonmoon69.gmail
-  cyfr profile grant f:local.daily-report --entry @ingress=vlt_abc123`,
+  cyfr profile grant f:local.daily-report --entry @ingress=vlt_abc123
+  cyfr profile grant f:local.daily-report --origin interactive --origin schedule`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
@@ -116,6 +128,19 @@ var profileGrantCmd = &cobra.Command{
 			return handleToolError(err)
 		}
 
+		// A closure that does not resolve has nothing to preview or commit:
+		// say what is missing instead of drawing the source alone as the ask.
+		if missing, unresolved := unresolvedPlan(plan); unresolved {
+			return fmt.Errorf("%s cannot be granted yet: %s", ref, missing)
+		}
+
+		named, _ := cmd.Flags().GetStringSlice("origin")
+		admitted, kept := grantOrigins(named, plan)
+		if kept && !flagJSON {
+			fmt.Printf("Keeping the origins this grant admits: %s (name --origin to change them)\n",
+				strings.Join(admitted, ", "))
+		}
+
 		bindings, err := collectBindings(cmd, plan)
 		if err != nil {
 			if prompt.IsAborted(err) {
@@ -124,14 +149,17 @@ var profileGrantCmd = &cobra.Command{
 			return err
 		}
 
-		decisions := ops.ProfilePreviewArgsDecisions{Ref: ops.Value(ref), Bindings: ops.Value(bindings)}
+		decisions := ops.ProfilePreviewArgsDecisions{
+			Ref: ops.Value(ref), Bindings: ops.Value(bindings), Origins: ops.Value(admitted)}
 
 		preview, err := client.CallTool(cmd.Context(), ops.Profile, ops.ProfilePreviewArgs{Decisions: decisions})
 		if err != nil {
 			return handleToolError(err)
 		}
 
-		renderPreview(preview)
+		if !flagJSON {
+			renderPreview(os.Stdout, preview)
+		}
 
 		if !flagJSON && prompt.IsInteractive(flagNoInteractive) {
 			ok, cerr := prompt.Confirm("Grant these permissions?")
@@ -161,7 +189,8 @@ var profileGrantCmd = &cobra.Command{
 			return fmt.Errorf("invalid consent revision: %w", err)
 		}
 		result, err := client.CallTool(cmd.Context(), ops.Profile, ops.ProfileCommitArgs{
-			Decisions: ops.ProfileCommitArgsDecisions{Ref: ops.Value(ref), Bindings: ops.Value(commitBindings)},
+			Decisions: ops.ProfileCommitArgsDecisions{
+				Ref: ops.Value(ref), Bindings: ops.Value(commitBindings), Origins: ops.Value(admitted)},
 			PlanToken: planToken, Proof: proof, CommitDigest: digest, ExpectedConsentRevision: revision})
 		if err != nil {
 			return handleToolError(err)
@@ -254,19 +283,263 @@ func askForEntry(need map[string]any, candidates []any) (string, error) {
 	return prompt.SelectOne(title, options)
 }
 
-func renderPreview(preview map[string]any) {
-	if flagJSON {
-		return
+// grantOrigins is what a grant admits, and whether it is the head's kept:
+// the origins --origin names, each once; with none named, the origins the
+// profile's head admits (the plan's head_origins), so a re-grant never
+// quietly drops one; and interactive alone on a first grant.
+func grantOrigins(named []string, plan map[string]any) ([]string, bool) {
+	if len(named) == 0 {
+		if head := stringList(plan["head_origins"]); len(head) > 0 {
+			return head, true
+		}
+		return []string{"interactive"}, false
+	}
+	seen := map[string]bool{}
+	origins := make([]string, 0, len(named))
+	for _, origin := range named {
+		if !seen[origin] {
+			seen[origin] = true
+			origins = append(origins, origin)
+		}
+	}
+	return origins, false
+}
+
+// stringList is a JSON array of strings, nil for anything else.
+func stringList(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	list := make([]string, 0, len(items))
+	for _, item := range items {
+		s, ok := item.(string)
+		if !ok {
+			return nil
+		}
+		list = append(list, s)
+	}
+	return list
+}
+
+// unresolvedPlan says what keeps a plan's closure from resolving: the ref
+// it names as missing, or the reason when it names none.
+func unresolvedPlan(plan map[string]any) (string, bool) {
+	unresolved, ok := plan["unresolved"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	missing := str(unresolved["missing"])
+	switch {
+	case missing != "" && str(unresolved["reason"]) == "missing_release_digest":
+		return missing + " has no release digest; publish it again", true
+	case missing != "":
+		return missing + " is missing: it is not installed, or its dependencies cannot be read", true
+	default:
+		return "its dependencies cannot be resolved (" + str(unresolved["reason"]) + ")", true
+	}
+}
+
+// previewKinds is Prima.ConsentPreview's kinds, in its order
+// (tests/fixtures/consent_preview.json holds them).
+var previewKinds = []string{
+	"credential", "egress", "storage", "tools", "tool_servers",
+	"limits", "frame", "streams", "cards", "system_actions",
+}
+
+var kindHeadings = map[string]string{
+	"credential":     "Vault entries it receives",
+	"egress":         "Network",
+	"storage":        "Files",
+	"tools":          "Tools",
+	"tool_servers":   "Tool servers",
+	"limits":         "Limits",
+	"frame":          "Its frame",
+	"streams":        "Streams it listens to",
+	"cards":          "Cards it shares with the desktop",
+	"system_actions": "System actions it may call",
+}
+
+// renderPreview draws a Prima.ConsentPreview's typed rows in the terminal,
+// grouped by kind in its own words, every value each row carries shown,
+// and the origins the grant admits. A kind it does not know is still
+// drawn, with its values as the home sent them: no row is hidden.
+func renderPreview(w io.Writer, preview map[string]any) {
+	fmt.Fprintln(w, "You are approving:")
+
+	byKind := map[string][]map[string]any{}
+	order := append([]string{}, previewKinds...)
+	rows, _ := preview["rows"].([]any)
+	for _, raw := range rows {
+		row, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		kind := str(row["kind"])
+		if _, known := kindHeadings[kind]; !known && len(byKind[kind]) == 0 {
+			order = append(order, kind)
+		}
+		byKind[kind] = append(byKind[kind], row)
 	}
 
-	fmt.Println("You are approving:")
-
-	summary, _ := preview["summary"].([]any)
-	for _, line := range summary {
-		fmt.Printf("  %s\n", str(line))
+	if len(rows) == 0 {
+		fmt.Fprintln(w, "  Nothing beyond its own limits.")
 	}
 
-	fmt.Print("\n  Vault entries are sealed at rest; a component receives only the fields listed.\n\n")
+	for _, kind := range order {
+		if len(byKind[kind]) == 0 {
+			continue
+		}
+		heading, ok := kindHeadings[kind]
+		if !ok {
+			heading = kind
+		}
+		fmt.Fprintf(w, "\n  %s\n", heading)
+		for _, row := range byKind[kind] {
+			for i, line := range describeRow(row) {
+				indent := "    "
+				if i > 0 {
+					indent = "      "
+				}
+				fmt.Fprintf(w, "%s%s\n", indent, line)
+			}
+		}
+	}
+
+	if origins := joinStrings(preview["origins"]); origins != "" {
+		fmt.Fprintf(w, "\n  Admits runs started: %s\n", origins)
+	}
+
+	fmt.Fprint(w, "\n  Vault entries are sealed at rest; a component receives only the fields listed.\n\n")
+}
+
+// describeRow is one row in the CLI's words, its first line naming it.
+func describeRow(row map[string]any) []string {
+	values, _ := row["values"].(map[string]any)
+	node := str(row["node"])
+	narrowed := ""
+	if row["narrowed"] == true {
+		narrowed = " (narrowed by you)"
+	}
+
+	switch str(row["kind"]) {
+	case "credential":
+		head := str(values["name"]) + " " + edgeLabel(node, str(values["edge"]))
+		if label := str(values["label"]); label != "" {
+			head += fmt.Sprintf(", the key bound on its '%s' profile", label)
+		}
+		return []string{head,
+			"fields: " + listOr(values["fields"], "none"),
+			"scopes: " + listOr(values["scopes"], "none")}
+
+	case "egress":
+		return []string{node + narrowed,
+			"talks to: " + listOr(values["domains"], "none"),
+			"methods: " + listOr(values["methods"], "none"),
+			"schemes: " + listOr(values["schemes"], "none"),
+			"PRIVATE NETWORKS: " + listOr(values["private_ips"], "none")}
+
+	case "storage":
+		return []string{node + narrowed,
+			"paths: " + listOr(values["paths"], "none"),
+			"actions: " + listOr(values["actions"], "none")}
+
+	case "tools":
+		if joinStrings(values["tools"]) == "*" {
+			return []string{node + narrowed, "every tool of the catalog (*)"}
+		}
+		return []string{node + narrowed, "tools: " + listOr(values["tools"], "none")}
+
+	case "tool_servers":
+		return []string{node,
+			str(values["name"]) + " " + str(values["digest"]),
+			"its tools matching: " + listOr(values["tool_patterns"], "none")}
+
+	case "limits":
+		lines := []string{node + narrowed}
+		for _, field := range []string{"timeout", "batch_timeout", "max_memory_bytes",
+			"max_request_size", "max_response_size", "max_concurrent_tasks"} {
+			if value, ok := values[field]; ok {
+				lines = append(lines, fmt.Sprintf("%s: %s", field, num(value)))
+			}
+		}
+		if rate, ok := values["rate_limit"].(map[string]any); ok {
+			lines = append(lines,
+				fmt.Sprintf("rate_limit: %s per %s", num(rate["requests"]), str(rate["window"])))
+		}
+		return lines
+
+	case "frame":
+		placement := str(values["placement"])
+		if placement == "" {
+			placement = "where the shell places it"
+		}
+		background := "stops when hidden"
+		if values["background"] == true {
+			background = "keeps running in the background when hidden"
+		}
+		return []string{node,
+			"may use: " + listOr(values["capabilities"], "no extra capability"),
+			"placed: " + placement,
+			background}
+
+	case "streams":
+		return []string{node, str(values["name"]) + " " + subjectLabel(values["subject"])}
+
+	case "cards":
+		if component := str(values["component"]); component != "" {
+			args, _ := json.Marshal(values["args"])
+			return []string{node, fmt.Sprintf("%s, from %s of %s with %s",
+				str(values["name"]), str(values["operation"]), component, args)}
+		}
+		return []string{node, str(values["name"]) + ", static, from no component"}
+
+	case "system_actions":
+		return []string{node, "actions: " + listOr(values["actions"], "none")}
+
+	default:
+		raw, _ := json.Marshal(values)
+		return []string{fmt.Sprintf("%s %s: %s", str(row["kind"]), node, raw)}
+	}
+}
+
+// edgeLabel names the edge a credential rides: its node's own key, or the
+// key it lends a dependency on that edge.
+func edgeLabel(node, edge string) string {
+	if edge == "@ingress" {
+		return "for " + node + "'s own calls"
+	}
+	dep, need, named := strings.Cut(edge, "|")
+	if named {
+		return fmt.Sprintf("lent by %s to %s for its %s need", node, dep, need)
+	}
+	return fmt.Sprintf("lent by %s to %s", node, dep)
+}
+
+func subjectLabel(subject any) string {
+	switch s := str(subject); s {
+	case "":
+		return "for its own subject"
+	case "*":
+		return "for any subject"
+	default:
+		return "for " + s
+	}
+}
+
+func listOr(value any, none string) string {
+	if joined := joinStrings(value); joined != "" {
+		return joined
+	}
+	return none
+}
+
+// num spells a JSON number as written: a whole number never in exponent form.
+func num(value any) string {
+	if f, ok := value.(float64); ok && f == math.Trunc(f) && math.Abs(f) < 1e15 {
+		return fmt.Sprintf("%.0f", f)
+	}
+	return str(value)
 }
 
 func str(value any) string {

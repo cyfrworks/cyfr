@@ -11,7 +11,7 @@ defmodule PrismWeb.ModelCatalogTest do
     ctx = %{Sanctum.TestContext.local() | athanor_id: nil}
 
     assert :unavailable = PrismWeb.ModelCatalog.load(ctx)
-    refute_received {:list_models_result, _}
+    refute_received {:list_models_result, _tag, _result}
     refute_received {:task_timeout, :models}
   end
 end

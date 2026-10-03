@@ -3,8 +3,8 @@
 
 defmodule Cyfr.Test.SeedBundleTest do
   @moduledoc """
-  The seed tree is the model-catalyst roster. Tests read it; they do not
-  keep a vendor list of their own.
+  The seed tree is the model-catalyst roster and ships the desktop. Tests
+  read it; they do not keep a vendor list of their own.
   """
 
   use ExUnit.Case, async: true
@@ -16,7 +16,7 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert [_ | _] = units
 
     for unit <- units do
-      assert Cyfr.Models.speaks_chat?(unit.manifest)
+      assert Prima.Model.speaks_chat?(unit.manifest)
       assert unit.type == "catalyst"
       assert unit.ref == "catalyst:local.#{unit.name}"
       assert unit.rel == "catalysts/local/#{unit.name}/#{unit.version}"
@@ -29,9 +29,97 @@ defmodule Cyfr.Test.SeedBundleTest do
 
   test "local_unit! takes the newest shipped version of a named hand" do
     files = SeedBundle.local_unit!("catalysts", "files")
-    refute Cyfr.Models.speaks_chat?(files.manifest)
+    refute Prima.Model.speaks_chat?(files.manifest)
     assert files.ref == "catalyst:local.files"
     assert files.rel == "catalysts/local/files/#{files.version}"
+  end
+
+  test "the shipped desktop is the default layout's, and the rules and the publish check accept it" do
+    desktop = SeedBundle.local_unit!("tinctures", "desktop")
+    assert desktop.type == "tincture"
+    assert desktop.ref == "tincture:local.desktop"
+
+    for {_posture, arrangement} <- Prima.Layout.default().postures,
+        do: assert(arrangement.desktop == desktop.ref)
+
+    assert Prima.Manifest.validate(desktop.manifest, fn _ -> true end) == :ok
+    assert {:ok, declaration} = Compendium.tincture_declaration(desktop.manifest)
+    assert declaration.frame.placement == "desktop"
+
+    # Arranging, cards and discovery, and nothing that reaches out.
+    assert Enum.sort(declaration.actions) ==
+             ~w(card.press card.refresh component.list layout.edit layout.get)
+
+    assert [%{name: "cards.refreshed", subject: nil}] = declaration.streams
+    assert Compendium.tincture_check_streams(declaration, Grimoire.streams()) == :ok
+    refute Map.has_key?(desktop.manifest["tincture"], "connect")
+    refute Map.has_key?(desktop.manifest, "caps")
+
+    for operation <- declaration.actions do
+      [tool, action] = String.split(operation, ".")
+      assert {:ok, {_provider, definition}} = Grimoire.lookup(tool)
+      assert Map.has_key?(Grimoire.declared_actions(definition), action), operation
+    end
+
+    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), desktop.rel)
+
+    files =
+      for path <- Prima.Test.SourceTree.files!(Path.join(dir, "**/*")),
+          File.regular?(path),
+          do: {Path.relative_to(path, dir), File.stat!(path).size}
+
+    assert {"index.html", _} = List.keyfind(files, "index.html", 0)
+    assert {:ok, _size} = Compendium.Tincture.check_version(desktop.manifest, files)
+  end
+
+  test "the shipped vault is the default layout's icon, declares only what a frame can complete, and passes the publish check" do
+    vault = SeedBundle.local_unit!("tinctures", "vault")
+    assert vault.ref == "tincture:local.vault"
+
+    for {_posture, arrangement} <- Prima.Layout.default().postures,
+        do: assert([%{tincture: "tincture:local.vault", size: :icon}] = arrangement.slots)
+
+    assert Prima.Manifest.validate(vault.manifest, fn _ -> true end) == :ok
+    assert {:ok, declaration} = Compendium.tincture_declaration(vault.manifest)
+
+    # vault.status is its read; vault.create is the credential prompt's
+    # write, which the shell honours only for a tincture that declares it.
+    # Every other vault act needs an interactive session, which a frame
+    # never is: those are the console's vault page's.
+    assert Enum.sort(declaration.actions) == ~w(vault.create vault.status)
+    assert declaration.streams == []
+    assert declaration.frame.capabilities == []
+    refute Map.has_key?(vault.manifest["tincture"], "connect")
+    refute Map.has_key?(vault.manifest, "caps")
+    refute Map.has_key?(vault.manifest, "dependencies")
+
+    for operation <- declaration.actions do
+      [tool, action] = String.split(operation, ".")
+      assert {:ok, {_provider, definition}} = Grimoire.lookup(tool)
+      assert Map.has_key?(Grimoire.declared_actions(definition), action), operation
+    end
+
+    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), vault.rel)
+
+    files =
+      for path <- Prima.Test.SourceTree.files!(Path.join(dir, "**/*")),
+          File.regular?(path),
+          do: {Path.relative_to(path, dir), File.stat!(path).size}
+
+    assert {:ok, _size} = Compendium.Tincture.check_version(vault.manifest, files)
+
+    # The page reads names and standing, adds through the shell's prompt,
+    # changes and removes nothing, and sets every text as text.
+    script = File.read!(Path.join(dir, "vault.js"))
+    refute script =~ "innerHTML"
+    assert script =~ "cyfr.credential("
+
+    for act <- ~w(vault.list vault.delete vault.rotate vault.revoke vault.rename vault.rebind),
+        do: refute(script =~ act, "the page calls #{act}")
+
+    page = File.read!(Path.join(dir, "index.html"))
+    refute page =~ ~r/https?:\/\//
+    assert page =~ "Entries are changed and removed on the console's vault page."
   end
 
   test "local_unit! finds a shipped formula by name" do

@@ -6,9 +6,8 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
   alias Sanctum.Context
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -29,8 +28,8 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = execute_only_ctx()
 
       for action <- ~w(create delete enable disable test refresh get) do
-        assert {:error, reason} =
-                 Cyfr.Ops.Catalog.call_external("mcp_servers", ctx, %{
+        assert {:error, %Prima.Refusal{stage: :admission, reason: reason}} =
+                 Grimoire.call_external("mcp_servers", ctx, %{
                    "action" => action,
                    "name" => "some-server"
                  })
@@ -44,7 +43,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = execute_only_ctx()
 
       assert {:ok, %{servers: _}} =
-               Emissary.MCP.McpServersTool.handle(
+               Emissary.External.Provider.handle(
                  "mcp_servers",
                  ctx,
                  %{"action" => "list"}
@@ -58,8 +57,8 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
       for action <-
             ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove) do
-        assert {:error, reason} =
-                 Cyfr.Ops.Catalog.call_external("registry", ctx, %{
+        assert {:error, %Prima.Refusal{stage: :admission, reason: reason}} =
+                 Grimoire.call_external("registry", ctx, %{
                    "action" => action,
                    "slug" => "someslug"
                  })
@@ -71,7 +70,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
     test "whoami stays open" do
       ctx = execute_only_ctx()
-      assert {:ok, _identity} = Compendium.MCP.RegistryTool.handle(ctx, %{"action" => "whoami"})
+      assert {:ok, _identity} = Compendium.Providers.Registry.handle(ctx, %{"action" => "whoami"})
     end
   end
 
@@ -88,7 +87,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = Sanctum.TestContext.local()
 
       assert {:error, message} =
-               Emissary.MCP.McpServersTool.handle(
+               Emissary.External.Provider.handle(
                  "mcp_servers",
                  ctx,
                  create_args(%{"Authorization" => "Bearer sk-live-plaintext"})
@@ -103,7 +102,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
       for header <- ["X-Api-Key", "X-Access-Token", "My-Secret"] do
         assert {:error, _} =
-                 Emissary.MCP.McpServersTool.handle(
+                 Emissary.External.Provider.handle(
                    "mcp_servers",
                    ctx,
                    create_args(%{header => "literal-value"})
@@ -115,7 +114,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = Sanctum.TestContext.local()
 
       assert {:ok, _} =
-               Emissary.MCP.McpServersTool.handle(
+               Emissary.External.Provider.handle(
                  "mcp_servers",
                  ctx,
                  create_args(%{
@@ -127,7 +126,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
       for unresolved <- ["secret:my-token", "Token secret:my-token", "Bearer vault:"] do
         assert {:error, message} =
-                 Emissary.MCP.McpServersTool.handle(
+                 Emissary.External.Provider.handle(
                    "mcp_servers",
                    ctx,
                    create_args(%{"X-Client-Version" => unresolved})
@@ -143,8 +142,8 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
     test "denied for an execute-only context" do
       ctx = execute_only_ctx()
 
-      assert {:error, {:missing_permission, :admin}} =
-               Cyfr.Ops.Catalog.call_external("system", ctx, %{
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :admin}}} =
+               Grimoire.call_external("system", ctx, %{
                  "action" => "notify",
                  "event" => "test.event"
                })
@@ -154,7 +153,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = execute_only_ctx()
 
       assert {:ok, %{status: _}} =
-               Emissary.MCP.Tools.SystemProvider.handle("system", ctx, %{"action" => "status"})
+               Grimoire.Provider.handle("system", ctx, %{"action" => "status"})
     end
   end
 end

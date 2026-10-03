@@ -21,7 +21,7 @@ defmodule Cyfr.RetentionSchedulerTest do
 
   @kind "retention"
 
-  setup do
+  setup tags do
     # Ensure no lingering scheduler
     case GenServer.whereis(RetentionScheduler) do
       nil -> :ok
@@ -29,8 +29,7 @@ defmodule Cyfr.RetentionSchedulerTest do
     end
 
     # handle_continue(:first_run, ...) runs a cycle, which hits the DB
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     {:ok, key: "cell-retention-#{System.unique_integer([:positive])}"}
   end
@@ -126,6 +125,103 @@ defmodule Cyfr.RetentionSchedulerTest do
       assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
       assert "rates" in summary.steps
       assert rows(bucket) == 0
+    end
+  end
+
+  describe "the host's decisions" do
+    setup do
+      Cyfr.Test.Settings.put("decision_retention_days", 30)
+    end
+
+    test "the cycle purges the rows without a tenant past the host's days, under its claim",
+         %{key: key} do
+      decision = fn days_ago, admission ->
+        Prima.Decision.new(
+          call_id: "call_host_#{System.unique_integer([:positive])}",
+          plane: :external,
+          admission: admission,
+          refusal_class: if(admission == :refused, do: :unauthenticated),
+          inserted_at:
+            DateTime.utc_now()
+            |> DateTime.add(-days_ago * 86_400, :second)
+            |> DateTime.truncate(:microsecond)
+        )
+      end
+
+      actor = Sanctum.Context.actor(Sanctum.TestContext.local())
+      old_host = decision.(40, :refused)
+      recent_host = decision.(10, :refused)
+      old_tenant = decision.(40, :admitted)
+      :ok = Arca.DecisionLog.append(nil, old_host)
+      :ok = Arca.DecisionLog.append(nil, recent_host)
+      :ok = Arca.DecisionLog.append(actor, old_tenant)
+
+      assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+      assert "decisions_global" in summary.steps
+
+      admin = %{Prima.Actor.system() | platform_admin: true}
+      assert {:error, :not_found} = Arca.DecisionLog.get_global(admin, old_host.call_id)
+      assert {:ok, _} = Arca.DecisionLog.get_global(admin, recent_host.call_id)
+      # An athanor's decisions are its own policy's (90 days by default), never the host's.
+      assert {:ok, _} = Arca.DecisionLog.get(actor, old_tenant.call_id)
+    end
+
+    test "a member without the claim runs no host decision purge", %{key: key} do
+      old_host =
+        Prima.Decision.new(
+          call_id: "call_host_#{System.unique_integer([:positive])}",
+          plane: :external,
+          admission: :refused,
+          refusal_class: :unauthenticated,
+          inserted_at:
+            DateTime.utc_now()
+            |> DateTime.add(-40 * 86_400, :second)
+            |> DateTime.truncate(:microsecond)
+        )
+
+      :ok = Arca.DecisionLog.append(nil, old_host)
+      {:ok, _held} = JobClaims.claim(@kind, key, "member-a", 60_000)
+
+      assert {:busy, "member-a"} = RetentionScheduler.cycle(key: key, owner: "member-b")
+
+      admin = %{Prima.Actor.system() | platform_admin: true}
+      assert {:ok, _} = Arca.DecisionLog.get_global(admin, old_host.call_id)
+    end
+  end
+
+  describe "the webhook deliveries" do
+    test "the sweep keeps a claim inside the idempotency window and drops one past it" do
+      ctx = Sanctum.TestContext.local()
+      Sanctum.Test.ComponentHelpers.register_test_component("handler", "1.0.0", "formula", %{})
+      profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.handler")
+
+      {:ok, %{slug: slug}} =
+        Sanctum.TestContext.create_webhook(ctx, %{
+          name: "retention-#{System.unique_integer([:positive])}",
+          target_ref: "f:local.handler",
+          profile_id: profile,
+          idempotency_key_header: "X-Cyfr-Delivery"
+        })
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      assert :fresh = Arca.WebhookDeliveryStorage.record(hook.id, "evt-old")
+
+      two_hours_ago =
+        DateTime.utc_now() |> DateTime.add(-7_200, :second) |> DateTime.truncate(:microsecond)
+
+      from(d in Arca.Schemas.WebhookDelivery, where: d.webhook_id == ^hook.id)
+      |> Arca.Repo.update_all(set: [first_seen_at: two_hours_ago])
+
+      Cyfr.Test.Settings.put("webhook_idempotency_ttl_seconds", 10_800)
+      cycle_key = "cell-retention-#{System.unique_integer([:positive])}"
+      assert {:ok, _summary} = RetentionScheduler.cycle(key: cycle_key, owner: "member-a")
+      assert {:duplicate, _} = Arca.WebhookDeliveryStorage.record(hook.id, "evt-old")
+
+      Cyfr.Test.Settings.put("webhook_idempotency_ttl_seconds", 3_600)
+      cycle_key = "cell-retention-#{System.unique_integer([:positive])}"
+      assert {:ok, summary} = RetentionScheduler.cycle(key: cycle_key, owner: "member-a")
+      assert "webhooks" in summary.steps
+      assert :fresh = Arca.WebhookDeliveryStorage.record(hook.id, "evt-old")
     end
   end
 
@@ -242,6 +338,222 @@ defmodule Cyfr.RetentionSchedulerTest do
       assert summary.athanors == active_ids()
     end
   end
+
+  describe "the athanors it walks" do
+    test "an athanor archived after the list was read is passed over, and its rows freeze", %{
+      key: key
+    } do
+      # Ids minted in one millisecond are not ordered, so the walk's order
+      # is read off them rather than assumed from the creation order.
+      [first, archived] = Enum.sort_by([group!("walked"), group!("archived")], & &1.id)
+
+      for athanor <- [first, archived] do
+        over_limit!(athanor.id)
+      end
+
+      # Archived while the walk is on an earlier athanor: after the list of
+      # active athanors was read, before the walk reaches this one.
+      on_first_athanor(fn ->
+        {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived)
+      end)
+
+      assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+
+      refute archived.id in summary.athanors
+      assert first.id in summary.athanors
+      assert executions(archived.id) == 3
+      assert executions(first.id) == 1
+    end
+
+    test "an athanor whose settings are corrupt is logged against it, and the walk goes on", %{
+      key: key
+    } do
+      [corrupt, next] = Enum.sort_by([group!("corrupt"), group!("next")], & &1.id)
+
+      over_limit!(corrupt.id)
+      over_limit!(next.id)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.RetentionSettings, where: r.athanor_id == ^corrupt.id),
+          set: [settings: "not valid json {{{"]
+        )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+          assert corrupt.id in summary.athanors
+          assert next.id in summary.athanors
+        end)
+
+      assert log =~ "Retention skipped: :corrupt"
+      assert log =~ "athanor_id=#{corrupt.id}"
+      assert executions(corrupt.id) == 3
+      assert executions(next.id) == 1
+    end
+  end
+
+  describe "the carry sweep" do
+    test "runs after the session sweep, and any person's expired carry is expired with its payload cleared",
+         %{key: key} do
+      expired = carry!()
+      open = carry!()
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(a in Arca.Schemas.CarryAction, where: a.id == ^expired.id),
+          set: [expires_at: DateTime.add(Arca.ServerMetaStorage.now!(), -1, :second)]
+        )
+
+      assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+      assert ["sessions", "carry"] = Enum.filter(summary.steps, &(&1 in ["sessions", "carry"]))
+
+      # Neither person opened another carry, which would end only their own:
+      # the cycle reached the expired one anyway.
+      swept = Arca.Repo.get!(Arca.Schemas.CarryAction, expired.id)
+      assert swept.phase == "expired"
+      assert is_nil(swept.payload)
+      assert %DateTime{} = swept.retain_until
+
+      stands = Arca.Repo.get!(Arca.Schemas.CarryAction, open.id)
+      assert stands.phase == "pending"
+      assert is_binary(stands.payload)
+    end
+
+    test "the scheduler keeps sweeping while a batch of heads fills", %{key: key} do
+      # One more head cached for no one here than one batch of the sweep
+      # takes, each verified longer ago than a carry lives, and one
+      # expired carry beside them.
+      heads = orphan_heads!(501)
+      expired = carry!()
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(a in Arca.Schemas.CarryAction, where: a.id == ^expired.id),
+          set: [expires_at: DateTime.add(Arca.ServerMetaStorage.now!(), -1, :second)]
+        )
+
+      previous = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+          assert "carry" in summary.steps
+        end)
+
+      Logger.configure(level: previous)
+
+      # A first batch filled with heads alone, so a second one ran.
+      assert Arca.Repo.aggregate(
+               from(h in Arca.Schemas.DirectoryHead, where: h.identifier in ^heads),
+               :count
+             ) == 0
+
+      assert log =~
+               "Expired 1 and removed 0 sign-in carry action(s), " <>
+                 "and removed 501 cached identity head(s) no one here holds"
+    end
+  end
+
+  # `n` heads cached for identifiers no person or invitation here names,
+  # each last verified twice a carry's lifetime ago.
+  defp orphan_heads!(n) do
+    now = Arca.ServerMetaStorage.now!()
+    verified_at = DateTime.add(now, -2 * Arca.CarryActions.lifetime_ms(), :millisecond)
+    batch = System.unique_integer([:positive])
+
+    rows =
+      for i <- 1..n do
+        epoch = Prima.Digest.sha256("orphan-#{batch}-#{i}")
+
+        %{
+          identifier: "per_" <> Prima.Digest.sha256_hex("orphan-#{batch}-#{i}"),
+          genesis: "genesis-bytes",
+          directory_url: "https://dir.example",
+          head_hash: epoch,
+          key_epoch: epoch,
+          recovery_epoch: epoch,
+          state: "{}",
+          verified_at: verified_at,
+          revision: 1,
+          inserted_at: now,
+          updated_at: now
+        }
+      end
+
+    {^n, _} = Arca.Repo.insert_all(Arca.Schemas.DirectoryHead, rows)
+    Enum.map(rows, & &1.identifier)
+  end
+
+  # A person of their own, and a pending carry of theirs to a hub.
+  defp carry! do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|carry-sweep-#{n}",
+        provider: "github",
+        email: "carry-sweep#{n}@example.com",
+        verified: true
+      })
+
+    payload = ~s({"genesis":{}})
+
+    {:ok, action} =
+      Arca.CarryActions.open(%Prima.Actor{user_id: user.id}, %{
+        user_id: user.id,
+        action_id: "car_sweep#{n}",
+        source_home: "https://a.example",
+        destination_home: "https://hub.example",
+        return_url: "https://a.example/carry",
+        payload: payload,
+        payload_digest: Prima.Digest.sha256(payload),
+        key_epoch: Prima.Digest.sha256("a head")
+      })
+
+    action
+  end
+
+  defp group!(name) do
+    {:ok, athanor} =
+      Sanctum.Tenancy.Athanors.create(%{
+        kind: "group",
+        name: name,
+        slug: "#{name}-#{System.unique_integer([:positive])}",
+        created_by: "test"
+      })
+
+    athanor
+  end
+
+  # Three finished executions in an athanor whose settings keep one.
+  defp over_limit!(athanor_id) do
+    actor = %Prima.Actor{athanor_id: athanor_id, user_id: "usr_retention"}
+
+    {:ok, _} =
+      Arca.Retention.set_settings(actor, %{"executions" => 1, "execution_days" => 10_000})
+
+    for i <- 1..3 do
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: "#{athanor_id}_exec_#{i}",
+          request_id: "req_retention",
+          user_id: actor.user_id,
+          athanor_id: athanor_id,
+          reference: "reagent:local.test:0.1.0",
+          component_type: "reagent",
+          started_at: DateTime.add(DateTime.utc_now(), -i, :minute),
+          status: "completed"
+        })
+    end
+
+    :ok
+  end
+
+  defp executions(athanor_id),
+    do: length(Arca.Execution.list(athanor_id: athanor_id, limit: 100))
 
   defp active_ids,
     do: Sanctum.Tenancy.Athanors.list_active() |> Enum.map(& &1.id) |> Enum.sort()

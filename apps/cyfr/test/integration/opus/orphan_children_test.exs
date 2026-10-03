@@ -30,7 +30,7 @@ defmodule Opus.OrphanChildrenTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import Ecto.Query, only: [from: 2]
 
   alias Cyfr.Test.TwoServices
@@ -56,10 +56,10 @@ defmodule Opus.OrphanChildrenTest do
     previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
     Application.put_env(:arca, :base_path, test_path)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do
@@ -85,8 +85,8 @@ defmodule Opus.OrphanChildrenTest do
     test "admits no child once it was cancelled", %{ctx: ctx} do
       {root_id, authority, row} = held_root!(ctx)
 
-      assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, root_id)
-      assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Execution, root_id)
+      assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, root_id)
+      assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Schemas.Execution, root_id)
 
       refute_orphans_admitted(root_id, authority, row)
     end
@@ -96,14 +96,14 @@ defmodule Opus.OrphanChildrenTest do
 
       TwoServices.release!(row.close)
       assert_receive {:root, {:ok, %{status: :completed}}}, 30_000
-      assert %{status: "completed"} = Arca.Repo.get!(Arca.Execution, root_id)
+      assert %{status: "completed"} = Arca.Repo.get!(Arca.Schemas.Execution, root_id)
 
       refute_orphans_admitted(root_id, authority, row)
     end
   end
 
   test "a run_stream child takes a charge row and gives it back", %{ctx: ctx} do
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
     hold_children!(root_id)
     TwoServices.hold!(:complete, root_id, once: true)
     start_root(ctx, root_id, %{"op" => "call", "request" => request("run_stream")})
@@ -118,7 +118,12 @@ defmodule Opus.OrphanChildrenTest do
              charges(ctx, authority)
 
     TwoServices.release!(stream)
-    wait_until(fn -> Arca.Repo.get!(Arca.Execution, stream_id).status == "completed" end, 30_000)
+
+    wait_until(
+      fn -> Arca.Repo.get!(Arca.Schemas.Execution, stream_id).status == "completed" end,
+      30_000
+    )
+
     wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
     wait_until(fn -> charges(ctx, authority) == [] end)
 
@@ -128,7 +133,7 @@ defmodule Opus.OrphanChildrenTest do
   end
 
   test "every child is killed at its deadline, within its parent's, held past it", %{ctx: ctx} do
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
     hold_children!(root_id)
 
     # A spawned child, a streamed one and a called one, the guest waiting on
@@ -153,7 +158,7 @@ defmodule Opus.OrphanChildrenTest do
     authority = TwoServices.entered(root_id)
 
     wait_until(
-      fn -> Enum.all?(held, &(Arca.Repo.get!(Arca.Execution, &1).status == "failed")) end,
+      fn -> Enum.all?(held, &(Arca.Repo.get!(Arca.Schemas.Execution, &1).status == "failed")) end,
       15_000
     )
 
@@ -164,10 +169,10 @@ defmodule Opus.OrphanChildrenTest do
     timeout = ~r/^Execution timeout after (\d+)ms$/
 
     for id <- held do
-      assert %{error_message: message} = Arca.Repo.get!(Arca.Execution, id)
+      assert %{error_message: message} = Arca.Repo.get!(Arca.Schemas.Execution, id)
       assert [_, ms] = Regex.run(timeout, message)
       assert String.to_integer(ms) in 1..1000
-      wait_until(fn -> Cyfr.Execution.Attempt.whereis(id) == nil end)
+      wait_until(fn -> Crucible.Attempt.whereis(id) == nil end)
     end
 
     # The formula's guest was answered each child's end, the called one's
@@ -193,7 +198,7 @@ defmodule Opus.OrphanChildrenTest do
   # as its runner attached with it, the held close and the client its
   # runner holds.
   defp held_root!(ctx) do
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
     TwoServices.hold!(:complete, root_id, once: true)
     start_root(ctx, root_id, %{"op" => "echo"})
     assert_receive {:held, ^root_id, close}, 30_000
@@ -209,8 +214,7 @@ defmodule Opus.OrphanChildrenTest do
     spawn(fn ->
       send(
         test_pid,
-        {:root,
-         Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
+        {:root, Crucible.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
       )
     end)
   end
@@ -256,10 +260,12 @@ defmodule Opus.OrphanChildrenTest do
     assert %{"error" => %{"message" => @ended}} = Jason.decode!(spawn_fn.(request_json("run")))
     Opus.FormulaHandler.cleanup_registry(tracker)
 
-    children = from(e in Arca.Execution, where: e.parent_execution_id == ^root_id, select: e.id)
+    children =
+      from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^root_id, select: e.id)
+
     assert Arca.Repo.all(children) == []
     assert Sanctum.Authority.budget(authority).in_flight == 0
-    assert charges(Sanctum.TestContext.local(), authority) == []
+    assert charges(Sanctum.TestContext.local(:api), authority) == []
   end
 
   defp brief_limits do

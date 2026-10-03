@@ -9,21 +9,29 @@ defmodule Sanctum.Tenancy.Caps do
   personal athanors may be minted per hour, and how many bytes an athanor
   may store.
 
-  Read from `config :sanctum, :caps` (`CYFR_MAX_ATHANORS`,
+  Each cap is a platform setting of the same name, read on every check
+  through `Arca.PlatformSettings.effective/1`, so a cap an operator sets
+  refuses the next creation over it with no restart (`CYFR_MAX_ATHANORS`,
   `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_PAIRS_PER_PERSON`,
   `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MAX_THREADS_PER_ATHANOR`,
-  `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES`). A `nil` cap is off. A private box needs
-  none of them; a `*` server sets them — and a default install therefore
-  has NO total-byte ceiling on authenticated guest writes (only the
-  per-call `max_request_size` and the per-scope file backstop): an
-  operator exposing the box sets `CYFR_ATHANOR_STORAGE_BYTES`
-  deliberately.
+  `CYFR_MINT_PER_HOUR` and `CYFR_ATHANOR_STORAGE_BYTES` pin them). A `nil`
+  or `0` cap is off. A private box needs none of them; a `*` server sets
+  them — and a default install therefore has NO total-byte ceiling on
+  authenticated guest writes (only the per-call `max_request_size` and the
+  per-scope file backstop): an operator exposing the box sets the storage
+  cap deliberately.
 
-  The group, pair and thread caps ship on: `config/runtime.exs` defaults
-  them to 50, 200 and 1000 (`0` turns any of them off). A thread is
+  A cap whose value the store cannot answer refuses like a count that
+  cannot be taken: `{:error, {:cap_unverifiable, key}}`, or
+  `{:error, :storage_unverifiable}` for the byte cap. The caps refuse a
+  stale value, so a store that has been unreachable past the accessor's
+  cache is never read as a server with no caps.
+
+  The group, pair and thread caps ship on: their defaults are 50, 200 and
+  1000 (`0` turns any of them off). A thread is
   a row any member — or any headless client of theirs — can mint from the
   wire (`thread.create`), each with a follow row of its own, so an
-  estate's thread count needs a ceiling the way its DMs do. A DM is minted from the wire against anyone
+  athanor's thread count needs a ceiling the way its DMs do. A DM is minted from the wire against anyone
   the caller shares a room with, and nobody else's consent is asked, so
   one member of a large room could otherwise spend `CYFR_MAX_ATHANORS`
   for everyone by opening a DM per co-member. It counts the ACTIVE pairs a
@@ -32,13 +40,13 @@ defmodule Sanctum.Tenancy.Caps do
 
   ## The port
 
-  This module is the one implementation of `Cyfr.Caps`, the contract the
+  This module is the one implementation of `Prima.Caps`, the contract the
   layers below the tenancy domain ask their ceilings through. The port's
-  two callbacks take the `%Cyfr.Actor{}` first — `check_counted/3` and
+  two callbacks take the `%Prima.Actor{}` first — `check_counted/3` and
   `check_storage/2` — because a cap bounds what one tenant or one person
   holds, and which one that is comes from the authenticated caller and
   never from an argument. `Cyfr.Application` installs this module at
-  boot; until it does, `Cyfr.Caps.impl/0` raises rather than reading an
+  boot; until it does, `Prima.Caps.impl!/0` raises rather than reading an
   uninstalled port as a server with no caps.
 
   `check_counted/2` is the tenancy domain's own spelling, for the mints
@@ -57,7 +65,7 @@ defmodule Sanctum.Tenancy.Caps do
   would serialize all tenant writes to close that sliver.
   """
 
-  @behaviour Cyfr.Caps
+  @behaviour Prima.Caps
 
   @type key ::
           :max_athanors
@@ -78,22 +86,40 @@ defmodule Sanctum.Tenancy.Caps do
     :athanor_storage_bytes
   ]
 
-  @doc "The configured cap for `key`, or `nil` when off."
-  @spec get(key()) :: pos_integer() | nil
+  @doc """
+  The cap set for `key`, `nil` when off, or `{:error, :unavailable}` when
+  the store cannot answer it. Raises when no declaration is installed:
+  nothing checks a cap before the host's boot installed one.
+  """
+  @spec get(key()) :: {:ok, pos_integer() | nil} | {:error, :unavailable}
   def get(key) when key in @keys do
-    case Keyword.get(Application.get_env(:sanctum, :caps, []), key) do
-      n when is_integer(n) and n > 0 -> n
-      _ -> nil
+    case Arca.PlatformSettings.effective(Atom.to_string(key)) do
+      {:ok, n} when is_integer(n) and n > 0 ->
+        {:ok, n}
+
+      # Unset, and 0, are off.
+      {:ok, _off} ->
+        {:ok, nil}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
+
+      {:error, reason} when reason in [:uninstalled, :unknown_key] ->
+        raise "[Sanctum.Tenancy.Caps] the #{key} cap cannot be read: the setting is #{reason}"
     end
   end
 
   @doc "`:ok` while `current` is below the cap (or the cap is off)."
-  @spec check(key(), non_neg_integer()) :: :ok | {:error, {:limit_reached, key(), pos_integer()}}
+  @spec check(key(), non_neg_integer()) ::
+          :ok
+          | {:error, {:limit_reached, key(), pos_integer()}}
+          | {:error, {:cap_unverifiable, key()}}
   def check(key, current) when key in @keys and is_integer(current) do
     case get(key) do
-      nil -> :ok
-      cap when current < cap -> :ok
-      cap -> {:error, {:limit_reached, key, cap}}
+      {:ok, nil} -> :ok
+      {:ok, cap} when current < cap -> :ok
+      {:ok, cap} -> {:error, {:limit_reached, key, cap}}
+      {:error, :unavailable} -> unreadable(key)
     end
   end
 
@@ -112,10 +138,13 @@ defmodule Sanctum.Tenancy.Caps do
           | {:error, {:cap_unverifiable, key()}}
   def check_counted(key, count_fun) when key in @keys and is_function(count_fun, 0) do
     case get(key) do
-      nil ->
+      {:ok, nil} ->
         :ok
 
-      cap ->
+      {:error, :unavailable} ->
+        unreadable(key)
+
+      {:ok, cap} ->
         case count_fun.() do
           {:ok, current} when is_integer(current) and current < cap ->
             :ok
@@ -137,7 +166,7 @@ defmodule Sanctum.Tenancy.Caps do
   end
 
   @doc """
-  `Cyfr.Caps.check_counted/3`: the port's door onto `check_counted/2`.
+  `Prima.Caps.check_counted/3`: the port's door onto `check_counted/2`.
 
   The actor is matched and not otherwise read. What a counted cap bounds
   is counted by the caller's own `count` — Arca counts an athanor's
@@ -146,10 +175,25 @@ defmodule Sanctum.Tenancy.Caps do
   Matching the actor is what keeps a caller from passing a bare key or a
   context in its place.
   """
-  @impl Cyfr.Caps
-  @spec check_counted(Cyfr.Actor.t(), key(), Cyfr.Caps.count()) :: Cyfr.Caps.counted_decision()
-  def check_counted(%Cyfr.Actor{}, key, count) when key in @keys and is_function(count, 0),
+  @impl Prima.Caps
+  @spec check_counted(Prima.Actor.t(), key(), Prima.Caps.count()) :: Prima.Caps.counted_decision()
+  def check_counted(%Prima.Actor{}, key, count) when key in @keys and is_function(count, 0),
     do: check_counted(key, count)
+
+  # A cap the store cannot answer is refused as unverifiable, never read
+  # as off: a ceiling that lifts whenever the store blinks is not one.
+  defp unreadable(key) do
+    warn_unreadable(key)
+    {:error, {:cap_unverifiable, key}}
+  end
+
+  defp warn_unreadable(key) do
+    require Logger
+
+    Logger.warning(
+      "[Sanctum.Tenancy.Caps] the #{key} cap could not be read; refusing until it answers"
+    )
+  end
 
   # `Arca` keeps this current without re-walking: every successful tenant
   # write bumps the cached total by the bytes written (over-counting an
@@ -180,19 +224,23 @@ defmodule Sanctum.Tenancy.Caps do
   (bytes bumped on writes,
   dropped on deletes), so the hot path pays no walk at all.
   """
-  @impl Cyfr.Caps
-  @spec check_storage(Cyfr.Actor.t(), non_neg_integer()) :: Cyfr.Caps.storage_decision()
+  @impl Prima.Caps
+  @spec check_storage(Prima.Actor.t(), non_neg_integer()) :: Prima.Caps.storage_decision()
   # Read-then-write without a lock (the cached total, then the caller's
   # write): N concurrent writes can each pass before any lands, so the cap
   # can overshoot by at most (per-tenant execution slots × max write size)
-  # — bounded and accepted, the same call Cyfr.RateLimiter documents for
+  # — bounded and accepted, the same call Prima.RateLimiter documents for
   # its ingress buckets.
-  def check_storage(%Cyfr.Actor{} = actor, incoming) when is_integer(incoming) do
+  def check_storage(%Prima.Actor{} = actor, incoming) when is_integer(incoming) do
     case get(:athanor_storage_bytes) do
-      nil ->
+      {:ok, nil} ->
         :ok
 
-      cap ->
+      {:error, :unavailable} ->
+        warn_unreadable(:athanor_storage_bytes)
+        {:error, :storage_unverifiable}
+
+      {:ok, cap} ->
         case athanor_bytes(actor) do
           {:ok, bytes} when bytes + incoming > cap ->
             {:error, {:limit_reached, :athanor_storage_bytes, cap}}
@@ -210,7 +258,7 @@ defmodule Sanctum.Tenancy.Caps do
   # this cap's own: a walk that cannot answer must refuse the write —
   # treating an unreadable tree as empty would let writes march past the
   # ceiling. The failure is never cached: the next check walks again.
-  defp athanor_bytes(%Cyfr.Actor{athanor_id: id} = actor) when is_binary(id) and id != "" do
+  defp athanor_bytes(%Prima.Actor{athanor_id: id} = actor) when is_binary(id) and id != "" do
     case Arca.Usage.athanor_bytes(actor) do
       {:ok, bytes} ->
         {:ok, bytes}
@@ -229,9 +277,9 @@ defmodule Sanctum.Tenancy.Caps do
 
   # An actor with no resolved athanor names no tree, so there is no total
   # to compare against the ceiling. That is unverifiable, not zero: a
-  # `{:ok, 0}` here would read an unresolved tenant as an empty estate and
+  # `{:ok, 0}` here would read an unresolved tenant as an empty athanor and
   # admit the write, which is the refusal-as-silence the tenancy rules
   # forbid. Nothing reaches it through the `Arca` gate, which refuses such
   # an actor first; it is the backstop for a direct caller.
-  defp athanor_bytes(%Cyfr.Actor{}), do: {:error, :storage_unverifiable}
+  defp athanor_bytes(%Prima.Actor{}), do: {:error, :storage_unverifiable}
 end

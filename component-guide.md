@@ -32,14 +32,15 @@ your-project/
         ├── threads/ # Chat attachment files
         ├── notes/         # What was kept out of a thread — host-only, never a guest scope
         ├── payloads/      # Retained execution inputs and results — host-only, by digest
+        ├── staging/       # Content staged for a fenced publication — host-only, by digest
         └── data/          # Files WASM components store — their `data/` scope, and yours
 ```
 
 Every folder is laid when the athanor is provisioned. The Files page in the
 console, and the `file` tool behind it, show this tree by tier: `data/` is
 open, `components/` and `aqua/` are shaped, `notes/` and
-`threads/` are read-only there, and `payloads/` is the server's own and
-has no name on the page.
+`threads/` are read-only there, and `payloads/` and `staging/` are the
+server's own and have no name on the page.
 
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):
 ```
@@ -554,7 +555,7 @@ An OAuth need declares only the provider and scopes (`"type": "oauth:google"`, `
 
 ### `caps` Section
 
-The declared capability **ask**. Unlike the `setup.policy` block it replaces, `caps` is never applied by itself — it is rendered on the consent sheet and becomes effective capability only when a human commits a consent (`effective = ask ∩ operator choices ∩ platform ceiling`). Declaring more here widens what the operator is *asked* for, never what the component *gets*.
+The declared capability **ask**. `caps` is never applied by itself — it is rendered on the consent sheet and becomes effective capability only when a human commits a consent (`effective = ask ∩ operator choices ∩ platform ceiling`). Declaring more here widens what the operator is *asked* for, never what the component *gets*.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -710,8 +711,10 @@ Behavior: `cyfr pull` and `cyfr build compile` auto-fetch missing published depe
 ### `cyfr:http/fetch` — `request(json) -> string`
 Request: `{"method": "POST", "url": "...", "headers": {...}, "body": "..."}`
 Success: `{"status": 200, "headers": {...}, "body": "..."}`
-Error: `{"error": {"type": "invalid_json|invalid_request|domain_blocked|method_blocked|scheme_blocked|rate_limited|timeout|private_ip_blocked|dns_error|request_too_large|response_too_large|http_error", "message": "..."}}`
+Error: `{"error": {"type": "invalid_json|invalid_request|domain_blocked|method_blocked|scheme_blocked|rate_limited|timeout|private_ip_blocked|dns_error|redirect_credentials|request_too_large|response_too_large|http_error", "message": "..."}}`
 (`invalid_json`/`invalid_request` are the same malformed-input types every host interface uses; `http_error` is a transport failure after validation passed.)
+
+The engine resolves no name: CYFR resolves each request's host and pins the address it connects to under the run's consent, and a pin it refuses reaches the component as `private_ip_blocked` (a metadata address, or a private one the consent does not grant), `dns_error` (a host that resolves to nothing) or `redirect_credentials`. The host follows no redirect: a `3xx` answer is the component's, and its next request to the `Location` is the redirect's next hop, pinned from the request it came from. A hop to another scheme or host is refused as `redirect_credentials`, since it would carry the request's credentials to another origin, and the engine never sends `Authorization` or `Cookie` across origins.
 
 **Binary data** — base64 encode request body and/or request base64 response:
 ```json
@@ -837,7 +840,7 @@ let token = bindings::cyfr::oauth::token::get_access_token("google")
 | `delete` | `path` | `{status, path, deleted}` |
 | `exists` | `path` | `{status, path, exists}` |
 
-All content is base64-encoded. Host enforces: the granted storage paths and actions, path safety (no `..`), scoped to `data/` or `components/`.
+All content is base64-encoded. Host enforces: the granted storage paths and actions, path safety (canonical paths only: no empty, `.` or `..` segment), scoped to `data/` or `components/`.
 
 Error: `{"error": {"type": "...", "message": "..."}}`.
 
@@ -999,7 +1002,7 @@ The window comes from the provider's models API where it reports one (claude, ge
 ```json
 {"operation": "chat", "params": {
   "model": "claude-sonnet-4-6",
-  "system": "You are the estate's assistant.",
+  "system": "You are the athanor's assistant.",
   "messages": [
     {"role": "user", "content": "Read a.txt"},
     {"role": "assistant", "content": [
@@ -1100,7 +1103,7 @@ What a component may do at runtime comes from its consent, not from stored polic
 effective capability = manifest ask (caps) ∩ operator choices ∩ platform ceiling
 ```
 
-All three are frozen at consent time. Nothing auto-applies the manifest's `caps` — it is rendered on the consent sheet and a human commits every widening. (This is the key break from `setup.policy`, which silently widened effective policy at read time.)
+All three are frozen at consent time. Nothing auto-applies the manifest's `caps` — it is rendered on the consent sheet and a human commits every widening.
 
 ### Egress (`caps.egress`)
 
@@ -1111,7 +1114,7 @@ All three are frozen at consent time. Nothing auto-applies the manifest's `caps`
 
 ### Storage (`caps.storage`)
 
-- `paths` — directory prefixes end with `/` (e.g. `"data/"`), exact files without, or `"*"`. Paths must start with `data/` or `components/`. Empty = hard deny.
+- `paths` — directory prefixes end with `/` (e.g. `"data/"`), exact files without, or `"*"`. Paths must start with `data/` or `components/` and be canonical: no empty, `.` or `..` segment, and no spelling the storage door would serve under another name; a manifest naming one is refused at publish. Empty = hard deny.
 - `actions` — `read`, `write`, `list`, `delete`, `exists`; each must be asked for.
 
 ### Tools (`caps.tools`)
@@ -1169,7 +1172,7 @@ The AQUA tree — the soul, its roles and its scrolls — follows the same
 model: provisioning copies the shipped tree into the athanor's `aqua/`, an
 edited file reads as edited by its bytes, and the `aqua` tool's `reset`
 action (from the AQUA page or over MCP) restores edited copies — one role by name, or every one —
-while keeping the roles and scrolls the estate made; `skill_reset` restores
+while keeping the roles and scrolls the athanor made; `skill_reset` restores
 one scroll.
 
 ### The Files page

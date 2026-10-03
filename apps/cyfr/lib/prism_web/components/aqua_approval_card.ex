@@ -11,21 +11,32 @@ defmodule PrismWeb.AquaApprovalCard do
   renders this component for it. On approve/decline the parent LiveView
   dispatches the member's decision to the runner.
 
-  Approve carries a *scope*:
+  The card decides its approval (`approval_id`) through `approval.resolve`:
+  its parent LiveView is sent `{:approval_approve, approval_id, choice}`
+  or `{:approval_decline, approval_id, reason, scope}`. Approve offers:
 
-    - `:once`         — run it this once (default)
-    - `:thread` — run it, and record a standing allow for the same
-      `tool.action` in this thread (a `tool_grants` row; it survives
-      a restart and ends with the thread)
-    - `:always`       — run it, and record the standing allow for the agent
-      wherever it works (an agent-scope row in its home estate). The row
-      belongs to the athanor, not to whoever clicks: in a group the control
-      says so, because one member is deciding for everyone.
+    - once — run it this once (`scope: :once`);
+    - for this run — a standing allow for the same `tool.action` in this
+      thread, ending with the card's own execution (`:thread`, lifecycle
+      `:execution`);
+    - for this thread until… — the same, ending 1, 8 or 24 hours from
+      the click (`:thread`, `until` computed here in UTC);
+    - always — a standing allow for the agent wherever it works (an
+      agent-scope row in its home athanor). The row belongs to the
+      athanor, not to whoever clicks: in a group the control says so,
+      because one member is deciding for everyone;
+    - for this schedule — the same, ending with the schedule the card's
+      run was started by (`:always`, lifecycle `:schedule`), offered only
+      when that run's row names one (`scheduled`);
+    - limit to these paths — for an action that declares which argument
+      names a storage path (`Grimoire.Catalog.action_declaration/1`), a
+      standing choice may carry the path the call names, in the storage
+      door's spelling, as its constraint.
 
-  Which of the two are offered follows the action's own declaration, the
-  same one the runner and the grant store enforce: none for a
-  `:destructive` / `:external` action, none for an action declared
-  `standing: false`, only "for this chat" for one declared
+  Which standing answers are offered follows the action's own
+  declaration, the same one the runner and the grant store enforce: none
+  for a `:destructive` / `:external` action, none for an action declared
+  `standing: false`, only this thread's for one declared
   `standing: :thread`. The refusal the runner would post is the
   backstop for a race, not the outcome of a visible button.
 
@@ -42,6 +53,9 @@ defmodule PrismWeb.AquaApprovalCard do
   """
 
   use PrismWeb, :live_component
+
+  # The deadlines "for this thread until…" offers, in hours.
+  @deadlines [{"1", "1 hour"}, {"8", "8 hours"}, {"24", "24 hours"}]
 
   @impl true
   def render(assigns) do
@@ -177,19 +191,48 @@ defmodule PrismWeb.AquaApprovalCard do
               </button>
             </div>
             <div
-              :if={@proposal && status(@status) == :pending}
+              :if={
+                @proposal && status(@status) == :pending &&
+                  standing_offered?(@kind, @standing, :thread)
+              }
               class="flex flex-wrap gap-2 items-center justify-end mt-1.5 text-[11px] text-gray-500"
+              data-test="approval-standing"
             >
-              <span>remember:</span>
+              <span>also approve:</span>
               <button
-                :if={standing_offered?(@kind, @standing, :thread)}
                 type="button"
                 phx-click="approval:approve"
                 phx-value-scope="thread"
+                phx-value-lifecycle="execution"
                 phx-target={@myself}
                 class="rounded px-2 py-0.5 bg-gray-800 text-gray-300 hover:bg-gray-700"
               >
-                for this chat
+                for this run
+              </button>
+              <span class="inline-flex items-center gap-1">
+                for this thread until
+                <button
+                  :for={{hours, text} <- @deadlines}
+                  type="button"
+                  phx-click="approval:approve"
+                  phx-value-scope="thread"
+                  phx-value-hours={hours}
+                  phx-target={@myself}
+                  class="rounded px-2 py-0.5 bg-gray-800 text-gray-300 hover:bg-gray-700"
+                >
+                  {text}
+                </button>
+              </span>
+              <button
+                :if={@scheduled && standing_offered?(@kind, @standing, :always)}
+                type="button"
+                phx-click="approval:approve"
+                phx-value-scope="always"
+                phx-value-lifecycle="schedule"
+                phx-target={@myself}
+                class="rounded px-2 py-0.5 bg-gray-800 text-gray-300 hover:bg-gray-700"
+              >
+                for this schedule
               </button>
               <button
                 :if={standing_offered?(@kind, @standing, :always)}
@@ -203,6 +246,15 @@ defmodule PrismWeb.AquaApprovalCard do
               >
                 always{if @shared_with, do: " — for everyone here"}
               </button>
+              <label :if={@limit} class="inline-flex items-center gap-1" data-test="approval-limit">
+                <input
+                  type="checkbox"
+                  phx-click="approval:toggle_limit"
+                  phx-target={@myself}
+                  checked={@limited}
+                /> limit to these paths:
+                <span class="font-mono text-gray-300">{Enum.join(@limit.patterns, ", ")}</span>
+              </label>
             </div>
           <% end %>
         <% status(@status) == :approved -> %>
@@ -210,10 +262,10 @@ defmodule PrismWeb.AquaApprovalCard do
             <span class="text-green-400">✓ Approved</span>
             <span :if={@resolved_by} class="text-gray-500">by {@resolved_by}</span>
             <span :if={@scope == :thread} class="text-gray-500">
-              — auto-approved for this chat
+              — standing for this chat{bounds_label(@bounds)}
             </span>
             <span :if={@scope == :always} class="text-gray-500">
-              — won't ask again{if @shared_with, do: ", for anyone here"}
+              — won't ask again{if @shared_with, do: ", for anyone here"}{bounds_label(@bounds)}
             </span>
             <span class="text-gray-500">{format_time(@decided_at)}</span>
             <span :if={@result_summary} class="text-gray-400 ml-2 truncate">— {@result_summary}</span>
@@ -246,32 +298,70 @@ defmodule PrismWeb.AquaApprovalCard do
 
   @impl true
   def update(assigns, socket) do
-    {:ok,
-     socket
-     |> assign(assigns)
-     |> assign_new(:decline_reason_open, fn -> false end)
-     |> assign_new(:agent_label, fn -> nil end)
-     |> assign_new(:shared_with, fn -> nil end)
-     |> assign_new(:result_summary, fn -> nil end)
-     |> assign_new(:reason, fn -> nil end)
-     |> assign_new(:scope, fn -> nil end)
-     |> assign_new(:resolved_by, fn -> nil end)
-     |> assign_new(:decided_at, fn -> nil end)}
+    socket =
+      socket
+      |> assign(assigns)
+      |> assign_new(:decline_reason_open, fn -> false end)
+      |> assign_new(:agent_label, fn -> nil end)
+      |> assign_new(:shared_with, fn -> nil end)
+      |> assign_new(:result_summary, fn -> nil end)
+      |> assign_new(:reason, fn -> nil end)
+      |> assign_new(:scope, fn -> nil end)
+      |> assign_new(:bounds, fn -> %{} end)
+      |> assign_new(:resolved_by, fn -> nil end)
+      |> assign_new(:decided_at, fn -> nil end)
+      |> assign_new(:scheduled, fn -> false end)
+      |> assign_new(:limited, fn -> false end)
+      |> assign(:deadlines, @deadlines)
+
+    {:ok, assign_new(socket, :limit, fn -> limit(socket.assigns.payload) end)}
+  end
+
+  # What a standing answer may be limited to: the path the call names, in
+  # the storage door's spelling, when the action declares which of its
+  # arguments names a storage path. Nil otherwise: no constraint is offered.
+  defp limit(payload) do
+    proposal = payload[:proposal] || payload["proposal"] || %{}
+    tool = proposal[:tool] || proposal["tool"]
+    action = proposal[:action] || proposal["action"]
+    args = proposal[:args] || proposal["args"] || %{}
+
+    with true <- is_binary(tool) and is_binary(action),
+         {:ok, %{resource: {argument, :storage_path}}} <-
+           Grimoire.Catalog.action_declaration("#{tool}.#{action}"),
+         path when is_binary(path) <- args[argument],
+         pattern when is_binary(pattern) <- Prima.ComponentPath.door_path(path) do
+      %{kind: "storage_path", patterns: [pattern]}
+    else
+      _none -> nil
+    end
   end
 
   @impl true
-  def handle_event("approval:approve", %{"scope" => scope}, socket) do
-    send(self(), {:approval_approve, socket.assigns.message_id, parse_scope(scope)})
+  def handle_event("approval:approve", %{"scope" => scope} = params, socket) do
+    case choice(scope, params, socket.assigns) do
+      {:ok, choice} -> send(self(), {:approval_approve, socket.assigns.approval_id, choice})
+      :error -> :ok
+    end
+
     {:noreply, socket}
   end
 
+  def handle_event("approval:toggle_limit", _params, socket) do
+    {:noreply, assign(socket, :limited, not socket.assigns.limited)}
+  end
+
   def handle_event("approval:decline", %{"reason" => reason}, socket) do
-    send(self(), {:approval_decline, socket.assigns.message_id, reason, :once})
+    send(self(), {:approval_decline, socket.assigns.approval_id, reason, :once})
     {:noreply, assign(socket, :decline_reason_open, false)}
   end
 
   def handle_event("approval:decline_never", _params, socket) do
-    send(self(), {:approval_decline, socket.assigns.message_id, "removed from allowlist", :never})
+    send(
+      self(),
+      {:approval_decline, socket.assigns.approval_id, "removed from allowlist", :never}
+    )
+
     {:noreply, socket}
   end
 
@@ -295,7 +385,54 @@ defmodule PrismWeb.AquaApprovalCard do
   defp always_confirm(name),
     do: "Stop asking for this action in #{name}? It applies to every member, not just you."
 
-  defp parse_scope(scope), do: Aqua.ApprovalScope.parse(scope)
+  # The choice an offer stands for: once; this thread, ending with the
+  # card's own run or at a deadline computed here, in UTC; or the agent
+  # everywhere, ending with the run's schedule or not at all. A standing
+  # choice carries the paths it is limited to when the person ticked it.
+  # An offer the card does not make chooses nothing.
+  defp choice("once", _params, _assigns), do: {:ok, %{scope: :once}}
+
+  defp choice("thread", %{"lifecycle" => "execution"}, assigns),
+    do: {:ok, limited(%{scope: :thread, lifecycle: :execution}, assigns)}
+
+  defp choice("thread", %{"hours" => hours}, assigns) do
+    case List.keyfind(@deadlines, hours, 0) do
+      {^hours, _text} ->
+        until = DateTime.add(DateTime.utc_now(), String.to_integer(hours) * 3600, :second)
+        {:ok, limited(%{scope: :thread, until: until}, assigns)}
+
+      nil ->
+        :error
+    end
+  end
+
+  defp choice("always", %{"lifecycle" => "schedule"}, %{scheduled: true} = assigns),
+    do: {:ok, limited(%{scope: :always, lifecycle: :schedule}, assigns)}
+
+  defp choice("always", params, assigns) when not is_map_key(params, "lifecycle"),
+    do: {:ok, limited(%{scope: :always}, assigns)}
+
+  defp choice(_scope, _params, _assigns), do: :error
+
+  defp limited(choice, %{limited: true, limit: %{} = limit}),
+    do: Map.put(choice, :constraint, limit)
+
+  defp limited(choice, _assigns), do: choice
+
+  # The bounds a decided card's standing answer carries, as its resolution
+  # records them.
+  defp bounds_label(bounds) when is_map(bounds) do
+    [
+      bounds["lifecycle"] && ", ending with its #{bounds["lifecycle"]}",
+      bounds["until"] && ", until #{bounds["until"]}",
+      match?(%{"patterns" => [_ | _]}, bounds["constraint"]) &&
+        ", for #{Enum.join(bounds["constraint"]["patterns"], ", ")}"
+    ]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.join()
+  end
+
+  defp bounds_label(_bounds), do: ""
 
   defp status(:pending), do: :pending
   defp status(:running), do: :running
@@ -326,7 +463,7 @@ defmodule PrismWeb.AquaApprovalCard do
     do: false
 
   defp standing_offered?(kind, standing, scope),
-    do: standing_offered(kind, Cyfr.Ops.Annotations.standing(standing), scope)
+    do: standing_offered(kind, Grimoire.standing_scope(standing), scope)
 
   defp standing_offered(_kind, false, _scope), do: false
   defp standing_offered(_kind, :thread, :always), do: false

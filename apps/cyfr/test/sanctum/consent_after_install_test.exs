@@ -3,12 +3,12 @@
 
 defmodule Sanctum.ConsentAfterInstallTest do
   @moduledoc """
-  What installing a component does to what the estate consented to.
+  What installing a component does to what the athanor consented to.
 
   A baseline consent is minted against the closure that exists when the
-  estate is filled. Installing a component a formula names as an optional
+  athanor is filled. Installing a component a formula names as an optional
   dependency widens that closure, so the consent no longer answers for it
-  and a turn is refused until a member consents again. The estate reports
+  and a turn is refused until a member consents again. The athanor reports
   that state rather than leaving it unexplained — and only for the
   formula the install touched: the bundled assistant's closure ships in
   the seed and stands.
@@ -65,9 +65,8 @@ defmodule Sanctum.ConsentAfterInstallTest do
   @formula "formula:local.uses-remote"
   @remote "catalyst:moonmoon69.claude"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_install_#{System.unique_integer([:positive])}")
     seed_dir = Path.join(test_dir, "seed")
@@ -110,7 +109,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     {:ok, port: port}
   end
 
-  test "installing a component changes what the estate consented to, and it says so", %{
+  test "installing a component changes what the athanor consented to, and it says so", %{
     port: port
   } do
     n = System.unique_integer([:positive])
@@ -124,6 +123,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
         auth_method: :oidc,
         authenticated: true
       )
+      |> Sanctum.TestContext.via(:prism)
 
     # Filled offline: each consent covers the closure that exists, and a
     # turn can pin it.
@@ -136,38 +136,38 @@ defmodule Sanctum.ConsentAfterInstallTest do
     {:ok, group} = Athanors.get(group.id)
     assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
 
-    assert {:ok, %Cyfr.Authority{}} =
-             Cyfr.Execution.authority_for(in_group, :default, @formula)
+    assert {:ok, %Prima.Authority{}} =
+             Crucible.authority_for(in_group, :default, @formula)
 
-    assert Cyfr.ConsentDrift.state(in_group, @formula) == :ok
+    assert Aqua.consent_state(in_group, @formula) == {:ok, :current}
 
     # The optional provider is installed, as the console's Install does.
     # That widens the closure the formula's consent was minted against, so
     # the consent no longer answers for it and a turn is refused until a
-    # member consents again. The estate must SAY that rather than look
+    # member consents again. The athanor must SAY that rather than look
     # unexplained.
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
     # `localhost:` is the one host the OCI reference layer maps to http.
     Application.put_env(:cyfr, :oci_registry_url, "localhost:#{port}")
 
     assert {:ok, _} =
-             Cyfr.Ops.Catalog.call_external("component", in_group, %{
+             Grimoire.call_external("component", in_group, %{
                "action" => "pull",
                "reference" => @remote
              })
 
     assert {:error, {:consent_required, _}} =
-             Cyfr.Execution.authority_for(in_group, :default, @formula)
+             Crucible.authority_for(in_group, :default, @formula)
 
-    assert Cyfr.ConsentDrift.state(in_group, @formula) == :stale
-    assert Cyfr.ConsentDrift.stale_refs(in_group) == [{@formula, :stale}]
+    assert Aqua.consent_state(in_group, @formula) == {:ok, :stale}
+    assert Aqua.stale_consent_refs(in_group) == {:ok, [{@formula, :stale}]}
 
     # The bundled assistant names nothing the install touched: its closure
     # ships in the seed, so its consent stands and a turn still pins it.
-    assert Cyfr.ConsentDrift.state(in_group) == :ok
+    assert Aqua.consent_state(in_group) == {:ok, :current}
 
-    assert {:ok, %Cyfr.Authority{}} =
-             Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua")
+    assert {:ok, %Prima.Authority{}} =
+             Crucible.authority_for(in_group, :default, "agent:local.aqua")
   end
 
   # A local formula that may use the published provider once it is installed.
@@ -226,7 +226,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
   defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
-    |> Cyfr.Test.SourceTree.files!(match_dot: false)
+    |> Prima.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
       target = Path.join(dest, Path.relative_to(src, @bundle))

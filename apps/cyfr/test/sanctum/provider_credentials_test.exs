@@ -7,9 +7,8 @@ defmodule Sanctum.ProviderCredentialsTest do
   alias Sanctum.Context
   alias Sanctum.ProviderCredentials
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     {:ok, ctx: Sanctum.TestContext.local()}
   end
@@ -24,31 +23,89 @@ defmodule Sanctum.ProviderCredentialsTest do
     )
   end
 
+  # The sources of the statements this process ran, as the handler told it.
+  defp ran do
+    receive do
+      {:statement, source} -> [source | ran()]
+    after
+      0 -> []
+    end
+  end
+
   describe "put/4 + fetch_for_oauth/4" do
     test "round-trips client credentials through the sealed store", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "google", "client-abc", "secret-xyz")
+      assert :ok =
+               Sanctum.TestContext.put_provider_credentials(
+                 ctx,
+                 "google",
+                 "client-abc",
+                 "secret-xyz"
+               )
 
       assert {:ok, %{"client_id" => "client-abc", "client_secret" => "secret-xyz"}} =
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
     end
 
     test "public clients store a nil client_secret", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "github", "public-client")
+      assert :ok = Sanctum.TestContext.put_provider_credentials(ctx, "github", "public-client")
 
       assert {:ok, %{"client_id" => "public-client", "client_secret" => nil}} =
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "github")
     end
 
     test "put replaces existing credentials", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "google", "old-id", "old-secret")
-      assert :ok = ProviderCredentials.put(ctx, "google", "new-id", "new-secret")
+      assert :ok =
+               Sanctum.TestContext.put_provider_credentials(ctx, "google", "old-id", "old-secret")
+
+      assert :ok =
+               Sanctum.TestContext.put_provider_credentials(ctx, "google", "new-id", "new-secret")
 
       assert {:ok, %{"client_id" => "new-id", "client_secret" => "new-secret"}} =
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
     end
 
+    test "a context that is no paired device's takes no device hold, and stores as before",
+         %{ctx: ctx} do
+      confirmed =
+        Sanctum.TestContext.confirmed_change(
+          ctx,
+          "oauth.set_client",
+          %{provider: "google", client_id: "session-id", client_secret: "session-secret"},
+          "google"
+        )
+
+      test = self()
+      handler = {__MODULE__, make_ref()}
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _, _, meta, _ -> if self() == test, do: send(test, {:statement, meta[:source]}) end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      answer = ProviderCredentials.put(confirmed, "google", "session-id", "session-secret")
+      :telemetry.detach(handler)
+
+      assert answer == :ok
+      sources = ran()
+      refute "paired_clients" in sources
+      refute "device_certificates" in sources
+
+      assert {:ok, %{"client_id" => "session-id"}} =
+               ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
+    end
+
     test "fetch takes tenant coordinates, never the caller's permissions", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "google", "client-abc", "secret-xyz")
+      assert :ok =
+               Sanctum.TestContext.put_provider_credentials(
+                 ctx,
+                 "google",
+                 "client-abc",
+                 "secret-xyz"
+               )
 
       # No Context argument exists on this path — the read is keyed by tenant
       # alone, which is exactly why an executing component's context can no
@@ -83,7 +140,7 @@ defmodule Sanctum.ProviderCredentialsTest do
 
     test "configured? reports presence", %{ctx: ctx} do
       refute ProviderCredentials.configured?(ctx, "google")
-      assert :ok = ProviderCredentials.put(ctx, "google", "id", "sec")
+      assert :ok = Sanctum.TestContext.put_provider_credentials(ctx, "google", "id", "sec")
       assert ProviderCredentials.configured?(ctx, "google")
     end
   end
@@ -116,12 +173,12 @@ defmodule Sanctum.ProviderCredentialsTest do
     end
 
     test "reads stay available to a key", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "google", "id", "sec")
+      assert :ok = Sanctum.TestContext.put_provider_credentials(ctx, "google", "id", "sec")
       assert ProviderCredentials.configured?(key_ctx(), "google")
     end
 
     test "both oauth mutations are annotated interactive" do
-      actions = Sanctum.MCP.OAuthTool.definition().annotations.actions
+      actions = Sanctum.Providers.OAuth.definition().annotations.actions
 
       assert actions["set_client"][:consent] == :interactive
       assert actions["delete_client"][:consent] == :interactive
@@ -131,7 +188,7 @@ defmodule Sanctum.ProviderCredentialsTest do
 
   describe "delete/2" do
     test "removes stored credentials", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "google", "id", "sec")
+      assert :ok = Sanctum.TestContext.put_provider_credentials(ctx, "google", "id", "sec")
       assert :ok = ProviderCredentials.delete(ctx, "google")
       refute ProviderCredentials.configured?(ctx, "google")
 
@@ -142,8 +199,16 @@ defmodule Sanctum.ProviderCredentialsTest do
 
   describe "oauth.set_client MCP action" do
     test "stores credentials via the tool surface", %{ctx: ctx} do
+      confirmed =
+        Sanctum.TestContext.confirmed_change(
+          ctx,
+          "oauth.set_client",
+          %{provider: "google", client_id: "tool-id", client_secret: "tool-secret"},
+          "google"
+        )
+
       assert {:ok, %{status: "ok"}} =
-               Sanctum.MCP.OAuthTool.handle(ctx, %{
+               Sanctum.Providers.OAuth.handle(confirmed, %{
                  "action" => "set_client",
                  "provider" => "google",
                  "client_id" => "tool-id",
@@ -156,7 +221,7 @@ defmodule Sanctum.ProviderCredentialsTest do
 
     test "requires provider and client_id" do
       ctx = Sanctum.TestContext.local()
-      assert {:error, _} = Sanctum.MCP.OAuthTool.handle(ctx, %{"action" => "set_client"})
+      assert {:error, _} = Sanctum.Providers.OAuth.handle(ctx, %{"action" => "set_client"})
     end
 
     test "requires the interactive class" do
@@ -164,8 +229,8 @@ defmodule Sanctum.ProviderCredentialsTest do
       # action's consent annotation is enforced. A permission set — however
       # wide — does not open an outbound-credential write.
       for ctx <- [narrow_ctx([:execute]), key_ctx()] do
-        assert {:error, {:consent_class_required, _}} =
-                 Cyfr.Ops.Catalog.call_external("oauth", ctx, %{
+        assert {:error, %Prima.Refusal{stage: :admission, reason: {:consent_class_required, _}}} =
+                 Grimoire.call_external("oauth", ctx, %{
                    "action" => "set_client",
                    "provider" => "google",
                    "client_id" => "x"

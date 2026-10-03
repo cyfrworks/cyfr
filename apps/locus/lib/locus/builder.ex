@@ -6,7 +6,7 @@ defmodule Locus.Builder do
   Builds a component from its sources: Rust to a WASM component with
   `cargo-component`, a tincture's JavaScript to a static bundle with npm
   and Vite. It takes a build request as the build wire reads it
-  (`Cyfr.BuilderProtocol`) and answers output files, or the wire's refusal
+  (`Prima.BuilderProtocol`) and answers output files, or the wire's refusal
   for why there are none.
 
   ## arca:bypass-ok=D — entire module
@@ -19,7 +19,7 @@ defmodule Locus.Builder do
 
   `prepare/1` checks the request and packs it, running nothing: the
   sources a language needs, their total size and every path
-  (`Cyfr.PathSafety`), the toolchain, an executor to run under, the Cargo
+  (`Prima.PathSafety`), the toolchain, an executor to run under, the Cargo
   seed. `run/2` runs what it prepared.
 
   A build is one POSIX shell script run by an executor
@@ -35,12 +35,12 @@ defmodule Locus.Builder do
   the wire's output bounds; output past a bound is refused as `failed`,
   never truncated.
 
-  Each build runs through cyfr-spawn under a pooled uid of its own
-  (`Locus.Spawner`): a 0700 home neither another build nor this node's user
+  Each build runs through cyfr-keeper under a pooled uid of its own
+  (`Locus.Keeper`): a 0700 home neither another build nor this node's user
   can enter, an environment built from nothing, resource limits, a memory
   bound, and at its end every process of the uid killed and everything it
   left removed before the uid serves another build. A node without
-  cyfr-spawn builds nothing, the test environment excepted
+  cyfr-keeper builds nothing, the test environment excepted
   (`Locus.Executor`).
 
   ## What a build sees
@@ -55,22 +55,33 @@ defmodule Locus.Builder do
 
   A Rust build carrying a `Cargo.lock` builds `--locked` to it — a
   dependency the lock does not cover fails with cargo's own message — and
-  one carrying none, or asked to `resolve`, resolves one. npm runs with
-  `--ignore-scripts`, so a dependency's lifecycle script never executes.
-  The compiled WASM is validated (`Compendium.WasmValidator`) before it is
-  answered; it executes only inside the Opus sandbox.
+  one carrying none, or asked to `resolve`, resolves one. A tincture
+  builds only from its lockfile: one without `package-lock.json` beside
+  its `package.json` is refused as `malformed` before anything runs, and
+  `npm ci` installs exactly what the lockfile pins, refusing one out of
+  step with the package manifest. Install scripts run, as the build
+  itself does: under the build's uid, in its home, with the environment
+  above, which carries no credential — the builds key and anything else
+  of this node's environment stay outside. The compiled WASM is validated
+  (`Prima.Wasm`) before it is answered; it executes only inside the Opus
+  sandbox.
+
+  A tincture's bundle keeps the notices of what it ships:
+  `dist/third-party-notices.json` lists every runtime package the
+  lockfile installed, with its license and the text of its license and
+  notice files, unless the build wrote that file itself.
 
   ## What a build answers
 
   `{:ok, %{language, target_type, outputs}}`, where a component's outputs
-  are `Cyfr.BuilderProtocol.component_wasm/0` and, when the build left
+  are `Prima.BuilderProtocol.component_wasm/0` and, when the build left
   one, `component_lockfile/0`, and a tincture's are the files of its
-  `dist/`; or `{:error, refusal}`, a `t:Cyfr.BuilderProtocol.refusal/0`:
+  `dist/`; or `{:error, refusal}`, a `t:Prima.BuilderProtocol.refusal/0`:
 
   | Refusal | When |
   |---|---|
   | `malformed` | the sources do not make a build of that language |
-  | `unavailable` | the toolchain, the Cargo seed or cyfr-spawn is missing, or cyfr-spawn cannot bound the build's memory |
+  | `unavailable` | the toolchain, the Cargo seed or cyfr-keeper is missing, or cyfr-keeper cannot bound the build's memory |
   | `capacity` | no pooled uid is free |
   | `timeout` | the build passed `:timeout_ms` and was ended |
   | `memory` | the build reached its memory bound and was ended there |
@@ -82,7 +93,7 @@ defmodule Locus.Builder do
 
   require Logger
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
 
   # The output archive adds headers, padding and a Cargo.lock to its files.
   @max_output_archive_bytes BuilderProtocol.max_output_bytes() + 4 * 1024 * 1024
@@ -108,15 +119,60 @@ defmodule Locus.Builder do
   if [ "$#" -gt 0 ]; then exec tar --format=ustar -cf - "$@"; fi
   """
 
+  # $1 the notices script, $2 the notices file's name. `npm ci` installs exactly what the lockfile
+  # pins, and refuses a lockfile out of step with package.json; install
+  # scripts run, under the build's uid and its environment, which holds no
+  # credential.
   @javascript_script """
   set -eu
   export CARGO_HOME="$HOME/cargo" npm_config_cache="$HOME/npm"
   mkdir -p "$HOME/src"
   cd "$HOME/src"
   tar -xf -
-  npm install --no-audit --no-fund --ignore-scripts </dev/null >&2
+  npm ci --no-audit --no-fund --ignore-scripts=false </dev/null >&2
   npm run build </dev/null >&2
-  if [ -d dist ]; then exec tar --format=ustar -cf - dist; fi
+  if [ -d dist ]; then
+    node -e "$1" "$2" </dev/null >&2
+    exec tar --format=ustar -cf - dist
+  fi
+  """
+
+  # The npm package manifest and the lockfile a tincture build installs
+  # from (`Compendium.Tincture.Rules.lockfile/0` names the same file on the
+  # control plane, which this island does not read).
+  @package_manifest "package.json"
+  @lockfile "package-lock.json"
+
+  # The notices the bundle keeps: every package the lockfile installs for
+  # runtime (not `dev`), its name, version, declared license and the text
+  # of its license and notice files, into `dist/third-party-notices.json`.
+  # A build that ships none writes nothing, and one whose own output
+  # already carries the file keeps its own.
+  @notices "third-party-notices.json"
+  @notices_script ~S"""
+  const fs = require("fs"), path = require("path");
+  const target = path.join("dist", process.argv[1]);
+  const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+  const out = [];
+  for (const [dir, entry] of Object.entries(lock.packages || {})) {
+    if (!dir.startsWith("node_modules/") || entry.dev || entry.link) continue;
+    let names;
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    const notices = names
+      .filter((name) => /^(licen[cs]e|notice|copying)/i.test(name))
+      .sort()
+      .flatMap((name) => {
+        const file = path.join(dir, name);
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.size > 65536) return [];
+        return [{ file: name, text: fs.readFileSync(file, "utf8") }];
+      });
+    const name = entry.name || dir.slice(dir.lastIndexOf("node_modules/") + 13);
+    out.push({ name, version: entry.version, license: entry.license || null, notices });
+  }
+  if (out.length > 0 && !fs.existsSync(target)) {
+    fs.writeFileSync(target, JSON.stringify(out, null, 2) + "\n");
+  }
   """
 
   @typedoc "What a build is asked for: the fields of a wire request the builder builds from."
@@ -235,10 +291,10 @@ defmodule Locus.Builder do
   @doc """
   Return the Cargo.toml content for a given component type.
 
-  Delegates to `Cyfr.CargoToml.template/2` — the canonical
+  Delegates to `Prima.CargoToml.template/2` — the canonical
   template — omitting the `cyfr:oauth` WIT dep from the GENERATED
   Cargo.toml. The build still receives the full catalyst WIT tree
-  (`wit_files/2` includes everything `Compendium.WITSource.files/1`
+  (`wit_files/2` includes everything `Prima.WIT.files/1`
   returns, oauth included — the world imports it, so the files must
   exist); what this omission controls is only which packages the
   generated manifest binds. A user project that uses oauth carries its
@@ -246,7 +302,7 @@ defmodule Locus.Builder do
   WIT deps.
   """
   def cargo_toml_for(type) do
-    Cyfr.CargoToml.template(type, include_oauth_wit: false)
+    Prima.CargoToml.template(type, include_oauth_wit: false)
   end
 
   # ============================================================================
@@ -277,8 +333,17 @@ defmodule Locus.Builder do
   defp required_source(sources, :rust) when not is_map_key(sources, "src/lib.rs"),
     do: {:error, {:malformed, "a rust build needs src/lib.rs among its sources"}}
 
-  defp required_source(sources, :javascript) when not is_map_key(sources, "package.json"),
-    do: {:error, {:malformed, "a javascript build needs package.json among its sources"}}
+  defp required_source(sources, :javascript) when not is_map_key(sources, @package_manifest),
+    do: {:error, {:malformed, "a javascript build needs #{@package_manifest} among its sources"}}
+
+  # A tincture builds only from its lockfile: a build without one would
+  # install whatever the registry answers on the day.
+  defp required_source(sources, :javascript) when not is_map_key(sources, @lockfile),
+    do:
+      {:error,
+       {:malformed,
+        "a javascript build needs #{@lockfile} beside #{@package_manifest}: a tincture " <>
+          "builds only from its lockfile"}}
 
   defp required_source(_sources, _language), do: :ok
 
@@ -295,7 +360,7 @@ defmodule Locus.Builder do
     sources
     |> Map.keys()
     |> Enum.reduce_while(:ok, fn path, :ok ->
-      case Cyfr.PathSafety.validate_relative_path(path) do
+      case Prima.PathSafety.validate_relative_path(path) do
         :ok -> {:cont, :ok}
         {:error, _reason} -> {:halt, malformed({:unsafe_path, path})}
       end
@@ -317,7 +382,7 @@ defmodule Locus.Builder do
 
       {:error, :no_keeper} ->
         {:error,
-         {:unavailable, "cyfr-spawn is not running, and the builder runs a build only under it"}}
+         {:unavailable, "cyfr-keeper is not running, and the builder runs a build only under it"}}
     end
   end
 
@@ -358,10 +423,17 @@ defmodule Locus.Builder do
        %{
          language: :javascript,
          target_type: target_type,
-         argv: ["/bin/sh", "-c", @javascript_script, "locus-build"],
+         argv: [
+           "/bin/sh",
+           "-c",
+           @javascript_script,
+           "locus-build",
+           @notices_script,
+           @notices
+         ],
          archive: archive,
          wasm: nil,
-         announce: "Building tincture (npm install && npm run build)..."
+         announce: "Building tincture (npm ci && npm run build)..."
        }}
     end
   end
@@ -409,7 +481,7 @@ defmodule Locus.Builder do
       {:error, :capacity} ->
         {:error, {:capacity, Locus.Config.max_concurrent()}}
 
-      # The spawner's own reading of the wire: a build ended at its bound,
+      # The keeper client's own reading of the wire: a build ended at its bound,
       # and a bound this deployment cannot enforce.
       {:error, {:memory, _limit_bytes} = refusal} ->
         {:error, refusal}
@@ -424,7 +496,7 @@ defmodule Locus.Builder do
 
       {:error, {:spawn_failed, reason}} ->
         Logger.error("[Locus.Builder] a build could not be run: #{inspect(reason)}")
-        {:error, {:unavailable, "cyfr-spawn could not run the build (#{spawn_failure(reason)})"}}
+        {:error, {:unavailable, "cyfr-keeper could not run the build (#{spawn_failure(reason)})"}}
     end
   end
 
@@ -495,7 +567,7 @@ defmodule Locus.Builder do
   end
 
   defp validate(wasm_bytes, on_progress) do
-    case Compendium.WasmValidator.validate(wasm_bytes) do
+    case Prima.Wasm.validate(wasm_bytes) do
       {:ok, _validation} ->
         :ok
 
@@ -509,7 +581,9 @@ defmodule Locus.Builder do
   end
 
   defp validation_failure(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp validation_failure(reason) when is_tuple(reason), do: inspect(elem(reason, 0))
+
+  defp validation_failure(reason) when is_tuple(reason) and is_atom(elem(reason, 0)),
+    do: Atom.to_string(elem(reason, 0))
 
   defp within_bounds(outputs, on_progress) do
     total = outputs |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))
@@ -585,13 +659,13 @@ defmodule Locus.Builder do
   end
 
   # The WIT definitions are the host ABI, release-embedded
-  # (`Compendium.WITSource`): a build compiles against exactly what the
+  # (`Prima.WIT`): a build compiles against exactly what the
   # running host implements. Sources that carry their own `wit/` use it.
   defp wit_files(sources, target_type) do
     if Enum.any?(Map.keys(sources), &String.starts_with?(&1, "wit/")) do
       {:ok, %{}}
     else
-      case Compendium.WITSource.files(target_type) do
+      case Prima.WIT.files(target_type) do
         [] ->
           {:error, {:unavailable, "this release embeds no WIT for a #{target_type}"}}
 

@@ -4,13 +4,13 @@
 defmodule Cyfr.IdMintingSeamTest do
   @moduledoc """
   Mechanical guard for the one spelling of row-id minting:
-  `Cyfr.UUID7.generate_id("<prefix>")`. Style follows
+  `Prima.UUID7.generate_id("<prefix>")`. Style follows
   `Arca.DbRescueSeamTest`: read the sources, compare literals — a failure
-  means a bare `Cyfr.UUID7.generate()` or `Ecto.UUID.generate()` crept
+  means a bare `Prima.UUID7.generate()` or `Ecto.UUID.generate()` crept
   into a mint site; give the id its prefix instead, so every id in the
   system says what it names.
 
-  Scans cyfr, opus and locus for raw id generation. Only `Cyfr.UUID7`
+  Scans cyfr, opus and locus for raw id generation. Only `Prima.UUID7`
   may call the underlying UUID generator directly.
   """
   use ExUnit.Case, async: true
@@ -19,20 +19,20 @@ defmodule Cyfr.IdMintingSeamTest do
 
   # Bare (unprefixed) generator calls. `generate_id(` never matches: the
   # pattern requires the empty argument list right after `generate`.
-  @bare_pattern ~r/\b(?:Cyfr\.UUID7|Ecto\.UUID)\.generate\(\)/
+  @bare_pattern ~r/\b(?:Prima\.UUID7|Ecto\.UUID)\.generate\(\)/
 
   # Files allowed to keep a bare call, with how many sites and why.
   @allowed %{
     # The generator's own home: `generate_id/1` composes the prefix around
     # the raw UUID; the moduledoc and a doctest show the raw form.
-    "apps/cyfr_contracts/lib/cyfr/uuid7.ex" => 2
+    "apps/prima/lib/prima/uuid7.ex" => 2
   }
 
   test "bare UUID minting exists only at the enumerated exceptions" do
     found =
-      for dir <- Cyfr.Test.SourceTree.app_libs(@root),
-          file <- Cyfr.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
-          count = length(Regex.scan(@bare_pattern, Cyfr.Test.SourceTree.read(file))),
+      for dir <- Prima.Test.SourceTree.app_libs(@root),
+          file <- Prima.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
+          count = length(Regex.scan(@bare_pattern, Prima.Test.SourceTree.read(file))),
           count > 0,
           into: %{} do
         {Path.relative_to(file, @root), count}
@@ -45,12 +45,12 @@ defmodule Cyfr.IdMintingSeamTest do
 
     assert new_sites == [],
            """
-           Bare `Cyfr.UUID7.generate()` / `Ecto.UUID.generate()` outside
+           Bare `Prima.UUID7.generate()` / `Ecto.UUID.generate()` outside
            this test's allowlist:
 
            #{Enum.map_join(Enum.sort(new_sites), "\n", fn {f, n} -> "  #{f} (+#{n})" end)}
 
-           Mint row ids through `Cyfr.UUID7.generate_id("<prefix>")` so
+           Mint row ids through `Prima.UUID7.generate_id("<prefix>")` so
            every id carries the kind it names. Only a site that genuinely
            needs an unprefixed UUID belongs in the allowlist above, with a
            comment saying why.

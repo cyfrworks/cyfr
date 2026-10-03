@@ -6,9 +6,8 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
   alias Sanctum.Tenancy.Athanors
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -110,7 +109,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
       assert second.slug != first.slug
       refute second.slug =~ "--"
-      assert second.slug =~ Cyfr.ComponentRef.personal_slug_regex()
+      assert second.slug =~ Prima.ComponentRef.personal_slug_regex()
     end
 
     test "one person, one personal athanor" do
@@ -208,9 +207,14 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
     test "a settings change is broadcast on the athanor's notify topic" do
       athanor = group!()
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor.id))
+
+      Cyfr.Bus.subscribe(
+        Prima.Actor.in_athanor(athanor.id),
+        Cyfr.Bus.notify(Prima.Actor.in_athanor(athanor.id))
+      )
+
       {:ok, _} = Athanors.put_settings(athanor, %{"theme" => "dark"})
-      assert_receive {:notify, id, :athanor_changed, _}
+      assert_receive %Cyfr.Bus.Notify{athanor_id: id, kind: :athanor_changed}
       assert id == athanor.id
     end
   end
@@ -259,9 +263,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     test "the per-person group cap applies, and a mint that trips it commits nothing" do
       n = System.unique_integer([:positive])
       creator = "u-cap-#{n}"
-      original = Application.get_env(:sanctum, :caps, [])
-      Application.put_env(:sanctum, :caps, max_groups_per_person: 1)
-      on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
+      Cyfr.Test.Settings.put("max_groups_per_person", 1)
 
       assert {:ok, first} = Athanors.create_group(creator, "One #{n}")
 

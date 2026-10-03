@@ -27,6 +27,8 @@ POST /mcp  ──────────────────>  Authenticate
 
 Every CLI command (`cyfr run`, `cyfr profile grant`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
 
+The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, `/_s` and `/_f`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`) and inbound webhooks (`/hooks`); and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
+
 ---
 
 ## Authentication Methods
@@ -46,7 +48,7 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 |------|--------|----------|------------------------|
 | **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
 | **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can read the vault. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server — take a signed-in session instead. |
+| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
@@ -291,7 +293,7 @@ omitted entirely for methods that name no subject.
     ],
     "isError": false,
     "_meta": {
-      "io.modelcontextprotocol/serverInfo": {"name": "CYFR", "version": "0.5.8"}
+      "io.modelcontextprotocol/serverInfo": {"name": "CYFR", "version": "<release>"}
     }
   }
 }
@@ -375,16 +377,26 @@ on the wire.
 | -33001 | `auth_required` | Not authenticated — tool requires login (see [Public Tools](#public-tools-no-auth-required) for exceptions) |
 | -33002 | `auth_invalid` | Invalid API key or token |
 | -33004 | `insufficient_permissions` | Key scope doesn't cover this action, the caller is not a platform admin, or the IP is not in the allowlist |
-| -33100 | `execution_failed` | Component execution failed |
+| -33100 | `internal` | The call failed for a reason the server could not confirm — check before retrying |
+| -33101 | `conflict` | The state moved on — read it again and retry |
+| -33102 | `not_owner` | This server does not currently own its control plane — retry shortly |
+| -33103 | `unavailable` | A service the call needs could not answer — retry shortly |
+| -33104 | `corrupt` | Stored data does not match what was recorded; retrying will not help |
+| -33105 | `timeout` | The call timed out |
+| -33106 | `uncertain` | The call may or may not have taken effect — check before retrying |
 | -33304 | `rate_limited` | Too many requests — back off and retry. Honour `Retry-After` when present |
+| -33305 | `request_cancelled` | The call was cancelled |
 | -33501 | `setup_required` | A dependency needs configuring before this can run ([Readiness and typed errors](#readiness-and-typed-errors)) |
 | -33502 | `consent_required` | The caller has no consent for this component |
 | -33503 | `consent_conflict` | Consent exists but does not cover what was asked |
 | -33504 | `restart_required` | Consent changed under a running execution |
+| -33505 | `confirmation_required` | A sensitive change waits for the person's fresh confirmation and nothing was changed; `error.data.payload.id` is the asking client's own secret for this request — keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation/pending` lists the pending confirmation by its ref, never by that id, and names the client that asked. Once it is confirmed, repeat the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to that id, never as an argument: a repeat before the proof answers the same id and changes nothing, and a value not spelled `cnf_` and 43 base64url characters is refused `-32602` at HTTP 400 ([Readiness and typed errors](#readiness-and-typed-errors)) |
 
 `-33304` is the one to branch on for backoff; the `-335xx` band is the
-remediation vocabulary, whose `error.data` payload is described under
-[Readiness and typed errors](#readiness-and-typed-errors).
+consent signals, whose `error.data` payload is described under
+[Readiness and typed errors](#readiness-and-typed-errors). The `-331xx`
+band answers a `resources/read` by the class of its refusal; a store that
+cannot answer is `-33103`, never a missing resource.
 
 Everything else a tool refuses arrives as a **successful** JSON-RPC response
 whose `result.isError` is `true` and whose content carries the sentence —
@@ -406,8 +418,11 @@ one annotation. It is short:
 
 | Tool | Actions | Why Public |
 |------|---------|------------|
-| `session` | `login`, `logout`, `whoami`, `device_init`, `device_poll` | Needed to authenticate in the first place |
+| `pairing` | `complete` | A new device holds neither a session nor a certificate: the short-lived, single-use pairing code a signed-in person's `pairing.begin` issued names the person and athanor, the device proves its key, and a session cookie the browser holds never chooses the person |
+| `person` | `renew_certificate` | A device paired at another home renews the certificate this home issued it, holding no session here: it proves the device key the certification names over a single-use challenge this home issued, and only a certification still standing under the person's current keys is extended |
+| `session` | `login`, `logout`, `whoami`, `device_init`, `device_poll`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions |
 | `system` | `status` | Health checks |
+| `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace` or group slug, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |
 
 That is the whole list, and it does **not** widen on a server without an
 auth provider: a request with no credential is an unauthenticated context
@@ -416,13 +431,26 @@ either way. In particular `component.search`/`inspect`/`categories`,
 or an API key, and `session.use` — switching which athanor you work in —
 needs one too, since there has to be a session to switch.
 
+MCP resources follow the same rule. `resources/list` and
+`resources/templates/list` are open metadata, but a `resources/read` is
+admitted by the one operation that declares the URI's scheme, through the
+same gate as a tool call: `compendium://` by `component.read_resource`
+(`component_read`), `crucible://` by `execution.read_resource` and `arca://` by
+`resource.read` (both `storage_read`), and `sanctum://identity` and
+`sanctum://permissions` by `session.read_resource`, the one resource read an
+uncredentialed caller may make. A read the gate refuses for authentication
+or permission answers the same `-33001` or `-33004` a tool call gets; a
+missing file answers the JSON-RPC `-32002` resource error; a malformed URI,
+an unknown scheme or a path outside the caller's roots `-32602` (invalid
+params); and any other refusal the code of its class in the table above.
+
 A second tier sits between public and fully authenticated: actions
 annotated `auth: :signed_in` serve a caller holding a live session that
 has not yet claimed a namespace, which is how the first-login flow
 (`registry.probe`, `registry.claim_personal`) completes. Those are not
 public — they need the session — but they do not need a claimed identity.
 
-Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
+Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `decision.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `component.read_resource`, `resource.read`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
 ---
 
@@ -801,8 +829,17 @@ Every MCP tool call is recorded with full input/output, status, and duration. In
 ```bash
 cyfr log list                              # Recent logs
 cyfr log list --tool execution --status error  # Filter by tool and status
-cyfr log get <id>                          # Full details for a specific log entry
-cyfr log correlate <request_id>            # Find related log entries
+cyfr log get <call_id>                     # Full details for a specific log entry
+cyfr log correlate <request_id>            # Find related log entries and decisions
+```
+
+Every call the server admitted or refused is also recorded once as an admission decision under its call ID, with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_grimoire_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via the `decision` tool or `cyfr decision` CLI commands; a platform admin reads every athanor's decisions and the host's own with `--global`:
+
+```bash
+cyfr decision list --admission refused     # Recent refusals
+cyfr decision get <call_id>                # One decision
+cyfr decision correlate <request_id>       # A request's decisions, logs and executions
+cyfr decision list --global --athanor none # The host's own decisions (platform admins)
 ```
 
 ### Concrete Example: User Management
@@ -915,14 +952,16 @@ A vault entry holds credential material — sealed at rest, never returned by an
 | Action | Key args | What it does |
 |--------|----------|--------------|
 | `list` | — | Enumerate entries (names + status, never material) |
+| `status` | — | Each living entry's name, kind, status, created and updated times and whether a consent binds it — never material or a field; on both planes, under no consent class, so a tincture that declares it and an in-chain call may read it |
 | `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields` | Mint an entry with sealed material |
+| `rename` | `id`, `name` | Relabel an entry — a label is unique among the athanor's living entries |
 | `rotate` | `id`, `fields`, `expected_payload_rev` | Replace material, same field schema — CAS-guarded, **no re-consent needed** |
 | `rebind` | `id` + binding fields (`field_names`, `oauth_endpoints`, `oauth_scopes`) | Change what the credential *talks to* — dependent consents stop being ready until re-approved |
 | `authorize` | `id` (re-auth) or `name` + `provider_hint` (+ `oauth_scopes`) | Start a browser OAuth grant; the callback completes it into the entry |
 | `revoke` | `id` | Kill the material; dependent profiles report not-ready |
 | `delete` | `id` | Remove the entry |
 
-Vault mutations require an interactive session — components and guest-plane callers can never reach these verbs.
+Vault mutations require an interactive session — components, tincture frames and guest-plane callers can never reach these verbs; `list` needs a surface that could finish a consent walk. A tincture never takes a secret itself: `cyfr.credential(name)` has the shell prompt the person, and the shell's prompt makes the `create`.
 
 **OAuth is entry-keyed, not component-keyed.** Provider endpoints live on the vault entry (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The component only declares a need of type `oauth:<provider>` with the scopes it requires; at runtime it calls `get_access_token("<provider>")` and receives short-lived, auto-refreshed tokens.
 
@@ -931,40 +970,52 @@ Vault mutations require an interactive session — components and guest-plane ca
 Granting is a three-step walk — nothing is granted outside it:
 
 ```
-plan     {ref}                            → the component's needs + caps ask,
-                                            candidate vault entries, a plan_token
-preview  {decisions, plan_token}          → the exact rendered grant + commit_digest
+plan     {ref}                            → the component's needs + caps ask as
+                                            preview rows, candidate vault
+                                            entries, a plan_token
+preview  {decisions, plan_token}          → the grant as typed rows, the origins
+                                            it admits, commit_digest
 commit   {decisions, plan_token, proof,
           commit_digest,
           expected_consent_revision}      → an immutable consent revision
 ```
 
-`preview` exists so the approval proof binds the exact commit digest that was rendered — a decision changed after approval cannot ride on the old approval. `commit` CAS-checks the head revision, so concurrent grants conflict instead of clobbering. Decisions carry the bindings (`[{need, entry_id, fields, scopes}]`), the scope (`versionless` covers every release of the line — the default; `pinned` names one), and any limit adjustments under the platform ceiling.
+`preview` exists so the approval proof binds the exact commit digest that was rendered — a decision changed after approval cannot ride on the old approval. `commit` CAS-checks the head revision, so concurrent grants conflict instead of clobbering. Decisions carry the bindings (`[{need, entry_id, fields, scopes}]`), the scope (`versionless` covers every release of the line — the default; `pinned` names one), a `subset` that narrows the ask per node and resource kind (exact domains, methods, schemes, private ranges, storage paths and actions, tools, and limits under the ask and the ceiling; a superset is refused), and the `origins` the grant admits.
+
+**The preview is typed rows.** It answers `v`, `rows`, `origins` and `commit_digest` (the `Prima.ConsentPreview` document, whose shape `tests/fixtures/consent_preview.json` pins), beside the `proof` and `expected_consent_revision` a commit presents. Each row is one resource an edge of the grant gives — a credential and its projection, egress, storage, tools, tool servers, limits, and for a tincture its frame capabilities, placement, background permission, streams, cards and system actions — with the node it belongs to and whether a decision narrowed it. Render the rows yourself; there is no prose summary. Explanatory text, such as a need's reason, is shown but not bound, so rewording it invalidates no grant.
+
+**Origins.** Every run carries the origin of the path that admitted it, whatever credential it holds: `interactive` for Prism under a session or a paired device (a tincture's frame and a public tincture's page included), `programmatic` for the HTTP API and MCP, `schedule` for a schedule's fire, `webhook` for a webhook delivery. A child runs under its root's origin. A grant admits the origins its decisions name, and `interactive` alone when they name none; a run under an origin the grant does not name is refused with `consent_required`, so a script, an API key or a schedule runs a component only under a grant that names its origin. `cyfr profile grant <ref> --origin programmatic` names one at grant time; a re-grant keeps the origins the grant had unless `--origin` names others.
 
 | Action | Key args | Returns |
 |--------|----------|---------|
 | `plan` | `ref` | needs, caps ask, candidate vault entries, `plan_token` |
-| `preview` | `decisions` | rendered summary, `commit_digest` |
+| `preview` | `decisions` | `v`, `rows`, `origins`, `commit_digest`, `proof`, `expected_consent_revision` |
 | `commit` | `decisions`, `plan_token`, `proof`, `commit_digest`, `expected_consent_revision` | the new consent revision |
+| `grant` | `profile_id`, `bindings`, `expected_consent_revision` | the new consent revision — binds vault entries to needs on an active owner profile whose component has not changed shape, CAS-checked like `commit`; a moved shape needs the walk again |
+| `publish` | `profile_id`, `need_ids`, `durable_storage` | a `plan_token` for `preview` and `commit` — stages a public profile from an owner profile, keeping credentials only for `need_ids` |
 | `list` | `ref` | profiles + head revisions |
+| `grants` | one of `domain`, `path`, `entry_id` | the athanor's active grants whose resources reach that egress domain, storage path or vault entry, read as the enforcement point admits them: wildcard domains included, a path by prefix, an entry by the revision's vault references, and a narrowed grant only as far as it was narrowed |
 | `revoke` | `profile_id` | revoked — effective on the next run |
 
 Interactive sessions and consent-capable API keys may commit; a key's consent capability comes from its own key row, never from the request.
+
+**Which runs used a grant.** `execution.usage` with a `profile_id` lists the root runs that profile admitted, newest first (`limit`, 20 by default, at most 1,000), each with its origin, its root and its time. A revoked profile's runs still answer, as history; another athanor's profile, or an unknown one, is refused as not found.
 
 ### Readiness and typed errors
 
 `component.setup_plan` answers "can this run?" before you invoke: its `consent` section lists the profile and one row per need (`satisfied` + a human-readable `detail`), and top-level `ready` is true only when the profile is active and every need is bound to a live, digest-matching vault entry.
 
-Four typed errors cross every surface (MCP, CLI, consoles) with normative payloads:
+Five typed errors cross every surface (MCP, HTTP, CLI, consoles) with normative payloads:
 
 | Error | Payload | Meaning / next step |
 |-------|---------|---------------------|
 | `setup_required` | `{profile_id, node_ref, need, reason}` | Names the unbound need — grant a vault entry for it (`profile.plan` / `cyfr profile grant <ref>`) |
-| `consent_required` | `{profile_id, current_revision, shape_diff}` | The component's ask changed since approval — the shape diff shows exactly what; review and re-approve |
+| `consent_required` | `{profile_id, current_revision, shape_diff}` | The grant does not cover this run: the component's ask changed since approval (the shape diff shows exactly what), the grant does not admit the run's origin, or it names a storage path spelled other than the storage door reaches it. Review and grant again |
 | `consent_conflict` | `{expected_revision, actual_revision, cause}` | `stale_plan` → re-run plan; `digest_changed` → re-run preview; `race` → retry commit |
 | `restart_required` | `{profile_id, new_revision, missing}` | A new revision landed under a running execution — restart to pick it up |
+| `confirmation_required` | `{id, operation, expires_at}` | A sensitive change needs the person's fresh confirmation before `expires_at`; nothing was changed, and it is no denial. `id` is the asking client's own secret for this one request: keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation/pending` lists the pending confirmation by its ref, derived one way from `id`, never by `id` itself, and names the client that asked. Over MCP the asking client then repeats the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to `id`, which no request log records; a repeat before the proof answers the same `id` and opens nothing, and a repeat after it completes the change once. The CLI repeats for you on a terminal: it shows the ref and repeats each time you press Enter. A plain HTTP endpoint carries no repeat |
 
-On the MCP wire each arrives as a protocol-level JSON-RPC error — codes `-33501` (`setup_required`), `-33502` (`consent_required`), `-33503` (`consent_conflict`), `-33504` (`restart_required`) — with `error.data` carrying `{"tag": …, "payload": {…}}` and a one-line human summary in `error.message`. Branch on the code (or `data.tag`); the payload is the table above.
+On the MCP wire each arrives as a protocol-level JSON-RPC error — codes `-33501` (`setup_required`), `-33502` (`consent_required`), `-33503` (`consent_conflict`), `-33504` (`restart_required`), `-33505` (`confirmation_required`) — with `error.data` carrying `{"tag": …, "payload": {…}}` and a one-line human summary in `error.message`. A plain HTTP endpoint answers the same `data` beside its `code` and `message`, `confirmation_required` at `428 Precondition Required`. Branch on the code (or `data.tag`); the payload is the table above.
 
 ### What a grant enforces
 
@@ -972,47 +1023,30 @@ The committed consent is the runtime capability — `ask ∩ operator choices �
 
 - **Domains** — exact (`"api.stripe.com"`) or wildcard (`"*.stripe.com"`); deny-by-default. Schemes default to https-only.
 - **Private IPs** — all private/reserved ranges blocked (SSRF prevention) unless the ask carried `egress.private_ips` and the operator approved it. `169.254.0.0/16` (link-local / cloud metadata) is always blocked.
-- **Storage** — granted `storage.paths` (directory prefixes end with `/`, must start with `data/` or `components/`) and `storage.actions`; empty = hard deny.
+- **Addresses** — the engine resolves no name. CYFR resolves each outbound host and pins the address the engine connects to, under the execution's grant (`egress_pin`); `CYFR_PRIVATE_EGRESS_TARGETS` is CYFR's own and never applies to a component. The engine follows no redirect: a component's next request to a `Location` is the redirect's next hop, pinned from the request it came from, and a hop to another scheme or host is refused as `redirect_credentials`, so a request's credentials never cross origins.
+- **Storage** — granted `storage.paths` (directory prefixes end with `/`, must start with `data/` or `components/`) and `storage.actions`; empty = hard deny. A path is spelled as the storage door reaches it: no empty segment (`data//secrets/`), no `.` or `..` segment, and a folder ends in exactly one `/`. A manifest spelling a path otherwise is refused when it is published, and a grant already stored under such a spelling is refused at every run until it is granted again; the server lists those grants at boot and tells each athanor that holds one.
 - **Tools (formulas)** — granted patterns (`"execution.run"`, `"component.*"`, `"*"`) expand to the concrete action list at commit; a tool added to the platform later never widens an existing consent. Discovery via `{"tool": "tools", "action": "list"}`.
 - **Limits** — `timeout`, `rate_limit`, sizes, `max_concurrent_tasks`; the manifest's suggestions as adjusted by the operator, capped by the ceiling. Defaults when unasked: catalyst `"3m"`, formula `"5m"`, reagent `"1m"`, rate limit `{"requests": 100, "window": "1m"}`, memory 64 MB, request 1 MB, response 5 MB.
 
 ---
 
+## Inbound Webhooks
+
+A webhook (`webhook` tool, or the console's Webhooks page) is a `POST /hooks/:slug` a sender signs with HMAC-SHA256. The signature is verified before anything else: an unknown or disabled slug answers 404, a missing or wrong signature 401, and a webhook store that cannot answer 503. A webhook configured with an idempotency key header (GitHub's `X-GitHub-Delivery`, a Stripe event id) runs each delivery once: a request without the header answers 400, a key already seen answers 200 `{"status": "duplicate", "first_seen_at": "..."}` without running the target again, and when the replay store cannot answer the claim the delivery answers 503 `unavailable` and runs nothing, since without the claim nothing proves the delivery has not already run. A delivery that ends non-2xx gives its claim back, so the sender's retry runs as a fresh delivery.
+
+---
+
 ## Tincture Routes
 
-Tinctures are frontend components served by CYFR at dedicated routes. Unlike WASM components (which are called via the `/mcp` endpoint), tinctures are accessed directly via browser URLs.
+Tinctures are browser frontends the Prism shell opens in a sandboxed frame; the [Tincture Guide](tincture-guide.md) is their full reference. Their routes on the one endpoint:
 
-### Private (Authenticated)
+| Route | Serves |
+|-------|--------|
+| `GET /t/:athanor/:publisher/:tincture_name` and `…/*path` | A public tincture's entry page and files, to anyone. A tincture is public when it has an active public consent profile: publish one with `profile.publish`, revoke it with `profile.revoke`, and read the current answer with `tincture_visibility.get` |
+| `GET /_s/:credential/:publisher/:name/:version/*file` | A private tincture version's files, under the asset credential the shell mints for a person; the credential is verified on every request and opens that version's files alone |
+| `POST /_f/v1/invoke`, `/_f/v1/action`, `/_f/v1/stream` | A frame's data requests, made by the SDK with the frame's per-open credential as a bearer, or by a public tincture's page naming itself; each is admitted against the tincture's declaration and recorded like any other call |
 
-Served inside the Prism shell at `/t/:athanor/:publisher/:tincture_name`. Requires Prism session authentication (same as the dashboard).
-
-```
-GET /t/@alice/local/stock-dashboard           → index.html
-GET /t/@alice/local/stock-dashboard/app.js    → static asset
-GET /t/@alice/local/stock-dashboard/style.css → static asset
-```
-
-### Public (Unauthenticated)
-
-Public tinctures use the same `/t/` path — no authentication needed. A tincture is public when it has an active public consent profile: publish one with `profile.publish`, revoke it with `profile.revoke`, and read the current answer with `tincture_visibility.get`.
-
-```
-GET /t/@alice/local/stock-dashboard              → index.html (no auth needed if public)
-GET /t/@alice/local/stock-dashboard/app.js       → static asset
-```
-
-### Security Headers
-
-| Route | CSP Notable Differences |
-|-------|------------------------|
-| `/t/:athanor/:pub/:name` (index) | `script-src 'self' 'nonce-...'` (per-request nonce for auto-injected SDK), `connect-src 'self'` (extended from manifest `tincture.connect`), `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'self'` |
-| `/t/:athanor/:pub/:name/*path` (assets) | `Access-Control-Allow-Origin: *` (CORS for sandboxed iframe module scripts) |
-
-Both surfaces set `X-Content-Type-Options: nosniff`. Static assets include `Cache-Control: public, max-age=3600`. The Cyfr SDK is injected inline into `<head>` with a nonce — no separate `/sdk/` endpoint.
-
-`frame-ancestors 'self'`: tinctures are framed by the Prism shell on the same origin (one endpoint serves both), so nothing else may frame them. The iframe is sandboxed (`allow-scripts` only, no `allow-same-origin`) with a per-request nonce, and private tinctures require a credential a third-party framer cannot obtain.
-
-Sensitive files are never served: `data.db`, `cyfr-manifest.json`, `schema.sql`, dotfiles.
+A path under `/_s/` carries a credential: no proxy in front of CYFR may log `/_s/` paths (the shipped `Caddyfile` keeps no access log). Every tincture response carries `Referrer-Policy: no-referrer`; each HTML page carries the Content Security Policy derived from the tincture's declaration. The guide lists the headers, the frame's policy and the wire's shapes.
 
 ---
 
@@ -1021,53 +1055,29 @@ Sensitive files are never served: `data.db`, `cyfr-manifest.json`, `schema.sql`,
 Tinctures don't have their own database. They get data two ways:
 
 - **Live data** — call your backend components from the browser with `cyfr.invoke()` (see the SDK in the [Tincture Guide](tincture-guide.md)). The component fetches from your real data source server-side and returns the result; credentials and consent are enforced for you.
-- **Static seed data** — ship a `data.db` (or any file) as a static asset in the tincture and read it client-side. It's just another shipped file; CYFR serves it like any other asset.
+- **Static seed data** — ship a JSON file (or any served type) as a static asset in the tincture and read it client-side. It's just another shipped file; CYFR serves it like any other asset.
 
 A typical live-data pipeline:
 
 ```
 1. Catalyst (yfinance)        → fetches stock data from a market API
 2. Formula  (stock-feed)      → calls the catalyst, aggregates results
-3. Tincture (stock-dashboard) → cyfr.invoke("f:local.stock-feed", {symbol: "AAPL"})
+3. Tincture (stock-dashboard) → cyfr.invoke("f:local.stock-feed", "quote", {symbol: "AAPL"})
                                  receives data, renders the chart in the browser
 ```
 
 ---
 
-## Environment Variables Reference
+## Configuration
 
-### Required for Production
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `CYFR_SECRET_KEY_BASE` | Phoenix secret key base (generated during project init) | `<64-byte random base64>` |
-
-### Server
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_HOST` | `localhost` | Hostname for URL generation (not the bind address) |
-| `CYFR_PORT` | `4000` | Server port |
-| `CYFR_BIND_ADDRESS` | `0.0.0.0` | Network bind address for the MCP endpoint |
-| `CYFR_DATABASE_PATH` | `data/cyfr.db` | SQLite database path |
-| `CYFR_DB_POOL_SIZE` | `20` | Database connection pool size |
-| `CYFR_DATA_PATH` | `data` | The one runtime storage root (athanor data and components, caches) |
-| `CYFR_SEED_PATH` | `seed` | Seed tree (component bundle + AQUA template), read in place |
-| `CYFR_BEHIND_PROXY` | — | Set to `true` when behind a TLS-terminating reverse proxy |
-
-### Authentication
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_GITHUB_CLIENT_ID` | — | GitHub OAuth app client ID (for `cyfr login`) |
-| `CYFR_GOOGLE_CLIENT_ID` | — | Google OAuth client ID (alternative sign-in provider) |
-| `CYFR_GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
-| `CYFR_SESSION_TTL_HOURS` | `720` | Session idle timeout in hours (30 days; `0` = never expire) |
-| `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oauth` (GitHub/Google) or `oidc` (federated) |
-| `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails of the server's operators (platform admins). They are always let in and manage the door — the server allowlist (`cyfr admin allow <email\|user_id\|*>`) that decides who else may sign in. Everyone not on either list is refused at sign-in (403). |
-| `CYFR_MAX_ATHANORS`, `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES` | unset (off) | Public-door caps for a server whose allowlist is `*`. Note `CYFR_ATHANOR_STORAGE_BYTES` in particular: unset, an athanor's storage has no total-byte ceiling (each write is still bounded, and files per scope are backstopped) — a server exposed to others sets it deliberately. |
-| `CYFR_MAX_THREADS_PER_ATHANOR` | `1000` | Threads one estate may hold (`0` = off). A thread is a row any member — or any headless client of theirs, via `thread.create` — can mint, each with a follow row of its own, so an estate's count needs a ceiling the way its DMs do. |
-| `CYFR_MAX_PAIRS_PER_PERSON` | `200` | Active DMs one person may hold open (`0` = off). A DM is minted for two and asks nobody else's consent, so the cap is checked for both people; without it one member of a large room could spend `CYFR_MAX_ATHANORS` for everyone by opening a DM with every co-member. |
+Every variable the `cyfr` server reads and every platform setting, each
+with what it sets and its default, is in
+[configuration-guide.md](configuration-guide.md), rendered from the
+server's settings roster; this guide does not repeat them. `.env.example`
+is the starting `.env`, and the execution worker's and the Locus
+services' own settings are in `.env.opus.example` and
+`.env.locus.example`. What follows is what an integrator needs beyond
+the values themselves.
 
 ### Platform admins
 
@@ -1080,7 +1090,7 @@ own athanor past the server caps, and able to run the operator verbs
 (`door.*`, `execution.force_release`)
 — but working inside one athanor at a time like everyone else; there is no
 cross-athanor reach. The **server allowlist** (the door — `cyfr admin allow
-<email|user_id|*>`, `cyfr admin deny …`, or the Settings page) is who else may
+<email|user_id|identifier|*>`, `cyfr admin deny …`, or the Settings page) is who else may
 sign in at all: a match on first sign-in lets them in, no match is a 403, and
 `*` lets in anyone the configured provider authenticates. Groups never open the
 door: adding an unknown email to a group leaves an invitation that activates on
@@ -1108,22 +1118,6 @@ three variables are required when oidc is selected — the server refuses to boo
 otherwise rather than silently degrading to no authentication. The issuer must
 not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 
-| Variable | Description |
-|----------|-------------|
-| `CYFR_OIDC_ISSUER` | OIDC issuer URL (e.g., `https://auth.example.com`) |
-| `CYFR_OIDC_CLIENT_ID` | OIDC client ID |
-| `CYFR_OIDC_CLIENT_SECRET` | OIDC client secret |
-
-### Storage and database
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_STORAGE` | `local` | `local` (filesystem) or `s3`. `s3` requires the `CYFR_S3_*` set |
-| `CYFR_S3_BUCKET` / `CYFR_S3_REGION` | — | Required for S3 |
-| `CYFR_S3_ACCESS_KEY_ID` / `CYFR_S3_SECRET_ACCESS_KEY` | — | Required for S3 |
-| `CYFR_S3_ENDPOINT` / `CYFR_S3_PREFIX` / `CYFR_S3_PATH_STYLE` | — | Optional (MinIO etc.) |
-| `CYFR_DATABASE_URL` | — | Required for a Postgres build (adapter is chosen at build time via `CYFR_DATABASE=postgres`; the published image is SQLite) |
-
 ### Several members on one database (a cell)
 
 One server per database is the default: a second one pointed at the same
@@ -1131,15 +1125,10 @@ database refuses to boot. A **cell** is several control-plane members
 sharing one database, one object store and one set of workers, each
 holding its own slot and taking a peer's work only after that peer's
 lease has run out on the database's clock. `CYFR_CLUSTER=1` turns it on,
-and it boots only with every condition below — each missing one is a
-named refusal at boot.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_CLUSTER` | `false` | Several members share this database as one cell. Needs Postgres, `CYFR_STORAGE=s3`, TLS distribution, `CYFR_CELL_COOKIE`, a topology, `CYFR_WORKER_KEY` and this member's own `CYFR_HOST_API_URL` |
-| `CYFR_CELL_COOKIE` | — | The cookie that bounds this cell: at least 32 characters, the same on every member, and the value each member's BEAM runs under (`RELEASE_COOKIE`, or `-setcookie`). An ambient `~/.erlang.cookie` is the machine's, not the cell's |
-| `CYFR_CLUSTER_NODES` | — | The members, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`) |
-| `CYFR_CLUSTER_DNS_QUERY` / `CYFR_CLUSTER_NODE_BASENAME` | — | The alternative to the list: a headless service to resolve, and the basename each member's node name uses (`<basename>@<address>`) |
+and it boots only with Postgres, `CYFR_STORAGE=s3`, TLS distribution,
+`CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_OPUS_KEY` and
+this member's own `CYFR_HOST_API_URL`; each missing one is a named
+refusal at boot, and the configuration guide says what each one sets.
 
 Distribution must be TLS: start every member with `-proto_dist inet_tls`
 and an `-ssl_dist_optfile` naming its certificate, key and CA. A cell of
@@ -1163,10 +1152,10 @@ What a cell changes for a client and an operator:
   call, a lease renewal included, so one worker service can serve several
   members and a misrouted call is lost loudly rather than answered for
   work the member does not hold. Each member still lists the workers it
-  dispatches to in its own `CYFR_WORKERS`.
+  dispatches to in its own `CYFR_OPUS_WORKERS`.
 - **Stdio MCP servers are not available** in a cell.
-- **Per-member ceilings multiply.** `CYFR_MAX_CONCURRENT_EXECUTIONS`,
-  `CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT` and the per-credential
+- **Per-member ceilings multiply.** `CYFR_CRUCIBLE_MAX_CONCURRENT`,
+  `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT` and the per-credential
   stream cap on `execution.subscribe` and `notifications/listen` are each
   member's, so N members admit N times each. The tenant's durable
   ceilings are rows and hold for the cell: its consented invocation rate,
@@ -1183,17 +1172,15 @@ the host API's URL from `.env`; `.env.opus.example` documents the worker's
 own settings, and [Running a worker outside
 Compose](#running-a-worker-outside-compose) what compose sets for it.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_WORKER_KEY` | — | The root every worker key derives from, 32 random bytes as 64 hex digits (`cyfr init` mints it; by hand, `openssl rand -hex 32`). Only CYFR holds it; without it no worker service can authenticate, so no component runs |
-| `CYFR_WORKERS` | `wrk_local=http://127.0.0.1:4200` | The worker services runs are dispatched to: comma-separated `<service_id>=<url>` entries, tried in order. A service id is `wrk_` followed by 1 to 64 letters, digits, `_` or `-`; the URL is the base URL of the service's listener. Compose sets `wrk_opus=http://opus:4200` |
-| `CYFR_HOST_API_BIND` / `CYFR_HOST_API_PORT` | `127.0.0.1` / `4300` | Where CYFR's host API listens for the workers' host calls and exit reports |
-| `CYFR_HOST_API_URL` | — | The address a worker service reaches *this* member's host API at (`http://cyfr:4300`). Every assignment this member issues carries it, and a worker posts that attempt's host calls there. Unset, the assignment carries no address and the worker uses `OPUS_HOST_URL`; a cell refuses to boot without it |
-| `OPUS_SERVICE_ID` | `wrk_local` (compose: `wrk_opus`) | The worker's service id, the one CYFR lists it under in `CYFR_WORKERS` |
-| `OPUS_SERVICE_KEY` | — | The worker's key, derived from the root for its id: `cyfr init` derives it, and `CYFR_WORKER_KEY=… mix cyfr.worker.key <service_id>` prints it. Required by the `opus` release |
-| `OPUS_HOST_URL` | — | The base URL of CYFR's host API as the worker reaches it (compose: `http://cyfr:4300`). Required by the `opus` release. It is where an attempt's host calls go only when the attempt's assignment names no address of its own; an assignment that names one wins, because it knows which member issued the work |
-| `OPUS_RUNNER_MEMORY_BYTES` | `402653184` (384 MiB) | The memory bound of every runner, 16 MiB to 1 TiB: its VM, every guest's linear memory, its home and the kernel memory charged to it. A runner that reaches it is ended whole and never reused |
-| `OPUS_MEMORY_LIMIT` / `OPUS_CPU_LIMIT` | `4G` / `4` | The `opus` container's limits, read by compose from `.env`: the memory limit holds all eight runner uids at their bound and the service (8 × 384 MiB + 1 GiB) |
+CYFR and its workers speak one versioned wire. Every body and answer
+carries `"v": 1` as its first member and every `x-cyfr-auth` header begins
+with the version token `v1`; a header at another version is refused
+`unknown_version` before its body is read, and a body without `v` or at
+another version is refused `unknown_version` before its operation is read,
+so a worker and a CYFR at different versions refuse each other's work
+rather than misread it. The engine resolves no name: a run's outbound
+address is the one CYFR pins for it under the run's grant (see [What a
+grant enforces](#what-a-grant-enforces)).
 
 ### Builds
 
@@ -1205,11 +1192,18 @@ CYFR builds nothing and refuses every build; with one, or a malformed
 value, it refuses to boot. `.env.locus.example` documents the builder's own
 `LOCUS_BUILDS_*` side.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_LOCUS_BUILDS_URL` | — | The base URL of the builds service's listener (compose: `http://locus-builds:4100`, which `cyfr init` writes). Naming the compose service makes `cyfr up` start it |
-| `CYFR_LOCUS_BUILDS_KEY` | — | The builds key, 32 random bytes as 64 hex digits (`cyfr init` mints it; by hand, `openssl rand -hex 32`); compose hands the same value to the builder as `LOCUS_BUILDS_KEY` |
-| `LOCUS_BUILDS_MEMORY_LIMIT` / `LOCUS_BUILDS_CPU_LIMIT` | `4G` / `2` | The `locus-builds` container's limits, read by compose from `.env`: the memory limit holds `LOCUS_BUILDS_MAX_CONCURRENT` builds at their bound and the service (2 × (1 GiB + 1 GiB)) |
+### Stdio MCP servers
+
+Stdio MCP servers run on the Locus backends service (the `locus-backends`
+compose service), which CYFR reaches over a signed wire; every compose
+deploy starts it. Each backend runs under a pooled uid of its own, started
+by `cyfr-keeper`, with a private home, an environment built only from its
+server's definition and a memory bound of its own; the service keeps no
+state, and CYFR sends each server's definition again when the service
+restarts. With the URL or the key unset CYFR refuses stdio servers; with a
+malformed value it refuses to boot. Stdio servers are not available in a
+cell. `.env.locus.example` documents the service's own `LOCUS_BACKENDS_*`
+side.
 
 ### Running a worker outside Compose
 
@@ -1223,7 +1217,7 @@ hardening the compose file gives the service: `cap_drop`, `cap_add`,
 
 The execution worker takes `OPUS_SERVICE_ID`, `OPUS_SERVICE_KEY` and
 `OPUS_HOST_URL` as `.env.example` documents them, and the two below, which
-compose fixes for its container. CYFR lists the worker in `CYFR_WORKERS`
+compose fixes for its container. CYFR lists the worker in `CYFR_OPUS_WORKERS`
 under its service id at the URL of this listener, and binds
 `CYFR_HOST_API_BIND` to an address the worker reaches at `OPUS_HOST_URL`
 — or, where several members share the worker, at each member's own
@@ -1242,38 +1236,33 @@ listener.
 |----------|---------|-------------|
 | `LOCUS_BUILDS_KEY` | — | The builds key, 64 hex digits: the same value as `CYFR_LOCUS_BUILDS_KEY`. Required: the builder refuses to start without it |
 
+The backends service takes the key compose passes it from `.env`'s
+`CYFR_LOCUS_BACKENDS_KEY`, and runs under the keeper's `backends` pool,
+which compose's `entrypoint:` names (`cyfr-keeper serve --pool
+backends:20001-20032 …`) in place of the image's build pool; CYFR's
+`CYFR_LOCUS_BACKENDS_URL` names the service's listener.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOCUS_BACKENDS_KEY` | — | The backends key, 64 hex digits: the same value as `CYFR_LOCUS_BACKENDS_KEY`. A node with neither this nor `LOCUS_BUILDS_KEY` refuses to start |
+
 ### Docker requirement
 
-The `opus` and `locus-builds` containers hold every runner and every build
-to a memory bound of its own, a cgroup `cyfr-spawn` makes for it. That
-needs **Docker Engine 28 or later on a cgroup v2 host** and the containers'
-`security_opt: writable-cgroups=true`, which the shipped
-`docker-compose.yml` sets and which adds no capability. Without it nothing
-runs unbounded and nothing runs: `opus` starts no runner and logs, naming
-`writable-cgroups=true`, that it cannot bound one, so no component runs;
-and every build is refused as `unavailable`, naming the option.
+The `opus`, `locus-builds` and `locus-backends` containers hold every
+runner, build and backend to a memory bound of its own, a cgroup
+`cyfr-keeper` makes for it. That needs **Docker Engine 28 or later on a
+cgroup v2 host** and the containers' `security_opt: writable-cgroups=true`,
+which the shipped `docker-compose.yml` sets and which adds no capability.
+Without it nothing runs unbounded and nothing runs: `opus` starts no runner
+and logs, naming `writable-cgroups=true`, that it cannot bound one, so no
+component runs; every build is refused as `unavailable`, naming the option;
+and every backend reports the keeper's refusal as its error.
 
-Docker marks either container `OOMKilled` whenever a runner or a build is
-ended at its own bound, though neither the container nor its release was
-touched. Read it as a runner or a build that passed its bound (the
-service's log says which), not as the container running out of memory.
-
-### Registry and signing
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_REGISTRY_URL` | `cyfr.run` | Component registry host the CLI/server publish to and pull from |
-| `CYFR_OCI_REGISTRY_URL` | `registry.<CYFR_REGISTRY_URL>` | OCI registry endpoint for component blobs |
-| `CYFR_COSIGN_KEY` / `CYFR_COSIGN_PASSWORD` | — | Cosign signing key (and its password) used when publishing components |
-
-### Operations
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_MCP_ALLOWED_ORIGINS` | — | Comma-separated origins allowed to call `/mcp` cross-origin (e.g. a PWA hosted on another domain) |
-| `CYFR_LOG_FORMAT` | text | Set to `json` for structured (machine-parseable) logs |
-| `CYFR_OTEL_ENABLED` | `false` | Set to `true` to enable OpenTelemetry distributed tracing |
-| `CYFR_MAX_CONCURRENT_EXECUTIONS` | runtime default | Cap on concurrent component executions |
+Docker marks a container `OOMKilled` whenever a runner, a build or a
+backend is ended at its own bound, though neither the container nor its
+release was touched. Read it as a runner, a build or a backend that passed
+its bound (the service's log says which), not as the container running out
+of memory.
 
 ---
 
@@ -1329,7 +1318,7 @@ React:    cyfr new tincture <name> --template react   → edit src/App.tsx → c
 
 - `cyfr new tincture <name>` scaffolds vanilla HTML/JS/CSS (SDK is auto-injected at serve time)
 - `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (requires `cyfr build compile` before registering)
-- React builds run `npm install && vite build` via Locus — output is static HTML/JS/CSS, no runtime dependency
+- Built tinctures run `npm ci && vite build` via Locus, installing exactly what `package-lock.json` pins — output is static HTML/JS/CSS, no runtime dependency
 - Tinctures invoke backend components via `cyfr.invoke()` — declare dependencies in manifest `dependencies.static`
 - View at `localhost:4000` (Prism → Tinctures tab) or `/t/:athanor/:publisher/:name` if public
 

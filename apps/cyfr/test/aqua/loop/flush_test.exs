@@ -16,6 +16,7 @@ defmodule Aqua.Loop.FlushTest do
 
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap}
 
@@ -31,7 +32,7 @@ defmodule Aqua.Loop.FlushTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "flush_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, test_path)
     Application.put_env(:arca, :seed_path, @seed_root)
@@ -49,7 +50,7 @@ defmodule Aqua.Loop.FlushTest do
     # The loops' work stops before the paths it runs under are restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -83,7 +84,7 @@ defmodule Aqua.Loop.FlushTest do
     allow_keep!(ctx, thread)
     turn = accept_large!(ctx, thread)
 
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
 
     script!([
       round_one(),
@@ -99,9 +100,9 @@ defmodule Aqua.Loop.FlushTest do
     assert :completed = Task.await(run(ctx, turn), 60_000)
 
     # Only the chat step's text streams; the flush and the summary say nothing.
-    assert_receive {:thread, _, {:delta, %{text: "done"}}}, 5_000
-    refute_received {:thread, _, {:delta, %{text: "Keeping a note."}}}
-    refute_received {:thread, _, {:delta, %{text: "the story so far"}}}
+    assert_receive %ThreadEvent{kind: :delta, data: %{text: "done"}}, 5_000
+    refute_received %ThreadEvent{kind: :delta, data: %{text: "Keeping a note."}}
+    refute_received %ThreadEvent{kind: :delta, data: %{text: "the story so far"}}
 
     {:ok, steps} = Tape.steps(ctx, turn)
 
@@ -494,17 +495,34 @@ defmodule Aqua.Loop.FlushTest do
     {:ok, _} = Aqua.Approvals.resolve(ctx, approval.id, %{decision: :declined})
   end
 
+  # A model request is recorded only on a running turn: the steps an
+  # interrupted flush left behind were written while the turn ran, so the
+  # fixture records them on the paused turn as it stood then.
   defp model_step!(ctx, turn, purpose) do
     {:ok, step} =
-      Tape.record_model_intent(ctx, turn, %{
-        idempotency_key: "model:#{turn.id}:#{System.unique_integer([:positive])}",
-        tool: @model,
-        action: "chat",
-        purpose: purpose
-      })
+      as_running(turn, fn ->
+        Tape.record_model_intent(ctx, turn, %{
+          idempotency_key: "model:#{turn.id}:#{System.unique_integer([:positive])}",
+          tool: @model,
+          action: "chat",
+          purpose: purpose
+        })
+      end)
 
     {:ok, step} = Tape.mark_dispatched(ctx, turn, step)
     step
+  end
+
+  defp as_running(%{id: turn_id, status: status}, fun) do
+    import Ecto.Query, only: [from: 2]
+    row = from(t in Arca.Schemas.Turn, where: t.id == ^turn_id)
+    {1, _} = Arca.Repo.update_all(row, set: [status: "running"])
+
+    try do
+      fun.()
+    after
+      {1, _} = Arca.Repo.update_all(row, set: [status: status])
+    end
   end
 
   defp call_attrs(turn, model_step, id, name) do

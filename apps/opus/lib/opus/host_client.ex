@@ -3,42 +3,62 @@
 
 defmodule Opus.HostClient do
   @moduledoc """
-  A runner's client of CYFR's host calls (`Cyfr.HostAPI`), for one
-  execution attempt, over HTTP.
+  A client of CYFR's host calls (`Prima.HostAPI`) for one execution
+  attempt, and the worker service's poster of every host call.
+
+  A runner has no network. Its client sends each call through its relay
+  (`Opus.Relay.Runner`, the `:relay` a client is made with), whose service
+  end (`Opus.Relay`) verifies the call under the attempt's keys and posts
+  it unchanged with `post_call/4`: every host call reaches CYFR from the
+  worker service, never from a runner. The service's own calls for an
+  attempt (the `take_rate` its relay takes before a fetch) are made by a
+  client posting directly (`:host_url`), as are its runner exit reports.
 
   A client names the attempt (its athanor, execution, attempt id, fence,
   generation and worker service), the runner presenting it, the attempt's
   keys CYFR issued with the assignment, and **the member that issued that
   assignment**: its boot id and the base URL of its host API, both read
-  from the assignment (`Cyfr.Assignment`). An attempt has one process, on
+  from the assignment (`Prima.Assignment`). An attempt has one process, on
   that member, so its calls are posted at that member's address and name
   it in every header; a member that is not the one named refuses them,
   and an assignment naming no address is posted to the address this
   worker service is configured with (`Opus.Credentials`), which is the
   whole deployment where only one member issues. Every call is one `POST`
   to the callback's route
-  (`Cyfr.WorkerWire.host_route/1`): its body is the JSON
-  `{"op": name, "args": {...}}` sealed with the attempt's seal key to the
-  call's fields (`Cyfr.WorkerAuth.seal_call/5`), and its `x-cyfr-auth`
-  header is the attempt's call-key signature over those fields — a fresh
-  nonce and the current time among them — and the sealed body
-  (`Cyfr.WorkerAuth.host_call_header/3`). A `200` answer is the JSON
-  `Cyfr.WorkerWire` describes, sealed to the same fields in the answer
-  direction and read up to `Cyfr.HostAPI.max_answer_bytes/0`; any other
-  status is the listener's refusal, and is lost. The attempt's seal key
-  also opens the keys of a child CYFR admits for this client's runner
-  (`admit_child/5`).
+  (`Prima.WorkerWire.host_route/1`): its body is the versioned JSON
+  `{"v": 1, "op": name, "args": {...}}` (`Prima.WorkerWire.request_body/2`)
+  sealed with the attempt's seal key to the call's fields
+  (`Prima.WorkerAuth.seal_call/5`), and its `x-cyfr-auth` header is the
+  attempt's call-key signature over those fields — a fresh nonce and the
+  current time among them — and the sealed body
+  (`Prima.WorkerAuth.host_call_header/3`). A `200` answer is the JSON
+  `Prima.WorkerWire` describes, sealed to the same fields in the answer
+  direction, read up to `Prima.HostAPI.max_answer_bytes/0` and read as an
+  answer of this wire's version (`Prima.WorkerWire.read_answer/1`); an
+  answer without `v`, or at another version, is no answer and is lost.
+  Any other status is the listener's refusal, and is lost, except a
+  refusal naming `unknown_version`: the host speaks another version of the
+  wire, so it is not this engine's host, and the call is answered
+  `{:error, :lost}` at once, which stops the attempt's work, rather than
+  asked again. The attempt's seal key also opens the keys of a child CYFR
+  admits for this client's runner (`admit_child/5`), whose attempt the
+  runner's relay then carries.
 
-  Each function answers as the `Cyfr.HostAPI` callback of the same name.
-  An answer that does not arrive within `Cyfr.HostAPI.request_timeout_ms/1`,
+  Each function answers as the `Prima.HostAPI` callback of the same name.
+  An answer that does not arrive within `Prima.HostAPI.request_timeout_ms/1`,
   or cannot be read, is lost, and what the client does then is the
-  callback's retry class (`Cyfr.HostAPI.retry/1`): an `:idempotent`,
+  callback's retry class (`Prima.HostAPI.retry/1`): an `:idempotent`,
   `:outcome`, `:batch` or `:keyed` call is made once more — the same body
   under a fresh header, so a `push_deltas` batch goes again as the same
   batch and an `admit_child` under the same `child_key` — and a `:never`
   call ends `{:error, {:uncertain, sentence}}`, since its effect may have
   happened. A second loss is `{:error, :lost}`. CYFR's own answers, `lost`
   included, are never retried: they are answers.
+
+  `egress_pin/3` asks CYFR for the address a guest's outbound URL may be
+  reached at (`c:Prima.HostAPI.egress_pin/3`): the engine resolves no name
+  itself, and connects to the address the answer names
+  (`Opus.Egress.pin/3`).
 
   One call reaches CYFR beside a runner's: `runner_exited/4`, a worker
   service's report that one of its runners exited, a plain JSON body
@@ -51,9 +71,11 @@ defmodule Opus.HostClient do
 
   require Logger
 
-  alias Cyfr.{Assignment, BoundedBody, HostAPI, WorkerAuth, WorkerWire}
+  alias Prima.{Assignment, BoundedBody, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
 
   @derive {Inspect, except: [:call_key, :seal_key]}
+  # A client posts through a runner's relay (`relay`) or directly to the
+  # member's address (`host_url`), never both.
   @enforce_keys [
     :athanor_id,
     :execution_id,
@@ -68,7 +90,7 @@ defmodule Opus.HostClient do
     :seal_key,
     :host_url
   ]
-  defstruct @enforce_keys
+  defstruct @enforce_keys ++ [relay: nil]
 
   @type t :: %__MODULE__{
           athanor_id: String.t(),
@@ -82,7 +104,8 @@ defmodule Opus.HostClient do
           member: String.t(),
           call_key: binary(),
           seal_key: binary(),
-          host_url: String.t()
+          host_url: String.t() | nil,
+          relay: GenServer.server() | nil
         }
 
   @typedoc """
@@ -107,35 +130,46 @@ defmodule Opus.HostClient do
     "replayed" => :replayed,
     "malformed" => :malformed,
     "bad_mac" => :bad_mac,
-    "unknown_version" => :unknown_version,
     "claim_expired" => :claim_expired,
     "not_found" => :not_found
   }
 
+  # The refusals only an `egress_pin` answer names.
+  @pin_refusals Map.new(PinnedTarget.refusals(), &{Atom.to_string(&1), &1})
+
   @uncertain "The call's answer was lost and its effect is unknown"
 
   @doc """
-  A client for the attempt `keys` name (`t:Cyfr.WorkerAuth.attempt_keys/0`),
-  signing with its call key and posting to the member `at` names: its
-  `member` boot id, which every header presents, and the `host_url` its
-  host API answers at. `runner` names the runner presenting the calls (a
-  fresh runner id is minted when it is nil) and `boot` the worker service
-  boot it presents from.
+  A client for the attempt `keys` name (`t:Prima.WorkerAuth.attempt_keys/0`),
+  signing with its call key, addressed to the member `at` names: its
+  `member` boot id, which every header presents, and either the `relay`
+  a runner sends its calls through (`Opus.Relay.Runner`) or the
+  `host_url` the worker service posts to. `runner` names the runner
+  presenting the calls (a fresh runner id is minted when it is nil) and
+  `boot` the worker service boot it presents from.
   """
   @spec new(
-          Cyfr.WorkerAuth.attempt_keys(),
+          Prima.WorkerAuth.attempt_keys(),
           String.t() | nil,
           String.t(),
           %{member: String.t(), host_url: String.t()}
+          | %{member: String.t(), relay: GenServer.server()}
         ) :: t()
-  def new(
-        %{attempt: attempt, call: call_key, seal: seal_key},
-        runner,
-        boot,
-        %{member: member, host_url: host_url}
-      )
-      when is_map(attempt) and is_binary(call_key) and is_binary(seal_key) and is_binary(boot) and
-             is_binary(member) and is_binary(host_url) do
+  def new(keys, runner, boot, %{member: member, relay: relay}) when relay != nil,
+    do: build(keys, runner, boot, member, {nil, relay})
+
+  def new(keys, runner, boot, %{member: member, host_url: host_url}) when is_binary(host_url),
+    do: build(keys, runner, boot, member, {host_url, nil})
+
+  defp build(
+         %{attempt: attempt, call: call_key, seal: seal_key},
+         runner,
+         boot,
+         member,
+         {url, relay}
+       )
+       when is_map(attempt) and is_binary(call_key) and is_binary(seal_key) and is_binary(boot) and
+              is_binary(member) do
     %__MODULE__{
       athanor_id: Map.fetch!(attempt, :athanor_id),
       execution_id: Map.fetch!(attempt, :execution_id),
@@ -144,11 +178,12 @@ defmodule Opus.HostClient do
       generation: Map.fetch!(attempt, :generation),
       service: Map.fetch!(attempt, :service),
       boot: boot,
-      runner: runner || Cyfr.UUID7.generate_id("runner"),
+      runner: runner || Prima.UUID7.generate_id("runner"),
       member: member,
       call_key: call_key,
       seal_key: seal_key,
-      host_url: host_url
+      host_url: url,
+      relay: relay
     }
   end
 
@@ -171,7 +206,7 @@ defmodule Opus.HostClient do
 
   @doc "Renew the leases of `attempts`, answering each one's renewal by attempt id."
   @spec renew(t(), [String.t()]) ::
-          {:ok, %{optional(String.t()) => Cyfr.HostAPI.renewal()}} | {:error, term()}
+          {:ok, %{optional(String.t()) => Prima.HostAPI.renewal()}} | {:error, term()}
   def renew(%__MODULE__{} = client, attempts) when is_list(attempts) do
     with {:ok, %{} = renewals} <- request(client, :renew, %{"attempts" => attempts}) do
       {:ok, Map.new(renewals, fn {attempt, renewal} -> {attempt, renewal(renewal)} end)}
@@ -249,7 +284,7 @@ defmodule Opus.HostClient do
   (`"path"`, and `"content"` for a write or append), answering the
   success answer's members.
   """
-  @spec storage(t(), Cyfr.HostAPI.storage_op(), map()) :: {:ok, map()} | {:error, term()}
+  @spec storage(t(), Prima.HostAPI.storage_op(), map()) :: {:ok, map()} | {:error, term()}
   def storage(%__MODULE__{} = client, op, args)
       when op in [:read, :write, :append, :list, :delete, :exists] and is_map(args) do
     case request(client, :storage, Map.put(args, "action", Atom.to_string(op))) do
@@ -276,7 +311,7 @@ defmodule Opus.HostClient do
   Record a refusal the runner made for the attempt's component: one of its
   own egress checks, by its WIT error `type` and `message`, or
   `secret_denied` with the vault field name the guest was refused
-  (`Cyfr.HostAPI.valid_field_name?/1`), which CYFR audits for this attempt.
+  (`Prima.HostAPI.valid_field_name?/1`), which CYFR audits for this attempt.
   """
   @spec record_denial(t(), String.t(), String.t()) :: :ok | {:error, term()}
   def record_denial(%__MODULE__{} = client, type, message)
@@ -293,12 +328,12 @@ defmodule Opus.HostClient do
   named `need`, with `input`, made with `guest_fn` (`:call` or `:spawn`).
   CYFR admits it under the authority it holds for this attempt and claims
   it for this client's runner, under a `child_key` this client mints
-  (`t:Cyfr.HostAPI.child_key/0`), so a lost answer is asked again for the
+  (`t:Prima.HostAPI.child_key/0`), so a lost answer is asked again for the
   same child. Answers the child to run (`t:child/0`), once its keys open
   under this attempt's seal key as the attempt its assignment names on
   this client's worker service, and its input hashes to the assignment's
   digest. A refusal of the child is `{:error, guest_error}`
-  (`t:Cyfr.HostAPI.guest_error/0`).
+  (`t:Prima.HostAPI.guest_error/0`).
   """
   @spec admit_child(t(), String.t(), term(), map(), :call | :spawn) ::
           {:ok, child()} | {:error, term()}
@@ -323,8 +358,9 @@ defmodule Opus.HostClient do
          {:ok, assignment} <- Assignment.read(token) do
       with {:ok, keys} <- WorkerAuth.open_attempt_keys(client.seal_key, sealed),
            true <- names_attempt?(assignment, keys.attempt, client),
-           true <- Cyfr.Digest.sha256(input_json) == assignment.input_digest,
-           {:ok, %{} = admitted_input} <- Jason.decode(input_json) do
+           true <- Prima.Digest.sha256(input_json) == assignment.input_digest,
+           {:ok, %{} = admitted_input} <- Jason.decode(input_json),
+           :ok <- carried(client, assignment.attempt) do
         {:ok,
          %{
            token: token,
@@ -378,6 +414,40 @@ defmodule Opus.HostClient do
   end
 
   @doc """
+  Pin the address the attempt's guest may reach `url` at, for one request
+  of the `:purpose` `opts` names (`:fetch`, `:stream` or `:redirect`,
+  default `:fetch`), naming for a redirect the id of the pin the
+  redirecting answer came from (`:from`). Answers the pin CYFR validated
+  (`Prima.PinnedTarget`), a refusal it names
+  (`Prima.PinnedTarget.refusals/0`, each already recorded by CYFR as a
+  denial of the attempt), or `{:error, :lost | :unavailable}`. A request
+  `Prima.PinnedTarget.request_args/3` refuses is `{:error, :malformed}`
+  without a call. The call is idempotent: a lost answer is asked once
+  more.
+  """
+  @spec egress_pin(t(), String.t(), keyword()) :: {:ok, PinnedTarget.t()} | {:error, term()}
+  def egress_pin(%__MODULE__{} = client, url, opts \\ []) when is_binary(url) and is_list(opts) do
+    purpose = Keyword.get(opts, :purpose, :fetch)
+
+    with {:ok, args} <- pin_args(url, purpose, Keyword.get(opts, :from)),
+         {:ok, wire} <- request(client, :egress_pin, args) do
+      case PinnedTarget.read(wire) do
+        {:ok, pin} -> {:ok, pin}
+        :error -> {:error, :lost}
+      end
+    end
+  end
+
+  defp pin_args(url, purpose, from) when purpose in [:fetch, :stream, :redirect] do
+    case PinnedTarget.request_args(url, purpose, from) do
+      {:ok, args} -> {:ok, args}
+      :error -> {:error, :malformed}
+    end
+  end
+
+  defp pin_args(_url, _purpose, _from), do: {:error, :malformed}
+
+  @doc """
   Report, for the worker service `credentials` name on its boot `boot`,
   that its runner `runner` exited while it held `attempts`. Every attempt
   one runner holds was issued by one member, so the report names that
@@ -415,7 +485,7 @@ defmodule Opus.HostClient do
            do: {:ok, header, body, &{:ok, &1}}
     end
 
-    case call(at.host_url, :runner_exited, try) do
+    case call({:http, at.host_url}, :runner_exited, try) do
       {:ok, true} -> :ok
       {:ok, _other} -> {:error, :lost}
       {:error, reason} -> {:error, reason}
@@ -436,15 +506,23 @@ defmodule Opus.HostClient do
       end
     end
 
-    call(client.host_url, op, try)
+    call(via(client), op, try)
   end
+
+  defp via(%__MODULE__{relay: nil, host_url: host_url}), do: {:http, host_url}
+  defp via(%__MODULE__{relay: relay, attempt: attempt}), do: {:relay, relay, attempt}
+
+  # A child's attempt is carried on the runner's relay before its first
+  # call; a client posting directly has no relay to tell.
+  defp carried(%__MODULE__{relay: nil}, _attempt), do: :ok
+  defp carried(%__MODULE__{relay: relay}, attempt), do: Opus.Relay.Runner.admit(relay, attempt)
 
   # One call: sealed and signed afresh for each try (`try` answers the
   # header, the body and how to read the answer), retried once after a
   # lost answer when its class allows, never on an answer CYFR gave.
-  defp call(host_url, op, try) do
+  defp call(via, op, try) do
     answer =
-      case post(host_url, op, try) do
+      case post(via, op, try) do
         {:ok, answer} ->
           answer
 
@@ -457,7 +535,7 @@ defmodule Opus.HostClient do
             _retried ->
               Logger.warning("[Opus.HostClient] #{op}'s answer was lost; calling once more")
 
-              case post(host_url, op, try) do
+              case post(via, op, try) do
                 {:ok, answer} -> answer
                 :lost -> {:error, :lost}
               end
@@ -476,25 +554,76 @@ defmodule Opus.HostClient do
     answer
   end
 
-  defp post(host_url, op, try) do
+  defp post(via, op, try) do
     with {:ok, header, body, read} <- try.(),
-         {:ok, raw} <- transport(host_url <> WorkerWire.host_route(op), header, body, op),
+         {:ok, raw} <- transport(via, op, header, body),
          {:ok, json} <- read.(raw) do
-      answer(json)
+      answer(json, op)
     else
+      {:refused, raw} -> refused(raw, op)
       _ -> :lost
     end
   end
 
-  # The bytes of a `200` answer, or `:error` for anything else: a refusal
-  # by status, a transport failure, an answer past the bound or later than
-  # the callback's timeout. No answer body is logged.
-  defp transport(url, header, body, op) do
+  # A refusal by status is lost, unless it says the host speaks another
+  # version of the wire: such a host refuses every call this engine makes,
+  # so the call is answered as the refusal that stops the attempt's work
+  # instead of being asked again. The refusal is plain, since a listener
+  # that cannot read the header cannot seal to it, and is read whatever
+  # version it carries, since it is the other version's answer.
+  defp refused(raw, op) do
+    case Jason.decode(raw) do
+      {:ok, %{"error" => "unknown_version"}} -> other_version(op)
+      _ -> :lost
+    end
+  end
+
+  defp other_version(op) do
+    Logger.warning(
+      "[Opus.HostClient] #{op} was refused: the host speaks another version of the wire"
+    )
+
+    {:ok, {:error, :lost}}
+  end
+
+  # The bytes of a `200` answer, `{:refused, bytes}` for the body of any
+  # other status, or `:error` for a transport failure, an answer past the
+  # bound or later than the callback's timeout, whether the worker service
+  # posted it for a runner's relay or itself. No answer body is logged.
+  defp transport(via, op, header, body) do
+    sent =
+      case via do
+        {:http, host_url} ->
+          post_call(host_url, op, header, body)
+
+        {:relay, relay, attempt} ->
+          Opus.Relay.Runner.call(relay, attempt, op, header, body, HostAPI.request_timeout_ms(op))
+      end
+
+    case sent do
+      {:ok, 200, raw} -> {:ok, raw}
+      {:ok, status, raw} when is_integer(status) -> {:refused, raw}
+      _lost -> :error
+    end
+  end
+
+  @doc """
+  Post one host call of `op`, its signed `header` and its `body`, to the
+  host API at `host_url`, once: CYFR's status and the answer's bytes, read
+  up to `Prima.HostAPI.max_answer_bytes/0`, or `:error` for a transport
+  failure, an answer past the bound or later than the callback's timeout.
+  The worker service posts every host call with it, its runners' as their
+  relay hands them over and its own.
+  """
+  @spec post_call(String.t(), atom(), String.t(), binary()) ::
+          {:ok, 100..599, binary()} | :error
+  def post_call(host_url, op, header, body)
+      when is_binary(host_url) and is_binary(header) and is_binary(body) do
     max = HostAPI.max_answer_bytes()
 
     request = [
       method: :post,
-      url: url,
+      url: host_url <> WorkerWire.host_route(op),
       headers: [{WorkerWire.auth_header(), header}, {"content-type", "application/json"}],
       body: body,
       receive_timeout: HostAPI.request_timeout_ms(op),
@@ -506,11 +635,15 @@ defmodule Opus.HostClient do
       into: BoundedBody.collector(max)
     ]
 
-    with {:ok, %Req.Response{status: 200} = response} <- Req.request(request),
-         {:ok, raw} <- BoundedBody.read(response, max) do
-      {:ok, raw}
-    else
-      _ -> :error
+    case Req.request(request) do
+      {:ok, %Req.Response{status: status} = response} ->
+        case BoundedBody.read(response, max) do
+          {:ok, raw} -> {:ok, status, raw}
+          _ -> :error
+        end
+
+      _ ->
+        :error
     end
   end
 
@@ -530,19 +663,25 @@ defmodule Opus.HostClient do
     }
   end
 
-  defp at(%__MODULE__{} = client), do: %{member: client.member, host_url: client.host_url}
+  defp at(%__MODULE__{relay: nil} = client),
+    do: %{member: client.member, host_url: client.host_url}
+
+  defp at(%__MODULE__{} = client), do: %{member: client.member, relay: client.relay}
 
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 
   # A child's assignment must name the attempt its keys open as, on this
   # client's worker service and boot, and be issued by the member its
   # parent's is: a child is admitted through the parent's host call, so a
-  # child of another member's is a child this runner cannot reach.
+  # child of another member's is a child this runner cannot reach. A
+  # runner's client knows no address: its relay's service end holds the
+  # child's to its parent's.
   defp names_attempt?(%Assignment{} = assignment, attempt, %__MODULE__{} = client) do
     Map.take(assignment, @attempt_fields) == Map.take(attempt, @attempt_fields) and
       assignment.service == client.service and assignment.boot == client.boot and
       attempt.service == client.service and assignment.member == client.member and
-      (assignment.host_url == nil or assignment.host_url == client.host_url)
+      (assignment.host_url == nil or client.host_url == nil or
+         assignment.host_url == client.host_url)
   end
 
   defp outcome(client, status, fields) do
@@ -554,24 +693,38 @@ defmodule Opus.HostClient do
     })
   end
 
-  # An answer CYFR gave, or `:lost` for bytes that are not one.
-  defp answer(json) do
+  # An answer CYFR gave to `op`, or `:lost` for bytes that are not one at
+  # this wire's version (`Prima.WorkerWire.read_answer/1`).
+  defp answer(json, op) do
     case Jason.decode(json) do
-      {:ok, %{"ok" => value}} ->
+      {:ok, decoded} -> read_answer(decoded, op)
+      {:error, _} -> :lost
+    end
+  end
+
+  defp read_answer(decoded, op) do
+    case WorkerWire.read_answer(decoded) do
+      {:ok, value} ->
         {:ok, {:ok, value}}
 
-      {:ok, %{"error" => "setup_required", "payload" => %{} = payload}} ->
+      {:error, "setup_required", %{"payload" => %{} = payload}} ->
         {:ok, {:error, {:setup_required, payload}}}
 
-      {:ok, %{"error" => "guest_error", "type" => type, "message" => message} = refusal}
+      {:error, "guest_error", %{"type" => type, "message" => message} = fields}
       when is_binary(type) and is_binary(message) ->
-        {:ok, guest_error(refusal, type, message)}
+        {:ok, guest_error(fields, type, message)}
 
-      {:ok, %{"error" => "failed", "message" => message}} when is_binary(message) ->
+      {:error, "failed", %{"message" => message}} when is_binary(message) ->
         {:ok, {:error, {:failed, message}}}
 
-      {:ok, %{"error" => refusal}} when is_map_key(@refusals, refusal) ->
+      {:error, "unknown_version", _fields} ->
+        other_version(op)
+
+      {:error, refusal, _fields} when is_map_key(@refusals, refusal) ->
         {:ok, {:error, Map.fetch!(@refusals, refusal)}}
+
+      {:error, refusal, _fields} when op == :egress_pin and is_map_key(@pin_refusals, refusal) ->
+        {:ok, {:error, Map.fetch!(@pin_refusals, refusal)}}
 
       _ ->
         :lost
@@ -581,7 +734,7 @@ defmodule Opus.HostClient do
   defp guest_error(%{"remediation" => %{} = remediation}, type, message),
     do: {:error, {:guest_error, type, message, remediation}}
 
-  defp guest_error(_refusal, type, message), do: {:error, {:guest_error, type, message}}
+  defp guest_error(_fields, type, message), do: {:error, {:guest_error, type, message}}
 
   defp renewal(%{"lease_until" => until}) when is_integer(until), do: {:ok, until}
   defp renewal(_lost), do: :lost

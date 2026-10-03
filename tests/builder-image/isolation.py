@@ -3,9 +3,9 @@
 # Copyright 2026 CYFR Works Inc.
 """The builder image isolates its builds, run as docker-compose.yml's locus-builds service.
 
-- cyfr-spawn holds exactly SETUID, SETGID and KILL; the release runs as
-  cyfr-builder with no capability and no Erlang distribution listener; the
-  release refuses to serve builds when started without cyfr-spawn, and to
+- cyfr-keeper holds exactly SETUID, SETGID and KILL; the release runs as
+  locus with no capability and no Erlang distribution listener; the
+  release refuses to serve builds when started without cyfr-keeper, and to
   start at all with a control-plane variable in its environment.
 - A build runs under a pooled uid, alone in its group, in a 0700 home,
   with none of the release's environment; it cannot read the release's
@@ -19,7 +19,7 @@
   in the home root, a directory tree it made unwritable, System V shared
   memory, semaphores and message queues, a POSIX message queue) is gone
   before the next build runs under the same uid; /tmp, /var/tmp, /dev/shm,
-  /run and /run/cyfr-builder are not writable to it.
+  /run and /run/locus are not writable to it.
 - Started without the `writable-cgroups=true` security option, as a
   deployment that lacks it would be, the service answers every build
   `unavailable`, naming the option, and runs nothing: no build is ever run
@@ -44,9 +44,9 @@ from stack import (  # noqa: E402
     expect, output_file, run, tincture,
 )
 
-SPAWNER_CAPS = "00000000000000e0"
-TAG = "cyfr-builder-residue"
-SHARED = [f"/tmp/{TAG}", f"/var/tmp/{TAG}", f"/dev/shm/{TAG}", f"/run/{TAG}", f"/run/cyfr-builder/{TAG}"]
+KEEPER_CAPS = "00000000000000e0"
+TAG = "locus-builds-residue"
+SHARED = [f"/tmp/{TAG}", f"/var/tmp/{TAG}", f"/dev/shm/{TAG}", f"/run/{TAG}", f"/run/locus/{TAG}"]
 LEFT = [f"{HOME_ROOT}/{TAG}", f"{HOME_ROOT}/{TAG}-tree/"]
 
 PROBE = r"""
@@ -54,6 +54,7 @@ set -u
 mkdir -p dist
 {
   echo "uid=$(id -u)"
+  echo "user=$(id -un)"
   echo "gid=$(id -g)"
   echo "groups=$(id -G)"
   echo "home=$HOME"
@@ -133,18 +134,23 @@ impl Guest for Daemon {
 """
 
 
+def pool_user(uid):
+    """The name the image gives a build uid: uid 30000+N is locus-buildNN (Dockerfile.locus)."""
+    return f"locus-build{uid - 30000:02d}"
+
+
 def fields(text):
     return dict(line.split("=", 1) for line in (text or "").splitlines() if "=" in line)
 
 
 def test_process_model(stack, image):
     procs = stack.processes()
-    spawner = [p for p in procs if p["cmd"].startswith("cyfr-spawn serve")]
+    keeper = [p for p in procs if p["cmd"].startswith("cyfr-keeper serve")]
     release = [p for p in procs if "beam.smp" in p["cmd"]]
-    expect(len(spawner) == 1 and spawner[0]["uids"] == [0, 0, 0, 0] and spawner[0]["cap_eff"] == SPAWNER_CAPS,
-           "cyfr-spawn runs as root holding exactly SETUID, SETGID and KILL", procs)
+    expect(len(keeper) == 1 and keeper[0]["uids"] == [0, 0, 0, 0] and keeper[0]["cap_eff"] == KEEPER_CAPS,
+           "cyfr-keeper runs as root holding exactly SETUID, SETGID and KILL", procs)
     expect(len(release) == 1 and release[0]["uids"] == [RELEASE_UID] * 4 and release[0]["cap_eff"] == "0000000000000000",
-           "the release runs as cyfr-builder with no capability", procs)
+           "the release runs as locus with no capability", procs)
     expect(not any("epmd" in p["cmd"] for p in procs) and "-sname" not in release[0]["cmd"] and " -name " not in release[0]["cmd"],
            "the release starts no Erlang distribution", release)
     # Docker's embedded DNS resolver listens on 127.0.0.11 (0B00007F) in every
@@ -154,12 +160,12 @@ def test_process_model(stack, image):
     expect(ports == [4100], "besides Docker's resolver, the builder's only listening TCP port is 4100", listening)
 
     def start_alone(name, *env):
-        return run("docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}cyfr-builder-isolation-{name}-{os.getpid()}",
+        return run("docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}locus-builds-isolation-{name}-{os.getpid()}",
                    "-e", f"LOCUS_BUILDS_KEY={stack.key}", *env, "--entrypoint", RELEASE_BIN, image, "start", check=False, timeout=120)
 
     refused = start_alone("alone")
-    expect(refused.returncode != 0 and "runs a build only through cyfr-spawn" in refused.stdout + refused.stderr,
-           "the release refuses to serve builds when started without cyfr-spawn", refused.stdout + refused.stderr)
+    expect(refused.returncode != 0 and "only through cyfr-keeper" in refused.stdout + refused.stderr,
+           "the release refuses to serve builds when started without cyfr-keeper", refused.stdout + refused.stderr)
     refused = start_alone("keyring", "-e", "CYFR_CRYPTO_KEYRING=not-a-builders")
     expect(refused.returncode != 0 and "must not see CYFR_CRYPTO_KEYRING" in refused.stdout + refused.stderr
            and "not-a-builders" not in refused.stdout + refused.stderr,
@@ -173,6 +179,7 @@ def test_build_identity(stack):
     uid = int(who["uid"])
     expect(POOL_FIRST <= uid <= POOL_LAST and who["gid"] == str(uid) and who["groups"] == str(uid),
            "a build runs under a pooled uid, alone in its group", who)
+    expect(who["user"] == pool_user(uid), f"the build's uid is the image's {pool_user(uid)}", who)
     expect(re.fullmatch(rf"{HOME_ROOT}/{uid}-[0-9a-f]{{32}}", who["home"]) and who["home_mode"] == "700"
            and who["tmpdir"] == who["home"] + "/tmp" and who["caps"] == "0000000000000000",
            "its home is a 0700 directory of its own, TMPDIR is inside it and it holds no capability", who)
@@ -235,7 +242,7 @@ def test_residue(stack):
     expect(planted["uid"] == POOL_FIRST, "the first build runs under the pool's one uid", planted)
     expect(planted["files"] == {
         f"/tmp/{TAG}": "EROFS", f"/var/tmp/{TAG}": "EROFS", f"/dev/shm/{TAG}": "ENOENT", f"/run/{TAG}": "EROFS",
-        f"/run/cyfr-builder/{TAG}": "EACCES", f"{HOME_ROOT}/{TAG}": "ok", f"{HOME_ROOT}/{TAG}-tree/": "ok",
+        f"/run/locus/{TAG}": "EACCES", f"{HOME_ROOT}/{TAG}": "ok", f"{HOME_ROOT}/{TAG}-tree/": "ok",
     }, "outside its home a build can write only into the home root", planted)
     expect(all(planted[kind] == "ok" for kind in ("shm", "sem", "msg", "mqueue")),
            "a build can create System V IPC objects and a POSIX message queue", planted)
@@ -247,7 +254,7 @@ def test_residue(stack):
     expect(probed["uid"] == POOL_FIRST, "the second build runs under the same uid", probed)
     expect(probed["files"] == {
         f"/tmp/{TAG}": "absent", f"/var/tmp/{TAG}": "absent", f"/dev/shm/{TAG}": "absent", f"/run/{TAG}": "absent",
-        f"/run/cyfr-builder/{TAG}": "denied", f"{HOME_ROOT}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}-tree/": "absent",
+        f"/run/locus/{TAG}": "denied", f"{HOME_ROOT}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}-tree/": "absent",
     } and all(probed[kind] == "absent" for kind in ("shm", "sem", "msg", "mqueue")),
         "nothing the first build left reaches the second", probed)
     sysvipc = stack.exec("cat /proc/sysvipc/shm /proc/sysvipc/sem /proc/sysvipc/msg; ls -A /dev/mqueue").stdout
@@ -274,7 +281,7 @@ def test_no_bound_no_build(stack):
 
 def main(image):
     canary = build_canary()
-    stack = Stack("cyfr-builder-isolation", image, canary)
+    stack = Stack("locus-builds-isolation", image, canary)
     try:
         stack.up()
         test_process_model(stack, image)

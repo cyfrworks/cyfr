@@ -21,9 +21,8 @@ defmodule Sanctum.ProvisioningClosureTest do
   @repo_root Path.expand("../../../..", __DIR__)
   @bundle Path.join(@repo_root, "seed/components")
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_closure_#{System.unique_integer([:positive])}")
     seed_dir = Path.join(test_dir, "seed")
@@ -67,6 +66,7 @@ defmodule Sanctum.ProvisioningClosureTest do
           auth_method: :oidc,
           authenticated: true
         )
+        |> Sanctum.TestContext.via(:prism)
 
       assert {:ok, group} = Athanors.create_group(ctx.user_id, "Offline #{n}")
       in_group = %{ctx | athanor_id: group.id}
@@ -75,11 +75,11 @@ defmodule Sanctum.ProvisioningClosureTest do
       {:ok, group} = Athanors.get(group.id)
 
       assert %DateTime{} = group.provisioned_at,
-             "the estate did not provision: #{inspect(Athanors.settings(group))}"
+             "the athanor did not provision: #{inspect(Athanors.settings(group))}"
 
       refute Athanors.provisioning_failure(group)
 
-      # Every model catalyst is a row of the estate: shipped, never pulled.
+      # Every model catalyst is a row of the athanor: shipped, never pulled.
       for unit <- SeedBundle.model_chat_units() do
         assert {:ok, %{publisher: "local"}} =
                  Compendium.Registry.get_latest(in_group, unit.name, "local", "catalyst"),
@@ -90,8 +90,8 @@ defmodule Sanctum.ProvisioningClosureTest do
       assert {:ok, [_profile]} =
                Arca.ConsentStorage.profiles(Sanctum.Context.actor(in_group), "agent:local.aqua")
 
-      assert {:ok, %Cyfr.Authority{} = auth} =
-               Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua")
+      assert {:ok, %Prima.Authority{} = auth} =
+               Crucible.authority_for(in_group, :default, "agent:local.aqua")
 
       assert auth.cursor == {:bound, "agent:local.aqua"}
 
@@ -105,7 +105,7 @@ defmodule Sanctum.ProvisioningClosureTest do
   defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
-    |> Cyfr.Test.SourceTree.files!(match_dot: false)
+    |> Prima.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
       rel = Path.relative_to(src, @bundle)

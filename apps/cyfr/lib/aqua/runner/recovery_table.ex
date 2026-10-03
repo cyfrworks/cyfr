@@ -119,24 +119,37 @@ defmodule Aqua.Runner.RecoveryTable do
   # nothing to have moved.
   defp consent_holds(_ctx, %{profile_id: nil}), do: :ok
 
+  # The consent is loaded under the origin the turn's row records, not the
+  # recoverer's: the turn resumes under that origin, so that is the grant
+  # that has to stand. Whether this caller may recover is checked before.
   defp consent_holds(ctx, turn) do
-    case Cyfr.Execution.authority_for(ctx, {:id, turn.profile_id}, source_ref(turn)) do
-      {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id ->
-        :ok
-
+    with {:ok, origin} <- Prima.Origin.from_wire(Map.get(turn, :origin)),
+         {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id <-
+           Crucible.authority_for(
+             %{ctx | origin: origin},
+             {:id, turn.profile_id},
+             source_ref(turn)
+           ) do
+      :ok
+    else
       {:ok, _moved} ->
         {:error, "the consent the turn ran under has moved"}
 
       {:error, reason} ->
-        {:error, "the turn's consent could not be loaded: #{Aqua.Ops.render_refusal(reason)}"}
+        {:error, "the turn's consent could not be loaded: " <> unloaded(reason)}
     end
   end
+
+  # A turn row that records no origin has no grant to be judged under: it
+  # is never judged under the caller's.
+  defp unloaded({:unknown_origin, _spelling}), do: "the turn records no origin"
+  defp unloaded(reason), do: Aqua.Ops.render_refusal(reason)
 
   defp capability_holds(_ctx, %{agent_capability_digest: nil}), do: :ok
 
   defp capability_holds(ctx, %{agent: name, agent_capability_digest: pinned}) do
-    with {:ok, agent} <- Compendium.AquaAgent.get(ctx, name),
-         {:ok, ^pinned} <- Compendium.AquaAgent.capability_digest(agent) do
+    with {:ok, agent} <- Compendium.agent(ctx, name),
+         {:ok, ^pinned} <- Compendium.agent_capability_digest(agent) do
       :ok
     else
       {:ok, _other} -> {:error, "#{name} changed since the turn started"}
@@ -145,9 +158,9 @@ defmodule Aqua.Runner.RecoveryTable do
   end
 
   defp source_ref(%{agent: name}) do
-    if Compendium.AgentSource.soul?(name),
-      do: Compendium.AgentSource.soul_ref(),
-      else: Compendium.AgentSource.ref(name)
+    if Prima.AgentRef.soul?(name),
+      do: Prima.AgentRef.soul_ref(),
+      else: Prima.AgentRef.ref(name)
   end
 
   defp action(ctx, turn) do
@@ -185,11 +198,11 @@ defmodule Aqua.Runner.RecoveryTable do
   defp classify(_ctx, turn),
     do: {:uncertain, turn, "the turn is in no state a runner can continue"}
 
-  # A launch is never replayed (`Cyfr.TurnStep.unresolved/1`):
+  # A launch is never replayed (`Prima.TurnStep.unresolved/1`):
   # whether the application started is not known from here, and the turn
   # stops on it. The continuation settles any other open step.
   defp settle_launch(ctx, turn, step) do
-    with :uncertain <- Cyfr.TurnStep.unresolved(step),
+    with :uncertain <- Prima.TurnStep.unresolved(step),
          {:ok, %{turn: paused}} <-
            Tape.pause_uncertain(ctx, turn, %{
              step_id: step.id,
@@ -202,7 +215,7 @@ defmodule Aqua.Runner.RecoveryTable do
         nil
 
       {:error, reason} ->
-        {:uncertain, turn, "the launch could not be settled: #{inspect(reason)}"}
+        {:uncertain, turn, "the launch could not be settled: " <> Aqua.Ops.render_refusal(reason)}
 
       _settled_on_continue ->
         {:continue, turn}
@@ -217,9 +230,14 @@ defmodule Aqua.Runner.RecoveryTable do
            turn,
            "the server restarted while a call's outcome was unknown"
          ) do
-      {:ok, paused} -> {:wait, paused}
-      {:error, reason} when reason in @moved -> nil
-      {:error, reason} -> {:uncertain, turn, "the turn could not be set down: #{inspect(reason)}"}
+      {:ok, paused} ->
+        {:wait, paused}
+
+      {:error, reason} when reason in @moved ->
+        nil
+
+      {:error, reason} ->
+        {:uncertain, turn, "the turn could not be set down: " <> Aqua.Ops.render_refusal(reason)}
     end
   end
 
@@ -238,7 +256,8 @@ defmodule Aqua.Runner.RecoveryTable do
         nil
 
       {:error, reason} ->
-        {:uncertain, turn, "the turn could not be taken over: #{inspect(reason)}"}
+        {:uncertain, turn,
+         "the turn could not be taken over: " <> Aqua.Ops.render_refusal(reason)}
     end
   end
 end

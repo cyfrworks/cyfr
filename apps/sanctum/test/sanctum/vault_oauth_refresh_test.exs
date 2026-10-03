@@ -9,9 +9,10 @@ defmodule Sanctum.VaultOAuthRefreshTest do
   alias Sanctum.Vault.Payload
   alias Sanctum.VaultReader
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  @scopes ["gmail.readonly"]
+
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     {:ok, ctx: Sanctum.TestContext.local()}
   end
@@ -26,7 +27,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
   defp actor(ctx), do: Sanctum.Context.actor(ctx)
 
   defp mint_oauth_entry(ctx, oauth, over \\ %{}) do
-    id = Cyfr.UUID7.generate_id("vlt")
+    id = Prima.UUID7.generate_id("vlt")
     aad = CipherAAD.vault_entry(ctx.athanor_id, id, "google")
 
     {:ok, json} = Payload.encode_material(%{}, oauth)
@@ -39,11 +40,16 @@ defmodule Sanctum.VaultOAuthRefreshTest do
         provider_hint: "google",
         kind: "oauth",
         oauth_endpoints: Map.get(over, :endpoints, ~s({"token_url":"https://127.0.0.1:1/tok"})),
+        oauth_scopes: Jason.encode!(@scopes),
         sealed_payload: sealed
       })
 
     {:ok, digest} = VaultReader.binding_digest(entry)
-    {entry, %{entry_id: entry.id, binding_digest: digest}}
+
+    # The edge a consent writes for an OAuth need: its projection is the
+    # scopes the entry was authorized for.
+    projection = %{fields: [], scopes: @scopes}
+    {entry, %{entry_id: entry.id, binding_digest: digest, projection: projection}}
   end
 
   defp reseal_valid(ctx, entry, token) do
@@ -135,7 +141,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
       assert is_binary(detail)
       assert Sanctum.Unauthorized.reason?(reason)
-      assert Sanctum.Unauthorized.code(reason) == :auth_required
+      assert Sanctum.Unauthorized.class(reason) == :setup_required
+      assert Sanctum.Unauthorized.code_override(reason) == :auth_required
 
       assert :counters.get(counter, 1) == 0
     end
@@ -153,7 +160,14 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       {_entry, resource} = mint_oauth_entry(ctx, @expired)
       counter = attach_attempt_counter()
 
-      :ok = Sanctum.ProviderCredentials.put(ctx, "google", "cid", "csec")
+      entering =
+        Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+          operation: "oauth.set_client",
+          arguments: %{provider: "google", client_id: "cid", client_secret: "csec"},
+          resource: "google"
+        })
+
+      :ok = Sanctum.ProviderCredentials.put(entering, "google", "cid", "csec")
 
       assert {:error, {:authorization_required, detail}} =
                VaultReader.oauth_token(ctx, resource, "google")

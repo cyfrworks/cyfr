@@ -7,7 +7,7 @@ defmodule Mix.Tasks.Cyfr.Bench.Step do
   @moduledoc """
   Runs model steps through the real turn loop and execution path against
   a streaming stub catalyst and prints the p50, p95 and p99 of each step's
-  spans (`Cyfr.Execution.StepSpans`): admission, the guest's first delta,
+  spans (`Crucible.StepSpans`): admission, the guest's first delta,
   time to first delta, completion and the whole `run_child`, with the
   database and storage adapters in use. `Cyfr.Test.StepBench` describes
   what one step runs.
@@ -22,7 +22,7 @@ defmodule Mix.Tasks.Cyfr.Bench.Step do
       and fill the caches (non-negative, default 20)
 
   The bench runs in the test environment, from the umbrella root: the
-  estate is built from test fixtures inside one SQL sandbox checkout of
+  athanor is built from test fixtures inside one SQL sandbox checkout of
   the test database and rolled back, so nothing it writes outlives it.
   `mix cyfr.bench.step` selects `MIX_ENV=test` and migrates the test
   database first. On Postgres, name the database and a build path of its
@@ -35,6 +35,8 @@ defmodule Mix.Tasks.Cyfr.Bench.Step do
   carry each statement's cost but not a commit's (a synchronous write's
   flush to disk). Numbers from a loaded machine are indicative only.
   """
+
+  use Boundary, classify_to: Cyfr.Mix
 
   use Mix.Task
 

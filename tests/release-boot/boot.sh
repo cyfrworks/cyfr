@@ -4,21 +4,34 @@
 #
 # The `cyfr` release, built as `Dockerfile` builds it (MIX_ENV=prod, the
 # adapter chosen at compile time by CYFR_DATABASE, `mix release cyfr`),
-# booted against a FRESH database of that adapter with auto-migration on.
-# Two cases, in order:
+# booted against a FRESH database of that adapter with auto-migration on
+# (tests/release-boot/release.sh). Three cases, in order:
 #
-#   boots   the environment `cyfr init` writes — the stack's keys, the empty
-#           CORS allowlist, authentication configured, CYFR_AUTO_MIGRATE=true.
-#           The release migrates the schema itself (nothing else can: the
-#           database carries no schema before it starts) and answers
-#           /api/health/ready, the readiness check the image's HEALTHCHECK
-#           runs. A boot that raises, exits or never answers fails here, with
-#           its whole log.
+#   boots    the environment `cyfr init` writes — the stack's keys, the
+#            empty CORS allowlist, authentication configured,
+#            CYFR_AUTO_MIGRATE=true. The release migrates the schema itself
+#            (nothing else can: the database carries no schema before it
+#            starts) and answers /api/health/ready, the readiness check the
+#            image's HEALTHCHECK runs. A boot that raises, exits or never
+#            answers fails here, with its whole log.
 #
-#   refuses the same environment with the wildcard CORS allowlist, which a
-#           release with authentication configured must refuse at boot. The
-#           release must exit non-zero naming CORS: a boot that raises is
-#           loud, never a container that looks started.
+#   refuses  the same environment with the wildcard CORS allowlist, which a
+#            release with authentication configured must refuse at boot.
+#            The release must exit non-zero naming CORS: a boot that raises
+#            is loud, never a container that looks started.
+#
+#   restores a cell's backup, which is four parts copied while the cell is
+#            stopped: the database, the storage root, the keyring and the
+#            deployment file. A cell of its own (its database, for
+#            PostgreSQL, created beside the one the first case used) keeps
+#            its keyring in a file apart from its deployment file, signs a
+#            person in, holds a tincture and a thread, and is stopped; the
+#            four parts are copied to a fresh location (for PostgreSQL, the
+#            database dumped into another new one) and the copy booted with
+#            auto-migration off. The copy must pass the schema fingerprint
+#            (`Arca.SchemaFingerprint.verify!/0`) and the keyring
+#            fingerprint its boot checks, and serve the tincture and the
+#            thread to the person's session, which the copy still honours.
 #
 # Nothing else boots a release: the suite starts the application under its
 # test configuration, which migrates nothing and reads no `.env`, so a boot
@@ -26,12 +39,11 @@
 #
 # Usage:  tests/release-boot/boot.sh <sqlite|postgres>
 #
-# Building the release runs `mix assets.deploy`, as the image's builder
-# stage does, so it leaves digested assets under apps/cyfr/priv/static/ —
-# build output of a prod build, not of this proof.
-#
 # Postgres needs CYFR_DATABASE_URL pointing at an EXISTING database with no
-# schema in it; this script never creates or drops one. Set
+# schema in it, as a role that may create databases: the third case creates
+# `<database>_cell` and `<database>_restore` beside it (dropping any left by
+# an earlier run) and drops them when it ends. The dump and the restore run
+# in the postgres:16 image, with this host's network. Set
 # RELEASE_BOOT_SKIP_BUILD=1 to reuse the release a previous run built, and
 # RELEASE_BOOT_KEEP=1 to keep the scratch directory and its logs.
 set -euo pipefail
@@ -45,40 +57,42 @@ case "$ADAPTER" in
     ;;
 esac
 
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-release-boot-XXXXXX")"
+# shellcheck source=release.sh
+source "$(cd "$(dirname "$0")" && pwd)/release.sh"
 cd "$ROOT"
 
-PORT="${RELEASE_BOOT_PORT:-4399}"
-HOST_API_PORT="${RELEASE_BOOT_HOST_API_PORT:-4398}"
-READY_TIMEOUT="${RELEASE_BOOT_READY_TIMEOUT:-180}"
-BUILD_PATH="$ROOT/_build/prod_release_boot_$ADAPTER"
-REL="$BUILD_PATH/rel/cyfr"
+# The PostgreSQL client the restore case runs, the server's own major.
+PG_IMAGE="postgres:16"
+CREATED_DATABASES=()
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-release-boot-XXXXXX")"
-DATA="$WORK/data"
-SEED="$WORK/seed"
-SERVER_PID=""
+# A PostgreSQL client command in the postgres image, on this host's network.
+pg() {
+  docker run --rm --network host -e PGOPTIONS=--client-min-messages=warning "$PG_IMAGE" "$@"
+}
 
-# A node name of this run's own. The release's default is `cyfr`, which a
-# developer's release or the other adapter's leg may still hold on epmd — a
-# clash that says nothing about the release.
-NODE="cyfr-boot-$ADAPTER-$$"
+# CYFR_DATABASE_URL with its database renamed to `$1`.
+pg_url() {
+  local base="${CYFR_DATABASE_URL%%\?*}" query=""
+  [ "$base" = "$CYFR_DATABASE_URL" ] || query="?${CYFR_DATABASE_URL#*\?}"
+  echo "${base%/*}/$1$query"
+}
 
-step() { printf '\n=== %s\n' "$*"; }
-
-# `bin/cyfr start` runs the BEAM as a CHILD of the shell it starts, so
-# signalling that shell leaves a listening server behind. Stopping is the
-# release's own stop; whatever survives it is signalled by node name.
-stop_server() {
-  [ -n "$SERVER_PID" ] || return 0
-  with_env "$DATA" "$SEED" "" "$REL/bin/cyfr" stop >/dev/null 2>&1 || true
-  wait "$SERVER_PID" 2>/dev/null || true
-  SERVER_PID=""
-  pkill -f "sname $NODE" 2>/dev/null || true
+pg_fresh_database() {
+  local name="$1"
+  pg psql -v ON_ERROR_STOP=1 -q "$CYFR_DATABASE_URL" \
+    -c "DROP DATABASE IF EXISTS \"$name\"" -c "CREATE DATABASE \"$name\"" \
+    || fail "could not create the database $name beside the one CYFR_DATABASE_URL names"
+  CREATED_DATABASES+=("$name")
 }
 
 cleanup() {
-  stop_server
+  server_stop || true
+  if [ "${RELEASE_BOOT_KEEP:-}" != 1 ]; then
+    for name in ${CREATED_DATABASES[@]+"${CREATED_DATABASES[@]}"}; do
+      pg psql -q "$CYFR_DATABASE_URL" -c "DROP DATABASE IF EXISTS \"$name\"" >/dev/null 2>&1 || true
+    done
+  fi
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
@@ -87,119 +101,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The release's own environment, the shape `cyfr init` writes into `.env`:
-# the stack's keys, an explicit empty CORS allowlist, authentication
-# configured (the client id `.env.example` ships), builds on with their URL
-# and key together, and auto-migration on. CYFR_DATABASE is the adapter this
-# release was COMPILED for; runtime.exs refuses a disagreement.
-release_env() {
-  local data="$1"
-  local seed="$2"
-  local cors="$3"
-
-  cat <<ENV
-CYFR_DATABASE=$ADAPTER
-CYFR_AUTO_MIGRATE=true
-CYFR_DATA_PATH=$data
-CYFR_SEED_PATH=$seed
-CYFR_PORT=$PORT
-CYFR_BIND_ADDRESS=127.0.0.1
-CYFR_HOST=localhost
-CYFR_HOST_API_BIND=127.0.0.1
-CYFR_HOST_API_PORT=$HOST_API_PORT
-CYFR_CORS_ALLOWED_ORIGINS=$cors
-CYFR_SECRET_KEY_BASE=$SECRET_KEY_BASE
-CYFR_MCP_BRIDGE_KEY=$BRIDGE_KEY
-CYFR_WORKER_KEY=$WORKER_KEY
-OPUS_SERVICE_ID=wrk_opus
-CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100
-CYFR_LOCUS_BUILDS_KEY=$BUILDS_KEY
-CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm
-CYFR_PLATFORM_ADMIN_EMAILS=operator@example.com
-CYFR_BEHIND_PROXY=false
-CYFR_PRIVATE_EGRESS_TARGETS=mcp-bridge
-ENV
-}
-
-# Run a command with that environment and nothing else of the caller's that
-# could steer the release (a CYFR_* left over from a shell, a DATABASE_URL).
-with_env() {
-  local data="$1" seed="$2" cors="$3"
-  shift 3
-
-  local -a assignments=()
-  while IFS= read -r line; do
-    [ -n "$line" ] && assignments+=("$line")
-  done <<<"$(release_env "$data" "$seed" "$cors")"
-
-  if [ "$ADAPTER" = postgres ]; then
-    assignments+=("CYFR_DATABASE_URL=$CYFR_DATABASE_URL")
-  fi
-
-  # From the scratch directory, so a crash dump or anything else the
-  # release writes beside itself lands there and not in the checkout, and
-  # with crash dumps off, so a boot that raises dies at once instead of
-  # spending its ready window writing one (`ERL_CRASH_DUMP_SECONDS=0`, as
-  # the workflows set for every Elixir job).
-  (
-    cd "$WORK" || exit 1
-    env -i \
-      HOME="$WORK/home" PATH="$PATH" LANG="${LANG:-en_US.UTF-8}" TERM="${TERM:-dumb}" \
-      ERL_CRASH_DUMP_SECONDS=0 \
-      RELEASE_NODE="$NODE" \
-      "${assignments[@]}" \
-      "$@"
-  )
-}
-
-# How many migrations the database has not run, as the release itself
-# reports them (`Cyfr.Release.pending/0`): the one number that says whether
-# a schema is there, whoever put it there.
-pending_count() {
-  with_env "$DATA" "$SEED" "" "$REL/bin/cyfr" eval \
-    'IO.puts("PENDING=" <> Integer.to_string(length(Cyfr.Release.pending())))' \
-    | sed -n 's/^PENDING=//p' | tail -1
-}
-
-# ---------------------------------------------------------------------------
-# Build the release the way the image builds it
-# ---------------------------------------------------------------------------
-
-if [ "${RELEASE_BOOT_SKIP_BUILD:-}" = "1" ] && [ -x "$REL/bin/cyfr" ]; then
-  step "reusing the $ADAPTER release at $REL"
-else
-  step "building the cyfr release for $ADAPTER (MIX_ENV=prod, as Dockerfile builds it)"
-  export MIX_ENV=prod
-  export MIX_BUILD_PATH="$BUILD_PATH"
-  export CYFR_DATABASE="$ADAPTER"
-  mix deps.get --only prod
-  mix compile
-  mix assets.deploy
-  mix release cyfr --overwrite
-  unset MIX_ENV MIX_BUILD_PATH CYFR_DATABASE
-fi
-
-[ -x "$REL/bin/cyfr" ] || {
-  echo "::error::no release at $REL/bin/cyfr" >&2
-  exit 1
-}
-
-# The keys the stack runs on, minted for this run alone, as `cyfr init`
-# mints them: 32 random bytes as 64 hexadecimal digits, and a key base.
-WORKER_KEY="$(openssl rand -hex 32)"
-BRIDGE_KEY="$(openssl rand -hex 32)"
-BUILDS_KEY="$(openssl rand -hex 32)"
-SECRET_KEY_BASE="$(openssl rand -base64 48 | tr -d '\n')"
-
-mkdir -p "$WORK/home" "$DATA"
-cp -R "$ROOT/seed" "$SEED"
+release_build
 
 # ---------------------------------------------------------------------------
 # Case 1: a fresh database, migrated by the boot, answering its health check
 # ---------------------------------------------------------------------------
 
+CELL="$WORK/cell"
+cell_new "$CELL" "${CYFR_DATABASE_URL:-}"
+
 step "the $ADAPTER database carries no schema before the release starts"
-before="$(pending_count)"
+before="$(cell_pending "$CELL")"
 if [ "${before:-0}" -lt 1 ]; then
   echo "::error::the $ADAPTER database is not fresh: it reports $before pending migrations" >&2
   echo "Point CYFR_DATABASE_URL at an empty database (or remove the SQLite file)." >&2
@@ -207,67 +119,25 @@ if [ "${before:-0}" -lt 1 ]; then
 fi
 echo "pending migrations before the boot: $before"
 
-# A server left from another run would answer the readiness check below
-# while this boot failed on its ports, and pass for it.
-if curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$PORT/api/health" 2>/dev/null; then
-  echo "::error::something already answers on 127.0.0.1:$PORT — stop it before this proof" >&2
-  exit 1
-fi
-
 step "booting the release against a fresh $ADAPTER database with auto-migration on"
-LOG="$WORK/boot.log"
-with_env "$DATA" "$SEED" "" "$REL/bin/cyfr" start >"$LOG" 2>&1 &
-SERVER_PID=$!
-
-ready=""
-died=""
-for _ in $(seq 1 "$READY_TIMEOUT"); do
-  if curl -fsS -o "$WORK/ready.json" "http://127.0.0.1:$PORT/api/health/ready" 2>/dev/null; then
-    ready=yes
-    break
-  fi
-  # A boot that raised says so in its log and never answers. `kill -0` on
-  # the background job cannot tell: a child that has exited stays a zombie
-  # until it is waited for, and `start` runs the VM below a wrapper of its
-  # own, so a raise would otherwise cost the whole ready window and be
-  # reported as a boot that was merely slow.
-  if grep -q "Kernel pid terminated\|Application cyfr exited\|application_start_failure" "$LOG"; then
-    died=yes
-    break
-  fi
-  sleep 1
-done
-
-if [ "$ready" != yes ]; then
-  if [ -n "$died" ]; then
-    echo "::error::the $ADAPTER release exited while booting, without answering /api/health/ready" >&2
-  else
-    echo "::error::the $ADAPTER release did not answer /api/health/ready within ${READY_TIMEOUT}s" >&2
-  fi
-
-  wait "$SERVER_PID" 2>/dev/null || true
-  echo "----- boot log -----" >&2
-  cat "$LOG" >&2
-  exit 1
-fi
-
-echo "GET /api/health/ready -> 200 $(cat "$WORK/ready.json")"
+server_start "$CELL"
+echo "GET /api/health/ready -> 200 $(cat "$CELL/ready.json")"
 
 step "the boot migrated the schema itself"
-if ! grep -q "== Migrated" "$LOG"; then
+if ! grep -q "== Migrated" "$CELL/boot.log"; then
   echo "::error::the boot log does not report a migration it ran" >&2
-  cat "$LOG" >&2
+  cat "$CELL/boot.log" >&2
   exit 1
 fi
-grep -E "== (Running|Migrated)" "$LOG"
+grep -E "== (Running|Migrated)" "$CELL/boot.log"
 
 # Liveness beside readiness, so a half-open server cannot pass as a boot.
-curl -fsS "http://127.0.0.1:$PORT/api/health" >"$WORK/health.json"
-echo "GET /api/health -> 200 $(cat "$WORK/health.json")"
+curl -fsS "http://127.0.0.1:$PORT/api/health" >"$CELL/health.json"
+echo "GET /api/health -> 200 $(cat "$CELL/health.json")"
 
-stop_server
+server_stop
 
-after="$(pending_count)"
+after="$(cell_pending "$CELL")"
 if [ "${after:-1}" -ne 0 ]; then
   echo "::error::the $ADAPTER database still reports $after pending migrations after the boot" >&2
   exit 1
@@ -281,7 +151,7 @@ echo "pending migrations after the boot: $after"
 step "a boot that raises exits non-zero and says why (the wildcard CORS allowlist)"
 REFUSAL_LOG="$WORK/refusal.log"
 set +e
-with_env "$DATA" "$SEED" "*" "$REL/bin/cyfr" start >"$REFUSAL_LOG" 2>&1
+cell_cyfr "$CELL" "CYFR_CORS_ALLOWED_ORIGINS=*" start >"$REFUSAL_LOG" 2>&1
 status=$?
 set -e
 
@@ -300,4 +170,121 @@ fi
 echo "the boot exited $status, naming the wildcard:"
 grep -o "FATAL: CORS wildcard.*" "$REFUSAL_LOG" | head -1
 
-step "the cyfr release boots on $ADAPTER, migrates itself, and refuses loudly"
+# ---------------------------------------------------------------------------
+# Case 3: a backup of the four parts, restored and booted elsewhere
+# ---------------------------------------------------------------------------
+
+step "a cell of its own, with its keyring kept apart from its deployment file"
+ORIGIN="$WORK/origin"
+ORIGIN_URL=""
+if [ "$ADAPTER" = postgres ]; then
+  ORIGIN_DB="$(basename "${CYFR_DATABASE_URL%%\?*}")_cell"
+  pg_fresh_database "$ORIGIN_DB"
+  ORIGIN_URL="$(pg_url "$ORIGIN_DB")"
+fi
+cell_new "$ORIGIN" "$ORIGIN_URL"
+# The SQLite database in a directory of its own, so it is a part apart
+# from the storage root.
+[ "$ADAPTER" = sqlite ] && mkdir -p "$ORIGIN/db"
+printf '{"primary":"k1","keys":{"k1":"%s"}}' "$(openssl rand -base64 32 | tr -d '\n')" >"$ORIGIN/keyring.json"
+
+server_start "$ORIGIN"
+# The first boot of a database records its keyring's fingerprint; the
+# copy's boot must match it rather than record one.
+grep -q "Recorded the crypto keyring fingerprint" "$ORIGIN/boot.log" ||
+  fail "the cell's first boot did not record its keyring fingerprint"
+person="$(server_fixture "$ORIGIN" person operator@example.com release-boot-backup)"
+[ -n "$person" ] || fail "the fixture signed nobody in"
+field() { printf '%s' "$1" | python3 -c "import json, sys; print(json.load(sys.stdin)['$2'])"; }
+user_id="$(field "$person" user_id)"
+token="$(field "$person" token)"
+
+TINCTURE_DIR="$WORK/tincture"
+mkdir -p "$TINCTURE_DIR"
+cat >"$TINCTURE_DIR/cyfr-manifest.json" <<'JSON'
+{"name": "backup-proof", "type": "tincture", "version": "1.0.0", "publisher": "local",
+ "tincture": {"entry": "index.html"}}
+JSON
+echo '<!doctype html><html><head></head><body>the backup proof tincture</body></html>' >"$TINCTURE_DIR/index.html"
+tincture="$(server_fixture "$ORIGIN" tincture "$user_id" "$TINCTURE_DIR" backup-proof public)"
+tincture_path="$(field "$tincture" path)"
+thread_id="$(field "$(server_fixture "$ORIGIN" thread "$user_id" "the backup proof thread")" thread_id)"
+echo "the cell holds $tincture_path and $thread_id"
+
+# The tincture page as the person's session fetches it, and the thread's
+# messages over /mcp, as the person's client reads them.
+serves() {
+  local what="$1"
+  local page
+  page="$(curl -fsS -H "authorization: Bearer $token" "http://127.0.0.1:$PORT$tincture_path")" ||
+    fail "$what: $tincture_path was not served to the person"
+  case "$page" in
+    *"the backup proof tincture"*) echo "$what: GET $tincture_path -> the tincture's page" ;;
+    *) fail "$what: $tincture_path answered without the tincture's page" ;;
+  esac
+
+  local body answer
+  body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"thread","arguments":{"action":"messages","thread":"%s"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$thread_id")"
+  answer="$(curl -fsS -X POST "http://127.0.0.1:$PORT/mcp" \
+    -H "authorization: Bearer $token" -H 'content-type: application/json' \
+    -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' \
+    -H 'mcp-method: tools/call' -H 'mcp-name: thread' -d "$body")" ||
+    fail "$what: the thread was not served over /mcp"
+  if printf '%s' "$answer" | python3 -c '
+import json, sys
+result = json.load(sys.stdin)["result"]
+messages = json.loads(result["content"][0]["text"])["messages"]
+sys.exit(0 if not result["isError"] and [m["content"] for m in messages] == ["the backup proof thread"] else 1)'; then
+    echo "$what: thread.messages -> the thread's message"
+  else
+    fail "$what: thread.messages answered without the message: $answer"
+  fi
+}
+serves "the cell"
+
+step "the cell stopped, its four parts copied to a fresh location"
+server_stop
+COPY="$WORK/copy"
+mkdir -p "$COPY/home"
+cp -R "$ORIGIN/data" "$COPY/data"
+cp "$ORIGIN/keyring.json" "$COPY/keyring.json"
+cp "$ORIGIN/.env" "$COPY/.env"
+# The seed tree is install media, not the cell's: the copy gets the release's.
+cp -R "$ROOT/seed" "$COPY/seed"
+if [ "$ADAPTER" = sqlite ]; then
+  cp -R "$ORIGIN/db" "$COPY/db"
+else
+  RESTORE_DB="$(basename "${CYFR_DATABASE_URL%%\?*}")_restore"
+  pg_fresh_database "$RESTORE_DB"
+  pg pg_dump --format=custom --no-owner "$ORIGIN_URL" >"$WORK/cell.dump" ||
+    fail "the cell's database did not dump"
+  docker run --rm -i --network host "$PG_IMAGE" \
+    pg_restore --no-owner --exit-on-error -d "$(pg_url "$RESTORE_DB")" <"$WORK/cell.dump" ||
+    fail "the dump did not restore into $RESTORE_DB"
+  sed -i "s|^CYFR_DATABASE_URL=.*|CYFR_DATABASE_URL=$(pg_url "$RESTORE_DB")|" "$COPY/.env"
+  # The origin's database goes, so a copy that still reached it could not pass.
+  pg psql -q "$CYFR_DATABASE_URL" -c "DROP DATABASE \"$ORIGIN_DB\"" || fail "could not drop $ORIGIN_DB"
+fi
+# The origin's storage root goes too, for the same reason.
+rm -rf "$ORIGIN"
+sed -i 's/^CYFR_AUTO_MIGRATE=.*/CYFR_AUTO_MIGRATE=false/' "$COPY/.env"
+echo "copied: the database, the storage root, keyring.json and .env"
+
+step "the copy boots with nothing to migrate and passes both fingerprints"
+restored_pending="$(cell_pending "$COPY")"
+[ "${restored_pending:-1}" -eq 0 ] || fail "the copy reports $restored_pending pending migrations"
+verified="$(cell_cyfr "$COPY" eval \
+  '_ = Cyfr.Release.pending(); {:ok, :ok, _} = Ecto.Migrator.with_repo(Arca.Repo, fn _ -> Arca.SchemaFingerprint.verify!() end); IO.puts("SCHEMA_FINGERPRINT=ok")' \
+  | grep -c '^SCHEMA_FINGERPRINT=ok' || true)"
+[ "$verified" = 1 ] || fail "the copy's schema fingerprint did not verify"
+echo "the schema fingerprint verified"
+
+server_start "$COPY"
+if grep -q "Recorded the crypto keyring fingerprint\|Accepted a different crypto keyring" "$COPY/boot.log"; then
+  fail "the copy's boot recorded a keyring fingerprint anew instead of matching the one the cell recorded"
+fi
+echo "GET /api/health/ready -> 200 $(cat "$COPY/ready.json")"
+serves "the copy"
+server_stop
+
+step "the cyfr release boots on $ADAPTER, migrates itself, refuses loudly and restores from its backup"

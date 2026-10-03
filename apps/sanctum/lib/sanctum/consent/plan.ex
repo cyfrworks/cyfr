@@ -23,9 +23,30 @@ defmodule Sanctum.Consent.Plan do
   of its own owner profiles bind an entry — the candidates a `selections`
   decision picks from, so that edge runs the dependency with the key
   bound on that profile rather than a copy of its own.
+
+  The ask is answered as `rows`, the typed rows of `Prima.ConsentPreview`
+  in their JSON form, one per resource each node of the closure asks for,
+  its limits, and a tincture's frame, streams, cards and system actions:
+  what a narrowing is chosen from, none of it narrowed yet. `origins` is
+  the default a decision that names none admits, `interactive` alone.
+
+  A plan for a profile with a head says what the head holds:
+  `head_origins`, the origins it admits, so a re-grant starts from them
+  rather than quietly dropping one; and, when the component's shape moved
+  since the head, `shape_diff`, the head as the person narrowed it against
+  the live ask (`Sanctum.Consent.ShapeDiff`). With no head, `head_origins` is nil
+  and `shape_diff` empty.
+
+  A closure that cannot be resolved is `unresolved`: `%{reason, missing}`,
+  the reason's tag (`"unresolvable_dependency"`, `"missing_release_digest"`
+  or the resolution's own) and the name-level ref of what is missing,
+  `nil` when the resolution names none. Its `rows` are empty, since the
+  source's rows alone are not the ask, and it offers no selection; the
+  preview and the commit refuse it. A resolved closure is `unresolved:
+  nil`.
   """
 
-  alias Cyfr.Authority.RootSelect
+  alias Prima.Authority.RootSelect
   alias Sanctum.Consent.Components
 
   alias Sanctum.Consent.Authz
@@ -35,9 +56,14 @@ defmodule Sanctum.Consent.Plan do
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
 
+  require Logger
+
   # Ten minutes: an operator reads candidates and decides. The commit
   # proof (120s) is the short-lived one; the plan token only pins facts.
   @plan_ttl_ms 600_000
+
+  # What a grant admits when its decision names no origin.
+  @default_origins [:interactive]
 
   @type t :: %{
           plan_token: String.t(),
@@ -49,11 +75,20 @@ defmodule Sanctum.Consent.Plan do
           dependency_needs: [map()],
           caps: map(),
           limits: map(),
+          rows: [BlobBuilder.row()],
+          unresolved: %{reason: String.t(), missing: String.t() | nil} | nil,
+          origins: [String.t(), ...],
+          head_origins: [String.t(), ...] | nil,
+          shape_diff: [map()],
           candidates: [map()],
-          tool_server_candidates: [Sanctum.Catalog.tool_server_candidate()],
+          tool_server_candidates: [Sanctum.Grimoire.tool_server_candidate()],
           warnings: [String.t()],
           defaults: map()
         }
+
+  @doc "The origins a grant admits when its decision names none: `interactive` alone."
+  @spec default_origins() :: [Prima.Origin.t(), ...]
+  def default_origins, do: @default_origins
 
   @doc "Stage a consent: facts, candidates, and the plan token."
   @spec plan(Context.t(), map()) :: {:ok, t()} | {:error, term()}
@@ -68,13 +103,17 @@ defmodule Sanctum.Consent.Plan do
          {:ok, shape_input} <- ShapeDerivation.shape_input(ctx, source_ref),
          {:ok, shape_digest} <- ShapeDigest.compute(shape_input),
          {:ok, profile_id, expected_revision} <- locate_profile(ctx, source_ref, label, kind),
-         manifest = decode_manifest(component),
+         manifest = manifest(component, source_ref),
          {:ok, resources, limits} <-
            Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest),
+         closure = closure(ctx, component),
+         {:ok, rows} <- ask_rows(ctx, closure),
          {:ok, candidates} <- candidates(ctx),
          needs = need_rows(manifest),
          {:ok, plan_token} <-
            mint_token(ctx, shape_digest, profile_id, expected_revision) do
+      head = head_facts(ctx, profile_id, shape_digest, source_ref)
+
       {:ok,
        %{
          plan_token: plan_token,
@@ -83,11 +122,16 @@ defmodule Sanctum.Consent.Plan do
          profile_id: profile_id,
          source_ref: source_ref,
          needs: needs,
-         dependency_needs: dependency_needs(ctx, component, source_ref),
+         dependency_needs: dependency_needs(ctx, closure),
          caps: resources,
          limits: limits,
+         rows: rows,
+         unresolved: unresolved(closure),
+         origins: Prima.Origin.to_wire_list(@default_origins),
+         head_origins: head.origins,
+         shape_diff: head.shape_diff,
          candidates: candidates,
-         tool_server_candidates: Sanctum.Catalog.tool_server_candidates(ctx),
+         tool_server_candidates: Sanctum.Grimoire.tool_server_candidates(ctx),
          warnings: need_warnings(needs, candidates),
          defaults: %{scope: :versionless, kind: kind, label: label, invoke_mode: :open_inert}
        }}
@@ -118,7 +162,7 @@ defmodule Sanctum.Consent.Plan do
 
   @doc false
   def name_ref(ref) do
-    case Cyfr.ComponentRef.to_name_ref(ref) do
+    case Prima.ComponentRef.to_name_ref(ref) do
       {:ok, name_ref} -> {:ok, name_ref}
       {:error, reason} -> {:error, {:invalid_ref, reason}}
     end
@@ -126,7 +170,7 @@ defmodule Sanctum.Consent.Plan do
 
   @doc false
   def fetch_component(ctx, source_ref) do
-    with {:ok, parsed} <- Cyfr.ComponentRef.parse(source_ref),
+    with {:ok, parsed} <- Prima.ComponentRef.parse(source_ref),
          {:ok, component} <-
            Components.get_latest(ctx, parsed.name, parsed.namespace, parsed.type) do
       {:ok, component}
@@ -139,19 +183,28 @@ defmodule Sanctum.Consent.Plan do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp decode_manifest(component) do
-    Cyfr.Manifest.decode(Map.get(component, :manifest) || Map.get(component, "manifest"))
+  # A manifest that does not decode declares nothing. The line names the
+  # component, never the manifest's bytes.
+  defp manifest(row, ref) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Sanctum.Consent.Plan] manifest malformed: #{ref}")
+        %{}
+    end
   end
 
   # Declared needs become the sheet's rows — the operator sees each
   # need's reason, never the developer's key names. A manifest with no
   # needs block keeps the single ingress slot.
   defp need_rows(manifest) do
-    case Cyfr.Manifest.Needs.from_manifest(manifest) do
+    case Prima.Manifest.Needs.from_manifest(manifest) do
       nil ->
         [
           %{
-            need: Cyfr.Authority.Blob.ingress_key(),
+            need: Prima.Authority.Blob.ingress_key(),
             reason: "credentials this component may use when invoked",
             required: false
           }
@@ -190,38 +243,96 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
+  # What the profile's head holds: the origins it admits, and what changed
+  # against it when the shape moved. A head that cannot be read answers as
+  # none, which the commit's own revision check still fences.
+  defp head_facts(_ctx, nil, _shape_digest, _source_ref), do: %{origins: nil, shape_diff: []}
+
+  defp head_facts(ctx, profile_id, shape_digest, source_ref) do
+    case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id) do
+      {:ok, head} ->
+        %{
+          origins: Prima.Origin.to_wire_list(head.admitted_origins),
+          shape_diff:
+            if(head.shape_digest == shape_digest,
+              do: [],
+              else: Sanctum.Consent.ShapeDiff.compute(ctx, source_ref, head.resolved_policy)
+            )
+        }
+
+      {:error, _no_head} ->
+        %{origins: nil, shape_diff: []}
+    end
+  end
+
+  # The activation closure's graph, or what keeps it from resolving: the
+  # reason's tag and the ref the resolution names as missing, if any.
+  defp closure(ctx, component) do
+    case Components.resolve(ctx, component) do
+      {:ok, %{graph: graph}} -> {:ok, graph}
+      {:error, reason} -> {:unresolved, unresolved_reason(reason)}
+    end
+  end
+
+  defp unresolved_reason({:incomplete, {tag, missing}}) when is_atom(tag) and is_binary(missing),
+    do: %{reason: Atom.to_string(tag), missing: missing}
+
+  defp unresolved_reason({:incomplete, tag}) when is_atom(tag),
+    do: %{reason: Atom.to_string(tag), missing: nil}
+
+  defp unresolved_reason({tag, _detail}) when is_atom(tag),
+    do: %{reason: Atom.to_string(tag), missing: nil}
+
+  defp unresolved_reason(tag) when is_atom(tag), do: %{reason: Atom.to_string(tag), missing: nil}
+  defp unresolved_reason(_reason), do: %{reason: "unresolvable", missing: nil}
+
+  defp unresolved({:ok, _graph}), do: nil
+  defp unresolved({:unresolved, unresolved}), do: unresolved
+
+  # The ask of every node of the closure, each row held to its shape, each
+  # once. A closure that cannot be resolved has no ask to show: the
+  # source's own rows would read as the whole of it.
+  defp ask_rows(_ctx, {:unresolved, _unresolved}), do: {:ok, []}
+
+  defp ask_rows(ctx, {:ok, graph}) do
+    with {:ok, rows} <- BlobBuilder.ask_rows(ctx, Map.keys(graph)) do
+      rows = BlobBuilder.order_rows(rows)
+
+      case BlobBuilder.check_rows(rows) do
+        {:ok, _checked} -> {:ok, rows}
+        {:error, reason} -> {:error, {:preview_unrepresentable, reason}}
+      end
+    end
+  end
+
   # The closure's dependency edges whose target declares a credential
   # need, each with the owner profiles of that target that bind one —
   # what a selection may name. A closure that cannot be resolved offers
   # none; the commit refuses a selection it cannot place anyway.
-  defp dependency_needs(ctx, component, _source_ref) do
-    case Components.resolve(ctx, component) do
-      {:ok, %{graph: graph}} ->
-        graph
-        |> Map.keys()
-        |> Enum.sort()
-        |> Enum.flat_map(fn from ->
-          case node_manifest(ctx, from) do
-            {:ok, manifest} ->
-              manifest
-              |> BlobBuilder.dep_edges(graph, from)
-              |> Enum.sort()
-              |> Enum.flat_map(&dependency_rows(ctx, from, &1))
+  defp dependency_needs(_ctx, {:unresolved, _unresolved}), do: []
 
-            _ ->
-              []
-          end
-        end)
+  defp dependency_needs(ctx, {:ok, graph}) do
+    graph
+    |> Map.keys()
+    |> Enum.sort()
+    |> Enum.flat_map(fn from ->
+      case node_manifest(ctx, from) do
+        {:ok, manifest} ->
+          manifest
+          |> BlobBuilder.dep_edges(graph, from)
+          |> Enum.sort()
+          |> Enum.flat_map(&dependency_rows(ctx, from, &1))
 
-      _unresolvable ->
-        []
-    end
+        _ ->
+          []
+      end
+    end)
   end
 
   defp node_manifest(ctx, node_key) do
-    with {:ok, ref} <- Cyfr.ComponentRef.parse(node_key),
+    with {:ok, ref} <- Prima.ComponentRef.parse(node_key),
          {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
-      {:ok, Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
+      {:ok, manifest(row, node_key)}
     end
   end
 
@@ -263,9 +374,9 @@ defmodule Sanctum.Consent.Plan do
       {:ok, profiles} ->
         for %{kind: :owner, status: :active} = profile <- profiles,
             {:ok, head} <- [Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)],
-            {:ok, blob} <- [Cyfr.Authority.Blob.parse(head.resolved_policy)],
-            {:ok, ingress} <- [Cyfr.Authority.Blob.ingress(blob, dep)],
-            Cyfr.Authority.Blob.bound_vault?(ingress.vault),
+            {:ok, blob} <- [Prima.Authority.Blob.parse(head.resolved_policy)],
+            {:ok, ingress} <- [Prima.Authority.Blob.ingress(blob, dep)],
+            Prima.Authority.Blob.bound_vault?(ingress.vault),
             {:ok, entry} <-
               [
                 Sanctum.VaultReader.usable(
@@ -297,7 +408,7 @@ defmodule Sanctum.Consent.Plan do
         athanor_id: ctx.athanor_id,
         expected_revision: expected_revision
       }
-      |> Cyfr.MapUtil.put_present(:profile_id, profile_id)
+      |> Prima.MapUtil.put_present(:profile_id, profile_id)
 
     Proof.mint(bindings, ttl_ms: @plan_ttl_ms)
   end

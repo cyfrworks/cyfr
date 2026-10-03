@@ -1,21 +1,25 @@
-# Findings the bridge and builder images cannot take a fix for, with what
-# would lift each. Read by every image scan: the four in
+# Findings the Locus image cannot take a fix for, with what would lift
+# each. Read by every image scan: the three in
 # .github/workflows/test.yml, which run on every push, and the one in
 # .github/workflows/docker.yml, which runs before an image is published.
 # Every other fixable HIGH or CRITICAL still fails those jobs.
 #
 # Each entry is scoped to the path where the finding was observed, so the
-# same identifier appearing anywhere else — above all in the bridge's own
-# `app/node_modules` tree — still fails. A bare id would have suppressed it
-# image-wide, which is wider than the reasoning below supports.
+# same identifier appearing anywhere else still fails. A bare id would have
+# suppressed it image-wide, which is wider than the reasoning below
+# supports.
 #
-# All four live in npm's bundled dependencies, pinned by npm's lockfile. No
-# npm release ships any of these fixes: 12.0.2 is the newest and was
-# measured carrying all of them. Patching a dependency inside npm's own tree
-# is not something an image should do to itself, and npm cannot be removed —
-# the bridge launches its backends through `npx` and the builder installs a
-# tincture's dependencies with `npm install`, so npm is runtime code in both
-# rather than build tooling.
+# All seven live in npm's bundled dependencies, pinned by npm's lockfile. The
+# image's npm is the one Node 24.21.0, the newest Node 24 LTS, bundles:
+# 11.19.0. Four are fixed in npm 11.19.1 and later, which no Node 24 LTS
+# release bundles yet. For the three marked "no npm release ships the fix",
+# none does: 12.2.0 is the newest and was measured (2026-10-02) carrying
+# brace-expansion 5.0.9 and undici 6.28.0, as 11.19.1 and 11.21.0 do.
+# Patching a dependency inside npm's own tree is not something an image
+# should do to itself, and npm cannot be removed —
+# the backends service launches its backends through `npx` and the builds
+# service installs a tincture's dependencies with `npm install`, so npm is
+# runtime code in both rather than build tooling.
 #
 # What reaches them is a package a stdio server's backend command names, or
 # a tincture's own package.json, and running that package's code is
@@ -24,26 +28,52 @@
 # caller already commands.
 
 vulnerabilities:
-  # brace-expansion 5.0.7. Lift when an npm release bundles 5.0.9 or later.
+  # brace-expansion 5.0.7, fixed at 5.0.9. npm 11.19.1 and later bundle
+  # 5.0.9, but no Node 24 LTS release bundles that npm yet. Lift when the
+  # image's Node bundles npm 11.19.1 or later.
   - id: CVE-2026-14257
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
-    statement: npm's bundled brace-expansion; no npm release ships the fix.
+    statement: npm's bundled brace-expansion; the npm Node 24 LTS bundles does not ship the fix.
   - id: CVE-2026-69152
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
+    statement: npm's bundled brace-expansion; the npm Node 24 LTS bundles does not ship the fix.
+
+  # brace-expansion 5.0.7: denial of service on crafted brace patterns,
+  # through stack exhaustion (fixed at 5.0.10) and through nested patterns
+  # (fixed at 5.0.11). Lift once the npm the image's Node bundles carries
+  # 5.0.11 or later.
+  - id: CVE-2026-102276
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
+    statement: npm's bundled brace-expansion; no npm release ships the fix.
+  - id: CVE-2026-102278
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
     statement: npm's bundled brace-expansion; no npm release ships the fix.
 
+  # undici 6.27.0: denial of service on an unrequested WebSocket
+  # subprotocol. Lift once the npm the image's Node bundles carries 6.28.1
+  # or later.
+  - id: CVE-2026-19534
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
+    statement: npm's bundled undici; no npm release ships the fix.
+
   # tar 7.5.19: denial of service on a crafted long-path archive, which npm
-  # would meet while extracting a package. Lift at 7.5.21 or later.
+  # would meet while extracting a package. Fixed at 7.5.21; npm 11.19.1 and
+  # later bundle 7.5.22. Lift when the image's Node bundles npm 11.19.1 or
+  # later.
   - id: CVE-2026-73566
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/tar/package.json"
-    statement: npm's bundled tar; no npm release ships the fix.
+    statement: npm's bundled tar; the npm Node 24 LTS bundles does not ship the fix.
 
   # ip-address 10.2.0: inconsistent parsing between it and other consumers
-  # of the same string. Lift at 10.3.1 or later.
+  # of the same string. Fixed at 10.3.1; npm 11.19.1 and later bundle
+  # 10.5.0. Lift when the image's Node bundles npm 11.19.1 or later.
   - id: CVE-2026-69192
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/ip-address/package.json"
-    statement: npm's bundled ip-address; no npm release ships the fix.
+    statement: npm's bundled ip-address; the npm Node 24 LTS bundles does not ship the fix.

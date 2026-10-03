@@ -7,9 +7,8 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
 
   alias Sanctum.Policy.Enforcement
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     {:ok, ctx: Sanctum.TestContext.local()}
   end
@@ -36,9 +35,10 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
           invoke_mode: "open_inert",
           shape_digest: "sha256:shape",
           commit_digest: "sha256:commit",
-          blob_digest: Cyfr.JCS.hash_binary("{}"),
+          blob_digest: Prima.JCS.hash_binary("{}"),
           resolved_policy: "{}",
           activation: "{}",
+          admitted_origins: [:interactive],
           granted_by: "operator@example",
           granted_via: "interactive"
         },

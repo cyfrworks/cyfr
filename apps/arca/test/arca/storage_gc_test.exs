@@ -83,9 +83,8 @@ defmodule Arca.StorageGCTest do
   @sentinel "cyfr-manifest.json"
   @day :timer.hours(24)
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "storage_gc_#{System.unique_integer([:positive])}")
     prev_base = Application.fetch_env!(:arca, :base_path)
@@ -231,7 +230,7 @@ defmodule Arca.StorageGCTest do
   end
 
   defp start_build(actor) do
-    id = Cyfr.UUID7.build_id()
+    id = Prima.UUID7.build_id()
     :ok = Arca.BuildRecords.record_started(actor, id, "c:local.gc:1.0.0")
     id
   end
@@ -242,7 +241,7 @@ defmodule Arca.StorageGCTest do
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{
         message: %{author: actor.user_id, content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: actor.user_id}
+        turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 
     turn
@@ -295,7 +294,7 @@ defmodule Arca.StorageGCTest do
 
       identity = %{
         new_revision: revision,
-        content_identity: Cyfr.Digest.sha256("slow"),
+        content_identity: Prima.Digest.sha256("slow"),
         commit_identity: "usr_slow"
       }
 
@@ -325,7 +324,7 @@ defmodule Arca.StorageGCTest do
       assert :committed =
                StorageUnits.commit(actor, draft, nil, token, %{
                  new_revision: revision,
-                 content_identity: Cyfr.Digest.sha256("late"),
+                 content_identity: Prima.Digest.sha256("late"),
                  commit_identity: "usr_late"
                })
 
@@ -602,6 +601,61 @@ defmodule Arca.StorageGCTest do
     end
   end
 
+  describe "the root's projection" do
+    defp change(actor, unit) do
+      {root, key} = UnitLocator.unit_key(unit)
+      {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, root, units: [key])
+      Enum.find(token.units, &(&1.unit_key == key))
+    end
+
+    test "a repair with the revision unchanged raises the unit's generation, then marks it ready",
+         %{actor: actor, unit: unit} do
+      commit_unserved(actor, unit, "one")
+      {:ok, %{current_revision: one}} = pointer(actor, unit)
+      committed = change(actor, unit)
+      assert %{ready: false, source_revision: ^one, pending: true} = committed
+
+      assert {:ok, %{repaired: [^unit]}} = StorageGC.repair(actor)
+
+      repaired = change(actor, unit)
+      assert %{ready: true, source_revision: ^one, tombstone: false} = repaired
+      assert repaired.generation > committed.generation
+
+      {root, _key} = UnitLocator.unit_key(unit)
+      assert {:ok, %{epoch: epoch}} = Arca.StorageProjectionRoots.epoch(actor, root)
+      assert epoch == repaired.generation
+    end
+
+    test "a repair whose move fails leaves a pending generation, never a ready one", %{
+      actor: actor,
+      unit: unit
+    } do
+      commit_unserved(actor, unit, "one")
+      committed = change(actor, unit)
+
+      Adapter.hook(fn op, _actor, path ->
+        if op in [:put, :replace_tree] and served?(path, unit), do: {:error, :enospc}, else: :pass
+      end)
+
+      assert {:ok, %{left: [{^unit, {:repair_failed, _}}]}} = StorageGC.repair(actor)
+      Adapter.clear()
+
+      assert %{ready: false} = pending = change(actor, unit)
+      assert pending.generation > committed.generation
+    end
+
+    test "collection changes no projection", %{actor: actor, unit: unit} do
+      assert {:ok, _} = commit(actor, unit, "one")
+      {root, _key} = UnitLocator.unit_key(unit)
+      {:ok, before} = Arca.StorageProjectionRoots.epoch(actor, root)
+
+      lay_prefix(actor, unit, StorageUnits.new_revision(), "dead", marker: false)
+      assert {:ok, %{collected: 1}} = StorageGC.sweep(actor, now: later(2 * @day))
+
+      assert {:ok, ^before} = Arca.StorageProjectionRoots.epoch(actor, root)
+    end
+  end
+
   describe "a sweep's own repair" do
     test "finishes a move that outlived the grace", %{actor: actor, unit: unit} do
       assert {:ok, _} = commit(actor, unit, "one")
@@ -646,10 +700,10 @@ defmodule Arca.StorageGCTest do
         :pass
       end)
 
-      nobody = %Cyfr.Actor{athanor_id: nil, user_id: "usr_nobody"}
+      nobody = %Prima.Actor{athanor_id: nil, user_id: "usr_nobody"}
 
       # No connection to query with: a query would raise, not refuse.
-      Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
 
       assert {:error, :no_athanor} = StorageGC.sweep(nobody)
       assert {:error, :no_athanor} = StorageGC.roots(nobody)
@@ -665,11 +719,11 @@ defmodule Arca.StorageGCTest do
                  pins: MapSet.new()
                })
 
-      assert {:error, :no_athanor} = StorageGC.sweep(%Cyfr.Actor{athanor_id: ""})
+      assert {:error, :no_athanor} = StorageGC.sweep(%Prima.Actor{athanor_id: ""})
       refute_received {:storage, _op, _path}
     end
 
-    test "one estate's sweep lists and collects inside that estate alone", %{
+    test "one athanor's sweep lists and collects inside that athanor alone", %{
       actor: actor,
       unit: unit
     } do
@@ -678,7 +732,7 @@ defmodule Arca.StorageGCTest do
       mine = lay_prefix(actor, unit, StorageUnits.new_revision(), "mine")
       theirs = lay_prefix(other, unit, StorageUnits.new_revision(), "theirs")
 
-      # The other estate's pointer names the revision this one staged.
+      # The other athanor's pointer names the revision this one staged.
       {root, key} = UnitLocator.unit_key(unit)
       token = StorageUnits.new_writer_token()
       {:ok, draft} = StorageUnits.register_draft(other, root, key, token)
@@ -686,7 +740,7 @@ defmodule Arca.StorageGCTest do
       :committed =
         StorageUnits.commit(other, draft, nil, token, %{
           new_revision: mine,
-          content_identity: Cyfr.Digest.sha256("theirs"),
+          content_identity: Prima.Digest.sha256("theirs"),
           commit_identity: "usr_other"
         })
 

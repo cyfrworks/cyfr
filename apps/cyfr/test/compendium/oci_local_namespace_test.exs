@@ -6,9 +6,8 @@ defmodule Compendium.OCILocalNamespaceTest do
 
   alias Compendium.OCI
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
@@ -78,7 +77,7 @@ defmodule Compendium.OCILocalNamespaceTest do
   describe "the component tool's early check" do
     test "refuses a bare local ref with an actionable message", %{ctx: ctx} do
       assert {:error, message} =
-               Compendium.MCP.ComponentTool.handle(ctx, %{
+               Compendium.Providers.Component.handle(ctx, %{
                  "action" => "pull",
                  "reference" => "reagent:local.thing:1.0.0"
                })

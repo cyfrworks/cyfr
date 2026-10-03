@@ -39,9 +39,31 @@ helper="$script_dir/test-partition-env.exs"
 checkout=$(pwd -P)
 if [ -z "${MIX_BUILD_PATH:-}" ] && [ "$ADAPTER" = postgres ]; then export MIX_BUILD_PATH=_build/test_pg; fi
 export CYFR_DATABASE="$ADAPTER" MIX_ENV=test CYFR_TEST_PARTITION_ENV_LIBRARY=0
-cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+# Mix keeps its build lock under TMPDIR, and every Mix process here runs
+# under a partition's own, so the lock excludes no one. It is off because
+# Mix through 1.20.4 can take it into a wait that never ends: the second
+# take in a fresh lock directory, on the port the first one had, reads its
+# own port back as the holder's and waits for itself to let go.
+export MIX_OS_CONCURRENCY_LOCK=0
+# The cores this run may size itself to: the machine's, or the share a
+# caller that runs several at once gives it (scripts/heavy-check.sh -s).
+if [ -n "${CYFR_TEST_CORES:-}" ]; then
+  case "$CYFR_TEST_CORES" in *[!0-9]*|0*) echo 'CYFR_TEST_CORES must be a positive decimal integer' >&2; exit 64 ;; esac
+  [ "${#CYFR_TEST_CORES}" -le 4 ] || { echo 'CYFR_TEST_CORES is at most 9999' >&2; exit 64; }
+  cores=$CYFR_TEST_CORES
+else
+  cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+fi
 per=$(( cores / PARTITIONS )); [ "$per" -lt 2 ] && per=2
-export ERL_FLAGS="+S ${per}:${per} +SDcpu ${per} +SDio ${per}"
+# Dirty I/O schedulers are threads that block inside the SQLite driver while
+# a writer waits out a busy quantum; scaling them down with the partition
+# count lets waiters crowd out the holder they wait for. They stay wide.
+# No scheduler busy-waits: on a loaded host, a partition's idle scheduler
+# threads spinning for work compete with the one that has it, and pinned to
+# two CPUs beside six busy loops a partition's throughput fell as low as
+# 1.5% of what it had on them unloaded (about 63% with busy-wait off). A
+# runner VM outside a release makes the same choice (`Opus.Release`).
+export ERL_FLAGS="+S ${per}:${per} +SDcpu ${per} +SDio 16 +sbwt none +sbwtdcpu none +sbwtdio none"
 umask 077
 # UNIX socket paths have a small fixed ceiling on macOS. Do not nest under
 # the inherited TMPDIR (which may already consume most of that ceiling), and
@@ -174,20 +196,131 @@ run_partition() {
   # "$@" handles an empty argument list even under Bash 3.2 + nounset.
   mix test --partitions "$PARTITIONS" --no-compile "$@"
 }
+
+# Mix splits test files among partitions per umbrella application, round
+# robin over each application's sorted files, and refuses a partition to
+# which the paths named for an application give no file: that partition
+# exits 1 with no test failed. So every existing path under apps/<app>/ is
+# counted with its application's test files (`*_test.exs` under a
+# directory, a named file as it is), and a partition is given only the
+# paths of the applications with at least as many files as its number. A
+# partition left with none of the named paths is not started. Any other
+# argument (an option, its value, a missing path, a path outside an
+# application) reaches every started partition unchanged, and so does an
+# application's path that holds no test file, so a mistyped path still
+# fails as it would.
+args=("$@")
+arg_app=()
+app_names=()
+app_counts=()
+line_suffix='^(.+):[0-9]+$'
+for ((j=0; j<${#args[@]}; j++)); do
+  arg_app[$j]=
+  path=${args[$j]}
+  case "$path" in -*) continue ;; esac
+  while [[ $path =~ $line_suffix ]]; do path=${BASH_REMATCH[1]}; done
+  path=${path#./}
+  case "$path" in "$checkout"/*) path=${path#"$checkout"/} ;; esac
+  case "$path" in apps/*/?*) ;; *) continue ;; esac
+  [ -e "$path" ] || continue
+  app=${path#apps/}
+  app=${app%%/*}
+  arg_app[$j]=$app
+  # Mix's wildcard skips dot-entries; a named file counts whatever its name.
+  if [ -d "$path" ]; then
+    find "$path" -mindepth 1 -name '.*' -prune -o -type f -name '*_test.exs' -print
+  else
+    printf '%s\n' "$path"
+  fi >>"$out_dir/files-$app"
+done
+for ((j=0; j<${#args[@]}; j++)); do
+  [ -n "${arg_app[$j]}" ] || continue
+  known=false
+  for ((k=0; k<${#app_names[@]}; k++)); do
+    [ "${app_names[$k]}" = "${arg_app[$j]}" ] && known=true
+  done
+  [ "$known" = true ] && continue
+  app_names[${#app_names[@]}]=${arg_app[$j]}
+  app_counts[${#app_counts[@]}]=$(sort -u "$out_dir/files-${arg_app[$j]}" | wc -l | tr -d ' ')
+done
+app_count() {
+  local k
+  for ((k=0; k<${#app_names[@]}; k++)); do
+    if [ "${app_names[$k]}" = "$1" ]; then echo "${app_counts[$k]}"; return; fi
+  done
+}
+# Fills part_args with partition $1's arguments; fails when paths were
+# named and none of them is its.
+partition_args() {
+  local i=$1 j count named=false own=false
+  part_args=()
+  for ((j=0; j<${#args[@]}; j++)); do
+    if [ -n "${arg_app[$j]}" ]; then
+      named=true
+      count=$(app_count "${arg_app[$j]}")
+      if [ "$count" -ne 0 ] && [ "$count" -lt "$i" ]; then continue; fi
+      own=true
+    fi
+    part_args[${#part_args[@]}]=${args[$j]}
+  done
+  [ "$named" = false ] || [ "$own" = true ]
+}
+
 start=$SECONDS
+started=()
+partition_pid=()
+skipped=0
 for ((i=1; i<=PARTITIONS; i++)); do
-  run_partition "$i" "$@" >"$out_dir/p$i.log" 2>&1 &
+  if ! partition_args "$i"; then
+    started[$i]=false
+    skipped=$((skipped + 1))
+    continue
+  fi
+  started[$i]=true
+  run_partition "$i" ${part_args[@]+"${part_args[@]}"} >"$out_dir/p$i.log" 2>&1 &
+  partition_pid[$i]=$!
   pids[${#pids[@]}]=$!
 done
 status=0
-for pid in "${pids[@]}"; do wait "$pid" || status=1; done
+exits=()
+for ((i=1; i<=PARTITIONS; i++)); do
+  [ "${started[$i]}" = true ] || continue
+  if wait "${partition_pid[$i]}"; then exits[$i]=0; else exits[$i]=$?; status=1; fi
+done
 for ((i=1; i<=PARTITIONS; i++)); do
   printf '==> partition %s/%s\n' "$i" "$PARTITIONS"
+  if [ "${started[$i]}" != true ]; then
+    echo '    not started: no test file of the named paths falls to it'
+    continue
+  fi
   grep -E '^(Finished in|Result:|[[:space:]]+[0-9]+\) test)' "$out_dir/p$i.log" | head -20 || :
   if ! grep -q '^Result:' "$out_dir/p$i.log"; then
     echo '    NO RESULT — partition did not report'
     status=1
   fi
+  # A partition that ended non-zero says why here, since its log stays on
+  # the machine that ran it: every line of its last hundred that is not a
+  # progress dot, a result or a routine log line.
+  if [ "${exits[$i]}" != 0 ]; then
+    printf '    partition exited %s; its account:\n' "${exits[$i]}"
+    # The ownership watch's verdict and each new line it kept, wherever
+    # they fell in the log.
+    grep -nE 'OwnershipError line\(s\) were logged|^-- NEW' "$out_dir/p$i.log" | sed 's/^/    | /' || :
+    grep -nE -A3 '^-- NEW' "$out_dir/p$i.log" | grep -vE '^--$' | sed 's/^/    | /' || :
+    # Each failure's own block: the test, its file and line, the assertion
+    # and its stack, which the tail below may not reach when logged lines
+    # follow it. Without this a failure on a runner whose log is gone can
+    # be named but not read.
+    grep -nE -A30 '^[[:space:]]+[0-9]+\) test' "$out_dir/p$i.log" \
+      | grep -vE '^--$|^[0-9]+-[[:space:]]*$' | head -n 240 | sed 's/^/    | /' || :
+    tail -n 100 "$out_dir/p$i.log" \
+      | grep -vE '^[[:space:]]*$|^\.+$|^Result:|^Finished in|\[(info|debug)\]' \
+      | tail -n 40 | sed 's/^/    | /' || :
+  fi
 done
-echo "==> $PARTITIONS partitions, $ADAPTER, $((SECONDS - start))s wall, exit $status"
+if [ "$skipped" -gt 0 ]; then
+  echo "==> $PARTITIONS partitions ($skipped not started: no test file of the named paths falls to them), $ADAPTER, $((SECONDS - start))s wall, exit $status"
+else
+  echo "==> $PARTITIONS partitions, $ADAPTER, $((SECONDS - start))s wall, exit $status"
+fi
 exit "$status"

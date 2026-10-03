@@ -16,7 +16,21 @@ end
 # running the whole application against one Postgres and one object store.
 # It costs two operating-system processes and a full boot each, and it
 # needs a database of its own, so it runs only when it is asked for.
-ExUnit.configure(exclude: [:cluster, :s3_integration, :public_dns | toolchain_excludes])
+# :benchmark is the admission latency matrix (`Grimoire.AdmissionLatencyTest`):
+# minutes of timed samples against committed rows, run alone with
+# `--only benchmark` so nothing else competes for the pool it measures.
+# :boundary_plant is the Boundary compiler's planted violations
+# (`Cyfr.BoundariesTest.CompilerPlants`): each is a forced compile of a
+# copy of the tree, run once by the gate's static leg.
+ExUnit.configure(
+  exclude: [
+    :cluster,
+    :s3_integration,
+    :public_dns,
+    :benchmark,
+    :boundary_plant | toolchain_excludes
+  ]
+)
 
 # The suite runs from the umbrella root, where the Opus worker service is
 # up beside CYFR: its listener and CYFR's host API listener each bound a
@@ -33,10 +47,15 @@ Cyfr.Test.OpusService.wire!()
 Cyfr.Test.LocusService.serve!()
 ExUnit.after_suite(fn _ -> Cyfr.Test.LocusService.stop!() end)
 
+# The platform settings the boot installed, with the suite's own values
+# over the roster's defaults (`Cyfr.Test.Settings.suite/0`); a test sets
+# one through `Cyfr.Test.Settings.put/2`.
+Cyfr.Test.Settings.install!()
+
 # Owned by the test-runner process so it outlives every test and no two
-# tests race to create it. `Cyfr.Test.SourceTree` fills it lazily; see that
+# tests race to create it. `Prima.Test.SourceTree` fills it lazily; see that
 # module for why the architecture tests need to stop re-reading the tree.
-Cyfr.Test.SourceTree.ensure_table()
+Prima.Test.SourceTree.ensure_table()
 
 # The tmp storage roots configured in config/test.exs: the tenant root, and
 # the seed tree with an empty bundle plus a copy of the shipped AQUA
@@ -52,6 +71,13 @@ File.cp_r!(Path.expand("../../../seed/aqua", __DIR__), Path.join(seed_path, "aqu
 # A suite database built from a different schema would run stale, since the
 # baseline still reads as applied; refuse it before any test touches it.
 Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, &Arca.SchemaFingerprint.verify!/0)
+
+# Every connection is lent by a test's sandbox owner, and never taken by a
+# process on its own: in the pool's default automatic mode a process no
+# test allowed (the decision log's writer, spawned from an asynchronous
+# test) is handed a real connection and its rows commit for the tests
+# after it to see.
+Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
 
 # The athanor rows the fixtures name by hand, committed once for the run.
 Sanctum.TestContext.seed_athanors!()

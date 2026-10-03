@@ -5,9 +5,9 @@ defmodule PrismWeb.SignInTraceTest do
   @moduledoc """
   Sign-in on the product path, end to end, once per way in. A browser opens
   the sign-in page; the identity provider answers; the door admits; the
-  person's estate is minted at once and the real shipped bundle fills it in
+  person's athanor is minted at once and the real shipped bundle fills it in
   the background with no registry reachable; the session is a cookie; and
-  the console mounts on the estate that fill left, its context established
+  the console mounts on the athanor that fill left, its context established
   from that cookie.
 
     * Device flow: `/login` starts GitHub's device flow against a stand-in
@@ -18,11 +18,11 @@ defmodule PrismWeb.SignInTraceTest do
       `/auth/oidcc/callback` with Ueberauth's state check in between.
 
   Fills run in the background here (`provisioning_inline: false`), and no
-  estate is stubbed: the page can mount only because the fill happened.
+  athanor is stubbed: the page can mount only because the fill happened.
   """
   use PrismWeb.ConnCase, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   @moduletag timeout: 240_000
 
@@ -79,7 +79,7 @@ defmodule PrismWeb.SignInTraceTest do
     end)
 
     # The sign-in budgets are node-wide counters another test may have spent.
-    Cyfr.RateLimiter.reset()
+    Prima.RateLimiter.reset()
 
     # A fill still running when the paths are restored would provision
     # against the repository's own seed and data trees.
@@ -89,7 +89,7 @@ defmodule PrismWeb.SignInTraceTest do
     :ok
   end
 
-  test "device flow: the sign-in page, the IdP, the ticket, the cookie, the filled estate",
+  test "device flow: the sign-in page, the IdP, the ticket, the cookie, the filled athanor",
        %{conn: conn} do
     n = System.unique_integer([:positive])
     polls = stand_in_idp(n)
@@ -108,10 +108,12 @@ defmodule PrismWeb.SignInTraceTest do
     assert redirected_to(signed_in) == "/"
     assert get_session(signed_in, :sanctum_session_token)
 
-    assert_console_on_filled_estate(signed_in, "github|https://github.com|#{n}")
+    assert_console_on_filled_athanor(signed_in, "github|https://github.com|#{n}")
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
-  test "OIDC: the issuer round trip through /auth/oidcc/callback, the cookie, the filled estate",
+  test "OIDC: the issuer round trip through /auth/oidcc/callback, the cookie, the filled athanor",
        %{conn: conn} do
     n = System.unique_integer([:positive])
     Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OIDC)
@@ -128,12 +130,14 @@ defmodule PrismWeb.SignInTraceTest do
     assert redirected_to(signed_in) == "/"
     assert get_session(signed_in, :sanctum_session_token)
 
-    assert_console_on_filled_estate(signed_in, "oidcc|https://idp.test|trace-#{n}")
+    assert_console_on_filled_athanor(signed_in, "oidcc|https://idp.test|trace-#{n}")
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
-  # The person the sign-in minted, the fill their estate received with
+  # The person the sign-in minted, the fill their athanor received with
   # nothing here performing it, and the console mounted from the cookie.
-  defp assert_console_on_filled_estate(signed_in, identity) do
+  defp assert_console_on_filled_athanor(signed_in, identity) do
     {:ok, user} = Users.get_by_identity(identity)
     athanor_id = user.personal_athanor_id
     assert {:ok, %{kind: "person"}} = Athanors.get(athanor_id)
@@ -169,7 +173,7 @@ defmodule PrismWeb.SignInTraceTest do
     assert {:ok, [_profile]} =
              Arca.ConsentStorage.profiles(Sanctum.Context.actor(reader), "agent:local.aqua")
 
-    # `/` lands the person in their own estate — the redirect naming it is
+    # `/` lands the person in their own athanor — the redirect naming it is
     # itself the claim — and the page there is not the preparing state.
     Process.put(:prism_test_athanor_id, athanor_id)
     console = recycle(signed_in)

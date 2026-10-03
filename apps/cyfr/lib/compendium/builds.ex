@@ -10,6 +10,14 @@ defmodule Compendium.Builds do
   `Cargo.lock` the build used, or a tincture's `dist/` — before the
   component is registered.
 
+  A tincture with a package manifest builds only from its lockfile: one
+  whose `package.json` ships without it is refused here before any request
+  (`Compendium.TinctureValidator.check_lockfile/1`), and the builder
+  installs exactly what it pins, under its isolation, with no credential
+  in the build's environment. The bundle the build answers keeps the
+  notices of the packages it ships (`dist/third-party-notices.json`), and
+  replaces the unit's `dist/` whole.
+
   This server runs no toolchain. It builds exactly when a builds service
   is configured (`Cyfr.RuntimeConfig.builds_enabled?/0`); otherwise every
   build is refused before a row is written or a request made. It keeps no
@@ -47,7 +55,7 @@ defmodule Compendium.Builds do
   alias Arca.BuildRecords
   alias Compendium.Builds.Client
   alias Compendium.ComponentPath
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
   alias Sanctum.Context
 
   @supervisor Compendium.Builds.TaskSupervisor
@@ -61,7 +69,7 @@ defmodule Compendium.Builds do
 
   @typedoc """
   One step of a build as its watchers see it: a stage the builder reported
-  (`t:Cyfr.BuilderProtocol.stage/0`), or `:complete` or `:error` at its end.
+  (`t:Prima.BuilderProtocol.stage/0`), or `:complete` or `:error` at its end.
   """
   @type progress :: %{build_id: String.t(), phase: atom(), message: String.t()}
 
@@ -83,7 +91,7 @@ defmodule Compendium.Builds do
 
   Answers the operation's result — `status`, `reference`, `digest`,
   `size`, `files`, `exports`, `language`, `target_type` and
-  `registration: "pending"` — or a refusal `Cyfr.Ops.Error.render/2`
+  `registration: "pending"` — or a refusal `Grimoire.render/1`
   renders.
   """
   @spec compile(Context.t(), String.t(), [option()]) :: {:ok, map()} | {:error, term()}
@@ -170,7 +178,7 @@ defmodule Compendium.Builds do
   # its shape is bounded, and an id naming a build still in flight is
   # refused rather than refreshing that build's row under its subscriber
   # (`Arca.BuildRecords.record_started/3` overwrites the caller's own row).
-  defp settle_build_id(_ctx, nil), do: {:ok, Cyfr.UUID7.generate_id("build")}
+  defp settle_build_id(_ctx, nil), do: {:ok, Prima.UUID7.generate_id("build")}
 
   defp settle_build_id(ctx, id) when is_binary(id) do
     cond do
@@ -195,11 +203,11 @@ defmodule Compendium.Builds do
   defp run_recorded(%{ctx: ctx, build_id: build_id, reference: reference} = build) do
     case BuildRecords.record_started(Context.actor(ctx), build_id, reference) do
       :ok ->
-        logger_metadata = Cyfr.LoggerContext.capture()
+        logger_metadata = Prima.LoggerContext.capture()
 
         started =
           Task.Supervisor.start_child(@supervisor, fn ->
-            Cyfr.LoggerContext.restore(logger_metadata)
+            Prima.LoggerContext.restore(logger_metadata)
             record_outcome(build, run(build))
           end)
 
@@ -234,9 +242,7 @@ defmodule Compendium.Builds do
     do: BuildRecords.record_finished(Context.actor(ctx), build_id, "compiled", result)
 
   defp record_outcome(%{ctx: ctx, build_id: build_id}, {:error, reason}) do
-    sentence =
-      Cyfr.Ops.Error.render(reason) ||
-        "The build failed for an unexpected reason — see the server log"
+    sentence = Grimoire.render(reason)
 
     BuildRecords.record_finished(Context.actor(ctx), build_id, "failed", sentence)
   end
@@ -371,12 +377,12 @@ defmodule Compendium.Builds do
   # Sources
   # ---------------------------------------------------------------------------
 
-  # `Cyfr.ComponentRef.parse/1` gates the type and the namespace policy the
+  # `Prima.ComponentRef.parse/1` gates the type and the namespace policy the
   # namespace. Sources, version resolution and the published artifact all
   # use the local publisher, so a reference of another namespace is refused
   # rather than renamespaced.
   defp parse_reference(reference) do
-    case Cyfr.ComponentRef.parse(reference) do
+    case Prima.ComponentRef.parse(reference) do
       {:ok, ref} ->
         case Compendium.NamespacePolicy.require_local_build(ref.namespace) do
           :ok -> {:ok, ref.type, ref.name, ref.version}
@@ -393,11 +399,11 @@ defmodule Compendium.Builds do
   defp resolve_version(ctx, reference, nil) do
     case Compendium.Resolver.resolve(ctx, reference) do
       {:ok, resolved_ref, _metadata} ->
-        {:ok, parsed} = Cyfr.ComponentRef.parse(resolved_ref)
+        {:ok, parsed} = Prima.ComponentRef.parse(resolved_ref)
         {:ok, parsed.version}
 
       {:error, reason} ->
-        {:error, "Cannot resolve version for #{reference}: #{reason}"}
+        {:error, "Cannot resolve version for #{reference}: #{Grimoire.render(reason)}"}
     end
   end
 
@@ -410,8 +416,13 @@ defmodule Compendium.Builds do
     package = base ++ ["package.json"]
 
     case Arca.get(Sanctum.Context.actor(ctx), package) do
+      # Refused here as well as by the builder, so a unit without its
+      # lockfile never reaches the builds service.
       {:ok, _} ->
-        {:ok, collect(ctx, base, &tincture_source?/1)}
+        sources = collect(ctx, base, &tincture_source?/1)
+
+        with :ok <- Compendium.TinctureValidator.check_lockfile(Map.keys(sources)),
+             do: {:ok, sources}
 
       {:error, _} ->
         {:error,
@@ -636,14 +647,14 @@ defmodule Compendium.Builds do
   # A started build's row carries the outcome; a build with no row told
   # its caller `"pending"` and this is a no-op.
   defp register(%{ctx: ctx, build_id: build_id}) do
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     started =
       Task.Supervisor.start_child(@supervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
+        Prima.LoggerContext.restore(logger_metadata)
 
         outcome =
-          case Cyfr.Ops.Catalog.call_external("component", ctx, %{"action" => "register"}) do
+          case Grimoire.call_external("component", ctx, %{"action" => "register"}) do
             {:ok, _} ->
               "done"
 

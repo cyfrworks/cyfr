@@ -3,8 +3,8 @@
 # Copyright 2026 CYFR Works Inc.
 """A runner cannot take more memory than its bound, run as docker-compose.yml's opus service.
 
-The service asks cyfr-spawn for a memory bound on every runner it spawns
-(`Opus.Keeper.Spawn`, the pool's `:runner_memory_bytes`): cyfr-spawn gives
+The service asks cyfr-keeper for a memory bound on every runner it spawns
+(`Opus.Keeper.Channel`, the pool's `:runner_memory_bytes`): cyfr-keeper gives
 the runner a cgroup v2 group of its own at that bound, with no swap and the
 group killed whole, charged for the runner's VM, every guest's linear
 memory, the pages of its home and the kernel memory it causes, together. It
@@ -111,7 +111,7 @@ MARGIN = 1.8
 
 
 def group(uid):
-    return f"/sys/fs/cgroup/spawn-{uid}"
+    return f"/sys/fs/cgroup/keeper-{uid}"
 
 
 def read_group(stack, uid):
@@ -148,7 +148,7 @@ def brief_stat(stat):
 
 
 def keeper_group(stack):
-    """The keeper's group (cyfr-spawn, the service and every spawn without a bound): its peak and current use."""
+    """The keeper's group (cyfr-keeper, the service and every spawn without a bound): its peak and current use."""
     out = stack.exec("cat /sys/fs/cgroup/keeper/memory.peak /sys/fs/cgroup/keeper/memory.current").stdout.split()
     return {"peak": int(out[0]), "current": int(out[1])} if len(out) == 2 else None
 
@@ -186,7 +186,7 @@ class GroupSampler(threading.Thread):
 
     SCRIPT = r"""
       echo "pid $$"
-      g=/sys/fs/cgroup/spawn-UID
+      g=/sys/fs/cgroup/keeper-UID
       while :; do
         p=; c=; k=; o=; ok=
         { read -r p < $g/memory.peak; read -r c < $g/memory.current; } 2>/dev/null
@@ -374,7 +374,7 @@ def test_runner_bound(stack, plane):
     # children take their memory, then let complete.
     sibling = plane.mint(stack.boot, "reagent", ECHO_REF, wasm(ECHO), {"sibling": "alive"}, "ath_mem_sibling", 30_000)
     release_sibling = held(plane, "attach", sibling["execution_id"])
-    expect(stack.start(sibling)[1] == {"ok": True}, "a sibling subtree starts and is held at its attach")
+    expect(stack.start(sibling)[1] == {"v": 1, "ok": True}, "a sibling subtree starts and is held at its attach")
     sibling_runner = attached_runner(stack, plane, sibling)
 
     # The formula spawns its children, each admitted for its runner, and
@@ -398,7 +398,7 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
     # emit for seconds, not for a runner's boot.
     release_formula = held(plane, "fetch_artifact", formula["execution_id"])
     try:
-        expect(stack.start(formula)[1] == {"ok": True}, f"a formula that spawns {CHILDREN} children and awaits them all starts")
+        expect(stack.start(formula)[1] == {"v": 1, "ok": True}, f"a formula that spawns {CHILDREN} children and awaits them all starts")
         runner = attached_runner(stack, plane, formula)
         plane.wait_seen("fetch_artifact", formula["execution_id"], 30)
         expect(runner["uid"] != sibling_runner["uid"], "the formula and the sibling run under different uids",
@@ -573,7 +573,7 @@ def reuse_uid(stack, plane, hostile, tries=12):
             if process["uid"] == hostile["uid"]:
                 return {**process, "group": wait_until(lambda: read_group(stack, process["uid"]), 10, "the new runner's group")}
         attempt = plane.mint(stack.boot, "reagent", ECHO_REF, wasm(ECHO), {"cycle": n}, f"ath_mem_cycle_{n}", 30_000)
-        expect(stack.start(attempt)[1] == {"ok": True}, f"a subtree of another athanor starts ({n + 1})")
+        expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"a subtree of another athanor starts ({n + 1})")
         terminal(plane, attempt["execution_id"], BOOT_S)
         time.sleep(stack.idle_ttl_ms / 1000 + 0.5)
     sys.exit(f"FAIL: uid {hostile['uid']} was not given to a runner again within {tries} subtrees")
@@ -614,7 +614,7 @@ def test_bound_unavailable(image, plane, window_s=5.0):
               f"last {counts[-1] if counts else None}; the start answered {code} {answer}", flush=True)
         expect(seen == set() and stack.homes() == [], "no runner process ever ran under a pooled uid, and no home was made",
                {"pids": sorted(seen), "homes": stack.homes()})
-        expect(len(refusals) == 1, "the service logged once that cyfr-spawn cannot bound a runner, naming writable-cgroups=true",
+        expect(len(refusals) == 1, "the service logged once that cyfr-keeper cannot bound a runner, naming writable-cgroups=true",
                [line for line in logs if "memory" in line or "Keeper" in line][-10:])
         expect(counts and all(c == {"fresh": 0, "idle": 0, "busy": 0, "tainted": 0} for c in counts),
                f"the pool kept no runner it was refused, tainted or otherwise, in any of {len(counts)} samples",
@@ -650,7 +650,7 @@ def seed(kind, name):
 
 def chat_request(model):
     """A model turn with a long thread, a tool result and an image: some 600 KB of input."""
-    notes = ("The estate's notes, read back in full so the model sees every line of them. " * 64)[:4_000]
+    notes = ("The athanor's notes, read back in full so the model sees every line of them. " * 64)[:4_000]
     image = base64.b64encode(os.urandom(150_000)).decode()
     messages = []
     for i in range(50):
@@ -662,9 +662,9 @@ def chat_request(model):
             {"type": "tool_result", "tool_call_id": f"call_{i}", "name": "files.read", "content": notes, "is_error": False}]})
     messages.append({"role": "user", "content": [{"type": "text", "text": "And this?"},
                                                  {"type": "image", "media_type": "image/png", "data": image}]})
-    tools = [{"name": f"tool_{i}", "description": "A tool the estate offers. " * 8,
+    tools = [{"name": f"tool_{i}", "description": "A tool the athanor offers. " * 8,
               "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}} for i in range(40)]
-    return {"operation": "chat", "params": {"model": model, "system": "You are the estate's assistant. " * 20,
+    return {"operation": "chat", "params": {"model": model, "system": "You are the athanor's assistant. " * 20,
                                              "messages": messages, "tools": tools, "max_tokens": 4096}}
 
 
@@ -679,7 +679,7 @@ def fixture_request():
 
 
 def bound_authority(ref, tasks):
-    """An authority bound to `ref` whose node allows `tasks` concurrent children (`Cyfr.Authority` on the wire)."""
+    """An authority bound to `ref` whose node allows `tasks` concurrent children (`Prima.Authority` on the wire)."""
     name = ref.rsplit(":", 1)[0]
     return {
         "activation": {}, "budget": {"id": "bgt_AAAAAAAAAAHKmY6r"}, "chain": [], "cursor": {"bound": name}, "depth": 0,
@@ -729,7 +729,7 @@ def run_workload(stack, plane, label, component, input_, children, athanor):
     if children:
         admit_children(plane, stack, attempt, children)
     code, answer = stack.start(attempt)
-    expect(code == 200 and answer == {"ok": True}, f"{label}: starts", answer)
+    expect(code == 200 and answer == {"v": 1, "ok": True}, f"{label}: starts", answer)
     runner = attached_runner(stack, plane, attempt)
     closed = terminal(plane, attempt["execution_id"], 180)
     measured = read_group(stack, runner["uid"])
@@ -774,7 +774,7 @@ def measure(image, rounds):
             print(f"round {n + 1}: {label}: {len(runners)} runner(s), peaked at {mib(group_['peak'])} ({group_['peak']} bytes)", flush=True)
             keeper = keeper_group(stack)
             keeper_peaks.append(keeper["peak"])
-            print(f"round {n + 1}: the keeper group (cyfr-spawn and the service) peaked at {mib(keeper['peak'])}", flush=True)
+            print(f"round {n + 1}: the keeper group (cyfr-keeper and the service) peaked at {mib(keeper['peak'])}", flush=True)
         finally:
             stack.down()
             plane.stop()

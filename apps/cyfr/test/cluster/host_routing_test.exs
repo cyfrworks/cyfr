@@ -47,7 +47,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
 
   use Cyfr.Cluster.Case, async: false
 
-  alias Cyfr.{Assignment, WorkerAuth, WorkerWire}
+  alias Prima.{Assignment, WorkerAuth, WorkerWire}
 
   # §4.3: the attempt lease (180 s) plus the sweeper's interval (60 s) is
   # the maximum recovery for an execution whose member is gone. The case
@@ -89,7 +89,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
         # made to the address it names.
         assert {:ok, %Assignment{}} = Assignment.read(redirected)
 
-        assert {200, %{"error" => "bad_mac"}} =
+        assert {200, %{"v" => 1, "error" => "bad_mac"}} =
                  post(call(held, "attach", %{"assignment" => redirected}), address(held))
       end
 
@@ -144,7 +144,8 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       # The same call, made once, delivered to the peer. Nothing about it
       # differs; only which member is asked to answer it. The peer refuses
       # it on the header alone, before it reads the body.
-      assert {401, %{"error" => "lost"}} = refused_by_peer!(completion(held), context.generation)
+      assert {401, %{"v" => 1, "error" => "lost"}} =
+               refused_by_peer!(completion(held), context.generation)
 
       # A completion an attempt's process never saw is a completion that
       # did not happen: the execution is still running, and the guest's
@@ -167,7 +168,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       held = attempt(:a, :unattached, attach: false)
       attach = call(held, "attach", %{"assignment" => held.assignment})
 
-      assert {401, %{"error" => "lost"}} = refused_by_peer!(attach, context.generation)
+      assert {401, %{"v" => 1, "error" => "lost"}} = refused_by_peer!(attach, context.generation)
 
       # The attempt is still unclaimed, so nothing about the peer's refusal
       # left it half-held, and the member it names still claims it.
@@ -182,7 +183,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       before = Observer.attempt(held.attempt)["lease_until"]
       renew = call(held, "renew", %{"attempts" => [held.attempt]})
 
-      assert {401, %{"error" => "lost"}} = refused_by_peer!(renew, context.generation),
+      assert {401, %{"v" => 1, "error" => "lost"}} = refused_by_peer!(renew, context.generation),
              "the peer renewed the lease of an attempt it holds none of the work for"
 
       assert Observer.attempt(held.attempt)["lease_until"] == before
@@ -205,12 +206,12 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       # which name no member — so the peer reads it and refuses it, rather
       # than refusing it unread. Its header carries no generation either,
       # so the member is the only thing that can refuse it.
-      assert {200, %{"error" => "lost"}} = refused_by_peer!(report, context.generation)
+      assert {200, %{"v" => 1, "error" => "lost"}} = refused_by_peer!(report, context.generation)
       assert Observer.attempt(held.attempt)["state"] == "running"
       assert Observer.attempt(held.attempt)["lease_until"] == before
 
       # The member that issued the attempts the runner held lapses them.
-      assert {200, %{"ok" => true}} = post(report, address(held))
+      assert {200, %{"v" => 1, "ok" => true}} = post(report, address(held))
 
       Wait.until!(
         fn -> Observer.attempt(held.attempt)["state"] == "lapsed" end,
@@ -226,7 +227,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
 
       # A refusal is an answer: the peer is reached, verifies the call and
       # says `lost`. The worker knows CYFR heard it and said no.
-      assert {401, %{"error" => "lost"}} =
+      assert {401, %{"v" => 1, "error" => "lost"}} =
                refused_by_peer!(call(held, "renew", %{"attempts" => [held.attempt]}), generation)
 
       Cell.kill(:a)
@@ -313,9 +314,10 @@ defmodule Cyfr.Cluster.HostRoutingTest do
   end
 
   # An attempt held open on `id` under `label`, with nothing of an earlier
-  # case still held there.
+  # case still held there: a run started over the API.
   defp attempt(id, label, opts \\ []) do
     Cell.call(id, Cyfr.Cluster.Holder, :release!, [])
+    opts = Keyword.put_new_lazy(opts, :ctx, fn -> Sanctum.TestContext.local(:api) end)
     Cell.call(id, Cyfr.Cluster.Holder, :attach!, [label, opts])
   end
 
@@ -334,7 +336,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       |> Map.merge(%{ts: System.system_time(:millisecond), nonce: nonce()})
 
     {:ok, keys} = WorkerAuth.attempt_keys(root(), fields)
-    json = Jason.encode!(%{"op" => op, "args" => args})
+    json = op |> String.to_existing_atom() |> WorkerWire.request_body(args) |> Jason.encode!()
     {:ok, sealed} = WorkerAuth.seal_call(keys.seal, :body, fields, json)
     {:ok, header} = WorkerAuth.host_call_header(keys.call, fields, sealed)
 
@@ -365,14 +367,13 @@ defmodule Cyfr.Cluster.HostRoutingTest do
   # whose attempts the runner held.
   defp exit_report(held) do
     body =
-      Jason.encode!(%{
-        "op" => "runner_exited",
-        "args" => %{
-          "member" => held.member,
-          "runner" => held.runner,
-          "attempts" => [held.attempt]
-        }
+      :runner_exited
+      |> WorkerWire.request_body(%{
+        "member" => held.member,
+        "runner" => held.runner,
+        "attempts" => [held.attempt]
       })
+      |> Jason.encode!()
 
     {:ok, worker_key} = WorkerAuth.worker_key(root(), held.service)
 
@@ -432,13 +433,13 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       |> Base.url_decode64!(padding: false)
       |> Jason.decode!()
       |> change.()
-      |> Cyfr.JCS.encode()
+      |> Prima.JCS.encode()
 
     mac = :crypto.mac(:hmac, :sha256, "a worker's key", bytes)
     Base.url_encode64(bytes, padding: false) <> "." <> Base.url_encode64(mac, padding: false)
   end
 
-  defp root, do: Application.fetch_env!(:cyfr, :worker_key)
+  defp root, do: Application.fetch_env!(:cyfr, :opus_key)
 
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 end

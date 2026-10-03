@@ -4,8 +4,9 @@
 defmodule Opus.SettingsTest do
   @moduledoc """
   The service's pool settings come from `config :opus` with defaults in
-  code, each validated, the keeper following the environment when unset,
-  a runner's memory bound in the keeper's own range and never none; a
+  code, each validated, the keeper the cyfr-keeper channel when unset and
+  the retired `OPUS_KEEPER` refused, a runner's memory bound in the
+  keeper's own range and never none; a
   runner's settings come from its process environment alone, and a
   runner that can see the service's key refuses to start.
   """
@@ -18,8 +19,7 @@ defmodule Opus.SettingsTest do
   @runner_env %{
     "OPUS_RUNNER_ID" => "runner_1",
     "OPUS_SERVICE_ID" => "wrk_local",
-    "OPUS_BOOT_ID" => "nonode@nohost#boot_1",
-    "OPUS_HOST_URL" => "http://127.0.0.1:4300"
+    "OPUS_BOOT_ID" => "nonode@nohost#boot_1"
   }
 
   describe "pool/2" do
@@ -30,7 +30,7 @@ defmodule Opus.SettingsTest do
                 idle_ttl_ms: 30_000,
                 watchdog_grace_ms: 5_000,
                 release_grace_ms: 2_000,
-                keeper: :direct,
+                keeper: :channel,
                 attach_dir: "/run/opus",
                 runner_memory_bytes: 402_653_184
               }} = Settings.pool([], %{})
@@ -38,22 +38,101 @@ defmodule Opus.SettingsTest do
       assert {:ok, 402_653_184} = Settings.runner_memory_bytes([])
     end
 
-    test "the keeper follows the environment when unset, and is what the configuration names when set" do
-      assert {:ok, %{keeper: :spawn}} = Settings.pool([], %{"CYFR_SPAWN_CHANNEL" => "socket:[1]"})
-      assert {:ok, %{keeper: :direct}} = Settings.pool([], %{"CYFR_SPAWN_CHANNEL" => ""})
+    test "unset, the keeper is the channel whatever the environment says; set, what the configuration names" do
+      for system <- [%{}, %{"KEEPER_CHANNEL" => ""}, %{"KEEPER_CHANNEL" => "socket:[1]"}] do
+        assert {:ok, %{keeper: :channel}} = Settings.pool([], system)
+      end
 
       assert {:ok, %{keeper: :direct}} =
-               Settings.pool([keeper: :direct], %{"CYFR_SPAWN_CHANNEL" => "socket:[1]"})
+               Settings.pool([keeper: :direct], %{"KEEPER_CHANNEL" => "socket:[1]"})
 
       assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :remote], %{})
       assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :local], %{})
-      assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: "spawn"], %{})
+      assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: "channel"], %{})
+      assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :spawn], %{})
+      assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: Opus.Keeper.Direct], %{})
+    end
+
+    test "OPUS_KEEPER is retired: set to any keeper, or blank, it refuses naming it and the channel" do
+      for value <- ["direct", "channel", ""], env <- [[], [keeper: :direct]] do
+        assert {:error, {:retired, "OPUS_KEEPER"}} =
+                 Settings.pool(env, %{"OPUS_KEEPER" => value})
+      end
+
+      assert Settings.retired("OPUS_KEEPER") =~ "OPUS_KEEPER is retired"
+      assert Settings.retired("OPUS_KEEPER") =~ "cyfr-keeper"
+    end
+
+    # The release carries no host module, so the prefix is declared here:
+    # an `OPUS_*` name it does not read refuses by name, whether the process
+    # or an .env file a development boot sourced sets it.
+    test "an OPUS_* name the release does not read refuses, naming it" do
+      assert {:error, {:unknown, ["OPUS_POOL_SIZ"]}} =
+               Settings.pool([], %{"OPUS_POOL_SIZ" => "4", "PATH" => "/bin"})
+
+      assert {:error, {:unknown, ["OPUS_A", "OPUS_B"]}} =
+               Settings.pool([], %{"OPUS_B" => "", "OPUS_A" => "1"})
+
+      assert Settings.unknown(["OPUS_POOL_SIZ"]) =~
+               "OPUS_POOL_SIZ is not a variable the opus release reads"
+
+      # What it reads, what compose interpolates, and other prefixes pass.
+      system =
+        Map.new(
+          Settings.variables() ++ Settings.compose_only() ++ ["KEEPER_CHANNEL", "CYFR_HOST"],
+          &{&1, "set"}
+        )
+
+      assert Settings.unknown_names(system) == []
+
+      # The retired name keeps its own refusal, and comes first.
+      assert {:error, {:retired, "OPUS_KEEPER"}} =
+               Settings.pool([], %{"OPUS_KEEPER" => "direct", "OPUS_BOGUS" => "1"})
+    end
+
+    test "pool!/0 refuses a stray OPUS_* name in the process environment" do
+      System.put_env("OPUS_STRAY_FOR_TEST", "1")
+      on_exit(fn -> System.delete_env("OPUS_STRAY_FOR_TEST") end)
+
+      assert_raise ArgumentError, ~r/OPUS_STRAY_FOR_TEST is not a variable/, &Settings.pool!/0
+    end
+
+    test "the declared names are every OPUS_* name a runner is handed" do
+      env =
+        Settings.runner_environment(%{
+          runner_id: "r",
+          service_id: "wrk_local",
+          boot: "b",
+          host_url: "http://127.0.0.1:4300",
+          watchdog_grace_ms: 5_000
+        })
+
+      assert Map.keys(env) -- Settings.variables() == []
+      assert "OPUS_CONTROL_FD" in Settings.variables()
     end
 
     # A subtree runs in a runner's VM of its own in every build, the test
     # build included: there is no keeper that runs one in the service's.
-    test "the keepers are spawn and direct, in every build" do
-      assert Settings.keepers() == [:spawn, :direct]
+    # The direct keeper is the test build's: without it, the channel alone.
+    test "the keepers are the channel and the test build's direct keeper, and the channel alone without it" do
+      assert Settings.keepers() == [:channel, :direct]
+      assert Opus.Keeper.direct_keeper() == Opus.Keeper.Direct
+
+      previous = Application.fetch_env!(:opus, :direct_keeper)
+      Application.delete_env(:opus, :direct_keeper)
+
+      try do
+        assert Opus.Keeper.direct_keeper() == nil
+        assert Settings.keepers() == [:channel]
+        assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :direct], %{})
+        assert Settings.expected(:keeper) == "one of :channel"
+        assert_raise ArgumentError, ~r/no direct keeper/, fn -> Opus.Keeper.module(:direct) end
+
+        Application.put_env(:opus, :direct_keeper, Opus.Keeper.NotCompiled)
+        assert Settings.keepers() == [:channel]
+      after
+        Application.put_env(:opus, :direct_keeper, previous)
+      end
     end
 
     test "a bound that is not a positive integer refuses, naming its key" do
@@ -132,16 +211,30 @@ defmodule Opus.SettingsTest do
   end
 
   describe "runner/1" do
-    test "reads the runner's settings from its environment, with the control descriptor and grace defaulted" do
+    test "reads the runner's settings from its environment, with the descriptors and grace defaulted" do
       assert {:ok,
               %{
                 runner_id: "runner_1",
                 service_id: "wrk_local",
                 boot: "nonode@nohost#boot_1",
-                host_url: "http://127.0.0.1:4300",
                 control_fd: 3,
+                relay: {:fd, 4},
                 watchdog_grace_ms: 5_000
-              }} = Settings.runner(@runner_env)
+              } = settings} = Settings.runner(@runner_env)
+
+      # A runner knows no address of CYFR's: it reaches CYFR through its relay.
+      refute Map.has_key?(settings, :host_url)
+
+      assert {:ok, %{relay: {:fd, 5}}} =
+               Settings.runner(Map.put(@runner_env, "OPUS_RELAY_FD", "5"))
+
+      assert {:ok, %{relay: {:socket, "/tmp/runner/relay.sock"}}} =
+               Settings.runner(
+                 Map.merge(@runner_env, %{
+                   "OPUS_RELAY_FD" => "4",
+                   "OPUS_RELAY_SOCKET" => "/tmp/runner/relay.sock"
+                 })
+               )
 
       assert {:ok, %{control_fd: 0, watchdog_grace_ms: 250}} =
                Settings.runner(
@@ -175,8 +268,14 @@ defmodule Opus.SettingsTest do
       assert {:error, {:malformed, "OPUS_RUNNER_ID"}} =
                Settings.runner(%{@runner_env | "OPUS_RUNNER_ID" => "has space"})
 
-      assert {:error, {:malformed, "OPUS_HOST_URL"}} =
-               Settings.runner(%{@runner_env | "OPUS_HOST_URL" => "not a url"})
+      assert {:error, {:malformed, "OPUS_RELAY_FD"}} =
+               Settings.runner(Map.put(@runner_env, "OPUS_RELAY_FD", "2"))
+
+      assert {:error, {:malformed, "OPUS_RELAY_SOCKET"}} =
+               Settings.runner(Map.put(@runner_env, "OPUS_RELAY_SOCKET", "relay.sock"))
+
+      assert {:error, {:malformed, "OPUS_RELAY_SOCKET"}} =
+               Settings.runner(Map.put(@runner_env, "OPUS_RELAY_SOCKET", "/tmp/../relay.sock"))
 
       assert {:error, {:malformed, "OPUS_CONTROL_FD"}} =
                Settings.runner(Map.put(@runner_env, "OPUS_CONTROL_FD", "-1"))
@@ -195,12 +294,13 @@ defmodule Opus.SettingsTest do
           watchdog_grace_ms: 5_000
         })
 
+      # No address of CYFR's, whatever the service holds: the runner's host
+      # calls leave through its relay.
       assert env == %{
                "OPUS_ROLE" => "runner",
                "OPUS_RUNNER_ID" => "runner_1",
                "OPUS_SERVICE_ID" => "wrk_local",
                "OPUS_BOOT_ID" => "boot_1",
-               "OPUS_HOST_URL" => "http://127.0.0.1:4300",
                "OPUS_WATCHDOG_GRACE_MS" => "5000"
              }
 

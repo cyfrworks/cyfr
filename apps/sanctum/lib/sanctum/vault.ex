@@ -3,8 +3,8 @@
 
 defmodule Sanctum.Vault do
   @moduledoc """
-  The operator's credential verbs: list, create, rename, rotate, rebind,
-  revoke, delete.
+  The operator's credential verbs: list, status, create, rename, rotate,
+  rebind, revoke, delete.
 
   Two mutations are deliberately different classes:
 
@@ -19,8 +19,14 @@ defmodule Sanctum.Vault do
 
   Every mutation requires the interactive consent class (`:oidc`
   surface, external plane) — no permission wildcard and no scoped key
-  reaches these verbs. Each broadcasts `{:vault_entry_changed, id, verb}`
-  on the tenant `"vault:changed"` topic so dependents (external MCP
+  reaches these verbs. Entering and rotating material are sensitive
+  changes (`credential_entry`), decided here by
+  `Sanctum.Consent.Authz.confirm/3`; from a paired device, their write's
+  own transaction holds the device's client and certificate
+  (`Sanctum.Issuance.device_hold/1`), so a revocation that commits after
+  the request was verified writes nothing and answers
+  `{:error, :not_standing}`. Each announces the change by entry, verb and name
+  (`Sanctum.Telemetry.vault_entry_changed/4`) so dependents (external MCP
   server processes holding resolved headers) reconcile immediately.
 
   What ships to callers is metadata only: names, kinds, field *names*,
@@ -76,6 +82,48 @@ defmodule Sanctum.Vault do
     end
   end
 
+  @typedoc """
+  One living entry's standing: its id, name, kind and status, when it was
+  created and last changed, and whether any consent's head revision binds
+  it. Never material, and never a field's name or content.
+  """
+  @type status_view :: %{
+          id: String.t(),
+          name: String.t(),
+          kind: String.t(),
+          status: String.t(),
+          created_at: DateTime.t() | nil,
+          updated_at: DateTime.t() | nil,
+          bound: boolean()
+        }
+
+  @doc """
+  The standing of every living entry in the caller's athanor
+  (`t:status_view/0`), by name. A read: it needs no consent class.
+  """
+  @spec status(Context.t()) :: {:ok, [status_view()]} | {:error, term()}
+  def status(%Context{} = ctx) do
+    actor = Context.actor(ctx)
+
+    with {:ok, rows} <- Arca.VaultStorage.list(actor),
+         {:ok, referenced} <- Arca.ConsentStorage.head_referenced_entries(actor) do
+      bound = MapSet.new(referenced)
+
+      {:ok,
+       Enum.map(rows, fn row ->
+         %{
+           id: row.id,
+           name: row.name,
+           kind: row.kind,
+           status: row.status,
+           created_at: row.inserted_at,
+           updated_at: row.updated_at,
+           bound: MapSet.member?(bound, row.id)
+         }
+       end)}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Create
   # ---------------------------------------------------------------------------
@@ -97,9 +145,16 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, name} <- required_name(params),
          {:ok, kind} <- required_kind(params),
+         {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
+         :ok <-
+           Authz.confirm(ctx, :credential_entry, %{
+             operation: "vault.create",
+             arguments: params,
+             resource: name
+           }),
          :ok <- check_name_free(ctx, name),
          {:ok, json} <- Payload.encode_material(fields, Map.get(params, :oauth)),
-         id = Cyfr.UUID7.generate_id("vlt"),
+         id = Prima.UUID7.generate_id("vlt"),
          hint = Map.get(params, :provider_hint, ""),
          aad = CipherAAD.vault_entry(Context.athanor!(ctx), id, hint),
          {:ok, sealed} <- seal(json, aad) do
@@ -124,7 +179,8 @@ defmodule Sanctum.Vault do
                  status: "active",
                  sealed_payload: sealed,
                  binding_digest: digest
-               })
+               }),
+               hold
              ) do
         broadcast(ctx, id, :create, %{name: entry.name})
         {:ok, view(entry)}
@@ -176,6 +232,13 @@ defmodule Sanctum.Vault do
       when is_map(fields) and is_integer(expected) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_rotatable(ctx, id),
+         {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
+         :ok <-
+           Authz.confirm(ctx, :credential_entry, %{
+             operation: "vault.rotate",
+             arguments: params,
+             resource: entry.name
+           }),
          :ok <- check_schema(entry, fields),
          {:ok, current} <- unseal(ctx, entry),
          {:ok, oauth} <- rotation_oauth(current, Map.get(params, :oauth)),
@@ -193,7 +256,7 @@ defmodule Sanctum.Vault do
         rebind: nil
       }
 
-      case Arca.VaultStorage.commit_payload(Context.actor(ctx), id, plan) do
+      case Arca.VaultStorage.commit_payload(Context.actor(ctx), id, plan, hold) do
         {:ok, %{payload_rev: rev}} ->
           broadcast(ctx, id, :rotate, %{name: entry.name})
           {:ok, rev}
@@ -321,8 +384,8 @@ defmodule Sanctum.Vault do
       provider_hint: entry.provider_hint,
       status: entry.status,
       provenance: entry.provenance,
-      field_names: decode_list(entry.field_names),
-      oauth_scopes: decode_list(entry.oauth_scopes),
+      field_names: decode_list(entry.field_names, "field_names"),
+      oauth_scopes: decode_list(entry.oauth_scopes, "oauth_scopes"),
       payload_rev: entry.payload_rev,
       last_used_at: entry.last_used_at
     }
@@ -365,7 +428,7 @@ defmodule Sanctum.Vault do
   end
 
   defp check_schema(entry, fields) do
-    declared = decode_list(entry.field_names)
+    declared = decode_list(entry.field_names, "field_names")
     provided = Enum.sort(Map.keys(fields))
 
     if provided == declared do
@@ -429,14 +492,31 @@ defmodule Sanctum.Vault do
   defp encode_optional_list(list) when is_list(list), do: Jason.encode!(list)
   defp encode_optional_list(json) when is_binary(json), do: json
 
-  defp decode_list(nil), do: []
+  defp decode_list(nil, _field), do: []
 
-  defp decode_list(json) when is_binary(json) do
-    # Through `Cyfr.Json`: corruption in a stored column is logged under a
-    # label, never silently flattened to the default.
-    case Cyfr.Json.decode_or(json, [], "Sanctum.Vault.decode_list") do
+  defp decode_list(json, field) when is_binary(json) do
+    case decode_stored(json, [], field) do
       list when is_list(list) -> Enum.sort(Enum.filter(list, &is_binary/1))
       _ -> []
+    end
+  end
+
+  # A stored JSON column that does not decode reads as its default. The
+  # line names the column and its size, never its bytes. `decode_list/2`
+  # answers nil itself.
+  defp decode_stored("", default, _field), do: default
+
+  defp decode_stored(json, default, field) when is_binary(json) do
+    case Prima.Json.decode(json) do
+      {:ok, value} ->
+        value
+
+      {:error, :invalid_json} ->
+        Logger.warning(
+          "[Sanctum.Vault] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
+        )
+
+        default
     end
   end
 

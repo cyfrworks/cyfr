@@ -5,7 +5,10 @@ package scaffold
 
 import (
 	"io/fs"
+	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -18,9 +21,13 @@ import (
 // `cyfr update` would clobber them.
 func TestIsManaged(t *testing.T) {
 	managed := []string{
+		"configuration-guide.md",
 		"component-guide.md",
 		"tincture-guide.md",
 		"integration-guide.md",
+		"identity-guide.md",
+		"devices-guide.md",
+		"keeper.seccomp.json",
 		"wit",
 		"wit/cyfr/oauth/token.wit",
 		"aqua/aqua.md",
@@ -40,8 +47,7 @@ func TestIsManaged(t *testing.T) {
 		"Caddyfile",
 		".env",
 		".env.example",
-		"Dockerfile.node",
-		"apps/mcp-bridge/server.mjs",
+		".env.locus.example",
 		"cyfr.yaml",
 		"aqua",
 		"aqua/README.md",                     // only the soul, roles and scrolls ship
@@ -55,6 +61,96 @@ func TestIsManaged(t *testing.T) {
 		if isManaged(p) {
 			t.Errorf("expected %q NOT to be managed (must be preserved on update)", p)
 		}
+	}
+}
+
+// TestShippedGuidesAreManaged binds the guides the scaffold tarball packs
+// (scripts/scaffold-tarball.sh's items) to Guides and to the managed set: a
+// guide shipped but not managed would never be refreshed by `cyfr update`,
+// and one managed but not shipped would name nothing. Every guide at the
+// repository's root ships, so a new root guide fails here until it is
+// listed.
+func TestShippedGuidesAreManaged(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..")
+	raw, err := os.ReadFile(filepath.Join(root, "scripts", "scaffold-tarball.sh"))
+	if err != nil {
+		t.Fatalf("read scaffold-tarball.sh: %v", err)
+	}
+	items := regexp.MustCompile(`(?s)\nITEMS=\((.*?)\n\)`).FindStringSubmatch(string(raw))
+	if items == nil {
+		t.Fatal("scaffold-tarball.sh has no ITEMS list")
+	}
+	var shipped []string
+	for _, line := range strings.Split(items[1], "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		for _, item := range strings.Fields(line) {
+			if strings.HasSuffix(item, "-guide.md") {
+				shipped = append(shipped, item)
+			}
+		}
+	}
+	want := slices.Clone(Guides)
+	slices.Sort(want)
+	slices.Sort(shipped)
+	if !slices.Equal(shipped, want) {
+		t.Errorf("the tarball ships the guides %v, and Guides names %v", shipped, want)
+	}
+	for _, guide := range shipped {
+		if !isManaged(guide) {
+			t.Errorf("the tarball ships %s, which `cyfr update` does not refresh", guide)
+		}
+	}
+	paths, err := filepath.Glob(filepath.Join(root, "*-guide.md"))
+	if err != nil {
+		t.Fatalf("glob the root guides: %v", err)
+	}
+	var present []string
+	for _, path := range paths {
+		present = append(present, filepath.Base(path))
+	}
+	slices.Sort(present)
+	if !slices.Equal(present, want) {
+		t.Errorf("the repository's root guides are %v, and Guides names %v", present, want)
+	}
+}
+
+// TestShippedProfileIsManaged binds the seccomp profile the scaffold tarball
+// packs beside docker-compose.yml to the managed set and to the name the
+// opus service gives it: a profile shipped but not managed would stay
+// behind the image `cyfr update` pulls, and one named otherwise than the
+// compose file names it would never be read.
+func TestShippedProfileIsManaged(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..")
+	raw, err := os.ReadFile(filepath.Join(root, "scripts", "scaffold-tarball.sh"))
+	if err != nil {
+		t.Fatalf("read scaffold-tarball.sh: %v", err)
+	}
+	script := string(raw)
+	source := regexp.MustCompile(`(?m)^PROFILE=(\S+)$`).FindStringSubmatch(script)
+	name := regexp.MustCompile(`(?m)^PROFILE_NAME=(\S+)$`).FindStringSubmatch(script)
+	if source == nil || name == nil {
+		t.Fatal("scaffold-tarball.sh names no PROFILE and PROFILE_NAME")
+	}
+	if source[1] != "apps/keeper/seccomp/keeper.json" || name[1] != SeccompProfile {
+		t.Errorf("the tarball ships %s as %s, want apps/keeper/seccomp/keeper.json as %s", source[1], name[1], SeccompProfile)
+	}
+	if !strings.Contains(script, `-C "$STAGE" "$PROFILE_NAME"`) {
+		t.Error("scaffold-tarball.sh does not pack the staged profile")
+	}
+	if _, err := os.Stat(filepath.Join(root, source[1])); err != nil {
+		t.Errorf("the profile the tarball ships: %v", err)
+	}
+	if !isManaged(SeccompProfile) {
+		t.Errorf("the tarball ships %s, which `cyfr update` does not refresh", SeccompProfile)
+	}
+	compose, err := os.ReadFile(filepath.Join(root, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+	if !strings.Contains(string(compose), "      - seccomp=./"+SeccompProfile+"\n") {
+		t.Errorf("docker-compose.yml does not name ./%s", SeccompProfile)
 	}
 }
 

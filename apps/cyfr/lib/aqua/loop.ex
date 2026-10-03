@@ -38,7 +38,7 @@ defmodule Aqua.Loop do
   @launch_timeout_ms 10 * 60 * 1000
   @retry_delays_ms [2_000, 8_000, 20_000]
   # `{"operation":"chat","params":}` around the request, which is what
-  # `Cyfr.Execution.Admission` encodes and weighs against the node's cap.
+  # `Crucible.Admission` encodes and weighs against the node's cap.
   @envelope_bytes 30
   @resume_backoff_ms [500, 2_000, 8_000]
   # A retry opens a new step at a higher ordinal, and the refused step is
@@ -144,14 +144,19 @@ defmodule Aqua.Loop do
 
       catalyst ->
         end_unrun(ctx, claim, turn, "setup_required")
-        Tape.announce(ctx, turn.thread_id, {:consent_required, catalyst, ctx.user_id})
+
+        Tape.announce(ctx, turn.thread_id, :consent_required, %{
+          ref: catalyst,
+          user_id: ctx.user_id
+        })
+
         {:failed, :setup_required}
     end
   end
 
   defp end_unrun(ctx, claim, turn, error) do
     _ = Tape.finish(ctx, turn, "failed", %{error: error})
-    Cyfr.Execution.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
+    Crucible.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
   end
 
   defp needs_setup({:setup_required, catalyst}), do: catalyst
@@ -163,7 +168,12 @@ defmodule Aqua.Loop do
 
   defp setup_required(ctx, turn) do
     _ = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
-    Tape.announce(ctx, turn.thread_id, {:consent_required, source_ref(turn), ctx.user_id})
+
+    Tape.announce(ctx, turn.thread_id, :consent_required, %{
+      ref: source_ref(turn),
+      user_id: ctx.user_id
+    })
+
     {:failed, :setup_required}
   end
 
@@ -246,7 +256,7 @@ defmodule Aqua.Loop do
   (`Aqua.Loop.Worker`); then the dispatched steps of the turn and of its
   open clones are cancel-marked, every child execution and every
   in-process catalog handler is cancelled, dispatched steps settle by
-  `Cyfr.TurnStep.unresolved/1` — a call whose effect is unknown is
+  `Prima.TurnStep.unresolved/1` — a call whose effect is unknown is
   marked `uncertain`, since a cancel does not prove the effect never
   happened — unstarted steps are skipped, each open clone ends
   `cancelled`, and the aborted mark is written. The caller then ends the
@@ -320,7 +330,7 @@ defmodule Aqua.Loop do
         guest = Context.enter_guest(ctx)
 
         result =
-          case Cyfr.TurnStep.unresolved(step) do
+          case Prima.TurnStep.unresolved(step) do
             :uncertain -> Tape.mark_uncertain(guest, turn, step, reason)
             :unknown -> Tape.close_step(guest, turn, step, "uncertain", %{error: reason})
             _ -> Tape.close_step(guest, turn, step, "error", %{error: reason})
@@ -339,7 +349,7 @@ defmodule Aqua.Loop do
   defp cancel_aborted_child(_ctx, nil), do: :ok
 
   defp cancel_aborted_child(ctx, id) do
-    case Cyfr.Execution.cancel(ctx, id) do
+    case Crucible.cancel(ctx, id) do
       {:ok, _} -> :ok
       {:error, reason} when reason in [:not_found, :not_cancellable] -> :ok
       error -> error
@@ -352,12 +362,12 @@ defmodule Aqua.Loop do
 
   defp claim_and_start(ctx, turn) do
     with {:ok, claim} <-
-           Cyfr.Execution.claim_turn_root(ctx, source_ref(turn),
+           Crucible.claim_turn_root(ctx, source_ref(turn),
              turn_id: turn.id,
              thread_id: turn.thread_id,
              envelope: %{"turn" => turn.id}
            ) do
-      with {:ok, snapshot} <- Compendium.AgentIndex.snapshot(ctx, turn.agent),
+      with {:ok, snapshot} <- Compendium.agent_snapshot(ctx, turn.agent),
            :ok <- consented_release(ctx, claim.authority, turn, snapshot),
            {:ok, started} <-
              Tape.start_turn(ctx, turn, %{
@@ -367,7 +377,8 @@ defmodule Aqua.Loop do
                profile_id: claim.authority.profile_id,
                consent_id: claim.authority.consent_id,
                agent_revision_digest: snapshot.revision_digest,
-               agent_capability_digest: snapshot.capability_digest
+               agent_capability_digest: snapshot.capability_digest,
+               recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
              }),
            {:ok, spec} <- Turn.build(ctx, started, authority: claim.authority),
            {:ok, started} <- Tape.pin_catalyst(ctx, started, spec.catalyst) do
@@ -386,7 +397,7 @@ defmodule Aqua.Loop do
   end
 
   defp reclaim(ctx, turn, :resume) do
-    case Cyfr.Execution.resume_turn_root(ctx, turn.root_execution_id,
+    case Crucible.resume_turn_root(ctx, turn.root_execution_id,
            turn_id: turn.id,
            fence: turn.fence
          ) do
@@ -397,7 +408,7 @@ defmodule Aqua.Loop do
 
   defp reclaim(ctx, turn, :adopt) do
     with {:ok, claim} <-
-           Cyfr.Execution.adopt_turn_root(ctx, turn.root_execution_id, attempt: turn.attempt) do
+           Crucible.adopt_turn_root(ctx, turn.root_execution_id, attempt: turn.attempt) do
       {:ok, claim, turn}
     end
   end
@@ -406,7 +417,7 @@ defmodule Aqua.Loop do
   # must still be at the pinned consent, and the budget is the turn's
   # reservation.
   defp pinned_authority(ctx, %{profile_id: profile_id} = turn) when is_binary(profile_id) do
-    case Cyfr.Execution.authority_for(ctx, {:id, profile_id}, source_ref(turn),
+    case Crucible.authority_for(ctx, {:id, profile_id}, source_ref(turn),
            budget_id: turn.budget_id
          ) do
       {:ok, %{consent_id: consent_id} = authority} when consent_id == turn.consent_id ->
@@ -424,18 +435,18 @@ defmodule Aqua.Loop do
 
   # The source a turn runs as: the soul, or the role a person addressed.
   defp source_ref(%{agent: name}) do
-    if Compendium.AgentSource.soul?(name),
-      do: Compendium.AgentSource.soul_ref(),
-      else: Compendium.AgentSource.ref(name)
+    if Prima.AgentRef.soul?(name),
+      do: Prima.AgentRef.soul_ref(),
+      else: Prima.AgentRef.ref(name)
   end
 
   # The file the turn pins must be the release the loaded consent names
   # for its own node; a file edited past its consent is refused, never
   # run under the old grant.
   defp consented_release(ctx, %{activation: activation}, turn, %{agent: agent}) do
-    with {:ok, roster} <- Compendium.AgentSource.enabled_roster(ctx) do
+    with {:ok, roster} <- Compendium.enabled_agent_roster(ctx) do
       consented = Map.get(activation, source_ref(turn))
-      projected = Compendium.AgentSource.row(agent, roster).release_digest
+      projected = Compendium.agent_row(agent, roster).release_digest
 
       if is_binary(consented) and consented == projected,
         do: :ok,
@@ -498,7 +509,7 @@ defmodule Aqua.Loop do
   defp terminal({:uncertain, reason}), do: {"uncertain", describe(reason)}
 
   defp release(%State{claim: %{execution_id: execution_id} = claim} = state) do
-    Cyfr.Execution.release_turn_root(ctx(state), execution_id, claim: claim)
+    Crucible.release_turn_root(ctx(state), execution_id, claim: claim)
   end
 
   defp release(_state), do: :ok
@@ -590,7 +601,7 @@ defmodule Aqua.Loop do
   end
 
   defp agent_or_system?(author),
-    do: author in Cyfr.Author.reserved()
+    do: author in Prima.Author.reserved()
 
   # The model step is dispatched before the call: a recovery finds it
   # without a response and never replays it.
@@ -605,7 +616,7 @@ defmodule Aqua.Loop do
            Tape.record_model_intent(guest(state), state.turn, %{
              idempotency_key:
                "model:#{state.turn.id}:#{System.unique_integer([:positive, :monotonic])}",
-             child_execution_id: Cyfr.UUID7.execution_id(),
+             child_execution_id: Prima.UUID7.execution_id(),
              tool: state.spec.catalyst,
              action: "chat",
              purpose: purpose
@@ -632,7 +643,12 @@ defmodule Aqua.Loop do
 
       {:error, %{"type" => type} = error} when type in @setup ->
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: error["message"]})
-        announce(state, {:consent_required, state.spec.catalyst, ctx(state).user_id})
+
+        announce(state, :consent_required, %{
+          ref: state.spec.catalyst,
+          user_id: ctx(state).user_id
+        })
+
         {:halt, {:failed, :setup_required}, state}
 
       {:error, %{"type" => _type, "message" => message}} ->
@@ -641,7 +657,7 @@ defmodule Aqua.Loop do
         {:halt, {:failed, message}, state}
 
       # A model request that died left nothing a person must judge
-      # (`Cyfr.TurnStep.unresolved/1`): it ends the turn like a refusal.
+      # (`Prima.TurnStep.unresolved/1`): it ends the turn like a refusal.
       {failure, reason} when failure in [:error, :exit] ->
         text = describe(reason)
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: text})
@@ -667,7 +683,7 @@ defmodule Aqua.Loop do
       try do
         worker(
           fn ->
-            Cyfr.Execution.run_child(spec.authority, spec.catalyst, nil, input,
+            Crucible.run_child(spec.authority, spec.catalyst, nil, input,
               ctx: guest,
               execution_id: step.child_execution_id,
               step_id: step.id,
@@ -689,8 +705,8 @@ defmodule Aqua.Loop do
 
     result =
       case answer do
-        {:ok, {:ok, %{output: output}}} -> Cyfr.Models.decode_envelope(output)
-        {:ok, {:ok, output}} -> Cyfr.Models.decode_envelope(output)
+        {:ok, {:ok, %{output: output}}} -> Prima.Model.decode_envelope(output)
+        {:ok, {:ok, output}} -> Prima.Model.decode_envelope(output)
         {:ok, {:error, reason}} -> {:error, reason}
         {:exit, reason} -> {:exit, reason}
       end
@@ -779,7 +795,7 @@ defmodule Aqua.Loop do
   defp call_attrs(%State{} = state, model_step, block, call) do
     name = block["name"] || ""
     args = if is_map(block["arguments"]), do: block["arguments"], else: %{}
-    id = block["id"] || Cyfr.UUID7.generate_id("call")
+    id = block["id"] || Prima.UUID7.generate_id("call")
 
     {tool, action, kind, recovery, child, step_kind} =
       case call do
@@ -821,7 +837,7 @@ defmodule Aqua.Loop do
   defp recovery_of(%Call{} = call), do: if(replay_safe?(call), do: "replay_safe", else: nil)
 
   defp child_id_for(%Call{kind: kind}) when kind in [:hand, :launch, :external],
-    do: Cyfr.UUID7.execution_id()
+    do: Prima.UUID7.execution_id()
 
   defp child_id_for(_call), do: nil
 
@@ -834,7 +850,7 @@ defmodule Aqua.Loop do
     input = usage["input_tokens"] || 0
     output = usage["output_tokens"] || 0
     totals = %{input: state.usage.input + input, output: state.usage.output + output}
-    announce(state, {:usage, totals})
+    announce(state, :usage, totals)
 
     if input > 0 do
       %{state | usage: totals, observed: input, observed_seq: state.sent_upto}
@@ -943,10 +959,14 @@ defmodule Aqua.Loop do
          {runnable, cards}
        ) do
     decision =
-      Policy.decide(call, state.spec.policy,
-        consented?: &consented?(state, &1),
-        touched: touched,
-        restricted?: state.restricted?
+      Policy.decide(
+        call,
+        state.spec.policy,
+        [
+          consented?: &consented?(state, &1),
+          touched: touched,
+          restricted?: state.restricted?
+        ] ++ place(state)
       )
 
     case decision do
@@ -986,7 +1006,7 @@ defmodule Aqua.Loop do
 
   defp open_card(%State{} = state, step, %Call{} = call) do
     intent =
-      Policy.card(call, id: Cyfr.UUID7.generate_id("apr"))
+      Policy.card(call, id: Prima.UUID7.generate_id("apr"))
       |> Map.put("tool_call_id", call.tool_call_id)
 
     case Tape.open_approval(guest(state), state.turn, step, %{
@@ -1174,13 +1194,14 @@ defmodule Aqua.Loop do
   # runs, both belonged to a grant that had gone. Every call asks again as
   # it dispatches. The check can only withdraw an `auto`: a card the person
   # answered is their decision about this exact call, and a standing grant's
-  # withdrawal does not retract it.
+  # withdrawal does not retract it. A call a bounded allow let run is asked
+  # again whether the allow still covers it, from the rows as they stand.
   defp still_granted(_state, %{approval: %{}}, _call), do: :ok
 
   defp still_granted(%State{} = state, _item, %Call{} = call) do
     case Turn.current_policy(state.spec) do
       {:ok, policy} ->
-        if Policy.auto?(call, policy),
+        if Policy.auto?(call, policy, place(state)),
           do: :ok,
           else: {:denied, "#{call.tool}.#{call.action} is no longer allowed in this thread"}
 
@@ -1189,6 +1210,19 @@ defmodule Aqua.Loop do
       {:error, _reason} ->
         {:denied, "#{call.tool}.#{call.action} could not be checked against the agent's grants"}
     end
+  end
+
+  # Where a call is made, as a bounded allow is judged against it
+  # (`Sanctum.ToolGrants.admits?/2`): the member's context its rows are
+  # read under, the agent, the thread, the turn and the turn's root.
+  defp place(%State{spec: spec, turn: turn}) do
+    [
+      ctx: spec.ctx,
+      agent: spec.agent["name"],
+      thread_id: turn.thread_id,
+      turn_id: turn.id,
+      execution_id: turn.root_execution_id
+    ]
   end
 
   defp settle_denied(%State{} = state, step, %Call{} = call, message) do
@@ -1231,7 +1265,7 @@ defmodule Aqua.Loop do
   defp execute(%State{} = state, _step, %Call{kind: :ui, args: args}) do
     case Aqua.Intents.validate(args) do
       {:ok, intent} ->
-        announce(state, {:intents, [intent], ctx(state).user_id})
+        announce(state, :intents, %{intents: [intent], user_id: ctx(state).user_id})
         {:ok, "done"}
 
       {:error, message} ->
@@ -1247,7 +1281,7 @@ defmodule Aqua.Loop do
          target: reference,
          args: args
        }) do
-    Cyfr.Execution.run_child(spec.authority, reference, args["need"], args["input"] || %{},
+    Crucible.run_child(spec.authority, reference, args["need"], args["input"] || %{},
       ctx: guest(state),
       execution_id: step.child_execution_id,
       step_id: step.id,
@@ -1265,6 +1299,7 @@ defmodule Aqua.Loop do
       ctx: guest(state),
       authority: spec.authority,
       root_execution_id: state.turn.root_execution_id,
+      call_id: spec.call_id,
       attempt: state.turn.attempt,
       thread_id: state.turn.thread_id,
       charge: Binding.charge(step, state.turn),
@@ -1299,13 +1334,20 @@ defmodule Aqua.Loop do
         {:error, {:denied, message}} ->
           {"denied", message, true}
 
-        {:error, {:invoke_denied, reason}} ->
-          {"denied", "Denied by chain authority: #{inspect(reason)}", true}
+        # The chain's authority denied the call, answered by the child's
+        # admission or refused by the gate: the step closes `denied`, in
+        # the table's sentence for it.
+        {:error, {:invoke_denied, _reason} = denied} ->
+          {"denied", Prima.Refusal.message(denied), true}
+
+        {:error, %Prima.Refusal{stage: :admission, reason: {:invoke_denied, _}} = refusal} ->
+          {"denied", refusal.message, true}
 
         {:error, message} when is_binary(message) ->
-          if String.starts_with?(message, "Denied by chain authority"),
-            do: {"denied", message, true},
-            else: {"error", message, true}
+          {"error", message, true}
+
+        {:error, %Prima.Refusal{stage: :admission, reason: message}} when is_binary(message) ->
+          {"error", message, true}
 
         {:ok, text} when is_binary(text) ->
           {"ok", text, false}
@@ -1337,7 +1379,7 @@ defmodule Aqua.Loop do
   defp render(%Call{} = call, result), do: Binding.render(call, result)
 
   # A worker that died or timed out: a step it never dispatched is
-  # skipped; a dispatched one settles by `Cyfr.TurnStep.unresolved/1` — one safe
+  # skipped; a dispatched one settles by `Prima.TurnStep.unresolved/1` — one safe
   # to run again closes as an error the model may retry, a flush's closes
   # with its outcome unknown, and one whose effect is unknown is reported
   # (`:report`, the default) so the loop stops the turn on it, or marked in
@@ -1356,11 +1398,11 @@ defmodule Aqua.Loop do
 
       {:ok, %{dispatch_state: "dispatched"} = fresh} ->
         if fresh.child_execution_id,
-          do: Cyfr.Execution.cancel(ctx(state), fresh.child_execution_id)
+          do: Crucible.cancel(ctx(state), fresh.child_execution_id)
 
         why = describe(reason)
 
-        case Cyfr.TurnStep.unresolved(fresh) do
+        case Prima.TurnStep.unresolved(fresh) do
           :uncertain ->
             unknown(state, fresh, why, mode)
 
@@ -1424,7 +1466,7 @@ defmodule Aqua.Loop do
       content: @aborted_content
     }
 
-    case Cyfr.Execution.pause_turn_root(ctx(state), id,
+    case Crucible.pause_turn_root(ctx(state), id,
            claim: claim,
            turn_id: state.turn.id,
            fence: state.turn.fence,
@@ -1433,7 +1475,7 @@ defmodule Aqua.Loop do
          ) do
       {:ok, %{turn: paused} = moved} ->
         if moved[:aborted],
-          do: announce(state, {:message, moved.aborted})
+          do: announce(state, :message, moved.aborted)
 
         {:ok, %{state | turn: paused, claim: nil, since: nil, active_ms: paused.active_ms}}
 
@@ -1463,7 +1505,7 @@ defmodule Aqua.Loop do
   defp cancel_rest(%State{} = state, rest) do
     Enum.each(rest, fn %{item: %{step: step} = item, task: task} ->
       if task, do: Aqua.Loop.Worker.shutdown(task)
-      if step.child_execution_id, do: Cyfr.Execution.cancel(ctx(state), step.child_execution_id)
+      if step.child_execution_id, do: Crucible.cancel(ctx(state), step.child_execution_id)
       Aqua.Ops.cancel_call(handle(state, step))
       _ = settle_dead(state, item, :cancelled, :mark)
       Aqua.Ops.release_call(handle(state, step))
@@ -1550,7 +1592,7 @@ defmodule Aqua.Loop do
          reason,
          launch_step_id
        ) do
-    case Cyfr.Execution.pause_turn_root(ctx(state), execution_id,
+    case Crucible.pause_turn_root(ctx(state), execution_id,
            claim: claim,
            turn_id: state.turn.id,
            fence: state.turn.fence,
@@ -1575,7 +1617,7 @@ defmodule Aqua.Loop do
   end
 
   defp resume_root(%State{} = state, tries) do
-    case Cyfr.Execution.resume_turn_root(ctx(state), state.turn.root_execution_id,
+    case Crucible.resume_turn_root(ctx(state), state.turn.root_execution_id,
            turn_id: state.turn.id,
            fence: state.turn.fence
          ) do
@@ -1599,7 +1641,7 @@ defmodule Aqua.Loop do
   # Settling open steps on a continuation
   # ---------------------------------------------------------------------------
 
-  # A step found open settles by `Cyfr.TurnStep.unresolved/1`: a model step
+  # A step found open settles by `Prima.TurnStep.unresolved/1`: a model step
   # without its response closes as an error (its request cannot be
   # rebuilt); a dispatched call that is safe to run again is opened afresh;
   # a flush's dispatched call closes with its outcome unknown and its
@@ -1615,9 +1657,9 @@ defmodule Aqua.Loop do
         Enum.reduce(steps, [], fn
           %{dispatch_state: "dispatched"} = step, open ->
             if step.child_execution_id,
-              do: Cyfr.Execution.cancel(ctx(state), step.child_execution_id)
+              do: Crucible.cancel(ctx(state), step.child_execution_id)
 
-            case Cyfr.TurnStep.unresolved(step) do
+            case Prima.TurnStep.unresolved(step) do
               :unanswered ->
                 _ =
                   Tape.close_step(guest, state.turn, step, "error", %{error: "not reproducible"})
@@ -1625,7 +1667,7 @@ defmodule Aqua.Loop do
                 open
 
               :replay ->
-                _ = Tape.next_generation(guest, state.turn, step, Cyfr.UUID7.execution_id())
+                _ = Tape.next_generation(guest, state.turn, step, Prima.UUID7.execution_id())
                 open
 
               :unknown ->
@@ -1999,13 +2041,13 @@ defmodule Aqua.Loop do
   # branch, and a cap of nil looks exactly like a request that fits.
   # By name, without the version. The spec carries a versioned ref because
   # that is what resolved, but the consent graph keys every node by name —
-  # `Cyfr.Execution.Admission` steps by name and `Authority.limits/1` matches on
+  # `Crucible.Admission` steps by name and `Authority.limits/1` matches on
   # that. A versioned key finds nothing, and a cap of nil is a check that
   # never fires.
   def catalyst_request_cap(%{authority: authority, catalyst: catalyst}) do
-    with {:ok, name_ref} <- Cyfr.ComponentRef.to_name_ref(catalyst),
-         {:ok, %Cyfr.Limits{max_request_size: cap}} <-
-           Cyfr.Authority.node_limits(authority, name_ref) do
+    with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst),
+         {:ok, %Prima.Limits{max_request_size: cap}} <-
+           Prima.Authority.node_limits(authority, name_ref) do
       cap
     else
       _ -> nil
@@ -2053,7 +2095,7 @@ defmodule Aqua.Loop do
          declared_needs: []
        }}
 
-    match?({:child, _}, Cyfr.Authority.Transition.step(spec.authority, :call, target))
+    match?({:child, _}, Prima.Authority.Transition.step(spec.authority, :call, target))
   rescue
     ArgumentError -> false
   end
@@ -2113,7 +2155,7 @@ defmodule Aqua.Loop do
           Enum.reduce(names, state.activity, &mark_done(&2, &1))
       end
 
-    announce(state, {:tool_activity, activity})
+    announce(state, :tool_activity, activity)
     %{state | activity: activity}
   end
 
@@ -2135,7 +2177,7 @@ defmodule Aqua.Loop do
 
   defp system_row(%State{} = state, text) do
     Tape.append(guest(state), state.turn.thread_id, %{
-      author: Cyfr.Author.system(),
+      author: Prima.Author.system(),
       kind: "system",
       content: text,
       turn_id: state.turn.id,
@@ -2143,8 +2185,8 @@ defmodule Aqua.Loop do
     })
   end
 
-  defp announce(%State{} = state, event),
-    do: Tape.announce(guest(state), state.turn.thread_id, event)
+  defp announce(%State{} = state, kind, data),
+    do: Tape.announce(guest(state), state.turn.thread_id, kind, data)
 
   defp worker(fun, timeout) do
     task = Aqua.Loop.Worker.async(fun)
@@ -2163,7 +2205,7 @@ defmodule Aqua.Loop do
   defp retained(request, _excerpt), do: Request.without_excerpt(request)
 
   defp digest(request) do
-    case Cyfr.JCS.hash(request) do
+    case Prima.JCS.hash(request) do
       {:ok, digest} -> digest
       _ -> nil
     end

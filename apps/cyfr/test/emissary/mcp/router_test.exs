@@ -1,14 +1,50 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Emissary.MCP.RouterTest.Confirming do
+  @moduledoc false
+  # A handler that answers what a sensitive change answers until its
+  # confirmation is given: the `confirmation_required` signal naming the
+  # pending confirmation, never a result.
+  @behaviour Prima.Provider
+
+  alias Prima.Operation
+
+  @impl true
+  def service, do: "probe"
+
+  @impl true
+  def tools do
+    [
+      Operation.tool([
+        Operation.new("confirming_probe", "change", "Ask for a fresh confirmation", [],
+          kind: :read,
+          planes: [:external]
+        )
+      ])
+    ]
+  end
+
+  @impl true
+  def handle(_tool, _ctx, %{"action" => "change"}) do
+    {:error,
+     {:confirmation_required,
+      %{
+        id: "confirmation-7f3a",
+        operation: "confirming_probe/change",
+        expires_at: ~U[2026-09-29 12:05:00Z]
+      }}}
+  end
+end
+
 defmodule Emissary.MCP.RouterTest do
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.{Message, Router}
+  alias Emissary.MCP.Router
+  alias Prima.MCP.Message
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     ctx = Sanctum.TestContext.local()
 
@@ -20,7 +56,7 @@ defmodule Emissary.MCP.RouterTest do
       msg = %Message{type: :request, id: 1, method: "server/discover", params: %{}}
 
       assert {:ok, result} = Router.dispatch(ctx, msg)
-      assert result["supportedVersions"] == Emissary.MCP.Protocol.supported()
+      assert result["supportedVersions"] == Prima.MCP.Protocol.supported()
       assert is_map(result["capabilities"])
 
       # Identity is stamped onto every result by the encoder, so the router's
@@ -148,8 +184,106 @@ defmodule Emissary.MCP.RouterTest do
     end
   end
 
+  # The Router makes no decision of its own: the gate authorizes and casts
+  # once, and the stage of its answer says how the wire carries it. What
+  # the gate refused before the tool ran is a JSON-RPC error by class —
+  # every refusal the Router's own pre-checks used to make, with the same
+  # class and code; what the tool answered is a failed tool result, except
+  # an authentication, permission or consent refusal.
+  describe "dispatch/2 with tools/call refusals" do
+    defp call(ctx, name, arguments) do
+      Router.dispatch(ctx, %Message{
+        type: :request,
+        id: 7,
+        method: "tools/call",
+        params: %{"name" => name, "arguments" => arguments}
+      })
+    end
+
+    test "the gate's refusals are protocol errors by class", %{context: ctx} do
+      Grimoire.Catalog.with_providers([Grimoire.Probe.Refusing], fn ->
+        # A declared argument the gate cannot cast.
+        assert {:error, :invalid_params, message} =
+                 call(ctx, "refusing_probe", %{"action" => "invalid", "n" => "x"})
+
+        assert message =~ "integer"
+
+        # An undeclared argument, an undeclared action, no action at all.
+        assert {:error, :invalid_params, "Unknown field: extra"} =
+                 call(ctx, "refusing_probe", %{"action" => "invalid", "extra" => 1})
+
+        assert {:error, :invalid_params, "Unknown action: refusing_probe.dance"} =
+                 call(ctx, "refusing_probe", %{"action" => "dance"})
+
+        assert {:error, :invalid_params, "Missing required argument: action"} =
+                 call(ctx, "refusing_probe", %{})
+      end)
+
+      # The caller's authorization, refused before the arguments are read:
+      # a caller with no credential, and one without the declared permission.
+      anonymous = %{ctx | authenticated: false}
+
+      assert {:error, :auth_required, _message} =
+               call(anonymous, "component", %{"action" => "list", "extra" => 1})
+
+      no_admin = %{ctx | permissions: MapSet.new([:execute])}
+
+      assert {:error, :insufficient_permissions, message} =
+               call(no_admin, "system", %{"action" => "notify"})
+
+      assert message ==
+               Sanctum.Unauthorized.message({:missing_permission, :admin}, no_admin.auth_method)
+    end
+
+    test "a tool's own refusal is a failed tool result; its permission refusal keeps its code",
+         %{context: ctx} do
+      Grimoire.Catalog.with_providers([Grimoire.Probe.Refusing], fn ->
+        assert {:ok, %{"isError" => true, "content" => [%{"text" => text}]}} =
+                 call(ctx, "refusing_probe", %{"action" => "invalid", "n" => 1})
+
+        assert text == "the handler refused this argument"
+
+        assert {:error, :insufficient_permissions, _message} =
+                 call(ctx, "refusing_probe", %{"action" => "forbidden"})
+      end)
+    end
+
+    test "a pending confirmation is a protocol error, -33505, its secret in the data alone",
+         %{context: ctx} do
+      Grimoire.Catalog.with_providers([Emissary.MCP.RouterTest.Confirming], fn ->
+        assert {:error, :confirmation_required, message, data} =
+                 call(ctx, "confirming_probe", %{"action" => "change"})
+
+        # The id is the asking request's secret: it rides the data alone,
+        # never the sentence a log or a page keeps.
+        refute message =~ "confirmation-7f3a"
+        assert message =~ "Prism"
+
+        # As the wire carries it.
+        assert %{
+                 "error" => %{
+                   "code" => -33_505,
+                   "message" => ^message,
+                   "data" => %{
+                     "tag" => "confirmation_required",
+                     "payload" => %{
+                       "id" => "confirmation-7f3a",
+                       "operation" => "confirming_probe/change",
+                       "expires_at" => "2026-09-29T12:05:00Z"
+                     }
+                   }
+                 }
+               } =
+                 7
+                 |> Message.encode_error(:confirmation_required, message, data)
+                 |> Jason.encode!()
+                 |> Jason.decode!()
+      end)
+    end
+  end
+
   describe "dispatch/2 with resources/list" do
-    test "delegates to ResourceRegistry and returns resources list", %{context: ctx} do
+    test "delegates to Grimoire.Resources and returns resources list", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 7,
@@ -202,10 +336,43 @@ defmodule Emissary.MCP.RouterTest do
         params: %{"uri" => "unknown://resource/path"}
       }
 
-      assert {:error, :resource_not_found, message} = Router.dispatch(ctx, msg)
-      # A handler's crafted string diagnosis passes through; an internal
-      # term would have been masked.
-      assert message =~ "No provider found"
+      # An argument refusal answers by its class: invalid params.
+      assert {:error, :invalid_params, message} = Router.dispatch(ctx, msg)
+      assert message =~ "No provider found for scheme: unknown"
+    end
+
+    test "returns error for a URI with no scheme", %{context: ctx} do
+      msg = %Message{
+        type: :request,
+        id: 8,
+        method: "resources/read",
+        params: %{"uri" => "invalid-uri-no-scheme"}
+      }
+
+      assert {:error, :invalid_params, message} = Router.dispatch(ctx, msg)
+      assert message =~ "Invalid URI format"
+    end
+
+    test "a declared read answers its content in the MCP shape", %{context: ctx} do
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "router.txt"], "bytes")
+
+      msg = %Message{
+        type: :request,
+        id: 8,
+        method: "resources/read",
+        params: %{"uri" => "arca://files/data/router.txt"}
+      }
+
+      assert {:ok, %{"contents" => [entry], "cacheScope" => "private"}} =
+               Router.dispatch(ctx, msg)
+
+      assert entry["uri"] == "arca://files/data/router.txt"
+      assert entry["mimeType"] == Prima.MediaType.binary()
+      assert Base.decode64!(entry["blob"]) == "bytes"
+
+      msg = %{msg | params: %{"uri" => "sanctum://identity"}}
+      assert {:ok, %{"contents" => [%{"text" => text}]}} = Router.dispatch(ctx, msg)
+      assert Jason.decode!(text)["user_id"] == ctx.user_id
     end
 
     # Reject missing or non-string resource URIs as invalid_params.
@@ -227,6 +394,49 @@ defmodule Emissary.MCP.RouterTest do
         assert {:error, :invalid_params, message} = Router.dispatch(ctx, msg)
         assert message =~ "uri"
       end
+    end
+  end
+
+  describe "the decision a call is recorded as" do
+    test "a tools/call is recorded under the call id the request's context carries",
+         %{context: ctx} do
+      call_id = Prima.UUID7.generate_id("call")
+      ctx = %{ctx | request_id: Prima.UUID7.request_id(), call_id: call_id}
+
+      msg = %Message{
+        type: :request,
+        id: 1,
+        method: "tools/call",
+        params: %{"name" => "session", "arguments" => %{"action" => "whoami"}}
+      }
+
+      assert {:ok, _} = Router.dispatch(ctx, msg)
+
+      assert {:ok, %{admission: :admitted, tool: "session", request_id: request_id}} =
+               Arca.DecisionLog.get(Sanctum.Context.actor(ctx), call_id)
+
+      assert request_id == ctx.request_id
+
+      assert %{method: "tools/call"} = Arca.Repo.get(Arca.Schemas.McpLog, call_id)
+    end
+
+    test "a resources/read keeps its wire method on the row", %{context: ctx} do
+      call_id = Prima.UUID7.generate_id("call")
+      ctx = %{ctx | request_id: Prima.UUID7.request_id(), call_id: call_id}
+
+      msg = %Message{
+        type: :request,
+        id: 1,
+        method: "resources/read",
+        params: %{"uri" => "arca://files/data/nothing-here.txt"}
+      }
+
+      _ = Router.dispatch(ctx, msg)
+
+      assert {:ok, %{admission: :admitted}} =
+               Arca.DecisionLog.get(Sanctum.Context.actor(ctx), call_id)
+
+      assert %{method: "resources/read"} = Arca.Repo.get(Arca.Schemas.McpLog, call_id)
     end
   end
 

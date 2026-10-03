@@ -10,7 +10,7 @@ defmodule Opus.ModelContractTest do
   The catalyst is the chat fixture (`test_wasm/chat_fixture/`), which plays
   the script the person's message carries, run by the Opus service over
   the wire as the soul's model. Every case is a turn a person sends
-  (`Aqua.Runner.send_message/4`) on an estate filled from a seed
+  (`Aqua.Runner.send_message/4`) on an athanor filled from a seed
   (`Sanctum.Provisioning.provision/2`), and is read where a person or
   another node could read it: the thread's topic, the executions topic and
   each execution's event stream (`Cyfr.Test.ChatFixture.observe!/2`), the
@@ -21,11 +21,12 @@ defmodule Opus.ModelContractTest do
   use ExUnit.Case, async: false
 
   import Cyfr.Test.ChatFixture
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import ExUnit.CaptureLog
 
   alias Aqua.{Approvals, Runner, Tape}
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ChatFixture, as: Fixture
 
   @moduletag timeout: 180_000
@@ -62,8 +63,8 @@ defmodule Opus.ModelContractTest do
     # The turns' work stops before the paths it runs under are restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    ctx = Fixture.estate!()
-    on_exit(fn -> Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id) end)
+    ctx = Fixture.athanor!()
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
     :ok = Fixture.bind_key!(ctx, @canary)
     {:ok, ctx: ctx}
   end
@@ -76,11 +77,11 @@ defmodule Opus.ModelContractTest do
       assert [_, recorded] =
                Regex.run(~r/^#{Regex.escape(name)}\s+(sha256:[0-9a-f]{64})$/m, readme)
 
-      assert Cyfr.Digest.sha256(File.read!(Path.join(dir, name))) == recorded, name
+      assert Prima.Digest.sha256(File.read!(Path.join(dir, name))) == recorded, name
     end
   end
 
-  test "V1: a person's hello on a provisioned estate completes, and the key shows nowhere",
+  test "V1: a person's hello on a provisioned athanor completes, and the key shows nowhere",
        %{ctx: ctx} do
     played = play(ctx, "@aqua hello")
 
@@ -406,21 +407,24 @@ defmodule Opus.ModelContractTest do
     assert {:ok, []} =
              Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), played.turn.budget_id)
 
-    # Each call passed the gate, which keeps a row of it with what it was
-    # asked; the rows close behind the calls.
+    # Each call passed the gate, which records it with a row of what it
+    # was asked, completed when the call returns; `system.status` is
+    # discovery, which is not recorded.
     gated = fn ->
       {:ok, rows} = Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100)
       for %{tool: tool} = row <- rows, tool in ["notes", "system"], do: row
     end
 
     wait_until(
-      fn -> Enum.count(gated.(), &(&1.status == "success")) == 4 end,
+      fn -> Enum.count(gated.(), &(&1.status == "success")) == 3 end,
       @settle_ms,
-      "the gate's rows of the four calls to close"
+      "the gate's rows of the three recorded calls to close"
     )
 
     assert gated.() |> Enum.map(&"#{&1.tool}.#{&1.action}") |> Enum.sort() ==
-             ["notes.list", "notes.search", "notes.search", "system.status"]
+             ["notes.list", "notes.search", "notes.search"]
+
+    assert Enum.all?(gated.(), &String.starts_with?(&1.id, "call_"))
 
     assert gated.()
            |> Enum.filter(&(&1.action == "search"))
@@ -455,8 +459,8 @@ defmodule Opus.ModelContractTest do
     # A catalog tool's schema is the one the gate derives for the actions the
     # policy offers, and nothing the policy does not offer is named.
     for {name, actions} <- [{"notes", ~w(keep list read search)}, {"system", ~w(status)}] do
-      {:ok, definition} = Cyfr.Ops.Catalog.get_tool(name)
-      derived = Cyfr.Ops.Catalog.restrict_tool(definition, actions)["inputSchema"]
+      {:ok, definition} = Grimoire.get_tool(name)
+      derived = Grimoire.restrict_tool(definition, actions)["inputSchema"]
       %{"parameters" => given} = Enum.find(tools, &(&1["name"] == name))
 
       assert given == Jason.decode!(Jason.encode!(derived))
@@ -617,7 +621,7 @@ defmodule Opus.ModelContractTest do
                turn_events(ctx, played, "model.completed", step_id)
 
       assert usage == tokens(2, 3)
-      assert {:turn_finished} in played.seen.thread
+      assert {:turn_finished, nil} in played.seen.thread
     end
   end
 
@@ -665,7 +669,7 @@ defmodule Opus.ModelContractTest do
              &(&1.content =~ "The model could not answer: the provider said no")
            )
 
-    assert {:turn_finished} in played.seen.thread
+    assert {:turn_finished, nil} in played.seen.thread
 
     # The thread takes the next turn, which a script of its own plays.
     again = play(ctx, back(), played.thread)
@@ -729,7 +733,7 @@ defmodule Opus.ModelContractTest do
     # call's arguments, the whole request: none of it is the run's error,
     # which the rows below, the thread and the log all carry.
     assert error =~ ~r/^Component call failed for .*wasm trap/
-    assert %{status: "failed", error_message: ^error} = Arca.Repo.get!(Arca.Execution, id)
+    assert %{status: "failed", error_message: ^error} = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert %{error: turn_error} = played.turn
     told = Enum.find(played.rows, &(&1.content =~ "The model could not be reached"))
     assert %{author: "system"} = told
@@ -755,8 +759,11 @@ defmodule Opus.ModelContractTest do
     assert [%{step_id: ^step_id}] =
              for({:delta_abandoned, marker} <- played.seen.thread, do: marker)
 
-    assert {:turn_finished} in played.seen.thread
-    assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, played.turn.root_execution_id)
+    assert {:turn_finished, nil} in played.seen.thread
+
+    assert %{status: "failed"} =
+             Arca.Repo.get!(Arca.Schemas.Execution, played.turn.root_execution_id)
+
     assert [] = key_leaks(ctx, played)
 
     # The thread takes the next turn, which a script of its own plays.
@@ -782,10 +789,10 @@ defmodule Opus.ModelContractTest do
              played.steps
 
     assert error =~ ~r/^Execution timeout after \d+ms$/
-    assert %{status: "failed", error_message: ^error} = Arca.Repo.get!(Arca.Execution, id)
+    assert %{status: "failed", error_message: ^error} = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert %{type: "execution.failed"} = List.last(Map.fetch!(played.seen.streams, id))
     assert [] = agent_rows(played)
-    assert {:turn_finished} in played.seen.thread
+    assert {:turn_finished, nil} in played.seen.thread
   end
 
   test "an event over the size bound is refused to the guest, and the run goes on", %{ctx: ctx} do
@@ -878,10 +885,15 @@ defmodule Opus.ModelContractTest do
     drain_thread()
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
 
+    # The person sends from the console, whose context carries the origin
+    # `interactive`: a turn paused on a card resumes under the origin its
+    # row stores.
+    sender = %{ctx | origin: :interactive}
+
     {turn_id, log} =
       with_every_log(fn ->
         assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
-                 Runner.send_message(ctx, thread.id, text)
+                 Runner.send_message(sender, thread.id, text)
 
         await_turn(ctx, turn_id, :pauses)
         turn_id
@@ -918,11 +930,11 @@ defmodule Opus.ModelContractTest do
     wait_until(
       fn ->
         seen = Fixture.seen(observer)
-        ended? = turn.status == "paused" or {:turn_finished} in seen.thread
+        ended? = turn.status == "paused" or {:turn_finished, nil} in seen.thread
 
         ended? and
           Enum.all?(closed, fn id ->
-            seen.streams |> Map.get(id, []) |> Enum.any?(&Cyfr.Execution.Events.terminal?/1)
+            seen.streams |> Map.get(id, []) |> Enum.any?(&Crucible.Events.terminal?/1)
           end)
       end,
       @settle_ms,
@@ -961,17 +973,17 @@ defmodule Opus.ModelContractTest do
   # announced again, which a turn being followed to its end reads past.
   defp await_turn(ctx, turn_id, mode) do
     receive do
-      {:thread, _thread, {:turn_finished}} ->
+      %ThreadEvent{kind: :turn_finished} ->
         :ok
 
-      {:thread, _thread, {:message, %{kind: "approval"}}} when mode == :pauses ->
+      %ThreadEvent{kind: :message, data: %{kind: "approval"}} when mode == :pauses ->
         wait_until(
           fn -> match?({:ok, %{status: "paused"}}, Tape.turn(ctx, turn_id)) end,
           @turn_ms,
           "the turn to pause on its card"
         )
 
-      {:thread, _thread, _event} ->
+      %ThreadEvent{} ->
         await_turn(ctx, turn_id, mode)
     after
       @turn_ms -> flunk("the turn #{turn_id} neither finished nor paused")
@@ -980,7 +992,7 @@ defmodule Opus.ModelContractTest do
 
   defp drain_thread do
     receive do
-      {:thread, _thread, _event} -> drain_thread()
+      %ThreadEvent{} -> drain_thread()
     after
       0 -> :ok
     end
@@ -994,7 +1006,7 @@ defmodule Opus.ModelContractTest do
 
   # The usage an execution's row keeps in its output's envelope.
   defp execution_usage(execution_id) do
-    Arca.Execution
+    Arca.Schemas.Execution
     |> Arca.Repo.get!(execution_id)
     |> Map.fetch!(:output)
     |> Jason.decode!()
@@ -1029,7 +1041,7 @@ defmodule Opus.ModelContractTest do
   defp kept_text(events) do
     events
     |> Enum.reduce(Aqua.Loop.Stream.new(), fn
-      {:turn_fence, _, fence}, kept -> Aqua.Loop.Stream.advance(kept, fence)
+      {:turn_fence, %{fence: fence}}, kept -> Aqua.Loop.Stream.advance(kept, fence)
       {:delta, delta}, kept -> Aqua.Loop.Stream.add(kept, delta)
       {:delta_abandoned, marker}, kept -> Aqua.Loop.Stream.abandoned(kept, marker)
       {:message, row}, kept -> Aqua.Loop.Stream.landed(kept, row)
@@ -1055,14 +1067,14 @@ defmodule Opus.ModelContractTest do
     at + plus
   end
 
-  # Every retained payload of the estate's executions, read as a person's
+  # Every retained payload of the athanor's executions, read as a person's
   # read of an execution reads them.
   defp payloads(ctx) do
     import Ecto.Query, only: [from: 2]
 
     ids =
       Arca.Repo.all(
-        from(e in Arca.Execution, where: e.athanor_id == ^ctx.athanor_id, select: e.id)
+        from(e in Arca.Schemas.Execution, where: e.athanor_id == ^ctx.athanor_id, select: e.id)
       )
 
     for id <- ids,

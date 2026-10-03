@@ -9,6 +9,61 @@ defmodule PrismWeb.LoginLive do
   ticket to `GET /auth/device/complete/:ticket`, which sets the cookie
   session this origin has.
 
+  A passkey registered here signs its person in too: the page holds a
+  sign-in challenge (`Sanctum.Passkeys.sign_in_challenge/0`), the browser's
+  ceremony (`system_layer/webauthn.js`, through the `SystemLayer` hook in
+  its WebAuthn mode) answers it, and `Sanctum.Passkeys.sign_in/2` verifies
+  the answer against the challenge, which is spent on the first answer,
+  and mints the session. A one-time ticket bound to this browser hands it
+  to `GET /auth/passkey/complete/:ticket`, as the device flow's does.
+
+  A person whose keys another home holds signs in through the `cyfr` door
+  (`Sanctum.Auth.CyfrDoor`), and the page's script (`hooks/carry.js`)
+  carries the exchange between the homes:
+
+    * **The entry.** "Sign in with your CYFR" takes the address of their
+      signing home. The page answers `cyfr:expect` with that home's
+      origin and where to go: its `/carry`, this home as the destination
+      in the fragment, where they begin the sign-in themselves. The
+      script keeps `{home, at}` in this tab's `sessionStorage` before it
+      goes. When this browser's session already holds an unexpired
+      challenge of that home's carry, the same challenge goes back there
+      instead, by a new ticket through `GET /auth/cyfr`: the exchange
+      resumes under its own action. That answer is `cyfr:go`, which keeps
+      no expectation: a resumed exchange comes back with its assertion,
+      never a carry, so it opens no window for a carry no gesture asked
+      for.
+    * **The carry.** Their home sends the browser back here with the
+      carry in the fragment (`#carry=`). The script reads and clears it,
+      and raises `cyfr_carry` only while the expectation that entry left
+      is fresh, once, naming the home as `expected_source`: a carry no
+      gesture here asked for signs nobody in, so another home cannot sign
+      this browser in as someone else. The page refuses a carry whose
+      envelope's `source` is not that home before anything reads a
+      directory, then verifies it against the person's directory and
+      mints this home's challenge.
+    * **The code.** The page shows the challenge's comparison code
+      (`Prima.PersonAssertion.comparison_code/1`), which their home's
+      confirmation names too, and Continue mints the one-time ticket bound
+      to this browser and goes to `GET /auth/cyfr`, which keeps the
+      challenge in the browser's session and returns the browser to their
+      home.
+    * **The callback.** Their home's assertion comes back the same way
+      (`#cyfr=`), to `cyfr_assertion`, and the page posts it as
+      `fragment`, which the request log redacts (`Prima.Sanitizer`), with
+      its CSRF token, to `POST /auth/cyfr/callback`, which reports the
+      outcome back to their home.
+
+  A held challenge carries the browser secret its login is bound to. The
+  page keeps it whole for the hop, inside `PrismWeb.LoginLive.Held`,
+  whose inspection omits that secret, so a crash report that prints the
+  page's assigns never prints it.
+
+  The script on this page also keeps a carry fragment meant for this home
+  as a signing home (a destination, a challenge or a return that arrived
+  at `/carry` before its person signed in here, and was sent here to sign
+  in) until `/carry` takes it.
+
   A refused sign-in never reaches a session — the door answers on the
   poll; a signed-in person who has no athanor yet is told so.
 
@@ -20,12 +75,30 @@ defmodule PrismWeb.LoginLive do
 
   use PrismWeb, :live_view
 
-  alias Sanctum.Auth.DeviceFlow
+  alias PrismWeb.LoginLive.Held
+  alias Sanctum.Auth.{CyfrDoor, DeviceFlow}
   require Logger
 
   @ticket_ttl_ms 60_000
   @default_poll_interval_s 5
+  # Passkey challenges per address: the page is reached over the LiveView
+  # socket, which passes no rate-limit plug, so this is its per-address
+  # bound, per node, before any signature is checked.
+  @passkey_starts 30
+  @passkey_window_ms 60_000
+  # A `cyfr` sign-in's carry reads the person's directory before anything
+  # else answers, so each address has its own bound here, per node; the
+  # installation's bound across every address is the door's
+  # (`Sanctum.Auth.CyfrDoor`), and both answer the same sentence.
+  @cyfr_starts 30
+  @cyfr_window_ms 60_000
+  @cyfr_rate_limited "Too many sign-ins from here. Try again in a minute."
   @not_owner "This server is not accepting sign-ins right now. Try again in a moment."
+  @wrong_source "That sign-in came from another home than the one you named, so nobody was " <>
+                  "signed in. Name your home below and begin again."
+  @unsolicited "A sign-in arrived that this page did not ask for, so nobody was signed in. " <>
+                 "To sign in with your CYFR, name your home below."
+  @oversized "That sign-in is larger than this home accepts."
 
   @impl true
   def mount(params, session, socket) do
@@ -49,10 +122,166 @@ defmodule PrismWeb.LoginLive do
      |> assign(:verification_uri, nil)
      |> assign(:device_code, nil)
      |> assign(:poll_interval, @default_poll_interval_s)
+     # The passkey sign-in challenge this page holds, answered at most once.
+     |> assign(:passkey_challenge, nil)
+     # A `cyfr` sign-in's callback fragment, posted once by the form below.
+     |> assign(:cyfr_fragment, nil)
+     |> assign(:cyfr_trigger, false)
+     # How long the script holds an expectation, the carry's lifetime.
+     |> assign(:carry_lifetime_ms, CyfrDoor.carry_lifetime_ms())
+     # The challenge this browser's session holds from an earlier hop,
+     # which an entry naming its home resumes. Server-side only.
+     |> assign(:cyfr_held, held_challenge(session))
+     # A verified carry's challenge, waiting for the person's Continue.
+     |> assign(:cyfr_pending, nil)
      |> assign(:error, error_from_params(params)), layout: false}
   end
 
+  # The person names their signing home; they begin the sign-in there, or
+  # resume the exchange this browser already holds a challenge of.
   @impl true
+  def handle_event("cyfr_home", %{"home" => address}, socket) when is_binary(address) do
+    case CyfrDoor.signing_home(address) do
+      {:ok, url} ->
+        home = signing_origin(url)
+
+        socket = assign(socket, error: nil, cyfr_pending: nil)
+
+        # A resumed exchange keeps no expectation: what comes back is its
+        # assertion, never a carry.
+        case resumable(socket.assigns.cyfr_held, home) do
+          {:ok, held} ->
+            {:noreply,
+             push_event(socket, "cyfr:go", %{
+               to: challenge_hop(held, socket.assigns.browser_binding)
+             })}
+
+          :none ->
+            {:noreply, push_event(socket, "cyfr:expect", %{home: home, to: url})}
+        end
+
+      {:error, :this_home} ->
+        {:noreply,
+         assign(
+           socket,
+           :error,
+           "That is this home's address; name the home that holds your keys."
+         )}
+
+      {:error, :invalid_home} ->
+        {:noreply,
+         assign(socket, :error, "That is not a home's address, like https://home.example.")}
+    end
+  end
+
+  # The carry the person's home sent back with them, raised only after the
+  # entry above named that home (`expected_source`): this home's challenge
+  # for it, shown as its comparison code until the person continues.
+  def handle_event(
+        "cyfr_carry",
+        %{"fragment" => fragment, "expected_source" => expected},
+        socket
+      )
+      when is_binary(fragment) and is_binary(expected) do
+    if Arca.ControlPlane.held?() do
+      # Before any directory is read: the carry is from the home the
+      # person named here, or it signs nobody in.
+      case unexpected_source(fragment, expected) do
+        nil -> {:noreply, challenge_carry(socket, fragment, expected)}
+        refusal -> {:noreply, assign(socket, error: refusal, cyfr_pending: nil)}
+      end
+    else
+      {:noreply, assign(socket, :error, @not_owner)}
+    end
+  end
+
+  # A carry no entry here asked for: nothing is checked and nobody signed in.
+  def handle_event("cyfr_carry", _params, socket),
+    do: {:noreply, assign(socket, error: @unsolicited, cyfr_pending: nil)}
+
+  def handle_event("cyfr_unsolicited", _params, socket),
+    do: {:noreply, assign(socket, error: @unsolicited, cyfr_pending: nil)}
+
+  def handle_event("cyfr_oversized", _params, socket),
+    do: {:noreply, assign(socket, error: @oversized, cyfr_pending: nil)}
+
+  # The person saw the code and continues: the challenge goes, by a ticket
+  # bound to this browser, to the hop that keeps it in the browser's
+  # session and returns them to their home.
+  def handle_event("cyfr_continue", _params, socket) do
+    case socket.assigns.cyfr_pending do
+      %{held: held} ->
+        if unexpired?(held) do
+          {:noreply, redirect(socket, to: challenge_hop(held, socket.assigns.browser_binding))}
+        else
+          {:noreply,
+           assign(socket,
+             error: "That sign-in expired. Begin it again from your home.",
+             cyfr_pending: nil
+           )}
+        end
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cyfr_cancel", _params, socket),
+    do: {:noreply, assign(socket, cyfr_pending: nil)}
+
+  # The assertion the person's home sent back: posted, with this page's
+  # CSRF token, to the callback, by the form the trigger submits.
+  def handle_event("cyfr_assertion", %{"fragment" => fragment}, socket)
+      when is_binary(fragment) do
+    if byte_size(fragment) <= Prima.Carry.max_fragment_bytes() do
+      {:noreply, assign(socket, cyfr_fragment: fragment, cyfr_trigger: true, error: nil)}
+    else
+      {:noreply, assign(socket, :error, "That sign-in is larger than this home accepts.")}
+    end
+  end
+
+  def handle_event("passkey_start", _params, socket) do
+    cond do
+      not Arca.ControlPlane.held?() ->
+        {:reply, %{error: @not_owner}, assign(socket, :error, @not_owner)}
+
+      Prima.RateLimiter.check(
+        {:passkey_sign_in, socket.assigns.client_ip},
+        @passkey_starts,
+        @passkey_window_ms
+      ) != :ok ->
+        message = "Too many passkey sign-ins from here. Try again in a minute."
+        {:reply, %{error: message}, assign(socket, :error, message)}
+
+      true ->
+        held = Sanctum.Passkeys.sign_in_challenge()
+
+        {:reply, %{public_key: held.public_key},
+         assign(socket, :passkey_challenge, Map.take(held, [:challenge, :expires_at]))}
+    end
+  end
+
+  def handle_event("passkey_assertion", %{"credential" => credential}, socket)
+      when is_map(credential) do
+    case socket.assigns.passkey_challenge do
+      nil ->
+        {:noreply, assign(socket, :error, "That passkey sign-in expired. Please try again.")}
+
+      held ->
+        # The challenge is spent on its first answer, whatever it says.
+        socket = assign(socket, :passkey_challenge, nil)
+        finish_passkey(socket, Sanctum.Passkeys.sign_in(held, credential))
+    end
+  end
+
+  def handle_event("passkey_assertion", _params, socket),
+    do: {:noreply, assign(socket, passkey_challenge: nil, error: passkey_refused())}
+
+  def handle_event("passkey_error", _params, socket) do
+    {:noreply,
+     assign(socket, passkey_challenge: nil, error: "The passkey sign-in did not finish.")}
+  end
+
   def handle_event("start", %{"provider" => provider}, socket) do
     now = System.monotonic_time(:millisecond)
     last = socket.assigns[:last_start_at]
@@ -133,7 +362,7 @@ defmodule PrismWeb.LoginLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -195,6 +424,147 @@ defmodule PrismWeb.LoginLive do
   defp finish_poll(socket, {:error, reason}) do
     Logger.warning("[LoginLive] device-flow poll failed: #{inspect(reason)}")
     {:noreply, assign_idle(socket, "Couldn't complete sign-in. Try again in a moment.")}
+  end
+
+  defp finish_passkey(socket, {:ok, result}) do
+    ticket = mint_ticket({:login_passkey_ticket, result}, socket.assigns.browser_binding)
+    {:noreply, redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")}
+  end
+
+  defp finish_passkey(socket, {:error, {:door, _reason}}),
+    do: {:noreply, assign(socket, :error, Sanctum.Door.refusal_message())}
+
+  defp finish_passkey(socket, {:error, :unavailable}),
+    do:
+      {:noreply, assign(socket, :error, "The server could not sign you in just now. Try again.")}
+
+  # A remote person's head moved between the passkey's verification and
+  # the mint: a pause, not a refusal of the passkey, and the retry decides.
+  defp finish_passkey(socket, {:error, :identity_stale}),
+    do: {:noreply, assign(socket, :error, cyfr_refused(:identity_stale))}
+
+  defp finish_passkey(socket, {:error, _refused}),
+    do: {:noreply, assign(socket, :error, passkey_refused())}
+
+  defp passkey_refused, do: "That passkey did not sign you in here."
+
+  defp cyfr_refused(reason) when reason in [:identity_stale, :unavailable],
+    do: "Your identity could not be confirmed with its directory just now. Try again shortly."
+
+  defp cyfr_refused(:wrong_destination),
+    do: "That sign-in was begun for another home. Begin it again for this one."
+
+  defp cyfr_refused(_refused),
+    do: "That sign-in could not be checked here. Begin it again from your home."
+
+  defp challenge_carry(socket, fragment, expected) do
+    if Prima.RateLimiter.check(
+         {:cyfr_sign_in, socket.assigns.client_ip},
+         @cyfr_starts,
+         @cyfr_window_ms
+       ) == :ok do
+      case CyfrDoor.challenge(fragment) do
+        {:ok, %{"source" => ^expected} = held} ->
+          assign(socket, error: nil, cyfr_pending: pending(Held.new(held)))
+
+        {:ok, _another} ->
+          assign(socket, error: @wrong_source, cyfr_pending: nil)
+
+        {:error, {:rate_limited, _retry_after_ms}} ->
+          assign(socket, error: @cyfr_rate_limited, cyfr_pending: nil)
+
+        {:error, reason} ->
+          assign(socket, error: cyfr_refused(reason), cyfr_pending: nil)
+      end
+    else
+      assign(socket, :error, @cyfr_rate_limited)
+    end
+  end
+
+  # The envelope's source, read from the carry before anything is verified
+  # or any directory read: nil when it is the home the person named here,
+  # else the sentence that refuses it.
+  defp unexpected_source(fragment, expected) do
+    case Prima.Carry.parse_fragment(fragment) do
+      {:ok, %{envelope: %{source: ^expected}}} -> nil
+      {:ok, _another} -> @wrong_source
+      {:error, :carry_too_large} -> @oversized
+      {:error, _unread} -> cyfr_refused(:invalid_carry)
+    end
+  end
+
+  # What the page shows while the person compares codes: the home they
+  # named and the comparison code of the challenge this home issued, which
+  # that home's confirmation names too. The challenge stays in this process
+  # until Continue hands it to the hop.
+  defp pending(%Held{held: inner} = held) do
+    {:ok, challenge} =
+      Prima.Identity.Encoding.unb64(inner["challenge"], Prima.PersonAssertion.challenge_bytes())
+
+    %{held: held, home: inner["source"], code: Prima.PersonAssertion.comparison_code(challenge)}
+  end
+
+  # The challenge an earlier hop left in this browser's session
+  # (`PrismWeb.AuthController.cyfr_challenge_key/0`), if any.
+  defp held_challenge(session) do
+    case session[PrismWeb.AuthController.cyfr_challenge_key()] do
+      %{} = held -> Held.new(held)
+      _none -> nil
+    end
+  end
+
+  # The exchange this browser holds the challenge of resumes when the
+  # person names its home again before it expires: the same action and
+  # challenge go back, never a new one.
+  defp resumable(%Held{held: %{"source" => home}} = held, home),
+    do: if(unexpired?(held), do: {:ok, held}, else: :none)
+
+  defp resumable(_held, _home), do: :none
+
+  defp unexpired?(%Held{held: %{"expires_at" => at}}) when is_integer(at),
+    do: at > System.os_time(:millisecond)
+
+  defp unexpired?(_held), do: false
+
+  defp challenge_hop(%Held{held: held}, browser_binding) do
+    ticket = mint_ticket({:login_cyfr_ticket, held}, browser_binding)
+    "/auth/cyfr?" <> URI.encode_query(%{ticket: ticket})
+  end
+
+  # The signing home's origin, from the address `signing_home/1` answered:
+  # its `/carry` path (`Prima.Carry.return_url/1`) and its fragment off.
+  defp signing_origin(url) do
+    url |> String.split("#", parts: 2) |> hd() |> String.replace_suffix("/carry", "")
+  end
+
+  # A `cyfr` sign-in's challenge, for the hop that keeps it in this
+  # browser's session: bound to the browser as the other tickets are.
+  defp mint_ticket({:login_cyfr_ticket, held}, browser_binding) do
+    ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+    Arca.Cache.put(
+      {:login_cyfr_ticket, ticket},
+      %{held: held, browser_binding: browser_binding},
+      @ticket_ttl_ms
+    )
+
+    ticket
+  end
+
+  defp mint_ticket({:login_passkey_ticket, result}, browser_binding) do
+    ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+    Arca.Cache.put(
+      {:login_passkey_ticket, ticket},
+      %{
+        session_token: result.session_token,
+        outcome: result.outcome,
+        browser_binding: browser_binding
+      },
+      @ticket_ttl_ms
+    )
+
+    ticket
   end
 
   defp mint_ticket(result, browser_binding) do
@@ -301,6 +671,53 @@ defmodule PrismWeb.LoginLive do
 
           <h2 class="text-lg font-medium text-white text-center mb-4">Sign in to continue</h2>
 
+          <%!-- The carry's script: reads and clears the address's fragment
+                and holds the in-flight carry data (`hooks/carry.js`). --%>
+          <div
+            id="cyfr-carry"
+            phx-hook="Carry"
+            data-carry="login"
+            data-lifetime-ms={@carry_lifetime_ms}
+            data-max-fragment={Prima.Carry.max_fragment_bytes()}
+            hidden
+          >
+          </div>
+
+          <div
+            :if={@cyfr_pending}
+            id="cyfr-code"
+            data-test="cyfr-code"
+            class="rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 space-y-3"
+          >
+            <p class="text-sm text-gray-300">
+              Your home, <span class="font-mono text-white">{@cyfr_pending.home}</span>,
+              will show this code when it asks you to confirm signing in here:
+            </p>
+            <p class="text-center font-mono text-2xl tracking-widest text-white" data-test="code">
+              {@cyfr_pending.code}
+            </p>
+            <p class="text-sm text-gray-300">
+              Continue, and confirm there only if your home shows the same code.
+            </p>
+            <div class="flex gap-2 justify-end">
+              <button
+                type="button"
+                phx-click="cyfr_cancel"
+                class="px-4 py-2 text-sm text-gray-400 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                phx-click="cyfr_continue"
+                data-test="cyfr-continue"
+                class="px-4 py-2 bg-indigo-900/60 hover:bg-indigo-900 text-white rounded-lg border border-indigo-700"
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+
           <div :if={@login_state == :waiting} class="space-y-4">
             <p class="text-sm text-gray-300 text-center">
               Open
@@ -337,6 +754,64 @@ defmodule PrismWeb.LoginLive do
           <div :if={@login_state == :idle} class="flex flex-col gap-3">
             <.provider_button :for={provider <- @providers} provider={provider} />
           </div>
+
+          <div
+            :if={@login_state == :idle}
+            id="passkey-sign-in"
+            phx-hook="SystemLayer"
+            data-webauthn="sign-in"
+            class="flex flex-col gap-3"
+          >
+            <button
+              type="button"
+              data-webauthn-start
+              class="flex items-center justify-center gap-3 w-full px-4 py-3 bg-indigo-900/60 hover:bg-indigo-900 text-white rounded-lg border border-indigo-700 transition-colors cursor-pointer"
+            >
+              <span>Sign in with a passkey</span>
+            </button>
+          </div>
+
+          <form
+            :if={@login_state == :idle}
+            id="cyfr-sign-in"
+            phx-submit="cyfr_home"
+            class="flex flex-col gap-2 pt-2 border-t border-gray-800"
+          >
+            <label for="cyfr-home" class="text-sm text-gray-300">
+              Sign in with your CYFR: the address of the home that holds your keys
+            </label>
+            <div class="flex gap-2">
+              <input
+                id="cyfr-home"
+                name="home"
+                type="text"
+                inputmode="url"
+                autocomplete="url"
+                placeholder="https://your-home.example"
+                class="flex-1 min-w-0 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-white"
+              />
+              <button
+                type="submit"
+                class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg border border-gray-700"
+              >
+                Continue
+              </button>
+            </div>
+            <p class="text-xs text-gray-500">
+              Your home learns this home's address, and this home learns yours.
+            </p>
+          </form>
+
+          <.form
+            :if={@cyfr_trigger}
+            for={%{}}
+            id="cyfr-callback"
+            action={~p"/auth/cyfr/callback"}
+            method="post"
+            phx-trigger-action={@cyfr_trigger}
+          >
+            <input type="hidden" name="fragment" value={@cyfr_fragment} />
+          </.form>
         </div>
       </div>
     </div>
@@ -403,5 +878,33 @@ defmodule PrismWeb.LoginLive do
       <span>Sign in with {@provider}</span>
     </a>
     """
+  end
+end
+
+defmodule PrismWeb.LoginLive.Held do
+  @moduledoc """
+  A `cyfr` sign-in's held challenge (`Sanctum.Auth.CyfrDoor`) as the
+  sign-in page keeps it: whole, for the hop that keeps it in the
+  browser's session, and inspected without its `browser_secret`, the
+  secret its login is bound to, so a crash report that prints the page's
+  assigns never prints it.
+  """
+
+  @enforce_keys [:held]
+  defstruct [:held]
+
+  @type t :: %__MODULE__{held: map()}
+
+  @doc "The held challenge `held`, kept for the page."
+  @spec new(map()) :: t()
+  def new(%{} = held), do: %__MODULE__{held: held}
+
+  defimpl Inspect, for: PrismWeb.LoginLive.Held do
+    use Boundary, classify_to: PrismWeb
+    import Inspect.Algebra
+
+    def inspect(%{held: held}, opts) do
+      concat(["#PrismWeb.LoginLive.Held<", to_doc(Map.delete(held, "browser_secret"), opts), ">"])
+    end
   end
 end

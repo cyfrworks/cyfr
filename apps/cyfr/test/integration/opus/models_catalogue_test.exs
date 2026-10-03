@@ -17,10 +17,9 @@ defmodule Opus.ModelsCatalogueTest do
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "models_cat_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path]
@@ -38,7 +37,7 @@ defmodule Opus.ModelsCatalogueTest do
       end
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
   test "every contract catalyst is listed; one without a key is an error, not a provider", %{
@@ -56,12 +55,12 @@ defmodule Opus.ModelsCatalogueTest do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     for unit <- models, do: assert(unit.ref in minted, "#{unit.ref} not minted")
 
-    # The estate is filled by hand above; marked so, a listing starts no
+    # The athanor is filled by hand above; marked so, a listing starts no
     # fill of its own behind this test.
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
     {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
 
-    assert {:ok, catalogue} = Cyfr.Models.catalogue(ctx)
+    assert {:ok, catalogue} = Aqua.models(ctx)
 
     expected_refs = Map.new(models, &{&1.name, &1.ref})
     assert catalogue["refs"] == expected_refs

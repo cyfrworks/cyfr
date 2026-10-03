@@ -9,33 +9,33 @@ defmodule Cyfr.Test.OpusService do
   of their own (the `Direct` keeper, `config/test.exs`), pooled and reused
   across tests.
 
-  The umbrella starts CYFR's host API listener (`Cyfr.Execution.HostListener`,
+  The umbrella starts CYFR's host API listener (`Crucible.HostListener`,
   port 0 under `config/test.exs`) and the Opus application, whose listener
   (`Opus.WorkerListener`) also binds port 0. Neither knows the other's port
   until both are up, so `wire!/1`, run once by `test_helper.exs` and by the
   step bench, gives the service `wrk_local` its credentials — the key CYFR
   derives for it and where its runners reach CYFR — restarting it when they
   are not the ones it holds, and puts the service's endpoint in
-  `config :cyfr, :workers`, where `Cyfr.Execution.Dispatch` finds it. For
+  `config :cyfr, :opus_workers`, where `Crucible.Dispatch` finds it. For
   the suite, the runners reach the host listener through the suite's wire
   (`Cyfr.Test.TwoServices.Wire`), which a test watches, holds a call on or
   loses a call on without restarting the service; the bench run alone
-  (`mix cyfr.bench.step`) reaches it directly. A test that replaces `:workers` restores what it found.
+  (`mix cyfr.bench.step`) reaches it directly. A test that replaces `:opus_workers` restores what it found.
 
   `status/0` and `boot/0` ask the service over the wire, `request!/3` and
-  `start!/3` post a `Cyfr.WorkerAPI` request to the service's listener
+  `start!/3` post a `Prima.WorkerAPI` request to the service's listener
   signed as CYFR signs it, and `restart!/0` restarts the service, a new boot
   holding no attempt and a pool refilled from nothing, as an operator's
   restart does.
   """
 
-  alias Cyfr.Execution.{HostListener, Keys, WorkerClient}
+  alias Crucible.{HostListener, Keys, WorkerClient}
   alias Cyfr.Test.TwoServices
-  alias Cyfr.{WorkerAPI, WorkerAuth, WorkerWire}
+  alias Prima.{WorkerAPI, WorkerAuth, WorkerWire}
 
   # The service is a sibling application, not a dependency: CYFR names it
   # here as the suite's, never in its own code.
-  @compile {:no_warn_undefined, [Opus.Credentials]}
+  @compile {:no_warn_undefined, [Opus.Credentials, Opus.WorkerService]}
 
   @service "wrk_local"
 
@@ -46,14 +46,14 @@ defmodule Cyfr.Test.OpusService do
   @doc """
   Point Opus at the running host listener — through the suite's wire
   unless `proxy: false` — and CYFR at Opus's listener. Answers the
-  service's endpoint (`t:Cyfr.WorkerAPI.endpoint/0`).
+  service's endpoint (`t:Prima.WorkerAPI.endpoint/0`).
   """
-  @spec wire!(keyword()) :: Cyfr.WorkerAPI.endpoint()
+  @spec wire!(keyword()) :: Prima.WorkerAPI.endpoint()
   def wire!(opts \\ []) do
     unless Process.whereis(Opus.Supervisor),
       do: raise("the Opus worker service is not running: run the suite from the umbrella root")
 
-    {:ok, worker_key} = Keys.worker_key(@service)
+    {:ok, worker_key} = Keys.opus_key(@service)
 
     reached =
       if Keyword.get(opts, :proxy, true),
@@ -78,7 +78,7 @@ defmodule Cyfr.Test.OpusService do
     end
 
     endpoint = endpoint()
-    Application.put_env(:cyfr, :workers, [endpoint])
+    Application.put_env(:cyfr, :opus_workers, [endpoint])
     endpoint
   end
 
@@ -86,7 +86,7 @@ defmodule Cyfr.Test.OpusService do
   @spec host_url() :: String.t()
   def host_url do
     {_id, listener, _type, _modules} =
-      Cyfr.InfraSupervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0)
+      Crucible.Supervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0)
 
     "http://127.0.0.1:#{HostListener.port(listener)}"
   end
@@ -102,7 +102,7 @@ defmodule Cyfr.Test.OpusService do
   end
 
   @doc "The service's endpoint entry, running any component."
-  @spec endpoint() :: Cyfr.WorkerAPI.endpoint()
+  @spec endpoint() :: Prima.WorkerAPI.endpoint()
   def endpoint, do: %{id: @service, url: url(), components: nil}
 
   @doc "The service's status, asked over the wire by CYFR's own client."
@@ -115,6 +115,14 @@ defmodule Cyfr.Test.OpusService do
   @doc "The boot id the running service answers."
   @spec boot() :: String.t()
   def boot, do: status().boot
+
+  @doc """
+  Answer once every runner exit the service is reporting has been
+  answered by CYFR or given up on (`Opus.WorkerService.await_reports/1`):
+  for a test outside the wiring suite that ends a runner, before its end.
+  """
+  @spec await_reports() :: :ok
+  def await_reports, do: Opus.WorkerService.await_reports()
 
   @doc """
   Restart the worker service and its runners: a new boot that holds no
@@ -135,7 +143,7 @@ defmodule Cyfr.Test.OpusService do
   """
   @spec request!(atom(), map(), keyword()) :: {non_neg_integer(), map()}
   def request!(callback, args, opts \\ []) do
-    {:ok, worker_key} = Keys.worker_key(@service)
+    {:ok, worker_key} = Keys.opus_key(@service)
     body = Jason.encode!(WorkerWire.request_body(callback, args))
 
     request = %{
@@ -180,7 +188,7 @@ defmodule Cyfr.Test.OpusService do
   def listeners do
     host =
       with {_id, listener, _type, _modules} <-
-             Cyfr.InfraSupervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0),
+             Crucible.Supervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0),
            {_id, server, _type, _modules} <-
              listener |> Supervisor.which_children() |> List.keyfind(:server, 0) do
         [server]

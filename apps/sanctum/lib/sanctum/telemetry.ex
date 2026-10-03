@@ -54,6 +54,20 @@ defmodule Sanctum.Telemetry do
   @api_keys_event [:cyfr, :sanctum, :api_keys, :changed]
   @webhooks_event [:cyfr, :sanctum, :webhooks, :changed]
 
+  # A remote identity's head as this home reads it from its directory.
+  @identity_not_descendant_event [:cyfr, :sanctum, :identity, :not_descendant]
+  @identity_stale_event [:cyfr, :sanctum, :identity, :stale]
+
+  # A pending confirmation's lifecycle, one event per kind.
+  @confirmation_events %{
+    opened: [:cyfr, :sanctum, :confirmation, :opened],
+    confirmed: [:cyfr, :sanctum, :confirmation, :confirmed],
+    consumed: [:cyfr, :sanctum, :confirmation, :consumed],
+    cancelled: [:cyfr, :sanctum, :confirmation, :cancelled],
+    voided: [:cyfr, :sanctum, :confirmation, :voided],
+    expired: [:cyfr, :sanctum, :confirmation, :expired]
+  }
+
   @doc """
   Emit an authentication event.
 
@@ -129,7 +143,7 @@ defmodule Sanctum.Telemetry do
   def sessions_revoked(user_id),
     do: :telemetry.execute(@sessions_revoked_event, %{count: 1}, %{user_id: user_id})
 
-  @doc "One person's seat in one athanor changed — which estates they may now reach."
+  @doc "One person's seat in one athanor changed — which athanors they may now reach."
   @spec membership_changed(String.t(), String.t() | nil, term()) :: :ok
   def membership_changed(user_id, athanor_id, change) when is_binary(user_id) do
     :telemetry.execute(@membership_event, %{count: 1}, %{
@@ -173,4 +187,69 @@ defmodule Sanctum.Telemetry do
   @spec webhooks_changed(String.t()) :: :ok
   def webhooks_changed(athanor_id) when is_binary(athanor_id),
     do: :telemetry.execute(@webhooks_event, %{count: 1}, %{athanor_id: athanor_id})
+
+  @doc """
+  The directory `directory` served a log of `identifier` that does not
+  contain the head this home verified before: the cache was left as it
+  was and the head was refused. An honest directory's log only grows, so
+  this is evidence about the directory, kept on the audit trail.
+  """
+  @spec identity_not_descendant(String.t(), String.t()) :: :ok
+  def identity_not_descendant(identifier, directory)
+      when is_binary(identifier) and is_binary(directory) do
+    :telemetry.execute(@identity_not_descendant_event, %{count: 1}, %{
+      identifier: identifier,
+      directory: directory
+    })
+  end
+
+  @doc """
+  `identifier`'s head is past its freshness bound, `bound_seconds`, and
+  its directory (`directory`, nil when this home has no locator for it)
+  could not refresh it: that person's protected work here pauses. No
+  person, token or key is named.
+  """
+  @spec identity_stale(String.t(), String.t() | nil, pos_integer()) :: :ok
+  def identity_stale(identifier, directory, bound_seconds)
+      when is_binary(identifier) and is_integer(bound_seconds) do
+    :telemetry.execute(@identity_stale_event, %{count: 1}, %{
+      identifier: identifier,
+      directory: directory,
+      bound_seconds: bound_seconds
+    })
+  end
+
+  @typedoc "What happened to a pending confirmation."
+  @type confirmation_kind :: :opened | :confirmed | :consumed | :cancelled | :voided | :expired
+
+  @doc """
+  The pending-confirmation lifecycle's announcement: the confirmation
+  `ref` (`Prima.Confirmation.ref/1`) of `user_id` in `athanor_id`, for the
+  operation it confirms (`tool.action`), was opened, confirmed, consumed,
+  cancelled, voided or expired. Emits `[:cyfr, :sanctum, :confirmation,
+  kind]` with the athanor, the person, the ref, the operation and the
+  expiry, and nothing else: never the secret the asking request holds,
+  the change's arguments or its preview, which a client reads under its
+  own session. The host's bridge carries it to the person's own clients.
+  """
+  @spec confirmation(confirmation_kind(), String.t(), String.t(), %{
+          ref: String.t(),
+          operation: String.t(),
+          expires_at: DateTime.t()
+        }) :: :ok
+  def confirmation(kind, athanor_id, user_id, %{
+        ref: ref,
+        operation: operation,
+        expires_at: %DateTime{} = expires_at
+      })
+      when is_map_key(@confirmation_events, kind) and is_binary(athanor_id) and
+             is_binary(user_id) and is_binary(ref) and is_binary(operation) do
+    :telemetry.execute(Map.fetch!(@confirmation_events, kind), %{count: 1}, %{
+      athanor_id: athanor_id,
+      user_id: user_id,
+      ref: ref,
+      operation: operation,
+      expires_at: expires_at
+    })
+  end
 end

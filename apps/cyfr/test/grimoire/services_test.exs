@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+defmodule Grimoire.ServicesTest do
+  use ExUnit.Case, async: true
+
+  alias Grimoire.Services
+  alias Grimoire.Catalog
+
+  test "every configured provider maps to a service the roster lists" do
+    names = Services.service_names()
+
+    for module <- Catalog.configured_providers() do
+      assert Services.service_name(module) in names
+    end
+
+    assert names == names |> Enum.uniq() |> Enum.sort()
+  end
+
+  test "the storage providers are arca's, everywhere they are named" do
+    # routed_to and system.status read the same map, so the same module
+    # cannot be one service in the log and another in the report. Several
+    # providers may share a service.
+    assert Services.service_name(Arca.Providers.Records) == "arca"
+    assert Services.service_name(Arca.Providers.Files) == "arca"
+    assert Services.providers_for("arca") == [Arca.Providers.Records, Arca.Providers.Files]
+  end
+
+  test "an unlisted module is grimoire's" do
+    assert Services.service_name(UnknownProvider) == "grimoire"
+  end
+end

@@ -15,7 +15,7 @@ defmodule Arca.Schemas.Profile do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias Cyfr.Authority.RootSelect
+  alias Prima.Authority.RootSelect
 
   @kinds ~w(owner public)
   @statuses ~w(active needs_consent revoked)
@@ -39,7 +39,7 @@ defmodule Arca.Schemas.Profile do
   @doc """
   A profile row about to be inserted.
 
-  The label rule has one owner — `Cyfr.Authority.RootSelect.valid_label?/1`,
+  The label rule has one owner — `Prima.Authority.RootSelect.valid_label?/1`,
   whose `decode/1` tells an id from a label by the `prof_` prefix and is
   only sound while no stored label wears it — and this is where a write is
   held to it. The active-identity index rides along so a race answers
@@ -72,7 +72,7 @@ defmodule Arca.Schemas.Profile do
   end
 
   @doc """
-  The label rule in its typed form — `Cyfr.Authority.RootSelect.check_label/1`,
+  The label rule in its typed form — `Prima.Authority.RootSelect.check_label/1`,
   which owns the rule this row is held to and which the consent verbs
   answer with before a plan token or proof is minted for a label.
   """

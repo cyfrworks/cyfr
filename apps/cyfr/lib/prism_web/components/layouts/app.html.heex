@@ -1,20 +1,26 @@
 <div class="flex h-screen flex-col overflow-hidden bg-gray-950">
   <% mode = Prism.Labels.mode(assigns[:ui_mode]) %>
-  <!-- The chrome: brand, the athanor switcher, the drawer, the person — and in dev the live indicators -->
-  {live_render(@socket, PrismWeb.TopbarLive,
-    id: "topbar",
-    session: %{"athanor_id" => assigns[:athanor] && @athanor.id, "ui_mode" => mode}
-  )}
+  <!-- The chrome: brand, the athanor switcher, the drawer, the person — and in dev the live indicators.
+       A page whose own layer covers the chrome (`covered`, the shell under a full frame) takes it out
+       of reach, so no key reaches a control nobody can see. -->
+  <div id="chrome-top" class="contents" inert={assigns[:covered]}>
+    {live_render(@socket, PrismWeb.TopbarLive,
+      id: "topbar",
+      session: %{"athanor_id" => assigns[:athanor] && @athanor.id, "ui_mode" => mode}
+    )}
+  </div>
 
   <!-- Body row: sidebar (dev, wide screens) + drawer (both modes) + main content -->
   <div class="flex flex-1 overflow-hidden">
-    <.sidebar
-      :if={Prism.Labels.dev?(mode)}
-      mode={mode}
-      athanor_route={@athanor_route}
-      active_nav={assigns[:active_nav]}
-    />
-    <.drawer mode={mode} athanor_route={@athanor_route} active_nav={assigns[:active_nav]} />
+    <div id="chrome-side" class="contents" inert={assigns[:covered]}>
+      <.sidebar
+        :if={Prism.Labels.dev?(mode)}
+        mode={mode}
+        athanor_route={@athanor_route}
+        active_nav={assigns[:active_nav]}
+      />
+      <.drawer mode={mode} athanor_route={@athanor_route} active_nav={assigns[:active_nav]} />
+    </div>
 
     <!-- Main content -->
     <div class="flex flex-1 flex-col overflow-hidden">

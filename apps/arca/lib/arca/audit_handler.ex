@@ -121,7 +121,7 @@ defmodule Arca.AuditHandler do
   # the entry and writing the line. A deployment's own attach on
   # `[:cyfr, :audit, :recorded]` is telemetry's to catch and detach, not
   # this handler's, though it runs in this process and on this path.
-  # `Cyfr.OtelTenantHandler` and `Prism.TelemetryBridge` take the same
+  # `Cyfr.OtelTenantHandler` and `Cyfr.TelemetryBridge` take the same
   # precaution for the same reason.
   def handle_event(event_name, measurements, metadata, config) do
     do_handle_event(event_name, measurements, metadata, config)
@@ -151,7 +151,7 @@ defmodule Arca.AuditHandler do
     event = %Arca.Audit.Event{
       name: event_name,
       measurements: measurements,
-      metadata: Cyfr.Sanitizer.sanitize(metadata),
+      metadata: Prima.Sanitizer.sanitize(metadata),
       user_id: metadata[:user_id],
       athanor_id: metadata[:athanor_id]
     }
@@ -165,7 +165,7 @@ defmodule Arca.AuditHandler do
   # a door refusal's reason, so it renders what is there.
   #
   # `user_id` and `athanor_id` are Logger metadata; with
-  # `CYFR_LOG_FORMAT=json`, `Cyfr.JsonFormatter` emits them as structured
+  # `CYFR_LOG_FORMAT=json`, `Prima.JsonFormatter` emits them as structured
   # fields for filtering by caller and athanor. The line goes out at
   # `:info`, so a node whose level is raised to `:warning` keeps its
   # operational logging and loses this trail — which is why a deployment
@@ -189,7 +189,7 @@ defmodule Arca.AuditHandler do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 end

@@ -4,28 +4,99 @@
 defmodule Cyfr.Application do
   @moduledoc false
 
+  use Boundary,
+    top_level?: true,
+    deps: [
+      Arca,
+      Sanctum,
+      Grimoire,
+      Cyfr,
+      Compendium,
+      Aqua,
+      Crucible,
+      Emissary,
+      Prism,
+      PrismWeb,
+      CyfrWeb,
+      CyfrWeb.Endpoint
+    ],
+    exports: [],
+    check: [aliases: true]
+
   require Logger
 
   use Application
 
+  # config:compile-runtime-ok — the permission is compiled in on purpose: a
+  # release is built without it, so no runtime setting can omit the gate.
+  @bootstrap_skip_permitted Application.compile_env(:cyfr, :bootstrap_skip_permitted, false)
+
   @impl true
   def start(_type, _args) do
-    # The storage and counted cap port's one write, before every domain
-    # this application starts. A capped write asks it on the first tenant
-    # byte, and an uninstalled port refuses rather than reading as a
-    # server with no ceilings (`Cyfr.Caps.NotInstalledError`).
-    Cyfr.Caps.install!(Sanctum.Tenancy.Caps)
+    # A stop in this VM may have marked the LiveView socket draining; a
+    # start serves `/live` again.
+    :ok = CyfrWeb.LiveSocket.undrain()
+
+    # The five ports' one write each, before every domain this
+    # application starts: each declaring module reads its implementation
+    # from the term written here, and an uninstalled port raises where it
+    # is asked rather than answering as though nothing were there. The
+    # storage and counted caps, asked on the first tenant byte; consent's
+    # view of the operation table; the component facts a consent rests on;
+    # the proxied `server:tool` tools the table resolves on a miss; and
+    # the overlaid roots' unit locators, asserted against the layout here
+    # before Bootstrap or the tincture registry scans the union.
+    Prima.Caps.install!(Sanctum.Tenancy.Caps)
+    Sanctum.Grimoire.install!(Grimoire.Catalog)
+    Sanctum.Consent.Components.install!(Compendium.ConsentFacts)
+    Grimoire.Proxy.install!(Emissary.External.Proxy)
+
+    Arca.Storage.UnitLocator.install!(%{
+      "aqua" => Compendium.AquaPath,
+      "components" => Compendium.ComponentPath
+    })
+
+    # The platform settings, before the tree and so before the execution
+    # slots' pool or any other consumer reads one, whether or not this
+    # boot migrated: the roster's defaults installed into Arca's accessor,
+    # this member's environment pins checked against the live members'
+    # recorded ones (a disagreement refuses the boot naming both), and
+    # each restart-scoped row and the log level's applied once. An
+    # unreadable settings table refuses the boot.
+    Cyfr.Platform.Settings.install!()
+    Cyfr.Platform.Settings.check_pins!()
+    Cyfr.Platform.Settings.apply()
+
+    # The operation table and its resource index, built from the
+    # configured providers and written once into Grimoire's term — after
+    # the ports its audit and its providers read, before any process that
+    # dispatches, derives a consent shape or serves `tools/list` exists.
+    # A provider that cannot load, or a declaration the gates cannot
+    # classify, refuses the boot here.
+    Grimoire.Catalog.load!()
+
+    # Every stream the table holds rides a topic the bus declares, one a
+    # grant can scope: checked before any process that could open one
+    # exists, and a stream naming anything else refuses the boot naming
+    # its provider, the stream and the topic.
+    check_stream_topics!()
+
+    # Every socket the endpoint mounts is a path an intent enters by, so
+    # each is on the admission roster (`Cyfr.Admission`) before the
+    # endpoint starts: one that is not refuses the boot, naming it. The
+    # host reads the roster; no listener asks it.
+    check_endpoint_sockets!()
 
     # One redaction vocabulary: Phoenix's inbound request-param filter is
     # fed from its owner (config/config.exs deliberately does not spell a
     # list — config files run before this module exists).
-    Application.put_env(:phoenix, :filter_parameters, Cyfr.Sanitizer.filter_parameters())
+    Application.put_env(:phoenix, :filter_parameters, Prima.Sanitizer.filter_parameters())
 
     # This boot's name, before any row can carry it, and the worker root
     # every assignment, worker and attempt key this boot issues derives
     # from.
-    Cyfr.Boot.mint()
-    Cyfr.Execution.Keys.mint()
+    Prima.Boot.mint()
+    Crucible.Keys.mint()
 
     # Resolve the at-rest cipher keyring before anything seals a row. The
     # `arca` application has already opened the database and run the
@@ -39,21 +110,11 @@ defmodule Cyfr.Application do
     # set an explicit keyring.
     resolve_crypto_keyring!()
 
-    # Port 5's wiring: every overlaid root is mapped to the locator that
-    # knows its unit boundaries. It fails loud here — before Bootstrap or
-    # the tincture registry scan the union — not on the first touch of
-    # whichever overlaid root was left without one. The locators are
-    # Compendium's and the roster is this application's, which is why the
-    # install is here and not in `Arca.Supervisor`.
-    Arca.Storage.install_locators!()
-
     # Emissary: Initialize OpenTelemetry instrumentation for Phoenix/Bandit
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do
       OpentelemetryBandit.setup()
       OpentelemetryPhoenix.setup(adapter: :bandit)
     end
-
-    # Emissary: RunningTasks GenServer is now in the supervision tree
 
     # CORS hardening once authentication is configured (and thus users other
     # than the operator can make credentialed cross-origin requests).
@@ -77,9 +138,298 @@ defmodule Cyfr.Application do
     # detaching `"webhook-verify-failed-log"` if they prefer an alternative
     # sink (e.g. forwarding to SIEM via a Telemetry Metrics consumer).
     attach_webhook_verify_failed_logger()
-    Cyfr.ScheduleNotes.attach()
 
-    infra_children = [
+    warn_if_one_athanor_fills_the_slots()
+
+    # Two tiers under a :rest_for_one root so each has its own restart budget:
+    # a crash-looping endpoint exhausts only the web tier (infra keeps running,
+    # then the root restarts just the web tier), while an infra collapse
+    # restarts infra AND the web tier so endpoints rebind to fresh
+    # PubSub and registries instead of holding dead references. The repo is
+    # the `arca` application's and restarts under its own supervisor;
+    # everything here reaches it by name. Shutdown is reverse start order:
+    # endpoints drain before infra goes down, and every child that holds a
+    # claim has stopped before this tree returns, so the `arca`
+    # application, which this one depends on and which stops after it,
+    # still has its pool open for every claim they release.
+    children = Enum.map(layout(), &tier/1)
+
+    opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
+
+    with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      # A listener is known by what it runs, so the tree's are read once
+      # the tree has started them, the HostAPI's once `Crucible.Supervisor`
+      # has: each is on the admission roster, or the tree is stopped and
+      # the boot refused, naming it.
+      refuse_unrostered_listeners!(pid)
+      {:ok, pid}
+    end
+  end
+
+  # How long a graceful stop waits for the endpoint to stop accepting
+  # before it goes on without it: a suspension is a few supervisor calls,
+  # and a server that cannot answer them in this long never holds the stop.
+  @suspend_deadline_ms 5_000
+
+  @impl true
+  def prep_stop(state) do
+    # A graceful stop refuses before it drains. Here, before the tree
+    # stops, the LiveView socket starts refusing every connect, and then
+    # the endpoint's listening ports close: a new connection is refused at
+    # once, and every connection already open stays. The tree then stops:
+    # the LiveView socket's drainer tells the tabs it holds to reconnect,
+    # and each meets the closed port, or on a connection already open the
+    # socket's refusal, and rejoins another member or the restarted
+    # server, never this one, while the requests in flight finish within
+    # the endpoint's drain (`shutdown_timeout`, `config/config.exs`). This
+    # also runs when the tree has already died, where the endpoint serves
+    # nothing and there is nothing to close.
+    :ok = CyfrWeb.LiveSocket.drain()
+    _ = suspend_endpoint(CyfrWeb.Endpoint)
+    state
+  end
+
+  @doc """
+  Stop `endpoint` accepting: each socket server it serves on
+  (`endpoint_servers/1`) is suspended (`suspend_server/1`). With none,
+  there is nothing to do and the answer is `:ok`.
+
+  It never raises and never outlasts `deadline_ms`: the lookup and the
+  suspensions run in a process of their own, and one that fails, crashes
+  or is still running at the deadline, which kills it, is logged and
+  answered `:error`.
+  """
+  @spec suspend_endpoint(module(), timeout()) :: :ok | :error
+  def suspend_endpoint(endpoint, deadline_ms \\ @suspend_deadline_ms) do
+    # Monitored and never linked: `prep_stop/1` runs in the application
+    # master, which traps exits, so a link would leave an exit message in
+    # its mailbox. The outcome is the process's exit reason, and the
+    # monitor is flushed on the deadline, so nothing is left behind.
+    {pid, ref} =
+      spawn_monitor(fn ->
+        suspended = Enum.map(endpoint_servers(endpoint), &suspend_server/1)
+        if Enum.all?(suspended, &(&1 == :ok)), do: :ok, else: exit({:shutdown, :not_suspended})
+      end)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, :normal} ->
+        :ok
+
+      # `suspend_server/1` has logged each server it could not suspend.
+      {:DOWN, ^ref, :process, ^pid, {:shutdown, :not_suspended}} ->
+        :error
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        Logger.warning(
+          "[Cyfr] graceful stop: #{inspect(endpoint)} could not stop accepting " <>
+            "(#{inspect(reason)}); it drains while it still accepts"
+        )
+
+        :error
+    after
+      deadline_ms ->
+        Process.exit(pid, :kill)
+        Process.demonitor(ref, [:flush])
+
+        Logger.warning(
+          "[Cyfr] graceful stop: #{inspect(endpoint)} did not stop accepting within " <>
+            "#{deadline_ms} ms; it drains while it still accepts"
+        )
+
+        :error
+    end
+  end
+
+  @doc """
+  The socket servers `endpoint` serves on, one for each scheme it listens
+  on (`Bandit.PhoenixAdapter.bandit_pid/2`). Empty when it serves no
+  listener, as under `server: false`, or is not running.
+  """
+  @spec endpoint_servers(module()) :: [pid()]
+  def endpoint_servers(endpoint \\ CyfrWeb.Endpoint) do
+    for scheme <- [:http, :https],
+        {:ok, pid} when is_pid(pid) <- [Bandit.PhoenixAdapter.bandit_pid(endpoint, scheme)],
+        do: pid
+  catch
+    :exit, _not_running -> []
+  end
+
+  @doc """
+  Suspend the socket server `server` (`ThousandIsland.suspend/1`): its
+  acceptors end and its listening port closes, so a new connection is
+  refused at once, while every connection already open stays until the
+  server itself stops. A server that cannot be suspended, or is gone, is
+  logged and answered `:error`; this never raises.
+  """
+  @spec suspend_server(Supervisor.supervisor()) :: :ok | :error
+  def suspend_server(server) do
+    case safely_suspend(server) do
+      :ok ->
+        :ok
+
+      failure ->
+        Logger.warning(
+          "[Cyfr] graceful stop: the socket server #{inspect(server)} could not stop " <>
+            "accepting (#{inspect(failure)}); it drains while it still accepts"
+        )
+
+        :error
+    end
+  end
+
+  defp safely_suspend(server) do
+    ThousandIsland.suspend(server)
+  catch
+    kind, reason -> {kind, reason}
+  end
+
+  @doc """
+  Refuse the boot when a socket the endpoint mounts (`sockets`, its
+  `__sockets__/0`) is on no admission path (`Cyfr.Admission.socket_findings/1`).
+  """
+  @spec check_endpoint_sockets!([{String.t(), module(), keyword()}]) :: :ok
+  def check_endpoint_sockets!(sockets \\ CyfrWeb.Endpoint.__sockets__()) do
+    case Cyfr.Admission.socket_findings(sockets) do
+      [] ->
+        :ok
+
+      findings ->
+        raise "the endpoint mounts sockets the admission roster does not name; " <>
+                "refusing to boot:\n" <> Enum.map_join(findings, "\n", &("  - " <> &1))
+    end
+  end
+
+  @doc """
+  Refuse the boot when a listener in `listeners` (`listeners/1` of the
+  running tree) is on no admission path (`Cyfr.Admission.listener_findings/1`).
+  """
+  @spec check_listeners!([term()]) :: :ok
+  def check_listeners!(listeners) do
+    case Cyfr.Admission.listener_findings(listeners) do
+      [] ->
+        :ok
+
+      findings ->
+        raise "listeners run under the supervision tree that the admission roster " <>
+                "does not name; refusing to boot:\n" <>
+                Enum.map_join(findings, "\n", &("  - " <> &1))
+    end
+  end
+
+  # The socket servers a listener runs: a Bandit server, or a bare
+  # ThousandIsland one.
+  @socket_servers [Bandit, ThousandIsland]
+
+  @doc """
+  The listeners running under `supervisor`: each supervisor in its tree
+  that runs a socket server as a direct child, named by its own child id
+  (`Crucible.HostListener`, `CyfrWeb.Endpoint`), or by `supervisor` itself
+  for a socket server started directly under it. A server's own subtree is
+  not read, and a child that is gone by the time it is asked is skipped:
+  it listens on nothing.
+  """
+  @spec listeners(Supervisor.supervisor()) :: [term()]
+  def listeners(supervisor), do: listeners(supervisor, supervisor)
+
+  defp listeners(supervisor, id) do
+    {servers, others} = supervisor |> children() |> Enum.split_with(&socket_server?/1)
+    own = if servers == [], do: [], else: [id]
+
+    own ++
+      for {child_id, pid, :supervisor, _modules} <- others,
+          is_pid(pid),
+          listener <- listeners(pid, child_id),
+          do: listener
+  end
+
+  defp children(supervisor) do
+    Supervisor.which_children(supervisor)
+  catch
+    :exit, _gone -> []
+  end
+
+  defp socket_server?({_id, _pid, _type, modules}) when is_list(modules),
+    do: Enum.any?(modules, &(&1 in @socket_servers))
+
+  defp socket_server?(_child), do: false
+
+  # Once the tree has started: a listener off the roster stops the tree
+  # this start began, then refuses the boot.
+  defp refuse_unrostered_listeners!(pid) do
+    check_listeners!(listeners(Cyfr.Supervisor))
+  rescue
+    exception ->
+      Supervisor.stop(pid)
+      reraise exception, __STACKTRACE__
+  end
+
+  @typedoc """
+  A supervisor as the census describes it: its id, its strategy, its
+  restart intensity (`{max_restarts, max_seconds}`) and its children in
+  start order, each a child spec or a supervisor described the same way.
+  """
+  @type census() ::
+          {term(), Supervisor.strategy(), {non_neg_integer(), pos_integer()},
+           [census() | Supervisor.child_spec()]}
+
+  # The domains' subtrees: the census reads each one's children through
+  # its own `init/1`, the definition its start runs.
+  @owners [
+    Grimoire.Supervisor,
+    Compendium.Supervisor,
+    Crucible.Supervisor,
+    Aqua.Supervisor,
+    Emissary.Supervisor
+  ]
+
+  @doc false
+  # The two tiers in start order, each with its children in start order,
+  # down through every subtree the tree names — the census
+  # `Cyfr.StartupAdmissionBarrierTest` reads. It is read from the child
+  # specs `start/2` starts, each supervisor's children through the same
+  # `init/1` its start runs, so the test and the boot cannot describe
+  # different trees.
+  @spec tiers() :: [census()]
+  def tiers, do: Enum.map(layout(), &(&1 |> tier() |> census()))
+
+  # The tiers as the boot builds them: id, strategy, intensity and
+  # children in start order.
+  defp layout do
+    [
+      # Every child after the claim holds something before it: the cell's
+      # generation, a subscription in `Cyfr.PubSub`, the gate's verdict. So
+      # a restart takes down everything after the child and starts it again
+      # in order, and the gate reruns before the first child that admits work.
+      {Cyfr.InfraSupervisor, :rest_for_one, {10, 60},
+       List.flatten([pre_gate(), gate(), post_gate(), seed_offer()])},
+      {Cyfr.WebSupervisor, :one_for_one, {10, 60}, web()}
+    ]
+  end
+
+  # Emissary's webhook task supervisor (an inbound webhook's delivery)
+  # starts before the endpoint and so stops after it: the listener has
+  # closed before the tree stops (`prep_stop/1`), and a delivery already in
+  # flight is ended after the endpoint. The endpoint drains its open
+  # connections for the `thousand_island_options` `shutdown_timeout` in
+  # `config/config.exs`.
+  defp web do
+    [
+      # 30 s: the longest webhook delivery it lets finish.
+      Supervisor.child_spec({Task.Supervisor, name: Emissary.Web.TaskSupervisor},
+        shutdown: 30_000
+      ),
+      CyfrWeb.Endpoint
+    ]
+  end
+
+  # Before the gate: only what the security reconcile needs, what must
+  # hear its announcements, and the settings every later child reads. None
+  # of these runs tenant work, projects a credential, dispatches to a
+  # provider, starts a backend or recovers anything; each only answers
+  # once something else calls it, but for the settings process's own node
+  # facts: this member's pinned values and the store revision it polls.
+  defp pre_gate do
+    [
       # The database is the one this release's schema built, its tenant
       # roster covers the schema, and its keyring is the one this boot
       # resolved — before any worker reads a row or seals one under a
@@ -92,188 +442,150 @@ defmodule Cyfr.Application do
       # failure `Cyfr.Cell`'s refusals exist to stop.
       cluster_supervisor(),
       # This member's slot in the cell — claimed before anything that
-      # assumes it is the only one holding this database.
+      # assumes it is the only one holding this database, and the slot the
+      # security reconcile runs under.
       cell_claim(),
-      # The two registries that write catalogues into `Arca.Cache`. The
-      # table dies with its owner, `Arca.Cache.Sweeper`, which the `arca`
-      # application starts — one app below, so no supervisor of this one
-      # can hold both. Each registry monitors the owner instead and
-      # rebuilds its catalogue when it goes, rather than answering
-      # "Unknown tool" until a 23-hour refresh. Before anything that might
-      # read through the cache.
-      Cyfr.Ops.Catalog,
-      Emissary.MCP.ResourceRegistry,
-      Cyfr.RetentionScheduler,
-      # Recurring component executions: the runs the scheduler fires are
-      # tasks of their own, monitored by it.
-      Supervisor.child_spec({Task.Supervisor, name: Cyfr.Schedules.TaskSupervisor},
-        shutdown: 30_000
-      ),
-      Cyfr.Schedules.Scheduler,
       # The audit roster is the catalog's, read here and handed down: an
       # event is audited exactly when `Cyfr.Telemetry.Catalog` names
       # `:audit` among its consumers. The storage layer holds the handler
       # and the sinks; naming the catalog is the host's part.
-      {Arca.AuditHandler, events: Cyfr.Telemetry.Catalog.consumed_by(:audit)},
-      # Emissary web layer
-      EmissaryWeb.Telemetry,
-      {Phoenix.PubSub, name: Emissary.PubSub},
+      # 5 s: its stop, which holds no work in flight.
+      Supervisor.child_spec(
+        {Arca.AuditHandler, events: Cyfr.Telemetry.Catalog.consumed_by(:audit)},
+        shutdown: 5_000
+      ),
+      # The web tier's metrics and poller
+      CyfrWeb.Telemetry,
+      # The bus's server (`Cyfr.Bus`): nothing else names it.
+      {Phoenix.PubSub, name: Cyfr.PubSub},
       # Drops this member's cached authorization decisions when any member
       # says one is no longer good. Right after PubSub, and before
-      # anything that establishes a caller.
-      Cyfr.StandingWatch,
-      # Execution admission: the slots a member's own work holds. The
-      # consented rate has no child here — its window is a row every
-      # member of the cell claims in (`Arca.RateWindows`), so there is
-      # nothing in this boot to start, own or lose.
-      execution_slots(),
-      # Execution bookkeeping, after PubSub (the buffers broadcast on it):
-      # the execution_id → driving-process registry, the per-execution
-      # event-buffer registry, the emit counter, the buffers, and the open
-      # attempts' registry and supervisor. The counter comes before the
-      # buffers, so a restart of this group rebuilds the numbering source
-      # first and then the buffers that read it; the attempts, which push
-      # onto the buffers, come last; a dead registry restarts what
-      # registers in it.
-      group(Cyfr.Execution.Tree, [
-        {Registry, keys: :unique, name: Cyfr.Execution.Registry},
-        {Registry, keys: :unique, name: Cyfr.Execution.Events.Registry},
-        Cyfr.Execution.Events.Sequence,
-        {DynamicSupervisor, name: Cyfr.Execution.Events.Supervisor, strategy: :one_for_one},
-        {Registry, keys: :unique, name: Cyfr.Execution.Attempt.Registry},
-        {DynamicSupervisor, name: Cyfr.Execution.Attempt.Supervisor, strategy: :one_for_one}
-      ]),
-      # Roots run in the background (`execution.run_stream`), after the
-      # registry each one registers in; shutdown waits up to 30 s for them.
-      Supervisor.child_spec({Task.Supervisor, name: Cyfr.Execution.TaskSupervisor},
-        shutdown: 30_000
-      ),
-      # Stops an archived athanor's running work. The archive announces and
-      # this reacts: what is still running is the execution domain's, and
-      # the identity domain must not name it.
-      Cyfr.Execution.ArchiveWatch,
-      # Periodic sweep that fails running executions whose lease lapsed;
-      # started only when `:execution_sweeper_enabled`.
-      Cyfr.Execution.Sweeper,
-      # Hears from each configured worker service every poll interval and
-      # lapses what a boot it stopped hearing from, or saw replaced, was
-      # running; started only when `:worker_watch_enabled`, which follows
-      # `:execution_sweeper_enabled`.
-      Cyfr.Execution.WorkerWatch,
-      # The host API: where the worker services' runners post their host
-      # calls and the services their exit reports (`CYFR_HOST_API_BIND`,
-      # `CYFR_HOST_API_PORT`). After the attempt tree it serves, so a
-      # shutdown stops taking calls before the attempts they reach go.
-      {Cyfr.Execution.HostListener,
-       bind: Cyfr.RuntimeConfig.host_api_bind(), port: Cyfr.RuntimeConfig.host_api_port()},
-      # subscriptions/listen stream slots — duplicate keys, one entry per open
-      # stream, keyed by {athanor_id, user_id}. An entry dies with its conn
-      # process, so a vanished client frees its slot without bookkeeping.
-      {Registry, keys: :duplicate, name: Emissary.MCP.SubscriptionRegistry},
-      # Use :rest_for_one for the external-server registry, the MCP bridge
-      # controller, servers and reconciler. A failure restarts its
-      # dependents. The controller starts before the servers and stops after
-      # them, because a stopping stdio server releases its owner through it.
-      group(Emissary.MCP.ExternalServerTree, [
-        {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
-        Emissary.MCP.Bridge,
-        {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
-        Emissary.MCP.ExternalServerReconciler
-      ]),
-      Emissary.MCP.Progress,
-      {Task.Supervisor, name: Emissary.TaskSupervisor},
-      # Builds (`Compendium.Builds`): a started build, the process watching
-      # it, each request to the Locus builds service and the registration
-      # after it. After the catalog, the bus and the bookkeeping they write
-      # through, so a shutdown ends the builds before them; a build it ends
-      # publishes nothing.
-      {Task.Supervisor, name: Compendium.Builds.TaskSupervisor},
-      Emissary.MCP.RunningTasks,
-      # Filling an athanor's component estate: the background fills the
-      # first-need hook and a sign-in ask for, and the registry pulls each
-      # attempt runs under its own deadline.
-      {Task.Supervisor, name: Compendium.ProvisioningSupervisor},
-      # The estate filler itself — it reacts to the identity domain's
-      # announcement that an athanor needs filling.
-      Compendium.Provisioning,
-      # Prism dashboard
-      Prism.TelemetryBridge,
-      Prism.TinctureRegistry,
-      group(Aqua.WorkerTree, [
-        Aqua.Loop.Worker,
-        {Task.Supervisor, name: Aqua.TaskSupervisor}
-      ]),
-      # Thread runners: one process per thread with open
-      # turns, started on demand; the recovery task starts one for every
-      # thread holding an open turn when the server last stopped. The
-      # registry names each runner by its thread and each loop by the root
-      # turn it holds (`Aqua.Loop.holder/1`). Registry and the supervisor
-      # whose children register in it restart together; a runner's loop
-      # dies with the runner.
-      group(Aqua.RunnerTree, [
-        {Registry, keys: :unique, name: Aqua.RunnerRegistry},
-        {DynamicSupervisor, name: Aqua.RunnerSupervisor, strategy: :one_for_one},
-        maybe_thread_recovery()
-      ]),
-      # Last, and synchronous: reconciles the platform-admin roster against
-      # the env and offers new seed media to the estates that exist (the
-      # overlay serves the bundle in place — no bytes are copied). Needs the
-      # repo, the tincture registry (the scan reloads it) and nothing else.
-      #
-      # It runs its work in `init/1` and answers `:ignore`, so this child
-      # finishing is what gates the web tier below — the endpoint must not
-      # answer requests while a de-listed operator's sessions are still
-      # live.
-      Supervisor.child_spec(Cyfr.Bootstrap, restart: :temporary)
+      # anything that establishes a caller. 5 s: its stop, which holds no
+      # work in flight.
+      Supervisor.child_spec(Cyfr.StandingWatch, shutdown: 5_000),
+      # The host's telemetry-to-bus bridge, attached before the reconcile
+      # announces a revocation, so the announcement reaches mounted views.
+      # 5 s: its stop, which holds no work in flight.
+      Supervisor.child_spec(Cyfr.TelemetryBridge, shutdown: 5_000),
+      # This member's settings process: after the claim, which recorded
+      # the pins it writes to the store, and the bus it hears changes on;
+      # before every consumer. It drops a cached setting on each committed
+      # change and applies the log level in store-revision order. 5 s: its
+      # stop, which holds no work in flight.
+      Supervisor.child_spec(Cyfr.Platform.Settings, shutdown: 5_000)
     ]
-
-    infra_children = List.flatten(infra_children)
-
-    web_children = [EmissaryWeb.Endpoint]
-
-    # Two tiers under a :rest_for_one root so each has its own restart budget:
-    # a crash-looping endpoint exhausts only the web tier (infra keeps running,
-    # then the root restarts just the web tier), while an infra collapse
-    # restarts infra AND the web tier so endpoints rebind to fresh
-    # PubSub and registries instead of holding dead references. The repo is
-    # the `arca` application's and restarts under its own supervisor;
-    # everything here reaches it by name. Shutdown is reverse start order:
-    # endpoints drain before infra goes down.
-    children = [
-      tier(Cyfr.InfraSupervisor, infra_children),
-      tier(Cyfr.WebSupervisor, web_children)
-    ]
-
-    opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
-    Supervisor.start_link(children, opts)
   end
 
-  # The execution slots: one `Cyfr.Slots` instance, keyed by athanor, on
-  # the caps the operator configured (`CYFR_MAX_CONCURRENT_EXECUTIONS`,
-  # `CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT`), else the shipped ones.
-  # The ratio warning is said once here, at boot, where an operator can
-  # act on it.
-  defp execution_slots do
+  # The gate: synchronous, and a checked success or no boot. Its `init/1`
+  # returns only after the reconcile committed, its claim was released
+  # and this member's slot re-verified; a refusal stops the supervisor's
+  # start, so nothing after it ever starts. Only the sandboxed test boot
+  # omits it, where no process may write before a test checks out the
+  # sandbox — see `bootstrap_skipped?/2`.
+  defp gate do
+    if bootstrap_skipped?(@bootstrap_skip_permitted, boot_work_enabled?()),
+      do: [],
+      else: [Supervisor.child_spec(Cyfr.Bootstrap, restart: :transient)]
+  end
+
+  # After the gate: everything that admits work — fires a schedule,
+  # recovers a turn, starts a backend, serves a host call, dispenses a
+  # credential or publishes a result.
+  defp post_gate do
+    [
+      # 5 s: its stop, which leaves a cycle's claim to lapse on its lease.
+      Supervisor.child_spec(Cyfr.RetentionScheduler, shutdown: 5_000),
+      # The SSE stream slots (`CyfrWeb.SSE.claim_slot/3`): one entry per open
+      # stream, which dies with its conn process, so a vanished client frees
+      # its slot without bookkeeping.
+      CyfrWeb.SSE.Registry,
+      # The domains' subtrees, in order: the gate's handlers, the
+      # component athanor, execution, the assistant, then the MCP surface.
+      Grimoire.Supervisor,
+      Compendium.Supervisor,
+      # The slots' caps and the host API's bind and port
+      # (`CYFR_HOST_API_BIND`, `CYFR_HOST_API_PORT`) are read here and
+      # handed down: a domain's subtree reads no configuration. The
+      # listener's drain is the time an open host call has to finish once
+      # it stops accepting.
+      {Crucible.Supervisor,
+       slot_caps: execution_slot_caps(),
+       bind: Cyfr.RuntimeConfig.host_api_bind(),
+       port: Cyfr.RuntimeConfig.host_api_port(),
+       drain_ms: 5_000},
+      # Off in the test env: suites drive runners directly.
+      {Aqua.Supervisor, thread_recovery: Application.get_env(:cyfr, :thread_recovery, true)},
+      Emissary.Supervisor,
+      # Recurring component executions: the runs the scheduler fires are
+      # tasks of their own, monitored by it. Last among the domains, so a
+      # fire never reaches a tree that is not up, and the first to stop at
+      # shutdown. 30 s: the longest run it lets finish.
+      Supervisor.child_spec({Task.Supervisor, name: Crucible.Schedules.TaskSupervisor},
+        shutdown: 30_000
+      ),
+      # 10 s: its terminate cancelling the timers of every schedule it
+      # holds, before a fire can reach a stopping tree.
+      Supervisor.child_spec(Crucible.Schedules.Scheduler, shutdown: 10_000),
+      # The console's: the tincture registry, and the task supervisor its
+      # pages start their asynchronous work on. 5 s: the registry's stop,
+      # which holds no work in flight; 30 s: the longest page task it lets
+      # finish.
+      Supervisor.child_spec(Prism.TinctureRegistry, shutdown: 5_000),
+      Supervisor.child_spec({Task.Supervisor, name: Prism.TaskSupervisor}, shutdown: 30_000)
+    ]
+  end
+
+  # Last in the infra tier, and optional: offers new seed media to the
+  # athanors that exist. Its failure is logged and never stops the boot; the
+  # sandboxed test boot omits it with the gate's runtime switch.
+  defp seed_offer do
+    if boot_work_enabled?(),
+      do: [
+        Supervisor.child_spec({Cyfr.SeedOffer, sync: &Compendium.sync_seeds/0},
+          restart: :temporary
+        )
+      ],
+      else: []
+  end
+
+  @doc false
+  # Pure decision seam: the gate is omitted only when the build was
+  # compiled with the test permission (`config/test.exs` alone sets it)
+  # AND the runtime switch turns boot work off. Either alone keeps it.
+  @spec bootstrap_skipped?(boolean(), boolean()) :: boolean()
+  def bootstrap_skipped?(skip_permitted?, boot_work_enabled?),
+    do: skip_permitted? == true and boot_work_enabled? == false
+
+  defp boot_work_enabled?, do: Application.get_env(:cyfr, :provisioning_boot_enabled, true)
+
+  # The execution slots (`Crucible.Slots`) boot on the caps the operator
+  # configured (`CYFR_CRUCIBLE_MAX_CONCURRENT`,
+  # `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT`), else the shipped ones. The
+  # ratio warning is said once here, at boot, where an operator can act
+  # on it.
+  defp warn_if_one_athanor_fills_the_slots do
     {max, key_max} = execution_slot_caps()
 
     case execution_slot_footprint(max, key_max) do
       :ok -> :ok
       {:warn, message} -> Logger.warning(message)
     end
-
-    {Cyfr.Slots, name: Cyfr.Execution.Slots, max: max, key_max: key_max}
   end
 
   @doc false
   # The caps the execution slots boot with: the total, and the roots one
-  # athanor may hold.
+  # athanor may hold. Restart-scoped settings, read once here from the
+  # application environment, where the boot wrote a pinned value and
+  # `Cyfr.Platform.Settings.apply/0` a stored one, and never through
+  # `Arca.PlatformSettings.effective/1`: that answers the stored row,
+  # which may be a value saved for the next boot and not the one running.
   @spec execution_slot_caps() :: {pos_integer(), pos_integer()}
   def execution_slot_caps do
-    {Application.get_env(:cyfr, :max_concurrent_executions, Cyfr.Slots.default_max()),
+    {Application.get_env(:cyfr, :crucible_max_concurrent, Prima.Slots.default_max()),
      Application.get_env(
        :cyfr,
-       :max_concurrent_executions_per_tenant,
-       Cyfr.Slots.default_key_max()
+       :crucible_max_concurrent_per_tenant,
+       Prima.Slots.default_key_max()
      )}
   end
 
@@ -286,68 +598,65 @@ defmodule Cyfr.Application do
   # Capping children is not the fix; the lever is the ratio.
   @spec execution_slot_footprint(pos_integer(), pos_integer()) :: :ok | {:warn, String.t()}
   def execution_slot_footprint(max, key_max) do
-    footprint = Cyfr.Slots.max_key_footprint(key_max)
+    footprint = Prima.Slots.max_key_footprint(key_max)
 
     if footprint >= max do
       {:warn,
-       "[Cyfr.Execution.Slots] one athanor can hold every slot on this node: " <>
-         "#{key_max} roots x depth #{Cyfr.Authority.depth_cap()} = #{footprint} >= " <>
+       "[Crucible.Slots] one athanor can hold every slot on this node: " <>
+         "#{key_max} roots x depth #{Prima.Authority.depth_cap()} = #{footprint} >= " <>
          "#{max} slots. Children are exempt from the per-athanor cap by design (a chain " <>
          "must be able to finish), so the cap bounds roots, not footprint. Lower " <>
-         "CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT or raise " <>
-         "CYFR_MAX_CONCURRENT_EXECUTIONS to keep one athanor off the whole pool."}
+         "CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT or raise " <>
+         "CYFR_CRUCIBLE_MAX_CONCURRENT to keep one athanor off the whole pool."}
     else
       :ok
     end
   end
 
-  # Off in the test env: suites drive runners directly.
-  defp maybe_thread_recovery do
-    if Application.get_env(:cyfr, :thread_recovery, true) do
-      [
-        Supervisor.child_spec(
-          {Task, &Aqua.Runner.recover_all/0},
-          id: Aqua.RunnerRecovery,
-          restart: :temporary
-        )
-      ]
-    else
-      []
-    end
-  end
-
-  # A registry and the processes that hold references into it restart
-  # together: :rest_for_one from the registry (or table owner) down, so a
-  # restart never leaves dependents holding a name that resolves to
-  # nothing — and the dependents' own hand-rolled recovery loops retire.
-  defp group(name, children) do
+  defp tier({name, strategy, {max_restarts, max_seconds}, children}) do
     %{
       id: name,
       start:
         {Supervisor, :start_link,
          [
-           List.flatten(children),
-           [strategy: :rest_for_one, name: name, max_restarts: 10, max_seconds: 60]
+           children,
+           [
+             strategy: strategy,
+             name: name,
+             max_restarts: max_restarts,
+             max_seconds: max_seconds
+           ]
          ]},
       type: :supervisor
     }
   end
 
-  defp tier(name, children) do
-    %{
-      id: name,
-      start:
-        {Supervisor, :start_link,
-         [children, [strategy: :one_for_one, name: name, max_restarts: 10, max_seconds: 60]]},
-      type: :supervisor
-    }
+  # A child as the census describes it: a supervisor the tree builds
+  # (a tier or a group, started through `Supervisor.start_link/2`) or a
+  # domain's subtree is read through the `init/1` its start runs; any
+  # other child is its spec.
+  defp census(child) do
+    case Supervisor.child_spec(child, []) do
+      %{id: id, start: {Supervisor, :start_link, [children, opts]}} ->
+        flags = Keyword.take(opts, [:strategy, :max_restarts, :max_seconds])
+        described(id, Supervisor.init(children, flags))
+
+      %{id: id, start: {owner, :start_link, [opts]}} when owner in @owners ->
+        described(id, owner.init(opts))
+
+      spec ->
+        spec
+    end
   end
+
+  defp described(id, {:ok, {flags, children}}),
+    do: {id, flags.strategy, {flags.intensity, flags.period}, Enum.map(children, &census/1)}
 
   # Tell Phoenix to update the endpoint configuration
   # whenever the application is updated.
   @impl true
   def config_change(changed, _new, removed) do
-    EmissaryWeb.Endpoint.config_change(changed, removed)
+    CyfrWeb.Endpoint.config_change(changed, removed)
     :ok
   end
 
@@ -364,8 +673,9 @@ defmodule Cyfr.Application do
   # suite's sandbox cannot lend it a connection, so the suite turns it off
   # and exercises `Arca.ControlPlane`'s writes and `Cyfr.Cell` directly.
   defp cell_claim do
+    # 5 s: its terminate releasing this member's slot row.
     if Application.get_env(:arca, :control_plane_claim_enabled, true),
-      do: [Cyfr.Cell],
+      do: [Supervisor.child_spec(Cyfr.Cell, shutdown: 5_000)],
       else: []
   end
 
@@ -541,6 +851,49 @@ defmodule Cyfr.Application do
           "is empty — no user can access the system. Set CYFR_PLATFORM_ADMIN_EMAILS=" <>
           "<your_email> or seed a membership row manually."
       )
+    end
+  end
+
+  @doc """
+  Refuse the boot when a declared stream (`Grimoire.Catalog.stream_entries/0`,
+  or `entries`) names a topic `Cyfr.Bus` does not roster, or one no grant
+  can scope (`stream_topic_findings/1`).
+  """
+  @spec check_stream_topics!([{module(), Prima.Provider.Stream.t()}]) :: :ok
+  def check_stream_topics!(entries \\ Grimoire.Catalog.stream_entries()) do
+    case stream_topic_findings(entries) do
+      [] ->
+        :ok
+
+      findings ->
+        raise "declared streams name topics the bus cannot carry; refusing to boot:\n" <>
+                Enum.map_join(findings, "\n", &("  - " <> &1))
+    end
+  end
+
+  @doc """
+  One sentence per declared stream whose topic is not on the `Cyfr.Bus`
+  roster (`Cyfr.Bus.topic?/1`), or is on it but cannot carry the stream's
+  grant (`Cyfr.Bus.grantable?/2`), naming the provider, the stream and the
+  topic. Empty when every stream rides a topic a grant can scope.
+  """
+  @spec stream_topic_findings([{module(), Prima.Provider.Stream.t()}]) :: [String.t()]
+  def stream_topic_findings(entries) when is_list(entries) do
+    for {provider, %Prima.Provider.Stream{} = stream} <- entries,
+        finding = stream_topic_finding(stream),
+        do: "#{inspect(provider)} declares #{stream.name} on #{inspect(stream.topic)}: #{finding}"
+  end
+
+  defp stream_topic_finding(stream) do
+    cond do
+      not Cyfr.Bus.topic?(stream.topic) ->
+        "the bus declares no such topic"
+
+      not Cyfr.Bus.grantable?(stream.topic, not is_nil(stream.subject)) ->
+        "the topic is not a tenant topic of the stream's subject shape"
+
+      true ->
+        nil
     end
   end
 

@@ -3,17 +3,17 @@
 
 # Independent app suites have no Host. Preserve an umbrella boot's identity.
 try do
-  Cyfr.Boot.id()
+  Prima.Boot.id()
 rescue
-  Cyfr.Boot.NotInitializedError -> Cyfr.Boot.mint()
+  Prima.Boot.NotInitializedError -> Prima.Boot.mint()
 end
 
 # MinIO backs the :s3_integration suites; each runs only when selected.
 ExUnit.configure(exclude: [:s3_integration])
 
 # Owned by the test-runner process so it outlives every test and no two
-# tests race to create it. `Cyfr.Test.SourceTree` fills it lazily.
-Cyfr.Test.SourceTree.ensure_table()
+# tests race to create it. `Prima.Test.SourceTree` fills it lazily.
+Prima.Test.SourceTree.ensure_table()
 
 # The throwaway storage roots `config/config.exs` names: the tenant root
 # and a seed tree with an empty bundle, both removed after the run.
@@ -35,24 +35,39 @@ File.mkdir_p!(Path.join(seed_path, "components"))
 # admitted, which is how `mix test apps/arca/test apps/cyfr/test/arca`
 # found three of them failing.
 try do
-  Cyfr.Caps.impl()
+  Prima.Caps.impl!()
 rescue
-  Cyfr.Caps.NotInstalledError -> Cyfr.Caps.install!(Arca.Test.Caps)
+  Prima.Caps.NotInstalledError -> Prima.Caps.install!(Arca.Test.Caps)
 end
 
-# Port 5's wiring, likewise: the overlaid roots' unit boundaries are the
-# component domain's to spell. An umbrella run is configured with that
-# domain's locators and keeps them; a build of the contracts and this app
-# alone has no component domain, and takes the suite's stand-ins.
-if Application.get_env(:arca, :overlay_locators) in [nil, %{}] do
-  Application.put_env(:arca, :overlay_locators, Arca.Test.UnitLocator.locators())
+# The unit-locator port, likewise: the overlaid roots' unit boundaries
+# are the component domain's to spell. An umbrella run's boot installed
+# that domain's locators and keeps them; a build of the contracts and this
+# app alone has no component domain, and installs the suite's stand-ins.
+try do
+  Arca.Storage.UnitLocator.impl!()
+rescue
+  Arca.Storage.UnitLocator.NotInstalledError ->
+    Arca.Storage.UnitLocator.install!(Arca.Test.UnitLocator.locators())
 end
 
-Arca.Storage.install_locators!()
+# The installation mode every person mint reads. Sanctum's boot installs
+# it, and no Sanctum starts here, so the suite installs the ordinary mode
+# itself — only when nothing has, exactly as the ports above.
+unless Arca.InstallationClaims.installed?() do
+  Arca.InstallationClaims.install_mode!(:ordinary)
+end
 
 # A suite database built from a different schema would run stale, since
 # the baseline still reads as applied; refuse it before any test touches it.
 Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, &Arca.SchemaFingerprint.verify!/0)
+
+# Every connection is lent by a test's sandbox owner, and never taken by a
+# process on its own: in the pool's default automatic mode a process no
+# test allowed (the decision log's writer, spawned from an asynchronous
+# test) is handed a real connection and its rows commit for the tests
+# after it to see.
+Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
 
 # The athanor rows the fixtures name by hand, committed once for the run.
 Arca.Test.Actor.seed_athanors!()

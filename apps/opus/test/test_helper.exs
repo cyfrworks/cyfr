@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# :public_dns asks the public resolver and runs only when explicitly
-# selected (`mix test --include public_dns`).
-ExUnit.configure(exclude: [:public_dns])
-
 # Opus's own suite runs with the contracts alone: no database and no
 # control plane. Every host call a test makes goes to a scripted host
 # (`Opus.Test.ScriptedHost`) served on a loopback port. The worker service
@@ -20,7 +16,7 @@ ExUnit.configure(exclude: [:public_dns])
 # runs in this VM (the runtime, the handlers, `Opus.Runner`) runs on the
 # engine the suite starts here (`Opus.Test.Engine`).
 root = Opus.Test.ScriptedHost.root()
-{:ok, worker_key} = Cyfr.WorkerAuth.worker_key(root, Opus.Test.ScriptedHost.service())
+{:ok, worker_key} = Prima.WorkerAuth.worker_key(root, Opus.Test.ScriptedHost.service())
 
 Application.put_env(:opus, :service_id, Opus.Test.ScriptedHost.service())
 Application.put_env(:opus, :service_key, Base.encode16(worker_key, case: :lower))

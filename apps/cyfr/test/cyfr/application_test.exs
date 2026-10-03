@@ -4,6 +4,54 @@
 defmodule Cyfr.ApplicationTest do
   use ExUnit.Case, async: true
 
+  require Record
+
+  # The supervisor's own state, read for its strategy and intensity:
+  # neither `Supervisor.count_children/1` nor a child spec carries them.
+  Record.defrecordp(
+    :supervisor_state,
+    :state,
+    for(
+      {field, _default} <- Record.extract(:state, from_lib: "stdlib/src/supervisor.erl"),
+      do: {field, nil}
+    )
+  )
+
+  # Every long-running child's stated stop bound: a GenServer's stop, a
+  # task supervisor's longest task, the scheduler's timers. A supervisor
+  # waits for its own children and keeps `:infinity`.
+  @shutdowns %{
+    Cyfr.Cell => 5_000,
+    Arca.AuditHandler => 5_000,
+    Cyfr.StandingWatch => 5_000,
+    Cyfr.TelemetryBridge => 5_000,
+    Cyfr.Platform.Settings => 5_000,
+    Cyfr.RetentionScheduler => 5_000,
+    Grimoire.RunningTasks => 5_000,
+    Grimoire.TaskSupervisor => 30_000,
+    Compendium.Builds.TaskSupervisor => 30_000,
+    Compendium.ProvisioningSupervisor => 30_000,
+    Compendium.Provisioning => 5_000,
+    Compendium.ProjectionReconciler => 5_000,
+    Crucible.Slots => 5_000,
+    Crucible.Events.Sequence => 5_000,
+    Crucible.TaskSupervisor => 30_000,
+    Crucible.ArchiveWatch => 5_000,
+    Crucible.Sweeper => 5_000,
+    Crucible.WorkerWatch => 5_000,
+    Aqua.ScheduleNotes => 5_000,
+    Aqua.Loop.Worker => 5_000,
+    Aqua.TaskSupervisor => 30_000,
+    Emissary.External.Backends => 5_000,
+    Emissary.External.Reconciler => 5_000,
+    Emissary.TaskSupervisor => 30_000,
+    Crucible.Schedules.TaskSupervisor => 30_000,
+    Crucible.Schedules.Scheduler => 10_000,
+    Prism.TinctureRegistry => 5_000,
+    Prism.TaskSupervisor => 30_000,
+    Emissary.Web.TaskSupervisor => 30_000
+  }
+
   # A wildcard CORS origin once authentication is configured must fail closed
   # at boot in a real release, not merely warn. cors_enforcement/3 is the pure
   # decision seam the boot guard uses (first arg: auth configured?).
@@ -74,6 +122,24 @@ defmodule Cyfr.ApplicationTest do
                children
     end
 
+    # A child of the infra tier restarts everything after it, the gate
+    # among them; the web tier restarts a child alone, so an endpoint in a
+    # crash loop exhausts only its own budget; the root restarts a failed
+    # tier and every tier after it.
+    test "the root and the infra tier restart the rest, the web tier each child alone" do
+      for {supervisor, strategy} <- [
+            {Cyfr.Supervisor, :rest_for_one},
+            {Cyfr.InfraSupervisor, :rest_for_one},
+            {Cyfr.WebSupervisor, :one_for_one}
+          ] do
+        state = :sys.get_state(supervisor)
+
+        assert {supervisor_state(state, :strategy), supervisor_state(state, :intensity),
+                supervisor_state(state, :period)} == {strategy, 10, 60},
+               "#{inspect(supervisor)} runs with another strategy or intensity"
+      end
+    end
+
     test "data/infra children live under the infra tier" do
       ids =
         Cyfr.InfraSupervisor
@@ -81,15 +147,16 @@ defmodule Cyfr.ApplicationTest do
         |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
 
       assert Phoenix.PubSub.Supervisor in ids or
-               Enum.any?(ids, fn id -> id == Emissary.PubSub end)
+               Enum.any?(ids, fn id -> id == Cyfr.PubSub end)
 
-      # The repo is the `arca` application's now, and so is the cache
-      # table's owner; this tier holds the registries that write
-      # catalogues into that table and reaches the repo by name.
-      assert Cyfr.Ops.Catalog in ids
-      assert Emissary.MCP.ResourceRegistry in ids
+      # The repo is the `arca` application's, and so is the cache table's
+      # owner; this tier reaches the repo by name. The operation table is
+      # a term written before the tree starts, owned by no child.
+      refute Grimoire.Catalog in ids
+      refute Emissary.MCP.ResourceRegistry in ids
+      assert is_map(Grimoire.operations())
       refute Arca.Repo in ids
-      refute EmissaryWeb.Endpoint in ids
+      refute CyfrWeb.Endpoint in ids
     end
 
     # The persistence layer's own tree: the pool, the write-behind that
@@ -121,95 +188,216 @@ defmodule Cyfr.ApplicationTest do
       assert is_pid(Process.whereis(Sanctum.Auth.Finch))
     end
 
-    test "execution slots, event streams and attempts start under the infra tier after PubSub" do
-      # `which_children/1` lists the most recently started child first.
+    # Each domain's processes are one subtree of the infra tier, started
+    # after PubSub in the order the domains call one another; the schedule
+    # pair follows them, so a fire never reaches a tree that is not up,
+    # and the console's children come last.
+    test "the domains' subtrees start under the infra tier after PubSub, in order" do
       started = Cyfr.InfraSupervisor |> started_ids()
-      at = fn id -> Enum.find_index(started, &(&1 == id)) end
-      pubsub = Enum.find_index(started, &(&1 in [Emissary.PubSub, Phoenix.PubSub.Supervisor]))
+      pubsub = Enum.find_index(started, &(&1 in [Cyfr.PubSub, Phoenix.PubSub.Supervisor]))
+
+      order = [
+        Grimoire.Supervisor,
+        Compendium.Supervisor,
+        Crucible.Supervisor,
+        Aqua.Supervisor,
+        Emissary.Supervisor,
+        Crucible.Schedules.TaskSupervisor,
+        Crucible.Schedules.Scheduler,
+        Prism.TinctureRegistry,
+        Prism.TaskSupervisor
+      ]
+
+      assert Enum.filter(started, &(&1 in order)) == order
+      assert Enum.find_index(started, &(&1 == Grimoire.Supervisor)) > pubsub
+
+      for {supervisor, children} <- [
+            {Grimoire.Supervisor, [Grimoire.RunningTasks, Grimoire.TaskSupervisor]},
+            {Compendium.Supervisor,
+             [
+               Compendium.Builds.TaskSupervisor,
+               Compendium.ProvisioningSupervisor,
+               Compendium.Provisioning,
+               Compendium.ProjectionReconciler
+             ]},
+            {Crucible.Supervisor,
+             [
+               Crucible.Slots,
+               Crucible.Tree,
+               Crucible.TaskSupervisor,
+               Crucible.ArchiveWatch,
+               Crucible.Sweeper,
+               Crucible.WorkerWatch,
+               Crucible.HostListener
+             ]},
+            {Aqua.Supervisor, [Aqua.ScheduleNotes, Aqua.WorkerTree, Aqua.RunnerTree]},
+            {Emissary.Supervisor, [Emissary.External.ServerTree, Emissary.TaskSupervisor]}
+          ] do
+        assert started_ids(supervisor) == children,
+               "#{inspect(supervisor)} must hold #{inspect(children)} in start order"
+
+        for child <- children, do: refute(child in started)
+      end
+    end
+
+    test "execution slots, event streams and attempts start first in the execution subtree" do
+      started = Crucible.Supervisor |> started_ids()
 
       # The consented rate is not among them: its window is a shared row,
       # so this boot starts nothing for it.
-      refute Cyfr.Execution.Rates in started
-
-      for id <- [Cyfr.Execution.Slots, Cyfr.Execution.Tree] do
-        assert is_integer(at.(id)) and at.(id) > pubsub,
-               "#{inspect(id)} must start under the infra tier after PubSub"
-      end
+      refute Crucible.Rates in started
+      assert [Crucible.Slots, Crucible.Tree | _] = started
 
       assert [
-               Cyfr.Execution.Registry,
-               Cyfr.Execution.Events.Registry,
-               Cyfr.Execution.Events.Sequence,
-               Cyfr.Execution.Events.Supervisor,
-               Cyfr.Execution.Attempt.Registry,
-               Cyfr.Execution.Attempt.Supervisor
-             ] = started_ids(Cyfr.Execution.Tree)
+               Crucible.Registry,
+               Crucible.Events.Registry,
+               Crucible.Events.Sequence,
+               Crucible.Events.Supervisor,
+               Crucible.Attempt.Registry,
+               Crucible.Attempt.Supervisor
+             ] = started_ids(Crucible.Tree)
     end
 
     test "background roots and the stale-execution sweeper start after the execution group" do
-      started = Cyfr.InfraSupervisor |> started_ids()
+      started = Crucible.Supervisor |> started_ids()
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
 
       # The sweeper is a child even where `:execution_sweeper_enabled` is off
       # and it did not start.
-      for id <- [Cyfr.Execution.TaskSupervisor, Cyfr.Execution.Sweeper] do
-        assert is_integer(at.(id)) and at.(id) > at.(Cyfr.Execution.Tree),
-               "#{inspect(id)} must start under the infra tier after Cyfr.Execution.Tree"
+      for id <- [Crucible.TaskSupervisor, Crucible.Sweeper] do
+        assert is_integer(at.(id)) and at.(id) > at.(Crucible.Tree),
+               "#{inspect(id)} must start under the execution subtree after Crucible.Tree"
       end
     end
 
     # Builds run on the control plane's own task supervisor and nowhere
     # else: this server starts no builder, and a build's request, watcher and
-    # registration stop before the catalog and the bookkeeping they write
-    # through.
-    test "the builds' task supervisor starts under the infra tier after the catalog, and no builder does" do
-      started = Cyfr.InfraSupervisor |> started_ids()
-      at = fn id -> Enum.find_index(started, &(&1 == id)) end
+    # registration stop before the bookkeeping they write through.
+    test "the builds' task supervisor starts under the component subtree, and no builder does" do
+      started = Compendium.Supervisor |> started_ids()
 
-      builds = at.(Compendium.Builds.TaskSupervisor)
-      assert is_integer(builds)
-
-      pubsub = Enum.find_index(started, &(&1 in [Emissary.PubSub, Phoenix.PubSub.Supervisor]))
-      assert builds > pubsub
-
-      for id <- [Cyfr.Ops.Catalog, Emissary.MCP.ResourceRegistry] do
-        assert builds > at.(id), "#{inspect(id)} must start before the builds' supervisor"
-      end
-
+      assert Compendium.Builds.TaskSupervisor in started
       assert is_pid(Process.whereis(Compendium.Builds.TaskSupervisor))
-      refute Enum.any?(started, &(inspect(&1) =~ "Locus"))
+
+      for supervisor <- [Cyfr.InfraSupervisor, Compendium.Supervisor] do
+        refute supervisor |> started_ids() |> Enum.any?(&(inspect(&1) =~ "Locus"))
+      end
     end
 
-    test "the host API listener starts under the infra tier after the attempts it serves" do
-      started = Cyfr.InfraSupervisor |> started_ids()
+    test "the host API listener starts under the execution subtree after the attempts it serves" do
+      started = Crucible.Supervisor |> started_ids()
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
 
       # Shutdown is reverse start order: the listener stops taking host
       # calls before the attempt tree and the roots that wait on them go.
-      assert is_integer(at.(Cyfr.Execution.HostListener))
-      assert at.(Cyfr.Execution.HostListener) > at.(Cyfr.Execution.Tree)
-      assert at.(Cyfr.Execution.HostListener) > at.(Cyfr.Execution.TaskSupervisor)
+      assert is_integer(at.(Crucible.HostListener))
+      assert at.(Crucible.HostListener) > at.(Crucible.Tree)
+      assert at.(Crucible.HostListener) > at.(Crucible.TaskSupervisor)
 
       # Bound where the configuration says, on the port the suite asked for
       # (0: one of the system's choosing), and answering as the host API.
       {_, listener, :supervisor, _} =
-        Cyfr.InfraSupervisor
+        Crucible.Supervisor
         |> Supervisor.which_children()
-        |> List.keyfind(Cyfr.Execution.HostListener, 0)
+        |> List.keyfind(Crucible.HostListener, 0)
 
       assert Cyfr.RuntimeConfig.host_api_port() == 0
-      port = Cyfr.Execution.HostListener.port(listener)
+      port = Crucible.HostListener.port(listener)
       assert port > 0
       assert Cyfr.Test.OpusService.host_url() == "http://127.0.0.1:#{port}"
 
       {:ok, %Req.Response{status: 401, body: body}} =
-        Req.post("http://127.0.0.1:#{port}" <> Cyfr.WorkerWire.host_route(:attach),
+        Req.post("http://127.0.0.1:#{port}" <> Prima.WorkerWire.host_route(:attach),
           body: "{}",
           retry: false,
           decode_body: false
         )
 
-      assert Jason.decode!(body) == %{"error" => "lost"}
+      assert Jason.decode!(body) == %{"v" => 1, "error" => "lost"}
+    end
+
+    # The census the admission barrier test pins is the tree that runs:
+    # every supervisor it describes is running under that id, with that
+    # strategy and intensity, over exactly those children in that order.
+    test "the census names exactly the running tree" do
+      tiers = Cyfr.Application.tiers()
+      assert started_ids(Cyfr.Supervisor) == Enum.map(tiers, &elem(&1, 0))
+
+      for {id, _, _, _} = tier <- tiers do
+        {^id, pid, :supervisor, _} =
+          Cyfr.Supervisor |> Supervisor.which_children() |> List.keyfind(id, 0)
+
+        assert_runs(tier, pid)
+      end
+    end
+
+    # Each child is stopped within its stated bound, read from the child
+    # spec its running supervisor holds. The suite's boot omits the cell
+    # (`:control_plane_claim_enabled`); the admission barrier test reads
+    # its bound from the census.
+    test "every long-running child in the census stops within its stated bound" do
+      children =
+        for {id, _, _, _} = tier <- Cyfr.Application.tiers(),
+            {^id, pid, :supervisor, _} =
+              List.keyfind(Supervisor.which_children(Cyfr.Supervisor), id, 0),
+            child <- running_specs(tier, pid),
+            do: child
+
+      for %{id: id, shutdown: shutdown, type: type, written?: written?} <- children do
+        case Map.fetch(@shutdowns, id) do
+          {:ok, bound} ->
+            assert {shutdown, written?} == {bound, true},
+                   "#{inspect(id)} does not state its bound where it is declared"
+
+          :error ->
+            assert {type, shutdown} == {:supervisor, :infinity},
+                   "#{inspect(id)} is long-running and states no bound"
+        end
+      end
+
+      assert Map.keys(@shutdowns) -- Enum.map(children, & &1.id) == [Cyfr.Cell]
+    end
+
+    # A tier returns from its stop only once each child is down, a worker
+    # within its bound. The claim holders are workers under the infra
+    # tier, so none outlives it; and `:cyfr` stops before `:arca`, which
+    # it depends on, so the pool they release through is still open. The
+    # cell and the gate, which the suite's boot omits, are the admission
+    # barrier test's.
+    test "the claim holders stop inside the infra tier, before the pool closes" do
+      assert :arca in Application.spec(:cyfr, :applications)
+
+      for {path, id} <- [
+            {[], Cyfr.RetentionScheduler},
+            {[Crucible.Supervisor], Crucible.WorkerWatch},
+            {[Emissary.Supervisor, Emissary.External.ServerTree], Emissary.External.Backends}
+          ] do
+        supervisor = child_pid(Cyfr.InfraSupervisor, path)
+
+        assert {:ok, %{type: :worker, shutdown: bound}} =
+                 :supervisor.get_childspec(supervisor, id)
+
+        assert is_integer(bound)
+      end
+    end
+
+    # The endpoint's drain is one setting in `config/config.exs`, merged
+    # under every environment's `http:`, and the release's runtime
+    # configuration does not set it again.
+    test "the endpoint drains its connections for 30 s in every environment" do
+      drain = [:thousand_island_options, :shutdown_timeout]
+      assert get_in(CyfrWeb.Endpoint.config(:http), drain) == 30_000
+
+      root = Path.expand("../../../..", __DIR__)
+
+      for env <- [:dev, :test, :prod] do
+        config = Config.Reader.read!(Path.join(root, "config/config.exs"), env: env)
+
+        assert get_in(config, [:cyfr, CyfrWeb.Endpoint, :http | drain]) == 30_000,
+               "the #{env} endpoint drains for another time"
+      end
+
+      refute File.read!(Path.join(root, "config/runtime.exs")) =~ "shutdown_timeout"
     end
 
     test "the endpoint lives under the web tier" do
@@ -218,10 +406,56 @@ defmodule Cyfr.ApplicationTest do
         |> Supervisor.which_children()
         |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
 
-      assert EmissaryWeb.Endpoint in ids
+      assert CyfrWeb.Endpoint in ids
       refute Arca.Repo in ids
     end
   end
+
+  defp assert_runs({id, strategy, intensity, children}, pid) do
+    state = :sys.get_state(pid)
+
+    assert {supervisor_state(state, :strategy),
+            {supervisor_state(state, :intensity), supervisor_state(state, :period)}} ==
+             {strategy, intensity},
+           "#{inspect(id)} runs with another strategy or intensity than the census says"
+
+    assert started_ids(pid) == Enum.map(children, &census_id/1),
+           "#{inspect(id)} runs other children than the census says"
+
+    running = Supervisor.which_children(pid)
+
+    for {child_id, _, _, _} = nested <- children do
+      {^child_id, child, :supervisor, _} = List.keyfind(running, child_id, 0)
+      assert_runs(nested, child)
+    end
+  end
+
+  # The child spec each running supervisor holds for every leaf of the
+  # census below it, and whether the census states its shutdown rather
+  # than leaving the module's default.
+  defp running_specs({_id, _, _, children}, pid) do
+    running = Supervisor.which_children(pid)
+
+    Enum.flat_map(children, fn
+      {child_id, _, _, _} = nested ->
+        {^child_id, child, :supervisor, _} = List.keyfind(running, child_id, 0)
+        running_specs(nested, child)
+
+      child ->
+        {:ok, spec} = :supervisor.get_childspec(pid, census_id(child))
+        [Map.put(spec, :written?, Map.has_key?(Supervisor.child_spec(child, []), :shutdown))]
+    end)
+  end
+
+  defp child_pid(supervisor, []), do: supervisor
+
+  defp child_pid(supervisor, [id | path]) do
+    {^id, pid, :supervisor, _} = supervisor |> Supervisor.which_children() |> List.keyfind(id, 0)
+    child_pid(pid, path)
+  end
+
+  defp census_id({id, _strategy, _intensity, _children}), do: id
+  defp census_id(child), do: Supervisor.child_spec(child, []).id
 
   defp started_ids(supervisor) do
     supervisor

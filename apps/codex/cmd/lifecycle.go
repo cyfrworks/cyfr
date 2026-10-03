@@ -40,8 +40,8 @@ func generateSecretKey() (string, error) {
 }
 
 // generateHexKey returns 32 cryptographically random bytes as 64
-// hexadecimal digits: the one form of CYFR_MCP_BRIDGE_KEY, CYFR_WORKER_KEY
-// and CYFR_LOCUS_BUILDS_KEY that cyfr and each service accept.
+// hexadecimal digits: the one form of CYFR_LOCUS_BACKENDS_KEY,
+// CYFR_OPUS_KEY and CYFR_LOCUS_BUILDS_KEY that cyfr and each service accept.
 func generateHexKey() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -53,8 +53,8 @@ func generateHexKey() (string, error) {
 // The stack's keys and the settings they pair with, as .env names them.
 const (
 	secretKeyBaseVar = "CYFR_SECRET_KEY_BASE"
-	bridgeKeyVar     = "CYFR_MCP_BRIDGE_KEY"
-	workerRootVar    = "CYFR_WORKER_KEY"
+	backendsKeyVar   = "CYFR_LOCUS_BACKENDS_KEY"
+	workerRootVar    = "CYFR_OPUS_KEY"
 	serviceIDVar     = "OPUS_SERVICE_ID"
 	serviceKeyVar    = "OPUS_SERVICE_KEY"
 	buildsURLVar     = "CYFR_LOCUS_BUILDS_URL"
@@ -62,7 +62,7 @@ const (
 	corsOriginsVar   = "CYFR_CORS_ALLOWED_ORIGINS"
 
 	// The opus service's id when .env names none: docker-compose.yml's
-	// default for both OPUS_SERVICE_ID and the entry of CYFR_WORKERS.
+	// default for both OPUS_SERVICE_ID and the entry of CYFR_OPUS_WORKERS.
 	defaultServiceID = "wrk_opus"
 	// The compose builds service's listener (docker-compose.yml's
 	// `locus-builds`, port 4100).
@@ -73,14 +73,14 @@ const (
 // read from exactly one assignment, so what init reads is what compose and
 // cyfr read.
 var stackVars = []string{
-	secretKeyBaseVar, bridgeKeyVar, workerRootVar, serviceIDVar, serviceKeyVar, buildsURLVar,
+	secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceIDVar, serviceKeyVar, buildsURLVar,
 	buildsKeyVar, corsOriginsVar,
 }
 
 // serviceIDPattern is the service id grammar Opus.Credentials accepts.
 var serviceIDPattern = regexp.MustCompile(`^wrk_[A-Za-z0-9_-]{1,64}$`)
 
-// decodeHexKey is Cyfr.MacEnvelope.decode_root/1: exactly 64 hexadecimal
+// decodeHexKey is Prima.MacEnvelope.decode_root/1: exactly 64 hexadecimal
 // digits, in either case, spelling 32 bytes.
 func decodeHexKey(text string) ([]byte, bool) {
 	if len(text) != 64 {
@@ -90,12 +90,12 @@ func decodeHexKey(text string) ([]byte, bool) {
 	return b, err == nil
 }
 
-// workerKey is Cyfr.WorkerAuth.worker_key/2, the key of the worker service
+// workerKey is Prima.WorkerAuth.worker_key/2, the key of the worker service
 // `serviceID`: HMAC-SHA256 keyed by the root over its label and the service
 // id, one per line.
 func workerKey(root []byte, serviceID string) []byte {
 	mac := hmac.New(sha256.New, root)
-	mac.Write([]byte("cyfr-worker/v1/worker\n" + serviceID))
+	mac.Write([]byte("cyfr-opus/v1/worker\n" + serviceID))
 	return mac.Sum(nil)
 }
 
@@ -216,8 +216,8 @@ func ensureStackKeys(text string) (string, []envChange, error) {
 			return "", nil, err
 		}
 	}
-	if v, _ := f.value(bridgeKeyVar); v == "" {
-		if err := mint(bridgeKeyVar, "generated", generateHexKey); err != nil {
+	if v, _ := f.value(backendsKeyVar); v == "" {
+		if err := mint(backendsKeyVar, "generated", generateHexKey); err != nil {
 			return "", nil, err
 		}
 	}
@@ -226,7 +226,7 @@ func ensureStackKeys(text string) (string, []envChange, error) {
 	if serviceID == "" {
 		serviceID = defaultServiceID
 	} else if !serviceIDPattern.MatchString(serviceID) {
-		return "", nil, refuseEnv("%s in .env is %q, which is not `wrk_` followed by 1 to 64 letters, digits, `_` or `-`, so no key can be derived for it: fix the id (and the matching entry of CYFR_WORKERS) and run cyfr init again.", serviceIDVar, serviceID)
+		return "", nil, refuseEnv("%s in .env is %q, which is not `wrk_` followed by 1 to 64 letters, digits, `_` or `-`, so no key can be derived for it: fix the id (and the matching entry of CYFR_OPUS_WORKERS) and run cyfr init again.", serviceIDVar, serviceID)
 	}
 	rootText, _ := f.value(workerRootVar)
 	serviceKeyText, _ := f.value(serviceKeyVar)
@@ -350,8 +350,20 @@ func describeChanges(changes []envChange) string {
 	return strings.Join(parts, ", ")
 }
 
+// forceRefetched names the deploy files `cyfr init --force` removes so the
+// scaffold tarball lays them down again: docker-compose.yml, the Caddyfile
+// and the keeper's seccomp profile beside them, which `cyfr update` also
+// refreshes. On a dev build the tarball is a no-op, so nothing is removed
+// that could not be replaced.
+func forceRefetched(releaseBuild bool) []string {
+	if !releaseBuild {
+		return nil
+	}
+	return []string{"docker-compose.yml", "Caddyfile", scaffold.SeccompProfile}
+}
+
 func init() {
-	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml even if they already exist (never replaces .env or .env.example)")
+	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml even if they already exist (never replaces .env or .env.example)")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
@@ -361,13 +373,13 @@ var initCmd = &cobra.Command{
 	Use:     "init",
 	Short:   "Scaffold a CYFR project and mint the stack's keys into .env",
 	GroupID: "server",
-	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), opus (the execution worker), locus-builds (the builds service), mcp-bridge (stdio MCP servers) and, in TLS mode, caddy.
+	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), opus (the execution worker), locus-builds (the builds service), locus-backends (stdio MCP servers) and, in TLS mode, caddy.
 
-Downloads docker-compose.yml, Caddyfile, .env.example, the services' own env examples and the bundled scaffold (component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example, prompting for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email; and pulls the images the stack starts. Run with --no-interactive to take the defaults silently.
+Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the opus service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (configuration/component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example, prompting for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email; and pulls the images the stack starts. Run with --no-interactive to take the defaults silently.
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_MCP_BRIDGE_KEY, the worker root CYFR_WORKER_KEY with the OPUS_SERVICE_KEY derived from it for OPUS_SERVICE_ID (wrk_opus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin — a release with sign-in configured refuses to boot on the wildcard default, which init never writes.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the worker root CYFR_OPUS_KEY with the OPUS_SERVICE_KEY derived from it for OPUS_SERVICE_ID (wrk_opus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin — a release with sign-in configured refuses to boot on the wildcard default, which init never writes.
 
-Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. A builds URL set empty with no key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml.`,
+Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. A builds URL set empty with no key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml.`,
 	Example: `  cyfr init
   cyfr init --force
   cyfr up`,
@@ -387,22 +399,20 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 			envChanges = changes
 		}
 
-		// On --force, drop the tarball-managed deploy files so scaffold.Download
+		// On --force, drop the tarball's deploy files so scaffold.Download
 		// re-extracts them, and regenerate cyfr.yaml. .env / .env.example are
-		// deliberately never removed. (On a dev build the tarball is a no-op, so
-		// don't delete docker-compose.yml/Caddyfile we couldn't replace.)
+		// deliberately never removed.
 		if force {
-			if releaseBuild {
-				_ = os.Remove("docker-compose.yml")
-				_ = os.Remove("Caddyfile")
+			for _, name := range forceRefetched(releaseBuild) {
+				_ = os.Remove(name)
 			}
 			_ = os.Remove("cyfr.yaml")
 		}
 
 		// Download scaffold files (non-fatal): guides, wit/, aqua/, and the
-		// deploy files (docker-compose.yml, Caddyfile, .env.example,
-		// Dockerfile.node). Idempotent — existing files kept. No-op for dev
-		// builds (version.Version=="dev"/"").
+		// deploy files (docker-compose.yml, Caddyfile, .env.example and the
+		// services' env examples). Idempotent — existing files kept. No-op
+		// for dev builds (version.Version=="dev"/"").
 		if err := scaffold.Download(version.Version); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to download scaffold files: %v (continuing anyway)\n", err)
 		}
@@ -470,10 +480,10 @@ database_path: ./data/cyfr.db
 		}
 
 		// Warm-pull the images docker-compose.yml starts with this project's
-		// profiles, read from the .env just written (cyfr and opus, plus
-		// locus-builds with builds on and caddy in TLS mode — mcp-bridge is
-		// `build:`-only). Falls back to the published cyfr image on a dev
-		// build (no compose).
+		// profiles, read from the .env just written (cyfr, opus and
+		// cyfr-locus for locus-backends, the same image serving locus-builds
+		// with builds on, and caddy in TLS mode). Falls back to the published
+		// cyfr image on a dev build (no compose).
 		images := imagesFromCompose("docker-compose.yml", composeProfiles(".env"))
 		if len(images) == 0 {
 			images = []string{"ghcr.io/cyfrworks/cyfr:latest"}
@@ -528,12 +538,12 @@ database_path: ./data/cyfr.db
 		fmt.Println("CYFR project initialized.")
 		if releaseBuild {
 			if composeExists {
-				fmt.Println("  docker-compose.yml ready (cyfr, opus, locus-builds, mcp-bridge; caddy via the `tls` profile)")
+				fmt.Println("  docker-compose.yml ready (cyfr, opus, locus-builds, locus-backends; caddy via the `tls` profile)")
 			}
 			if caddyfileExists {
 				fmt.Println("  Caddyfile ready")
 			}
-			fmt.Println("  component-guide.md / tincture-guide.md / integration-guide.md downloaded")
+			fmt.Printf("  %s downloaded\n", strings.Join(scaffold.Guides, " / "))
 			fmt.Println("  wit/ interface definitions downloaded")
 			fmt.Println("  aqua/ soul, roles and scrolls downloaded")
 		}
@@ -592,9 +602,10 @@ func fileExists(path string) bool {
 // imagesFromCompose returns every `image:` value referenced by the services
 // of the compose file at path that start with the given profiles active: a
 // service with no `profiles:`, or one naming any of them. Images are in the
-// order the services appear. Build-only services (e.g. mcp-bridge, which has
-// only `build:`) are skipped. Returns nil if the file can't be read or parsed
-// — callers should fall back to a sensible default.
+// order the services first name them, each once (locus-builds and
+// locus-backends run one image). A service with only `build:` is skipped.
+// Returns nil if the file can't be read or parsed — callers should fall
+// back to a sensible default.
 func imagesFromCompose(path string, profiles []string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -614,7 +625,7 @@ func imagesFromCompose(path string, profiles []string) []string {
 		if svc.Kind != yaml.MappingNode || !startsWith(svc, profiles) {
 			continue
 		}
-		if img := mapValue(svc, "image"); img != nil && img.Value != "" {
+		if img := mapValue(svc, "image"); img != nil && img.Value != "" && !slices.Contains(images, img.Value) {
 			images = append(images, img.Value)
 		}
 	}
@@ -683,14 +694,26 @@ func ask(r *bufio.Reader, question, def string) string {
 	return line
 }
 
+// The template lines renderEnvFile rewrites, matched by prefix as the
+// template spells them: three assignments, and the operators' line, which
+// the template ships commented and init uncomments. A line the template
+// lacks is one init cannot write, so each must appear in .env.example
+// exactly once (TestRenderEnvFileShippedTemplate).
+const (
+	hostAnchor        = "CYFR_HOST="
+	behindProxyAnchor = "CYFR_BEHIND_PROXY="
+	acmeEmailAnchor   = "CADDY_ACME_EMAIL="
+	adminEmailsAnchor = "# CYFR_PLATFORM_ADMIN_EMAILS="
+)
+
 // renderEnvFile fills in a .env.example template with the answers to init's
 // prompts: sets CYFR_HOST, sets CADDY_ACME_EMAIL if non-empty, flips
 // CYFR_BEHIND_PROXY based on the TLS choice, and (if adminEmail is
 // non-empty) un-comments and sets CYFR_PLATFORM_ADMIN_EMAILS. Everything
 // else is left as-is; the keys are ensureStackKeys'.
-// TestRenderEnvFileShippedTemplate binds this key set, and the keys, to the
-// real .env.example — a template edit that strands a key fails there, not
-// on a user's first `cyfr up`.
+// TestRenderEnvFileShippedTemplate binds these anchors, and the keys, to
+// the real .env.example — a template edit that strands one fails there,
+// not on a user's first `cyfr up`.
 func renderEnvFile(template, host, adminEmail, acmeEmail string, tls bool) string {
 	behindProxy := "false"
 	if tls {
@@ -699,14 +722,14 @@ func renderEnvFile(template, host, adminEmail, acmeEmail string, tls bool) strin
 	lines := strings.Split(template, "\n")
 	for i, line := range lines {
 		switch {
-		case strings.HasPrefix(line, "CYFR_HOST="):
-			lines[i] = "CYFR_HOST=" + host
-		case strings.HasPrefix(line, "CYFR_BEHIND_PROXY="):
-			lines[i] = "CYFR_BEHIND_PROXY=" + behindProxy
-		case acmeEmail != "" && strings.HasPrefix(line, "CADDY_ACME_EMAIL="):
-			lines[i] = "CADDY_ACME_EMAIL=" + acmeEmail
-		case adminEmail != "" && strings.HasPrefix(line, "# CYFR_PLATFORM_ADMIN_EMAILS="):
-			lines[i] = "CYFR_PLATFORM_ADMIN_EMAILS=" + adminEmail
+		case strings.HasPrefix(line, hostAnchor):
+			lines[i] = hostAnchor + host
+		case strings.HasPrefix(line, behindProxyAnchor):
+			lines[i] = behindProxyAnchor + behindProxy
+		case acmeEmail != "" && strings.HasPrefix(line, acmeEmailAnchor):
+			lines[i] = acmeEmailAnchor + acmeEmail
+		case adminEmail != "" && strings.HasPrefix(line, adminEmailsAnchor):
+			lines[i] = strings.TrimPrefix(adminEmailsAnchor, "# ") + adminEmail
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -714,13 +737,13 @@ func renderEnvFile(template, host, adminEmail, acmeEmail string, tls bool) strin
 
 var upCmd = &cobra.Command{
 	Use:     "up",
-	Short:   "Start the CYFR stack (cyfr, opus, locus-builds, mcp-bridge; caddy in TLS mode)",
+	Short:   "Start the CYFR stack (cyfr, opus, locus-builds, locus-backends; caddy in TLS mode)",
 	GroupID: "server",
 	Long: `Start the CYFR stack with Docker Compose in detached mode. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
 
-The stack is five services: cyfr (the one endpoint: Prism, API, MCP, tinctures), opus (the execution worker that runs components), locus-builds (the builds service that compiles components and tinctures), mcp-bridge (runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid of its own; cyfr tells it what to run) and caddy (TLS and reverse proxy).
+The stack is five services: cyfr (the one endpoint: Prism, API, MCP, tinctures), opus (the execution worker that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run) and caddy (TLS and reverse proxy).
 
-cyfr, opus and mcp-bridge always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes; --profile locus-builds). caddy starts when CYFR_BEHIND_PROXY=true in .env (--profile tls) and fronts cyfr on :80/:443; otherwise cyfr is reachable directly at http://localhost:4000.`,
+cyfr, opus and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes; --profile locus-builds). caddy starts when CYFR_BEHIND_PROXY=true in .env (--profile tls) and fronts cyfr on :80/:443; otherwise cyfr is reachable directly at http://localhost:4000.`,
 	Example: `  cyfr up`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Registry auth is per-user: `cyfr login` (device flow) after
@@ -789,7 +812,7 @@ var downCmd = &cobra.Command{
 	Use:     "down",
 	Short:   "Stop the CYFR stack",
 	GroupID: "server",
-	Long:    "Stop the CYFR stack and remove its containers via Docker Compose: cyfr, opus, mcp-bridge, and the profile services locus-builds (--profile locus-builds) and caddy (--profile tls), so a stack started with `cyfr up` with either is fully torn down.",
+	Long:    "Stop the CYFR stack and remove its containers via Docker Compose: cyfr, opus, locus-backends, and the profile services locus-builds (--profile locus-builds) and caddy (--profile tls), so a stack started with `cyfr up` with either is fully torn down.",
 	Example: "  cyfr down",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Every profile, so down considers the opt-in services too; harmless

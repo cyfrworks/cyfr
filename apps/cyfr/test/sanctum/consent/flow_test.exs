@@ -4,19 +4,18 @@
 defmodule Sanctum.Consent.FlowTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
+  alias Prima.Authority
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Plan
-  alias Sanctum.MCP.ProfileTool
+  alias Sanctum.Providers.Profile
   alias Sanctum.Vault
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "consent_flow_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -30,7 +29,7 @@ defmodule Sanctum.Consent.FlowTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
   defp publish!(ctx, name, version \\ "1.0.0", attrs \\ %{}) do
@@ -44,9 +43,13 @@ defmodule Sanctum.Consent.FlowTest do
     component
   end
 
+  # Entering a credential is a sensitive change: the entry is created
+  # under the confirmation its person proved
+  # (`Sanctum.TestContext.create_vault/2`). The walks and grants below
+  # then run on the session alone.
   defp entry!(ctx, over \\ %{}) do
     {:ok, view} =
-      Vault.create(
+      Sanctum.TestContext.create_vault(
         ctx,
         Map.merge(
           %{
@@ -111,6 +114,30 @@ defmodule Sanctum.Consent.FlowTest do
       assert {:error, :shape_moved} = Commit.grant(ctx, %{grant | expected_consent_revision: 2})
     end
 
+    test "a walk and a grant need the session alone: no confirmation is asked or opened",
+         %{ctx: ctx} do
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      publish!(person, "flow-grant-session")
+      entry = entry!(person)
+      actor = Sanctum.Context.actor(person)
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(actor, person.user_id)
+
+      # The session itself, naming no confirmation.
+      assert person.confirmation_id == nil
+
+      assert {:ok, %{profile_id: profile_id, revision: 1}} =
+               walk!(person, "reagent:local.flow-grant-session")
+
+      assert {:ok, %{revision: 2}} =
+               Commit.grant(person, %{
+                 profile_id: profile_id,
+                 bindings: [%{need: "@ingress", entry_id: entry.id}],
+                 expected_consent_revision: 1
+               })
+
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(actor, person.user_id)
+    end
+
     test "only an active owner profile takes a grant", %{ctx: ctx} do
       publish!(ctx, "flow-grant-owner")
       entry = entry!(ctx)
@@ -143,7 +170,20 @@ defmodule Sanctum.Consent.FlowTest do
       }
 
       {:ok, preview} = Commit.preview(ctx, decisions)
-      assert Enum.any?(preview.summary, &(&1 =~ "Uses #{entry.name}"))
+
+      assert [
+               %{
+                 "kind" => "credential",
+                 "node" => "reagent:local.flow-happy",
+                 "values" => %{
+                   "name" => entry_name,
+                   "edge" => "@ingress",
+                   "fields" => ["anon_key", "url"]
+                 }
+               }
+             ] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+
+      assert entry_name == entry.name
 
       {:ok, committed} =
         Commit.commit(ctx, %{
@@ -577,7 +617,7 @@ defmodule Sanctum.Consent.FlowTest do
 
       {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), owner_id)
 
-      assert head.blob_digest == Cyfr.JCS.hash_binary(head.resolved_policy),
+      assert head.blob_digest == Prima.JCS.hash_binary(head.resolved_policy),
              "a consent row must carry the hash of the policy it stores"
     end
 
@@ -707,19 +747,23 @@ defmodule Sanctum.Consent.FlowTest do
     # Exercise projection defaults through the MCP tool. Omitted fields
     # must retain the manifest’s subset, and the consent sheet must show
     # every granted resource and node limit.
-    test "the summary discloses private egress, schemes and the node's limits",
+    test "the rows disclose private egress, schemes and the node's limits",
          %{ctx: ctx} do
       publish_private_egress!(ctx, "flow-private-egress")
       ref = "reagent:local.flow-private-egress"
 
       {:ok, preview} = Commit.preview(ctx, %{ref: ref})
-      sheet = Enum.join(preview.summary, "\n")
+      rows = Enum.group_by(preview.rows, &{&1["kind"], &1["node"]}, & &1["values"])
 
-      assert sheet =~ "internal.corp"
-      assert sheet =~ "INCLUDING PRIVATE"
-      assert sheet =~ "10.0.0.0/8"
-      assert sheet =~ "via http"
-      assert sheet =~ "limits "
+      assert [egress] = rows[{"egress", ref}]
+      assert "internal.corp" in egress["domains"]
+      assert "10.0.0.0/8" in egress["private_ips"]
+      assert "http" in egress["schemes"]
+
+      assert [limits] = rows[{"limits", ref}]
+
+      assert Map.keys(limits) |> Enum.sort() ==
+               Prima.Limits.fields() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
     end
 
     test "an MCP binding that omits fields still gets the manifest's subset",
@@ -730,11 +774,11 @@ defmodule Sanctum.Consent.FlowTest do
 
       decisions = %{"bindings" => [%{"need" => "api_key", "entry_id" => entry.id}], "ref" => ref}
 
-      {:ok, plan} = ProfileTool.handle(ctx, %{"action" => "plan", "ref" => ref})
-      {:ok, preview} = ProfileTool.handle(ctx, %{"action" => "preview", "decisions" => decisions})
+      {:ok, plan} = Profile.handle(ctx, %{"action" => "plan", "ref" => ref})
+      {:ok, preview} = Profile.handle(ctx, %{"action" => "preview", "decisions" => decisions})
 
       {:ok, _} =
-        ProfileTool.handle(ctx, %{
+        Profile.handle(ctx, %{
           "action" => "commit",
           "decisions" => decisions,
           "plan_token" => plan.plan_token,
@@ -780,6 +824,86 @@ defmodule Sanctum.Consent.FlowTest do
       # The projection defaulted to the need's declared fields.
       assert auth.resources.vault.projection.fields == ["ANTHROPIC_API_KEY"]
       assert auth.resources.egress.domains == ["api.anthropic.com"]
+    end
+
+    test "an explicit empty projection is refused, never read as every field", %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-empty")
+      entry = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-1"}})
+      ref = "reagent:local.flow-needs-empty"
+
+      for over <- [%{fields: []}, %{scopes: []}] do
+        binding = Map.merge(%{need: "api_key", entry_id: entry.id}, over)
+
+        assert {:error, {:invalid_argument, message}} =
+                 Commit.preview(ctx, %{ref: ref, bindings: [binding]})
+
+        assert message =~ "api_key"
+      end
+    end
+
+    test "a key need grants no scopes, so its edge never dispenses a token", %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-scopes")
+      entry = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-1"}})
+
+      assert {:error, {:invalid_argument, message}} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.flow-needs-scopes",
+                 bindings: [%{need: "api_key", entry_id: entry.id, scopes: ["s"]}]
+               })
+
+      assert message =~ "api_key"
+    end
+
+    test "an ingress binding on a manifest without needs names the entry's fields",
+         %{ctx: ctx} do
+      publish!(ctx, "flow-ingress-named")
+      entry = entry!(ctx)
+      ref = "reagent:local.flow-ingress-named"
+
+      assert {:ok, %{revision: 1}} =
+               walk!(ctx, ref, %{bindings: [%{need: "@ingress", entry_id: entry.id}]})
+
+      {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+
+      {:ok, component} =
+        Compendium.Registry.get_latest(ctx, "flow-ingress-named", "local", "reagent")
+
+      {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
+      {:ok, auth, _} = Loader.load_root(ctx, profile, live: {:ok, live})
+
+      # The edge references its entry under a named projection, and the
+      # attach's read answers exactly those fields.
+      assert auth.resources.vault.projection.fields == ["anon_key", "url"]
+
+      assert {:ok, %{"url" => "https://db.example", "anon_key" => "anon"}} =
+               Sanctum.VaultReader.fetch(ctx, auth.resources.vault)
+    end
+
+    test "the preview names the fields the edge projects", %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-sheet")
+      entry = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-1", "OTHER" => "x"}})
+
+      {:ok, preview} =
+        Commit.preview(ctx, %{
+          ref: "reagent:local.flow-needs-sheet",
+          bindings: [%{need: "api_key", entry_id: entry.id}]
+        })
+
+      # The row names exactly the fields the edge projects, never the
+      # entry's other fields.
+      entry_name = entry.name
+
+      assert [
+               %{
+                 "node" => "reagent:local.flow-needs-sheet",
+                 "values" => %{
+                   "name" => ^entry_name,
+                   "edge" => "@ingress",
+                   "fields" => ["ANTHROPIC_API_KEY"],
+                   "scopes" => []
+                 }
+               }
+             ] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
     end
 
     test "the implicit slot retires when needs are declared", %{ctx: ctx} do
@@ -921,7 +1045,7 @@ defmodule Sanctum.Consent.FlowTest do
         assert is_binary(consent.blob_digest) and consent.blob_digest != "",
                "#{ref} was minted without a blob digest"
 
-        assert consent.blob_digest == Cyfr.JCS.hash_binary(consent.resolved_policy),
+        assert consent.blob_digest == Prima.JCS.hash_binary(consent.resolved_policy),
                "#{ref}'s stored digest does not describe its stored policy"
       end
     end

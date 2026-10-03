@@ -32,11 +32,11 @@ defmodule Arca.ThreadStorage do
   """
 
   import Ecto.Query
-  # Every function takes the `Cyfr.Actor` first and matches it in the
+  # Every function takes the `Prima.Actor` first and matches it in the
   # head; an actor whose athanor is nil OR the empty string is
   # `{:error, :no_athanor}` before any query, and `insert_message!/3`,
   # which runs inside a caller's transaction, raises instead. The thread
-  # cap is asked through `Cyfr.Caps`, the port, rather than by naming the
+  # cap is asked through `Prima.Caps`, the port, rather than by naming the
   # tenancy domain above this layer.
   require Logger
 
@@ -57,10 +57,10 @@ defmodule Arca.ThreadStorage do
   # ---------------------------------------------------------------------------
 
   @doc "The athanor's threads, most recently active first."
-  @spec list(Cyfr.Actor.t(), keyword()) :: [Thread.t()] | {:error, :no_athanor | :database_error}
+  @spec list(Prima.Actor.t(), keyword()) :: [map()] | {:error, :no_athanor | :database_error}
   def list(actor, opts \\ [])
 
-  def list(%Cyfr.Actor{athanor_id: athanor_id} = actor, opts)
+  def list(%Prima.Actor{athanor_id: athanor_id} = actor, opts)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.list", fn ->
       limit = Keyword.get(opts, :limit, 200)
@@ -72,27 +72,34 @@ defmodule Arca.ThreadStorage do
       |> QueryHelpers.where_tenant(actor)
       |> Repo.all()
     end)
+    |> Arca.Data.project()
   end
 
-  def list(%Cyfr.Actor{}, _opts), do: {:error, :no_athanor}
+  def list(%Prima.Actor{}, _opts), do: {:error, :no_athanor}
 
   @doc "One thread of the context's athanor."
-  @spec get(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Thread.t()} | {:error, :no_athanor | :not_found | :database_error}
-  def get(%Cyfr.Actor{athanor_id: athanor_id} = actor, id)
+  @spec get(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
+  def get(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("ThreadStorage.get", fn ->
-      from(c in Thread, where: c.id == ^id)
-      |> QueryHelpers.where_tenant(actor)
-      |> Repo.one()
-      |> case do
-        nil -> {:error, :not_found}
-        thread -> {:ok, thread}
-      end
-    end)
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.get", fn -> thread_row(actor, id) end)
+    |> Arca.Data.project()
   end
 
-  def get(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
+  def get(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+
+  # The row itself, for the writers here that act on it inside their own
+  # rescue or transaction; `get/2` is its projection.
+  # arca:db-raise-ok inside the caller's rescue.
+  defp thread_row(actor, id) do
+    from(c in Thread, where: c.id == ^id)
+    |> QueryHelpers.where_tenant(actor)
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :not_found}
+      thread -> {:ok, thread}
+    end
+  end
 
   @doc """
   Open a new thread in the context's athanor, attributed to its user.
@@ -102,23 +109,23 @@ defmodule Arca.ThreadStorage do
   themselves. There is deliberately no subscriber list to pass: a client
   must not follow other members.
   """
-  @spec create(Cyfr.Actor.t(), map()) ::
-          {:ok, Thread.t()} | {:error, :no_athanor | Ecto.Changeset.t() | :database_error}
+  @spec create(Prima.Actor.t(), map()) ::
+          {:ok, map()} | {:error, :no_athanor | {:invalid, map()} | :database_error}
   def create(actor, attrs \\ %{})
 
-  def create(%Cyfr.Actor{athanor_id: athanor_id} = actor, attrs)
+  def create(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.create", fn ->
       # A thread is a row any member's client can mint from the wire, so
-      # the estate's count is held to the operator's cap like its DMs are.
+      # the athanor's count is held to the operator's cap like its DMs are.
       with :ok <-
-             Cyfr.Caps.check_counted(actor, :max_threads_per_athanor, fn ->
+             Prima.Caps.check_counted(actor, :max_threads_per_athanor, fn ->
                {:ok, count(actor)}
              end),
            {:ok, thread} <-
              %Thread{}
              |> Thread.changeset(%{
-               id: attrs[:id] || Cyfr.UUID7.generate_id("thread"),
+               id: attrs[:id] || Prima.UUID7.generate_id("thread"),
                athanor_id: actor.athanor_id,
                title: attrs[:title] || @default_title,
                created_by: actor.user_id || @system_author
@@ -128,19 +135,21 @@ defmodule Arca.ThreadStorage do
         {:ok, thread}
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def create(%Cyfr.Actor{}, _attrs), do: {:error, :no_athanor}
+  def create(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
 
-  # How many threads the estate holds — read inside `create/2`'s rescue.
-  defp count(%Cyfr.Actor{} = actor) do
+  # How many threads the athanor holds — read inside `create/2`'s rescue.
+  defp count(%Prima.Actor{} = actor) do
     Repo.aggregate(from(c in Thread, where: c.athanor_id == ^actor.athanor_id), :count)
   end
 
   # Best effort: a thread that exists but is in nobody's sidebar is a
   # recoverable annoyance (follow it), where failing the create over it
   # would lose the thread itself.
-  defp subscribe_creator(%Cyfr.Actor{user_id: creator} = actor, thread) when is_binary(creator) do
+  defp subscribe_creator(%Prima.Actor{user_id: creator} = actor, thread)
+       when is_binary(creator) do
     Arca.ThreadSubscriptionStorage.follow(actor, thread.id, creator)
   end
 
@@ -150,13 +159,13 @@ defmodule Arca.ThreadStorage do
   Update a thread's title, agent, turn cursor or last
   activity.
   """
-  @spec update(Cyfr.Actor.t(), String.t(), map()) ::
-          {:ok, Thread.t()}
-          | {:error, :no_athanor | :not_found | :database_error | Ecto.Changeset.t()}
-  def update(%Cyfr.Actor{athanor_id: athanor_id} = actor, id, attrs)
+  @spec update(Prima.Actor.t(), String.t(), map()) ::
+          {:ok, map()}
+          | {:error, :no_athanor | :not_found | :database_error | {:invalid, map()}}
+  def update(%Prima.Actor{athanor_id: athanor_id} = actor, id, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.update", fn ->
-      with {:ok, thread} <- get(actor, id) do
+      with {:ok, thread} <- thread_row(actor, id) do
         attrs =
           attrs
           |> Map.take([:title, :agent, :turn_seq, :last_message_at])
@@ -164,9 +173,10 @@ defmodule Arca.ThreadStorage do
         thread |> Thread.changeset(attrs) |> Repo.update()
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def update(%Cyfr.Actor{}, _id, _attrs), do: {:error, :no_athanor}
+  def update(%Prima.Actor{}, _id, _attrs), do: {:error, :no_athanor}
 
   # ---------------------------------------------------------------------------
   # The thread claim
@@ -185,14 +195,19 @@ defmodule Arca.ThreadStorage do
   A claim that wrote nothing is told which of the two conditions refused
   it, from a second read that decides nothing: `{:error, :stale}` when a
   peer accepted the next message first — re-read, because which turn is
-  next may have changed — and `{:error, {:busy, turn_id}}` when another
-  turn holds it. A thread this turn already holds answers `{:ok, thread}`,
+  next may have changed — and `{:error, {:held_elsewhere, turn_id}}` when
+  another turn holds it. A thread this turn already holds answers `{:ok, thread}`,
   so a claimant that lost track of its own claim may ask again.
   """
-  @spec claim(Cyfr.Actor.t(), String.t(), String.t(), non_neg_integer()) ::
-          {:ok, Thread.t()}
-          | {:error, :no_athanor | :not_found | :stale | {:busy, String.t()} | :database_error}
-  def claim(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id, turn_id, turn_seq)
+  @spec claim(Prima.Actor.t(), String.t(), String.t(), non_neg_integer()) ::
+          {:ok, map()}
+          | {:error,
+             :no_athanor
+             | :not_found
+             | :stale
+             | {:held_elsewhere, String.t()}
+             | :database_error}
+  def claim(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, turn_id, turn_seq)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
              is_binary(turn_id) and is_integer(turn_seq) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.claim", fn ->
@@ -204,23 +219,24 @@ defmodule Arca.ThreadStorage do
         |> Repo.update_all(set: [active_turn_id: turn_id])
 
       case claimed do
-        {1, _} -> get(actor, thread_id)
+        {1, _} -> thread_row(actor, thread_id)
         {0, _} -> claim_refused(actor, thread_id, turn_id)
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def claim(%Cyfr.Actor{}, _thread_id, _turn_id, _turn_seq), do: {:error, :no_athanor}
+  def claim(%Prima.Actor{}, _thread_id, _turn_id, _turn_seq), do: {:error, :no_athanor}
 
   # Why the one statement wrote nothing. A read, so it decides nothing and
   # cannot be raced into admitting anything.
   defp claim_refused(actor, thread_id, turn_id) do
-    case get(actor, thread_id) do
+    case thread_row(actor, thread_id) do
       {:ok, %Thread{active_turn_id: ^turn_id} = thread} ->
         {:ok, thread}
 
       {:ok, %Thread{active_turn_id: held}} when is_binary(held) ->
-        {:error, {:busy, held}}
+        {:error, {:held_elsewhere, held}}
 
       # Nobody holds it now, so the sequence is what refused the claim —
       # or a release landed between the statement and this read. Both say
@@ -242,9 +258,9 @@ defmodule Arca.ThreadStorage do
   work, waiting on a person. `turn.suspend` and every terminal transition
   release it.
   """
-  @spec release(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec release(Prima.Actor.t(), String.t(), String.t()) ::
           :ok | {:error, :no_athanor | :not_held | :database_error}
-  def release(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id, turn_id)
+  def release(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, turn_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
              is_binary(turn_id) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.release", fn ->
@@ -253,19 +269,20 @@ defmodule Arca.ThreadStorage do
         {0, _} -> {:error, :not_held}
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def release(%Cyfr.Actor{}, _thread_id, _turn_id), do: {:error, :no_athanor}
+  def release(%Prima.Actor{}, _thread_id, _turn_id), do: {:error, :no_athanor}
 
   @doc """
   `release/3` for a caller that owns the transaction: the count is the
   caller's to read, and a release that matched nothing is not an error
   there — a terminal turn that never held the claim releases nothing.
   """
-  @spec release_all!(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec release_all!(Prima.Actor.t(), String.t(), String.t()) ::
           {non_neg_integer(), nil | [term()]}
   # arca:db-raise-ok inside the caller's transaction
-  def release_all!(%Cyfr.Actor{athanor_id: athanor_id}, thread_id, turn_id)
+  def release_all!(%Prima.Actor{athanor_id: athanor_id}, thread_id, turn_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
              is_binary(turn_id) do
     from(c in Thread,
@@ -275,7 +292,7 @@ defmodule Arca.ThreadStorage do
     |> Repo.update_all(set: [active_turn_id: nil])
   end
 
-  def release_all!(%Cyfr.Actor{}, _thread_id, _turn_id),
+  def release_all!(%Prima.Actor{}, _thread_id, _turn_id),
     do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.release_all!/3")
 
   @doc """
@@ -296,11 +313,12 @@ defmodule Arca.ThreadStorage do
   first member to name it. A member's own turns are its own — a
   `runner_id` equal to this boot is never a live peer — so a member picks
   up what it left behind without waiting for anything. Rolls the caller's
-  transaction back with `:busy` when a live peer holds the thread.
+  transaction back with `:held_elsewhere` when a live peer holds the
+  thread.
   """
-  @spec take_claim!(Cyfr.Actor.t(), String.t(), String.t()) :: :ok
+  @spec take_claim!(Prima.Actor.t(), String.t(), String.t()) :: :ok
   # arca:db-raise-ok inside the caller's transaction
-  def take_claim!(%Cyfr.Actor{athanor_id: athanor_id}, thread_id, turn_id)
+  def take_claim!(%Prima.Actor{athanor_id: athanor_id}, thread_id, turn_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
              is_binary(turn_id) do
     taken =
@@ -314,11 +332,11 @@ defmodule Arca.ThreadStorage do
 
     case taken do
       {1, _} -> :ok
-      {0, _} -> Repo.rollback(:busy)
+      {0, _} -> Repo.rollback(:held_elsewhere)
     end
   end
 
-  def take_claim!(%Cyfr.Actor{}, _thread_id, _turn_id),
+  def take_claim!(%Prima.Actor{}, _thread_id, _turn_id),
     do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.take_claim!/3")
 
   @doc """
@@ -329,7 +347,7 @@ defmodule Arca.ThreadStorage do
   `live_peer?` is true only for a holder whose `runner_id` is another
   member's boot with a cell slot that has not lapsed on database time.
   """
-  @spec claim_holder(Cyfr.Actor.t(), String.t()) ::
+  @spec claim_holder(Prima.Actor.t(), String.t()) ::
           {:ok,
            %{
              turn_id: String.t() | nil,
@@ -337,16 +355,17 @@ defmodule Arca.ThreadStorage do
              live_peer?: boolean()
            }}
           | {:error, :no_athanor | :not_found | :database_error}
-  def claim_holder(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id)
+  def claim_holder(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.claim_holder", fn ->
-      with {:ok, thread} <- get(actor, thread_id) do
+      with {:ok, thread} <- thread_row(actor, thread_id) do
         {:ok, holder_of(athanor_id, thread)}
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def claim_holder(%Cyfr.Actor{}, _thread_id), do: {:error, :no_athanor}
+  def claim_holder(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
 
   defp holder_of(_athanor_id, %Thread{active_turn_id: nil}),
     do: %{turn_id: nil, runner_id: nil, live_peer?: false}
@@ -373,7 +392,7 @@ defmodule Arca.ThreadStorage do
   # it a moment before the write can only make a lapsed peer look live,
   # which refuses a take; it can never make a live peer look lapsed.
   defp live_peer_turns(athanor_id) do
-    me = Cyfr.Boot.id()
+    me = Prima.Boot.id()
 
     live_owners =
       from(l in Arca.Schemas.CellLease,
@@ -396,19 +415,20 @@ defmodule Arca.ThreadStorage do
   a deletion the tree didn't make — the next attempt (or the orphan
   sweep) retries.
   """
-  @spec delete(Cyfr.Actor.t(), String.t()) ::
+  @spec delete(Prima.Actor.t(), String.t()) ::
           :ok | {:error, :no_athanor | :not_found | {:storage_delete_failed, term()}}
-  def delete(%Cyfr.Actor{athanor_id: athanor_id} = actor, id)
+  def delete(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.delete", fn -> do_delete(actor, id) end)
+    |> Arca.Data.project()
   end
 
-  def delete(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
+  def delete(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   defp do_delete(actor, id) do
-    with {:ok, thread} <- get(actor, id),
+    with {:ok, thread} <- thread_row(actor, id),
          :ok <- delete_blobs(actor, thread.id) do
-      # arca:unscoped-ok get(actor, id) above establishes thread ownership.
+      # arca:unscoped-ok thread_row(actor, id) above establishes thread ownership.
       # Delete its messages, follows, and grants. Explicit message deletion
       # also covers SQLite connections without foreign_keys=ON.
       Repo.transaction(fn ->
@@ -457,15 +477,16 @@ defmodule Arca.ThreadStorage do
   (kept) or is a genuine orphan — a concurrent create can never lose its
   bytes to this sweep.
   """
-  @spec sweep_orphaned_blobs(Cyfr.Actor.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def sweep_orphaned_blobs(%Cyfr.Actor{athanor_id: athanor_id} = actor)
+  @spec sweep_orphaned_blobs(Prima.Actor.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def sweep_orphaned_blobs(%Prima.Actor{athanor_id: athanor_id} = actor)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.sweep_orphaned_blobs", fn ->
       do_sweep_orphaned_blobs(actor)
     end)
+    |> Arca.Data.project()
   end
 
-  def sweep_orphaned_blobs(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def sweep_orphaned_blobs(%Prima.Actor{}), do: {:error, :no_athanor}
 
   defp do_sweep_orphaned_blobs(actor) do
     with {:ok, entries} <- Arca.list_typed(actor, ["threads"]) do
@@ -503,11 +524,11 @@ defmodule Arca.ThreadStorage do
   bound the window (exclusive / inclusive) — a turn's task is the human
   rows between the last turn's cursor and the message that started it.
   """
-  @spec messages(Cyfr.Actor.t(), String.t(), keyword()) ::
-          [Message.t()] | {:error, :no_athanor | :database_error}
+  @spec messages(Prima.Actor.t(), String.t(), keyword()) ::
+          [map()] | {:error, :no_athanor | :database_error}
   def messages(actor, thread_id, opts \\ [])
 
-  def messages(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id, opts)
+  def messages(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.messages", fn ->
       query =
@@ -538,9 +559,10 @@ defmodule Arca.ThreadStorage do
       |> QueryHelpers.where_tenant(actor)
       |> Repo.all()
     end)
+    |> Arca.Data.project()
   end
 
-  def messages(%Cyfr.Actor{}, _thread_id, _opts), do: {:error, :no_athanor}
+  def messages(%Prima.Actor{}, _thread_id, _opts), do: {:error, :no_athanor}
 
   @doc """
   The newest `n` messages of a thread, in ascending order.
@@ -549,9 +571,9 @@ defmodule Arca.ThreadStorage do
   rows (it bounds windowed turn assembly), which is the wrong end for a
   reader opening a long-lived thread.
   """
-  @spec latest_messages(Cyfr.Actor.t(), String.t(), pos_integer()) ::
-          [Message.t()] | {:error, term()}
-  def latest_messages(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id, n)
+  @spec latest_messages(Prima.Actor.t(), String.t(), pos_integer()) ::
+          [map()] | {:error, term()}
+  def latest_messages(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, n)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and is_integer(n) and
              n > 0 do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.latest_messages", fn ->
@@ -564,32 +586,37 @@ defmodule Arca.ThreadStorage do
       |> Repo.all()
       |> Enum.reverse()
     end)
+    |> Arca.Data.project()
   end
 
-  def latest_messages(%Cyfr.Actor{}, _thread_id, _n), do: {:error, :no_athanor}
+  def latest_messages(%Prima.Actor{}, _thread_id, _n), do: {:error, :no_athanor}
 
   @doc "One message of the context's athanor."
-  @spec get_message(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Message.t()} | {:error, :no_athanor | :not_found | :database_error}
-  def get_message(%Cyfr.Actor{athanor_id: athanor_id} = actor, id)
+  @spec get_message(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
+  def get_message(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("ThreadStorage.get_message", fn ->
-      from(m in Message, where: m.id == ^id)
-      |> QueryHelpers.where_tenant(actor)
-      |> Repo.one()
-      |> case do
-        nil -> {:error, :not_found}
-        msg -> {:ok, msg}
-      end
-    end)
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.get_message", fn -> message_row(actor, id) end)
+    |> Arca.Data.project()
   end
 
-  def get_message(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
+  def get_message(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+
+  # arca:db-raise-ok inside the caller's rescue.
+  defp message_row(actor, id) do
+    from(m in Message, where: m.id == ^id)
+    |> QueryHelpers.where_tenant(actor)
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :not_found}
+      msg -> {:ok, msg}
+    end
+  end
 
   @doc "The approval rows of a thread still waiting on a decision."
-  @spec pending_approvals(Cyfr.Actor.t(), String.t()) ::
-          [Message.t()] | {:error, :no_athanor | :database_error}
-  def pending_approvals(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id)
+  @spec pending_approvals(Prima.Actor.t(), String.t()) ::
+          [map()] | {:error, :no_athanor | :database_error}
+  def pending_approvals(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.pending_approvals", fn ->
       from(m in Message,
@@ -601,9 +628,10 @@ defmodule Arca.ThreadStorage do
       |> QueryHelpers.where_tenant(actor)
       |> Repo.all()
     end)
+    |> Arca.Data.project()
   end
 
-  def pending_approvals(%Cyfr.Actor{}, _thread_id), do: {:error, :no_athanor}
+  def pending_approvals(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
 
   @doc """
   Append one message to a thread.
@@ -614,10 +642,10 @@ defmodule Arca.ThreadStorage do
   on the unique index retries. The first user text message titles a
   thread that still carries the default title.
   """
-  @spec append(Cyfr.Actor.t(), String.t(), map()) ::
-          {:ok, Message.t()}
-          | {:error, :no_athanor | :not_found | :seq_conflict | Ecto.Changeset.t()}
-  def append(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id, attrs)
+  @spec append(Prima.Actor.t(), String.t(), map()) ::
+          {:ok, map()}
+          | {:error, :no_athanor | :not_found | :seq_conflict | {:invalid, map()}}
+  def append(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     # Rescued like every other write here: the transaction is inside the
     # private helper, where `Arca.DbRescueCoverageTest` (which inspects
@@ -625,26 +653,28 @@ defmodule Arca.ThreadStorage do
     # `DBConnection.ConnectionError` into the runner and the LiveView
     # instead of the module's `{:error, :database_error}`.
     Arca.Repo.Errors.with_db_rescue("Arca.ThreadStorage.append", fn ->
-      with {:ok, thread} <- get(actor, thread_id) do
+      with {:ok, thread} <- thread_row(actor, thread_id) do
         do_append(actor, thread, attrs, 3)
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def append(%Cyfr.Actor{}, _thread_id, _attrs), do: {:error, :no_athanor}
+  def append(%Prima.Actor{}, _thread_id, _attrs), do: {:error, :no_athanor}
 
-  @doc """
-  Insert one message inside the caller's transaction, at the next `seq`,
-  raising on a store error so the caller's transaction rolls back. The
-  `(thread_id, seq)` race surfaces as `Ecto.InvalidChangesetError`
-  carrying a `:unique` constraint on `:thread_id`; a caller that
-  owns the transaction retries the whole transaction on it
-  (`Arca.TurnStorage.with_seq_retry/1`). Titles the thread from its
-  first user text and bumps `last_message_at` as `append/3` does.
-  """
-  @spec insert_message!(Cyfr.Actor.t(), Thread.t(), map()) :: Message.t()
+  @doc false
+  # Insert one message inside the caller's transaction, at the next `seq`,
+  # raising on a store error so the caller's transaction rolls back. The
+  # `(thread_id, seq)` race surfaces as `Ecto.InvalidChangesetError`
+  # carrying a `:unique` constraint on `:thread_id`; a caller that owns the
+  # transaction retries the whole transaction on it
+  # (`Arca.TurnStorage.with_seq_retry/1`). Titles the thread from its first
+  # user text and bumps `last_message_at` as `append/3` does. An
+  # in-transaction helper: it answers the schema row to Arca's own
+  # transactions, never across the boundary.
+  @spec insert_message!(Prima.Actor.t(), Thread.t(), map()) :: Message.t()
   # arca:db-raise-ok inside the caller's transaction
-  def insert_message!(%Cyfr.Actor{athanor_id: athanor_id} = actor, %Thread{} = thread, attrs)
+  def insert_message!(%Prima.Actor{athanor_id: athanor_id} = actor, %Thread{} = thread, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     now = DateTime.utc_now()
 
@@ -659,7 +689,7 @@ defmodule Arca.ThreadStorage do
     msg =
       Repo.insert!(
         Message.changeset(%Message{}, %{
-          id: attrs[:id] || Cyfr.UUID7.generate_id("msg"),
+          id: attrs[:id] || Prima.UUID7.generate_id("msg"),
           thread_id: thread.id,
           athanor_id: actor.athanor_id,
           seq: seq,
@@ -683,13 +713,13 @@ defmodule Arca.ThreadStorage do
     msg
   end
 
-  def insert_message!(%Cyfr.Actor{}, _thread, _attrs),
+  def insert_message!(%Prima.Actor{}, _thread, _attrs),
     do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.insert_message!/3")
 
   @doc "The message a sender accepted under `client_id` in this thread, if any."
-  @spec get_by_client_id(Cyfr.Actor.t(), String.t(), String.t()) ::
-          {:ok, Message.t()} | {:error, :no_athanor | :not_found | :database_error}
-  def get_by_client_id(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id, client_id)
+  @spec get_by_client_id(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
+  def get_by_client_id(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, client_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
              is_binary(client_id) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.get_by_client_id", fn ->
@@ -703,9 +733,10 @@ defmodule Arca.ThreadStorage do
         msg -> {:ok, msg}
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def get_by_client_id(%Cyfr.Actor{}, _thread_id, _client_id), do: {:error, :no_athanor}
+  def get_by_client_id(%Prima.Actor{}, _thread_id, _client_id), do: {:error, :no_athanor}
 
   defp do_append(_ctx, _thread, _attrs, 0), do: {:error, :seq_conflict}
 
@@ -724,7 +755,7 @@ defmodule Arca.ThreadStorage do
 
         changeset =
           Message.changeset(%Message{}, %{
-            id: attrs[:id] || Cyfr.UUID7.generate_id("msg"),
+            id: attrs[:id] || Prima.UUID7.generate_id("msg"),
             thread_id: thread.id,
             athanor_id: actor.athanor_id,
             seq: seq,
@@ -796,13 +827,13 @@ defmodule Arca.ThreadStorage do
   defp title_after(%Thread{title: title}, _msg), do: title
 
   @doc "Replace a message's content/payload (the runner finalising a streamed turn)."
-  @spec update_message(Cyfr.Actor.t(), String.t(), map()) ::
-          {:ok, Message.t()}
-          | {:error, :no_athanor | :not_found | :database_error | Ecto.Changeset.t()}
-  def update_message(%Cyfr.Actor{athanor_id: athanor_id} = actor, id, attrs)
+  @spec update_message(Prima.Actor.t(), String.t(), map()) ::
+          {:ok, map()}
+          | {:error, :no_athanor | :not_found | :database_error | {:invalid, map()}}
+  def update_message(%Prima.Actor{athanor_id: athanor_id} = actor, id, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.update_message", fn ->
-      with {:ok, msg} <- get_message(actor, id) do
+      with {:ok, msg} <- message_row(actor, id) do
         attrs =
           attrs
           |> Map.take([:content, :payload, :status, :execution_id])
@@ -812,9 +843,10 @@ defmodule Arca.ThreadStorage do
         msg |> Message.changeset(attrs) |> Repo.update()
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def update_message(%Cyfr.Actor{}, _id, _attrs), do: {:error, :no_athanor}
+  def update_message(%Prima.Actor{}, _id, _attrs), do: {:error, :no_athanor}
 
   @doc """
   Move an approval row from one of `from` to `to` — compare-and-set on
@@ -824,20 +856,27 @@ defmodule Arca.ThreadStorage do
   context's user and `resolved_at` is now unless the row is only being
   marked `"running"`.
   """
-  @spec resolve_approval(Cyfr.Actor.t(), String.t(), [String.t()] | String.t(), String.t(), map()) ::
-          {:ok, Message.t()}
+  @spec resolve_approval(
+          Prima.Actor.t(),
+          String.t(),
+          [String.t()] | String.t(),
+          String.t(),
+          map()
+        ) ::
+          {:ok, map()}
           | {:error, :no_athanor | :not_found | :already_resolved | :database_error}
   def resolve_approval(actor, id, from, to, attrs \\ %{})
 
-  def resolve_approval(%Cyfr.Actor{athanor_id: athanor_id} = actor, id, from, to, attrs)
+  def resolve_approval(%Prima.Actor{athanor_id: athanor_id} = actor, id, from, to, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and
              to in ~w(running approved declined error) do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.resolve_approval", fn ->
       do_resolve_approval(actor, id, from, to, attrs)
     end)
+    |> Arca.Data.project()
   end
 
-  def resolve_approval(%Cyfr.Actor{}, _id, _from, _to, _attrs), do: {:error, :no_athanor}
+  def resolve_approval(%Prima.Actor{}, _id, _from, _to, _attrs), do: {:error, :no_athanor}
 
   defp do_resolve_approval(actor, id, from, to, attrs) do
     from = List.wrap(from)
@@ -860,10 +899,10 @@ defmodule Arca.ThreadStorage do
 
     case count do
       1 ->
-        get_message(actor, id)
+        message_row(actor, id)
 
       0 ->
-        case get_message(actor, id) do
+        case message_row(actor, id) do
           {:ok, _} -> {:error, :already_resolved}
           {:error, :not_found} -> {:error, :not_found}
         end
@@ -871,14 +910,14 @@ defmodule Arca.ThreadStorage do
   end
 
   @doc "A message's `payload` decoded (`%{}` when none)."
-  @spec payload(Message.t()) :: map()
-  def payload(%Message{payload: nil}), do: %{}
-  def payload(%Message{payload: json}), do: decode_map(json)
+  @spec payload(map()) :: map()
+  def payload(%{payload: nil}), do: %{}
+  def payload(%{payload: json}), do: decode_map(json, "payload")
 
   @doc "A message's `resolution` decoded (`%{}` when none)."
-  @spec resolution(Message.t()) :: map()
-  def resolution(%Message{resolution: nil}), do: %{}
-  def resolution(%Message{resolution: json}), do: decode_map(json)
+  @spec resolution(map()) :: map()
+  def resolution(%{resolution: nil}), do: %{}
+  def resolution(%{resolution: json}), do: decode_map(json, "resolution")
 
   # ---------------------------------------------------------------------------
   # Restart recovery / retention
@@ -889,16 +928,17 @@ defmodule Arca.ThreadStorage do
   `cutoff` — messages and attachment blobs included. The context is the
   athanor's (retention walks each with an internal context).
   """
-  @spec delete_before(Cyfr.Actor.t(), DateTime.t()) ::
+  @spec delete_before(Prima.Actor.t(), DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
-  def delete_before(%Cyfr.Actor{athanor_id: athanor_id} = actor, %DateTime{} = cutoff)
+  def delete_before(%Prima.Actor{athanor_id: athanor_id} = actor, %DateTime{} = cutoff)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ThreadStorage.delete_before", fn ->
       delete_before_rows(actor, cutoff)
     end)
+    |> Arca.Data.project()
   end
 
-  def delete_before(%Cyfr.Actor{}, _cutoff), do: {:error, :no_athanor}
+  def delete_before(%Prima.Actor{}, _cutoff), do: {:error, :no_athanor}
 
   defp delete_before_rows(actor, cutoff) do
     ids = Repo.all(from(c in stale_before(actor, cutoff), select: c.id))
@@ -946,10 +986,10 @@ defmodule Arca.ThreadStorage do
   # The retention window both verbs speak, scoped the one way this module
   # scopes: the athanor's threads whose last activity is older than
   # `cutoff`, a thread holding an open turn never among them.
-  defp stale_before(%Cyfr.Actor{athanor_id: athanor_id} = actor, cutoff) do
+  defp stale_before(%Prima.Actor{athanor_id: athanor_id} = actor, cutoff) do
     open =
       from(t in Arca.Schemas.Turn,
-        where: t.athanor_id == ^athanor_id and t.status in ^Arca.TurnStorage.open_statuses(),
+        where: t.athanor_id == ^athanor_id and t.status in ^Prima.TurnState.open_statuses(),
         select: t.thread_id
       )
 
@@ -964,16 +1004,17 @@ defmodule Arca.ThreadStorage do
   count, sharing its rule: a thread with a running turn is never
   touched.
   """
-  @spec count_before(Cyfr.Actor.t(), DateTime.t()) ::
+  @spec count_before(Prima.Actor.t(), DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
-  def count_before(%Cyfr.Actor{athanor_id: athanor_id} = actor, %DateTime{} = cutoff)
+  def count_before(%Prima.Actor{athanor_id: athanor_id} = actor, %DateTime{} = cutoff)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ThreadStorage.count_before", fn ->
       {:ok, Repo.aggregate(stale_before(actor, cutoff), :count)}
     end)
+    |> Arca.Data.project()
   end
 
-  def count_before(%Cyfr.Actor{}, _cutoff), do: {:error, :no_athanor}
+  def count_before(%Prima.Actor{}, _cutoff), do: {:error, :no_athanor}
 
   # ---------------------------------------------------------------------------
   # JSON
@@ -983,10 +1024,29 @@ defmodule Arca.ThreadStorage do
   defp encode_json(value) when is_binary(value), do: value
   defp encode_json(value), do: Jason.encode!(value)
 
-  defp decode_map(json) do
-    case Cyfr.Json.decode_or(json, %{}, "Arca.ThreadStorage.decode_map") do
+  defp decode_map(json, field) do
+    case decode_stored(json, %{}, field) do
       %{} = map -> map
       _ -> %{}
+    end
+  end
+
+  # A stored JSON column that does not decode reads as its default. The
+  # line names the column and its size, never its bytes.
+  defp decode_stored(nil, default, _field), do: default
+  defp decode_stored("", default, _field), do: default
+
+  defp decode_stored(json, default, field) when is_binary(json) do
+    case Prima.Json.decode(json) do
+      {:ok, value} ->
+        value
+
+      {:error, :invalid_json} ->
+        Logger.warning(
+          "[Arca.ThreadStorage] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
+        )
+
+        default
     end
   end
 end

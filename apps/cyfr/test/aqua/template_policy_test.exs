@@ -13,7 +13,6 @@ defmodule Prism.AquaTemplatePolicyTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.Catalog
   alias Aqua.Hands
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
@@ -31,7 +30,7 @@ defmodule Prism.AquaTemplatePolicyTest do
              Enum.join(unreachable, "\n")
   end
 
-  # The "execution" entries come from Cyfr.Execution.MCP's registered tool.
+  # The "execution" entries come from Crucible.Provider's registered tool.
   test "the capability matrix offers reachable actions, with their real kinds" do
     catalog = Map.new(PrismWeb.AquaLive.Catalog.enumerate_tool_actions())
 
@@ -50,7 +49,7 @@ defmodule Prism.AquaTemplatePolicyTest do
     roles = Path.join(@seed, Compendium.AquaPath.roles_dirname())
 
     files =
-      [Path.join(@seed, "aqua.md") | Cyfr.Test.SourceTree.files!(Path.join(roles, "*.md"))]
+      [Path.join(@seed, "aqua.md") | Prima.Test.SourceTree.files!(Path.join(roles, "*.md"))]
 
     for path <- files,
         name = Path.basename(path, ".md"),
@@ -84,5 +83,5 @@ defmodule Prism.AquaTemplatePolicyTest do
     end
   end
 
-  defp refused_action?(tool, action), do: Catalog.in_chain_refused?(tool, action)
+  defp refused_action?(tool, action), do: Grimoire.in_chain_refused?(tool, action)
 end

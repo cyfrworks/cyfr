@@ -12,9 +12,9 @@ defmodule Sanctum.Consent.Normalize do
   # are errors). Every function takes the error tag its caller reports
   # under, so `ShapeDigest` and `CommitDigest` keep their own taxonomies.
 
-  alias Cyfr.ComponentRef
+  alias Prima.ComponentRef
 
-  # Durations must be exact here. Cyfr.Limits.parse_duration/1 tolerates
+  # Durations must be exact here. Prima.Limits.parse_duration/1 tolerates
   # repeated trailing suffixes ("5mm" parses as 5 minutes) — harmless for a
   # timeout, unacceptable for a digest input, where it would give one
   # duration two spellings.
@@ -27,8 +27,8 @@ defmodule Sanctum.Consent.Normalize do
     end
   end
 
-  def only_keys(other, _allowed, tag),
-    do: {:error, {tag, :input, "expected a map, got: #{inspect(other)}"}}
+  def only_keys(_other, _allowed, tag),
+    do: {:error, {tag, :input, "expected a map"}}
 
   def enum(map, key, allowed, tag) do
     case Map.get(map, key) do
@@ -51,8 +51,8 @@ defmodule Sanctum.Consent.Normalize do
         {:ok, value}
       end
     else
-      {:ok, other} ->
-        {:error, {tag, key, "must be a component ref string, got: #{inspect(other)}"}}
+      {:ok, _other} ->
+        {:error, {tag, key, "must be a component ref string"}}
 
       {:error, reason} ->
         {:error, {tag, key, "is not a valid component ref: #{reason}"}}
@@ -63,7 +63,7 @@ defmodule Sanctum.Consent.Normalize do
     case Map.get(map, key) do
       nil -> {:ok, nil}
       value when is_binary(value) and value != "" -> {:ok, value}
-      other -> {:error, {tag, key, "must be a non-empty string, got: #{inspect(other)}"}}
+      _other -> {:error, {tag, key, "must be a non-empty string"}}
     end
   end
 
@@ -86,8 +86,8 @@ defmodule Sanctum.Consent.Normalize do
           {:error, {tag, key, "must be a list of non-empty strings"}}
         end
 
-      other ->
-        {:error, {tag, key, "must be a list, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, key, "must be a list"}}
     end
   end
 
@@ -135,8 +135,8 @@ defmodule Sanctum.Consent.Normalize do
           error -> error
         end
 
-      other ->
-        {:error, {tag, key, "must be a list, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, key, "must be a list"}}
     end
   end
 
@@ -150,8 +150,8 @@ defmodule Sanctum.Consent.Normalize do
     end
   end
 
-  defp normalize_need(other, key, tag) do
-    {:error, {tag, key, "each need must be a map, got: #{inspect(other)}"}}
+  defp normalize_need(_other, key, tag) do
+    {:error, {tag, key, "each need must be a map"}}
   end
 
   @doc false
@@ -168,8 +168,8 @@ defmodule Sanctum.Consent.Normalize do
           end
         end)
 
-      other ->
-        {:error, {tag, key, "must be a map, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, key, "must be a map"}}
     end
   end
 
@@ -229,10 +229,222 @@ defmodule Sanctum.Consent.Normalize do
           end
         end
 
-      other ->
-        {:error, {tag, key, "must be a map, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, key, "must be a map"}}
     end
   end
+
+  @doc false
+  # The origins a grant admits: a non-empty list of distinct
+  # `Prima.Origin` values, answered as their wire spellings in the enum's
+  # order, so two lists naming the same origins are one input.
+  def origins(map, key, tag) do
+    case Map.fetch(map, key) do
+      {:ok, [_ | _] = origins} ->
+        if Enum.all?(origins, &Prima.Origin.origin?/1) do
+          if length(Enum.uniq(origins)) == length(origins),
+            do: {:ok, Prima.Origin.to_wire_list(origins)},
+            else: {:error, {tag, key, "names an origin twice"}}
+        else
+          {:error,
+           {tag, key, "must name only origins: #{Enum.join(Prima.Origin.spellings(), ", ")}"}}
+        end
+
+      {:ok, []} ->
+        {:error, {tag, key, "must name at least one origin"}}
+
+      {:ok, _other} ->
+        {:error, {tag, key, "must be a list of origins"}}
+
+      :error ->
+        {:error, {tag, key, "is required"}}
+    end
+  end
+
+  # The kinds a subset may name, each with the fields it narrows; `tools`
+  # and the limits are their own shapes below.
+  @subset_sets %{
+    "egress" => ~w(domains methods schemes private_ips),
+    "storage" => ~w(paths actions)
+  }
+  @subset_kinds ~w(egress storage tools limits)
+  @limit_integers ~w(max_memory_bytes max_request_size max_response_size max_concurrent_tasks)
+  @limit_durations ~w(timeout batch_timeout)
+
+  @doc false
+  # A narrowing, per consent-graph node: a record of the kinds whose
+  # enforcement point can check a subset (`egress`, `storage`, `tools`,
+  # `limits`), each naming only the fields it narrows. The shape alone is
+  # checked here; whether each value lies inside the ask and the ceiling is
+  # the builder's, which knows the ask (`Sanctum.Consent.BlobBuilder`).
+  #
+  # Sets are sorted and deduplicated. A field left out keeps its ask and is
+  # absent here too, while an explicit empty set grants none and stays an
+  # empty set, so the two never read alike. A kind or node that names no
+  # field names nothing and is dropped, so a decision spelled with empty
+  # records is the same input as one without them. Answers `%{}` when the
+  # map carries no subset.
+  def subset(map, key, tag) do
+    case Map.get(map, key, %{}) do
+      subset when is_map(subset) and not is_struct(subset) ->
+        subset
+        |> Enum.sort()
+        |> Enum.reduce_while({:ok, %{}}, fn {node, record}, {:ok, acc} ->
+          with {:ok, node} <- subset_node_ref(node, key, tag),
+               {:ok, normalized} <- subset_record(node, record, tag) do
+            {:cont, {:ok, put_named(acc, node, normalized)}}
+          else
+            error -> {:halt, error}
+          end
+        end)
+
+      _other ->
+        {:error, {tag, key, "must be a map from consent-graph node to its narrowing"}}
+    end
+  end
+
+  defp subset_node_ref(node, key, tag) when is_binary(node) do
+    case component_ref(%{node: node}, :node, tag) do
+      {:ok, node} -> {:ok, node}
+      {:error, _} -> {:error, {tag, key, "names a node that is not a name-level component ref"}}
+    end
+  end
+
+  defp subset_node_ref(_node, key, tag),
+    do: {:error, {tag, key, "names a node that is not a name-level component ref"}}
+
+  defp subset_record(node, record, tag) when is_map(record) and not is_struct(record) do
+    record
+    |> Enum.sort()
+    |> Enum.reduce_while({:ok, %{}}, fn {kind, value}, {:ok, acc} ->
+      case subset_kind(node, kind, value, tag) do
+        {:ok, normalized} -> {:cont, {:ok, put_named(acc, kind, normalized)}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp subset_record(node, _record, tag),
+    do: {:error, {tag, :subset, "#{node} must be a record of resource kinds"}}
+
+  defp subset_kind(node, kind, value, tag) when is_map_key(@subset_sets, kind),
+    do: subset_sets(node, kind, value, Map.fetch!(@subset_sets, kind), tag)
+
+  defp subset_kind(node, "tools", value, tag) do
+    case tool_actions(%{tools: value}, :tools, tag) do
+      {:ok, tools} -> {:ok, tools}
+      {:error, {^tag, :tools, why}} -> {:error, {tag, :subset, "#{node} tools #{why}"}}
+    end
+  end
+
+  defp subset_kind(node, "limits", value, tag), do: subset_limits(node, value, tag)
+
+  defp subset_kind(node, kind, _value, tag) when is_binary(kind) do
+    if kind in Enum.map(Prima.ConsentPreview.kinds(), &Atom.to_string/1) do
+      {:error,
+       {tag, :subset, "#{node}: #{kind} cannot be narrowed; it is granted whole or not at all"}}
+    else
+      {:error,
+       {tag, :subset, "#{node} names a kind that is not one of #{Enum.join(@subset_kinds, ", ")}"}}
+    end
+  end
+
+  defp subset_kind(node, _kind, _value, tag),
+    do:
+      {:error,
+       {tag, :subset, "#{node} names a kind that is not one of #{Enum.join(@subset_kinds, ", ")}"}}
+
+  defp subset_sets(node, kind, record, fields, tag)
+       when is_map(record) and not is_struct(record) do
+    record
+    |> Enum.sort()
+    |> Enum.reduce_while({:ok, %{}}, fn {field, value}, {:ok, acc} ->
+      if field in fields do
+        case string_set(%{field => value}, field, tag) do
+          {:ok, set} ->
+            {:cont, {:ok, Map.put(acc, field, set)}}
+
+          {:error, {^tag, _field, why}} ->
+            {:halt, {:error, {tag, :subset, "#{node} #{kind}.#{field} #{why}"}}}
+        end
+      else
+        {:halt,
+         {:error, {tag, :subset, "#{node} #{kind} narrows only #{Enum.join(fields, ", ")}"}}}
+      end
+    end)
+  end
+
+  defp subset_sets(node, kind, _record, _fields, tag),
+    do: {:error, {tag, :subset, "#{node} #{kind} must be a record"}}
+
+  # The limits in `Prima.Limits`' own vocabulary: four non-negative
+  # integers, two exact durations and the rate limit's `requests` and
+  # `window`, each optional.
+  defp subset_limits(node, record, tag) when is_map(record) and not is_struct(record) do
+    record
+    |> Enum.sort()
+    |> Enum.reduce_while({:ok, %{}}, fn {field, value}, {:ok, acc} ->
+      case subset_limit(field, value) do
+        {:ok, normalized} ->
+          {:cont, {:ok, put_named(acc, field, normalized)}}
+
+        {:error, why} ->
+          {:halt, {:error, {tag, :subset, "#{node} limits.#{limit_name(field)} #{why}"}}}
+      end
+    end)
+  end
+
+  defp subset_limits(node, _record, tag),
+    do: {:error, {tag, :subset, "#{node} limits must be a record"}}
+
+  defp subset_limit(field, value) when field in @limit_integers do
+    if is_integer(value) and value >= 0,
+      do: {:ok, value},
+      else: {:error, "must be a non-negative integer"}
+  end
+
+  defp subset_limit(field, value) when field in @limit_durations, do: exact_duration(value)
+
+  defp subset_limit("rate_limit", record) when is_map(record) and not is_struct(record) do
+    Enum.reduce_while(Enum.sort(record), {:ok, %{}}, fn
+      {"requests", requests}, {:ok, acc} when is_integer(requests) and requests >= 0 ->
+        {:cont, {:ok, Map.put(acc, "requests", requests)}}
+
+      {"requests", _requests}, _acc ->
+        {:halt, {:error, "requests must be a non-negative integer"}}
+
+      {"window", window}, {:ok, acc} ->
+        case exact_duration(window) do
+          {:ok, window} -> {:cont, {:ok, Map.put(acc, "window", window)}}
+          {:error, why} -> {:halt, {:error, "window " <> why}}
+        end
+
+      {_other, _value}, _acc ->
+        {:halt, {:error, "names only requests and window"}}
+    end)
+  end
+
+  defp subset_limit("rate_limit", _value), do: {:error, "must be a record of requests and window"}
+
+  defp subset_limit(_field, _value),
+    do:
+      {:error,
+       "is not a limit; the limits are #{Enum.map_join(Prima.Limits.fields(), ", ", &Atom.to_string/1)}"}
+
+  defp exact_duration(value) when is_binary(value) do
+    if Regex.match?(@duration_re, value),
+      do: {:ok, value},
+      else: {:error, "must be an exact duration like \"30s\" or \"5m\""}
+  end
+
+  defp exact_duration(_value), do: {:error, "must be an exact duration like \"30s\" or \"5m\""}
+
+  defp limit_name(field) when is_binary(field) and byte_size(field) <= 64, do: field
+  defp limit_name(_field), do: "(unnamed)"
+
+  # A record that names nothing is left out, so it reads as the ask.
+  defp put_named(map, _key, empty) when is_map(empty) and map_size(empty) == 0, do: map
+  defp put_named(map, key, value), do: Map.put(map, key, value)
 
   @doc false
   def put_optional(map, _key, nil), do: map

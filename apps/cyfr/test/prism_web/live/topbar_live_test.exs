@@ -9,7 +9,7 @@ defmodule PrismWeb.TopbarLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Sanctum.Tenancy.Athanors
 
@@ -18,6 +18,21 @@ defmodule PrismWeb.TopbarLiveTest do
 
   # The indicators the bar has been told to reload but has not reloaded yet.
   defp pending(bar), do: :sys.get_state(bar.pid).socket.assigns.refresh_pending
+
+  # The indicators marked once the bar has handled `events`, read before
+  # anything else reaches it. The bar is held while the events and the read
+  # queue behind one another, so the refresh timer the first event arms
+  # cannot fire between them however slowly this process is scheduled.
+  defp pending_after(bar, events) do
+    ref = make_ref()
+    true = :erlang.suspend_process(bar.pid)
+    for event <- events, do: send(bar.pid, event)
+    # What `:sys.get_state/1` sends, queued here behind the events.
+    send(bar.pid, {:system, {self(), ref}, :get_state})
+    true = :erlang.resume_process(bar.pid)
+    assert_receive {^ref, {:ok, state}}, 30_000
+    state.socket.assigns.refresh_pending
+  end
 
   test "one athanor: no list, but New group… — which creates and opens the group", %{conn: conn} do
     alice = test_user()
@@ -51,13 +66,13 @@ defmodule PrismWeb.TopbarLiveTest do
     render_click(bar, "toggle_popover", %{"name" => "athanors"})
     assert render(bar) =~ "Bells"
 
-    # A row opens the estate's chat; the small link beside it, its AQUA.
+    # A row opens the athanor's chat; the small link beside it, its AQUA.
     route = Athanors.route_slug(group)
     assert has_element?(bar, ~s(a[href="#{PrismWeb.ChatLive.chat_path(route)}"]), "Bells")
     assert has_element?(bar, ~s(a[href="/a/#{route}/aqua"]), "AQUA")
 
     # something happens in a FOLLOWED thread of the group while another
-    # estate is in focus: a badge. The creator follows their own thread.
+    # athanor is in focus: a badge. The creator follows their own thread.
     group_ctx =
       Sanctum.Context.build(
         user_id: alice.user_id,
@@ -86,7 +101,7 @@ defmodule PrismWeb.TopbarLiveTest do
     assert render(bar) == before
   end
 
-  test "the bar follows the page only into an estate the person holds a seat in", %{conn: conn} do
+  test "the bar follows the page only into an athanor the person holds a seat in", %{conn: conn} do
     alice = test_user()
     conn = log_in_user(conn, alice)
     {:ok, group} = Athanors.create_group(alice.user_id, "Seen #{alice.namespace}")
@@ -95,11 +110,11 @@ defmodule PrismWeb.TopbarLiveTest do
     viewing = fn -> :sys.get_state(bar.pid).socket.assigns.viewing end
     assert viewing.() == seated_athanor().id
 
-    send(bar.pid, {:viewing, group.id})
+    send(bar.pid, Cyfr.Bus.Viewing.new(group.id))
     assert viewing.() == group.id
 
     # An id that names no seat of theirs is not followed.
-    send(bar.pid, {:viewing, "ath_nobody"})
+    send(bar.pid, Cyfr.Bus.Viewing.new("ath_nobody"))
     assert viewing.() == group.id
   end
 
@@ -164,7 +179,7 @@ defmodule PrismWeb.TopbarLiveTest do
       )
 
     assert {:ok, _} =
-             Cyfr.Ops.Catalog.call_external("door", ctx, %{
+             Grimoire.call_external("door", ctx, %{
                "action" => "resolve",
                "id" => id,
                "decision" => "reject"
@@ -179,22 +194,25 @@ defmodule PrismWeb.TopbarLiveTest do
     {view, _html} = mount_athanor(conn, "")
     bar = topbar(view)
 
+    # Whatever the mount set off has drained, so no refresh is already due
+    # when the burst lands.
+    wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the mount's refresh to drain")
+
     # Coalesce bursts of telemetry into one reload.
-    for _ <- 1..10, do: send(bar.pid, {:request, %{}, %{}})
-    :sys.get_state(bar.pid)
+    actor = Prima.Actor.in_athanor(seated_athanor().id)
+    burst = for _ <- 1..10, do: Cyfr.Bus.Request.new(actor, :logged)
 
     # All ten have been seen and none has been served — that is the whole
     # claim. The two indicators a request invalidates are marked once.
-    assert pending(bar) == MapSet.new([:requests, :log_stats])
+    assert pending_after(bar, burst) == MapSet.new([:requests, :log_stats])
 
     # One timer drains the set, and only `:do_refresh` empties it.
     wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the coalesced refresh to drain")
 
     # And the window re-arms: a burst after a drain is coalesced too, rather
     # than the bar going unthrottled or silent for the rest of the session.
-    for _ <- 1..5, do: send(bar.pid, {:execution_started, %{}, %{}})
-    :sys.get_state(bar.pid)
-    assert pending(bar) == MapSet.new([:executions])
+    burst = for _ <- 1..5, do: Cyfr.Bus.Execution.new(actor, :started)
+    assert pending_after(bar, burst) == MapSet.new([:executions])
 
     wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the second burst to drain")
   end

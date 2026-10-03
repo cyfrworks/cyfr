@@ -13,6 +13,8 @@ defmodule Compendium.Component do
   alias Sanctum.Context
   alias Compendium.Registry
 
+  require Logger
+
   @doc """
   Inspect a component by reference.
 
@@ -87,8 +89,7 @@ defmodule Compendium.Component do
       {:ok, component, ref} ->
         canonical_ref = canonical_ref(ref)
 
-        manifest = component[:manifest] || component["manifest"] || %{}
-        manifest = decode_manifest(manifest)
+        manifest = decode_manifest(component[:manifest] || component["manifest"], canonical_ref)
 
         needs = declared_needs(manifest)
         deps = extract_dependency_refs(manifest)
@@ -133,14 +134,18 @@ defmodule Compendium.Component do
   carrying the actually-resolved version — one registry lookup, whether
   the ref is pinned (`Registry.get/5`) or versionless
   (`Registry.get_latest/4`, whose row already carries the manifest).
-  Every error — malformed reference, not found, storage fault — is a
-  human-readable `{:error, binary}`, never a raise.
+  A component the registry does not hold is
+  `{:error, {:not_found, {:component, reference}}}`; a malformed reference
+  or a storage fault is a human-readable `{:error, binary}`. Nothing
+  raises.
 
   The one resolver: the MCP tool modules delegate here
-  (`Compendium.MCP.Shared`) and `Compendium.Resolver` is its
-  string-in/string-out adapter, so no caller and no surface can drift.
+  (`Compendium.Providers.Shared`) and `Compendium.Resolver` is its
+  string-in adapter, so no caller and no surface can drift.
   """
-  @spec resolve_component(Context.t(), term()) :: {:ok, map(), map()} | {:error, String.t()}
+  @spec resolve_component(Context.t(), term()) ::
+          {:ok, map(), map()}
+          | {:error, {:not_found, {:component, String.t()}} | String.t()}
   def resolve_component(%Context{} = ctx, reference) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->
@@ -162,10 +167,10 @@ defmodule Compendium.Component do
              %{namespace: namespace, name: name, version: resolved_version, type: resolved_type}}
 
           {:error, :not_found} ->
-            {:error, "Component not found: #{reference}"}
+            {:error, {:not_found, {:component, reference}}}
 
           {:error, reason} ->
-            {:error, "Failed to resolve component #{reference}: #{inspect(reason)}"}
+            {:error, "Failed to resolve component #{reference}: #{Grimoire.render(reason)}"}
         end
 
       {:error, reason} ->
@@ -177,7 +182,7 @@ defmodule Compendium.Component do
   Parse a component reference — canonical (`type:namespace.name:version`)
   or the flexible short forms (`c:local.tool`) — into
   `{:ok, namespace, name, version, type}` for registry lookup. The one
-  grammar for every resolver (`Cyfr.ComponentRef.normalize_flexible/1`,
+  grammar for every resolver (`Prima.ComponentRef.normalize_flexible/1`,
   fields validated); the namespace doubles as the publisher filter, and
   version may be nil.
   """
@@ -185,8 +190,8 @@ defmodule Compendium.Component do
           {:ok, String.t(), String.t(), String.t() | nil, String.t() | nil}
           | {:error, String.t()}
   def parse_reference(reference) when is_binary(reference) do
-    case Cyfr.ComponentRef.normalize_flexible(reference) do
-      {:ok, %Cyfr.ComponentRef{type: type, namespace: namespace, name: name, version: version}} ->
+    case Prima.ComponentRef.normalize_flexible(reference) do
+      {:ok, %Prima.ComponentRef{type: type, namespace: namespace, name: name, version: version}} ->
         {:ok, namespace, name, version, type}
 
       {:error, reason} ->
@@ -197,7 +202,7 @@ defmodule Compendium.Component do
   def parse_reference(_), do: {:error, "Reference must be a string"}
 
   defp canonical_ref(ref) do
-    Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
+    Prima.ComponentRef.to_string(%Prima.ComponentRef{
       type: ref.type,
       namespace: ref.namespace,
       name: ref.name,
@@ -210,7 +215,8 @@ defmodule Compendium.Component do
   # ============================================================================
 
   defp maybe_enrich_with_dependencies(ctx, component, result) do
-    manifest = decode_manifest(component[:manifest] || component["manifest"])
+    manifest =
+      decode_manifest(component[:manifest] || component["manifest"], result["component_ref"])
 
     static_deps = get_in(manifest, ["dependencies", "static"]) || []
     has_dynamic = Compendium.DependencyResolver.has_dynamic_deps?(manifest)
@@ -249,14 +255,25 @@ defmodule Compendium.Component do
     end)
   end
 
-  defdelegate decode_manifest(value), to: Cyfr.Manifest, as: :decode
+  # A manifest that does not decode declares nothing. The line names the
+  # component, never the manifest's bytes.
+  defp decode_manifest(value, ref) do
+    case Prima.Manifest.decode_strict(value) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Compendium.Component] manifest malformed: #{ref}")
+        %{}
+    end
+  end
 
   # ============================================================================
   # Private — Setup Plan Helpers
   # ============================================================================
 
   defp declared_needs(manifest) do
-    Compendium.Manifest.Needs.from_manifest(manifest) || []
+    Prima.Manifest.Needs.from_manifest(manifest) || []
   end
 
   defp extract_dependency_refs(component) do

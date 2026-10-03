@@ -92,13 +92,13 @@ defmodule Compendium.OCI.Reference do
   end
 
   @doc """
-  Build an OCI reference from a `Cyfr.ComponentRef` and a registry hostname.
+  Build an OCI reference from a `Prima.ComponentRef` and a registry hostname.
 
   Maps the CYFR convention: `<registry>/<publisher>/<type>s/<name>:<version>`
 
   ## Examples
 
-      iex> component_ref = %Cyfr.ComponentRef{type: "catalyst", namespace: "alice", name: "claude", version: "0.1.0"}
+      iex> component_ref = %Prima.ComponentRef{type: "catalyst", namespace: "alice", name: "claude", version: "0.1.0"}
       iex> Compendium.OCI.Reference.from_component_ref(component_ref, "registry.cyfr.run")
       {:ok, %Compendium.OCI.Reference{
         registry: "registry.cyfr.run",
@@ -106,9 +106,9 @@ defmodule Compendium.OCI.Reference do
         tag: "0.1.0"
       }}
   """
-  @spec from_component_ref(Cyfr.ComponentRef.t(), String.t()) ::
+  @spec from_component_ref(Prima.ComponentRef.t(), String.t()) ::
           {:ok, t()} | {:error, String.t()}
-  def from_component_ref(%Cyfr.ComponentRef{} = cref, registry) when is_binary(registry) do
+  def from_component_ref(%Prima.ComponentRef{} = cref, registry) when is_binary(registry) do
     repository =
       "#{cref.namespace}/#{Compendium.ComponentPath.type_plural(cref.type)}/#{cref.name}"
 
@@ -121,7 +121,7 @@ defmodule Compendium.OCI.Reference do
   end
 
   @doc """
-  Convert an OCI reference back to a `Cyfr.ComponentRef`.
+  Convert an OCI reference back to a `Prima.ComponentRef`.
 
   Expects the CYFR repository convention: `<publisher>/<type>s/<name>`
 
@@ -129,9 +129,9 @@ defmodule Compendium.OCI.Reference do
 
       iex> ref = %Compendium.OCI.Reference{registry: "registry.cyfr.run", repository: "alice/catalysts/claude", tag: "0.1.0"}
       iex> Compendium.OCI.Reference.to_component_ref(ref)
-      {:ok, %Cyfr.ComponentRef{type: "catalyst", namespace: "alice", name: "claude", version: "0.1.0"}}
+      {:ok, %Prima.ComponentRef{type: "catalyst", namespace: "alice", name: "claude", version: "0.1.0"}}
   """
-  @spec to_component_ref(t()) :: {:ok, Cyfr.ComponentRef.t()} | {:error, String.t()}
+  @spec to_component_ref(t()) :: {:ok, Prima.ComponentRef.t()} | {:error, String.t()}
   def to_component_ref(%__MODULE__{repository: repo, tag: tag, digest: digest}) do
     version = tag || digest
 
@@ -139,9 +139,9 @@ defmodule Compendium.OCI.Reference do
       [publisher, type_plural, name] ->
         type = Compendium.ComponentPath.singular(type_plural)
 
-        if type in Cyfr.ComponentRef.valid_types() do
+        if type in Prima.ComponentRef.valid_types() do
           {:ok,
-           %Cyfr.ComponentRef{
+           %Prima.ComponentRef{
              type: type,
              namespace: publisher,
              name: name,

@@ -34,7 +34,7 @@ func joinTypeShorthand(args []string) []string {
 // string format expected by the Opus executor.
 //
 // The CLI does minimal input normalization only — full parsing and validation
-// is handled server-side by Cyfr.ComponentRef.
+// is handled server-side by Prima.ComponentRef.
 //
 // Normalizations performed:
 //   - --type flag injection when ref has no type prefix

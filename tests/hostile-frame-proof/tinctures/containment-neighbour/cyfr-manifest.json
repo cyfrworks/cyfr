@@ -1,0 +1,10 @@
+{
+  "name": "containment-neighbour",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "A second private tincture: the sibling frame and the other private version of the containment proof.",
+  "tincture": {
+    "entry": "index.html"
+  }
+}

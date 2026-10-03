@@ -10,7 +10,7 @@ defmodule Emissary.MCP do
 
   ## Protocol Support
 
-  Implements MCP #{Emissary.MCP.Protocol.version()} with:
+  Implements MCP #{Prima.MCP.Protocol.version()} with:
   - JSON-RPC 2.0 message format, one message per request — never a batch
   - Streamable HTTP transport, POST only
   - Per-request protocol version and client capabilities in `params._meta`;
@@ -24,7 +24,8 @@ defmodule Emissary.MCP do
 
   """
 
-  alias Emissary.MCP.{Message, Router}
+  alias Emissary.MCP.Router
+  alias Prima.MCP.Message
   alias Sanctum.Context
 
   @doc """
@@ -34,7 +35,7 @@ defmodule Emissary.MCP do
   `{:ok, result, id}`, `:ok` for a notification, or `{:error, code, message}`.
 
   There is no list-of-messages clause. The specification requires the POST body
-  to be a single request or notification, and `EmissaryWeb.MCPController`
+  to be a single request or notification, and `Emissary.Web.MCPController`
   rejects a batch before it reaches here.
   """
   def handle_message(%Context{} = ctx, params) when is_map(params) do

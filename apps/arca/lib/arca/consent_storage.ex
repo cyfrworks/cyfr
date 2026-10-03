@@ -17,7 +17,9 @@ defmodule Arca.ConsentStorage do
   outside the closed vocabulary, or an activation blob that does not parse,
   drops the profile or refuses the consent rather than guessing. Rows can
   only get that way through a bug or a hand edit, and neither may root an
-  execution.
+  execution. `profile_entries/2` is the same read with nothing dropped: an
+  undecodable profile is present as `%{id: id, status: :corrupt}`, for the
+  readers that must tell a damaged row from an absent one.
   """
 
   import Ecto.Query
@@ -47,6 +49,7 @@ defmodule Arca.ConsentStorage do
           required(:blob_digest) => String.t() | nil,
           required(:resolved_policy) => String.t(),
           required(:activation) => %{String.t() => String.t()},
+          required(:admitted_origins) => [Prima.Origin.t(), ...],
           required(:vault_refs) => [
             %{vault_entry_id: String.t(), binding_digest: String.t()}
           ]
@@ -61,16 +64,25 @@ defmodule Arca.ConsentStorage do
   commit uses to re-verify binding liveness so a `vault.rebind` racing the
   commit rolls the whole revision back. It must return `:ok` or
   `{:error, reason}` and must only read.
+
+  `attrs[:admitted_origins]` is the non-empty list of origins the revision
+  admits (`Prima.Origin` atoms or their wire spellings), stored as their
+  spellings in the enum's order; a revision without it, an empty list, a
+  duplicate or an origin outside the enum is refused `{:error, {:invalid,
+  %{admitted_origins: …}}}` with nothing written. A stored revision whose
+  origins are absent or do not parse does not decode, so no reader meets
+  a revision that admits none.
   """
   @spec insert_revision(map(), [map()], String.t() | nil, keyword()) ::
-          {:ok, Consent.t()} | {:error, term()}
+          {:ok, map()} | {:error, term()}
   def insert_revision(attrs, vault_refs, expected_head, opts \\ []) when is_map(attrs) do
     athanor_id = Map.fetch!(attrs, :athanor_id)
-    row = revision_row(attrs, athanor_id)
 
-    Ecto.Multi.new()
-    |> revision_multi(row, vault_refs, expected_head, athanor_id, opts)
-    |> run_multi(:consent)
+    with {:ok, row} <- revision_row(attrs, athanor_id) do
+      Ecto.Multi.new()
+      |> revision_multi(row, vault_refs, expected_head, athanor_id, opts)
+      |> run_multi(:consent)
+    end
   end
 
   @doc """
@@ -79,21 +91,22 @@ defmodule Arca.ConsentStorage do
   `head_consent_id` is forever NULL.
   """
   @spec mint_profile_with_revision(map(), map(), [map()], keyword()) ::
-          {:ok, Consent.t()} | {:error, term()}
+          {:ok, map()} | {:error, term()}
   def mint_profile_with_revision(profile_attrs, consent_attrs, vault_refs, opts \\ []) do
     athanor_id = Map.fetch!(profile_attrs, :athanor_id)
-    row = revision_row(consent_attrs, athanor_id)
 
-    # Through the schema's changeset, never a raw struct: the label rule
-    # and the kind/status vocabulary are the changeset's, and this is the
-    # one production mint of a profile.
-    Ecto.Multi.new()
-    |> Ecto.Multi.insert(
-      :profile,
-      Arca.Schemas.Profile.changeset(%Arca.Schemas.Profile{}, profile_attrs)
-    )
-    |> revision_multi(row, vault_refs, nil, athanor_id, opts)
-    |> run_multi(:consent)
+    with {:ok, row} <- revision_row(consent_attrs, athanor_id) do
+      # Through the schema's changeset, never a raw struct: the label rule
+      # and the kind/status vocabulary are the changeset's, and this is the
+      # one production mint of a profile.
+      Ecto.Multi.new()
+      |> Ecto.Multi.insert(
+        :profile,
+        Arca.Schemas.Profile.changeset(%Arca.Schemas.Profile{}, profile_attrs)
+      )
+      |> revision_multi(row, vault_refs, nil, athanor_id, opts)
+      |> run_multi(:consent)
+    end
   end
 
   defp revision_row(attrs, athanor_id) do
@@ -105,14 +118,44 @@ defmodule Arca.ConsentStorage do
 
       other ->
         raise ArgumentError,
-              "consent revisions require a blob_digest, got: #{inspect(other)}"
+              "consent revisions require a blob_digest, got: #{Prima.LoggerContext.shape(other)}"
     end
 
-    attrs
-    |> Map.put(:athanor_id, athanor_id)
-    |> Map.put_new(:id, Cyfr.UUID7.generate_id("cons"))
-    |> Map.put_new(:granted_at, DateTime.utc_now())
+    with {:ok, origins} <- admitted_origins(Map.get(attrs, :admitted_origins)) do
+      {:ok,
+       attrs
+       |> Map.put(:athanor_id, athanor_id)
+       |> Map.put(:admitted_origins, origins)
+       |> Map.put_new(:id, Prima.UUID7.generate_id("cons"))
+       |> Map.put_new(:granted_at, DateTime.utc_now())}
+    end
   end
+
+  # The origins a revision admits, as the column stores them: a JSON array
+  # of wire spellings in the enum's order. A revision names them or is not
+  # written.
+  defp admitted_origins(origins) when is_list(origins) do
+    spellings =
+      Enum.map(origins, fn
+        origin when is_atom(origin) and not is_nil(origin) and not is_boolean(origin) ->
+          if Prima.Origin.origin?(origin), do: Prima.Origin.to_wire(origin), else: origin
+
+        spelling ->
+          spelling
+      end)
+
+    case Prima.Origin.parse_list(spellings) do
+      {:ok, parsed} -> {:ok, Jason.encode!(Prima.Origin.to_wire_list(parsed))}
+      {:error, reason} -> {:error, {:invalid, %{admitted_origins: [origin_refusal(reason)]}}}
+    end
+  end
+
+  defp admitted_origins(_origins),
+    do: {:error, {:invalid, %{admitted_origins: ["is a non-empty list of origins"]}}}
+
+  defp origin_refusal(:empty_origins), do: "is a non-empty list of origins"
+  defp origin_refusal(:duplicate_origin), do: "names an origin twice"
+  defp origin_refusal({:unknown_origin, _spelling}), do: "names an origin outside the enum"
 
   defp revision_multi(multi, row, vault_refs, expected_head, athanor_id, opts) do
     ref_rows =
@@ -153,7 +196,7 @@ defmodule Arca.ConsentStorage do
     end)
     |> Ecto.Multi.run(:head, fn _repo, _done ->
       case Arca.ProfileStorage.advance_head(
-             Cyfr.Actor.in_athanor(athanor_id),
+             Prima.Actor.in_athanor(athanor_id),
              row.profile_id,
              expected_head,
              row.id
@@ -179,6 +222,7 @@ defmodule Arca.ConsentStorage do
           {:error, reason}
       end
     end)
+    |> Arca.Data.project()
   end
 
   defp insert_refs([]), do: {0, nil}
@@ -186,16 +230,16 @@ defmodule Arca.ConsentStorage do
   defp insert_refs(rows), do: Arca.Repo.insert_all(ConsentVaultRef, rows)
 
   @doc "The head consent revision of a profile, with its vault refs."
-  # `get_head/2` and `head_profiles_referencing/2` take the `Cyfr.Actor`
+  # `get_head/2` and `head_profiles_referencing/2` take the `Prima.Actor`
   # first and match it in the head, so the athanor comes from the caller;
   # an actor whose athanor is nil or the empty string is
   # `{:error, :no_athanor}` before any query. The two multi writers take
   # attribute maps their caller assembled and stamp no tenant of their
   # own.
-  @spec get_head(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Consent.t(), [ConsentVaultRef.t()]}
+  @spec get_head(Prima.Actor.t(), String.t()) ::
+          {:ok, map(), [map()]}
           | {:error, :no_athanor | :not_found | :no_head | term()}
-  def get_head(%Cyfr.Actor{athanor_id: athanor_id} = actor, profile_id)
+  def get_head(%Prima.Actor{athanor_id: athanor_id} = actor, profile_id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.get_head", fn ->
       with {:ok, profile} <- Arca.ProfileStorage.get(actor, profile_id),
@@ -213,9 +257,10 @@ defmodule Arca.ConsentStorage do
         {:error, reason} -> {:error, reason}
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def get_head(%Cyfr.Actor{}, _profile_id), do: {:error, :no_athanor}
+  def get_head(%Prima.Actor{}, _profile_id), do: {:error, :no_athanor}
 
   @doc """
   Profiles whose **head** revision references a vault entry.
@@ -224,9 +269,9 @@ defmodule Arca.ConsentStorage do
   over-report — a profile that dropped the entry two revisions ago is not
   affected right now.
   """
-  @spec head_profiles_referencing(Cyfr.Actor.t(), String.t()) ::
+  @spec head_profiles_referencing(Prima.Actor.t(), String.t()) ::
           {:ok, [String.t()]} | {:error, term()}
-  def head_profiles_referencing(%Cyfr.Actor{athanor_id: athanor_id}, vault_entry_id)
+  def head_profiles_referencing(%Prima.Actor{athanor_id: athanor_id}, vault_entry_id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.head_profiles_referencing", fn ->
       ids =
@@ -244,9 +289,162 @@ defmodule Arca.ConsentStorage do
 
       {:ok, ids}
     end)
+    |> Arca.Data.project()
   end
 
-  def head_profiles_referencing(%Cyfr.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
+  def head_profiles_referencing(%Prima.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
+
+  @doc """
+  The vault entries of the actor's athanor that some profile's **head**
+  revision references, each id once: `head_profiles_referencing/2` for
+  every entry in one query.
+  """
+  @spec head_referenced_entries(Prima.Actor.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def head_referenced_entries(%Prima.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.head_referenced_entries", fn ->
+      ids =
+        from(r in ConsentVaultRef,
+          join: c in Consent,
+          on: c.id == r.consent_id and c.athanor_id == r.athanor_id,
+          join: p in Arca.Schemas.Profile,
+          on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id,
+          distinct: true,
+          select: r.vault_entry_id
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.all()
+
+      {:ok, ids}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def head_referenced_entries(%Prima.Actor{}), do: {:error, :no_athanor}
+
+  @typedoc "An active profile and its head revision, as `active_heads/2` answers them."
+  @type active_head :: %{
+          profile: Prima.Authority.RootSelect.profile_summary(),
+          consent: consent()
+        }
+
+  @doc """
+  The first `limit:` `active` profiles of the actor's athanor, in profile-id
+  order, each with its **head** revision and that revision's vault refs,
+  decoded as `profiles/2` and `head_consent/2` decode them: the grants the
+  athanor holds now, never more than `limit` of them.
+
+  The third element says whether more active heads stand past the limit:
+  the read fetches one row beyond it to know, and answers that row's
+  presence rather than a count it would need another query for.
+
+  Two queries: the profiles with their heads, then the refs of those
+  heads by consent id. A revision and its refs commit in one transaction
+  and never change, so the second query reads exactly the first one's
+  revisions whatever advances in between. A profile with no head, or a
+  row that does not decode, is dropped, as `profiles/2` drops one: it
+  roots nothing, and it still counts toward the limit, which bounds the
+  rows read. An actor whose athanor is nil or the empty string is
+  `{:error, :no_athanor}` before any query.
+  """
+  @spec active_heads(Prima.Actor.t(), limit: pos_integer()) ::
+          {:ok, [active_head()], truncated? :: boolean()} | {:error, :no_athanor | term()}
+  def active_heads(actor, opts)
+
+  def active_heads(%Prima.Actor{athanor_id: athanor_id}, limit: limit)
+      when is_binary(athanor_id) and athanor_id != "" and is_integer(limit) and limit > 0 do
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.active_heads", fn ->
+      rows =
+        from(p in Arca.Schemas.Profile,
+          join: c in Consent,
+          on: c.id == p.head_consent_id and c.athanor_id == p.athanor_id,
+          where: p.status == "active",
+          order_by: p.id,
+          limit: ^(limit + 1),
+          select: {p, c}
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.all()
+
+      heads = Enum.take(rows, limit)
+      refs = refs_by_consent(athanor_id, Enum.map(heads, fn {_profile, c} -> c.id end))
+
+      decoded =
+        Enum.flat_map(heads, fn {profile, consent} ->
+          with %{} = summary <- profile_summary(profile),
+               {:ok, head} <- decode_consent(consent, Map.get(refs, consent.id, [])) do
+            [%{profile: summary, consent: head}]
+          else
+            _undecodable -> []
+          end
+        end)
+
+      {:ok, decoded, length(rows) > limit}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def active_heads(%Prima.Actor{}, limit: limit) when is_integer(limit) and limit > 0,
+    do: {:error, :no_athanor}
+
+  @typedoc "One active head as the stored-grant check reads it (`active_head_policies/2`)."
+  @type head_policy :: %{
+          athanor_id: String.t(),
+          profile_id: String.t(),
+          source_ref: String.t(),
+          revision: non_neg_integer(),
+          resolved_policy: String.t()
+        }
+
+  @doc """
+  One page of every athanor's active heads, for the boot check of stored
+  grants (`Sanctum.Consent.StoredGrants`): up to `limit` rows in profile-id
+  order after `after_id` (`nil` for the first page), each naming its own
+  athanor, the profile and its source, and the head's revision and
+  resolved policy as stored. Nothing is decoded or checked here: the
+  reader says what a policy grants.
+  """
+  @spec active_head_policies(String.t() | nil, pos_integer()) ::
+          {:ok, [head_policy()]} | {:error, term()}
+  # arca:unscoped-ok the stored-grant check walks every athanor's active
+  # heads by design, a page at a time, at boot; each row names its own
+  # athanor, and what the check finds is announced to that athanor alone.
+  def active_head_policies(after_id, limit)
+      when (is_nil(after_id) or is_binary(after_id)) and is_integer(limit) and limit > 0 do
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.active_head_policies", fn ->
+      page =
+        from(p in Arca.Schemas.Profile,
+          join: c in Consent,
+          on: c.id == p.head_consent_id and c.athanor_id == p.athanor_id,
+          where: p.status == "active",
+          order_by: p.id,
+          limit: ^limit,
+          select: %{
+            athanor_id: p.athanor_id,
+            profile_id: p.id,
+            source_ref: p.source_ref,
+            revision: c.revision,
+            resolved_policy: c.resolved_policy
+          }
+        )
+        |> after_profile(after_id)
+        |> Arca.Repo.all()
+
+      {:ok, page}
+    end)
+  end
+
+  defp after_profile(query, nil), do: query
+  defp after_profile(query, after_id), do: where(query, [p], p.id > ^after_id)
+
+  defp refs_by_consent(_athanor_id, []), do: %{}
+
+  defp refs_by_consent(athanor_id, consent_ids) do
+    from(r in ConsentVaultRef, where: r.consent_id in ^consent_ids)
+    |> Arca.QueryHelpers.where_athanor(athanor_id)
+    |> Arca.Repo.all()
+    |> Enum.group_by(& &1.consent_id)
+  end
 
   @doc """
   Candidate profiles for a name-level source ref within the actor's tenant,
@@ -257,11 +455,29 @@ defmodule Arca.ConsentStorage do
   that silently admitted it would root an execution on a value no writer
   of this table can produce.
   """
-  @spec profiles(Cyfr.Actor.t(), String.t()) ::
-          {:ok, [Cyfr.Authority.RootSelect.profile_summary()]} | {:error, term()}
-  def profiles(%Cyfr.Actor{} = actor, source_ref) do
+  @spec profiles(Prima.Actor.t(), String.t()) ::
+          {:ok, [Prima.Authority.RootSelect.profile_summary()]} | {:error, term()}
+  def profiles(%Prima.Actor{} = actor, source_ref) do
+    with {:ok, entries} <- profile_entries(actor, source_ref) do
+      {:ok, Enum.reject(entries, &(&1.status == :corrupt))}
+    end
+  end
+
+  @typedoc "A stored profile whose kind or status is outside the closed vocabulary."
+  @type corrupt_profile :: %{required(:id) => String.t(), required(:status) => :corrupt}
+
+  @doc """
+  `profiles/2` with every row accounted for: each candidate profile
+  decoded as `profiles/2` decodes it, or, when its stored kind or status
+  is outside the closed vocabulary, `%{id: id, status: :corrupt}`. The
+  marker carries nothing that could be selected.
+  """
+  @spec profile_entries(Prima.Actor.t(), String.t()) ::
+          {:ok, [Prima.Authority.RootSelect.profile_summary() | corrupt_profile()]}
+          | {:error, term()}
+  def profile_entries(%Prima.Actor{} = actor, source_ref) do
     with {:ok, rows} <- Arca.ProfileStorage.list_for_source(actor, source_ref) do
-      {:ok, rows |> Enum.map(&profile_summary/1) |> Enum.reject(&is_nil/1)}
+      {:ok, Enum.map(rows, &(profile_summary(&1) || %{id: &1.id, status: :corrupt}))}
     end
   end
 
@@ -270,12 +486,12 @@ defmodule Arca.ConsentStorage do
 
   Decoding fails closed — a stored scope or invoke mode outside the closed
   vocabulary, or an activation blob that does not parse, refuses the
-  consent. `resolved_policy` stays a string: `Cyfr.Authority.Blob.parse/1`
+  consent. `resolved_policy` stays a string: `Prima.Authority.Blob.parse/1`
   is the single fail-closed entry for those bytes and this is not it.
   """
-  @spec head_consent(Cyfr.Actor.t(), String.t()) ::
+  @spec head_consent(Prima.Actor.t(), String.t()) ::
           {:ok, consent()} | {:error, :no_athanor | :not_found | :no_head | term()}
-  def head_consent(%Cyfr.Actor{} = actor, profile_id) do
+  def head_consent(%Prima.Actor{} = actor, profile_id) do
     with {:ok, consent, refs} <- get_head(actor, profile_id) do
       decode_consent(consent, refs)
     end
@@ -303,7 +519,8 @@ defmodule Arca.ConsentStorage do
              "open_inert" => :open_inert,
              "edge_only" => :edge_only
            }),
-         {:ok, activation} <- decode_activation(consent.activation) do
+         {:ok, activation} <- decode_activation(consent.activation),
+         {:ok, origins} <- decode_origins(consent.admitted_origins) do
       {:ok,
        %{
          id: consent.id,
@@ -316,6 +533,7 @@ defmodule Arca.ConsentStorage do
          blob_digest: consent.blob_digest,
          resolved_policy: consent.resolved_policy,
          activation: activation,
+         admitted_origins: origins,
          vault_refs:
            Enum.map(refs, fn r ->
              %{vault_entry_id: r.vault_entry_id, binding_digest: r.binding_digest}
@@ -346,4 +564,17 @@ defmodule Arca.ConsentStorage do
   end
 
   defp decode_activation(_), do: {:error, {:invalid_stored_value, :activation}}
+
+  # A stored list that is absent or does not parse refuses the consent
+  # rather than guessing which origins it admits.
+  defp decode_origins(json) when is_binary(json) do
+    with {:ok, spellings} <- Jason.decode(json),
+         {:ok, origins} <- Prima.Origin.parse_list(spellings) do
+      {:ok, origins}
+    else
+      _ -> {:error, {:invalid_stored_value, :admitted_origins}}
+    end
+  end
+
+  defp decode_origins(_absent), do: {:error, {:invalid_stored_value, :admitted_origins}}
 end

@@ -7,8 +7,8 @@ defmodule Opus.RunnerPoolTest do
   scripted keeper hands the test: the configured number of fresh runners
   spawned ahead and refilled; an idle runner reused for its athanor only,
   a fresh one for another; an idle runner retired at its TTL; a clean
-  completion to idle, an unclean one, an exit, a closed channel and a
-  kill to tainted, released and gone; every busy runner offered a
+  completion to idle, an unclean one, an exit, a closed channel, a closed
+  relay and a kill to tainted, released and gone; every busy runner offered a
   `cancel_child`; a frame from a runner already ended ignored; a keeper
   that refuses runners leaving none in the pool, tainted or otherwise,
   with the pool backing off, refusing a take with the keeper's account
@@ -20,23 +20,11 @@ defmodule Opus.RunnerPoolTest do
 
   import Opus.Test.Wait
 
-  alias Cyfr.RunnerControl
+  alias Prima.RunnerControl
   alias Opus.{RunnerPool, RunnerProcess}
-  alias Opus.Test.ScriptedKeeper
+  alias Opus.Test.{ScriptedHost, ScriptedKeeper}
 
   @service %{service_id: "wrk_local", boot: "boot_pool", host_url: "http://127.0.0.1:9"}
-  @keys %{
-    attempt: %{
-      athanor_id: "ath_a",
-      execution_id: "exec_a",
-      attempt: "att_a",
-      fence: 1,
-      generation: 1,
-      service: "wrk_local"
-    },
-    call: :binary.copy(<<1>>, 32),
-    seal: :binary.copy(<<2>>, 32)
-  }
 
   defp start_pool!(keeper, overrides) do
     {:ok, defaults} = Opus.Settings.pool([], %{})
@@ -64,15 +52,14 @@ defmodule Opus.RunnerPoolTest do
 
   defp counts(pool), do: RunnerPool.status(pool).runners
 
-  defp assign(pid, execution_id) do
-    keys = put_in(@keys, [:attempt, :execution_id], execution_id)
+  # An assign as the service sends one, of an attempt a scripted host
+  # minted, so the runner's relay binds to it: the handle's answer and the
+  # assignment's token.
+  defp assign(pid) do
+    attempt = ScriptedHost.attempt!(ScriptedHost.start!())
 
-    RunnerProcess.send_message(pid, %{
-      type: :assign,
-      assignment: "token-" <> execution_id,
-      input: "{}",
-      keys: keys
-    })
+    {RunnerProcess.assign(pid, attempt.assignment, "{}", attempt.keys, @service.host_url),
+     attempt.assignment}
   end
 
   defp complete(spawn, execution_id, clean),
@@ -168,14 +155,14 @@ defmodule Opus.RunnerPoolTest do
     wait_until(fn -> counts(pool).fresh == 1 end)
 
     {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
-    assert :ok = assign(pid, "exec_1")
+    assert {:ok, token} = assign(pid)
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 1, tainted: 0} end)
 
     spawn = spawn_of(keeper, pid)
     assert spawn.spec.runner == id
     wait_until(fn -> ScriptedKeeper.read(spawn) != "" end)
 
-    assert {:ok, %{type: :assign, assignment: "token-exec_1"}} =
+    assert {:ok, %{type: :assign, assignment: ^token}} =
              RunnerControl.decode(ScriptedKeeper.read(spawn))
 
     complete(spawn, "exec_1", true)
@@ -302,8 +289,8 @@ defmodule Opus.RunnerPoolTest do
     serve!(pool)
     {:ok, a, _} = RunnerPool.take(pool, "ath_a", "exec_1")
     {:ok, b, _} = RunnerPool.take(pool, "ath_b", "exec_2")
-    assert :ok = assign(a, "exec_1")
-    assert :ok = assign(b, "exec_2")
+    assert {:ok, _token} = assign(a)
+    assert {:ok, _token} = assign(b)
     wait_until(fn -> counts(pool).fresh == 1 end)
 
     assert :ok = RunnerPool.cancel_child(pool, "exec_child")
@@ -339,6 +326,26 @@ defmodule Opus.RunnerPoolTest do
     {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
     ScriptedKeeper.write(spawn_of(keeper, pid), "not json\n")
     assert_receive {RunnerPool, ^pid, {:gone, {:protocol, :malformed}}}
+  end
+
+  test "a runner whose relay closes is retired: the service tells it why and ends the stream", %{
+    keeper: keeper
+  } do
+    pool = start_pool!(keeper, pool_size: 0)
+    serve!(pool)
+    {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    assert {:ok, _token} = assign(pid)
+    spawn = spawn_of(keeper, pid)
+
+    # A frame the codec refuses: the relay closes the channel.
+    ScriptedKeeper.write_relay(spawn, <<2::32, "[]">>)
+
+    assert_receive {RunnerPool, ^pid, {:gone, {:relay, {:shutdown, {:closed, :malformed}}}}},
+                   5_000
+
+    wait_until(fn -> ScriptedKeeper.relay_closed?(spawn) end)
+    assert ScriptedKeeper.read_relay(spawn) =~ ~s("kind":"close")
+    wait_until(fn -> Enum.empty?(RunnerPool.runners(pool)) end)
   end
 
   test "retiring the busy runners ends each at once and answers once they are gone, keeping the fresh and idle",

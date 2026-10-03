@@ -7,7 +7,7 @@ defmodule Locus.BuilderService do
   @cancel_ms 15_000
 
   @moduledoc """
-  The builds service: the listener side of `Cyfr.BuilderProtocol`, and the
+  The builds service: the listener side of `Prima.BuilderProtocol`, and the
   only thing that reaches `Locus.Builder`. It speaks that protocol and
   nothing else: two `POST` routes, versioned bodies, and answers that are
   lines, each at the status the protocol gives its class. Whatever is not
@@ -23,8 +23,9 @@ defmodule Locus.BuilderService do
 
   1. **The header, before any of the body.** The `x-cyfr-auth` header is
      verified under this service's request key
-     (`Cyfr.BuilderProtocol.verify_request_header/3`) and refused as
-     `unauthorized`, in the protocol's order: `malformed`,
+     (`Prima.BuilderProtocol.verify_request_header/3`) and refused as
+     `unauthorized`, in the protocol's order: `unknown_version` (a
+     version token other than the protocol's), `malformed`,
      `outside_window`, `bad_mac`. A service holding no key verifies
      nothing.
   2. **Replay.** A verified header's nonce is kept for as long as the
@@ -32,7 +33,7 @@ defmodule Locus.BuilderService do
      `replayed`. Only a verified header's nonce is kept, so nobody without
      the key grows the table.
   3. **The bound.** A declared length past
-     `Cyfr.BuilderProtocol.max_request_bytes/0` is refused `malformed`
+     `Prima.BuilderProtocol.max_request_bytes/0` is refused `malformed`
      without reading; the body is then read up to that bound, and one that
      runs past it is refused the same way.
   4. **The body's hash.** The bytes read must be the ones the header named
@@ -44,7 +45,7 @@ defmodule Locus.BuilderService do
      deadline already passed is refused `timeout` with nothing run.
   7. **The build itself** is checked and packed (`Locus.Builder.prepare/1`):
      `malformed` for sources that make no build, `unavailable` for a
-     missing toolchain or spawner.
+     missing toolchain or keeper.
   8. **The slot.** One of `Locus.BuildSlots` is taken for the request's
      `athanor_id`, never waited for: `capacity` names the total cap or the
      athanor's, whichever refused.
@@ -54,7 +55,8 @@ defmodule Locus.BuilderService do
   opens as a `200` stream of lines: each progress line as the build makes
   it, then one terminal line, the result or the refusal the build ended
   with (`timeout`, `memory`, `failed`, `unavailable`, `capacity`), carrying
-  the lines streamed as its diagnostics (`Locus.Diagnostics`).
+  the lines streamed as its diagnostics, in the encoded form each was
+  charged to the log's budget as (`Locus.Diagnostics`).
 
   ## How a build ends, and what is given back
 
@@ -74,12 +76,13 @@ defmodule Locus.BuilderService do
     ended, and releases the slot. Nothing more is written.
   - **The connection's process killed** (the listener stopping, a crash):
     the link ends the build process, whose executor's own watch ends the
-    build (the spawner releases a dead caller's spawn, the direct launcher's
-    janitor kills the group), and the slots' monitor gives the slot back.
-  - **cyfr-spawn lost**: the spawner answers every run in flight and stops;
-    each build's terminal line is `unavailable`, its slot is released, and
-    the listener, which depends on the spawner, stops with it
-    (`Locus.Application`).
+    build (the keeper's client releases a dead caller's spawn, the direct
+    launcher's janitor kills the group), and the slots' monitor gives the
+    slot back.
+  - **cyfr-keeper lost**: the keeper's client answers every run in flight
+    and stops; each build's terminal line is `unavailable`, its slot is
+    released, and the listener, which depends on the keeper's client, stops
+    with it (`Locus.Application`).
 
   Nothing a request carries is logged: a refusal is logged by its class.
   """
@@ -88,7 +91,7 @@ defmodule Locus.BuilderService do
 
   require Logger
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
   alias Locus.Diagnostics
 
   @nonces __MODULE__.Nonces
@@ -166,7 +169,7 @@ defmodule Locus.BuilderService do
       try do
         stream(conn, plan, budget_ms)
       after
-        Cyfr.Slots.release(@slots, slot)
+        Prima.Slots.release(@slots, slot)
       end
     else
       {:refused, conn, refusal} -> refuse(conn, refusal)
@@ -264,9 +267,9 @@ defmodule Locus.BuilderService do
   # A build never waits for a slot, so a slot server that does not answer
   # refuses within the call's grace instead of holding the request open.
   defp slot(conn, %{athanor_id: athanor_id}) do
-    case Cyfr.Slots.acquire(@slots, athanor_id, :root, wait_ms: 0) do
+    case Prima.Slots.acquire(@slots, athanor_id, :root, wait_ms: 0) do
       {:ok, slot} -> {:ok, slot}
-      {:error, refusal} -> {:refused, conn, slot_refusal(refusal, Cyfr.Slots.status(@slots))}
+      {:error, refusal} -> {:refused, conn, slot_refusal(refusal, Prima.Slots.status(@slots))}
     end
   end
 
@@ -294,8 +297,8 @@ defmodule Locus.BuilderService do
     budget = Diagnostics.budget()
 
     on_progress = fn stage, message ->
-      for {stage, message} <- Diagnostics.admit(budget, stage, message),
-          do: send(service, {ref, :progress, stage, message})
+      for {progress, diagnostic} <- Diagnostics.admit(budget, stage, message),
+          do: send(service, {ref, :progress, progress, diagnostic})
 
       :ok
     end
@@ -313,11 +316,9 @@ defmodule Locus.BuilderService do
 
   defp follow(conn, %{ref: ref, monitor: monitor} = s) do
     receive do
-      {^ref, :progress, stage, message} ->
-        {:ok, line} = BuilderProtocol.encode_progress(stage, message)
-
-        case chunk(conn, [line, ?\n]) do
-          {:ok, conn} -> follow(conn, %{s | lines: [Diagnostics.line(stage, message) | s.lines]})
+      {^ref, :progress, progress, diagnostic} ->
+        case chunk(conn, [progress, ?\n]) do
+          {:ok, conn} -> follow(conn, %{s | lines: [diagnostic | s.lines]})
           {:error, _closed} -> abandon(conn, s)
         end
 
@@ -344,15 +345,19 @@ defmodule Locus.BuilderService do
   defp finish(conn, _s, {:error, :cancelled}), do: conn
 
   # The builder held its outputs to the wire's bounds and the lines were
-  # admitted within the log's, so the result encodes.
+  # admitted within the log's, so the result encodes. The lines go out as
+  # they were charged, already encoded.
   defp finish(conn, s, {:ok, built}) do
     {:ok, line} =
-      BuilderProtocol.encode_result(Map.put(built, :diagnostics, Enum.reverse(s.lines)))
+      BuilderProtocol.encode_result(
+        Map.put(built, :diagnostics, {:encoded, Enum.reverse(s.lines)})
+      )
 
     terminal(conn, line)
   end
 
-  defp finish(conn, s, {:error, refusal}), do: refusal_line(conn, refusal, Enum.reverse(s.lines))
+  defp finish(conn, s, {:error, refusal}),
+    do: refusal_line(conn, refusal, {:encoded, Enum.reverse(s.lines)})
 
   defp refusal_line(conn, refusal, diagnostics) do
     Logger.warning("[Locus.BuilderService] a build ended refused: #{elem(refusal, 0)}")

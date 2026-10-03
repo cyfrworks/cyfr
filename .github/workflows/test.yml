@@ -4,16 +4,25 @@ on:
     branches: [main]
     paths:
       # Every app: the Elixir suite also pins the CLI's grammar and the
-      # bridge's protocol literals (ClientProtocolDriftTest, StackShapeTest).
+      # stack's shape (ClientProtocolDriftTest, StackShapeTest).
       - 'apps/**'
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
-      - '.github/workflows/test.yml'
-      # Compile-embedded (@external_resource) into compendium/mcp/aqua_tool.ex.
+      # Every workflow: the drift test reads docker.yml and the retired-
+      # settings test scans them all; the image scans read .trivyignore.yaml.
+      - '.github/workflows/*.yml'
+      - '.trivyignore.yaml'
+      # Compile-embedded (@external_resource) into compendium/providers/aqua.ex.
       - 'component-guide.md'
       - 'tincture-guide.md'
       - 'integration-guide.md'
+      # Rendered from the settings roster; the guide check and the drift test
+      # read it.
+      - 'configuration-guide.md'
+      # Shipped beside the others; the drift and vocabulary tests read them.
+      - 'identity-guide.md'
+      - 'devices-guide.md'
       # Release-critical surfaces with no workflow of their own: run the
       # suite so a change here at least builds against a green tree.
       - 'Dockerfile*'
@@ -31,22 +40,32 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - 'README.md'
+      - 'ARCHITECTURE.md'
       - 'CONTRIBUTING.md'
       - '.gitignore'
       - '.dockerignore'
   pull_request:
     paths:
       # Every app: the Elixir suite also pins the CLI's grammar and the
-      # bridge's protocol literals (ClientProtocolDriftTest, StackShapeTest).
+      # stack's shape (ClientProtocolDriftTest, StackShapeTest).
       - 'apps/**'
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
-      - '.github/workflows/test.yml'
-      # Compile-embedded (@external_resource) into compendium/mcp/aqua_tool.ex.
+      # Every workflow: the drift test reads docker.yml and the retired-
+      # settings test scans them all; the image scans read .trivyignore.yaml.
+      - '.github/workflows/*.yml'
+      - '.trivyignore.yaml'
+      # Compile-embedded (@external_resource) into compendium/providers/aqua.ex.
       - 'component-guide.md'
       - 'tincture-guide.md'
       - 'integration-guide.md'
+      # Rendered from the settings roster; the guide check and the drift test
+      # read it.
+      - 'configuration-guide.md'
+      # Shipped beside the others; the drift and vocabulary tests read them.
+      - 'identity-guide.md'
+      - 'devices-guide.md'
       # Release-critical surfaces with no workflow of their own: run the
       # suite so a change here at least builds against a green tree.
       - 'Dockerfile*'
@@ -64,6 +83,7 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - 'README.md'
+      - 'ARCHITECTURE.md'
       - 'CONTRIBUTING.md'
       - '.gitignore'
       - '.dockerignore'
@@ -74,6 +94,10 @@ permissions:
 env:
   MIX_ENV: test
   ERL_CRASH_DUMP_SECONDS: 0
+  # Mix through 1.20 can wait forever on its own build lock the second
+  # time a fresh lock directory is taken, and a runner starts every one
+  # fresh. One Mix process at a time builds here, so the lock is off.
+  MIX_OS_CONCURRENCY_LOCK: 0
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
   test:
@@ -210,12 +234,52 @@ jobs:
           fi
       - name: Install dependencies
         run: mix deps.get
+      # Every layer edge is a Boundary declaration, and a forbidden
+      # reference is a compiler warning: a plain compile only warns, and
+      # incremental state can keep a declaration the tree no longer has, so
+      # both environments compile forced with warnings as errors.
       - name: Compile with warnings as errors
-        run: mix compile --warnings-as-errors
+        run: mix compile --force --warnings-as-errors
+      - name: Compile the dev target with warnings as errors
+        env:
+          MIX_ENV: dev
+        run: mix compile --force --warnings-as-errors
+      # The Boundary plants: each writes a forbidden edge into a copy of the
+      # tree and force-compiles it, so a declaration that stopped refusing
+      # an edge fails here, once, outside the partitions.
+      - name: Boundary plants
+        run: mix test apps/cyfr/test/cyfr/boundaries_test.exs --only boundary_plant
       - name: Static analysis
         run: mix credo --only=warning
       - name: Check formatting
         run: mix format --check-formatted
+      # The CLI's operation constants are generated from the server's
+      # operation table: a catalog that no longer matches it fails here.
+      - name: The CLI catalog is the operation table's
+        run: mix ops.gen.cli --check
+      # configuration-guide.md is rendered from the settings roster: a guide
+      # that no longer matches it fails here.
+      - name: The configuration guide is the roster's
+        run: mix cyfr.gen.configuration_guide --check
+      # The tincture SDK is built from apps/cyfr/assets/js/sdk into
+      # priv/static/sdk/cyfr.js and tracked, since a tincture's entry page
+      # embeds it at compile time, and Plug.Static serves cyfr.js.gz beside
+      # it to a client that accepts gzip. A source edit without a rebuild
+      # fails here, and so does a gzip that is not the build.
+      - name: The built SDK is its source's
+        run: |
+          set -euo pipefail
+          mix esbuild sdk
+          if [ -n "$(git status --porcelain -- apps/cyfr/priv/static/sdk/)" ]; then
+            echo "::error::apps/cyfr/priv/static/sdk/ is not the build of apps/cyfr/assets/js/sdk: run mix esbuild sdk and commit the result"
+            git status --porcelain -- apps/cyfr/priv/static/sdk/
+            git diff --stat -- apps/cyfr/priv/static/sdk/
+            exit 1
+          fi
+          if ! zcat apps/cyfr/priv/static/sdk/cyfr.js.gz | cmp -s - apps/cyfr/priv/static/sdk/cyfr.js; then
+            echo "::error::apps/cyfr/priv/static/sdk/cyfr.js.gz does not hold cyfr.js: gzip the build again"
+            exit 1
+          fi
       # --warnings-as-errors covers the .exs files `mix test` loads, which a
       # forced compile never reads: a warning in a test fails the build as
       # one in the application does.
@@ -223,6 +287,7 @@ jobs:
         run: |
           bash tests/test-partitioned-test.sh
           elixir tests/test-partition-env-test.exs
+          bash tests/heavy-check-test.sh
       - name: Run tests
         run: scripts/test-partitioned.sh -a "${{ matrix.db }}" -- --warnings-as-errors
 
@@ -274,13 +339,13 @@ jobs:
           key: ${{ runner.os }}-mix-cluster-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
           restore-keys: ${{ runner.os }}-mix-cluster-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
       # CYFR_CLUSTER=1 refuses local storage: two members would each hold
-      # half of every estate. The same image and credentials the s3-minio
+      # half of every athanor. The same image and credentials the s3-minio
       # job uses, pinned by digest like every other image here.
       - name: Start MinIO
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 \
-            quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            pgsty/minio@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372 \
             server /data
       - name: Install dependencies
         run: mix deps.get
@@ -305,6 +370,44 @@ jobs:
         if: failure()
         run: docker logs minio
 
+  prima-independence:
+    name: Prima compiles and tests alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: '29'
+          elixir-version: '1.20.3'
+      - name: Cache deps
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-prima-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-prima-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - name: Install dependencies
+        run: mix deps.get
+      # The shared contracts depend on no other application: a checkout
+      # holding only the lock, Prima, the fetched deps, the WIT tree
+      # (`Prima.WIT` embeds it), the protocol vectors and the shipped
+      # components the Wasm validator's suite reads compiles it with
+      # warnings as errors and runs its suite. Standalone, the application
+      # loads only its own empty configuration.
+      - name: Compile and test Prima alone
+        run: |
+          set -euo pipefail
+          island="$RUNNER_TEMP/prima-island"
+          mkdir -p "$island/apps" "$island/tests" "$island/seed"
+          cp mix.lock "$island/"
+          cp -R apps/prima "$island/apps/"
+          cp -R deps wit "$island/"
+          cp -R tests/fixtures "$island/tests/"
+          cp -R seed/components "$island/seed/"
+          cd "$island/apps/prima"
+          mix compile --warnings-as-errors
+          mix test
+
   opus-independence:
     name: Opus compiles and tests from its declared apps alone
     runs-on: ubuntu-latest
@@ -324,18 +427,20 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
       # The worker service releases without the control plane: a checkout
-      # holding only the lock, the contracts, Opus, the fetched deps and the
-      # WIT tree (`Compendium.WITSource` embeds it; `Opus.Runtime` reads the
-      # same tree) compiles it with warnings as errors and runs its suite,
-      # against a scripted host and no database.
+      # holding only the lock, the contracts, Opus, the fetched deps, the
+      # WIT tree (`Prima.WIT` embeds it; `Opus.Runtime` reads the
+      # same tree) and the protocol vectors compiles it with warnings as
+      # errors and runs its suite, against a scripted host and no database.
+      # The vector tests fail rather than skip without their fixture.
       - name: Compile and test Opus from its declared apps alone
         run: |
           set -euo pipefail
           island="$RUNNER_TEMP/opus-island"
-          mkdir -p "$island/apps"
+          mkdir -p "$island/apps" "$island/tests"
           cp mix.lock "$island/"
-          cp -R apps/cyfr_contracts apps/opus "$island/apps/"
+          cp -R apps/prima apps/opus "$island/apps/"
           cp -R deps wit "$island/"
+          cp -R tests/fixtures "$island/tests/"
           cd "$island/apps/opus"
           mix compile --warnings-as-errors
           mix test
@@ -371,7 +476,7 @@ jobs:
           island="$RUNNER_TEMP/arca-island"
           mkdir -p "$island/apps" "$island/config"
           cp mix.lock "$island/"
-          cp -R apps/cyfr_contracts apps/arca "$island/apps/"
+          cp -R apps/prima apps/arca "$island/apps/"
           cp -R deps wit "$island/"
           cp config/database_choice.exs "$island/config/"
           cd "$island/apps/arca"
@@ -411,7 +516,7 @@ jobs:
           island="$RUNNER_TEMP/sanctum-island"
           mkdir -p "$island/apps" "$island/config"
           cp mix.lock "$island/"
-          cp -R apps/cyfr_contracts apps/arca apps/sanctum "$island/apps/"
+          cp -R apps/prima apps/arca apps/sanctum "$island/apps/"
           cp -R deps wit "$island/"
           cp config/database_choice.exs "$island/config/"
           cd "$island/apps/sanctum"
@@ -436,21 +541,21 @@ jobs:
           restore-keys: ${{ runner.os }}-mix-locus-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
       - name: Install dependencies
         run: mix deps.get
-      # The builder releases without the control plane: a checkout holding
-      # only the lock, the contracts, Locus, the fetched deps, the WIT tree
-      # (`Compendium.WITSource` embeds it), the vector files its wire and
-      # spawner tests read (tests/fixtures) and the locus release's runtime
+      # Locus releases without the control plane: a checkout holding only
+      # the lock, the contracts, Locus, the fetched deps, the WIT tree
+      # (`Prima.WIT` embeds it), the vector files its two wires' and its
+      # keeper tests read (tests/fixtures) and the locus release's runtime
       # configuration (config/locus_runtime.exs, which its config test
       # evaluates) compiles it with warnings as errors and runs its suite,
-      # against no database. Unlike Opus's, Locus's vector tests fail
-      # rather than skip without the vector file.
+      # against no database. Its vector tests fail rather than skip
+      # without the vector file.
       - name: Compile and test Locus from its declared apps alone
         run: |
           set -euo pipefail
           island="$RUNNER_TEMP/locus-island"
           mkdir -p "$island/apps" "$island/config" "$island/tests"
           cp mix.lock "$island/"
-          cp -R apps/cyfr_contracts apps/locus "$island/apps/"
+          cp -R apps/prima apps/locus "$island/apps/"
           cp -R deps wit "$island/"
           cp -R tests/fixtures "$island/tests/"
           cp config/locus_runtime.exs "$island/config/"
@@ -484,12 +589,15 @@ jobs:
       # CI fixtures mirrored in s3_minio_test.exs.
       - name: Start MinIO
         run: |
-          # docker.io/minio/minio refuses anonymous pulls; quay.io is the
-          # project's own registry. Pinned by digest (RELEASE.2025-09-07T16-13-09Z)
-          # like every other image and action in these workflows.
+          # MinIO Inc. stopped publishing images in October 2025 and archived
+          # the server in February 2026; pgsty/minio is the maintained
+          # community build of the same server, with the same variables and
+          # health route. Pinned by digest (RELEASE.2026-08-04T00-00-00Z,
+          # the multi-arch index) like every other image and action in these
+          # workflows.
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 \
-            quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            pgsty/minio@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372 \
             server /data
       - name: Install dependencies
         run: mix deps.get
@@ -545,6 +653,8 @@ jobs:
         with:
           context: .
           file: Dockerfile.locus
+          build-args: |
+            APT_REFRESH=${{ github.run_id }}
           load: true
           tags: cyfr-locus:smoke
           cache-from: type=gha,scope=locus
@@ -557,9 +667,9 @@ jobs:
       - name: Build a component through its lock lifecycle, and a tincture
         run: python3 scripts/builder-smoke.py cyfr-locus:smoke
 
-      # Under the same settings: cyfr-spawn holds exactly SETUID|SETGID|KILL
+      # Under the same settings: cyfr-keeper holds exactly SETUID|SETGID|KILL
       # and the release none, with no distribution listener, and the release
-      # refuses to serve without cyfr-spawn; a build runs under a pooled uid
+      # refuses to serve without cyfr-keeper; a build runs under a pooled uid
       # in a 0700 home, cannot read or signal the release (whose environ
       # holds the builds key), list the home root or read a concurrent
       # build's tree; a daemon a build.rs starts is gone, with the home, when
@@ -585,7 +695,15 @@ jobs:
       - name: The container's limit holds the builds and the service
         run: python3 tests/builder-image/headroom.py cyfr-locus:smoke
 
-      # The same scan docker.yml runs before publishing the builder image.
+      # A tincture builds only from its lockfile: one without it is refused
+      # before anything runs, one out of step with its package.json fails
+      # in `npm ci`, and an install script runs under the build's uid and
+      # finds no credential — not the builds key, nor any variable named
+      # for one, nor an npm registry credential.
+      - name: A tincture builds from its lockfile, its install scripts with no credential
+        run: python3 tests/builder-image/lockfile.py cyfr-locus:smoke
+
+      # The same scan docker.yml runs before publishing the Locus image.
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -621,6 +739,10 @@ jobs:
             fail=1
           fi
           exit "$fail"
+      # The host's AppArmor restriction on unprivileged user namespaces stays
+      # as the runner image sets it: the keeper clones each runner's
+      # namespaces under Docker's default AppArmor profile, which allows
+      # the clone (docker-compose.yml's opus service says why).
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build the worker image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -664,121 +786,119 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
 
-  # D15: bridge backends isolated from each other and from the bridge. All
-  # four suites run here, in the workflow the tag's `verify` calls, so the
-  # release gates on them; three of them used to run in node-ci.yml, which
-  # nothing at the tag waited for. One job, because both images are built
-  # once for every suite that needs them.
-  bridge-image:
-    name: Bridge image (isolation, refusals, residue, failures and leaks)
+  # Stdio backends isolated from each other and from the backends
+  # service, under the locus-backends service's own settings. The suites
+  # run here, in the workflow the tag's `verify` calls, so the release gates
+  # on them.
+  locus-backends-image:
+    name: Backends image (end to end, isolation, refusals, residue, memory bound)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
+      # The service bounds every backend with a cgroup of its own, which
+      # needs the security option writable-cgroups=true: Docker Engine 28 or
+      # later on a cgroup v2 host. Without either every case below fails for
+      # a reason the suite does not name, so this names it first.
+      - name: Docker Engine 28 or later on cgroup v2
+        run: |
+          set -euo pipefail
+          version="$(docker version --format '{{.Server.Version}}')"
+          cgroup="$(docker info --format '{{.CgroupVersion}}')"
+          echo "Docker Engine $version on cgroup v$cgroup"
+          fail=0
+          if [ "${version%%.*}" -lt 28 ]; then
+            echo "::error::Docker Engine $version is older than 28: writable-cgroups=true, which bounds every backend, needs Docker Engine 28 or later"
+            fail=1
+          fi
+          if [ "$cgroup" != "2" ]; then
+            echo "::error::this runner's Docker Engine runs on cgroup v$cgroup: writable-cgroups=true, which bounds every backend, needs a cgroup v2 host"
+            fail=1
+          fi
+          exit "$fail"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the Locus image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.locus
+          load: true
+          tags: cyfr-locus:backends
+          cache-from: |
+            type=gha,scope=locus
+            type=gha,scope=locus-backends
+          cache-to: type=gha,scope=locus-backends,mode=max
       - name: Build the app image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile
           load: true
-          tags: cyfr:bridge-e2e
-          cache-from: type=gha,scope=cyfr-bridge-e2e
-          cache-to: type=gha,scope=cyfr-bridge-e2e,mode=max
-      - name: Build the bridge image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: Dockerfile.node
-          target: mcp-bridge
-          load: true
-          tags: cyfr-mcp-bridge:bridge-e2e
-          cache-from: type=gha,scope=mcp-bridge-e2e
-          cache-to: type=gha,scope=mcp-bridge-e2e,mode=max
+          tags: cyfr:push
+          cache-from: type=gha,scope=cyfr-push
+          cache-to: type=gha,scope=cyfr-push,mode=max
 
-      # Two owners' probe backends under the mcp-bridge service's own
-      # settings, driven by requests signed as CYFR signs them
-      # (tests/bridge-image/controller.mjs): each runs under its own pooled
-      # uid (never 0 or the bridge's), neither can read the other's home or
-      # /proc environ or signal it, the spawner holds exactly
-      # SETUID|SETGID|KILL (CapEff 0xe0) and no inet socket, the bridge holds
-      # no capability, the root is read-only, and releasing an owner leaves no
-      # process of its uid, a setsid daemon ignoring SIGTERM included, and no
-      # home. Also: the refused boot without a valid key, the spawner's
-      # refusal of Docker's default capabilities, and retirement on loss and
-      # on stop.
+      # Every suite drives docker-compose.yml's locus-backends service with
+      # its own settings (layered with
+      # tests/locus-backends-image/compose.locus-backends.yml for the image
+      # under test, a loopback port and the probe backend) through a
+      # scripted control plane that signs as CYFR does
+      # (tests/locus-backends-image/harness.py, checked against
+      # tests/fixtures/locus_backends.json before any container starts).
+
+      # A backend synced, called and listed, its sealed credential masked in
+      # every result, error and stderr tail, retired once idle with its
+      # tools still listed, and woken by its next call.
+      - name: End to end
+        run: python3 tests/locus-backends-image/e2e.py cyfr-locus:backends
+
+      # Each backend under its own pooled uid, alone in its group, in a 0700
+      # home, with an environment of its sealed block alone; none can read
+      # another's home or /proc environ or the release's, nor signal
+      # another backend, a relay, the release or cyfr-keeper; cyfr-keeper
+      # holds exactly SETUID|SETGID|KILL and the release none; releasing an
+      # owner leaves no process of its uid, a setsid daemon ignoring SIGTERM
+      # included, and no home; and when the release dies cyfr-keeper
+      # retires every backend and exits.
       - name: Backend isolation
-        env:
-          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
-        run: node --test tests/bridge-image/isolation.test.mjs
+        run: python3 tests/locus-backends-image/isolation.py cyfr-locus:backends
 
-      # A forged MAC, a timestamp outside the window, a control message below
-      # the high-water mark, a stale or future epoch, a replayed nonce and a
-      # captured invoke sent again after `docker restart` are refused, and a
-      # sync the uid pool cannot hold spawns nothing.
+      # A captured invoke sent again after `docker restart` (stale_boot), a
+      # control message at or below the high-water mark (stale_control), an
+      # invoke at a stale epoch, a replayed nonce and a sync the uid pool
+      # cannot hold (capacity) are refused over the wire, and a refused sync
+      # spawns nothing.
       - name: Refusals
-        env:
-          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
-        run: node --test tests/bridge-image/refusals.test.mjs
+        run: python3 tests/locus-backends-image/refusals.py cyfr-locus:backends
 
       # With a pool of one uid: a backend can write outside its home only
       # into the home root; the entries it leaves there, a directory tree it
       # made unwritable, System V shared memory, semaphores and message
       # queues and a POSIX message queue (tests/fixtures/residue-canary.go)
-      # are gone before the next owner runs under the same uid. The spawner
-      # refuses a writable root, a shared /tmp and Docker's default /dev/shm.
+      # are gone before the next owner runs under the same uid.
       - name: Residue across uid reuse
-        env:
-          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
-        run: node --test tests/bridge-image/residue.test.mjs
+        run: python3 tests/locus-backends-image/residue.py cyfr-locus:backends
 
-      # Both images under docker compose with the services' own settings and
-      # a 5 s bridge lease (tests/bridge-image/compose.e2e.yml): a crash of
-      # cyfr between an update's commit and its sync, a sync held back across
-      # a bridge restart, a revoke while the control channel is down, a dead
-      # controller, a killed spawner and a crash-looping backend, each with
-      # what cyfr and the bridge observe; and a canary vault entry echoed by
-      # a backend that reaches no log, request-log row, execution payload or
-      # file under cyfr's data volume.
-      - name: Failures and leaks
-        env:
-          CYFR_IMAGE: cyfr:bridge-e2e
-          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
-        run: node --test tests/bridge-image/e2e.test.mjs
+      # A backend past LOCUS_BACKENDS_MEMORY_BYTES is ended at its bound in
+      # a cgroup of its own, alone: its sibling and the service keep
+      # running, and it restarts.
+      - name: Every backend's memory bound
+        run: python3 tests/locus-backends-image/memory.py cyfr-locus:backends
 
-      # The same scan docker.yml runs before publishing the bridge image.
-      - name: Scan the bridge image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: cyfr-mcp-bridge:bridge-e2e
-          format: table
-          exit-code: '1'
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          # Findings with no fix in any distribution, each scoped to the
-          # path it was observed at, with its reason and what would lift it.
-          # Everything else fixable still fails, including the same id in
-          # the bridge's own dependency tree.
-          trivyignores: .trivyignore.yaml
-
-      # The app image is built here, for the end-to-end run above, and this
-      # is the one push-time build of it — so it is scanned here too. Until
-      # now `cyfr` was the only shipped image scanned at tag time alone,
-      # where a finding stops a release instead of the commit that brought
-      # it in. Same scan docker.yml runs before publishing it.
+      # The app image is built here, and this is the one push-time build of
+      # it — so it is scanned here, where a finding stops the commit that
+      # brought it in rather than a release. Same scan docker.yml runs
+      # before publishing it. The Locus image is scanned in builder-image.
       - name: Scan the app image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: cyfr:bridge-e2e
+          image-ref: cyfr:push
           format: table
           exit-code: '1'
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
 
-  # D15: a release boots on each database. The `cyfr` release, built as
+  # A release boots on each database. The `cyfr` release, built as
   # Dockerfile builds it (MIX_ENV=prod, the adapter chosen at compile time),
   # started against a fresh database with auto-migration on: it migrates the
   # schema itself and answers the readiness check the image's HEALTHCHECK
@@ -834,50 +954,104 @@ jobs:
       - name: Boot the release against a fresh ${{ matrix.db }} database
         run: tests/release-boot/boot.sh ${{ matrix.db }}
 
-  arca-seam:
-    name: Arca single-seam (no untagged filesystem I/O)
+  # The browser harness (tests/browser/README.md): the `cyfr` release started
+  # as release-boot starts one, on SQLite, serving two public tinctures, and
+  # the frame-facts experiment run against it in every browser the official
+  # Playwright image ships. The image is pinned by digest in
+  # tests/browser/run.sh, so no browser binary is fetched here; Playwright's
+  # library comes from tests/browser/package-lock.json, JavaScript only.
+  # The experiment records what each browser allowed and fails only when it
+  # could not observe an attempt. Every proof after it reuses the release
+  # the experiment built (RELEASE_BOOT_SKIP_BUILD), each on its own cells
+  # behind the harness's HTTPS front; a proof that uses a passkey drives
+  # Chromium's virtual authenticator, so its passkey steps run in Chromium
+  # alone.
+  browser:
+    name: Browser harness (frame facts, the SDK, the multi-home smoke, and the tincture, containment, pairing, identity, join, grant and canvas proofs on Chromium, Firefox and WebKit)
     runs-on: ubuntu-latest
+    # One serial job of ten proofs in three browsers after an image build
+    # and a release build: about an hour on p1's sixteen cores, so a
+    # hang is cut here before the runner's six-hour limit.
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      # All file/blob I/O must use Arca.Storage unless a direct call is marked
-      # with `arca:bypass-ok=<A|B|C|D|E>` on its line or within four lines above it.
-      # This includes File.*, Path.wildcard, :file, :filelib, :erl_tar and :prim_file.
-      # Arca.Storage documents the bypass groups. Scratch-only modules may use
-      # `arca:bypass-ok=<X> — entire module`.
-      - name: Assert direct filesystem calls are tagged
-        run: |
-          set -uo pipefail
-          fail=0
-          sources="$(git ls-files 'apps/*/lib/*.ex' 'apps/*/lib/**/*.ex')"
-          # A scan that reads nothing would pass; refuse it.
-          if [ -z "$sources" ]; then
-            echo "::error::no application sources matched — the scan would read nothing"
-            exit 1
-          fi
-          while IFS= read -r f; do
-            case "$f" in
-              */arca/adapters/*) continue ;;
-              apps/arca/lib/arca/storage.ex) continue ;;
-            esac
-            if grep -qE 'arca:bypass-ok=[A-E] — entire module' "$f"; then continue; fi
-            bad="$(awk '
-              /arca:bypass-ok/ { ok = NR }
-              /(^|[^A-Za-z0-9_.])File\.[a-z]|Path\.wildcard|(^|[^A-Za-z0-9_]):(file|filelib|erl_tar|prim_file)\./ {
-                if ($0 ~ /^[[:space:]]*#/) next
-                if (ok && NR - ok <= 4) next
-                print NR ": " $0
-              }
-            ' "$f")"
-            if [ -n "$bad" ]; then
-              echo "::error file=$f::direct filesystem I/O without a nearby arca:bypass-ok tag (see Arca.Storage single-seam policy)"
-              echo "$bad"
-              fail=1
-            fi
-          done <<< "$sources"
-          if [ "$fail" -ne 0 ]; then
-            echo "Untagged filesystem I/O found. Route it through Arca, or tag the call site # arca:bypass-ok=<A|B|C|D|E>."
-            exit 1
-          fi
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: '29'
+          elixir-version: '1.20.3'
+      # The grant proof builds the command line from apps/codex.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+      - name: Cache deps and the prod build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-browser-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-browser-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - name: Install dependencies
+        run: mix deps.get
+      - name: The frame-facts experiment
+        run: tests/browser/run.sh
+      - name: The SDK's JavaScript tests
+        run: apps/cyfr/assets/test/run.sh
+      - name: Build the Locus builds image for the tincture proof
+        run: docker build -f Dockerfile.locus -t cyfr-locus:tincture-proof .
+      - name: The tincture proof
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/tincture-proof/run.sh cyfr-locus:tincture-proof
+      - name: The frame sandbox containment proof
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/hostile-frame-proof/run.sh
+      - name: The pairing proof (Chromium alone, with its virtual WebAuthn authenticator)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/pairing-proof/run.sh
+      # Two homes on hostnames of their own over HTTPS, the shape the identity
+      # and join proofs stand on: each a secure context, names the run's
+      # authority did not sign refused, no cookie crossing between them, a
+      # framed request refused, a fragment carried intact, and a passkey per
+      # home in Chromium (tests/browser/README.md).
+      - name: The multi-home smoke
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/multi-home-smoke/run.sh
+      # Enrollment, printed kits, a rotation, the restores and what each home
+      # sees, against a directory of its own (tests/identity-proof/README.md).
+      - name: The identity proof (Chromium alone, with its virtual WebAuthn authenticator)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/identity-proof/run.sh
+      # A person joining a hub from their own home, on two directories: the
+      # sign-in, the carry and a second profile in every browser, the passkey
+      # steps and a paired device's in Chromium (tests/join-proof/README.md).
+      - name: The join proof
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/join-proof/run.sh
+      # The steps that need no execution engine and no model; the others are
+      # the suite's (tests/grant-proof/README.md).
+      - name: The grant proof (Chromium alone)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/grant-proof/run.sh
+      - name: The canvas proof
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/canvas-proof/run.sh
+      # The shipped Caddyfile in the Caddy image docker-compose.yml names, in
+      # front of a stub upstream: HSTS, the endpoint's value, once on every
+      # response over TLS for a real host and never for localhost, the
+      # upstream's headers through, plain HTTP redirected, and the file
+      # loading with CADDY_ACME_EMAIL empty. Docker alone; no release.
+      - name: HSTS behind the shipped proxy
+        run: tests/proxy-hsts/run.sh
 
   seed-guards:
     name: Seed media (clean, immutable versions)
@@ -1041,7 +1215,7 @@ jobs:
           while IFS= read -r key; do
             [ -n "$key" ] || continue
             # Exempt when every file that compile_env's this key carries the
-            # tag, the same file-level shape the arca-seam job uses.
+            # tag: one tag anywhere in the file exempts the whole file.
             untagged=$(git grep -lE "compile_env\(:cyfr, *:${key}[^a-z_0-9]" -- 'apps/**/*.ex' 'apps/**/*.exs' \
               | while IFS= read -r f; do
                   grep -q 'config:compile-runtime-ok' "$f" || echo "$f"
@@ -1067,16 +1241,19 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # The tenancy unit is the athanor and a conversation is a thread. This
-      # asserts the old vocabularies — org/project, conversation/topic
-      # subscription, the prism: PubSub prefix — cannot creep back into code,
-      # config, or operator-facing docs.
+      # asserts the old vocabularies — org/project, the athanor's retired
+      # second name, conversation/topic subscription, the prism: PubSub
+      # prefix, the keeper's retired role name — cannot creep back into code,
+      # config, or operator-facing docs. Each retired name is matched as a
+      # word or inside an identifier, never inside an English word that
+      # merely contains its letters.
       # Free-word "org"/"project" is deliberately not gated (OCI annotations,
       # Mix.Project, Go module paths, "project directory" prose are legitimate).
       - name: Tier A/B fossil patterns must be absent
         run: |
           set -uo pipefail
-          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.node Dockerfile.locus Dockerfile.opus docker-entrypoint.sh .env.example .env.bridge.example .env.locus.example .env.opus.example .gitignore .dockerignore README.md CONTRIBUTING.md component-guide.md integration-guide.md tincture-guide.md'
-          excl=':(exclude)docs/** :(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
+          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus Dockerfile.opus docker-entrypoint.sh .env.example .env.locus.example .env.opus.example .gitignore .dockerignore README.md ARCHITECTURE.md CONTRIBUTING.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md'
+          excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
           fail=0
           for p in \
             '\borg_id\b' \
@@ -1111,6 +1288,36 @@ jobs:
             'topic_subscription|TopicSubscription' \
             'Cyfr\.Topics\b' \
             'prism:[a-z_]' \
+            'cyfr_contracts' \
+            'CyfrContracts' \
+            'Compendium\.(WITSource|WasmValidator)\b' \
+            'Cyfr\.Test\.(SourceTree|CodeLines|Wait|AuthorityFixtures)\b' \
+            'Emissary\.MCP\.VaultRef\b' \
+            'Cyfr\.Ops\b' \
+            'Sanctum\.Catalog\b' \
+            'Emissary\.MCP\.(RequestLog|RunningTasks|Tools\.SystemProvider)\b' \
+            'Cyfr\.Execution\b' \
+            'Cyfr\.Schedules\b' \
+            'opus://' \
+            'Emissary\.MCP\.(McpServersTool|ExternalProvider|Bridge|ExternalServer\w*|ApprovalTool|NotesTool|ThreadTool|BackendDefinition|StatusRedaction)\b' \
+            'Compendium\.MCP\b' \
+            'Sanctum\.MCP\b' \
+            'apps/spawn/' \
+            'cyfr-spawn' \
+            'spawn_protocol\.json' \
+            'CYFR_SPAWN_CHANNEL' \
+            'cyfr-worker/v1' \
+            'cyfr\.worker\.key' \
+            'Locus\.Spawner\b' \
+            'Locus\.Test\.FakeSpawner\b' \
+            '(^|[^A-Za-z])([Ss]pawners?([^a-z]|$)|SPAWNERS?([^A-Z]|$))|[a-z]Spawner' \
+            'Opus\.Keeper\.Spawn\b' \
+            'CYFR_WORKER_KEY' \
+            'CYFR_WORKERS\b' \
+            'CYFR_EXECUTION_EVENTS_' \
+            'CYFR_MAX_CONCURRENT_EXECUTIONS' \
+            'CYFR_WORKER_WATCH_' \
+            '(^|[^A-Za-z])([Ee]states?([^a-z]|$)|ESTATES?([^A-Z]|$))|[a-z]Estate' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"
             if [ -n "$hits" ]; then
@@ -1120,7 +1327,7 @@ jobs:
             fi
           done
           # Check athanor_id constraints in every migration. Only the baseline's
-          # memberships and sessions columns may be nullable.
+          # memberships, sessions and decision_logs columns may be nullable.
           # `grep -c` exits 1 when the count is zero, and the job's shell is
           # `bash -e`, so an unguarded count on a migration that adds no
           # athanor_id column kills the job silently — which is what every
@@ -1128,15 +1335,15 @@ jobs:
           m=apps/arca/priv/repo/migrations/20260815000000_baseline.exs
           nullable="$(grep -cE 'add :athanor_id' "$m" || true)"
           notnull="$(grep -cE 'add :athanor_id.*null: false' "$m" || true)"
-          if [ "$((nullable - notnull))" -ne 2 ]; then
-            echo "::error::exactly two nullable athanor_id columns are allowed (memberships, sessions); found $((nullable - notnull))"; fail=1
+          if [ "$((nullable - notnull))" -ne 3 ]; then
+            echo "::error::exactly three nullable athanor_id columns are allowed (memberships, sessions, decision_logs); found $((nullable - notnull))"; fail=1
           fi
           for other in apps/arca/priv/repo/migrations/*.exs; do
             [ "$other" = "$m" ] && continue
             n="$(grep -cE 'add :athanor_id' "$other" || true)"
             nn="$(grep -cE 'add :athanor_id.*null: false' "$other" || true)"
             if [ "$n" -ne "$nn" ]; then
-              echo "::error file=$other::athanor_id must be null: false outside the baseline (the two nullable fabrics are baseline-only)"; fail=1
+              echo "::error file=$other::athanor_id must be null: false outside the baseline (the three nullable fabrics are baseline-only)"; fail=1
             fi
           done
           if grep -nE 'add :athanor_id.*default:' apps/arca/priv/repo/migrations/*.exs; then
@@ -1161,7 +1368,7 @@ jobs:
           # Operator-facing docs describe the unified athanor layout — not the
           # old two-segment one, not the split components/{athanor} roots, and
           # not a bare components/ tree at the project root.
-          docs_hits="$(git grep -InE 'components/local/default|/t/:publisher/|/t/<publisher>/|components/\{athanor|^components/$' -- README.md component-guide.md integration-guide.md tincture-guide.md .env.example || true)"
+          docs_hits="$(git grep -InE 'components/local/default|/t/:publisher/|/t/<publisher>/|components/\{athanor|^components/$' -- README.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md .env.example || true)"
           if [ -n "$docs_hits" ]; then
             echo "::error::guides still describe a pre-unification layout"; echo "$docs_hits"; fail=1
           fi
@@ -1169,7 +1376,7 @@ jobs:
           # The names below are not tenant roots. `data/` is no longer among
           # them: the guest's scope and the athanor's root are one name now
           # (Arca.Storage.tenant_roots/0).
-          phantom_hits="$(git grep -InE '^ +[├└│|]+─* *(config|builds)/ ' -- README.md component-guide.md integration-guide.md tincture-guide.md || true)"
+          phantom_hits="$(git grep -InE '^ +[├└│|]+─* *(config|builds)/ ' -- README.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md || true)"
           if [ -n "$phantom_hits" ]; then
             echo "::error::guide tree diagrams name a scope that is not a tenant root (see Arca.Storage.tenant_roots/0)"; echo "$phantom_hits"; fail=1
           fi

@@ -7,7 +7,7 @@ defmodule Arca.Audit.Event do
 
   `Arca.AuditHandler` builds exactly one of these per audited telemetry
   event: the name, the measurements, and the emitter's metadata sanitized
-  through `Cyfr.Sanitizer` — so a credential that rides an emitter's
+  through `Prima.Sanitizer` — so a credential that rides an emitter's
   metadata never reaches an operator-added SIEM sink.
 
   Identity fields (`user_id`, `athanor_id`, the email on a door event)

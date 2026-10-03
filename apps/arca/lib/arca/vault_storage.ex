@@ -76,7 +76,9 @@ defmodule Arca.VaultStorage do
           status: String.t(),
           payload_rev: non_neg_integer(),
           sealed_payload: binary() | nil,
-          last_used_at: DateTime.t() | nil
+          last_used_at: DateTime.t() | nil,
+          inserted_at: DateTime.t() | nil,
+          updated_at: DateTime.t() | nil
         }
 
   @typedoc "The binding move and the profiles it blocks, or nothing to move."
@@ -110,11 +112,18 @@ defmodule Arca.VaultStorage do
   `:athanor_id` among the attributes is an `ArgumentError`, not a quiet
   override — a caller that thought it was choosing the tenant must find
   out here rather than write someone else's row.
+
+  `opts` may name the issuance the entry is written under (`lock:` and
+  `verify:`, `Arca.SecurityTransitions.Issuance.held/2`): the row is then
+  inserted in that transaction, once the caller's standing rows are
+  locked and its policy agrees, and a refusal writes nothing.
   """
-  @spec put(Cyfr.Actor.t(), map()) ::
-          {:ok, entry()} | {:error, :name_taken} | refusal()
-  def put(%Cyfr.Actor{athanor_id: athanor_id}, attrs)
-      when resolved(athanor_id) and is_map(attrs) do
+  @spec put(Prima.Actor.t(), map(), keyword()) ::
+          {:ok, entry()} | {:error, :name_taken} | refusal() | {:error, term()}
+  def put(actor, attrs, opts \\ [])
+
+  def put(%Prima.Actor{athanor_id: athanor_id} = actor, attrs, opts)
+      when resolved(athanor_id) and is_map(attrs) and is_list(opts) do
     if Map.has_key?(attrs, :athanor_id) or Map.has_key?(attrs, "athanor_id") do
       raise ArgumentError,
             "Arca.VaultStorage.put/2: the tenant comes from the actor; " <>
@@ -122,47 +131,52 @@ defmodule Arca.VaultStorage do
     end
 
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.put", fn ->
-      row =
-        attrs
-        |> Map.put(:athanor_id, athanor_id)
-        |> Map.put_new(:id, Cyfr.UUID7.generate_id("vlt"))
-
-      # Through a changeset carrying the living-name index, so a race on
-      # the name answers `{:error, :name_taken}` like the pre-check does.
-      # A bare `struct |> insert` declares no constraint, so a violation
-      # raised `Ecto.ConstraintError` — which `db_errors()` deliberately
-      # does not rescue — straight past this wrapper.
-      #
-      # Both spellings are declared because the two adapters name the
-      # violated constraint differently: Postgres reports the index's own
-      # name, while ecto_sqlite3 derives one from the columns SQLite names
-      # in its error text. Declaring only the first left SQLite raising
-      # `Ecto.ConstraintError` on the race the changeset exists to catch.
-      %VaultEntry{}
-      |> Ecto.Changeset.change(row)
-      |> Ecto.Changeset.unique_constraint([:athanor_id, :name],
-        name: :vault_entries_active_name_index
-      )
-      |> Ecto.Changeset.unique_constraint([:athanor_id, :name],
-        name: :vault_entries_athanor_id_name_index
-      )
-      |> Arca.Repo.insert()
-      |> case do
-        {:ok, inserted} -> {:ok, view(inserted)}
-        # The changeset never leaves: a caller below the security boundary
-        # answering with an Ecto struct would put the sealed payload into
-        # every inspect of the refusal.
-        {:error, %Ecto.Changeset{}} -> {:error, :name_taken}
-      end
+      Arca.SecurityTransitions.Issuance.held(opts, fn -> insert(actor, attrs) end)
     end)
   end
 
-  def put(%Cyfr.Actor{}, attrs) when is_map(attrs), do: {:error, :no_athanor}
+  def put(%Prima.Actor{}, attrs, opts) when is_map(attrs) and is_list(opts),
+    do: {:error, :no_athanor}
+
+  defp insert(%Prima.Actor{athanor_id: athanor_id}, attrs) do
+    row =
+      attrs
+      |> Map.put(:athanor_id, athanor_id)
+      |> Map.put_new(:id, Prima.UUID7.generate_id("vlt"))
+
+    # Through a changeset carrying the living-name index, so a race on
+    # the name answers `{:error, :name_taken}` like the pre-check does.
+    # A bare `struct |> insert` declares no constraint, so a violation
+    # raised `Ecto.ConstraintError` — which `db_errors()` deliberately
+    # does not rescue — straight past this wrapper.
+    #
+    # Both spellings are declared because the two adapters name the
+    # violated constraint differently: Postgres reports the index's own
+    # name, while ecto_sqlite3 derives one from the columns SQLite names
+    # in its error text. Declaring only the first left SQLite raising
+    # `Ecto.ConstraintError` on the race the changeset exists to catch.
+    %VaultEntry{}
+    |> Ecto.Changeset.change(row)
+    |> Ecto.Changeset.unique_constraint([:athanor_id, :name],
+      name: :vault_entries_active_name_index
+    )
+    |> Ecto.Changeset.unique_constraint([:athanor_id, :name],
+      name: :vault_entries_athanor_id_name_index
+    )
+    |> Arca.Repo.insert()
+    |> case do
+      {:ok, inserted} -> {:ok, view(inserted)}
+      # The changeset never leaves: a caller below the security boundary
+      # answering with an Ecto struct would put the sealed payload into
+      # every inspect of the refusal.
+      {:error, %Ecto.Changeset{}} -> {:error, :name_taken}
+    end
+  end
 
   @doc "The entry with this id in the actor's athanor."
-  @spec get(Cyfr.Actor.t(), String.t()) ::
+  @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, entry()} | {:error, :not_found} | refusal()
-  def get(%Cyfr.Actor{athanor_id: athanor_id}, id) when resolved(athanor_id) and is_binary(id) do
+  def get(%Prima.Actor{athanor_id: athanor_id}, id) when resolved(athanor_id) and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.get", fn ->
       # Not found and belongs-to-another-athanor are deliberately the same
       # answer: a distinct error would tell a caller that an id it guessed
@@ -174,12 +188,12 @@ defmodule Arca.VaultStorage do
     end)
   end
 
-  def get(%Cyfr.Actor{}, id) when is_binary(id), do: {:error, :no_athanor}
+  def get(%Prima.Actor{}, id) when is_binary(id), do: {:error, :no_athanor}
 
   @doc "The living entry with this name in the actor's athanor, if any."
-  @spec get_by_name(Cyfr.Actor.t(), String.t()) ::
+  @spec get_by_name(Prima.Actor.t(), String.t()) ::
           {:ok, entry()} | {:error, :not_found} | refusal()
-  def get_by_name(%Cyfr.Actor{athanor_id: athanor_id}, name)
+  def get_by_name(%Prima.Actor{athanor_id: athanor_id}, name)
       when resolved(athanor_id) and is_binary(name) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.get_by_name", fn ->
       row =
@@ -194,14 +208,14 @@ defmodule Arca.VaultStorage do
     end)
   end
 
-  def get_by_name(%Cyfr.Actor{}, name) when is_binary(name),
+  def get_by_name(%Prima.Actor{}, name) when is_binary(name),
     do: {:error, :no_athanor}
 
   @doc "Living entries in the actor's athanor. `include_tombstoned: true` widens to all."
-  @spec list(Cyfr.Actor.t(), keyword()) :: {:ok, [entry()]} | refusal()
+  @spec list(Prima.Actor.t(), keyword()) :: {:ok, [entry()]} | refusal()
   def list(actor, opts \\ [])
 
-  def list(%Cyfr.Actor{athanor_id: athanor_id}, opts)
+  def list(%Prima.Actor{athanor_id: athanor_id}, opts)
       when resolved(athanor_id) and is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.list", fn ->
       query =
@@ -217,33 +231,33 @@ defmodule Arca.VaultStorage do
     end)
   end
 
-  def list(%Cyfr.Actor{}, opts) when is_list(opts), do: {:error, :no_athanor}
+  def list(%Prima.Actor{}, opts) when is_list(opts), do: {:error, :no_athanor}
 
   @doc "Update the mutable label. Everything else has its own verb."
-  @spec update_meta(Cyfr.Actor.t(), String.t(), %{name: String.t()}) ::
+  @spec update_meta(Prima.Actor.t(), String.t(), %{name: String.t()}) ::
           :ok | {:error, :not_found} | refusal()
-  def update_meta(%Cyfr.Actor{athanor_id: athanor_id}, id, %{name: name})
+  def update_meta(%Prima.Actor{athanor_id: athanor_id}, id, %{name: name})
       when resolved(athanor_id) and is_binary(id) and is_binary(name) and name != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.update_meta", fn ->
       write(athanor_id, id, name: name, updated_at: now())
     end)
   end
 
-  def update_meta(%Cyfr.Actor{}, id, %{name: name})
+  def update_meta(%Prima.Actor{}, id, %{name: name})
       when is_binary(id) and is_binary(name) and name != "",
       do: {:error, :no_athanor}
 
   @doc "Set the entry's status."
-  @spec set_status(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec set_status(Prima.Actor.t(), String.t(), String.t()) ::
           :ok | {:error, :not_found} | refusal()
-  def set_status(%Cyfr.Actor{athanor_id: athanor_id}, id, status)
+  def set_status(%Prima.Actor{athanor_id: athanor_id}, id, status)
       when resolved(athanor_id) and is_binary(id) and is_binary(status) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.set_status", fn ->
       write(athanor_id, id, status: status, updated_at: now())
     end)
   end
 
-  def set_status(%Cyfr.Actor{}, id, status)
+  def set_status(%Prima.Actor{}, id, status)
       when is_binary(id) and is_binary(status),
       do: {:error, :no_athanor}
 
@@ -252,15 +266,15 @@ defmodule Arca.VaultStorage do
   The partial unique index ignores tombstoned rows, so the name is
   immediately reusable.
   """
-  @spec tombstone(Cyfr.Actor.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
-  def tombstone(%Cyfr.Actor{athanor_id: athanor_id}, id)
+  @spec tombstone(Prima.Actor.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
+  def tombstone(%Prima.Actor{athanor_id: athanor_id}, id)
       when resolved(athanor_id) and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.tombstone", fn ->
       write(athanor_id, id, status: "tombstoned", sealed_payload: nil, updated_at: now())
     end)
   end
 
-  def tombstone(%Cyfr.Actor{}, id) when is_binary(id), do: {:error, :no_athanor}
+  def tombstone(%Prima.Actor{}, id) when is_binary(id), do: {:error, :no_athanor}
 
   @doc """
   Move a living entry's binding from the digest it was read at, and block
@@ -278,9 +292,9 @@ defmodule Arca.VaultStorage do
   is gone; the caller re-reads and recomputes. The answer on success is
   the profiles blocked.
   """
-  @spec move_binding(Cyfr.Actor.t(), String.t(), String.t() | nil, map(), String.t()) ::
+  @spec move_binding(Prima.Actor.t(), String.t(), String.t() | nil, map(), String.t()) ::
           {:ok, [String.t()]} | {:error, :binding_moved} | refusal()
-  def move_binding(%Cyfr.Actor{athanor_id: athanor_id}, id, from_digest, changes, blocked_status)
+  def move_binding(%Prima.Actor{athanor_id: athanor_id}, id, from_digest, changes, blocked_status)
       when resolved(athanor_id) and is_binary(id) and is_map(changes) and
              (is_binary(from_digest) or is_nil(from_digest)) and is_binary(blocked_status) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.move_binding", fn ->
@@ -294,7 +308,7 @@ defmodule Arca.VaultStorage do
     end)
   end
 
-  def move_binding(%Cyfr.Actor{}, id, from_digest, changes, blocked_status)
+  def move_binding(%Prima.Actor{}, id, from_digest, changes, blocked_status)
       when is_binary(id) and is_map(changes) and
              (is_binary(from_digest) or is_nil(from_digest)) and is_binary(blocked_status),
       do: {:error, :no_athanor}
@@ -309,9 +323,9 @@ defmodule Arca.VaultStorage do
   provider's HTTP call. A material write that carries a status flip or a
   binding move with it goes through `commit_payload/3`.
   """
-  @spec rotate_payload(Cyfr.Actor.t(), String.t(), non_neg_integer(), binary()) ::
+  @spec rotate_payload(Prima.Actor.t(), String.t(), non_neg_integer(), binary()) ::
           :ok | {:error, :payload_conflict} | refusal()
-  def rotate_payload(%Cyfr.Actor{athanor_id: athanor_id}, id, expected_rev, sealed)
+  def rotate_payload(%Prima.Actor{athanor_id: athanor_id}, id, expected_rev, sealed)
       when resolved(athanor_id) and is_binary(id) and is_integer(expected_rev) and
              expected_rev >= 0 and is_binary(sealed) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.rotate_payload", fn ->
@@ -319,7 +333,7 @@ defmodule Arca.VaultStorage do
     end)
   end
 
-  def rotate_payload(%Cyfr.Actor{}, id, expected_rev, sealed)
+  def rotate_payload(%Prima.Actor{}, id, expected_rev, sealed)
       when is_binary(id) and is_integer(expected_rev) and expected_rev >= 0 and is_binary(sealed),
       do: {:error, :no_athanor}
 
@@ -347,50 +361,75 @@ defmodule Arca.VaultStorage do
   which writes a failure has to undo. The payload CAS is the step that
   loses a race, so putting it last means a lost race undoes the status
   flip and the binding move with it, and never the reverse.
+
+  `opts` may name the issuance the material is written under (`lock:` and
+  `verify:`, `Arca.SecurityTransitions.Issuance.held/2`): the writes then
+  run in that transaction, once the caller's standing rows are locked and
+  its policy agrees, and a refusal writes none of them.
   """
-  @spec commit_payload(Cyfr.Actor.t(), String.t(), payload_plan()) ::
+  @spec commit_payload(Prima.Actor.t(), String.t(), payload_plan(), keyword()) ::
           {:ok, %{payload_rev: non_neg_integer(), affected: [String.t()]}}
           | {:error, :payload_conflict | :binding_moved}
           | refusal()
-  def commit_payload(%Cyfr.Actor{athanor_id: athanor_id}, id, %{
-        expected_rev: expected_rev,
-        sealed_payload: sealed,
-        status: status,
-        rebind: rebind
-      })
+          | {:error, term()}
+  def commit_payload(actor, id, plan, opts \\ [])
+
+  def commit_payload(
+        %Prima.Actor{athanor_id: athanor_id},
+        id,
+        %{
+          expected_rev: expected_rev,
+          sealed_payload: sealed,
+          status: status,
+          rebind: rebind
+        },
+        opts
+      )
       when resolved(athanor_id) and is_binary(id) and is_integer(expected_rev) and
              expected_rev >= 0 and is_binary(sealed) and
-             (is_binary(status) or is_nil(status)) and (is_map(rebind) or is_nil(rebind)) do
+             (is_binary(status) or is_nil(status)) and (is_map(rebind) or is_nil(rebind)) and
+             is_list(opts) do
+    commit = fn ->
+      with :ok <- maybe_status(athanor_id, id, status),
+           {:ok, affected} <- maybe_rebind(athanor_id, id, rebind),
+           :ok <- cas_payload(athanor_id, id, expected_rev, sealed) do
+        {:ok, %{payload_rev: expected_rev + 1, affected: affected}}
+      end
+    end
+
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.commit_payload", fn ->
-      transact(fn ->
-        with :ok <- maybe_status(athanor_id, id, status),
-             {:ok, affected} <- maybe_rebind(athanor_id, id, rebind),
-             :ok <- cas_payload(athanor_id, id, expected_rev, sealed) do
-          {:ok, %{payload_rev: expected_rev + 1, affected: affected}}
-        end
-      end)
+      # Under an issuance its transaction is the one the writes share;
+      # without one they take their own.
+      if held?(opts),
+        do: Arca.SecurityTransitions.Issuance.held(opts, commit),
+        else: transact(commit)
     end)
   end
 
-  def commit_payload(%Cyfr.Actor{}, id, %{
-        expected_rev: expected_rev,
-        sealed_payload: sealed,
-        status: status,
-        rebind: rebind
-      })
+  def commit_payload(
+        %Prima.Actor{},
+        id,
+        %{
+          expected_rev: expected_rev,
+          sealed_payload: sealed,
+          status: status,
+          rebind: rebind
+        },
+        opts
+      )
       when is_binary(id) and is_integer(expected_rev) and expected_rev >= 0 and
              is_binary(sealed) and (is_binary(status) or is_nil(status)) and
-             (is_map(rebind) or is_nil(rebind)),
+             (is_map(rebind) or is_nil(rebind)) and is_list(opts),
       do: {:error, :no_athanor}
 
   @doc "Mark an entry read now — bookkeeping, written behind by `Arca.RecordSink`."
-  @spec touch_last_used(Cyfr.Actor.t(), String.t()) :: :ok | {:error, :no_athanor}
-  def touch_last_used(%Cyfr.Actor{athanor_id: athanor_id}, id)
+  @spec touch_last_used(Prima.Actor.t(), String.t()) :: :ok | {:error, :no_athanor}
+  def touch_last_used(%Prima.Actor{athanor_id: athanor_id}, id)
       when resolved(athanor_id) and is_binary(id) do
     Arca.RecordSink.enqueue({:vault_touch, athanor_id, id})
   end
 
-  def touch_last_used(%Cyfr.Actor{}, id) when is_binary(id),
+  def touch_last_used(%Prima.Actor{}, id) when is_binary(id),
     do: {:error, :no_athanor}
 
   # ---------------------------------------------------------------------------
@@ -415,7 +454,9 @@ defmodule Arca.VaultStorage do
       status: row.status,
       payload_rev: row.payload_rev,
       sealed_payload: row.sealed_payload,
-      last_used_at: row.last_used_at
+      last_used_at: row.last_used_at,
+      inserted_at: row.inserted_at,
+      updated_at: row.updated_at
     }
   end
 
@@ -434,6 +475,8 @@ defmodule Arca.VaultStorage do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp held?(opts), do: Keyword.has_key?(opts, :lock) or Keyword.has_key?(opts, :verify)
 
   defp maybe_status(_athanor_id, _id, nil), do: :ok
 
@@ -455,7 +498,7 @@ defmodule Arca.VaultStorage do
     with :ok <- cas_binding(athanor_id, id, from_digest, changes),
          {:ok, affected} <-
            Arca.ConsentStorage.head_profiles_referencing(
-             Cyfr.Actor.in_athanor(athanor_id),
+             Prima.Actor.in_athanor(athanor_id),
              id
            ),
          :ok <- block_profiles(athanor_id, affected, blocked_status) do
@@ -466,7 +509,7 @@ defmodule Arca.VaultStorage do
   defp block_profiles(athanor_id, profile_ids, blocked_status) do
     Enum.reduce_while(profile_ids, :ok, fn profile_id, :ok ->
       case Arca.ProfileStorage.set_status(
-             Cyfr.Actor.in_athanor(athanor_id),
+             Prima.Actor.in_athanor(athanor_id),
              profile_id,
              blocked_status
            ) do

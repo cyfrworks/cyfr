@@ -74,11 +74,11 @@ unless Code.ensure_loaded?(Opus.Test.FormulaHost) do
 
     @doc "The actions an assignment names as a formula's host's to run."
     @spec intercepted() :: [String.t()]
-    def intercepted, do: Cyfr.Ops.Catalog.host_intercepted_actions()
+    def intercepted, do: Grimoire.host_intercepted_actions()
 
     @doc "The options a formula's host functions run with under `authority`."
-    @spec opts(Cyfr.Authority.t()) :: keyword()
+    @spec opts(Prima.Authority.t()) :: keyword()
     def opts(authority),
-      do: [limits: Cyfr.Authority.limits(authority), intercepted: intercepted()]
+      do: [limits: Prima.Authority.limits(authority), intercepted: intercepted()]
   end
 end

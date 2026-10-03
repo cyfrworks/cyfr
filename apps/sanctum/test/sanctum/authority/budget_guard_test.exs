@@ -4,9 +4,9 @@
 defmodule Sanctum.Authority.BudgetGuardTest do
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
-  alias Cyfr.Authority.Budget
+  alias Prima.Authority.Budget
   alias Sanctum.Authority.BudgetCounter
   alias Sanctum.Authority.BudgetGuard
 

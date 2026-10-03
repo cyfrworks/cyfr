@@ -36,23 +36,41 @@ defmodule Cyfr.RetiredSettingsTest do
                    builds_enabled build_timeout_ms build_cargo_seed max_concurrent_builds
                    max_concurrent_builds_per_tenant) ++ ["allow_in_" <> "process_builds"]
 
+  # The guides a project ships are the scaffold tarball's items
+  # (scripts/scaffold-tarball.sh), the one list every copy is held to
+  # (`Cyfr.DocsDriftTest` here, codex's scaffold test there), so a guide
+  # shipped later is scanned without this file naming it.
+  defp shipped_guides do
+    script = File.read!(Path.join(root(), "scripts/scaffold-tarball.sh"))
+
+    [_, items] =
+      Regex.run(~r/\nITEMS=\((.*?)\n\)/s, script) ||
+        flunk("scaffold-tarball.sh has no ITEMS list")
+
+    guides =
+      items
+      |> String.split("\n")
+      |> Enum.reject(&String.starts_with?(String.trim(&1), "#"))
+      |> Enum.flat_map(&String.split/1)
+      |> Enum.filter(&String.ends_with?(&1, "-guide.md"))
+
+    assert "integration-guide.md" in guides, "the scaffold ships #{inspect(guides)}"
+    guides
+  end
+
   defp retired_scan_files do
-    [
-      "config/*.exs",
-      "apps/*/lib/**/*.{ex,exs}",
-      "apps/*/mix.exs",
-      "apps/codex/**/*.go",
-      "scripts/*",
-      "tests/**/*.{py,yml,mjs}",
-      "docker-compose.yml",
-      "Dockerfile*",
-      ".env*.example",
-      "README.md",
-      "integration-guide.md",
-      "component-guide.md",
-      "tincture-guide.md",
-      ".github/workflows/*.yml"
-    ]
+    ([
+       "config/*.exs",
+       "apps/*/lib/**/*.{ex,exs}",
+       "apps/*/mix.exs",
+       "apps/codex/**/*.go",
+       "scripts/*",
+       "tests/**/*.{py,yml,mjs}",
+       "docker-compose.yml",
+       "Dockerfile*",
+       ".env*.example",
+       "README.md"
+     ] ++ shipped_guides() ++ [".github/workflows/*.yml"])
     |> Enum.flat_map(&Path.wildcard(Path.join(root(), &1), match_dot: true))
     |> Enum.reject(&String.contains?(&1, "/node_modules/"))
     |> Enum.uniq()
@@ -89,7 +107,7 @@ defmodule Cyfr.RetiredSettingsTest do
   test "the builds service's two keys are wired, and read through their accessors alone" do
     for key <- ~w(locus_builds_url locus_builds_key) do
       declared =
-        for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "config/*.exs")),
+        for path <- Prima.Test.SourceTree.files!(Path.join(root(), "config/*.exs")),
             File.read!(path) =~ ~r/config :cyfr, :#{key},/,
             do: Path.basename(path)
 
@@ -97,9 +115,9 @@ defmodule Cyfr.RetiredSettingsTest do
     end
 
     readers =
-      for lib <- Cyfr.Test.SourceTree.app_libs(root()),
-          path <- Cyfr.Test.SourceTree.files!(Path.join([root(), lib, "**/*.ex"])),
-          Cyfr.Test.SourceTree.read(path) =~
+      for lib <- Prima.Test.SourceTree.app_libs(root()),
+          path <- Prima.Test.SourceTree.files!(Path.join([root(), lib, "**/*.ex"])),
+          Prima.Test.SourceTree.read(path) =~
             ~r/Application\.get_env\(:cyfr, :locus_builds_(url|key)\)/,
           do: Path.relative_to(path, root())
 

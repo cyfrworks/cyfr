@@ -8,17 +8,29 @@ defmodule Sanctum.Consent.ShapeDiff do
   so the delta sheet can show a difference instead of a whole sheet.
 
   Granted capabilities come from the head consent's blob (the source
-  node's `@ingress` edge — what the operator actually approved), live
-  ones from the component's effective policy today. Each entry names a
-  capability, what was granted, and what is now wanted; a capability
-  that only gained entries is `:widened`, one that only lost them is
-  `:narrowed`, and both is `:changed`.
+  node's `@ingress` edge — what the operator actually approved, after any
+  narrowing they chose), live ones from the component's ask today. Each
+  entry names a capability with `added`, the values the live ask names
+  that the head does not grant, and `removed`, the values the head grants
+  that the ask no longer covers: a storage path the ask still admits
+  (`Prima.ComponentPath.path_granted?/2`), such as a sub-folder the person
+  picked inside a folder still asked for, or a host a still-asked domain
+  pattern admits (`Prima.Network.domain_allowed?/2`), is not among them.
+  `added` is not only what the component newly asks for: a value the
+  person narrowed away is in it too, since the head does not grant it, so
+  a renderer words it as "asks for what your grant does not give", never
+  as the component widening. A capability
+  with only `added` values is `:widened`, one with only `removed` values
+  `:narrowed`, and both is `:changed`, each read against the head as
+  narrowed.
 
   Explains the loader's decision without changing it. A derivation failure
   returns an empty diff.
   """
 
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority.Blob
+
+  require Logger
 
   @egress ~w(domains methods schemes private_ips)
   @storage ~w(paths actions)
@@ -46,8 +58,7 @@ defmodule Sanctum.Consent.ShapeDiff do
 
   defp live_caps(ctx, source_ref) do
     with {:ok, component} <- Sanctum.Consent.Plan.fetch_component(ctx, source_ref),
-         manifest =
-           Cyfr.Manifest.decode(Map.get(component, :manifest) || Map.get(component, "manifest")),
+         manifest = manifest(component, source_ref),
          {:ok, resources, _limits} <-
            Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest) do
       {:ok,
@@ -111,7 +122,7 @@ defmodule Sanctum.Consent.ShapeDiff do
     live = normalize(live)
 
     added = live -- granted
-    removed = granted -- live
+    removed = Enum.reject(granted -- live, &covered?(capability, &1, live))
 
     case {added, removed} do
       {[], []} ->
@@ -127,6 +138,14 @@ defmodule Sanctum.Consent.ShapeDiff do
     end
   end
 
+  # Whether the live ask still covers a value the head grants, as the
+  # value's enforcement point reads the ask: a path a picker chose inside a
+  # folder the ask still names, or a host inside a domain pattern it still
+  # names, is no value the component stopped asking for.
+  defp covered?("storage.paths", path, live), do: Prima.ComponentPath.path_granted?(path, live)
+  defp covered?("egress.domains", host, live), do: Prima.Network.domain_allowed?(host, live)
+  defp covered?(_capability, _value, _live), do: false
+
   defp change_kind([], _removed), do: :narrowed
   defp change_kind(_added, []), do: :widened
   defp change_kind(_added, _removed), do: :changed
@@ -134,4 +153,17 @@ defmodule Sanctum.Consent.ShapeDiff do
   defp normalize(nil), do: []
   defp normalize(list) when is_list(list), do: list |> Enum.filter(&is_binary/1) |> Enum.sort()
   defp normalize(_), do: []
+
+  # A manifest that does not decode declares nothing. The line names the
+  # component, never the manifest's bytes.
+  defp manifest(row, ref) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Sanctum.Consent.ShapeDiff] manifest malformed: #{ref}")
+        %{}
+    end
+  end
 end

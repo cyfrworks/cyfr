@@ -15,15 +15,14 @@ defmodule Opus.ExecutionProvenanceTest do
 
   @moduletag timeout: 120_000
 
-  setup do
+  setup tags do
     test_path = Path.join(System.tmp_dir!(), "provenance_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     :ok = Probe.publish_probe!(ctx)
     {:ok, _} = Bootstrap.run(ctx)
 
@@ -40,15 +39,15 @@ defmodule Opus.ExecutionProvenanceTest do
 
   defp run(ctx, opts) do
     {:ok, result} =
-      Cyfr.Execution.Dispatch.run(
+      Crucible.Dispatch.run(
         ctx,
         Probe.probe_ref(),
         %{"op" => "echo"},
-        [type: :formula, authority: Cyfr.Authority.zero()] ++ opts
+        [type: :formula, authority: Prima.Authority.zero()] ++ opts
       )
 
     assert result.status == :completed
-    row = Arca.Repo.get(Arca.Execution, result.metadata.execution_id)
+    row = Arca.Repo.get(Arca.Schemas.Execution, result.metadata.execution_id)
     {row, Jason.decode!(row.output)}
   end
 
@@ -57,7 +56,7 @@ defmodule Opus.ExecutionProvenanceTest do
   } do
     {row, output} =
       run(ctx,
-        parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
+        parent_execution_id: Cyfr.Test.AttemptFixtures.lineage!(ctx).parent_execution_id,
         retention_class: "chat_step"
       )
 
@@ -86,8 +85,8 @@ defmodule Opus.ExecutionProvenanceTest do
     assert {:ok, _payload, bytes} =
              Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), row.id, "result")
 
-    assert Cyfr.Digest.sha256(bytes) == digest
-    assert {:ok, %{output: %{"op" => "echo"} = joined}} = Cyfr.Execution.get(ctx, row.id)
+    assert Prima.Digest.sha256(bytes) == digest
+    assert {:ok, %{output: %{"op" => "echo"} = joined}} = Crucible.get(ctx, row.id)
     assert Jason.decode!(bytes) == joined
   end
 end

@@ -22,9 +22,8 @@ defmodule Aqua.Loop.Clone do
   alias Aqua.Loop.Binding.Call
   alias Aqua.Loop.Turn
   alias Aqua.Tape
-  alias Compendium.AgentSource
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Transition
+  alias Prima.Authority
+  alias Prima.Authority.Transition
 
   @type refusal ::
           {:no_role_edge, String.t()}
@@ -40,7 +39,7 @@ defmodule Aqua.Loop.Clone do
 
     with {:ok, definition} <- Turn.role(parent.spec, role),
          :ok <- intact(ctx, parent.spec.authority),
-         {:ok, snapshot} <- Compendium.AgentIndex.snapshot(ctx, role),
+         {:ok, snapshot} <- Compendium.agent_snapshot(ctx, role),
          {:ok, child} <- authority(parent.spec.authority, role, snapshot, roster(parent.spec)),
          {:ok, %{turn: clone}} <-
            Tape.open_clone_turn(guest, parent.turn, %{
@@ -98,7 +97,7 @@ defmodule Aqua.Loop.Clone do
   The authority a clone of `role` runs under, from the soul's `parent`
   authority: the release digest the soul's consent names for the role
   (`activation[role_ref]`) must equal the one `snapshot` projects under
-  `roster` (the estate's enabled agent names), then the soul → role edge
+  `roster` (the athanor's enabled agent names), then the soul → role edge
   is stepped as a synchronous call — the soul's profile, consent and
   budget with the role's cursor and edge resources. `{:error, refusal}`
   when the soul names no edge to the role, the role's shape moved since
@@ -108,7 +107,7 @@ defmodule Aqua.Loop.Clone do
           {:ok, Authority.t()} | {:error, refusal()}
   def authority(%Authority{} = parent, role, %{agent: agent} = _snapshot, %MapSet{} = roster)
       when is_binary(role) do
-    ref = AgentSource.ref(role)
+    ref = Prima.AgentRef.ref(role)
 
     with {:ok, consented} <- consented_release(parent, ref, role),
          :ok <- check_release(consented, agent, roster, role) do
@@ -124,7 +123,7 @@ defmodule Aqua.Loop.Clone do
   end
 
   defp check_release(consented, agent, roster, role) do
-    if AgentSource.row(agent, roster).release_digest == consented,
+    if Compendium.agent_row(agent, roster).release_digest == consented,
       do: :ok,
       else: {:error, {:role_shape_moved, role}}
   end
@@ -151,7 +150,7 @@ defmodule Aqua.Loop.Clone do
   # next transition; a clone is one. The pinned profile is loaded again:
   # its head must still be the pinned consent.
   defp intact(ctx, %Authority{profile_id: profile_id, consent_id: consent_id, source_ref: ref}) do
-    case Cyfr.Execution.authority_for(ctx, {:id, profile_id}, ref) do
+    case Crucible.authority_for(ctx, {:id, profile_id}, ref) do
       {:ok, %Authority{consent_id: ^consent_id}} -> :ok
       _ -> {:error, :consent_moved}
     end
@@ -184,7 +183,7 @@ defmodule Aqua.Loop.Clone do
   defp terminal({:uncertain, reason}), do: {"uncertain", describe(reason)}
 
   defp last_reply(guest, clone) do
-    agent = Cyfr.Author.agent()
+    agent = Prima.Author.agent()
 
     case Tape.projection(guest, clone) do
       {:ok, rows} ->

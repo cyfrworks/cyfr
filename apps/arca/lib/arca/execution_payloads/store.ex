@@ -14,9 +14,9 @@ defmodule Arca.ExecutionPayloads.Store do
   athanor's own tree under the overlay's internal-write scope.
   """
 
-  @callback put(Cyfr.Actor.t(), [String.t()], binary()) :: :ok | {:error, term()}
-  @callback get(Cyfr.Actor.t(), [String.t()]) :: {:ok, binary()} | {:error, :not_found | term()}
-  @callback delete(Cyfr.Actor.t(), [String.t()]) :: :ok | {:error, :not_found | term()}
+  @callback put(Prima.Actor.t(), [String.t()], binary()) :: :ok | {:error, term()}
+  @callback get(Prima.Actor.t(), [String.t()]) :: {:ok, binary()} | {:error, :not_found | term()}
+  @callback delete(Prima.Actor.t(), [String.t()]) :: :ok | {:error, :not_found | term()}
 
   @doc "The configured store module."
   @spec impl() :: module()

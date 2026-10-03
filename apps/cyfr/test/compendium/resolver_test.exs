@@ -19,9 +19,8 @@ defmodule Compendium.ResolverTest do
                 <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
                 <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_resolver_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
@@ -89,8 +88,10 @@ defmodule Compendium.ResolverTest do
     end
 
     test "errors when component not found", %{ctx: ctx} do
-      assert {:error, msg} = Resolver.resolve(ctx, "c:local.nonexistent")
-      assert msg =~ "Component not found"
+      assert {:error, {:not_found, {:component, "c:local.nonexistent"}} = reason} =
+               Resolver.resolve(ctx, "c:local.nonexistent")
+
+      assert Prima.Refusal.message(reason) =~ "Component not found"
     end
 
     test "errors on empty ref", %{ctx: ctx} do

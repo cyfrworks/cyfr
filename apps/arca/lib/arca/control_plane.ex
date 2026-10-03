@@ -71,15 +71,44 @@ defmodule Arca.ControlPlane do
   The cell's claimant, and nothing else. This module keeps no timer and no
   process: `take/3`, `renew/1` and `release/0` are called from the
   claimant's own process and leave the cached standing behind them.
+  `verify_held/1` writes nothing: it is how a security transaction or a
+  fenced publication (`Arca.FencedPublication`) proves, under a shared
+  row lock, that the slot it runs for is still this member's.
+
+  ## Its own connection
+
+  Audit traffic must not consume the capacity a renewal needs
+  (`ARCHITECTURE.md` §6.4), so each of the three writes is one
+  `Arca.Repo.locking_transaction/2` on a pool of one connection of its
+  own (`pool_spec/1`), started beside the main pool and selected for the
+  call alone: a full ordinary pool never delays it. On SQLite the
+  transaction also asks for the control plane's turn (`Arca.WriteTurn`),
+  which is issued ahead of every queued audit writer. Where the pool is
+  configured and not running, the write fails; it never falls back to
+  the ordinary pool. The reads (`check_held/1`, `roster/0`,
+  `live_member?/1`, `slot/1`) write nothing and stay on the ordinary
+  pool, and `verify_held/1` runs in its caller's transaction.
+
+  What a write won is published only once its transaction has committed:
+  a rollback, a raised commit or a store that cannot answer publishes
+  nothing, and the standing recorded before runs out on its own. A loss
+  a renewal discovers is recorded as the statement answers it, before
+  the function returns.
   """
 
   import Ecto.Query, only: [from: 2]
+
+  require Logger
 
   alias Arca.Schemas.CellLease
 
   @standing_key {__MODULE__, :standing}
   @generation_key {__MODULE__, :generation}
   @slot_key {__MODULE__, :slot}
+
+  # The name the control plane's own pool is registered under, and selected
+  # by (`Arca.Repo.put_dynamic_repo/1`).
+  @pool :arca_control_plane_pool
 
   # How much of a won lease a member gives up before it believes it holds
   # one, covering the rate difference between its monotonic clock and the
@@ -145,9 +174,74 @@ defmodule Arca.ControlPlane do
     end
   end
 
+  @doc """
+  The slot a host-owned write of this member names
+  (`Arca.FencedPublication`, `Arca.ProvisioningClaims.claim/5`), from the
+  cached standing alone — a term read, like `held?/0`. What it answers is
+  the writer's claim and never the guarantee: the write's own transaction
+  verifies it live (`verify_held/1`).
+
+    * `{:ok, slot}` — the slot this member won and still believes it
+      holds.
+    * `{:ok, :none}` — no claimant runs in this deployment (`claimed?/0`
+      is false) and no slot was recorded, so there is nothing to fence.
+    * `{:error, :not_owner}` — a claimant runs here and this member holds
+      no slot: before its first take, after a loss or a release, or past
+      its own countdown.
+  """
+  @spec member_slot() :: {:ok, slot()} | {:ok, :none} | {:error, :not_owner}
+  def member_slot do
+    with true <- held?(),
+         {:ok, slot} <- held() do
+      {:ok, slot}
+    else
+      :none -> if generation() == :none and not claimed?(), do: {:ok, :none}, else: not_owner()
+      false -> not_owner()
+    end
+  end
+
+  defp not_owner, do: {:error, :not_owner}
+
+  @doc """
+  Whether a claimant runs in this deployment. The in-code default is
+  true, and no environment variable reads it; only the test configuration
+  turns it off, and only an explicit `false` does. Without a claimant no
+  member holds a slot, so a host-owned write has none to be fenced by
+  (`member_slot/0`).
+  """
+  @spec claimed?() :: boolean()
+  def claimed?, do: Application.get_env(:arca, :control_plane_claim_enabled, true) != false
+
   @doc "The slice of a won lease a member does not count as its own."
   @spec margin_ms() :: pos_integer()
   def margin_ms, do: @margin_ms
+
+  # ---- its own connection ----------------------------------------------------
+
+  @doc """
+  Whether the control plane writes on a pool of its own. The in-code
+  default is true, and no environment variable reads it; only the test
+  configuration turns it off, where under the SQL sandbox a second
+  connection would neither see nor roll back a test's rows.
+  """
+  @spec own_pool?() :: boolean()
+  def own_pool?, do: Application.get_env(:arca, :control_plane_pool, true) != false
+
+  @doc """
+  The child that is the control plane's pool: `Arca.Repo` again, one
+  connection, under its own name, with the repo's configuration and
+  `overrides` over it (a test starting one outside the sandbox names the
+  plain pool).
+  """
+  @spec pool_spec(keyword()) :: Supervisor.child_spec()
+  def pool_spec(overrides \\ []) do
+    opts = Keyword.merge([name: @pool, pool_size: 1], overrides)
+    Supervisor.child_spec({Arca.Repo, opts}, id: @pool)
+  end
+
+  @doc "The children `Arca.Supervisor` starts for the control plane: its pool, when it has one."
+  @spec children() :: [Supervisor.child_spec()]
+  def children, do: if(own_pool?(), do: [pool_spec()], else: [])
 
   # ---- the writes ------------------------------------------------------------
 
@@ -169,18 +263,20 @@ defmodule Arca.ControlPlane do
   its compare-and-set rather than both replacing the same row.
   """
   @spec take(String.t(), String.t(), pos_integer()) ::
-          {:ok, slot()} | {:busy, CellLease.t()} | {:error, :database_error}
+          {:ok, slot()} | {:busy, map()} | {:error, :database_error}
   def take(node, owner, lease_ms)
       when is_binary(node) and node != "" and is_binary(owner) and owner != "" and
              is_integer(lease_ms) and lease_ms > 0 do
-    Arca.Repo.Errors.with_db_rescue("Arca.ControlPlane.take", fn ->
-      started = System.monotonic_time(:millisecond)
+    # Read before the connection, the turn and the lock are waited for, so
+    # every wait shortens the countdown and none lengthens it.
+    started = System.monotonic_time(:millisecond)
 
-      case do_take(node, owner, lease_ms, @rounds) do
-        {:ok, row} -> {:ok, won(row, lease_ms, started)}
-        other -> other
-      end
-    end)
+    case write("Arca.ControlPlane.take", fn -> do_take(node, owner, lease_ms, @rounds) end) do
+      {:ok, {:ok, row}} -> {:ok, won(row, lease_ms, started)}
+      {:ok, {:busy, _row} = busy} -> busy
+      _unwritten -> {:error, :database_error}
+    end
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -201,6 +297,8 @@ defmodule Arca.ControlPlane do
 
   `{:error, :database_error}` records nothing: a member that cannot reach
   the row does not know it lost it, and its countdown runs out on its own.
+  So does a renewal that could not take the lock within its deadline, and
+  one whose transaction did not commit.
   """
   @spec renew(pos_integer()) :: {:ok, slot()} | :taken | :unclaimed | {:error, :database_error}
   def renew(lease_ms) when is_integer(lease_ms) and lease_ms > 0 do
@@ -209,37 +307,36 @@ defmodule Arca.ControlPlane do
         :unclaimed
 
       {:ok, slot} ->
-        Arca.Repo.Errors.with_db_rescue("Arca.ControlPlane.renew", fn ->
-          started = System.monotonic_time(:millisecond)
-          now = Arca.ServerMetaStorage.now!()
+        started = System.monotonic_time(:millisecond)
 
-          slot
-          |> mine()
-          |> Arca.Repo.update_all(
-            set: [
-              lease_until: lease_end(now, lease_ms),
-              fence: slot.fence + 1,
-              updated_at: now
-            ]
-          )
-          |> case do
-            {1, _} ->
-              # What the statement set, not what a later read would see:
-              # the renew keeps this member's own generation, and a
-              # successor's must never be mistaken for it.
-              renewed = %{
-                slot
-                | fence: slot.fence + 1,
-                  lease_until: lease_end(now, lease_ms)
-              }
+        case write("Arca.ControlPlane.renew", fn -> push_out(slot, lease_ms) end) do
+          {:ok, {:renewed, renewed}} -> {:ok, won(renewed, lease_ms, started)}
+          {:ok, :taken} -> :taken
+          _unwritten -> {:error, :database_error}
+        end
+    end
+  end
 
-              {:ok, won(renewed, lease_ms, started)}
+  defp push_out(slot, lease_ms) do
+    now = Arca.ServerMetaStorage.now!()
 
-            {0, _} ->
-              lost()
-              :taken
-          end
-        end)
+    slot
+    |> mine()
+    |> Arca.Repo.update_all(
+      set: [lease_until: lease_end(now, lease_ms), fence: slot.fence + 1, updated_at: now]
+    )
+    |> case do
+      {1, _} ->
+        # What the statement set, not what a later read would see: the
+        # renew keeps this member's own generation, and a successor's must
+        # never be mistaken for it.
+        {:renewed, %{slot | fence: slot.fence + 1, lease_until: lease_end(now, lease_ms)}}
+
+      {0, _} ->
+        # Recorded as the statement answers, inside the transaction: the
+        # row is a successor's whether or not this transaction commits.
+        lost()
+        :taken
     end
   end
 
@@ -259,24 +356,102 @@ defmodule Arca.ControlPlane do
         :unclaimed
 
       {:ok, slot} ->
-        result =
-          Arca.Repo.Errors.with_db_rescue("Arca.ControlPlane.release", fn ->
-            now = Arca.ServerMetaStorage.now!()
-
-            slot
-            |> mine()
-            |> Arca.Repo.update_all(
-              set: [lease_until: now, fence: slot.fence + 1, updated_at: now]
-            )
-            |> case do
-              {1, _} -> :ok
-              {0, _} -> :taken
-            end
-          end)
-
+        result = write("Arca.ControlPlane.release", fn -> give_up(slot) end)
         lost()
-        result
+
+        case result do
+          {:ok, answer} when answer in [:ok, :taken] -> answer
+          _unwritten -> {:error, :database_error}
+        end
     end
+  end
+
+  # The row left with its lease already run out, while it is still this
+  # member's at the fence it last wrote.
+  defp give_up(slot) do
+    now = Arca.ServerMetaStorage.now!()
+
+    slot
+    |> mine()
+    |> Arca.Repo.update_all(set: [lease_until: now, fence: slot.fence + 1, updated_at: now])
+    |> case do
+      {1, _} -> :ok
+      {0, _} -> :taken
+    end
+  end
+
+  @doc """
+  Inside a caller's `Arca.Repo.locking_transaction/2`: whether `slot` —
+  node, owner and generation as `take/3` won them — still names the row,
+  under a lease that stands on the database's clock.
+
+  The row is read under a shared lock held until the caller commits
+  (`Arca.QueryHelpers.for_share/1`). On PostgreSQL any number of this
+  member's transactions hold it at once, so they do not serialize on
+  their own row, while a write to it — the claimant's renew, a
+  successor's take, a release — waits until each of them commits. On
+  SQLite the read is plain and the locking transaction's write lock
+  serializes the same writers. Nothing is written, so the fence the
+  claimant's renew names does not move.
+
+  The lease is compared with the database's clock read AFTER the lock was
+  won, so a wait behind a release or a takeover cannot pass on an instant
+  taken before it, and a lease that ran out with no successor refuses
+  exactly as a takeover does. Never touches the cached standing:
+  `renew/1` writes that, and it is not called here.
+
+  `:none` is the slot `member_slot/0` answers where no claimant runs: it
+  is `:ok` while `claimed?/0` is false, with nothing read, and `:lost`
+  wherever a claimant runs, so a writer that holds no slot is never taken
+  for one with nothing to fence.
+
+  Raises outside a transaction and on a store that cannot answer, so the
+  caller's transaction rolls back.
+  """
+  @spec verify_held(slot() | :none) :: :ok | :lost
+  def verify_held(:none) do
+    unless Arca.Repo.in_transaction?() do
+      raise ArgumentError, "Arca.ControlPlane.verify_held/1 runs inside a locking transaction"
+    end
+
+    if claimed?(), do: :lost, else: :ok
+  end
+
+  # arca:db-raise-ok a step inside the caller's locking transaction; a raise rolls it back.
+  def verify_held(%{node: node, owner: owner, generation: generation})
+      when is_binary(node) and is_binary(owner) and is_integer(generation) do
+    unless Arca.Repo.in_transaction?() do
+      raise ArgumentError, "Arca.ControlPlane.verify_held/1 runs inside a locking transaction"
+    end
+
+    held =
+      from(l in CellLease,
+        where: l.node == ^node and l.owner == ^owner and l.generation == ^generation,
+        select: l.lease_until
+      )
+      |> Arca.QueryHelpers.for_share()
+
+    case Arca.Repo.one(held) do
+      nil ->
+        :lost
+
+      lease_until ->
+        if DateTime.compare(lease_until, Arca.ServerMetaStorage.now!()) == :gt,
+          do: :ok,
+          else: :lost
+    end
+  end
+
+  @doc """
+  `verify_held/1` in a locking transaction of its own, for a caller that
+  holds none: `:ok` while `slot` still names the row under a standing
+  lease, `:lost` once it does not. A store that cannot answer raises, as
+  `verify_held/1` does.
+  """
+  @spec check_held(slot() | :none) :: :ok | :lost
+  def check_held(slot) do
+    {:ok, standing} = Arca.Repo.locking_transaction(fn -> verify_held(slot) end)
+    standing
   end
 
   # ---- the roster ------------------------------------------------------------
@@ -289,7 +464,7 @@ defmodule Arca.ControlPlane do
   most one tick stale, and staleness only ever affects a PROPOSAL — where
   a singleton should run. What actually runs it is a claim row.
   """
-  @spec roster() :: {:ok, [CellLease.t()]} | {:error, :database_error}
+  @spec roster() :: {:ok, [map()]} | {:error, :database_error}
   def roster do
     Arca.Repo.Errors.with_db_rescue("Arca.ControlPlane.roster", fn ->
       now = Arca.ServerMetaStorage.now!()
@@ -302,6 +477,7 @@ defmodule Arca.ControlPlane do
          )
        )}
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -309,7 +485,7 @@ defmodule Arca.ControlPlane do
   "is the claimant still alive?" in the cell — a turn's holder, an
   occurrence's claimant, an attempt's runner.
 
-  Because `Cyfr.Boot.id/0` embeds the node, a claim left by an OLDER boot
+  Because `Prima.Boot.id/0` embeds the node, a claim left by an OLDER boot
   of the same node is not live, which is exactly right: that boot is gone
   even though its node came back.
 
@@ -327,7 +503,7 @@ defmodule Arca.ControlPlane do
   def live_member?(_boot), do: false
 
   @doc "The slot row for `node` as it reads now, for diagnostics and tests."
-  @spec slot(String.t()) :: {:ok, CellLease.t()} | {:error, :not_found | :database_error}
+  @spec slot(String.t()) :: {:ok, map()} | {:error, :not_found | :database_error}
   def slot(node) when is_binary(node) do
     Arca.Repo.Errors.with_db_rescue("Arca.ControlPlane.slot", fn ->
       case read(node) do
@@ -335,6 +511,7 @@ defmodule Arca.ControlPlane do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   # ---- the cache -------------------------------------------------------------
@@ -393,10 +570,68 @@ defmodule Arca.ControlPlane do
 
   # ---- internal --------------------------------------------------------------
 
+  # One of the three writes: a locking transaction on the control plane's
+  # own connection, which on SQLite asks for the control plane's turn.
+  # `{:ok, answer}` once it has committed, and `{:error, :database_error}`
+  # for everything else: a store that could not answer, a lock not taken in
+  # time, a commit that raised, a transaction rolled back, or an own pool
+  # that is not running or stopped under the call.
+  defp write(tag, fun) do
+    Arca.Repo.Errors.with_db_rescue(tag, fn ->
+      on_own_connection(tag, fn ->
+        Arca.Repo.locking_transaction(fun, write_turn: :control_plane)
+      end)
+    end)
+    |> case do
+      {:ok, _answer} = committed ->
+        committed
+
+      {:error, :database_error} = error ->
+        error
+
+      unwritten ->
+        Logger.error("[#{tag}] the write did not commit: #{Prima.LoggerContext.shape(unwritten)}")
+        {:error, :database_error}
+    end
+  end
+
+  # The pool is selected for this call alone and the caller's selection put
+  # back, whatever the call did. Where the pool should run and does not —
+  # not started, or stopped between its lookup and the call — the write
+  # fails; it never falls back to the ordinary pool.
+  defp on_own_connection(tag, fun) do
+    if own_pool?() do
+      previous = Arca.Repo.put_dynamic_repo(@pool)
+
+      try do
+        fun.()
+      rescue
+        # What the repo's lookup raises for a name that no longer names a
+        # started repo. Raised with the pool running, it is not the pool's.
+        e in [RuntimeError, ArgumentError] ->
+          if pool_running?(), do: reraise(e, __STACKTRACE__), else: pool_down(tag)
+      catch
+        # The pool went while the checkout waited on it.
+        :exit, {_reason, {DBConnection.Holder, :checkout, _args}} -> pool_down(tag)
+      after
+        Arca.Repo.put_dynamic_repo(previous)
+      end
+    else
+      fun.()
+    end
+  end
+
+  defp pool_running?, do: @pool in Ecto.Repo.all_running()
+
+  defp pool_down(tag) do
+    Logger.error("[#{tag}] the control plane's own pool is not running")
+    {:error, :database_error}
+  end
+
   # Everything a won lease leaves behind, in one place so the row and the
   # cache cannot drift: the slot the next write names, the generation
   # stamped outward, and the time left counted from the instant BEFORE the
-  # write went out.
+  # write went out. Called once the write has committed, never inside it.
   defp won(row, lease_ms, started) do
     slot = %{
       node: row.node,
@@ -552,9 +787,9 @@ defmodule Arca.ControlPlane do
 
   defp lease_end(now, lease_ms), do: DateTime.add(now, lease_ms, :millisecond)
 
-  # Whether a claimant runs in this deployment at all. With one, a member
-  # that has recorded nothing holds nothing — the fail-closed direction,
-  # and the state of every member between its start and its first claim.
-  # Without one there is no slot to take, so every boot holds.
-  defp claimed_here?, do: Application.get_env(:arca, :control_plane_claim_enabled, true)
+  # With a claimant, a member that has recorded nothing holds nothing —
+  # the fail-closed direction, and the state of every member between its
+  # start and its first claim. Without one there is no slot to take, so
+  # every boot holds.
+  defp claimed_here?, do: claimed?()
 end

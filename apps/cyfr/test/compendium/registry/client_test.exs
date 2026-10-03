@@ -5,12 +5,11 @@ defmodule Compendium.Registry.ClientTest do
   use ExUnit.Case, async: false
 
   alias Compendium.Registry.Client
-  alias Compendium.MCP
+  alias Compendium.Provider
   alias Compendium.OCI.Errors
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     # Point API URL at a non-routable address so tests don't hit the real API.
     # Use a random high port on localhost that (almost certainly) has no listener.
@@ -96,7 +95,7 @@ defmodule Compendium.Registry.ClientTest do
          %{ctx: ctx} do
       fn ->
         {:ok, result} =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "search",
             "query" => "nonexistent-component-xyz"
           })
@@ -114,7 +113,7 @@ defmodule Compendium.Registry.ClientTest do
     test "multi-tenant does not attempt cyfr.run search", %{ctx: ctx} do
       fn ->
         {:ok, result} =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "search",
             "query" => "nonexistent-component-xyz"
           })
@@ -136,7 +135,7 @@ defmodule Compendium.Registry.ClientTest do
     } do
       fn ->
         {:error, reason} =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "discover"
           })
 
@@ -148,7 +147,7 @@ defmodule Compendium.Registry.ClientTest do
     test "single-user rejects non-cyfr.run registry for discover", %{ctx: ctx} do
       fn ->
         {:error, msg} =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "discover",
             "registry" => "ghcr.io"
           })
@@ -160,7 +159,7 @@ defmodule Compendium.Registry.ClientTest do
     test "multi-tenant uses OCI.Client for discover (not Registry.Client)", %{ctx: ctx} do
       fn ->
         result =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "discover"
           })
 
@@ -181,7 +180,7 @@ defmodule Compendium.Registry.ClientTest do
     test "multi-tenant allows custom registry for discover", %{ctx: ctx} do
       fn ->
         result =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "discover",
             "registry" => "ghcr.io"
           })
@@ -310,7 +309,7 @@ defmodule Compendium.Registry.ClientTest do
   describe "token redaction" do
     # The log_token_returning_result pipeline runs on every call to a
     # token-returning endpoint. We can't observe the redaction on the error
-    # path (Cyfr.Sanitizer.sanitize/1 only runs on {:ok, body}), but we
+    # path (Prima.Sanitizer.sanitize/1 only runs on {:ok, body}), but we
     # CAN confirm that a probe call with a fake access_token never leaks the
     # raw token value into Logger output — the access_token goes into the
     # request body, and :filter_parameters + the sanitizer cover the
@@ -373,6 +372,49 @@ defmodule Compendium.Registry.ClientTest do
       conn
       |> Plug.Conn.get_req_header("authorization")
       |> List.first()
+    end
+
+    test "a damaged stored push token refuses before any request leaves", %{
+      ctx: ctx,
+      bypass: bypass
+    } do
+      registry = Compendium.RegistryHost.canonical_host()
+
+      # One usable token, and one row that does not open: the damaged row
+      # fails the choice, rather than handing over the other token or
+      # sending the request anonymously.
+      :ok =
+        Compendium.Registry.CredentialStore.put_push_token(
+          ctx,
+          registry,
+          "zeta.example",
+          "cyfr_pt_usable",
+          "personal"
+        )
+
+      aad = Sanctum.CipherAAD.registry_token(ctx.user_id, registry, "alice")
+      {:ok, ciphertext} = Sanctum.Cipher.encrypt("not json", aad)
+
+      :ok =
+        Arca.RegistryTokenStorage.put(%{
+          user_id: ctx.user_id,
+          registry: registry,
+          namespace_slug: "alice",
+          credential_ciphertext: ciphertext
+        })
+
+      # No expectation is set: Bypass fails the test on any request that
+      # reaches it.
+      _ = bypass
+
+      assert {:error, {:corrupt, :registry_credential}} = Client.search(ctx, %{query: "x"})
+      assert {:error, {:corrupt, :registry_credential}} = Client.discover(ctx, %{})
+
+      assert {:error, {:corrupt, :registry_credential}} =
+               Client.get_component(ctx, "reagent", "alice", "thing", "1.0.0")
+
+      assert %Prima.Refusal{class: :corrupt} =
+               Prima.Refusal.classify({:corrupt, :registry_credential})
     end
 
     test "probe_identity/3 — POST /v1/identity/probe with access_token in body", %{bypass: bypass} do
@@ -858,7 +900,7 @@ defmodule Compendium.Registry.ClientTest do
   describe "MCP component.deprecate" do
     test "rejects missing reason", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("component", ctx, %{
+        Provider.handle("component", ctx, %{
           "action" => "deprecate",
           "reference" => "c:alice.widget:1.0.0"
         })
@@ -868,7 +910,7 @@ defmodule Compendium.Registry.ClientTest do
 
     test "rejects empty reason", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("component", ctx, %{
+        Provider.handle("component", ctx, %{
           "action" => "deprecate",
           "reference" => "c:alice.widget:1.0.0",
           "reason" => ""
@@ -879,7 +921,7 @@ defmodule Compendium.Registry.ClientTest do
 
     test "rejects unpinned ref (no version)", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("component", ctx, %{
+        Provider.handle("component", ctx, %{
           "action" => "deprecate",
           "reference" => "c:alice.widget",
           "reason" => "use v2"
@@ -902,7 +944,7 @@ defmodule Compendium.Registry.ClientTest do
   describe "MCP registry.report" do
     test "rejects missing category", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("registry", ctx, %{
+        Provider.handle("registry", ctx, %{
           "action" => "report",
           "target_namespace" => "alice",
           "details" => "d"
@@ -913,7 +955,7 @@ defmodule Compendium.Registry.ClientTest do
 
     test "rejects missing target", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("registry", ctx, %{
+        Provider.handle("registry", ctx, %{
           "action" => "report",
           "category" => "malware",
           "details" => "d"
@@ -924,7 +966,7 @@ defmodule Compendium.Registry.ClientTest do
 
     test "rejects missing details", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("registry", ctx, %{
+        Provider.handle("registry", ctx, %{
           "action" => "report",
           "category" => "malware",
           "target_namespace" => "alice"
@@ -936,13 +978,13 @@ defmodule Compendium.Registry.ClientTest do
 
   describe "MCP component.yank" do
     test "rejects missing reference", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component", ctx, %{"action" => "yank"})
+      {:error, msg} = Provider.handle("component", ctx, %{"action" => "yank"})
       assert err_msg(msg) =~ "reference"
     end
 
     test "rejects unpinned ref", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("component", ctx, %{
+        Provider.handle("component", ctx, %{
           "action" => "yank",
           "reference" => "c:alice.widget"
         })
@@ -957,7 +999,7 @@ defmodule Compendium.Registry.ClientTest do
       fn ->
         # the code path that checks for result[:warning]
         result =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "pull",
             "reference" => "#{Compendium.RegistryHost.canonical_host()}/cyfr/reagents/test:1.0.0"
           })
@@ -970,7 +1012,7 @@ defmodule Compendium.Registry.ClientTest do
     test "multi-tenant surfaces pull warnings from OCI.Client", %{ctx: ctx} do
       fn ->
         result =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "pull",
             "reference" => "ghcr.io/alice/reagents/test:1.0.0"
           })
@@ -985,7 +1027,7 @@ defmodule Compendium.Registry.ClientTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Cyfr.Ops.Error.render(reason) ||
+    Grimoire.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

@@ -16,25 +16,35 @@ const (
 	Aqua               = "aqua"
 	Athanor            = "athanor"
 	Build              = "build"
+	Card               = "card"
 	Component          = "component"
+	Confirmation       = "confirmation"
+	Decision           = "decision"
 	Door               = "door"
 	Execution          = "execution"
 	File               = "file"
 	Key                = "key"
+	Layout             = "layout"
 	McpLog             = "mcp_log"
 	McpServers         = "mcp_servers"
 	Member             = "member"
 	Notes              = "notes"
 	Oauth              = "oauth"
+	Pairing            = "pairing"
+	Passkey            = "passkey"
+	Person             = "person"
 	PolicyLog          = "policy_log"
 	Profile            = "profile"
 	Record             = "record"
 	Registry           = "registry"
+	Resource           = "resource"
 	Retention          = "retention"
 	Schedule           = "schedule"
 	Session            = "session"
+	Settings           = "settings"
 	System             = "system"
 	Thread             = "thread"
+	Tincture           = "tincture"
 	TinctureVisibility = "tincture_visibility"
 	Tools              = "tools"
 	Turn               = "turn"
@@ -74,6 +84,8 @@ const (
 	BuildStatus             = "status"
 	BuildToolchains         = "toolchains"
 	BuildValidate           = "validate"
+	CardPress               = "press"
+	CardRefresh             = "refresh"
 	ComponentCategories     = "categories"
 	ComponentCreate         = "create"
 	ComponentDelete         = "delete"
@@ -85,12 +97,22 @@ const (
 	ComponentList           = "list"
 	ComponentPull           = "pull"
 	ComponentPush           = "push"
+	ComponentReadResource   = "read_resource"
 	ComponentRegister       = "register"
 	ComponentReset          = "reset"
 	ComponentSearch         = "search"
 	ComponentSetupPlan      = "setup_plan"
 	ComponentStatus         = "status"
 	ComponentYank           = "yank"
+	ConfirmationCancel      = "cancel"
+	ConfirmationConfirm     = "confirm"
+	ConfirmationPending     = "pending"
+	ConfirmationReauth      = "reauth"
+	DecisionCorrelate       = "correlate"
+	DecisionGet             = "get"
+	DecisionGetGlobal       = "get_global"
+	DecisionList            = "list"
+	DecisionListGlobal      = "list_global"
 	DoorAllow               = "allow"
 	DoorDeny                = "deny"
 	DoorList                = "list"
@@ -101,9 +123,11 @@ const (
 	ExecutionForceRelease   = "force_release"
 	ExecutionList           = "list"
 	ExecutionLogs           = "logs"
+	ExecutionReadResource   = "read_resource"
 	ExecutionRun            = "run"
 	ExecutionRunStream      = "run_stream"
 	ExecutionStatus         = "status"
+	ExecutionUsage          = "usage"
 	FileDelete              = "delete"
 	FileList                = "list"
 	FileRead                = "read"
@@ -113,6 +137,8 @@ const (
 	KeyList                 = "list"
 	KeyRevoke               = "revoke"
 	KeyRotate               = "rotate"
+	LayoutEdit              = "edit"
+	LayoutGet               = "get"
 	McpLogCorrelate         = "correlate"
 	McpLogFanOuts           = "fan_outs"
 	McpLogGet               = "get"
@@ -141,11 +167,37 @@ const (
 	OauthDeleteClient       = "delete_client"
 	OauthList               = "list"
 	OauthSetClient          = "set_client"
+	PairingBegin            = "begin"
+	PairingComplete         = "complete"
+	PairingList             = "list"
+	PairingRenew            = "renew"
+	PairingRevoke           = "revoke"
+	PasskeyList             = "list"
+	PasskeyRecoverAdmin     = "recover_admin"
+	PasskeyRegister         = "register"
+	PasskeyRevoke           = "revoke"
+	PersonAssert            = "assert"
+	PersonCarryBegin        = "carry_begin"
+	PersonCarryCancel       = "carry_cancel"
+	PersonCarryComplete     = "carry_complete"
+	PersonCarryList         = "carry_list"
+	PersonCertify           = "certify"
+	PersonEnroll            = "enroll"
+	PersonEnrollAbandon     = "enroll_abandon"
+	PersonEnrollHolder      = "enroll_holder"
+	PersonKit               = "kit"
+	PersonKitAck            = "kit_ack"
+	PersonLinkDoor          = "link_door"
+	PersonRenewCertificate  = "renew_certificate"
+	PersonRotate            = "rotate"
+	PersonStatus            = "status"
+	PersonUnlinkDoor        = "unlink_door"
 	PolicyLogCorrelate      = "correlate"
 	PolicyLogGet            = "get"
 	PolicyLogList           = "list"
 	ProfileCommit           = "commit"
 	ProfileGrant            = "grant"
+	ProfileGrants           = "grants"
 	ProfileList             = "list"
 	ProfilePlan             = "plan"
 	ProfilePreview          = "preview"
@@ -173,6 +225,7 @@ const (
 	RegistryTokensRevoke    = "tokens_revoke"
 	RegistryVerifyPublisher = "verify_publisher"
 	RegistryWhoami          = "whoami"
+	ResourceRead            = "read"
 	RetentionCleanup        = "cleanup"
 	RetentionGet            = "get"
 	RetentionSet            = "set"
@@ -188,8 +241,12 @@ const (
 	SessionDevicePoll       = "device_poll"
 	SessionLogin            = "login"
 	SessionLogout           = "logout"
+	SessionReadResource     = "read_resource"
 	SessionUse              = "use"
 	SessionWhoami           = "whoami"
+	SettingsList            = "list"
+	SettingsReset           = "reset"
+	SettingsSet             = "set"
 	SystemNotify            = "notify"
 	SystemStatus            = "status"
 	ThreadAloud             = "aloud"
@@ -208,6 +265,8 @@ const (
 	ThreadSend              = "send"
 	ThreadStop              = "stop"
 	ThreadUnfollow          = "unfollow"
+	TinctureInvokeProtected = "invoke_protected"
+	TinctureInvokePublic    = "invoke_public"
 	TinctureVisibilityGet   = "get"
 	ToolsList               = "list"
 	TurnRecover             = "recover"
@@ -220,6 +279,7 @@ const (
 	VaultRename             = "rename"
 	VaultRevoke             = "revoke"
 	VaultRotate             = "rotate"
+	VaultStatus             = "status"
 	WebhookCreate           = "create"
 	WebhookGet              = "get"
 	WebhookList             = "list"
@@ -234,29 +294,39 @@ var Actions = map[string][]string{
 	"aqua":                {"create", "delete", "get", "list", "reset", "skill_create", "skill_delete", "skill_get", "skill_list", "skill_reset", "skill_update", "status", "update"},
 	"athanor":             {"archive", "create", "destroy", "get", "list", "pair", "provision", "purge", "rename", "settings", "unarchive"},
 	"build":               {"compile", "status", "toolchains", "validate"},
-	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "register", "reset", "search", "setup_plan", "status", "yank"},
+	"card":                {"press", "refresh"},
+	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
+	"confirmation":        {"cancel", "confirm", "pending", "reauth"},
+	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
-	"execution":           {"cancel", "force_release", "list", "logs", "run", "run_stream", "status"},
+	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status", "usage"},
 	"file":                {"delete", "list", "read", "write"},
 	"key":                 {"create", "get", "list", "revoke", "rotate"},
+	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "fan_outs", "get", "list", "stats"},
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "restart", "test", "update"},
 	"member":              {"add", "leave", "list", "remove"},
 	"notes":               {"forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
+	"pairing":             {"begin", "complete", "list", "renew", "revoke"},
+	"passkey":             {"list", "recover_admin", "register", "revoke"},
+	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "enroll", "enroll_abandon", "enroll_holder", "kit", "kit_ack", "link_door", "renew_certificate", "rotate", "status", "unlink_door"},
 	"policy_log":          {"correlate", "get", "list"},
-	"profile":             {"commit", "grant", "list", "plan", "preview", "publish", "revoke"},
+	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
 	"registry":            {"appeal", "claim_personal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "probe", "report", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"device_init", "device_poll", "login", "logout", "use", "whoami"},
+	"session":             {"device_init", "device_poll", "login", "logout", "read_resource", "use", "whoami"},
+	"settings":            {"list", "reset", "set"},
 	"system":              {"notify", "status"},
 	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "events", "follow", "get", "list", "messages", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
+	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
 	"turn":                {"recover", "suspend"},
-	"vault":               {"authorize", "create", "delete", "list", "rebind", "rename", "revoke", "rotate"},
+	"vault":               {"authorize", "create", "delete", "list", "rebind", "rename", "revoke", "rotate", "status"},
 	"webhook":             {"create", "get", "list", "revoke", "rotate", "update"},
 }
 
@@ -285,6 +355,12 @@ type ApprovalResolveArgs struct {
 	Scope Field[string] `json:"scope,omitzero"`
 	// resolve: why (decline)
 	Reason Field[string] `json:"reason,omitzero"`
+	// resolve: the run a standing approval ends with — its execution, turn or schedule
+	Lifecycle Field[string] `json:"lifecycle,omitzero"`
+	// resolve: an ISO 8601 UTC time a standing approval ends at, a bound beside its lifecycle
+	Until Field[string] `json:"until,omitzero"`
+	// resolve: the resources a standing approval covers, for an action that declares which argument names one
+	Constraint Field[ApprovalResolveArgsConstraint] `json:"constraint,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -294,6 +370,22 @@ func (args ApprovalResolveArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ApprovalResolve, fields: fields(args)})
+}
+
+type ApprovalResolveArgsConstraint struct {
+	Kind     string   `json:"kind"`
+	Patterns []string `json:"patterns"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ApprovalResolveArgsConstraint) UnmarshalJSON(data []byte) error {
+	type fields ApprovalResolveArgsConstraint
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ApprovalResolveArgsConstraint(value)
+	return nil
 }
 
 // AquaCreateArgs carries arguments for aqua.create.
@@ -606,7 +698,7 @@ func (args AthanorListArgs) MarshalJSON() ([]byte, error) {
 
 // AthanorPairArgs carries arguments for athanor.pair.
 type AthanorPairArgs struct {
-	// pair: the other person's user id — someone you already share an active estate with
+	// pair: the other person's user id — someone you already share an active athanor with
 	User string `json:"user"`
 }
 
@@ -762,6 +854,42 @@ func (args BuildValidateArgs) MarshalJSON() ([]byte, error) {
 	}{Action: BuildValidate, fields: fields(args)})
 }
 
+// CardPressArgs carries arguments for card.press.
+type CardPressArgs struct {
+	// The id of a card-size slot in your layout
+	Slot string `json:"slot"`
+	// The posture whose arrangement holds the slot
+	Posture string `json:"posture"`
+	// The index of the button among the card's declared buttons
+	Button int `json:"button"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args CardPressArgs) MarshalJSON() ([]byte, error) {
+	type fields CardPressArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: CardPress, fields: fields(args)})
+}
+
+// CardRefreshArgs carries arguments for card.refresh.
+type CardRefreshArgs struct {
+	// The id of a card-size slot in your layout
+	Slot string `json:"slot"`
+	// The posture whose arrangement holds the slot
+	Posture string `json:"posture"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args CardRefreshArgs) MarshalJSON() ([]byte, error) {
+	type fields CardRefreshArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: CardRefresh, fields: fields(args)})
+}
+
 // ComponentCategoriesArgs carries arguments for component.categories.
 type ComponentCategoriesArgs struct {
 }
@@ -783,7 +911,7 @@ type ComponentCreateArgs struct {
 	Type string `json:"type"`
 	// Semver version (create/fork action)
 	Version Field[string] `json:"version,omitzero"`
-	// Scaffold template (tincture only). Omit for vanilla HTML/JS/CSS.
+	// Scaffold template (tincture only): vanilla HTML/JS/CSS, Vite, or React on Vite; the built two ship the lockfile their build installs from. Omit for vanilla.
 	Template Field[string] `json:"template,omitzero"`
 }
 
@@ -951,6 +1079,21 @@ func (args ComponentPushArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ComponentPush, fields: fields(args)})
 }
 
+// ComponentReadResourceArgs carries arguments for component.read_resource.
+type ComponentReadResourceArgs struct {
+	// compendium://components/{reference} for a component's metadata, or compendium://assets/{reference}/{path} for one of its files
+	Uri string `json:"uri"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ComponentReadResourceArgs) MarshalJSON() ([]byte, error) {
+	type fields ComponentReadResourceArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ComponentReadResource, fields: fields(args)})
+}
+
 // ComponentRegisterArgs carries arguments for component.register.
 type ComponentRegisterArgs struct {
 	// Correlation ID for registration progress events
@@ -1055,9 +1198,170 @@ func (args ComponentYankArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ComponentYank, fields: fields(args)})
 }
 
+// ConfirmationCancelArgs carries arguments for confirmation.cancel.
+type ConfirmationCancelArgs struct {
+	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
+	Ref string `json:"ref"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ConfirmationCancelArgs) MarshalJSON() ([]byte, error) {
+	type fields ConfirmationCancelArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ConfirmationCancel, fields: fields(args)})
+}
+
+// ConfirmationConfirmArgs carries arguments for confirmation.confirm.
+type ConfirmationConfirmArgs struct {
+	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
+	Ref string `json:"ref"`
+	// confirm: a WebAuthn assertion over the confirmation's digest, from a passkey registered here
+	Assertion Field[any] `json:"assertion,omitzero"`
+	// confirm: the one-time code sent to your verified email for it
+	Code Field[string] `json:"code,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ConfirmationConfirmArgs) MarshalJSON() ([]byte, error) {
+	type fields ConfirmationConfirmArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ConfirmationConfirm, fields: fields(args)})
+}
+
+// ConfirmationPendingArgs carries arguments for confirmation.pending.
+type ConfirmationPendingArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ConfirmationPendingArgs) MarshalJSON() ([]byte, error) {
+	type fields ConfirmationPendingArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ConfirmationPending, fields: fields(args)})
+}
+
+// ConfirmationReauthArgs carries arguments for confirmation.reauth.
+type ConfirmationReauthArgs struct {
+	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
+	Ref string `json:"ref"`
+	// reauth: a fresh OpenID Connect sign-in, or a one-time code to your verified email
+	Method string `json:"method"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ConfirmationReauthArgs) MarshalJSON() ([]byte, error) {
+	type fields ConfirmationReauthArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ConfirmationReauth, fields: fields(args)})
+}
+
+// DecisionCorrelateArgs carries arguments for decision.correlate.
+type DecisionCorrelateArgs struct {
+	// The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it.
+	RequestId string `json:"request_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DecisionCorrelateArgs) MarshalJSON() ([]byte, error) {
+	type fields DecisionCorrelateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DecisionCorrelate, fields: fields(args)})
+}
+
+// DecisionGetArgs carries arguments for decision.get.
+type DecisionGetArgs struct {
+	// Call ID
+	CallId string `json:"call_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DecisionGetArgs) MarshalJSON() ([]byte, error) {
+	type fields DecisionGetArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DecisionGet, fields: fields(args)})
+}
+
+// DecisionGetGlobalArgs carries arguments for decision.get_global.
+type DecisionGetGlobalArgs struct {
+	// Call ID
+	CallId string `json:"call_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DecisionGetGlobalArgs) MarshalJSON() ([]byte, error) {
+	type fields DecisionGetGlobalArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DecisionGetGlobal, fields: fields(args)})
+}
+
+// DecisionListArgs carries arguments for decision.list.
+type DecisionListArgs struct {
+	// The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it.
+	RequestId Field[string] `json:"request_id,omitzero"`
+	// Tool name filter
+	Tool Field[string] `json:"tool,omitzero"`
+	// Filter by admission
+	Admission Field[string] `json:"admission,omitzero"`
+	// Filter by refusal class
+	RefusalClass Field[string] `json:"refusal_class,omitzero"`
+	// ISO8601 timestamp — return decisions made at or after this time
+	Since Field[string] `json:"since,omitzero"`
+	// Max results (default: 20)
+	Limit Field[int] `json:"limit,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DecisionListArgs) MarshalJSON() ([]byte, error) {
+	type fields DecisionListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DecisionList, fields: fields(args)})
+}
+
+// DecisionListGlobalArgs carries arguments for decision.list_global.
+type DecisionListGlobalArgs struct {
+	// The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it.
+	RequestId Field[string] `json:"request_id,omitzero"`
+	// Tool name filter
+	Tool Field[string] `json:"tool,omitzero"`
+	// Filter by admission
+	Admission Field[string] `json:"admission,omitzero"`
+	// Filter by refusal class
+	RefusalClass Field[string] `json:"refusal_class,omitzero"`
+	// ISO8601 timestamp — return decisions made at or after this time
+	Since Field[string] `json:"since,omitzero"`
+	// Max results (default: 20)
+	Limit Field[int] `json:"limit,omitzero"`
+	// global only: one athanor's decisions, or none for the host's own
+	AthanorId Field[string] `json:"athanor_id,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DecisionListGlobalArgs) MarshalJSON() ([]byte, error) {
+	type fields DecisionListGlobalArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DecisionListGlobal, fields: fields(args)})
+}
+
 // DoorAllowArgs carries arguments for door.allow.
 type DoorAllowArgs struct {
-	// An email, an IdP subject, or * (allow, deny)
+	// An email, an IdP subject, a person identifier, or * (allow, deny)
 	Value string `json:"value"`
 	// How to read value; inferred from its shape when absent
 	Kind Field[string] `json:"kind,omitzero"`
@@ -1076,7 +1380,7 @@ func (args DoorAllowArgs) MarshalJSON() ([]byte, error) {
 
 // DoorDenyArgs carries arguments for door.deny.
 type DoorDenyArgs struct {
-	// An email, an IdP subject, or * (allow, deny)
+	// An email, an IdP subject, a person identifier, or * (allow, deny)
 	Value string `json:"value"`
 	// How to read value; inferred from its shape when absent
 	Kind Field[string] `json:"kind,omitzero"`
@@ -1211,6 +1515,21 @@ func (args ExecutionLogsArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ExecutionLogs, fields: fields(args)})
 }
 
+// ExecutionReadResourceArgs carries arguments for execution.read_resource.
+type ExecutionReadResourceArgs struct {
+	// crucible://executions/{id} for an execution's state, or crucible://executions/{id}/logs for its logs
+	Uri string `json:"uri"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ExecutionReadResourceArgs) MarshalJSON() ([]byte, error) {
+	type fields ExecutionReadResourceArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ExecutionReadResource, fields: fields(args)})
+}
+
 // ExecutionRunArgs carries arguments for execution.run.
 type ExecutionRunArgs struct {
 	// Component reference string (e.g., 'catalyst:local.claude:0.2.0')
@@ -1304,6 +1623,23 @@ func (args ExecutionStatusArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ExecutionStatus, fields: fields(args)})
+}
+
+// ExecutionUsageArgs carries arguments for execution.usage.
+type ExecutionUsageArgs struct {
+	// usage: the profile whose runs to show, with each run's origin
+	ProfileId string `json:"profile_id"`
+	// Maximum results to return (list action)
+	Limit Field[int] `json:"limit,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ExecutionUsageArgs) MarshalJSON() ([]byte, error) {
+	type fields ExecutionUsageArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ExecutionUsage, fields: fields(args)})
 }
 
 // FileDeleteArgs carries arguments for file.delete.
@@ -1451,6 +1787,38 @@ func (args KeyRotateArgs) MarshalJSON() ([]byte, error) {
 	}{Action: KeyRotate, fields: fields(args)})
 }
 
+// LayoutEditArgs carries arguments for layout.edit.
+type LayoutEditArgs struct {
+	// edit: the whole layout document — {version: 1, postures: {hand|desk: {desktop, slots: [{id, tincture, size: icon|card|full, order, card}], floating: [{tincture, position: {x, y}}]}}}
+	Document any `json:"document"`
+	// edit: the revision get answered; a layout published since refuses the edit
+	Revision int `json:"revision"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args LayoutEditArgs) MarshalJSON() ([]byte, error) {
+	type fields LayoutEditArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: LayoutEdit, fields: fields(args)})
+}
+
+// LayoutGetArgs carries arguments for layout.get.
+type LayoutGetArgs struct {
+	// get: also answer this posture's arrangement
+	Posture Field[string] `json:"posture,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args LayoutGetArgs) MarshalJSON() ([]byte, error) {
+	type fields LayoutGetArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: LayoutGet, fields: fields(args)})
+}
+
 // McpLogCorrelateArgs carries arguments for mcp_log.correlate.
 type McpLogCorrelateArgs struct {
 	// The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it.
@@ -1564,7 +1932,7 @@ type McpServersCreateArgsConfig struct {
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`
 	// The tools the server may offer (default: all)
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
-	// http (default): a URL. stdio: backends the MCP bridge runs.
+	// http (default): a URL. stdio: backends the backends service runs.
 	Transport Field[string] `json:"transport,omitzero"`
 	// MCP server endpoint URL (http)
 	Url Field[string] `json:"url,omitzero"`
@@ -1746,7 +2114,7 @@ type McpServersUpdateArgsConfig struct {
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`
 	// The tools the server may offer (default: all)
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
-	// http (default): a URL. stdio: backends the MCP bridge runs.
+	// http (default): a URL. stdio: backends the backends service runs.
 	Transport Field[string] `json:"transport,omitzero"`
 	// MCP server endpoint URL (http)
 	Url Field[string] `json:"url,omitzero"`
@@ -1788,6 +2156,8 @@ type MemberAddArgs struct {
 	Email Field[string] `json:"email,omitzero"`
 	// The person's user id, when already on this server (add, remove)
 	UserId Field[string] `json:"user_id,omitzero"`
+	// The person's identifier (per_…), in place of an email or a user id (add, remove)
+	Identifier Field[string] `json:"identifier,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -1841,6 +2211,10 @@ type MemberRemoveArgs struct {
 	Email Field[string] `json:"email,omitzero"`
 	// The person's user id, when already on this server (add, remove)
 	UserId Field[string] `json:"user_id,omitzero"`
+	// The person's identifier (per_…), in place of an email or a user id (add, remove)
+	Identifier Field[string] `json:"identifier,omitzero"`
+	// With an email or an identifier: withdraw only its pending invitation, never a member, and answer not found once it has been accepted (remove)
+	Invitation Field[bool] `json:"invitation,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -1890,7 +2264,7 @@ func (args NotesKeepArgs) MarshalJSON() ([]byte, error) {
 
 // NotesListArgs carries arguments for notes.list.
 type NotesListArgs struct {
-	// Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.
+	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
 	Scope Field[string] `json:"scope,omitzero"`
 	// list, search: how many to answer at most (default 100).
 	Limit Field[int] `json:"limit,omitzero"`
@@ -1932,9 +2306,9 @@ func (args NotesPinArgs) MarshalJSON() ([]byte, error) {
 type NotesReadArgs struct {
 	// What the note is called (keep, pin, read, forget)
 	Name string `json:"name"`
-	// Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.
+	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
 	Scope Field[string] `json:"scope,omitzero"`
-	// read: the estate a search answered for the note — reads it there, under your own seat.
+	// read: the athanor a search answered for the note — reads it there, under your own seat.
 	AthanorId Field[string] `json:"athanor_id,omitzero"`
 }
 
@@ -1951,7 +2325,7 @@ func (args NotesReadArgs) MarshalJSON() ([]byte, error) {
 type NotesSearchArgs struct {
 	// search: text to find in a note's name or body
 	Query string `json:"query"`
-	// Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.
+	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
 	Scope Field[string] `json:"scope,omitzero"`
 	// list, search: how many to answer at most (default 100).
 	Limit Field[int] `json:"limit,omitzero"`
@@ -2013,6 +2387,473 @@ func (args OauthSetClientArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: OauthSetClient, fields: fields(args)})
+}
+
+// PairingBeginArgs carries arguments for pairing.begin.
+type PairingBeginArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingBeginArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingBeginArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingBegin, fields: fields(args)})
+}
+
+// PairingCompleteArgs carries arguments for pairing.complete.
+type PairingCompleteArgs struct {
+	// complete: the invitation's secret, from the pairing code's fragment
+	InvitationSecret string `json:"invitation_secret"`
+	// The device's public key, unpadded base64url (complete, renew)
+	DeviceKey string `json:"device_key"`
+	// complete: the device key's signature over the pair challenge; absent, the answer is the challenge to sign
+	Proof Field[PairingCompleteArgsProof] `json:"proof,omitzero"`
+	// complete: for a person whose identity is at another home, the device certificate their home issued for this client, device key, home and athanor; absent for a person whose keys are here
+	Certificate Field[any] `json:"certificate,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingCompleteArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingCompleteArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingComplete, fields: fields(args)})
+}
+
+type PairingCompleteArgsProof struct {
+	Protocol  string `json:"protocol"`
+	Purpose   string `json:"purpose"`
+	Home      string `json:"home"`
+	Athanor   string `json:"athanor"`
+	ClientId  string `json:"client_id"`
+	DeviceKey string `json:"device_key"`
+	Nonce     string `json:"nonce"`
+	ExpiresAt int    `json:"expires_at"`
+	Sig       string `json:"sig"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *PairingCompleteArgsProof) UnmarshalJSON(data []byte) error {
+	type fields PairingCompleteArgsProof
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = PairingCompleteArgsProof(value)
+	return nil
+}
+
+// PairingListArgs carries arguments for pairing.list.
+type PairingListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingListArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingList, fields: fields(args)})
+}
+
+// PairingRenewArgs carries arguments for pairing.renew.
+type PairingRenewArgs struct {
+	// The paired client (pcl_…) (renew, revoke)
+	ClientId string `json:"client_id"`
+	// The device's public key, unpadded base64url (complete, renew)
+	DeviceKey string `json:"device_key"`
+	// renew: the device key's signature over the renew challenge
+	Proof PairingRenewArgsProof `json:"proof"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingRenewArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingRenewArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingRenew, fields: fields(args)})
+}
+
+type PairingRenewArgsProof struct {
+	Protocol  string `json:"protocol"`
+	Purpose   string `json:"purpose"`
+	Home      string `json:"home"`
+	Athanor   string `json:"athanor"`
+	ClientId  string `json:"client_id"`
+	DeviceKey string `json:"device_key"`
+	Nonce     string `json:"nonce"`
+	ExpiresAt int    `json:"expires_at"`
+	Sig       string `json:"sig"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *PairingRenewArgsProof) UnmarshalJSON(data []byte) error {
+	type fields PairingRenewArgsProof
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = PairingRenewArgsProof(value)
+	return nil
+}
+
+// PairingRevokeArgs carries arguments for pairing.revoke.
+type PairingRevokeArgs struct {
+	// The paired client (pcl_…) (renew, revoke)
+	ClientId string `json:"client_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingRevokeArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingRevokeArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingRevoke, fields: fields(args)})
+}
+
+// PasskeyListArgs carries arguments for passkey.list.
+type PasskeyListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PasskeyListArgs) MarshalJSON() ([]byte, error) {
+	type fields PasskeyListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PasskeyList, fields: fields(args)})
+}
+
+// PasskeyRecoverAdminArgs carries arguments for passkey.recover_admin.
+type PasskeyRecoverAdminArgs struct {
+	// recover_admin: the person whose pending registration is authorized
+	UserId string `json:"user_id"`
+	// The passkey, or the pending registration (revoke, recover_admin)
+	PasskeyId string `json:"passkey_id"`
+	// recover_admin: the digest (sha256:<hex>) of the exact pending registration authorized
+	RegistrationDigest string `json:"registration_digest"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PasskeyRecoverAdminArgs) MarshalJSON() ([]byte, error) {
+	type fields PasskeyRecoverAdminArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PasskeyRecoverAdmin, fields: fields(args)})
+}
+
+// PasskeyRegisterArgs carries arguments for passkey.register.
+type PasskeyRegisterArgs struct {
+	// register: the WebAuthn registration the browser's ceremony answered; absent, the answer is the options to begin one with
+	Credential Field[any] `json:"credential,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PasskeyRegisterArgs) MarshalJSON() ([]byte, error) {
+	type fields PasskeyRegisterArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PasskeyRegister, fields: fields(args)})
+}
+
+// PasskeyRevokeArgs carries arguments for passkey.revoke.
+type PasskeyRevokeArgs struct {
+	// The passkey, or the pending registration (revoke, recover_admin)
+	PasskeyId string `json:"passkey_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PasskeyRevokeArgs) MarshalJSON() ([]byte, error) {
+	type fields PasskeyRevokeArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PasskeyRevoke, fields: fields(args)})
+}
+
+// PersonAssertArgs carries arguments for person.assert.
+type PersonAssertArgs struct {
+	// The other home, as its origin: the assertion's audience, or the home a certificate is presented to
+	Audience string `json:"audience"`
+	// assert: the challenge that home issued for this sign-in
+	Challenge string `json:"challenge"`
+	// The pending sign-in carry, by its action id
+	ActionId string `json:"action_id"`
+	// assert: the key_epoch (sha256:<hex>) of the identity head the assertion is signed under
+	KeyEpoch string `json:"key_epoch"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonAssertArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonAssertArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonAssert, fields: fields(args)})
+}
+
+// PersonCarryBeginArgs carries arguments for person.carry_begin.
+type PersonCarryBeginArgs struct {
+	// carry_begin: the home to sign in at, as its origin
+	Destination string `json:"destination"`
+	// carry_begin: what the carry is for; join is the one operation
+	Operation Field[string] `json:"operation,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonCarryBeginArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonCarryBeginArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonCarryBegin, fields: fields(args)})
+}
+
+// PersonCarryCancelArgs carries arguments for person.carry_cancel.
+type PersonCarryCancelArgs struct {
+	// The pending sign-in carry, by its action id
+	ActionId string `json:"action_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonCarryCancelArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonCarryCancelArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonCarryCancel, fields: fields(args)})
+}
+
+// PersonCarryCompleteArgs carries arguments for person.carry_complete.
+type PersonCarryCompleteArgs struct {
+	// The pending sign-in carry, by its action id
+	ActionId string `json:"action_id"`
+	// carry_complete: the navigation outcome the destination returned
+	Outcome string `json:"outcome"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonCarryCompleteArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonCarryCompleteArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonCarryComplete, fields: fields(args)})
+}
+
+// PersonCarryListArgs carries arguments for person.carry_list.
+type PersonCarryListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonCarryListArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonCarryListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonCarryList, fields: fields(args)})
+}
+
+// PersonCertifyArgs carries arguments for person.certify.
+type PersonCertifyArgs struct {
+	// certify: the device's public key, unpadded base64url
+	DeviceKey string `json:"device_key"`
+	// The other home, as its origin: the assertion's audience, or the home a certificate is presented to
+	Audience string `json:"audience"`
+	// certify: the athanor at that home the device joins
+	Athanor string `json:"athanor"`
+	// certify: the paired-client id that home reserved for the device (pcl_…)
+	ClientId string `json:"client_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonCertifyArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonCertifyArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonCertify, fields: fields(args)})
+}
+
+// PersonEnrollArgs carries arguments for person.enroll.
+type PersonEnrollArgs struct {
+	// enroll: the new kit's recovery seed, drawn by the trusted form (32 bytes, unpadded base64url)
+	RecoverySecret string `json:"recovery_secret"`
+	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, enroll_holder)
+	RequestId string `json:"request_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonEnrollArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonEnrollArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonEnroll, fields: fields(args)})
+}
+
+// PersonEnrollAbandonArgs carries arguments for person.enroll_abandon.
+type PersonEnrollAbandonArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonEnrollAbandonArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonEnrollAbandonArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonEnrollAbandon, fields: fields(args)})
+}
+
+// PersonEnrollHolderArgs carries arguments for person.enroll_holder.
+type PersonEnrollHolderArgs struct {
+	// enroll_holder: an existing kit's recovery seed, which signs the change (32 bytes, unpadded base64url)
+	RecoverySecret string `json:"recovery_secret"`
+	// enroll_holder: the recovery holder to add
+	Holder PersonEnrollHolderArgsHolder `json:"holder"`
+	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, enroll_holder)
+	RequestId string `json:"request_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonEnrollHolderArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonEnrollHolderArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonEnrollHolder, fields: fields(args)})
+}
+
+type PersonEnrollHolderArgsHolder struct {
+	// The kind of recovery holder added; a printed kit is the one kind
+	Kind string `json:"kind"`
+	// The added kit's recovery seed, drawn by the trusted form (32 bytes, unpadded base64url)
+	RecoverySecret string `json:"recovery_secret"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *PersonEnrollHolderArgsHolder) UnmarshalJSON(data []byte) error {
+	type fields PersonEnrollHolderArgsHolder
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = PersonEnrollHolderArgsHolder(value)
+	return nil
+}
+
+// PersonKitArgs carries arguments for person.kit.
+type PersonKitArgs struct {
+	// The enrollment or added-kit attempt whose kit this is (kit, kit_ack)
+	AttemptId string `json:"attempt_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonKitArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonKitArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonKit, fields: fields(args)})
+}
+
+// PersonKitAckArgs carries arguments for person.kit_ack.
+type PersonKitAckArgs struct {
+	// The enrollment or added-kit attempt whose kit this is (kit, kit_ack)
+	AttemptId string `json:"attempt_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonKitAckArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonKitAckArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonKitAck, fields: fields(args)})
+}
+
+// PersonLinkDoorArgs carries arguments for person.link_door.
+type PersonLinkDoorArgs struct {
+	// link_door: the door to link, as its provider name
+	Provider string `json:"provider"`
+	// link_door: the single-use ticket a completed sign-in with that door answered, proving control of its subject
+	Ticket string `json:"ticket"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonLinkDoorArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonLinkDoorArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonLinkDoor, fields: fields(args)})
+}
+
+// PersonRenewCertificateArgs carries arguments for person.renew_certificate.
+type PersonRenewCertificateArgs struct {
+	// renew_certificate: a certificate this home issued for the device, which only locates its certification
+	Certificate any `json:"certificate"`
+	// renew_certificate: the device key's signature over the renew challenge; absent, the answer is the challenge to sign
+	Proof Field[any] `json:"proof,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonRenewCertificateArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonRenewCertificateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonRenewCertificate, fields: fields(args)})
+}
+
+// PersonRotateArgs carries arguments for person.rotate.
+type PersonRotateArgs struct {
+	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, enroll_holder)
+	RequestId string `json:"request_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonRotateArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonRotateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonRotate, fields: fields(args)})
+}
+
+// PersonStatusArgs carries arguments for person.status.
+type PersonStatusArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonStatusArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonStatusArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonStatus, fields: fields(args)})
+}
+
+// PersonUnlinkDoorArgs carries arguments for person.unlink_door.
+type PersonUnlinkDoorArgs struct {
+	// unlink_door: the linked door's identity key (provider|issuer|subject)
+	Door string `json:"door"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonUnlinkDoorArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonUnlinkDoorArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonUnlinkDoor, fields: fields(args)})
 }
 
 // PolicyLogCorrelateArgs carries arguments for policy_log.correlate.
@@ -2105,6 +2946,10 @@ type ProfileCommitArgsDecisions struct {
 	PublishFrom    Field[string]                                      `json:"publish_from,omitzero"`
 	NeedIds        Field[[]string]                                    `json:"need_ids,omitzero"`
 	DurableStorage Field[bool]                                        `json:"durable_storage,omitzero"`
+	// The origins the grant admits; absent, interactive alone
+	Origins Field[[]string] `json:"origins,omitzero"`
+	// Per consent-graph node, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
+	Subset Field[map[string]ProfileCommitArgsDecisionsSubsetItem] `json:"subset,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -2170,6 +3015,95 @@ func (args *ProfileCommitArgsDecisionsToolServersItem) UnmarshalJSON(data []byte
 	return nil
 }
 
+type ProfileCommitArgsDecisionsSubsetItem struct {
+	Egress  Field[ProfileCommitArgsDecisionsSubsetItemEgress]  `json:"egress,omitzero"`
+	Storage Field[ProfileCommitArgsDecisionsSubsetItemStorage] `json:"storage,omitzero"`
+	Tools   Field[[]string]                                    `json:"tools,omitzero"`
+	Limits  Field[ProfileCommitArgsDecisionsSubsetItemLimits]  `json:"limits,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSubsetItem) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSubsetItem
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSubsetItem(value)
+	return nil
+}
+
+type ProfileCommitArgsDecisionsSubsetItemEgress struct {
+	Domains    Field[[]string] `json:"domains,omitzero"`
+	Methods    Field[[]string] `json:"methods,omitzero"`
+	Schemes    Field[[]string] `json:"schemes,omitzero"`
+	PrivateIps Field[[]string] `json:"private_ips,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSubsetItemEgress) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSubsetItemEgress
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSubsetItemEgress(value)
+	return nil
+}
+
+type ProfileCommitArgsDecisionsSubsetItemStorage struct {
+	Paths   Field[[]string] `json:"paths,omitzero"`
+	Actions Field[[]string] `json:"actions,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSubsetItemStorage) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSubsetItemStorage
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSubsetItemStorage(value)
+	return nil
+}
+
+type ProfileCommitArgsDecisionsSubsetItemLimits struct {
+	BatchTimeout       Field[string]                                              `json:"batch_timeout,omitzero"`
+	MaxConcurrentTasks Field[int]                                                 `json:"max_concurrent_tasks,omitzero"`
+	MaxMemoryBytes     Field[int]                                                 `json:"max_memory_bytes,omitzero"`
+	MaxRequestSize     Field[int]                                                 `json:"max_request_size,omitzero"`
+	MaxResponseSize    Field[int]                                                 `json:"max_response_size,omitzero"`
+	RateLimit          Field[ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit] `json:"rate_limit,omitzero"`
+	Timeout            Field[string]                                              `json:"timeout,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSubsetItemLimits) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSubsetItemLimits
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSubsetItemLimits(value)
+	return nil
+}
+
+type ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit struct {
+	Requests Field[int]    `json:"requests,omitzero"`
+	Window   Field[string] `json:"window,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit(value)
+	return nil
+}
+
 // ProfileGrantArgs carries arguments for profile.grant.
 type ProfileGrantArgs struct {
 	// Profile id (grant/list/revoke)
@@ -2205,6 +3139,25 @@ func (args *ProfileGrantArgsBindingsItem) UnmarshalJSON(data []byte) error {
 	}
 	*args = ProfileGrantArgsBindingsItem(value)
 	return nil
+}
+
+// ProfileGrantsArgs carries arguments for profile.grants.
+type ProfileGrantsArgs struct {
+	// grants: an egress domain; name exactly one of domain, path, entry_id
+	Domain Field[string] `json:"domain,omitzero"`
+	// grants: a storage path; name exactly one of domain, path, entry_id
+	Path Field[string] `json:"path,omitzero"`
+	// grants: a vault entry (vlt_…); name exactly one of domain, path, entry_id
+	EntryId Field[string] `json:"entry_id,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ProfileGrantsArgs) MarshalJSON() ([]byte, error) {
+	type fields ProfileGrantsArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ProfileGrants, fields: fields(args)})
 }
 
 // ProfileListArgs carries arguments for profile.list.
@@ -2269,6 +3222,10 @@ type ProfilePreviewArgsDecisions struct {
 	PublishFrom    Field[string]                                       `json:"publish_from,omitzero"`
 	NeedIds        Field[[]string]                                     `json:"need_ids,omitzero"`
 	DurableStorage Field[bool]                                         `json:"durable_storage,omitzero"`
+	// The origins the grant admits; absent, interactive alone
+	Origins Field[[]string] `json:"origins,omitzero"`
+	// Per consent-graph node, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
+	Subset Field[map[string]ProfilePreviewArgsDecisionsSubsetItem] `json:"subset,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -2331,6 +3288,95 @@ func (args *ProfilePreviewArgsDecisionsToolServersItem) UnmarshalJSON(data []byt
 		return err
 	}
 	*args = ProfilePreviewArgsDecisionsToolServersItem(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSubsetItem struct {
+	Egress  Field[ProfilePreviewArgsDecisionsSubsetItemEgress]  `json:"egress,omitzero"`
+	Storage Field[ProfilePreviewArgsDecisionsSubsetItemStorage] `json:"storage,omitzero"`
+	Tools   Field[[]string]                                     `json:"tools,omitzero"`
+	Limits  Field[ProfilePreviewArgsDecisionsSubsetItemLimits]  `json:"limits,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSubsetItem) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSubsetItem
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSubsetItem(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSubsetItemEgress struct {
+	Domains    Field[[]string] `json:"domains,omitzero"`
+	Methods    Field[[]string] `json:"methods,omitzero"`
+	Schemes    Field[[]string] `json:"schemes,omitzero"`
+	PrivateIps Field[[]string] `json:"private_ips,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSubsetItemEgress) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSubsetItemEgress
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSubsetItemEgress(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSubsetItemStorage struct {
+	Paths   Field[[]string] `json:"paths,omitzero"`
+	Actions Field[[]string] `json:"actions,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSubsetItemStorage) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSubsetItemStorage
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSubsetItemStorage(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSubsetItemLimits struct {
+	BatchTimeout       Field[string]                                               `json:"batch_timeout,omitzero"`
+	MaxConcurrentTasks Field[int]                                                  `json:"max_concurrent_tasks,omitzero"`
+	MaxMemoryBytes     Field[int]                                                  `json:"max_memory_bytes,omitzero"`
+	MaxRequestSize     Field[int]                                                  `json:"max_request_size,omitzero"`
+	MaxResponseSize    Field[int]                                                  `json:"max_response_size,omitzero"`
+	RateLimit          Field[ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit] `json:"rate_limit,omitzero"`
+	Timeout            Field[string]                                               `json:"timeout,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSubsetItemLimits) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSubsetItemLimits
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSubsetItemLimits(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit struct {
+	Requests Field[int]    `json:"requests,omitzero"`
+	Window   Field[string] `json:"window,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit(value)
 	return nil
 }
 
@@ -2752,6 +3798,21 @@ func (args RegistryWhoamiArgs) MarshalJSON() ([]byte, error) {
 	}{Action: RegistryWhoami, fields: fields(args)})
 }
 
+// ResourceReadArgs carries arguments for resource.read.
+type ResourceReadArgs struct {
+	// The resource URI, like arca://files/data/reports/q3.csv
+	Uri string `json:"uri"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ResourceReadArgs) MarshalJSON() ([]byte, error) {
+	type fields ResourceReadArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ResourceRead, fields: fields(args)})
+}
+
 // RetentionCleanupArgs carries arguments for retention.cleanup.
 type RetentionCleanupArgs struct {
 	// Kind of records to clean up
@@ -2817,11 +3878,19 @@ type RetentionSetArgsSettings struct {
 	// Days of records kept per athanor
 	PolicyLogDays Field[int] `json:"policy_log_days,omitzero"`
 	// Days of records kept per athanor
+	DecisionsDays Field[int] `json:"decisions_days,omitzero"`
+	// Days of records kept per athanor
 	MessagesDays Field[int] `json:"messages_days,omitzero"`
 	// Days of records kept per athanor
 	StagingDays Field[int] `json:"staging_days,omitzero"`
 	// Days of records kept per athanor
 	WriteIntentDays Field[int] `json:"write_intent_days,omitzero"`
+	// Days of records kept per athanor
+	FencedStagingDays Field[int] `json:"fenced_staging_days,omitzero"`
+	// Days of records kept per athanor
+	ProjectionTombstoneDays Field[int] `json:"projection_tombstone_days,omitzero"`
+	// Days of records kept per athanor
+	FrameCredentialDays Field[int] `json:"frame_credential_days,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -2847,7 +3916,7 @@ type ScheduleCreateArgs struct {
 	ProfileId string `json:"profile_id"`
 	// Input data to pass to the component (create/update)
 	Input Field[map[string]any] `json:"input,omitzero"`
-	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's estate, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
+	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's athanor, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
 	Metadata Field[map[string]any] `json:"metadata,omitzero"`
 	// Whether a due occurrence runs while another of this schedule is still open (default forbid)
 	Concurrency Field[string] `json:"concurrency,omitzero"`
@@ -2966,7 +4035,7 @@ type ScheduleUpdateArgs struct {
 	ProfileId Field[string] `json:"profile_id,omitzero"`
 	// Input data to pass to the component (create/update)
 	Input Field[*map[string]any] `json:"input,omitzero"`
-	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's estate, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
+	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's athanor, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
 	Metadata Field[*map[string]any] `json:"metadata,omitzero"`
 	// Whether a due occurrence runs while another of this schedule is still open (default forbid)
 	Concurrency Field[string] `json:"concurrency,omitzero"`
@@ -3039,6 +4108,21 @@ func (args SessionLogoutArgs) MarshalJSON() ([]byte, error) {
 	}{Action: SessionLogout, fields: fields(args)})
 }
 
+// SessionReadResourceArgs carries arguments for session.read_resource.
+type SessionReadResourceArgs struct {
+	// sanctum://identity or sanctum://permissions
+	Uri string `json:"uri"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionReadResourceArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionReadResourceArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionReadResource, fields: fields(args)})
+}
+
 // SessionUseArgs carries arguments for session.use.
 type SessionUseArgs struct {
 	// For `use`: the athanor to work in — an id, a group slug, or @<namespace>
@@ -3065,6 +4149,55 @@ func (args SessionWhoamiArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SessionWhoami, fields: fields(args)})
+}
+
+// SettingsListArgs carries arguments for settings.list.
+type SettingsListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SettingsListArgs) MarshalJSON() ([]byte, error) {
+	type fields SettingsListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SettingsList, fields: fields(args)})
+}
+
+// SettingsResetArgs carries arguments for settings.reset.
+type SettingsResetArgs struct {
+	// The setting, as list names it
+	Key string `json:"key"`
+	// The store revision the change is made against, as list answered it; a write made since refuses the change. Absent, the current revision
+	Revision Field[int] `json:"revision,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SettingsResetArgs) MarshalJSON() ([]byte, error) {
+	type fields SettingsResetArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SettingsReset, fields: fields(args)})
+}
+
+// SettingsSetArgs carries arguments for settings.set.
+type SettingsSetArgs struct {
+	// The setting, as list names it
+	Key string `json:"key"`
+	// The value, written as the setting's variable takes it
+	Value string `json:"value"`
+	// The store revision the change is made against, as list answered it; a write made since refuses the change. Absent, the current revision
+	Revision Field[int] `json:"revision,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SettingsSetArgs) MarshalJSON() ([]byte, error) {
+	type fields SettingsSetArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SettingsSet, fields: fields(args)})
 }
 
 // SystemNotifyArgs carries arguments for system.notify.
@@ -3107,9 +4240,9 @@ type ThreadAloudArgs struct {
 	Thread string `json:"thread"`
 	// aloud: your own messages to copy, in any order — or your assistant's replies to you in your own athanor
 	MessageIds []string `json:"message_ids"`
-	// aloud: the estate to post into (you must be a member)
+	// aloud: the athanor to post into (you must be a member)
 	TargetAthanor string `json:"target_athanor"`
-	// aloud: the thread in that estate to post onto
+	// aloud: the thread in that athanor to post onto
 	TargetThread string `json:"target_thread"`
 }
 
@@ -3365,7 +4498,7 @@ type ThreadSendArgs struct {
 	Id Field[string] `json:"id,omitzero"`
 	// send: a model override for this turn
 	Model Field[string] `json:"model,omitzero"`
-	// send: the room the sender has open beside this thread (athanor_id, thread_id, title, estate); its newest lines are read for this one turn, never stored
+	// send: the room the sender has open beside this thread (athanor_id, thread_id, title, athanor); its newest lines are read for this one turn, never stored
 	Room Field[ThreadSendArgsRoom] `json:"room,omitzero"`
 }
 
@@ -3400,7 +4533,7 @@ type ThreadSendArgsRoom struct {
 	AthanorId string        `json:"athanor_id"`
 	ThreadId  string        `json:"thread_id"`
 	Title     Field[string] `json:"title,omitzero"`
-	Estate    Field[string] `json:"estate,omitzero"`
+	Athanor   Field[string] `json:"athanor,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3442,6 +4575,50 @@ func (args ThreadUnfollowArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ThreadUnfollow, fields: fields(args)})
+}
+
+// TinctureInvokeProtectedArgs carries arguments for tincture.invoke_protected.
+type TinctureInvokeProtectedArgs struct {
+	// The tincture's publisher (e.g. 'local')
+	Publisher string `json:"publisher"`
+	// The tincture's name
+	TinctureName string `json:"tincture_name"`
+	// The dependency to invoke, as the tincture's manifest declares it
+	Reference string `json:"reference"`
+	// The input to pass to the dependency
+	Input map[string]any `json:"input"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args TinctureInvokeProtectedArgs) MarshalJSON() ([]byte, error) {
+	type fields TinctureInvokeProtectedArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: TinctureInvokeProtected, fields: fields(args)})
+}
+
+// TinctureInvokePublicArgs carries arguments for tincture.invoke_public.
+type TinctureInvokePublicArgs struct {
+	// The tincture's public address: its athanor's URL segment ('@<namespace>' for a person's, the slug for a group's)
+	Athanor string `json:"athanor"`
+	// The tincture's publisher (e.g. 'local')
+	Publisher string `json:"publisher"`
+	// The tincture's name
+	TinctureName string `json:"tincture_name"`
+	// The dependency to invoke, as the tincture's manifest declares it
+	Reference string `json:"reference"`
+	// The input to pass to the dependency
+	Input map[string]any `json:"input"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args TinctureInvokePublicArgs) MarshalJSON() ([]byte, error) {
+	type fields TinctureInvokePublicArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: TinctureInvokePublic, fields: fields(args)})
 }
 
 // TinctureVisibilityGetArgs carries arguments for tincture_visibility.get.
@@ -3712,6 +4889,19 @@ func (args VaultRotateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: VaultRotate, fields: fields(args)})
+}
+
+// VaultStatusArgs carries arguments for vault.status.
+type VaultStatusArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args VaultStatusArgs) MarshalJSON() ([]byte, error) {
+	type fields VaultStatusArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: VaultStatus, fields: fields(args)})
 }
 
 // WebhookCreateArgs carries arguments for webhook.create.

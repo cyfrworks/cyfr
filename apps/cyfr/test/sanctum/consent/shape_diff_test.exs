@@ -8,10 +8,9 @@ defmodule Sanctum.Consent.ShapeDiffTest do
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "shape_diff_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -134,6 +133,34 @@ defmodule Sanctum.Consent.ShapeDiffTest do
 
     assert %{change: :widened, added: ["write"]} =
              Enum.find(diff, &(&1.capability == "storage.actions"))
+  end
+
+  test "a host the ask still covers is never reported as dropped", %{ctx: ctx} do
+    # The ask moved to a wildcard: the plain host the person was granted is
+    # still inside it, as the egress pin reads a domain grant.
+    publish_live!(ctx, "1.0.6", %{"egress" => %{"domains" => ["*.covered.example"]}})
+
+    granted =
+      blob(%{
+        "egress" => %{"domains" => ["api.covered.example", "gone.elsewhere.example"]}
+      })
+
+    diff = ShapeDiff.compute(ctx, @source, granted)
+    entry = Enum.find(diff, &(&1.capability == "egress.domains"))
+
+    assert entry.removed == ["gone.elsewhere.example"]
+    refute "api.covered.example" in entry.removed
+    assert entry.added == ["*.covered.example"]
+
+    # A grant every host of which the ask still covers drops nothing.
+    covered =
+      ShapeDiff.compute(
+        ctx,
+        @source,
+        blob(%{"egress" => %{"domains" => ["api.covered.example"]}})
+      )
+
+    refute Enum.any?(covered, &(&1.capability == "egress.domains" and &1.removed != []))
   end
 
   test "an underivable side yields no diff, never a wrong one", %{ctx: ctx} do

@@ -42,7 +42,7 @@ apps/cyfr/test/integration/opus/support/test_wasm/nested_probe/build.sh --check 
 ```
 
 `build.sh` lays the crate out in a scratch directory with the canonical
-formula `Cargo.toml` (`Cyfr.CargoToml.template(:formula)`) and the formula
+formula `Cargo.toml` (`Prima.CargoToml.template(:formula)`) and the formula
 world's WIT (`wit/formula`), builds it `--locked` to `Cargo.lock` with
 `cargo component build --release --target wasm32-wasip2`, and remaps the
 scratch directory and the Cargo home out of the paths rustc embeds, so the

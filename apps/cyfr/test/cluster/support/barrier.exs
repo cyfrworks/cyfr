@@ -5,8 +5,8 @@ defmodule Cyfr.Cluster.Barrier do
   @moduledoc """
   Where two members act at one instant, the instant is **made** here.
 
-  Four tests in this slice asserted more than their mechanism could
-  guarantee, each passing alone and failing in a full run. A case that
+  A test that asserts more than its mechanism can guarantee passes alone
+  and fails in a full run. A case that
   starts two members a millisecond apart and hopes they collide is the
   same mistake: it passes on a quiet machine and says nothing on a busy
   one. So a case that needs an interleaving takes it — both parties do

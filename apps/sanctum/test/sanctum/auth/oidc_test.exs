@@ -8,9 +8,8 @@ defmodule Sanctum.Auth.OIDCTest do
   alias Sanctum.Context
   alias Sanctum.Session
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     # Use a temp directory for file-based tests
     test_dir = Path.join(System.tmp_dir!(), "cyfr_oidc_test_#{:rand.uniform(100_000)}")
@@ -141,7 +140,7 @@ defmodule Sanctum.Auth.OIDCTest do
 
   describe "authenticate/1 with API key params" do
     test "API keys are not an OIDC credential" do
-      # Keys authenticate only through EmissaryWeb.Plugs.Authenticate, which
+      # Keys authenticate only through CyfrWeb.Plugs.Authenticate, which
       # resolves the client IP for the allowlist check.
       assert {:error, :invalid_credentials} = OIDC.authenticate(%{api_key: "cyfr_ak_anything"})
     end
@@ -165,17 +164,19 @@ defmodule Sanctum.Auth.OIDCTest do
     end
 
     test "sessions and keys are the server's credentials, established before the provider is asked" do
-      ctx =
+      {ctx, _user} =
         Context.build(
-          user_id: "usr_oidc_bearer",
+          user_id: "github|https://github.com|oidc-bearer",
           email: "test@example.com",
           provider: "github",
           permissions: [],
           namespace: "testns",
           authenticated: true
         )
+        |> Sanctum.TestContext.person!()
 
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} =
+        Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
 
       conn =
         Plug.Test.conn(:get, "/")

@@ -51,6 +51,16 @@ defmodule Arca.OverlayTest.NoSwapAdapter do
   use Arca.Storage.TestDouble
 end
 
+defmodule Arca.OverlayTest.UndeletableAdapter do
+  @moduledoc false
+  # A tenant adapter whose deletes fail and write nothing — a store that
+  # refused. Everything else answers as the Local adapter does.
+  use Arca.Storage.TestDouble
+
+  def delete(_actor, _path), do: {:error, :eacces}
+  def delete_tree(_actor, _path), do: {:error, :eacces}
+end
+
 defmodule Arca.OverlayTest.DownAdapter do
   @moduledoc false
   # A tenant adapter whose listings are down — the outage shape an object
@@ -81,10 +91,9 @@ defmodule Arca.OverlayTest do
   @version_dir ["components", "catalysts", "local", "bundled", "1.0.0"]
   @sentinel "cyfr-manifest.json"
 
-  setup do
+  setup tags do
     # Shared: a unit's row is read and written by the tasks a test spawns.
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "overlay_#{System.unique_integer([:positive])}")
     seed = Path.join(base, "seed")
@@ -170,9 +179,9 @@ defmodule Arca.OverlayTest do
   end
 
   describe "the locator wiring matches the component path's shape" do
-    # The unit grammar is `Compendium.ComponentPath`'s to own; the
-    # `:overlay_locators` config wires it in so `Arca` never gains a
-    # compile dependency on Compendium. This witness is the link.
+    # The unit grammar is `Compendium.ComponentPath`'s to own; the boot
+    # installs it as the root's `Arca.Storage.UnitLocator` so `Arca` never
+    # gains a compile dependency on Compendium. This witness is the link.
     test "a components path locates to its version_dir unit, manifest sentinel" do
       vd = Compendium.ComponentPath.version_dir("catalyst", "local", "n", "1.0.0")
 
@@ -233,14 +242,9 @@ defmodule Arca.OverlayTest do
   describe "pulling what ships" do
     test "pull_shipped/2 copies the unit whole — droppings excluded, sentinel last, uncapped",
          %{actor: actor} do
-      prev = Application.get_env(:sanctum, :caps)
-      Application.put_env(:sanctum, :caps, athanor_storage_bytes: 5)
+      Cyfr.Test.Settings.put("athanor_storage_bytes", 5)
 
       on_exit(fn ->
-        if prev,
-          do: Application.put_env(:sanctum, :caps, prev),
-          else: Application.delete_env(:sanctum, :caps)
-
         Arca.Cache.delete_match({:athanor_usage, :_, :_})
       end)
 
@@ -410,7 +414,7 @@ defmodule Arca.OverlayTest do
       :ok = Arca.Overlay.pull_shipped(actor, @version_dir)
 
       shaped = %{
-        Cyfr.Actor.system()
+        Prima.Actor.system()
         | user_id: "_overlay",
           athanor_id: actor.athanor_id,
           scope: :athanor
@@ -451,6 +455,47 @@ defmodule Arca.OverlayTest do
 
       assert :ok = Arca.delete_tree(actor, own)
       assert Arca.Overlay.unit_status(actor, own) == {:ok, :absent}
+    end
+
+    test "a delete the store refuses is not a deletion the registry acknowledges", %{
+      actor: actor
+    } do
+      ctx = Sanctum.TestContext.local()
+      name = "undeletable-#{System.unique_integer([:positive])}"
+      unit = ["components", "reagents", "local", name, "1.0.0"]
+
+      wasm =
+        <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+          0x03, 0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00, 0x0A, 0x04, 0x01,
+          0x02, 0x00, 0x0B>>
+
+      :ok = Arca.put(actor, unit ++ ["reagent.wasm"], wasm)
+      :ok = Arca.put(actor, unit ++ [@sentinel], ~s({"type":"reagent","description":"kept"}))
+      assert {:ok, %{description: "kept"}} = Compendium.Registry.get(ctx, name, "1.0.0")
+
+      prev_adapter = Application.get_env(:arca, :storage_adapter)
+      Application.put_env(:arca, :storage_adapter, Arca.OverlayTest.UndeletableAdapter)
+
+      on_exit(fn ->
+        if prev_adapter,
+          do: Application.put_env(:arca, :storage_adapter, prev_adapter),
+          else: Application.delete_env(:arca, :storage_adapter)
+      end)
+
+      # The caller is told; the bytes stay, and so does the row derived
+      # from them — the unit's last change is no tombstone, and it is read.
+      assert {:error, :eacces} = Arca.delete_tree(actor, unit)
+      assert Arca.exists?(actor, unit ++ [@sentinel])
+
+      assert {:ok, %{units: [%{tombstone: false, ready: true}]}} =
+               Arca.StorageProjectionChanges.snapshot(actor, "components",
+                 units: ["reagents/local/#{name}/1.0.0"]
+               )
+
+      assert {:ok, %{description: "kept"}} = Compendium.Registry.get(ctx, name, "1.0.0")
+
+      assert {:ok, %{epoch: epoch, acknowledged_epoch: epoch}} =
+               Arca.StorageProjectionRoots.epoch(actor, "components")
     end
 
     test "above the shadow unit, deletes touch only the athanor's own tree", %{actor: actor} do
@@ -968,7 +1013,7 @@ defmodule Arca.OverlayTest do
   describe "seed stays read-only" do
     test "no write reaches the seed side, whoever asks", %{actor: actor} do
       system = %{
-        Cyfr.Actor.system()
+        Prima.Actor.system()
         | user_id: "_test",
           athanor_id: actor.athanor_id,
           scope: :athanor
@@ -1567,7 +1612,7 @@ defmodule Arca.OverlayTest do
       offenders =
         root
         |> Path.join("apps/*/lib/**/*.ex")
-        |> Cyfr.Test.SourceTree.files!()
+        |> Prima.Test.SourceTree.files!()
         |> Enum.flat_map(fn path ->
           source = File.read!(path)
 
@@ -1637,14 +1682,9 @@ defmodule Arca.OverlayTest do
     end
 
     test "cap refuses before the first write", %{actor: actor} do
-      prev = Application.get_env(:sanctum, :caps)
-      Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1)
+      Cyfr.Test.Settings.put("athanor_storage_bytes", 1)
 
       on_exit(fn ->
-        if prev,
-          do: Application.put_env(:sanctum, :caps, prev),
-          else: Application.delete_env(:sanctum, :caps)
-
         Arca.Cache.delete_match({:athanor_usage, :_, :_})
       end)
 
@@ -1785,7 +1825,7 @@ defmodule Arca.OverlayTest do
   end
 
   describe "a partial aqua skill is not a skill" do
-    # `compendium/mcp/aqua_tool.ex` reads the tree directly — `list_typed`,
+    # `compendium/providers/aqua.ex` reads the tree directly — `list_typed`,
     # `list_recursive`, `get` — so a half-written skill that read as whole
     # would put its instructions in front of the agent.
     #

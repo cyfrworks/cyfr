@@ -6,7 +6,7 @@ defmodule Cyfr.MixProject do
   def project do
     [
       apps_path: "apps",
-      apps: [:cyfr_contracts, :arca, :sanctum, :cyfr, :locus, :opus],
+      apps: [:prima, :arca, :sanctum, :cyfr, :locus, :opus],
       version: "0.5.8",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -17,7 +17,7 @@ defmodule Cyfr.MixProject do
     ]
   end
 
-  # The step bench builds its estate from test fixtures in the test database.
+  # The step bench builds its athanor from test fixtures in the test database.
   def cli do
     [preferred_envs: ["cyfr.bench.step": :test]]
   end
@@ -49,10 +49,24 @@ defmodule Cyfr.MixProject do
       setup: ["deps.get", "ecto.setup"],
       "ecto.setup": ["ecto.create", "ecto.migrate"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      test: [&test_after_database/1],
       "cyfr.bench.step": ["ecto.create --quiet", "ecto.migrate --quiet", "cyfr.bench.step"],
       "assets.deploy": ["tailwind prism --minify", "esbuild prism --minify", "phx.digest"]
     ]
+  end
+
+  # `mix test` prepares the database, then tests. The database steps take
+  # the compile switches from the same arguments, because a string alias
+  # hands its arguments to the last step only: a root `compile` inside one
+  # partition of `scripts/test-partitioned.sh` deletes and rebuilds the
+  # umbrella's shared protocol consolidation (every child compiles with
+  # consolidation off and cleans the shared path first) while the other
+  # partitions are loading from it.
+  defp test_after_database(args) do
+    switches = Enum.filter(args, &(&1 in ["--no-compile", "--no-deps-check"]))
+    Mix.Task.run("ecto.create", ["--quiet" | switches])
+    Mix.Task.run("ecto.migrate", ["--quiet" | switches])
+    Mix.Task.run("test", args)
   end
 
   defp releases do
@@ -62,7 +76,7 @@ defmodule Cyfr.MixProject do
       # control plane starts neither.
       cyfr: [
         applications: [
-          cyfr_contracts: :permanent,
+          prima: :permanent,
           arca: :permanent,
           sanctum: :permanent,
           cyfr: :permanent
@@ -74,17 +88,17 @@ defmodule Cyfr.MixProject do
       # reaches CYFR's host API over HTTP.
       opus: [
         applications: [
-          cyfr_contracts: :permanent,
+          prima: :permanent,
           opus: :permanent
         ]
       ],
       # The builder: Locus on the shared contracts, and nothing of the
       # control plane (`Locus.HostSurfaceTest`). It holds one builds key,
       # reads `LOCUS_BUILDS_*` through its own runtime configuration, and is
-      # reached by CYFR over the build wire (`Cyfr.BuilderProtocol`).
+      # reached by CYFR over the build wire (`Prima.BuilderProtocol`).
       locus: [
         applications: [
-          cyfr_contracts: :permanent,
+          prima: :permanent,
           locus: :permanent
         ],
         runtime_config_path: "config/locus_runtime.exs"

@@ -16,8 +16,13 @@ defmodule Sanctum.Consent do
   | `Sanctum.Consent.Proof` | single-use authorization bound to one commit |
   | `Sanctum.Consent.Authz` | who may consent at all |
 
-  Persistence and the API endpoints are deliberately not here yet; these
-  are the pure verbs the endpoints will be built from.
+  ## Reading consent from above
+
+  Consent rows are security rows: a domain or a surface learns about
+  them only through `profiles/2`, `head_consent/2` and `revoke_source/2`
+  here. Each scopes by the tenant of the caller's context, and each keeps
+  an unreadable store, a damaged row and an absent one apart — a caller
+  that cannot tell them apart would read an outage as "not granted".
 
   ## The protocol
 
@@ -25,34 +30,45 @@ defmodule Sanctum.Consent do
   operator saw — not a plan that could still change underneath it:
 
       plan     {ref, label?, kind?, scope?}
-               → shape digest, expected revision, candidates, defaults
+               → shape digest, expected revision, candidates, defaults,
+                 the ask as preview rows, the default origins
 
       preview  {plan_token, decisions}
-               → commit digest, rendered summary
+               → the structured preview (rows, origins, commit digest)
+                 and the proof
 
       commit   {plan_token, decisions, commit_digest, expected_revision, proof}
                → verify the proof binds THIS commit digest, recompute the
                  live shape digest, re-verify vault binding liveness, CAS on
-                 the head revision, then insert
+                 the head revision, then insert with its admitted origins
 
   `preview` exists so a proof can bind the exact commit digest that was
   rendered. Without it, a choice made after approval — a different vault
   entry, a widened projection — would be covered by an authorization the
   operator never gave.
 
+  Decisions may narrow the ask (`subset`, per consent-graph node and
+  resource kind) and name the origins the grant admits (`origins`,
+  `interactive` alone when absent); the commit digest binds both
+  (`Sanctum.Consent.Commit`).
+
   ## Errors
 
-  These four cross the WIT boundary, the MCP boundary, the console, the PWA
-  and the CLI, so their payloads are normative rather than incidental.
+  These cross the MCP boundary, the console, the PWA and the CLI, and the
+  first four the WIT boundary too, so their payloads are normative rather
+  than incidental.
 
-      setup_required     {profile_id, node_ref, need, reason}
-      consent_required   {profile_id, current_revision, shape_diff}
-      consent_conflict   {expected_revision, actual_revision, cause}
-      restart_required   {profile_id, new_revision, missing}
+      setup_required         {profile_id, node_ref, need, reason}
+      consent_required       {profile_id, current_revision, shape_diff}
+      consent_conflict       {expected_revision, actual_revision, cause}
+      restart_required       {profile_id, new_revision, missing}
+      confirmation_required  {id, operation, expires_at}
 
   `consent_conflict`'s cause distinguishes a stale plan from a digest that
   changed under the operator from a genuine race — different remedies:
-  re-plan, re-preview, or retry.
+  re-plan, re-preview, or retry. `confirmation_required` is no denial: the
+  change stands and waits for a fresh confirmation of the pending
+  confirmation `id` names.
   """
 
   @type scope :: :versionless | :pinned
@@ -95,11 +111,39 @@ defmodule Sanctum.Consent do
           missing: %{chain: [String.t()], edge: String.t(), activation: String.t()}
         }
 
+  @type confirmation_required :: %{
+          id: String.t(),
+          operation: String.t(),
+          expires_at: DateTime.t()
+        }
+
+  @typedoc """
+  What `preview` answers: a `Prima.ConsentPreview` document, its fields
+  beside the envelope a commit presents.
+
+    * `v`, `rows`, `origins`, `commit_digest` — the document: its version,
+      its typed rows each in the row's JSON form
+      (`Prima.ConsentPreview.Row`), the origins the grant would admit as
+      their wire spellings, and the commit digest binding them.
+      `Prima.ConsentPreview.decode/1` reads these four back.
+    * `proof` and `expected_consent_revision` — what the commit presents
+      with the digest.
+  """
+  @type preview :: %{
+          v: pos_integer(),
+          rows: [%{required(String.t()) => term()}],
+          origins: [String.t(), ...],
+          commit_digest: String.t(),
+          proof: String.t(),
+          expected_consent_revision: non_neg_integer()
+        }
+
   @type error ::
           {:setup_required, setup_required()}
           | {:consent_required, consent_required()}
           | {:consent_conflict, consent_conflict()}
           | {:restart_required, restart_required()}
+          | {:confirmation_required, confirmation_required()}
 
   @doc """
   The scopes a consent may take.
@@ -112,4 +156,68 @@ defmodule Sanctum.Consent do
   """
   @spec scopes() :: [scope()]
   def scopes, do: [:versionless, :pinned]
+
+  @typedoc """
+  One candidate profile of a source: decoded, or — when its stored kind or
+  status is outside the closed vocabulary — only its id and `:corrupt`.
+  """
+  @type profile_entry ::
+          Prima.Authority.RootSelect.profile_summary()
+          | %{required(:id) => String.t(), required(:status) => :corrupt}
+
+  @doc """
+  The non-revoked profiles of a name-level `source_ref` in the caller's
+  athanor. A row that cannot be decoded is present as
+  `%{id: id, status: :corrupt}`, never dropped: a caller that needs the
+  decoded profile treats it as unavailable for that profile.
+
+  `{:error, :unavailable}` is a store that could not answer, never an
+  empty list; `{:error, :no_athanor}` is a context with no tenant.
+  """
+  @spec profiles(Sanctum.Context.t(), String.t()) ::
+          {:ok, [profile_entry()]} | {:error, :unavailable | :no_athanor}
+  def profiles(%Sanctum.Context{} = ctx, source_ref) when is_binary(source_ref) do
+    case Arca.ConsentStorage.profile_entries(Sanctum.Context.actor(ctx), source_ref) do
+      {:ok, entries} -> {:ok, entries}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  The head consent revision of a profile in the caller's athanor, decoded
+  with its vault references (`t:Arca.ConsentStorage.consent/0`).
+
+  A profile with no head, or no such profile, is `:not_found`; a stored
+  value outside the closed vocabulary is `:corrupt`; a store that could
+  not answer is `:unavailable`.
+  """
+  @spec head_consent(Sanctum.Context.t(), String.t()) ::
+          {:ok, Arca.ConsentStorage.consent()}
+          | {:error, :not_found | :unavailable | :corrupt | :no_athanor}
+  def head_consent(%Sanctum.Context{} = ctx, profile_id) when is_binary(profile_id) do
+    case Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id) do
+      {:ok, consent} -> {:ok, consent}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, absent} when absent in [:not_found, :no_head] -> {:error, :not_found}
+      {:error, {:invalid_stored_value, _field}} -> {:error, :corrupt}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  Revoke every profile of a name-level `source_ref` in the caller's
+  athanor, in one transaction — what removing the last version of a
+  component does to the grants made for it. Consent history and vault
+  entries remain. Answers the ids revoked.
+  """
+  @spec revoke_source(Sanctum.Context.t(), String.t()) ::
+          {:ok, %{revoked: [String.t()]}} | {:error, :unavailable | :no_athanor}
+  def revoke_source(%Sanctum.Context{} = ctx, source_ref) when is_binary(source_ref) do
+    case Arca.ProfileStorage.revoke_for_source(Sanctum.Context.actor(ctx), source_ref) do
+      {:ok, ids} -> {:ok, %{revoked: ids}}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
 end

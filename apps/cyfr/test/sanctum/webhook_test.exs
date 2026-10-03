@@ -7,9 +7,8 @@ defmodule Sanctum.WebhookTest do
   alias Sanctum.Test.ConsentFixtures
   alias Sanctum.Webhook
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     # Webhook create/update validates that target_ref names a registered
     # component; register the refs these tests point at.
@@ -34,7 +33,7 @@ defmodule Sanctum.WebhookTest do
         _ -> "prof-handler"
       end
 
-    Webhook.create(
+    confirmed_create(
       ctx,
       opts
       |> Map.put_new(:profile_id, profile)
@@ -45,15 +44,30 @@ defmodule Sanctum.WebhookTest do
     )
   end
 
+  # Issuing a webhook's secret is a sensitive change: each create and
+  # rotate here runs under the confirmation its person proved
+  # (`Sanctum.TestContext.confirmed/3`), for exactly its own arguments.
+  defp confirmed_create(ctx, opts) do
+    ctx
+    |> Sanctum.TestContext.confirmed_change("webhook.create", opts, opts[:name])
+    |> Webhook.create(opts)
+  end
+
+  defp rotate(ctx, name) do
+    ctx
+    |> Sanctum.TestContext.confirmed_change("webhook.rotate", %{name: name}, name)
+    |> Webhook.rotate(name)
+  end
+
   describe "the target is read before anything else" do
     # A webhook must never be registered against a ref that does not
     # exist: it would go live the moment anyone published that name,
     # because delivery resolves the ref again at request time. The row is
     # read through the component-facts port, which answers the exact
     # version a pinned ref names — so a target pinned to a version the
-    # estate no longer holds is refused on its own terms, not admitted on
+    # athanor no longer holds is refused on its own terms, not admitted on
     # its name.
-    test "a target the estate does not hold refuses, and not as a signature failure",
+    test "a target the athanor does not hold refuses, and not as a signature failure",
          %{ctx: ctx} do
       assert {:error, message} =
                create(ctx, %{name: "ghost", target_ref: "f:local.no-such-handler"})
@@ -67,7 +81,7 @@ defmodule Sanctum.WebhookTest do
       refute message =~ "replay"
     end
 
-    test "a target pinned to a version the estate no longer holds refuses", %{ctx: ctx} do
+    test "a target pinned to a version the athanor no longer holds refuses", %{ctx: ctx} do
       assert {:ok, _} = create(ctx, %{name: "pinned-ok", target_ref: "f:local.handler:1.0.0"})
 
       assert {:error, message} =
@@ -92,7 +106,7 @@ defmodule Sanctum.WebhookTest do
       profile = @profile
       # Creation without a replay-protection header or explicit acknowledgement must fail.
       assert {:error, :replay_protection_required} =
-               Sanctum.Webhook.create(ctx, %{
+               confirmed_create(ctx, %{
                  name: "unstated",
                  target_ref: "f:local.handler",
                  profile_id: profile
@@ -106,7 +120,7 @@ defmodule Sanctum.WebhookTest do
       profile = @profile
 
       assert {:ok, %{replay_protection: "none"}} =
-               Sanctum.Webhook.create(ctx, %{
+               confirmed_create(ctx, %{
                  name: "stated-none",
                  target_ref: "f:local.handler",
                  profile_id: profile,
@@ -118,7 +132,7 @@ defmodule Sanctum.WebhookTest do
       profile = @profile
 
       assert {:ok, %{replay_protection: "timestamp"}} =
-               Sanctum.Webhook.create(ctx, %{
+               confirmed_create(ctx, %{
                  name: "stated-ts",
                  target_ref: "f:local.handler",
                  profile_id: profile,
@@ -126,7 +140,7 @@ defmodule Sanctum.WebhookTest do
                })
 
       assert {:ok, %{replay_protection: "idempotency_key"}} =
-               Sanctum.Webhook.create(ctx, %{
+               confirmed_create(ctx, %{
                  name: "stated-idem",
                  target_ref: "f:local.handler",
                  profile_id: profile,
@@ -141,7 +155,7 @@ defmodule Sanctum.WebhookTest do
     # afterwards is indistinguishable from one created with "none".
     test "update cannot clear the last header without saying so", %{ctx: ctx} do
       {:ok, _} =
-        Sanctum.Webhook.create(ctx, %{
+        confirmed_create(ctx, %{
           name: "walked-back",
           target_ref: "f:local.handler",
           profile_id: @profile,
@@ -166,7 +180,7 @@ defmodule Sanctum.WebhookTest do
 
     test "update that swaps one header for the other needs no restatement", %{ctx: ctx} do
       {:ok, _} =
-        Sanctum.Webhook.create(ctx, %{
+        confirmed_create(ctx, %{
           name: "swapped",
           target_ref: "f:local.handler",
           profile_id: @profile,
@@ -400,13 +414,38 @@ defmodule Sanctum.WebhookTest do
     end
   end
 
+  describe "issuing a webhook's secret is a sensitive change" do
+    test "created or rotated from a session with no proof, it answers the signal and mints nothing",
+         %{ctx: ctx} do
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+
+      assert {:error, {:confirmation_required, %{operation: "webhook.create"}}} =
+               Webhook.create(person, %{
+                 name: "unproven",
+                 target_ref: "f:local.handler",
+                 profile_id: "prof-handler",
+                 replay_protection: "none"
+               })
+
+      assert {:error, :not_found} = Webhook.get(person, "unproven")
+
+      {:ok, %{secret: secret}} = create(person, %{name: "proven", target_ref: "f:local.handler"})
+
+      assert {:error, {:confirmation_required, %{operation: "webhook.rotate"}}} =
+               Webhook.rotate(person, "proven")
+
+      assert {:ok, %{slug: slug}} = Webhook.get(person, "proven")
+      assert :ok = verify_grace_with_slug(slug, secret, "body")
+    end
+  end
+
   describe "rotate/2" do
     test "old secret keeps verifying during the grace window, dropped after expiry",
          %{ctx: ctx} do
       {:ok, %{secret: old_secret, slug: slug, url: url}} =
         create(ctx, %{name: "rot", target_ref: "f:local.handler"})
 
-      assert {:ok, rotated} = Webhook.rotate(ctx, "rot")
+      assert {:ok, rotated} = rotate(ctx, "rot")
       assert rotated.secret != old_secret
       # URL is unchanged across rotation — same slug.
       assert rotated.url == url
@@ -505,6 +544,49 @@ defmodule Sanctum.WebhookTest do
 
       assert {:error, :timestamp_skew} =
                Webhook.verify_with_grace(hook, body, sig, stale_ts)
+    end
+
+    test "the skew window is the platform setting, taken by the next delivery", %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        create(ctx, %{
+          name: "ts-window",
+          target_ref: "f:local.handler",
+          timestamp_header: "X-Cyfr-Timestamp"
+        })
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+
+      body = "{}"
+      ts = (System.system_time(:second) - 600) |> Integer.to_string()
+      sig = "sha256=" <> hmac_hex(secret, ts <> "." <> body)
+
+      assert {:error, :timestamp_skew} = Webhook.verify_with_grace(hook, body, sig, ts)
+
+      Cyfr.Test.Settings.put("webhook_max_skew_seconds", 900)
+      assert :ok = Webhook.verify_with_grace(hook, body, sig, ts)
+    end
+
+    @tag :capture_log
+    test "a window the store cannot answer refuses the delivery", %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        create(ctx, %{
+          name: "ts-outage",
+          target_ref: "f:local.handler",
+          timestamp_header: "X-Cyfr-Timestamp"
+        })
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+
+      body = "{}"
+      ts = System.system_time(:second) |> Integer.to_string()
+      sig = "sha256=" <> hmac_hex(secret, ts <> "." <> body)
+
+      Cyfr.Test.Settings.expire("webhook_max_skew_seconds")
+      Cyfr.Test.Settings.break_store!()
+
+      # A delivery inside the window, refused: the window cannot be read,
+      # so it is not admitted against a window this member cannot see.
+      assert {:error, :unavailable} = Webhook.verify_with_grace(hook, body, sig, ts)
     end
 
     test "rejects malformed (non-integer) timestamps", %{ctx: ctx} do

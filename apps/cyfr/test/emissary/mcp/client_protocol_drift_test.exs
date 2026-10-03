@@ -3,23 +3,23 @@
 
 defmodule Emissary.MCP.ClientProtocolDriftTest do
   @moduledoc """
-  The protocol version has one Elixir source (`Emissary.MCP.Protocol`), but
-  two first-party clients live outside the BEAM and must carry their own
-  literal: the Go CLI and the mcp-bridge. This test binds those literals to
-  the server's version so a revision bump cannot strand a bundled client on
-  a version the server refuses.
+  The protocol version has one Elixir source (`Prima.MCP.Protocol`), but
+  one first-party client lives outside the BEAM and must carry its own
+  literal: the Go CLI. This test binds that literal to the server's version
+  so a revision bump cannot strand a bundled client on a version the server
+  refuses.
 
-  Pins the shared outbound fallback revision used for third-party MCP peers and children.
+  Pins the shared outbound fallback revision used for third-party MCP peers
+  and for the stdio backends the Locus backends service runs.
   """
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.Protocol
+  alias Prima.MCP.Protocol
 
   @project_root Path.expand("../../../../..", __DIR__)
 
   @clients [
-    {"apps/codex/internal/mcp/client.go", ~r/protocolVersion\s*=\s*"(\d{4}-\d{2}-\d{2})"/},
-    {"apps/mcp-bridge/server.mjs", ~r/const PROTOCOL_VERSION\s*=\s*"(\d{4}-\d{2}-\d{2})"/}
+    {"apps/codex/internal/mcp/client.go", ~r/protocolVersion\s*=\s*"(\d{4}-\d{2}-\d{2})"/}
   ]
 
   for {path, regex} <- @clients do
@@ -48,9 +48,9 @@ defmodule Emissary.MCP.ClientProtocolDriftTest do
 
   describe "outbound legacy support names one revision" do
     @legacy_sources [
-      {"apps/cyfr/lib/emissary/mcp/external_server.ex",
+      {"apps/cyfr/lib/emissary/external/server.ex",
        ~r/@legacy_protocol_version\s+"(\d{4}-\d{2}-\d{2})"/},
-      {"apps/mcp-bridge/server.mjs", ~r/const CHILD_PROTOCOL_VERSION\s*=\s*"(\d{4}-\d{2}-\d{2})"/}
+      {"apps/locus/lib/locus/backends/backend.ex", ~r/@protocol_version\s+"(\d{4}-\d{2}-\d{2})"/}
     ]
 
     test "every outbound fallback offers the same legacy revision" do

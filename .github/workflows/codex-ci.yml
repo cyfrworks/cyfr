@@ -14,12 +14,16 @@ on:
       # the scaffold's role and scroll rosters to seed/aqua — an edit
       # to any of them must run the Go tests.
       - '.env.example'
-      # TestShippedComposePullsTheBuilderWhenBuildsUseIt reads the shipped
-      # compose file's locus-builds profile, with the builds URL
-      # .env.example offers.
+      # TestShippedComposePullsTheLocusImageOnce reads the shipped compose
+      # file's Locus services, with the builds URL .env.example offers, and
+      # TestMissingStackServices its service roster.
       - 'docker-compose.yml'
       - 'tests/fixtures/**'
       - 'seed/aqua/**'
+      # TestShippedGuidesAreManaged reads the tarball's ITEMS list.
+      - 'scripts/scaffold-tarball.sh'
+      # TestReadmeCLITablesAreTheCommandTree reads the README's CLI tables.
+      - 'README.md'
       - '.github/workflows/codex-ci.yml'
   pull_request:
     paths:
@@ -28,6 +32,8 @@ on:
       - 'docker-compose.yml'
       - 'tests/fixtures/**'
       - 'seed/aqua/**'
+      - 'scripts/scaffold-tarball.sh'
+      - 'README.md'
       - '.github/workflows/codex-ci.yml'
 
 permissions:

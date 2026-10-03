@@ -16,29 +16,29 @@ defmodule Compendium.Source do
   `values/0` is the closed roster the row store enforces
   (`Arca.ComponentStorage` refuses to write anything outside it).
 
-  The roster itself is `Cyfr.ComponentSource`, where the row store reads
+  The roster itself is `Prima.ComponentSource`, where the row store reads
   it too; this module is the component domain's spelling of it and the
   home of the provenance predicate.
   """
 
-  @published Cyfr.ComponentSource.published()
-  @oci Cyfr.ComponentSource.oci()
+  @published Prima.ComponentSource.published()
+  @oci Prima.ComponentSource.oci()
 
   @doc "The scanner's ingress — bundled and user-created rows alike."
   @spec filesystem() :: String.t()
-  defdelegate filesystem(), to: Cyfr.ComponentSource
+  defdelegate filesystem(), to: Prima.ComponentSource
 
   @doc "Published directly into this registry."
   @spec published() :: String.t()
-  defdelegate published(), to: Cyfr.ComponentSource
+  defdelegate published(), to: Prima.ComponentSource
 
   @doc "Pulled from a remote registry."
   @spec oci() :: String.t()
-  defdelegate oci(), to: Cyfr.ComponentSource
+  defdelegate oci(), to: Prima.ComponentSource
 
   @doc "The closed roster — what the row store admits."
   @spec values() :: [String.t()]
-  defdelegate values(), to: Cyfr.ComponentSource
+  defdelegate values(), to: Prima.ComponentSource
 
   @doc """
   Whether the source names registry-sourced bytes — the one input the

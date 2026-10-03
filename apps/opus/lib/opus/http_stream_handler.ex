@@ -16,7 +16,8 @@ defmodule Opus.HttpStreamHandler do
 
   ## Flow
 
-  1. WASM calls `stream.request(json)` — host starts async HTTP request, returns handle ID
+  1. WASM calls `stream.request(json)` — host sends the request through the
+     runner's relay (`Opus.Relay.Runner`), returns handle ID
   2. WASM calls `stream.read(handle)` in a loop — returns `{"data": "...", "done": false,
      "status": 200}`, `status` being the provider's HTTP status once its response began.
      A read waits up to 100 ms for a chunk and answers `"data": ""` when none arrived.
@@ -32,7 +33,18 @@ defmodule Opus.HttpStreamHandler do
 
   All the same edge enforcement as `cyfr:http/fetch` applies — both handlers
   go through `Opus.HttpRequestValidation`, the single pre-flight path:
-  - Domain/method/scheme allowlisting, SSRF prevention with IP pinning
+  - Domain/method/scheme allowlisting, and the address CYFR pins under the
+    attempt's authority, taken once, when the stream opens, as a fetch
+    takes it (`Opus.Egress.pin/3`): a stream that outlives its pin keeps
+    the connection the relay's service end opened, and a stream opened
+    past the pin's `expires_at` is pinned again
+  - The runner connects nowhere: the relay's service end (`Opus.Relay`)
+    checks the request again, takes it from the consented rate, connects
+    to the pinned address and sends the body on only as far as the credit
+    the guest's reads grant: each chunk a read hands the guest is granted
+    back, so a guest that reads slowly holds the service's connection
+    waiting, never the runner's memory, and the service ends the stream at
+    the attempt's deadline
   - Request body checked against the node's `max_request_size`
   - Response bytes capped at `max_response_size` both when the collector
     buffers them and when the guest reads them
@@ -44,8 +56,8 @@ defmodule Opus.HttpStreamHandler do
 
   require Logger
 
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Limits
+  alias Prima.Authority.Blob.Edge
+  alias Prima.Limits
   alias Opus.{HostClient, HttpHandler, HttpRequestValidation}
 
   # Fallback stream timeout, used only when the node limits carry an
@@ -180,13 +192,18 @@ defmodule Opus.HttpStreamHandler do
       )
     else
       case HttpRequestValidation.validate(json_request, edge, limits, host, component_ref,
-             allow_multipart: false
+             allow_multipart: false,
+             purpose: :stream
            ) do
         {:ok, request} ->
-          start_stream(request, exec_ref, component_ref, limits)
+          start_stream(request, exec_ref, host, component_ref, limits)
 
         {:error, type, message} ->
           HttpHandler.record_refusal(host, type, message)
+          encode_error(type, message)
+
+        # CYFR refused the pin, and has already recorded the denial.
+        {:refused, type, message} ->
           encode_error(type, message)
       end
     end
@@ -227,10 +244,9 @@ defmodule Opus.HttpStreamHandler do
   # Private: Stream Lifecycle
   # ============================================================================
 
-  defp start_stream(request, exec_ref, component_ref, limits) do
+  defp start_stream(request, exec_ref, host, component_ref, limits) do
     handle_id = generate_handle_id()
     timeout_ms = HttpRequestValidation.timeout_ms(limits, @stream_timeout_ms)
-    max_response_size = limits.max_response_size
 
     # Create a buffer agent to collect chunks. A :queue keeps both ends O(1):
     # the byte ceiling bounds total size but not chunk count, and an SSE
@@ -242,7 +258,14 @@ defmodule Opus.HttpStreamHandler do
     # abnormally if its own anonymous fn raises, which none here can.
     buffer =
       case Agent.start_link(fn ->
-             %{chunks: :queue.new(), done: false, total_bytes: 0, error: nil, status: nil}
+             %{
+               chunks: :queue.new(),
+               done: false,
+               total_bytes: 0,
+               error: nil,
+               status: nil,
+               fetch: nil
+             }
            end) do
         {:ok, pid} -> pid
         {:error, reason} -> throw({:stream_start_failed, :buffer, reason})
@@ -257,14 +280,14 @@ defmodule Opus.HttpStreamHandler do
     # Carry the tenant correlators into the task — the one spawn in the
     # tree that skipped the capture/restore convention, so guest streaming
     # logs arrived with no athanor_id or execution_id.
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     start =
       Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
+        Prima.LoggerContext.restore(logger_metadata)
 
         try do
-          perform_streaming_request(request, buffer, component_ref, timeout_ms, max_response_size)
+          perform_streaming_request(request, buffer, host, component_ref, timeout_ms, limits)
         rescue
           e ->
             Logger.warning(
@@ -309,39 +332,17 @@ defmodule Opus.HttpStreamHandler do
     safe_encode(%{"handle" => handle_id})
   end
 
-  defp perform_streaming_request(request, buffer, component_ref, timeout_ms, max_response_size) do
-    # The pinned URL and transport policy come from `Opus.Egress.pin/2`
-    # via validation — same seam as the buffered fetch path.
-    req_opts =
-      request.pin_req_opts
-      |> Keyword.put(:method, request.method_atom)
-      |> Keyword.put(:headers, request.headers)
-      |> Keyword.put(:receive_timeout, timeout_ms)
-      |> Keyword.put(:into, :self)
-      |> then(fn opts ->
-        if request.body != "", do: Keyword.put(opts, :body, request.body), else: opts
-      end)
-
+  defp perform_streaming_request(request, buffer, host, component_ref, timeout_ms, limits) do
     start_time = System.monotonic_time(:millisecond)
 
-    case Req.request(req_opts) do
-      {:ok, response} ->
-        update_buffer(buffer, &%{&1 | status: response.status})
+    case HttpHandler.relay_fetch(host, request) do
+      {:ok, relay, ref} ->
+        # The reader grants the relay credit for each chunk it hands the
+        # guest, so it must know which fetch the buffer is filled from.
+        update_buffer(buffer, &%{&1 | fetch: {relay, ref}})
+        collect_stream_chunks(ref, buffer, request, component_ref, start_time, timeout_ms, limits)
 
-        # The stream path emits the same [:cyfr, :opus, :http, :request]
-        # event the fetch path always did — it emitted nothing before, so
-        # streamed egress was invisible to telemetry.
-        HttpHandler.emit_telemetry(
-          component_ref,
-          request,
-          response.status,
-          System.monotonic_time(:millisecond) - start_time
-        )
-
-        # Collect streaming chunks
-        collect_stream_chunks(response, buffer, timeout_ms, max_response_size)
-
-      {:error, exception} ->
+      {:error, reason} ->
         HttpHandler.emit_telemetry(
           component_ref,
           request,
@@ -349,55 +350,79 @@ defmodule Opus.HttpStreamHandler do
           System.monotonic_time(:millisecond) - start_time
         )
 
-        park_error(buffer, :request_failed, Exception.message(exception))
+        {_type, message} = HttpHandler.fetch_error(reason, limits)
+        park_error(buffer, :request_failed, message)
     end
   end
 
-  defp collect_stream_chunks(response, buffer, timeout_ms, max_response_size) do
-    # Req's `into: :self` sends raw Mint transport messages (e.g. {:ssl, socket, data}).
-    # We must use Req.parse_message/2 to decode them into {:ok, chunks} where
-    # chunks contain {:data, binary} or :done.
+  defp collect_stream_chunks(ref, buffer, request, component_ref, start_time, timeout_ms, limits) do
     receive do
-      message ->
-        case Req.parse_message(response, message) do
-          {:ok, chunks} ->
-            Enum.each(chunks, fn
-              {:data, data} ->
-                append_chunk(buffer, data, max_response_size)
+      {Opus.Relay.Runner, ^ref, {:head, status, _headers, body}} ->
+        update_buffer(buffer, &%{&1 | status: status})
 
-              :done ->
-                update_buffer(buffer, &%{&1 | done: true})
+        # The stream path emits the same [:cyfr, :opus, :http, :request]
+        # event the fetch path does.
+        HttpHandler.emit_telemetry(
+          component_ref,
+          request,
+          status,
+          System.monotonic_time(:millisecond) - start_time
+        )
 
-              _other ->
-                :ok
-            end)
+        if body != "", do: append_chunk(buffer, body, limits.max_response_size)
+        next_stream_chunk(ref, buffer, request, component_ref, start_time, timeout_ms, limits)
 
-            cond do
-              # Over budget or closed: stop collecting; this process exiting
-              # closes the connection, and stream_read surfaces a parked error.
-              stopped?(buffer) ->
-                :ok
+      {Opus.Relay.Runner, ^ref, {:chunk, body}} ->
+        append_chunk(buffer, body, limits.max_response_size)
+        next_stream_chunk(ref, buffer, request, component_ref, start_time, timeout_ms, limits)
 
-              Enum.member?(chunks, :done) ->
-                :ok
+      {Opus.Relay.Runner, ^ref, {:end, nil}} ->
+        update_buffer(buffer, &%{&1 | done: true})
+        :ok
 
-              true ->
-                collect_stream_chunks(response, buffer, timeout_ms, max_response_size)
-            end
+      {Opus.Relay.Runner, ^ref, {:end, "response_too_large"}} ->
+        park_error(
+          buffer,
+          :response_too_large,
+          "Stream response exceeds limit (#{limits.max_response_size} bytes)"
+        )
 
-          {:error, reason} ->
-            park_error(buffer, :stream_error, "The stream broke: #{inspect(reason)}")
-            :error
+      {Opus.Relay.Runner, ^ref, {:end, "timeout"}} ->
+        park_error(buffer, :timeout, "No stream data for #{div(timeout_ms, 1000)}s")
 
-          :unknown ->
-            # Message not for this response, keep waiting
-            collect_stream_chunks(response, buffer, timeout_ms, max_response_size)
+      {Opus.Relay.Runner, ^ref, {:end, code}} ->
+        {type, message} = HttpHandler.fetch_error(code, limits)
+
+        if status_of(buffer) == nil do
+          HttpHandler.emit_telemetry(
+            component_ref,
+            request,
+            :error,
+            System.monotonic_time(:millisecond) - start_time
+          )
         end
+
+        park_error(buffer, if(type == :http_error, do: :request_failed, else: type), message)
     after
       timeout_ms ->
         park_error(buffer, :timeout, "No stream data for #{div(timeout_ms, 1000)}s")
         :timeout
     end
+  end
+
+  # Over budget or closed: stop collecting; this process exiting leaves
+  # the rest of the fetch to drain, and stream_read surfaces a parked error.
+  defp next_stream_chunk(ref, buffer, request, component_ref, start_time, timeout_ms, limits) do
+    if stopped?(buffer),
+      do: :ok,
+      else:
+        collect_stream_chunks(ref, buffer, request, component_ref, start_time, timeout_ms, limits)
+  end
+
+  defp status_of(buffer) do
+    Agent.get(buffer, & &1.status)
+  catch
+    :exit, _ -> nil
   end
 
   # The first error parked stands; the stream is done either way.
@@ -489,17 +514,27 @@ defmodule Opus.HttpStreamHandler do
 
   # Pop the first chunk atomically, so the collector cannot append between
   # a look and a take; an empty, open stream is looked at again until
-  # `deadline`.
+  # `deadline`. A chunk handed on is granted back to the relay as credit.
   defp next_chunk(buffer, deadline) do
     popped =
       Agent.get_and_update(buffer, fn state ->
         case :queue.out(state.chunks) do
-          {{:value, chunk}, rest} -> {{:chunk, chunk, state.status}, %{state | chunks: rest}}
-          {:empty, _} -> {{:empty, state.done, state.error, state.status}, state}
+          {{:value, chunk}, rest} ->
+            {{:chunk, chunk, state.status, state.fetch}, %{state | chunks: rest}}
+
+          {:empty, _} ->
+            {{:empty, state.done, state.error, state.status}, state}
         end
       end)
 
     case popped do
+      {:chunk, chunk, status, {relay, ref}} ->
+        Opus.Relay.Runner.credit(relay, ref, byte_size(chunk))
+        {:chunk, chunk, status}
+
+      {:chunk, chunk, status, nil} ->
+        {:chunk, chunk, status}
+
       {:empty, false, nil, _status} ->
         if System.monotonic_time(:millisecond) < deadline do
           Process.sleep(@read_poll_ms)
@@ -543,7 +578,7 @@ defmodule Opus.HttpStreamHandler do
     :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
   end
 
-  defp safe_encode(data), do: Cyfr.WitResponse.safe_encode(data)
+  defp safe_encode(data), do: Prima.WitResponse.safe_encode(data)
 
-  defp encode_error(type, message), do: Cyfr.WitResponse.encode_error(type, message)
+  defp encode_error(type, message), do: Prima.WitResponse.encode_error(type, message)
 end

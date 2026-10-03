@@ -1,30 +1,51 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""`Cyfr.WorkerAuth` and `Cyfr.Assignment` as the worker image tests spell
+"""`Prima.WorkerAuth` and `Prima.Assignment` as the worker image tests spell
 them, so a scripted control plane can mint what CYFR mints and verify what
 a worker sends, with nothing but the standard library.
 
 Every key is HMAC-SHA256 of the root over a label and field values one per
-line (`Cyfr.MacEnvelope`); a header is `v1 kind=<kind> name=value … body=<hex>
+line (`Prima.MacEnvelope`); a header is `v1 kind=<kind> name=value … body=<hex>
 mac=<b64url>` signed over the envelope's canonical string; a sealed value is
 `base64url(iv ‖ tag ‖ ciphertext)` under AES-256-GCM with the label and
 fields as additional data; an assignment token is `base64url(jcs) "."
 base64url(mac)` under the assign key. AES-GCM is written out here rather
-than imported, so the suite runs wherever `python3` does; `check_vectors`
-reproduces every value of `tests/fixtures/worker_auth.json`, the one vector
-file every side of the protocol consumes, and refuses to serve otherwise.
+than imported, so the suite runs wherever `python3` does.
+
+The wire (`Prima.WorkerWire`) is versioned: a header's first token is the
+version token `v1`, and one spelling another version (`v` and a decimal
+number) is `unknown_version` before the body is read; every body and answer
+carries `"v": 1` as its first member, and a body without it, or at another
+version, is `unknown_version` once opened and before its `op` is read. A
+guest's outbound target is an `egress_pin` host call answered with a
+`Prima.PinnedTarget` or refused by name (`read_pin_request`, `read_pin`),
+under the egress policy's pure matchers as `Prima.Network` answers them
+(`domain_allowed`, `same_origin`, `credential_header`).
+
+`check_vectors` reproduces every value of `tests/fixtures/worker_auth.json`
+(the primitives) and of the message vectors `host_api.json` and
+`worker_api.json` beside it (every call, request and answer, sealed and
+signed from the fixed keys, and every egress policy answer derived from
+its case), which every side of the protocol consumes, and refuses to serve
+otherwise. `python3 worker_auth.py --self-check` runs it.
 """
 
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
 import secrets
+import sys
 import time
+import urllib.parse
 
-PREFIX = "cyfr-worker/v1"
+PREFIX = "cyfr-opus/v1"
+VERSION = 1
+VERSION_TOKEN = "v1"
+ANY_VERSION_TOKEN = re.compile(r"v(0|[1-9][0-9]*)")
 ATTEMPT_FIELDS = ("athanor_id", "execution_id", "attempt", "fence", "generation", "service")
 CALL_FIELDS = ATTEMPT_FIELDS + ("boot", "runner", "member", "ts", "nonce")
 DISPATCH_FIELDS = ("service", "boot", "ts", "nonce")
@@ -152,6 +173,19 @@ def header(kind, names, key, fields, body):
     return f"v1 kind={kind} {pairs} body={body_hash} mac={mac}"
 
 
+def header_version(text):
+    """None for a header at this wire's version; `unknown_version` for one
+    whose first token spells another (`v` and a decimal number), which a
+    listener answers before it reads the body; `malformed` for a header
+    with no version token at all (`V1`, `Bearer`, nothing)."""
+    if not isinstance(text, str):
+        return "malformed"
+    token = text.split(" ")[0]
+    if token == VERSION_TOKEN:
+        return None
+    return "unknown_version" if ANY_VERSION_TOKEN.fullmatch(token) else "malformed"
+
+
 def parse(kind, names, text):
     """The fields, body hash and MAC of a header of `kind`, or None."""
     if not isinstance(text, str):
@@ -204,10 +238,16 @@ def report_header(dkey, report, body):
     return header("report", DISPATCH_FIELDS, dkey, report, body)
 
 
-def verify_host_call(root, text, body, now, generation, member):
-    """The call's fields, or the refusal name, in the contract's order. A
+def verify_host_call_header(root, text, now, generation, member):
+    """The call's fields and the body hash its header names, or the refusal
+    name, from the header alone and in the contract's order: another
+    version, a header that does not parse, a timestamp outside the window, a
+    MAC that is not the call key's, another generation, another member. A
     call names the member it is addressed to — the one that issued its
     attempt's assignment — and no other member answers it."""
+    refusal = header_version(text)
+    if refusal:
+        return None, refusal
     parsed = parse("call", CALL_FIELDS, text)
     if parsed is None:
         return None, "malformed"
@@ -216,16 +256,38 @@ def verify_host_call(root, text, body, now, generation, member):
         return None, "outside_window"
     if not verify_header("call", CALL_FIELDS, attempt_call_key(root, call), call, body_hash, mac):
         return None, "bad_mac"
-    if not hmac.compare_digest(body_hash, sha256_hex(body)):
-        return None, "bad_mac"
     if call["generation"] != generation:
         return None, "generation_mismatch"
     if call["member"] != member:
         return None, "member_mismatch"
+    return (call, body_hash), None
+
+
+def verify_body(body_hash, body):
+    """Whether `body` is the bytes a verified header named."""
+    return hmac.compare_digest(body_hash, sha256_hex(body))
+
+
+def verify_host_call(root, text, body, now, generation, member):
+    """The call's fields, or the refusal name: the header's refusals, then a
+    body that is not the one the header named (`bad_mac`)."""
+    verified, refusal = verify_host_call_header(root, text, now, generation, member)
+    if refusal:
+        return None, refusal
+    call, body_hash = verified
+    if not verify_body(body_hash, body):
+        return None, "bad_mac"
     return call, None
 
 
-def verify_report(root, text, body, now):
+def verify_report_header(root, text, now):
+    """A report's fields and the body hash its header names, or the refusal
+    name, from the header alone: another version, a header that does not
+    parse, a timestamp outside the window, a MAC that is not the dispatch
+    key of the service it names."""
+    refusal = header_version(text)
+    if refusal:
+        return None, refusal
     parsed = parse("report", DISPATCH_FIELDS, text)
     if parsed is None:
         return None, "malformed"
@@ -235,9 +297,258 @@ def verify_report(root, text, body, now):
     key = dispatch_key(worker_key(root, report["service"]))
     if not verify_header("report", DISPATCH_FIELDS, key, report, body_hash, mac):
         return None, "bad_mac"
-    if not hmac.compare_digest(body_hash, sha256_hex(body)):
+    return (report, body_hash), None
+
+
+def verify_report(root, text, body, now):
+    verified, refusal = verify_report_header(root, text, now)
+    if refusal:
+        return None, refusal
+    report, body_hash = verified
+    if not verify_body(body_hash, body):
         return None, "bad_mac"
     return report, None
+
+
+def verify_request(dkey, text, body, now):
+    """A request CYFR sends a worker service, verified as the service
+    verifies it under its dispatch key, or the refusal name."""
+    refusal = header_version(text)
+    if refusal:
+        return None, refusal
+    parsed = parse("request", DISPATCH_FIELDS, text)
+    if parsed is None:
+        return None, "malformed"
+    request, body_hash, mac = parsed
+    if not within_window(request["ts"], now):
+        return None, "outside_window"
+    if not verify_header("request", DISPATCH_FIELDS, dkey, request, body_hash, mac):
+        return None, "bad_mac"
+    if not verify_body(body_hash, body):
+        return None, "bad_mac"
+    return request, None
+
+
+# ---------------------------------------------------------------------------
+# Bodies and answers (`Prima.WorkerWire`)
+# ---------------------------------------------------------------------------
+
+
+def request_body(op, args):
+    """The body of a call or request: `v` first, then `op` and `args`."""
+    return json.dumps({"v": VERSION, "op": op, "args": args}, separators=(",", ":"))
+
+
+def answer_body(answer):
+    """An answer as the wire writes it: `v` first, then `ok` or `error` and its fields."""
+    return json.dumps({"v": VERSION, **answer}, separators=(",", ":"))
+
+
+def _versioned(decoded):
+    v = decoded.get("v")
+    return isinstance(v, int) and not isinstance(v, bool) and v == VERSION
+
+
+def read_body(op, body):
+    """The args of an opened body posted at `op`'s route, or the refusal
+    name: `malformed` for a body that is not a JSON object,
+    `unknown_version` for one without `v` or at another version (read
+    before its `op`), and `malformed` for an `op` that is not the route's or
+    `args` that are not an object."""
+    try:
+        decoded = json.loads(body)
+    except (ValueError, TypeError):
+        return None, "malformed"
+    if not isinstance(decoded, dict):
+        return None, "malformed"
+    if not _versioned(decoded):
+        return None, "unknown_version"
+    if decoded.get("op") != op or not isinstance(decoded.get("args"), dict):
+        return None, "malformed"
+    return decoded["args"], None
+
+
+def read_answer(text):
+    """An answer's `ok` value as `("ok", value)`, its refusal as `("error",
+    name, fields)`, or None for an answer the wire counts as lost: not a
+    JSON object, without `v` or at another version, or neither `ok` nor
+    `error`."""
+    try:
+        decoded = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(decoded, dict) or not _versioned(decoded):
+        return None
+    if "ok" in decoded and set(decoded) == {"v", "ok"}:
+        return ("ok", decoded["ok"])
+    if isinstance(decoded.get("error"), str):
+        return ("error", decoded["error"], {k: v for k, v in decoded.items() if k not in ("v", "error")})
+    return None
+
+
+def first_member(text):
+    """The name of a JSON object's first member as written."""
+    match = re.match(r'^\{"([^"]*)"', text)
+    return match.group(1) if match else None
+
+
+# ---------------------------------------------------------------------------
+# Pinned targets (`Prima.PinnedTarget`)
+# ---------------------------------------------------------------------------
+
+PIN_PURPOSES = ("fetch", "stream", "redirect")
+PIN_REFUSALS = ("denied", "metadata", "resolution", "redirect_credentials", "malformed")
+PIN_MEMBERS = {"id", "ip", "family", "scheme", "port", "host", "expires_at"}
+PIN_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_LABEL = r"[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?"
+HOSTNAME = re.compile(r"(?=.{1,253}\Z)" + _LABEL + r"(?:\." + _LABEL + r")*\.?")
+DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def parse_url(url):
+    """`(scheme, host, port)` of an `http` or `https` URL with a host, the
+    scheme lowercased, the host lowercased and an IPv6 literal bracketed, as
+    a pin names them, the port the scheme's default when the URL names none;
+    None otherwise."""
+    if not isinstance(url, str):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    if scheme not in DEFAULT_PORTS or not parts.hostname:
+        return None
+    host = parts.hostname.lower()
+    try:
+        if ipaddress.ip_address(host).version == 6:
+            host = f"[{host}]"
+    except ValueError:
+        pass
+    port = port if port is not None else DEFAULT_PORTS[scheme]
+    if not 1 <= port <= 65_535:
+        return None
+    return scheme, host, port
+
+
+def read_pin_request(args):
+    """An `egress_pin` call's args, read: `(url, purpose, from)` for exactly
+    `url` and `purpose`, and `from` (a pin id) for a `redirect` alone; None
+    for anything else, which is `malformed`."""
+    if not isinstance(args, dict):
+        return None
+    url, purpose = args.get("url"), args.get("purpose")
+    if purpose not in PIN_PURPOSES or parse_url(url) is None:
+        return None
+    if purpose == "redirect":
+        from_ = args.get("from")
+        if set(args) != {"url", "purpose", "from"} or not isinstance(from_, str) or not PIN_ID.fullmatch(from_):
+            return None
+        return url, purpose, from_
+    if set(args) != {"url", "purpose"}:
+        return None
+    return url, purpose, None
+
+
+def _pin_host(host):
+    if not isinstance(host, str):
+        return False
+    if host.startswith("[") and host.endswith("]") and len(host) > 2:
+        try:
+            return ipaddress.ip_address(host[1:-1]).version == 6
+        except ValueError:
+            return False
+    return bool(HOSTNAME.fullmatch(host))
+
+
+def read_pin(wire):
+    """The pin a JSON answer's `ok` spells, or None: exactly its seven
+    members, an id, an IP literal whose family is `family`, an `http` or
+    `https` scheme, a port of 1 to 65535, a hostname or bracketed IPv6
+    literal and an expiry of 0 to 2^53 - 1."""
+    if not isinstance(wire, dict) or set(wire) != PIN_MEMBERS:
+        return None
+    try:
+        family = ipaddress.ip_address(wire["ip"]).version if isinstance(wire["ip"], str) else None
+    except ValueError:
+        family = None
+    port, expires_at = wire["port"], wire["expires_at"]
+    if (
+        not isinstance(wire["id"], str)
+        or not PIN_ID.fullmatch(wire["id"])
+        or family is None
+        or wire["family"] != family
+        or isinstance(wire["family"], bool)
+        or wire["scheme"] not in DEFAULT_PORTS
+        or not _count(port)
+        or not 1 <= port <= 65_535
+        or not _pin_host(wire["host"])
+        or not _count(expires_at)
+        or expires_at > MAX_INTEGER
+    ):
+        return None
+    return wire
+
+
+# ---------------------------------------------------------------------------
+# The egress policy's pure matchers, as `Prima.Network` answers them
+# ---------------------------------------------------------------------------
+
+CREDENTIAL_HEADERS = {"authorization", "cookie", "proxy-authorization", "x-api-key", "x-auth-token",
+                      "x-access-token", "x-csrf-token"}
+CREDENTIAL_SUFFIXES = ("-token", "-key", "-secret")
+
+
+def _fold_host(host):
+    """A host case-folded with one trailing dot dropped."""
+    return (host[:-1] if host.endswith(".") else host).lower()
+
+
+def domain_allowed(host, patterns):
+    """`Prima.Network.domain_allowed?/2`: "*" matches any host,
+    "*.example.com" every name below example.com, any other pattern exactly;
+    an empty host, or no pattern, matches nothing."""
+    host = _fold_host(host or "")
+    if not host:
+        return False
+    for pattern in patterns:
+        if pattern == "*":
+            return True
+        if pattern.startswith("*."):
+            base = _fold_host(pattern[2:])
+            if base and host.endswith("." + base):
+                return True
+        elif _fold_host(pattern) == host:
+            return True
+    return False
+
+
+def origin(url):
+    """A URL's scheme, host and effective port, an IPv6 literal compared by
+    its address; None for a URL that has none."""
+    parsed = parse_url(url)
+    if parsed is None:
+        return None
+    scheme, host, port = parsed
+    host = _fold_host(host[1:-1] if host.startswith("[") else host)
+    if ":" in host:
+        try:
+            host = ipaddress.IPv6Address(host).compressed
+        except ValueError:
+            return None
+    return scheme, host, port
+
+
+def same_origin(a, b):
+    """`Prima.Network.same_origin?/2`."""
+    return origin(a) is not None and origin(a) == origin(b)
+
+
+def credential_header(name):
+    """`Prima.Network.credential_header?/1`."""
+    name = name.lower()
+    return name in CREDENTIAL_HEADERS or name.endswith(CREDENTIAL_SUFFIXES)
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +721,7 @@ def read_assignment(token):
 
 
 # ---------------------------------------------------------------------------
-# A worker service's status (`Cyfr.WorkerAPI.read_status/1`)
+# A worker service's status (`Prima.WorkerAPI.read_status/1`)
 # ---------------------------------------------------------------------------
 
 STATUS_MEMBERS = {"service", "boot", "runners", "attempts", "memory_bytes", "refusal"}
@@ -534,14 +845,213 @@ def check_vectors(path):
     assert sign_assignment(wire, assign_key(root)) == a["token"], "assignment token"
     assert read_assignment(a["token"]) == wire, "assignment reads"
 
-    for vec in v["status"]["valid"]:
+    assert header_version(header_text) is None, "the call header is at this version"
+    for token, refusal in (("v2", "unknown_version"), ("v0", "unknown_version"), ("v10", "unknown_version"),
+                           ("V1", "malformed"), ("v01", "malformed"), ("Bearer", "malformed")):
+        other = token + header_text[len("v1"):]
+        assert verify_host_call(root, other, body, ts, generation, member)[1] == refusal, f"a {token} header is {refusal}"
+    assert header_version("") == "malformed", "an empty header is malformed"
+
+    fixtures = os.path.dirname(path)
+    check_host_api(os.path.join(fixtures, "host_api.json"), v)
+    check_worker_api(os.path.join(fixtures, "worker_api.json"), v)
+    return True
+
+
+def _check_answer(text, what):
+    assert first_member(text) == "v", f"{what}: v is the answer's first member"
+    assert read_answer(text) is not None, f"{what}: the answer reads"
+
+
+def check_host_api(path, primitives):
+    """Reproduce every call of the HostAPI message vectors from its fields
+    under the fixed keys: its body, its seal in the body direction, its
+    header over the sealed bytes, its answer's seal in the answer direction;
+    every egress policy answer from its case; and every refusal, pre-body
+    and after the body, by name."""
+    with open(path, encoding="utf-8") as f:
+        v = json.load(f)
+    keys = v["keys"]
+    root = decode_root(keys["root_hex"])
+    assert keys["root_hex"] == primitives["root_hex"], "host_api: the root is worker_auth.json's"
+    assert {k: x for k, x in keys.items() if k != "root_hex"} == primitives["keys"], "host_api: the keys are worker_auth.json's"
+    assert v["version"] == VERSION and v["auth_header"] == "x-cyfr-auth" and v["window_ms"] == WINDOW_MS, "host_api: version, header, window"
+    standing = v["standing"]
+    generation, member = standing["generation"], standing["member"]
+    assert set(v["routes"]) == set(v["retries"]) == set(v["timeouts_ms"]), "host_api: every callback has a route, a retry class and a timeout"
+    for callback, route in v["routes"].items():
+        assert route == f"/host/v1/{callback}", f"host_api: {callback}'s route"
+    assert "egress_pin" in v["routes"], "host_api: egress_pin is a callback"
+
+    def reproduce(call, what, callback):
+        fields = call["fields"]
+        body = call["body"].encode()
+        assert first_member(call["body"]) == "v", f"{what}: v is the body's first member"
+        args, refusal = read_body(callback, call["body"])
+        assert refusal is None, f"{what}: the body reads ({refusal})"
+        assert call["body"] == request_body(callback, args), f"{what}: the body is the wire's writing"
+        ckey, skey = attempt_call_key(root, fields), attempt_seal_key(root, fields)
+        sealed = seal_call(skey, "body", fields, body, bytes.fromhex(call["body_iv_hex"]))
+        assert sealed == call["body_sealed"], f"{what}: the sealed body"
+        assert open_call(skey, "body", fields, sealed) == body, f"{what}: the sealed body opens"
+        assert host_call_header(ckey, fields, sealed.encode()) == call["header"], f"{what}: the header"
+        verified, refusal = verify_host_call(root, call["header"], sealed.encode(), fields["ts"], generation, member)
+        assert refusal is None and verified == fields, f"{what}: the call verifies ({refusal})"
+        if "answer" in call:
+            answer = call["answer"].encode()
+            sealed_answer = seal_call(skey, "answer", fields, answer, bytes.fromhex(call["answer_iv_hex"]))
+            assert sealed_answer == call["answer_sealed"], f"{what}: the sealed answer"
+            assert open_call(skey, "answer", fields, sealed_answer) == answer, f"{what}: the sealed answer opens"
+            _check_answer(call["answer"], what)
+        return args
+
+    callbacks = [call["callback"] for call in v["calls"]]
+    assert sorted(callbacks) == sorted(c for c in v["routes"] if c != "runner_exited"), "host_api: one call per host callback"
+    for call in v["calls"]:
+        reproduce(call, f"host_api {call['callback']}", call["callback"])
+        for refusal in call["refusals"]:
+            _check_answer(refusal["answer"], f"host_api {call['callback']} refusal")
+            assert read_answer(refusal["answer"])[0] == "error", f"host_api {call['callback']}: a refusal is an error"
+
+    for case in v["egress_pin_cases"]:
+        what = f"host_api egress_pin {case['name']}"
+        args = reproduce(case, what, case["callback"])
+        assert case["callback"] == "egress_pin" and read_pin_request(args) is not None, f"{what}: the args read"
+        answer = read_answer(case["answer"])
+        if answer[0] == "ok":
+            pin = read_pin(answer[1])
+            assert pin is not None, f"{what}: the answer is a pinned target"
+            scheme, host, port = parse_url(args["url"])
+            assert (pin["scheme"], pin["host"], pin["port"]) == (scheme, host, port), f"{what}: the pin names the URL's origin"
+        else:
+            assert answer[1] in PIN_REFUSALS and answer[1] == case["name"], f"{what}: refused by its name"
+    names = {case["name"] for case in v["egress_pin_cases"]}
+    assert {"fetch", "stream", "redirect"} | set(PIN_REFUSALS) - {"malformed"} <= names, "host_api: every pin case"
+
+    # The egress policy's cases, in the order one attempt makes them: each
+    # call reproduced as a pin case is, and each answer derived from its
+    # expect: the URL's host against domains, a redirect's URL against the
+    # URL of the pin it names as from, a pin answered only where both hold,
+    # `denied` outside domains and `redirect_credentials` on another origin;
+    # and a hop's headers_after as headers_before without every header that
+    # carries a credential.
+    pinned, outcomes = {}, set()
+    for case in v["egress_policy_cases"]:
+        what = f"host_api egress_policy {case['name']}"
+        assert case["callback"] == "egress_pin", f"{what}: an egress_pin call"
+        args = reproduce(case, what, case["callback"])
+        assert read_pin_request(args) is not None, f"{what}: the args read"
+        url, expect = args["url"], case["expect"]
+        allowed = domain_allowed(urllib.parse.urlsplit(url).hostname, case["domains"])
+        assert expect["domain_allowed"] == allowed, f"{what}: the host against the domains"
+        same = True
+        if args["purpose"] == "redirect":
+            assert args["from"] in pinned, f"{what}: from names a pin an earlier case was answered"
+            same = same_origin(url, pinned[args["from"]])
+            assert expect["same_origin"] == same, f"{what}: the origin against its pin's"
+        answer = read_answer(case["answer"])
+        if allowed and same:
+            assert answer[0] == "ok", f"{what}: pinned"
+            pin = read_pin(answer[1])
+            assert pin is not None, f"{what}: the answer is a pinned target"
+            assert (pin["scheme"], pin["host"], pin["port"]) == parse_url(url), f"{what}: the pin names the URL's origin"
+            pinned[pin["id"]] = url
+            outcomes.add("pinned")
+        else:
+            refusal = "denied" if not allowed else "redirect_credentials"
+            assert answer[0] == "error" and answer[1] == refusal, f"{what}: refused as {refusal}"
+            outcomes.add(refusal)
+        if "headers_before" in case:
+            kept = [pair for pair in case["headers_before"] if not credential_header(pair[0])]
+            assert kept == case["headers_after"], f"{what}: the headers a hop to another origin keeps"
+            outcomes.add("stripped")
+    assert outcomes == {"pinned", "denied", "redirect_credentials", "stripped"}, "host_api: every egress policy outcome"
+
+    for refusal in v["pre_body_refusals"]:
+        what = f"host_api pre-body {refusal['name']}"
+        st = refusal["standing"]
+        verified, got = verify_host_call_header(root, refusal["header"], refusal["now"], st["generation"], st["member"])
+        if refusal["error"] == "replayed":
+            # The nonce is the listener's memory, not the header's: the
+            # header verifies, and names the nonce and attempt of a call
+            # that is never retried, presented within the window.
+            assert got is None, f"{what}: the header verifies"
+            call = verified[0]
+            storage = next(c for c in v["calls"] if c["callback"] == "storage")["fields"]
+            assert v["retries"]["storage"] == "never", f"{what}: storage is never retried"
+            assert (call["attempt"], call["nonce"]) == (storage["attempt"], storage["nonce"]), f"{what}: the storage call's nonce"
+            assert within_window(storage["ts"], refusal["now"]), f"{what}: within the window"
+        else:
+            assert got == refusal["error"], f"{what}: refused {refusal['error']}, not {got}"
+        assert refusal["status"] == 401, f"{what}: answered 401"
+
+    for refusal in v["body_refusals"]:
+        assert read_body("renew", refusal["body"]) == (None, refusal["error"]), f"host_api body {refusal['name']}: {refusal['error']}"
+
+    report = v["report"]
+    body = report["body"].encode()
+    wkey = worker_key(root, report["fields"]["service"])
+    assert report_header(dispatch_key(wkey), report["fields"], body) == report["header"], "host_api report: the header"
+    verified, refusal = verify_report(root, report["header"], body, report["fields"]["ts"])
+    assert refusal is None and verified == report["fields"], "host_api report: verifies"
+    args, refusal = read_body("runner_exited", report["body"])
+    assert refusal is None and args["member"] == member, "host_api report: names the member"
+    _check_answer(report["answer"], "host_api report")
+    cross = report["cross_member"]
+    assert report_header(dispatch_key(wkey), cross["fields"], cross["body"].encode()) == cross["header"], "host_api cross-member report: the header"
+    args, refusal = read_body("runner_exited", cross["body"])
+    assert refusal is None and args["member"] != member and cross["error"] == "lost", "host_api cross-member report: another member's is lost"
+
+    first, second = v["retry_identity"]["first"], v["retry_identity"]["second"]
+    reproduce(first, "host_api retry first", "admit_child")
+    reproduce(second, "host_api retry second", "admit_child")
+    assert first["body"] == second["body"] and first["fields"]["nonce"] != second["fields"]["nonce"], "host_api retry: one body, fresh nonces"
+    return True
+
+
+def check_worker_api(path, primitives):
+    """Reproduce every WorkerAPI request from its fields under the fixed
+    dispatch key, and read every answer and refusal; and every status
+    vector reads or is refused as it says."""
+    with open(path, encoding="utf-8") as f:
+        v = json.load(f)
+    root = decode_root(primitives["root_hex"])
+    dkey = dispatch_key(worker_key(root, primitives["service"]))
+    assert v["version"] == VERSION, "worker_api: version"
+    assert set(v["routes"]) == set(v["retries"]) == set(v["timeouts_ms"]) == {"start", "kill", "status"}, "worker_api: the three requests"
+    for request in v["requests"]:
+        what = f"worker_api {request['callback']}"
+        body = request["body"].encode()
+        assert v["routes"][request["callback"]] == f"/worker/v1/{request['callback']}", f"{what}: route"
+        assert first_member(request["body"]) == "v", f"{what}: v is the body's first member"
+        args, refusal = read_body(request["callback"], request["body"])
+        assert refusal is None and request["body"] == request_body(request["callback"], args), f"{what}: the body"
+        assert request_header(dkey, request["fields"], body) == request["header"], f"{what}: the header"
+        verified, refusal = verify_request(dkey, request["header"], body, request["fields"]["ts"])
+        assert refusal is None and verified == request["fields"], f"{what}: verifies ({refusal})"
+        other = "v2" + request["header"][len("v1"):]
+        assert verify_request(dkey, other, body, request["fields"]["ts"])[1] == "unknown_version", f"{what}: a v2 header"
+        _check_answer(request["answer"], what)
+        for refusal in request["refusals"]:
+            _check_answer(refusal["answer"], f"{what} refusal")
+    status = v["status"]
+    for vec in status["valid"]:
         assert read_status(vec["wire"]) == vec["wire"], f"status reads: {vec['why']}"
-    for vec in v["status"]["invalid"]:
+    for vec in status["invalid"]:
         assert read_status(vec["wire"]) is None, f"status refused: {vec['why']}"
     return True
 
 
+USAGE = """usage: worker_auth.py [--self-check]
+
+Reproduces every vector of tests/fixtures/worker_auth.json, host_api.json
+and worker_api.json from the fixed keys, and exits non-zero naming the first
+that differs."""
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] not in ([], ["--self-check"]):
+        sys.exit(USAGE)
     here = os.path.dirname(os.path.abspath(__file__))
     check_vectors(os.path.join(here, "..", "fixtures", "worker_auth.json"))
-    print("ok: every vector of tests/fixtures/worker_auth.json reproduces")
+    print("ok: every vector of tests/fixtures/worker_auth.json, host_api.json and worker_api.json reproduces")

@@ -16,7 +16,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   requires an `athanor_id`, and Compendium / TinctureRegistry
   lookups use the user's `Sanctum.Context`. The palette never calls
   platform-scope variants. Action invocation goes through
-  `Cyfr.Ops.Catalog.call/3` with the user's context — same authz
+  `Grimoire.call_external/4` with the user's context — same authz
   path as a normal page interaction.
   """
 
@@ -44,11 +44,13 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
   @impl true
   def handle_event("toggle", _params, socket) do
-    if socket.assigns.open do
-      {:noreply, close(socket)}
-    else
-      {:noreply, socket |> assign(:open, true) |> load_items()}
-    end
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      if socket.assigns.open do
+        {:noreply, close(socket)}
+      else
+        {:noreply, socket |> assign(:open, true) |> load_items()}
+      end
+    end)
   end
 
   def handle_event("close", _params, socket), do: {:noreply, close(socket)}

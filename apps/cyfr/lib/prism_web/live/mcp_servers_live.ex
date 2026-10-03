@@ -10,15 +10,15 @@ defmodule PrismWeb.McpServersLive do
   Two ways to add one:
 
     * **Add stdio server** — one stdio backend (a command such as
-      `npx -y @modelcontextprotocol/server-github` and its env) that the MCP
-      bridge runs under a uid of its own. Env values are `vault:ENTRY`
-      templates; only the non-secret names `Emissary.MCP.BackendDefinition`
+      `npx -y @modelcontextprotocol/server-github` and its env) that the
+      backends service runs under a uid of its own. Env values are `vault:ENTRY`
+      templates; only the non-secret names `Emissary.External.BackendDefinition`
       lists may hold a literal. More backends for one server go through the
       config form.
     * **Add server** — the config as JSON: an http server's `url` and
       `headers`, or a stdio server's `transport` and `backends`.
 
-  An expanded stdio server shows what the bridge reports for each backend
+  An expanded stdio server shows what the backends service reports for each backend
   and offers Restart, which releases its backends and starts them again.
   """
 
@@ -39,8 +39,8 @@ defmodule PrismWeb.McpServersLive do
     # Subscribe once, at mount — handle_params re-fires on every patch,
     # and PubSub's :duplicate registry would deliver every message twice.
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.mcp_servers(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.mcp_servers(actor))
     end
 
     socket =
@@ -218,12 +218,12 @@ defmodule PrismWeb.McpServersLive do
     end
   end
 
-  def handle_info(:mcp_servers_changed, socket) do
+  def handle_info(%Cyfr.Bus.McpServers{}, socket) do
     {:noreply, refresh_servers(socket)}
   end
 
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -352,7 +352,7 @@ defmodule PrismWeb.McpServersLive do
         <form phx-submit="add_stdio" class="space-y-4">
           <p class="text-xs text-gray-500">
             A stdio MCP server (for example an <code class="text-gray-400">npx</code>
-            package) that the MCP bridge runs under a user of its own. Its tools
+            package) that the backends service runs under a user of its own. Its tools
             appear as <span class="font-mono">&lt;name&gt;:&lt;backend&gt;__&lt;tool&gt;</span>.
           </p>
           <div class="grid gap-3 md:grid-cols-2">
@@ -557,7 +557,7 @@ defmodule PrismWeb.McpServersLive do
     """
   end
 
-  defp endpoint(%{transport: "stdio"}), do: "stdio (MCP bridge)"
+  defp endpoint(%{transport: "stdio"}), do: "stdio (backends service)"
   defp endpoint(server), do: server[:url]
 
   defp status_color("ready"), do: "green"

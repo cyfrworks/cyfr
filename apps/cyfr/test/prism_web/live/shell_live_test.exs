@@ -5,11 +5,9 @@ defmodule PrismWeb.ShellLiveTest do
   use ExUnit.Case, async: true
 
   @moduledoc """
-  Tests for ShellLive navigation and iframe message handling logic.
-
-  ShellLive uses a single-panel layout with a tincture sidebar.
-  Tinctures are loaded from TinctureRegistry and displayed as iframes.
-  The only bridge action is "query" (no general tool execution).
+  Tests for ShellLive's picker navigation logic. The frames it creates,
+  their attributes, credentials and shell verbs are
+  `PrismWeb.ShellFrameTest`'s.
   """
 
   describe "tincture selection" do
@@ -59,71 +57,13 @@ defmodule PrismWeb.ShellLiveTest do
     end
   end
 
-  describe "iframe message routing" do
-    test "query action is recognized" do
-      msg = %{
-        "type" => "cyfr:request",
-        "id" => "req_1",
-        "action" => "query",
-        "payload" => %{"name" => "latest", "params" => %{}}
-      }
-
-      assert msg["action"] == "query"
-    end
-
-    test "set_title action is recognized" do
-      msg = %{
-        "type" => "cyfr:request",
-        "id" => "req_2",
-        "action" => "set_title",
-        "payload" => %{"title" => "My Dashboard"}
-      }
-
-      assert msg["action"] == "set_title"
-    end
-
-    test "close action is recognized" do
-      msg = %{
-        "type" => "cyfr:request",
-        "id" => "req_3",
-        "action" => "close",
-        "payload" => %{}
-      }
-
-      assert msg["action"] == "close"
-    end
-
-    test "unknown actions are rejected" do
-      msg = %{
-        "type" => "cyfr:request",
-        "id" => "req_4",
-        "action" => "tool_call",
-        "payload" => %{}
-      }
-
-      # tool_call is a legacy action that should not be recognized
-      assert msg["action"] not in ["query", "set_title", "close", "ready", "get_context"]
-    end
-  end
-
   describe "tincture iframe URLs" do
     test "entry URL uses the canonical athanor-scoped route" do
-      url = Cyfr.TinctureHelpers.tincture_path("home", "local", "stock-dashboard")
+      url = Prima.TinctureUrl.path("home", "local", "stock-dashboard")
 
       # Must use the index route (not asset route) for CSP headers
       assert url == "/t/home/local/stock-dashboard"
       refute String.contains?(url, "index.html")
-    end
-  end
-
-  describe "iframe sandbox security" do
-    test "ShellLive template uses allow-scripts only (no allow-same-origin)" do
-      source = File.read!(Path.join(:code.priv_dir(:cyfr), "../lib/prism_web/live/shell_live.ex"))
-
-      # The sandbox attribute must be exactly "allow-scripts" — adding
-      # allow-same-origin would let tinctures escape their containment.
-      assert source =~ ~s(sandbox="allow-scripts")
-      refute source =~ "allow-same-origin"
     end
   end
 

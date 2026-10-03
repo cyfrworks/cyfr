@@ -8,9 +8,8 @@ defmodule Arca.ExecutionPayloadsTest do
 
   alias Arca.ExecutionPayloads
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "payloads_#{:rand.uniform(1_000_000)}")
     original = Application.get_env(:arca, :base_path)
@@ -35,7 +34,7 @@ defmodule Arca.ExecutionPayloadsTest do
     now = DateTime.utc_now()
 
     {1, _} =
-      Arca.Repo.insert_all(Arca.Execution, [
+      Arca.Repo.insert_all(Arca.Schemas.Execution, [
         %{
           id: id,
           athanor_id: actor.athanor_id,
@@ -52,7 +51,7 @@ defmodule Arca.ExecutionPayloadsTest do
 
   defp move_attempt!(exec, attempt) do
     {1, _} =
-      Arca.Repo.update_all(from(e in Arca.Execution, where: e.id == ^exec),
+      Arca.Repo.update_all(from(e in Arca.Schemas.Execution, where: e.id == ^exec),
         set: [current_attempt: attempt]
       )
 
@@ -80,7 +79,7 @@ defmodule Arca.ExecutionPayloadsTest do
 
     assert row.athanor_id == actor.athanor_id
     assert row.attempt == "att_#{exec}"
-    assert row.digest == Cyfr.Digest.sha256(~s({"ok":true}))
+    assert row.digest == Prima.Digest.sha256(~s({"ok":true}))
     assert row.bytes == 11
     "sha256:" <> hex = row.digest
     assert row.blob_ref == "payloads/#{exec}/result.#{hex}"
@@ -164,14 +163,15 @@ defmodule Arca.ExecutionPayloadsTest do
       ExecutionPayloads.stage(actor, exec, "input", "given", "api")
 
     {:ok, row} = Arca.Repo.transaction(fn -> ExecutionPayloads.commit!(staged, "att_#{exec}") end)
-    assert {:ok, ^row, "given"} = ExecutionPayloads.get(actor, exec, "input")
+    projected = Arca.Data.project(row)
+    assert {:ok, ^projected, "given"} = ExecutionPayloads.get(actor, exec, "input")
 
     # Discarding a stage whose object a row already names keeps the object.
     {:ok, again} =
       ExecutionPayloads.stage(actor, exec, "input", "given", "api")
 
     assert :ok = ExecutionPayloads.discard(again)
-    assert {:ok, ^row, "given"} = ExecutionPayloads.get(actor, exec, "input")
+    assert {:ok, ^projected, "given"} = ExecutionPayloads.get(actor, exec, "input")
 
     # A second commit for the same execution, kind and attempt raises, and
     # its transaction rolls back.
@@ -225,7 +225,7 @@ defmodule Arca.ExecutionPayloadsTest do
              ExecutionPayloads.get(actor, exec, "result")
   end
 
-  test "a payload is the athanor's: another estate reads nothing", %{actor: actor, exec: exec} do
+  test "a payload is the athanor's: another athanor reads nothing", %{actor: actor, exec: exec} do
     {:ok, _} = ExecutionPayloads.put(actor, exec, "result", "mine", "api")
 
     assert {:error, :not_found} =
@@ -254,7 +254,7 @@ defmodule Arca.ExecutionPayloadsTest do
              Arca.get(actor, String.split(row.blob_ref, "/"))
   end
 
-  test "a sweep is scoped to its retention classes", %{ctx: ctx, actor: actor} do
+  test "a sweep is scoped to its retention classes", %{actor: actor} do
     api = execution!(actor)
     hook = execution!(actor)
     {:ok, _} = ExecutionPayloads.put(actor, api, "result", "api", "api")
@@ -277,21 +277,21 @@ defmodule Arca.ExecutionPayloadsTest do
     assert {:ok, _, "api"} = ExecutionPayloads.get(actor, api, "result")
 
     # Every class has a retention kind of its own, each with its window.
-    kinds = Cyfr.Retention.kinds()
+    kinds = Arca.Retention.kinds()
 
     for {kind, key} <- [
-          {Cyfr.Retention.Payloads, "payload_days"},
-          {Cyfr.Retention.WebhookPayloads, "webhook_payload_days"},
-          {Cyfr.Retention.SchedulePayloads, "schedule_payload_days"},
-          {Cyfr.Retention.SystemPayloads, "system_payload_days"}
+          {Arca.Retention.Payloads, "payload_days"},
+          {Arca.Retention.WebhookPayloads, "webhook_payload_days"},
+          {Arca.Retention.SchedulePayloads, "schedule_payload_days"},
+          {Arca.Retention.SystemPayloads, "system_payload_days"}
         ] do
       assert kind in kinds
       assert kind.key() == key
       assert kind.unit() == :days
     end
 
-    assert {:ok, 1} = Cyfr.Retention.Payloads.prune(ctx, 30, true)
-    assert {:ok, 0} = Cyfr.Retention.WebhookPayloads.prune(ctx, 30, true)
+    assert {:ok, 1} = Arca.Retention.Payloads.prune(actor, 30, true)
+    assert {:ok, 0} = Arca.Retention.WebhookPayloads.prune(actor, 30, true)
   end
 
   test "a row whose bytes could not be deleted stays for the next sweep", %{
@@ -346,7 +346,7 @@ defmodule Arca.ExecutionPayloadsTest do
     # An execution whose payload is still held cannot be deleted underneath it.
     refused =
       try do
-        Arca.Repo.delete_all(from(e in Arca.Execution, where: e.id == ^b))
+        Arca.Repo.delete_all(from(e in Arca.Schemas.Execution, where: e.id == ^b))
         :deleted
       rescue
         _ -> :refused

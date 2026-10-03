@@ -20,8 +20,9 @@ sign-off requirement.
 
 ## New files
 
-Add the SPDX header on the first line that matches the directory the file lives
-in, following the existing convention:
+Open every source file with the SPDX header that matches the directory it
+lives in, after a shebang line if it has one, in the file's own comment
+syntax:
 
 ```
 # SPDX-License-Identifier: Apache-2.0
@@ -30,13 +31,20 @@ in, following the existing convention:
 
 (use `FSL-1.1-Apache-2.0` only for files inside `apps/sanctum/`).
 
-The `license-lint` workflow enforces this boundary on every pull request — a
+The `license-lint` workflow enforces this boundary on every pull request for
+Elixir, Go, WIT, the console's JavaScript and the backends image suite — a
 missing or wrong header fails CI.
 
 ## Before opening a PR
 
+- Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first. A change to a principle, a
+  layer edge, a port or an invariant changes that document in the same pull
+  request.
 - Keep changes focused and match the surrounding code style.
-- Run the test suite for the apps you touched (`mix test`).
+- Run the tests for what you touched as operating-system partitions:
+  `scripts/test-partitioned.sh <test paths>` on SQLite, and
+  `scripts/test-partitioned.sh -a postgres <test paths>` on PostgreSQL.
+  CI runs the whole suite on both.
 - If you changed a `@spec` or a function's return shape, run `mix dialyzer`.
   CI runs it too. It is fast once the PLT is built, and the findings it
   reports today are recorded in [`.dialyzer_ignore.exs`](.dialyzer_ignore.exs)

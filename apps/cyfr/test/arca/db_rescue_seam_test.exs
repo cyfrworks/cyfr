@@ -10,7 +10,7 @@ defmodule Arca.DbRescueSeamTest do
   crept in, go wrap it", never a behavioural assertion.
 
   Value-position uses of `db_errors()` (attribute lists such as
-  `Cyfr.Schedules.Scheduler`'s error rosters) are not rescue clauses and
+  `Crucible.Schedules.Scheduler`'s error rosters) are not rescue clauses and
   are deliberately not matched.
   """
   use ExUnit.Case, async: true
@@ -43,17 +43,22 @@ defmodule Arca.DbRescueSeamTest do
     # constant the helper returns. DB errors only: a structurally-bad
     # queued item must crash, never be dropped with :ok.
     "apps/arca/lib/arca/record_sink.ex" => 2,
-    # Two boot steps (the platform reconcile and the seed sync) that tolerate
-    # a database outage with their own step-specific log lines and keep the
-    # remaining steps running — a bug still crashes the one-shot task loudly.
-    "apps/cyfr/lib/cyfr/bootstrap.ex" => 2
+    # run/1: the security reconcile is fail-closed, and a raised database
+    # error refuses the boot as `:database_error`, a class of its own and
+    # distinct from any other raise (`:exception`). Nothing is tolerated.
+    "apps/cyfr/lib/cyfr/bootstrap.ex" => 1,
+    # the budgeted append and finish: the answer is a typed audit failure
+    # that tells a timeout from an outage (a `DBConnection.ConnectionError`
+    # past the deadline, or SQLite's lock wait, is `:timeout`; the rest are
+    # `:unavailable`), which the helper's single `:database_error` collapses.
+    "apps/arca/lib/arca/decision_log.ex" => 1
   }
 
   test "inline db-errors rescues exist only at the enumerated exceptions" do
     found =
-      for dir <- Cyfr.Test.SourceTree.app_libs(@root),
-          file <- Cyfr.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
-          count = length(Regex.scan(@rescue_pattern, Cyfr.Test.SourceTree.read(file))),
+      for dir <- Prima.Test.SourceTree.app_libs(@root),
+          file <- Prima.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
+          count = length(Regex.scan(@rescue_pattern, Prima.Test.SourceTree.read(file))),
           count > 0,
           into: %{} do
         {Path.relative_to(file, @root), count}

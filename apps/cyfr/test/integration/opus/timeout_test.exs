@@ -4,12 +4,12 @@
 defmodule Opus.TimeoutTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Execution.{Dispatch, MCP}
+  alias Crucible.{Dispatch, Provider}
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
 
-  setup do
+  setup tags do
     # Use a test-specific base path to avoid state leaking between tests
     test_path = Path.join(System.tmp_dir!(), "opus_timeout_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -19,10 +19,9 @@ defmodule Opus.TimeoutTest do
     # through the production DB source, and the loader reads it back.
 
     # Checkout the Ecto sandbox to isolate SQLite data between tests
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     # Plant the test WASM in a private seed so bootstrap can mint it.
     Cyfr.Test.SeedBundle.isolate!()
@@ -65,14 +64,14 @@ defmodule Opus.TimeoutTest do
     test "default timeout applied when not specified", %{ctx: ctx, ref: ref} do
       # Execution creates a record with the policy timeout even on failure
       _result =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
         })
 
       # Retrieve execution record to verify policy was applied
-      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
       assert list_result.count >= 1
     end
 
@@ -88,14 +87,14 @@ defmodule Opus.TimeoutTest do
     test "policy-derived timeout is used when available", %{ctx: ctx, ref: ref} do
       # Execute — policy is applied regardless of whether WASM execution succeeds
       _result =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 1}
         })
 
       # Verify a record was created (policy was applied during execution setup)
-      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
       assert list_result.count >= 1
     end
   end
@@ -105,14 +104,14 @@ defmodule Opus.TimeoutTest do
       # Run multiple executions — each creates a record
       for _i <- 1..3 do
         _result =
-          MCP.handle("execution", ctx, %{
+          Provider.handle("execution", ctx, %{
             "action" => "run",
             "reference" => ref,
             "input" => %{"a" => 1, "b" => 1}
           })
       end
 
-      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
       assert list_result.count >= 3
     end
   end

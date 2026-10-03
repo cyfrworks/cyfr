@@ -13,17 +13,15 @@ defmodule Emissary.MCP.InChainIdentityTest do
   # gate that still needs the identity-conjunct branch.
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Sanctum.Context
 
   @plane_refusal ~r/guest-plane context cannot/
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -84,6 +82,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         scope: :athanor,
@@ -94,7 +93,10 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     refusals =
       for {tool, action} <- pairs,
-          result = Catalog.call_in_chain(tool, ctx, %{"action" => action}, auth),
+          result =
+            Grimoire.call_in_chain(tool, ctx, %{"action" => action}, auth,
+              lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
+            ),
           match?({:error, msg} when is_binary(msg), result),
           {:error, msg} = result,
           msg =~ @plane_refusal,
@@ -113,6 +115,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         scope: :athanor,
@@ -123,7 +126,9 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     args = %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"}
 
-    case Catalog.call_in_chain("tincture_visibility", ctx, args, auth) do
+    case Grimoire.call_in_chain("tincture_visibility", ctx, args, auth,
+           lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
+         ) do
       {:ok, _result} ->
         :ok
 
@@ -136,14 +141,15 @@ defmodule Emissary.MCP.InChainIdentityTest do
   test "call_external rejects a guest-plane context outright" do
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
         authenticated: true
       })
 
-    assert {:error, {:guest_plane_call, "component"}} =
-             Catalog.call_external("component", ctx, %{"action" => "list"})
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:guest_plane_call, "component"}}} =
+             Grimoire.call_external("component", ctx, %{"action" => "list"})
   end
 
   test "call_in_chain denies an action the authority does not grant" do
@@ -151,6 +157,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
@@ -158,8 +165,10 @@ defmodule Emissary.MCP.InChainIdentityTest do
         request_id: "req_identity_matrix"
       })
 
-    assert {:error, msg} =
-             Catalog.call_in_chain("component", ctx, %{"action" => "search"}, auth)
+    assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
+             Grimoire.call_in_chain("component", ctx, %{"action" => "search"}, auth,
+               lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
+             )
 
     assert msg =~ "Denied by chain authority"
   end
@@ -170,6 +179,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
@@ -177,12 +187,13 @@ defmodule Emissary.MCP.InChainIdentityTest do
         request_id: "req_identity_matrix"
       })
 
-    assert {:error, msg} =
-             Catalog.call_in_chain(
+    assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
+             Grimoire.call_in_chain(
                "execution",
                ctx,
                %{"action" => "force_release"},
-               auth
+               auth,
+               lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
              )
 
     assert msg =~ "not reachable from a running chain"
@@ -206,6 +217,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
@@ -215,8 +227,10 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     for {tool, action} <- verbs do
-      assert {:error, msg} =
-               Catalog.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth)
+      assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
+               Grimoire.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth,
+                 lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
+               )
 
       assert msg =~ "not reachable from a running chain", "#{tool}.#{action}: #{msg}"
     end
@@ -227,6 +241,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
@@ -234,8 +249,10 @@ defmodule Emissary.MCP.InChainIdentityTest do
         request_id: "req_identity_matrix"
       })
 
-    assert {:error, msg} =
-             Catalog.call_in_chain("github:create_issue", ctx, %{}, auth)
+    assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
+             Grimoire.call_in_chain("github:create_issue", ctx, %{}, auth,
+               lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
+             )
 
     assert msg =~ "Denied by chain authority"
   end

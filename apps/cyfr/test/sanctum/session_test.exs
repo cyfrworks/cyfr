@@ -7,18 +7,20 @@ defmodule Sanctum.SessionTest do
   alias Sanctum.Context
   alias Sanctum.Session
 
-  setup do
+  setup tags do
     # Use Arca.Repo sandbox for test isolation
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
+    # A session is issued only to a person this server knows, against the
+    # standing their row was read at.
     ctx =
       Context.build(
-        user_id: "user_123",
+        user_id: "github|https://github.com|session-#{System.unique_integer([:positive])}",
         email: "test@example.com",
         provider: "github",
         permissions: [:execute, :read]
       )
+      |> Sanctum.TestContext.issuer!()
 
     {:ok, ctx: ctx}
   end
@@ -29,7 +31,7 @@ defmodule Sanctum.SessionTest do
 
       assert session.token != nil
       assert byte_size(session.token) > 30
-      assert session.user_id == "user_123"
+      assert session.user_id == ctx.user_id
       assert session.email == "test@example.com"
       assert session.provider == "github"
     end
@@ -47,9 +49,8 @@ defmodule Sanctum.SessionTest do
       assert diff >= 719 and diff <= 720
     end
 
-    test "respects CYFR_SESSION_TTL_HOURS override", %{ctx: ctx} do
-      Application.put_env(:sanctum, :session_ttl_hours, 1)
-      on_exit(fn -> Application.delete_env(:sanctum, :session_ttl_hours) end)
+    test "takes the session_ttl_hours setting, with no restart", %{ctx: ctx} do
+      Cyfr.Test.Settings.put("session_ttl_hours", 1)
 
       {:ok, session} = Session.create(ctx)
       {:ok, expires_at, _} = DateTime.from_iso8601(session.expires_at)
@@ -80,7 +81,7 @@ defmodule Sanctum.SessionTest do
       {:ok, session} = Session.create(ctx)
       {:ok, retrieved_ctx} = Session.load(session.token, surface: :console)
 
-      assert retrieved_ctx.user_id == "user_123"
+      assert retrieved_ctx.user_id == ctx.user_id
       assert retrieved_ctx.email == "test@example.com"
       assert retrieved_ctx.provider == "github"
       # The fixture person has no namespace: a publishing credential, not
@@ -113,7 +114,7 @@ defmodule Sanctum.SessionTest do
           permissions: [:read]
         )
 
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Sanctum.TestContext.create_session(ctx)
 
       assert {:ok, %{authenticated: true, namespace: ns}} =
                Session.load(session.token, surface: :console)
@@ -124,16 +125,18 @@ defmodule Sanctum.SessionTest do
       # deleting one changes nothing about who the person is.
       registry = Compendium.RegistryHost.canonical_host()
 
+      person = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+
       :ok =
         Compendium.Registry.CredentialStore.put_push_token(
-          user_id,
+          person,
           registry,
           "sess#{n}",
           "t",
           "personal"
         )
 
-      :ok = Compendium.Registry.CredentialStore.delete(user_id, registry, "sess#{n}")
+      :ok = Compendium.Registry.CredentialStore.delete(person, registry, "sess#{n}")
       Sanctum.Namespace.invalidate(user_id)
       assert {:ok, %{authenticated: true}} = Session.load(session.token, surface: :console)
     end
@@ -234,10 +237,38 @@ defmodule Sanctum.SessionTest do
       assert :ok = Session.refresh_if_stale("nope")
     end
 
+    test "establishing slides a session only when it is due, on Sanctum's own pool" do
+      import Ecto.Query
+      # Seated in an athanor, so the session establishes.
+      {:ok, session} = Session.create(Sanctum.TestContext.issuer!(Sanctum.TestContext.local()))
+      token_hash = :crypto.hash(:sha256, session.token)
+      expiry = fn -> elem(Session.get(session.token), 1).expires_at end
+
+      # A fresh session is not due: the load says so and no slide runs.
+      assert {:ok, %Context{}, false} = Session.load_sliding(session.token, surface: :console)
+      untouched = expiry.()
+      {:ok, _} = Sanctum.Caller.establish(session.token)
+      Process.sleep(50)
+      assert expiry.() == untouched
+
+      # One that is due is slid by the establish that read it.
+      soon = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:microsecond)
+
+      from(s in Arca.Schemas.Session, where: s.token_hash == ^token_hash)
+      |> Arca.Repo.update_all(set: [expires_at: soon])
+
+      assert {:ok, %Context{}, true} = Session.load_sliding(session.token, surface: :console)
+      {:ok, _} = Sanctum.Caller.establish(session.token)
+
+      Prima.Test.Wait.wait_until(fn ->
+        {:ok, at, _} = DateTime.from_iso8601(expiry.())
+        DateTime.diff(at, DateTime.utc_now(), :hour) >= 719
+      end)
+    end
+
     test "no-ops when TTL is infinite", %{ctx: ctx} do
       {:ok, session} = Session.create(ctx)
-      Application.put_env(:sanctum, :session_ttl_hours, 0)
-      on_exit(fn -> Application.delete_env(:sanctum, :session_ttl_hours) end)
+      Cyfr.Test.Settings.put("session_ttl_hours", 0)
 
       assert :ok = Session.refresh_if_stale(session.token)
     end
@@ -287,6 +318,195 @@ defmodule Sanctum.SessionTest do
 
       # Expired session should be gone
       assert {:error, :invalid_session} = Session.load(expired_session.token, surface: :console)
+    end
+  end
+
+  describe "a remote person's key epoch" do
+    import Ecto.Query, only: [from: 2]
+
+    alias Sanctum.Test.DirectoryServer
+
+    setup %{ctx: ctx} do
+      tls = DirectoryServer.tls()
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+
+      on_exit(fn ->
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+      end)
+
+      directory = DirectoryServer.start!(tls)
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+      :ok = DirectoryServer.remote_person!(ctx.user_id, identity)
+      %{dir: directory.dir, identity: identity}
+    end
+
+    defp sessions(user_id),
+      do: Arca.Repo.all(from(s in Arca.Schemas.Session, where: s.user_id == ^user_id))
+
+    defp recorded_epoch(%{token: token}) do
+      {:ok, %{identity_key_epoch: epoch}} =
+        Arca.SessionStorage.get_session(Session.token_hash(token))
+
+      epoch
+    end
+
+    test "a door's verified epoch must be the one the fresh read answers: a head moved since mints nothing",
+         %{ctx: ctx, dir: dir, identity: identity} do
+      verified = DirectoryServer.key_epoch(identity)
+      assert {:ok, session} = Session.create(ctx, key_epoch: verified)
+      assert recorded_epoch(session) == verified
+
+      # A rotation lands after the door verified under `verified`: the
+      # mint's own fresh read takes it in, retiring the session above, and
+      # mints nothing under either epoch.
+      rotated = DirectoryServer.rotate!(dir, identity)
+      assert {:error, :stale_key_epoch} = Session.create(ctx, key_epoch: verified)
+      assert sessions(ctx.user_id) == []
+
+      # The door verifies again, under the new head, and mints.
+      assert {:ok, again} = Session.create(ctx, key_epoch: DirectoryServer.key_epoch(rotated))
+      assert recorded_epoch(again) == DirectoryServer.key_epoch(rotated)
+
+      # A remote person's proof always stood on some head: none is no epoch
+      # of theirs.
+      assert {:error, :stale_key_epoch} = Session.create(ctx, key_epoch: nil)
+    end
+
+    test "a head advanced at this home between create's read and the insert leaves no session on the retired epoch, whichever door",
+         %{ctx: ctx, dir: dir, identity: identity} do
+      # A session under the first head, so that the mint's own fresh read,
+      # advancing the cache past it, announces its retirement: the
+      # observable point between that read and the insert.
+      assert {:ok, _first} = Session.create(ctx)
+      rotated = DirectoryServer.rotate!(dir, identity)
+      test = self()
+      user_id = ctx.user_id
+      handler = {__MODULE__, :between_read_and_insert, make_ref()}
+
+      :telemetry.attach(
+        handler,
+        [:cyfr, :sanctum, :sessions, :revoked],
+        fn _event, _measurements, meta, _ ->
+          if self() == test and meta[:user_id] == user_id and
+               Process.get(:advanced_in_window) == nil do
+            again = DirectoryServer.rotate!(dir, rotated)
+            {:ok, _head} = Sanctum.IdentityFreshness.fresh!(identity.identifier)
+            Process.put(:advanced_in_window, again)
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # No `key_epoch:`, as every door but the passkey's: the insert's own
+      # fence, under the person's lock, holds the session to the head.
+      assert {:error, :stale_key_epoch} = Session.create(ctx)
+      :telemetry.detach(handler)
+      assert %{} = advanced = Process.get(:advanced_in_window)
+
+      assert {:ok, %{key_epoch: current}} =
+               Arca.DirectoryHeads.get(Prima.Actor.system(), identity.identifier)
+
+      assert current == DirectoryServer.key_epoch(advanced)
+      assert sessions(ctx.user_id) == []
+    end
+
+    test "a local person's door verified under no head, and nothing else stands for them" do
+      local =
+        Context.build(
+          user_id: "github|https://github.com|local-#{System.unique_integer([:positive])}",
+          email: "local@example.com",
+          provider: "github",
+          permissions: [:read]
+        )
+        |> Sanctum.TestContext.issuer!()
+
+      assert {:ok, session} = Session.create(local, key_epoch: nil)
+      assert recorded_epoch(session) == nil
+
+      assert {:error, :stale_key_epoch} =
+               Session.create(local, key_epoch: Prima.Digest.sha256("an epoch"))
+    end
+  end
+
+  describe "the reserved provider restore" do
+    # A restore attempt of the person's, at `phase`: the row the restore's
+    # mint leaves, written as it is for the session store to read.
+    defp restore_attempt!(user_id, phase) do
+      id = Prima.UUID7.generate_id("iat")
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.IdentityAttempt, [
+          %{
+            id: id,
+            kind: "restore",
+            request_id: Prima.UUID7.generate_id("rst"),
+            user_id: user_id,
+            identifier: "per_" <> String.duplicate("c", 64),
+            directory_url: "https://dir.example",
+            phase: phase,
+            entry: "recover-request",
+            request_digest: Prima.Digest.sha256("recover-#{id}"),
+            expected_revision: 0,
+            token_digest: Prima.Digest.sha256("token-#{id}"),
+            staged_live_public_key: :crypto.strong_rand_bytes(32),
+            staged_operational_public_key: :crypto.strong_rand_bytes(32),
+            revision: 1,
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+
+      id
+    end
+
+    test "an ordinary session request cannot select it", %{ctx: ctx} do
+      assert {:error, :reserved_provider} = Session.create(%{ctx | provider: "restore"})
+
+      assert {:error, :reserved_provider} =
+               Session.create(%{ctx | provider: "restore"}, restore: "iat_nothing")
+    end
+
+    test "it stands only on the restore attempt that minted this very person", %{ctx: ctx} do
+      restore = %{ctx | provider: "restore"}
+
+      other =
+        Sanctum.TestContext.issuer!(
+          Context.build(
+            user_id: "github|https://github.com|other-#{System.unique_integer([:positive])}",
+            provider: "github"
+          )
+        )
+
+      assert {:error, :reserved_provider} =
+               Session.create(restore, restore: restore_attempt!(other.user_id, "minted"))
+
+      assert {:error, :reserved_provider} =
+               Session.create(restore, restore: restore_attempt!(ctx.user_id, "accepted"))
+
+      assert {:ok, %{provider: "restore"} = session} =
+               Session.create(restore, restore: restore_attempt!(ctx.user_id, "minted"))
+
+      assert {:ok, %{provider: "restore"}} =
+               Session.create(restore, restore: restore_attempt!(ctx.user_id, "completed"))
+
+      # The session's original creation time is what the first-method rule
+      # reads; a refresh moves only its sliding expiry.
+      {:ok, row} = Arca.SessionStorage.get_session(:crypto.hash(:sha256, session.token))
+      {:ok, _} = Session.refresh(session.token)
+      {:ok, again} = Arca.SessionStorage.get_session(:crypto.hash(:sha256, session.token))
+      assert again.inserted_at == row.inserted_at
+    end
+
+    test "no external identity arrives under it" do
+      assert {:error, :not_an_identity} =
+               Sanctum.Tenancy.Users.upsert_from_provider(%{
+                 id: "restore|https://idp.test|someone",
+                 provider: "restore"
+               })
     end
   end
 end

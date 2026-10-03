@@ -17,9 +17,31 @@ defmodule Arca.UsersTest do
     :ok
   end
 
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
 
-  defp in_athanor(id), do: %{Cyfr.Actor.system() | athanor_id: id, scope: :athanor}
+  defp attrs_pair do
+    n = System.unique_integer([:positive])
+    now = DateTime.utc_now()
+
+    {%{
+       id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+       provider: "github",
+       first_seen_at: now,
+       last_seen_at: now,
+       created_at: now,
+       updated_at: now
+     },
+     %{
+       key: "github|https://github.com|also#{n}",
+       provider: "github",
+       issuer: "https://github.com",
+       subject: "also#{n}",
+       first_seen_at: now,
+       last_seen_at: now
+     }}
+  end
+
+  defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
 
   defp person!(overrides \\ %{}) do
     n = System.unique_integer([:positive])
@@ -28,7 +50,7 @@ defmodule Arca.UsersTest do
     user_attrs =
       Map.merge(
         %{
-          id: Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix()),
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           provider: "github",
           email: "p#{n}@example.com",
           email_verified: true,
@@ -99,8 +121,10 @@ defmodule Arca.UsersTest do
       assert {:error, :cross_tenant} = Users.identities(member, "usr_1")
       assert {:error, :cross_tenant} = Users.personal_athanor?(member, "ath_1")
       assert {:error, :cross_tenant} = Users.touch_identity(member, "k", DateTime.utc_now())
-      assert {:error, :cross_tenant} = Users.update(member, row, %{display_name: "X"})
+      assert {:error, :cross_tenant} = Users.update(member, row.id, %{display_name: "X"})
       assert {:error, :cross_tenant} = Users.mint(member, %{}, %{})
+      assert {:error, :cross_tenant} = Users.link_identity(member, "usr_1", %{key: "k"})
+      assert {:error, :cross_tenant} = Users.unlink_identity(member, "usr_1", "k")
       refute_received :queried
 
       # The probe is live: the server's own actor does query.
@@ -113,7 +137,7 @@ defmodule Arca.UsersTest do
       user = person!()
       drain_queries!()
 
-      # A map carrying the actor's own fields is still not a `%Cyfr.Actor{}`:
+      # A map carrying the actor's own fields is still not a `%Prima.Actor{}`:
       # every head matches the struct, so the shape is refused rather than
       # read for the scope it claims.
       not_an_actor = %{user_id: user.id, scope: :platform}
@@ -126,7 +150,7 @@ defmodule Arca.UsersTest do
     end
   end
 
-  describe "mint/3 is one transaction" do
+  describe "mint/4 is one transaction" do
     test "the person and the identity that names them land together" do
       user = person!()
 
@@ -139,7 +163,7 @@ defmodule Arca.UsersTest do
 
     test "an identity that cannot be written leaves no person behind" do
       now = DateTime.utc_now()
-      id = Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix())
+      id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
 
       assert {:error, {:invalid, %{subject: [_ | _]}}} =
                Users.mint(
@@ -174,7 +198,7 @@ defmodule Arca.UsersTest do
                Users.mint(
                  server(),
                  %{
-                   id: Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix()),
+                   id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
                    provider: "github",
                    first_seen_at: now,
                    last_seen_at: now,
@@ -223,6 +247,47 @@ defmodule Arca.UsersTest do
     end
   end
 
+  describe "mint/4's also: closure" do
+    test "runs inside the mint's transaction, after the person row is written" do
+      {user, identity} = attrs_pair()
+      me = self()
+
+      also = fn person ->
+        # The person row is already there for the closure to write beside.
+        {:ok, _} = Users.update(server(), person.id, %{display_name: "Written beside"})
+        send(me, {:also, person.id, Arca.Repo.in_transaction?()})
+        :ok
+      end
+
+      assert {:ok, person} = Users.mint(server(), user, identity, also: also)
+      assert_received {:also, id, true}
+      assert id == person.id
+      assert {:ok, %{display_name: "Written beside"}} = Users.get(server(), person.id)
+    end
+
+    test "a failing closure writes no person row" do
+      {user, identity} = attrs_pair()
+
+      assert {:error, :keys_unavailable} =
+               Users.mint(server(), user, identity,
+                 also: fn _person -> {:error, :keys_unavailable} end
+               )
+
+      assert {:error, :not_found} = Users.get(server(), user.id)
+      assert {:error, :not_found} = Users.get_by_identity(server(), identity.key)
+    end
+
+    test "a closure that answers anything else raises, and writes nothing" do
+      {user, identity} = attrs_pair()
+
+      assert_raise ArgumentError, fn ->
+        Users.mint(server(), user, identity, also: fn _person -> :nope end)
+      end
+
+      assert {:error, :not_found} = Users.get(server(), user.id)
+    end
+  end
+
   describe "the reads and writes" do
     test "a person is found by id, identity, address and namespace" do
       user = person!()
@@ -234,7 +299,7 @@ defmodule Arca.UsersTest do
       assert {:error, :not_found} = Users.get_by_identity(server(), "github|iss|nobody")
       assert {:error, :not_found} = Users.get_by_namespace(server(), "nobody-here")
 
-      assert {:ok, updated} = Users.update(server(), user, %{namespace: "ns-#{id}"})
+      assert {:ok, updated} = Users.update(server(), user.id, %{namespace: "ns-#{id}"})
       assert {:ok, %{id: ^id}} = Users.get_by_namespace(server(), updated.namespace)
     end
 
@@ -251,7 +316,7 @@ defmodule Arca.UsersTest do
     test "personal_athanor? answers whether any row names the athanor as its own" do
       user = person!()
       assert {:ok, false} = Users.personal_athanor?(server(), "ath_unclaimed")
-      {:ok, _} = Users.update(server(), user, %{personal_athanor_id: "ath_claimed"})
+      {:ok, _} = Users.update(server(), user.id, %{personal_athanor_id: "ath_claimed"})
       assert {:ok, true} = Users.personal_athanor?(server(), "ath_claimed")
     end
 
@@ -265,6 +330,117 @@ defmodule Arca.UsersTest do
       assert DateTime.compare(touched.last_seen_at, identity.last_seen_at) == :gt
       assert {:ok, %{last_seen_at: unchanged}} = Users.get(server(), user.id)
       assert DateTime.compare(unchanged, user.last_seen_at) == :eq
+    end
+  end
+
+  describe "linking and unlinking a door" do
+    defp door(n) do
+      %{
+        key: "oidcc|https://idp.test|link#{n}",
+        provider: "oidcc",
+        issuer: "https://idp.test",
+        subject: "link#{n}"
+      }
+    end
+
+    test "links another identity to the person, inside the also: closure's transaction" do
+      user = person!()
+      n = System.unique_integer([:positive])
+      test = self()
+
+      assert {:ok, %{linked: true, identity: identity}} =
+               Users.link_identity(server(), user.id, door(n),
+                 also: fn %{identity: written} ->
+                   send(test, {:also, written.key})
+                   :ok
+                 end
+               )
+
+      assert identity.user_id == user.id
+      assert_received {:also, key}
+      assert key == identity.key
+      assert {:ok, %{id: id}} = Users.get_by_identity(server(), key)
+      assert id == user.id
+      assert {:ok, [_first, _linked]} = Users.identities(server(), user.id)
+    end
+
+    test "a refusing closure links nothing, and its reason is the answer" do
+      user = person!()
+      n = System.unique_integer([:positive])
+
+      assert {:error, :refused_here} =
+               Users.link_identity(server(), user.id, door(n),
+                 also: fn _ -> {:error, :refused_here} end
+               )
+
+      assert {:error, :not_found} = Users.get_by_identity(server(), door(n).key)
+    end
+
+    test "an identity already the person's is answered linked: false, and runs no closure" do
+      user = person!()
+      {:ok, [identity]} = Users.identities(server(), user.id)
+      attrs = Map.take(identity, [:key, :provider, :issuer, :subject])
+
+      assert {:ok, %{linked: false}} =
+               Users.link_identity(server(), user.id, attrs,
+                 also: fn _ -> flunk("nothing was written") end
+               )
+    end
+
+    test "another person's identity is a conflict; a person not active links nothing" do
+      alice = person!()
+      bob = person!()
+      {:ok, [bobs]} = Users.identities(server(), bob.id)
+
+      assert {:error, :conflict} =
+               Users.link_identity(
+                 server(),
+                 alice.id,
+                 Map.take(bobs, [:key, :provider, :issuer, :subject])
+               )
+
+      n = System.unique_integer([:positive])
+      import Ecto.Query, only: [from: 2]
+
+      Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^alice.id),
+        set: [status: "denied"]
+      )
+
+      assert {:error, :not_active} = Users.link_identity(server(), alice.id, door(n))
+      assert {:error, :not_found} = Users.link_identity(server(), "usr_nobody", door(n))
+    end
+
+    test "unlinks the person's own identity, telling the closure how many remain" do
+      user = person!()
+      n = System.unique_integer([:positive])
+      {:ok, _} = Users.link_identity(server(), user.id, door(n))
+      test = self()
+
+      assert {:ok, %{remaining: 1}} =
+               Users.unlink_identity(server(), user.id, door(n).key,
+                 also: fn %{remaining: remaining} ->
+                   send(test, {:remaining, remaining})
+                   :ok
+                 end
+               )
+
+      assert_received {:remaining, 1}
+      assert {:error, :not_found} = Users.get_by_identity(server(), door(n).key)
+    end
+
+    test "a refusing closure keeps the identity; another person's is not found" do
+      alice = person!()
+      bob = person!()
+      {:ok, [identity]} = Users.identities(server(), alice.id)
+
+      assert {:error, :last_door} =
+               Users.unlink_identity(server(), alice.id, identity.key,
+                 also: fn %{remaining: 0} -> {:error, :last_door} end
+               )
+
+      assert {:ok, %{id: id}} = Users.get_by_identity(server(), identity.key)
+      assert id == alice.id
+      assert {:error, :not_found} = Users.unlink_identity(server(), bob.id, identity.key)
     end
   end
 end

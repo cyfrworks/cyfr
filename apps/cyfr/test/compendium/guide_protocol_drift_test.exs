@@ -5,7 +5,7 @@ defmodule Compendium.GuideProtocolDriftTest do
   @moduledoc """
   The guides are not just documentation — `integration-guide.md`,
   `component-guide.md` and `tincture-guide.md` are compiled into
-  `Compendium.MCP.AquaTool` as `@external_resource` and served to the AQUA agent
+  `Compendium.Providers.Aqua` as `@external_resource` and served to the AQUA agent
   as its reference material.
 
   Validate guide samples against the server protocol so copied requests are accepted.
@@ -14,7 +14,7 @@ defmodule Compendium.GuideProtocolDriftTest do
   """
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.Protocol
+  alias Prima.MCP.Protocol
 
   @project_root Path.expand("../../../..", __DIR__)
   @guides ~w(integration-guide.md component-guide.md tincture-guide.md)
@@ -66,7 +66,7 @@ defmodule Compendium.GuideProtocolDriftTest do
                """
                #{unquote(name)} still shows protocol version #{version}.
 
-               This file is compiled into Compendium.MCP.AquaTool, so the agent
+               This file is compiled into Compendium.Providers.Aqua, so the agent
                reads it as authoritative. Use #{Protocol.version()}.
                """
       end
@@ -105,7 +105,7 @@ defmodule Compendium.GuideProtocolDriftTest do
       assert String.contains?(String.downcase(text), header),
              """
              integration-guide.md never mentions the `#{header}` header, which
-             EmissaryWeb.Plugs.MCPRequestMetadata requires on every request. A reader
+             Emissary.Web.Plugs.MCPRequestMetadata requires on every request. A reader
              following this guide would build a client that is refused.
              """
     end
@@ -126,10 +126,10 @@ defmodule Compendium.GuideProtocolDriftTest do
   # five that are — so generated error handling matched nothing.
   # A formula's invoke errors are rendered in two places: the runner's
   # `Opus.FormulaHandler`, and CYFR's answer to a child or catalog tool call
-  # it refuses (`Cyfr.Execution.Host.Children`).
+  # it refuses (`Crucible.Host.Children`).
   test "component-guide's invoke error table matches the invoke error vocabulary" do
     handler =
-      ["apps/opus/lib/opus/formula_handler.ex", "apps/cyfr/lib/cyfr/execution/host/children.ex"]
+      ["apps/opus/lib/opus/formula_handler.ex", "apps/cyfr/lib/crucible/host/children.ex"]
       |> Enum.map_join("\n", &File.read!(Path.join(@project_root, &1)))
 
     produced =

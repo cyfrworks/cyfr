@@ -3,16 +3,15 @@
 
 defmodule Aqua.AloudTest do
   # Saying part of a private exchange out loud: the one deliberate copy in
-  # the system, and the checks that keep it from being a way into an estate
+  # the system, and the checks that keep it from being a way into an athanor
   # you are not in.
   use ExUnit.Case, async: false
 
   alias Arca.ThreadStorage, as: Threads
   alias Aqua.Aloud
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "aloud_#{:rand.uniform(1_000_000)}")
     original = Application.get_env(:arca, :base_path)
@@ -128,7 +127,7 @@ defmodule Aqua.AloudTest do
     assert Enum.map(posted, & &1.content) == ["first", "second"]
   end
 
-  test "an estate you are not in is neither readable nor writable", %{
+  test "an athanor you are not in is neither readable nor writable", %{
     ctx: ctx,
     private: private,
     shared: shared,
@@ -240,14 +239,14 @@ defmodule Aqua.AloudTest do
 
     # Focus is the audited open; the copy is a second act and takes no
     # capability. The admin is a member of the source and the shared room —
-    # those still work — but not of the third estate.
+    # those still work — but not of the third athanor.
     assert {:error, :not_a_member} =
              Aloud.post(admin, private.id, [row.id], theirs.athanor_id, theirs.id)
 
     assert {:ok, [_]} = Aloud.post(admin, private.id, [row.id], shared.athanor_id, shared.id)
   end
 
-  test "an archived target estate refuses the copy", %{
+  test "an archived target athanor refuses the copy", %{
     ctx: ctx,
     private: private,
     shared: shared
@@ -269,7 +268,7 @@ defmodule Aqua.AloudTest do
     private: private,
     shared: shared
   } do
-    message_id = Cyfr.UUID7.generate_id("msg")
+    message_id = Prima.UUID7.generate_id("msg")
 
     {:ok, refs} =
       Aqua.Attachments.store(ctx, private.id, message_id, [
@@ -287,7 +286,7 @@ defmodule Aqua.AloudTest do
 
     {:ok, [posted]} = Aloud.post(ctx, private.id, [m.id], shared.athanor_id, shared.id)
 
-    # The posted ref resolves in the TARGET estate — the bytes crossed,
+    # The posted ref resolves in the TARGET athanor — the bytes crossed,
     # not a pointer back into the private tree.
     target_ctx = %{ctx | athanor_id: shared.athanor_id}
     assert [ref] = Aqua.Attachments.refs_of(posted)
@@ -304,7 +303,7 @@ defmodule Aqua.AloudTest do
     private: private,
     shared: shared
   } do
-    message_id = Cyfr.UUID7.generate_id("msg")
+    message_id = Prima.UUID7.generate_id("msg")
 
     {:ok, refs} =
       Aqua.Attachments.store(ctx, private.id, message_id, [

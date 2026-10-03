@@ -24,14 +24,14 @@ defmodule Opus.FormulaHandlerTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import Ecto.Query, only: [from: 2]
 
   alias Opus.FormulaHandler
   alias Opus.Test.FormulaHost
   alias Opus.Test.NestedExecution, as: Probe
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Cyfr.Test.TwoServices
   alias Sanctum.Consent.{Bootstrap}
 
@@ -41,7 +41,7 @@ defmodule Opus.FormulaHandlerTest do
   @test_ref "reagent:local.test-math:0.1.0"
   @test_node "reagent:local.test-math"
   @fh_node "formula:local.fh-root"
-  @act_fh Cyfr.Digest.sha256("act-fh")
+  @act_fh Prima.Digest.sha256("act-fh")
   @probe_node "formula:local.nested-probe"
 
   setup tags do
@@ -52,7 +52,7 @@ defmodule Opus.FormulaHandlerTest do
     Cyfr.Test.Sandbox.setup!(tags)
     TwoServices.watch!()
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     wasm_bytes = File.read!(@math_wasm_path)
 
@@ -65,7 +65,7 @@ defmodule Opus.FormulaHandlerTest do
       })
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       if original_base_path,
@@ -179,7 +179,7 @@ defmodule Opus.FormulaHandlerTest do
           } <- TwoServices.calls(),
           do: token
 
-    {:ok, assignment} = Cyfr.Assignment.read(token)
+    {:ok, assignment} = Prima.Assignment.read(token)
     {:ok, authority} = Authority.from_wire(assignment.authority)
     %{execution_id: assignment.execution_id, authority: authority}
   end
@@ -193,8 +193,7 @@ defmodule Opus.FormulaHandlerTest do
     spawn(fn ->
       send(
         test_pid,
-        {:root,
-         Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
+        {:root, Crucible.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
       )
     end)
   end
@@ -204,7 +203,7 @@ defmodule Opus.FormulaHandlerTest do
   # child it spawns is held at the catalog call it makes, on the suite's
   # wire, until the test ends.
   defp run_steps!(ctx, steps, opts \\ []) do
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
     if Keyword.get(opts, :hold_children, false), do: hold_children!(root_id)
     start_steps(ctx, root_id, steps)
     {root_id, results!(root_id)}
@@ -235,7 +234,8 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   defp children(parent_id),
-    do: Arca.Repo.all(from(e in Arca.Execution, where: e.parent_execution_id == ^parent_id))
+    do:
+      Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^parent_id))
 
   defp decoded(output) when is_binary(output) do
     case Jason.decode(output) do
@@ -255,7 +255,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero())
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       assert is_map(imports)
       assert is_pid(tracker_pid)
@@ -364,7 +364,7 @@ defmodule Opus.FormulaHandlerTest do
       parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "dispatch_error"
-      assert parsed["error"]["message"] =~ "resolve"
+      assert parsed["error"]["message"] == "Component not found: reagent:local.missing:0.1.0"
     end
 
     test "an intercepted action is the host's only when the assignment names it", %{ctx: ctx} do
@@ -396,7 +396,9 @@ defmodule Opus.FormulaHandlerTest do
         Jason.decode!(execute(execution_run_request(ref, %{"a" => 1}), host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "tool_denied"
-      assert parsed["error"]["message"] =~ "edge_only"
+
+      assert parsed["error"]["message"] ==
+               "Invocation denied: " <> Prima.Authority.Transition.deny_message(:edge_only)
     end
 
     test "an open_inert authority runs an off-edge invoke inert, not denied", %{
@@ -536,7 +538,7 @@ defmodule Opus.FormulaHandlerTest do
       assert Sanctum.Authority.budget(auth).in_flight == 0
 
       assert Arca.Repo.all(
-               from(e in Arca.Execution,
+               from(e in Arca.Schemas.Execution,
                  where: e.parent_execution_id == ^host.execution_id,
                  select: e.id
                )
@@ -644,7 +646,7 @@ defmodule Opus.FormulaHandlerTest do
       assert %{"status" => "pending"} = Jason.decode!(polled)
 
       [child] = children(root_id)
-      wait_until(fn -> Arca.Repo.get!(Arca.Execution, child.id).status == "failed" end)
+      wait_until(fn -> Arca.Repo.get!(Arca.Schemas.Execution, child.id).status == "failed" end)
     end
 
     test "cancelling a spawned child's task stops it and gives back what it held", %{ctx: ctx} do
@@ -658,13 +660,13 @@ defmodule Opus.FormulaHandlerTest do
 
       authority = TwoServices.entered(root_id)
       [child] = children(root_id)
-      wait_until(fn -> Arca.Repo.get!(Arca.Execution, child.id).status == "failed" end)
+      wait_until(fn -> Arca.Repo.get!(Arca.Schemas.Execution, child.id).status == "failed" end)
       wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
-      wait_until(fn -> Cyfr.Execution.Attempt.whereis(child.id) == nil end)
+      wait_until(fn -> Crucible.Attempt.whereis(child.id) == nil end)
     end
 
     test "tasks a formula leaves running end with it, and CYFR reclaims their holds", %{ctx: ctx} do
-      root_id = Cyfr.UUID7.execution_id()
+      root_id = Prima.UUID7.execution_id()
       hold_children!(root_id)
       TwoServices.hold!(:tool_call, root_id, once: true)
 
@@ -687,8 +689,8 @@ defmodule Opus.FormulaHandlerTest do
       assert [_first, _second, _called] = results!(root_id)
 
       for child <- children(root_id) do
-        wait_until(fn -> Arca.Repo.get!(Arca.Execution, child.id).status == "failed" end)
-        wait_until(fn -> Cyfr.Execution.Attempt.whereis(child.id) == nil end)
+        wait_until(fn -> Arca.Repo.get!(Arca.Schemas.Execution, child.id).status == "failed" end)
+        wait_until(fn -> Crucible.Attempt.whereis(child.id) == nil end)
       end
 
       wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
@@ -703,7 +705,7 @@ defmodule Opus.FormulaHandlerTest do
     test "stops tracker and returns :ok", %{ctx: ctx} do
       {_imports, tracker_pid} =
         FormulaHandler.build_formula_imports(host!(ctx, Authority.zero()),
-          limits: Cyfr.Limits.defaults(:formula)
+          limits: Prima.Limits.defaults(:formula)
         )
 
       assert Process.alive?(tracker_pid)
@@ -739,7 +741,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: "exec_emit_test")
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
@@ -756,7 +758,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: "exec_emit_seq")
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
@@ -775,7 +777,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: "exec_emit_bad")
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
@@ -793,21 +795,21 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
-      Cyfr.Execution.Events.subscribe(execution_id, ctx)
+      Crucible.Events.subscribe(execution_id, ctx)
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
-      assert_receive {:execution_event, event}, 2000
+      assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2000
       assert event.type == "emit"
       assert event.execution_id == execution_id
       assert event.sequence == "0.1"
       assert event.data["kind"] == "turn_start"
       assert event.data["turn"] == 1
 
-      Cyfr.Execution.Events.unsubscribe(execution_id, ctx)
+      Crucible.Events.unsubscribe(execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
@@ -821,9 +823,9 @@ defmodule Opus.FormulaHandlerTest do
         )
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
-      Cyfr.Execution.Events.subscribe(execution_id, ctx)
+      Crucible.Events.subscribe(execution_id, ctx)
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
@@ -831,11 +833,11 @@ defmodule Opus.FormulaHandlerTest do
         Jason.encode!(%{"kind" => "text_delta", "content" => "key is sk-super-secret-value"})
       )
 
-      assert_receive {:execution_event, event}, 2000
+      assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2000
       assert event.data["content"] == "key is [REDACTED]"
       refute inspect(event) =~ "sk-super-secret-value"
 
-      Cyfr.Execution.Events.unsubscribe(execution_id, ctx)
+      Crucible.Events.unsubscribe(execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
@@ -844,7 +846,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
@@ -853,14 +855,14 @@ defmodule Opus.FormulaHandlerTest do
       emit_fn.(Jason.encode!(%{"kind" => "tool_use", "tool" => "read_file"}))
 
       # Flush pending buffer writes before reading
-      Cyfr.Execution.Events.flush(execution_id)
+      Crucible.Events.flush(execution_id)
 
-      events = Cyfr.Execution.Events.since(execution_id, {0, 0}, ctx.athanor_id)
+      events = Crucible.Events.since(execution_id, {0, 0}, ctx.athanor_id)
       assert length(events) == 3
       assert Enum.map(events, & &1.sequence) == ["0.1", "0.2", "0.3"]
       assert Enum.map(events, & &1.data["kind"]) == ["turn_start", "text_delta", "tool_use"]
 
-      events_after_1 = Cyfr.Execution.Events.since(execution_id, {0, 1}, ctx.athanor_id)
+      events_after_1 = Crucible.Events.since(execution_id, {0, 1}, ctx.athanor_id)
       assert length(events_after_1) == 2
       assert Enum.map(events_after_1, & &1.sequence) == ["0.2", "0.3"]
 
@@ -889,7 +891,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
@@ -911,43 +913,43 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: root_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
-      Cyfr.Execution.Events.subscribe(root_id, ctx)
-      Cyfr.Execution.Events.subscribe(host.execution_id, ctx)
+      Crucible.Events.subscribe(root_id, ctx)
+      Crucible.Events.subscribe(host.execution_id, ctx)
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
-      assert_receive {:execution_event, event}, 2000
+      assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2000
       assert event.execution_id == root_id
       assert event.data["kind"] == "turn_start"
 
-      refute_receive {:execution_event, _}, 100
+      refute_receive %Cyfr.Bus.ExecutionEvent{}, 100
 
-      Cyfr.Execution.Events.unsubscribe(root_id, ctx)
-      Cyfr.Execution.Events.unsubscribe(host.execution_id, ctx)
+      Crucible.Events.unsubscribe(root_id, ctx)
+      Crucible.Events.unsubscribe(host.execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
   end
 
   # ============================================================================
-  # Cyfr.Execution.Events durable events
+  # Crucible.Events durable events
   # ============================================================================
 
-  describe "Cyfr.Execution.Events durable events" do
+  describe "Crucible.Events durable events" do
     test "a published lifecycle row reaches subscribers with its number", %{ctx: ctx} do
       execution_id = "exec_terminal_#{:rand.uniform(100_000)}"
 
-      Cyfr.Execution.Events.subscribe(execution_id, ctx)
+      Crucible.Events.subscribe(execution_id, ctx)
 
       :ok =
-        Cyfr.Execution.Events.publish(execution_id, ctx, "execution.completed", 7, %{
+        Crucible.Events.publish(execution_id, ctx, "execution.completed", 7, %{
           "status" => "completed",
           "duration_ms" => 1234
         })
 
-      assert_receive {:execution_event, event}, 2000
+      assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2000
       assert event.type == "execution.completed"
       assert event.execution_id == execution_id
       assert event.sequence == "7"
@@ -955,7 +957,7 @@ defmodule Opus.FormulaHandlerTest do
       assert event.data["status"] == "completed"
       assert event.data["duration_ms"] == 1234
 
-      Cyfr.Execution.Events.unsubscribe(execution_id, ctx)
+      Crucible.Events.unsubscribe(execution_id, ctx)
     end
   end
 
@@ -995,7 +997,7 @@ defmodule Opus.FormulaHandlerTest do
       assert parsed["error"]["type"] == "setup_required"
 
       # One remediation shape on the wire, whichever dispatch path failed —
-      # Cyfr.Remediation's, the one component-guide documents.
+      # Prima.Remediation's, the one component-guide documents.
       remediation = parsed["error"]["remediation"]
       assert remediation["component_ref"] == "catalyst:local.no-policy-test:0.1.0"
       assert remediation["setup_command"] =~ "profile grant"

@@ -16,16 +16,16 @@ defmodule Aqua.ApprovalsTest do
 
   alias Aqua.{Approvals, Launch, Tape}
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
   alias Sanctum.Consent.{Bootstrap}
   alias Sanctum.Tenancy.{Members, Users}
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "approvals_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path]
@@ -43,7 +43,7 @@ defmodule Aqua.ApprovalsTest do
       end
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -51,12 +51,12 @@ defmodule Aqua.ApprovalsTest do
     assert @soul in minted
 
     {:ok, %{profile_id: profile_id, consent_id: consent_id}} =
-      Cyfr.Execution.authority_for(ctx, :default, @soul)
+      Crucible.authority_for(ctx, :default, @soul)
 
     {:ok, %{capability_digest: capability}} = Compendium.AgentIndex.snapshot(ctx, "aqua")
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
 
     pins = %{profile_id: profile_id, consent_id: consent_id, agent_capability_digest: capability}
     {:ok, ctx: ctx, thread: thread, pins: pins}
@@ -78,16 +78,23 @@ defmodule Aqua.ApprovalsTest do
           athanor_id: ctx.athanor_id,
           component_type: "agent",
           kind: "turn",
-          turn_id: turn.id
+          turn_id: turn.id,
+          origin: :interactive
         },
-        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4}
+        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
+        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+        verify: &Sanctum.ExecutionStanding.verify/1
       )
 
     {:ok, turn} =
       Tape.start_turn(
         ctx,
         turn,
-        Map.merge(pins, %{root_execution_id: execution.id, attempt: attempt.attempt})
+        Map.merge(pins, %{
+          root_execution_id: execution.id,
+          attempt: attempt.attempt,
+          recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+        })
       )
 
     turn
@@ -149,7 +156,10 @@ defmodule Aqua.ApprovalsTest do
             %{decision: "approved", resolution_kind: "continue", replayed: false, pending: 0}} =
              Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
-    assert_receive {:thread, _, {:approval_resolved, %{approval_id: aid, decision: "approved"}}}
+    assert_receive %ThreadEvent{
+      kind: :approval_resolved,
+      data: %{approval_id: aid, decision: "approved"}
+    }
 
     assert aid == approval.id
     assert {:ok, %{dispatch_state: "proposed", kind: "tool"}} = Tape.step(ctx, step.id)
@@ -187,6 +197,240 @@ defmodule Aqua.ApprovalsTest do
 
     assert {:error, {:scope_not_permitted, "destructive"}} =
              Approvals.resolve(ctx, destructive.id, %{decision: :approved, scope: :thread})
+  end
+
+  test "an unbounded thread-scope allow over approval.resolve stands, judged under the turn's origin",
+       %{ctx: ctx, thread: thread, pins: pins} do
+    turn = started!(ctx, thread, pins)
+    %{approval: approval} = card!(ctx, turn, @keep, standing: "thread")
+
+    # Sent over the API: the approver's line is programmatic, and the pin
+    # check reads the turn's grant under the interactive origin its row
+    # stores. An allow for this chat with no lifecycle, deadline or
+    # constraint is narrower than the agent-scope answer and stays
+    # accepted, though the console offers only its five bounded choices.
+    api = Sanctum.TestContext.via(ctx, :api)
+
+    assert {:ok, _resolved} =
+             Grimoire.call_external("approval", api, %{
+               "action" => "resolve",
+               "approval" => approval.id,
+               "decision" => "approve",
+               "scope" => "thread"
+             })
+
+    assert {:ok,
+            [
+              %{
+                effect: "allow",
+                scope: "thread",
+                lifecycle_kind: nil,
+                expires_at: nil,
+                constraint: nil
+              }
+            ]} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+  end
+
+  describe "a bounded standing approval" do
+    @write %{
+      tool: "files",
+      action: "write",
+      args: %{"path" => "data/other/x.md", "content" => "x"}
+    }
+    @notes %{kind: "storage_path", patterns: ["data/notes/"]}
+
+    defp soon, do: DateTime.add(DateTime.utc_now(), 3600, :second) |> DateTime.truncate(:second)
+
+    defp resolution(ctx, approval_id) do
+      {:ok, %{resolution: resolution}} = Tape.approval(ctx, approval_id)
+      if is_binary(resolution), do: Jason.decode!(resolution), else: resolution
+    end
+
+    test "carries its lifecycle and deadline from the card's own turn into its row", %{
+      ctx: ctx,
+      thread: thread,
+      pins: pins
+    } do
+      turn = started!(ctx, thread, pins)
+      until = soon()
+      %{approval: approval} = card!(ctx, turn, @keep, standing: "thread")
+
+      assert {:ok, %{decision: "approved"}} =
+               Approvals.resolve(ctx, approval.id, %{
+                 decision: :approved,
+                 scope: :thread,
+                 lifecycle: :turn,
+                 until: until
+               })
+
+      turn_id = turn.id
+
+      assert {:ok,
+              [
+                %{
+                  tool: "notes",
+                  action: "keep",
+                  effect: "allow",
+                  scope: "thread",
+                  lifecycle_kind: "turn",
+                  lifecycle_id: ^turn_id,
+                  constraint: nil
+                } = row
+              ]} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      assert DateTime.compare(row.expires_at, until) == :eq
+
+      assert %{"scope" => "thread", "lifecycle" => "turn", "until" => spelled} =
+               resolution(ctx, approval.id)
+
+      assert {:ok, ^until, 0} = DateTime.from_iso8601(spelled)
+
+      # The run it ends with is the turn's root, read from the turn.
+      %{approval: again} = card!(ctx, turn, @keep, standing: "thread")
+
+      {:ok, _} =
+        Approvals.resolve(ctx, again.id, %{
+          decision: :approved,
+          scope: :thread,
+          lifecycle: :execution
+        })
+
+      root = turn.root_execution_id
+
+      assert {:ok, [%{lifecycle_kind: "execution", lifecycle_id: ^root}]} =
+               Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+    end
+
+    test "carries a constraint for an action that names its resource", %{
+      ctx: ctx,
+      thread: thread,
+      pins: pins
+    } do
+      turn = started!(ctx, thread, pins)
+
+      # What put files.write in the soul's policy: an earlier answer, for
+      # this run and data/notes/ alone, at agent scope.
+      {:ok, _} =
+        Aqua.ToolGrants.put(ctx, %{
+          scope: "agent",
+          effect: "allow",
+          agent_name: "aqua",
+          tool: "files",
+          action: "write",
+          lifecycle_kind: "execution",
+          lifecycle_id: turn.root_execution_id,
+          constraint: @notes
+        })
+
+      %{approval: approval} = card!(ctx, turn, @write)
+      other = %{kind: "storage_path", patterns: ["data/other/"]}
+
+      assert {:ok, %{decision: "approved"}} =
+               Approvals.resolve(ctx, approval.id, %{
+                 decision: :approved,
+                 scope: :thread,
+                 lifecycle: :turn,
+                 constraint: other
+               })
+
+      {:ok, rows} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      assert %{constraint: ^other, lifecycle_kind: "turn"} =
+               Enum.find(rows, &(&1.scope == "thread"))
+
+      assert %{"constraint" => %{"kind" => "storage_path"}} = resolution(ctx, approval.id)
+
+      place = fn path ->
+        %{
+          agent_name: "aqua",
+          thread_id: thread.id,
+          tool: "files",
+          action: "write",
+          args: %{"path" => path},
+          turn_id: turn.id,
+          execution_id: turn.root_execution_id
+        }
+      end
+
+      assert Sanctum.ToolGrants.admits?(ctx, place.("data/other/y.md"))
+      assert Sanctum.ToolGrants.admits?(ctx, place.("data/notes/y.md"))
+      refute Sanctum.ToolGrants.admits?(ctx, place.("data/elsewhere/y.md"))
+    end
+
+    test "a bound the answer may not carry is refused, and the card stays open", %{
+      ctx: ctx,
+      thread: thread,
+      pins: pins
+    } do
+      turn = started!(ctx, thread, pins)
+      %{approval: approval} = card!(ctx, turn, @keep, standing: "thread")
+      past = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      for {choice, reason} <- [
+            {%{decision: :approved, scope: :thread, constraint: @notes}, :no_resource},
+            {%{decision: :approved, scope: :once, lifecycle: :turn}, :bounds_without_standing},
+            {%{decision: :approved, scope: :thread, lifecycle: :schedule}, :no_schedule},
+            {%{decision: :approved, scope: :thread, lifecycle: :forever}, :invalid_lifecycle},
+            {%{decision: :approved, scope: :thread, until: past}, :deadline_passed},
+            {%{decision: :declined, scope: :never, until: soon()}, :bounded_deny},
+            {%{decision: :declined, scope: :never, lifecycle: :turn}, :bounded_deny},
+            {%{decision: :declined, scope: :never, constraint: @notes}, :bounded_deny},
+            {%{decision: :declined, scope: :once, until: soon()}, :bounds_without_standing}
+          ] do
+        assert {:error, {:scope_not_permitted, ^reason}} =
+                 Approvals.resolve(ctx, approval.id, choice),
+               "#{inspect(choice)} was not refused as #{reason}"
+
+        assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
+      end
+
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      # A constraint the store would refuse is refused by the rule, before
+      # the decision's transaction: a pattern twice, more than 64, or a
+      # wildcard. What put files.write in the policy is an earlier answer
+      # for this run and data/notes/ alone.
+      {:ok, _} =
+        Aqua.ToolGrants.put(ctx, %{
+          scope: "agent",
+          effect: "allow",
+          agent_name: "aqua",
+          tool: "files",
+          action: "write",
+          lifecycle_kind: "execution",
+          lifecycle_id: turn.root_execution_id,
+          constraint: @notes
+        })
+
+      %{approval: write} = card!(ctx, turn, @write)
+
+      for patterns <- [["data/a/", "data/a/"], Enum.map(1..65, &"data/#{&1}.md"), ["*"]] do
+        assert {:error, {:scope_not_permitted, :invalid_constraint}} =
+                 Approvals.resolve(ctx, write.id, %{
+                   decision: :approved,
+                   scope: :thread,
+                   constraint: %{kind: "storage_path", patterns: patterns}
+                 }),
+               "#{inspect(patterns)} was not refused"
+
+        assert {:ok, %{status: "pending"}} = Tape.approval(ctx, write.id)
+      end
+
+      assert {:ok, [%{scope: "agent", constraint: @notes}]} =
+               Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      # A destructive action takes no standing allow, bounded or not.
+      %{approval: destructive} = card!(ctx, turn, @wipe, kind: "destructive")
+
+      assert {:error, {:scope_not_permitted, "destructive"}} =
+               Approvals.resolve(ctx, destructive.id, %{
+                 decision: :approved,
+                 scope: :thread,
+                 lifecycle: :turn
+               })
+
+      assert {:ok, %{status: "pending"}} = Tape.approval(ctx, destructive.id)
+    end
   end
 
   test "declining closes the step denied with a tool result, and never records a deny", %{
@@ -347,7 +591,9 @@ defmodule Aqua.ApprovalsTest do
     {:ok, _} = Members.ensure(approver.id, scope: "athanor", athanor_id: ctx.athanor_id)
     approver_ctx = %{ctx | user_id: approver.id}
 
-    turn = started!(ctx, thread, pins)
+    # A launch continues under the origin its turn's row stores: this
+    # turn was sent from the console.
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
 
     launch = %{
       tool: "execution",
@@ -387,7 +633,7 @@ defmodule Aqua.ApprovalsTest do
 
     launched =
       Arca.Repo.all(
-        from(e in Arca.Execution,
+        from(e in Arca.Schemas.Execution,
           where:
             e.athanor_id == ^ctx.athanor_id and
               like(e.reference, "formula:local.list-models%")
@@ -448,8 +694,8 @@ defmodule Aqua.ApprovalsTest do
   end
 
   describe "ttl_seconds/1" do
-    test "is the estate's setting in hours, else the configured default, never a bad value" do
-      ctx = Sanctum.TestContext.local()
+    test "is the athanor's setting in hours, else the configured default, never a bad value" do
+      ctx = Sanctum.TestContext.local(:prism)
       assert Approvals.ttl_seconds(ctx) == 24 * 3600
 
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)

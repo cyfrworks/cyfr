@@ -14,18 +14,17 @@ defmodule Aqua.Attachments do
   back through `PrismWeb.AttachmentController`, and the model call
   receives them base64-encoded from `load/3`.
 
-  Filenames are the uploader's and are reduced to a safe basename: `Cyfr.PathSafety`
+  Filenames are the uploader's and are reduced to a safe basename: `Prima.PathSafety`
   refuses traversal but not an embedded `/`, and the local adapter would turn one
   into a subdirectory. Two uploads with the same name in one message get
-  distinct paths (an index prefix). The athanor's storage cap
-  (`Sanctum.Tenancy.Caps.check_storage/2`) is checked before the first byte
-  is written.
+  distinct paths (an index prefix). The athanor's storage cap is asked of
+  the cap port (`Prima.Caps.check_storage/2`) before the first byte is
+  written.
   """
 
   require Logger
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Caps
 
   @max_files 10
   @max_file_bytes 20_000_000
@@ -73,7 +72,7 @@ defmodule Aqua.Attachments do
             ref = %{
               "filename" => safe_filename(file["filename"]),
               "stored_name" => stored_name,
-              "media_type" => file["media_type"] || Cyfr.MediaType.binary(),
+              "media_type" => file["media_type"] || Prima.MediaType.binary(),
               "size" => byte_size(bytes)
             }
 
@@ -137,7 +136,7 @@ defmodule Aqua.Attachments do
   Every attachment in a list of message rows, paired with the message
   that owns it — the shape `load/3` resolves.
   """
-  @spec attachments_of([Arca.Schemas.Message.t()]) :: [%{message_id: String.t(), ref: ref()}]
+  @spec attachments_of([Aqua.Tape.row()]) :: [%{message_id: String.t(), ref: ref()}]
   def attachments_of(rows) when is_list(rows) do
     Enum.flat_map(rows, fn msg ->
       Enum.map(refs_of(msg), &%{message_id: msg.id, ref: &1})
@@ -168,7 +167,7 @@ defmodule Aqua.Attachments do
   end
 
   @doc "The refs stored on a message row's payload (`[]` when none)."
-  @spec refs_of(Arca.Schemas.Message.t()) :: [ref()]
+  @spec refs_of(Aqua.Tape.row()) :: [ref()]
   def refs_of(msg) do
     case Arca.ThreadStorage.payload(msg)["attachments"] do
       refs when is_list(refs) -> refs
@@ -246,7 +245,7 @@ defmodule Aqua.Attachments do
   defp check_quota(ctx, files) do
     incoming = files |> Enum.map(&byte_size(&1["bytes"] || "")) |> Enum.sum()
 
-    case Caps.check_storage(Sanctum.Context.actor(ctx), incoming) do
+    case Prima.Caps.check_storage(Context.actor(ctx), incoming) do
       :ok -> :ok
       {:error, {:limit_reached, :athanor_storage_bytes, _cap}} -> {:error, :storage_full}
       # Pass through — the cap layer worked to tell "over the cap" from

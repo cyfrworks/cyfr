@@ -16,6 +16,14 @@ defmodule Sanctum.Context do
   makes is attributable to the request that started it — which is what lets
   `Arca.McpLog` show a chain as one group.
 
+  `call_id` is the admission this context is inside: the gate call (or the
+  entry's own admission) that is running now, `call_<uuid7>`. The entry
+  that decides sets it, the gate sets it on the context it hands a
+  handler, and an execution admitted under the context records it
+  (`Crucible.Record`). It identifies one decision in `Arca.DecisionLog`,
+  authorizes nothing, is not projected onto the actor and survives
+  `enter_guest/1` unchanged. It is nil outside any admission.
+
   Tests construct permissive single-user contexts via
   `Sanctum.TestContext.local/0`, which lives in test support and so is
   compiled only in `:test`.
@@ -45,13 +53,85 @@ defmodule Sanctum.Context do
 
   require Logger
 
-  # The vocabulary is `Cyfr.TenancyScope`'s, where the actor and the
+  # The vocabulary is `Prima.TenancyScope`'s, where the actor and the
   # stored membership row read it too.
-  @type scope :: Cyfr.TenancyScope.t()
+  @type scope :: Prima.TenancyScope.t()
   @type auth_method ::
-          :oidc | :api_key | :scheduled | :webhook | :tincture | :system | :session | nil
+          :oidc
+          | :device
+          | :api_key
+          | :scheduled
+          | :webhook
+          | :tincture
+          | :system
+          | :session
+          | nil
   @type api_key_type :: :application | :service | :admin | nil
   @type plane :: :external | :guest
+
+  @typedoc """
+  What a credential this context holds was issued against, read when the
+  context was established: which credential (`source_kind`, `source_id`),
+  which membership authorized its focus (`focus_basis`: the membership
+  row id, `:key` for an athanor's key, or nil where no row does), and the
+  person's and the focused athanor's standing generations. A freshly
+  admitted sign-in, which holds no credential yet, carries
+  `source_kind: :identity` and `source_id: nil`.
+
+  A paired device's context carries `source_kind: :device`, its paired
+  client's id as `source_id`, and `identity`: the identity row a person
+  whose keys are at another home was resolved by when the certificate was
+  verified (`t:device_identity/0`), or nil for a certificate this home's
+  own key set signed. For such a person it also carries `key_epoch`, the
+  head's `key_epoch` the certificate was verified under; nil otherwise.
+  Only `Sanctum.Caller.establish_device/2` sets it, and `build/1` refuses
+  it on any context but that device's own (`auth_method: :device`, its
+  `client_id` the binding's `source_id`).
+
+  Issuing a credential from this context locks those rows and refuses
+  unless they still stand at these generations
+  (`Arca.SecurityTransitions.Issuance`), so a context read before a
+  retirement cannot issue after the restore. A device's issuance also
+  locks its paired client after them and refuses unless the client and
+  what its certificate stands on still stand: for a certificate this home
+  signed, its row; for a remote person, the identity row and their cached
+  head at that `key_epoch` (`Sanctum.Issuance`).
+  """
+  @type credential_binding :: %{
+          required(:source_kind) => :identity | :session | :api_key | :device,
+          required(:source_id) => String.t() | nil,
+          required(:focus_basis) => String.t() | :key | nil,
+          required(:user_generation) => pos_integer(),
+          required(:athanor_generation) => pos_integer() | nil,
+          optional(:identity) => device_identity() | nil,
+          optional(:key_epoch) => String.t() | nil
+        }
+
+  @typedoc """
+  The remote identity row a paired device's person was resolved by, as
+  `Sanctum.DeviceCerts.remote_subject/3` read it: whose row it is, its
+  `provenance` (`remote`) and the identifier the certificate names.
+  """
+  @type device_identity :: %{
+          user_id: String.t(),
+          provenance: String.t(),
+          identifier: String.t()
+        }
+
+  @typedoc """
+  The frame a context acts for, when a frame credential established it
+  (`Sanctum.Caller.establish({:frame_credential, bearer}, …)`): the
+  credential row's `id`, the shell's `frame_id`, the tincture version the
+  frame opened (`reference`) and its release digest (`version_digest`),
+  and the `grant_revision` the frame was opened under.
+  """
+  @type frame :: %{
+          id: String.t(),
+          frame_id: String.t(),
+          reference: %{publisher: String.t(), name: String.t(), version: String.t()},
+          version_digest: String.t(),
+          grant_revision: non_neg_integer()
+        }
 
   @type t :: %__MODULE__{
           user_id: String.t() | nil,
@@ -64,14 +144,23 @@ defmodule Sanctum.Context do
           auth_method: auth_method(),
           api_key_type: api_key_type(),
           request_id: String.t() | nil,
+          call_id: String.t() | nil,
           api_key_id: String.t() | nil,
           session_token_hash: binary() | nil,
+          credential_binding: credential_binding() | nil,
+          credential_deadline: DateTime.t() | nil,
+          validated_at: DateTime.t() | nil,
+          frame: frame() | nil,
+          client_id: String.t() | nil,
+          confirmation_id: String.t() | nil,
+          origin: Prima.Origin.t() | nil,
           authenticated: boolean(),
           anonymous: boolean(),
           platform_admin: boolean(),
           plane: plane()
         }
 
+  @derive {Inspect, except: [:confirmation_id]}
   defstruct [
     :user_id,
     :email,
@@ -83,6 +172,7 @@ defmodule Sanctum.Context do
     :auth_method,
     :api_key_type,
     :request_id,
+    :call_id,
     :api_key_id,
     # The session row's key, when a Sanctum session token authenticated the
     # request. It is the SHA-256 of the token, so it addresses the row
@@ -90,6 +180,26 @@ defmodule Sanctum.Context do
     # identifier as :api_key_id, and what `session.logout` needs to retire
     # exactly the session that called it.
     :session_token_hash,
+    # What this context's credential was issued against and the
+    # generations it read (`t:credential_binding/0`). Stamped together
+    # with `:session_token_hash` or `:api_key_id` by the one assembly path
+    # of each credential (`Sanctum.Session`, `Sanctum.ApiKey`), with
+    # `:client_id` by `Sanctum.Caller.establish_device/2`, and by
+    # `Sanctum.Tenancy.resolve_status/2` for an admitted sign-in.
+    :credential_binding,
+    # The absolute instant this context's authority ends when a parent
+    # credential bounds it, or nil when only its own source does.
+    :credential_deadline,
+    # When this context's credential and standing were last read from the
+    # store (`Sanctum.Caller.establish/2`, `revalidate_session/1`), or nil
+    # for a context no one validated. A holder that keeps a context past
+    # the freshness bound (`Sanctum.Caller.fresh?/1`) revalidates before
+    # acting on it; reusing a context never moves this instant.
+    :validated_at,
+    # The frame this context acts for (`t:frame/0`), or nil. Only
+    # `Sanctum.Caller`'s frame-credential clause sets it: it names the one
+    # tincture version whose declaration bounds what the context may reach.
+    :frame,
     # The caller's resolved address, where the ingress knew one
     # (`Sanctum.ClientIp`). It is not identity and authorizes nothing — it
     # is what an anonymous, per-action budget can be charged to. Without
@@ -97,6 +207,22 @@ defmodule Sanctum.Context do
     # transport's shared 120/min bucket, so several addresses could still
     # exhaust the global sign-in ceiling between them.
     :client_ip,
+    # The paired client the device channel authenticated this request
+    # through (`auth_method: :device`), or nil for every other ingress.
+    # Only that channel sets it; nothing a caller sends can name one.
+    :client_id,
+    # The secret of the pending confirmation a surface repeats a sensitive
+    # change under (`Sanctum.Consent.Authz.confirm/3`), or nil: the asking
+    # client's own, which the signal answered to it alone. It proves
+    # nothing by itself: the record its ref names is checked, with its
+    # opener and its person's standing, where the change is decided. It is
+    # never inspected (the derived `Inspect` leaves it out), so a crash
+    # report carrying the context does not carry it.
+    :confirmation_id,
+    # How the run this context starts began (`Prima.Origin`): set by the
+    # admission entry that builds the context, never from a caller's
+    # argument, or nil where no entry named one.
+    :origin,
     authenticated: false,
     # True when the ORIGINATING caller presented no credentials (public
     # tincture invocation). Ingress adapters may still mint an authenticated
@@ -120,13 +246,15 @@ defmodule Sanctum.Context do
   Context for scheduled (cron) executions.
 
   Grants execute and storage permissions inside the schedule's athanor,
-  attributed to the originating user. `:athanor_id` is required.
+  attributed to the originating user, with the origin `schedule`.
+  `:athanor_id` is required.
   """
   def for_scheduled(user_id, opts \\ []) do
-    # Delegates to the single builder; cron's only divergence from the
-    # `:system` default is the `:scheduled` provenance tag. namespace is pure
-    # identity (not path-bearing), so an absent one is fine — the schedule's
-    # athanor determines where its files land.
+    # Delegates to the single builder; cron's divergences from the
+    # `:system` default are the `:scheduled` provenance tag and the
+    # `schedule` origin. namespace is pure identity (not path-bearing), so
+    # an absent one is fine — the schedule's athanor determines where its
+    # files land.
     #
     # Permissions are stated explicitly rather than inherited from
     # internal/1's defaults, so what a schedule runs with is visible here
@@ -137,6 +265,8 @@ defmodule Sanctum.Context do
       athanor_id: Keyword.fetch!(opts, :athanor_id),
       scope: :athanor,
       auth_method: :scheduled,
+      # A schedule's fire is the admission path that starts the run.
+      origin: :schedule,
       permissions: [:execute, :storage_read, :storage_write]
     )
   end
@@ -163,6 +293,10 @@ defmodule Sanctum.Context do
   - `:api_key_id` - API key identifier
   - `:session_token_hash` - session row key (SHA-256 of the session token)
   - `:request_id` - MCP request ID
+  - `:call_id` - the admission the context is inside (`call_<uuid7>`)
+  - `:client_id` - the paired client the device channel authenticated
+  - `:confirmation_id` - the pending confirmation a repeated change names
+  - `:origin` - how the run began (`Prima.Origin`), set by the admission entry
   - `:authenticated` - Boolean (default: false)
 
   ## Examples
@@ -178,7 +312,17 @@ defmodule Sanctum.Context do
   @valid_scopes Sanctum.Atoms.scope_atoms()
 
   # Validate auth_method against its declared vocabulary at context construction.
-  @valid_auth_methods [:oidc, :api_key, :scheduled, :webhook, :tincture, :system, :session, nil]
+  @valid_auth_methods [
+    :oidc,
+    :device,
+    :api_key,
+    :scheduled,
+    :webhook,
+    :tincture,
+    :system,
+    :session,
+    nil
+  ]
 
   # Mirrors the `plane()` type, guarded for the same reason.
   @valid_planes [:external, :guest]
@@ -188,14 +332,14 @@ defmodule Sanctum.Context do
 
     unless scope in @valid_scopes do
       raise ArgumentError,
-            "invalid scope #{inspect(scope)}, must be one of #{inspect(@valid_scopes)}"
+            "invalid scope #{Prima.LoggerContext.shape(scope)}, must be one of #{inspect(@valid_scopes)}"
     end
 
     auth_method = Map.get(attrs, :auth_method)
 
     unless auth_method in @valid_auth_methods do
       raise ArgumentError,
-            "invalid auth_method #{inspect(auth_method)}, must be one of " <>
+            "invalid auth_method #{Prima.LoggerContext.shape(auth_method)}, must be one of " <>
               "#{inspect(@valid_auth_methods)}"
     end
 
@@ -203,7 +347,7 @@ defmodule Sanctum.Context do
 
     unless plane in @valid_planes do
       raise ArgumentError,
-            "invalid plane #{inspect(plane)}, must be one of #{inspect(@valid_planes)}"
+            "invalid plane #{Prima.LoggerContext.shape(plane)}, must be one of #{inspect(@valid_planes)}"
     end
 
     for field <- [
@@ -213,13 +357,17 @@ defmodule Sanctum.Context do
           :namespace,
           :athanor_id,
           :request_id,
+          :call_id,
           :api_key_id,
-          :client_ip
+          :client_ip,
+          :client_id,
+          :confirmation_id
         ] do
       val = Map.get(attrs, field)
 
       unless is_nil(val) or is_binary(val) do
-        raise ArgumentError, "#{field} must be a string or nil, got: #{inspect(val)}"
+        raise ArgumentError,
+              "#{field} must be a string or nil, got: #{Prima.LoggerContext.shape(val)}"
       end
     end
 
@@ -234,7 +382,7 @@ defmodule Sanctum.Context do
     if authenticated and is_nil(Map.get(attrs, :user_id)) do
       raise ArgumentError,
             "Sanctum.Context.build/1: authenticated contexts require :user_id " <>
-              "(scope=#{inspect(scope)} auth_method=#{inspect(auth_method)})."
+              "(scope=#{Prima.LoggerContext.shape(scope)} auth_method=#{Prima.LoggerContext.shape(auth_method)})."
     end
 
     permissions =
@@ -271,8 +419,17 @@ defmodule Sanctum.Context do
       auth_method: Map.get(attrs, :auth_method),
       api_key_type: Map.get(attrs, :api_key_type),
       request_id: Map.get(attrs, :request_id),
+      call_id: Map.get(attrs, :call_id),
       api_key_id: Map.get(attrs, :api_key_id),
+      session_token_hash: Map.get(attrs, :session_token_hash),
+      credential_binding: binding!(Map.get(attrs, :credential_binding), attrs),
+      credential_deadline: deadline!(Map.get(attrs, :credential_deadline)),
+      validated_at: validated_at!(Map.get(attrs, :validated_at)),
+      frame: frame!(Map.get(attrs, :frame)),
       client_ip: Map.get(attrs, :client_ip),
+      client_id: Map.get(attrs, :client_id),
+      confirmation_id: Map.get(attrs, :confirmation_id),
+      origin: origin!(Map.get(attrs, :origin)),
       authenticated: Map.get(attrs, :authenticated, false),
       anonymous: Map.get(attrs, :anonymous, false) == true,
       platform_admin: Map.get(attrs, :platform_admin, false) == true,
@@ -288,6 +445,116 @@ defmodule Sanctum.Context do
     audit_platform!(ctx, Map.get(attrs, :__platform_ok__, false) == true)
     ctx
   end
+
+  @binding_sources [:identity, :session, :api_key, :device]
+
+  # A binding is data the issuance check trusts, so a malformed one is a
+  # construction bug caught here rather than a refusal found later.
+  defp binding!(nil, _attrs), do: nil
+
+  defp binding!(
+         %{
+           source_kind: kind,
+           source_id: source_id,
+           focus_basis: basis,
+           user_generation: user_generation,
+           athanor_generation: athanor_generation
+         } = binding,
+         attrs
+       )
+       when kind in @binding_sources and (is_binary(source_id) or is_nil(source_id)) and
+              (is_binary(basis) or basis in [:key, nil]) and is_integer(user_generation) and
+              user_generation > 0 and
+              (is_nil(athanor_generation) or
+                 (is_integer(athanor_generation) and athanor_generation > 0)) do
+    if held_by?(binding, attrs), do: binding, else: malformed_binding!(binding)
+  end
+
+  defp binding!(other, _attrs), do: malformed_binding!(other)
+
+  # A device's binding is only that device context's own: it names the
+  # paired client the context was established through, and the issuance
+  # locks that client. On any other context it would name a client the
+  # context never proved. A remote person's identity row comes with the
+  # `key_epoch` their certificate was verified under, and neither without
+  # the other; no other kind carries either.
+  defp held_by?(%{source_kind: :device, source_id: client_id} = binding, attrs)
+       when is_binary(client_id) and client_id != "" do
+    Map.get(attrs, :auth_method) == :device and Map.get(attrs, :client_id) == client_id and
+      device_identity?(Map.get(binding, :identity), Map.get(binding, :key_epoch))
+  end
+
+  defp held_by?(%{source_kind: :device}, _attrs), do: false
+
+  defp held_by?(binding, _attrs),
+    do: is_nil(Map.get(binding, :identity)) and is_nil(Map.get(binding, :key_epoch))
+
+  defp device_identity?(nil, nil), do: true
+
+  defp device_identity?(
+         %{user_id: user_id, provenance: "remote", identifier: identifier} = identity,
+         key_epoch
+       )
+       when is_binary(user_id) and is_binary(identifier) and map_size(identity) == 3 and
+              is_binary(key_epoch) and key_epoch != "",
+       do: true
+
+  defp device_identity?(_identity, _key_epoch), do: false
+
+  @spec malformed_binding!(term()) :: no_return()
+  defp malformed_binding!(other),
+    do:
+      raise(ArgumentError, "credential_binding is malformed: #{Prima.LoggerContext.shape(other)}")
+
+  defp deadline!(nil), do: nil
+  defp deadline!(%DateTime{} = deadline), do: deadline
+
+  defp deadline!(other),
+    do:
+      raise(
+        ArgumentError,
+        "credential_deadline must be a DateTime or nil, got: #{Prima.LoggerContext.shape(other)}"
+      )
+
+  defp frame!(nil), do: nil
+
+  defp frame!(
+         %{
+           id: id,
+           frame_id: frame_id,
+           reference: %{publisher: publisher, name: name, version: version},
+           version_digest: digest,
+           grant_revision: revision
+         } = frame
+       )
+       when is_binary(id) and is_binary(frame_id) and is_binary(publisher) and is_binary(name) and
+              is_binary(version) and is_binary(digest) and is_integer(revision) and revision >= 0,
+       do: frame
+
+  defp frame!(other),
+    do: raise(ArgumentError, "frame is malformed: #{Prima.LoggerContext.shape(other)}")
+
+  defp origin!(nil), do: nil
+
+  defp origin!(origin) do
+    if Prima.Origin.origin?(origin),
+      do: origin,
+      else:
+        raise(
+          ArgumentError,
+          "origin must be a Prima.Origin or nil, got: #{Prima.LoggerContext.shape(origin)}"
+        )
+  end
+
+  defp validated_at!(nil), do: nil
+  defp validated_at!(%DateTime{} = at), do: at
+
+  defp validated_at!(other),
+    do:
+      raise(
+        ArgumentError,
+        "validated_at must be a DateTime or nil, got: #{Prima.LoggerContext.shape(other)}"
+      )
 
   @doc """
   The single builder for server-constructed, no-external-credential contexts.
@@ -307,6 +574,7 @@ defmodule Sanctum.Context do
     * `:permissions`    — default `[:execute, :storage_read, :storage_write]`
     * `:scope`          — default `:platform`
     * `:auth_method`    — default `:system`; cron passes `:scheduled`
+    * `:origin`         — default `nil`; cron passes `:schedule`
 
   `authenticated:` is always `true`.
 
@@ -330,6 +598,7 @@ defmodule Sanctum.Context do
         ]),
       scope: Keyword.get(opts, :scope, :platform),
       auth_method: Keyword.get(opts, :auth_method, :system),
+      origin: Keyword.get(opts, :origin),
       authenticated: true,
       # Marks this as the single sanctioned platform-construction path so the
       # audit in build/1 records it as sanctioned (no warning).
@@ -378,7 +647,7 @@ defmodule Sanctum.Context do
   def enter_guest(%__MODULE__{} = ctx), do: %{ctx | plane: :guest}
 
   @doc """
-  The actor this context projects: a `Cyfr.Actor` with `athanor_id`,
+  The actor this context projects: a `Prima.Actor` with `athanor_id`,
   `plane`, `anonymous`, `user_id`, `request_id`, `authenticated` and
   `client_ip` copied one field each, with the meanings they carry here. The
   context stays the owner of those fields and stores no duplicate `:actor`;
@@ -393,16 +662,19 @@ defmodule Sanctum.Context do
   `auth_method == :system`, the provenance that lets the server's own work
   mutate seed, global and tenant-reserved paths; every other
   `auth_method` records where a caller came from and grants nothing, so it
-  projects `system: false`. Neither crosses the wire (`Cyfr.Actor`).
+  projects `system: false`. `platform_admin` is the context's operator
+  capability, copied as it stands: it widens no scope, and it is what the
+  global audit reads require. None of the three crosses the wire
+  (`Prima.Actor`).
 
   A context whose athanor is unresolved projects `athanor_id: nil`, never a
   sentinel: the facade refuses it before any query, and it stays
   distinguishable from `anonymous: true`, which is a caller that has a
   tenant and no credentials of its own.
   """
-  @spec actor(t()) :: Cyfr.Actor.t()
+  @spec actor(t()) :: Prima.Actor.t()
   def actor(%__MODULE__{} = ctx) do
-    %Cyfr.Actor{
+    %Prima.Actor{
       athanor_id: ctx.athanor_id,
       plane: ctx.plane,
       anonymous: ctx.anonymous,
@@ -411,7 +683,8 @@ defmodule Sanctum.Context do
       authenticated: ctx.authenticated,
       client_ip: ctx.client_ip,
       scope: ctx.scope,
-      system: ctx.auth_method == :system
+      system: ctx.auth_method == :system,
+      platform_admin: ctx.platform_admin == true
     }
   end
 
@@ -492,43 +765,88 @@ defmodule Sanctum.Context do
   athanor — an audited act (`Sanctum.Telemetry.platform_context_event/1`),
   never a widened scope: the result works inside that athanor exactly as a
   member's context does. An archived athanor cannot be focused by anyone.
+
+  The athanor is named by its id, or by a map carrying it (`:id`), and
+  only the id is read: its row, its standing and the seat are read again
+  here, so a caller's stale copy of a row cannot focus an athanor that has
+  since been archived or bind the context to a generation it no longer
+  has. A store that cannot answer either read is `{:error, :unavailable}`,
+  never an absence.
   """
-  @spec focus(t(), Arca.Schemas.Athanor.t() | String.t()) ::
-          {:ok, t()} | {:error, :not_found | :archived | :not_member}
+  @spec focus(t(), String.t() | %{required(:id) => String.t(), optional(atom()) => term()}) ::
+          {:ok, t()} | {:error, :not_found | :archived | :not_member | :unavailable}
+  def focus(%__MODULE__{} = ctx, %{id: athanor_id}) when is_binary(athanor_id),
+    do: focus(ctx, athanor_id)
+
   def focus(%__MODULE__{} = ctx, athanor_id) when is_binary(athanor_id) do
     case Sanctum.Tenancy.Athanors.get(athanor_id) do
-      {:ok, athanor} -> focus(ctx, athanor)
+      {:ok, %{status: "archived"}} -> {:error, :archived}
+      {:ok, %{id: ^athanor_id} = athanor} -> seated(ctx, athanor)
       {:error, :not_found} -> {:error, :not_found}
-      {:error, _} -> {:error, :not_found}
+      {:error, _unreadable} -> {:error, :unavailable}
     end
   end
 
-  def focus(%__MODULE__{}, %Arca.Schemas.Athanor{status: "archived"}), do: {:error, :archived}
+  defp seated(ctx, %{id: id} = athanor) do
+    case Sanctum.Tenancy.Members.active_seat(ctx.user_id, id) do
+      {:ok, seat} ->
+        {:ok, refocused(ctx, athanor, seat.id)}
 
-  def focus(%__MODULE__{} = ctx, %Arca.Schemas.Athanor{id: id}) do
-    cond do
-      Sanctum.Tenancy.Members.member?(ctx.user_id, id) ->
-        {:ok, %{ctx | athanor_id: id, scope: :athanor}}
+      :none when ctx.platform_admin ->
+        with {:ok, basis} <- platform_basis(ctx) do
+          Sanctum.Telemetry.platform_context_event(%{
+            caller: :focus,
+            user_id: ctx.user_id,
+            athanor_id: id,
+            auth_method: ctx.auth_method
+          })
 
-      ctx.platform_admin ->
-        Sanctum.Telemetry.platform_context_event(%{
-          caller: :focus,
-          user_id: ctx.user_id,
-          athanor_id: id,
-          auth_method: ctx.auth_method
-        })
+          {:ok, refocused(ctx, athanor, basis)}
+        end
 
-        {:ok, %{ctx | athanor_id: id, scope: :athanor}}
-
-      true ->
+      :none ->
         {:error, :not_member}
+
+      {:error, _unreadable} ->
+        {:error, :unavailable}
+    end
+  end
+
+  # A new focus is a new standing read: the binding follows it, naming the
+  # athanor's generation as read now and the membership that authorized
+  # it. An athanor's key keeps `:key` — its standing is the key's, not a
+  # seat's.
+  defp refocused(%__MODULE__{credential_binding: nil} = ctx, %{id: id}, _basis),
+    do: %{ctx | athanor_id: id, scope: :athanor}
+
+  defp refocused(%__MODULE__{credential_binding: binding} = ctx, athanor, basis) do
+    basis = if binding.focus_basis == :key, do: :key, else: basis
+    ctx = %{ctx | athanor_id: athanor.id, scope: :athanor}
+
+    %{
+      ctx
+      | credential_binding: %{
+          binding
+          | focus_basis: basis,
+            athanor_generation: athanor.security_generation
+        }
+    }
+  end
+
+  defp platform_basis(%__MODULE__{credential_binding: nil}), do: {:ok, nil}
+
+  defp platform_basis(%__MODULE__{user_id: user_id}) do
+    case Sanctum.Tenancy.Members.platform_seat(user_id) do
+      {:ok, seat} -> {:ok, seat.id}
+      :none -> {:ok, nil}
+      {:error, _unreadable} -> {:error, :unavailable}
     end
   end
 
   @doc """
   Focuses the caller on another athanor for domain reads or writes after
   checking membership and archive status. Archived-athanor management uses
-  `Sanctum.MCP.AthanorTool.resolve/3`, which permits get and unarchive.
+  `Sanctum.Providers.Athanor.resolve/3`, which permits get and unarchive.
 
   A user context goes through `focus/2` whole: membership or the audited
   operator open, and an archived athanor refused. A **system** context
@@ -538,13 +856,14 @@ defmodule Sanctum.Context do
   a closed furnace either.
   """
   @spec refocus(t(), String.t()) ::
-          {:ok, t()} | {:error, :not_found | :archived | :not_member}
+          {:ok, t()} | {:error, :not_found | :archived | :not_member | :unavailable}
   def refocus(%__MODULE__{auth_method: :system} = ctx, athanor_id)
       when is_binary(athanor_id) do
     case Sanctum.Tenancy.Athanors.get(athanor_id) do
       {:ok, %{status: "archived"}} -> {:error, :archived}
       {:ok, _} -> {:ok, %{ctx | athanor_id: athanor_id, scope: :athanor}}
-      {:error, _} -> {:error, :not_found}
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, _unreadable} -> {:error, :unavailable}
     end
   end
 

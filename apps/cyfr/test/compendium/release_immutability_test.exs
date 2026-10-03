@@ -14,13 +14,12 @@ defmodule Compendium.ReleaseImmutabilityTest do
   @wasm_a File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
   @wasm_b @wasm_a <> <<0x00, 0x05, 0x04>> <> "cyfr"
 
-  setup do
+  setup tags do
     test_path = Path.join(System.tmp_dir!(), "release_immutability_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -111,7 +110,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
           "local"
         )
 
-      assert row.digest == Compendium.WasmValidator.compute_digest(@wasm_a)
+      assert row.digest == Prima.Wasm.compute_digest(@wasm_a)
     end
 
     test "different versions of the same component are unaffected", %{ctx: ctx} do
@@ -164,7 +163,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
           "local"
         )
 
-      assert row.digest == Compendium.WasmValidator.compute_digest(@wasm_b)
+      assert row.digest == Prima.Wasm.compute_digest(@wasm_b)
       assert row.release_digest != nil
     end
   end

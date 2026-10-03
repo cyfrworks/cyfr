@@ -6,9 +6,8 @@ defmodule Arca.TenantIsolationTest do
 
   alias Sanctum.TestContext
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "tenant_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
@@ -172,7 +171,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can get their own execution
-      assert %Arca.Execution{id: "exec_cross_a"} =
+      assert %{id: "exec_cross_a"} =
                Arca.Execution.get_tenant(Sanctum.Context.actor(ctx_a), "exec_cross_a")
 
       # B cannot get A's execution
@@ -201,7 +200,7 @@ defmodule Arca.TenantIsolationTest do
           namespace: "testns"
         )
 
-      assert %Arca.Execution{id: "exec_platform_test"} =
+      assert %{id: "exec_platform_test"} =
                Arca.Execution.get_tenant(
                  Sanctum.Context.actor(platform_ctx),
                  "exec_platform_test"
@@ -408,7 +407,7 @@ defmodule Arca.TenantIsolationTest do
 
       # Insert old log for tenant A
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "log_tenant_a",
           user_id: ctx_a.user_id,
           athanor_id: ctx_a.athanor_id,
@@ -420,7 +419,7 @@ defmodule Arca.TenantIsolationTest do
 
       # Insert old log for tenant B
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "log_tenant_b",
           user_id: ctx_b.user_id,
           athanor_id: ctx_b.athanor_id,
@@ -431,13 +430,14 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # Cleanup for tenant A with 1-day retention
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx_a, "mcp_log_days", value: 1)
+      assert {:ok, 1} =
+               Arca.Retention.cleanup(Sanctum.Context.actor(ctx_a), "mcp_log_days", value: 1)
 
       # Tenant A's log is gone
-      assert Arca.Repo.get(Arca.McpLog, "log_tenant_a") == nil
+      assert Arca.Repo.get(Arca.Schemas.McpLog, "log_tenant_a") == nil
 
       # Tenant B's log survives
-      assert Arca.Repo.get(Arca.McpLog, "log_tenant_b") != nil
+      assert Arca.Repo.get(Arca.Schemas.McpLog, "log_tenant_b") != nil
     end
 
     test "dry_run scoped to tenant" do
@@ -446,7 +446,7 @@ defmodule Arca.TenantIsolationTest do
       old_time = DateTime.utc_now() |> DateTime.add(-60 * 86_400, :second)
 
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "log_dry_a",
           user_id: ctx_a.user_id,
           athanor_id: ctx_a.athanor_id,
@@ -455,7 +455,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "log_dry_b",
           user_id: ctx_b.user_id,
           athanor_id: ctx_b.athanor_id,
@@ -463,8 +463,17 @@ defmodule Arca.TenantIsolationTest do
           status: "success"
         })
 
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx_a, "mcp_log_days", value: 1, dry_run: true)
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx_b, "mcp_log_days", value: 1, dry_run: true)
+      assert {:ok, 1} =
+               Arca.Retention.cleanup(Sanctum.Context.actor(ctx_a), "mcp_log_days",
+                 value: 1,
+                 dry_run: true
+               )
+
+      assert {:ok, 1} =
+               Arca.Retention.cleanup(Sanctum.Context.actor(ctx_b), "mcp_log_days",
+                 value: 1,
+                 dry_run: true
+               )
     end
   end
 
@@ -502,7 +511,7 @@ defmodule Arca.TenantIsolationTest do
       end
 
       # Cleanup tenant A, keeping 2
-      {:ok, count} = Cyfr.Retention.cleanup(ctx_a, "executions", value: 2)
+      {:ok, count} = Arca.Retention.cleanup(Sanctum.Context.actor(ctx_a), "executions", value: 2)
       assert count == 3
 
       # Tenant A has 2
@@ -546,7 +555,8 @@ defmodule Arca.TenantIsolationTest do
       end
 
       # Cleanup scoped to tenant A — retention is per-athanor.
-      assert {:ok, 3} = Cyfr.Retention.cleanup(ctx_a, "executions", value: 1)
+      assert {:ok, 3} =
+               Arca.Retention.cleanup(Sanctum.Context.actor(ctx_a), "executions", value: 1)
 
       # Tenant B unaffected
       b_results =
@@ -582,7 +592,11 @@ defmodule Arca.TenantIsolationTest do
           })
       end
 
-      assert {:ok, 2} = Cyfr.Retention.cleanup(ctx_a, "executions", value: 1, dry_run: true)
+      assert {:ok, 2} =
+               Arca.Retention.cleanup(Sanctum.Context.actor(ctx_a), "executions",
+                 value: 1,
+                 dry_run: true
+               )
 
       # All records still exist
       all_a = Arca.Execution.list(athanor_id: ctx_a.athanor_id, limit: 100)
@@ -599,7 +613,7 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "mlog_cross_a",
           user_id: ctx_a.user_id,
           athanor_id: ctx_a.athanor_id,
@@ -610,7 +624,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can get their own log
-      assert %Arca.McpLog{id: "mlog_cross_a"} =
+      assert %{id: "mlog_cross_a"} =
                Arca.McpLog.get_tenant(Sanctum.Context.actor(ctx_a), "mlog_cross_a")
 
       # B cannot get A's log
@@ -621,7 +635,7 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, _ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "mlog_platform_test",
           user_id: ctx_a.user_id,
           athanor_id: ctx_a.athanor_id,
@@ -637,7 +651,7 @@ defmodule Arca.TenantIsolationTest do
           namespace: "testns"
         )
 
-      assert %Arca.McpLog{id: "mlog_platform_test"} =
+      assert %{id: "mlog_platform_test"} =
                Arca.McpLog.get_tenant(Sanctum.Context.actor(platform_ctx), "mlog_platform_test")
     end
   end
@@ -661,7 +675,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can get their own log
-      assert %Arca.PolicyLog{id: "plog_cross_a"} =
+      assert %{id: "plog_cross_a"} =
                Arca.PolicyLog.get_tenant(Sanctum.Context.actor(ctx_a), "plog_cross_a")
 
       # B cannot get A's log
@@ -688,7 +702,7 @@ defmodule Arca.TenantIsolationTest do
           namespace: "testns"
         )
 
-      assert %Arca.PolicyLog{id: "plog_platform_test"} =
+      assert %{id: "plog_platform_test"} =
                Arca.PolicyLog.get_tenant(
                  Sanctum.Context.actor(platform_ctx),
                  "plog_platform_test"
@@ -711,7 +725,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can find by request_id
-      assert %Arca.PolicyLog{} =
+      assert %{id: _} =
                Arca.PolicyLog.get_by_request_id_tenant(
                  Sanctum.Context.actor(ctx_a),
                  "req_cross_tenant_123"
@@ -746,7 +760,7 @@ defmodule Arca.TenantIsolationTest do
           namespace: "testns"
         )
 
-      assert %Arca.PolicyLog{} =
+      assert %{id: _} =
                Arca.PolicyLog.get_by_request_id_tenant(
                  Sanctum.Context.actor(platform_ctx),
                  "req_platform_456"
@@ -767,7 +781,7 @@ defmodule Arca.TenantIsolationTest do
       # Insert 3 logs for tenant A
       for i <- 1..3 do
         {:ok, _} =
-          Arca.McpLog.record(%{
+          seed_log(%{
             id: "stats_a_#{i}",
             user_id: ctx_a.user_id,
             athanor_id: ctx_a.athanor_id,
@@ -780,7 +794,7 @@ defmodule Arca.TenantIsolationTest do
       # Insert 2 logs for tenant B
       for i <- 1..2 do
         {:ok, _} =
-          Arca.McpLog.record(%{
+          seed_log(%{
             id: "stats_b_#{i}",
             user_id: ctx_b.user_id,
             athanor_id: ctx_b.athanor_id,
@@ -814,17 +828,20 @@ defmodule Arca.TenantIsolationTest do
 
       # Create key for ath_alpha
       :ok =
-        Arca.ApiKeyStorage.create_key(%{
-          name: "cross-athanor-key",
-          key_hash: key_hash,
-          key_prefix: "cyfr_sk_",
-          type: "secret",
-          scope: "[]",
-          rate_limit: nil,
-          ip_allowlist: nil,
-          created_by: "user_a",
-          athanor_id: "ath_alpha"
-        })
+        Arca.ApiKeyStorage.create_key(
+          %{
+            name: "cross-athanor-key",
+            key_hash: key_hash,
+            key_prefix: "cyfr_sk_",
+            type: "secret",
+            scope: "[]",
+            rate_limit: nil,
+            ip_allowlist: nil,
+            created_by: "user_a",
+            athanor_id: "ath_alpha"
+          },
+          Arca.Test.Actor.issuance("user_a")
+        )
 
       # API keys are athanor credentials: the (sole) hash lookup returns the
       # key's OWN athanor from the row. Cross-tenant rejection happens on the
@@ -838,17 +855,20 @@ defmodule Arca.TenantIsolationTest do
       key_hash = :crypto.hash(:sha256, "test_key_metadata_#{:rand.uniform(100_000)}")
 
       :ok =
-        Arca.ApiKeyStorage.create_key(%{
-          name: "metadata-key",
-          key_hash: key_hash,
-          key_prefix: "cyfr_sk_",
-          type: "secret",
-          scope: "[]",
-          rate_limit: nil,
-          ip_allowlist: nil,
-          created_by: "user_a",
-          athanor_id: "ath_gamma"
-        })
+        Arca.ApiKeyStorage.create_key(
+          %{
+            name: "metadata-key",
+            key_hash: key_hash,
+            key_prefix: "cyfr_sk_",
+            type: "secret",
+            scope: "[]",
+            rate_limit: nil,
+            ip_allowlist: nil,
+            created_by: "user_a",
+            athanor_id: "ath_gamma"
+          },
+          Arca.Test.Actor.issuance("user_a")
+        )
 
       # Verify the row returned by get_key_by_hash includes athanor_id
       {:ok, row} = Arca.ApiKeyStorage.get_key_by_hash(key_hash)
@@ -873,5 +893,24 @@ defmodule Arca.TenantIsolationTest do
       |> binary_part(0, 16)
 
     "comp_#{hash}"
+  end
+
+  # A request-log row as the gate writes one: the projection of an
+  # admission decision, appended with it in one transaction.
+  defp seed_log(%{id: id, athanor_id: athanor_id, user_id: user_id, timestamp: at} = attrs) do
+    actor = %{Prima.Actor.in_athanor(athanor_id) | user_id: user_id}
+
+    decision =
+      Prima.Decision.new(
+        call_id: id,
+        plane: :external,
+        tool: attrs[:tool],
+        action: attrs[:action],
+        inserted_at: at,
+        admission: :admitted
+      )
+
+    :ok = Arca.DecisionLog.append(actor, decision, mcp_log: Map.delete(attrs, :athanor_id))
+    {:ok, attrs}
   end
 end

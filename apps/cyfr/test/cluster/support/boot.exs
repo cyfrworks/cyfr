@@ -10,8 +10,10 @@ defmodule Cyfr.Cluster.Boot do
   Nothing here is a stand-in for the product's boot. `Application.ensure_all_started/1`
   starts the same supervision tree a release starts, under the same
   refusals: `Cyfr.Cell` reads `Cyfr.Cell.facts/0` and raises if this
-  deployment cannot form a cell, and the member claims its
-  `cell_leases` slot before anything that admits work.
+  deployment cannot form a cell, the member claims its `cell_leases`
+  slot, and `Cyfr.Bootstrap` reconciles the operators under that slot
+  before anything that admits work — a refused reconcile is a boot that
+  answers `{:error, reason}` here.
 
   A worker service is **not** started with the application. It is the
   suite's scripted one (`Cyfr.Test.ScriptedWorker`), served over HTTP on a
@@ -91,7 +93,7 @@ defmodule Cyfr.Cluster.Boot do
   def route!(references, endpoints) do
     Application.put_env(
       :cyfr,
-      :workers,
+      :opus_workers,
       Enum.map(endpoints, &Map.put(&1, :components, references))
     )
 
@@ -104,7 +106,7 @@ defmodule Cyfr.Cluster.Boot do
     %{
       held: Arca.ControlPlane.held?(),
       generation: Arca.ControlPlane.generation(),
-      boot: Cyfr.Boot.id(),
+      boot: Prima.Boot.id(),
       node: node()
     }
   end
@@ -156,7 +158,7 @@ defmodule Cyfr.Cluster.Boot do
 
     watcher =
       spawn(fn ->
-        :ok = Cyfr.Execution.subscribe_events(execution_id, %{athanor_id: athanor_id})
+        :ok = Crucible.subscribe_events(execution_id, %{athanor_id: athanor_id})
         send(caller, {:subscribed, self()})
         collect([])
       end)
@@ -170,10 +172,12 @@ defmodule Cyfr.Cluster.Boot do
     end
   end
 
+  defp stop_stream_watch!, do: stop_registered!(:cyfr_cluster_stream_watch)
+
   # The name is one process's, and `Process.exit/2` is asynchronous, so a
   # replacement registered before the old watcher died would raise.
-  defp stop_stream_watch! do
-    case Process.whereis(:cyfr_cluster_stream_watch) do
+  defp stop_registered!(name) do
+    case Process.whereis(name) do
       nil ->
         :ok
 
@@ -203,7 +207,7 @@ defmodule Cyfr.Cluster.Boot do
 
   defp collect(seen) do
     receive do
-      {:execution_event, %{sequence: sequence}} ->
+      %Cyfr.Bus.ExecutionEvent{sequence: sequence} ->
         collect(seen ++ [sequence])
 
       {:heard, from} ->
@@ -216,11 +220,70 @@ defmodule Cyfr.Cluster.Boot do
   end
 
   @doc """
+  Watch `athanor_id`'s tray from this member, keeping the references of
+  each `:regrant_required` entry it hears (`tray_heard/0`).
+
+  The tray's topic is the cell's, so a watcher here hears what either
+  member announces. Like `watch_stream!/2` it is a named process, and it
+  answers only once that process has subscribed.
+  """
+  @spec watch_tray!(String.t()) :: :ok
+  def watch_tray!(athanor_id) do
+    stop_registered!(:cyfr_cluster_tray_watch)
+    caller = self()
+    actor = Prima.Actor.in_athanor(athanor_id)
+
+    watcher =
+      spawn(fn ->
+        :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
+        send(caller, {:subscribed, self()})
+        collect_tray([])
+      end)
+
+    Process.register(watcher, :cyfr_cluster_tray_watch)
+
+    receive do
+      {:subscribed, ^watcher} -> :ok
+    after
+      10_000 -> raise "the tray watcher never subscribed to #{athanor_id}"
+    end
+  end
+
+  @doc """
+  The `:regrant_required` entries this member's tray watcher has heard, in
+  arrival order, each as its sorted references.
+  """
+  @spec tray_heard() :: [[String.t()]]
+  def tray_heard do
+    send(:cyfr_cluster_tray_watch, {:heard, self()})
+
+    receive do
+      {:tray_heard, seen} -> seen
+    after
+      5_000 -> raise "the tray watcher did not answer"
+    end
+  end
+
+  defp collect_tray(seen) do
+    receive do
+      %Cyfr.Bus.Notify{kind: :regrant_required, payload: %{references: references}} ->
+        collect_tray(seen ++ [Enum.sort(references)])
+
+      {:heard, from} ->
+        send(from, {:tray_heard, seen})
+        collect_tray(seen)
+
+      _other ->
+        collect_tray(seen)
+    end
+  end
+
+  @doc """
   Run one sweep of the stale-attempt pass on this member, as its own timer
-  would (`Cyfr.Execution.Sweeper.sweep/0`).
+  would (`Crucible.Sweeper.sweep/0`).
   """
   @spec sweep() :: :ok
-  def sweep, do: Cyfr.Execution.Sweeper.sweep()
+  def sweep, do: Crucible.Sweeper.sweep()
 
   # ---------------------------------------------------------------------------
   # The worker watch
@@ -242,7 +305,7 @@ defmodule Cyfr.Cluster.Boot do
     stop_watch!()
 
     {:ok, pid} =
-      Cyfr.Execution.WorkerWatch.start_link(
+      Crucible.WorkerWatch.start_link(
         Keyword.merge(
           [
             name: @watch,
@@ -283,6 +346,64 @@ defmodule Cyfr.Cluster.Boot do
     case Process.whereis(@watch) do
       nil -> :ok
       pid -> GenServer.stop(pid)
+    end
+  end
+
+  @doc """
+  A schedule's committed completion as this member publishes it: issued
+  under the slot it holds now (`Arca.ControlPlane.held/0`), asking for its
+  outcome to be kept.
+  """
+  @spec completion(String.t(), String.t(), String.t()) :: struct()
+  def completion(athanor_id, schedule_id, execution_id) do
+    Cyfr.Bus.ScheduleCompleted.new(%{Prima.Actor.in_athanor(athanor_id) | user_id: "cluster"}, %{
+      issuer_member: Cyfr.Bus.ScheduleCompleted.issuer(Arca.ControlPlane.held()),
+      schedule_id: schedule_id,
+      execution_id: execution_id,
+      completed_at: DateTime.utc_now(),
+      keep_outcome: true,
+      output: %{"from" => to_string(node())}
+    })
+  end
+
+  @doc "Publish `completion` on the cell's completion topic, from this member."
+  @spec publish_completion(struct()) :: :ok | {:error, term()}
+  def publish_completion(completion),
+    do: Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
+
+  @doc "Wait until this member's notes keeper has handled what it was sent."
+  @spec settle_notes() :: :ok
+  def settle_notes do
+    _ = :sys.get_state(Aqua.ScheduleNotes, 30_000)
+    :ok
+  end
+
+  @doc "The note `name` of `athanor_id` as this member reads it, or `:none`."
+  @spec note(String.t(), String.t()) :: map() | :none
+  def note(athanor_id, name) do
+    internal = Sanctum.Context.internal(user_id: "cluster", permissions: [:storage_read])
+
+    with {:ok, ctx} <- Sanctum.Context.refocus(internal, athanor_id),
+         {:ok, note} <- Aqua.Notes.read(ctx, name) do
+      note
+    else
+      _ -> :none
+    end
+  end
+
+  @doc """
+  Keep `completion` on this member after it lost its slot, and hold the
+  slot again afterwards; the member's claimant rewrites the real standing
+  on its next renewal.
+  """
+  @spec keep_without_slot(struct()) :: term()
+  def keep_without_slot(completion) do
+    Arca.ControlPlane.record(:lost)
+
+    try do
+      Aqua.ScheduleNotes.keep(completion)
+    after
+      Arca.ControlPlane.record({:held, 5_000})
     end
   end
 

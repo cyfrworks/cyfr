@@ -12,7 +12,10 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   re-recording (`CYFR_GOLDEN_RECORD=1 mix test <this file>`).
 
   Only the blob is golden: the activation and its digests move with every
-  wasm rebuild, so they are asserted present, not pinned.
+  wasm rebuild, so they are asserted present, not pinned. The origins a
+  seeded grant admits are asserted beside it: `interactive` and
+  `programmatic`, the operator's own first-party install, and never a
+  schedule or a webhook.
   """
   use ExUnit.Case, async: false
 
@@ -22,9 +25,8 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   @bundle Path.join(@repo_root, "seed/components")
   @golden Path.expand("../../support/fixtures/consent_golden.json", __DIR__)
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_golden_#{:rand.uniform(1_000_000)}")
     seed_dir = Path.join(test_dir, "seed")
@@ -76,6 +78,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
         {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
         assert is_map(consent.activation) and consent.activation != %{}
         assert is_binary(consent.shape_digest) and consent.shape_digest != ""
+        assert consent.admitted_origins == [:interactive, :programmatic]
         {ref, consent.resolved_policy}
       end)
 
@@ -99,7 +102,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
-    |> Cyfr.Test.SourceTree.files!(match_dot: false)
+    |> Prima.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
       target = Path.join(dest, Path.relative_to(src, @bundle))

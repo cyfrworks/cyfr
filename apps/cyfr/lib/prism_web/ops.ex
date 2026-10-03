@@ -5,7 +5,7 @@ defmodule PrismWeb.Ops do
   @moduledoc """
   The console's adapter onto the operation catalog.
 
-  All tool invocations go through `Cyfr.Ops.Catalog.call_external/3`
+  All tool invocations go through `Grimoire.call_external/3`
   using the `Sanctum.Context` stored in socket assigns — in-process: the
   gate, the contract and the handler on the LiveView's own process, with
   no task, timeout or wire encoding between them.
@@ -16,7 +16,7 @@ defmodule PrismWeb.Ops do
   admission changes use the operation catalog and its authorization gate.
 
   UI preferences, cache invalidation, and authenticated chat operations
-  call their domain functions directly. ThreadTool exposes chat
+  call their domain functions directly. `Aqua.Providers.Thread` exposes chat
   operations separately to external OIDC-interactive clients.
 
   PrismWeb.ToolSeamTest checks the allowed direct domain calls.
@@ -29,33 +29,53 @@ defmodule PrismWeb.Ops do
       VERBATIM — atom keys at the top level, but a field decoded from a
       stored JSON column keeps its string keys. Proxied `server:tool`
       calls carry decoded JSON throughout.
-    * `Aqua.AgentConfig.call_aqua/2` deep-stringifies on the way out, so
+    * `PrismWeb.AquaLive.Section.call_aqua/2` deep-stringifies on the way out, so
       its consumers read string keys only.
 
   Some nested JSON values remain string-keyed inside atom-keyed rows.
   Check the field’s producer before removing mixed-key access handling.
   """
 
-  require Logger
-
   @doc """
   Call an MCP tool with the socket's context, or with a context directly.
 
   The context form supports supervised tasks that have no LiveView socket.
+  Either way the context passes `CyfrWeb.ContextGuard.check/1` first: one
+  older than the freshness bound is revalidated for this call, and one
+  that no longer stands is the call's refusal — nothing is dispatched.
+
+  A sensitive change the call makes may answer the consent signal
+  `{:error, {:confirmation_required, %{id: id, …}}}`. Once the person
+  proved that confirmation, the page repeats the same call with
+  `confirmation_id: id` in `opts`, and the repeat carries the id in its
+  context (`Sanctum.Context`'s `confirmation_id`), where the deciding site
+  consumes it. A confirmation is for its one change: the id rides this
+  call alone, never the socket's context.
 
   Returns `{:ok, result}` or `{:error, reason}`.
   """
-  def call_tool(socket_or_context, tool_name, args \\ %{})
+  def call_tool(socket_or_context, tool_name, args \\ %{}, opts \\ [])
 
-  def call_tool(%Sanctum.Context{} = ctx, tool_name, args) do
-    {name, merged_args} = normalize_tool_call(tool_name, args)
-    Cyfr.Ops.Catalog.call_external(name, ctx, merged_args)
+  def call_tool(%Sanctum.Context{} = ctx, tool_name, args, opts) when is_list(opts) do
+    with {:ok, ctx} <- CyfrWeb.ContextGuard.check(ctx) do
+      {name, merged_args} = normalize_tool_call(tool_name, args)
+      Grimoire.call_external(name, confirming(ctx, opts), merged_args)
+    end
   end
 
-  def call_tool(socket, tool_name, args) do
+  def call_tool(socket, tool_name, args, opts) when is_list(opts) do
     case socket.assigns do
-      %{context: %Sanctum.Context{} = ctx} -> call_tool(ctx, tool_name, args)
+      %{context: %Sanctum.Context{} = ctx} -> call_tool(ctx, tool_name, args, opts)
       _ -> {:error, :no_context}
+    end
+  end
+
+  # The confirmation a repeated change names, or none: a caller's own
+  # `confirmation_id` never survives into a call that names none.
+  defp confirming(ctx, opts) do
+    case Keyword.get(opts, :confirmation_id) do
+      id when is_binary(id) and id != "" -> %{ctx | confirmation_id: id}
+      _none -> %{ctx | confirmation_id: nil}
     end
   end
 
@@ -80,25 +100,14 @@ defmodule PrismWeb.Ops do
   @doc """
   One user-facing sentence for a tool failure.
 
-  Tool refusals are already sentences and pass through; an authorization
-  refusal renders through its vocabulary; anything else is logged and
-  generalized — internal terms never reach the page.
+  Every refusal renders through the table (`Grimoire.render/1`), the
+  same sentence on the wire and the page: a bare sentence as its own
+  words, an authorization refusal through its vocabulary, anything else
+  logged and generalized — internal terms never reach the page.
   """
   def error_message(reason)
-  def error_message(message) when is_binary(message), do: message
   def error_message(:no_context), do: "Not signed in."
-
-  def error_message(reason) do
-    # Use the shared wire, console and guest error renderer.
-    case Cyfr.Ops.Error.render(reason) do
-      nil ->
-        Logger.warning("[PrismWeb.Ops] tool call failed: #{inspect(reason)}")
-        "The request failed — try again."
-
-      message ->
-        message
-    end
-  end
+  def error_message(reason), do: Grimoire.render(reason)
 
   defp normalize_tool_call(tool_name, args) do
     case String.split(tool_name, "/", parts: 2) do

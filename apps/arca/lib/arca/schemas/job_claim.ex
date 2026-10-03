@@ -12,7 +12,7 @@ defmodule Arca.Schemas.JobClaim do
   actor as any other caller, so `key` naming an athanor's credential grants
   no reach into that athanor — it only says which job this row is about.
   That is why the table carries no `athanor_id`: several of its kinds have
-  no estate at all, and a claim is not the thing tenancy is decided by.
+  no athanor at all, and a claim is not the thing tenancy is decided by.
 
   `detail` carries the job's own progress under the holder's fence, so a
   takeover inherits what its predecessor had learned — the worker watch's
@@ -24,7 +24,7 @@ defmodule Arca.Schemas.JobClaim do
 
   @primary_key {:id, :string, autogenerate: false}
 
-  @kinds ~w(retention bootstrap seed_release oauth_refresh worker_watch mcp_backend)
+  @kinds ~w(retention bootstrap seed_release regrant_notice oauth_refresh worker_watch mcp_backend)
 
   @type t :: %__MODULE__{}
 
@@ -45,12 +45,4 @@ defmodule Arca.Schemas.JobClaim do
   """
   @spec kinds() :: [String.t()]
   def kinds, do: @kinds
-
-  @doc """
-  The `key` of a job the cell has exactly one of — retention, the boot
-  reconciliation, the seed release. The kinds that name a thing of their
-  own (a worker service, a credential) carry that thing's id instead.
-  """
-  @spec cell_key() :: String.t()
-  def cell_key, do: "cell"
 end

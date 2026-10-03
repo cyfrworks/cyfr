@@ -30,20 +30,12 @@ defmodule PrismWeb.BuildsLive do
   end
 
   def handle_event("compile", %{"reference" => reference}, socket) do
-    build_id = Cyfr.Hex.short()
+    build_id = Prima.Hex.short()
 
     # Keep only the selected build subscription active.
-    if previous = socket.assigns[:build_id] do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.build(previous, socket.assigns[:context])
-      )
-    end
-
-    Phoenix.PubSub.subscribe(
-      Emissary.PubSub,
-      Cyfr.Bus.build(build_id, socket.assigns[:context])
-    )
+    unsubscribe_build(socket)
+    actor = Sanctum.Context.actor(socket.assigns[:context])
+    Cyfr.Bus.subscribe(actor, Cyfr.Bus.progress(actor, {:build, build_id}))
 
     socket =
       socket
@@ -57,14 +49,15 @@ defmodule PrismWeb.BuildsLive do
     # every assign in the task's heap.
     lv = self()
     ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
+    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+           Prima.LoggerContext.restore(logger_metadata)
            args = %{"reference" => reference, "build_id" => build_id}
            result = call_tool(ctx, "build/compile", args)
-           send(lv, {:build_complete, result})
+           send(lv, {:deliver, tag, {:build_complete, result}})
          end) do
       {:ok, _pid} ->
         # A generation token, so a stale deadline (an earlier build that
@@ -98,7 +91,11 @@ defmodule PrismWeb.BuildsLive do
     {:noreply, socket}
   end
 
+  # The build's answer, taken only under the focus it was started for.
   @impl true
+  def handle_info({:deliver, tag, message}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &handle_info(message, &1))
+
   def handle_info(:load, socket) do
     toolchains =
       case call_tool(socket, "build/toolchains", %{}) do
@@ -137,31 +134,20 @@ defmodule PrismWeb.BuildsLive do
      |> assign(:loading, false)}
   end
 
-  def handle_info({:build_progress, %{phase: phase, message: message}}, socket) do
+  def handle_info(
+        %Cyfr.Bus.Progress{subject: {:build, _id}, phase: phase, message: message},
+        socket
+      ) do
     entry = %{phase: phase, message: message, at: DateTime.utc_now()}
     {:noreply, assign(socket, :build_log, socket.assigns.build_log ++ [entry])}
   end
 
   def handle_info({:build_complete, {:ok, result}}, socket) do
     socket = assign(socket, :build_timeout, nil)
+    unsubscribe_build(socket)
 
-    if socket.assigns.build_id do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.build(socket.assigns.build_id, socket.assigns[:context])
-      )
-    end
-
-    topic = Cyfr.Bus.components(socket.assigns[:context])
-
-    case Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[BuildsLive] PubSub broadcast failed: #{inspect(reason)}")
-    end
-
+    # The registration announces itself on the components topic once it
+    # commits (`Compendium.Registry`); this view says nothing of it.
     {:noreply,
      socket
      |> assign(:build_output, result)
@@ -172,13 +158,7 @@ defmodule PrismWeb.BuildsLive do
 
   def handle_info({:build_complete, {:error, reason}}, socket) do
     socket = assign(socket, :build_timeout, nil)
-
-    if socket.assigns.build_id do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.build(socket.assigns.build_id, socket.assigns[:context])
-      )
-    end
+    unsubscribe_build(socket)
 
     {:noreply,
      socket
@@ -203,24 +183,24 @@ defmodule PrismWeb.BuildsLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
   defp discover_local_components(ctx) do
-    # The build plane's one walk (`Compendium.AutoIndexer.discover/1`) —
+    # The build plane's one walk (`Compendium.discover_components/1`) —
     # the same manifest-bearing roster registration sees, so the picker
     # can never diverge from the scanner. Manifest-less version dirs
     # rightly vanish: a scaffold always writes the manifest, so a dir
     # without one was never buildable.
-    with {:ok, segment_lists} <- Compendium.AutoIndexer.discover(ctx) do
+    with {:ok, segment_lists} <- Compendium.discover_components(ctx) do
       refs =
         segment_lists
         |> Enum.flat_map(fn segments ->
-          case Compendium.ComponentPath.parse(segments) do
+          case Compendium.parse_component_path(segments) do
             {:ok, %{type: type, publisher: publisher, name: name, version: version}} ->
               [
-                Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
+                Prima.ComponentRef.to_string(%Prima.ComponentRef{
                   type: type,
                   namespace: publisher,
                   name: name,
@@ -345,5 +325,12 @@ defmodule PrismWeb.BuildsLive do
       </.card>
     </div>
     """
+  end
+
+  defp unsubscribe_build(socket) do
+    if build_id = socket.assigns[:build_id] do
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.progress(actor, {:build, build_id}))
+    end
   end
 end

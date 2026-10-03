@@ -38,7 +38,7 @@ defmodule Compendium.OCI.CacheTest do
 
       assert :miss = Cache.get_blob(digest)
       # The corrupt entry is removed on detection, not left to be re-read.
-      refute Arca.exists?(Cyfr.Actor.system(), blob_segments(digest))
+      refute Arca.exists?(Prima.Actor.system(), blob_segments(digest))
     end
 
     defp blob_segments("sha256:" <> hex), do: ["cache", "oci", "blobs", "sha256", hex]
@@ -58,6 +58,50 @@ defmodule Compendium.OCI.CacheTest do
 
     test "get_manifest returns :miss for uncached" do
       assert :miss = Cache.get_manifest("unknown.io", "test/repo", "latest")
+    end
+  end
+
+  describe "the entitlement memo" do
+    setup do
+      {:ok, registry: "memo-#{System.unique_integer([:positive])}.example"}
+    end
+
+    test "is one credential's, for one repository", %{registry: registry} do
+      refute Cache.entitled?("cred_a", registry, "alice/reagents/x")
+      assert :ok = Cache.entitle("cred_a", registry, "alice/reagents/x")
+      assert Cache.entitled?("cred_a", registry, "alice/reagents/x")
+
+      refute Cache.entitled?("cred_b", registry, "alice/reagents/x")
+      refute Cache.entitled?("anonymous", registry, "alice/reagents/x")
+      refute Cache.entitled?("cred_a", registry, "alice/reagents/y")
+      refute Cache.entitled?("cred_a", "other.example", "alice/reagents/x")
+    end
+
+    test "is forgotten when the registry refuses", %{registry: registry} do
+      :ok = Cache.entitle("cred_a", registry, "alice/reagents/x")
+      :ok = Cache.entitle("cred_b", registry, "alice/reagents/x")
+      assert :ok = Cache.forget_entitlement("cred_a", registry, "alice/reagents/x")
+
+      refute Cache.entitled?("cred_a", registry, "alice/reagents/x")
+      assert Cache.entitled?("cred_b", registry, "alice/reagents/x")
+    end
+
+    test "stands for five minutes and is never written to storage", %{registry: registry} do
+      before = System.monotonic_time(:millisecond)
+      :ok = Cache.entitle("cred_a", registry, "alice/reagents/x")
+      later = System.monotonic_time(:millisecond)
+
+      assert [{_key, true, expires_at}] =
+               :ets.match_object(
+                 Arca.Cache.table_name(),
+                 {{:oci_entitlement, registry, :_, :_}, :_, :_}
+               )
+
+      # Five minutes from the write, which the two clock reads bracket:
+      # they may fall in different milliseconds.
+      assert expires_at in (before + 300_000)..(later + 300_000)
+
+      refute Arca.exists?(Prima.Actor.system(), ["cache", "oci", "entitlements"])
     end
   end
 

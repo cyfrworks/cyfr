@@ -1,0 +1,302 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Prima.WasmTest do
+  use ExUnit.Case, async: true
+
+  import ExUnit.CaptureLog
+
+  alias Prima.Wasm
+
+  # Valid minimal WASM binary (magic + version + empty sections)
+  # \0asm followed by version 1
+  @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>
+
+  # Valid Component Model binary (magic + component preamble)
+  @valid_component <<0x00, 0x61, 0x73, 0x6D, 0x0D, 0x00, 0x01, 0x00>>
+
+  # Tracked cargo-component output — the realest component fixtures there
+  # are. The list-models formula is found at its newest shipped version
+  # rather than pinned, so a release bump cannot leave this pointing at a
+  # directory that no longer ships.
+  @seed_formula [__DIR__, "../../../../seed/components/formulas/local/list-models/*/formula.wasm"]
+                |> Path.join()
+                |> Path.wildcard()
+                |> Enum.sort_by(fn path ->
+                  path
+                  |> Path.split()
+                  |> Enum.at(-2)
+                  |> String.split(".")
+                  |> Enum.map(&String.to_integer/1)
+                end)
+                |> List.last()
+  @seed_catalyst Path.expand(
+                   "../../../../seed/components/catalysts/local/http/1.1.2/catalyst.wasm",
+                   __DIR__
+                 )
+
+  # Valid WASM with export section
+  # This is a minimal WASM module that exports a function named "run"
+  # magic + version
+  # type section: 1 func type () -> ()
+  # function section: 1 function, type 0
+  # export section: "run" as func 0
+  # code section: empty function body
+  @wasm_with_export <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+                      <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+                      <<0x03, 0x02, 0x01, 0x00>> <>
+                      <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+                      <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+
+  describe "validate/1" do
+    test "validates minimal WASM binary" do
+      {:ok, result} = Wasm.validate(@valid_wasm)
+
+      assert result.valid == true
+      assert result.size == 8
+      assert String.starts_with?(result.digest, "sha256:")
+      assert result.version == 1
+      assert result.format == :core_module
+    end
+
+    test "validates Component Model binary" do
+      {:ok, result} = Wasm.validate(@valid_component)
+
+      assert result.valid == true
+      assert result.size == 8
+      assert String.starts_with?(result.digest, "sha256:")
+      assert result.format == :component
+      assert result.exports == []
+      assert result.exports_complete == true
+      assert result.suggested_type == :reagent
+    end
+
+    test "parses a real component's world exports and suggests its type" do
+      # The seed binaries are tracked source and the realest fixtures there
+      # are: cargo-component output, one world export each.
+      for {path, export, type} <- [
+            {@seed_formula, "cyfr:formula/run@0.1.0", :formula},
+            {@seed_catalyst, "cyfr:catalyst/run@0.1.0", :catalyst}
+          ] do
+        {:ok, result} = Wasm.validate(File.read!(path))
+
+        assert result.format == :component
+        assert result.exports == [export]
+        assert result.exports_complete == true
+        assert result.suggested_type == type
+      end
+    end
+
+    test "validates WASM with exports" do
+      {:ok, result} = Wasm.validate(@wasm_with_export)
+
+      assert result.valid == true
+      assert "run" in result.exports
+    end
+
+    test "detects reagent type for simple exports" do
+      {:ok, result} = Wasm.validate(@wasm_with_export)
+
+      assert result.suggested_type == :reagent
+    end
+
+    test "rejects non-binary input" do
+      assert {:error, :not_binary} = Wasm.validate(nil)
+      assert {:error, :not_binary} = Wasm.validate(123)
+      assert {:error, :not_binary} = Wasm.validate(%{})
+    end
+
+    test "rejects too small binary" do
+      assert {:error, :too_small} = Wasm.validate(<<0, 1, 2, 3>>)
+    end
+
+    test "rejects invalid magic bytes" do
+      invalid = <<0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00>>
+      assert {:error, :invalid_magic_bytes} = Wasm.validate(invalid)
+    end
+
+    test "rejects unsupported version" do
+      invalid = <<0x00, 0x61, 0x73, 0x6D, 0x02, 0x00, 0x00, 0x00>>
+      assert {:error, {:unsupported_version, _}} = Wasm.validate(invalid)
+    end
+
+    test "rejects oversized binary" do
+      result = Wasm.validate(String.duplicate("x", 100))
+      assert {:error, :invalid_magic_bytes} = result
+    end
+  end
+
+  describe "quick_check/1" do
+    test "passes valid WASM" do
+      assert :ok = Wasm.quick_check(@valid_wasm)
+    end
+
+    test "rejects invalid magic bytes" do
+      invalid = <<0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00>>
+      assert {:error, :invalid_magic_bytes} = Wasm.quick_check(invalid)
+    end
+
+    test "rejects non-binary" do
+      assert {:error, :not_binary} = Wasm.quick_check(nil)
+    end
+  end
+
+  describe "compute_digest/1" do
+    test "computes SHA-256 digest" do
+      digest = Wasm.compute_digest(@valid_wasm)
+
+      assert String.starts_with?(digest, "sha256:")
+      # Hex encoded SHA-256 is 64 characters
+      "sha256:" <> hash = digest
+      assert byte_size(hash) == 64
+    end
+
+    test "produces consistent digest for same input" do
+      digest1 = Wasm.compute_digest(@valid_wasm)
+      digest2 = Wasm.compute_digest(@valid_wasm)
+
+      assert digest1 == digest2
+    end
+
+    test "produces different digest for different input" do
+      digest1 = Wasm.compute_digest(@valid_wasm)
+      digest2 = Wasm.compute_digest(@wasm_with_export)
+
+      assert digest1 != digest2
+    end
+  end
+
+  describe "suggest_type/1" do
+    test "suggests formula for execute export" do
+      assert :formula = Wasm.suggest_type(["execute", "validate"])
+    end
+
+    test "suggests catalyst for http exports" do
+      assert :catalyst = Wasm.suggest_type(["run", "http_request"])
+      assert :catalyst = Wasm.suggest_type(["http_get"])
+      assert :catalyst = Wasm.suggest_type(["socket_connect"])
+    end
+
+    test "suggests reagent for plain exports" do
+      assert :reagent = Wasm.suggest_type(["run"])
+      assert :reagent = Wasm.suggest_type(["run", "init"])
+      assert :reagent = Wasm.suggest_type([])
+    end
+  end
+
+  describe "extract_exports/1" do
+    test "extracts exports from valid WASM" do
+      {:ok, exports} = Wasm.extract_exports(@wasm_with_export)
+
+      assert is_list(exports)
+      assert "run" in exports
+    end
+
+    test "returns empty list for WASM without exports" do
+      {:ok, exports} = Wasm.extract_exports(@valid_wasm)
+
+      assert exports == []
+    end
+
+    test "handles malformed section headers gracefully" do
+      malformed =
+        <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x07, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF>>
+
+      assert {:error, :incomplete_leb128} = Wasm.extract_exports(malformed)
+    end
+
+    test "handles section with bad export entry gracefully" do
+      malformed =
+        <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x07, 0x05, 0x01, 0xFF, 0xFF, 0xFF, 0xFF>>
+
+      {:error, :export_entry_parse_failed} = Wasm.extract_exports(malformed)
+    end
+
+    test "handles truncated section gracefully" do
+      truncated =
+        <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x07, 0x20>>
+
+      {:error, {:section_truncated, 7, 32, 0}} = Wasm.extract_exports(truncated)
+    end
+  end
+
+  describe "validate/2 — the declared type's world" do
+    test "accepts a component that exports its declared world" do
+      assert {:ok, _} = Wasm.validate(File.read!(@seed_catalyst), "catalyst")
+      assert {:ok, _} = Wasm.validate(File.read!(@seed_formula), "formula")
+    end
+
+    test "refuses a component declared as a type whose world it does not export" do
+      # The whole point: a mistyped artifact must be refused at
+      # registration, before the executor resolves vault material and
+      # builds a catalyst host surface around it.
+      assert {:error, {:wrong_world, message}} =
+               Wasm.validate(File.read!(@seed_formula), "catalyst")
+
+      assert message =~ "cyfr:catalyst/run@0.1.0"
+      assert message =~ "cyfr:formula/run@0.1.0"
+
+      assert {:error, {:wrong_world, _}} =
+               Wasm.validate(File.read!(@seed_catalyst), "reagent")
+    end
+
+    test "a component exporting nothing is refused for every executable type" do
+      for type <- ~w(catalyst reagent formula) do
+        assert {:error, {:wrong_world, message}} =
+                 Wasm.validate(@valid_component, type)
+
+        assert message =~ "exports nothing"
+      end
+    end
+
+    test "an export section the parser cannot walk refuses, fail-closed" do
+      # A component whose export section carries an ascribed extern type
+      # (option byte 0x01) — this parser does not walk externdesc, so the
+      # world cannot be verified and registration must refuse rather than
+      # trust a partial answer.
+      name = "cyfr:catalyst/run@0.1.0"
+
+      # vec count 1, tag 0x00, name, sort instance (0x05), idx 0, opt 0x01
+      export_section_body =
+        <<1, 0x00, byte_size(name), name::binary, 0x05, 0, 0x01, 0xFF>>
+
+      binary =
+        @valid_component <>
+          <<11, byte_size(export_section_body), export_section_body::binary>>
+
+      {:ok, result} = Wasm.validate(binary)
+      refute result.exports_complete
+
+      assert {:error, {:unverifiable_exports, message}} =
+               Wasm.validate(binary, "catalyst")
+
+      assert message =~ "could not be fully parsed"
+    end
+
+    test "core modules pass untouched — the runtime refuses them anyway" do
+      assert {:ok, %{format: :core_module}} = Wasm.validate(@valid_wasm, "catalyst")
+    end
+  end
+
+  describe "a malformed export section" do
+    # An export section of one entry whose name runs past the section.
+    @truncated_entry @valid_wasm <> <<7, 3, 1, 5, ?a>>
+
+    test "is the returned reason, and nothing is logged" do
+      log =
+        capture_log(fn ->
+          assert {:error, {:wasm_parse_failed, :export_entry_parse_failed}} =
+                   Wasm.validate(@truncated_entry)
+
+          assert {:error, :export_entry_parse_failed} =
+                   Wasm.extract_exports(@truncated_entry)
+        end)
+
+      # Other async modules log while this one runs.
+      refute log =~ "Prima.Wasm"
+    end
+  end
+end

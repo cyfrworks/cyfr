@@ -3,49 +3,63 @@
 
 defmodule Locus.ExecutorTest do
   @moduledoc """
-  Which executor a build runs under, and that the unisolated one is a
-  choice of the test build alone: the roster is fixed when Locus is
-  compiled, by the build environment and nothing a deployment can set.
+  Which executor a build runs under, and that the unisolated one is the
+  test build's alone: every build knows the keeper, and only the test
+  build's application environment names a direct launcher, which only its
+  test support compiles.
   """
 
-  use ExUnit.Case, async: true
+  # One case replaces the application environment the launcher is named by.
+  use ExUnit.Case, async: false
 
   alias Locus.Executor
   alias Locus.Test.CodeLines
 
-  @source Path.expand("../../lib/locus/executor.ex", __DIR__)
+  @lib Path.expand("../../lib/locus", __DIR__)
+  @mix_exs Path.expand("../../mix.exs", __DIR__)
 
-  test "this build, the test environment's, knows the direct launcher and picks it without a spawner" do
-    assert Executor.executors() == [Locus.Spawner, Locus.DirectLauncher]
-    refute Locus.Spawner.running?()
+  test "every build knows the keeper alone; this one, the test build, picks its direct launcher without a keeper" do
+    assert Executor.executors() == [Locus.Keeper]
+    refute Locus.Keeper.running?()
+    assert Executor.direct_launcher() == Locus.DirectLauncher
     assert Executor.executor() == {:ok, Locus.DirectLauncher}
   end
 
-  test "the roster is decided by the build environment: every build but the test one knows the spawner alone" do
-    code = @source |> File.read!() |> CodeLines.lines() |> Enum.join("\n")
+  test "a launcher the build does not compile is no launcher, and without one no build runs outside the keeper" do
+    previous = Application.get_env(:locus, :direct_launcher)
 
-    assert code =~
-             ~r/@executors if Mix\.env\(\) == :test,\s+do: \[Locus\.Spawner, Locus\.DirectLauncher\],\s+else: \[Locus\.Spawner\]/
-
-    # The launcher is named by the roster and the pick from it, and by
-    # nothing a setting could reach.
-    assert code |> String.split("Locus.DirectLauncher") |> length() == 3
-    refute code =~ "Application.get_env"
-    refute code =~ "System.get_env"
+    try do
+      for name <- [nil, Locus.NotCompiled, "Locus.DirectLauncher"] do
+        Application.put_env(:locus, :direct_launcher, name)
+        assert Executor.direct_launcher() == nil
+        assert Executor.executor() == {:error, :no_keeper}
+        assert Executor.launcher() == {:error, :no_keeper}
+      end
+    after
+      Application.put_env(:locus, :direct_launcher, previous)
+    end
   end
 
-  test "nothing else in the builder picks the direct launcher" do
-    lib = Path.expand("../../lib/locus", __DIR__)
+  test "the launcher is compiled from the test support and named by the test build's environment alone" do
+    refute File.exists?(Path.join(@lib, "direct_launcher.ex"))
 
+    assert File.exists?(Path.expand("../support/direct_launcher.ex", __DIR__))
+
+    mix = File.read!(@mix_exs)
+    assert mix =~ ~S|defp elixirc_paths(:test), do: ["lib", "test/support"]|
+    assert mix =~ ~S|defp elixirc_paths(_), do: ["lib"]|
+    assert mix =~ ~S|defp env(:test), do: [direct_launcher: Locus.DirectLauncher]|
+    assert mix =~ ~S|defp env(_env), do: []|
+
+    # Nothing under `lib` names the launcher; it is reached through the one
+    # key the test build sets.
     named =
-      for path <- Path.wildcard(Path.join(lib, "*.ex")),
-          Path.basename(path) not in ["executor.ex", "direct_launcher.ex"],
+      for path <- Path.wildcard(Path.join(@lib, "**/*.ex")),
           line <- path |> File.read!() |> CodeLines.lines(),
           line =~ "DirectLauncher",
-          do: {Path.basename(path), String.trim(line)}
+          do: {Path.relative_to(path, @lib), String.trim(line)}
 
-    # The boot's check that serving without cyfr-spawn is this build's to do.
-    assert named == [{"application.ex", "if Locus.DirectLauncher in executors do"}]
+    assert named == []
   end
 
   test "a log arrives as lines: whole ones as they form, the last one at the end, a long one in pieces" do

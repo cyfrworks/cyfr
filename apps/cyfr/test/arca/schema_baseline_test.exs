@@ -9,8 +9,8 @@ defmodule Arca.SchemaBaselineTest do
   so a table or column added there is checked without a second list here.
 
   The athanor is the only tenant column: the tables that carry `athanor_id`
-  are exactly `Arca.TenantTables`'s roster, only `memberships` and
-  `sessions` may leave it null, and the tables without it are the ones the
+  are exactly `Arca.TenantTables`'s roster, only `memberships`,
+  `sessions` and `decision_logs` may leave it null, and the tables without it are the ones the
   roster names as not athanor-scoped or reached through a parent, the
   athanors themselves, and the server's people and door.
 
@@ -33,12 +33,12 @@ defmodule Arca.SchemaBaselineTest do
   @retired_columns ["org" <> "_id", "project" <> "_id", "conver" <> "sation_id"]
 
   setup_all do
-    [path] = Cyfr.Test.SourceTree.files!(@migration)
-    {:ok, declared: path |> Cyfr.Test.SourceTree.read() |> declared_tables()}
+    [path] = Prima.Test.SourceTree.files!(@migration)
+    {:ok, declared: path |> Prima.Test.SourceTree.read() |> declared_tables()}
   end
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -70,14 +70,14 @@ defmodule Arca.SchemaBaselineTest do
     end
   end
 
-  test "the tables carrying athanor_id are Arca.TenantTables's roster, NOT NULL but two",
+  test "the tables carrying athanor_id are Arca.TenantTables's roster, NOT NULL but three",
        %{declared: declared} do
     scoped = for {table, %{"athanor_id" => column}} <- declared, into: %{}, do: {table, column}
 
     assert Enum.sort(Map.keys(scoped)) == Enum.sort(Arca.TenantTables.roster())
 
     nullable = for {table, %{not_null?: false}} <- scoped, do: table
-    assert Enum.sort(nullable) == ["memberships", "sessions"]
+    assert Enum.sort(nullable) == ["decision_logs", "memberships", "sessions"]
 
     for table <- Map.keys(scoped) do
       athanor = Enum.find(columns(table), &(&1.name == "athanor_id"))
@@ -115,6 +115,53 @@ defmodule Arca.SchemaBaselineTest do
     refute Enum.find(columns("memberships"), &(&1.name == "user_id")).not_null?
   end
 
+  test "a person and an athanor carry a positive standing generation, 1 at birth" do
+    for table <- ~w(users athanors) do
+      column = Enum.find(columns(table), &(&1.name == "security_generation"))
+      assert column.not_null?, "#{table}.security_generation is NOT NULL"
+      assert to_string(column.default) =~ "1", "#{table}.security_generation defaults to 1"
+    end
+
+    for schema <- [Arca.Schemas.User, Arca.Schemas.Athanor] do
+      assert :security_generation in schema.__schema__(:fields)
+    end
+
+    now = NaiveDateTime.utc_now()
+
+    athanor = fn generation ->
+      %{
+        id: "ath_gen_#{System.unique_integer([:positive])}",
+        kind: "group",
+        name: "Generation",
+        slug: "generation-#{System.unique_integer([:positive])}",
+        created_by: "usr_schema",
+        security_generation: generation,
+        created_at: now,
+        updated_at: now
+      }
+    end
+
+    person = fn generation ->
+      %{
+        id: "usr_gen_#{System.unique_integer([:positive])}",
+        provider: "github",
+        security_generation: generation,
+        first_seen_at: now,
+        last_seen_at: now,
+        created_at: now,
+        updated_at: now
+      }
+    end
+
+    assert :ok = insert_row("athanors", athanor.(1))
+    assert :ok = insert_row("users", person.(1))
+
+    for generation <- [0, -1] do
+      assert :refused = insert_row("athanors", athanor.(generation))
+      assert :refused = insert_row("users", person.(generation))
+    end
+  end
+
   test "api_keys and webhooks have no scope-type column; vault_entries has no system column" do
     fossil = "scope" <> "_type"
     refute fossil in Enum.map(columns("api_keys"), & &1.name)
@@ -131,12 +178,24 @@ defmodule Arca.SchemaBaselineTest do
     refute columns["service_id"].not_null?
   end
 
-  test "a turn is fenced and pins its catalyst release" do
+  test "an execution attempt stores the athanor standing it was admitted under, with no default" do
+    column = Enum.find(columns("execution_attempts"), &(&1.name == "athanor_generation"))
+    assert column.not_null?, "execution_attempts.athanor_generation is NOT NULL"
+    assert is_nil(column.default), "execution_attempts.athanor_generation has no default"
+    assert :athanor_generation in Arca.Schemas.ExecutionAttempt.__schema__(:fields)
+  end
+
+  test "a turn is fenced, pins its catalyst release and stores its recovery limit" do
     columns = Map.new(columns("turns"), &{&1.name, &1})
 
     assert columns["fence"].not_null?
     refute columns["catalyst_ref"].not_null?
     assert columns["thread_id"].not_null?
+
+    # The limit is the assistant's policy, written when the turn starts: an
+    # accepted turn has none, and storage never supplies one.
+    refute columns["recovery_limit"].not_null?
+    assert is_nil(columns["recovery_limit"].default)
   end
 
   test "threads hold the messages and subscriptions" do
@@ -165,7 +224,7 @@ defmodule Arca.SchemaBaselineTest do
     end
   end
 
-  test "a storage unit is one pointer per estate, root and key, published only by a commit" do
+  test "a storage unit is one pointer per athanor, root and key, published only by a commit" do
     columns = Map.new(columns("storage_units"), &{&1.name, &1})
 
     for column <- ~w(root unit_key state), do: assert(columns[column].not_null?)
@@ -182,13 +241,13 @@ defmodule Arca.SchemaBaselineTest do
     assert :ok = insert_row("storage_units", unit)
 
     # The same key under the same root is the same unit; another root or
-    # another estate is not.
+    # another athanor is not.
     assert :refused = insert_row("storage_units", %{unit | id: "su_twice"})
     assert :ok = insert_row("storage_units", %{unit | id: "su_aqua", root: "aqua"})
     assert :ok = insert_row("storage_units", %{unit | id: "su_theirs", athanor_id: "ath_theirs"})
   end
 
-  test "a storage commit is appended per revision and names its unit within the estate" do
+  test "a storage commit is appended per revision and names its unit within the athanor" do
     columns = Map.new(columns("storage_commits"), &{&1.name, &1})
 
     for column <- ~w(storage_unit_id new_revision content_identity commit_identity committed_at),
@@ -203,8 +262,8 @@ defmodule Arca.SchemaBaselineTest do
     assert :ok = insert_row("storage_commits", commit_row(unit, nil, "rev_1"))
     assert :ok = insert_row("storage_commits", commit_row(unit, "rev_1", "rev_2"))
 
-    # A journal row for a unit the estate does not hold is refused: the
-    # composite key ties it to its unit's row, never across estates.
+    # A journal row for a unit the athanor does not hold is refused: the
+    # composite key ties it to its unit's row, never across athanors.
     assert :refused = insert_row("storage_commits", commit_row(%{unit | id: "su_none"}, nil, "r"))
 
     assert :refused =
@@ -214,7 +273,7 @@ defmodule Arca.SchemaBaselineTest do
              )
   end
 
-  test "one provisioning claim per estate, fenced and leased, settled by an outcome" do
+  test "one provisioning claim per athanor, fenced and leased, settled by an outcome" do
     columns = Map.new(columns("provisioning_claims"), &{&1.name, &1})
 
     for column <- ~w(owner attempt entry_kind lease_until fence),
@@ -225,7 +284,7 @@ defmodule Arca.SchemaBaselineTest do
     claim = claim_row("ath_claimed")
     assert :ok = insert_row("provisioning_claims", claim)
 
-    # A second claim on the estate is refused whoever takes it: the row is
+    # A second claim on the athanor is refused whoever takes it: the row is
     # taken over by compare-and-set, never duplicated.
     assert :refused =
              insert_row("provisioning_claims", %{
@@ -239,7 +298,7 @@ defmodule Arca.SchemaBaselineTest do
              insert_row("provisioning_claims", %{claim | id: "pc_other", athanor_id: "ath_other"})
   end
 
-  test "a storage write intent names its attempt and fence and belongs to an execution of its estate" do
+  test "a storage write intent names its attempt and fence and belongs to an execution of its athanor" do
     columns = Map.new(columns("storage_write_intents"), &{&1.name, &1})
 
     for column <- ~w(execution_id attempt fence runner op path state inserted_at),
@@ -248,14 +307,18 @@ defmodule Arca.SchemaBaselineTest do
     for column <- ~w(bytes reason settled_at), do: refute(columns[column].not_null?)
 
     {:ok, %{execution: execution, attempt: attempt}} =
-      Arca.Execution.admit(%{
-        id: "exec_schema_#{System.unique_integer([:positive])}",
-        reference: "catalyst:local.schema:0.1.0",
-        user_id: "usr_schema",
-        athanor_id: "ath_schema",
-        component_type: "catalyst",
-        input: "{}"
-      })
+      Arca.Execution.admit(
+        %{
+          id: "exec_schema_#{System.unique_integer([:positive])}",
+          reference: "catalyst:local.schema:0.1.0",
+          user_id: "usr_schema",
+          athanor_id: "ath_schema",
+          component_type: "catalyst",
+          input: "{}",
+          origin: :programmatic
+        },
+        Arca.Test.Actor.standing("ath_schema")
+      )
 
     intent = %{
       id: "swi_#{System.unique_integer([:positive])}",
@@ -274,7 +337,7 @@ defmodule Arca.SchemaBaselineTest do
     assert :ok = insert_row("storage_write_intents", intent)
     assert :ok = insert_row("storage_write_intents", %{intent | id: "swi_again"})
 
-    # An intent for an execution the estate does not hold is refused.
+    # An intent for an execution the athanor does not hold is refused.
     assert :refused =
              insert_row("storage_write_intents", %{
                intent
@@ -312,16 +375,16 @@ defmodule Arca.SchemaBaselineTest do
   test "the recorded fingerprint is the digest of the migration sources on disk" do
     digest =
       @migration
-      |> Cyfr.Test.SourceTree.files!()
+      |> Prima.Test.SourceTree.files!()
       |> Enum.sort()
       |> Enum.map_join(fn path ->
-        Path.basename(path) <> "\n" <> Cyfr.Test.SourceTree.read(path)
+        Path.basename(path) <> "\n" <> Prima.Test.SourceTree.read(path)
       end)
-      |> Cyfr.Digest.sha256_hex()
+      |> Prima.Digest.sha256_hex()
 
     # The baseline is edited in place and records this digest as it builds
-    # the schema, so every edit of it — this slice's columns included —
-    # leaves a database built from the version before carrying a
+    # the schema, so every edit of it leaves a database built from the
+    # version before carrying a
     # fingerprint that is no longer this release's.
     # `Arca.SchemaFingerprintTest` covers the refusal that follows; this
     # covers what makes the refusal fire at all.
@@ -392,7 +455,7 @@ defmodule Arca.SchemaBaselineTest do
     assert :ok = insert_row("rate_windows", window)
     assert :refused = insert_row("rate_windows", %{window | id: "rw_twice"})
 
-    # The bucket is the athanor's: another estate's window of the same name
+    # The bucket is the athanor's: another athanor's window of the same name
     # is a different row, and the roster says whose it is to delete.
     assert :ok =
              insert_row("rate_windows", %{window | id: "rw_theirs", athanor_id: "ath_theirs"})

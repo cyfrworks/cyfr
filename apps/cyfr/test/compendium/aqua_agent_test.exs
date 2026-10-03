@@ -144,4 +144,103 @@ defmodule Compendium.AquaAgentTest do
     {:ok, other} = AquaAgent.capability_digest(%{role | tool_policy: %{"files.read" => "ask"}})
     refute digest == other
   end
+
+  # What an authored policy may say, on top of the grammar: the rule the
+  # `aqua` tool door applies to every write.
+  describe "validate_tool_policy/2" do
+    test "a destructive or external action is never auto, on any agent" do
+      assert {:error, msg} =
+               AquaAgent.validate_tool_policy(%{"files.delete" => "auto"}, AquaAgent.soul_type())
+
+      assert msg =~ "always asks"
+
+      assert {:error, _} =
+               AquaAgent.validate_tool_policy(%{"http.delete" => "auto"}, AquaAgent.role_type())
+
+      assert :ok =
+               AquaAgent.validate_tool_policy(%{"files.delete" => "ask"}, AquaAgent.soul_type())
+
+      assert :ok =
+               AquaAgent.validate_tool_policy(%{"files.write" => "auto"}, AquaAgent.soul_type())
+    end
+
+    test "a glob at auto that covers a destructive action is refused with the actions named" do
+      assert {:error, msg} =
+               AquaAgent.validate_tool_policy(%{"files.*" => "auto"}, AquaAgent.soul_type())
+
+      assert msg =~ "files.delete"
+      assert :ok = AquaAgent.validate_tool_policy(%{"files.*" => "ask"}, AquaAgent.soul_type())
+    end
+
+    test "a role holds nothing at ask — it has no card to raise" do
+      assert {:error, msg} =
+               AquaAgent.validate_tool_policy(%{"files.write" => "ask"}, AquaAgent.role_type())
+
+      assert msg =~ "no card"
+
+      assert :ok =
+               AquaAgent.validate_tool_policy(%{"files.write" => "auto"}, AquaAgent.role_type())
+
+      assert :ok =
+               AquaAgent.validate_tool_policy(%{"files.write" => "ask"}, AquaAgent.soul_type())
+    end
+
+    test "a role's delegation glob and the search gate pass" do
+      assert :ok =
+               AquaAgent.validate_tool_policy(
+                 %{"builder.*" => "auto", "native_search" => "auto"},
+                 AquaAgent.soul_type()
+               )
+    end
+
+    test "a UI event is auto or absent" do
+      assert {:error, msg} =
+               AquaAgent.validate_tool_policy(
+                 %{"request_setup.open" => "ask"},
+                 AquaAgent.soul_type()
+               )
+
+      assert msg =~ "runs on its own"
+
+      assert :ok =
+               AquaAgent.validate_tool_policy(
+                 %{"request_setup.open" => "auto", "files.read" => "ask"},
+                 AquaAgent.soul_type()
+               )
+    end
+
+    test "a catalogued tool's kind is its operation-table annotation" do
+      assert {:error, msg} =
+               AquaAgent.validate_tool_policy(
+                 %{"component.delete" => "auto"},
+                 AquaAgent.soul_type()
+               )
+
+      assert msg =~ "always asks"
+
+      assert {:error, msg} =
+               AquaAgent.validate_tool_policy(%{"component.*" => "auto"}, AquaAgent.soul_type())
+
+      assert msg =~ "component.delete"
+
+      # An upstream server's tool is external whatever the action; a tool
+      # neither table holds has no kind and is left to the runtime ceiling.
+      assert {:error, _} =
+               AquaAgent.validate_tool_policy(
+                 %{"srv:search.run" => "auto"},
+                 AquaAgent.soul_type()
+               )
+
+      assert :ok =
+               AquaAgent.validate_tool_policy(%{"nosuch.thing" => "auto"}, AquaAgent.soul_type())
+    end
+
+    test "the grammar is checked first, with its typed reason" do
+      assert {:error, {:tool_policy_invalid_value, "files.read", "never"}} =
+               AquaAgent.validate_tool_policy(%{"files.read" => "never"}, AquaAgent.soul_type())
+
+      assert {:error, :tool_policy_not_a_map} =
+               AquaAgent.validate_tool_policy("auto", AquaAgent.role_type())
+    end
+  end
 end

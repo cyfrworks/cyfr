@@ -1,0 +1,20 @@
+{
+  "name": "proof-game",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "The tincture proof's game: Three.js, Rapier stepping in an inline worker, GPU particles and one sound.",
+  "tincture": {
+    "entry": "dist/index.html",
+    "build": {"tool": "vite"},
+    "icon": "🎮",
+    "tagline": "A tower of boxes, knocked down",
+    "window": {"width": 1280, "height": 720, "resizable": true},
+    "frame": {"capabilities": ["pointer_lock", "fullscreen", "audio_autoplay"]}
+  },
+  "dependencies": {
+    "static": [
+      {"ref": "c:local.files", "reason": "Saves the player's progress"}
+    ]
+  }
+}

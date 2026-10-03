@@ -124,7 +124,7 @@ defmodule Opus.StorageHandlerTest do
     host: host,
     client: client
   } do
-    limits = %Cyfr.Limits{max_request_size: 16, max_response_size: 16}
+    limits = %Prima.Limits{max_request_size: 16, max_response_size: 16}
 
     huge =
       ~s({"action": "write", "path": "data/x.txt", "content": "#{String.duplicate("A", 200_000)}"})

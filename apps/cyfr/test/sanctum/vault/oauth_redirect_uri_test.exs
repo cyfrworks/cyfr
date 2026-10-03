@@ -46,7 +46,7 @@ defmodule Sanctum.Vault.OAuthRedirectUriTest do
     Application.delete_env(:sanctum, :public_url)
 
     assert OAuthGrant.redirect_uri() ==
-             EmissaryWeb.Endpoint.url() <> OAuthGrant.callback_path()
+             CyfrWeb.Endpoint.url() <> OAuthGrant.callback_path()
   end
 
   test "the path is still the one accessor" do

@@ -9,9 +9,9 @@ defmodule Sanctum.Authority.BlobSelectionWireTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
-  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
+  alias Prima.Authority
+  alias Prima.Authority.Blob
+  alias Prima.Test.AuthorityFixtures, as: Fixtures
 
   @formula "formula:local.assistant"
   @catalyst "catalyst:local.claude"

@@ -26,7 +26,15 @@ defmodule Sanctum.ProviderCredentials do
   alias Sanctum.Context
 
   @doc """
-  Store (or replace) a provider's client credentials for the caller's athanor.
+  Store (or replace) a provider's client credentials for the caller's
+  athanor: a sensitive change (`credential_entry`), decided here.
+
+  The confirmation is consumed at once, and the write follows in its own
+  transaction. From a paired device, that transaction holds the device's
+  client and certificate (`Sanctum.Issuance.device_hold/1`), so a
+  revocation that commits after the confirmation writes nothing and
+  answers one of the standing refusals (`{:error, :not_standing}` for a
+  revoked client).
 
   `client_secret` may be nil — public OAuth clients have no secret.
   """
@@ -34,19 +42,29 @@ defmodule Sanctum.ProviderCredentials do
   def put(%Context{} = ctx, provider, client_id, client_secret \\ nil) do
     with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
          :ok <- validate_provider(provider),
-         :ok <- validate_client_id(client_id) do
+         :ok <- validate_client_id(client_id),
+         {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
+         :ok <-
+           Sanctum.Consent.Authz.confirm(ctx, :credential_entry, %{
+             operation: "oauth.set_client",
+             arguments: %{provider: provider, client_id: client_id, client_secret: client_secret},
+             resource: provider
+           }) do
       athanor_id = athanor!(ctx)
       payload = Jason.encode!(%{"client_id" => client_id, "client_secret" => client_secret})
 
       {:ok, ciphertext} =
         Sanctum.Cipher.encrypt(payload, CipherAAD.provider_credential(athanor_id, provider))
 
-      Arca.ProviderCredentialStorage.put(%{
-        athanor_id: athanor_id,
-        provider: provider,
-        payload_ciphertext: ciphertext,
-        created_by: ctx.user_id
-      })
+      Arca.ProviderCredentialStorage.put(
+        %{
+          athanor_id: athanor_id,
+          provider: provider,
+          payload_ciphertext: ciphertext,
+          created_by: ctx.user_id
+        },
+        hold
+      )
     end
   end
 
@@ -91,7 +109,7 @@ defmodule Sanctum.ProviderCredentials do
   @spec fetch_for_oauth(String.t(), String.t()) :: {:ok, map()} | {:error, String.t()}
   def fetch_for_oauth(athanor_id, provider) do
     with :ok <- validate_provider(provider) do
-      case Arca.ProviderCredentialStorage.get(Cyfr.Actor.in_athanor(athanor_id), provider) do
+      case Arca.ProviderCredentialStorage.get(Prima.Actor.in_athanor(athanor_id), provider) do
         {:ok, row} ->
           emit_fetch(provider, :store)
           unseal(row)
@@ -100,7 +118,7 @@ defmodule Sanctum.ProviderCredentials do
           {:error, not_configured_message(provider)}
 
         {:error, reason} ->
-          {:error, "failed to read OAuth provider credentials: #{inspect(reason)}"}
+          {:error, "failed to read OAuth provider credentials: #{Prima.Refusal.message(reason)}"}
       end
     end
   end

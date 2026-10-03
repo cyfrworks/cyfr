@@ -28,9 +28,8 @@ defmodule Sanctum.S2LooksLikeKeyTest do
     assert ApiKey.validate("definitely-not-a-key") == {:error, :invalid_key_format}
   end
 
-  test "validate/2 still returns :invalid_key for a well-formed but unknown key" do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  test "validate/2 still returns :invalid_key for a well-formed but unknown key", tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     assert ApiKey.validate("cyfr_ak_" <> String.duplicate("a", 32)) == {:error, :invalid_key}
   end

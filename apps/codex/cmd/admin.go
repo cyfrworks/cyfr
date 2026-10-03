@@ -32,9 +32,11 @@ var adminCmd = &cobra.Command{
 	Short:   "The door: who may sign in to this server (platform admins)",
 	GroupID: "admin",
 	Long: "The server allowlist is the door. Entries name an email, an IdP subject, " +
-		"or `*` for anyone the configured provider authenticates. A deny is sticky " +
-		"and ejects the person; requests are invites members made for addresses " +
-		"the door does not know. Platform admins (CYFR_PLATFORM_ADMIN_EMAILS) " +
+		"a person identifier (per_…, how a person signing in through the CYFR door " +
+		"is named), or `*` for anyone the configured provider authenticates or the " +
+		"CYFR door presents. A deny is sticky and ejects the person; requests are " +
+		"invites members made for addresses or identifiers the door does not know, " +
+		"and sign-ins it refused. Platform admins (CYFR_PLATFORM_ADMIN_EMAILS) " +
 		"are always let in and are the only ones who may edit the list.",
 }
 
@@ -69,7 +71,7 @@ var adminListCmd = &cobra.Command{
 
 var adminRequestsCmd = &cobra.Command{
 	Use:   "requests",
-	Short: "Pending invites for addresses the door does not know",
+	Short: "Pending invites for addresses or person identifiers (per_…) the door does not know, and refused sign-ins",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		result, err := newClient().CallTool(cmd.Context(), ops.Door, ops.DoorRequestsArgs{})
 		if err != nil {
@@ -96,8 +98,8 @@ var adminRequestsCmd = &cobra.Command{
 }
 
 var adminAllowCmd = &cobra.Command{
-	Use:   "allow <email|user_id|*>",
-	Short: "Let an identity sign in",
+	Use:   "allow <email|user_id|identifier|*>",
+	Short: "Let an identity sign in, by email, IdP subject or person identifier (per_…), or * for anyone",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")
@@ -116,8 +118,8 @@ var adminAllowCmd = &cobra.Command{
 }
 
 var adminDenyCmd = &cobra.Command{
-	Use:   "deny <email|user_id>",
-	Short: "Keep an identity out — and eject them if they are here",
+	Use:   "deny <email|user_id|identifier>",
+	Short: "Keep an identity out, by email, IdP subject or person identifier (per_…) — and eject them if they are here",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")

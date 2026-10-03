@@ -18,6 +18,7 @@ defmodule Aqua.Loop.CloneTest do
   alias Aqua.Loop.Clone
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
   alias Compendium.{AgentIndex, AgentSource, AquaPath}
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap, Commit, Plan}
@@ -31,7 +32,7 @@ defmodule Aqua.Loop.CloneTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "clone_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, test_path)
     Application.put_env(:arca, :seed_path, @seed_root)
@@ -49,7 +50,7 @@ defmodule Aqua.Loop.CloneTest do
     # The loops' work stops before the paths it runs under are restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = AgentIndex.sync(ctx)
@@ -100,7 +101,7 @@ defmodule Aqua.Loop.CloneTest do
 
   defp bind_claude!(ctx, opts) do
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: Keyword.fetch!(opts, :name),
         kind: "api_key",
         fields: %{"ANTHROPIC_API_KEY" => Keyword.fetch!(opts, :key)}
@@ -241,7 +242,7 @@ defmodule Aqua.Loop.CloneTest do
 
   test "a clone's authority is the soul's stepped to the role, and only along a consented edge",
        %{ctx: ctx} do
-    {:ok, soul} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
     {:ok, roster} = AgentSource.enabled_roster(ctx)
     {:ok, planner} = AgentIndex.snapshot(ctx, "planner")
     {:ok, web} = AgentIndex.snapshot(ctx, "web")
@@ -260,11 +261,11 @@ defmodule Aqua.Loop.CloneTest do
        %{reference: "catalyst:local.http", need: nil, activation_digest: nil, declared_needs: []}}
 
     {:ok, as_web} = Clone.authority(soul, "web", web, roster)
-    assert {:child, _} = Cyfr.Authority.Transition.step(as_web, :call, http)
+    assert {:child, _} = Prima.Authority.Transition.step(as_web, :call, http)
 
     refute match?(
              {:child, %{cursor: {:bound, _}}},
-             Cyfr.Authority.Transition.step(as_planner, :call, http)
+             Prima.Authority.Transition.step(as_planner, :call, http)
            )
 
     # A role the soul's consent does not name.
@@ -285,7 +286,7 @@ defmodule Aqua.Loop.CloneTest do
     ctx: ctx,
     thread: thread
   } do
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     turn = accept!(ctx, thread, "@aqua plan this")
 
     start_supervised!(
@@ -304,11 +305,17 @@ defmodule Aqua.Loop.CloneTest do
 
     turn_id = turn.id
 
-    assert_receive {:thread, _,
-                    {:delta, %{text: "planning", role: "planner", turn_id: ^turn_id}}},
+    assert_receive %ThreadEvent{
+                     kind: :delta,
+                     data: %{text: "planning", role: "planner", turn_id: ^turn_id}
+                   },
                    5_000
 
-    assert_receive {:thread, _, {:delta, %{text: "done", role: nil, turn_id: ^turn_id}}}, 5_000
+    assert_receive %ThreadEvent{
+                     kind: :delta,
+                     data: %{text: "done", role: nil, turn_id: ^turn_id}
+                   },
+                   5_000
   end
 
   test "a turn cut while its clone works stops the clone, which writes nothing more", %{
@@ -379,7 +386,7 @@ defmodule Aqua.Loop.CloneTest do
     :ok = Arca.put(Sanctum.Context.actor(ctx), path, bytes <> "\n\nLIVE-EDIT-MARKER\n")
     {:ok, _} = AgentIndex.sync(ctx)
 
-    {:ok, soul} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
     {:ok, roster} = AgentSource.enabled_roster(ctx)
     {:ok, live} = AgentIndex.snapshot(ctx, "planner")
     assert live.revision_digest != clone.agent_revision_digest

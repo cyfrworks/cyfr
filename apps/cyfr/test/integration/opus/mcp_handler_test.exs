@@ -9,7 +9,7 @@ defmodule Opus.FormulaHandlerMcpTest do
 
   Every dispatch is a host call of the formula's attempt, decided by CYFR
   under the authority it holds for that attempt: a catalog tool goes
-  through `Cyfr.Ops.Catalog.call_in_chain/5`, where the grant is the
+  through `Grimoire.call_in_chain/5`, where the grant is the
   consented edge's tool list — exact `tool.action` entries,
   deny-by-default. The telemetry a call emits in its runner's VM is
   `Opus.FormulaHandlerRunnerTest`'s, in Opus's suite.
@@ -18,8 +18,8 @@ defmodule Opus.FormulaHandlerMcpTest do
 
   alias Opus.FormulaHandler
   alias Opus.Test.FormulaHost
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
 
   @mcp_node "formula:local.mcp-root"
 
@@ -32,12 +32,7 @@ defmodule Opus.FormulaHandlerMcpTest do
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_dir)
 
-    # Ensure the catalog has providers loaded for dispatch tests
-    if Process.whereis(Cyfr.Ops.Catalog) do
-      Cyfr.Ops.Catalog.refresh()
-    end
-
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
@@ -144,8 +139,11 @@ defmodule Opus.FormulaHandlerMcpTest do
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "dispatch_error"
-      assert decoded["error"]["message"] =~ "Denied by chain authority"
-      assert decoded["error"]["message"] =~ "component"
+
+      # The table's sentence for the rostered denial (`{:invoke_denied,
+      # :tool_not_granted}`), which says why in the authority's own words.
+      assert decoded["error"]["message"] ==
+               "Denied by chain authority: tool not granted on this node's consent"
     end
 
     test "denies every tool when the edge grants none", %{ctx: ctx} do
@@ -271,8 +269,8 @@ defmodule Opus.FormulaHandlerMcpTest do
 
   describe "host interception" do
     test "the host has an arm for exactly the actions an assignment names as intercepted" do
-      execution = Enum.find(Cyfr.Execution.MCP.tools(), &(&1.name == "execution"))
-      actions = execution |> Cyfr.Ops.Annotations.actions_of() |> Map.keys()
+      execution = Enum.find(Crucible.Provider.tools(), &(&1.name == "execution"))
+      actions = execution |> Grimoire.Annotations.actions_of() |> Map.keys()
       intercepted = FormulaHost.intercepted()
 
       assert intercepted != []

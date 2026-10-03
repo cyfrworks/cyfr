@@ -235,6 +235,121 @@ defmodule Compendium.TinctureValidatorTest do
     dir
   end
 
+  describe "the publish check" do
+    defp write_tree(base, name, manifest_extra, files) do
+      dir = Path.join(base, name)
+
+      manifest =
+        Map.merge(
+          %{"name" => name, "type" => "tincture", "version" => "1.0.0", "publisher" => "local"},
+          manifest_extra
+        )
+
+      for {path, bytes} <- [{"cyfr-manifest.json", Jason.encode!(manifest)} | files] do
+        File.mkdir_p!(Path.dirname(Path.join(dir, path)))
+        File.write!(Path.join(dir, path), bytes)
+      end
+
+      dir
+    end
+
+    defp pairs(dir) do
+      for path <- Path.wildcard(Path.join(dir, "**/*"), match_dot: true),
+          not File.dir?(path),
+          do: {path |> Path.relative_to(dir) |> String.split("/"), File.read!(path)}
+    end
+
+    # Both walkers answer the same: the scratch directory a pull extracts
+    # and the stored subtree registration reads.
+    defp both(dir) do
+      from_dir = TinctureValidator.validate(dir)
+      assert TinctureValidator.validate_from_pairs(pairs(dir)) == from_dir
+      from_dir
+    end
+
+    test "a file of a type no tincture serves is refused by its name", %{base: base} do
+      dir =
+        write_tree(base, "odd-type", %{}, [
+          {"index.html", "<html></html>"},
+          {"run.sh", "rm -rf /"}
+        ])
+
+      assert {:error, message} = both(dir)
+      assert message =~ "run.sh is not a type a tincture serves"
+      assert message =~ ".wasm"
+    end
+
+    test "the served types are the frame's rules: WebAssembly, audio and models publish",
+         %{base: base} do
+      files =
+        for ext <- ~w(.wasm .ogg .glb .ktx2 .woff2 .mjs),
+            do: {"assets/f" <> ext, "bytes"}
+
+      dir = write_tree(base, "rich", %{}, [{"index.html", "<html></html>"} | files])
+      assert {:ok, _} = both(dir)
+
+      for {ext, _type} <- Compendium.Tincture.Rules.served_types() do
+        assert Path.extname("f" <> ext) in Compendium.tincture_asset_rules().allowed_extensions
+      end
+    end
+
+    test "the readme, the source tree, dotfiles and the reserved files are not served files",
+         %{base: base} do
+      dir =
+        write_tree(base, "carried", %{"schema" => %{}}, [
+          {"index.html", "<html></html>"},
+          {"README.md", "# readme"},
+          {"src/lib.ts", "export {}"},
+          {".gitignore", "node_modules"},
+          {"data.db", "sqlite"},
+          {"schema.sql", "create table t (x);"}
+        ])
+
+      assert {:ok, _} = both(dir)
+    end
+
+    test "a built tincture serves its entry's directory and its media; the rest is build input",
+         %{base: base} do
+      build = %{"tincture" => %{"entry" => "dist/index.html", "build" => %{"tool" => "vite"}}}
+
+      input = [
+        {"dist/index.html", "<html></html>"},
+        {"dist/assets/app.js", "1"},
+        {"public/media/icon.svg", "<svg/>"},
+        {"index.html", "<html></html>"},
+        {"vite.config.ts", "export default {}"},
+        {"src/App.tsx", "export {}"},
+        {"package.json", "{}"},
+        {"package-lock.json", "{}"}
+      ]
+
+      assert {:ok, _} = both(write_tree(base, "built", build, input))
+
+      dir = write_tree(base, "built-odd", build, [{"dist/assets/app.ts", "x"} | input])
+      assert {:error, message} = both(dir)
+      assert message =~ "dist/assets/app.ts is not a type a tincture serves"
+    end
+
+    test "a package manifest without its lockfile is refused", %{base: base} do
+      dir =
+        write_tree(base, "unlocked", %{}, [
+          {"index.html", "<html></html>"},
+          {"package.json", "{}"}
+        ])
+
+      assert {:error, message} = both(dir)
+      assert message =~ "package.json ships without #{Compendium.Tincture.Rules.lockfile()}"
+    end
+
+    test "a declaration the frame's rules refuse is refused", %{base: base} do
+      manifest = %{"tincture" => %{"frame" => %{"capabilities" => ["camera"]}}}
+      dir = write_tree(base, "undeclared", manifest, [{"index.html", "<html></html>"}])
+
+      assert {:error, message} = both(dir)
+      assert message =~ "camera"
+    end
+  end
+
   describe "the entry rule is one rule" do
     # Publish checked path safety only; serve added a denylist and refused
     # dotfiles; the indexer checked nothing. So `entry: "cyfr-manifest.json"`
@@ -242,29 +357,80 @@ defmodule Compendium.TinctureValidatorTest do
     # opened it — the author finding out last, from a blank page.
     test "an entry the serve side refuses does not pass validation" do
       for entry <- ["cyfr-manifest.json", "data.db", "schema.sql", ".env"] do
-        assert {:error, _} = Cyfr.TinctureHelpers.validate_entry(entry),
+        assert {:error, _} = Compendium.Tincture.validate_entry(entry),
                "#{entry} must be refused at publish, not only at serve"
 
-        assert Cyfr.TinctureHelpers.resolve_entry(%{
+        assert Compendium.tincture_entry(%{
                  manifest: %{"tincture" => %{"entry" => entry}}
-               }) == :error
+               }) == {:error, :invalid_entry}
       end
     end
 
     test "an ordinary entry passes both, and an absent one defaults" do
-      assert {:ok, "app.html"} = Cyfr.TinctureHelpers.validate_entry("app.html")
-      assert {:ok, "index.html"} = Cyfr.TinctureHelpers.validate_entry(nil)
-      assert {:ok, "index.html"} = Cyfr.TinctureHelpers.entry_of(%{})
+      assert {:ok, "app.html"} = Compendium.Tincture.validate_entry("app.html")
+      assert {:ok, "index.html"} = Compendium.Tincture.validate_entry(nil)
+      assert {:ok, "index.html"} = Compendium.Tincture.entry_of(%{})
 
-      assert Cyfr.TinctureHelpers.resolve_entry(%{manifest: %{}}) ==
-               {:ok, Cyfr.TinctureHelpers.default_entry()}
+      assert Compendium.tincture_entry(%{manifest: %{}}) ==
+               {:ok, Compendium.tincture_asset_rules().default_entry}
     end
 
     test "path safety speaks before the dotfile rule" do
       # `../escape.html` is a dotfile by prefix and a traversal by meaning;
       # the traversal is what the author needs told.
-      assert {:error, message} = Cyfr.TinctureHelpers.validate_entry("../escape.html")
+      assert {:error, message} = Compendium.Tincture.validate_entry("../escape.html")
       assert message =~ "'..'"
     end
+  end
+end
+
+defmodule Compendium.TinctureValidatorCeilingTest do
+  # Sets the registry's decompressed ceiling, which is application
+  # configuration, and restores it.
+  use ExUnit.Case, async: false
+
+  alias Compendium.TinctureValidator
+
+  setup do
+    prev = Application.get_env(:cyfr, :tincture_max_decompressed_bytes)
+    Application.put_env(:cyfr, :tincture_max_decompressed_bytes, 1_000)
+
+    dir = Path.join(System.tmp_dir!(), "tincture_ceiling_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+
+    File.write!(
+      Path.join(dir, "cyfr-manifest.json"),
+      Jason.encode!(%{"name" => "big", "type" => "tincture", "version" => "1.0.0"})
+    )
+
+    File.write!(Path.join(dir, "index.html"), "<html></html>")
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:cyfr, :tincture_max_decompressed_bytes, prev),
+        else: Application.delete_env(:cyfr, :tincture_max_decompressed_bytes)
+
+      File.rm_rf!(dir)
+    end)
+
+    {:ok, dir: dir}
+  end
+
+  test "a version within the ceiling states its size", %{dir: dir} do
+    assert {:ok, %{size: size}} = TinctureValidator.validate(dir)
+    assert size <= 1_000
+  end
+
+  test "a version over the registry's decompressed ceiling is refused with its size", %{dir: dir} do
+    File.write!(Path.join(dir, "blob.bin"), :binary.copy("x", 2_000))
+
+    assert {:error, message} = TinctureValidator.validate(dir)
+    assert message =~ "bytes decompressed, over the registry's ceiling of 1000 bytes"
+
+    pairs =
+      for path <- Path.wildcard(Path.join(dir, "**/*")),
+          do: {path |> Path.relative_to(dir) |> String.split("/"), File.read!(path)}
+
+    assert {:error, ^message} = TinctureValidator.validate_from_pairs(pairs)
   end
 end

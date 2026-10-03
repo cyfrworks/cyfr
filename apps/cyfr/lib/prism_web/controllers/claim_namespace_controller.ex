@@ -10,10 +10,10 @@ defmodule PrismWeb.ClaimNamespaceController do
   - `GET /claim-namespace` — renders a form prompting the user for a slug
     (default = a suggestion from their screen name or email).
   - `POST /claim-namespace/submit` — reads the pending-probe cookie
-    (`PrismWeb.PendingProbe`), invokes
-    `Compendium.Registry.Client.claim_personal_namespace/4`,
-    stores the issued push token, and redirects to the configured post-login
-    landing target via `PrismWeb.SafeRedirect`.
+    (`CyfrWeb.PendingProbe`), claims the namespace
+    (`Compendium.claim_personal_namespace/3`), records it, stores the issued
+    push token (`Compendium.store_push_token/3`), and redirects to the
+    configured post-login landing target via `CyfrWeb.SafeRedirect`.
 
   Accepted cross-layer coupling — this controller is part of the auth
   sliver in spirit but calls Compendium for the post-claim token storage.
@@ -23,9 +23,7 @@ defmodule PrismWeb.ClaimNamespaceController do
 
   require Logger
 
-  alias Compendium.Registry.Client
-  alias Compendium.Registry.CredentialStore
-  alias PrismWeb.PendingProbe
+  alias CyfrWeb.PendingProbe
 
   def show(conn, _params) do
     page(conn, 200, suggestion(conn), nil)
@@ -41,28 +39,22 @@ defmodule PrismWeb.ClaimNamespaceController do
     # function was called with. Naming them apart keeps that a decision
     # instead of a surprise the day a clause above starts assigning.
     with {:ok, popped, access_token} <- PendingProbe.pop(conn),
-         {:ok, user_id} <- current_user_id(popped),
+         {:ok, ctx} <- standing_caller(popped),
          {:ok, provider} <- current_provider(popped, params),
-         {:ok, body} <-
-           Client.claim_personal_namespace(username, provider, access_token) do
+         {:ok, %{slug: slug, token: push_token}} <-
+           Compendium.claim_personal_namespace(username, provider, access_token),
+         # The registry answered after a round trip: the session is read
+         # again before anything is written under it.
+         {:ok, %{user_id: user_id} = fresh} <- still_standing(popped, ctx) do
       conn = popped
-      slug = body["slug"] || username
 
       # The claim is the person's identity from here on: it lands on the
       # users row first, and that is what lets them through. The push token
       # is cached best-effort — a later probe re-mints it.
       case Sanctum.SignIn.record_namespace(user_id, slug) do
         {:ok, _user} ->
-          registry = Compendium.RegistryHost.canonical_host()
-
           conn =
-            case CredentialStore.put_push_token(
-                   user_id,
-                   registry,
-                   slug,
-                   body["token"],
-                   "personal"
-                 ) do
+            case Compendium.store_push_token(fresh, slug, push_token) do
               :ok ->
                 conn
 
@@ -82,7 +74,7 @@ defmodule PrismWeb.ClaimNamespaceController do
 
           conn
           |> PendingProbe.clear()
-          |> PrismWeb.SafeRedirect.post_login()
+          |> CyfrWeb.SafeRedirect.post_login()
 
         {:error, reason} ->
           Logger.error(
@@ -101,7 +93,15 @@ defmodule PrismWeb.ClaimNamespaceController do
         |> put_status(:unauthorized)
         |> redirect(to: "/login")
 
-      {:error, :invalid_access_token} ->
+      {:unavailable, conn} ->
+        page(
+          conn,
+          503,
+          username,
+          "We could not confirm your session just now. Try again shortly."
+        )
+
+      {:error, %Prima.Refusal{reason: :invalid_access_token}} ->
         # IdP access_token expired between the callback-side cookie stash and
         # the claim submission. Can't recover; bounce back through login.
         # Clear the dead cookie so the fresh auth round starts clean.
@@ -109,7 +109,7 @@ defmodule PrismWeb.ClaimNamespaceController do
         |> PendingProbe.clear()
         |> redirect(to: "/login")
 
-      {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required}} ->
+      {:error, %Prima.Refusal{reason: {:registry, :policy_acceptance_required}}} ->
         # cyfr.run wants the user to clickwrap-accept the current bundled
         # policy before claiming. Don't clear _cyfr_pending_probe — the
         # accept flow consumes it, and the user can return here to retry
@@ -119,9 +119,9 @@ defmodule PrismWeb.ClaimNamespaceController do
 
       {:error, err} ->
         # 422: the claim was refused and the form re-renders for a retry —
-        # a 200 said "fine" about a failure. Internal terms are logged,
-        # never put on the page.
-        page(conn, 422, username, claim_error_message(err))
+        # a 200 said "fine" about a failure. The refusal's sentence is
+        # what the page shows; an internal term reads as the fixed one.
+        page(conn, 422, username, Grimoire.render(err))
     end
   end
 
@@ -156,26 +156,13 @@ defmodule PrismWeb.ClaimNamespaceController do
       suggested: suggested,
       error: error,
       csrf_token: Plug.CSRFProtection.get_csrf_token(),
-      pattern: Cyfr.ComponentRef.personal_slug_html_pattern()
+      pattern: Prima.ComponentRef.personal_slug_html_pattern()
     )
-  end
-
-  defp claim_error_message(other) do
-    # One renderer (Cyfr.Ops.Error.render covers the OCI struct and crafted
-    # binaries too); nil means internal — logged, never reflected.
-    case Cyfr.Ops.Error.render(other) do
-      nil ->
-        Logger.error("[ClaimNamespaceController] claim failed: #{inspect(other)}")
-        "The claim failed — try again."
-
-      msg ->
-        msg
-    end
   end
 
   defp suggestion(conn) do
     with {:ok, %{user_id: id, provider: provider}} when is_binary(id) <-
-           Sanctum.Caller.peek(get_session(conn, PrismWeb.SignInResponse.session_key())),
+           Sanctum.Caller.peek(get_session(conn, CyfrWeb.SignInResponse.session_key())),
          {:ok, user} <- Sanctum.Tenancy.Users.get(id) do
       Sanctum.SignIn.suggested_slug(user, provider || "github") || ""
     else
@@ -183,9 +170,27 @@ defmodule PrismWeb.ClaimNamespaceController do
     end
   end
 
-  defp current_user_id(conn) do
-    case Sanctum.Caller.peek(get_session(conn, PrismWeb.SignInResponse.session_key())) do
-      {:ok, %{user_id: id}} when is_binary(id) -> {:ok, id}
+  # The session the cookie names, established and revalidated against the
+  # stored session and the person's standing: the claim writes on that
+  # person's row, so a look at who the cookie names is not enough. A store
+  # that cannot answer, and a remote person whose identity could not be
+  # confirmed fresh, are a "try again" — the session stands — never a
+  # sign-out.
+  defp standing_caller(conn) do
+    token = get_session(conn, CyfrWeb.SignInResponse.session_key())
+
+    with {:ok, ctx} <- Sanctum.Caller.establish(token, refresh: false) do
+      still_standing(conn, ctx)
+    else
+      {:error, reason} when reason in [:unavailable, :identity_stale] -> {:unavailable, conn}
+      _ -> {:not_logged_in, conn}
+    end
+  end
+
+  defp still_standing(conn, ctx) do
+    case Sanctum.Caller.revalidate_session(ctx) do
+      {:ok, %Sanctum.Context{user_id: id} = fresh} when is_binary(id) -> {:ok, fresh}
+      {:error, reason} when reason in [:unavailable, :identity_stale] -> {:unavailable, conn}
       _ -> {:not_logged_in, conn}
     end
   end

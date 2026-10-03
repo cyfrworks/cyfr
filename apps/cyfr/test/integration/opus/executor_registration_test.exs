@@ -9,10 +9,9 @@ defmodule Opus.ExecutorRegistrationTest do
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.reg-math:0.1.0"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "opus_reg_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -56,12 +55,12 @@ defmodule Opus.ExecutorRegistrationTest do
     # fails at compile — irrelevant here: registration wraps the execution
     # window either way, and the entry must be gone afterwards.
     _result =
-      Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+      Crucible.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
         type: :reagent,
         execution_id: execution_id
       )
 
-    assert Registry.lookup(Cyfr.Execution.Registry, execution_id) == []
+    assert Registry.lookup(Crucible.Registry, execution_id) == []
   end
 
   test "a pre-registered owner (the run_stream shape) keeps its entry", %{ctx: ctx} do
@@ -70,13 +69,13 @@ defmodule Opus.ExecutorRegistrationTest do
 
     owner =
       spawn_link(fn ->
-        # Mirrors Cyfr.Execution.MCP run_stream / cron: the task registers itself,
+        # Mirrors Crucible.Provider run_stream / cron: the task registers itself,
         # then dispatches the run from the same process.
-        {:ok, _} = Registry.register(Cyfr.Execution.Registry, execution_id, :running)
+        {:ok, _} = Registry.register(Crucible.Registry, execution_id, :running)
         send(parent, :registered)
 
         result =
-          Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 2, "b" => 3},
+          Crucible.Dispatch.run(ctx, @test_ref, %{"a" => 2, "b" => 3},
             type: :reagent,
             execution_id: execution_id
           )
@@ -93,7 +92,7 @@ defmodule Opus.ExecutorRegistrationTest do
 
     # The dispatch's own register/unregister must not steal or clear the
     # streaming task's entry — it stays until the owner process exits.
-    assert [{^owner, _}] = Registry.lookup(Cyfr.Execution.Registry, execution_id)
+    assert [{^owner, _}] = Registry.lookup(Crucible.Registry, execution_id)
 
     send(owner, :stop)
   end

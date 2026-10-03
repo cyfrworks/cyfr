@@ -1,0 +1,11 @@
+{
+  "name": "ungranted-probe",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "The containment proof's tincture that waits for a grant: its owner profile needs consent again, so the shell offers the grant prompt when the person's layout floats it.",
+  "tincture": {
+    "entry": "index.html",
+    "frame": {"placement": "float"}
+  }
+}

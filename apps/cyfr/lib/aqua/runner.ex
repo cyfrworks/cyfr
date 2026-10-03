@@ -19,22 +19,29 @@ defmodule Aqua.Runner do
 
   A send is held to, in order: the text and its size; the sender's
   standing; the addressing (`Aqua.Runner.Admission`); then, for a turn,
-  the estate being filled (`:not_provisioned`, nothing written), the
+  the athanor being filled (`:not_provisioned`, nothing written), the
   engine being up (`:execution_unavailable`), and the queue having room
   (`:busy`). Only then is the message accepted, atomically with the
   turn — or attached to the running turn as a steer when its own sender
-  writes again, or queued behind it. A `client_id` the thread
-  already accepted answers the same identity.
+  writes again under the origin the turn records, or queued behind it as
+  a turn of its own. A `client_id` the thread already accepted answers
+  the same identity.
 
   ## Turns
 
   One turn runs at a time. The loop ends the turn itself on every
   outcome but a pause; a turn paused on a card waits for the decision —
   the tape tells the runner — and continues as the person who sent it
-  (`Sanctum.Tenancy.continuation/2`), or ends uncertain when that person
+  (`Sanctum.Tenancy.continuation/3`), or ends uncertain when that person
   is no longer seated. A loop that dies without an answer is aborted
   from here (`Aqua.Loop.abort/4`) and its turn ended uncertain, or
   cancelled when a cancel asked for it.
+
+  A turn continued from its rows — a paused turn picked up again, or a
+  turn recovered after a restart — continues under the origin its row
+  stores (`Prima.Origin`), never one guessed from the person it runs
+  as: a programmatic turn resumes as `programmatic`. A turn whose row
+  stores no origin is cancelled with that reason and never resumed.
 
   ## Recovery
 
@@ -66,26 +73,26 @@ defmodule Aqua.Runner do
   changing the tape or advancing queued turns. A holding runner recovers
   the open work from its durable rows.
 
-  ## Broadcasts — `{:thread, thread_id, event}`
+  ## Broadcasts — `Cyfr.Bus.ThreadEvent` on `Cyfr.Bus.thread/2`
 
-  The rows from the tape (`{:message, row}`, `{:turn_finished}`,
-  `{:approval_resolved, _}`), and from here `{:turn_starting, user_id}`,
-  `{:turn_started, turn_id}`, `{:queued, n}`, `{:grants, set}`,
-  `{:restart_prompt, text, user_id}`, `{:error, text}`; the loop
-  announces `{:usage, _}`, `{:tool_activity, _}`, `{:intents, _, _}`,
-  `{:consent_required, _, _}`, the running loop's
-  `{:turn_fence, turn_id, fence}`, a chat step's streamed text as
-  `{:delta, _}` and `{:delta_abandoned, marker}` (`Aqua.Loop.Stream`),
+  The rows from the tape (`:message`, `:turn_suspended`, `:turn_finished`,
+  `:approval_resolved`), and from here `:turn_starting`, `:turn_started`,
+  `:turn_paused`, `:queued`, `:grants` and `:restart_prompt`; the loop
+  announces `:usage`, `:tool_activity`, `:intents`, `:consent_required`,
+  the running loop's `:turn_fence`, a chat step's streamed text as
+  `:delta` and its withdrawal as `:delta_abandoned` (`Aqua.Loop.Stream`),
   which the runner keeps for the running turn's current fence until each
-  step's answer lands or is withdrawn.
+  step's answer lands or is withdrawn. `Cyfr.Bus.ThreadEvent` says what
+  each kind's `data` is.
   """
 
   use GenServer, restart: :transient
 
   require Logger
 
-  alias Aqua.Runner.{Admission, RecoveryTable}
+  alias Aqua.Runner.{Admission, RecoveryPolicy, RecoveryTable}
   alias Aqua.Tape
+  alias Cyfr.Bus.{Notify, ThreadEvent}
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members}
 
@@ -121,7 +128,7 @@ defmodule Aqua.Runner do
   The runner for a thread, started if it is not running. A member that
   holds no cell slot starts none (`{:error, :control_plane_lost}`), and
   neither does one whose thread row says a live peer is running a turn
-  there (`{:error, :busy}`).
+  there (`{:error, :held_elsewhere}`).
   """
   @spec ensure(String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
   def ensure(thread_id, athanor_id)
@@ -156,7 +163,7 @@ defmodule Aqua.Runner do
   defp not_a_peers(thread_id, athanor_id) do
     case Tape.claim_holder(internal_context(athanor_id), thread_id) do
       {:ok, %{live_peer?: false}} -> :ok
-      {:ok, %{live_peer?: true}} -> {:error, :busy}
+      {:ok, %{live_peer?: true}} -> {:error, :held_elsewhere}
       {:error, :not_found} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
@@ -166,7 +173,7 @@ defmodule Aqua.Runner do
     do: Sanctum.internal_context(user_id: "_threads", athanor_id: athanor_id, scope: :athanor)
 
   # A runner that declines to start answers why: the plane was lost in
-  # between, or the thread is not an active estate's.
+  # between, or the thread is not an active athanor's.
   defp start_runner(thread_id, athanor_id) do
     case DynamicSupervisor.start_child(
            @supervisor,
@@ -190,7 +197,7 @@ defmodule Aqua.Runner do
 
   @doc """
   Whether a turn is running in this thread right now, for a viewer of its
-  estate.
+  athanor.
 
   No local runner is not "no turn": the thread row is asked, and a claim
   a live peer's turn holds is a turn that is running, on another member.
@@ -211,28 +218,29 @@ defmodule Aqua.Runner do
     :exit, _ -> false
   end
 
-  @doc "The PubSub topic a thread's viewers subscribe to, tenant-prefixed."
-  @spec topic(String.t(), String.t()) :: String.t()
-  def topic(thread_id, athanor_id),
-    do: Cyfr.Bus.thread(thread_id, athanor_id)
-
   @doc "Subscribe the calling process to a thread's broadcasts."
   @spec subscribe(String.t(), String.t()) :: :ok | {:error, term()}
-  def subscribe(thread_id, athanor_id),
-    do: Phoenix.PubSub.subscribe(Emissary.PubSub, topic(thread_id, athanor_id))
+  def subscribe(thread_id, athanor_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread_id))
+  end
 
   @doc "Undo `subscribe/2` for the calling process."
-  @spec unsubscribe(String.t(), String.t()) :: :ok
-  def unsubscribe(thread_id, athanor_id),
-    do: Phoenix.PubSub.unsubscribe(Emissary.PubSub, topic(thread_id, athanor_id))
+  @spec unsubscribe(String.t(), String.t()) :: :ok | {:error, term()}
+  def unsubscribe(thread_id, athanor_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.thread(actor, thread_id))
+  end
 
   @doc "Tell a thread's viewers about a row appended outside a turn (a line said aloud)."
-  @spec announce(Arca.Schemas.Message.t()) :: :ok | {:error, term()}
+  @spec announce(Aqua.Tape.row()) :: :ok | {:error, term()}
   def announce(%{thread_id: thread_id, athanor_id: athanor_id} = row) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      topic(thread_id, athanor_id),
-      {:thread, thread_id, {:message, row}}
+    actor = Prima.Actor.in_athanor(athanor_id)
+
+    Cyfr.Bus.broadcast(
+      actor,
+      Cyfr.Bus.thread(actor, thread_id),
+      Cyfr.Bus.ThreadEvent.new(actor, thread_id, :message, row)
     )
   end
 
@@ -287,7 +295,8 @@ defmodule Aqua.Runner do
   which is recorded on the turn and shown in the transcript.
 
   A thread with no runner here is not this member's to set down: a turn a
-  live peer runs is `{:error, :busy}` and anything else is already down,
+  live peer runs is `{:error, :held_elsewhere}` and anything else is
+  already down,
   `{:error, :not_running}`.
   """
   @spec suspend_turn(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -306,7 +315,7 @@ defmodule Aqua.Runner do
 
   defp nothing_to_suspend(ctx, thread_id) do
     case Tape.claim_holder(ctx, thread_id) do
-      {:ok, %{live_peer?: true}} -> {:error, :busy}
+      {:ok, %{live_peer?: true}} -> {:error, :held_elsewhere}
       {:ok, _free_or_ours} -> {:error, :not_running}
       {:error, reason} -> {:error, reason}
     end
@@ -318,7 +327,7 @@ defmodule Aqua.Runner do
 
   What the rows call for is the recovery table's to say, and the take is
   the thread's claim — refused for a turn a live peer runs
-  (`{:error, :busy}`) and for one still running here
+  (`{:error, :held_elsewhere}`) and for one still running here
   (`{:error, :not_suspended}`). The turn's pinned consent head and
   capability identity are read again first: a recovery asked for by hand
   is a fresh admission of old work. Past the recovery cap the turn ends
@@ -370,7 +379,7 @@ defmodule Aqua.Runner do
         {:error, :not_suspended}
 
       match?({:ok, %{live_peer?: true}}, Tape.claim_holder(ctx, thread.id)) ->
-        {:error, :busy}
+        {:error, :held_elsewhere}
 
       true ->
         :ok
@@ -378,15 +387,15 @@ defmodule Aqua.Runner do
   end
 
   # What a freshly started runner made of the turn: the row, read again. A
-  # turn it gave up on because the cap was spent is `uncertain` with the
-  # cap's own count, which is the cap answering; `uncertain` for any other
-  # reason is reported as the status it is.
+  # turn it gave up on because its limit was spent is `uncertain` with the
+  # limit's own count, which is the limit answering; `uncertain` for any
+  # other reason is reported as the status it is.
   defp recovered(ctx, turn_id) do
-    cap = Tape.recovery_cap()
-
     case Tape.turn(ctx, turn_id) do
-      {:ok, %{status: "uncertain", recovery_attempts: spent}} when spent >= cap ->
-        {:error, :recovery_exhausted}
+      {:ok, %{status: "uncertain", recovery_attempts: spent} = turn} ->
+        if spent >= recovery_limit(turn),
+          do: {:error, :recovery_exhausted},
+          else: {:ok, report_row(turn)}
 
       {:ok, turn} ->
         {:ok, report_row(turn)}
@@ -395,6 +404,11 @@ defmodule Aqua.Runner do
         {:error, reason}
     end
   end
+
+  # The limit a turn is held to: the one its row stores, or — for a turn
+  # only accepted, which stores none yet — the policy.
+  defp recovery_limit(%{recovery_limit: limit}) when is_integer(limit), do: limit
+  defp recovery_limit(_turn), do: RecoveryPolicy.max_attempts()
 
   defp report_row(turn) do
     %{
@@ -453,7 +467,8 @@ defmodule Aqua.Runner do
     with :ok <- held(),
          {:ok, thread} <- Tape.thread(ctx, thread_id),
          {:ok, %{status: "active"}} <- Athanors.get(athanor_id) do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor_id))
+      actor = Prima.Actor.in_athanor(athanor_id)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
       :ok = subscribe(thread.id, athanor_id)
 
       state =
@@ -587,7 +602,9 @@ defmodule Aqua.Runner do
 
         case cancel_work(state, "restart required") do
           {:ok, state} ->
-            if prompt, do: broadcast(state, {:restart_prompt, prompt, ctx.user_id})
+            if prompt,
+              do: broadcast(state, :restart_prompt, %{text: prompt, user_id: ctx.user_id})
+
             {:reply, :ok, state}
 
           {:error, reason, state} ->
@@ -614,7 +631,7 @@ defmodule Aqua.Runner do
       Sanctum.Provisioning.ready(ctx) != :ok ->
         {:reply, {:error, :not_provisioned}, state}
 
-      not Cyfr.Execution.available?() ->
+      not Crucible.available?() ->
         {:reply, {:error, :execution_unavailable}, state}
 
       busy?(state) and length(state.queue) >= @queue_max ->
@@ -641,21 +658,35 @@ defmodule Aqua.Runner do
     end
   end
 
-  # The turn's own sender writing again to the same agent steers it —
-  # while it runs, or while it is paused (the row waits on the tape and
-  # is drained on resume). A line to another agent, or from another
-  # member, is a turn of its own.
-  defp steer?(%{live: %{user_id: user_id, agent: name}}, %Context{user_id: user_id}, name),
-    do: true
-
+  # The turn's own sender writing again to the same agent, under the
+  # origin the turn's row records, steers it — while it runs, or while it
+  # is paused (the row waits on the tape and is drained on resume). A line
+  # to another agent, from another member, or admitted under another
+  # origin is a turn of its own, judged by its own grant: an API key's
+  # `programmatic` line never acts inside an `interactive` turn.
   defp steer?(
-         %{live: nil, paused: %{user_id: user_id, agent: name}},
-         %Context{user_id: user_id},
+         %{live: %{user_id: user_id, agent: name} = live},
+         %Context{user_id: user_id} = ctx,
          name
        ),
-       do: true
+       do: same_origin?(ctx, live)
+
+  defp steer?(
+         %{live: nil, paused: %{user_id: user_id, agent: name} = paused},
+         %Context{user_id: user_id} = ctx,
+         name
+       ),
+       do: same_origin?(ctx, paused)
 
   defp steer?(_state, _ctx, _name), do: false
+
+  # Whether a line's admission origin is the one the turn's row records
+  # (its wire spelling). A context with no origin, or a turn that records
+  # none, drives nothing.
+  defp same_origin?(%Context{origin: origin}, %{origin: stored}) when is_binary(stored),
+    do: Prima.Origin.origin?(origin) and Prima.Origin.to_wire(origin) == stored
+
+  defp same_origin?(_ctx, _turn), do: false
 
   defp busy?(%{live: nil, paused: nil, held: held}) when map_size(held) == 0, do: false
   defp busy?(_state), do: true
@@ -665,7 +696,7 @@ defmodule Aqua.Runner do
 
     case Tape.accept(ctx, state.id, %{message: message(ctx, text, opts), steer_turn_id: turn_id}) do
       {:ok, %{message: row, replayed: replayed}} ->
-        {:reply, {:ok, result(row, turn_id, replayed, :steer)}, touch(acknowledge(state))}
+        {:reply, {:ok, result(row, turn_id, replayed, :steer)}, touch(acknowledge(state, ctx))}
 
       # The turn ended before its end reached this process: the line opens
       # the next turn, queued behind the end.
@@ -678,24 +709,26 @@ defmodule Aqua.Runner do
   end
 
   # A turn stopped on a call whose outcome is unknown continues on its
-  # sender's next line — the one past the boundary the stop moved; a
-  # replayed earlier line is not that.
-  defp acknowledge(%{live: nil, paused: %{reason: :uncertain, turn_id: turn_id} = paused} = state) do
-    case Tape.turn(state.ctx, turn_id) do
-      {:ok, %{status: "paused"} = turn} ->
-        if Tape.steer_pending?(state.ctx, turn),
-          do: continue(%{state | paused: nil}, entry_of(paused), :resume),
-          else: state
-
-      _ ->
-        state
+  # sender's next line — the one past the boundary the stop moved, sent
+  # under the origin the turn records; a replayed earlier line is not
+  # that, and neither is a line of another origin.
+  defp acknowledge(
+         %{live: nil, paused: %{reason: :uncertain, turn_id: turn_id} = paused} = state,
+         ctx
+       ) do
+    with true <- same_origin?(ctx, paused),
+         {:ok, %{status: "paused"} = turn} <- Tape.turn(state.ctx, turn_id),
+         true <- Tape.steer_pending?(state.ctx, turn) do
+      continue(%{state | paused: nil}, entry_of(paused), :resume)
+    else
+      _ -> state
     end
   end
 
-  defp acknowledge(state), do: state
+  defp acknowledge(state, _ctx), do: state
 
   defp entry_of(paused),
-    do: paused |> Map.take([:turn_id, :user_id, :agent]) |> Map.put(:ctx, nil)
+    do: paused |> Map.take([:turn_id, :user_id, :agent, :origin]) |> Map.put(:ctx, nil)
 
   defp accept_turn(state, ctx, name, text, opts) do
     attrs = %{
@@ -713,13 +746,22 @@ defmodule Aqua.Runner do
         {:reply, {:ok, result(row, turn && turn.id, true, :turn)}, touch(state)}
 
       {:ok, %{message: row, turn: turn}} ->
-        entry = %{turn_id: turn.id, user_id: ctx.user_id, ctx: ctx, agent: name}
+        entry = %{
+          turn_id: turn.id,
+          user_id: ctx.user_id,
+          ctx: ctx,
+          agent: name,
+          # What a continuation of this turn resumes under: the origin its
+          # row stores, never the context's as it stands later.
+          origin: turn.origin
+        }
+
         state = %{state | agent: name}
 
         state =
           if busy?(state) do
             state = %{state | queue: state.queue ++ [entry]}
-            broadcast(state, {:queued, length(state.queue)})
+            broadcast(state, :queued, length(state.queue))
             state
           else
             start(state, entry)
@@ -771,26 +813,38 @@ defmodule Aqua.Runner do
     run(state, entry, fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn_id) end)
   end
 
+  # A turn continued from its rows runs as its sender under the origin its
+  # row stores. A row that stores none is cancelled with that reason: it
+  # is never resumed under an origin guessed from the sender.
   defp continue(state, %{turn_id: turn_id} = entry, mode) do
-    case Sanctum.Tenancy.continuation(entry.user_id, state.athanor_id) do
+    case Sanctum.Tenancy.continuation(entry.user_id, state.athanor_id, entry.origin) do
       {:ok, actor} ->
         run(state, %{entry | ctx: actor}, fn ->
           Aqua.Loop.run_nested(ctx: actor, turn_id: turn_id, mode: mode)
         end)
 
+      {:error, :no_origin} ->
+        state
+        |> end_turn(turn_id, "cancelled", unresumable(:no_origin))
+        |> start_next()
+
       {:error, reason} ->
         state
-        |> end_turn(turn_id, "uncertain", "the sender is no longer seated here (#{reason})")
+        |> end_turn(turn_id, "uncertain", unresumable(reason))
         |> start_next()
     end
   end
+
+  # Why a turn cannot continue from its rows.
+  defp unresumable(:no_origin), do: "the turn records no origin to resume under (no_origin)"
+  defp unresumable(reason), do: "the sender is no longer seated here (#{reason})"
 
   # Viewers hear the turn start before the loop can announce anything of it.
   # The loop is a worker of this process: it, and every worker under it,
   # is killed when the runner ends.
   defp run(state, entry, fun) do
-    broadcast(state, {:turn_starting, entry.user_id})
-    broadcast(state, {:turn_started, entry.turn_id})
+    broadcast(state, :turn_starting, entry.user_id)
+    broadcast(state, :turn_started, entry.turn_id)
     task = Aqua.Loop.Worker.async(fun)
 
     state = %{
@@ -809,7 +863,7 @@ defmodule Aqua.Runner do
 
   defp start_next(%{queue: [entry | rest]} = state) do
     state = %{state | queue: rest}
-    broadcast(state, {:queued, length(rest)})
+    broadcast(state, :queued, length(rest))
 
     cond do
       not Members.member?(entry.user_id, state.athanor_id) ->
@@ -874,47 +928,47 @@ defmodule Aqua.Runner do
         end
 
       nil ->
-        Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+        Prima.LoggerContext.unexpected(__MODULE__, msg)
         {:noreply, state}
     end
   end
 
   # A card decided: the paused turn continues once none is pending.
   defp handle_owned_info(
-         {:thread, _id, {:approval_resolved, %{turn_id: turn_id}}},
+         %ThreadEvent{kind: :approval_resolved, data: %{turn_id: turn_id}},
          %{paused: %{turn_id: turn_id}} = state
        ) do
     {:noreply, settle_paused(state)}
   end
 
-  defp handle_owned_info({:thread, _id, {:usage, usage}}, state),
+  defp handle_owned_info(%ThreadEvent{kind: :usage, data: usage}, state),
     do: {:noreply, %{state | usage: usage}}
 
-  defp handle_owned_info({:thread, _id, {:tool_activity, list}}, state),
+  defp handle_owned_info(%ThreadEvent{kind: :tool_activity, data: list}, state),
     do: {:noreply, %{state | tool_activity: list}}
 
   defp handle_owned_info(
-         {:thread, _id, {:turn_fence, turn_id, fence}},
+         %ThreadEvent{kind: :turn_fence, data: %{turn_id: turn_id, fence: fence}},
          %{live: %{turn_id: turn_id}} = state
        ),
        do: {:noreply, %{state | partials: Aqua.Loop.Stream.advance(state.partials, fence)}}
 
   defp handle_owned_info(
-         {:thread, _id, {:delta_abandoned, %{turn_id: turn_id} = marker}},
+         %ThreadEvent{kind: :delta_abandoned, data: %{turn_id: turn_id} = marker},
          %{live: %{turn_id: turn_id}} = state
        ),
        do: {:noreply, %{state | partials: Aqua.Loop.Stream.abandoned(state.partials, marker)}}
 
   defp handle_owned_info(
-         {:thread, _id, {:delta, %{turn_id: turn_id} = delta}},
+         %ThreadEvent{kind: :delta, data: %{turn_id: turn_id} = delta},
          %{live: %{turn_id: turn_id}} = state
        ),
        do: {:noreply, %{state | partials: Aqua.Loop.Stream.add(state.partials, delta)}}
 
-  defp handle_owned_info({:thread, _id, {:message, row}}, state),
+  defp handle_owned_info(%ThreadEvent{kind: :message, data: row}, state),
     do: {:noreply, %{state | partials: Aqua.Loop.Stream.landed(state.partials, row)}}
 
-  defp handle_owned_info({:thread, _id, _event}, state), do: {:noreply, state}
+  defp handle_owned_info(%ThreadEvent{}, state), do: {:noreply, state}
 
   defp handle_owned_info({:expire, turn_id}, %{paused: %{turn_id: turn_id}} = state) do
     Aqua.Approvals.expire_due(state.ctx)
@@ -935,7 +989,7 @@ defmodule Aqua.Runner do
   defp handle_owned_info({:recover, _turn_id}, state), do: {:noreply, state}
 
   # The athanor changed: an archive ends the runner, its turns cut.
-  defp handle_owned_info({:notify, _athanor_id, :athanor_changed, _payload}, state) do
+  defp handle_owned_info(%Notify{kind: :athanor_changed}, state) do
     case Athanors.get(state.athanor_id) do
       {:ok, %{status: "archived"}} ->
         case cancel_work(state, "the athanor was archived") do
@@ -948,7 +1002,7 @@ defmodule Aqua.Runner do
     end
   end
 
-  defp handle_owned_info({:notify, _athanor_id, _kind, _payload}, state), do: {:noreply, state}
+  defp handle_owned_info(%Notify{}, state), do: {:noreply, state}
   defp handle_owned_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   defp handle_owned_info(:idle, %{live: nil, paused: nil, queue: [], held: held} = state)
@@ -958,7 +1012,7 @@ defmodule Aqua.Runner do
   defp handle_owned_info(:idle, state), do: {:noreply, touch(state)}
 
   defp handle_owned_info(msg, state) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -978,12 +1032,13 @@ defmodule Aqua.Runner do
               turn_id: live.turn_id,
               user_id: live.user_id,
               agent: live.agent,
+              origin: live.origin,
               reason: reason,
               expiry: nil
             }
         }
 
-        broadcast(state, {:turn_paused, live.turn_id, reason})
+        broadcast(state, :turn_paused, %{turn_id: live.turn_id, reason: reason})
         settle_paused(state)
 
       {:error, :held} ->
@@ -1015,12 +1070,13 @@ defmodule Aqua.Runner do
           turn_id: live.turn_id,
           user_id: live.user_id,
           agent: live.agent,
+          origin: turn.origin,
           reason: pause_reason(turn),
           expiry: nil
         }
 
         state = %{state | live: nil, paused: paused}
-        broadcast(state, {:turn_paused, live.turn_id, paused.reason})
+        broadcast(state, :turn_paused, %{turn_id: live.turn_id, reason: paused.reason})
         {:noreply, settle_paused(state)}
 
       _ ->
@@ -1207,7 +1263,7 @@ defmodule Aqua.Runner do
     if Tape.terminal?(turn) do
       {:reply, {:error, :not_open}, state}
     else
-      case Tape.recover(state.ctx, turn) do
+      case Tape.recover(state.ctx, turn, RecoveryPolicy.max_attempts()) do
         {:ok, recovered} ->
           state =
             RecoveryTable.claimed(state.ctx, recovered)
@@ -1249,7 +1305,7 @@ defmodule Aqua.Runner do
         queue: Enum.reject(state.queue, &(&1.turn_id == id))
     }
 
-    broadcast(state, {:queued, length(state.queue)})
+    broadcast(state, :queued, length(state.queue))
     touch(state)
   end
 
@@ -1290,7 +1346,8 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           ctx: nil,
-          agent: turn.agent
+          agent: turn.agent,
+          origin: turn.origin
         }
 
         recovered_start(state, entry)
@@ -1300,6 +1357,7 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           agent: turn.agent,
+          origin: turn.origin,
           reason: pause_reason(turn),
           expiry: nil
         }
@@ -1311,7 +1369,8 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           ctx: nil,
-          agent: turn.agent
+          agent: turn.agent,
+          origin: turn.origin
         }
 
         if busy?(state),
@@ -1323,7 +1382,8 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           ctx: nil,
-          agent: turn.agent
+          agent: turn.agent,
+          origin: turn.origin
         }
 
         if busy?(state),
@@ -1390,22 +1450,21 @@ defmodule Aqua.Runner do
   defp pause_reason(%{paused_reason: "uncertain"}), do: :uncertain
   defp pause_reason(_turn), do: :approval
 
-  # A queued turn recovered from its row runs as its sender's continuation.
+  # A queued turn recovered from its row runs as its sender's
+  # continuation, under the origin its row stores; one that cannot is
+  # cancelled with its reason, and the turns behind it go on.
   defp recovered_start(state, entry) do
     if busy?(state) do
       %{state | queue: state.queue ++ [entry]}
     else
-      case Sanctum.Tenancy.continuation(entry.user_id, state.athanor_id) do
+      case Sanctum.Tenancy.continuation(entry.user_id, state.athanor_id, entry.origin) do
         {:ok, actor} ->
           start(state, %{entry | ctx: actor})
 
         {:error, reason} ->
-          end_turn(
-            state,
-            entry.turn_id,
-            "cancelled",
-            "the sender is no longer seated here (#{reason})"
-          )
+          state
+          |> end_turn(entry.turn_id, "cancelled", unresumable(reason))
+          |> start_next()
       end
     end
   end
@@ -1438,7 +1497,7 @@ defmodule Aqua.Runner do
     case Aqua.ToolGrants.allowed_by_agent(ctx, state.id) do
       {:ok, grants} ->
         state = %{state | grants: grants}
-        broadcast(state, {:grants, grants})
+        broadcast(state, :grants, grants)
         state
 
       {:error, _} ->
@@ -1446,7 +1505,7 @@ defmodule Aqua.Runner do
     end
   end
 
-  defp broadcast(state, event), do: Tape.announce(state.ctx, state.id, event)
+  defp broadcast(state, kind, data), do: Tape.announce(state.ctx, state.id, kind, data)
 
   defp touch(state) do
     if state.idle_ref, do: Process.cancel_timer(state.idle_ref)

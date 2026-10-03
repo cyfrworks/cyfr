@@ -60,7 +60,7 @@ defmodule Arca.StorageTest do
 
   describe "physical_segments/2" do
     defp ath_actor do
-      %{Cyfr.Actor.in_athanor("ath_x") | user_id: "u", authenticated: true}
+      %{Prima.Actor.in_athanor("ath_x") | user_id: "u", authenticated: true}
     end
 
     test "everything an athanor owns lives under athanors/{id} — the actor's id, verbatim" do
@@ -120,7 +120,7 @@ defmodule Arca.StorageTest do
     end
 
     test "an actor without an athanor cannot name a component path (fail closed)" do
-      for unresolved <- [Cyfr.Actor.system(), %Cyfr.Actor{athanor_id: ""}] do
+      for unresolved <- [Prima.Actor.system(), %Prima.Actor{athanor_id: ""}] do
         assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
           Storage.physical_segments(unresolved, ["components", "tinctures"])
         end
@@ -143,15 +143,15 @@ defmodule Arca.StorageTest do
 
   describe "tenant_segments/1" do
     test "the athanor id names the tenant directory (the identity is not in the path)" do
-      actor = %Cyfr.Actor{user_id: "user_1", athanor_id: "ath_acme", authenticated: true}
+      actor = %Prima.Actor{user_id: "user_1", athanor_id: "ath_acme", authenticated: true}
 
       # The person ("user_1") is identity-only and does NOT appear in the path.
       assert Storage.tenant_segments(actor) == ["ath_acme"]
     end
 
     test "nothing but the athanor determines the path" do
-      named = %{Cyfr.Actor.in_athanor("ath_acme") | user_id: "u", request_id: "req_1"}
-      bare = Cyfr.Actor.in_athanor("ath_acme")
+      named = %{Prima.Actor.in_athanor("ath_acme") | user_id: "u", request_id: "req_1"}
+      bare = Prima.Actor.in_athanor("ath_acme")
 
       assert Storage.tenant_segments(named) == Storage.tenant_segments(bare)
       assert Storage.tenant_segments(named) == ["ath_acme"]
@@ -160,7 +160,7 @@ defmodule Arca.StorageTest do
     test "raises when the actor has no athanor (fail closed)" do
       # A resolved athanor is required to name a tenant directory; a nil
       # means a caller reached here around the chokepoint that resolves one.
-      actor = %Cyfr.Actor{user_id: "user_1", athanor_id: nil, authenticated: false}
+      actor = %Prima.Actor{user_id: "user_1", athanor_id: nil, authenticated: false}
 
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
         Storage.tenant_segments(actor)
@@ -179,7 +179,7 @@ defmodule Arca.StorageTest do
       # `".."` escapes, and `"."` IS the all-athanors root once joined and
       # expanded — the grammar has no dots or slashes at all.
       for bad <- ["..", ".", "a/b", "a.b", "%2e"] do
-        actor = %Cyfr.Actor{user_id: "user_1", athanor_id: bad, authenticated: true}
+        actor = %Prima.Actor{user_id: "user_1", athanor_id: bad, authenticated: true}
 
         assert_raise ArgumentError, ~r/invalid athanor_id/, fn ->
           Storage.tenant_segments(actor)
@@ -190,21 +190,21 @@ defmodule Arca.StorageTest do
 
   describe "authorize_path/2" do
     test "an athanor's component tree is its own — the path is tenant-relative" do
-      actor = %Cyfr.Actor{user_id: "u", athanor_id: "ath_a", authenticated: true}
+      actor = %Prima.Actor{user_id: "u", athanor_id: "ath_a", authenticated: true}
 
       assert :ok = Storage.authorize_path(actor, ["components", "catalysts", "local"])
       assert :ok = Storage.authorize_path(actor, ["components"])
     end
 
     test "the seed bundle is readable only by a system actor" do
-      member = %{Cyfr.Actor.in_athanor("ath_a") | user_id: "u", authenticated: true}
+      member = %{Prima.Actor.in_athanor("ath_a") | user_id: "u", authenticated: true}
 
       # An operator reading across athanors is platform SCOPE, which is a
       # different authority from `system`: it widens a read, it does not
       # open a shared path.
-      platform = %{Cyfr.Actor.in_athanor("ath_a") | user_id: "op", scope: :platform}
+      platform = %{Prima.Actor.in_athanor("ath_a") | user_id: "op", scope: :platform}
 
-      seed = %{Cyfr.Actor.system() | user_id: "_seed", athanor_id: "ath_a", scope: :athanor}
+      seed = %{Prima.Actor.system() | user_id: "_seed", athanor_id: "ath_a", scope: :athanor}
 
       assert {:error, :forbidden} = Storage.authorize_path(member, ["seed", "components"])
       assert {:error, :forbidden} = Storage.authorize_path(platform, ["seed", "aqua"])
@@ -213,30 +213,30 @@ defmodule Arca.StorageTest do
     end
 
     test "tenant-prefixed paths are not gated here; the global roots are the server's" do
-      actor = %Cyfr.Actor{user_id: "u", athanor_id: "ath_a", authenticated: true}
+      actor = %Prima.Actor{user_id: "u", athanor_id: "ath_a", authenticated: true}
 
       assert {:error, :forbidden} = Storage.authorize_path(actor, ["config", "retention.json"])
       assert :ok = Storage.authorize_path(actor, ["data", "notes.txt"])
       assert {:error, :forbidden} = Storage.authorize_path(actor, ["cache", "oci", "x"])
       assert {:error, :forbidden} = Storage.authorize_path(actor, ["system", "health"])
 
-      assert :ok = Storage.authorize_path(Cyfr.Actor.system(), ["cache", "oci", "x"])
-      assert :ok = Storage.authorize_path(Cyfr.Actor.system(), ["system", "health"])
+      assert :ok = Storage.authorize_path(Prima.Actor.system(), ["cache", "oci", "x"])
+      assert :ok = Storage.authorize_path(Prima.Actor.system(), ["system", "health"])
     end
 
     test "an unknown first segment is refused for every actor" do
-      actor = %Cyfr.Actor{user_id: "u", athanor_id: "ath_a", authenticated: true}
+      actor = %Prima.Actor{user_id: "u", athanor_id: "ath_a", authenticated: true}
 
       assert {:error, :forbidden} = Storage.authorize_path(actor, ["scratch", "hello.txt"])
       assert {:error, :forbidden} = Storage.authorize_path(actor, ["guest", "x.txt"])
-      assert {:error, :forbidden} = Storage.authorize_path(Cyfr.Actor.system(), ["scratch"])
+      assert {:error, :forbidden} = Storage.authorize_path(Prima.Actor.system(), ["scratch"])
     end
   end
 
   describe "classify/1 and tenant_roots/0" do
     test "the tenant roster is closed, and every scope classifies" do
       assert Storage.tenant_roots() ==
-               ~w(aqua components threads notes payloads data)
+               ~w(aqua components threads notes payloads staging data)
 
       for root <- Storage.tenant_roots() do
         assert Storage.classify([root, "x"]) == :tenant
@@ -270,12 +270,12 @@ defmodule Arca.StorageTest do
       # Every roster is derived from @layout; these pin the derived values
       # so an edited row cannot silently reshape a roster.
       assert Enum.sort(Storage.tenant_roots()) ==
-               ~w(aqua components data notes payloads threads)
+               ~w(aqua components data notes payloads staging threads)
 
       assert Enum.sort(Storage.global_prefixes()) == ~w(cache system)
       assert Enum.sort(Storage.seed_roots()) == ~w(aqua components)
       assert Enum.sort(Storage.overlay_roots()) == ~w(aqua components)
-      assert Storage.reserved_roots() == ~w(payloads)
+      assert Storage.reserved_roots() == ~w(payloads staging)
       assert Storage.guest_scopes() == %{"data" => "data", "components" => "components"}
 
       # The console tier: what a person sees of the tree, system absent.
@@ -296,6 +296,7 @@ defmodule Arca.StorageTest do
              }
 
       assert Storage.tier("payloads") == :system
+      assert Storage.tier("staging") == :system
       assert Storage.tier("cache") == :system
       assert Storage.tier("data") == :open
       assert Storage.tier("guest") == nil
@@ -304,14 +305,14 @@ defmodule Arca.StorageTest do
 
       # The classes partition: no root is both tenant and global; every
       # seed root, overlay root and guest-scope target is a tenant root;
-      # every overlay root has a configured locator (the unit shapes are
+      # every overlay root has an installed locator (the unit shapes are
       # the locators' own — their tests witness them).
       assert Storage.tenant_roots() -- Storage.global_prefixes() == Storage.tenant_roots()
       assert Enum.all?(Storage.seed_roots(), &(&1 in Storage.tenant_roots()))
       assert Enum.all?(Storage.overlay_roots(), &(&1 in Storage.tenant_roots()))
       assert Enum.all?(Map.values(Storage.guest_scopes()), &(&1 in Storage.tenant_roots()))
 
-      locators = Application.fetch_env!(:arca, :overlay_locators)
+      locators = Arca.Storage.UnitLocator.impl!()
       assert Enum.sort(Map.keys(locators)) == Enum.sort(Storage.overlay_roots())
 
       for {_root, mod} <- locators do
@@ -319,7 +320,7 @@ defmodule Arca.StorageTest do
       end
     end
 
-    test "locate/1 routes through the configured locator, and only there" do
+    test "locate/1 routes through the installed locator, and only there" do
       assert Storage.locate(["data", "x"]) == :not_overlaid
       assert Storage.locate(["payloads", "sha256", "x"]) == :not_overlaid
       assert Storage.locate([]) == :not_overlaid
@@ -382,13 +383,13 @@ defmodule Arca.StorageTest do
 
       refute Arca.exists?(actor, ["data", "x"])
       refute Arca.exists?(actor, ["components"])
-      refute Arca.exists?(%Cyfr.Actor{athanor_id: ""}, ["data", "x"])
+      refute Arca.exists?(%Prima.Actor{athanor_id: ""}, ["data", "x"])
 
       # Every other facade entry refuses the same actor loudly rather than
       # answering an empty result, and the raise stays under the facade,
       # for anything that reaches an adapter directly.
       assert {:error, :no_athanor} = Arca.get(actor, ["data", "x"])
-      assert {:error, :no_athanor} = Arca.list(%Cyfr.Actor{athanor_id: ""}, ["data"])
+      assert {:error, :no_athanor} = Arca.list(%Prima.Actor{athanor_id: ""}, ["data"])
 
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
         Arca.Storage.tenant_segments(actor)
@@ -400,6 +401,15 @@ defmodule Arca.StorageTest do
     # The refusals fire before any adapter dispatch: the athanor root and
     # the scope roots are directories, never objects — a put there would
     # wedge the tree (a regular file where the tree root belongs).
+    #
+    # A mutation that passes the path gate reaches the storage cap, which
+    # the settings accessor reads from the store since B2, so the tests
+    # that exercise a deeper path need a sandbox owner.
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
     test "put/append/delete below depth 2 answer {:error, :invalid_path}" do
       actor = Arca.Test.Actor.local()
 
@@ -409,7 +419,7 @@ defmodule Arca.StorageTest do
       assert {:error, :invalid_path} = Arca.delete(actor, ["data"])
 
       # Globals are covered by the same gate.
-      assert {:error, :invalid_path} = Arca.put(Cyfr.Actor.system(), ["cache"], "x")
+      assert {:error, :invalid_path} = Arca.put(Prima.Actor.system(), ["cache"], "x")
     end
 
     test "a multi-level string segment counts as its real depth" do
@@ -452,7 +462,7 @@ defmodule Arca.StorageTest do
     test "a leaf read that hangs past the deadline is a typed error, not an exit" do
       # The callers of a bulk read are request handlers; a hung adapter must
       # answer as an error tuple — never kill the caller.
-      actor = Cyfr.Actor.in_athanor("ath_x")
+      actor = Prima.Actor.in_athanor("ath_x")
 
       assert {:error, {:subtree_read_failed, ["data", "sub", "stuck.txt"], :timeout}} =
                Storage.read_subtree_via(HangingAdapter, actor, ["data", "sub"], timeout: 50)
@@ -461,34 +471,49 @@ defmodule Arca.StorageTest do
 end
 
 defmodule Arca.StorageLocatorWiringTest do
-  # Mutates the global :overlay_locators wiring — must not run beside the
-  # async suites that call locate/1.
+  # Mutates the global unit-locator port — must not run beside the async
+  # suites that call locate/1.
   use ExUnit.Case, async: false
 
-  test "install_locators!/0 fails loud on a wiring that does not match the layout" do
-    original = Application.fetch_env!(:arca, :overlay_locators)
+  alias Arca.Storage.UnitLocator
 
-    on_exit(fn ->
-      Application.put_env(:arca, :overlay_locators, original)
-      Arca.Storage.install_locators!()
-    end)
+  test "install!/1 fails loud on a registry that does not match the layout" do
+    original = UnitLocator.impl!()
+    on_exit(fn -> UnitLocator.install!(original) end)
 
     # A missing root is a boot error, not a first-touch surprise. The
-    # failed install never clobbers the previously installed map, so
+    # failed install never clobbers the previously installed registry, so
     # locate/1 keeps answering while this raises.
-    Application.put_env(:arca, :overlay_locators, Map.delete(original, "aqua"))
-
-    assert_raise ArgumentError, ~r/overlay_locators must name exactly/, fn ->
-      Arca.Storage.install_locators!()
+    assert_raise ArgumentError, ~r/must name exactly the overlaid roots/, fn ->
+      UnitLocator.install!(Map.delete(original, "aqua"))
     end
 
+    assert UnitLocator.impl!() == original
     assert {:file, _} = Arca.Storage.locate(["aqua", "roles", "a.md"])
 
     # A root wired to a module without locate/1 is refused too.
-    Application.put_env(:arca, :overlay_locators, %{original | "aqua" => String})
-
     assert_raise ArgumentError, ~r/does not implement/, fn ->
-      Arca.Storage.install_locators!()
+      UnitLocator.install!(%{original | "aqua" => String})
     end
+
+    assert UnitLocator.impl!() == original
+  end
+
+  test "an overlaid path asked before the boot write raises, and a plain one does not" do
+    original = UnitLocator.impl!()
+    on_exit(fn -> UnitLocator.install!(original) end)
+
+    UnitLocator.reset()
+
+    error =
+      assert_raise UnitLocator.NotInstalledError, fn ->
+        Arca.Storage.locate(["aqua", "roles", "a.md"])
+      end
+
+    assert error.message =~ "Arca.Storage.UnitLocator.install!/1"
+    assert_raise UnitLocator.NotInstalledError, fn -> UnitLocator.impl!() end
+
+    # A path no locator shapes needs none installed to say so.
+    assert Arca.Storage.locate(["data", "x"]) == :not_overlaid
   end
 end

@@ -26,10 +26,9 @@ defmodule Cyfr.GmailOAuthSmokeTest do
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
   @provider "google"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "gmail_smoke_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -79,7 +78,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
 
   defp mint_entry!(ctx, oauth, endpoints) do
     {:ok, view} =
-      Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "my-gmail",
         kind: "oauth",
         provider_hint: @provider,
@@ -117,8 +116,8 @@ defmodule Cyfr.GmailOAuthSmokeTest do
 
   defp edge_resource!(ctx, profile_id) do
     {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
-    {:ok, blob} = Cyfr.Authority.Blob.parse(consent.resolved_policy)
-    {:ok, edge} = Cyfr.Authority.Blob.ingress(blob, "catalyst:local.gmail")
+    {:ok, blob} = Prima.Authority.Blob.parse(consent.resolved_policy)
+    {:ok, edge} = Prima.Authority.Blob.ingress(blob, "catalyst:local.gmail")
     edge.vault
   end
 
@@ -160,7 +159,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     # the vault path. The pending is fabricated exactly as vault.authorize
     # mints it (endpoint https validation happens there, on operator
     # input), with the token URL pointed at Bypass.
-    :ok = Sanctum.ProviderCredentials.put(ctx, @provider, "smoke-cid", "smoke-cs")
+    :ok = Sanctum.TestContext.put_provider_credentials(ctx, @provider, "smoke-cid", "smoke-cs")
 
     bypass = Bypass.open()
 
@@ -184,7 +183,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     end)
 
     state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    redirect_uri = EmissaryWeb.Endpoint.url() <> "/auth/oauth/callback"
+    redirect_uri = CyfrWeb.Endpoint.url() <> "/auth/oauth/callback"
 
     pending = %{
       target: %{
@@ -225,7 +224,8 @@ defmodule Cyfr.GmailOAuthSmokeTest do
       Plug.Conn.resp(conn, 200, "{}")
     end)
 
-    :ok = Sanctum.ProviderCredentials.put(ctx, @provider, "client-id", "client-secret")
+    :ok =
+      Sanctum.TestContext.put_provider_credentials(ctx, @provider, "client-id", "client-secret")
 
     entry =
       mint_entry!(

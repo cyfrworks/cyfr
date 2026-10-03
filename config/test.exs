@@ -3,11 +3,12 @@
 import Config
 
 # We don't run a server during test
-# The establish memo is a per-request convenience; tests assert on the
-# uncached pipeline.
-config :sanctum, :establish_cache_ms, 0
+# The caller bound is off: the establish memo keeps nothing, so tests
+# assert on the uncached pipeline, and every retained context is
+# revalidated before each action it is used for.
+config :sanctum, :caller_memo_ttl_ms, 0
 
-config :cyfr, EmissaryWeb.Endpoint,
+config :cyfr, CyfrWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "test-secret-key-base-minimum-64-characters-long-for-testing-only",
   server: false
@@ -15,10 +16,11 @@ config :cyfr, EmissaryWeb.Endpoint,
 # The origin an absolute URL falls back to, the endpoint's own above.
 config :sanctum, :fallback_origin, "http://localhost:4002"
 
-# Effectively disable the MCP transport rate limit in tests — controller
-# suites drive hundreds of /mcp requests from 127.0.0.1 within one window.
-# MCPRateLimitTest overrides this per-test to exercise the limiter itself.
-config :cyfr, :mcp_rate_limit_max, 1_000_000
+# A one-time confirmation code's transport: the tree ships none, so the
+# suite captures each code where the test that asked for it reads it
+# (`Sanctum.TestContext.MailSink`); a home without one refuses the email
+# method (`Sanctum.Auth.EmailVerification`).
+config :sanctum, :confirmation_code_transport, Sanctum.TestContext.MailSink
 
 # Proofs likewise: unit tests run on the ETS store; proof_db_test.exs
 # exercises the durable adapter directly.
@@ -74,8 +76,11 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
       queue_target: 500,
       queue_interval: 5_000,
       journal_mode: :wal,
-      # Allow SQLite writers to wait for contention between concurrent test fixtures.
-      busy_timeout: 20_000
+      # Long enough for writers to wait out contention between concurrent
+      # test fixtures, and below DBConnection's 15 s client timeout: a
+      # statement still waiting inside the driver when the client gives up
+      # has its connection closed under it, which crashes the VM.
+      busy_timeout: 10_000
 
   :postgres ->
     # A partitioned run that names no URL still gets one database per
@@ -110,7 +115,7 @@ config :cyfr, tool_providers_lenient: true
 
 # Don't run the background retention sweeper in the test supervision tree —
 # its periodic DB cleanup conflicts with the Ecto sandbox connection lifecycle.
-# Retention logic is exercised directly in Cyfr.RetentionTest / scheduler unit tests.
+# Retention logic is exercised directly in Arca.RetentionTest / scheduler unit tests.
 config :cyfr, retention_scheduler_enabled: false
 
 # The reconciler reacts to vault broadcasts with DB reads from its own
@@ -122,9 +127,26 @@ config :cyfr, external_server_reconciler_enabled: false
 # stays within the owning test's sandbox lifetime.
 config :cyfr, cron_scheduler_enabled: false
 
-# The boot task writes rows (the operator reconcile, the seed sync) before
-# any test's sandbox checkout — both are exercised directly by their own
-# tests.
+# The projection reconciler starts and attaches nothing: its recovery and
+# its notifications would reconcile from its own process, on a sandbox
+# connection no test owns. Every read's barrier reconciles in the reader,
+# and its own suite starts an instance.
+config :cyfr, Compendium.ProjectionReconciler, enabled: false
+
+# The boot's security reconcile and seed offer write rows before any
+# test's sandbox checkout, so the sandboxed suite boot omits both; their
+# own tests run them directly. Omitting the security gate takes BOTH this
+# compile-time permission and the runtime switch below: a build compiled
+# without the permission — every release — starts the gate whatever the
+# switch says (`Cyfr.Application.bootstrap_skipped?/2`).
+config :cyfr, bootstrap_skip_permitted: true
+
+# Fixtures that build an issuing context by hand pass the generations its
+# rows stand at (`Sanctum.TestContext.snapshot!/1`) as `generation_snapshot:`
+# to `Sanctum.Session.create/2` and `Sanctum.ApiKey.create/3`. Compiled in
+# here alone: every release refuses the option as a context with no
+# generations (`Sanctum.Issuance`).
+config :sanctum, issuance_snapshot_permitted: true
 config :cyfr, provisioning_boot_enabled: false
 
 # Likewise the thread-runner boot recovery reads the repo before any
@@ -154,16 +176,37 @@ config :cyfr, execution_archive_watch_enabled: false
 # finds. Its own suite starts it with the endpoints it serves.
 config :cyfr, worker_watch_enabled: false
 
-# The control-plane claim is the same shape again (a permanent GenServer
-# renewing a DB lease); `Cyfr.ControlPlane.Claim` is exercised directly.
-# The key is Arca's, beside the lease row and the cached standing
-# `Arca.ControlPlane` answers from when no claimant runs.
+# The control-plane claim is the same shape again (a permanent process
+# renewing a DB lease) and is exercised directly. The key is
+# `Arca.ControlPlane`'s, which holds the lease row: off, it answers as a
+# member that claims no slot, from the cached standing, and every boot
+# holds.
 config :arca, control_plane_claim_enabled: false
+
+# The control plane's own pool is off under the SQL sandbox: a second
+# connection neither sees nor rolls back a test's rows, and on SQLite it
+# waits behind a test's open write. So the control plane writes on the
+# sandboxed repo here; the tests of the pool start one of their own,
+# outside the sandbox, and the cluster members turn it on.
+config :arca, control_plane_pool: false
+
+# SQLite's writers take no turns under the SQL sandbox
+# (`Arca.WriteTurn.enabled?/0`): an async test's connection holds the
+# write lock until the test ends and its own audit writer runs on it, so a
+# writer of another sandbox holding the turn while it waits for that lock,
+# and this writer waiting for the turn, would wait on each other until a
+# deadline. The tests of the turn turn it on outside the sandbox, and the
+# cluster members and the canvas proof's release run it.
+config :arca, write_turn: false
 
 # The boot's database checks (schema fingerprint, tenant roster, keyring
 # fingerprint) read and write server rows outside any sandbox; the suite
 # verifies the schema before it starts and exercises each check directly.
 config :cyfr, database_checks_enabled: false
+
+# The stored-grant check reads every athanor's consent heads at boot,
+# outside any test's sandbox; the suite drives it directly.
+config :sanctum, stored_grants_check_enabled: false
 
 # Default storage roots for tests (individual tests may override), two
 # throwaway SIBLING roots — the topology dev and prod use ("two trees, two
@@ -185,27 +228,27 @@ config :sanctum,
   # CredentialStore via the session-resolution path.
   default_test_namespace: "testns"
 
-# The worker root every key CYFR issues derives from (`Cyfr.WorkerAuth`),
+# The worker root every key CYFR issues derives from (`Prima.WorkerAuth`),
 # fixed for the suite so the Opus worker service of a test boot holds the
 # key CYFR derives for its id: `worker_key(root, "wrk_local")`, spelled
-# here as the HMAC it is (`Cyfr.MacEnvelope.derive/4`: the label, then the
+# here as the HMAC it is (`Prima.MacEnvelope.derive/4`: the label, then the
 # service id, one per line) because the contracts are not compiled when
-# this file is read. `Cyfr.ExecutionTest` pins the two spellings to each
+# this file is read. `CrucibleTest` pins the two spellings to each
 # other.
 test_worker_root = :crypto.hash(:sha256, "cyfr-test-worker-root")
-config :cyfr, :worker_key, test_worker_root
+config :cyfr, :opus_key, test_worker_root
 
 # The Opus service of a test boot listens on a port of the system's choosing,
 # and so does CYFR's host API listener; `Cyfr.Test.OpusService` points each
 # at the other's once both are up. Its runners are OS processes of their
-# own, started by the `Direct` keeper and pooled across tests; a runner
-# holds no sys.config, so what it takes from this configuration (the log
-# level, the scheduler counts) the service passes it explicitly
-# (`Opus.Release.runner_command/0`).
+# own, started by the test build's `:direct` keeper (`apps/opus/mix.exs`)
+# and pooled across tests; a runner holds no sys.config, so what it takes
+# from this configuration (the log level, the scheduler counts) the service
+# passes it explicitly (`Opus.Release.runner_command/0`).
 config :opus,
   service_key:
     :hmac
-    |> :crypto.mac(:sha256, test_worker_root, "cyfr-worker/v1/worker\nwrk_local")
+    |> :crypto.mac(:sha256, test_worker_root, "cyfr-opus/v1/worker\nwrk_local")
     |> Base.encode16(case: :lower),
   port: 0,
   keeper: :direct
@@ -219,8 +262,3 @@ config :logger, level: :warning
 # sandbox rollback is a write no invalidation ever sees, so tests read the
 # users row every time.
 config :sanctum, :namespace_cache_ttl_ms, 0
-
-# A subscription stream is long-lived by design, so a test that opens one would
-# otherwise block until the production bound. Short enough that the graceful
-# close is what the assertions actually observe.
-config :cyfr, :mcp_subscription_max_ms, 50

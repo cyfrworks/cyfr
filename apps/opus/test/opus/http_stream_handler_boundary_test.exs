@@ -6,12 +6,15 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
   The streaming imports keep the promise every host import keeps: a host
   function never raises into WASM. A malformed request, a handle that does
   not exist and a stream that cannot be started each answer the guest a
-  typed error, with a host client that holds no context of its own.
+  typed error, with a host client that holds no context of its own. A
+  stream's address is pinned when it opens: a stream that outlives its pin
+  keeps the connection it opened, and a stream opened past the pin's
+  `expires_at` is pinned again.
   """
   use ExUnit.Case, async: true
 
   alias Opus.HttpStreamHandler
-  alias Opus.Test.ScriptedHost
+  alias Opus.Test.{ScriptedHost, ScriptedKeeper}
 
   defp imports do
     attempt =
@@ -20,7 +23,7 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
     {imports, exec_ref} =
       HttpStreamHandler.build_stream_imports(
         nil,
-        Cyfr.Limits.defaults(:catalyst),
+        Prima.Limits.defaults(:catalyst),
         attempt.client,
         "catalyst:local.streamer:0.1.0"
       )
@@ -31,6 +34,87 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
   defp call(ns, name, arg) do
     {:fn, fun} = ns[name]
     fun.(arg)
+  end
+
+  defmodule Upstream do
+    @moduledoc false
+    # A loopback upstream answering each path with its name.
+    @behaviour Plug
+
+    @impl true
+    def init(opts), do: opts
+
+    @impl true
+    def call(conn, _opts), do: Plug.Conn.send_resp(conn, 200, "streamed " <> conn.request_path)
+  end
+
+  defp read_all(read, handle, acc \\ "", attempts \\ 100)
+  defp read_all(_read, _handle, _acc, 0), do: flunk("the stream never completed")
+
+  defp read_all(read, handle, acc, attempts) do
+    case read.(handle) |> Jason.decode!() do
+      %{"done" => true, "data" => data} -> acc <> data
+      %{"data" => data} -> read_all(read, handle, acc <> data, attempts - 1)
+    end
+  end
+
+  test "a stream that outlives its pin keeps its connection; one opened past it is pinned again" do
+    server =
+      start_supervised!({Bandit, plug: Upstream, ip: {127, 0, 0, 1}, port: 0, startup_log: false})
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+
+    host = ScriptedHost.start!()
+    ref = "catalyst:local.streamer:0.1.0"
+    edge = Opus.Test.EdgeFixtures.edge(domains: ["stream.test"], methods: ["GET"])
+    authority = ScriptedKeeper.authority(edge, Prima.Limits.defaults(:catalyst))
+
+    # Routed as a runner's is: the relay's service end keeps each pin
+    # CYFR grants the attempt and connects each stream with its own.
+    client =
+      host
+      |> ScriptedHost.attempt!(component_ref: ref, authority: authority)
+      |> ScriptedKeeper.relayed!()
+      |> Map.fetch!(:client)
+
+    {imports, exec_ref} =
+      HttpStreamHandler.build_stream_imports(edge, Prima.Limits.defaults(:catalyst), client, ref)
+
+    on_exit(fn -> HttpStreamHandler.cleanup_registry(exec_ref) end)
+    ns = imports["cyfr:http/streaming@0.1.0"]
+    {:fn, read} = ns["read"]
+
+    open = fn path ->
+      request = Jason.encode!(%{"method" => "GET", "url" => "http://stream.test:#{port}#{path}"})
+      assert %{"handle" => handle} = ns |> call("request", request) |> Jason.decode!()
+      handle
+    end
+
+    pins = fn -> length(ScriptedHost.requests(host, "egress_pin")) end
+
+    # A pin already past its expires_at when it is answered: its own
+    # stream connects with it, and the next stream asks again.
+    ScriptedHost.pins(host, %{"stream.test" => "127.0.0.1"}, expires_in: -1)
+    first = open.("/one")
+    second = open.("/two")
+    assert pins.() == 2
+
+    for %{args: args} <- ScriptedHost.requests(host, "egress_pin"),
+        do: assert(args["purpose"] == "stream")
+
+    # The first stream outlived its pin, and reads to its end all the same.
+    assert read_all(read, first) == "streamed /one"
+    assert read_all(read, second) == "streamed /two"
+    call(ns, "close", first)
+    call(ns, "close", second)
+
+    # A pin that holds is the next stream's too.
+    ScriptedHost.pins(host, %{"stream.test" => "127.0.0.1"}, expires_in: 60_000)
+    third = open.("/three")
+    fourth = open.("/four")
+    assert pins.() == 3
+    assert read_all(read, third) == "streamed /three"
+    assert read_all(read, fourth) == "streamed /four"
   end
 
   test "a malformed request is a typed error, not a raise" do

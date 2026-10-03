@@ -10,9 +10,8 @@ defmodule Aqua.AgentConfigTest do
 
   alias Aqua.AgentConfig
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "agent_config_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -32,7 +31,7 @@ defmodule Aqua.AgentConfigTest do
 
   defp policy(ctx, name) do
     {:ok, guide} =
-      Cyfr.Ops.Catalog.call_external("aqua", ctx, %{"action" => "get", "name" => name})
+      Grimoire.call_external("aqua", ctx, %{"action" => "get", "name" => name})
 
     Aqua.AgentConfig.stringify_deep(guide)["tool_policy"]
   end
@@ -76,7 +75,7 @@ defmodule Aqua.AgentConfigTest do
           <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
           <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
-  test "a catalyst the estate holds resolves to its newest installed release", %{ctx: ctx} do
+  test "a catalyst the athanor holds resolves to its newest installed release", %{ctx: ctx} do
     for version <- ["9.0.0", "10.0.0"] do
       {:ok, _} =
         Compendium.Registry.publish_bytes(ctx, @wasm, %{

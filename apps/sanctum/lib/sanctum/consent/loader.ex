@@ -2,31 +2,46 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Consent.Loader do
   @moduledoc """
-  Fail-closed construction of a root `Cyfr.Authority` from a profile's
+  Fail-closed construction of a root `Prima.Authority` from a profile's
   head consent.
 
   The checks run in a fixed order, each refusing rather than degrading:
 
   1. profile status — only `:active` roots an execution
   2. head consent exists
-  3. consent internal validity (pinned ⟺ non-empty version — the database
+  3. **origin admitted** — the context's `origin` (`Prima.Origin`, set by
+     the admission path that started the run) must be among the
+     revision's `admitted_origins`; a context with none, or with one the
+     revision does not name, answers `consent_required` with its usual
+     payload, so the surface asks the person to grant again
+  4. consent internal validity (pinned ⟺ non-empty version — the database
      cannot enforce it portably, so the loader is the gate)
-  4. the resolved policy blob parses (`Cyfr.Authority.Blob.parse/1`)
-  5. **blob/refs equality** — every bound vault reference inside the blob
+  5. the resolved policy blob parses (`Prima.Authority.Blob.parse/1`)
+  6. **canonical storage paths** — every storage path the blob grants is
+     spelled as the storage door reaches it
+     (`Prima.ComponentPath.door_path/1`, `"*"` aside); a revision that
+     names another spelling answers `consent_required`, and is never
+     rewritten here
+  7. **blob/refs equality** — every bound vault reference inside the blob
      must exactly equal the consent's stored `vault_refs`; any asymmetry
      means the blob and the reverse index disagree about what was
      granted, and the consent is refused
-  6. **selections resolved** — an edge whose vault selects a labelled
+  8. **selections resolved** — an edge whose vault selects a labelled
      profile of its target is rewritten to that profile's own bound entry
      when the profile is an active owner profile, its head consent is
      intact and its ingress binds an entry of the pinned digest;
      otherwise the selection stays, and a run under that edge answers
-     setup_required
-  7. **binding digest consistency** — the same vault entry on two edges
+     setup_required. A lender's head that does not admit the context's
+     origin refuses the whole load with `consent_required`, naming the
+     lender's profile and revision
+  9. **binding digest consistency** — the same vault entry on two edges
      with unequal binding digests is refused; the loader never picks
-  8. the `Sanctum.Consent.Loader.Decision` table over granted vs installed
-     activation
-  9. `Cyfr.Authority.root/3` — ceiling clamping happens inside
+  10. the `Sanctum.Consent.Loader.Decision` table over granted vs
+      installed activation
+  11. `Prima.Authority.root/3` — ceiling clamping happens inside
+
+  Checks 4 to 9 are the stored head's own (`admitted_blob/3`), the one
+  rule every read of what a grant reaches applies.
 
   The live side of the integrity evaluation (`live` and `live_shape_digest`)
   is supplied by the caller, because resolving installed components is
@@ -37,12 +52,12 @@ defmodule Sanctum.Consent.Loader do
 
   require Logger
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Sanctum.Consent.Loader.Decision
-  alias Cyfr.ComponentRef
+  alias Prima.ComponentRef
   alias Sanctum.Context
-  alias Cyfr.JCS
+  alias Prima.JCS
 
   @type load_error ::
           Sanctum.Consent.error()
@@ -80,15 +95,39 @@ defmodule Sanctum.Consent.Loader do
 
     with :ok <- check_profile_status(profile),
          {:ok, consent} <- fetch_head(actor, profile),
-         :ok <- check_consent_validity(consent),
-         :ok <- check_blob_digest(consent),
-         {:ok, blob} <- parse_blob(consent),
-         :ok <- check_blob_refs_equality(blob, consent),
-         blob = resolve_selections(actor, blob),
-         :ok <- check_entry_digest_conflicts(blob),
+         :ok <- check_origin(ctx, profile, consent),
+         {:ok, blob} <- admitted_blob(ctx, profile, consent),
          {:ok, running} <- evaluate_activation(ctx, profile, consent, opts),
          {:ok, authority} <- build_root(profile, consent, blob, running, opts) do
       {:ok, authority, %{activation_digest: running.digest, activation_graph: running.graph}}
+    end
+  end
+
+  @doc """
+  The blob a stored head grants, as `load_root/3` carries it, or the
+  refusal that stops `load_root/3` on the head itself: checks 4 to 9 of
+  the module's order, in that order, under the context's origin. A read
+  of what a grant reaches (`profile/grants`) asks this, so no grant shows
+  wider or narrower than the loader runs it.
+
+  It reads neither the profile's status nor the run's own origin against
+  the head (checks 1 to 3), and asks nothing of the installed components
+  (check 10): those belong to a run, not to the stored grant. The
+  context's origin still decides each lender's admission (check 8), so the
+  same head can carry a borrowed entry under one origin and refuse under
+  another.
+  """
+  @spec admitted_blob(Context.t(), map(), map()) :: {:ok, Blob.t()} | {:error, load_error()}
+  def admitted_blob(%Context{} = ctx, profile, consent)
+      when is_map(profile) and is_map(consent) do
+    with :ok <- check_consent_validity(consent),
+         :ok <- check_blob_digest(consent),
+         {:ok, blob} <- parse_blob(consent),
+         :ok <- check_canonical_paths(blob, profile, consent),
+         :ok <- check_blob_refs_equality(blob, consent),
+         {:ok, blob} <- resolve_selections(ctx, Context.actor(ctx), blob),
+         :ok <- check_entry_digest_conflicts(blob) do
+      {:ok, blob}
     end
   end
 
@@ -101,6 +140,37 @@ defmodule Sanctum.Consent.Loader do
       {:ok, consent} -> {:ok, consent}
       {:error, _} -> {:error, {:no_head_consent, profile.id}}
     end
+  end
+
+  # The origin is the admission path's (`Prima.Origin`), never the
+  # credential's: a revision admits the origins its person named, and a
+  # context with none — or one the revision does not name — is asked to
+  # grant again, as any other consent the run lacks.
+  defp check_origin(%Context{origin: origin}, profile, %{admitted_origins: origins} = consent) do
+    if origin in origins, do: :ok, else: regrant(profile, consent)
+  end
+
+  # `consent_required` with its usual payload: the surface that handles it
+  # already raises the grant prompt for that profile.
+  defp regrant(profile, consent) do
+    {:error,
+     {:consent_required,
+      %{profile_id: profile.id, current_revision: consent.revision, shape_diff: []}}}
+  end
+
+  # A storage path is granted as the door reaches it. A revision written
+  # before the manifest grammar refused other spellings (`data//secrets/`)
+  # still runs nothing: it is asked again, under the canonical spelling,
+  # and never rewritten here.
+  defp check_canonical_paths(%Blob{nodes: nodes}, profile, consent) do
+    canonical? =
+      Enum.all?(nodes, fn {_ref, node} ->
+        Enum.all?(node.edges, fn {_key, edge} ->
+          Enum.all?(Blob.Edge.paths(edge), &Prima.Manifest.Caps.canonical_storage_path?/1)
+        end)
+      end)
+
+    if canonical?, do: :ok, else: regrant(profile, consent)
   end
 
   defp check_consent_validity(consent) do
@@ -192,31 +262,63 @@ defmodule Sanctum.Consent.Loader do
   # pinned one when the selection pinned it. The bound entry then rides
   # the edge, projected to what both the selection and the ingress allow.
   # Anything else leaves the selection in place, which no run can unseal.
-  defp resolve_selections(actor, %Blob{} = blob) do
-    Blob.map_edges(blob, fn _node_ref, key, edge ->
-      case {edge.vault, Blob.edge_target(key)} do
-        {%{via: via, projection: projection}, {:ok, target}} ->
-          case resolve_selection(actor, target, via, projection) do
-            {:ok, vault} ->
-              %{edge | vault: vault}
-
-            {:error, reason} ->
-              Logger.debug(
-                "[Consent.Loader] selection on #{key} not resolved: #{inspect(reason)}"
-              )
-
-              edge
-          end
-
-        _bound_absent_or_ingress ->
-          edge
+  #
+  # The lender's head must admit the context's origin as the root's must:
+  # a key lent under a grant that does not name this origin is not lent to
+  # this run, and the whole load is refused, naming the lender.
+  defp resolve_selections(%Context{} = ctx, actor, %Blob{nodes: nodes} = blob) do
+    nodes
+    |> Enum.reduce_while({:ok, %{}}, fn {node_ref, node}, {:ok, resolved} ->
+      case resolve_node(ctx, actor, node) do
+        {:ok, node} -> {:cont, {:ok, Map.put(resolved, node_ref, node)}}
+        {:error, _} = refused -> {:halt, refused}
       end
     end)
+    |> case do
+      {:ok, resolved} -> {:ok, %{blob | nodes: resolved}}
+      {:error, _} = refused -> refused
+    end
   end
 
-  defp resolve_selection(actor, target, via, projection) do
+  defp resolve_node(ctx, actor, %Blob.Node{edges: edges} = node) do
+    edges
+    |> Enum.reduce_while({:ok, %{}}, fn {key, edge}, {:ok, resolved} ->
+      case resolve_edge(ctx, actor, key, edge) do
+        {:ok, edge} -> {:cont, {:ok, Map.put(resolved, key, edge)}}
+        {:error, _} = refused -> {:halt, refused}
+      end
+    end)
+    |> case do
+      {:ok, resolved} -> {:ok, %{node | edges: resolved}}
+      {:error, _} = refused -> refused
+    end
+  end
+
+  defp resolve_edge(ctx, actor, key, edge) do
+    case {edge.vault, Blob.edge_target(key)} do
+      {%{via: via, projection: projection}, {:ok, target}} ->
+        case resolve_selection(ctx, actor, target, via, projection) do
+          {:ok, vault} ->
+            {:ok, %{edge | vault: vault}}
+
+          {:error, {:consent_required, _}} = refused ->
+            refused
+
+          {:error, reason} ->
+            Logger.debug("[Consent.Loader] selection on #{key} not resolved: #{inspect(reason)}")
+
+            {:ok, edge}
+        end
+
+      _bound_absent_or_ingress ->
+        {:ok, edge}
+    end
+  end
+
+  defp resolve_selection(ctx, actor, target, via, projection) do
     with {:ok, profile} <- selected_profile(actor, target, via.label),
          {:ok, consent} <- fetch_head(actor, profile),
+         :ok <- check_origin(ctx, profile, consent),
          :ok <- check_blob_digest(consent),
          {:ok, target_blob} <- parse_blob(consent),
          {:ok, ingress} <- ingress_edge(target_blob, target),
@@ -421,7 +523,7 @@ defmodule Sanctum.Consent.Loader do
   defp local_source?(%{source_ref: source_ref}) do
     case ComponentRef.parse(source_ref) do
       {:ok, %ComponentRef{namespace: namespace}} ->
-        Cyfr.ComponentPath.local_publisher?(namespace)
+        Prima.ComponentPath.local_publisher?(namespace)
 
       _ ->
         false

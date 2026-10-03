@@ -17,14 +17,11 @@ defmodule Compendium.RegisterMintsNothingTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
-
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "register_no_mint_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -43,7 +40,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
   describe "the register action's reach" do
     test "is refused in-chain, so an approved AQUA proposal cannot run it" do
-      assert Catalog.in_chain_refused?("component", "register"),
+      assert Grimoire.in_chain_refused?("component", "register"),
              """
              `component.register` is reachable in-chain again.
 
@@ -56,10 +53,10 @@ defmodule Compendium.RegisterMintsNothingTest do
     end
 
     test "still reachable from the external plane, so console and CLI keep working" do
-      refute Catalog.in_chain_refused?("component", "list"),
+      refute Grimoire.in_chain_refused?("component", "list"),
              "sanity: a plainly in-chain action must not read as refused"
 
-      {:ok, {_module, definition}} = Catalog.lookup("component")
+      {:ok, {_module, definition}} = Grimoire.lookup("component")
       register = Map.fetch!(definition.annotations.actions, "register")
 
       assert :external in register.planes
@@ -89,7 +86,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
       # Now run the action itself. This is the whole point: the scanner
       # sees a local component with no profile and must leave it that way.
-      {:ok, result} = Compendium.MCP.handle("component", ctx, %{"action" => "register"})
+      {:ok, result} = Compendium.Provider.handle("component", ctx, %{"action" => "register"})
       assert result.status == "scanned"
 
       assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref),
@@ -158,7 +155,7 @@ defmodule Compendium.RegisterMintsNothingTest do
       assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
 
       # The scanner runs and indexes it — that is its job.
-      {:ok, _} = Compendium.MCP.handle("component", ctx, %{"action" => "register"})
+      {:ok, _} = Compendium.Provider.handle("component", ctx, %{"action" => "register"})
 
       # But it consents to nothing. An `egress.domains: ["*"]` a catalyst
       # wrote for itself is exactly what must not arrive pre-approved.

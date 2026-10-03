@@ -4,13 +4,15 @@
 defmodule Arca.ExecutionTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Arca.Execution
+  alias Arca.Schemas.Execution, as: Row
 
   @athanor Arca.Test.Actor.athanor_id()
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -26,7 +28,7 @@ defmodule Arca.ExecutionTest do
         component_type: "reagent"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       assert changeset.valid?
     end
 
@@ -41,13 +43,13 @@ defmodule Arca.ExecutionTest do
       }
 
       # No silent "reagent" default — the writer must state the type.
-      refute Execution.start_changeset(base).valid?
+      refute Row.start_changeset(base).valid?
 
       # Tinctures are browser-side and never execute through Opus.
-      refute Execution.start_changeset(Map.put(base, :component_type, "tincture")).valid?
+      refute Row.start_changeset(Map.put(base, :component_type, "tincture")).valid?
 
-      for type <- Cyfr.ComponentRef.executable_types() do
-        assert Execution.start_changeset(Map.put(base, :component_type, type)).valid?
+      for type <- Prima.ComponentRef.executable_types() do
+        assert Row.start_changeset(Map.put(base, :component_type, type)).valid?
       end
     end
 
@@ -60,7 +62,7 @@ defmodule Arca.ExecutionTest do
         status: "running"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       refute changeset.valid?
       assert {:id, _} = hd(changeset.errors)
     end
@@ -74,7 +76,7 @@ defmodule Arca.ExecutionTest do
         status: "running"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       refute changeset.valid?
       assert {:reference, _} = hd(changeset.errors)
     end
@@ -89,7 +91,7 @@ defmodule Arca.ExecutionTest do
         status: "invalid_status"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       refute changeset.valid?
       assert {:status, _} = hd(changeset.errors)
     end
@@ -105,7 +107,7 @@ defmodule Arca.ExecutionTest do
         component_type: "invalid_type"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       refute changeset.valid?
       assert {:component_type, _} = hd(changeset.errors)
     end
@@ -123,16 +125,127 @@ defmodule Arca.ExecutionTest do
         input_hash: "def456"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       assert changeset.valid?
       assert Ecto.Changeset.get_field(changeset, :component_type) == "catalyst"
       assert Ecto.Changeset.get_field(changeset, :component_digest) == "sha256:abc123"
     end
   end
 
+  describe "the admitting call" do
+    test "a start keeps the call id of the admission it was started under" do
+      Arca.Test.Actor.athanor!()
+      actor = Arca.Test.Actor.local()
+      id = "exec_call_#{System.unique_integer([:positive])}"
+
+      {:ok, _row} =
+        Execution.record_start(%{
+          id: id,
+          reference: "catalyst:local.call:1.0.0",
+          user_id: "user_test",
+          athanor_id: @athanor,
+          started_at: DateTime.utc_now(),
+          status: "running",
+          component_type: "catalyst",
+          call_id: "call_admitting"
+        })
+
+      assert :call_id in Execution.start_fields()
+      assert %{call_id: "call_admitting"} = Execution.get_tenant(actor, id)
+    end
+  end
+
+  describe "the origin" do
+    defp admit_origin(attrs) do
+      Execution.admit(
+        Map.merge(
+          %{
+            id: "exec_origin_#{System.unique_integer([:positive])}",
+            reference: "catalyst:local.test:1.0.0",
+            user_id: "user_test",
+            athanor_id: @athanor,
+            component_type: "catalyst"
+          },
+          attrs
+        ),
+        grant: Arca.Test.Actor.grant(@athanor),
+        verify: &Arca.Test.Actor.admits/1
+      )
+    end
+
+    test "a root records the origin its caller names, and one naming none is refused" do
+      assert {:ok, %{execution: root}} = admit_origin(%{origin: :programmatic})
+      assert root.origin == "programmatic"
+      assert Arca.Repo.get!(Row, root.id).origin == "programmatic"
+
+      # No default stands in for the admission path: nothing is written.
+      bare = "exec_origin_bare_#{System.unique_integer([:positive])}"
+      assert {:error, :no_origin} = admit_origin(%{id: bare})
+      assert {:error, :no_origin} = admit_origin(%{id: bare, origin: nil})
+      assert is_nil(Arca.Repo.get(Row, bare))
+      refute Arca.Repo.get_by(Arca.Schemas.ExecutionAttempt, execution_id: bare)
+
+      assert {:error, {:invalid, %{origin: _}}} = admit_origin(%{origin: "batch"})
+    end
+
+    test "a child of a parent that records no origin is refused, with nothing written" do
+      {:ok, %{execution: parent}} = admit_origin(%{origin: :webhook})
+
+      # Past every writer's guard, as a hand edit or a restored row reaches it.
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(e in Row, where: e.id == ^parent.id),
+          set: [origin: nil]
+        )
+
+      id = "exec_origin_orphan_#{System.unique_integer([:positive])}"
+
+      for named <- [nil, :interactive] do
+        assert {:error, :no_origin} =
+                 admit_origin(%{
+                   id: id,
+                   parent_execution_id: parent.id,
+                   root_execution_id: parent.id,
+                   origin: named
+                 })
+      end
+
+      assert is_nil(Arca.Repo.get(Row, id))
+    end
+
+    test "a child carries its parent's origin, and one naming another is refused" do
+      {:ok, %{execution: parent}} = admit_origin(%{origin: "schedule"})
+
+      assert {:ok, %{execution: child}} =
+               admit_origin(%{parent_execution_id: parent.id, root_execution_id: parent.id})
+
+      assert child.origin == "schedule"
+
+      assert {:ok, %{execution: named}} =
+               admit_origin(%{
+                 parent_execution_id: parent.id,
+                 root_execution_id: parent.id,
+                 origin: :schedule
+               })
+
+      assert named.origin == "schedule"
+      id = "exec_origin_other_#{System.unique_integer([:positive])}"
+
+      assert {:error, :origin_mismatch} =
+               admit_origin(%{
+                 id: id,
+                 parent_execution_id: parent.id,
+                 root_execution_id: parent.id,
+                 origin: :interactive
+               })
+
+      assert is_nil(Arca.Repo.get(Row, id))
+    end
+  end
+
   describe "complete_changeset/2" do
     test "creates valid changeset for completion" do
-      execution = %Execution{
+      execution = %Row{
         id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
@@ -147,12 +260,12 @@ defmodule Arca.ExecutionTest do
         status: "completed"
       }
 
-      changeset = Execution.complete_changeset(execution, attrs)
+      changeset = Row.complete_changeset(execution, attrs)
       assert changeset.valid?
     end
 
     test "accepts error_message for failed status" do
-      execution = %Execution{
+      execution = %Row{
         id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
@@ -168,13 +281,13 @@ defmodule Arca.ExecutionTest do
         error_message: "Component crashed"
       }
 
-      changeset = Execution.complete_changeset(execution, attrs)
+      changeset = Row.complete_changeset(execution, attrs)
       assert changeset.valid?
       assert Ecto.Changeset.get_field(changeset, :error_message) == "Component crashed"
     end
 
     test "validates status for completion" do
-      execution = %Execution{id: "exec_test123", status: "running"}
+      execution = %Row{id: "exec_test123", status: "running"}
 
       # Invalid status for completion
       attrs = %{
@@ -183,7 +296,7 @@ defmodule Arca.ExecutionTest do
         status: "invalid_status"
       }
 
-      changeset = Execution.complete_changeset(execution, attrs)
+      changeset = Row.complete_changeset(execution, attrs)
       refute changeset.valid?
       assert {:status, _} = hd(changeset.errors)
     end
@@ -221,7 +334,7 @@ defmodule Arca.ExecutionTest do
           child_key: "ck_one"
         })
 
-      assert {:ok, %Execution{id: id}} =
+      assert {:ok, %{id: id}} =
                Execution.child_by_key(actor, parent.id, "ck_one")
 
       assert id == child.id
@@ -256,7 +369,7 @@ defmodule Arca.ExecutionTest do
                  child_key: "ck_dup"
                })
 
-      assert %Execution{} =
+      assert %{id: _} =
                start!(%{
                  id: "exec_c_#{System.unique_integer([:positive])}",
                  parent_execution_id: sibling.id,
@@ -264,10 +377,10 @@ defmodule Arca.ExecutionTest do
                })
 
       # Roots carry no key, and two of them never collide.
-      assert %Execution{child_key: nil} =
+      assert %{child_key: nil} =
                start!(%{id: "exec_r_#{System.unique_integer([:positive])}"})
 
-      assert %Execution{child_key: nil} =
+      assert %{child_key: nil} =
                start!(%{id: "exec_r_#{System.unique_integer([:positive])}"})
     end
 
@@ -282,17 +395,17 @@ defmodule Arca.ExecutionTest do
         component_type: "catalyst"
       }
 
-      assert {:error, %Ecto.Changeset{errors: errors}} =
+      assert {:error, {:invalid, errors}} =
                Execution.record_start(
                  Map.merge(base, %{parent_execution_id: "exec_p", child_key: "no key"})
                )
 
-      assert Keyword.has_key?(errors, :child_key)
+      assert Map.has_key?(errors, :child_key)
 
-      assert {:error, %Ecto.Changeset{errors: errors}} =
+      assert {:error, {:invalid, errors}} =
                Execution.record_start(Map.put(base, :child_key, "ck_orphan"))
 
-      assert Keyword.has_key?(errors, :parent_execution_id)
+      assert Map.has_key?(errors, :parent_execution_id)
     end
   end
 
@@ -359,7 +472,7 @@ defmodule Arca.ExecutionTest do
         })
 
       # Complete the child
-      actor = %Cyfr.Actor{
+      actor = %Prima.Actor{
         athanor_id: @athanor,
         user_id: "user_test",
         authenticated: true,
@@ -368,11 +481,12 @@ defmodule Arca.ExecutionTest do
       }
 
       {:ok, _} =
-        Execution.record_complete(actor, child_id, %{
-          completed_at: now,
-          duration_ms: 100,
-          status: "completed"
-        })
+        Execution.record_complete(
+          actor,
+          child_id,
+          %{completed_at: now, duration_ms: 100, status: "completed"},
+          Arca.Test.Actor.standing(@athanor)
+        )
 
       children = Execution.list_running_children(parent_id)
       assert children == []
@@ -390,22 +504,26 @@ defmodule Arca.ExecutionTest do
       now = DateTime.utc_now()
 
       {:ok, _} =
-        Execution.record_start(%{
-          id: id,
-          reference: "catalyst:local.test:1.0.0",
-          user_id: "user_test",
-          athanor_id: @athanor,
-          started_at: now,
-          status: "running",
-          component_type: "catalyst"
-        })
+        Execution.admit(
+          %{
+            id: id,
+            reference: "catalyst:local.test:1.0.0",
+            user_id: "user_test",
+            athanor_id: @athanor,
+            started_at: now,
+            component_type: "catalyst",
+            origin: :programmatic
+          },
+          Arca.Test.Actor.standing(@athanor)
+        )
 
-      {count, _} =
-        Execution.mark_failed_if_running(id, %{
-          completed_at: now,
-          duration_ms: 500,
-          error_message: "Parent terminated"
-        })
+      failure = %{completed_at: now, duration_ms: 500, error_message: "Parent terminated"}
+
+      # A failure names the stamp it retires under; one that names none
+      # fails nothing.
+      assert {0, nil} = Execution.mark_failed_if_running(id, failure)
+
+      {count, _} = Execution.mark_failed_if_running(id, failure, Arca.Test.Actor.stored())
 
       assert count == 1
 
@@ -432,7 +550,7 @@ defmodule Arca.ExecutionTest do
         })
 
       # Complete it first
-      actor = %Cyfr.Actor{
+      actor = %Prima.Actor{
         athanor_id: @athanor,
         user_id: "user_test",
         authenticated: true,
@@ -441,19 +559,24 @@ defmodule Arca.ExecutionTest do
       }
 
       {:ok, _} =
-        Execution.record_complete(actor, id, %{
-          completed_at: now,
-          duration_ms: 100,
-          status: "completed"
-        })
+        Execution.record_complete(
+          actor,
+          id,
+          %{completed_at: now, duration_ms: 100, status: "completed"},
+          Arca.Test.Actor.standing(@athanor)
+        )
 
       # Try to mark as failed — should be a no-op
       {count, _} =
-        Execution.mark_failed_if_running(id, %{
-          completed_at: now,
-          duration_ms: 500,
-          error_message: "Parent terminated"
-        })
+        Execution.mark_failed_if_running(
+          id,
+          %{
+            completed_at: now,
+            duration_ms: 500,
+            error_message: "Parent terminated"
+          },
+          Arca.Test.Actor.stored()
+        )
 
       assert count == 0
 
@@ -473,11 +596,14 @@ defmodule Arca.ExecutionTest do
             reference: "catalyst:local.test:1.0.0",
             user_id: "user_test",
             athanor_id: @athanor,
-            component_type: "catalyst"
+            component_type: "catalyst",
+            origin: :programmatic
           },
           attempt: Keyword.get(opts, :attempt),
           boot_id: "node@test",
-          lease_until: lease_until
+          lease_until: lease_until,
+          grant: Arca.Test.Actor.grant(@athanor),
+          verify: &Arca.Test.Actor.admits/1
         )
 
       {id, attempt.attempt}
@@ -505,18 +631,23 @@ defmodule Arca.ExecutionTest do
       assert observed.attempt == live
 
       renewed_until = DateTime.add(DateTime.utc_now(), 180, :second)
-      assert {:ok, ^renewed_until} = Arca.ExecutionAttempts.renew(live, renewed_until)
+
+      assert {:ok, ^renewed_until} =
+               Arca.ExecutionAttempts.renew(live, renewed_until, Arca.Test.Actor.stored())
 
       assert {0, _} =
                Execution.mark_failed_if_running(
                  id,
                  %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stale"},
                  attempt: observed.attempt,
-                 lease_until: observed.lease_until
+                 lease_until: observed.lease_until,
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1
                )
 
       # A stale attempt can neither renew nor finish the row…
-      assert :lost = Arca.ExecutionAttempts.renew("att_stale", renewed_until)
+      assert :lost =
+               Arca.ExecutionAttempts.renew("att_stale", renewed_until, Arca.Test.Actor.stored())
 
       assert {:error, :not_running} =
                Execution.record_end(
@@ -524,7 +655,8 @@ defmodule Arca.ExecutionTest do
                  id,
                  "completed",
                  %{completed_at: DateTime.utc_now(), duration_ms: 1},
-                 "att_stale"
+                 "att_stale",
+                 Arca.Test.Actor.stored()
                )
 
       # …and the live one still can, closing its attempt with the row.
@@ -534,11 +666,12 @@ defmodule Arca.ExecutionTest do
                  id,
                  "completed",
                  %{completed_at: DateTime.utc_now(), duration_ms: 1},
-                 live
+                 live,
+                 Arca.Test.Actor.stored()
                )
 
       assert %{state: "completed", outcome: "ok"} =
-               Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(@athanor), live)
+               Arca.ExecutionAttempts.get(Prima.Actor.in_athanor(@athanor), live)
     end
 
     test "a renewed lease takes an execution out of the sweep" do
@@ -547,7 +680,8 @@ defmodule Arca.ExecutionTest do
       assert {:ok, _} =
                Arca.ExecutionAttempts.renew(
                  attempt,
-                 DateTime.add(DateTime.utc_now(), 180, :second)
+                 DateTime.add(DateTime.utc_now(), 180, :second),
+                 Arca.Test.Actor.stored()
                )
 
       stale_ids = Execution.list_stale_running(DateTime.utc_now()) |> Enum.map(& &1.id)
@@ -560,13 +694,15 @@ defmodule Arca.ExecutionTest do
           id,
           "completed",
           %{completed_at: DateTime.utc_now(), duration_ms: 1},
-          nil
+          attempt,
+          Arca.Test.Actor.stored()
         )
 
       assert :lost =
                Arca.ExecutionAttempts.renew(
                  attempt,
-                 DateTime.add(DateTime.utc_now(), 180, :second)
+                 DateTime.add(DateTime.utc_now(), 180, :second),
+                 Arca.Test.Actor.stored()
                )
     end
 
@@ -580,18 +716,135 @@ defmodule Arca.ExecutionTest do
                  id,
                  %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stale"},
                  attempt: observed.attempt,
-                 lease_until: observed.lease_until
+                 lease_until: observed.lease_until,
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1
                )
 
       assert %{state: "lapsed", outcome: "uncertain"} =
-               Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(@athanor), attempt)
+               Arca.ExecutionAttempts.get(Prima.Actor.in_athanor(@athanor), attempt)
 
-      assert Arca.Repo.get!(Execution, id).status == "failed"
+      assert Arca.Repo.get!(Row, id).status == "failed"
     end
 
     test "respects limit parameter" do
       for _ <- 1..3, do: running!(DateTime.add(DateTime.utc_now(), -60, :second))
       assert length(Execution.list_stale_running(DateTime.utc_now(), 1)) == 1
+    end
+  end
+
+  describe "list_by_profile/3" do
+    defp profile_row(attrs) do
+      id = "exec_by_profile_#{System.unique_integer([:positive])}"
+
+      {:ok, row} =
+        Execution.record_start(
+          Map.merge(
+            %{
+              id: id,
+              root_execution_id: id,
+              reference: "catalyst:local.usage:1.0.0",
+              user_id: "user_test",
+              athanor_id: @athanor,
+              started_at: DateTime.utc_now(),
+              status: "running",
+              component_type: "catalyst"
+            },
+            attrs
+          )
+        )
+
+      row
+    end
+
+    test "answers the runs the profile rooted, newest first, with origin, root and time" do
+      profile_id = "prof_usage_#{System.unique_integer([:positive])}"
+      earlier = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      first =
+        profile_row(%{profile_id: profile_id, origin: "interactive", started_at: earlier})
+
+      second = profile_row(%{profile_id: profile_id, origin: "schedule", schedule_id: "sch_1"})
+
+      # A child walks its root's authority and carries no profile of its own.
+      _child =
+        profile_row(%{
+          parent_execution_id: second.id,
+          root_execution_id: second.id,
+          origin: "schedule"
+        })
+
+      _other_profile = profile_row(%{profile_id: profile_id <> "_other", origin: "webhook"})
+
+      assert {:ok, [newest, oldest]} =
+               Execution.list_by_profile(Arca.Test.Actor.local(), profile_id, 20)
+
+      assert %{id: id, root_execution_id: id, origin: "schedule", schedule_id: "sch_1"} = newest
+      assert id == second.id
+      assert %{id: id, origin: "interactive", kind: "component", status: "running"} = oldest
+      assert id == first.id
+      assert DateTime.compare(oldest.started_at, earlier) == :eq
+      assert is_nil(oldest.completed_at)
+    end
+
+    test "is bounded by its limit, keeping the newest" do
+      profile_id = "prof_usage_#{System.unique_integer([:positive])}"
+
+      _older =
+        profile_row(%{
+          profile_id: profile_id,
+          origin: "programmatic",
+          started_at: DateTime.add(DateTime.utc_now(), -60, :second)
+        })
+
+      newer = profile_row(%{profile_id: profile_id, origin: "programmatic"})
+
+      assert {:ok, [only]} = Execution.list_by_profile(Arca.Test.Actor.local(), profile_id, 1)
+      assert only.id == newer.id
+    end
+
+    test "never crosses athanors: another athanor's rows under the same id are not read" do
+      Arca.Test.Actor.athanor!("ath_other")
+      profile_id = "prof_usage_#{System.unique_integer([:positive])}"
+      mine = profile_row(%{profile_id: profile_id, origin: "interactive"})
+      theirs = profile_row(%{profile_id: profile_id, origin: "webhook", athanor_id: "ath_other"})
+
+      assert {:ok, [%{id: id}]} =
+               Execution.list_by_profile(Arca.Test.Actor.local(), profile_id, 20)
+
+      assert id == mine.id
+
+      assert {:ok, [%{id: id}]} =
+               Execution.list_by_profile(Arca.Test.Actor.in_athanor("ath_other"), profile_id, 20)
+
+      assert id == theirs.id
+
+      # A platform-scope actor reads the one athanor it carries, never all.
+      assert {:ok, [%{id: id}]} =
+               Execution.list_by_profile(
+                 Arca.Test.Actor.platform(athanor_id: @athanor),
+                 profile_id,
+                 20
+               )
+
+      assert id == mine.id
+    end
+
+    test "a profile with no runs is an empty answer, and an actor with no athanor is refused" do
+      assert {:ok, []} =
+               Execution.list_by_profile(Arca.Test.Actor.local(), "prof_usage_none", 20)
+
+      for athanor_id <- [nil, ""] do
+        assert {:error, :no_athanor} =
+                 Execution.list_by_profile(
+                   Arca.Test.Actor.local(athanor_id: athanor_id),
+                   "prof_usage_none",
+                   20
+                 )
+      end
+
+      assert {:error, :no_athanor} =
+               Execution.list_by_profile(Arca.Test.Actor.platform(), "prof_usage_none", 20)
     end
   end
 

@@ -6,8 +6,9 @@ defmodule Opus.HttpHandlerEnforcementTest do
   A runner reports each refusal of its egress checks through its attempt's
   host client, which holds no context of its own. CYFR records the policy
   decisions among them for the audit trail, in the attempt's athanor and
-  for the attempt's component, and records nothing for a malformed request
-  or a transport failure.
+  for the attempt's component: its own edge checks and, since the engine
+  resolves nothing, the pin the control plane refuses for a name that does
+  not resolve. It records nothing for a malformed request.
   """
 
   use ExUnit.Case, async: false
@@ -16,15 +17,27 @@ defmodule Opus.HttpHandlerEnforcementTest do
   alias Opus.HttpHandler
   alias Opus.Test.EdgeFixtures
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 
   # A real attached attempt for `component_ref` and its host client.
+  # The control plane's own domain check runs before any resolution, so the
+  # attempt's authority must allow every host these requests name for the
+  # engine's edge, the resolver and the method check to be what decides.
   defp attached(component_ref) do
-    attempt = AttemptFixtures.attached!(component_ref: component_ref)
+    egress = %{domains: ["*"], methods: [], schemes: [], private_ips: []}
+
+    attempt =
+      AttemptFixtures.attached!(
+        ctx: Sanctum.TestContext.local(:api),
+        component_ref: component_ref,
+        authority: %{
+          Prima.Authority.zero()
+          | resources: %Prima.Authority.Blob.Edge{egress: egress}
+        }
+      )
 
     {attempt,
      Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{
@@ -38,23 +51,6 @@ defmodule Opus.HttpHandlerEnforcementTest do
     |> Arca.PolicyLog.list()
     |> then(fn {:ok, rows} -> rows end)
     |> Enum.filter(&(&1.component_ref == attempt.component_ref))
-  end
-
-  # The guest-facing entry takes no resolver of its own: the handler's
-  # egress resolves through `config :opus, :resolver`, set here to the
-  # fixture's table for the rest of the test, so a name that does not
-  # resolve is the table's nxdomain and not the public resolver's answer.
-  # The module is sync, so no other test sees the seam set.
-  defp resolve_through(resolver) do
-    previous = Application.fetch_env(:opus, :resolver)
-    Application.put_env(:opus, :resolver, resolver)
-
-    on_exit(fn ->
-      case previous do
-        {:ok, value} -> Application.put_env(:opus, :resolver, value)
-        :error -> Application.delete_env(:opus, :resolver)
-      end
-    end)
   end
 
   test "blocked egress domain records a domain_blocked enforcement row" do
@@ -89,14 +85,18 @@ defmodule Opus.HttpHandlerEnforcementTest do
     assert row.decision == "denied"
   end
 
-  test "a malformed request and a transport-level failure record nothing" do
+  test "a malformed request records nothing, and a name the control plane cannot pin is its denial" do
     edge = EdgeFixtures.edge(domains: ["*"], methods: ["GET"])
     {attempt, host} = attached("catalyst:local.audited-dns:1.0.0")
 
     malformed = HttpHandler.execute("not json", edge, EdgeFixtures.limits(), host, "ref")
     assert %{"error" => %{"type" => "invalid_json"}} = Jason.decode!(malformed)
+    assert rows_for(attempt) == []
 
-    resolve_through(Sanctum.Test.Resolver)
+    # `.test` is reserved and never resolves (RFC 6761): the pin the engine
+    # asks the control plane for is refused as a resolution failure, which
+    # the guest sees as a DNS error and the control plane records as the
+    # attempt's denial, naming the host.
     request = Jason.encode!(%{"method" => "GET", "url" => "https://nonexistent.test/data"})
 
     result =
@@ -104,12 +104,15 @@ defmodule Opus.HttpHandlerEnforcementTest do
 
     assert %{"error" => %{"type" => "dns_error", "message" => message}} = Jason.decode!(result)
     assert message =~ "nonexistent.test"
-    assert rows_for(attempt) == []
+
+    assert [row] = rows_for(attempt)
+    assert row.decision == "denied"
+    assert row.decision_reason =~ "nonexistent.test"
   end
 
   test "a refusal reported for an attempt that is no longer held records nothing" do
     {attempt, host} = attached("catalyst:local.audited-closed:1.0.0")
-    assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(attempt.ctx, attempt.execution_id)
+    assert {:ok, %{cancelled: true}} = Crucible.cancel(attempt.ctx, attempt.execution_id)
 
     assert {:error, :lost} = Opus.HostClient.record_denial(host, "domain_blocked", "blocked")
     assert rows_for(attempt) == []

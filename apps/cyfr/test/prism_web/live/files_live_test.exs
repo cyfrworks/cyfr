@@ -13,10 +13,10 @@ defmodule PrismWeb.FilesLiveTest do
   setup %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    estate = seated_athanor()
-    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: estate.id}
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
     :ok = Arca.ensure_roots(Sanctum.Context.actor(ctx))
-    {:ok, conn: conn, ctx: ctx, route: Sanctum.Tenancy.Athanors.route_slug(estate)}
+    {:ok, conn: conn, ctx: ctx, route: Sanctum.Tenancy.Athanors.route_slug(athanor)}
   end
 
   test "the root lists the folders in their tiers and nothing of the server's", %{conn: conn} do
@@ -90,7 +90,7 @@ defmodule PrismWeb.FilesLiveTest do
   # ends while one is mid-query leaves the shared sandbox connection busy
   # for the next test.
   defp settle_session_refresh do
-    Cyfr.Test.Wait.wait_until(fn -> Task.Supervisor.children(Aqua.TaskSupervisor) == [] end)
+    Prima.Test.Wait.wait_until(fn -> Task.Supervisor.children(Prism.TaskSupervisor) == [] end)
   end
 
   test "a shaped folder says so, and a shipped unit refuses to go in words", %{conn: conn} do

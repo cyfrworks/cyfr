@@ -11,26 +11,25 @@ defmodule Arca.StorageUnitsTest do
 
   use ExUnit.Case, async: false
 
-  alias Arca.Schemas.{StorageCommit, StorageUnit}
+  alias Arca.Schemas.StorageUnit
   alias Arca.StorageUnits
 
   @root "components"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     key = "catalysts/local/unit-#{System.unique_integer([:positive])}/1.0.0"
     {:ok, actor: actor("ath_a"), other: actor("ath_b"), key: key}
   end
 
-  defp actor(athanor_id), do: %Cyfr.Actor{athanor_id: athanor_id, user_id: "usr_writer"}
+  defp actor(athanor_id), do: %Prima.Actor{athanor_id: athanor_id, user_id: "usr_writer"}
 
   defp identity(revision, attrs \\ %{}) do
     Map.merge(
       %{
         new_revision: revision,
-        content_identity: Cyfr.Digest.sha256(revision),
+        content_identity: Prima.Digest.sha256(revision),
         commit_identity: "usr_writer"
       },
       attrs
@@ -159,7 +158,7 @@ defmodule Arca.StorageUnitsTest do
       assert {:ok, %{state: "committed", current_revision: "rev_1", draft_writer_token: nil}} =
                StorageUnits.current(actor, @root, key)
 
-      assert {:ok, [%StorageCommit{} = commit]} = StorageUnits.journal(actor, @root, key)
+      assert {:ok, [%{id: _} = commit]} = StorageUnits.journal(actor, @root, key)
 
       assert %{
                athanor_id: "ath_a",
@@ -170,7 +169,7 @@ defmodule Arca.StorageUnitsTest do
              } = commit
 
       assert unit_id == draft.id
-      assert commit.content_identity == Cyfr.Digest.sha256("rev_1")
+      assert commit.content_identity == Prima.Digest.sha256("rev_1")
     end
 
     test "a second commit appends a second journal row naming the first as its prior", %{
@@ -285,6 +284,58 @@ defmodule Arca.StorageUnitsTest do
     end
   end
 
+  describe "the projection generation" do
+    defp change(actor, key) do
+      {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, @root, units: [key])
+      Enum.find(token.units, &(&1.unit_key == key))
+    end
+
+    test "a commit stamps its unit at a new generation, not ready, naming its revision", %{
+      actor: actor,
+      key: key
+    } do
+      token = StorageUnits.new_writer_token()
+      {:ok, draft} = StorageUnits.register_draft(actor, @root, key, token)
+      assert %{generation: 0} = change(actor, key)
+
+      assert {:committed, generation} =
+               StorageUnits.stamped_commit(actor, draft, nil, token, identity("rev_1"))
+
+      assert %{generation: ^generation, ready: false, source_revision: "rev_1", pending: true} =
+               change(actor, key)
+
+      assert {:ok, %{epoch: ^generation}} = Arca.StorageProjectionRoots.epoch(actor, @root)
+    end
+
+    test "a refused commit stamps nothing", %{actor: actor, key: key} do
+      commit!(actor, key, "rev_1")
+      stamped = change(actor, key)
+      {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_2")
+
+      assert {:error, :stale_revision} =
+               StorageUnits.stamped_commit(actor, draft, "rev_0", "wrt_2", identity("rev_2"))
+
+      assert change(actor, key) == stamped
+    end
+
+    test "a retirement stamps a tombstone, whether or not a row named the unit", %{
+      actor: actor,
+      other: other,
+      key: key
+    } do
+      commit!(actor, key, "rev_1")
+
+      assert {:retired, retired} = StorageUnits.stamped_retire(actor, @root, key)
+
+      assert %{generation: ^retired, tombstone: true, ready: false, source_revision: nil} =
+               change(actor, key)
+
+      assert {:not_found, absent} = StorageUnits.stamped_retire(other, @root, key)
+      assert %{generation: ^absent, tombstone: true} = change(other, key)
+      assert {:error, :not_found} = StorageUnits.current(other, @root, key)
+    end
+  end
+
   describe "abandon_draft/3, retire/3, current_under/2, stage_prefix/3" do
     test "an abandoned first draft is retired; an abandoned next draft leaves the unit committed",
          %{actor: actor, key: key} do
@@ -383,7 +434,7 @@ defmodule Arca.StorageUnitsTest do
     end
 
     test "an actor with no athanor is refused, and registers nothing", %{key: key} do
-      nobody = %Cyfr.Actor{athanor_id: nil, user_id: "usr_x"}
+      nobody = %Prima.Actor{athanor_id: nil, user_id: "usr_x"}
       unit = %StorageUnit{id: "unit_x", athanor_id: "ath_a", root: @root, unit_key: key}
 
       assert {:error, :no_athanor} = StorageUnits.register_draft(nobody, @root, key, "wrt_1")
@@ -398,7 +449,7 @@ defmodule Arca.StorageUnitsTest do
                StorageUnits.commit(nobody, unit, nil, "wrt_1", identity("rev_1"))
 
       # And an empty athanor is no athanor.
-      blank = %Cyfr.Actor{athanor_id: ""}
+      blank = %Prima.Actor{athanor_id: ""}
       assert {:error, :no_athanor} = StorageUnits.register_draft(blank, @root, key, "wrt_1")
 
       assert {:error, :not_found} = StorageUnits.current(actor("ath_a"), @root, key)

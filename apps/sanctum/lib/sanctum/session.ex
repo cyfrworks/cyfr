@@ -12,7 +12,7 @@ defmodule Sanctum.Session do
   ## Usage
 
       # Create a session — only after the door admitted the identity
-      # (`EmissaryWeb.AuthController.callback/2`, `Sanctum.Auth.DeviceFlow`)
+      # (`PrismWeb.AuthController.callback/2`, `Sanctum.Auth.DeviceFlow`)
       {:ok, session} = Sanctum.Session.create(ctx)
 
       # Load context from session token
@@ -45,45 +45,43 @@ defmodule Sanctum.Session do
 
   alias Sanctum.Context
 
-  # Session configuration
-  # 30 days by default — sessions slide forward on activity (see refresh_if_stale/1),
-  # so this acts as an idle timeout, not a hard cap.
-  @default_session_ttl_hours 720
-  @min_session_ttl_hours 1
+  # The idle timeout is the `session_ttl_hours` platform setting (720, 30
+  # days, by default), read through `Arca.PlatformSettings.effective/1` on
+  # each create and refresh. Sessions slide forward on activity (see
+  # `refresh_if_stale/1`), so it is an idle timeout, not a hard cap.
   @token_bytes 32
   # Year 9999 — used as expires_at when TTL is 0 (infinite)
   # Microsecond precision so it dumps cleanly into the `:utc_datetime_usec`
   # `expires_at` column on both adapters.
   @never_expires ~U[9999-12-31 23:59:59.999999Z]
 
+  # `{:ok, 0}` is sessions that never idle out, an intentional self-hosted
+  # choice. The setting refuses a stale value: a store that cannot answer
+  # it is `{:error, :unavailable}`, and nothing is issued or extended on a
+  # window this member cannot read.
   defp session_ttl_hours do
-    case Application.get_env(:sanctum, :session_ttl_hours, @default_session_ttl_hours) do
-      0 ->
-        # Infinite sessions — intentional self-hosted feature
-        0
+    case Arca.PlatformSettings.effective("session_ttl_hours") do
+      {:ok, hours} when is_integer(hours) and hours >= 0 ->
+        {:ok, hours}
 
-      hours when is_integer(hours) and hours < @min_session_ttl_hours ->
-        Logger.warning(
-          "[Sanctum.Session] CYFR_SESSION_TTL_HOURS=#{hours} is below minimum (#{@min_session_ttl_hours}). " <>
-            "Using #{@min_session_ttl_hours} hour(s). Set to 0 for infinite sessions."
+      {:ok, other} ->
+        Logger.error(
+          "[Sanctum.Session] the stored session_ttl_hours #{inspect(other)} is not a " <>
+            "whole number of hours; refusing until it is"
         )
 
-        @min_session_ttl_hours
+        {:error, :unavailable}
 
-      hours when is_integer(hours) ->
-        hours
+      {:error, :unavailable} ->
+        {:error, :unavailable}
 
-      # A non-integer (a string that slipped past runtime.exs, a typo'd
-      # override) must not turn every create/refresh into a CaseClauseError.
-      other ->
-        Logger.warning(
-          "[Sanctum.Session] invalid :session_ttl_hours #{inspect(other)} — " <>
-            "using the #{@default_session_ttl_hours}h default"
-        )
-
-        @default_session_ttl_hours
+      {:error, reason} when reason in [:uninstalled, :unknown_key] ->
+        raise "[Sanctum.Session] session_ttl_hours cannot be read: the setting is #{reason}"
     end
   end
+
+  defp expires_at(0, _now), do: @never_expires
+  defp expires_at(hours, now), do: DateTime.add(now, hours * 3600, :second)
 
   @type session :: %{
           token: String.t(),
@@ -100,32 +98,185 @@ defmodule Sanctum.Session do
 
   @doc """
   Create a new session for an authenticated context. Callers are the two
-  sign-in paths, after `Sanctum.Door.admit_identity/2` said yes; nothing
+  sign-in paths, after `Sanctum.Door.admit_identity/2` said yes and
+  `Sanctum.Tenancy.resolve_status/2` bound the admitted context; nothing
   else mints one.
 
+  The session is written in the issuance transaction
+  (`Arca.SecurityTransitions.Issuance`): the person and the session's
+  athanor are locked and reread, and must still be active at the
+  generations the context read (`ctx.credential_binding`), and the
+  membership that granted the focus must still stand. A context that read
+  its standing before a denial or an archive therefore cannot mint a
+  session after the allow or the reopen: `{:error, :stale_generation}`.
+  A context with no binding is `{:error, :missing_generation}` — except
+  where `generation_snapshot:` supplies one read from the rows
+  (`Sanctum.Tenancy.generation_snapshot/2`), which only a test fixture
+  building a context by hand does. `{:error, :unauthenticated}` is a
+  person, athanor or membership that no longer stands, and
+  `{:error, :unavailable}` an idle timeout the store cannot answer.
+
+  The session's provider `restore` is reserved
+  (`Sanctum.Auth.Identity.reserved_provider?/1`): only the
+  installation-authorized restore issues one, naming in `restore:` the
+  restore attempt that minted this very person and has reached `minted`
+  or `completed` (`Sanctum.Recovery`). Any other request for it is
+  `{:error, :reserved_provider}`, so neither an external identity claim nor
+  an ordinary session request selects the provider whose recent session
+  may initialize a person's first fresh method.
+
+  ## A remote person's session
+
+  A session of a person whose identity is `remote` records the
+  `identity_key_epoch` of their head, read fresh from their directory
+  (`Sanctum.IdentityFreshness.fresh!/2`) before the session's transaction
+  opens, whichever door admitted them: the `cyfr` door, a passkey
+  registered here or a door linked here. The store binds it under the
+  person's lock to the cached head's current epoch
+  (`Arca.SessionStorage.create_session/3`), so a rotation or a recovery
+  either retires the session or refuses it (`{:error, :stale_key_epoch}`),
+  whenever it lands after that read. A directory that cannot be read
+  mints nothing (`{:error, :identity_stale}`). A local person's session
+  records none.
+
+  ## The epoch a door verified under
+
+  `key_epoch:` is the `key_epoch` of the head the door verified the
+  person's proof against, nil for a local person, whose proof stands on
+  no head. When it is given, the fresh read must answer the same epoch
+  (`{:error, :stale_key_epoch}` otherwise): a rotation or a recovery that
+  lands between the door's verification and this read moved the head
+  the proof was checked against, and what the new head retired (a
+  passkey a recovery replaced among it) is not judged here, so nothing
+  is minted and the door verifies again. Absent, the session records
+  whatever epoch the fresh read answers.
+
+  ## A login receipt
+
+  `login_receipt: %{token: token, receipt: attrs}` is the `cyfr` door's
+  (`Sanctum.Auth.CyfrDoor`): the session's token is the one the door
+  derived for its challenge rather than a random one, and the receipt
+  (`Arca.CarryActions.record_receipt/2`'s `attrs`) commits in the
+  session's own transaction, so a session and its receipt exist together
+  or not at all. The receipt's `key_epoch`, the one the assertion was
+  verified under, must be the fresh head's (`{:error, :stale_key_epoch}`):
+  a rotation between the proof and the session admits nothing.
+
   Returns a session map containing the token and identity fields.
-
-  ## Examples
-
-      ctx = Sanctum.Context.build(user_id: "123", email: "alice@example.com", provider: "github")
-      {:ok, session} = Sanctum.Session.create(ctx)
-      session.token
-      #=> "abc123..."
-
   """
-  @spec create(Context.t()) :: {:ok, session()} | {:error, term()}
-  def create(%Context{} = ctx) do
-    token = generate_token()
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+  @spec create(Context.t(), keyword()) :: {:ok, session()} | {:error, term()}
+  def create(%Context{} = ctx, opts \\ []) when is_list(opts) do
+    receipt = Keyword.get(opts, :login_receipt)
 
-    expires_at =
-      case session_ttl_hours() do
-        0 -> @never_expires
-        hours -> DateTime.add(now, hours * 3600, :second)
+    with :ok <- provider_permitted(ctx, Keyword.get(opts, :restore)),
+         {:ok, epoch} <- identity_epoch(ctx.user_id),
+         :ok <- verified_epoch(Keyword.fetch(opts, :key_epoch), epoch),
+         :ok <- receipt_epoch(receipt, epoch),
+         {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, opts) do
+      insert(ctx, expectation, epoch, receipt)
+    end
+  end
+
+  # The epoch the door verified the person's proof under, held to the one
+  # the fresh read answers: a head that moved in between mints nothing.
+  defp verified_epoch(:error, _epoch), do: :ok
+  defp verified_epoch({:ok, epoch}, epoch), do: :ok
+  defp verified_epoch({:ok, _another}, _epoch), do: {:error, :stale_key_epoch}
+
+  # A remote person's head, read fresh from their directory outside any
+  # transaction: its `key_epoch` is what the session records. A local
+  # person's session records none.
+  defp identity_epoch(user_id) when is_binary(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
+        case Sanctum.IdentityFreshness.fresh!(identifier) do
+          {:ok, %{key_epoch: epoch}} -> {:ok, epoch}
+          {:refused, :identity_stale} -> {:error, :identity_stale}
+          {:error, :unavailable} -> {:error, :unavailable}
+        end
+
+      {:ok, %{provenance: "remote"}} ->
+        {:error, :identity_key_epoch_required}
+
+      {:ok, _local} ->
+        {:ok, nil}
+
+      {:error, :not_found} ->
+        {:ok, nil}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp identity_epoch(_user_id), do: {:ok, nil}
+
+  defp receipt_epoch(nil, _epoch), do: :ok
+
+  defp receipt_epoch(%{token: token, receipt: %{key_epoch: epoch}}, epoch) when is_binary(token),
+    do: :ok
+
+  defp receipt_epoch(%{token: token, receipt: %{}}, _epoch) when is_binary(token),
+    do: {:error, :stale_key_epoch}
+
+  defp receipt_epoch(_malformed, _epoch), do: {:error, :invalid_request}
+
+  # The reserved `restore` provider stands only on the restore attempt that
+  # minted the person, read again here: a context that merely names the
+  # provider, or names another person's attempt, issues nothing.
+  defp provider_permitted(%Context{provider: provider} = ctx, restore) do
+    cond do
+      not Sanctum.Auth.Identity.reserved_provider?(provider) ->
+        :ok
+
+      is_binary(restore) and restored?(restore, ctx.user_id) ->
+        :ok
+
+      true ->
+        {:error, :reserved_provider}
+    end
+  end
+
+  defp restored?(attempt_id, user_id) when is_binary(user_id) do
+    case Arca.IdentityAttempts.get(Prima.Actor.system(), attempt_id) do
+      {:ok, %{kind: "restore", user_id: ^user_id, phase: phase}} ->
+        phase in ["minted", "completed"]
+
+      _other ->
+        false
+    end
+  end
+
+  defp restored?(_attempt_id, _user_id), do: false
+
+  # The `cyfr` door's receipt, recorded in the session's own transaction
+  # for the person the session is minted for.
+  defp record_receipt(nil), do: fn _session -> :ok end
+
+  defp record_receipt(%{receipt: attrs}) do
+    fn %{user_id: user_id} ->
+      case Arca.CarryActions.record_receipt(
+             Prima.Actor.system(),
+             Map.put(attrs, :user_id, user_id)
+           ) do
+        {:ok, _receipt} -> :ok
+        {:error, reason} -> {:error, reason}
       end
+    end
+  end
+
+  defp insert(%Context{} = ctx, expectation, epoch, receipt) do
+    with {:ok, hours} <- session_ttl_hours() do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      insert(ctx, expectation, now, expires_at(hours, now), epoch, receipt)
+    end
+  end
+
+  defp insert(%Context{} = ctx, expectation, now, expires_at, epoch, receipt) do
+    token = if receipt, do: receipt.token, else: generate_token()
 
     # A session carries no permission list: it is a person's, and what
-    # they may do is decided by their memberships, the estate's consents
+    # they may do is decided by their memberships, the athanor's consents
     # and the policy on every request — never by a bag frozen at sign-in.
     attrs = %{
       token_prefix: String.slice(token, 0, 8),
@@ -137,11 +288,16 @@ defmodule Sanctum.Session do
       # scope is persisted: every session works inside its athanor, and the
       # platform-admin capability is re-read from the membership row on load.
       athanor_id: ctx.athanor_id,
+      identity_key_epoch: epoch,
       expires_at: expires_at,
       inserted_at: now
     }
 
-    case Arca.SessionStorage.create_session(hash_token(token), attrs) do
+    case Arca.SessionStorage.create_session(hash_token(token), attrs,
+           lock: Sanctum.Issuance.lock(expectation),
+           verify: Sanctum.Issuance.verify(expectation),
+           also: record_receipt(receipt)
+         ) do
       :ok ->
         session = %{
           token: token,
@@ -184,23 +340,51 @@ defmodule Sanctum.Session do
   @spec load(String.t(), surface: :console | :tincture) ::
           {:ok, Context.t()}
           | {:error, :invalid_session | :database_error | :namespace_unavailable}
-  def load(token, opts) when is_binary(token) do
+  def load(token, opts) when is_binary(token), do: load_by_hash(hash_token(token), opts)
+
+  @doc """
+  `load/2`, also saying whether the session is due its sliding refresh
+  (`slide_due?/1`), read off the row the load already read — so the
+  caller starts a refresh only when one would write.
+  """
+  @spec load_sliding(String.t(), surface: :console | :tincture) ::
+          {:ok, Context.t(), boolean()}
+          | {:error, :invalid_session | :database_error | :namespace_unavailable}
+  def load_sliding(token, opts) when is_binary(token) do
+    token_hash = hash_token(token)
+
+    with {:ok, row} <- stored(token_hash, opts),
+         {:ok, ctx} <- row_to_context(row, token_hash, Keyword.fetch!(opts, :surface)) do
+      {:ok, ctx, slide_due?(row.expires_at)}
+    end
+  end
+
+  @doc """
+  Load a Context from a session's row key (`token_hash/1`) rather than its
+  token: what `Sanctum.Caller.revalidate_session/1` rebuilds a retained
+  context from, since a holder keeps the hash and never the token. The
+  same assembly as `load/2`, with the same `:surface` rule and results.
+  """
+  @spec load_by_hash(binary(), surface: :console | :tincture) ::
+          {:ok, Context.t()}
+          | {:error, :invalid_session | :database_error | :namespace_unavailable}
+  def load_by_hash(token_hash, opts) when is_binary(token_hash) do
+    with {:ok, row} <- stored(token_hash, opts),
+         do: row_to_context(row, token_hash, Keyword.fetch!(opts, :surface))
+  end
+
+  defp stored(token_hash, opts) do
     surface = Keyword.fetch!(opts, :surface)
 
     unless surface in [:console, :tincture] do
       raise ArgumentError,
-            "Session.load surface must be :console or :tincture, got: #{inspect(surface)}"
+            "Session.load surface must be :console or :tincture, got: #{Prima.LoggerContext.shape(surface)}"
     end
 
-    case get_session_direct(token) do
-      {:ok, row} ->
-        row_to_context(row, surface)
-
-      {:error, :not_found} ->
-        {:error, :invalid_session}
-
-      {:error, :database_error} ->
-        {:error, :database_error}
+    case Arca.SessionStorage.get_session(token_hash) do
+      {:ok, row} -> {:ok, row}
+      {:error, :not_found} -> {:error, :invalid_session}
+      {:error, :database_error} -> {:error, :database_error}
     end
   end
 
@@ -232,20 +416,16 @@ defmodule Sanctum.Session do
       # Session expiration extended by 24 hours from now
 
   """
-  @spec refresh(String.t()) :: {:ok, session()} | {:error, :invalid_session | :database_error}
+  @spec refresh(String.t()) ::
+          {:ok, session()} | {:error, :invalid_session | :database_error | :unavailable}
   def refresh(token) when is_binary(token) do
     token_hash = hash_token(token)
 
-    with {:ok, _row} <- get_session_direct(token) do
-      now = DateTime.utc_now()
+    with {:ok, _row} <- get_session_direct(token),
+         {:ok, hours} <- session_ttl_hours() do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-      new_expires_at =
-        case session_ttl_hours() do
-          0 -> @never_expires
-          hours -> DateTime.add(now, hours * 3600, :second) |> DateTime.truncate(:microsecond)
-        end
-
-      case Arca.SessionStorage.refresh_session(token_hash, new_expires_at) do
+      case Arca.SessionStorage.refresh_session(token_hash, expires_at(hours, now)) do
         :ok ->
           case get_session_direct(token) do
             {:ok, row} -> {:ok, row_to_external(row, token)}
@@ -262,6 +442,7 @@ defmodule Sanctum.Session do
     else
       {:error, :not_found} -> {:error, :invalid_session}
       {:error, :database_error} -> {:error, :database_error}
+      {:error, :unavailable} -> {:error, :unavailable}
     end
   end
 
@@ -277,22 +458,37 @@ defmodule Sanctum.Session do
   """
   @spec refresh_if_stale(String.t()) :: :ok
   def refresh_if_stale(token) when is_binary(token) do
-    case session_ttl_hours() do
-      0 ->
-        :ok
+    with {:ok, row} <- get_session_direct(token),
+         true <- slide_due?(row.expires_at),
+         {:ok, _session} <- refresh(token) do
+      :ok
+    else
+      _ -> :ok
+    end
+  end
 
-      ttl_hours ->
+  @doc """
+  Whether a session expiring at `expires_at` is due its sliding refresh:
+  more than ~1 day (or half the TTL, whichever is smaller) has passed
+  since it was last extended. Never for infinite (TTL 0) sessions, nor
+  while the idle timeout cannot be read.
+  """
+  @spec slide_due?(DateTime.t() | term()) :: boolean()
+  def slide_due?(expires_at) do
+    case {session_ttl_hours(), coerce_datetime(expires_at)} do
+      {{:ok, 0}, _} ->
+        false
+
+      {{:error, :unavailable}, _} ->
+        false
+
+      {_ttl_hours, nil} ->
+        false
+
+      {{:ok, ttl_hours}, %DateTime{} = at} ->
         ttl_seconds = ttl_hours * 3600
         stale_after = ttl_seconds - min(86_400, div(ttl_seconds, 2))
-
-        with {:ok, row} <- get_session_direct(token),
-             %DateTime{} = expires_at <- coerce_datetime(row.expires_at),
-             true <- DateTime.diff(expires_at, DateTime.utc_now()) < stale_after,
-             {:ok, _session} <- refresh(token) do
-          :ok
-        else
-          _ -> :ok
-        end
+        DateTime.diff(at, DateTime.utc_now()) < stale_after
     end
   end
 
@@ -337,8 +533,8 @@ defmodule Sanctum.Session do
 
   @doc """
   Revoke every session of a person (server-denied, or removed as an
-  operator). Broadcasts `{:sessions_revoked, user_id}` on
-  `"sanctum:sessions"` so mounted LiveViews let go.
+  operator). Announces the revocation (`Sanctum.Telemetry.sessions_revoked/1`)
+  so mounted LiveViews let go.
   """
   @spec revoke_all_for_user(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def revoke_all_for_user(user_id) when is_binary(user_id) do
@@ -352,6 +548,20 @@ defmodule Sanctum.Session do
       broadcast_sessions_revoked(user_id)
       {:ok, count}
     end
+  end
+
+  @doc """
+  Announce sessions a committed transaction already removed: drop the
+  established-context memo of each token hash that transaction's DELETE
+  returned, then announce the revocation as `revoke_all_for_user/1`
+  does. Called only after the commit, so a
+  context re-established in between finds no row to cache.
+  """
+  @spec announce_revoked(String.t(), [binary()]) :: :ok
+  def announce_revoked(user_id, hashes) when is_binary(user_id) and is_list(hashes) do
+    Enum.each(hashes, &Sanctum.Caller.invalidate_hash/1)
+    broadcast_sessions_revoked(user_id)
+    :ok
   end
 
   @doc """
@@ -416,7 +626,11 @@ defmodule Sanctum.Session do
 
   # One return shape — {:ok, ctx} | {:error, :namespace_unavailable} — so
   # the caller stops discriminating structurally on struct-vs-tuple.
-  defp row_to_context(row, surface) do
+  #
+  # The one assembly of a session's context: the row key
+  # (`session_token_hash`) and the binding that names it are stamped here
+  # together and nowhere else.
+  defp row_to_context(row, token_hash, surface) do
     # A namespace is a publishing credential, not identity: a person
     # without one is as signed in as anyone, with `namespace: nil`.
     case namespace_of(row.user_id) do
@@ -439,15 +653,15 @@ defmodule Sanctum.Session do
             athanor_id: row.athanor_id,
             scope: :athanor,
             auth_method: surface_auth_method(surface),
+            session_token_hash: token_hash,
             authenticated: true
           )
 
         # Re-validated against the person's CURRENT standing, so a denial,
         # a revoked membership or an archived athanor takes effect at once;
         # a store that cannot say is a 503, never yesterday's answer.
-        case Sanctum.Tenancy.revalidate(ctx) do
-          {:ok, revalidated} -> {:ok, revalidated}
-          {:error, :unavailable} -> {:error, :database_error}
+        with {:ok, revalidated} <- revalidated(ctx) do
+          bound(revalidated, token_hash)
         end
 
       {:error, _reason} ->
@@ -455,6 +669,57 @@ defmodule Sanctum.Session do
         # Surface a retryable error so the caller returns 503 rather than
         # signing a valid person in as someone with no publisher namespace.
         {:error, :namespace_unavailable}
+    end
+  end
+
+  defp revalidated(ctx) do
+    case Sanctum.Tenancy.revalidate(ctx) do
+      {:ok, revalidated} -> {:ok, revalidated}
+      {:error, :unavailable} -> {:error, :database_error}
+    end
+  end
+
+  # The generations this context read, from a second read of the rows
+  # after revalidation chose the athanor: a read that raced a transition
+  # names the older generation, and the locked check at issuance refuses
+  # it. A person with no row, and a context the door no longer admits,
+  # carry no binding and can issue nothing.
+  defp bound(%Context{authenticated: false} = ctx, _token_hash), do: {:ok, ctx}
+
+  defp bound(%Context{} = ctx, token_hash) do
+    with {:ok, memberships} <- seats_of(ctx.user_id),
+         {:ok, snapshot} <- snapshot_of(ctx) do
+      binding =
+        snapshot &&
+          %{
+            source_kind: :session,
+            source_id: Base.url_encode64(token_hash, padding: false),
+            focus_basis:
+              Sanctum.Tenancy.focus_basis(
+                ctx,
+                ctx.athanor_id && %{id: ctx.athanor_id},
+                memberships
+              ),
+            user_generation: snapshot.user_generation,
+            athanor_generation: snapshot.athanor_generation
+          }
+
+      {:ok, %{ctx | credential_binding: binding}}
+    end
+  end
+
+  defp seats_of(user_id) do
+    case Sanctum.Tenancy.Members.list_by_user(user_id) do
+      {:ok, rows} -> {:ok, rows}
+      {:error, _reason} -> {:error, :database_error}
+    end
+  end
+
+  defp snapshot_of(%Context{} = ctx) do
+    case Sanctum.Tenancy.generation_snapshot(ctx.user_id, ctx.athanor_id) do
+      {:ok, snapshot} -> {:ok, snapshot}
+      {:error, :not_found} -> {:ok, nil}
+      {:error, :unavailable} -> {:error, :database_error}
     end
   end
 
@@ -475,24 +740,18 @@ defmodule Sanctum.Session do
       user_id: row.user_id,
       email: row.email,
       provider: row.provider,
-      created_at: Cyfr.Time.iso8601(row.inserted_at),
-      expires_at: Cyfr.Time.iso8601(row.expires_at)
+      created_at: Prima.Time.iso8601(row.inserted_at),
+      expires_at: Prima.Time.iso8601(row.expires_at)
     }
   end
 
   defp coerce_datetime(%DateTime{} = dt), do: dt
   defp coerce_datetime(_), do: nil
 
-  @session_topic "sanctum:sessions"
-
-  # Subscribers (e.g. AuthLive) hear that a session was created. No token
-  # travels — a subscriber uses adopt_active_session() to get its own.
-  # Sanctum announces; the host's bridge is what broadcasts.
+  # Subscribers hear that a session was created. No token travels — a
+  # subscriber uses adopt_active_session() to get its own. Sanctum
+  # announces; the host's bridge is what broadcasts.
   defp broadcast_session_created(_session), do: Sanctum.Telemetry.session_created()
 
   defp broadcast_sessions_revoked(user_id), do: Sanctum.Telemetry.sessions_revoked(user_id)
-
-  @doc "The topic session lifecycle events are broadcast on."
-  @spec topic() :: String.t()
-  def topic, do: @session_topic
 end

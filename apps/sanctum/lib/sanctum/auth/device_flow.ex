@@ -113,7 +113,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   `client_ip` is the address the budget is charged to, from
   `Sanctum.ClientIp`. Pass `nil` only from a surface that is already
   metered per address by the transport — today that is the MCP route
-  behind `EmissaryWeb.Plugs.MCPRateLimit`, and nothing else. It is a
+  behind `CyfrWeb.Plugs.MCPRateLimit`, and nothing else. It is a
   required argument rather than an option because a caller that has no
   answer has to say so, and the next anonymous surface must not inherit
   "unbudgeted" by omission.
@@ -141,7 +141,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp check_init_budget(client_ip) do
     with :ok <- check_ip_budget({:device_init, client_ip}, @init_per_ip_max),
          :ok <-
-           Cyfr.RateLimiter.check({:device_init, :all}, @init_global_max, @poll_window_ms) do
+           Prima.RateLimiter.check({:device_init, :all}, @init_global_max, @poll_window_ms) do
       :ok
     else
       {:deny, _retry_ms} -> {:error, "Too many sign-in attempts — try again shortly"}
@@ -153,7 +153,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp check_ip_budget({_bucket, nil}, _max), do: :ok
 
   defp check_ip_budget({bucket, client_ip}, max) when is_binary(client_ip) do
-    Cyfr.RateLimiter.check({bucket, client_ip}, max, @poll_window_ms)
+    Prima.RateLimiter.check({bucket, client_ip}, max, @poll_window_ms)
   end
 
   @doc """
@@ -204,7 +204,7 @@ defmodule Sanctum.Auth.DeviceFlow do
             # `Sanctum.Door.admit_identity/2` answers `{:error, {:door, reason}}`;
             # nothing produces a bare `:user_not_allowed`, so the arm that
             # matched it never ran. The door refusal falls through to `error`
-            # and `Sanctum.MCP.SessionTool` renders it uniformly, which is
+            # and `Sanctum.Providers.Session` renders it uniformly, which is
             # what a poller is meant to see.
             error ->
               error
@@ -294,6 +294,59 @@ defmodule Sanctum.Auth.DeviceFlow do
     end
   end
 
+  @doc """
+  Poll a device flow begun to link a door for the person signed in on
+  `ctx`, instead of signing anyone in: once the provider authorizes, the
+  identity it names is handed to `Sanctum.SignIn.link_ticket/2`, which asks
+  the door and binds a single-use link ticket to that person and session.
+  No person is minted and no session is created; the ticket is answered
+  to the page that polled, which presents it to `person.link_door`.
+
+  Returns `{:ok, %{status: "pending"}}`, `{:ok, %{status: "complete",
+  provider:, ticket:}}`, `{:ok, %{status: "expired" | "denied"}}`, or a
+  refusal: the poll's own, and `link_ticket/2`'s (`:unauthenticated`,
+  `:not_linkable`, `{:door, reason}`, `:unavailable`). The budget is the
+  sign-in poll's.
+  """
+  @spec poll_for_link(provider(), String.t(), String.t() | nil, Context.t()) ::
+          {:ok, map()} | {:error, term()}
+  def poll_for_link(provider, device_code, client_ip, %Context{} = ctx) do
+    with :ok <- check_poll_budget(device_code, client_ip),
+         {:ok, provider, client_id} <- usable(provider) do
+      case request_token(provider, client_id, device_code) do
+        {:ok, tokens} ->
+          with {:ok, user_info} <- fetch_user_info(provider, tokens),
+               {:ok, ticket} <-
+                 Sanctum.SignIn.link_ticket(ctx, %{
+                   key: Identity.builtin_key(provider, user_info.id),
+                   provider: Atom.to_string(provider),
+                   email: user_info.email,
+                   verified: user_info.verified
+                 }) do
+            {:ok, %{status: "complete", provider: Atom.to_string(provider), ticket: ticket}}
+          end
+
+        {:error, :authorization_pending} ->
+          {:ok, %{status: "pending"}}
+
+        {:error, :slow_down} ->
+          {:ok, %{status: "pending", slow_down: true}}
+
+        {:error, :expired_token} ->
+          {:ok, %{status: "expired"}}
+
+        {:error, :access_denied} ->
+          {:ok, %{status: "denied"}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      {:budget, :slow_down} -> {:ok, %{status: "pending", slow_down: true}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   # Both poll surfaces are anonymous, and every poll POSTs to the IdP
   # with THIS server's client id — unbudgeted, an abuser could spend the
   # client id's reputation at the provider. Three buckets, narrowest
@@ -307,11 +360,11 @@ defmodule Sanctum.Auth.DeviceFlow do
   # top of the module — init reads them too, and attributes must be
   # defined before use.)
   defp check_poll_budget(device_code, client_ip) do
-    per_code_key = {:device_poll, Cyfr.Digest.sha256_hex(device_code)}
+    per_code_key = {:device_poll, Prima.Digest.sha256_hex(device_code)}
 
-    with :ok <- Cyfr.RateLimiter.check(per_code_key, @poll_per_code_max, @poll_window_ms),
+    with :ok <- Prima.RateLimiter.check(per_code_key, @poll_per_code_max, @poll_window_ms),
          :ok <- check_ip_budget({:device_poll, client_ip}, @poll_per_ip_max),
-         :ok <- Cyfr.RateLimiter.check({:device_poll, :all}, @poll_global_max, @poll_window_ms) do
+         :ok <- Prima.RateLimiter.check({:device_poll, :all}, @poll_global_max, @poll_window_ms) do
       :ok
     else
       {:deny, _retry_ms} -> {:budget, :slow_down}

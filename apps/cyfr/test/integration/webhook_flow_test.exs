@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.WebhookFlowIntegrationTest do
+defmodule CyfrWeb.WebhookFlowIntegrationTest do
   @moduledoc """
   End-to-end test for the inbound webhook pipeline.
 
@@ -13,12 +13,10 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
   endpoint.
   """
 
-  use EmissaryWeb.ConnCase, async: false
-
-  alias Sanctum.Webhook
+  use CyfrWeb.ConnCase, async: false
 
   setup do
-    # Webhook controller dispatches `Cyfr.Execution.Dispatch.run/4` async via
+    # Webhook controller dispatches `Crucible.Dispatch.run/4` async via
     # `Task.Supervisor.start_child/2`. Tests must synchronize on the task
     # completing (`[:invoke, :stop]`) before exiting, otherwise the
     # ConnCase Ecto sandbox checks the connection back in while the task
@@ -41,7 +39,7 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  # Wait for the spawned `Cyfr.Execution.Dispatch.run/4` task to finish so the test
+  # Wait for the spawned `Crucible.Dispatch.run/4` task to finish so the test
   # process doesn't exit while the task is mid-DB-query.
   defp await_invoke_stop(request_id) do
     assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _measurements,
@@ -61,7 +59,7 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
     profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{comp}")
 
     {:ok, result} =
-      Webhook.create(
+      Sanctum.TestContext.create_webhook(
         ctx,
         Map.merge(%{name: name, target_ref: "f:local.#{comp}", profile_id: profile}, opts)
         # After the merge, so a fixture naming a real header still wins.
@@ -145,15 +143,30 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
     # must be accepted.
     {:ok, hook_row} = Arca.WebhookStorage.get_by_slug(slug)
 
-    retry_after_failure =
-      build_conn()
-      |> put_req_header("content-type", "application/json")
-      |> put_req_header("x-cyfr-signature", sig)
-      |> put_req_header("x-cyfr-delivery", delivery_id)
-      |> post("/hooks/" <> slug, body)
+    # The claim is settled after the stop event; until it is, the delivery
+    # is still in flight and a retry reads as a duplicate, which runs
+    # nothing.
+    test = self()
 
-    assert json_response(retry_after_failure, 200)["status"] == "accepted"
-    await_invoke_stop(json_response(retry_after_failure, 200)["request_id"])
+    Prima.Test.Wait.wait_until(
+      fn ->
+        retry =
+          build_conn()
+          |> put_req_header("content-type", "application/json")
+          |> put_req_header("x-cyfr-signature", sig)
+          |> put_req_header("x-cyfr-delivery", delivery_id)
+          |> post("/hooks/" <> slug, body)
+          |> json_response(200)
+
+        if retry["status"] == "accepted", do: send(test, {:retry_accepted, retry["request_id"]})
+        retry["status"] == "accepted"
+      end,
+      2_000,
+      "the failed delivery's retry to be accepted"
+    )
+
+    assert_receive {:retry_accepted, retry_request_id}
+    await_invoke_stop(retry_request_id)
 
     # And a delivery whose claim is live — staked here rather than raced
     # for — is still deduped over the real HTTP path. `claimed` means "in

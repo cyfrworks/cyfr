@@ -16,7 +16,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Execution.MCP
+  alias Crucible.Provider
   alias Sanctum.Consent.{Bootstrap}
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
@@ -30,10 +30,9 @@ defmodule Opus.SeedModelCatalystsTest do
     {"openrouter", "OPENROUTER_API_KEY", :keyed}
   ]
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "seed_models_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path]
@@ -52,7 +51,7 @@ defmodule Opus.SeedModelCatalystsTest do
       end
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
   for {name, field, _window} <- @models do
@@ -75,22 +74,22 @@ defmodule Opus.SeedModelCatalystsTest do
       # before any key exists: `describe` needs none, and a chat request
       # off the contract is refused as such rather than as a key failure.
       {:ok, component} = Compendium.Registry.get_latest(ctx, name, "local", "catalyst")
-      assert Cyfr.Models.speaks_chat?(component.manifest)
+      assert Prima.Model.speaks_chat?(component.manifest)
 
       assert {:ok, %{result: described}} =
-               MCP.handle("execution", ctx, %{
+               Provider.handle("execution", ctx, %{
                  "action" => "run",
                  "reference" => ref,
                  "input" => %{"operation" => "describe", "params" => %{}}
                })
 
-      assert {:ok, capabilities} = Cyfr.Models.decode_envelope(described)
-      assert capabilities["contracts"] == [Cyfr.Models.chat_contract()]
+      assert {:ok, capabilities} = Prima.Model.decode_envelope(described)
+      assert capabilities["contracts"] == [Prima.Model.chat_contract()]
       assert capabilities["tools"] == true and capabilities["streaming"] == true
       assert is_list(capabilities["provider_tools"]) and is_list(capabilities["media_types"])
 
       describe_model = fn model ->
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"operation" => "describe", "params" => %{"model" => model}}
@@ -102,7 +101,7 @@ defmodule Opus.SeedModelCatalystsTest do
           assert {:ok, %{result: answer}} = describe_model.(model)
 
           assert {:ok, %{"context_window" => ^context_window}} =
-                   Cyfr.Models.decode_envelope(answer)
+                   Prima.Model.decode_envelope(answer)
 
           assert {:error, message} = describe_model.("no-such-model")
           assert message =~ "not a model"
@@ -112,7 +111,7 @@ defmodule Opus.SeedModelCatalystsTest do
       end
 
       assert {:error, "'model' is required"} =
-               MCP.handle("execution", ctx, %{
+               Provider.handle("execution", ctx, %{
                  "action" => "run",
                  "reference" => ref,
                  "input" => %{"operation" => "chat", "params" => %{"messages" => []}}
@@ -120,7 +119,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
       # The operator binds a vault entry to the catalyst's one need.
       {:ok, entry} =
-        Sanctum.Vault.create(ctx, %{
+        Sanctum.TestContext.create_vault(ctx, %{
           name: "#{name} key",
           kind: "api_key",
           fields: %{field => "sk-test-#{name}"}
@@ -143,7 +142,7 @@ defmodule Opus.SeedModelCatalystsTest do
       # surfaces as the error: the key read succeeded first (a denied read
       # answers "Failed to read #{field}" instead), and nothing was dialled.
       assert {:error, "Unknown operation: nothing.here"} =
-               MCP.handle("execution", ctx, %{
+               Provider.handle("execution", ctx, %{
                  "action" => "run",
                  "reference" => ref,
                  "input" => %{"operation" => "nothing.here", "params" => %{}}
@@ -179,22 +178,22 @@ defmodule Opus.SeedModelCatalystsTest do
 
     child_opts = [
       ctx: Sanctum.Context.enter_guest(ctx),
-      parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
+      parent_execution_id: Cyfr.Test.AttemptFixtures.lineage!(ctx).parent_execution_id,
       root_execution_id: "exec_root_#{System.unique_integer([:positive])}"
     ]
 
     input = %{"operation" => "nothing.here", "params" => %{}}
 
-    {:ok, before} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, before} = Crucible.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{node_ref: "catalyst:local.claude:" <> _, reason: reason}}} =
-             Cyfr.Execution.run_child(before, "catalyst:local.claude", nil, input, child_opts)
+             Crucible.run_child(before, "catalyst:local.claude", nil, input, child_opts)
 
     assert reason == "vault_selection_unbound"
 
     # The person connects the key on the catalyst — one act, on the model.
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "claude key",
         kind: "api_key",
         fields: %{"ANTHROPIC_API_KEY" => "sk-test-claude"}
@@ -220,25 +219,25 @@ defmodule Opus.SeedModelCatalystsTest do
 
     # The assistant's authority, loaded again, lends the key on its edge;
     # the child reads it and runs to its own refusal.
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, authority} = Crucible.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, "Unknown operation: nothing.here"} =
-             Cyfr.Execution.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
+             Crucible.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
 
     # Revoking the catalyst's profile cuts the assistant off at the next load.
     {:ok, [claude_profile]} =
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.claude")
 
     :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), claude_profile.id, "revoked")
-    {:ok, revoked} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, revoked} = Crucible.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
-             Cyfr.Execution.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
+             Crucible.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
   end
 
   defp newest_shipped(plural, name) do
     Path.join(@seed_root, "components/#{plural}/local/#{name}/*")
-    |> Cyfr.Test.SourceTree.files!()
+    |> Prima.Test.SourceTree.files!()
     |> Enum.map(&Path.basename/1)
     |> Compendium.Semver.sort_desc()
     |> hd()

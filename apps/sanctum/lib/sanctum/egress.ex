@@ -10,7 +10,7 @@ defmodule Sanctum.Egress do
   disabled; callers validate and pin any subsequent destination themselves.
   """
 
-  import Cyfr.MapUtil, only: [put_unless_nil: 3]
+  import Prima.MapUtil, only: [put_unless_nil: 3]
 
   @doc """
   Issue an HTTP request with SSRF protection AND DNS-rebinding protection.
@@ -32,7 +32,7 @@ defmodule Sanctum.Egress do
     * `:protocols` — Mint protocols list (e.g. `[:http1]`)
     * `:transport_opts` — extra Mint transport opts
     * `:max_response_bytes` — enforce a response-size ceiling WHILE the
-      body streams in (via `Cyfr.BoundedBody.collector/1`), aborting the transfer
+      body streams in (via `Prima.BoundedBody.collector/1`), aborting the transfer
       at the limit instead of buffering an arbitrarily large body first.
       Exceeding it returns `{:error, {:response_too_large, size, max}}`.
   """
@@ -52,7 +52,7 @@ defmodule Sanctum.Egress do
           |> Keyword.put(:method, method)
           |> Keyword.put(:headers, headers)
           |> put_unless_nil(:body, body)
-          |> put_unless_nil(:into, max_bytes && Cyfr.BoundedBody.collector(max_bytes))
+          |> put_unless_nil(:into, max_bytes && Prima.BoundedBody.collector(max_bytes))
 
         case Req.request(req_opts) do
           {:ok, %Req.Response{status: status, headers: resp_headers} = resp} ->
@@ -70,7 +70,7 @@ defmodule Sanctum.Egress do
   end
 
   defp response_body(%Req.Response{body: body}, nil), do: {:ok, body}
-  defp response_body(resp, max_bytes), do: Cyfr.BoundedBody.read(resp, max_bytes)
+  defp response_body(resp, max_bytes), do: Prima.BoundedBody.read(resp, max_bytes)
 
   # Req returns headers as %{name => [values]}; flatten to the [{name, value}]
   # list shape the Finch-style callers expect.

@@ -5,27 +5,41 @@ defmodule PrismWeb.ToolSeamTest do
   @moduledoc """
   `PrismWeb.Ops` is the console's seam onto the operation catalog — one
   place that splits `"tool/action"`, one `error_message/1` vocabulary.
-  `call_tool/3` takes a context, so work handed to `Aqua.TaskSupervisor`
+  `call_tool/3` takes a context, so work handed to `Prism.TaskSupervisor`
   has no reason to reach past it; this test keeps every other console
   module from calling the catalog directly.
   """
 
   use ExUnit.Case, async: true
 
+  # The refused call below is recorded, so the test owns a sandbox.
+  setup do
+    Cyfr.Test.Sandbox.setup!(%{async: true})
+    :ok
+  end
+
   @seam "apps/cyfr/lib/prism_web/ops.ex"
   @direct_call ~r/\bCatalog\.call_external\(/
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
+  # The console's tree, and the page helpers it shares with the sign-in
+  # controllers: they transcribe a console flow's outcome and stay under
+  # its rules.
+  @page_helpers ~w(minimal_page sign_in_response pending_probe safe_redirect)
+
+  defp console_files do
+    Prima.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/prism_web/**/*.ex")) ++
+      for(helper <- @page_helpers, do: Path.join(root(), "apps/cyfr/lib/cyfr_web/#{helper}.ex"))
+  end
+
   test "the console reaches the tool surface only through its seam" do
     offenders =
-      root()
-      |> Path.join("apps/cyfr/lib/prism_web/**/*.ex")
-      |> Cyfr.Test.SourceTree.files!()
+      console_files()
       |> Enum.reject(&String.ends_with?(&1, "/ops.ex"))
       |> Enum.flat_map(fn path ->
         path
-        |> Cyfr.Test.SourceTree.read()
+        |> Prima.Test.SourceTree.read()
         |> String.split("\n")
         |> Enum.with_index(1)
         |> Enum.filter(fn {line, _n} ->
@@ -59,15 +73,16 @@ defmodule PrismWeb.ToolSeamTest do
     # The one transcription of a sign-in outcome to a browser response —
     # it mints the person's OWN session, before any console exists for
     # them. Door placement is pinned by Sanctum.DoorPlacementTest.
-    {"apps/cyfr/lib/prism_web/sign_in_response.ex", "Sanctum.Session.create"},
-    # Signing out: the same act as above, from the browser's own form post.
-    # A person retiring their OWN session, with no agent equivalent.
-    {"apps/cyfr/lib/prism_web/controllers/session_controller.ex", "Sanctum.Session.destroy"},
+    {"apps/cyfr/lib/cyfr_web/sign_in_response.ex", "Sanctum.Session.create"},
+    # The browser's own sign-out: it retires the session its cookie names and
+    # nothing else. It reads only that cookie and runs before any caller
+    # context exists, so it cannot pass the gate as `session/logout` does.
+    {"apps/cyfr/lib/prism_web/controllers/auth_controller.ex", "Sanctum.Session.destroy"},
     # Recording the registry push token the claim flow just obtained. Part of
     # minting the person's identity, before any athanor exists to run a tool
-    # in; `Compendium.MCP.Shared.namespace_bearer/2` reads it afterwards.
+    # in; `Compendium.Providers.Shared.namespace_bearer/2` reads it afterwards.
     {"apps/cyfr/lib/prism_web/controllers/claim_namespace_controller.ex",
-     "Compendium.Registry.CredentialStore.put_push_token"},
+     "Compendium.store_push_token"},
     # Chat IS on the wire now (`thread.*`, external-plane and
     # OIDC-only, so no agent and no API key reaches it) — and the console
     # is a deliberate in-process client of the same domain functions
@@ -78,8 +93,8 @@ defmodule PrismWeb.ToolSeamTest do
     # Attachments a person drags into their own chat, and the same call
     # undone when the message they belonged to is not sent. Storage-capped by
     # `Sanctum.Tenancy.Caps.check_storage/2` like every other tenant write.
-    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.Attachments.store"},
-    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.Attachments.discard"}
+    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.store_attachments"},
+    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.discard_attachments"}
   ]
 
   # The namespaces whose state the console must not change behind the tool
@@ -144,12 +159,10 @@ defmodule PrismWeb.ToolSeamTest do
     allowed = MapSet.new(@console_owned)
 
     found =
-      root()
-      |> Path.join("apps/cyfr/lib/prism_web/**/*.ex")
-      |> Cyfr.Test.SourceTree.files!()
+      console_files()
       |> Enum.flat_map(fn path ->
         rel = Path.relative_to(path, root())
-        source = Cyfr.Test.SourceTree.read(path)
+        source = Prima.Test.SourceTree.read(path)
         aliases = aliases(source)
 
         source
@@ -199,29 +212,35 @@ defmodule PrismWeb.ToolSeamTest do
   end
 
   # The chat's verbs go through the tool surface: the same `thread`
-  # actions a headless client calls, from the page.
+  # actions a headless client calls, from the page. A card is decided
+  # through `approval.resolve`, the one door that carries a standing
+  # answer's bounds, as the wire's `approval` tool does.
   @chat_verbs %{
     "apps/cyfr/lib/prism_web/live/thread_pane_live.ex" =>
-      ~w(create send stop approve decline revoke_grant restart_for_consent),
-    "apps/cyfr/lib/prism_web/live/chat_live.ex" => ~w(follow unfollow delete)
+      ~w(thread/create thread/send thread/stop approval/resolve thread/revoke_grant
+         thread/restart_for_consent),
+    "apps/cyfr/lib/prism_web/live/chat_live.ex" => ~w(thread/follow thread/unfollow thread/delete)
   }
 
   test "the chat's turn writes go through the thread tool" do
     for {rel, verbs} <- @chat_verbs, verb <- verbs do
-      source = Cyfr.Test.SourceTree.read(Path.join(root(), rel))
+      source = Prima.Test.SourceTree.read(Path.join(root(), rel))
 
       assert source =~ ~s(call_tool(#{if rel =~ "chat_live", do: "focus", else: ""}) or
-               source =~ "thread/#{verb}",
-             "#{rel} does not call thread/#{verb} through PrismWeb.Ops"
+               source =~ verb,
+             "#{rel} does not call #{verb} through PrismWeb.Ops"
 
-      assert source =~ "\"thread/#{verb}\"",
-             "#{rel} does not name thread/#{verb}"
+      assert source =~ "\"#{verb}\"",
+             "#{rel} does not name #{verb}"
     end
 
     pane =
-      Cyfr.Test.SourceTree.read(
+      Prima.Test.SourceTree.read(
         Path.join(root(), "apps/cyfr/lib/prism_web/live/thread_pane_live.ex")
       )
+
+    refute pane =~ ~s("thread/approve") or pane =~ ~s("thread/decline"),
+           "a card is decided through approval/resolve, which carries its bounds"
 
     refute pane =~ "RoomExcerpt.read",
            "the pane passes the room reference, never the excerpt text"

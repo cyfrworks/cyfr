@@ -13,7 +13,7 @@ defmodule PrismWeb.LegalAcceptController do
       `POLICY_ACCEPTANCE_REQUIRED` on a claim attempt.
 
   The IdP `access_token` is read from the same pending-probe cookie
-  (`PrismWeb.PendingProbe`) that `ClaimNamespaceController` consumes
+  (`CyfrWeb.PendingProbe`) that `ClaimNamespaceController` consumes
   (so the user's OAuth roundtrip happens once and feeds both the
   acceptance and the claim).
 
@@ -26,11 +26,10 @@ defmodule PrismWeb.LegalAcceptController do
 
   require Logger
 
-  alias Compendium.Registry.Client
-  alias PrismWeb.PendingProbe
+  alias CyfrWeb.PendingProbe
 
   def show(conn, params) do
-    case Client.get_legal_version() do
+    case Compendium.registry_legal_version() do
       {:ok, %{"policy_version" => version, "policies" => policies}} ->
         bodies = fetch_all_bodies(version, policies)
         provider = Map.get(params, "provider", current_provider(conn))
@@ -84,7 +83,7 @@ defmodule PrismWeb.LegalAcceptController do
     with {:ok, popped, access_token} <- PendingProbe.pop(conn),
          {:ok, provider} <- current_provider(popped, params),
          {:ok, _body} <-
-           Client.accept_policies(provider, access_token, nil, version) do
+           Compendium.accept_registry_policies(provider, access_token, nil, version) do
       # Acceptance recorded server-side. Route to /auth/post-legal-accept
       # so AuthController re-probes with the still-valid access_token
       # (cookie not cleared) and lands the person back in the console.
@@ -96,8 +95,8 @@ defmodule PrismWeb.LegalAcceptController do
       {:not_logged_in, conn} ->
         conn |> redirect(to: "/login")
 
-      {:error, %Compendium.OCI.Errors{reason: :policy_version_mismatch} = err} ->
-        required = Compendium.OCI.Errors.required_version(err)
+      {:error, %Prima.Refusal{reason: {:registry, :policy_version_mismatch, _}} = refusal} ->
+        required = Compendium.registry_required_version(refusal)
         # Server bumped between page-load and submit — redirect back to
         # /legal/accept so the user re-reads the new version. Pass
         # required version in query so log shows the divergence.
@@ -108,7 +107,7 @@ defmodule PrismWeb.LegalAcceptController do
 
         conn |> redirect(to: "/legal/accept" <> query)
 
-      {:error, %Compendium.OCI.Errors{reason: :unauthorized}} ->
+      {:error, %Prima.Refusal{reason: {:registry, :unauthorized}}} ->
         # 403 IDENTITY_BANNED at the accept endpoint. Surface as a flat error.
         error_page(
           conn,
@@ -116,7 +115,7 @@ defmodule PrismWeb.LegalAcceptController do
           "This identity is currently restricted from publishing on cyfr.run."
         )
 
-      {:error, :invalid_access_token} ->
+      {:error, %Prima.Refusal{reason: :invalid_access_token}} ->
         # IdP token expired between OAuth callback and accept submit.
         conn
         |> PendingProbe.clear()
@@ -126,7 +125,7 @@ defmodule PrismWeb.LegalAcceptController do
         # 502: cyfr.run refused or misanswered the accept — a 200 said
         # "fine" about a failure. Internal terms are logged, never shown.
         Logger.error("[LegalAcceptController] accept_policies error: #{inspect(err)}")
-        error_page(conn, 502, accept_error_message(err))
+        error_page(conn, 502, Grimoire.render(err))
     end
   end
 
@@ -147,7 +146,7 @@ defmodule PrismWeb.LegalAcceptController do
           policies
           |> Task.async_stream(
             fn %{"name" => name, "title" => title} ->
-              case Client.get_legal_page(name) do
+              case Compendium.registry_legal_page(name) do
                 {:ok, %{"content_markdown" => md}} -> {name, title, md}
                 _ -> {name, title, "_(failed to load #{name})_"}
               end
@@ -192,13 +191,6 @@ defmodule PrismWeb.LegalAcceptController do
   defp current_provider(conn), do: PendingProbe.current_provider(conn)
 
   defp current_provider(conn, params), do: {:ok, PendingProbe.current_provider(conn, params)}
-
-  defp accept_error_message(reason) do
-    # One renderer (Cyfr.Ops.Error.render covers the OCI struct and crafted
-    # binaries too); nil means internal and stays out of the page.
-    Cyfr.Ops.Error.render(reason) ||
-      "The acceptance could not be recorded — try again."
-  end
 
   # ============================================================================
   # Rendering — the two pages, in the Prism root layout

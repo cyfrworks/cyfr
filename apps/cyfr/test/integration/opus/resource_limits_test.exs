@@ -4,22 +4,21 @@
 defmodule Opus.ResourceLimitsTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
   @test_node "reagent:local.test-math"
 
-  setup do
+  setup tags do
     test_path = Path.join(System.tmp_dir!(), "opus_limits_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     wasm_bytes = File.read!(@math_wasm_path)
 
@@ -86,13 +85,13 @@ defmodule Opus.ResourceLimitsTest do
       assert Authority.limits(auth).max_memory_bytes == 8 * 1024 * 1024
 
       {:error, error_msg} =
-        Cyfr.Execution.Dispatch.run(ctx, ref, %{"a" => 10, "b" => 10},
+        Crucible.Dispatch.run(ctx, ref, %{"a" => 10, "b" => 10},
           type: :reagent,
           authority: auth
         )
 
       assert error_msg =~ "Component"
-      {:ok, records} = Cyfr.Execution.list(ctx)
+      {:ok, records} = Crucible.list(ctx)
       assert Enum.any?(records, &(&1.status == :failed))
     end
 
@@ -100,7 +99,7 @@ defmodule Opus.ResourceLimitsTest do
       auth = authority_with_limits(16 * 1024 * 1024)
 
       {:error, error_msg} =
-        Cyfr.Execution.Dispatch.run(ctx, ref, %{"a" => 3, "b" => 7},
+        Crucible.Dispatch.run(ctx, ref, %{"a" => 3, "b" => 7},
           type: :reagent,
           authority: auth
         )

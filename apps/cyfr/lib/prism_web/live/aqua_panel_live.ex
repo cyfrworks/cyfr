@@ -6,7 +6,7 @@ defmodule PrismWeb.AquaPanelLive do
   The person's own AQUA, on every page: a floating button and, opened, a
   panel over the page onto their own athanor — the threads of You, one of
   them open as `PrismWeb.ThreadPaneLive` focused on You, whatever
-  estate the page is on.
+  athanor the page is on.
 
   Opened beside a room (the chat page tells it what is in view through
   `PrismWeb.RoomFeed`), a send from here carries a bounded excerpt of the
@@ -24,28 +24,40 @@ defmodule PrismWeb.AquaPanelLive do
   and narrows to the person's own athanor. A person with no athanor of
   their own has no panel.
 
-  The dead render is the button alone; the session, the athanor and the
-  kept state are read on the connected mount, once.
+  The dead render is the button alone; the athanor and the kept state are
+  read on the connected mount, once. `CyfrWeb.ContextGuard` establishes
+  the session and keeps the panel's context current; the panel's move to
+  the person's own athanor goes back through it (`refocus/2`).
+
+  A grant the pane's turn needs is asked in the panel's own system layer
+  (`PrismWeb.SystemLayer`, DOM id `system-layer-panel`), under the
+  panel's context, which is the person's own athanor whatever athanor the
+  page is on; the page's layer would commit in the page's. That layer
+  opens no stream (`listen: false`): the page's own layer shows the
+  person's confirmations, and none is drawn twice.
   """
 
   use PrismWeb, :live_view
 
   alias Arca.ThreadStorage, as: Threads
   alias Phoenix.LiveView.JS
+  alias PrismWeb.SystemLayer
   alias Sanctum.Tenancy.Athanors
   alias Sanctum.Tenancy.Users
 
   @kept_ttl_ms :timer.hours(24)
+  @layer "system-layer-panel"
+
+  on_mount {CyfrWeb.ContextGuard, :protected}
 
   @impl true
   def mount(_params, session, socket) do
-    token = session[to_string(PrismWeb.SignInResponse.session_key())]
+    token = session[to_string(CyfrWeb.SignInResponse.session_key())]
     room_feed = session["room_feed"]
 
     socket =
       socket
       |> assign(:phase, :pending)
-      |> assign(:context, nil)
       |> assign(:athanor, nil)
       |> assign(:kept, nil)
       |> assign(:open, false)
@@ -65,25 +77,21 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   # Your own athanor, focused. The session's default is whatever page this
-  # is on; the panel is always You. A session that no longer establishes
-  # is said so; a person with no athanor of their own gets nothing.
+  # is on; the panel is always You. A person with no athanor of their own
+  # gets nothing.
   defp own(socket, token) do
-    case PrismWeb.AuthHelpers.authenticate_session(token) do
-      {:ok, ctx} ->
-        with {:ok, id} <- Users.personal_athanor_id(ctx.user_id),
-             {:ok, %{status: "active"} = athanor} <- Athanors.get(id),
-             {:ok, focused} <- Sanctum.Context.focus(ctx, athanor) do
-          socket
-          |> assign(:phase, :ready)
-          |> assign(:context, focused)
-          |> assign(:athanor, athanor)
-          |> assign(:kept, {:aqua_panel, Prism.Tray.session_hash(token)})
-        else
-          _ -> assign(socket, :phase, :none)
-        end
+    ctx = socket.assigns.context
 
-      {:error, _} ->
-        assign(socket, :phase, :signed_out)
+    with {:ok, id} <- Users.personal_athanor_id(ctx.user_id),
+         {:ok, %{status: "active"} = athanor} <- Athanors.get(id),
+         {:ok, focused} <- Sanctum.Context.focus(ctx, athanor),
+         {:ok, refocused} <- CyfrWeb.ContextGuard.refocus(socket, focused) do
+      refocused
+      |> assign(:phase, :ready)
+      |> assign(:athanor, athanor)
+      |> assign(:kept, {:aqua_panel, Prism.Tray.session_hash(token)})
+    else
+      _ -> assign(socket, :phase, :none)
     end
   end
 
@@ -156,7 +164,8 @@ defmodule PrismWeb.AquaPanelLive do
   # ============================================================================
 
   @impl true
-  def handle_info({:room_in_view, room}, socket), do: {:noreply, assign(socket, :room, room)}
+  def handle_info(%Cyfr.Bus.RoomInView{room: room}, socket),
+    do: {:noreply, assign(socket, :room, room)}
 
   # The pane is live: this is where a thread switch goes.
   def handle_info({:pane, _pane, {:ready, pid, thread_id}}, socket) do
@@ -179,10 +188,23 @@ defmodule PrismWeb.AquaPanelLive do
     {:noreply, socket |> open_on(thread_id) |> remember()}
   end
 
+  # A grant the pane's turn needs: asked in the panel's own layer, under
+  # the panel's context; the outcome goes back to the pane.
+  def handle_info({:pane, _pane, {:grant, pid, prompt}}, socket) when is_pid(pid) do
+    {:noreply, SystemLayer.relay(socket, pid, prompt, layer_id())}
+  end
+
   def handle_info({:pane, _pane, _message}, socket), do: {:noreply, socket}
 
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    case SystemLayer.relayed(socket, report) do
+      {:relayed, socket} -> {:noreply, socket}
+      :none -> {:noreply, socket}
+    end
+  end
+
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -191,20 +213,6 @@ defmodule PrismWeb.AquaPanelLive do
   # ============================================================================
 
   @impl true
-  def render(%{phase: :signed_out} = assigns) do
-    ~H"""
-    <div id="aqua-panel-root">
-      <p
-        id="aqua-panel-signed-out"
-        role="status"
-        class="fixed bottom-20 right-4 z-40 rounded-full border border-gray-800 bg-gray-900 px-4 py-2 text-xs text-gray-400 shadow-lg"
-      >
-        Signed out — reload to continue
-      </p>
-    </div>
-    """
-  end
-
   def render(%{phase: :none} = assigns) do
     ~H"""
     <div id="aqua-panel-root"></div>
@@ -222,7 +230,7 @@ defmodule PrismWeb.AquaPanelLive do
         phx-click={if @open, do: "close", else: "open"}
         aria-expanded={to_string(@open)}
         aria-controls={@open && "aqua-panel-sheet"}
-        title="Your own AQUA — on your own estate, wherever you are"
+        title="Your own AQUA — on your own athanor, wherever you are"
         class="fixed bottom-20 right-4 z-40 rounded-full bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-indigo-500"
       >
         AQUA
@@ -295,9 +303,23 @@ defmodule PrismWeb.AquaPanelLive do
           }
         )}
       </aside>
+
+      <.live_component
+        :if={@phase == :ready}
+        module={SystemLayer}
+        id={layer_id()}
+        context={@context}
+        listen={false}
+        athanor_route={Athanors.route_slug(@athanor)}
+        athanor_name={@athanor.name}
+      />
     </div>
     """
   end
 
   defp close_and_return, do: JS.push("close") |> JS.focus(to: "#aqua-panel-button")
+
+  @doc "The id of the panel's own system layer, beside the page's."
+  @spec layer_id() :: String.t()
+  def layer_id, do: @layer
 end

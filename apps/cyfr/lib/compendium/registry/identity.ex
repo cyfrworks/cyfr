@@ -21,7 +21,8 @@ defmodule Compendium.Registry.Identity do
         authenticated: boolean(),
         user_id: String.t() | nil,
         personal_namespace: %{slug: String.t(), last_used_at: String.t()} | nil,
-        memberships: [%{slug: String.t(), role: String.t(), last_used_at: String.t()}]
+        memberships: [%{slug: String.t(), role: String.t(), last_used_at: String.t()}],
+        damaged_credentials: [%{id: String.t(), status: :corrupt}]
       }
 
   `authenticated: true` iff the user holds at least one push token for this
@@ -30,8 +31,16 @@ defmodule Compendium.Registry.Identity do
   namespace but holds publisher-namespace memberships has
   `personal_namespace: nil` and a non-empty `memberships` list.
 
-  Consumed by `Compendium.MCP.registry.whoami`. Not exposed via
-  `Sanctum.MCP.session.whoami` — that action is local-user-only, so the
+  A stored row that cannot be opened is listed in `damaged_credentials`
+  as `%{id: id, status: :corrupt}`: shown, not confirmed and not counted
+  toward `authenticated`.
+
+  A credential store that cannot be read is
+  `{:error, {:unavailable, "Registry credentials"}}` — never
+  `authenticated: false`, which would tell the person to sign in again.
+
+  Consumed by `Compendium.Provider.registry.whoami`. Not exposed via
+  `Sanctum.Provider.session.whoami` — that action is local-user-only, so the
   auth sliver stays Compendium-free.
   """
 
@@ -49,7 +58,7 @@ defmodule Compendium.Registry.Identity do
   calls `GET /v1/namespaces/{slug}` per token to confirm the namespace still
   exists and collect `last_used_at`, then assembles personal + memberships.
   """
-  @spec identity(Sanctum.Context.t()) :: map()
+  @spec identity(Sanctum.Context.t()) :: map() | {:error, {:unavailable, String.t()}}
   def identity(%Sanctum.Context{} = ctx) do
     # OCI host keys the CredentialStore (tokens were issued for that host);
     # REST host receives the whoami confirmation call. Distinct in the default
@@ -58,10 +67,19 @@ defmodule Compendium.Registry.Identity do
     rest_host = rest_host()
 
     case list_user_credentials(ctx, oci_host) do
-      [] ->
-        %{authenticated: false, user_id: ctx.user_id, personal_namespace: nil, memberships: []}
+      {:error, _unreadable} ->
+        {:error, {:unavailable, "Registry credentials"}}
 
-      creds ->
+      {[], damaged} ->
+        %{
+          authenticated: false,
+          user_id: ctx.user_id,
+          personal_namespace: nil,
+          memberships: [],
+          damaged_credentials: damaged
+        }
+
+      {creds, damaged} ->
         # Confirm tokens concurrently, with at most eight requests in flight.
         # Results are unordered; timed-out tasks are killed after the request
         # timeout plus 500 ms. Failed confirmations are omitted.
@@ -85,7 +103,8 @@ defmodule Compendium.Registry.Identity do
           authenticated: personal != nil or memberships != [],
           user_id: ctx.user_id,
           personal_namespace: personal,
-          memberships: memberships
+          memberships: memberships,
+          damaged_credentials: damaged
         }
     end
   rescue
@@ -99,13 +118,20 @@ defmodule Compendium.Registry.Identity do
   # ============================================================================
 
   # The user's personal credentials (registry push tokens) are the only
-  # credential source; the same path serves every deployment.
-  defp list_user_credentials(%Sanctum.Context{user_id: user_id}, oci_host)
+  # credential source; the same path serves every deployment. The listing
+  # is read whole (`Sanctum.RegistryCredentials.list/2`): a row that cannot
+  # be opened has no token to confirm a namespace with, and is shown as it
+  # is, `%{id: id, status: :corrupt}`, rather than refusing the summary or
+  # being dropped from it.
+  defp list_user_credentials(%Sanctum.Context{user_id: user_id} = ctx, oci_host)
        when is_binary(user_id) and user_id != "" do
-    CredentialStore.list_for_user(user_id, oci_host)
+    case CredentialStore.list_for_user(ctx, oci_host) do
+      {:ok, entries} -> Enum.split_with(entries, &(not match?(%{status: :corrupt}, &1)))
+      {:error, _unreadable} = unreadable -> unreadable
+    end
   end
 
-  defp list_user_credentials(_ctx, _oci_host), do: []
+  defp list_user_credentials(_ctx, _oci_host), do: {[], []}
 
   # Best-effort per-token probe. Transient errors keep the entry with nil
   # `last_used_at`; 401/403 drops it (token revoked or namespace ownership

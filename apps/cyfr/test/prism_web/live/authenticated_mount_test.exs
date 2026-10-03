@@ -31,8 +31,11 @@ defmodule PrismWeb.AuthenticatedMountTest do
   test "a mounted view lets go when the person loses the athanor in focus", %{conn: conn} do
     user = test_user()
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Let go #{user.namespace}")
-    conn = log_in_user(conn, user, athanor_id: group.id)
-    {view, _html} = mount_athanor(conn, "/settings")
+    # The session is the person's own athanor's and the group is in focus by
+    # its address: a leave ends only the sessions bound to the group, so this
+    # one stands and the view lets go of the focus alone.
+    conn = log_in_user(conn, user)
+    {view, _html} = mount_athanor(conn, "/settings", group)
 
     # A person's own athanor never loses its owner, so the seat that can be
     # taken away is a group's.
@@ -48,7 +51,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
     # `Session.token_hash/1` for the same reason; the socket now matches.
     user = test_user()
     conn = log_in_user(conn, user)
-    token = Plug.Conn.get_session(conn, PrismWeb.SignInResponse.session_key())
+    token = Plug.Conn.get_session(conn, CyfrWeb.SignInResponse.session_key())
     assert is_binary(token)
 
     {view, _html} = mount_athanor(conn, "/settings")
@@ -183,5 +186,55 @@ defmodule PrismWeb.AuthenticatedMountTest do
     {_view, html} = mount_athanor(conn, "")
     assert html =~ ~s(id="thread-list")
     assert html =~ "max-md:hidden"
+  end
+
+  describe "a request a frame made" do
+    # A sandboxed tincture frame may navigate itself to a Prism page, and
+    # some browsers attach the session cookie: the page is refused before
+    # the session is read.
+    test "is refused with no page, a signed-in person's session notwithstanding",
+         %{conn: conn} do
+      conn = log_in_user(conn, test_user())
+      path = athanor_path("/settings")
+
+      framed = conn |> put_req_header("sec-fetch-dest", "iframe") |> get(path)
+
+      assert framed.status == 403
+      assert framed.halted
+      refute framed.resp_body =~ "<html"
+      assert get_resp_header(framed, "set-cookie") == []
+      assert get_resp_header(framed, "location") == []
+
+      page = get(conn, path)
+      assert html_response(page, 200) =~ "Settings"
+
+      # Nothing frames a Prism page, the shell included.
+      [csp] = get_resp_header(page, "content-security-policy")
+      assert csp =~ "frame-ancestors 'none'"
+      assert csp =~ "frame-src 'self'"
+      assert get_resp_header(page, "x-frame-options") == ["DENY"]
+    end
+
+    test "is refused before a stale or malformed session cookie is read" do
+      for cookie <- ["_cyfr_key=not-a-signed-session", "_cyfr_key="] do
+        framed =
+          build_conn()
+          |> put_req_header("cookie", cookie)
+          |> put_req_header("sec-fetch-dest", "iframe")
+          |> get("/")
+
+        assert framed.status == 403
+        assert get_resp_header(framed, "set-cookie") == []
+      end
+    end
+
+    test "is refused on the sign-in pages and on an attachment", %{conn: conn} do
+      conn = log_in_user(conn, test_user())
+
+      for path <- ["/login", "/auth/github", athanor_path("/attachments/msg_1/file.png")] do
+        framed = conn |> put_req_header("sec-fetch-dest", "embed") |> get(path)
+        assert framed.status == 403, "#{path} answered #{framed.status} to a frame"
+      end
+    end
   end
 end

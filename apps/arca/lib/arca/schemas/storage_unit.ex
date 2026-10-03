@@ -61,13 +61,17 @@ defmodule Arca.Schemas.StorageUnit do
       retired.
     * `{:error, :invalid_objects}` — the staged object set is not a
       complete, valid revision; nothing was committed.
-    * `{:error, :unavailable}` — the store could not answer; the outcome
-      is unknown to the writer and nothing may be assumed.
+    * `{:error, :outcome_unknown}` — the store could not answer; the
+      outcome is unknown to the writer and nothing may be assumed.
   """
   @type commit_result ::
           :committed
           | {:error,
-             :stale_revision | :stale_writer | :missing_unit | :invalid_objects | :unavailable}
+             :stale_revision
+             | :stale_writer
+             | :missing_unit
+             | :invalid_objects
+             | :outcome_unknown}
 
   @states ~w(draft committed retired)
 

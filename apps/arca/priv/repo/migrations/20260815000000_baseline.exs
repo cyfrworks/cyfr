@@ -12,17 +12,22 @@ defmodule Arca.Repo.Migrations.Baseline do
   archived, never deleted, so nothing needs the constraint and every fixture
   is spared a parent row. Several tables do name it inside a COMPOSITE key,
   which is a different thing: a child references its parent by
-  `(id, athanor_id)`, so nothing can point across estates. Those constrain
+  `(id, athanor_id)`, so nothing can point across athanors. Those constrain
   the pair, never the athanor itself. A 3+-column composite foreign key
   silently truncates on SQLite, so every composite is a two-column pair and
   its parent carries a unique `(id, athanor_id)` index created first.
 
-  The two nullable `athanor_id` columns are `memberships` (a platform
-  assignment has no athanor) and `sessions` (a session exists before its
-  athanor is resolved). `server_meta`, `registry_tokens`,
-  `external_identities`, `cell_leases` and `job_claims` are not
-  athanor-scoped: the first three are the server's own facts and the last
-  two the cell's, and a cell has no estate.
+  The three nullable `athanor_id` columns are `memberships` (a platform
+  assignment has no athanor), `sessions` (a session exists before its
+  athanor is resolved) and `decision_logs` (a call refused before any
+  tenant was resolved is the host's record, not a tenant's). `server_meta`, `registry_tokens`,
+  `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
+  and `settings_pins` are not athanor-scoped: the first three are the
+  server's own facts and the rest the cell's, and a cell has no athanor.
+  A person's identity, keys, identity attempts, carries and passkeys, the
+  directory's log, the cached heads of other people's logs, the
+  installation claim and the pre-authentication rate windows are not an
+  athanor's either (`people/0`).
 
   This file is the schema's single source: a change edits it, and
   `Arca.SchemaFingerprint` refuses a database built from a different
@@ -36,13 +41,21 @@ defmodule Arca.Repo.Migrations.Baseline do
     tenancy()
     provisioning()
     identity()
+    frame_credentials()
+    paired_clients()
+    people()
+    devices_and_confirmations()
     server()
     cell()
+    platform_settings()
     components()
     storage_units()
+    storage_projections()
+    fenced_publication()
     agents()
     executions()
     logs()
+    retention()
     vault_and_consent()
     registrations()
     schedules()
@@ -56,6 +69,25 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp tenancy do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # The standing counters. A deny/allow or archive/reopen that changes a
+    # row's standing raises its counter by one in the same transaction
+    # (`Arca.SecurityTransitions`); nothing else writes it. A credential is
+    # issued only against the counters its context read, so a context read
+    # before a retirement cannot issue after a restore. Positive, starting
+    # at 1; spelled once per adapter for the same reason as the MCP
+    # transport check below.
+    athanor_generation = %{
+      name: "athanors_security_generation_positive",
+      expr: "security_generation > 0"
+    }
+
+    user_generation = %{
+      name: "users_security_generation_positive",
+      expr: "security_generation > 0"
+    }
+
     create table(:athanors, primary_key: false) do
       add :id, :string, primary_key: true
       add :kind, :string, null: false
@@ -75,8 +107,18 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :roster, :string, null: false, default: "open"
       # SHA-256 over the JSON-encoded sorted member ids of a frozen pair.
       add :pair_key, :string
+
+      add :security_generation, :bigint,
+        null: false,
+        default: 1,
+        check: if(sqlite?, do: athanor_generation)
+
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
+    end
+
+    unless sqlite? do
+      create constraint(:athanors, athanor_generation.name, check: athanor_generation.expr)
     end
 
     create unique_index(:athanors, [:kind, :slug])
@@ -114,8 +156,18 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :first_seen_at, :utc_datetime_usec, null: false
       add :last_seen_at, :utc_datetime_usec, null: false
       add :denied_at, :utc_datetime_usec
+
+      add :security_generation, :bigint,
+        null: false,
+        default: 1,
+        check: if(sqlite?, do: user_generation)
+
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
+    end
+
+    unless sqlite? do
+      create constraint(:users, user_generation.name, check: user_generation.expr)
     end
 
     create index(:users, [:email])
@@ -163,12 +215,14 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # Presence-only assignments: a row means "user X is a member of athanor A"
     # (or, with no athanor, a platform admin). No roles. An `invited` row is
-    # keyed by email before the person has signed in and carries no user_id;
-    # it activates, atomically, on their first admitted sign-in.
+    # keyed by exactly one of an email or a person identifier (`per_…`)
+    # before the person has signed in and carries no user_id; it activates,
+    # atomically, on their first admitted sign-in.
     create table(:memberships, primary_key: false) do
       add :id, :string, primary_key: true
       add :user_id, :string
       add :email, :string
+      add :person_identifier, :string
       add :scope, :string, null: false, default: "athanor"
       add :status, :string, null: false, default: "active"
       add :added_by, :string
@@ -179,16 +233,18 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create index(:memberships, [:user_id])
     create index(:memberships, [:email])
+    create index(:memberships, [:person_identifier])
     create index(:memberships, [:athanor_id])
 
     # Raw SQL because the uniqueness has to treat a NULL as a value — a
     # platform assignment carries no athanor, an invited row no user, an
-    # active row no email — and two rows agreeing on all four are the same
-    # assignment. COALESCE in an index expression is not something
-    # `unique_index/3` can express.
+    # active row no email and no identifier — and two rows agreeing on all
+    # five are the same assignment. COALESCE in an index expression is not
+    # something `unique_index/3` can express.
     execute """
     CREATE UNIQUE INDEX memberships_assignment_index
-    ON memberships (scope, COALESCE(athanor_id, ''), COALESCE(user_id, ''), COALESCE(email, ''))
+    ON memberships (scope, COALESCE(athanor_id, ''), COALESCE(user_id, ''), COALESCE(email, ''),
+                    COALESCE(person_identifier, ''))
     """
   end
 
@@ -196,11 +252,11 @@ defmodule Arca.Repo.Migrations.Baseline do
   # Provisioning claims
   # ==========================================================================
 
-  # Who is filling an estate: one row per athanor, taken and settled by
+  # Who is filling an athanor: one row per athanor, taken and settled by
   # compare-and-set on `(owner, fence)`, so a stale owner — a boot that
   # lost its lease mid-fill — cannot mark readiness, overwrite a
   # successor's failure, mint consent or replace the agent index. Every
-  # entry point that fills or heals an estate (`Sanctum.Provisioning`)
+  # entry point that fills or heals an athanor (`Sanctum.Provisioning`)
   # takes the same row; the lease is what a successor waits out.
   defp provisioning do
     create table(:provisioning_claims, primary_key: false) do
@@ -232,7 +288,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
   defp identity do
     # A session is a person's: what they may do is decided by their
-    # memberships, the estate's consents and the policy, never by a list
+    # memberships, the athanor's consents and the policy, never by a list
     # frozen at sign-in.
     create table(:sessions, primary_key: false) do
       add :id, :string, primary_key: true
@@ -245,6 +301,11 @@ defmodule Arca.Repo.Migrations.Baseline do
       # The athanor the session works in. Nullable: a session exists from
       # sign-in on, before the person's own athanor is resolved.
       add :athanor_id, :string
+      # The `key_epoch` of the identity head verified when the session was
+      # minted: set for every session of a person whose identity is
+      # `remote`, whichever door admitted it, and null for a local person.
+      # A fresh head that changes it retires the session.
+      add :identity_key_epoch, :string
 
       timestamps(type: :utc_datetime_usec, updated_at: false)
     end
@@ -252,6 +313,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:sessions, [:token_hash])
     create index(:sessions, [:user_id])
     create index(:sessions, [:expires_at])
+    create index(:sessions, [:identity_key_epoch], where: "identity_key_epoch IS NOT NULL")
 
     create table(:api_keys, primary_key: false) do
       add :id, :string, primary_key: true
@@ -296,6 +358,648 @@ defmodule Arca.Repo.Migrations.Baseline do
   end
 
   # ==========================================================================
+  # Tincture frames: the per-open credential
+  # ==========================================================================
+
+  defp frame_credentials do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # SQLite takes a check only inside CREATE TABLE and Postgres only as a
+    # table constraint, so each rule is spelled once per adapter.
+    state_known = %{
+      name: "frame_credentials_state_known",
+      expr: "state IN ('active', 'suspended', 'revoked')"
+    }
+
+    revision_counted = %{
+      name: "frame_credentials_grant_revision_counted",
+      expr: "grant_revision >= 0"
+    }
+
+    # One row per frame a shell opened: the standing of the bearer the
+    # frame holds, read by every member. `publisher`, `name` and `version`
+    # are the tincture version the frame opened, whose release digest is
+    # `version_digest`. `source_kind`/`source_id` name the session (its
+    # base64url token hash) or the key it was minted under, lookup
+    # identifiers and never bearer credentials. A revoked row is terminal;
+    # `Arca.Retention.FrameCredentials` removes it once aged.
+    create table(:frame_credentials, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :user_id, :string, null: false
+      add :publisher, :string, null: false
+      add :name, :string, null: false
+      add :version, :string, null: false
+      add :version_digest, :string, null: false
+
+      add :grant_revision, :bigint,
+        null: false,
+        check: if(sqlite?, do: revision_counted)
+
+      add :frame_id, :string, null: false
+      add :source_kind, :string, null: false
+      add :source_id, :string, null: false
+      add :state, :string, null: false, default: "active", check: if(sqlite?, do: state_known)
+      add :deadline, :utc_datetime_usec, null: false
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    unless sqlite? do
+      create constraint(:frame_credentials, state_known.name, check: state_known.expr)
+      create constraint(:frame_credentials, revision_counted.name, check: revision_counted.expr)
+    end
+
+    # A frame id names one open in its athanor.
+    create unique_index(:frame_credentials, [:athanor_id, :frame_id])
+    create index(:frame_credentials, [:user_id, :state])
+    create index(:frame_credentials, [:source_kind, :source_id])
+    create index(:frame_credentials, [:athanor_id, :state, :updated_at])
+  end
+
+  # ==========================================================================
+  # Paired clients: the clients a person holds in an athanor
+  # ==========================================================================
+
+  defp paired_clients do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # SQLite takes a check only inside CREATE TABLE and Postgres only as a
+    # table constraint, so each rule is spelled once per adapter.
+    standing_known = %{
+      name: "paired_clients_standing_known",
+      expr: "standing IN ('active', 'revoked')"
+    }
+
+    # One row per client a person holds in an athanor: the credential it
+    # stands on (`source_kind`/`source_id`, a lookup identifier and never a
+    # bearer credential), a paired device's public key
+    # (`device_public_key`, for a `device_cert` client) and its standing,
+    # which alone decides what the client may do. A revoked row is
+    # terminal; a standing transition revokes a person's rows in its own
+    # transaction (`Arca.SecurityTransitions`).
+    create table(:paired_clients, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :user_id, :string, null: false
+      add :source_kind, :string, null: false
+      add :source_id, :string, null: false
+      add :device_public_key, :binary
+
+      add :standing, :string,
+        null: false,
+        default: "active",
+        check: if(sqlite?, do: standing_known)
+
+      add :label, :string
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    unless sqlite? do
+      create constraint(:paired_clients, standing_known.name, check: standing_known.expr)
+    end
+
+    # A credential is one client in its athanor.
+    create unique_index(:paired_clients, [:athanor_id, :source_kind, :source_id])
+    create index(:paired_clients, [:user_id, :standing])
+    create index(:paired_clients, [:athanor_id, :standing])
+  end
+
+  # ==========================================================================
+  # People: identity, keys, the directory, carries, passkeys, installation
+  # ==========================================================================
+
+  # None of these rows is an athanor's: a person's identity, keys and
+  # passkeys outlive every athanor they sit in, a directory orders
+  # identifiers, and the installation claim and the pre-authentication
+  # rate windows are the node's. Arca stores bytes and hashes here and
+  # verifies no signature.
+  defp people do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    identity_checks = [
+      known("person_identities_provenance_known", "provenance", ~w(local remote)),
+      known("person_identities_enrollment_known", "enrollment", ~w(none pending enrolled))
+    ]
+
+    # One row per person this home knows: the identifier once enrolled or
+    # admitted (`per_…`), whether their keys are held here (`local`) or at
+    # another home (`remote`), and, for a local person, the live and
+    # operational key pairs, the private halves sealed under the person's
+    # own frame (never an athanor's vault). `revision` is the row's
+    # compare-and-set token; `first_method_at` records that a fresh
+    # confirmation method ever existed, and nothing resets it.
+    create table(:person_identities, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
+      add :identifier, :string
+
+      add :provenance, :string,
+        null: false,
+        check: if(sqlite?, do: Enum.at(identity_checks, 0))
+
+      add :enrollment, :string,
+        null: false,
+        default: "none",
+        check: if(sqlite?, do: Enum.at(identity_checks, 1))
+
+      add :live_public_key, :binary
+      add :operational_public_key, :binary
+      add :live_key_sealed, :binary
+      add :operational_key_sealed, :binary
+      add :genesis_hash, :string
+      add :head_hash, :string
+      add :directory_url, :text
+      add :first_method_at, :utc_datetime_usec
+      add :revision, :bigint, null: false, default: 1
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :person_identities, identity_checks)
+    create unique_index(:person_identities, [:user_id])
+    create unique_index(:person_identities, [:identifier], where: "identifier IS NOT NULL")
+
+    attempt_checks = [
+      known("identity_attempts_kind_known", "kind", ~w(enrollment holder restore rotation)),
+      known(
+        "identity_attempts_phase_known",
+        "phase",
+        ~w(staged submitted accepted refused superseded keys_active minted completed)
+      )
+    ]
+
+    # Enrollment, added-kit (`holder`), restore and rotation attempts, keyed
+    # by their request id, each advanced through its phases by conditional
+    # writes so a killed attempt resumes from the phase it reached. The
+    # submission is immutable: the genesis bytes, or the entry or recover
+    # request bytes, and their digest. Staged keys and a pending kit seed
+    # are sealed; a restore names the installation token digest it claimed.
+    create table(:identity_attempts, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(attempt_checks, 0))
+      add :request_id, :string, null: false
+      add :user_id, :string
+      add :identifier, :string
+      add :directory_url, :text
+      add :phase, :string, null: false, check: if(sqlite?, do: Enum.at(attempt_checks, 1))
+      add :genesis, :binary
+      add :entry, :binary
+      add :entry_hash, :string
+      add :expected_head, :string
+      add :expected_revision, :integer
+      add :request_digest, :string, null: false
+      add :token_digest, :string
+      add :staged_live_public_key, :binary
+      add :staged_operational_public_key, :binary
+      add :staged_live_key_sealed, :binary
+      add :staged_operational_key_sealed, :binary
+      add :kit_seed_sealed, :binary
+      add :kit_acknowledged_at, :utc_datetime_usec
+      add :outcome, :text
+      add :reproof_challenge_digest, :string
+      add :reproof_expires_at, :utc_datetime_usec
+      add :revision, :bigint, null: false, default: 1
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :identity_attempts, attempt_checks)
+    create unique_index(:identity_attempts, [:request_id])
+    create unique_index(:identity_attempts, [:token_digest], where: "token_digest IS NOT NULL")
+    create index(:identity_attempts, [:user_id])
+
+    # One attempt in progress per person and kind: two enrollments racing
+    # for one person leave one durable attempt.
+    create unique_index(:identity_attempts, [:user_id],
+             where:
+               "kind = 'enrollment' AND user_id IS NOT NULL AND " <>
+                 "phase IN ('staged', 'submitted', 'accepted')",
+             name: :identity_attempts_active_enrollment_index
+           )
+
+    create unique_index(:identity_attempts, [:user_id],
+             where:
+               "kind = 'rotation' AND user_id IS NOT NULL AND " <>
+                 "phase IN ('staged', 'submitted', 'accepted', 'keys_active')",
+             name: :identity_attempts_active_rotation_index
+           )
+
+    log_checks = [
+      known("identity_log_entries_kind_known", "kind", ~w(genesis rotate recover)),
+      known("identity_log_entries_outcome_known", "outcome", ~w(accepted stale_policy))
+    ]
+
+    # The directory's store: one log per identifier, an entry per accepted
+    # write at its position (`seq`, 0 for the genesis), and a recovery
+    # request's recorded outcome under its request id, so a retry answers
+    # the same outcome. A refused request has no position. `bytes` is what
+    # the row counts against the directory's log-byte quota.
+    create table(:identity_log_entries, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :identifier, :string, null: false
+      add :seq, :integer
+      add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(log_checks, 0))
+      add :entry_hash, :string
+      add :prev_hash, :string
+      add :entry, :binary
+      add :request_id, :string
+      add :request_digest, :string
+      add :outcome, :string, null: false, check: if(sqlite?, do: Enum.at(log_checks, 1))
+      add :outcome_body, :text
+      add :bytes, :integer, null: false
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    checked(sqlite?, :identity_log_entries, log_checks)
+    create index(:identity_log_entries, [:identifier])
+
+    create unique_index(:identity_log_entries, [:identifier, :seq],
+             where: "seq IS NOT NULL",
+             name: :identity_log_entries_position_index
+           )
+
+    create unique_index(:identity_log_entries, [:identifier, :prev_hash],
+             where: "prev_hash IS NOT NULL",
+             name: :identity_log_entries_prev_index
+           )
+
+    create unique_index(:identity_log_entries, [:identifier, :request_id],
+             where: "request_id IS NOT NULL",
+             name: :identity_log_entries_request_index
+           )
+
+    # A home's verified cache of another person's head: the genesis it was
+    # verified from and the directory it names, both immutable, and the
+    # head, its `key_epoch`, its `recovery_epoch` and the verified state,
+    # with when it was verified on the database's clock.
+    create table(:directory_heads, primary_key: false) do
+      add :identifier, :string, primary_key: true
+      add :genesis, :binary, null: false
+      add :directory_url, :text, null: false
+      add :head_hash, :string, null: false
+      add :key_epoch, :string, null: false
+      add :recovery_epoch, :string, null: false
+      add :state, :text, null: false
+      add :verified_at, :utc_datetime_usec, null: false
+      add :revision, :bigint, null: false, default: 1
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    carry_checks = [
+      known("carry_actions_kind_known", "kind", ~w(source login_receipt)),
+      known(
+        "carry_actions_phase_known",
+        "phase",
+        ~w(pending delivered completed cancelled expired)
+      )
+    ]
+
+    # The sign-in carry: a `source` action at the person's signing home, one
+    # destination, its immutable payload and assertion; and at a relying
+    # home, the `login_receipt` of an accepted assertion, unique per home
+    # and challenge. A terminal action keeps its digests and outcome until
+    # `retain_until`, its payload cleared.
+    create table(:carry_actions, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(carry_checks, 0))
+      add :action_id, :string, null: false
+      add :user_id, :string, null: false
+      add :source_home, :text, null: false
+      add :destination_home, :text, null: false
+      add :return_url, :text
+      add :operation, :string, null: false, default: "join"
+      add :payload, :binary
+      add :payload_digest, :string
+      add :key_epoch, :string, null: false
+      add :challenge, :text
+      add :challenge_digest, :string
+      add :challenge_id, :string
+      add :assertion, :binary
+      add :assertion_digest, :string
+      add :browser_binding_digest, :string
+      add :phase, :string, null: false, check: if(sqlite?, do: Enum.at(carry_checks, 1))
+      add :outcome, :string
+      add :outcome_body, :text
+      add :revision, :bigint, null: false, default: 1
+      add :expires_at, :utc_datetime_usec, null: false
+      add :retain_until, :utc_datetime_usec
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :carry_actions, carry_checks)
+    create index(:carry_actions, [:user_id, :phase])
+    create index(:carry_actions, [:phase, :expires_at])
+
+    create unique_index(:carry_actions, [:action_id],
+             where: "kind = 'source'",
+             name: :carry_actions_source_index
+           )
+
+    create unique_index(:carry_actions, [:destination_home, :challenge_id],
+             where: "kind = 'login_receipt'",
+             name: :carry_actions_receipt_index
+           )
+
+    passkey_state = known("passkeys_state_known", "state", ~w(pending active revoked))
+
+    # A person's WebAuthn credentials at this relying home, pinned to its RP
+    # ID. A pending registration waits, with its exact registration digest,
+    # for activation; a remote person's credential names the
+    # `recovery_epoch` it was registered under, and a recovery that replaces
+    # the live key revokes the credential, while an ordinary rotation keeps
+    # it.
+    create table(:passkeys, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
+      add :credential_id, :text, null: false
+      add :rp_id, :string, null: false
+      add :relying_home, :text, null: false
+      add :public_key, :binary
+      add :sign_count, :bigint, null: false, default: 0
+      add :identity_recovery_epoch, :string
+      add :state, :string, null: false, check: if(sqlite?, do: passkey_state)
+      add :registration_digest, :string, null: false
+      add :possession_verified, :boolean, null: false, default: false
+      add :expires_at, :utc_datetime_usec
+      add :admin_confirmation_id, :string
+      add :label, :string
+      add :activated_at, :utc_datetime_usec
+      add :revoked_at, :utc_datetime_usec
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :passkeys, [passkey_state])
+    create index(:passkeys, [:user_id, :state])
+
+    create index(:passkeys, [:identity_recovery_epoch],
+             where: "identity_recovery_epoch IS NOT NULL"
+           )
+
+    create unique_index(:passkeys, [:rp_id, :credential_id],
+             where: "state != 'revoked'",
+             name: :passkeys_live_credential_index
+           )
+
+    claim_state = known("installation_claims_state_known", "state", ~w(pending ended))
+
+    # The installation claims: a row per restore's claim of an empty node,
+    # bound to the token digest, request and identifier it claimed for,
+    # and ended with the attempt it bound. At most one is pending, and a
+    # token digest claims once, ever.
+    create table(:installation_claims, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :token_digest, :string, null: false
+      add :request_id, :string, null: false
+      add :identifier, :string, null: false
+      add :state, :string, null: false, check: if(sqlite?, do: claim_state)
+      add :outcome, :string
+      add :claimed_at, :utc_datetime_usec, null: false
+      add :ended_at, :utc_datetime_usec
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :installation_claims, [claim_state])
+    create unique_index(:installation_claims, [:token_digest])
+
+    create unique_index(:installation_claims, [:state],
+             where: "state = 'pending'",
+             name: :installation_claims_one_pending_index
+           )
+
+    # Pre-authentication request limits, one fixed window per bucket and
+    # hashed key, counted on the database's clock and shared by every
+    # member. The key is the hash of what the caller named (an address, an
+    # identifier), never the value itself.
+    create table(:request_rate_windows, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :bucket, :string, null: false
+      add :key_hash, :string, null: false
+      add :window_start, :utc_datetime_usec, null: false
+      add :window_ms, :integer, null: false
+      add :count, :integer, null: false, default: 0
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:request_rate_windows, [:bucket, :key_hash])
+    create index(:request_rate_windows, [:bucket, :window_start])
+  end
+
+  # ==========================================================================
+  # Device certificates, pending confirmations and pairing invitations
+  # ==========================================================================
+
+  defp devices_and_confirmations do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    certificate_checks = [
+      known("device_certificates_subject_known", "subject_kind", ~w(local identity)),
+      known("device_certificates_state_known", "state", ~w(active revoked))
+    ]
+
+    # The certificates this home issued to a paired client, its signed
+    # bytes and digest beside the facts a revocation and a lookup need. An
+    # identity-subject certificate names the identifier and `key_epoch` it
+    # was issued under. Expiry is read on the database's clock; `revoked`
+    # is terminal.
+    create table(:device_certificates, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :paired_client_id, :string, null: false
+      add :user_id, :string, null: false
+
+      add :subject_kind, :string,
+        null: false,
+        check: if(sqlite?, do: Enum.at(certificate_checks, 0))
+
+      add :identifier, :string
+      add :key_epoch, :string
+      add :device_public_key, :binary, null: false
+      add :issuing_home, :text, null: false
+      add :audience_home, :text, null: false
+      add :not_before, :utc_datetime_usec, null: false
+      add :expires_at, :utc_datetime_usec, null: false
+      add :certificate, :binary, null: false
+      add :digest, :string, null: false
+
+      add :state, :string,
+        null: false,
+        default: "active",
+        check: if(sqlite?, do: Enum.at(certificate_checks, 1))
+
+      add :revoked_at, :utc_datetime_usec
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :device_certificates, certificate_checks)
+    create unique_index(:device_certificates, [:digest])
+    create index(:device_certificates, [:athanor_id, :paired_client_id])
+    create index(:device_certificates, [:user_id, :state])
+    create index(:device_certificates, [:key_epoch], where: "key_epoch IS NOT NULL")
+
+    certification_state =
+      known("device_certifications_state_known", "state", ~w(active revoked))
+
+    # What this home certified for one of its people's devices at another
+    # home: the client id that home reserved, the device key, that home and
+    # its athanor, the `key_epoch` the person confirmed it under and the
+    # latest certificate's expiry. One row per person, audience and client,
+    # replaced by each fresh certification; a renewal that proves the
+    # device key extends it only under the same `key_epoch`. The athanor is
+    # the other home's, so it is no tenant column here.
+    create table(:device_certifications, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
+      add :identifier, :string, null: false
+      add :key_epoch, :string, null: false
+      add :client_id, :string, null: false
+      add :device_public_key, :binary, null: false
+      add :audience_home, :text, null: false
+      add :audience_athanor, :string, null: false
+      add :expires_at, :utc_datetime_usec, null: false
+
+      add :state, :string,
+        null: false,
+        default: "active",
+        check: if(sqlite?, do: certification_state)
+
+      add :revision, :bigint, null: false, default: 1
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :device_certifications, [certification_state])
+
+    create unique_index(:device_certifications, [:user_id, :audience_home, :client_id],
+             name: :device_certifications_binding_index
+           )
+
+    confirmation_checks = [
+      known(
+        "pending_confirmations_state_known",
+        "state",
+        ~w(pending confirmed consumed cancelled voided expired)
+      ),
+      known(
+        "pending_confirmations_proof_known",
+        "proof",
+        ~w(passkey oidc_reauth email_code)
+      )
+    ]
+
+    # A pending confirmation of one sensitive change (`Prima.Confirmation`),
+    # keyed by its public ref and never by the secret the asking request
+    # holds (`Prima.Confirmation.ref/1`): the record's fields, its digest
+    # and secret-free preview, the credential that opened it and alone may
+    # consume it, a name for the client that asked, how it was proven and
+    # by which client or passkey, and a state each transition moves once.
+    # A remote person's record names the `key_epoch` it depends on.
+    create table(:pending_confirmations, primary_key: false) do
+      add :ref, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :user_id, :string, null: false
+      add :operation, :string, null: false
+      add :args_digest, :string, null: false
+      add :action, :string, null: false
+      add :preview, :text, null: false
+      add :home, :text, null: false
+      add :rp_id, :string, null: false
+      add :challenge, :binary, null: false
+      add :digest, :string, null: false
+      add :opener, :string, null: false
+      add :asker, :text, null: false
+      add :identity_key_epoch, :string
+
+      add :state, :string,
+        null: false,
+        default: "pending",
+        check: if(sqlite?, do: Enum.at(confirmation_checks, 0))
+
+      add :proof, :string, check: if(sqlite?, do: Enum.at(confirmation_checks, 1))
+      add :confirmed_client_id, :string
+      add :confirmed_passkey_id, :string
+      add :reauth_nonce, :string
+      add :email_code_hash, :string
+      add :email_code_failures, :integer, null: false, default: 0
+      add :opened_at, :utc_datetime_usec, null: false
+      add :expires_at, :utc_datetime_usec, null: false
+      add :confirmed_at, :utc_datetime_usec
+      add :ended_at, :utc_datetime_usec
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :pending_confirmations, confirmation_checks)
+    create index(:pending_confirmations, [:athanor_id, :user_id, :state])
+
+    create index(:pending_confirmations, [:confirmed_client_id],
+             where: "confirmed_client_id IS NOT NULL"
+           )
+
+    create index(:pending_confirmations, [:confirmed_passkey_id],
+             where: "confirmed_passkey_id IS NOT NULL"
+           )
+
+    create index(:pending_confirmations, [:identity_key_epoch],
+             where: "identity_key_epoch IS NOT NULL"
+           )
+
+    invitation_state =
+      known("pairing_invitations_state_known", "state", ~w(pending consumed revoked))
+
+    # A pairing invitation: the hash of its bearer secret (never the
+    # secret), the person and membership it was opened under, the client id
+    # it reserves for the device that redeems it, its audience and expiry.
+    # Consumed once with issuance; a closed invitation never reopens.
+    create table(:pairing_invitations, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :secret_hash, :string, null: false
+      add :user_id, :string, null: false
+      add :membership_id, :string, null: false
+      add :prospective_client_id, :string, null: false
+      add :audience_home, :text, null: false
+      add :expires_at, :utc_datetime_usec, null: false
+
+      add :state, :string,
+        null: false,
+        default: "pending",
+        check: if(sqlite?, do: invitation_state)
+
+      add :consumed_at, :utc_datetime_usec
+      add :revoked_at, :utc_datetime_usec
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :pairing_invitations, [invitation_state])
+    create unique_index(:pairing_invitations, [:secret_hash])
+    create unique_index(:pairing_invitations, [:prospective_client_id])
+    create index(:pairing_invitations, [:athanor_id, :user_id, :state])
+  end
+
+  # A closed vocabulary as a check. SQLite takes a check only inside CREATE
+  # TABLE and Postgres only as a table constraint, so each is spelled once
+  # per adapter: inline for SQLite (`check:` on the column), and here for
+  # Postgres.
+  defp known(name, column, values),
+    do: %{name: name, expr: "#{column} IN (#{Enum.map_join(values, ", ", &"'#{&1}'")})"}
+
+  defp checked(true = _sqlite?, _table, _checks), do: :ok
+
+  defp checked(false, table, checks) do
+    for %{name: name, expr: expr} <- checks, do: create(constraint(table, name, check: expr))
+    :ok
+  end
+
+  # ==========================================================================
   # Server-wide facts
   # ==========================================================================
 
@@ -328,7 +1032,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # retired.
     create table(:cell_leases, primary_key: false) do
       add :node, :string, primary_key: true
-      # The boot holding the slot (`Cyfr.Boot.id/0`).
+      # The boot holding the slot (`Prima.Boot.id/0`).
       add :owner, :string, null: false
       # What this member stamps on what it issues outward — worker
       # assignments, host-call bindings, bridge grants. Raised by one on
@@ -526,11 +1230,142 @@ defmodule Arca.Repo.Migrations.Baseline do
   end
 
   # ==========================================================================
+  # Storage projections
+  # ==========================================================================
+
+  # How far each domain projection of a seeded root has caught up with the
+  # root's units. A root row holds the root's epoch, raised by one in the
+  # transaction of every publication, retirement, repair and edit of a unit
+  # under it, and never lowered or deleted: a unit recreated after its
+  # deletion takes a generation no earlier change of it held. A change row
+  # holds the last generation a unit took, whether the bytes it names are
+  # served yet (`ready`), the revision it names or that it was deleted
+  # (`tombstone`), and the generation the projection has acknowledged. No
+  # row references `storage_units`: a hand-laid unit has none, and the
+  # evidence of a deletion outlives the unit's row.
+  defp storage_projections do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    epoch_positive = %{name: "storage_projection_roots_epoch_positive", expr: "epoch > 0"}
+
+    acknowledged_epoch_counted = %{
+      name: "storage_projection_roots_acknowledged_epoch_counted",
+      expr: "acknowledged_epoch >= 0"
+    }
+
+    create table(:storage_projection_roots, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      # The seeded root (`Arca.Storage.overlay_roots/0`).
+      add :root, :string, null: false
+      add :epoch, :bigint, null: false, check: if(sqlite?, do: epoch_positive)
+
+      # The epoch up to which the projection reflects every change of the
+      # root.
+      add :acknowledged_epoch, :bigint,
+        null: false,
+        default: 0,
+        check: if(sqlite?, do: acknowledged_epoch_counted)
+    end
+
+    unless sqlite? do
+      create constraint(:storage_projection_roots, epoch_positive.name,
+               check: epoch_positive.expr
+             )
+
+      create constraint(:storage_projection_roots, acknowledged_epoch_counted.name,
+               check: acknowledged_epoch_counted.expr
+             )
+    end
+
+    create unique_index(:storage_projection_roots, [:athanor_id, :root])
+
+    create table(:storage_projection_changes, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :root, :string, null: false
+      # The unit's key inside its root, as `storage_units` spells it.
+      add :unit_key, :string, null: false
+      # The root epoch the unit's last change took.
+      add :generation, :bigint, null: false
+      # Whether the bytes that change names are served.
+      add :ready, :boolean, null: false, default: false
+      # The revision the change names; null for a deletion and for a unit
+      # no commit has published.
+      add :source_revision, :string
+      add :tombstone, :boolean, null: false, default: false
+      add :acknowledged_generation, :bigint, null: false, default: 0
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:storage_projection_changes, [:athanor_id, :root, :unit_key])
+  end
+
+  # ==========================================================================
+  # Fenced publication
+  # ==========================================================================
+
+  # Content staged for a fenced publication, and the documents that
+  # reference it (`Arca.Storage.stage/3`, `Arca.FencedPublication`). A
+  # staging row is written before its bytes, so bytes a live attempt wrote
+  # always have a row naming them; a publication commits the document's
+  # reference and marks the row `published` in one transaction, and the
+  # bytes never move.
+  defp fenced_publication do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    revision_counted = %{name: "fenced_documents_revision_counted", expr: "revision >= 0"}
+
+    create table(:storage_staging, primary_key: false) do
+      # A ULID minted per staging attempt; the last segment of `key`.
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      # The writer's purpose, opaque to the store.
+      add :attempt, :string, null: false
+      # The logical storage path of the bytes under the athanor's
+      # `staging/` root, segments joined with `/`.
+      add :key, :string, null: false
+      # The digest of the bytes, recorded once they are written.
+      add :digest, :string
+      # reserved | published | deleting
+      add :state, :string, null: false
+      # Database time. A `reserved` row past it can no longer be published
+      # and is the sweep's to reclaim.
+      add :expires_at, :utc_datetime_usec, null: false
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:storage_staging, [:athanor_id, :key])
+    create index(:storage_staging, [:athanor_id, :state, :expires_at])
+
+    # The authoritative reference for a staged blob: the revision a
+    # publication compares and raises by one, and the staged bytes that
+    # revision names. A document no publication has created reads as
+    # revision 0.
+    create table(:fenced_documents, primary_key: false) do
+      add :athanor_id, :string, primary_key: true, null: false
+      add :key, :string, primary_key: true, null: false
+      add :revision, :bigint, null: false, check: if(sqlite?, do: revision_counted)
+      # The `storage_staging` key of the bytes this revision names.
+      add :blob_key, :string, null: false
+      add :digest, :string, null: false
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    unless sqlite? do
+      create constraint(:fenced_documents, revision_counted.name, check: revision_counted.expr)
+    end
+  end
+
+  # ==========================================================================
   # Agents
   # ==========================================================================
 
   defp agents do
-    # The estate's agents as rows: an index of the `aqua/` tree, one row per
+    # The athanor's agents as rows: an index of the `aqua/` tree, one row per
     # soul or role, carrying the digest of the file's bytes (its revision)
     # and of its security-relevant subset (its capability).
     create table(:agents, primary_key: false) do
@@ -567,6 +1402,8 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp executions do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
     create table(:executions, primary_key: false) do
       add :id, :string, primary_key: true
       add :reference, :string, null: false
@@ -604,6 +1441,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :current_attempt, :string
       # The durable event counter, allocated in the writer's transaction.
       add :event_seq, :integer, null: false, default: 0
+      # The admission the run was started under (`decision_logs.call_id`),
+      # which the calls its chain makes name as their parent.
+      add :call_id, :string
+      # How the run started (`Prima.Origin`): named by the admission path
+      # for a root, copied from the parent for a child.
+      add :origin, :string
     end
 
     create unique_index(:executions, [:id, :athanor_id])
@@ -626,9 +1469,23 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:executions, [:athanor_id, :kind, :status])
 
     # The fence: one row per attempt at an execution.
+    # The athanor standing an attempt was admitted under
+    # (`Prima.ExecutionGrant`): the athanor's `security_generation` its
+    # root read, inherited unchanged by every child and successor. No
+    # default: an attempt whose admission named no generation is not
+    # written. Positive, spelled once per adapter as above.
+    attempt_generation = %{
+      name: "execution_attempts_athanor_generation_positive",
+      expr: "athanor_generation > 0"
+    }
+
     create table(:execution_attempts, primary_key: false) do
       add :attempt, :string, primary_key: true
       add :athanor_id, :string, null: false
+
+      add :athanor_generation, :bigint,
+        null: false,
+        check: if(sqlite?, do: attempt_generation)
 
       add :execution_id,
           references(:executions,
@@ -640,7 +1497,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :fence, :integer, null: false
       # The worker service the attempt was dispatched to (its configured
-      # service id, `Cyfr.WorkerAuth`); null for an attempt the control
+      # service id, `Prima.WorkerAuth`); null for an attempt the control
       # plane holds itself, such as a turn root.
       add :service_id, :string
       # The boot holding the attempt: the worker service's incarnation, or
@@ -658,6 +1515,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :started_at, :utc_datetime_usec, null: false
       add :running_since, :utc_datetime_usec
       add :ended_at, :utc_datetime_usec
+    end
+
+    unless sqlite? do
+      create constraint(:execution_attempts, attempt_generation.name,
+               check: attempt_generation.expr
+             )
     end
 
     create unique_index(:execution_attempts, [:execution_id, :fence])
@@ -806,6 +1669,9 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp logs do
+    # One row per recorded call of a tenant, the projection of its
+    # admission decision (`decision_logs`), written in the same
+    # transaction: `id` is the decision's call id.
     create table(:mcp_logs, primary_key: false) do
       add :id, :string, primary_key: true
       add :user_id, :string
@@ -823,6 +1689,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :athanor_id, :string, null: false
       # The ingress request a call belongs to; a chain shares one.
       add :request_id, :string
+      # A refused call's class (`Prima.Refusal.classes/0`).
+      add :refusal_class, :string
     end
 
     create index(:mcp_logs, [:user_id])
@@ -861,6 +1729,65 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:policy_logs, [:athanor_id])
     create index(:policy_logs, [:athanor_id, :timestamp])
     create index(:policy_logs, [:consent_id])
+
+    # One row per admission decision (`Arca.DecisionLog`): the call the gate
+    # admitted or refused, and later, separately, how the admitted work
+    # ended. A refusal before any caller or tenant was established has no
+    # `user_id` and no `athanor_id`; such a row is the host's, purged under
+    # its own retention, and no tenant reads it. The index names are spelled
+    # so both adapters carry the same ones.
+    create table(:decision_logs, primary_key: false) do
+      add :call_id, :string, primary_key: true
+      add :parent_call_id, :string
+      add :request_id, :string
+      add :user_id, :string
+      add :athanor_id, :string
+      add :plane, :string, null: false
+      add :tool, :string
+      add :action, :string
+      add :admission, :string, null: false
+      add :refusal_class, :string
+      add :reason, :text
+      add :inserted_at, :utc_datetime_usec, null: false
+      add :completion, :string
+      add :completion_class, :string
+      add :completed_at, :utc_datetime_usec
+      add :duration_ms, :integer
+    end
+
+    create index(:decision_logs, [:athanor_id, :inserted_at], name: :decision_logs_athanor_time)
+    create index(:decision_logs, [:request_id], name: :decision_logs_request)
+    create index(:decision_logs, [:refusal_class], name: :decision_logs_refusal_class)
+  end
+
+  # ==========================================================================
+  # Retention settings
+  # ==========================================================================
+
+  # One row per athanor: the retention values it has set, as the RFC 8785
+  # encoding of a map from retention key to a positive integer
+  # (`Arca.RetentionSettings`). A patch lands only while the row still
+  # holds the revision it read, so two patches of different keys both
+  # land. Positive, starting at 1; spelled once per adapter for the same
+  # reason as the standing counters.
+  defp retention do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    revision_positive = %{name: "retention_settings_revision_positive", expr: "revision > 0"}
+
+    create table(:retention_settings, primary_key: false) do
+      add :athanor_id, :string, primary_key: true, null: false
+      add :settings, :text, null: false
+      add :revision, :bigint, null: false, check: if(sqlite?, do: revision_positive)
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    unless sqlite? do
+      create constraint(:retention_settings, revision_positive.name,
+               check: revision_positive.expr
+             )
+    end
   end
 
   # ==========================================================================
@@ -941,6 +1868,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :granted_via, :string, null: false
       add :granted_at, :utc_datetime_usec, null: false
       add :supersedes_id, :string
+      # The origins the revision admits (`Prima.Origin`), a JSON array of
+      # their wire spellings in the enum's order, never empty when set.
+      add :admitted_origins, :text
     end
 
     create index(:consents, [:athanor_id, :profile_id])
@@ -1005,6 +1935,14 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :action, :string, null: false
       add :granted_by, :string
       add :granted_at, :utc_datetime_usec, null: false
+      # The bounds an allow may carry and a deny never does: the lifecycle
+      # it ends with (`execution`, `turn` or `schedule`, and that row's id),
+      # a deadline, and a resource constraint (JSON: a resource kind and its
+      # patterns).
+      add :lifecycle_kind, :string
+      add :lifecycle_id, :string
+      add :expires_at, :utc_datetime_usec
+      add :constraint, :text
     end
 
     # Each partial key is named for its scope, the name Postgres reports a
@@ -1033,7 +1971,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
   defp registrations do
     # An `http` server has a url; a `stdio` server has none and runs its
-    # backends (`config_json.backends`) on the MCP bridge. `epoch` is 1 on
+    # backends (`config_json.backends`) on the backends service. `epoch` is 1 on
     # insert and rises in the same statement as every change to the row.
     # SQLite takes a check only inside CREATE TABLE and Postgres only as a
     # table constraint, so the one rule is spelled once per adapter.
@@ -1052,8 +1990,11 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :config_json, :text, null: false
       add :enabled, :boolean, default: true
       add :epoch, :bigint, null: false
+      # The per-row counter a fenced publication compares and raises
+      # (`Arca.FencedPublication`); every write to the row raises it.
+      add :revision, :bigint, null: false, default: 0
       # The person who created the row; their stdio servers share one quota
-      # of the MCP bridge across every athanor.
+      # of the backends service across every athanor.
       add :created_by, :string, null: false
       add :athanor_id, :string, null: false
 
@@ -1314,6 +2255,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       # by every host transition that takes the turn from its holder.
       add :fence, :integer, null: false
       add :recovery_attempts, :integer, null: false, default: 0
+      # The recoveries this turn is allowed, the assistant's policy written
+      # when the turn starts or is first claimed; null while it is only
+      # accepted. No default: the limit is the policy's, never storage's.
+      add :recovery_limit, :integer
       add :profile_id, :string
       add :consent_id, :string
       add :agent_revision_digest, :string
@@ -1330,6 +2275,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       # approval | launch
       add :paused_reason, :string
       add :launch_step_id, :string
+      # How the turn was started (`Prima.Origin`), written when it is
+      # accepted, so a turn recovered after a restart resumes under it.
+      add :origin, :string
     end
 
     create unique_index(:turns, [:id, :athanor_id])
@@ -1424,6 +2372,47 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:approvals, [:athanor_id, :turn_id])
     create index(:approvals, [:athanor_id, :thread_id, :status])
     create index(:approvals, [:athanor_id, :status, :expires_at])
+  end
+
+  # ==========================================================================
+  # Platform settings
+  # ==========================================================================
+
+  # The cell's platform settings (`Arca.PlatformSettings`): one row per
+  # setting someone set, its value as JSON text, and one reserved row whose
+  # `revision` is the store revision every write raises by compare-and-set.
+  # A setting's row records the store revision that wrote it; a key with no
+  # row is its default.
+  defp platform_settings do
+    create table(:platform_settings, primary_key: false) do
+      add :key, :string, primary_key: true
+      add :value, :text, null: false
+      add :revision, :bigint, null: false
+      # Who set it, as the host names them; nil on the reserved row.
+      add :set_by, :string
+      add :set_at, :utc_datetime_usec, null: false
+    end
+
+    # Each member's environment pins, under its slot's generation, retired
+    # by whoever next takes or expires the slot.
+    create table(:settings_pins, primary_key: false) do
+      add :key, :string, primary_key: true
+      add :member, :string, primary_key: true
+      add :generation, :bigint, null: false
+      add :value, :text, null: false
+    end
+
+    flush()
+
+    repo().insert_all(Arca.PlatformSettings.Row, [
+      %{
+        key: Arca.PlatformSettings.revision_key(),
+        value: "null",
+        revision: 0,
+        set_by: nil,
+        set_at: DateTime.utc_now()
+      }
+    ])
   end
 
   # The schema this database was built from, recorded by the migration that

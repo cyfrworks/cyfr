@@ -12,14 +12,14 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
-  alias Cyfr.Authority.Transition
+  alias Prima.Authority
+  alias Prima.Authority.Blob
+  alias Prima.Authority.Transition
   alias Sanctum.Consent.Loader
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
-  alias Cyfr.JCS
-  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
+  alias Prima.JCS
+  alias Prima.Test.AuthorityFixtures, as: Fixtures
 
   @formula "formula:local.assistant"
   @catalyst "catalyst:local.claude"
@@ -30,15 +30,15 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     "projection" => %{"fields" => ["ANTHROPIC_API_KEY", "ANTHROPIC_ORG"]}
   }
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     ctx = %Context{
       user_id: "loader_selection_user",
       athanor_id: "ath_test",
       scope: :athanor,
-      permissions: MapSet.new([:execute])
+      permissions: MapSet.new([:execute]),
+      origin: :interactive
     }
 
     {:ok, ctx: ctx}
@@ -85,12 +85,13 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         blob_digest: Keyword.get(opts, :blob_digest, JCS.hash_binary(policy)),
         resolved_policy: policy,
         activation: %{source_ref => "sha256:act-c"},
+        admitted_origins: Keyword.get(opts, :origins, [:interactive]),
         vault_refs: refs
       })
   end
 
   # The formula's profile: its edge to the catalyst selects the profile above.
-  defp put_formula!(ctx, selection) do
+  defp put_formula!(ctx, selection, origins \\ [:interactive]) do
     profile = %{
       id: "prof-aqua",
       kind: :owner,
@@ -129,6 +130,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         blob_digest: JCS.hash_binary(policy),
         resolved_policy: policy,
         activation: @activation,
+        admitted_origins: origins,
         vault_refs: []
       })
 
@@ -136,6 +138,11 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   end
 
   defp load!(ctx, profile) do
+    {:ok, authority, _stamp} = load(ctx, profile)
+    authority
+  end
+
+  defp load(ctx, profile) do
     {:ok, digest} = JCS.hash(@activation)
 
     live =
@@ -146,10 +153,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
          nodes: Map.new(@activation, fn {k, d} -> {k, %{release_digest: d, integrity: :ok}} end)
        }}
 
-    {:ok, authority, _stamp} =
-      Loader.load_root(ctx, profile, live: live, live_shape_digest: nil)
-
-    authority
+    Loader.load_root(ctx, profile, live: live, live_shape_digest: nil)
   end
 
   defp edge_vault(authority) do
@@ -370,5 +374,28 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     assert %Authority{cursor: {:bound, @catalyst}} = child
     assert %{via: %{label: "default"}} = child.resources.vault
     refute Blob.bound_vault?(child.resources.vault)
+  end
+
+  test "a lender whose grant does not admit the run's origin refuses the whole load, naming it",
+       %{ctx: ctx} do
+    # The key's own profile admits interactive alone; the formula borrowing
+    # it admits programmatic as well.
+    put_catalyst!(ctx, origins: [:interactive])
+
+    profile =
+      put_formula!(ctx, %{"via" => %{"label" => "default"}}, [:interactive, :programmatic])
+
+    assert {:error,
+            {:consent_required, %{profile_id: "prof-claude", current_revision: 1, shape_diff: []}}} =
+             load(%{ctx | origin: :programmatic}, profile)
+
+    # Under an origin both name, the key is lent.
+    assert %{entry_id: "vault-anthropic"} = edge_vault(load!(ctx, profile))
+
+    # Once the lender names it too, the programmatic run borrows the key.
+    put_catalyst!(ctx, origins: [:interactive, :programmatic])
+
+    assert {:ok, authority, _} = load(%{ctx | origin: :programmatic}, profile)
+    assert %{entry_id: "vault-anthropic"} = edge_vault(authority)
   end
 end

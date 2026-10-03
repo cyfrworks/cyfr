@@ -13,7 +13,7 @@ defmodule Aqua.AquaToolEditsTest do
   alias Compendium.AquaAgent
   alias Compendium.AquaPath
 
-  setup do
+  setup tags do
     test_path = Path.join(System.tmp_dir!(), "aqua_tool_edits_#{:rand.uniform(1_000_000)}")
     original = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
@@ -27,8 +27,7 @@ defmodule Aqua.AquaToolEditsTest do
     end)
 
     # The tool's door logs to the database; the runner it may reach does too.
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
@@ -129,7 +128,7 @@ defmodule Aqua.AquaToolEditsTest do
                "tool_policy_patch" => %{"files.read" => "ask"}
              })
 
-    assert {:error, {:invalid_argument, _}} =
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
              call(ctx, %{
                "action" => "update",
                "name" => "scout",
@@ -149,7 +148,7 @@ defmodule Aqua.AquaToolEditsTest do
 
   test "a prompt save names the version it edited and is refused over a newer one", %{ctx: ctx} do
     {:ok, %{"content_digest" => digest}} = call(ctx, %{"action" => "get", "name" => "scout"})
-    assert digest == Compendium.MCP.AquaTool.content_digest("")
+    assert digest == Compendium.Providers.Aqua.content_digest("")
 
     assert {:ok, _} =
              call(ctx, %{
@@ -211,25 +210,22 @@ defmodule Aqua.AquaToolEditsTest do
 
     # The refusal is the vocabulary's, not a flattened storage failure,
     # and it says the unit is published.
-    assert Cyfr.Refusal.reason?({:finish_failed, :enospc})
-    assert Cyfr.Refusal.message({:finish_failed, :enospc}) =~ "published"
+    assert Prima.Refusal.reason?({:finish_failed, :enospc})
+    assert Prima.Refusal.message({:finish_failed, :enospc}) =~ "published"
 
-    # The resync ran rather than being skipped with the refusal: it reads
-    # the served tree, which does not hold the role's bytes yet, so it
-    # keeps what is served and names nothing more.
-    {:ok, rows} = Compendium.AgentIndex.list(ctx)
-    assert Enum.any?(rows, &(&1.name == "scout"))
-    refute Enum.any?(rows, &(&1.name == "tracker"))
+    # The commit stamped the role pending and its move never finished: the
+    # index is behind the tree, and says so rather than answer the rows it
+    # held before the role was published.
+    assert {:error, :projection_unavailable} = Compendium.AgentIndex.list(ctx)
     refute Arca.exists?(Sanctum.Context.actor(ctx), role)
 
-    # The move is what was left, and the storage sweep is the only thing
-    # that finishes it. It re-derives the index too: the three writers of
-    # the index are the aqua tool, `Cyfr.Files` and provisioning, and none
-    # of them runs because a sweep repaired something — so without that,
-    # a role published by this commit stays out of the index until the
-    # next write to the tree, which may be days away or never.
+    # The move is what was left, and the storage sweep finishes it: its
+    # repair marks the role's change ready at a newer generation, so the
+    # next read of the index derives the role with nothing else asked.
     # No grace, so the move this commit left is overdue at once.
-    assert {:ok, _collected} = Cyfr.Retention.StagedRevisions.prune(ctx, 0, false)
+    assert {:ok, _collected} =
+             Arca.Retention.StagedRevisions.prune(Sanctum.Context.actor(ctx), 0, false)
+
     assert Arca.exists?(Sanctum.Context.actor(ctx), role)
 
     {:ok, rows} = Compendium.AgentIndex.list(ctx)

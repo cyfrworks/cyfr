@@ -28,7 +28,8 @@ defmodule Opus.AuthorityPlumbingTest do
       user_id: "auth_plumb_user_#{:rand.uniform(100_000)}",
       athanor_id: Sanctum.TestContext.athanor_id(),
       scope: :athanor,
-      permissions: MapSet.new([:execute])
+      permissions: MapSet.new([:execute]),
+      origin: :programmatic
     }
 
     admin_ctx = Sanctum.TestContext.local()
@@ -63,7 +64,7 @@ defmodule Opus.AuthorityPlumbingTest do
   # The authority as an assignment carries it to its runner: every member
   # but the budget's cap, which a decoded copy never charges.
   defp as_assigned(authority) do
-    {:ok, decoded} = Cyfr.Authority.from_wire(Cyfr.Authority.to_wire(authority))
+    {:ok, decoded} = Prima.Authority.from_wire(Prima.Authority.to_wire(authority))
     decoded
   end
 
@@ -73,11 +74,11 @@ defmodule Opus.AuthorityPlumbingTest do
 
   test "an :authority passed to a dispatched run reaches its runner as its assignment carries it",
        %{ctx: ctx} do
-    authority = Cyfr.Authority.zero()
+    authority = Prima.Authority.zero()
     execution_id = "exec_auth_plumb_#{System.unique_integer([:positive])}"
 
     _result =
-      Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+      Crucible.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
         type: :reagent,
         execution_id: execution_id,
         authority: authority
@@ -90,7 +91,7 @@ defmodule Opus.AuthorityPlumbingTest do
     # Admission raises for a missing authority, and the raise closes the
     # run failed before it reaches the runtime.
     assert {:error, message} =
-             Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: :reagent)
+             Crucible.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: :reagent)
 
     assert message =~ "without an authority is not a thing"
     refute attached?()
@@ -98,7 +99,7 @@ defmodule Opus.AuthorityPlumbingTest do
 
   test "authority_required without an authority fails closed, executing nothing", %{ctx: ctx} do
     assert {:error, message} =
-             Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+             Crucible.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
                type: :reagent,
                authority_required: true
              )
@@ -108,11 +109,11 @@ defmodule Opus.AuthorityPlumbingTest do
   end
 
   test "authority_required with an authority proceeds to its runner", %{ctx: ctx} do
-    authority = Cyfr.Authority.zero()
+    authority = Prima.Authority.zero()
     execution_id = "exec_auth_plumb_#{System.unique_integer([:positive])}"
 
     _result =
-      Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+      Crucible.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
         type: :reagent,
         execution_id: execution_id,
         authority: authority,

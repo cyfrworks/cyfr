@@ -4,13 +4,15 @@
 defmodule Sanctum.CallerTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+  import ExUnit.CaptureLog
+
   alias Sanctum.Caller
   alias Sanctum.Context
   alias Sanctum.Session
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -69,23 +71,23 @@ defmodule Sanctum.CallerTest do
         )
       )
 
-    {:ok, session} = Session.create(ctx)
+    {:ok, session} = Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
     session
   end
 
-  # A group of this person's own: no estate is shared server-wide, so a
+  # A group of this person's own: no athanor is shared server-wide, so a
   # test that needs a seat mints one.
   defp member!(user) do
-    {:ok, estate} =
+    {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create_group(
         user.user_id,
         "Caller #{System.unique_integer([:positive])}"
       )
 
     {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: estate.id)
+      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: athanor.id)
 
-    {user, estate}
+    {user, athanor}
   end
 
   describe "establish/2" do
@@ -113,7 +115,7 @@ defmodule Sanctum.CallerTest do
       _ = other_home
       other_session = session_for(Map.put(other, :namespace, other.slug))
 
-      # The other user holds no membership in the `home` fixture estate.
+      # The other user holds no membership in the `home` fixture athanor.
       assert {:error, reason} = Caller.establish(other_session.token, focus: home.id)
       assert reason in [:not_member, :no_athanor]
 
@@ -122,14 +124,14 @@ defmodule Sanctum.CallerTest do
     end
 
     test "a session whose person has no publisher namespace is established like any other" do
-      {user, estate} = new_user() |> known!() |> member!()
+      {user, athanor} = new_user() |> known!() |> member!()
       session = session_for(user, namespace: nil)
 
       assert {:ok, %Context{} = ctx} = Caller.establish(session.token)
       assert ctx.user_id == user.user_id
       assert ctx.authenticated
       assert ctx.namespace == nil
-      assert ctx.athanor_id == estate.id
+      assert ctx.athanor_id == athanor.id
     end
 
     test "no token, a blank token, and an unknown token are unauthenticated" do
@@ -183,7 +185,7 @@ defmodule Sanctum.CallerTest do
 
   describe "peek/1" do
     test "answers the identity fields without establishing" do
-      user = new_user()
+      user = known!(new_user())
       session = session_for(user, namespace: nil)
 
       assert {:ok, %{user_id: user_id, provider: "github", namespace: nil}} =
@@ -197,15 +199,15 @@ defmodule Sanctum.CallerTest do
 
   describe "the establish memo" do
     setup do
-      original = Application.get_env(:sanctum, :establish_cache_ms)
-      Application.put_env(:sanctum, :establish_cache_ms, 60_000)
+      original = Application.get_env(:sanctum, :caller_memo_ttl_ms)
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
 
       on_exit(fn ->
         Arca.Cache.delete_match({:established, :_, :_, :_})
 
         if original,
-          do: Application.put_env(:sanctum, :establish_cache_ms, original),
-          else: Application.delete_env(:sanctum, :establish_cache_ms)
+          do: Application.put_env(:sanctum, :caller_memo_ttl_ms, original),
+          else: Application.delete_env(:sanctum, :caller_memo_ttl_ms)
       end)
 
       :ok
@@ -301,7 +303,7 @@ defmodule Sanctum.CallerTest do
       # whose delivery is lost must not go on serving a revoked authority
       # past it, so the case revokes the row the way a peer would and
       # never delivers anything here.
-      Application.put_env(:sanctum, :establish_cache_ms, 150)
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 150)
 
       {user, _home} = new_user() |> claim!() |> member!()
       session = session_for(Map.put(user, :namespace, user.slug))
@@ -317,6 +319,106 @@ defmodule Sanctum.CallerTest do
 
       Process.sleep(200)
       assert {:error, :unauthenticated} = Caller.establish(session.token)
+    end
+  end
+
+  describe "revalidate_session/1" do
+    # The stored session says who the caller is; the admission the caller
+    # is inside says how the run began, which paired client it came from
+    # and which pending confirmation it names. Revalidation rereads the
+    # first and must not drop the second.
+    @admission [
+      origin: :interactive,
+      client_id: "cli_revalidation",
+      confirmation_id: "conf_revalidation"
+    ]
+
+    test "a session's revalidation keeps the origin, the client and the confirmation" do
+      {user, _home} = new_user() |> claim!() |> member!()
+      session = session_for(Map.put(user, :namespace, user.slug))
+      {:ok, established} = Caller.establish(session.token)
+
+      for {field, value} <- @admission do
+        assert Map.fetch!(established, field) == nil
+        held = Map.put(established, field, value)
+
+        assert {:ok, revalidated} = Caller.revalidate_session(held)
+        assert Map.fetch!(revalidated, field) == value, "#{field} was lost on revalidation"
+      end
+
+      held = struct!(established, @admission)
+      assert {:ok, revalidated} = Caller.revalidate_session(held)
+      assert Map.take(revalidated, Keyword.keys(@admission)) == Map.new(@admission)
+    end
+
+    test "a key's revalidation keeps them too" do
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      name = "revalidation-#{System.unique_integer([:positive])}"
+      {:ok, %{api_key: raw}} = Sanctum.TestContext.create_key(ctx, %{name: name})
+      {:ok, key} = Caller.establish({:api_key, raw})
+
+      held = struct!(key, @admission)
+      assert {:ok, revalidated} = Caller.revalidate_session(held)
+      assert Map.take(revalidated, Keyword.keys(@admission)) == Map.new(@admission)
+    end
+  end
+
+  describe "a key whose stored allowlist does not read" do
+    # A corrupt allowlist is a corrupt security row, not an absent
+    # restriction: the derived source and the retained context both refuse.
+    setup do
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      name = "corrupt-allowlist-#{System.unique_integer([:positive])}"
+
+      {:ok, %{api_key: raw}} =
+        Sanctum.TestContext.create_key(ctx, %{
+          name: name,
+          type: :service,
+          ip_allowlist: ["192.168.1.0/24"]
+        })
+
+      {:ok, key} = Caller.establish({:api_key, raw}, client_ip: "192.168.1.10")
+      key = %{key | client_ip: "192.168.1.10"}
+
+      claims =
+        Map.merge(key.credential_binding, %{user_id: key.user_id, athanor_id: key.athanor_id})
+
+      # Standing while the row reads: both paths admit.
+      assert {:ok, _} = Caller.derived_standing(claims, client_ip: "192.168.1.10")
+      assert {:ok, _} = Caller.revalidate_session(key)
+
+      {:ok, name: name, key: key, claims: claims}
+    end
+
+    for {label, stored} <- [
+          {"not JSON", ~s(["192.168.1.0/24")},
+          {"not a list", ~s({"allow": "192.168.1.0/24"})},
+          {"not strings", "[1, 2]"}
+        ] do
+      test "#{label}: the derived source and the revalidation refuse", %{
+        name: name,
+        key: key,
+        claims: claims
+      } do
+        stored = unquote(stored)
+
+        Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.name == ^name),
+          set: [ip_allowlist: stored]
+        )
+
+        log =
+          capture_log(fn ->
+            assert Caller.derived_standing(claims, client_ip: "192.168.1.10") ==
+                     {:error, :ip_not_allowed}
+
+            assert Caller.revalidate_session(key) == {:error, :unauthenticated}
+          end)
+
+        assert log =~
+                 ~r/\[Sanctum\.Caller\] stored ip_allowlist is not (valid JSON|a list of strings) \(#{byte_size(stored)} bytes\)/
+
+        refute log =~ stored
+      end
     end
   end
 

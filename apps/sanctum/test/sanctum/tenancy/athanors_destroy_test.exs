@@ -14,9 +14,8 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Users}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "destroy_#{:rand.uniform(1_000_000)}")
     prev = Application.get_env(:arca, :base_path)
@@ -58,12 +57,16 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
   # One row in each of the tables whose survival was the point: a sealed
   # credential, a thread with a message, and a request log.
   defp seed_rows!(ctx) do
-    {:ok, _entry} =
-      Sanctum.Vault.create(ctx, %{
-        name: "to-be-erased",
-        kind: "api_key",
-        fields: %{"token" => "super-secret-value"}
+    params = %{name: "to-be-erased", kind: "api_key", fields: %{"token" => "super-secret-value"}}
+
+    entering =
+      Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+        operation: "vault.create",
+        arguments: params,
+        resource: params.name
       })
+
+    {:ok, _entry} = Sanctum.Vault.create(entering, params)
 
     {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
@@ -166,6 +169,36 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
   end
 
+  test "the athanor's decisions go with it, and the host's decisions stay", %{
+    group: group,
+    ctx: ctx
+  } do
+    decision = fn admission ->
+      Prima.Decision.new(
+        call_id: "call_destroy_#{uniq()}",
+        plane: :external,
+        admission: admission,
+        refusal_class: if(admission == :refused, do: :unauthenticated),
+        inserted_at: DateTime.utc_now()
+      )
+    end
+
+    athanor = decision.(:admitted)
+    host = decision.(:refused)
+    :ok = Arca.DecisionLog.append(Sanctum.Context.actor(ctx), athanor)
+    :ok = Arca.DecisionLog.append(nil, host)
+    assert count("decision_logs", group.id) == 1
+
+    {:ok, archived} = Athanors.archive(group)
+    assert {:ok, %{"decision_logs" => 1}} = Athanors.destroy(archived)
+
+    assert count("decision_logs", group.id) == 0
+
+    admin = %{Prima.Actor.system() | platform_admin: true}
+    assert {:error, :not_found} = Arca.DecisionLog.get_global(admin, athanor.call_id)
+    assert {:ok, %{athanor_id: nil}} = Arca.DecisionLog.get_global(admin, host.call_id)
+  end
+
   test "the sealed payload itself is gone, not merely unreferenced", %{group: group, ctx: ctx} do
     :ok = seed_rows!(ctx)
 
@@ -194,7 +227,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
 
     # `users.personal_athanor_id` is not an athanor-scoped column, so
     # erasure would leave it naming a row whose data is gone: the unique
-    # index then blocks minting a replacement and `unarchive_personal/1`
+    # index then blocks minting a replacement and `Users.allow/1`
     # reopens a wiped shell.
     assert Sanctum.Tenancy.Users.personal_athanor?(personal.id)
 

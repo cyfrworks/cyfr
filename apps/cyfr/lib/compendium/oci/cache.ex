@@ -12,6 +12,18 @@ defmodule Compendium.OCI.Cache do
   - `cache/oci/manifests/<registry>/<repo>/<tag>.json` — cached manifest envelopes
 
   Tag refs re-check digest via HEAD; digest refs are immutable.
+
+  ## Entitlement
+
+  The bytes are shared, the permission to read them is not. A cached
+  manifest or blob is served to a caller only once the registry has
+  answered that caller's credential for the repository with a 200 — a
+  HEAD, a manifest GET or a blob download — and that answer is memoized
+  here for five minutes under the credential's key
+  (`Compendium.OCI.Transport.credential_key/2`), the registry and the
+  repository. An anonymous 200 is a public repository's entitlement.
+  The memo lives in `Arca.Cache` and is never written to storage; blob
+  deduplication stays keyed by digest alone.
   """
 
   require Logger
@@ -23,10 +35,14 @@ defmodule Compendium.OCI.Cache do
   # witnessed in the tests).
   @cache_root "cache"
 
+  # How long a registry's 200 for one credential and repository stands in
+  # for asking again.
+  @entitlement_ttl_ms 300_000
+
   # All cache operations run under a single global storage context.
   # The `cache/` prefix is in `Arca.Storage.global_prefixes/0`, so the
   # adapter writes to root rather than user-scoping by `user_id`.
-  defp actor, do: Cyfr.Actor.system()
+  defp actor, do: Prima.Actor.system()
 
   @doc """
   Get a cached blob by digest.
@@ -124,6 +140,31 @@ defmodule Compendium.OCI.Cache do
   end
 
   @doc """
+  Whether the registry has answered `credential` for `repository` within
+  the memo's lifetime.
+  """
+  @spec entitled?(String.t(), String.t(), String.t()) :: boolean()
+  def entitled?(credential, registry, repository),
+    do: Arca.Cache.get(entitlement_key(credential, registry, repository)) == {:ok, true}
+
+  @doc """
+  Record that the registry answered `credential` for `repository`. A cache
+  that cannot take the memo only costs the next read another HEAD.
+  """
+  @spec entitle(String.t(), String.t(), String.t()) :: :ok
+  def entitle(credential, registry, repository) do
+    _ =
+      Arca.Cache.put(entitlement_key(credential, registry, repository), true, @entitlement_ttl_ms)
+
+    :ok
+  end
+
+  @doc "Drop the memo: the registry refused `credential` for `repository`."
+  @spec forget_entitlement(String.t(), String.t(), String.t()) :: :ok
+  def forget_entitlement(credential, registry, repository),
+    do: Arca.Cache.invalidate(entitlement_key(credential, registry, repository))
+
+  @doc """
   Clear the entire cache.
   """
   @spec clear() :: :ok | {:error, term()}
@@ -146,6 +187,9 @@ defmodule Compendium.OCI.Cache do
   # ============================================================================
 
   defp blob_segments(hex), do: [@cache_root, "oci", "blobs", "sha256", hex]
+
+  defp entitlement_key(credential, registry, repository),
+    do: {:oci_entitlement, registry, repository, credential}
 
   defp manifest_segments(registry, repository, tag) do
     safe_repo = String.replace(repository, "/", "_")

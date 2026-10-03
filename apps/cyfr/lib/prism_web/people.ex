@@ -9,7 +9,7 @@ defmodule PrismWeb.People do
   `member.list` verb's rows — atom or string keys) reads as its display
   name, else its email, else a shortened id; a bare user id reads the same
   way from the `users` row. The person looking reads as "You", the way the
-  console already names their own estate — pass `nil` for `ctx` where no
+  console already names their own athanor — pass `nil` for `ctx` where no
   one in particular is looking (a log column, a table of who did what).
   """
 

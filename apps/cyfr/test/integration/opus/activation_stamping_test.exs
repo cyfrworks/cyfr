@@ -14,15 +14,14 @@ defmodule Opus.ActivationStampingTest do
 
   @probe_node "formula:local.nested-probe"
 
-  setup do
+  setup tags do
     test_path = Path.join(System.tmp_dir!(), "activation_stamp_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     :ok = Probe.publish_probe!(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @probe_node in minted
@@ -39,7 +38,7 @@ defmodule Opus.ActivationStampingTest do
   end
 
   defp execution_row(execution_id) do
-    Arca.Repo.get(Arca.Execution, execution_id)
+    Arca.Repo.get(Arca.Schemas.Execution, execution_id)
   end
 
   test "a root execution records its activation digest and graph", %{ctx: ctx} do
@@ -55,7 +54,7 @@ defmodule Opus.ActivationStampingTest do
     assert Map.has_key?(graph, @probe_node)
 
     # The stored graph is the canonical form the digest was taken over.
-    assert Cyfr.JCS.hash_binary(row.activation_graph) == row.activation_digest
+    assert Prima.JCS.hash_binary(row.activation_graph) == row.activation_digest
   end
 
   test "a nested child execution carries the root's digest and no graph", %{ctx: ctx} do
@@ -74,7 +73,9 @@ defmodule Opus.ActivationStampingTest do
 
     children =
       Arca.Repo.all(
-        from(e in Arca.Execution, where: e.parent_execution_id == ^result.metadata.execution_id)
+        from(e in Arca.Schemas.Execution,
+          where: e.parent_execution_id == ^result.metadata.execution_id
+        )
       )
 
     assert children != []
@@ -99,9 +100,9 @@ defmodule Opus.ActivationStampingTest do
     # stamping is exercised where it still runs: a direct execution under
     # an authority that carries no activation of its own.
     {:ok, result} =
-      Cyfr.Execution.Dispatch.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
+      Crucible.Dispatch.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
         type: :formula,
-        authority: Cyfr.Authority.zero()
+        authority: Prima.Authority.zero()
       )
 
     assert result.status == :completed

@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Prima.Remediation do
+  @moduledoc """
+  Turn setup-related failures into machine-readable fix actions.
+
+  Builds remediation from typed consent errors and directs callers to `profile.plan`.
+  """
+
+  @type issue :: %{
+          String.t() => term()
+        }
+
+  @type remediation :: %{
+          String.t() => term()
+        }
+
+  @doc """
+  Analyze a failed sub-component execution into operator remediation.
+  """
+  @spec analyze(String.t() | tuple()) ::
+          {:setup_required, remediation()} | :not_setup_error
+  def analyze(error)
+
+  def analyze({:setup_required, %{} = payload}) do
+    component_ref = payload[:node_ref] || payload["node_ref"] || ""
+    need = payload[:need] || payload["need"] || ""
+
+    base = %{
+      "component_ref" => component_ref,
+      "message" => setup_message(need),
+      "setup_command" => grant_command(component_ref),
+      "profile_id" => payload[:profile_id] || payload["profile_id"]
+    }
+
+    issues =
+      if need != "" do
+        [
+          %{
+            "type" => "unbound_need",
+            "need" => need,
+            "message" => "The need \"#{need}\" has no live credential bound",
+            "fix" => %{
+              "tool" => "profile",
+              "action" => "plan",
+              "args" => %{"ref" => component_ref}
+            }
+          }
+        ]
+      else
+        []
+      end
+
+    {:setup_required, Map.put(base, "issues", issues)}
+  end
+
+  def analyze({:consent_required, %{} = payload}) do
+    profile_id = payload[:profile_id] || payload["profile_id"]
+    revision = payload[:current_revision] || payload["current_revision"]
+
+    {:setup_required,
+     %{
+       "component_ref" => "",
+       "profile_id" => profile_id,
+       "message" =>
+         "This app's permissions changed since you approved them " <>
+           "(consent revision #{revision}). Review and approve to continue.",
+       "setup_command" => "cyfr profile grant",
+       "issues" => [
+         %{
+           "type" => "consent_required",
+           "message" => "A new consent revision is required before this can run",
+           "fix" => %{
+             "tool" => "profile",
+             "action" => "plan",
+             "args" => %{"profile_id" => profile_id}
+           }
+         }
+       ]
+     }}
+  end
+
+  def analyze(_reason), do: :not_setup_error
+
+  # The payload's reason is the vault's own term for what is missing; the
+  # issues carry the fix, so the sentence names only the need.
+  defp setup_message(""), do: "This app needs setup before it can run"
+  defp setup_message(need), do: "This app needs a vault entry for \"#{need}\""
+
+  defp grant_command(""), do: "cyfr profile grant"
+  defp grant_command(ref), do: "cyfr profile grant #{ref}"
+end

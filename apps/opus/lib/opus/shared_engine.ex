@@ -49,7 +49,7 @@ defmodule Opus.SharedEngine do
             %{engine: engine, generation: :erlang.unique_integer([:positive, :monotonic])}
 
           {:error, reason} ->
-            raise "Opus.SharedEngine: failed to create Wasmex engine: #{inspect(reason)}"
+            raise "Opus.SharedEngine: failed to create Wasmex engine: #{Prima.LoggerContext.shape(reason)}"
         end
       end,
       name: __MODULE__

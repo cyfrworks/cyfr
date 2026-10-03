@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -36,7 +37,8 @@ func Download(version string) error {
 
 // Update fetches the scaffold tarball for the given version and extracts it
 // into the current working directory. Managed files (guides, wit/
-// definitions, the shipped AQUA soul, roles and scrolls) are overwritten
+// definitions, the keeper's seccomp profile, the shipped AQUA soul, roles
+// and scrolls) are overwritten
 // with the latest content. Component files that already exist are skipped;
 // new components are created. Version "dev" or "" is a no-op.
 func Update(version string) error {
@@ -82,12 +84,30 @@ func isManagedAqua(path string) bool {
 	return false
 }
 
+// SeccompProfile is the keeper's seccomp profile, which the opus service of
+// docker-compose.yml names beside it. It follows the image it lets start,
+// so `cyfr update`, which pulls the image, refreshes it too.
+const SeccompProfile = "keeper.seccomp.json"
+
+// Guides are the guides the scaffold tarball ships at a project's root
+// (scripts/scaffold-tarball.sh's items), each managed, so `cyfr update`
+// refreshes it. `cyfr init` and `cyfr update` name them from here, and
+// TestShippedGuidesAreManaged binds the tarball's list and the repository's
+// root guides to this one.
+var Guides = []string{
+	"configuration-guide.md",
+	"component-guide.md",
+	"tincture-guide.md",
+	"integration-guide.md",
+	"identity-guide.md",
+	"devices-guide.md",
+}
+
 // isManaged returns true for files that are maintained by cyfr and should be
-// overwritten during an upgrade (guides, WIT interface definitions, and the
-// shipped AQUA soul, roles and scrolls).
+// overwritten during an upgrade (guides, WIT interface definitions, the
+// keeper's seccomp profile, and the shipped AQUA soul, roles and scrolls).
 func isManaged(path string) bool {
-	switch path {
-	case "component-guide.md", "tincture-guide.md", "integration-guide.md":
+	if path == SeccompProfile || slices.Contains(Guides, path) {
 		return true
 	}
 	// Everything under wit/ is managed.
@@ -111,10 +131,11 @@ func extract(version string, overwriteManaged bool) error {
 
 	client := &http.Client{Timeout: requestTimeout}
 
-	// The tarball carries docker-compose.yml, Dockerfile.node and the bridge
-	// source that `cyfr up` will build and run — verify it against the
-	// release's cosign-signed checksums.txt before extracting a byte. The
-	// release binary itself gets the same treatment from install.sh.
+	// The tarball carries docker-compose.yml, which names the images `cyfr
+	// up` will pull and run (cyfr, cyfr-opus and cyfr-locus) — verify it
+	// against the release's cosign-signed checksums.txt before extracting a
+	// byte. The release binary itself gets the same treatment from
+	// install.sh.
 	want, err := fetchScaffoldChecksum(client, version)
 	if err != nil {
 		return err

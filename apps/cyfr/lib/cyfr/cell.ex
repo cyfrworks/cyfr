@@ -33,7 +33,7 @@ defmodule Cyfr.Cell do
   execution on the member that admitted it, and ownership is settled after
   the fact by a claim row. Three things must happen once in the cell
   rather than once per member — watching a worker service, holding a
-  backend's bridge controller, and running a singleton job — and those are
+  backend's controller, and running a singleton job — and those are
   proposed by **rendezvous hashing** over the live roster:
 
       owner(subject) = argmax over live members m of sha256(subject <> "\\0" <> m)
@@ -57,7 +57,7 @@ defmodule Cyfr.Cell do
   holds its attempt's process. So the assignment it issues carries its own
   address (`CYFR_HOST_API_URL`) and its own boot, and the worker posts
   that attempt's host calls there and names that member in every header
-  (`Cyfr.Execution.Assignments`, `Cyfr.WorkerAuth`). This is not placement
+  (`Crucible.Assignments`, `Prima.WorkerAuth`). This is not placement
   — nothing decided where the work would run — but the return path of work
   already placed. A member that is not the one named refuses the call,
   including a lease renewal it could have written from the rows, so a
@@ -159,7 +159,7 @@ defmodule Cyfr.Cell do
       &tls_distribution/1,
       &cell_cookie/1,
       &topology/1,
-      &worker_key/1,
+      &opus_key/1,
       &host_api_url/1
     ]
     |> Enum.flat_map(fn check -> List.wrap(check.(facts)) end)
@@ -171,14 +171,14 @@ defmodule Cyfr.Cell do
   @spec facts() :: map()
   def facts do
     %{
-      repo_adapter: Arca.Repo.adapter(),
-      storage_adapter: Application.get_env(:arca, :storage_adapter, Arca.Adapters.Local),
+      repo_adapter: Arca.repo_adapter(),
+      storage_adapter: Arca.storage_adapter(),
       proto_dist: proto_dist(),
       dist_certificates?: dist_certificates?(),
       cell_cookie: Application.get_env(:cyfr, :cell_cookie),
       node_cookie: node_cookie(),
       topologies: Application.get_env(:libcluster, :topologies, []),
-      worker_key: Application.get_env(:cyfr, :worker_key),
+      opus_key: Application.get_env(:cyfr, :opus_key),
       host_api_url: Cyfr.RuntimeConfig.host_api_url()
     }
   end
@@ -195,13 +195,15 @@ defmodule Cyfr.Cell do
     """
   end
 
-  defp shared_storage(%{storage_adapter: Arca.Adapters.S3}), do: []
-
   defp shared_storage(%{storage_adapter: adapter}) do
+    if Arca.shared_storage?(adapter), do: [], else: shared_storage_refusal(adapter)
+  end
+
+  defp shared_storage_refusal(adapter) do
     """
     CYFR_CLUSTER=1 needs shared object storage, and this member's storage \
     adapter is #{inspect(adapter)}. Local storage is one member's \
-    filesystem: two members would each hold half of every estate. Set \
+    filesystem: two members would each hold half of every athanor. Set \
     CYFR_STORAGE=s3 with the bucket and credentials every member shares, or \
     unset CYFR_CLUSTER.\
     """
@@ -271,11 +273,11 @@ defmodule Cyfr.Cell do
     """
   end
 
-  defp worker_key(%{worker_key: <<_::binary-size(32)>>}), do: []
+  defp opus_key(%{opus_key: <<_::binary-size(32)>>}), do: []
 
-  defp worker_key(_facts) do
+  defp opus_key(_facts) do
     """
-    CYFR_CLUSTER=1 needs CYFR_WORKER_KEY set and identical on every member. \
+    CYFR_CLUSTER=1 needs CYFR_OPUS_KEY set and identical on every member. \
     Unset, the worker root is random per boot, so a worker's report to a \
     peer fails MAC verification and its assignment is refused. Generate one \
     with `openssl rand -hex 32` and set the same value on every member, or \
@@ -335,7 +337,7 @@ defmodule Cyfr.Cell do
     lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
     renew_ms = Keyword.get(opts, :renew_ms, @renew_ms)
     cluster? = Keyword.get(opts, :cluster, Application.get_env(:cyfr, :cluster, false)) == true
-    me = Cyfr.Boot.id()
+    me = Prima.Boot.id()
     slot = Keyword.get(opts, :node_name, node_name())
 
     if cluster?,
@@ -345,8 +347,9 @@ defmodule Cyfr.Cell do
     state = %{me: me, slot: slot, lease_ms: lease_ms, renew_ms: renew_ms, cluster?: cluster?}
 
     case take_or_wait(state) do
-      {:ok, _won} ->
+      {:ok, won} ->
         refuse_live_peers!(state)
+        pins!(won)
         refresh_roster()
         Process.send_after(self(), :renew, renew_ms)
         {:ok, state}
@@ -359,7 +362,7 @@ defmodule Cyfr.Cell do
 
       {:error, reason} ->
         raise "[Cyfr] FATAL: this member's cell slot could not be read or written " <>
-                "(#{inspect(reason)})."
+                "(#{Prima.LoggerContext.shape(reason)})."
     end
   end
 
@@ -395,7 +398,7 @@ defmodule Cyfr.Cell do
   end
 
   def handle_info(msg, state) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -449,8 +452,44 @@ defmodule Cyfr.Cell do
 
   defp reclaim(state) do
     case Arca.ControlPlane.take(state.slot, state.me, state.lease_ms) do
-      {:ok, _won} -> Logger.warning("[Cyfr.Cell] slot regained")
-      _refused -> :ok
+      {:ok, won} ->
+        Logger.warning("[Cyfr.Cell] slot regained")
+
+        # A regained slot is a new generation, and the take retires the
+        # pins this member recorded under the one it lost: it records them
+        # again under the one it holds.
+        case Cyfr.Platform.Settings.claimed(won) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "[Cyfr.Cell] this member's settings pins were not recorded again " <>
+                "(#{inspect(reason)}); a peer's list shows none until its next boot"
+            )
+        end
+
+      _refused ->
+        :ok
+    end
+  end
+
+  # The claim that wins a slot retires the pins recorded under that slot's
+  # earlier generations and those of every member whose slot is no longer
+  # held, so a member that died without retiring its own is cleared by
+  # whoever next takes or outlives it, and then records this member's
+  # pins under `(node, generation)`. A store that cannot answer refuses
+  # the boot, releasing the slot first as every refusal here does.
+  defp pins!(won) do
+    case Cyfr.Platform.Settings.claimed(won) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        _ = Arca.ControlPlane.release()
+
+        raise "[Cyfr] FATAL: this member's settings pins could not be recorded " <>
+                "(#{Prima.LoggerContext.shape(reason)})."
     end
   end
 
@@ -521,7 +560,8 @@ defmodule Cyfr.Cell do
 
       {:error, reason} ->
         _ = Arca.ControlPlane.release()
-        raise "[Cyfr] FATAL: the cell roster could not be read (#{inspect(reason)})."
+
+        raise "[Cyfr] FATAL: the cell roster could not be read (#{Prima.LoggerContext.shape(reason)})."
     end
   end
 
@@ -545,7 +585,8 @@ defmodule Cyfr.Cell do
         :ok
 
       others ->
-        raise "[Cyfr] FATAL: this node is connected to #{inspect(others)} but CYFR_CLUSTER is " <>
+        raise "[Cyfr] FATAL: this node is connected to #{length(others)} other node(s) " <>
+                "but CYFR_CLUSTER is " <>
                 "not set. A cell of control planes needs the multi-node work; a single one " <>
                 "must not be distributed."
     end

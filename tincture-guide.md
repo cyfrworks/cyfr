@@ -1,97 +1,126 @@
 # Tincture Reference
 
-Build, test, and deploy tinctures for CYFR. Tinctures are full-stack frontend experiences (HTML/JS/CSS) that invoke CYFR components as their backend. Unlike WASM components, tinctures run in the browser — they call backend components via `cyfr.invoke()` and CYFR handles execution, credentials, and consent enforcement server-side.
+Build, test, and deploy tinctures for CYFR. A tincture is a browser frontend — HTML, JavaScript, CSS and whatever assets it ships, WebAssembly and audio included — that the Prism shell opens in a sandboxed frame. It reaches the server only through the Cyfr SDK (`window.cyfr`): it invokes the components it declares, runs the system actions it declares and opens the streams it declares, and CYFR resolves credentials, consent and execution server-side. A tincture never holds an API key, a session or a secret.
+
+The lists in this guide — served types, frame capabilities, templates, the declaration grammar, the wire's routes and the SDK's calls — are the frame's rules (`Compendium.Tincture.Rules`) and the wire (`Prima.TinctureWire`) as they stand; the docs-drift test fails when one of them differs.
 
 ---
 
-## Architecture
+## How a Frame Opens
 
-Tinctures are served at `/t/:athanor/:publisher/:name` (the athanor segment is `@<namespace>` for a person's athanor, the group slug for a group's). They invoke backend components via `cyfr.invoke()` — CYFR validates the call against the manifest's dependency allowlist, executes the component server-side (resolving vault entries, enforcing the consented authority), and returns secret-masked output to the browser. Tinctures never see API keys, session tokens, or secrets.
+The shell is the one place a tincture's frame is created. Launching a tincture:
 
-### Private vs Public
+1. The shell reads the version's declaration and renders the frame's `sandbox` and `allow` attributes from the rules for the capabilities it declares: `allow-scripts` always, every other token or permission only for a capability declared, and never `allow-same-origin`, `allow-forms`, `allow-popups` or any `allow-top-navigation`. A declaration the rules refuse opens nothing.
+2. The frame's page is a private tincture's entry under an **asset credential** in its path, or a public tincture's public address. No URL carries anything that opens more than the version's own files.
+3. The shell mints a **frame credential** for this open, bound to the person, the tincture version and its release digest, the grant revision of the tincture's owner profile and a fresh frame id.
+4. On the frame's first load the shell posts it one handshake carrying a `MessagePort` and the frame id, and sends the frame credential over that port only. The SDK accepts the handshake only from its parent window, and only once.
 
-Tinctures are **private by default** — only authenticated users can access them.
+From then on the SDK sends data requests to the endpoint with the frame credential as a bearer, and the shell verbs (`open`, `close`, `title`, `ready`, `credential`) over the port. The shell listens to no window message; anything arriving on the port that is not a shell verb for that frame is dropped. A reload or a navigation inside the frame gets no second handshake: the frame is spent until the person opens the tincture again.
+
+A frame hidden behind another is **suspended** unless it declares `frame.background`, and resumed when shown: a suspended frame's requests are refused (`frame_suspended`). A resume that fails revokes the frame's credential and the frame shows the refusal in place of its page. Closing the frame, the `close` verb, the registry no longer listing the tincture and the end of the shell's session each revoke its credential. A frame credential is also refused once the tincture's version or its owner profile's grant moved since the open (`frame_moved`): open it again.
+
+### Private and Public
+
+A tincture is private unless it has an active public consent profile. Publish one with `profile.publish` (the proof-bound consent walk) and unpublish by revoking it with `profile.revoke`; `tincture_visibility.get` reports the current answer. The manifest's `tincture.public` is a metadata hint only.
 
 | | Private | Public |
 |---|---|---|
-| **Access** | Authenticated users only | Anyone |
-| **How to set** | Default | `profile.publish` (the consent walk) |
-| **Invoke rate limit** | Consent-configured (default 100/min per user) | Consent-configured (default 100/min per IP) |
-| **`cyfr.invoke()`** | Works the same | Works the same |
-
-The `tincture.public` field in the manifest is a **metadata hint only**. Public-ness is a published profile, not a policy bit: a tincture is public when it has an active public consent profile. Publish with `profile.publish` — the proof-bound consent walk — and unpublish by revoking that profile with `profile.revoke`. `tincture_visibility.get` reports the current answer.
+| **Its files** | `/_s/<asset credential>/<publisher>/<name>/<version>/<file>`, only under a credential the shell minted for the person | `/t/<athanor>/<publisher>/<name>` and the files under it, to anyone |
+| **Opened by** | the shell, for a member of its athanor | the shell, or anyone at its address |
+| **Data requests** | the frame credential as a bearer | in the shell, the frame credential; at its address, the page names itself as `public` and sends no bearer |
+| **Runs under** | the tincture's owner profile | the owner profile in the shell; its public profile at its address |
 
 ---
 
-## Directory Layout
+## The Canvas
 
-**Vanilla tincture** (no build step):
+The shell draws a person's **layout** (`layout.get`, `layout.edit`): per posture — `hand` under 768 CSS pixels wide, `desk` otherwise — one desktop tincture, the app slots and the floating tinctures. The shell opens the desktop as a frame filling the canvas, under every slot and floating frame; a person who never arranged one runs the shipped `tincture:local.desktop`, with the shipped vault (`tincture:local.vault`) as its one icon. A layout published anywhere — by the desktop, the assistant or safe mode — is read again by every shell the person has open.
+
+### Sizes and placements
+
+A slot holds one tincture at one of three sizes:
+
+| Size | What is drawn |
+|---|---|
+| `icon` | the desktop draws the tincture's icon; activating it opens the tincture as a full frame |
+| `card` | the desktop draws one of the tincture's declared `cards`, as data (below) |
+| `full` | the tincture's own frame, at the slot's place |
+
+A tincture floats over the desktop only when its declaration names `frame.placement: "float"`, and only where the layout puts it. A tincture runs as a desktop only when it names `frame.placement: "desktop"`; a desktop draws other tinctures' cards and reaches nothing of its own, so it declares no `tincture.connect` origin, no `caps.egress` and no component dependency.
+
+### Cards
+
+A card is data the desktop draws, never a frame. **`card.refresh`** (a `slot` and a `posture`) runs the card's `source` under the card tincture's own grant, projects the answer through the declaration (the `number` and `list` fields of the source's answer, the declared title, image and buttons) and answers it; a static card runs nothing. Each refresh is also delivered on the stream **`cards.refreshed`**, which is bound to its holder: a frame opens it with no subject, and it carries the refreshes of that person's own cards and nobody else's. **`card.press`** (a `slot`, a `posture` and a `button` index) fires the button's declared action with its fixed `args`, through the gate, under the person's context; a button never fires the `card` tool itself. A desktop declares `card.refresh`, `card.press` and the stream `cards.refreshed` to draw cards.
+
+### Hidden, frozen and background frames
+
+The frame the person looks at is live. With a full frame shown, every other frame — the desktop among them — is hidden, and a hidden frame without `frame.background: true` is frozen: its credential is suspended before its bridge is told, its element is inert, and its requests are refused as `frame_suspended` until it is shown again. A frame that declares the background grant keeps running hidden. A frame never raises itself: no verb places, sizes or raises a frame.
+
+### Safe mode
+
+A desktop that has not sent `ready` within ten seconds of its handshake, a desktop whose frame is refused at open, and the person's own ask — the shell's **Safe mode** button, or Ctrl+Alt+S on the shell's page, which a frame never hears — enter safe mode. Every frame is discarded with its credential, the picker is drawn, and the shell's prompt offers to try the current desktop again or, while some posture runs another, to use the shipped default. Choosing opens the desktop again from the layout as it then stands. The assistant's panel stays as it was.
+
+### Secrets
+
+A frame never asks for a secret and never holds one. **`cyfr.credential(name)`** asks the shell to prompt the person for a value to store in the vault as the entry `name`; the shell honours it only for a live, visible frame whose declaration lists `vault.create`, and drops it otherwise. The value is typed into the shell's own prompt and goes to the vault; the frame is told only that the prompt closed and whether an entry was saved (`{saved: true | false}`), never the value and never why nothing was saved. A frame cannot change or remove a vault entry: renaming, rotating, rebinding, revoking, deleting and OAuth authorization need an interactive session, and are the console's vault page's. The shipped vault tincture lists entries through `vault.status` and adds them through `cyfr.credential`.
+
+---
+
+## Addresses, Credentials and Headers
+
+A public tincture is served at its address, `/t/<athanor>/<publisher>/<name>` (the athanor segment is `@<namespace>` for a person's athanor, the group's slug for a group's), with its files under it. The address follows the tincture's latest version.
+
+A private tincture version's files are served only at `/_s/<credential>/<publisher>/<name>/<version>/<file>`. The asset credential is signed, opaque and URL-safe; it names the person, the version's release digest and a window (`asset_credential_window_s`), carries no secret, and is verified against its source's standing at every request — a session that ended, a key that was revoked, a person denied or an athanor archived refuses the next fetch. It stays one credential for one person and one version for the window, so a browser's cache holds across opens, and it opens nothing but that version's files: another version's path under it is not found.
+
+Every tincture response carries:
+
+- `Referrer-Policy: no-referrer`, so no tincture URL — a private one carries its asset credential — leaves in a `Referer`;
+- `X-Content-Type-Options: nosniff` and `Access-Control-Allow-Origin: *` (the frame's origin is `null`; what authorizes a read is the URL, never the requesting origin);
+- `Cache-Control: public, max-age=3600` for a public tincture's files, `no-cache` for its address, and `private, max-age=<n>` for a private version's files, `n` never above the seconds the credential has left;
+- `Content-Encoding: gzip`, for a client that accepts it, on text, scripts, JSON, SVG, glTF and WebAssembly.
+
+A path under `/_s/` is a credential. **No proxy may log `/_s/` paths.** The server redacts the credential segment from the request path before any log line, span or error report names it; the shipped `Caddyfile` keeps no access log, and a proxy placed in front of CYFR must keep none for these paths either.
+
+Every HTML page of a version is served with the Content Security Policy the rules derive from its declaration under a fresh nonce, plus a `sandbox` directive opening exactly what the frame's declared capabilities open, so a page navigated to directly is never a first-party page of the origin. The entry page also gets a `<base>` naming its own directory and the SDK, inline under the nonce.
+
+---
+
+## Templates and Layout
+
+A tincture starts from one of these templates (`cyfr new tincture <name> --template <template>`):
+
+<!-- tincture:templates -->
+| Template | Build | Entry |
+|---|---|---|
+| `vanilla` | — | `index.html` |
+| `vite` | `vite` | `dist/index.html` |
+| `react` | `vite` | `dist/index.html` |
+<!-- /tincture:templates -->
+
+A vanilla tincture is served as it is written. A built tincture (one whose manifest declares `tincture.build`) is compiled with `cyfr build compile t:local.<name>:<version>` on the Locus builds service, which replaces the version's `dist/` with the build's output; it serves only its entry's directory and `public/media/`, and the rest of the version — `package.json`, the lockfile, `src/` — is build input.
+
+**The lockfile rule.** A tincture with a `package.json` ships its `package-lock.json` beside it, and a build installs exactly what the lockfile pins (`npm ci`), never what a registry answers on the day. A version without its lockfile is refused at publish and at build. After changing a dependency, regenerate the lockfile (`npm install --package-lock-only`). The build runs install scripts under an isolated account whose environment holds no credential, and keeps `dist/third-party-notices.json` for the runtime packages the bundle ships.
+
+A built tincture's layout:
 
 ```
-data/athanors/{athanor_id}/components/tinctures/local/stock-dashboard/1.0.0/
-├── cyfr-manifest.json    ← type: "tincture"
-├── index.html            ← entry point
-├── app.js                ← application JavaScript
-├── style.css             ← styles
-├── public/
-│   └── media/
-│       ├── icon.svg          ← shown in the Prism tincture picker (auto-discovered)
-│       └── preview-1.svg     ← screenshot strip on the focused card (up to preview-6)
-└── src/                  ← optional source for forking
-```
-
-**React tincture** (after `cyfr build compile`):
-
-```
-data/athanors/{athanor_id}/components/tinctures/local/stock-dashboard/1.0.0/
+data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
 ├── cyfr-manifest.json    ← type: "tincture", tincture.build.tool: "vite", tincture.entry: "dist/index.html"
-├── package.json          ← React + Vite + TypeScript dependencies
-├── tsconfig.json         ← TypeScript config (strict mode)
-├── vite.config.ts        ← Vite config (base: "./", build.outDir: "dist")
+├── package.json
+├── package-lock.json     ← required beside package.json
+├── vite.config.js        ← base: "./", build.outDir: "dist"
 ├── index.html            ← Vite's source entry
+├── src/                  ← build input, never served
 ├── public/
 │   └── media/
-│       ├── icon.svg          ← shown in the Prism tincture picker (auto-discovered)
-│       └── preview-1.svg     ← screenshot strip on the focused card (up to preview-6)
-├── src/                  ← React/TypeScript source (not served — .tsx not in extension allowlist)
-│   ├── main.tsx
-│   ├── App.tsx
-│   └── index.css
+│       ├── icon.svg          ← the picker's icon (auto-discovered)
+│       └── preview-1.svg     ← the focused card's previews (up to preview-6)
 └── dist/                 ← the build's output, replaced whole by each build
-    ├── index.html            ← served entry point
-    └── assets/               ← JS/CSS bundles with content hashes
+    ├── index.html            ← served entry
+    └── assets/               ← bundles, workers, WebAssembly, audio
 ```
 
----
-
-## Development Loop
-
-### Vanilla Tinctures
-
-```
-1. Scaffold    cyfr new tincture stock-dashboard       (once — creates HTML/JS/CSS scaffold)
-2. Edit        Edit index.html, app.js, style.css      (any web editor or IDE)
-3. Register    cyfr register                           (index the tincture)
-4. View        Open Prism at localhost:4000 → Tinctures tab, or visit /t/@alice/local/stock-dashboard
-5. Iterate     Edit HTML/JS/CSS → reload browser (no compile step)
-```
-
-Vanilla tinctures have no compile step — edit files directly and reload.
-
-### React Tinctures
-
-```
-1. Scaffold    cyfr new tincture stock-dashboard --template react   (once — creates React/TS/Vite project)
-2. Edit        Edit src/App.tsx, add components                     (standard React + TypeScript)
-3. Compile     cyfr build compile t:local.stock-dashboard:0.1.0     (npm install && vite build)
-4. Register    cyfr register                                        (index the built output)
-5. View        Open Prism at localhost:4000 → Tinctures tab
-6. Iterate     Edit source → recompile → reload
-```
-
-React tinctures use TypeScript + Vite and require a build step. The build runs `npm install && npm run build` (which runs `tsc` then `vite build`) in a sandboxed temp directory, then replaces the version directory's `dist/` with its output (static HTML/JS/CSS); the source beside it is kept. The manifest's `entry` names the built page, `dist/index.html`, and its relative asset URLs resolve inside `dist/`. The served output is static, like a vanilla tincture — no JS runtime at serve-time.
-
-Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injected at serve time). Declare backend dependencies in the manifest's `dependencies.static` section.
+`vite.config.js` keeps `base: "./"`, so every asset URL resolves relative to the entry wherever the version is served.
 
 ---
 
@@ -99,27 +128,25 @@ Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injecte
 
 ```json
 {
-  "name": "stock-dashboard",
+  "name": "my-game",
   "type": "tincture",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "publisher": "local",
-  "description": "Stock analysis dashboard with TA indicators",
-  "tags": ["finance", "stocks", "dashboard"],
-  "category": "finance",
-
+  "description": "A physics toy",
   "tincture": {
-    "entry": "index.html",
-    "icon": "📈",
-    "tagline": "Real-time stock charts with TA indicators",
-    "public": true,
-    "window": {"width": 800, "height": 600, "resizable": true},
-    "sandbox": {"allow_scripts": true, "allow_forms": false, "allow_same_origin": false},
-    "connect": ["*.supabase.co"]
+    "entry": "dist/index.html",
+    "build": {"tool": "vite"},
+    "icon": "🎮",
+    "tagline": "Knock the tower down",
+    "window": {"width": 1280, "height": 720, "resizable": true},
+    "frame": {"capabilities": ["pointer_lock", "fullscreen", "audio_autoplay"]},
+    "actions": [],
+    "streams": [],
+    "cards": []
   },
-
   "dependencies": {
     "static": [
-      {"ref": "f:local.stock-analysis", "optional": false, "reason": "Stock data + AI analysis"}
+      {"ref": "c:local.save-slot", "reason": "Saves the player's progress"}
     ]
   }
 }
@@ -129,365 +156,262 @@ Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injecte
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `entry` | string | `"index.html"` | Entry point file, relative to the version directory. A built tincture serves `"dist/index.html"`; relative URLs in the entry resolve from its own directory |
-| `icon` | string | `"palette"` | Glyph fallback used by the picker when no `public/media/icon.{svg,png}` exists. Accepts an emoji (e.g. `"🎮"`) or a Lucide icon name (e.g. `"palette"`) |
-| `tagline` | string | — | Short one-line tagline shown under the title in the tincture picker. Distinct from `description`, which is used as the card title |
-| `public` | boolean | `false` | Metadata hint. Actual public access is an active public consent profile — published with `profile.publish` |
-| `build` | object | — | Build config. `{"tool": "vite"}` signals Locus to run npm+Vite build. Omit for vanilla tinctures |
+| `entry` | string | `"index.html"` | Entry page, relative to the version directory. A built tincture serves `"dist/index.html"`; relative URLs in the entry resolve from its own directory |
+| `build` | object | — | `{"tool": "vite"}`: the version is built, and ships its lockfile. Omit for a vanilla tincture |
+| `icon` | string | `"palette"` | Glyph fallback for the picker when no `public/media/icon.{svg,png}` exists: an emoji or a Lucide icon name |
+| `tagline` | string | — | One line under the title in the picker |
+| `public` | boolean | `false` | Metadata hint. Public access is an active public consent profile (`profile.publish`) |
 | `window` | object | `{}` | Shell window hints: `width`, `height`, `resizable`, `singleton` |
-| `connect` | string[] | `[]` | External domains for CSP `connect-src` (e.g., `["*.supabase.co"]`). Enables client-side SDK access to external services |
-| `media` | object | — | Overrides for the auto-discovered media (e.g. `{"icon": "media/logo.svg"}`); the `public/media/` convention below needs no manifest fields |
+| `connect` | string[] | `[]` | Bare external domains added to the page's `connect-src` over `https` (e.g. `["api.example.com"]`) |
+| `media` | object | — | Overrides for the auto-discovered media; the `public/media/` convention needs none |
+| `frame` | object | — | The frame's capabilities, placement and background flag (below) |
+| `cards` | object[] | `[]` | Cards the shell may show for the tincture (below) |
+| `streams` | object[] | `[]` | The streams the tincture may open (below) |
+| `actions` | string[] | `[]` | The system actions the tincture may run, as `tool.action` |
 
-The iframe sandbox itself is fixed policy — `allow-scripts` only, never `allow-same-origin` — and is not a manifest field (a `sandbox` block is ignored).
+### The declaration
 
-### Media Convention
+`frame`, `cards`, `streams` and `actions` are the tincture's declaration. It is held to the rules at publish and read again at every open and every request: the declaration is the grant, and anything a frame asks for outside it is refused before it is dispatched. A version that declares more is consented to again.
 
-CYFR auto-discovers tincture media from a fixed `public/media/` layout. **No manifest fields needed** — drop the files in the right slots and the Prism picker finds them.
+<!-- tincture:declaration -->
+| Block | Keys |
+|---|---|
+| `frame` | `background`, `capabilities`, `placement` |
+| `frame.placement` | one of `float`, `desktop` |
+| `cards[]` | `buttons`, `image`, `list`, `name`, `number`, `source`, `stream`, `title` |
+| `cards[].buttons[]` | `action`, `args`, `label` |
+| `streams[]` | `name`, `subject` |
+| `actions[]` | an operation name, `tool.action` |
+<!-- /tincture:declaration -->
 
-```
-data/athanors/{athanor_id}/components/tinctures/local/{name}/{version}/
-└── public/
-    └── media/
-        ├── icon.svg          ← OR icon.png  (svg preferred)
-        ├── preview-1.svg     ← OR preview-1.png
-        ├── preview-2.svg     ← up to preview-6.{svg,png}
-        └── ...
-```
+- `frame.capabilities` names capabilities from the table below; `frame.background: true` keeps the frame active while hidden.
+- A card's `number` and `list` name fields of its `source`'s answer, its `image` is a served image inside the version, and each button runs a declared action with fixed `args`. A card that shows a number or a list has a `source`: `component`, `operation` and `args` fixed at publish, an invoke of a component the tincture declares in `dependencies.static`, at most 4096 bytes of canonical JSON. A card without one is static.
+- A stream's `name` is a stream a provider declares (two or more dotted names, such as `mcp_servers.changes`); its `subject` is a literal, `"*"` for any subject that stream's grammar admits, or absent for a stream that takes none.
 
-| Slot | Path | Notes |
-|------|------|-------|
-| Icon | `public/media/icon.svg` (or `.png`) | Rendered 20×20 in the picker list, 48×48 in the info bar, and up to 192×192 as the in-stage fallback when a tincture has no previews. SVG strongly preferred — scales crisply at every size. |
-| Previews | `public/media/preview-1.svg` … `preview-6.svg` (or `.png`) | Up to 6 numbered slots. Shown one at a time in the preview stage; ↑/↓ cycles through them. Add them in order; gaps are skipped. |
+### Frame capabilities
 
-**Preview dimensions and aspect ratios:** the preview stage is a fixed 16:9 landscape container, and previews are *contained* (not cropped) — so any aspect ratio works without trimming. Anything wider or taller than 16:9 is letterboxed against a softly-blurred copy of the image, which makes the bars look intentional. Recommended:
+A frame gets nothing but scripts unless its declaration asks. Each capability adds exactly this to the frame the shell creates:
 
-- **16:9 landscape** (e.g. 1280×720, 1920×1080): fills the stage edge-to-edge, the most polished look.
-- **Other landscape** (4:3, 3:2): small letterbox bars top/bottom, still looks great.
-- **Portrait** (9:16, 3:4): pillarboxed with blurred backdrop — works fine for screenshots from a portrait/mobile-style tincture.
-- **Square** (1:1): pillarboxed slightly. Fine for icon-style art.
-- **Avoid extremely wide** (e.g. 21:9 ultrawide) or **extremely tall** (e.g. infinite-scroll captures) — they'll either letterbox heavily or shrink the focal area.
+<!-- tincture:frame-capabilities -->
+| Capability | `sandbox` adds | `allow` adds |
+|---|---|---|
+| `pointer_lock` | `allow-pointer-lock` | — |
+| `fullscreen` | — | `fullscreen` |
+| `gamepad` | — | `gamepad` |
+| `audio_autoplay` | — | `autoplay` |
+<!-- /tincture:frame-capabilities -->
 
-Both SVG and PNG are accepted. Keep individual files under ~500 KB to keep the picker snappy on first load.
+A capability that is not in this table is refused at publish, and the shell refuses to open a frame whose declaration asks for one. The browser still decides each use: fullscreen and pointer lock need a gesture of the person's inside the frame.
 
-**Why `public/`?** Vanilla tinctures get a regular subdirectory; React tinctures use Vite's existing `public/` convention (Vite copies it to dist on build, but the source files at `public/media/...` survive untouched, so the discovery helper finds them either way — no `vite.config.ts` changes needed).
+### `dependencies.static`
 
-**Why SVG first?** SVG renders crisply from the 20px sidebar entry to the 160px carousel card without any rasterization artifacts. PNG is the supported fallback for design tools that don't export SVG.
-
-**`cyfr new tincture`** scaffolds both placeholder files for you. Replace them with your real artwork — the picker updates automatically on the next refresh, no manifest edits.
-
-**Escape hatch for non-standard layouts:** if you must keep media files outside `public/media/`, the `tincture.media.icon` and `tincture.media.previews` manifest fields override discovery. You almost certainly don't need them — and the docs and scaffold no longer mention them for new tinctures.
-
-### `dependencies.static` Block
-
-**`dependencies.static`** — declares which backend components the tincture can invoke:
+The components the tincture may invoke. `cyfr.invoke` to a component that is not listed here is refused.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `ref` | string | Component reference (versionless preferred, e.g. `formula:local.stock-analysis`) — use `type:ns.name:version` only when pinning for reproducibility |
+| `ref` | string | Component reference, versionless preferred (`f:local.stock-analysis`); pin `type:ns.name:version` only for reproducibility |
 | `optional` | boolean | `false` = required for deployment |
-| `reason` | string | Why this dependency is needed |
+| `reason` | string | Why the tincture needs it |
 
-The dependency list acts as the **invoke allowlist** — `cyfr.invoke()` calls to unlisted components are rejected server-side.
+### Media convention
 
----
-
-## Cyfr SDK (`cyfr.js`)
-
-The SDK is **auto-injected** into every tincture's `<head>` at serve time — no `<script>` tag needed. `window.cyfr` is always available when your app code runs. A per-request nonce secures the inline script via CSP.
-
-**API:**
-
-| Function | Description |
-|----------|-------------|
-| `cyfr.mode` | `"shell"` or `"public"` — the SDK detects context automatically |
-| `cyfr.invoke(reference, input)` | Invoke a backend component. Returns `Promise<{status, output, execution_id, duration_ms}>` |
-| `cyfr.ready()` | Signal the shell that the tincture has finished initializing |
-| `cyfr.setTitle(title)` | Update the window title in the Prism shell |
-| `cyfr.close()` | Close this tincture's window |
-| `cyfr.getContext()` | Get `{tincture_id, window_id}` from the shell |
-| `cyfr.on(event, callback)` | Subscribe to shell events |
-| `cyfr.off(event, callback)` | Unsubscribe from shell events |
-
-**Example**:
-
-```javascript
-// Invoke a formula
-const result = await cyfr.invoke("f:local.stock-analysis", { symbol: "AAPL" });
-console.log(result.status);       // "completed"
-console.log(result.output);       // {symbol: "AAPL", price: 185.42, ...}
-console.log(result.execution_id); // "exec_abc123..."
-console.log(result.duration_ms);  // 1234
-```
-
-**Security**: The component's API keys and secrets are resolved server-side — they never appear in the response. `cyfr.invoke()` returns only the component's output (secret-masked).
-
-**Auth patterns**: Pass auth context (JWTs, tokens) as part of the input — the backend component verifies them server-side:
-
-```javascript
-// Supabase auth: pass JWT for the formula to verify server-side
-const jwt = supabase.auth.session()?.access_token;
-const data = await cyfr.invoke("f:local.supabase-rpc", {
-  jwt: jwt,
-  action: "get_user_data"
-});
-```
+The picker finds a tincture's media at fixed paths, no manifest fields needed: `public/media/icon.svg` (or `.png`) and `public/media/preview-1.svg` … `preview-6.svg` (or `.png`). Previews are shown in a 16:9 stage, contained rather than cropped; SVG is preferred, and each file is best kept under ~500 KB. `cyfr new tincture` writes placeholders for both.
 
 ---
 
-## Sandbox Constraints
+## Served Types
 
-Tinctures run in a sandboxed iframe (`sandbox="allow-scripts"`, no `allow-same-origin`). This blocks many standard browser APIs:
+A version serves a file only of one of these types; publishing a version that serves any other is refused, naming the file.
 
-| Blocked | Why | Use Instead |
-|---------|-----|-------------|
-| **Inline `<script>` blocks** | **CSP `script-src: 'self' 'nonce-...'` — only the SDK injection gets the nonce** | **Put all JS in external `.js` files and load with `<script src="app.js"></script>`** |
-| `eval()`, `new Function()` | CSP blocks dynamic code execution | Not available — restructure code to avoid eval |
-| `fetch()` to **undeclared** external URLs | CSP `connect-src` only includes declared domains | Declare domains in `tincture.connect` or use `cyfr.invoke()` |
-| `localStorage` / `sessionStorage` | Opaque origin (no `allow-same-origin`) | Store state in memory or via backend components |
-| Cookies | Opaque origin | Not needed — auth handled via `cyfr.invoke()` or client-side SDKs |
-| `<script src="https://cdn...">` | CSP `script-src: 'self' 'nonce-...'` | Bundle deps locally (Vite for React, local `.js` files for vanilla) |
-| Dynamic `import()` from CDN | CSP `script-src: 'self'` | Use local modules or bundle with Vite |
-| `window.parent` access | Cross-origin sandbox | `cyfr.*` SDK methods (use postMessage internally) |
-| `navigator.geolocation` | Permissions blocked in sandbox | Not available |
+<!-- tincture:served-types -->
+| Extension | Served as |
+|---|---|
+| `.bin` | `application/octet-stream` |
+| `.css` | `text/css` |
+| `.data` | `application/octet-stream` |
+| `.eot` | `application/vnd.ms-fontobject` |
+| `.flac` | `audio/flac` |
+| `.gif` | `image/gif` |
+| `.glb` | `model/gltf-binary` |
+| `.gltf` | `model/gltf+json` |
+| `.html` | `text/html` |
+| `.ico` | `image/x-icon` |
+| `.jpeg` | `image/jpeg` |
+| `.jpg` | `image/jpeg` |
+| `.js` | `text/javascript` |
+| `.json` | `application/json` |
+| `.ktx2` | `image/ktx2` |
+| `.m4a` | `audio/mp4` |
+| `.map` | `application/json` |
+| `.mjs` | `text/javascript` |
+| `.mp3` | `audio/mpeg` |
+| `.oga` | `audio/ogg` |
+| `.ogg` | `audio/ogg` |
+| `.opus` | `audio/ogg` |
+| `.otf` | `font/otf` |
+| `.pck` | `application/octet-stream` |
+| `.png` | `image/png` |
+| `.svg` | `image/svg+xml` |
+| `.ttf` | `font/ttf` |
+| `.wasm` | `application/wasm` |
+| `.wav` | `audio/wav` |
+| `.woff` | `font/woff` |
+| `.woff2` | `font/woff2` |
+<!-- /tincture:served-types -->
 
-**CRITICAL: No inline `<script>` blocks.** The CSP only grants a nonce to the auto-injected SDK. Any `<script>` block you write in `index.html` will be **silently blocked** — no error, no console warning, just nothing executes. Always use external script files: `<script src="app.js"></script>`. Inline `<style>` blocks ARE allowed (`style-src 'unsafe-inline'`).
+`cyfr-manifest.json`, `schema.sql`, `data.db` and dotfiles are never served. A version's decompressed size is stated at publish and refused over the registry's ceiling (256 MiB by default).
 
-**External connectivity**: By default, `connect-src` is `'self'` only. To use client-side SDKs (Supabase JS, Stripe, etc.), declare the domains in `tincture.connect` in the manifest — they'll be added to the CSP.
+---
 
-**All JavaScript must be in external `.js` files** within the tincture directory. For vanilla tinctures, add `.js` and `.css` files and reference them with `<script src>` and `<link rel="stylesheet">` tags. For React tinctures, Vite bundles everything into `assets/` during build.
+## The Cyfr SDK
+
+The SDK is injected into the entry page's `<head>` under the page's nonce, so `window.cyfr` exists before the page's own scripts run. Do not load it yourself.
+
+<!-- tincture:sdk -->
+| Call | Carried by |
+|---|---|
+| `cyfr.action(name, args)` | `POST /_f/v1/action` |
+| `cyfr.invoke(ref, operation, args)` | `POST /_f/v1/invoke` |
+| `cyfr.stream(name, subject, onEvent)` | `POST /_f/v1/stream` |
+| `cyfr.open(ref)` | the shell's port, `open` |
+| `cyfr.close()` | the shell's port, `close` |
+| `cyfr.title(title)` | the shell's port, `title` |
+| `cyfr.ready()` | the shell's port, `ready` |
+| `cyfr.credential(name)` | the shell's port, `credential` |
+<!-- /tincture:sdk -->
+
+- **`cyfr.invoke(ref, operation, args)`** runs a component the tincture declares in `dependencies.static`. The component runs with the input `{"operation": …, "params": …}` — `operation` the name given, `params` the `args` object — and the promise resolves with `{status, output, execution_id, duration_ms}`.
+- **`cyfr.action(name, args)`** runs a system action the declaration's `actions` lists (`"tool.action"`), with `args`, and resolves with its result.
+- **`cyfr.stream(name, subject, onEvent)`** opens a stream the declaration's `streams` lists, with a literal subject or `null` for one that takes none. It resolves, once the stream is open, with a handle: `handle.close()` ends it and `handle.closed` settles when it ends, whether the grant's deadline passed, the endpoint closed it or `close()` was called. `onEvent` is called with `{id, event, data}` per event: `id` the sequence number where the topic carries one, `event` the stream's name, `data` the payload projected to the grant's fields. A stream the endpoint closes for a reason the frame should know ends with an event named `refusal`. A reconnect is a new `cyfr.stream` call, admitted again.
+- **`cyfr.open(ref)`** asks the shell to open another tincture it lists; **`cyfr.close()`** closes this frame; **`cyfr.title(title)`** sets its title (at most 120 characters); **`cyfr.ready()`** tells the shell the tincture has loaded. No verb places, sizes or raises a frame: which frame is shown is the shell's and the person's. Shell verbs made before the handshake wait for it; outside a frame they do nothing.
+- **`cyfr.credential(name)`** asks the person for a secret through the shell's own prompt, to be stored in the vault as the entry `name`; see [Secrets](#secrets). It resolves with `{saved}` once the prompt closes.
+- `cyfr.frame` is the frame id the shell handed this frame (`null` before the handshake), and `cyfr.public` the public tincture a top-level page names itself as (`null` in a frame).
+
+A refusal rejects with a `CyfrError`: `message` is the sentence, `code` the refusal's class (`unauthenticated`, `forbidden`, `not_found`, `rate_limited`, `consent_required`, `invalid_argument`, `unavailable`, …) and `stage` whether it was refused at `admission` or during `execution`. A frame that has no credential yet waits up to 30 seconds for the shell's handshake and then rejects with `no_frame`.
+
+**Public mode.** A public tincture's page opened at its address, outside any frame, has no shell and no credential: the SDK names the tincture from the page's path as `public: {athanor, publisher, name}` in each request and sends no bearer. The endpoint admits such a request only for a tincture that is public, under its public profile; it opens no stream. Any other top-level page — a private `/_s/` page among them — answers `no_frame`.
+
+```javascript
+// src/main.js
+cyfr.ready();
+
+const saved = await cyfr.invoke("c:local.save-slot", "save", { level: 3, score: 1200 });
+console.log(saved.status, saved.output);
+
+const feed = await cyfr.stream("mcp_servers.changes", null, ({ event, data }) => render(event, data));
+// …later
+feed.close();
+```
+
+### The wire
+
+The SDK is the only client of three routes, each a `POST` of a JSON body carrying `v` (the wire version) with the frame credential as `Authorization: Bearer <credential>` — never in a URL or a body:
+
+<!-- tincture:wire-routes -->
+| Request | Route |
+|---|---|
+| `action` | `POST /_f/v1/action` |
+| `invoke` | `POST /_f/v1/invoke` |
+| `stream_open` | `POST /_f/v1/stream` |
+<!-- /tincture:wire-routes -->
+
+An `invoke` or `action` answers `{"v", "ok": true, "result"}`, a refusal `{"v", "ok": false, "error": {"class", "message", "stage"}}`; an admitted `stream_open` answers `text/event-stream`. These routes carry no session cookie and no CSRF token: the bearer is the only credential, and the `null` origin of a sandboxed frame is answered on these routes alone. `Prima.TinctureWire` defines the shapes and `tests/fixtures/tincture_wire.json` holds one of each.
+
+---
+
+## What the Frame May Do
+
+The frame's document is sandboxed without `allow-same-origin`, so its origin is `null` to every browser, and its policy is derived from its declaration:
+
+| Directive | Value | So the tincture |
+|---|---|---|
+| `script-src` | `'self'`, the page's nonce, `'wasm-unsafe-eval'` | loads scripts and module scripts from the origin and compiles WebAssembly; no inline script but the SDK, no `eval` |
+| `worker-src` | `'self' blob:` | runs workers from its own files or from `blob:` URLs (inline workers) |
+| `connect-src` | the endpoint's origin and `https://` each `tincture.connect` domain | fetches only its own files, the endpoint and the domains it declares |
+| `img-src`, `media-src`, `font-src` | the origin, plus `data:` and `blob:` where they apply | decodes images, audio and fonts it ships or generates |
+| `style-src` | `'self' 'unsafe-inline'` | uses stylesheets and inline styles |
+| `form-action` | `'none'` | submits no form (the sandbox has no `allow-forms` either) |
+| `object-src`, `base-uri`, `frame-ancestors` | `'none'`, `'self'`, the shell | embeds no plugin, and is framed by the shell alone |
+
+It has no cookies and no `localStorage` or `sessionStorage` (the opaque origin has none), no access to `window.top`, `window.opener` or the shell's document, no popups and no top-level navigation. A frame may navigate itself; that navigation carries no `Referer` and nothing the frame was not given, and ends its handshake. Keep all JavaScript in files — an inline `<script>` of your own is blocked without an error.
+
+---
+
+## Game Patterns
+
+A game is a tincture like any other; these patterns keep one smooth inside a frame and inside its grant:
+
+- **A fixed timestep.** Step the simulation at a fixed rate and interpolate rendering between steps, so physics does not depend on the display's refresh rate.
+- **Objects pooled.** Allocate bodies, meshes, projectiles and particles up front and reuse them; allocation in the frame loop is garbage collection in the frame loop.
+- **Particles on the GPU.** Animate particles in a shader (a points material or instanced mesh driven by time uniforms), not by writing positions from JavaScript each frame.
+- **A fixed set of lights.** Choose the lights once; adding or removing lights recompiles shaders.
+- **Physics off the main thread.** Step a WebAssembly physics engine (Rapier, Box2D) in a worker — an inline `blob:` worker is allowed — and post transforms back.
+- **Textures compressed.** Ship KTX2 (`.ktx2`) textures and glTF/GLB models; they are served types.
+- **Audio decoded once.** Decode each sound into an `AudioBuffer` at load and play buffers; declare `audio_autoplay` if sound starts before a gesture.
+- **Refused:** `eval` and `new Function`; imports from a remote URL (bundle every dependency, pinned by the lockfile); secrets of any kind in the frame; persistence outside components (save through a component the tincture declares); an invocation per frame — invoke on an event such as a save or a level's end, never from the render loop.
+
+Declare `pointer_lock`, `fullscreen`, `gamepad` and `audio_autoplay` only as the game uses them; request fullscreen and pointer lock from a click or key press inside the frame. A frame that holds the pointer when a consent prompt opens may keep it: the prompt stays operable from the keyboard, Escape frees the pointer, and the frame cannot act on the prompt.
 
 ---
 
 ## Limits
 
-| Limit | Value | What happens |
-|-------|-------|-------------|
-| Max query rows | 1,000 | Response includes `truncated: true`, excess rows dropped |
-| Query timeout | 2,000ms | Returns `"query timeout exceeded"` error |
-| DB size | 50MB | Writes rejected beyond limit |
-| Rate limit | 100 req/min (default; the consented node limits configure it) | HTTP 429 / `"rate_limited"` error. Public: per IP. Private: per user |
-| SDK request timeout | 30 seconds | Promise rejects with `"Request timed out"` |
-| Query cache TTL | 30s default | Override with `cache_ttl` in manifest query definition |
-| Allowed asset extensions | `.html .js .css .json .svg .png .jpg .jpeg .gif .ico .woff .woff2 .ttf .eot .map` | Other extensions return 404 |
-| Blocked files | `data.db`, `cyfr-manifest.json`, `schema.sql`, dotfiles | Always 404 |
+| Limit | Setting | What happens |
+|-------|---------|-------------|
+| Requests per frame | `frame_invocation_max` per `frame_invocation_window_ms` (120 per minute by default), charged on every invoke, action and stream open; a public page is charged per address and tincture | refused `rate_limited` with its retry seconds |
+| Open streams per frame | `frame_stream_max_concurrent` (8) | refused `rate_limited` until one closes |
+| Frame credential lifetime | `frame_credential_deadline_s` (one hour), capped by the session's own | refused; open the tincture again |
+| Asset credential window | `asset_credential_window_s` (one hour) | the shell mints the next one |
+| Version size | the registry's decompressed ceiling (256 MiB) | refused at publish |
+| Handshake wait | 30 seconds | the SDK rejects with `no_frame` |
 
----
-
-## Third-Party Libraries
-
-CDN `<script>` tags are blocked by CSP. All libraries must be served as local files.
-
-**React tinctures** (recommended when libraries are needed):
-Add dependencies to `package.json` and import normally. `cyfr build compile` runs `npm install` and Vite bundles everything — fully autonomous, no manual steps.
-
-**Vanilla tinctures**:
-Download the library's standalone/UMD/IIFE build and save it in the tincture directory. Reference with a `<script>` tag before your app script:
-
-```html
-<script src="three.module.js"></script>
-<script src="app.js"></script>
-```
-
-If the tincture needs multiple npm-ecosystem libraries, prefer the React template — it handles dependencies automatically via `npm install` during compile.
-
----
-
-## Complete Vanilla Example
-
-A minimal working `app.js` showing the full lifecycle — loading, fetching, rendering, error handling, and refresh:
-
-```javascript
-// app.js
-const app = document.getElementById("app");
-let loading = true, error = null, rows = [];
-
-function render() {
-  if (loading) { app.innerHTML = '<p class="loading">Loading…</p>'; return; }
-  if (error) {
-    app.innerHTML = `<p class="error">${error}</p><button onclick="loadData()">Retry</button>`;
-    return;
-  }
-  if (!rows.length) {
-    app.innerHTML = '<p>No data yet — call cyfr.invoke() to load some.</p>';
-    return;
-  }
-  const cols = Object.keys(rows[0]);
-  app.innerHTML = `
-    <button onclick="loadData()">Refresh</button>
-    <table>
-      <thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead>
-      <tbody>${rows.map(r =>
-        `<tr>${cols.map(c => `<td>${r[c] ?? ""}</td>`).join("")}</tr>`
-      ).join("")}</tbody>
-    </table>`;
-}
-
-async function loadData() {
-  loading = true; error = null; render();
-  try {
-    const result = await cyfr.invoke("f:local.stock-analysis", { symbol: "AAPL" });
-    rows = [result.output];  // Component returns data in output
-  } catch (err) { error = err.message; }
-  loading = false; render();
-}
-
-cyfr.ready();  // Signal shell that initialization started
-loadData();
-```
-
-**Key patterns**:
-- Call `cyfr.ready()` early — signals the shell that the tincture has started
-- Access `result.output` — `cyfr.invoke()` returns `{status, output, execution_id, duration_ms}`
-- Handle loading, error, and empty states
-- Invoke formulas, not catalysts directly — formulas validate input and enforce business logic server-side
-- Pass auth tokens as part of the input if the component needs user verification
-
----
-
-## Complete React Example
-
-A minimal `App.tsx` with full SDK type declarations and data loading:
-
-```tsx
-import { useState, useEffect, useCallback } from "react";
-
-// Full Cyfr SDK type declaration — cyfr is auto-injected at serve time, do NOT import it
-declare const cyfr: {
-  mode: "shell" | "public";
-  ready(): Promise<{ ok: true }>;
-  query(name: string, params?: Record<string, unknown>): Promise<{
-    data: Record<string, unknown>[];
-    columns: string[];
-    cached: boolean;
-  }>;
-  setTitle(title: string): Promise<{ ok: true }>;
-  close(): Promise<{ ok: true }>;
-  getContext(): Promise<{ tincture_id: string; window_id: string }>;
-  on(event: string, callback: (data: unknown) => void): void;
-  off(event: string, callback: (data: unknown) => void): void;
-};
-
-export default function App() {
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const loadData = useCallback(async () => {
-    setLoading(true); setError(null);
-    try {
-      const result = await cyfr.invoke("f:local.stock-analysis", { symbol: "AAPL" });
-      setRows([result.output]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { cyfr.ready(); loadData(); }, [loadData]);
-
-  if (loading) return <p>Loading…</p>;
-  if (error) return <div><p style={{color:"red"}}>{error}</p><button onClick={loadData}>Retry</button></div>;
-  if (!rows.length) return <p>No data yet.</p>;
-
-  const cols = Object.keys(rows[0]);
-  return (
-    <div>
-      <button onClick={loadData}>Refresh</button>
-      <table>
-        <thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead>
-        <tbody>{rows.map((r, i) => (
-          <tr key={i}>{cols.map(c => <td key={c}>{String(r[c] ?? "")}</td>)}</tr>
-        ))}</tbody>
-      </table>
-    </div>
-  );
-}
-```
-
-**React-specific notes**:
-- `cyfr` is a global injected at serve time — do not import it. The `declare const cyfr` block above is the complete type declaration
-- After editing source, compile with `cyfr build compile t:local.<name>:<version>` — runs `npm install && tsc && vite build`
-- `vite.config.ts` must use `base: "./"` (the scaffold sets this correctly) so assets resolve from subpath routes
-- Dev workflow: edit `src/*.tsx` → compile → reload browser. No local Vite dev server connects to the cyfr SDK
-
----
-
-## Routes
-
-All tinctures are served from a unified `/t/` path. Public tinctures are accessible by anyone; private tinctures require authentication.
-
-| Route | Auth | Description |
-|-------|------|-------------|
-| `/t/:athanor/:publisher/:name` | Optional | Serve tincture (see Private vs Public above) |
-| `/t/:athanor/:publisher/:name/*path` | None | Serve tincture static assets (JS, CSS, images) |
-
-- Canonical routes are **versionless** — the server resolves the latest registered version
-- Iframes get `sandbox="allow-scripts"` only (no `allow-same-origin`) — assets are served without cookie auth since sandboxed iframes cannot send cookies
-- A `<base>` tag and the Cyfr SDK are injected into `<head>` at serve time (nonce-secured)
+Each setting is a platform setting (see the [Configuration Guide](configuration-guide.md)). The consent profile the tincture runs under adds its own rate and budget.
 
 ---
 
 ## Security Model
 
-- **Invoke allowlist** — tinctures can only invoke components declared in `dependencies.static`
-- **Scoped context** — invoke uses a tincture execution context, not the operator's session
-- **No secrets in responses** — component output is secret-masked before returning to the browser
-- **Sandbox iframe** — `allow-scripts` only, no `allow-same-origin`
-- **Sensitive file denylist** — `cyfr-manifest.json`, `schema.sql`, dotfiles never served
-- **Visibility- and rate-managed** — invoke rate limits come from the consented node limits; public-ness is an active public consent profile, published with `profile.publish`
-- **No `sessionStorage`/`localStorage`** — sandboxed iframes without `allow-same-origin` cannot access browser storage; store state in memory or via backend components
-- **Rate limited** — default 100 req/min (consent-configured). Public: per IP. Private: per user. Clamped by platform ceiling
-
-### Invoke Formulas, Not Raw Catalysts
-
-**Tinctures should invoke formulas — never declare catalysts directly in `dependencies.static`.**
-
-The invoke endpoint is a trust boundary. Any client that can reach the tincture can call any component declared in `dependencies.static`, bypassing the tincture frontend entirely. Frontend validation (confirm dialogs, input sanitization, flow gates) provides zero protection — the server only checks that the reference is in the allowlist.
-
-Formulas solve this by acting as a backend gateway:
+- **The declaration is the grant.** A frame reaches only the components in `dependencies.static`, the actions in `actions` and the streams in `streams`; everything else is refused before dispatch, and every request is recorded as the gate's decision.
+- **One credential per open.** The frame credential is minted for one frame of one person, held to that person's session or key at every request, suspended with its frame and revoked when it closes. A copy of it carries exactly the frame's authority for its remaining life and nothing wider.
+- **Files by path.** A private version's files open only under an asset credential that names that version's digest; a credential leaked in a URL opens that version's bytes for its window and nothing more.
+- **No secrets in the frame.** Component credentials are resolved server-side and outputs are secret-masked before they reach the browser.
+- **Invoke formulas, not raw catalysts.** Anyone holding the frame can call any component the tincture declares, bypassing its interface; declare a formula that validates input and enforces the business rules, and let it call the catalyst.
 
 ```
 AVOID:
-  Tincture → cyfr.invoke("c:local.stripe-charge", input)
-  ↑ Any client can call this directly, bypassing the UI
+  Tincture → cyfr.invoke("c:local.stripe-charge", "charge", input)
 
 RECOMMENDED:
-  Tincture → cyfr.invoke("f:local.purchase-flow", input)
-                           ↓
-                     Formula validates input, enforces business logic,
-                     then dispatches to c:local.stripe-charge internally
+  Tincture → cyfr.invoke("f:local.purchase-flow", "buy", input)
+                              ↓
+                  the formula validates, then calls c:local.stripe-charge
 ```
-
-Why formulas are safer:
-- **The catalyst is unreachable** — it's not in the tincture's `dependencies.static`, so `can_invoke?` rejects direct calls
-- **Input validation in WASM** — the formula validates and sanitizes before dispatching
-- **Tool access control** — formulas have their own `allowed_tools` policy (deny-by-default)
-- **Audit lineage** — sub-invocations track `parent_execution_id` for full call chain visibility
-- **Dependency enforcement** — formulas fail at execution time if any declared dependency is missing
 
 ---
 
 ## Error Reference
 
-| Error | Context | Fix |
-|-------|---------|-----|
-| `component not in dependencies` | Invoke ref not in manifest deps | Add the component to `dependencies.static` in `cyfr-manifest.json` |
-| `Rate limit exceeded` | Public tincture hit rate limit | Wait for `Retry-After` header value. Limit is consent-configured (default 100/min) |
-| `rate_limited` | Private tincture hit rate limit | Reduce invoke frequency or batch requests in a formula. Limit is consent-configured |
-| `Request timed out` | SDK got no response in 30s | Check if shell is responsive, check component execution time |
-| Blank page / nothing renders | Inline `<script>` blocked by CSP | Move all JS to external `.js` files |
-| 404 on asset | File extension not in allowlist | Only `.html .js .css .json .svg .png .jpg .jpeg .gif .ico .woff .woff2 .ttf .eot .map` are served |
+| `code` | When | Fix |
+|--------|------|-----|
+| `unauthenticated` (`no_frame`) | the page is not a frame the shell opened, or the handshake never came | open the tincture from the shell, or publish it and use its public address |
+| `forbidden` (`frame_suspended`) | the frame is hidden and does not declare `frame.background` | act when shown, or declare `background` |
+| `forbidden` (`frame_moved`) | the version or its owner profile's grant changed since the frame opened | open the tincture again |
+| `forbidden` (undeclared) | the component, action or stream is not in the declaration | declare it and publish a new version |
+| `consent_required` | the tincture has no active profile for the route | grant its owner profile, or publish its public one |
+| `rate_limited` | the frame's request rate or open streams are over their bound | wait the seconds it names; invoke on events, not per frame |
+| `invalid_argument` | a request that does not match the wire | pass a reference, an operation name and an object |
+| `unavailable` | the server could not answer | retry |
+| Blank page | an inline `<script>` blocked by the policy | move the script to a file |
+| 404 on a file | a type that is not served, a reserved file, or another version's path | ship a served type under the version |
 
 ---
 
 ## Before Committing
 
-- [ ] `cyfr-manifest.json` has `type: "tincture"` with valid `tincture` and `schema` blocks
-- [ ] Entry file exists (default `index.html`)
-- [ ] **No inline `<script>` blocks** — all JS in external `.js` files loaded via `<script src="...">`
-- [ ] `cyfr.ready()` called in the external JS (SDK is auto-injected — no `<script>` tag needed for SDK)
-- [ ] All queries use named params (`:param`), never string concatenation
-- [ ] `tincture.public` matches intended visibility (actual access is a published public profile — `profile.publish`)
-- [ ] If public: tested both authenticated and unauthenticated access at `/t/:athanor/:publisher/:name`
-- [ ] For React tinctures: `vite.config.ts` uses `base: "./"` (required for subpath serving)
-- [ ] For React tinctures: `cyfr build compile t:local.<name>:<version>` succeeds before registering
+- [ ] `cyfr-manifest.json` has `type: "tincture"` and its declaration names every capability, component, action and stream the tincture uses — and nothing more
+- [ ] Every served file is a served type; no inline `<script>` of your own
+- [ ] `cyfr.ready()` is called from the tincture's script
+- [ ] A `package.json` ships with its `package-lock.json`, regenerated after every dependency change
+- [ ] Built tinctures: `vite.config.js` keeps `base: "./"`, and `cyfr build compile t:local.<name>:<version>` succeeds before registering
+- [ ] No secret, key or token in any file of the version
+- [ ] Public tinctures: the page works at its address with no session

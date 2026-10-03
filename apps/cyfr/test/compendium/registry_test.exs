@@ -3,13 +3,13 @@
 
 defmodule Compendium.RegistryTest.FailingPutAdapter do
   @moduledoc false
-  # Delegates to the Local adapter but refuses to write `boom.txt` —
+  # Delegates to the Local adapter but refuses to write `boom.js` —
   # simulates an object-store write failing partway through a multi-file
   # tincture store.
   use Arca.Storage.TestDouble
 
   def put(actor, path, content) do
-    if List.last(path) == "boom.txt" do
+    if List.last(path) == "boom.js" do
       {:error, :injected_write_failure}
     else
       Arca.Adapters.Local.put(actor, path, content)
@@ -34,9 +34,8 @@ defmodule Compendium.RegistryTest do
                 <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
                 <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_registry_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
@@ -765,128 +764,6 @@ defmodule Compendium.RegistryTest do
     end
   end
 
-  describe "prune_stale_entries/2" do
-    test "removes filesystem entries not in discovered set", %{ctx: ctx} do
-      segments = ["components", "reagents", "local", "stale-tool", "0.1.0"]
-
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
-
-      manifest = %{"type" => "reagent", "version" => "0.1.0", "description" => "Will be pruned"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
-
-      {:ok, _} = Registry.register_from_arca(ctx, segments)
-
-      # Verify it exists
-      {:ok, result} = Registry.search(ctx, %{query: "stale-tool"})
-      assert result.total == 1
-
-      # Get all current filesystem entries so we can exclude them from discovered
-      # (we only want to prune our specific entry)
-      {:ok, all_fs} =
-        Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), source: "filesystem")
-
-      other_entries =
-        all_fs
-        |> Enum.reject(&(&1.name == "stale-tool"))
-        |> Enum.map(&{&1.name, &1.version, Map.get(&1, :publisher, "local")})
-
-      # Prune with only other entries in discovered set — should remove stale-tool
-      {:ok, pruned} = Registry.prune_stale_entries(ctx, other_entries)
-      assert pruned >= 1
-
-      # Verify stale-tool is gone
-      {:ok, result2} = Registry.search(ctx, %{query: "stale-tool"})
-      assert result2.total == 0
-    end
-
-    test "preserves entries in discovered set", %{ctx: ctx} do
-      segments = ["components", "reagents", "local", "keep-tool", "0.1.0"]
-
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
-
-      manifest = %{"type" => "reagent", "version" => "0.1.0"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
-
-      {:ok, _} = Registry.register_from_arca(ctx, segments)
-
-      # Include ALL filesystem entries in the discovered set
-      {:ok, all_fs} =
-        Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), source: "filesystem")
-
-      all_discovered = Enum.map(all_fs, &{&1.name, &1.version, Map.get(&1, :publisher, "local")})
-
-      # Prune with all entries in discovered set — should not remove anything
-      {:ok, pruned} = Registry.prune_stale_entries(ctx, all_discovered)
-      assert pruned == 0
-
-      {:ok, result} = Registry.search(ctx, %{query: "keep-tool"})
-      assert result.total == 1
-    end
-
-    test "prune deletes entire version directory from storage", %{ctx: ctx} do
-      segments = ["components", "catalysts", "local", "tree-test", "1.0.0"]
-
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
-
-      manifest = %{"type" => "catalyst", "version" => "1.0.0", "description" => "Will be pruned"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
-      File.write!(Path.join(comp_dir, "README.md"), "# Tree Test")
-
-      src_dir = Path.join(comp_dir, "src")
-      File.mkdir_p!(Path.join(src_dir, "src"))
-      File.write!(Path.join(src_dir, "Cargo.toml"), "[package]\nname = \"tree-test\"")
-      File.write!(Path.join([src_dir, "src", "lib.rs"]), "fn main() {}")
-
-      {:ok, _} = Registry.register_from_arca(ctx, segments)
-
-      # Verify files were stored
-      base = ["components", "catalysts", "local", "tree-test", "1.0.0"]
-      assert {:ok, _} = Arca.get(Sanctum.Context.actor(ctx), base ++ ["catalyst.wasm"])
-      assert {:ok, _} = Arca.get(Sanctum.Context.actor(ctx), base ++ ["cyfr-manifest.json"])
-      assert {:ok, _} = Arca.get(Sanctum.Context.actor(ctx), base ++ ["README.md"])
-      assert {:ok, _} = Arca.get(Sanctum.Context.actor(ctx), base ++ ["src", "Cargo.toml"])
-
-      # Build discovered set excluding tree-test
-      {:ok, all_fs} =
-        Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), source: "filesystem")
-
-      other_entries =
-        all_fs
-        |> Enum.reject(&(&1.name == "tree-test"))
-        |> Enum.map(&{&1.name, &1.version, Map.get(&1, :publisher, "local")})
-
-      {:ok, pruned} = Registry.prune_stale_entries(ctx, other_entries)
-      assert pruned >= 1
-
-      # prune_stale_entries is DB-only cleanup — filesystem files are preserved
-      # (user source files must survive transient discovery failures).
-      # Verify DB entry was removed by confirming search no longer finds it.
-      {:ok, search_result} = Registry.search(ctx, %{query: "tree-test"})
-      assert search_result.total == 0
-    end
-  end
-
   describe "publisher-aware get/4" do
     test "filters by publisher when provided", %{ctx: ctx} do
       {:ok, _} =
@@ -1151,15 +1028,8 @@ defmodule Compendium.RegistryTest do
 
   describe "publish_tincture_archive/4 — athanor storage cap" do
     test "refuses when the extracted tree would pass the athanor cap", %{ctx: ctx} do
-      prev_caps = Application.get_env(:sanctum, :caps)
-      Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1)
+      Cyfr.Test.Settings.put("athanor_storage_bytes", 1)
       Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
-
-      on_exit(fn ->
-        if prev_caps,
-          do: Application.put_env(:sanctum, :caps, prev_caps),
-          else: Application.delete_env(:sanctum, :caps)
-      end)
 
       archive =
         tincture_archive([
@@ -1362,7 +1232,7 @@ defmodule Compendium.RegistryTest do
           {"cyfr-manifest.json",
            Jason.encode!(%{"name" => "partial", "version" => "1.0.0", "type" => "tincture"})},
           {"index.html", "<html></html>"},
-          {"boom.txt", "this write fails"}
+          {"boom.js", "this write fails"}
         ])
 
       assert {:error, {:tincture_store_failed, :injected_write_failure}} =

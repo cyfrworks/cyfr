@@ -36,13 +36,16 @@ defmodule Compendium.AquaAgent do
   The policy's own grammar — keys `tool.action`, `tool.*` or
   `native_search`, values `ask` or `auto` — is `check_tool_policy/1`, the
   one rule the file parser and the `aqua` tool door both apply, so a
-  value the runtime would otherwise have to reinterpret never lands.
+  value the runtime would otherwise have to reinterpret never lands. What
+  an authored policy may say on top of that grammar is
+  `validate_tool_policy/2`, the door's rule alone.
   `parse_frontmatter/1` is shared with the scrolls (`SKILL.md` files under
   `aqua/skills/` follow the open Agent Skills convention: `name` +
   `description` frontmatter, instructions as the body).
   """
 
   alias Compendium.AquaPath
+  alias Grimoire.VirtualTools
   alias Sanctum.Context
 
   @type t :: %{
@@ -195,7 +198,7 @@ defmodule Compendium.AquaAgent do
   @spec clone_glob(String.t()) :: String.t()
   def clone_glob(name) when is_binary(name), do: name <> ".*"
 
-  @doc "Whether this agent is the estate's soul, by the one reserved name."
+  @doc "Whether this agent is the athanor's soul, by the one reserved name."
   @spec soul?(t()) :: boolean()
   def soul?(%{name: name}), do: AquaPath.soul?(name)
 
@@ -239,13 +242,13 @@ defmodule Compendium.AquaAgent do
       "disabled" => agent.disabled == true,
       "tool_policy" => agent.tool_policy
     }
-    |> Cyfr.MapUtil.put_present("catalyst_ref", agent.catalyst_ref)
-    |> Cyfr.MapUtil.put_present("model", agent.model)
+    |> Prima.MapUtil.put_present("catalyst_ref", agent.catalyst_ref)
+    |> Prima.MapUtil.put_present("model", agent.model)
   end
 
   @doc "The digest of `to_manifest/1`: the agent's capability revision."
   @spec capability_digest(t()) :: {:ok, String.t()} | {:error, term()}
-  def capability_digest(agent), do: Cyfr.JCS.hash(to_manifest(agent))
+  def capability_digest(agent), do: Prima.JCS.hash(to_manifest(agent))
 
   @doc "One agent by name — the soul or a role, whichever the name is — through the overlay union."
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
@@ -300,6 +303,107 @@ defmodule Compendium.AquaAgent do
   end
 
   def check_tool_policy(_policy), do: {:error, :tool_policy_not_a_map}
+
+  @doc """
+  What an AUTHORED `tool_policy` may say: the grammar
+  (`check_tool_policy/1`) first, then the rules a write door applies on
+  top of it. A door refuses what a person must not be able to write: a
+  UI event held at anything but `auto`, an automatic destructive or
+  external action on any agent, a `tool.*` glob at `auto` whose actions
+  include one of those, and an `ask` on a role (a cloned role's answer is
+  a tool result, not a turn — it has no card to raise).
+
+  The parser keeps grammar only, so a hand-edited file still loads; the
+  assistant's runtime ceiling demotes whatever loaded anyway, so a file
+  written past this door reaches the guest already demoted.
+
+  An action's kind is the gate's classification (`Grimoire.tool_kind/2`:
+  a virtual hand's from `Grimoire.VirtualTools`, `:external` for a
+  `server:tool`, else the catalogued tool's annotation); only a kind
+  `Grimoire.VirtualTools.auto_permitted_kind?/1` admits may be `auto`, and an
+  action whose kind is unknown is left to that ceiling.
+
+  `:ok`, a typed grammar refusal, or `{:error, sentence}` — the sentence
+  is the person's.
+  """
+  @spec validate_tool_policy(term(), String.t()) ::
+          :ok | {:error, tool_policy_error() | String.t()}
+  def validate_tool_policy(policy, agent_type) do
+    with :ok <- check_tool_policy(policy),
+         :ok <- check_auto_only(policy) do
+      check_authored(policy, agent_type)
+    end
+  end
+
+  defp check_authored(policy, agent_type) do
+    role? = agent_type == @role_type
+
+    Enum.find_value(policy, :ok, fn {key, value} ->
+      cond do
+        role? and value == "ask" ->
+          {:error,
+           "#{key} cannot be held at ask on a role — a cloned role has no card to raise; " <>
+             "grant it (auto) or leave it out"}
+
+        value == "auto" ->
+          auto_refusal(key)
+
+        true ->
+          nil
+      end
+    end)
+  end
+
+  defp auto_refusal(key) do
+    case String.split(key, ".", parts: 2) do
+      [tool, "*"] ->
+        case Enum.reject(actions_of(tool), &auto_permitted?(tool, &1)) do
+          [] ->
+            nil
+
+          asking ->
+            {:error,
+             "#{key} at auto would cover #{Enum.map_join(asking, ", ", &"#{tool}.#{&1}")}, " <>
+               "which always asks — list the actions instead"}
+        end
+
+      [tool, action] ->
+        cond do
+          VirtualTools.auto_only?(tool, action) -> nil
+          kind_for(tool, action) == nil -> nil
+          auto_permitted?(tool, action) -> nil
+          true -> {:error, "#{key} always asks — it cannot be set to auto"}
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  # A UI event (`request_setup.open`) is answered by the guest in place, so
+  # a policy that holds it at `ask` names a card nothing can execute.
+  defp check_auto_only(policy) do
+    Enum.find_value(policy, :ok, fn {key, value} ->
+      case String.split(key, ".", parts: 2) do
+        [tool, action] ->
+          if VirtualTools.auto_only?(tool, action) and value != "auto",
+            do: {:error, "#{key} runs on its own — it is auto or absent, never ask"}
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  # The gate's one classification: a virtual hand's kind, `:external` for
+  # a `server:tool`, else the catalogued tool's annotation, nil unknown.
+  defp kind_for(tool, action), do: Grimoire.tool_kind(tool, action)
+
+  defp auto_permitted?(tool, action),
+    do: VirtualTools.auto_permitted_kind?(kind_for(tool, action))
+
+  # What a `tool.*` glob stands for, in declared order.
+  defp actions_of(tool), do: Grimoire.tool_actions(tool)
 
   defp valid_policy_key?("native_search"), do: true
 

@@ -20,11 +20,11 @@ defmodule Cyfr.TelemetryCatalogTest do
   @event_re ~r/\[:cyfr(?:,\s*:[a-z_0-9]+)+\]/
 
   defp source_events do
-    Cyfr.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
+    Prima.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
     |> Enum.reject(&String.ends_with?(&1, "lib/cyfr/telemetry/catalog.ex"))
     |> Enum.flat_map(fn path ->
       # Collapse formatting so a list wrapped across lines still matches.
-      source = path |> Cyfr.Test.SourceTree.read() |> String.replace(~r/\n\s*/, " ")
+      source = path |> Prima.Test.SourceTree.read() |> String.replace(~r/\n\s*/, " ")
 
       Regex.scan(@event_re, source)
       |> Enum.map(fn [match] ->
@@ -71,23 +71,24 @@ defmodule Cyfr.TelemetryCatalogTest do
     for event <- Catalog.consumed_by(:audit) do
       ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
 
-      assert Enum.any?(ids, &String.starts_with?(&1, "audit-")),
+      assert Enum.any?(ids, &(is_binary(&1) and String.starts_with?(&1, "audit-"))),
              "no audit handler attached for #{inspect(event)}"
     end
   end
 
   test "the telemetry bridge attaches exactly the catalog's :bridge roster" do
-    for event <- Catalog.consumed_by(:bridge) do
-      ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
+    assert Cyfr.TelemetryBridge.events() == Catalog.consumed_by(:bridge)
 
-      assert Enum.any?(ids, &String.starts_with?(&1, "prism-")),
-             "no bridge handler attached for #{inspect(event)}"
-    end
+    attached =
+      for %{id: {Cyfr.TelemetryBridge, event}, event_name: event} <- :telemetry.list_handlers([]),
+          do: event
+
+    assert Enum.sort(attached) == Catalog.consumed_by(:bridge)
   end
 
   test "the metric definitions cover exactly the catalog's :metrics roster" do
     metric_events =
-      EmissaryWeb.Telemetry.metrics()
+      CyfrWeb.Telemetry.metrics()
       |> Enum.map(& &1.event_name)
       |> Enum.filter(&match?([:cyfr | _], &1))
       |> Enum.uniq()
@@ -96,22 +97,41 @@ defmodule Cyfr.TelemetryCatalogTest do
     assert metric_events == Catalog.consumed_by(:metrics)
   end
 
-  test "the schedule-notes handler attaches exactly the catalog's :notes roster" do
-    assert Catalog.consumed_by(:notes) == [Cyfr.ScheduleNotes.event()]
+  # A completed schedule's note is kept from the committed bus message
+  # (`Cyfr.Bus.ScheduleCompleted`), never from the telemetry event too: the
+  # old `:notes` consumer is gone, with nothing attached in its place.
+  test "a completed schedule's telemetry has no consumer that keeps a note" do
+    assert Catalog.consumed_by(:notes) == []
+    assert Catalog.all()[[:cyfr, :schedules, :completed]].consumers == [:operator]
 
-    for event <- Catalog.consumed_by(:notes) do
-      ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
+    ids =
+      [:cyfr, :schedules, :completed] |> :telemetry.list_handlers() |> Enum.map(& &1.id)
 
-      assert Enum.any?(ids, &String.starts_with?(&1, "notes-")),
-             "no notes handler attached for #{inspect(event)}"
-    end
+    refute Enum.any?(ids, &(is_binary(&1) and String.starts_with?(&1, "notes-")))
+  end
+
+  test "the projection reconciler attaches exactly the catalog's :projection roster" do
+    assert Catalog.consumed_by(:projection) == [Arca.StorageProjectionChanges.event()]
+
+    # The attach a reconciler makes as it starts, under a name no running
+    # reconciler holds, so what it attaches is this case's alone.
+    name = :"telemetry_catalog_projection_#{System.unique_integer([:positive])}"
+    handler = Compendium.ProjectionReconciler.handler_id(name)
+    on_exit(fn -> Compendium.ProjectionReconciler.detach(name) end)
+
+    assert :ok = Compendium.ProjectionReconciler.attach(name)
+
+    attached =
+      for %{id: ^handler, event_name: event} <- :telemetry.list_handlers([]), do: event
+
+    assert Enum.sort(attached) == Catalog.consumed_by(:projection)
   end
 
   test "the dedicated log attaches cover the catalog's :log roster" do
     for event <- Catalog.consumed_by(:log) do
       ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
 
-      assert Enum.any?(ids, &String.contains?(&1, "-log")),
+      assert Enum.any?(ids, &(is_binary(&1) and String.contains?(&1, "-log"))),
              "no logger attach for #{inspect(event)}"
     end
   end

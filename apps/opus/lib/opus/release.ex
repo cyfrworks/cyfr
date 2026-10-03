@@ -20,7 +20,7 @@ defmodule Opus.Release do
   runner's uid can write nowhere else); otherwise a fresh `erl` of this
   runtime on the code paths of Opus and its applications, with no input
   of its own and no `sys.config`, told explicitly what it takes from this
-  VM (its log level, its guests' resolver, its scheduler counts), running
+  VM (its log level and its scheduler counts), running
   `runner/0`, which starts the application in the runner role and
   returns, leaving the VM up until the runner ends it (`stop/1`) or its
   watchdog halts it (`halt/1`).
@@ -50,7 +50,7 @@ defmodule Opus.Release do
       nil -> :service
       "service" -> :service
       "runner" -> :runner
-      other -> raise ArgumentError, "[Opus.Release] OPUS_ROLE=#{other} names no role"
+      _other -> raise ArgumentError, "[Opus.Release] OPUS_ROLE names no role: service or runner"
     end
   end
 
@@ -68,23 +68,25 @@ defmodule Opus.Release do
         :ok
 
       {:error, reason} ->
-        IO.puts(:stderr, "[Opus.Release] the runner could not start: #{inspect(reason)}")
+        IO.puts(
+          :stderr,
+          "[Opus.Release] the runner could not start: #{Prima.LoggerContext.shape(reason)}"
+        )
+
         :erlang.halt(1)
     end
   end
 
   @doc """
   How a keeper starts a runner of this boot (`t:command/0`), told what a
-  plain VM has no `sys.config` to read from this VM itself: its log level,
-  the resolver its guests' egress resolves through when one is configured
-  (`config :opus, :resolver`), and its scheduler counts.
+  plain VM has no `sys.config` to read from this VM itself: its log level
+  and its scheduler counts.
   """
   @spec runner_command() :: command()
   def runner_command do
     runner_command(
       env: System.get_env(),
       log_level: Logger.level(),
-      resolver: Application.get_env(:opus, :resolver),
       schedulers:
         {:erlang.system_info(:schedulers), :erlang.system_info(:schedulers_online),
          :erlang.system_info(:dirty_cpu_schedulers),
@@ -95,10 +97,10 @@ defmodule Opus.Release do
 
   @doc """
   How a keeper starts a runner, from `opts`: `:env`, the service's process
-  environment, and, for a runner outside a release, `:log_level`,
-  `:resolver` (a module, or nil for the runtime's own) and `:schedulers`
-  (`{schedulers, online, dirty_cpu, dirty_cpu_online, dirty_io}`), which
-  become its emulator flags and application environment. A release's
+  environment, and, for a runner outside a release, `:log_level` and
+  `:schedulers` (`{schedulers, online, dirty_cpu, dirty_cpu_online,
+  dirty_io}`), which become its emulator flags and application
+  environment. A release's
   runner reads the release's own `vm.args` and `sys.config`, so a release
   passes none of them.
   """
@@ -133,6 +135,10 @@ defmodule Opus.Release do
     end
   end
 
+  # A runner outside a release (a dev or test boot) does not busy-wait its
+  # schedulers: under a loaded host a runner VM's scheduler busy-wait
+  # stretched its boot from 0.2 s to 16 s. A release's runner reads the
+  # release's own `vm.args`, which this leaves untouched.
   defp emulator_flags({schedulers, online, dirty_cpu, dirty_cpu_online, dirty_io}),
     do: [
       "+S",
@@ -140,19 +146,18 @@ defmodule Opus.Release do
       "+SDcpu",
       "#{dirty_cpu}:#{dirty_cpu_online}",
       "+SDio",
-      "#{dirty_io}"
+      "#{dirty_io}",
+      "+sbwt",
+      "none",
+      "+sbwtdcpu",
+      "none",
+      "+sbwtdio",
+      "none"
     ]
 
-  # `-App Key Value`, the value read as an Erlang term: a module as a quoted
-  # atom.
-  defp application_flags(opts) do
-    level = ["-logger", "level", Atom.to_string(Keyword.fetch!(opts, :log_level))]
-
-    case Keyword.fetch!(opts, :resolver) do
-      nil -> level
-      resolver when is_atom(resolver) -> level ++ ["-opus", "resolver", "'#{resolver}'"]
-    end
-  end
+  # `-App Key Value`, the value read as an Erlang term.
+  defp application_flags(opts),
+    do: ["-logger", "level", Atom.to_string(Keyword.fetch!(opts, :log_level))]
 
   @doc """
   The code paths a runner of a non-release boot needs: the `ebin` of every
@@ -199,6 +204,16 @@ defmodule Opus.Release do
   def open_control(0), do: Port.open({:fd, 0, 1}, [:binary, :stream, :eof])
 
   def open_control(fd) when is_integer(fd) and fd > 0,
+    do: Port.open({:fd, fd, fd}, [:binary, :stream, :eof])
+
+  @doc """
+  The runner's end of its relay (`Opus.Relay.Runner`) as a port: file
+  descriptor `fd` (4, beside the control channel on 3, as the keeper
+  gives every runner) for both directions, reporting its end as
+  `{port, :eof}`.
+  """
+  @spec open_relay(pos_integer()) :: port()
+  def open_relay(fd) when is_integer(fd) and fd > 2,
     do: Port.open({:fd, fd, fd}, [:binary, :stream, :eof])
 
   @doc """

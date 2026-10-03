@@ -83,9 +83,9 @@ defmodule Cyfr.VocabularyDriftTest do
   end
 
   defp code_lines(glob) do
-    for path <- Cyfr.Test.SourceTree.files!(Path.join(@root, glob)) do
+    for path <- Prima.Test.SourceTree.files!(Path.join(@root, glob)) do
       {Path.relative_to(path, @root),
-       path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines()}
+       path |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.lines()}
     end
   end
 
@@ -98,21 +98,36 @@ defmodule Cyfr.VocabularyDriftTest do
   # The product's words reach the person through the seed, the CLI, the
   # guides and the formula's manifest as well as the code; none of them
   # may say what the code no longer does.
-  @product_files [
-    "seed/aqua/**/*.md",
-    "apps/codex/**/*.go",
-    "README.md",
-    "component-guide.md",
-    "integration-guide.md",
-    "tincture-guide.md"
-  ]
+  @product_files ["seed/aqua/**/*.md", "apps/codex/**/*.go", "README.md", "ARCHITECTURE.md"]
+
+  # The guides a project ships are the scaffold tarball's items
+  # (scripts/scaffold-tarball.sh), the one list every copy is held to
+  # (`Cyfr.DocsDriftTest` here, codex's scaffold test there), so a guide
+  # shipped later is scanned without this file naming it.
+  defp shipped_guides do
+    script = File.read!(Path.join(@root, "scripts/scaffold-tarball.sh"))
+
+    [_, items] =
+      Regex.run(~r/\nITEMS=\((.*?)\n\)/s, script) ||
+        flunk("scaffold-tarball.sh has no ITEMS list")
+
+    guides =
+      items
+      |> String.split("\n")
+      |> Enum.reject(&String.starts_with?(String.trim(&1), "#"))
+      |> Enum.flat_map(&String.split/1)
+      |> Enum.filter(&String.ends_with?(&1, "-guide.md"))
+
+    assert "integration-guide.md" in guides, "the scaffold ships #{inspect(guides)}"
+    guides
+  end
 
   @old_words Regex.compile!("sub-agent|\\bsub_agent\\b|" <> @retired_word, "i")
 
   test "the seed, the CLI, the guides and the manifest speak soul, role and scroll" do
     stale =
-      for glob <- @product_files,
-          path <- Cyfr.Test.SourceTree.files!(Path.join(@root, glob)),
+      for glob <- @product_files ++ shipped_guides(),
+          path <- Prima.Test.SourceTree.files!(Path.join(@root, glob)),
           not String.ends_with?(path, "_test.go"),
           {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
           line =~ @old_words,

@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.AquaLiveTest do
-  # The AQUA page shows the tree of the estate in focus — a person's own
+  # The AQUA page shows the tree of the athanor in focus — a person's own
   # on their page, the group's on the group's — and every write lands
   # there through the `aqua` and `notes` tools. These drive the LiveView
   # itself: the AgentConfig-level test cannot catch a handler that reads
@@ -139,13 +139,13 @@ defmodule PrismWeb.AquaLiveTest do
     render(view)
   end
 
-  describe "the estate's page" do
+  describe "the athanor's page" do
     setup %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      estate = seated_athanor()
-      ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: estate.id}
-      {:ok, conn: conn, ctx: ctx, estate: estate}
+      athanor = seated_athanor()
+      ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+      {:ok, conn: conn, ctx: ctx, athanor: athanor}
     end
 
     test "the soul offers no Delete; a shipped role is disabled and enabled from its card",
@@ -185,7 +185,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:ok, %{"disabled" => false}} = get_agent(ctx, "planner")
     end
 
-    test "restoring the shipped files reverts an edited soul and keeps what the estate made",
+    test "restoring the shipped files reverts an edited soul and keeps what the athanor made",
          %{conn: conn, ctx: ctx} do
       {:ok, %{"title" => shipped_title}} = get_agent(ctx, "aqua")
 
@@ -209,7 +209,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-restore-result", "Kept (1)")
     end
 
-    test "removing everything the estate made deletes a member-made role too",
+    test "removing everything the athanor made deletes a member-made role too",
          %{conn: conn, ctx: ctx} do
       {:ok, _} =
         AgentConfig.call_aqua(ctx, %{"action" => "create", "name" => "scout", "content" => "# S"})
@@ -281,8 +281,8 @@ defmodule PrismWeb.AquaLiveTest do
 
     test "the pinned page is written from the page and is what the soul reads",
          %{conn: conn, ctx: ctx} do
-      # The estate here is the person's own, so its one pinned page is
-      # `about-you`; a shared estate's is `about-us`.
+      # The athanor here is the person's own, so its one pinned page is
+      # `about-you`; a shared athanor's is `about-us`.
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "About you"
       assert html =~ "Nothing pinned yet."
@@ -471,7 +471,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:ok, %{"content" => "# PDF forms\nUse qpdf."}} =
                AgentConfig.call_aqua(ctx, %{"action" => "skill_get", "name" => "pdf-forms"})
 
-      # The estate's own scroll is deleted, with the verb spelled as such.
+      # The athanor's own scroll is deleted, with the verb spelled as such.
       assert has_element?(view, "#aqua-scroll-open button[phx-click=skill_delete]", "Delete")
 
       view
@@ -511,7 +511,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "form[phx-submit=editor_create_role]")
     end
 
-    test "a catalyst the estate does not hold is offered an Install, which refuses without a registry",
+    test "a catalyst the athanor does not hold is offered an Install, which refuses without a registry",
          %{conn: conn, ctx: ctx} do
       # The soul names a model catalyst nothing here holds: the page says so
       # and offers to fetch it, rather than leaving a dead end.
@@ -535,9 +535,23 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:error, %Compendium.OCI.Errors{reason: :registry_unconfigured}} =
                Compendium.Pull.oci_reference_for("catalyst:moonmoon69.claude")
 
+      before = Task.Supervisor.children(Prism.TaskSupervisor)
+
       view
       |> element("button[phx-click=install_catalyst]")
       |> render_click()
+
+      fetch = page_tasks(view, before)
+
+      # The click only starts the fetch; its refusal reaches the page when
+      # the task answers. The page tells the section which install ended
+      # while it serves that answer, so a render asked for once the refusal
+      # shows is served after the section has heard.
+      Prima.Test.Wait.wait_until(
+        fn -> render(view) =~ "Could not install" end,
+        5_000,
+        "the install's refusal"
+      )
 
       html = render(view)
       assert html =~ "Could not install"
@@ -546,6 +560,14 @@ defmodule PrismWeb.AquaLiveTest do
       # showing "Installing…" with nothing to click.
       refute html =~ "Installing…"
       assert has_element?(view, "button[phx-click=install_catalyst]:not([disabled])")
+
+      # The fetch has answered; it is gone before the registry setting it
+      # read is restored and before the sandbox it queried is released.
+      Prima.Test.Wait.wait_until(
+        fn -> not Enum.any?(Task.Supervisor.children(Prism.TaskSupervisor), &(&1 in fetch)) end,
+        5_000,
+        "the install's fetch to end"
+      )
     end
 
     test "an install that lands leaves the model asking for a key, not asking to be installed",
@@ -577,7 +599,9 @@ defmodule PrismWeb.AquaLiveTest do
             })
         })
 
-      send(view.pid, {:catalyst_installed, ref, {:ok, %{}}})
+      # The install task answers under the focus it started with.
+      tag = CyfrWeb.ContextGuard.capture(:sys.get_state(view.pid).socket)
+      send(view.pid, {:catalyst_installed, tag, ref, {:ok, %{}}})
 
       html = settled_render(view)
       assert html =~ "Installed #{ref}."
@@ -585,7 +609,8 @@ defmodule PrismWeb.AquaLiveTest do
       assert html =~ "the model has no key yet"
       refute has_element?(view, "button[phx-click=install_catalyst]")
 
-      # And the way on is live: the sheet opens on the release that landed.
+      # And the way on is live: the grant opens on the release that landed,
+      # in the page's system layer and nowhere on the page.
       view
       |> element("button[phx-click=open_consent]", "Connect a model")
       |> render_click()
@@ -593,6 +618,70 @@ defmodule PrismWeb.AquaLiveTest do
       html = render(view)
       assert html =~ "#{ref}:0.1.0"
       assert html =~ "to call the model with your key"
+      assert has_element?(view, ~s(#system-layer-dialog [data-test="grant-needs"]))
+    end
+
+    test "connecting a model binds the key in the system layer, and the page says it is connected",
+         %{conn: conn, ctx: ctx} do
+      ref = "catalyst:local.keyed"
+      :ok = soul_names_catalyst!(ctx, ref)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "keyed",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A model catalyst",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "api_key" => %{
+                  "type" => "api_key:keyed.test",
+                  "reason" => "to call the model with your key",
+                  "fields" => ["KEYED_API_KEY"],
+                  "required" => true
+                }
+              }
+            })
+        })
+
+      params = %{name: "keyed key", kind: "api_key", fields: %{"KEYED_API_KEY" => "sk-keyed"}}
+
+      entering =
+        Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+          operation: "vault.create",
+          arguments: params,
+          resource: params.name
+        })
+
+      {:ok, entry} = Sanctum.Vault.create(entering, params)
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      view
+      |> element("button[phx-click=open_consent]", "Connect a model")
+      |> render_click()
+
+      # No sheet on the page itself: the grant is the layer's.
+      refute has_element?(view, "#consent-sheet-dialog")
+      assert has_element?(view, ~s(#system-layer-dialog [data-test="grant-sheet"]))
+
+      view
+      |> element(
+        ~s(#system-layer-dialog [data-test="grant-pick"][phx-value-entry_id="#{entry.id}"])
+      )
+      |> render_click()
+
+      render(view)
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+      # The layer asks its sheet for the walk, then commits.
+      Prima.Test.Wait.wait_until(fn -> render(view) =~ "Model connected." end, 5_000, "the grant")
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+      {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+      assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
     end
 
     test "an unrelated reload does not re-enable Install while its fetch is running",
@@ -619,23 +708,36 @@ defmodule PrismWeb.AquaLiveTest do
 
     test "a key bound from the page drops the kept catalogue, so the picker is read again",
          %{conn: conn, ctx: ctx} do
-      estate = seated_athanor()
+      athanor = seated_athanor()
 
       :ok =
-        PrismWeb.ModelCatalog.remember(estate.id, %{"models" => %{"kept" => ["kept-model-1"]}})
+        PrismWeb.ModelCatalog.remember(athanor.id, %{"models" => %{"kept" => ["kept-model-1"]}})
 
-      on_exit(fn -> PrismWeb.ModelCatalog.forget(estate.id) end)
+      on_exit(fn -> PrismWeb.ModelCatalog.forget(athanor.id) end)
 
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "kept-model-1"
 
-      send(view.pid, {:consent_granted, "catalyst:local.http:1.1.2", %{}})
-      assert render(view) =~ "Model connected."
+      # The grant is asked in the page's system layer; confirmed there, the
+      # page hears it.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "kept-key",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A model catalyst",
+          manifest: Jason.encode!(%{})
+        })
+
+      render_click(view, "open_consent", %{"ref" => "catalyst:local.kept-key:0.1.0"})
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      Prima.Test.Wait.wait_until(fn -> render(view) =~ "Model connected." end, 5_000, "the grant")
 
       # The kept entry is gone: a load from here finds no hit to hand back,
       # whatever a fresh run answers.
       PrismWeb.ModelCatalog.load(ctx)
-      refute_received {:list_models_result, {:ok, %{"models" => %{"kept" => _}}}}
+      refute_received {:list_models_result, _tag, {:ok, %{"models" => %{"kept" => _}}}}
     end
 
     test "the prompt editor is a dialog with a sibling backdrop and an Escape of its own",
@@ -806,5 +908,15 @@ defmodule PrismWeb.AquaLiveTest do
 
   # A section re-reads itself on a message the write sends after it
   # answers, so a card's new state is awaited rather than read at once.
-  defp settled(fun, label), do: Cyfr.Test.Wait.wait_until(fun, 2_000, label)
+  defp settled(fun, label), do: Prima.Test.Wait.wait_until(fun, 2_000, label)
+
+  # The tasks the page itself started on the console's supervisor since `before`
+  # was read: a task names the process that started it first in its
+  # `$callers`, which leaves out the tasks those tasks start in turn.
+  defp page_tasks(%{pid: page}, before) do
+    for pid <- Task.Supervisor.children(Prism.TaskSupervisor) -- before,
+        {:dictionary, dictionary} <- [Process.info(pid, :dictionary)],
+        match?([^page | _], dictionary[:"$callers"]),
+        do: pid
+  end
 end

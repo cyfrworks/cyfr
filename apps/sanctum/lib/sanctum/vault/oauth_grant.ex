@@ -28,13 +28,20 @@ defmodule Sanctum.Vault.OAuthGrant do
   proof-of-initiation is the single-use 256-bit `state`
   (delete-on-read, 2-minute TTL) plus the server-held PKCE verifier, and
   the interactive-class check happened at `authorize_url/2` when the
-  pending record was minted. The pending record carries the `Cyfr.Actor`
-  that check passed for, so the callback acts with authority derived from
-  the session that started the grant and never from a tenant named in a
-  row it reads.
+  pending record was minted. The pending record carries the Context that
+  check passed for and the `Prima.Actor` it projects, so the callback acts
+  with authority derived from the session that started the grant and
+  never from a tenant named in a row it reads — and that standing is read
+  again before the credential is written: a session-backed context is
+  revalidated (`Sanctum.Caller.revalidate_session/1`), anything else is
+  held to the channel rule (`Sanctum.Tenancy.channel_active?/2`). A grant
+  a paired device started is written in a transaction that holds the
+  device's client and certificate (`Sanctum.Issuance.device_hold/1`), so a
+  revocation that commits after that revalidation writes nothing either.
   """
 
   require Logger
+  require Sanctum.Issuance
 
   alias Sanctum.CipherAAD
   alias Sanctum.Consent.Authz
@@ -70,12 +77,21 @@ defmodule Sanctum.Vault.OAuthGrant do
       `authorize_url` + `token_url` (https), optional `auth_style` /
       `extra_params`.
 
+  Starting one is a sensitive change (`credential_entry`): the grant it
+  completes seals a credential into the vault.
+
   Returns `{:ok, %{url, state, redirect_uri}}`.
   """
   @spec authorize_url(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def authorize_url(%Context{} = ctx, params) when is_map(params) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, target} <- resolve_target(ctx, params),
+         :ok <-
+           Authz.confirm(ctx, :credential_entry, %{
+             operation: "vault.authorize",
+             arguments: params,
+             resource: target.name
+           }),
          {:ok, endpoints} <- validate_endpoints(target.endpoints),
          {:ok, creds} <- provider_creds(ctx.athanor_id, target.provider) do
       state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
@@ -90,6 +106,7 @@ defmodule Sanctum.Vault.OAuthGrant do
         target: target,
         redirect_uri: redirect_uri,
         code_verifier: code_verifier,
+        context: ctx,
         actor: Context.actor(ctx)
       }
 
@@ -126,14 +143,25 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   Returns `{:ok, %{entry_id, name, provider, rebound: bool}}`;
   `{:error, :unknown_state}` when no pending grant matches — the callback
-  answers 400, since an expired or foreign `state` proves nothing.
+  answers 400, since an expired or foreign `state` proves nothing. The
+  grant's actor must still stand where it started the grant, read before
+  the exchange and again before anything is written: `{:error,
+  :unauthenticated}` when it does not — the presented `state` opens
+  nothing — and `{:error, :unavailable}` when the store cannot say, or
+  when a remote person's identity cannot be confirmed fresh.
   """
   @spec complete(String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def complete(state, code, redirect_uri) do
+    # Standing is read before the code is spent at the provider and again
+    # after, since the exchange is an outbound round trip a revocation can
+    # land inside.
     with {:ok, pending} <- fetch_pending(state),
          :ok <- validate_redirect_uri(pending, redirect_uri),
+         {:ok, _before} <- still_standing(pending),
          {:ok, creds} <- provider_creds(pending.actor.athanor_id, pending.target.provider),
-         {:ok, response} <- exchange(pending, creds, code, redirect_uri) do
+         {:ok, response} <- exchange(pending, creds, code, redirect_uri),
+         {:ok, standing} <- still_standing(pending),
+         {:ok, hold} <- write_hold(standing) do
       bundle = %{
         "access_token" => response["access_token"],
         "refresh_token" => response["refresh_token"],
@@ -142,8 +170,63 @@ defmodule Sanctum.Vault.OAuthGrant do
         "scopes" => pending.target.scopes
       }
 
-      apply_grant(pending, bundle)
+      pending |> apply_grant(bundle, hold) |> unheld()
     end
+  end
+
+  # The grant's actor, re-established: a session that started the grant must
+  # still be a live session of a standing person focused on the same athanor;
+  # any other holder is held to the rule an athanor-owned channel stands by.
+  # A remote person whose identity could not be confirmed fresh is paused,
+  # not signed out: the callback says to try again, as when the store
+  # cannot answer.
+  #
+  # Answers the revalidated context, or nil for a grant no context
+  # started, which its write is then held by (`write_hold/1`).
+  defp still_standing(%{context: %Context{} = ctx, actor: actor}) do
+    case Sanctum.Caller.revalidate_session(ctx) do
+      {:ok, %Context{} = fresh} -> with :ok <- same_athanor(fresh, actor), do: {:ok, fresh}
+      {:error, reason} when reason in [:unavailable, :identity_stale] -> {:error, :unavailable}
+      {:error, _refused} -> {:error, :unauthenticated}
+    end
+  end
+
+  defp still_standing(%{actor: actor}), do: with(:ok <- channel(actor), do: {:ok, nil})
+
+  # The write holds what the revalidated context stands on: a paired
+  # device's client and certificate, locked in the write's own transaction
+  # (`Sanctum.Issuance.device_hold/1`), so a revocation that commits after
+  # the revalidation and before the write refuses it; nothing for a
+  # session or a channel, as before. A device context with no binding of
+  # its own opens nothing.
+  defp write_hold(%Context{} = ctx) do
+    case Sanctum.Issuance.device_hold(ctx) do
+      {:ok, hold} -> {:ok, hold}
+      {:error, _no_binding} -> {:error, :unauthenticated}
+    end
+  end
+
+  defp write_hold(nil), do: {:ok, []}
+
+  # A write its device no longer stands for, any of the standing refusals
+  # (`Sanctum.Issuance`), is refused as the recheck refuses one: the
+  # presented `state` opens nothing.
+  defp unheld({:error, reason}) when Sanctum.Issuance.standing_refusal?(reason),
+    do: {:error, :unauthenticated}
+
+  defp unheld(result), do: result
+
+  defp same_athanor(%Context{session_token_hash: hash, athanor_id: athanor_id}, actor)
+       when is_binary(hash) do
+    if athanor_id == actor.athanor_id, do: :ok, else: {:error, :unauthenticated}
+  end
+
+  defp same_athanor(%Context{}, actor), do: channel(actor)
+
+  defp channel(%Prima.Actor{athanor_id: athanor_id, user_id: user_id}) do
+    if Sanctum.Tenancy.channel_active?(athanor_id, user_id),
+      do: :ok,
+      else: {:error, :unauthenticated}
   end
 
   # ---------------------------------------------------------------------------
@@ -311,8 +394,8 @@ defmodule Sanctum.Vault.OAuthGrant do
       {:error, "credential seal failed — check the crypto keyring"}
   end
 
-  defp apply_grant(%{target: %{kind: :new} = target, actor: actor} = pending, bundle) do
-    id = Cyfr.UUID7.generate_id("vlt")
+  defp apply_grant(%{target: %{kind: :new} = target, actor: actor} = pending, bundle, hold) do
+    id = Prima.UUID7.generate_id("vlt")
     aad = CipherAAD.vault_entry(actor.athanor_id, id, target.provider)
 
     with {:ok, json} <- Payload.encode_material(%{}, bundle),
@@ -339,14 +422,14 @@ defmodule Sanctum.Vault.OAuthGrant do
                sealed_payload: sealed,
                binding_digest: digest
              }),
-           {:ok, _entry} <- Arca.VaultStorage.put(actor, attrs) do
+           {:ok, _entry} <- Arca.VaultStorage.put(actor, attrs, hold) do
         broadcast(pending, id, target.name, :create)
         {:ok, %{entry_id: id, name: target.name, provider: target.provider, rebound: false}}
       end
     end
   end
 
-  defp apply_grant(%{target: %{kind: :existing} = target, actor: actor} = pending, bundle) do
+  defp apply_grant(%{target: %{kind: :existing} = target, actor: actor} = pending, bundle, hold) do
     with {:ok, entry} <- Arca.VaultStorage.get(actor, target.entry_id),
          :ok <- still_living(entry) do
       fields = current_fields(actor, entry)
@@ -354,7 +437,7 @@ defmodule Sanctum.Vault.OAuthGrant do
 
       with {:ok, json} <- Payload.encode_material(fields, bundle),
            {:ok, sealed} <- seal(json, aad) do
-        case commit_grant(actor, entry, target, sealed) do
+        case commit_grant(actor, entry, target, sealed, hold) do
           {:ok, rebound} ->
             granted(pending, entry, target, rebound)
 
@@ -362,7 +445,7 @@ defmodule Sanctum.Vault.OAuthGrant do
             # A concurrent material write landed between authorize and
             # callback. The grant is the fresher credential; one re-read
             # retry, then give up loudly.
-            retry_grant(pending, bundle)
+            retry_grant(pending, bundle, hold)
 
           {:error, reason} ->
             {:error, reason}
@@ -371,7 +454,7 @@ defmodule Sanctum.Vault.OAuthGrant do
     end
   end
 
-  defp retry_grant(%{target: target, actor: actor} = pending, bundle) do
+  defp retry_grant(%{target: target, actor: actor} = pending, bundle, hold) do
     case Arca.VaultStorage.get(actor, target.entry_id) do
       {:ok, entry} ->
         # The retry re-runs the first attempt's checks, not just its
@@ -383,7 +466,7 @@ defmodule Sanctum.Vault.OAuthGrant do
 
           with {:ok, json} <- Payload.encode_material(current_fields(actor, entry), bundle),
                {:ok, sealed} <- seal(json, aad),
-               {:ok, rebound} <- commit_grant(actor, entry, target, sealed) do
+               {:ok, rebound} <- commit_grant(actor, entry, target, sealed, hold) do
             granted(pending, entry, target, rebound)
           end
         end
@@ -404,7 +487,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   # binding that cannot move leaves the old material exactly where it was.
   # `{:error, :payload_conflict}` when another material write landed since
   # `entry` was read.
-  defp commit_grant(actor, entry, target, sealed) do
+  defp commit_grant(actor, entry, target, sealed, hold) do
     with {:ok, rebind} <- rebind_step(entry, target) do
       plan = %{
         expected_rev: entry.payload_rev,
@@ -414,7 +497,7 @@ defmodule Sanctum.Vault.OAuthGrant do
         rebind: rebind
       }
 
-      case Arca.VaultStorage.commit_payload(actor, entry.id, plan) do
+      case Arca.VaultStorage.commit_payload(actor, entry.id, plan, hold) do
         {:ok, _written} ->
           {:ok, rebind != nil}
 

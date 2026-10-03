@@ -12,7 +12,7 @@ defmodule Compendium.Activation do
   digest alone says nothing about declared capability.
 
   Nodes are keyed by **name-level ref** (`type:namespace.name`, no version),
-  matching `Cyfr.Authority.Blob`'s node-key grammar — code identity lives
+  matching `Prima.Authority.Blob`'s node-key grammar — code identity lives
   in the digest, never in the key.
 
   Only static dependencies are walked. Dynamic dispatch is deliberately
@@ -21,16 +21,30 @@ defmodule Compendium.Activation do
 
   Resolution is **all or nothing** over what the manifest requires. A node
   whose release digest is missing (a row published before release digests
-  existed) or whose required dependency cannot be found makes the whole
+  existed) or whose required dependency is not installed makes the whole
   activation `:incomplete`, and nothing is recorded — a partial graph
-  would read as a complete attestation. A dependency the manifest marks
+  would read as a complete attestation. The refusal names what is
+  missing, so a person can be told: `{:missing_release_digest, key}` the
+  node with no digest, `{:unresolvable_dependency, ref}` the name-level ref
+  of the required dependency that is not installed, or of the node whose
+  dependencies cannot be read. A dependency the manifest marks
   `optional` and that is not installed is simply absent from the graph:
   the attestation covers what can run, and when the component arrives the
-  graph — and so the digest — changes with it.
+  graph — and so the digest — changes with it. Only a dependency the
+  registry answers `:not_found` for is not installed; any other answer —
+  a store that cannot answer, a registry projection not yet caught up —
+  is the resolution's own error, never an absence.
+
+  The rows are the `components` root's projection, so a resolution first
+  waits for it (`Compendium.ProjectionReconciler.await/2`), before its
+  cache is asked: `{:error, :projection_unavailable}` rather than a graph
+  of rows the tree has moved past.
   """
 
   alias Sanctum.Context
-  alias Cyfr.JCS
+  alias Prima.JCS
+
+  require Logger
 
   # Mirrors Compendium.DependencyResolver's traversal bound.
   @max_depth 10
@@ -39,8 +53,13 @@ defmodule Compendium.Activation do
   @type t :: %{digest: String.t(), graph: graph()}
 
   @type error ::
-          {:incomplete, :missing_release_digest | :unresolvable_dependency | :depth_exceeded}
+          {:incomplete,
+           {:missing_release_digest | :unresolvable_dependency, String.t()} | :depth_exceeded}
           | {:invalid_graph, JCS.error()}
+          | :projection_unavailable
+          | :unavailable
+          | :database_error
+          | :no_athanor
 
   # A resolved graph is a function of the athanor's registered rows; it is
   # cached briefly per root (node key + release digest) and swept when the
@@ -56,6 +75,11 @@ defmodule Compendium.Activation do
   """
   @spec resolve(Context.t(), map()) :: {:ok, t()} | {:error, error()}
   def resolve(%Context{} = ctx, component) when is_map(component) do
+    with :ok <- Compendium.ProjectionReconciler.await(ctx, "components"),
+         do: resolve_current(ctx, component)
+  end
+
+  defp resolve_current(ctx, component) do
     case cache_key(ctx, component) do
       nil ->
         resolve_uncached(ctx, component)
@@ -88,7 +112,11 @@ defmodule Compendium.Activation do
        when is_binary(athanor_id) and athanor_id != "" do
     case release_digest(component) do
       digest when is_binary(digest) ->
-        Arca.Cache.Keys.activation(Cyfr.Actor.in_athanor(athanor_id), node_key(component), digest)
+        Arca.Cache.Keys.activation(
+          Prima.Actor.in_athanor(athanor_id),
+          node_key(component),
+          digest
+        )
 
       _ ->
         nil
@@ -119,7 +147,8 @@ defmodule Compendium.Activation do
           {:ok, %{digest: String.t(), graph: graph(), nodes: %{String.t() => verified_node()}}}
           | {:error, error()}
   def resolve_verified(%Context{} = ctx, component) when is_map(component) do
-    with {:ok, rows} <- walk(ctx, component, %{}, 0),
+    with :ok <- Compendium.ProjectionReconciler.await(ctx, "components"),
+         {:ok, rows} <- walk(ctx, component, %{}, 0),
          graph = graph_from_rows(rows),
          {:ok, digest} <- hash_graph(graph) do
       # Deliberately uncached (verification must be fresh) — but it is the
@@ -137,7 +166,7 @@ defmodule Compendium.Activation do
   end
 
   defp integrity(row) do
-    manifest = Cyfr.Manifest.decode(field(row, :manifest))
+    manifest = manifest(row)
 
     case Compendium.ReleaseDigest.compute(field(row, :digest), manifest) do
       {:ok, recomputed} ->
@@ -153,11 +182,11 @@ defmodule Compendium.Activation do
   @doc """
   The name-level key a component row occupies in an activation graph.
 
-  The shape is `Cyfr.ComponentRow`'s, where consent reads it too: a
+  The shape is `Prima.ComponentRow`'s, where consent reads it too: a
   stored graph and the key a consent names it by are one spelling.
   """
   @spec node_key(map()) :: String.t()
-  defdelegate node_key(component), to: Cyfr.ComponentRow
+  defdelegate node_key(component), to: Prima.ComponentRow
 
   # ============================================================================
   # Private
@@ -178,15 +207,15 @@ defmodule Compendium.Activation do
         {:ok, acc}
 
       is_nil(release_digest(component)) ->
-        {:error, {:incomplete, :missing_release_digest}}
+        {:error, {:incomplete, {:missing_release_digest, key}}}
 
       true ->
         acc = Map.put(acc, key, component)
-        manifest = Cyfr.Manifest.decode(field(component, :manifest))
+        manifest = manifest(component)
 
         case Compendium.DependencyResolver.extract_from_manifest(manifest, key) do
           {:ok, deps} -> walk_deps(ctx, deps, acc, depth)
-          {:error, _} -> {:error, {:incomplete, :unresolvable_dependency}}
+          {:error, _} -> {:error, {:incomplete, {:unresolvable_dependency, key}}}
         end
     end
   end
@@ -200,14 +229,19 @@ defmodule Compendium.Activation do
             {:error, _} = error -> {:halt, error}
           end
 
-        {:error, _} ->
+        {:error, :not_found} ->
           if dep.optional == true,
             do: {:cont, {:ok, acc}},
-            else: {:halt, {:error, {:incomplete, :unresolvable_dependency}}}
+            else: {:halt, {:error, {:incomplete, {:unresolvable_dependency, dep_ref(dep)}}}}
+
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
   end
 
+  # Behind the barrier `resolve/2` passed: the rows read here are the
+  # projection it waited for.
   defp resolve_dependency(ctx, dep) do
     if dep.dep_version do
       Arca.ComponentStorage.get_component(
@@ -225,12 +259,29 @@ defmodule Compendium.Activation do
     end
   end
 
+  # The name-level ref a dependency names, as a graph keys its node.
+  defp dep_ref(dep), do: Prima.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name)
+
   defp release_digest(component), do: field(component, :release_digest)
 
   # Component rows arrive as Ecto structs from storage and as plain maps
   # from the registry's build path; neither implements Access.
   defp field(component, key) do
     Map.get(component, key) || Map.get(component, Atom.to_string(key))
+  end
+
+  # A manifest that does not decode declares nothing: no dependencies, and
+  # a release digest that no longer matches. The line names the component,
+  # never the manifest's bytes.
+  defp manifest(row) do
+    case Prima.Manifest.decode_strict(field(row, :manifest)) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Compendium.Activation] manifest malformed: #{node_key(row)}")
+        %{}
+    end
   end
 
   defp hash_graph(graph) do

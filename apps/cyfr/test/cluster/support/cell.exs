@@ -498,14 +498,23 @@ defmodule Cyfr.Cluster.Cell do
         {:auto_migrate, false},
         {:storage_adapter, Arca.Adapters.S3},
         {:s3, Store.s3_config()},
-        {:control_plane_claim_enabled, true}
+        {:control_plane_claim_enabled, true},
+        # The control plane writes on its own connection, and writers take
+        # turns at the write lock where the store has one, as a
+        # deployment's do; `config/test.exs` turns both off for the sandbox.
+        {:control_plane_pool, true},
+        {:write_turn, true}
       ],
       cyfr: [
         {:cluster, true},
         {:cell_cookie, cookie()},
-        {:worker_key, Application.fetch_env!(:cyfr, :worker_key)},
+        {:opus_key, Application.fetch_env!(:cyfr, :opus_key)},
         {:retention_scheduler_enabled, true},
         {:cron_scheduler_enabled, true},
+        # The security gate runs on every member: this build carries the
+        # suite's compile-time skip permission, and turning the runtime
+        # switch on is what keeps `Cyfr.Bootstrap` in the member's tree, so
+        # each member boots only through its own checked reconcile.
         {:provisioning_boot_enabled, true},
         {:thread_recovery, true},
         {:execution_sweeper_enabled, true},
@@ -521,11 +530,11 @@ defmodule Cyfr.Cluster.Cell do
         {:host_api_port, member.host_api_port},
         {:host_api_bind, {127, 0, 0, 1}},
         {:host_api_url, member.host_api},
-        {:workers, []},
-        {EmissaryWeb.Endpoint,
+        {:opus_workers, []},
+        {CyfrWeb.Endpoint,
          [
            http: [ip: {127, 0, 0, 1}, port: 0],
-           secret_key_base: Application.fetch_env!(:cyfr, EmissaryWeb.Endpoint)[:secret_key_base],
+           secret_key_base: Application.fetch_env!(:cyfr, CyfrWeb.Endpoint)[:secret_key_base],
            server: true
          ]}
       ],
@@ -543,7 +552,7 @@ defmodule Cyfr.Cluster.Cell do
       # per-request convenience the single-node suite asserts around). A
       # memo that is never warm cannot show what a cell-wide invalidation
       # is for, so a member holds one for its production-shaped TTL.
-      sanctum: [{:establish_cache_ms, 60_000}],
+      sanctum: [{:caller_memo_ttl_ms, 60_000}],
       logger: [{:level, :warning}]
     ]
   end

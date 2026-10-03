@@ -3,22 +3,24 @@
 defmodule Sanctum.Consent.LoaderTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
+  alias Prima.Authority
   alias Sanctum.Consent.Loader
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
-  alias Cyfr.JCS
-  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
+  alias Prima.JCS
+  alias Prima.Test.AuthorityFixtures, as: Fixtures
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
+    # A person at Prism: the admission path every case here models but the
+    # origin cases below.
     ctx = %Context{
       user_id: "loader_test_user",
       athanor_id: "ath_test",
       scope: :athanor,
-      permissions: MapSet.new([:execute])
+      permissions: MapSet.new([:execute]),
+      origin: :interactive
     }
 
     {:ok, ctx: ctx}
@@ -65,7 +67,7 @@ defmodule Sanctum.Consent.LoaderTest do
     # loader refuses a mismatch, and every case below is about some other
     # failure. A test that wants the mismatch itself passes `:blob_digest`.
     Map.put_new_lazy(merged, :blob_digest, fn ->
-      Cyfr.JCS.hash_binary(merged.resolved_policy)
+      Prima.JCS.hash_binary(merged.resolved_policy)
     end)
   end
 
@@ -291,5 +293,143 @@ defmodule Sanctum.Consent.LoaderTest do
 
     assert {:error, {:consent_required, _}} =
              Loader.load_root(ctx, profile, live: live_for(drifted))
+  end
+
+  describe "the origin a run is admitted under" do
+    test "a context with no origin, or one the revision does not name, is asked to grant again",
+         %{ctx: ctx} do
+      profile = profile_summary()
+      consent = consent()
+      seed(ctx, profile, consent)
+      live = live_for(consent.activation)
+
+      for origin <- [nil, :programmatic, :schedule, :webhook] do
+        assert {:error,
+                {:consent_required,
+                 %{profile_id: "prof-1", current_revision: 1, shape_diff: []} = payload}} =
+                 Loader.load_root(%{ctx | origin: origin}, profile, live: live)
+
+        # The signal's payload, unchanged: what every surface already reads.
+        assert Map.keys(payload) |> Enum.sort() == [:current_revision, :profile_id, :shape_diff]
+      end
+
+      assert {:ok, %Authority{}, _stamp} = Loader.load_root(ctx, profile, live: live)
+    end
+
+    test "a revision that names an origin admits a run under it", %{ctx: ctx} do
+      profile = profile_summary()
+      consent = consent(%{admitted_origins: [:interactive, :programmatic]})
+      seed(ctx, profile, consent)
+      live = live_for(consent.activation)
+
+      assert {:ok, %Authority{}, _} =
+               Loader.load_root(%{ctx | origin: :programmatic}, profile, live: live)
+
+      assert {:error, {:consent_required, _}} =
+               Loader.load_root(%{ctx | origin: :schedule}, profile, live: live)
+    end
+  end
+
+  describe "a storage path spelled other than the door reaches it" do
+    defp with_paths(paths) do
+      graph =
+        put_in(
+          Fixtures.graph_map(),
+          ["nodes", Fixtures.formula_ref(), "edges", "@ingress", "storage"],
+          %{"paths" => paths, "actions" => ["read"]}
+        )
+
+      {:ok, policy} = Jason.encode(graph)
+      consent(%{resolved_policy: policy})
+    end
+
+    test "is refused at admission with consent_required, never rewritten", %{ctx: ctx} do
+      profile = profile_summary()
+
+      for path <- ["data//secrets/", "data/./secrets/", "data/../secrets/", "data/notes//"] do
+        consent = with_paths(["data/ok/", path])
+        seed(ctx, profile, consent)
+
+        assert {:error, {:consent_required, %{profile_id: "prof-1", shape_diff: []}}} =
+                 Loader.load_root(ctx, profile, live: live_for(consent.activation)),
+               "#{path} was admitted"
+
+        # The stored grant is as it was written.
+        assert {:ok, %{resolved_policy: stored}} =
+                 Arca.ConsentStorage.head_consent(Context.actor(ctx), "prof-1")
+
+        assert stored == consent.resolved_policy
+      end
+    end
+
+    test "a canonical spelling, a folder and the wildcard load", %{ctx: ctx} do
+      profile = profile_summary()
+      consent = with_paths(["data/notes/", "data/report.md", "data", "*"])
+      seed(ctx, profile, consent)
+
+      assert {:ok, %Authority{}, _} =
+               Loader.load_root(ctx, profile, live: live_for(consent.activation))
+    end
+  end
+
+  describe "admitted_blob/3, the stored head's own checks" do
+    defp head!(ctx, profile) do
+      {:ok, head} = Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)
+      head
+    end
+
+    test "answers the blob load_root/3 carries, before the ceiling clamps its limits",
+         %{ctx: ctx} do
+      profile = profile_summary()
+      consent = consent()
+      seed(ctx, profile, consent)
+
+      assert {:ok, %Prima.Authority.Blob{} = blob} =
+               Loader.admitted_blob(ctx, profile, head!(ctx, profile))
+
+      assert {:ok, %Authority{policy: carried}, _stamp} =
+               Loader.load_root(ctx, profile, live: live_for(consent.activation))
+
+      assert carried ==
+               Prima.Authority.Blob.clamp(blob, Sanctum.Policy.Ceiling.platform_ceiling())
+    end
+
+    test "leaves the run's own origin to load_root/3", %{ctx: ctx} do
+      profile = profile_summary()
+      consent = consent()
+      seed(ctx, profile, consent)
+      live = live_for(consent.activation)
+
+      assert {:error, {:consent_required, _}} =
+               Loader.load_root(%{ctx | origin: :schedule}, profile, live: live)
+
+      assert {:ok, %Prima.Authority.Blob{}} =
+               Loader.admitted_blob(%{ctx | origin: :schedule}, profile, head!(ctx, profile))
+    end
+
+    test "refuses each head load_root/3 refuses on the head itself, with its answer",
+         %{ctx: ctx} do
+      profile = profile_summary()
+      honest = consent()
+
+      refused = [
+        consent(%{scope: :pinned, pinned_version: ""}),
+        consent(%{resolved_policy: "{not json"}),
+        %{honest | blob_digest: "sha256:not-these-bytes"},
+        consent(%{
+          vault_refs: [%{vault_entry_id: "vault-source", binding_digest: "sha256:bind-source"}]
+        }),
+        with_paths(["data//secrets/"])
+      ]
+
+      for consent <- refused do
+        seed(ctx, profile, consent)
+
+        assert {:error, refusal} = Loader.admitted_blob(ctx, profile, head!(ctx, profile))
+
+        assert Loader.load_root(ctx, profile, live: live_for(consent.activation)) ==
+                 {:error, refusal}
+      end
+    end
   end
 end

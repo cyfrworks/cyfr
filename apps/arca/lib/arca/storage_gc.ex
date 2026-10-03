@@ -3,7 +3,7 @@
 
 defmodule Arca.StorageGC do
   @moduledoc """
-  Collection and repair of an estate's staging areas: the revision
+  Collection and repair of an athanor's staging areas: the revision
   prefixes `Arca.Overlay`'s write protocol stages under
   (`Arca.Storage.UnitLocator.revision_prefix/2`).
 
@@ -73,11 +73,11 @@ defmodule Arca.StorageGC do
 
   ## Tenancy
 
-  Every function takes the `Cyfr.Actor` first, refuses one with no
+  Every function takes the `Prima.Actor` first, refuses one with no
   athanor as `{:error, :no_athanor}` before any query or listing, and
   lists and deletes only inside that athanor's tree. The walk across
-  estates belongs to the caller that owns the roster
-  (`Cyfr.Retention.cleanup_all/1`).
+  athanors belongs to the caller that owns the roster
+  (`Cyfr.RetentionScheduler`).
   """
 
   import Ecto.Query, only: [from: 2]
@@ -98,7 +98,7 @@ defmodule Arca.StorageGC do
   @type holder :: {:turn | :build, String.t()}
   @type revision_key :: {root :: String.t(), unit_key :: String.t(), revision :: String.t()}
 
-  @typedoc "The roots of one estate, as `roots/1` read them."
+  @typedoc "The roots of one athanor, as `roots/1` read them."
   @type roots :: %{
           current: MapSet.t(revision_key()),
           drafts: %{{String.t(), String.t()} => DateTime.t()},
@@ -148,9 +148,9 @@ defmodule Arca.StorageGC do
   `{:error, :stale_revision}` and leaves no pin — the reader resolves the
   row again.
   """
-  @spec pin(Cyfr.Actor.t(), Arca.Storage.path(), String.t(), holder()) ::
+  @spec pin(Prima.Actor.t(), Arca.Storage.path(), String.t(), holder()) ::
           :ok | {:error, :stale_revision | :invalid_holder | term()} | refusal()
-  def pin(%Cyfr.Actor{} = actor, unit, revision, holder) when is_binary(revision) do
+  def pin(%Prima.Actor{} = actor, unit, revision, holder) when is_binary(revision) do
     with {:ok, _athanor} <- tenant(actor),
          {:ok, path} <- pin_path(unit, revision, holder) do
       inner = internal_actor(actor)
@@ -158,7 +158,7 @@ defmodule Arca.StorageGC do
 
       with :ok <- internally(fn -> Arca.put(inner, path, pin_body(holder), cap: :exempt) end) do
         case StorageUnits.current(actor, root, key) do
-          {:ok, %StorageUnit{current_revision: ^revision}} ->
+          {:ok, %{current_revision: ^revision}} ->
             :ok
 
           {:ok, _moved_on} ->
@@ -178,9 +178,9 @@ defmodule Arca.StorageGC do
   end
 
   @doc "Give a pin back. Idempotent."
-  @spec unpin(Cyfr.Actor.t(), Arca.Storage.path(), String.t(), holder()) ::
+  @spec unpin(Prima.Actor.t(), Arca.Storage.path(), String.t(), holder()) ::
           :ok | {:error, :invalid_holder | term()} | refusal()
-  def unpin(%Cyfr.Actor{} = actor, unit, revision, holder) when is_binary(revision) do
+  def unpin(%Prima.Actor{} = actor, unit, revision, holder) when is_binary(revision) do
     with {:ok, _athanor} <- tenant(actor),
          {:ok, path} <- pin_path(unit, revision, holder) do
       remove(internal_actor(actor), path)
@@ -192,15 +192,15 @@ defmodule Arca.StorageGC do
   # ---------------------------------------------------------------------------
 
   @doc """
-  One bounded sweep of the actor's estate, in the moduledoc's order.
+  One bounded sweep of the actor's athanor, in the moduledoc's order.
 
   Options: `grace_ms:` (default a day), `limit:` — how many prefixes one
   sweep collects or repairs, oldest first (default #{@default_limit}) —
   and `dry_run: true`, which counts what the snapshot would collect and
   touches nothing.
   """
-  @spec sweep(Cyfr.Actor.t(), keyword()) :: {:ok, report()} | {:error, term()} | refusal()
-  def sweep(%Cyfr.Actor{} = actor, opts \\ []) do
+  @spec sweep(Prima.Actor.t(), keyword()) :: {:ok, report()} | {:error, term()} | refusal()
+  def sweep(%Prima.Actor{} = actor, opts \\ []) do
     started = System.monotonic_time(:millisecond)
 
     with {:ok, athanor} <- tenant(actor),
@@ -254,7 +254,7 @@ defmodule Arca.StorageGC do
   end
 
   @doc """
-  The roots of the actor's estate, read now: the committed pointers, the
+  The roots of the actor's athanor, read now: the committed pointers, the
   units whose draft is held (with when it was registered), and the
   revisions a live holder pins.
 
@@ -263,8 +263,8 @@ defmodule Arca.StorageGC do
   snapshot whose rows show a later pointer lists after every pin on the
   earlier one was written, and sees it.
   """
-  @spec roots(Cyfr.Actor.t()) :: {:ok, roots()} | {:error, term()} | refusal()
-  def roots(%Cyfr.Actor{} = actor) do
+  @spec roots(Prima.Actor.t()) :: {:ok, roots()} | {:error, term()} | refusal()
+  def roots(%Prima.Actor{} = actor) do
     with {:ok, roots, _listing} <- snapshot(actor), do: {:ok, roots}
   end
 
@@ -301,9 +301,9 @@ defmodule Arca.StorageGC do
   lifetime plus the grace, and older than the grace. A prefix that
   carries no date is not a candidate.
   """
-  @spec candidates(Cyfr.Actor.t(), roots(), keyword()) ::
+  @spec candidates(Prima.Actor.t(), roots(), keyword()) ::
           {:ok, [candidate()]} | {:error, term()} | refusal()
-  def candidates(%Cyfr.Actor{} = actor, %{current: _, drafts: _, pins: _} = roots, opts \\ []) do
+  def candidates(%Prima.Actor{} = actor, %{current: _, drafts: _, pins: _} = roots, opts \\ []) do
     with {:ok, _athanor} <- tenant(actor),
          {:ok, listing} <- given_listing(actor, opts) do
       {now, grace_ms} = clock(opts)
@@ -337,9 +337,9 @@ defmodule Arca.StorageGC do
   snapshot said. Answers `:collected`, or `{:kept, reason}` with
   `:committed`, `:live_draft` or `:pinned`.
   """
-  @spec collect(Cyfr.Actor.t(), candidate(), keyword()) ::
+  @spec collect(Prima.Actor.t(), candidate(), keyword()) ::
           :collected | {:kept, :committed | :live_draft | :pinned} | {:error, term()} | refusal()
-  def collect(%Cyfr.Actor{} = actor, %{unit: unit, revision: revision} = candidate, opts \\ [])
+  def collect(%Prima.Actor{} = actor, %{unit: unit, revision: revision} = candidate, opts \\ [])
       when is_binary(revision) do
     with {:ok, athanor} <- tenant(actor) do
       {now, grace_ms} = clock(opts)
@@ -357,7 +357,7 @@ defmodule Arca.StorageGC do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Audit every committed unit of the actor's estate against its journal
+  Audit every committed unit of the actor's athanor against its journal
   and its objects, and finish the moves that did not finish.
 
   Answers, by unit path: `repaired` — the staged revision the row names
@@ -369,7 +369,7 @@ defmodule Arca.StorageGC do
   it is; `orphan_commits` — journal rows whose unit row is gone, reported
   and left.
   """
-  @spec repair(Cyfr.Actor.t(), keyword()) ::
+  @spec repair(Prima.Actor.t(), keyword()) ::
           {:ok,
            %{
              repaired: [Arca.Storage.path()],
@@ -380,7 +380,7 @@ defmodule Arca.StorageGC do
            }}
           | {:error, term()}
           | refusal()
-  def repair(%Cyfr.Actor{} = actor, _opts \\ []) do
+  def repair(%Prima.Actor{} = actor, _opts \\ []) do
     with {:ok, athanor} <- tenant(actor),
          {:ok, {rows, orphans}} <-
            rescuing_db("repair", fn ->
@@ -525,7 +525,7 @@ defmodule Arca.StorageGC do
     |> Enum.reduce_while({:ok, []}, fn key, {:ok, acc} ->
       case Arca.get(inner, key) do
         {:ok, bytes} ->
-          {:cont, {:ok, [{relative.(key), Cyfr.Digest.sha256(bytes), byte_size(bytes)} | acc]}}
+          {:cont, {:ok, [{relative.(key), Prima.Digest.sha256(bytes), byte_size(bytes)} | acc]}}
 
         {:error, _} = error ->
           {:halt, error}
@@ -728,7 +728,7 @@ defmodule Arca.StorageGC do
     end
   end
 
-  # Every key under the estate's staging areas, sorted into revision
+  # Every key under the athanor's staging areas, sorted into revision
   # prefixes, pins and the rest. One listing per overlaid root, inside the
   # actor's athanor.
   defp listing(actor) do
@@ -904,7 +904,7 @@ defmodule Arca.StorageGC do
     rescuing_db("live_holders", fn ->
       turns =
         from(t in where_athanor(Turn, athanor),
-          where: t.id in ^turn_ids and t.status in ^Arca.TurnStorage.open_statuses(),
+          where: t.id in ^turn_ids and t.status in ^Prima.TurnState.open_statuses(),
           select: t.id
         )
         |> Arca.Repo.all()
@@ -961,8 +961,8 @@ defmodule Arca.StorageGC do
   # ---------------------------------------------------------------------------
 
   # The refusal that precedes every query and every listing.
-  defp tenant(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}
-  defp tenant(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  defp tenant(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}
+  defp tenant(%Prima.Actor{}), do: {:error, :no_athanor}
 
   defp rescuing_db(entry, fun) do
     case Arca.Repo.Errors.with_db_rescue("Arca.StorageGC.#{entry}", fun) do
@@ -977,9 +977,9 @@ defmodule Arca.StorageGC do
   # attribution only. The server's own actor NARROWED to this athanor:
   # `system: true` is what lets the sweep write the pin and date files
   # under a reserved root, and `scope: :athanor` is what keeps its
-  # listings inside the one estate. A bare `Cyfr.Actor.system/0` here
+  # listings inside the one athanor. A bare `Prima.Actor.system/0` here
   # would widen every sweep to platform scope with nothing to fail.
-  defp internal_actor(%Cyfr.Actor{athanor_id: athanor}) do
-    %{Cyfr.Actor.system() | athanor_id: athanor, scope: :athanor, user_id: "_storage_gc"}
+  defp internal_actor(%Prima.Actor{athanor_id: athanor}) do
+    %{Prima.Actor.system() | athanor_id: athanor, scope: :athanor, user_id: "_storage_gc"}
   end
 end

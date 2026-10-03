@@ -5,8 +5,9 @@
 A Stack runs docker-compose.yml's `opus` service layered with
 compose.worker.yml, which adds only the image under test, a loopback port,
 the host gateway the scripted control plane (control_plane.py, on this
-machine) is reached through and the pool settings a test chooses.
-Everything else — cyfr-spawn's capabilities, the security options, the
+machine) is reached through and the pool settings a test chooses; its project directory holds the keeper's seccomp
+profile the service names, as a scaffolded project does.
+Everything else — cyfr-keeper's capabilities, the security options, the
 read-only root, `ipc: none`, the tmpfs mounts, the limits, the restart
 policy — is the shipped service. A Stack made with
 `writable_cgroups=False` also layers compose.no-writable-cgroups.yml, as a
@@ -33,11 +34,14 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 # network, for a host that tells one run's Docker objects from another's by
 # name.
 PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
+# The keeper's seccomp profile and the name the opus service reads it by.
+PROFILE = os.path.join(ROOT, "apps", "keeper", "seccomp", "keeper.json")
+PROFILE_NAME = "keeper.seccomp.json"
 SERVICE = "wrk_image"
 POOL_FIRST, POOL_LAST = 30101, 30108
 SERVICE_UID = 10002
 HOME_ROOT = "/var/lib/opus/homes"
-SPAWNER_CAPS = "00000000000000e0"
+KEEPER_CAPS = "00000000000000e0"
 
 
 def run(*args, check=True, env=None, timeout=None):
@@ -78,8 +82,11 @@ class Stack:
         self.watchdog_grace_ms = watchdog_grace_ms
         self.release_grace_ms = release_grace_ms
         self.project_dir = tempfile.mkdtemp(prefix=f"{self.project}-")
-        # The rest of the stack's definition names a project .env.
+        # The rest of the stack's definition names a project .env, and the
+        # opus service the keeper's seccomp profile beside it, which compose
+        # reads from the project directory, as a scaffolded project holds it.
         open(os.path.join(self.project_dir, ".env"), "w").close()
+        shutil.copyfile(PROFILE, os.path.join(self.project_dir, PROFILE_NAME))
         self.container = None
         self.base = None
         self.boot = None
@@ -156,7 +163,7 @@ class Stack:
     # ------------------------------------------------------------------
 
     def status(self):
-        """The service's status request: its HTTP status and answer; a 200 whose answer `Cyfr.WorkerAPI.read_status/1` refuses raises."""
+        """The service's status request: its HTTP status and answer; a 200 whose answer `Prima.WorkerAPI.read_status/1` refuses raises."""
         code, answer = self.plane.status(self.base)
         if code == 200 and auth.read_status(answer.get("ok")) is None:
             raise AssertionError(f"the service answered a status the contract refuses\n{json.dumps(answer, indent=2)}")
@@ -179,6 +186,13 @@ class Stack:
     # ------------------------------------------------------------------
     # Inside the container
     # ------------------------------------------------------------------
+
+    def host_gateway(self):
+        """The address the container reaches this machine at, compose's host
+        gateway (`host.docker.internal`), as the IPv4 literal a pin names; the
+        engine resolves nothing itself."""
+        out = self.exec("getent ahostsv4 host.docker.internal").stdout.split()
+        return out[0] if out else None
 
     def exec(self, script, user=None):
         user_args = ["-u", user] if user else []
@@ -205,26 +219,51 @@ class Stack:
                 out.append({"pid": int(pid), "uids": [int(u) for u in uids.split(",")], "cap_eff": eff, "cmd": cmd.strip()})
         return out
 
-    def runner_processes(self):
-        """The runner VMs: each pooled uid's beam.smp with the runner id and home its environment names.
+    def host_processes(self):
+        """Every process in the container as the host lists it (`docker top`): host pid and uids.
 
-        Another uid's environ is readable only by that uid (or with
-        CAP_SYS_PTRACE, which the container lacks), so it is read as the
-        runner's own uid through setpriv, which root's SETUID and SETGID
-        allow."""
+        Nothing joins the container to list them. A `docker exec` puts
+        runc's own processes, which live in the host's pid namespace, in
+        the container's cgroup root while it enters; one that lands as the
+        container restarts in place leaves them there when the new keeper
+        drains that root, where they show as pid 0 and cannot be moved, and
+        the keeper refuses memory bounds. A case that watches processes
+        across a restart lists them here. A container that is not running
+        holds no process."""
+        out = []
+        for line in run("docker", "top", self.container, "-eo", "pid,ruid,euid,suid,fsuid,args", check=False).stdout.splitlines()[1:]:
+            fields = line.split(None, 5)
+            if len(fields) >= 5 and all(f.isdigit() for f in fields[:5]):
+                out.append({"pid": int(fields[0]), "uids": [int(u) for u in fields[1:5]], "cmd": fields[5] if len(fields) > 5 else ""})
+        return out
+
+    def observe(self, script):
+        """`script` run in the container with every capability (`docker exec --privileged`), the observer's alone.
+
+        A runner's environ and descriptors are readable only by its own uid
+        from inside its user namespace, or with CAP_SYS_PTRACE there and
+        CAP_DAC_READ_SEARCH over its 0500 /proc entries: the runner's uid
+        in the container's namespace may not read them, and neither may the
+        container's root, which holds neither capability. Only the
+        observer's own process is privileged: the service and its runners
+        keep the shipped settings."""
+        return run("docker", "exec", "--privileged", self.container, "sh", "-c", script, check=False)
+
+    def runner_processes(self):
+        """The runner VMs: each pooled uid's beam.smp with the runner id and home its environment names, read by the observer (`observe`)."""
         script = r"""
           for d in /proc/[0-9]*; do
             s="$(cat "$d/status" 2>/dev/null)" || continue
             uid="$(printf '%s\n' "$s" | awk '/^Uid:/ {print $2}')"
             [ "$uid" -ge FIRST ] && [ "$uid" -le LAST ] || continue
             tr '\0' ' ' < "$d/cmdline" 2>/dev/null | grep -q 'beam.smp' || continue
-            env="$(setpriv --reuid="$uid" --regid="$uid" --clear-groups sh -c "tr '\\0' '\\n' < $d/environ" 2>/dev/null)"
+            env="$(tr '\0' '\n' < "$d/environ" 2>/dev/null)"
             runner="$(printf '%s\n' "$env" | sed -n 's/^OPUS_RUNNER_ID=//p')"
             home="$(printf '%s\n' "$env" | sed -n 's/^HOME=//p')"
             printf '%s|%s|%s|%s\n' "${d#/proc/}" "$uid" "$runner" "$home"
           done""".replace("FIRST", str(POOL_FIRST)).replace("LAST", str(POOL_LAST))
         out = []
-        for line in self.exec(script).stdout.splitlines():
+        for line in self.observe(script).stdout.splitlines():
             if line.count("|") < 3:
                 continue
             pid, uid, runner, home = line.split("|", 3)

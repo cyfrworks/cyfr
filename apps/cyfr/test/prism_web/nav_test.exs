@@ -43,8 +43,7 @@ defmodule PrismWeb.NavTest do
     # item whose path the router does not serve is a dead link on every
     # one of them. Dev mode is the full set.
     route_paths =
-      EmissaryWeb.Router
-      |> Phoenix.Router.routes()
+      Cyfr.Boundaries.routes()
       |> Enum.map(& &1.path)
       |> MapSet.new()
 
@@ -91,7 +90,7 @@ defmodule PrismWeb.NavTest do
     focus = "/a/:athanor"
 
     stubs =
-      for %{path: path, metadata: %{phoenix_live_view: live}} <- EmissaryWeb.Router.__routes__(),
+      for %{path: path, metadata: %{phoenix_live_view: live}} <- Cyfr.Boundaries.routes(),
           is_tuple(live),
           live |> elem(0) |> Atom.to_string() |> String.ends_with?("RedirectLive"),
           String.starts_with?(path, focus),

@@ -4,19 +4,18 @@
 defmodule Compendium.OCI.AuthTest do
   use ExUnit.Case, async: false
 
-  alias Compendium.OCI.Auth
+  alias Compendium.OCI.{Auth, Errors}
   alias Compendium.Registry.CredentialStore
   alias Sanctum.Context
 
   @registry "registry.test.example"
   @user "oci_auth_test_user"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     for slug <- ["alice", "stripe.com"] do
-      CredentialStore.delete(@user, @registry, slug)
+      CredentialStore.delete(ctx(), @registry, slug)
     end
 
     :ok
@@ -34,31 +33,44 @@ defmodule Compendium.OCI.AuthTest do
     )
   end
 
+  # A row written past the facade: sealed around `plaintext` under the key
+  # it is stored at.
+  defp plant!(slug, plaintext) do
+    aad = Sanctum.CipherAAD.registry_token(@user, @registry, slug)
+    {:ok, ciphertext} = Sanctum.Cipher.encrypt(plaintext, aad)
+
+    :ok =
+      Arca.RegistryTokenStorage.put(%{
+        user_id: @user,
+        registry: @registry,
+        namespace_slug: slug,
+        credential_ciphertext: ciphertext
+      })
+  end
+
+  defp outage!,
+    do: Arca.Repo.query!("ALTER TABLE registry_tokens RENAME TO registry_tokens_unavailable")
+
   describe "fetch_credential/3" do
     test "returns :anonymous when no credential is stored" do
       assert Auth.fetch_credential(@registry, "alice", ctx()) == :anonymous
     end
 
     test "returns :anonymous when ctx is nil (no cross-user fallback)" do
-      :ok =
-        CredentialStore.put(@user, @registry, "alice", %{
-          type: :push_token,
-          token: "cyfr_pt_fake",
-          namespace: "alice"
-        })
+      :ok = CredentialStore.put_push_token(ctx(), @registry, "alice", "cyfr_pt_fake", "personal")
 
       assert Auth.fetch_credential(@registry, "alice", nil) == :anonymous
     end
 
     test "returns the push-token credential when one is stored for the user+namespace" do
-      cred = %{
-        type: :push_token,
-        token: "cyfr_pt_alice_token",
-        namespace: "alice",
-        label: "laptop"
-      }
-
-      :ok = CredentialStore.put(@user, @registry, "alice", cred)
+      :ok =
+        CredentialStore.put_push_token(
+          ctx(),
+          @registry,
+          "alice",
+          "cyfr_pt_alice_token",
+          "personal"
+        )
 
       assert {:ok, fetched} = Auth.fetch_credential(@registry, "alice", ctx())
       assert fetched.type == :push_token
@@ -67,14 +79,46 @@ defmodule Compendium.OCI.AuthTest do
     end
 
     test "scoped per-namespace: alice's token does not surface for stripe.com" do
-      :ok =
-        CredentialStore.put(@user, @registry, "alice", %{
-          type: :push_token,
-          token: "cyfr_pt_alice",
-          namespace: "alice"
-        })
+      :ok = CredentialStore.put_push_token(ctx(), @registry, "alice", "cyfr_pt_alice", "personal")
 
       assert Auth.fetch_credential(@registry, "stripe.com", ctx()) == :anonymous
+    end
+
+    @tag :capture_log
+    test "a stored row that does not open is corrupt, never anonymous" do
+      for plaintext <- [
+            "not json",
+            ~s({"type":"push_token"}),
+            ~s({"type":"push_token","token":""}),
+            ~s({"type":"push_token","token":7})
+          ] do
+        plant!("alice", plaintext)
+
+        assert Auth.fetch_credential(@registry, "alice", ctx()) ==
+                 {:error, {:corrupt, :registry_credential}},
+               "#{plaintext} read as something other than corrupt"
+      end
+    end
+
+    @tag :capture_log
+    test "a store that cannot answer is unavailable, never anonymous" do
+      :ok = CredentialStore.put_push_token(ctx(), @registry, "alice", "cyfr_pt_alice", "personal")
+      outage!()
+
+      assert Auth.fetch_credential(@registry, "alice", ctx()) == {:error, :unavailable}
+    end
+
+    test "the log names the namespace and never the token" do
+      plant!("alice", ~s({"type":"push_token","token":["cyfr_pt_leak"]}))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, {:corrupt, :registry_credential}} =
+                   Auth.fetch_credential(@registry, "alice", ctx())
+        end)
+
+      assert log =~ "alice"
+      refute log =~ "cyfr_pt_leak"
     end
   end
 
@@ -85,14 +129,35 @@ defmodule Compendium.OCI.AuthTest do
 
     test "emits Bearer <push_token> when a push token is stored" do
       :ok =
-        CredentialStore.put(@user, @registry, "alice", %{
-          type: :push_token,
-          token: "cyfr_pt_abc123",
-          namespace: "alice"
-        })
+        CredentialStore.put_push_token(ctx(), @registry, "alice", "cyfr_pt_abc123", "personal")
 
       assert {:ok, [{"authorization", "Bearer cyfr_pt_abc123"}]} =
                Auth.auth_headers(@registry, "alice/catalysts/foo", "alice", ctx())
+    end
+
+    @tag :capture_log
+    test "a corrupt token refuses as the damaged credential it is, never as an outage" do
+      plant!("alice", ~s({"type":"push_token","token":42}))
+
+      assert {:error, {:corrupt, :registry_credential} = reason} =
+               Auth.auth_headers(@registry, "alice/catalysts/foo", "alice", ctx())
+
+      assert %Prima.Refusal{class: :corrupt, message: message} = Prima.Refusal.classify(reason)
+
+      assert message ==
+               "The stored registry credential is damaged; sign in to the registry again."
+    end
+
+    @tag :capture_log
+    test "a store outage refuses as unavailable rather than going anonymous" do
+      outage!()
+
+      assert {:error,
+              %Errors{
+                reason: :registry_unavailable,
+                detail: %{credential_store: :unavailable},
+                message: "Your registry credentials could not be read — retry shortly"
+              }} = Auth.auth_headers(@registry, "alice/catalysts/foo", "alice", ctx())
     end
   end
 end

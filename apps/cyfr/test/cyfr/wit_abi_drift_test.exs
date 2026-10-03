@@ -5,8 +5,8 @@ defmodule Cyfr.WitAbiDriftTest do
   @moduledoc """
   The guest ABI is written down twice, and nothing bound the two together.
 
-  `wit/` is the contract: `Compendium.WITSource` embeds it at compile time,
-  `Locus.Builder` copies it into the build sandbox, and `Cyfr.CargoToml`
+  `wit/` is the contract: `Prima.WIT` embeds it at compile time,
+  `Locus.Builder` copies it into the build sandbox, and `Prima.CargoToml`
   points a generated `Cargo.toml` at it — so a component is compiled against
   those interface names. The host side of the same contract is a set of
   string keys in `Opus`: the import map a component's world is instantiated
@@ -32,7 +32,7 @@ defmodule Cyfr.WitAbiDriftTest do
   defp opus_abi_names do
     @opus_lib
     |> Path.join("**/*.ex")
-    |> Cyfr.Test.SourceTree.files!()
+    |> Prima.Test.SourceTree.files!()
     |> Enum.flat_map(fn path ->
       ~r/"(cyfr:[a-z]+\/[a-z-]+@\d+\.\d+\.\d+)"/
       |> Regex.scan(File.read!(path))
@@ -47,7 +47,7 @@ defmodule Cyfr.WitAbiDriftTest do
   defp wit_abi_names do
     @wit_root
     |> Path.join("**/*.wit")
-    |> Cyfr.Test.SourceTree.files!()
+    |> Prima.Test.SourceTree.files!()
     |> Enum.flat_map(fn path ->
       source = File.read!(path)
 
@@ -98,7 +98,7 @@ defmodule Cyfr.WitAbiDriftTest do
     imported =
       @wit_root
       |> Path.join("*/world.wit")
-      |> Cyfr.Test.SourceTree.files!()
+      |> Prima.Test.SourceTree.files!()
       |> Enum.flat_map(fn path ->
         ~r/import\s+(cyfr:[a-z]+\/[a-z-]+@\d+\.\d+\.\d+)\s*;/
         |> Regex.scan(File.read!(path))
@@ -121,7 +121,7 @@ defmodule Cyfr.WitAbiDriftTest do
            """
   end
 
-  # `Cyfr.CargoToml` hand-writes the catalyst WIT dependency table
+  # `Prima.CargoToml` hand-writes the catalyst WIT dependency table
   # into a generated Cargo.toml; the build sandbox materializes whatever
   # sits under `wit/catalyst/deps/`. A new dep directory that the template
   # never declares fails a build with a message about the world, not
@@ -129,14 +129,14 @@ defmodule Cyfr.WitAbiDriftTest do
   test "the scaffold's Cargo.toml declares exactly the catalyst WIT deps" do
     declared =
       ~r/"(cyfr:[a-z-]+)" = \{ path = "wit\/deps\/(cyfr-[a-z-]+)" \}/
-      |> Regex.scan(Cyfr.CargoToml.template(:catalyst, include_oauth_wit: true))
+      |> Regex.scan(Prima.CargoToml.template(:catalyst, include_oauth_wit: true))
       |> Enum.map(fn [_, _pkg, dir] -> dir end)
       |> Enum.sort()
 
     on_disk =
       @wit_root
       |> Path.join("catalyst/deps/*")
-      |> Cyfr.Test.SourceTree.files!()
+      |> Prima.Test.SourceTree.files!()
       |> Enum.map(&Path.basename/1)
       |> Enum.sort()
 
@@ -145,8 +145,8 @@ defmodule Cyfr.WitAbiDriftTest do
              inspect(on_disk)
   end
 
-  # The registration gate (`Compendium.WasmValidator.validate/2`) demands
-  # the exports `Compendium.WITSource.expected_exports/1` derives from the
+  # The registration gate (`Prima.Wasm.validate/2`) demands
+  # the exports `Prima.WIT.expected_exports/1` derives from the
   # world files; the engine calls a component through the same names
   # (`Opus.Runtime.execute_with_convention/3`). If the two drift, either
   # registration refuses components the engine could run, or the engine
@@ -154,11 +154,11 @@ defmodule Cyfr.WitAbiDriftTest do
   test "the worlds registration demands are the ones the engine calls" do
     runtime = File.read!(Path.join(@opus_lib, "opus/runtime.ex"))
 
-    for type <- Cyfr.ComponentRef.executable_types() do
-      expected = Compendium.WITSource.expected_exports(type)
+    for type <- Prima.ComponentRef.executable_types() do
+      expected = Prima.WIT.expected_exports(type)
 
       assert expected != [],
-             "WITSource derives no expected exports for #{type} — " <>
+             "Prima.WIT derives no expected exports for #{type} — " <>
                "the world.wit parse has drifted"
 
       for name <- expected do

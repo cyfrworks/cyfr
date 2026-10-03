@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,10 +30,29 @@ var ErrAuthRequired = fmt.Errorf("authentication required")
 // ErrUnsupportedProtocol is returned when the server's protocol version doesn't match the client's.
 var ErrUnsupportedProtocol = fmt.Errorf("unsupported protocol version")
 
+// ConfirmationIDKey is the request metadata key a tools/call repeats a
+// sensitive change under. Its value is the secret id the
+// confirmation_required signal answered: it rides `params._meta`, which no
+// request-log row records, and never the tool's arguments.
+const ConfirmationIDKey = "cyfr/confirmationId"
+
+// ConfirmFunc is asked, each time a tool call is answered
+// confirmation_required, whether to repeat the call. `pending` is that
+// answer; `again` is true when it answered a repeat with the same id, so the
+// confirmation is still waiting. Returning nil repeats the same call once
+// under the pending id; returning an error ends the wait, and the call
+// answers that error.
+type ConfirmFunc func(ctx context.Context, pending *ConsentError, again bool) error
+
 // Client is a JSON-RPC 2.0 MCP client over HTTP.
 type Client struct {
 	BaseURL   string
 	SessionID string
+
+	// Confirm, when set, is how a tool call answered confirmation_required
+	// waits for the person and repeats. Every tool call goes through it, so
+	// no command repeats a change itself. Nil answers the signal as an error.
+	Confirm ConfirmFunc
 
 	httpClient *http.Client
 	nextID     atomic.Int64
@@ -181,8 +201,10 @@ func encodeHeaderValue(v string) string {
 //
 // There is no handshake, so every request declares its own protocol version,
 // client identity and capabilities. Params may be a struct or a map, so it is
-// round-tripped through JSON to get a map to add `_meta` to.
-func withMeta(params any, progressToken string) map[string]any {
+// round-tripped through JSON to get a map to add `_meta` to. A repeat of a
+// sensitive change also carries the confirmation's secret id under
+// ConfirmationIDKey; every other request carries none.
+func withMeta(params any, progressToken, confirmationID string) map[string]any {
 	m := map[string]any{}
 	if params != nil {
 		if b, err := json.Marshal(params); err == nil {
@@ -203,6 +225,9 @@ func withMeta(params any, progressToken string) map[string]any {
 	if progressToken != "" {
 		meta["progressToken"] = progressToken
 	}
+	if confirmationID != "" {
+		meta[ConfirmationIDKey] = confirmationID
+	}
 	m["_meta"] = meta
 	return m
 }
@@ -217,7 +242,69 @@ func (c *Client) CallTool(ctx context.Context, name string, args any) (map[strin
 // Progress travels on this request's own response stream. There is no separate
 // stream to open and no id to correlate by hand: passing a handler is what opts
 // in, and every notification on the stream belongs to this call.
+//
+// A call answered confirmation_required waits on c.Confirm and repeats under
+// the signal's id (repeatConfirmed), so every command meets a fresh
+// confirmation the same way.
 func (c *Client) CallToolWithProgress(ctx context.Context, name string, args any, onProgress ProgressFunc) (map[string]any, error) {
+	encoded, err := encodeArguments(args)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := c.callTool(ctx, name, encoded, onProgress, "")
+	return c.repeatConfirmed(ctx, name, encoded, onProgress, result, err)
+}
+
+// repeatConfirmed waits for the person and repeats a call answered
+// confirmation_required, under the id the answer carries, held here in memory
+// alone. Each repeat is the same call, once per time c.Confirm answers nil. A
+// repeat answered with the same id is still waiting (the home answers a repeat
+// before the proof so, and opens nothing), so c.Confirm is asked again; any
+// other answer, a new id included, ends the wait as that answer.
+func (c *Client) repeatConfirmed(ctx context.Context, name string, encoded json.RawMessage, onProgress ProgressFunc, result map[string]any, err error) (map[string]any, error) {
+	if c.Confirm == nil {
+		return result, err
+	}
+
+	pending, id := pendingConfirmation(err)
+	if pending == nil {
+		return result, err
+	}
+
+	again := false
+	for {
+		if waitErr := c.Confirm(ctx, pending, again); waitErr != nil {
+			return nil, waitErr
+		}
+
+		result, err = c.callTool(ctx, name, encoded, onProgress, id)
+
+		next, nextID := pendingConfirmation(err)
+		if next == nil || nextID != id {
+			return result, err
+		}
+		pending, again = next, true
+	}
+}
+
+// pendingConfirmation is the confirmation_required answer err carries and
+// its secret id, or nil when err is another answer or names no id to repeat
+// under (a proxy stripped error.data).
+func pendingConfirmation(err error) (*ConsentError, string) {
+	var ce *ConsentError
+	if !errors.As(err, &ce) || ce.Tag != "confirmation_required" {
+		return nil, ""
+	}
+	id, _ := ce.Payload["id"].(string)
+	if id == "" {
+		return nil, ""
+	}
+	return ce, id
+}
+
+// encodeArguments is a tool's arguments as the JSON object tools/call sends.
+func encodeArguments(args any) (json.RawMessage, error) {
 	if args == nil {
 		args = map[string]any{}
 	}
@@ -231,14 +318,19 @@ func (c *Client) CallToolWithProgress(ctx context.Context, name string, args any
 	if len(encoded) == 0 || encoded[0] != '{' {
 		return nil, fmt.Errorf("tool arguments must be a JSON object")
 	}
+	return json.RawMessage(encoded), nil
+}
 
+// callTool sends one tools/call and reads its answer. confirmationID is the
+// pending confirmation a repeat names, or "" for a first call.
+func (c *Client) callTool(ctx context.Context, name string, encoded json.RawMessage, onProgress ProgressFunc, confirmationID string) (map[string]any, error) {
 	req := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      int(c.nextID.Add(1)),
 		Method:  "tools/call",
 		Params: ToolCallParams{
 			Name:      name,
-			Arguments: json.RawMessage(encoded),
+			Arguments: encoded,
 		},
 	}
 
@@ -247,7 +339,7 @@ func (c *Client) CallToolWithProgress(ctx context.Context, name string, args any
 		progressToken = fmt.Sprintf("prog-%d", req.ID)
 	}
 
-	resp, err := c.doRequestOnce(ctx, req, progressToken, onProgress)
+	resp, err := c.doRequestOnce(ctx, req, progressToken, confirmationID, onProgress)
 	if err != nil {
 		return nil, err
 	}
@@ -332,12 +424,16 @@ func (c *Client) doRequest(ctx context.Context, req JSONRPCRequest) (*JSONRPCRes
 	// No retry-on-expiry: the credential authenticates each request on its own,
 	// so a rejected one will be rejected again. A revoked or expired token needs
 	// `cyfr login`, not a re-handshake.
-	return c.doRequestOnce(ctx, req, "", nil)
+	return c.doRequestOnce(ctx, req, "", "", nil)
 }
 
-// ConsentError is a protocol error in the -33501..-33504 range.
+// ConsentError is a protocol error in the -33501..-33505 range.
 // Its error.data contains {"tag": ..., "payload": {...}}. Commands recover
-// it with errors.As and render it via formatConsentError.
+// it with errors.As and render it via formatConsentError. A
+// confirmation_required error is never a success: the change waits for the
+// person's fresh confirmation. Its payload's id is this request's secret,
+// which repeats the change (Client.Confirm) and is never shown; the person
+// reads the record by its ref.
 type ConsentError struct {
 	Tag     string
 	Message string
@@ -351,6 +447,7 @@ var consentTagByCode = map[int]string{
 	-33502: "consent_required",
 	-33503: "consent_conflict",
 	-33504: "restart_required",
+	-33505: "confirmation_required",
 }
 
 func consentError(e *JSONRPCError) *ConsentError {
@@ -397,8 +494,8 @@ func withRequestID(err error, requestID string) error {
 	return fmt.Errorf("%w (request id %s)", err, requestID)
 }
 
-func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progressToken string, onProgress ProgressFunc) (*JSONRPCResponse, error) {
-	req.Params = withMeta(req.Params, progressToken)
+func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progressToken, confirmationID string, onProgress ProgressFunc) (*JSONRPCResponse, error) {
+	req.Params = withMeta(req.Params, progressToken, confirmationID)
 
 	body, err := json.Marshal(req)
 	if err != nil {

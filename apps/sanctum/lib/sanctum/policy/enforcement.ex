@@ -82,7 +82,7 @@ defmodule Sanctum.Policy.Enforcement do
 
       {:error, reason} ->
         # `:error`, like every other "a security record did not land" site
-        # (`Arca.RecordSink`, `Emissary.MCP.RequestLog`, `Arca.AuditHandler`).
+        # (`Arca.RecordSink`, `Grimoire.RequestLog`, `Arca.AuditHandler`).
         # An operator alarming on level:error over the audit plane was getting
         # an arbitrary subset while this one said :warning.
         Logger.error("[Policy.Enforcement] record failed: #{inspect(reason)}")
@@ -152,7 +152,10 @@ defmodule Sanctum.Policy.Enforcement do
           # detail goes to the log. Read by field rather than by struct —
           # the rule for a decision this domain records is that it never
           # names the store's types.
-          Logger.warning("[Policy.Enforcement] denial record refused: " <> detail(refusal))
+          Logger.warning(
+            "[Policy.Enforcement] denial record refused: " <>
+              inspect(detail(refusal), limit: 20, printable_limit: 200)
+          )
 
           {:error, :audit_write_failed}
       end
@@ -165,10 +168,8 @@ defmodule Sanctum.Policy.Enforcement do
   # validation refusal carries `errors`, anything else is sanitized whole
   # — a policy record holds no credential, but the audit plane is not the
   # place to find out.
-  defp detail(%{errors: errors}) when is_list(errors), do: inspect(errors)
-
-  defp detail(other),
-    do: inspect(Cyfr.Sanitizer.sanitize(other), limit: 20, printable_limit: 200)
+  defp detail(%{errors: errors}) when is_list(errors), do: errors
+  defp detail(other), do: Prima.Sanitizer.sanitize(other)
 
   defp emit_telemetry(record_attrs) do
     :telemetry.execute(
@@ -243,5 +244,5 @@ defmodule Sanctum.Policy.Enforcement do
   defp encode_chain(chain) when is_binary(chain), do: chain
   defp encode_chain(_), do: nil
 
-  defp generate_id, do: Cyfr.UUID7.generate_id("polog")
+  defp generate_id, do: Prima.UUID7.generate_id("polog")
 end

@@ -3,15 +3,20 @@
 
 defmodule Cyfr.DocsDriftTest do
   @moduledoc """
-  Checks documented storage roots and manifest fields against their
-  runtime definitions.
+  Checks the README's glossary, the guides and the env examples against
+  the tree and the runtime definitions they document.
 
   README and guide checks use tracked files and run in every checkout.
   """
   use ExUnit.Case, async: true
 
+  alias Cyfr.Platform.Settings.Roster
+  alias Cyfr.Platform.Settings.Roster.Entry
+  alias Mix.Tasks.Cyfr.Gen.ConfigurationGuide
+
   @repo_root Path.expand("../../../..", __DIR__)
   @readme Path.join(@repo_root, "README.md")
+  @configuration_guide Path.join(@repo_root, "configuration-guide.md")
 
   test "README's storage tree names every tenant root and global prefix" do
     doc = File.read!(@readme)
@@ -21,6 +26,370 @@ defmodule Cyfr.DocsDriftTest do
     for root <- Arca.Storage.tenant_roots() ++ Arca.Storage.global_prefixes() do
       assert doc =~ root <> "/",
              "root #{root}/ is missing from README's storage tree"
+    end
+  end
+
+  # The glossary names each part once, with the environment prefixes it
+  # owns. The prefixes are this roster, each named by one row.
+  @env_prefixes ~w(CYFR_ CYFR_OPUS_ CYFR_CRUCIBLE_ CYFR_HOST_API_ CYFR_LOCUS_BUILDS_
+                   CYFR_LOCUS_BACKENDS_ OPUS_ LOCUS_BUILDS_ LOCUS_BACKENDS_ KEEPER_)
+  @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Crucible Emissary Prism Codex Opus Locus keeper
+                     actor athanor)
+
+  # The files that read the releases' environment: the control plane's
+  # configuration (the `CYFR_*` variables `config/runtime.exs` reads into
+  # the operator keys of `Cyfr.Boundaries.config_key_classes/0`, the
+  # resolvers it calls, and the platform settings roster whose variables it
+  # reads), the Opus release's `OPUS_*` rows in the same file, the Locus
+  # release's `Locus.Config`, the Opus settings, and the keeper's own
+  # sources (`keeper_sources/0`).
+  @env_readers ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex
+                  apps/cyfr/lib/cyfr/platform/settings/roster.ex
+                  apps/locus/lib/locus/config.ex apps/opus/lib/opus/settings.ex)
+
+  # The names the roster spells that no release reads: those other
+  # programs own (`Roster.foreign/0`), which their owners document, and
+  # those compose reads alone (`Roster.compose_only/0`).
+  defp spelled_not_read do
+    MapSet.new(Enum.map(Roster.foreign(), &elem(&1, 0)) ++ Roster.compose_only())
+  end
+
+  # The keeper's Go sources other than its tests, relative to the root.
+  defp keeper_sources do
+    @repo_root
+    |> Path.join("apps/keeper/**/*.go")
+    |> Path.wildcard()
+    |> Enum.reject(&String.ends_with?(&1, "_test.go"))
+    |> Enum.map(&Path.relative_to(&1, @repo_root))
+  end
+
+  defp glossary do
+    [_, section] = Regex.run(~r/^## Glossary\n(.*?)(?=^## )/ms, File.read!(@readme))
+
+    [header, _rule | rows] =
+      for line <- String.split(section, "\n"),
+          String.starts_with?(line, "|"),
+          do: line |> String.trim("|") |> String.split("|") |> Enum.map(&String.trim/1)
+
+    {header, rows}
+  end
+
+  # The backquoted names in one column of the glossary, every row's.
+  defp glossary_column(title, pattern \\ ~r/`([^`]+)`/) do
+    {header, rows} = glossary()
+    column = Enum.find_index(header, &(&1 == title))
+    assert column, "the glossary has no #{title} column"
+
+    for row <- rows,
+        captures <- Regex.scan(pattern, Enum.at(row, column), capture: :all_but_first),
+        name <- captures,
+        name != "",
+        do: name
+  end
+
+  test "README's glossary names every part, and its prefix column is the environment roster" do
+    {header, rows} = glossary()
+
+    assert Enum.all?(rows, &(length(&1) == length(header))), "a glossary row has the wrong width"
+
+    names = Enum.map(rows, &hd/1)
+
+    for name <- @glossary_names do
+      assert name in names, "the glossary has no row for #{name}"
+    end
+
+    column = Enum.find_index(header, &(&1 == "Environment prefix"))
+    assert column, "the glossary has no environment prefix column"
+
+    prefixes =
+      for row <- rows,
+          [prefix] <-
+            Regex.scan(~r/`([A-Z][A-Z0-9_]*)`/, Enum.at(row, column), capture: :all_but_first),
+          do: prefix
+
+    assert Enum.sort(prefixes) == Enum.sort(@env_prefixes),
+           "the glossary's environment prefixes #{inspect(prefixes)} are not the roster " <>
+             "#{inspect(@env_prefixes)}, each once"
+  end
+
+  # ARCHITECTURE.md owns what each part is responsible for and the glossary
+  # names the same parts, so the two cannot describe different sets.
+  @architecture Path.join(@repo_root, "ARCHITECTURE.md")
+  @part_names @glossary_names -- ~w(actor athanor)
+
+  test "ARCHITECTURE.md describes exactly the parts the glossary names" do
+    described =
+      Regex.scan(~r/^### (\w+)(?: \([^)]*\))?: /m, File.read!(@architecture),
+        capture: :all_but_first
+      )
+      |> List.flatten()
+
+    assert Enum.sort(described) == Enum.sort(@part_names),
+           "ARCHITECTURE.md's module sections #{inspect(described)} are not the glossary's " <>
+             "parts #{inspect(@part_names)}"
+  end
+
+  test "ARCHITECTURE.md's five ports are the port roster" do
+    [section] =
+      Regex.run(~r/^### 4\.2 The five ports\n(.*?)(?=^### )/ms, File.read!(@architecture),
+        capture: :all_but_first
+      )
+
+    documented =
+      for line <- String.split(section, "\n"),
+          String.starts_with?(line, "| "),
+          [behaviour] <-
+            Regex.scan(~r/^\| [^|]*\(`([A-Za-z.]+)`\)/, line, capture: :all_but_first),
+          do: behaviour
+
+    rostered = Enum.map(Cyfr.Boundaries.ports(), & &1.behaviour)
+
+    assert length(documented) == 5
+
+    assert Enum.sort(documented) == Enum.sort(rostered),
+           "ARCHITECTURE.md documents the ports #{inspect(documented)}; " <>
+             "Cyfr.Boundaries.ports/0 rosters #{inspect(rostered)}"
+  end
+
+  defp read_variables do
+    not_read = spelled_not_read()
+
+    for file <- @env_readers ++ keeper_sources(),
+        [name] <-
+          Regex.scan(
+            ~r/"((?:CYFR|OPUS|LOCUS|KEEPER)_[A-Z0-9_]*[A-Z0-9])"/,
+            File.read!(Path.join(@repo_root, file)),
+            capture: :all_but_first
+          ),
+        not MapSet.member?(not_read, name),
+        uniq: true,
+        do: name
+  end
+
+  # A variable belongs to the longest prefix of the roster it begins with.
+  defp owning_prefix(variable) do
+    @env_prefixes
+    |> Enum.filter(&String.starts_with?(variable, &1))
+    |> Enum.max_by(&String.length/1, fn -> nil end)
+  end
+
+  test "the environment prefixes are the ones the releases' readers name, each in use" do
+    read = read_variables()
+
+    # Guards against the scan quietly matching nothing.
+    assert "CYFR_LOCUS_BACKENDS_KEY" in read and "LOCUS_BACKENDS_KEY" in read
+    assert "OPUS_SERVICE_KEY" in read and "KEEPER_CHANNEL" in read
+    assert length(read) >= 100, "the scan found only #{length(read)} variables"
+
+    unowned = Enum.filter(read, &is_nil(owning_prefix(&1)))
+
+    assert unowned == [],
+           "these variables are read under a prefix the glossary does not name: " <>
+             inspect(unowned)
+
+    unused = @env_prefixes -- Enum.map(read, &owning_prefix/1)
+
+    assert unused == [],
+           "the glossary names these prefixes, and no reader reads a variable under them: " <>
+             inspect(unused)
+  end
+
+  # The scans tell this repository's modules from the rest by their root
+  # namespace: each capitalised part the glossary gives a directory, and
+  # the web tier of each part whose directory has one.
+  test "the boundary catalog's product roots are the glossary's parts" do
+    {header, rows} = glossary()
+    column = Enum.find_index(header, &(&1 == "Directory"))
+
+    parts =
+      for [name | _] = row <- rows,
+          name =~ ~r/^[A-Z]/,
+          Enum.at(row, column) != "—",
+          do: name
+
+    web =
+      for dir <- glossary_column("Directory"),
+          String.ends_with?(dir, "_web"),
+          do: dir |> Path.basename() |> Macro.camelize()
+
+    assert Enum.sort(Cyfr.Boundaries.product_roots()) == Enum.sort(parts ++ web),
+           "Cyfr.Boundaries' product roots are not the glossary's parts and their web tiers"
+  end
+
+  test "the glossary's directories, compose services and images are the tree's" do
+    for dir <- glossary_column("Directory") do
+      assert File.dir?(Path.join(@repo_root, dir)),
+             "the glossary names #{dir}, which is not a directory"
+    end
+
+    compose = File.read!(Path.join(@repo_root, "docker-compose.yml"))
+    services = compose_services(compose)
+
+    assert Enum.sort(glossary_column("Compose service")) == Enum.sort(Map.keys(services)),
+           "the glossary's compose services are not docker-compose.yml's"
+
+    # The images the release workflow builds, each from its Dockerfile.
+    built =
+      ~r/- image: ([a-z][a-z0-9-]*)\n\s+file: (\S+)/
+      |> Regex.scan(File.read!(Path.join(@repo_root, ".github/workflows/docker.yml")),
+        capture: :all_but_first
+      )
+      |> Map.new(fn [image, file] -> {image, file} end)
+
+    for {image, file} <- built do
+      assert File.regular?(Path.join(@repo_root, file)),
+             "docker.yml builds #{image} from #{file}, which is missing"
+    end
+
+    images =
+      glossary_column(
+        "Binary or image",
+        ~r/image `([a-z][a-z0-9-]*)`|`([a-z][a-z0-9-]*)` and `([a-z][a-z0-9-]*)` images/
+      )
+
+    assert Enum.sort(Enum.uniq(images)) == Enum.sort(Map.keys(built)),
+           "the glossary's images #{inspect(images)} are not the ones docker.yml builds"
+
+    # Every image of ours compose runs is one the workflow publishes, built
+    # from the Dockerfile the workflow builds it from.
+    for {name, service} <- services,
+        image = service.image,
+        String.starts_with?(image, "ghcr.io/cyfrworks/") do
+      published = image |> String.trim_leading("ghcr.io/cyfrworks/") |> String.split(":") |> hd()
+
+      assert Map.has_key?(built, published),
+             "compose's #{name} runs #{image}, which docker.yml does not build"
+
+      if service.dockerfile do
+        assert service.dockerfile == built[published],
+               "compose builds #{name} from #{service.dockerfile}, docker.yml from #{built[published]}"
+      end
+    end
+  end
+
+  # ==========================================================================
+  # One vocabulary
+  #
+  # The glossary names each namespace once, and the retired name of the
+  # tenancy unit appears in no tracked file of the tree, the seed, the
+  # image suites or the root guides. The pattern is the vocabulary-gate
+  # job's, read from its step in the workflow, which owns it.
+  # ==========================================================================
+
+  @workflow Path.join(@repo_root, ".github/workflows/test.yml")
+  @fossil_step "Tier A/B fossil patterns must be absent"
+
+  # A shipped component version is immutable, and this one's README and
+  # manifest say the retired name; it changes only in a new version.
+  # Exact: the exception must still hold a hit.
+  @retired_name_exceptions ["seed/components/formulas/local/list-models/0.6.2/"]
+
+  # The directories that are namespaces: each application under apps/, and
+  # each directory under the control plane's lib/ with a facade module
+  # beside it, less the web tiers, which belong to their namespace.
+  defp namespace_directories do
+    apps =
+      for path <- Path.wildcard(Path.join(@repo_root, "apps/*")),
+          File.dir?(path),
+          do: Path.basename(path)
+
+    lib = Path.join(@repo_root, "apps/cyfr/lib")
+
+    control_plane =
+      for path <- Path.wildcard(Path.join(lib, "*")),
+          File.dir?(path),
+          name = Path.basename(path),
+          File.regular?(Path.join(lib, name <> ".ex")),
+          not String.ends_with?(name, "_web"),
+          do: name
+
+    Enum.uniq(apps ++ control_plane)
+  end
+
+  test "the glossary names every namespace directory under apps/ exactly once" do
+    {_header, rows} = glossary()
+    names = Enum.map(rows, &(&1 |> hd() |> String.downcase()))
+    directories = namespace_directories()
+
+    # Guards against the scan quietly matching nothing.
+    assert "keeper" in directories and "codex" in directories and "grimoire" in directories
+
+    counts =
+      for directory <- directories,
+          n = Enum.count(names, &(&1 == directory)),
+          n != 1,
+          do: {directory, n}
+
+    assert counts == [],
+           "each namespace directory is one glossary row; these are not ({directory, rows}): " <>
+             inspect(counts)
+  end
+
+  # The retired-name pattern of the vocabulary-gate job: the one pattern of
+  # its fossil loop that spells the capitalised form of the retired name.
+  defp retired_name_pattern do
+    workflow = File.read!(@workflow)
+
+    [_, run] =
+      Regex.run(
+        ~r/- name: #{Regex.escape(@fossil_step)}\n\s+run: \|\n(.*?)\n\s+; do\n/s,
+        workflow
+      ) ||
+        flunk("test.yml has no #{inspect(@fossil_step)} step with a fossil loop")
+
+    patterns =
+      for [pattern] <- Regex.scan(~r/^\s+'([^']+)' \\$/m, run, capture: :all_but_first),
+          pattern =~ "[Ee]state",
+          do: pattern
+
+    case patterns do
+      [pattern] -> Regex.compile!(pattern)
+      other -> flunk("the fossil loop holds #{length(other)} retired-name patterns, not one")
+    end
+  end
+
+  test "the retired-name pattern is read from the gate and reads the name, not English words" do
+    pattern = retired_name_pattern()
+    name = "e" <> "state"
+
+    for line <- ["an #{name}", String.capitalize(name) <> "s", "my" <> String.capitalize(name)],
+        do: assert(line =~ pattern, "the pattern misses #{inspect(line)}")
+
+    for line <- ["re" <> name <> "d", "inter" <> name, "athanor"],
+        do: refute(line =~ pattern, "the pattern reads #{inspect(line)}")
+  end
+
+  test "no tracked file under apps/, seed/, tests/ or the root guides says the retired name" do
+    pattern = retired_name_pattern()
+
+    {listing, 0} =
+      System.cmd("git", ["ls-files", "-z", "--", "apps", "seed", "tests", ":(glob)*.md"],
+        cd: @repo_root
+      )
+
+    files = String.split(listing, <<0>>, trim: true)
+    assert "README.md" in files and Enum.any?(files, &String.starts_with?(&1, "seed/"))
+
+    hits =
+      for rel <- files,
+          path = Path.join(@repo_root, rel),
+          File.regular?(path),
+          text = File.read!(path),
+          not String.contains?(text, <<0>>),
+          {line, n} <- text |> String.split("\n") |> Enum.with_index(1),
+          line =~ pattern,
+          do: {rel, n}
+
+    excepted? = fn {rel, _} -> String.starts_with?(rel, @retired_name_exceptions) end
+    {excepted, stray} = Enum.split_with(hits, excepted?)
+
+    assert stray == [],
+           "these lines say the retired name of the athanor: " <>
+             Enum.map_join(stray, ", ", fn {rel, n} -> "#{rel}:#{n}" end)
+
+    for prefix <- @retired_name_exceptions do
+      assert Enum.any?(excepted, fn {rel, _} -> String.starts_with?(rel, prefix) end),
+             "#{prefix} no longer says the retired name; remove its exception"
     end
   end
 
@@ -45,9 +414,9 @@ defmodule Cyfr.DocsDriftTest do
   test "component-guide's manifest field table documents the closed key roster" do
     source = File.read!(Path.join(@repo_root, "component-guide.md"))
 
-    for key <- Compendium.Manifest.known_keys() do
+    for key <- Prima.Manifest.known_keys() do
       assert source =~ "| `#{key}` |",
-             "manifest key `#{key}` (Compendium.Manifest.known_keys/0) is missing " <>
+             "manifest key `#{key}` (Prima.Manifest.known_keys/0) is missing " <>
                "from component-guide.md's field table"
     end
   end
@@ -79,9 +448,9 @@ defmodule Cyfr.DocsDriftTest do
     for {code, name} <- guide_error_codes() do
       atom = String.to_existing_atom(name)
 
-      assert Emissary.MCP.Message.error_code(atom) == code,
+      assert Prima.MCP.Message.error_code(atom) == code,
              "integration-guide documents #{code} `#{name}`, which " <>
-               "Emissary.MCP.Message does not define under that name — a client " <>
+               "Prima.MCP.Message does not define under that name — a client " <>
                "branching on it waits for a code that never arrives"
     end
   end
@@ -89,13 +458,8 @@ defmodule Cyfr.DocsDriftTest do
   test "every code a client could receive is in the guide's table" do
     documented = guide_error_codes() |> Map.keys() |> MapSet.new()
 
-    # `request_cancelled` is recorded, never sent: by the time it exists the
-    # caller has closed the stream. It is the one code with no reader.
-    internal = [:request_cancelled]
-
     missing =
-      for {name, code} <- Emissary.MCP.Message.cyfr_error_codes(),
-          name not in internal,
+      for {name, code} <- Prima.MCP.Message.cyfr_error_codes(),
           not MapSet.member?(documented, code),
           do: "#{code} #{name}"
 
@@ -107,7 +471,7 @@ defmodule Cyfr.DocsDriftTest do
   # Every action a provider annotates `auth: :anonymous` — the actions that
   # answer without a session, which is exactly what the table claims to list.
   defp anonymous_actions do
-    for provider <- Cyfr.Ops.Catalog.available_providers(),
+    for provider <- Grimoire.configured_providers(),
         tool <- provider.tools(),
         {action, meta} <- get_in(tool, [Access.key(:annotations, %{}), :actions]) || %{},
         meta[:auth] == :anonymous,
@@ -176,14 +540,15 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # cyfr's side of the worker wire, as `config/runtime.exs` and the
-  # resolvers it calls read it, is documented in `.env.example`, the file
-  # cyfr reads.
-  test "every worker variable of cyfr's that the runtime configuration reads is documented in .env.example" do
+  # resolvers it calls read it, is documented in the configuration guide.
+  test "every worker variable of cyfr's that the runtime configuration reads is in the configuration guide" do
     read =
-      for file <- ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex),
+      for file <-
+            ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex
+               apps/cyfr/lib/cyfr/platform/settings/roster.ex),
           [name] <-
             Regex.scan(
-              ~r/"(CYFR_WORKERS|CYFR_WORKER_[A-Z0-9_]+|CYFR_HOST_API_[A-Z0-9_]+)"/,
+              ~r/"(CYFR_OPUS_WORKERS|CYFR_OPUS_[A-Z0-9_]+|CYFR_HOST_API_[A-Z0-9_]+)"/,
               File.read!(Path.join(@repo_root, file)),
               capture: :all_but_first
             ),
@@ -192,12 +557,12 @@ defmodule Cyfr.DocsDriftTest do
 
     assert length(read) >= 6, "the scan found only #{inspect(read)}"
 
-    project = documented(File.read!(Path.join(@repo_root, ".env.example")))
-    undocumented = Enum.reject(read, &MapSet.member?(project, &1))
+    guide = documented_in_guide(File.read!(@configuration_guide))
+    undocumented = Enum.reject(read, &MapSet.member?(guide, &1))
 
     assert undocumented == [],
-           "config/runtime.exs reads these worker variables, and .env.example does not " <>
-             "document them: #{inspect(undocumented)}"
+           "config/runtime.exs reads these worker variables, and configuration-guide.md " <>
+             "does not document them: #{inspect(undocumented)}"
   end
 
   # ==========================================================================
@@ -216,6 +581,11 @@ defmodule Cyfr.DocsDriftTest do
   #   * integration-guide.md's "Running a worker outside Compose", for what
   #     compose fixes and a release run without it is given itself.
   #
+  # Every name the `cyfr` boot reads has its home in `configuration-guide.md`,
+  # rendered from `Cyfr.Platform.Settings.Roster`; `.env.example` is the
+  # starting `.env`, a selection of the guide's names, so a name the guide
+  # documents counts there alone.
+  #
   # The rules are functions of the files' text, so the planted violations
   # below prove each one fails.
   # ==========================================================================
@@ -227,6 +597,15 @@ defmodule Cyfr.DocsDriftTest do
   defp documented(text) do
     ~r/^#?[ \t]*([A-Z][A-Z0-9_]*)=/m
     |> Regex.scan(text, capture: :all_but_first)
+    |> List.flatten()
+    |> MapSet.new()
+  end
+
+  # The names configuration-guide.md documents: the first cell of each row
+  # of its tables, where it is one backquoted name.
+  defp documented_in_guide(guide) do
+    ~r/^\| `([A-Z][A-Z0-9_]*)` \|/m
+    |> Regex.scan(guide, capture: :all_but_first)
     |> List.flatten()
     |> MapSet.new()
   end
@@ -248,7 +627,8 @@ defmodule Cyfr.DocsDriftTest do
 
   # The variables the opus and locus releases read from their operator:
   # config/runtime.exs's OPUS_* (OPUS_ROLE is the keeper's, set on a
-  # runner, not an operator's) and Locus.Config's LOCUS_BUILDS_*.
+  # runner, not an operator's) and Locus.Config's LOCUS_BUILDS_* and
+  # LOCUS_BACKENDS_*.
   defp release_variables(runtime, locus_config) do
     opus =
       Regex.scan(~r/"(OPUS_[A-Z0-9_]+)"/, runtime, capture: :all_but_first)
@@ -256,7 +636,9 @@ defmodule Cyfr.DocsDriftTest do
       |> Enum.reject(&(&1 == "OPUS_ROLE"))
 
     locus =
-      Regex.scan(~r/"(LOCUS_BUILDS_[A-Z0-9_]+)"/, locus_config, capture: :all_but_first)
+      Regex.scan(~r/"(LOCUS_(?:BUILDS|BACKENDS)_[A-Z0-9_]+)"/, locus_config,
+        capture: :all_but_first
+      )
       |> List.flatten()
 
     Enum.uniq(opus ++ locus)
@@ -288,7 +670,10 @@ defmodule Cyfr.DocsDriftTest do
               ),
             do: var
 
-      {name, %{env_files: env_files, environment: set}}
+      image = with [_, image] <- Regex.run(~r/^    image: (\S+)$/m, block), do: image
+      dockerfile = with [_, file] <- Regex.run(~r/^      dockerfile: (\S+)$/m, block), do: file
+
+      {name, %{env_files: env_files, environment: set, image: image, dockerfile: dockerfile}}
     end
   end
 
@@ -302,7 +687,8 @@ defmodule Cyfr.DocsDriftTest do
   # The documentation texts the rules read, by the name a failure shows.
   defp homes do
     Map.new(
-      ~w(.env.example .env.opus.example .env.locus.example .env.bridge.example integration-guide.md),
+      ~w(.env.example .env.opus.example .env.locus.example integration-guide.md
+         configuration-guide.md),
       &{&1, File.read!(Path.join(@repo_root, &1))}
     )
   end
@@ -310,11 +696,14 @@ defmodule Cyfr.DocsDriftTest do
   # Rule 1: every variable a release reads is documented in exactly one
   # home. Answers the violations, `{variable, homes}`.
   defp misplaced(variables, homes) do
+    guide = documented_in_guide(homes["configuration-guide.md"])
+
     documented_in = %{
-      ".env.example" => documented(homes[".env.example"]),
+      ".env.example" => MapSet.difference(documented(homes[".env.example"]), guide),
       ".env.opus.example" => documented(homes[".env.opus.example"]),
       ".env.locus.example" => documented(homes[".env.locus.example"]),
-      "integration-guide.md" => documented_outside_compose(homes["integration-guide.md"])
+      "integration-guide.md" => documented_outside_compose(homes["integration-guide.md"]),
+      "configuration-guide.md" => guide
     }
 
     for variable <- variables,
@@ -342,7 +731,7 @@ defmodule Cyfr.DocsDriftTest do
       ~r/\$\{([A-Z][A-Z0-9_]*)/ |> Regex.scan(compose, capture: :all_but_first) |> List.flatten()
 
     for variable <- documented(homes[".env.example"]),
-        String.starts_with?(variable, ["OPUS_", "LOCUS_BUILDS_"]),
+        String.starts_with?(variable, ["OPUS_", "LOCUS_BUILDS_", "LOCUS_BACKENDS_"]),
         variable not in interpolated,
         do: variable
   end
@@ -365,10 +754,13 @@ defmodule Cyfr.DocsDriftTest do
     # Guards against the scans quietly matching nothing.
     assert "OPUS_SERVICE_KEY" in variables and "OPUS_BIND" in variables
     assert "LOCUS_BUILDS_KEY" in variables and "LOCUS_BUILDS_MEMORY_BYTES" in variables
-    assert length(variables) >= 20, "the scan found only #{inspect(variables)}"
+    assert "LOCUS_BACKENDS_KEY" in variables and "LOCUS_BACKENDS_MEMORY_BYTES" in variables
+    assert length(variables) >= 27, "the scan found only #{inspect(variables)}"
     assert services["opus"].env_files == [".env.opus"]
     assert "OPUS_BIND" in services["opus"].environment
     assert services["locus-builds"].environment == ["LOCUS_BUILDS_KEY"]
+    assert services["locus-backends"].environment == ["LOCUS_BACKENDS_KEY"]
+    assert services["locus-backends"].env_files == [".env.locus"]
 
     for {_service, %{env_files: files}} <- services, file <- files do
       assert Map.has_key?(homes, file <> ".example"),
@@ -427,6 +819,35 @@ defmodule Cyfr.DocsDriftTest do
     planted = plant.(".env.locus.example", "# LOCUS_BUILDS_KEY=")
     assert {".env.locus.example", "LOCUS_BUILDS_KEY"} in overridden(services, planted)
 
+    # The backends key likewise, which compose hands the backends service.
+    planted = plant.(".env.locus.example", "# LOCUS_BACKENDS_KEY=")
+    assert {".env.locus.example", "LOCUS_BACKENDS_KEY"} in overridden(services, planted)
+
+    assert {"LOCUS_BACKENDS_KEY", [".env.locus.example", "integration-guide.md"]} in misplaced(
+             variables,
+             planted
+           )
+
+    # A backends setting documented in the project .env as well: there
+    # twice, and read from .env by nothing.
+    planted = plant.(".env.example", "# LOCUS_BACKENDS_PORT=4101")
+
+    assert {"LOCUS_BACKENDS_PORT", [".env.example", ".env.locus.example"]} in misplaced(
+             variables,
+             planted
+           )
+
+    assert "LOCUS_BACKENDS_PORT" in stranded(compose, planted)
+
+    # A platform setting of the control plane's documented in a service's
+    # example as well as in the guide.
+    planted = plant.(".env.locus.example", "# CYFR_SESSION_TTL_HOURS=720")
+
+    assert {"CYFR_SESSION_TTL_HOURS", [".env.locus.example", "configuration-guide.md"]} in misplaced(
+             ["CYFR_SESSION_TTL_HOURS"],
+             planted
+           )
+
     # A setting documented nowhere.
     unplanted =
       Map.update!(homes, ".env.opus.example", &String.replace(&1, "# OPUS_POOL_SIZE=", "#"))
@@ -445,10 +866,11 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # Compose reads the variables it interpolates from the project .env, so
-  # each is documented in an env example an operator copies: the service
-  # settings where they are read, and the containers' own limits, which no
-  # release reads, in `.env.example` beside the settings they hold.
-  test "every variable docker-compose.yml interpolates is documented in an env example" do
+  # each is documented where an operator looks for it: the service settings
+  # in the env example or the guide that owns them, and the containers' own
+  # limits, which no release reads, in `.env.example` beside the settings
+  # they hold.
+  test "every variable docker-compose.yml interpolates is documented in an env example or the guide" do
     compose = File.read!(Path.join(@repo_root, "docker-compose.yml"))
 
     interpolated =
@@ -462,14 +884,14 @@ defmodule Cyfr.DocsDriftTest do
     documented =
       for example <- Path.wildcard(Path.join(@repo_root, ".env*.example"), match_dot: true),
           [_, name] <- Regex.scan(~r/^#?\s*([A-Z][A-Z0-9_]*)=/m, File.read!(example)),
-          into: MapSet.new(),
+          into: documented_in_guide(File.read!(@configuration_guide)),
           do: name
 
     undocumented = Enum.reject(interpolated, &MapSet.member?(documented, &1))
 
     assert undocumented == [],
-           "docker-compose.yml reads these from the project .env, and no env example " <>
-             "documents them: #{inspect(undocumented)}"
+           "docker-compose.yml reads these from the project .env, and neither an env " <>
+             "example nor configuration-guide.md documents them: #{inspect(undocumented)}"
 
     # The containers' limits are compose's alone: documented where compose
     # reads them, and read by no release.
@@ -485,9 +907,10 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # The builds service is two variables, read by one resolver
-  # (`Cyfr.RuntimeConfig.resolve_locus_builds/1`), documented where an
-  # operator sets them.
-  test "the builds service's variables are documented in .env.example and the integration guide" do
+  # (`Cyfr.RuntimeConfig.resolve_locus_builds/1`), which `.env.example`
+  # assigns for `cyfr init` to complete: the compose service's URL, and the
+  # key init mints. The configuration guide documents each.
+  test "the builds service's variables are assigned in .env.example and documented in the guide" do
     read =
       @repo_root
       |> Path.join("apps/cyfr/lib/cyfr/runtime_config.ex")
@@ -500,14 +923,48 @@ defmodule Cyfr.DocsDriftTest do
     assert read == ["CYFR_LOCUS_BUILDS_KEY", "CYFR_LOCUS_BUILDS_URL"]
 
     project = File.read!(Path.join(@repo_root, ".env.example"))
-    guide = File.read!(Path.join(@repo_root, "integration-guide.md"))
+    configuration = documented_in_guide(File.read!(@configuration_guide))
 
     for name <- read do
-      assert project =~ ~r/^# #{name}=/m, "#{name} is not documented in .env.example"
-      assert guide =~ "`#{name}`", "#{name} is not in integration-guide.md's reference"
+      assert project =~ ~r/^#{name}=/m, "#{name} is not assigned in .env.example"
+      assert name in configuration, "#{name} is not in configuration-guide.md"
     end
 
-    assert project =~ "# CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100"
+    assert project =~ ~r/^CYFR_LOCUS_BUILDS_URL=http:\/\/locus-builds:4100$/m
+    assert project =~ ~r/^CYFR_LOCUS_BUILDS_KEY=$/m
+  end
+
+  # The backends service is four variables of the control plane's, read by
+  # `config/runtime.exs` (its two periods through the platform settings
+  # roster), documented in the configuration guide; `.env.example` assigns
+  # the key for `cyfr init` to mint, and compose sets the URL.
+  test "the backends service's variables are documented in the guide, its key in .env.example" do
+    read =
+      ~w(config/runtime.exs apps/cyfr/lib/cyfr/platform/settings/roster.ex)
+      |> Enum.map_join("\n", &File.read!(Path.join(@repo_root, &1)))
+      |> then(&Regex.scan(~r/"(CYFR_LOCUS_BACKENDS_[A-Z0-9_]+)"/, &1, capture: :all_but_first))
+      |> List.flatten()
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    assert read == [
+             "CYFR_LOCUS_BACKENDS_IDLE_MS",
+             "CYFR_LOCUS_BACKENDS_KEY",
+             "CYFR_LOCUS_BACKENDS_LEASE_MS",
+             "CYFR_LOCUS_BACKENDS_URL"
+           ]
+
+    project = File.read!(Path.join(@repo_root, ".env.example"))
+    configuration = documented_in_guide(File.read!(@configuration_guide))
+
+    for name <- read do
+      assert name in configuration, "#{name} is not in configuration-guide.md"
+    end
+
+    assert project =~ ~r/^CYFR_LOCUS_BACKENDS_KEY=$/m
+
+    assert File.read!(Path.join(@repo_root, "docker-compose.yml")) =~
+             "CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-http://locus-backends:4101}"
   end
 
   # Every build and every runner is bounded by a cgroup of its own, which
@@ -533,12 +990,12 @@ defmodule Cyfr.DocsDriftTest do
     assert readme =~ ~r/^\| `locus-builds` \*\(profile: `locus-builds`\)\* \|/m
   end
 
-  # What `describe` may answer, as `Cyfr.Models` reads it, is what the
+  # What `describe` may answer, as `Aqua.Models` reads it, is what the
   # guide documents for a catalyst author.
-  test "every field Cyfr.Models reads from describe is in the component guide" do
+  test "every field Aqua.Models reads from describe is in the component guide" do
     read =
       @repo_root
-      |> Path.join("apps/cyfr/lib/cyfr/models.ex")
+      |> Path.join("apps/cyfr/lib/aqua/models.ex")
       |> File.read!()
       |> then(&Regex.scan(~r/described\["([a-z_]+)"\]/, &1, capture: :all_but_first))
       |> List.flatten()
@@ -554,6 +1011,31 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
+  # A pin the control plane refuses reaches the guest as one of the
+  # engine's error types (`Opus.Egress`), and the fetch interface's error
+  # list in the component guide names every one.
+  test "component-guide's fetch error types name every type a refused pin reaches the guest as" do
+    answered =
+      @repo_root
+      |> Path.join("apps/opus/lib/opus/egress.ex")
+      |> File.read!()
+      |> then(&Regex.scan(~r/\{:(?:refused|error), :([a-z_]+),/, &1, capture: :all_but_first))
+      |> List.flatten()
+      |> Enum.uniq()
+
+    assert "redirect_credentials" in answered and "private_ip_blocked" in answered
+
+    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+
+    [_, types] =
+      Regex.run(~r/^### `cyfr:http\/fetch`.*?^Error: `\{"error": \{"type": "([a-z_|]+)"/ms, guide)
+
+    documented = String.split(types, "|")
+
+    assert answered -- documented == [],
+           "component-guide.md's fetch error types lack #{inspect(answered -- documented)}"
+  end
+
   test "the guides' tincture-block keys are ones the code actually reads" do
     # Documented tincture keys must match validator and consumer support.
     documented_only = ~w(sandbox)
@@ -564,5 +1046,911 @@ defmodule Cyfr.DocsDriftTest do
       refute source =~ "`#{key}` |",
              "#{guide} documents tincture.#{key} as a field, but nothing reads it"
     end
+  end
+
+  # ==========================================================================
+  # Every variable the releases read has one home, and every documented
+  # name is read
+  #
+  # The rules above place the worker and builder variables; this holds the
+  # whole set, every `CYFR_*`, `OPUS_*`, `LOCUS_*` and `KEEPER_*` name the
+  # releases' readers and the keeper read, to the shipped examples, and
+  # each example to what something reads.
+  # ==========================================================================
+
+  # Read by a release, set by no operator: the process that starts the
+  # reader hands each over, so no example documents it.
+  @set_by_the_starter %{
+    # The keeper sets it for the client it starts; an inherited value is
+    # replaced, never read.
+    "KEEPER_CHANNEL" => :keeper,
+    # The worker service hands each runner its role and identities
+    # (`Opus.Settings.runner_environment/1`), and the keeper adds the
+    # control and relay descriptors; the test build's direct keeper names
+    # a relay socket in the descriptor's place.
+    "OPUS_ROLE" => :worker_service,
+    "OPUS_RUNNER_ID" => :worker_service,
+    "OPUS_BOOT_ID" => :worker_service,
+    "OPUS_CONTROL_FD" => :keeper,
+    "OPUS_RELAY_FD" => :keeper,
+    "OPUS_RELAY_SOCKET" => :keeper,
+    # Retired: `Opus.Settings` reads it only to refuse a service that sets it.
+    "OPUS_KEEPER" => :retired
+  }
+
+  # A name two releases read, each from its own env file, is documented in
+  # each: cyfr's in the configuration guide, the opus service's in
+  # .env.opus.example.
+  @read_by_two %{"CYFR_LOG_LEVEL" => [".env.opus.example", "configuration-guide.md"]}
+
+  # Every quoted upper-case name the releases' readers spell: what a
+  # documented name must be read as, whatever its prefix.
+  defp spelled_by_readers do
+    not_read = spelled_not_read()
+
+    for file <- @env_readers ++ keeper_sources(),
+        [name] <-
+          Regex.scan(~r/"([A-Z][A-Z0-9_]*[A-Z0-9])"/, File.read!(Path.join(@repo_root, file)),
+            capture: :all_but_first
+          ),
+        not MapSet.member?(not_read, name),
+        into: MapSet.new(),
+        do: name
+  end
+
+  test "every variable the releases read is documented in exactly one home" do
+    read = read_variables()
+    homes = homes()
+
+    for {name, _starter} <- @set_by_the_starter do
+      assert name in read, "#{name} is on the set-by-the-starter roster, and nothing reads it"
+
+      for {home, text} <- homes, home != "integration-guide.md" do
+        refute name in documented(text), "#{home} documents #{name}, which no operator sets"
+      end
+    end
+
+    violations =
+      read
+      |> Enum.reject(&Map.has_key?(@set_by_the_starter, &1))
+      |> misplaced(homes)
+      |> Enum.reject(fn {name, found} -> Map.get(@read_by_two, name) == found end)
+
+    assert violations == [],
+           """
+           Each of these is read by a release and documented in no home or in \
+           more than one ({variable, homes}):
+
+           #{inspect(violations)}
+           """
+
+    for {name, examples} <- @read_by_two do
+      assert name in read, "#{name} is on the read-by-two roster, and nothing reads it"
+      assert {name, examples} in misplaced([name], homes)
+    end
+  end
+
+  # The compose-only class and the deployment list are the roster's
+  # (`Cyfr.Platform.Settings.Roster`), which derives the first from
+  # docker-compose.yml and holds it there; this reads them from their owner.
+  test "every name a shipped example documents is read by a release or by compose" do
+    read =
+      MapSet.union(
+        spelled_by_readers(),
+        MapSet.new(Roster.compose_only() ++ Roster.deployment() ++ Roster.variables())
+      )
+
+    unread =
+      for example <- ~w(.env.example .env.opus.example .env.locus.example),
+          name <- documented(File.read!(Path.join(@repo_root, example))),
+          not MapSet.member?(read, name),
+          do: {example, name}
+
+    assert unread == [],
+           "these examples document names no release reads and compose does not " <>
+             "interpolate: #{inspect(unread)}"
+  end
+
+  # ==========================================================================
+  # The deployment file and the configuration guide
+  #
+  # `.env.example` is the starting `.env`: the lines `cyfr init` rewrites
+  # or completes, assigned, and the deployment's choices commented out.
+  # `configuration-guide.md` is the roster's render, every name and setting
+  # with its sentence.
+  # ==========================================================================
+
+  # The names `.env.example` assigns: the keys and addresses `cyfr init`
+  # mints, writes or completes, and the reach every deployment decides.
+  @deployment_file_assignments ~w(
+    CYFR_SECRET_KEY_BASE CYFR_PORT CYFR_HOST CYFR_BEHIND_PROXY CADDY_ACME_EMAIL
+    CYFR_CORS_ALLOWED_ORIGINS CYFR_PRIVATE_EGRESS_TARGETS CYFR_GITHUB_CLIENT_ID
+    CYFR_GOOGLE_CLIENT_ID CYFR_OPUS_KEY OPUS_SERVICE_KEY CYFR_LOCUS_BACKENDS_KEY
+    CYFR_LOCUS_BUILDS_URL CYFR_LOCUS_BUILDS_KEY
+  )
+
+  test "the deployment file assigns init's lines, keeps its anchor and holds no platform setting" do
+    text = File.read!(Path.join(@repo_root, ".env.example"))
+
+    assigned =
+      for [name] <- Regex.scan(~r/^([A-Z][A-Z0-9_]*)=/m, text, capture: :all_but_first),
+          do: name
+
+    assert Enum.sort(assigned) == Enum.sort(@deployment_file_assignments),
+           ".env.example assigns #{inspect(assigned)}"
+
+    # `cyfr init` writes the operators' line over its commented anchor,
+    # matched by prefix, so the template carries the anchor once.
+    assert length(Regex.scan(~r/^# CYFR_PLATFORM_ADMIN_EMAILS=$/m, text)) == 1
+    refute text =~ ~r/^#?\s*CYFR_PLATFORM_ADMIN_EMAILS=.+$/m
+
+    settings = MapSet.new(Roster.variables())
+
+    assert Enum.filter(documented(text), &MapSet.member?(settings, &1)) == [],
+           ".env.example documents platform settings, which the guide and the Settings page hold"
+
+    declared = MapSet.new(Roster.deployment() ++ Roster.compose_only())
+
+    stray =
+      for name <- documented(text),
+          String.starts_with?(name, "CYFR_"),
+          not MapSet.member?(declared, name),
+          do: name
+
+    assert stray == [], ".env.example documents #{inspect(stray)}, no deployment variable"
+
+    assert length(String.split(text, "configuration-guide.md")) == 2,
+           ".env.example points at configuration-guide.md once"
+  end
+
+  test "configuration-guide.md is the roster's render" do
+    assert File.read!(@configuration_guide) == ConfigurationGuide.render(),
+           "configuration-guide.md is stale: run `mix cyfr.gen.configuration_guide`"
+  end
+
+  test "the guide lists every name the roster declares, each once, with its sentence" do
+    text = File.read!(@configuration_guide)
+
+    listed =
+      ~r/^\| `([A-Z][A-Z0-9_]*)` \|/m
+      |> Regex.scan(text, capture: :all_but_first)
+      |> List.flatten()
+
+    exact_foreign =
+      for {name, _owner} <- Roster.foreign(), not String.ends_with?(name, "*"), do: name
+
+    assert Enum.sort(listed) ==
+             Enum.sort(
+               Roster.deployment() ++ Roster.variables() ++ Roster.compose_only() ++ exact_foreign
+             )
+
+    for {name, doc} <- Roster.deployment_docs() ++ Roster.compose_only_docs() do
+      assert is_binary(doc) and String.trim(doc) != "", "#{name} has no sentence"
+    end
+
+    lines = String.split(text, "\n")
+
+    for %Entry{} = entry <- Roster.entries() do
+      assert is_binary(entry.doc) and String.trim(entry.doc) != "", "#{entry.key} has no doc"
+
+      row =
+        Enum.find(lines, &String.starts_with?(&1, "| `#{entry.variable}` | `#{entry.key}` |")) ||
+          flunk("configuration-guide.md has no row for #{entry.key}")
+
+      assert row =~ "| `#{entry.group}` | #{entry.scope} | #{entry.stale} | #{entry.doc} |"
+    end
+
+    [_, recovery] = String.split(text, "## Headless recovery\n", parts: 2)
+    assert recovery =~ "bin/cyfr rpc" and recovery =~ "bin/cyfr eval"
+  end
+
+  # ==========================================================================
+  # integration-guide's scope, key-type, vault and consent-walk tables
+  # ==========================================================================
+
+  # The rows of the first table under `heading`, up to the next heading,
+  # each as its trimmed cells.
+  defp guide_table(heading) do
+    guide = File.read!(@integration_guide)
+
+    [_, section] =
+      Regex.run(~r/^#{Regex.escape(heading)}\n(.*?)(?=^#)/ms, guide) ||
+        flunk("integration-guide.md has no section #{inspect(heading)}")
+
+    rows =
+      for line <- String.split(section, "\n"),
+          String.starts_with?(line, "|"),
+          not (line =~ ~r/^\|[\s|:-]+\|$/),
+          do: line |> String.trim("|") |> String.split(~r/(?<!\\)\|/) |> Enum.map(&String.trim/1)
+
+    [_header | body] = rows
+    assert body != [], "the table under #{heading} has no rows"
+    body
+  end
+
+  defp backquoted(cell),
+    do: ~r/`([^`]+)`/ |> Regex.scan(cell, capture: :all_but_first) |> List.flatten()
+
+  test "the guide's scope table is Sanctum's permission roster" do
+    documented = for [scope | _] <- guide_table("### Available Scopes"), do: hd(backquoted(scope))
+
+    assert Enum.sort(documented) == Enum.sort(Sanctum.Atoms.known_permissions()),
+           "integration-guide.md's scopes #{inspect(documented)} are not " <>
+             "Sanctum.Atoms.known_permissions/0"
+  end
+
+  test "the guide's key-type table is Sanctum.ApiKey's defaults and ceilings" do
+    rows = guide_table("#### Key Type Defaults and Ceilings")
+
+    documented =
+      Map.new(rows, fn [type, defaults, ceiling] ->
+        [_, name] = Regex.run(~r/\*\*(\w+)\*\*/, type)
+
+        {String.to_existing_atom(String.downcase(name)),
+         {Jason.decode!(hd(backquoted(defaults))), Jason.decode!(hd(backquoted(ceiling)))}}
+      end)
+
+    expected =
+      Map.new(Sanctum.ApiKey.type_defaults(), fn {type, defaults} ->
+        {type, {defaults, Map.fetch!(Sanctum.ApiKey.type_ceilings(), type)}}
+      end)
+
+    assert documented == expected,
+           "integration-guide.md's key-type defaults and ceilings are not Sanctum.ApiKey's"
+  end
+
+  # The operations of the configured tool named `tool`, by action.
+  defp operations(tool) do
+    definition =
+      Enum.find_value(Grimoire.configured_providers(), fn provider ->
+        Enum.find(provider.tools(), &(&1.name == tool))
+      end)
+
+    assert definition, "no configured provider serves #{tool}"
+    Map.new(definition.operations, &{&1.action, &1})
+  end
+
+  # A tool's action table: the actions are the tool's, each once, and every
+  # name the key-args column backquotes is an argument of that action or a
+  # value one of its arguments enumerates.
+  defp assert_action_table(heading, tool) do
+    rows = guide_table(heading)
+    operations = operations(tool)
+    documented = for [action | _] <- rows, do: hd(backquoted(action))
+
+    assert Enum.sort(documented) == Enum.sort(Map.keys(operations)),
+           "integration-guide.md's #{tool} actions #{inspect(documented)} are not the " <>
+             "operations #{tool} declares, #{inspect(Enum.sort(Map.keys(operations)))}"
+
+    for [action, args | _] <- rows,
+        action = hd(backquoted(action)),
+        %Prima.Operation{args: declared} <- [operations[action]] do
+      known = Enum.flat_map(declared, &[&1.name | &1.enum || []])
+
+      for name <- backquoted(args) do
+        assert name in known,
+               "integration-guide.md names `#{name}` for #{tool}.#{action}, which declares " <>
+                 inspect(Enum.map(declared, & &1.name))
+      end
+    end
+  end
+
+  test "the guide's vault table is the vault tool's operations" do
+    assert_action_table("### The vault (`vault` tool)", "vault")
+  end
+
+  test "the guide's consent-walk table is the profile tool's operations" do
+    assert_action_table("### The consent walk (`profile` tool)", "profile")
+  end
+
+  # ==========================================================================
+  # integration-guide's typed-errors table and the paragraph under it
+  #
+  # The typed errors are the consent signals, `Prima.ConsentSignal`'s tags,
+  # each with the payload `Sanctum.Consent` types for it. The table names
+  # each once with those keys; the paragraph under it names each tag's MCP
+  # code and the HTTP status `confirmation_required` answers.
+  # ==========================================================================
+
+  # The keys of `Sanctum.Consent`'s `@type <tag> :: %{…}`, in order, read
+  # inside that type up to its own closing brace, so a key of another type
+  # cannot stand in for a missing one.
+  defp consent_payload_keys(tag) do
+    consent = File.read!(Path.join(@repo_root, "apps/sanctum/lib/sanctum/consent.ex"))
+
+    [body] =
+      Regex.run(~r/^  @type #{tag} :: %\{\n(.*?)\n\s*\}$/ms, consent, capture: :all_but_first) ||
+        flunk("Sanctum.Consent declares no map type #{tag}")
+
+    ~r/^\s*(\w+):/m |> Regex.scan(body, capture: :all_but_first) |> List.flatten()
+  end
+
+  test "the guide's typed-errors table is the consent signals, each with its payload" do
+    tags = Enum.map(Prima.ConsentSignal.tags(), &Atom.to_string/1)
+    assert length(tags) == 5
+
+    documented =
+      for [error, payload | _] <- guide_table("### Readiness and typed errors") do
+        [tag] = backquoted(error)
+        [keys] = backquoted(payload)
+        {tag, keys |> String.trim_leading("{") |> String.trim_trailing("}") |> split_keys()}
+      end
+
+    assert Enum.sort(Enum.map(documented, &elem(&1, 0))) == Enum.sort(tags),
+           "integration-guide.md's typed errors #{inspect(Enum.map(documented, &elem(&1, 0)))} " <>
+             "are not the consent signals #{inspect(tags)}, each once"
+
+    for {tag, keys} <- documented do
+      assert keys == consent_payload_keys(tag),
+             "integration-guide.md documents #{tag}'s payload as #{inspect(keys)}; " <>
+               "Sanctum.Consent types it #{inspect(consent_payload_keys(tag))}"
+    end
+
+    [_, section] =
+      Regex.run(
+        ~r/^### Readiness and typed errors\n(.*?)(?=^### )/ms,
+        File.read!(@integration_guide)
+      )
+
+    [paragraph] =
+      Regex.run(~r/^On the MCP wire each arrives .*$/m, section) ||
+        flunk("the typed errors have no paragraph naming their MCP codes")
+
+    pairs = Regex.scan(~r/`(-335\d\d)` \(`(\w+)`\)/, paragraph, capture: :all_but_first)
+
+    assert Enum.sort(for [_code, tag] <- pairs, do: tag) == Enum.sort(tags),
+           "the paragraph names the codes of #{inspect(for [_code, tag] <- pairs, do: tag)}, " <>
+             "not of every consent signal once"
+
+    for [code, tag] <- pairs do
+      assert Prima.MCP.Message.error_code(String.to_existing_atom(tag)) == String.to_integer(code),
+             "the paragraph gives #{tag} the code #{code}, which Prima.MCP.Message does not"
+    end
+
+    [_, status] =
+      Regex.run(~r/`confirmation_required` at `(\d{3}) /, paragraph) ||
+        flunk("the paragraph names no HTTP status for confirmation_required")
+
+    assert String.to_integer(status) == CyfrWeb.ApiError.status(:confirmation_required),
+           "the paragraph's HTTP status for confirmation_required is not CyfrWeb.ApiError's"
+  end
+
+  defp split_keys(keys), do: keys |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+
+  # ==========================================================================
+  # component-guide's WIT blocks
+  # ==========================================================================
+
+  # A WIT text's package, its interfaces as name to the sorted function
+  # lines, and its worlds as name to {exports, imports}, comments dropped
+  # and whitespace collapsed.
+  defp wit(text) do
+    text =
+      text
+      |> String.replace(~r{//[^\n]*}, "")
+      |> String.replace(~r/\s+/, " ")
+
+    [_, package] = Regex.run(~r/package ([^;]+);/, text)
+
+    interfaces =
+      for [_, name, body] <- Regex.scan(~r/interface ([\w-]+) \{(.*?)\}/, text), into: %{} do
+        functions =
+          body
+          |> String.split(";", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+
+        {name, Enum.sort(functions)}
+      end
+
+    worlds =
+      for [_, name, body] <- Regex.scan(~r/world ([\w-]+) \{(.*?)\}/, text), into: %{} do
+        items = body |> String.split(";", trim: true) |> Enum.map(&String.trim/1)
+        exports = for "export " <> item <- items, do: item
+        imports = for "import " <> item <- items, do: item
+        {name, {Enum.sort(exports), Enum.sort(imports)}}
+      end
+
+    %{package: package, interfaces: interfaces, worlds: worlds}
+  end
+
+  # The canonical world of each component type, by package.
+  defp canonical_wits do
+    for path <- Path.wildcard(Path.join(@repo_root, "wit/*/world.wit")), into: %{} do
+      wit = wit(File.read!(path))
+      {wit.package, wit}
+    end
+  end
+
+  test "component-guide's WIT blocks are the canonical worlds, a catalyst's imports a subset" do
+    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+    canonical = canonical_wits()
+    blocks = Regex.scan(~r/^```wit\n(.*?)^```/ms, guide, capture: :all_but_first)
+
+    assert length(blocks) >= 3, "component-guide.md shows only #{length(blocks)} WIT blocks"
+
+    for [block] <- blocks do
+      shown = wit(block)
+
+      canon =
+        Map.get(canonical, shown.package) ||
+          flunk("component-guide.md shows package #{shown.package}, which wit/ does not declare")
+
+      for {name, functions} <- shown.interfaces do
+        assert Map.get(canon.interfaces, name) == functions,
+               "component-guide.md's #{shown.package} interface #{name} is #{inspect(functions)}; " <>
+                 "wit/ declares #{inspect(canon.interfaces[name])}"
+      end
+
+      for {name, {exports, imports}} <- shown.worlds do
+        {canon_exports, canon_imports} =
+          Map.get(canon.worlds, name) ||
+            flunk(
+              "component-guide.md shows world #{name}, which #{shown.package} does not declare"
+            )
+
+        assert exports == canon_exports, "world #{name} exports #{inspect(exports)}"
+
+        assert imports -- canon_imports == [],
+               "world #{name} imports #{inspect(imports -- canon_imports)}, which wit/ does not"
+
+        # Only a catalyst chooses its imports; every other world is shown whole.
+        unless shown.package =~ "catalyst",
+          do: assert(imports == canon_imports, "world #{name} is not shown whole")
+      end
+    end
+
+    # Every canonical world is shown at least once.
+    shown_packages = for [block] <- blocks, into: MapSet.new(), do: wit(block).package
+    assert MapSet.new(Map.keys(canonical)) == shown_packages
+  end
+
+  test "component-guide names every function of the invoke interface and of each host interface heading" do
+    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+    formula = canonical_wits() |> Map.values() |> Enum.find(&(&1.package =~ "formula"))
+
+    invoke =
+      for function <- formula.interfaces["invoke"],
+          do: function |> String.split(":", parts: 2) |> hd()
+
+    [_, listed] = Regex.run(~r/The full `invoke` interface \(with (.*?)\)/, guide)
+    assert Enum.sort(backquoted(listed)) == Enum.sort(invoke)
+
+    # Each `### `cyfr:<package>/<interface>` — `<function>(…` heading names
+    # a function its interface declares.
+    deps =
+      for path <- Path.wildcard(Path.join(@repo_root, "wit/*/deps/*/*.wit")),
+          wit = wit(File.read!(path)),
+          [package | _] = String.split(wit.package, "@"),
+          {interface, functions} <- wit.interfaces,
+          into: %{},
+          do: {"#{package}/#{interface}", Enum.map(functions, &hd(String.split(&1, ":")))}
+
+    headings =
+      Regex.scan(~r/^### `(cyfr:[a-z]+\/[a-z-]+)` — `([a-z-]+)\(/m, guide,
+        capture: :all_but_first
+      )
+
+    assert headings != []
+
+    for [interface, function] <- headings do
+      assert function in Map.get(deps, interface, []),
+             "component-guide.md heads #{interface} with #{function}, which it does not declare"
+    end
+  end
+
+  # ==========================================================================
+  # The tincture lists: tincture-guide.md and the Artisan role, from the
+  # frame's rules and the wire
+  #
+  # Each list is a block between `<!-- tincture:NAME -->` and
+  # `<!-- /tincture:NAME -->`, written as `tincture_list/1` renders it from
+  # `Compendium`'s tincture rules and `Prima.TinctureWire`. A block that
+  # differs fails with the rendering to paste, so a list the rules grow
+  # reaches the guide and the role before any reader meets a stale one.
+  # ==========================================================================
+
+  @tincture_list_files ["tincture-guide.md", "seed/aqua/roles/artisan.md"]
+  @tincture_lists ~w(served-types frame-capabilities templates declaration wire-routes sdk)
+
+  # The SDK's call for each request kind, and the arguments of each shell
+  # verb: the JavaScript names of what the wire names.
+  @sdk_requests %{
+    invoke: {"invoke", "ref, operation, args"},
+    action: {"action", "name, args"},
+    stream_open: {"stream", "name, subject, onEvent"}
+  }
+  @sdk_verb_args %{open: "ref", title: "title", credential: "name"}
+
+  defp tincture_list("served-types") do
+    rows =
+      for {extension, type} <- Enum.sort(Compendium.tincture_served_types()),
+          do: "| `#{extension}` | `#{type}` |"
+
+    ["| Extension | Served as |", "|---|---|" | rows]
+  end
+
+  defp tincture_list("frame-capabilities") do
+    rows =
+      for capability <- Compendium.tincture_frame_capabilities() do
+        {:ok, ["allow-scripts" | sandbox]} = Compendium.tincture_sandbox_tokens([capability])
+        {:ok, allow} = Compendium.tincture_allow_attribute([capability])
+
+        "| `#{capability}` | #{code_or_none(Enum.join(sandbox, " "))} | #{code_or_none(allow)} |"
+      end
+
+    ["| Capability | `sandbox` adds | `allow` adds |", "|---|---|---|" | rows]
+  end
+
+  defp tincture_list("templates") do
+    rows =
+      for %{name: name, build: build, entry: entry} <- Compendium.tincture_templates(),
+          do: "| `#{name}` | #{code_or_none(build || "")} | `#{entry}` |"
+
+    ["| Template | Build | Entry |", "|---|---|---|" | rows]
+  end
+
+  defp tincture_list("declaration") do
+    keys = fn struct -> struct |> Map.from_struct() |> Map.keys() |> Enum.sort() end
+    list = fn names -> Enum.map_join(names, ", ", &"`#{&1}`") end
+
+    [
+      "| Block | Keys |",
+      "|---|---|",
+      "| `frame` | #{list.(keys.(%Prima.Manifest.Tincture.Frame{}))} |",
+      "| `frame.placement` | one of #{list.(Compendium.tincture_placements())} |",
+      "| `cards[]` | #{list.(keys.(%Prima.Manifest.Tincture.Card{name: "", title: ""}))} |",
+      "| `cards[].buttons[]` | #{list.(keys.(%Prima.Manifest.Tincture.Button{label: "", action: ""}))} |",
+      "| `streams[]` | #{list.(keys.(%Prima.Manifest.Tincture.Stream{name: ""}))} |",
+      "| `actions[]` | an operation name, `tool.action` |"
+    ]
+  end
+
+  defp tincture_list("wire-routes") do
+    rows =
+      for kind <- Prima.TinctureWire.kinds(),
+          do: "| `#{kind}` | `POST #{Prima.TinctureWire.route(kind)}` |"
+
+    ["| Request | Route |", "|---|---|" | rows]
+  end
+
+  defp tincture_list("sdk") do
+    requests =
+      for kind <- Prima.TinctureWire.kinds() do
+        {name, args} = Map.fetch!(@sdk_requests, kind)
+        "| `cyfr.#{name}(#{args})` | `POST #{Prima.TinctureWire.route(kind)}` |"
+      end
+
+    verbs =
+      for verb <- Prima.TinctureWire.verbs(),
+          do:
+            "| `cyfr.#{verb}(#{Map.get(@sdk_verb_args, verb, "")})` | the shell's port, `#{verb}` |"
+
+    ["| Call | Carried by |", "|---|---|" | requests ++ verbs]
+  end
+
+  defp code_or_none(""), do: "—"
+  defp code_or_none(value), do: "`#{value}`"
+
+  defp tincture_block(text, name) do
+    case Regex.run(~r/<!-- tincture:#{name} -->\n(.*?)\n<!-- \/tincture:#{name} -->/s, text,
+           capture: :all_but_first
+         ) do
+      [block] -> block
+      nil -> nil
+    end
+  end
+
+  test "the tincture guide's and the Artisan role's lists are the rules' and the wire's" do
+    for file <- @tincture_list_files, name <- @tincture_lists do
+      text = File.read!(Path.join(@repo_root, file))
+      expected = Enum.join(tincture_list(name), "\n")
+
+      assert tincture_block(text, name) == expected,
+             """
+             #{file}'s #{name} list is not the rules' (or it has no block). It reads:
+
+             <!-- tincture:#{name} -->
+             #{expected}
+             <!-- /tincture:#{name} -->
+             """
+    end
+  end
+
+  test "the SDK's calls are the wire's request kinds and shell verbs" do
+    client = File.read!(Path.join(@repo_root, "apps/cyfr/assets/js/sdk/client.js"))
+    [_, api] = Regex.run(~r/const api = \{(.*?)\n  \}\n/s, client)
+
+    methods =
+      ~r/^    ([a-z]+)\(/m
+      |> Regex.scan(api, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.sort()
+
+    wire =
+      Enum.map(Prima.TinctureWire.kinds(), &elem(Map.fetch!(@sdk_requests, &1), 0)) ++
+        Enum.map(Prima.TinctureWire.verbs(), &Atom.to_string/1)
+
+    assert methods == Enum.sort(wire),
+           "the SDK's calls #{inspect(methods)} are not the wire's #{inspect(Enum.sort(wire))}"
+  end
+
+  test "the tincture guide states the lockfile, the invoke input, the referrer policy and the log rule" do
+    guide = File.read!(Path.join(@repo_root, "tincture-guide.md"))
+
+    assert guide =~ "`#{Compendium.Tincture.Rules.lockfile()}`"
+    assert guide =~ ~s({"operation": …, "params": …})
+    assert guide =~ "Referrer-Policy: no-referrer"
+    assert guide =~ ~r/no proxy may log `\/_s\/` paths/i
+
+    for guide <- ["tincture-guide.md", "integration-guide.md"] do
+      refute File.read!(Path.join(@repo_root, guide)) =~ ~r/POST \/t\//,
+             "#{guide} documents the retired /t/ invoke route"
+    end
+  end
+
+  # ==========================================================================
+  # integration-guide.md and the configuration guide
+  #
+  # Every variable and setting of the `cyfr` server is the configuration
+  # guide's, rendered from the roster. integration-guide.md points at it
+  # and lists none of its names in a table of its own: a copied table is
+  # one that drifts from the roster.
+  # ==========================================================================
+
+  # The configuration guide's names that a table row of `guide` begins
+  # with, each once.
+  defp repeated_settings(guide, configuration) do
+    for line <- String.split(guide, "\n"),
+        String.starts_with?(line, "| `"),
+        [first | _] = line |> String.trim_leading("|") |> String.split("|"),
+        [name] <- Regex.scan(~r/`([A-Z][A-Z0-9_]*)`/, first, capture: :all_but_first),
+        MapSet.member?(configuration, name),
+        uniq: true,
+        do: name
+  end
+
+  test "integration-guide.md points at the configuration guide and repeats none of its names" do
+    guide = File.read!(@integration_guide)
+    configuration = documented_in_guide(File.read!(@configuration_guide))
+
+    assert guide =~ "[configuration-guide.md](configuration-guide.md)",
+           "integration-guide.md does not point at configuration-guide.md"
+
+    assert repeated_settings(guide, configuration) == [],
+           "integration-guide.md's tables repeat what configuration-guide.md documents: " <>
+             inspect(repeated_settings(guide, configuration))
+
+    # A planted row of the server's is caught, and so is one of two names.
+    planted = guide <> "\n| `CYFR_HOST` | `localhost` | The host |\n"
+    assert repeated_settings(planted, configuration) == ["CYFR_HOST"]
+
+    planted = guide <> "\n| `CYFR_S3_BUCKET` / `CYFR_S3_REGION` | — | For S3 |\n"
+    assert repeated_settings(planted, configuration) == ["CYFR_S3_BUCKET", "CYFR_S3_REGION"]
+  end
+
+  # ==========================================================================
+  # The shipped guides
+  #
+  # The scaffold tarball's items (scripts/scaffold-tarball.sh) are the
+  # guides a project ships, and every guide at the repository's root is
+  # one of them; codex's managed list holds the same set (`scaffold.Guides`,
+  # under its own test). Every other copy of the list names the same
+  # guides: README's `cyfr init` paragraph, its project tree and its
+  # documentation table; the workflow's path filters, so a change to a guide
+  # runs the suite that reads it; and the vocabulary gate's paths.
+  # ==========================================================================
+
+  defp shipped_guides do
+    script = File.read!(Path.join(@repo_root, "scripts/scaffold-tarball.sh"))
+
+    [_, items] =
+      Regex.run(~r/\nITEMS=\((.*?)\n\)/s, script) ||
+        flunk("scaffold-tarball.sh has no ITEMS list")
+
+    items
+    |> String.split("\n")
+    |> Enum.reject(&String.starts_with?(String.trim(&1), "#"))
+    |> Enum.flat_map(&String.split/1)
+    |> Enum.filter(&String.ends_with?(&1, "-guide.md"))
+    |> Enum.sort()
+  end
+
+  defp readme_section(heading) do
+    [_, section] =
+      Regex.run(~r/^#{Regex.escape(heading)}\n(.*?)(?=^## )/ms, File.read!(@readme)) ||
+        flunk("README.md has no section #{inspect(heading)}")
+
+    section
+  end
+
+  defp guide_names(text, pattern),
+    do: pattern |> Regex.scan(text, capture: :all_but_first) |> List.flatten() |> Enum.sort()
+
+  test "every copy of the shipped-guide list names the guides the scaffold ships" do
+    shipped = shipped_guides()
+    assert "identity-guide.md" in shipped and "devices-guide.md" in shipped
+
+    root =
+      @repo_root
+      |> Path.join("*-guide.md")
+      |> Path.wildcard()
+      |> Enum.map(&Path.basename/1)
+      |> Enum.sort()
+
+    assert root == shipped,
+           "the root guides #{inspect(root)} are not the ones the scaffold ships #{inspect(shipped)}"
+
+    [_, included] =
+      Regex.run(~r/the included guides \((.*?)\)\./, File.read!(@readme)) ||
+        flunk("README.md's `cyfr init` paragraph names no included guides")
+
+    copies = [
+      {"README.md's `cyfr init` paragraph", included, ~r/\[([a-z-]+-guide\.md)\]/},
+      {"README.md's project tree", readme_section("## Project Layout"),
+       ~r/^├── ([a-z-]+-guide\.md) /m},
+      {"README.md's documentation table", readme_section("## Documentation"),
+       ~r/^\| \[[^\]]+\]\(([a-z-]+-guide\.md)\)/m}
+    ]
+
+    [triggers | _] = String.split(File.read!(@workflow), "\njobs:\n", parts: 2)
+
+    [_, push, pull_request] =
+      Regex.run(~r/^  push:\n(.*?)^  pull_request:\n(.*?)^  [a-z_]+:/ms, triggers) ||
+        flunk("test.yml has no push and pull_request triggers")
+
+    filters = ~r/^      - '([a-z-]+-guide\.md)'$/m
+
+    copies =
+      copies ++
+        [
+          {"test.yml's push paths", push, filters},
+          {"test.yml's pull_request paths", pull_request, filters}
+        ]
+
+    for {copy, text, pattern} <- copies do
+      assert guide_names(text, pattern) == shipped,
+             "#{copy} names #{inspect(guide_names(text, pattern))}, " <>
+               "not the guides the scaffold ships #{inspect(shipped)}"
+    end
+
+    # The vocabulary gate's three file lists: the fossil patterns' paths,
+    # and the files its layout and tree-diagram greps read.
+    workflow = File.read!(@workflow)
+
+    gate_lists = [
+      {"the vocabulary gate's paths", ~r/^\s+paths='([^']+)'$/m},
+      {"the vocabulary gate's docs_hits files",
+       ~r/^\s+docs_hits="\$\(git grep -InE '.*' -- ([^|]+) \|\| true\)"$/m},
+      {"the vocabulary gate's phantom_hits files",
+       ~r/^\s+phantom_hits="\$\(git grep -InE '.*' -- ([^|]+) \|\| true\)"$/m}
+    ]
+
+    for {copy, pattern} <- gate_lists do
+      [_, files] = Regex.run(pattern, workflow) || flunk("test.yml has no #{copy}")
+
+      guides =
+        files |> String.split() |> Enum.filter(&String.ends_with?(&1, "-guide.md")) |> Enum.sort()
+
+      assert guides == shipped,
+             "#{copy} name #{inspect(guides)}, not the guides the scaffold ships #{inspect(shipped)}"
+    end
+  end
+
+  # ==========================================================================
+  # identity-guide.md and devices-guide.md
+  #
+  # The guides a person reads name the settings that bound what they see
+  # and the variables an operator sets for them. Each name is the roster's,
+  # a value a guide gives a variable is one the roster accepts, and each
+  # default a guide states is the roster's.
+  # ==========================================================================
+
+  @people_guides ~w(identity-guide.md devices-guide.md)
+
+  # The spans the guides spell a default in, in seconds. A default spelled
+  # any other way fails until it is read here.
+  @spelled_spans %{"five minutes" => 300, "one hour" => 3_600}
+
+  defp stated_default(phrase) do
+    case Integer.parse(phrase) do
+      {seconds, ""} ->
+        seconds
+
+      _ ->
+        Map.get(@spelled_spans, phrase) ||
+          flunk("a guide states a default as #{inspect(phrase)}, which this test does not read")
+    end
+  end
+
+  test "the identity and devices guides name the roster's settings and variables, with its defaults" do
+    entries = Map.new(Roster.entries(), &{&1.key, &1})
+    by_variable = Map.new(Roster.entries(), &{&1.variable, &1})
+    declared = MapSet.new(Roster.deployment() ++ Roster.variables())
+
+    seen =
+      for guide <- @people_guides, reduce: %{keys: 0, variables: 0, defaults: 0} do
+        seen ->
+          text = File.read!(Path.join(@repo_root, guide))
+
+          # Every backquoted snake-case name that is a setting's, and every
+          # one spelled like a duration setting: a misspelt key fails.
+          keys =
+            for [token] <-
+                  Regex.scan(~r/`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`/, text, capture: :all_but_first),
+                Map.has_key?(entries, token) or String.ends_with?(token, "_seconds"),
+                uniq: true,
+                do: token
+
+          for key <- keys do
+            assert Map.has_key?(entries, key),
+                   "#{guide} names the setting #{key}, which the roster lacks"
+          end
+
+          # A variable, with the value a guide gives it when it gives one.
+          variables =
+            for [name | value] <-
+                  Regex.scan(~r/`(CYFR_[A-Z0-9_]+)(?:=([^`]*))?`/, text, capture: :all_but_first),
+                do: {name, List.first(value, "")}
+
+          for {name, value} <- variables do
+            assert MapSet.member?(declared, name),
+                   "#{guide} names #{name}, which the roster lacks"
+
+            if value != "" and Map.has_key?(by_variable, name) do
+              assert match?({:ok, _}, by_variable[name].validator.(value)),
+                     "#{guide} sets #{name}=#{value}, which the roster refuses"
+            end
+          end
+
+          defaults =
+            Regex.scan(~r/`([a-z][a-z0-9_]*)`(?: \(|, )([a-z0-9 ]+?) by default/, text,
+              capture: :all_but_first
+            )
+
+          for [key, phrase] <- defaults do
+            entry =
+              Map.get(entries, key) || flunk("#{guide} states a default for #{key}, no setting")
+
+            assert stated_default(phrase) == entry.default,
+                   "#{guide} says #{key} defaults to #{phrase}; " <>
+                     "the roster's default is #{inspect(entry.default)}"
+          end
+
+          %{
+            keys: seen.keys + length(keys),
+            variables: seen.variables + length(variables),
+            defaults: seen.defaults + length(defaults)
+          }
+      end
+
+    # Guards against the scans quietly matching nothing.
+    assert seen.keys >= 5 and seen.variables >= 5 and seen.defaults >= 5, inspect(seen)
+  end
+
+  # The identity guide's loss table has no owner in code to drift from; it
+  # is held as the contract it states: every row says what was lost, what
+  # still works and how the person comes back, and the last row is the one
+  # loss no recovery answers, which only starting again as a new person does.
+  test "the identity guide's loss table keeps its columns and its last row" do
+    guide = File.read!(Path.join(@repo_root, "identity-guide.md"))
+
+    [_, section] =
+      Regex.run(~r/^## What Each Loss Costs\n(.*?)(?=^## |\z)/ms, guide) ||
+        flunk("identity-guide.md has no section What Each Loss Costs")
+
+    [header, _rule | rows] =
+      for line <- String.split(section, "\n"),
+          String.starts_with?(line, "|"),
+          do: line |> String.trim("|") |> String.split("|") |> Enum.map(&String.trim/1)
+
+    assert header == ["You lost", "What still works", "How you come back"]
+    assert length(rows) >= 8, "the loss table has #{length(rows)} rows"
+    assert Enum.all?(rows, &(length(&1) == 3)), "a loss row does not have three cells"
+
+    [lost, works, back] = List.last(rows)
+    assert lost =~ "every kit" and lost =~ "online keys"
+    assert works =~ "Nothing"
+    assert back =~ "new person"
   end
 end

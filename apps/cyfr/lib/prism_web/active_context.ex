@@ -56,7 +56,7 @@ defmodule PrismWeb.ActiveContext do
 
       live_session :athanor,
         on_mount: [
-          {PrismWeb.LiveAuth, :require_auth},
+          {CyfrWeb.ContextGuard, :protected},
           {PrismWeb.Focus, :assign},
           {PrismWeb.ActiveContext, :assign}
         ] do

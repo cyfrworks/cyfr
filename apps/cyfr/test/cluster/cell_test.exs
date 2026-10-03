@@ -9,7 +9,7 @@ defmodule Cyfr.Cluster.CellTest do
   death costs a successor, what a live partition costs nobody, and which
   member proposes itself for a singleton.
 
-  Every bound here is `docs/plans/cell-ownership.md` §4.1's, measured
+  Every bound here is the cell ownership design note's §4.1's, measured
   rather than assumed, and every measurement is reported with the margin
   it had.
   """
@@ -197,8 +197,8 @@ defmodule Cyfr.Cluster.CellTest do
 
     test "without the proposal both members write, which is what the proposal removes" do
       # The broken-ownership variant: a tick that asks for the row
-      # regardless of the roster is what the code did before this slice,
-      # and it is still what `cycle/1` does for a caller that asks
+      # regardless of the roster is what the code did before the roster
+      # existed, and it is still what `cycle/1` does for a caller that asks
       # directly. Two members doing it is safe — the row admits one — but
       # contended, and the fence counts the contention the gate removes.
       Observer.forget_claim("retention", "cell")
@@ -216,15 +216,15 @@ defmodule Cyfr.Cluster.CellTest do
   end
 
   describe "what a cell does not run" do
-    test "no member runs a bridge controller, so no member claims a backend" do
-      # `Emissary.MCP.Bridge.start_link/1` answers `:ignore` while
+    test "no member runs a backends controller, so no member claims a backend" do
+      # `Emissary.External.Backends.start_link/1` answers `:ignore` while
       # `:cluster` is on: a cluster of control planes runs no stdio
       # servers. That is why the `mcp_backend` claim has no roster gate —
       # there is no controller in a cell to gate — and it is what the
       # shipped guides say.
       for id <- [:a, :b] do
-        refute Cell.call(id, Emissary.MCP.Bridge, :running?, []),
-               "member #{id} started a bridge controller in a cell"
+        refute Cell.call(id, Emissary.External.Backends, :running?, []),
+               "member #{id} started a backends controller in a cell"
       end
 
       assert Observer.claims("mcp_backend") == []

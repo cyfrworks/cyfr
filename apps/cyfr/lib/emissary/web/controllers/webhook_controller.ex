@@ -1,0 +1,368 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Emissary.Web.WebhookController do
+  @moduledoc """
+  Inbound webhook receiver.
+
+  This controller runs after `CyfrWeb.Plugs.WebhookRateLimit` and
+  `CyfrWeb.Plugs.VerifyWebhookSignature`, which together guarantee:
+
+    * `conn.assigns[:webhook]` is the looked-up, enabled webhook row.
+    * `conn.assigns[:raw_body]` is the verified raw request body.
+
+  Build the invoke envelope, merge with the webhook's stored
+  `input_template`, and **fire** the target component asynchronously through
+  `Crucible.run_root/5` via `Task.Supervisor.start_child/2`. The HTTP request
+  returns `200 {"status":"accepted","request_id":...}` immediately — webhook
+  senders only need a 2xx ack to consider delivery successful (Stripe /
+  GitHub / Twilio / PayPal docs all converge on this). The delivery is
+  one admission decision (`Grimoire.open_decision/3`), recorded with its
+  request-log row before the run is spawned, under a call id minted beside
+  the request id and carried on the context, so the root execution's row
+  names it. The context carries the origin `webhook` (`Prima.Origin`),
+  which that row records; a retried delivery the idempotency claim
+  admits again runs under the same origin. The component outcome is its
+  completion (`Grimoire.close_decision/3`), recorded and emitted via `[:cyfr,
+  :emissary, :webhook, :invoke, :stop]` telemetry from inside the spawned
+  task, correlated to the HTTP response by `request_id`.
+
+  No controller-level timeout: the executor enforces the consented node
+  timeout (`Prima.Limits`). A layered controller timeout would just
+  produce inconsistent error reasons for the same kill.
+  """
+
+  use Emissary.Web, :controller
+
+  require Logger
+
+  alias Sanctum.Webhook
+
+  # Headers the component is allowed to see on the inbound POST. Anything
+  # outside this list is dropped from the envelope before invocation —
+  # reduces blast radius if a webhook target is later changed to a less-
+  # trusted component, and keeps secrets like Authorization out of audit logs.
+  @safe_header_allowlist ~w(
+    content-type
+    user-agent
+    x-github-event
+    x-github-delivery
+    x-hub-signature-256
+    x-gitlab-event
+    stripe-signature
+    x-twilio-signature
+    x-request-id
+  )
+
+  def invoke(conn, _params) do
+    case conn.assigns[:webhook] do
+      nil ->
+        # Defensive — verify plug should have halted before us.
+        CyfrWeb.ApiError.send(conn, 500, :internal_error, nil)
+
+      webhook ->
+        # The request's identity is the pipeline's
+        # (`CyfrWeb.Plugs.CallIdentity`): the same key on the log lines
+        # as on the request-log row this run files, and the call id the
+        # delivery's decision and its execution row carry.
+        request_id = conn.assigns.request_id
+
+        case Sanctum.Caller.establish({:webhook, webhook}, request_id: request_id) do
+          {:ok, ctx} ->
+            # A delivery's run is a webhook's, whatever the request says.
+            ctx = %{CyfrWeb.Plugs.CallIdentity.stamp(conn, ctx) | origin: :webhook}
+            invoke_active(conn, ctx, webhook, conn.assigns[:raw_body], request_id)
+
+          {:error, :unauthenticated} ->
+            # The athanor is archived or the creator was denied on this
+            # server — the stored row must not remain a standing execution
+            # channel. Same response shape as a disabled webhook so
+            # existence is not leaked.
+            Logger.warning(
+              "[WebhookInvoke] athanor #{webhook.athanor_id} or creator " <>
+                "#{inspect(webhook.created_by)} no longer active — refusing slug=#{webhook.slug}"
+            )
+
+            CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
+
+          {:error, :no_athanor} ->
+            # Webhook row with no resolved athanor — should never happen for
+            # a well-formed row, but fail closed to preserve isolation.
+            Logger.error(
+              "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved athanor — rejecting"
+            )
+
+            CyfrWeb.ApiError.send(conn, 500, :internal_error, nil)
+        end
+    end
+  end
+
+  defp invoke_active(conn, ctx, webhook, raw_body, request_id) do
+    # This pipeline never runs Authenticate (the plug that stamps), so the
+    # tenant metadata lands here — the roster exists so an aggregator can
+    # filter by athanor, and webhook lines are exactly the ones that need it.
+    Prima.LoggerContext.set_from_context(ctx)
+
+    case Webhook.decode_input_template(webhook.input_template) do
+      {:ok, template} ->
+        input = build_input(template, conn, raw_body, webhook, request_id)
+        run_logged_invoke(conn, ctx, request_id, webhook, input)
+
+      {:error, reason} ->
+        Logger.error(
+          "[WebhookInvoke] stored input_template invalid slug=#{webhook.slug} reason=#{inspect(reason)}"
+        )
+
+        CyfrWeb.ApiError.send(conn, 500, :internal_error, nil)
+    end
+  end
+
+  # ============================================================================
+  # Internal
+  # ============================================================================
+
+  defp build_input(template, conn, raw_body, webhook, request_id) do
+    envelope = %{
+      "headers" => safe_headers(conn, webhook.signature_header),
+      "body" => raw_body,
+      "body_json" => parsed_body_json(conn),
+      "metadata" => %{
+        "webhook_slug" => webhook.slug,
+        "webhook_name" => webhook.name,
+        "received_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+        "request_id" => request_id
+      }
+    }
+
+    Map.put(template, "_webhook", envelope)
+  end
+
+  defp parsed_body_json(%Plug.Conn{body_params: %Plug.Conn.Unfetched{}}), do: nil
+  defp parsed_body_json(%Plug.Conn{body_params: %{} = params}), do: params
+
+  # Every known signature-carrying header is dropped, not just the one this
+  # webhook verifies with: a GitHub-configured hook has no business handing
+  # the target component a Stripe or Twilio signature that happened to ride
+  # along on the request.
+  @signature_headers ~w(x-hub-signature-256 stripe-signature x-twilio-signature)
+
+  defp safe_headers(conn, signature_header) do
+    drop = [String.downcase(signature_header || Sanctum.Webhook.default_signature_header())]
+    drop = drop ++ @signature_headers
+
+    conn.req_headers
+    |> Enum.filter(fn {name, _} -> String.downcase(name) in @safe_header_allowlist end)
+    |> Enum.reject(fn {name, _} -> String.downcase(name) in drop end)
+    |> Map.new(fn {name, value} -> {String.downcase(name), value} end)
+  end
+
+  defp run_logged_invoke(conn, ctx, request_id, webhook, input) do
+    log_input = %{
+      webhook_slug: webhook.slug,
+      webhook_name: webhook.name,
+      target_ref: webhook.target_ref
+    }
+
+    telemetry_meta = %{
+      request_id: request_id,
+      webhook_slug: webhook.slug,
+      webhook_name: webhook.name,
+      reference: webhook.target_ref,
+      athanor_id: ctx.athanor_id,
+      user_id: ctx.user_id
+    }
+
+    decision =
+      Prima.Decision.new(
+        call_id: ctx.call_id,
+        request_id: request_id,
+        user_id: ctx.user_id,
+        athanor_id: ctx.athanor_id,
+        plane: :external,
+        tool: "webhook",
+        action: "invoke",
+        inserted_at: DateTime.utc_now(),
+        admission: :admitted
+      )
+
+    Grimoire.open_decision(ctx, decision, %{method: "POST /hooks/:slug", input: log_input})
+
+    start_time = System.monotonic_time()
+
+    :telemetry.execute(
+      [:cyfr, :emissary, :webhook, :invoke, :start],
+      %{system_time: System.system_time()},
+      telemetry_meta
+    )
+
+    # Capture Logger metadata before spawn — `Task.Supervisor.start_child` does
+    # not inherit it. Same idiom as `CyfrWeb.Plugs.Authenticate`.
+    logger_metadata = Prima.LoggerContext.capture()
+
+    # The release starts :cyfr (binding this endpoint) before :opus brings
+    # up the execution machinery — refuse the request cleanly in that
+    # window instead of accepting work that noproc-crashes in the task.
+    spawn_result =
+      if Crucible.available?() do
+        claim = conn.assigns[:webhook_delivery_claim]
+
+        Task.Supervisor.start_child(Emissary.Web.TaskSupervisor, fn ->
+          Prima.LoggerContext.restore(logger_metadata)
+          run_in_task(ctx, webhook, input, telemetry_meta, start_time, claim)
+        end)
+      else
+        {:error, :engine_starting}
+      end
+
+    case spawn_result do
+      {:ok, _pid} ->
+        json(conn, %{status: "accepted", request_id: request_id})
+
+      {:error, reason} ->
+        Logger.error("[WebhookInvoke] task spawn failed slug=#{webhook.slug}: #{inspect(reason)}")
+
+        duration_ms = duration_ms(start_time)
+
+        # The stored row and the telemetry read the table's sentence; the
+        # term itself goes only to the log line above.
+        error = Grimoire.render(reason)
+
+        Grimoire.close_decision(ctx, ctx.call_id, %{
+          result: {:error, reason},
+          duration_ms: duration_ms,
+          routed_to: Crucible.service()
+        })
+
+        :telemetry.execute(
+          [:cyfr, :emissary, :webhook, :invoke, :stop],
+          %{duration_ms: duration_ms},
+          telemetry_meta
+          |> Map.put(:status, :error)
+          |> Map.put(:error, error)
+        )
+
+        # The delivery's decision was opened above and closed just now: the
+        # renderer appends no second one.
+        conn
+        |> CyfrWeb.Plugs.CallIdentity.decided()
+        |> CyfrWeb.ApiError.send(503, :service_unavailable, nil)
+    end
+  end
+
+  # Task body. Wrapped in try/rescue so the audit trail (the decision's
+  # completion + `:invoke, :stop` telemetry) closes whether
+  # `Crucible.run_root/5` returns `{:ok, _}`, `{:error, _}`, or raises. The
+  # supervisor would log a crash otherwise, but the decision would stay
+  # without a completion.
+  defp run_in_task(ctx, webhook, input, telemetry_meta, start_time, claim) do
+    outcome = run_and_audit(ctx, webhook, input, telemetry_meta, start_time)
+    settle_claim(claim, outcome)
+  end
+
+  # The claim the idempotency plug staked, settled by the only code that
+  # knows how the delivery ended. `succeeded` keeps it — the sender's retry
+  # is a genuine duplicate. `failed` makes it re-deliverable, which is the
+  # case the plug's `register_before_send` could never reach: the response
+  # went out as `200 accepted` when this task SPAWNED.
+  defp settle_claim(nil, _outcome), do: :ok
+
+  defp settle_claim({webhook_id, key}, outcome) do
+    case Arca.WebhookDeliveryStorage.settle(webhook_id, key, outcome) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[Webhook] could not settle idempotency claim for #{webhook_id}: " <>
+            "#{inspect(reason)} — a retry of this delivery may read as a duplicate"
+        )
+
+        :telemetry.execute(
+          [:cyfr, :emissary, :webhook, :dedup_settle_failed],
+          %{count: 1},
+          %{webhook_id: webhook_id, outcome: outcome}
+        )
+    end
+  end
+
+  defp run_and_audit(ctx, webhook, input, telemetry_meta, start_time) do
+    try do
+      # A webhook fires under its bound profile's consent — the binding is
+      # enforced at create/update and by the NOT NULL column.
+      run_result =
+        Crucible.run_root(ctx, {:id, webhook.profile_id}, webhook.target_ref, input,
+          class: :background
+        )
+
+      case run_result do
+        {:ok, result} ->
+          duration_ms = duration_ms(start_time)
+
+          Grimoire.close_decision(ctx, ctx.call_id, %{
+            result: {:ok, result.output},
+            duration_ms: duration_ms,
+            routed_to: Crucible.service()
+          })
+
+          :telemetry.execute(
+            [:cyfr, :emissary, :webhook, :invoke, :stop],
+            %{duration_ms: duration_ms},
+            Map.put(telemetry_meta, :status, :ok)
+          )
+
+          :succeeded
+
+        {:error, reason} ->
+          duration_ms = duration_ms(start_time)
+          Logger.warning("[WebhookInvoke] error slug=#{webhook.slug}: #{inspect(reason)}")
+
+          Grimoire.close_decision(ctx, ctx.call_id, %{
+            result: {:error, reason},
+            duration_ms: duration_ms,
+            routed_to: Crucible.service()
+          })
+
+          # A fixed slug, never the raw term: telemetry metadata fans out
+          # to consumers that must not see internal reasons. The rendered
+          # sentence lives in the request log above.
+          :telemetry.execute(
+            [:cyfr, :emissary, :webhook, :invoke, :stop],
+            %{duration_ms: duration_ms},
+            telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, "execution_failed")
+          )
+
+          :failed
+      end
+    rescue
+      e ->
+        duration_ms = duration_ms(start_time)
+        formatted = Exception.format(:error, e, __STACKTRACE__)
+        Logger.error("[WebhookInvoke] crashed slug=#{webhook.slug}\n#{formatted}")
+
+        # The crash arm obeys the same two rules as the {:error, reason}
+        # arm above: the stored row gets the table's sentence for the
+        # exception, which is classified by its shape alone (a KeyError's
+        # message quotes the map it raised on), and telemetry gets the
+        # fixed slug — its consumers must not see internal reasons.
+        Grimoire.close_decision(ctx, ctx.call_id, %{
+          result: {:error, e},
+          duration_ms: duration_ms,
+          routed_to: Crucible.service()
+        })
+
+        :telemetry.execute(
+          [:cyfr, :emissary, :webhook, :invoke, :stop],
+          %{duration_ms: duration_ms},
+          telemetry_meta
+          |> Map.put(:status, :error)
+          |> Map.put(:error, "execution_crashed")
+        )
+    end
+  end
+
+  defp duration_ms(start_time) do
+    System.monotonic_time()
+    |> Kernel.-(start_time)
+    |> System.convert_time_unit(:native, :millisecond)
+  end
+end

@@ -16,9 +16,8 @@ defmodule Cyfr.ControlPlaneWorkersTest do
 
   alias Arca.ControlPlane
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     on_exit(fn -> ControlPlane.record(:unclaimed) end)
     :ok
   end
@@ -27,14 +26,18 @@ defmodule Cyfr.ControlPlaneWorkersTest do
     hash = :crypto.hash(:sha256, "expired-#{System.unique_integer([:positive])}")
 
     :ok =
-      Arca.SessionStorage.create_session(hash, %{
-        user_id: "user_1",
-        email: "user@example.com",
-        provider: "github",
-        permissions: "[]",
-        expires_at: DateTime.add(DateTime.utc_now(), -60, :second),
-        token_prefix: "cyfr_"
-      })
+      Arca.SessionStorage.create_session(
+        hash,
+        %{
+          user_id: "user_1",
+          email: "user@example.com",
+          provider: "github",
+          permissions: "[]",
+          expires_at: DateTime.add(DateTime.utc_now(), -60, :second),
+          token_prefix: "cyfr_"
+        },
+        Arca.Test.Actor.issuance("user_1")
+      )
 
     state = %{interval: :timer.hours(999)}
 
