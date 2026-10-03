@@ -73,10 +73,10 @@ Chromium 153.0.8010.12.
 | `revoke` | held | `pairing.revoke` confirmed on the glass; the stream revoked, then the client, closed `4403`; no longer listed; key and certificate erased; the last certificate refused `4403` |
 | `viewport` | held | at 720×720: `pairing.begin` read and confirmed in the Prism's system layer, the glass, `vault.create` confirmed on it with its outcome drawn and the entry made, the glass reconnected, `pairing.revoke` confirmed on it; the consent prompt and the glass's five screens had no control under 24×24 CSS px, no text under 12 px and no overflow |
 
-The Prism page around the prompt at 720×720, measured and not held, had
-the picker's five page dots (`shell_live.ex`, `tincture_dots`: buttons
-24×6 and 6×6 px with no text), "Safe mode" and "Devices" in 11 px text,
-and the "private" label in 10 px text.
+The Prism page around the prompt at 720×720 is measured and not held;
+at the run of 2026-10-03 it had no control under 24×24 CSS px, no text
+under 12 px and no overflow (the picker's page dots sit in 24 px touch
+targets, and the shell's chrome and the "private" label are 12 px).
 
 The device-intent measurement is one glass on SQLite, one intent at a
 time, in Chromium through the harness's TLS front on a shared host: a
