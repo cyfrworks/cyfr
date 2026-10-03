@@ -93,7 +93,15 @@ defmodule Cyfr.Telemetry.Catalog do
           "since an unreachable directory raises it on every paused request"
     },
     [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap] => %{consumers: [:audit]},
-    [:cyfr, :sanctum, :platform_context] => %{consumers: [:audit]},
+    [:cyfr, :sanctum, :platform_context] => %{
+      consumers: [:audit],
+      note:
+        "a platform-scope context was built, sanctioned or refused, for a platform-scope " <>
+          "operation: a person's platform capability never enters an athanor, and an " <>
+          "internal system context that works in an athanor is built for its task or " <>
+          "narrowed by Context.refocus/2 (auth_method :system); safe to audit, since " <>
+          "the audit handler builds no context and the emit cannot recurse"
+    },
     [:cyfr, :sanctum, :notify] => %{
       consumers: [:bridge],
       note: "the tray fan-in: what an athanor's members, or the operator, see happened"

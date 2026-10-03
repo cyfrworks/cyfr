@@ -655,7 +655,7 @@ func (args AthanorCreateArgs) MarshalJSON() ([]byte, error) {
 
 // AthanorDestroyArgs carries arguments for athanor.destroy.
 type AthanorDestroyArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
+	// The archived athanor to act on — an id, a group slug, or @<namespace>. A platform operation: it never defaults to the athanor in focus.
 	Athanor Field[string] `json:"athanor,omitzero"`
 }
 
@@ -728,7 +728,7 @@ func (args AthanorProvisionArgs) MarshalJSON() ([]byte, error) {
 
 // AthanorPurgeArgs carries arguments for athanor.purge.
 type AthanorPurgeArgs struct {
-	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
+	// The archived athanor to act on — an id, a group slug, or @<namespace>. A platform operation: it never defaults to the athanor in focus.
 	Athanor Field[string] `json:"athanor,omitzero"`
 }
 

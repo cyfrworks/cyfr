@@ -11,6 +11,14 @@ defmodule Sanctum.Providers.Athanor do
   archived, and archived by its last member leaving. Mutations are a
   person's act — an API-key context is refused, since a key belongs to one
   athanor and is nobody's identity.
+
+  Every verb but two acts in an athanor the caller holds a seat in. `purge`
+  and `destroy` are the operator's platform-scope operations
+  (`scope: :platform`, checked at admission): they reclaim an archived
+  athanor the operator need not belong to, focus nothing, and read it
+  through the server's own platform context. An operator with no seat may
+  `get` an archived athanor's public facts and nothing more; every other
+  verb refuses them like anyone else.
   """
 
   require Logger
@@ -154,11 +162,12 @@ defmodule Sanctum.Providers.Athanor do
           [
             Arg.new("athanor", :string,
               description:
-                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+                "The archived athanor to act on — an id, a group slug, or @<namespace>. A platform operation: it never defaults to the athanor in focus."
             )
           ],
           kind: :destructive,
-          planes: [:external]
+          planes: [:external],
+          scope: :platform
         ),
         Operation.new(
           "athanor",
@@ -167,11 +176,12 @@ defmodule Sanctum.Providers.Athanor do
           [
             Arg.new("athanor", :string,
               description:
-                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+                "The archived athanor to act on — an id, a group slug, or @<namespace>. A platform operation: it never defaults to the athanor in focus."
             )
           ],
           kind: :destructive,
-          planes: [:external]
+          planes: [:external],
+          scope: :platform
         )
       ],
       description:
@@ -192,8 +202,9 @@ defmodule Sanctum.Providers.Athanor do
   end
 
   def handle(%Context{} = ctx, %{"action" => "get"} = args) do
-    with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true) do
-      {:ok, render(athanor)}
+    case resolve(ctx, args, include_archived: true) do
+      {:ok, athanor, _focused} -> {:ok, render(athanor)}
+      {:error, refusal} -> archived_facts(ctx, args, refusal)
     end
   end
 
@@ -319,64 +330,58 @@ defmodule Sanctum.Providers.Athanor do
     end
   end
 
-  # Purging is the operator's act: it deletes an archived athanor's whole
-  # storage tree — the one thing archive deliberately leaves in place so
-  # unarchive reopens a furnace intact. Blobs only; the rows remain, and a
-  # purged athanor that reopens comes back with empty storage. `destroy`
-  # below is the verb that also deletes the rows.
-  def handle(%Context{} = ctx, %{"action" => "purge"} = args) do
-    if ctx.platform_admin do
-      with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true) do
-        case Athanors.purge_storage(athanor) do
-          :ok ->
-            {:ok, Map.put(render(athanor), "purged", true)}
+  # Purging is the operator's platform-scope act: it deletes an archived
+  # athanor's whole storage tree — the one thing archive deliberately leaves
+  # in place so unarchive reopens a furnace intact. Blobs only; the rows
+  # remain, and a purged athanor that reopens comes back with empty storage.
+  # `destroy` below is the verb that also deletes the rows. Who may call
+  # either is the declaration's `scope: :platform`, which the gate checks
+  # before this runs (`platform_admin_required`).
+  def handle(%Context{}, %{"action" => "purge"} = args) do
+    with {:ok, athanor} <- platform_target(args) do
+      case Athanors.purge_storage(athanor) do
+        :ok ->
+          {:ok, Map.put(render(athanor), "purged", true)}
 
-          {:error, :not_archived} ->
-            {:error,
-             {:invalid_argument,
-              "Only an archived athanor's storage can be purged — archive it first"}}
+        {:error, :not_archived} ->
+          {:error,
+           {:invalid_argument,
+            "Only an archived athanor's storage can be purged — archive it first"}}
 
-          {:error, reason} ->
-            Logger.error("[Sanctum.Providers.Athanor] athanor.purge failed: #{inspect(reason)}")
-            {:error, {:unavailable, "Storage"}}
-        end
+        {:error, reason} ->
+          Logger.error("[Sanctum.Providers.Athanor] athanor.purge failed: #{inspect(reason)}")
+          {:error, {:unavailable, "Storage"}}
       end
-    else
-      # Return the shared insufficient_permissions error for the operator gate.
-      {:error, :platform_admin_required}
     end
   end
 
-  # The erasure verb. `purge` reclaims the volume and leaves every row;
-  # this deletes both, and only the archived tombstone survives. It refuses
-  # a personal athanor — `users.personal_athanor_id` would go on naming a
-  # row whose data is gone, and erasing a person is a different act.
-  def handle(%Context{} = ctx, %{"action" => "destroy"} = args) do
-    if ctx.platform_admin do
-      with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true) do
-        case Athanors.destroy(athanor) do
-          {:ok, counts} ->
-            {:ok,
-             render(athanor)
-             |> Map.put("destroyed", true)
-             |> Map.put("rows_deleted", Enum.sum(Map.values(counts)))}
+  # The erasure verb, platform-scope like `purge`. `purge` reclaims the
+  # volume and leaves every row; this deletes both, and only the archived
+  # tombstone survives. It refuses a personal athanor —
+  # `users.personal_athanor_id` would go on naming a row whose data is gone,
+  # and erasing a person is a different act.
+  def handle(%Context{}, %{"action" => "destroy"} = args) do
+    with {:ok, athanor} <- platform_target(args) do
+      case Athanors.destroy(athanor) do
+        {:ok, counts} ->
+          {:ok,
+           render(athanor)
+           |> Map.put("destroyed", true)
+           |> Map.put("rows_deleted", Enum.sum(Map.values(counts)))}
 
-          {:error, :not_archived} ->
-            {:error,
-             {:invalid_argument, "Only an archived athanor can be destroyed — archive it first"}}
+        {:error, :not_archived} ->
+          {:error,
+           {:invalid_argument, "Only an archived athanor can be destroyed — archive it first"}}
 
-          {:error, :personal_athanor} ->
-            {:error,
-             {:invalid_argument,
-              "A person's own athanor is not destroyed here — deny them at the door instead"}}
+        {:error, :personal_athanor} ->
+          {:error,
+           {:invalid_argument,
+            "A person's own athanor is not destroyed here — deny them at the door instead"}}
 
-          {:error, reason} ->
-            Logger.error("[Sanctum.Providers.Athanor] athanor.destroy failed: #{inspect(reason)}")
-            {:error, {:unavailable, "Storage"}}
-        end
+        {:error, reason} ->
+          Logger.error("[Sanctum.Providers.Athanor] athanor.destroy failed: #{inspect(reason)}")
+          {:error, {:unavailable, "Storage"}}
       end
-    else
-      {:error, :platform_admin_required}
     end
   end
 
@@ -433,9 +438,9 @@ defmodule Sanctum.Providers.Athanor do
   #
   # Returns the resolved athanor AND a context focused on it (`scope:
   # :athanor`, its id bound) — the shape every downstream act must run
-  # under. `Context.focus/2` is the narrowing: membership, or the operator's
-  # audited open. A platform admin's wider scope stops here, not in the
-  # handler.
+  # under. `Context.focus/2` is the narrowing: a seat, and nothing else —
+  # an operator with none is refused here like anyone else, and a platform
+  # context's wider scope stops here, not in the handler.
   @doc false
   def resolve(%Context{} = ctx, args, opts \\ []) do
     with {:ok, athanor} <- lookup(ctx, Map.get(args, "athanor"), opts) do
@@ -450,34 +455,48 @@ defmodule Sanctum.Providers.Athanor do
 
   # `focus/2` rightly refuses an archived athanor, and `lookup/3` only
   # admitted one because the action asked for it (`get`, `unarchive`) — so
-  # the focused shape is built by hand here, under the same two admissions
-  # focus grants: membership, or the operator's audited open.
+  # the focused shape is built by hand here, under the one admission focus
+  # grants: a seat. The operator capability admits nothing here.
   defp open_archived(ctx, athanor) do
-    admitted? =
-      cond do
-        Members.member?(ctx.user_id, athanor.id) ->
-          true
-
-        ctx.platform_admin ->
-          Sanctum.Telemetry.platform_context_event(%{
-            caller: :athanor_tool,
-            user_id: ctx.user_id,
-            athanor_id: athanor.id,
-            auth_method: ctx.auth_method
-          })
-
-          true
-
-        true ->
-          false
-      end
-
-    if admitted?,
+    if Members.member?(ctx.user_id, athanor.id),
       do: {:ok, athanor, %{ctx | athanor_id: athanor.id, scope: :athanor}},
       else: not_a_member()
   end
 
-  defp not_a_member, do: {:error, {:invalid_argument, "Not a member of that athanor"}}
+  @not_a_member {:invalid_argument, "Not a member of that athanor"}
+
+  defp not_a_member, do: {:error, @not_a_member}
+
+  # The athanor a platform-scope operation names, archived ones included,
+  # looked up through the server's own platform context
+  # (`Sanctum.system_context/0`), which focuses nothing and names no
+  # athanor of its own: the operator holds no seat in what they reclaim,
+  # and the athanor they work in decides nothing here.
+  defp platform_target(args),
+    do: lookup(Sanctum.system_context(), Map.get(args, "athanor"), include_archived: true)
+
+  # What an operator who holds no seat may learn of an archived athanor:
+  # its public facts, read through the same platform scope, and nothing it
+  # holds — no members, thread, file or vault. An athanor still open is its
+  # members' alone, and a non-operator is refused as any non-member is:
+  # both keep the refusal `resolve/3` gave.
+  defp archived_facts(%Context{platform_admin: true}, args, @not_a_member = refusal) do
+    case platform_target(args) do
+      {:ok, %{status: "archived"} = athanor} ->
+        {:ok,
+         %{
+           id: athanor.id,
+           name: athanor.name,
+           status: athanor.status,
+           archived_at: athanor.archived_at
+         }}
+
+      _not_archived ->
+        {:error, refusal}
+    end
+  end
+
+  defp archived_facts(_ctx, _args, refusal), do: {:error, refusal}
 
   defp lookup(%Context{athanor_id: id}, nil, opts) when is_binary(id), do: get(id, opts)
 

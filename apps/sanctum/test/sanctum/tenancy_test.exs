@@ -147,6 +147,27 @@ defmodule Sanctum.TenancyTest do
     end
   end
 
+  describe "focus_basis/3" do
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
+    test "is the person's seat in the athanor, never their platform row" do
+      uid = "u-basis-#{System.unique_integer([:positive])}"
+      seated = group!("basis-seated")
+      other = group!("basis-other")
+      {:ok, seat} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: seated.id})
+      {:ok, _} = Members.ensure(uid, scope: "platform")
+      {:ok, memberships} = Members.list_by_user(uid)
+      admin = %Context{user_id: uid, scope: :athanor, platform_admin: true}
+
+      assert Tenancy.focus_basis(admin, seated, memberships) == seat.id
+      assert Tenancy.focus_basis(admin, other, memberships) == nil
+      assert Tenancy.focus_basis(admin, nil, memberships) == nil
+    end
+  end
+
   describe "platform_admin?/1" do
     test "requires an ACTIVE platform row, not merely a platform row" do
       # Platform-admin status requires an active platform membership.
@@ -163,20 +184,33 @@ defmodule Sanctum.TenancyTest do
       :ok
     end
 
-    test "keeps the capability while the platform membership exists" do
+    test "keeps the capability and loses the athanor" do
       uid = "u-reval-keep-#{System.unique_integer([:positive])}"
       {:ok, _} = Members.ensure(uid, scope: "platform")
 
+      # The session names a group the operator holds no seat in: the
+      # capability is over the instance, not a seat, so it keeps them in
+      # no athanor.
       ctx = %Context{
         user_id: uid,
         athanor_id: group!("reval-keep").id,
         scope: :athanor,
+        platform_admin: true,
         authenticated: true
       }
 
       {:ok, out} = Tenancy.revalidate(ctx)
       assert out.platform_admin
       assert out.scope == :athanor
+      assert out.athanor_id == nil
+
+      # With a seat elsewhere, they fall back to it like anyone else.
+      seated = group!("reval-seated")
+      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: seated.id})
+
+      {:ok, out} = Tenancy.revalidate(ctx)
+      assert out.platform_admin
+      assert out.athanor_id == seated.id
     end
 
     test "drops the capability once the platform membership is revoked" do

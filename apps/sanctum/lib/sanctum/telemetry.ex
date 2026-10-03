@@ -97,9 +97,17 @@ defmodule Sanctum.Telemetry do
   @doc """
   Emit a platform-context construction event.
 
-  Audits every platform-context construction. `metadata.sanctioned` is true
-  for `Sanctum.Context.internal/1` and `Sanctum.system_context/0`; an
-  unauthorized `Context.build/1` emits false before raising.
+  Audits every platform-context construction, and nothing else: its one
+  emitter is the platform-scope constructor's gate in
+  `Sanctum.Context.build/1`. `metadata.sanctioned` is true for
+  `Sanctum.Context.internal/1` and `Sanctum.system_context/0`; an
+  unauthorized `Context.build/1` emits false before raising. A platform
+  context is built for platform-scope operations. A person's platform
+  capability never enters an athanor: `Sanctum.Context.focus/2` admits a
+  seat alone, and a person's focus, an operator's included, builds no
+  platform context and emits nothing here. An internal system context
+  that works in an athanor is built for its task or narrowed by
+  `Sanctum.Context.refocus/2` for `auth_method: :system`.
 
   Emits `[:cyfr, :sanctum, :platform_context]`.
   """

@@ -8,9 +8,10 @@ defmodule PrismWeb.Focus do
   `/a/<athanor>/…` names the athanor a page works in — `@<namespace>` for
   a person's, the slug for a group's. The hook resolves the segment,
   narrows the authenticated context to it (`Sanctum.Context.focus/2`: a
-  member may, a platform admin may with an audit record, nobody else may)
-  and assigns `:athanor` and `:athanor_route`. Two tabs can be two athanors;
-  the session's default athanor only decides where `/` lands.
+  member may, and nobody else may, a platform admin with no seat there
+  included) and assigns `:athanor` and `:athanor_route`. Two tabs can be
+  two athanors; the session's default athanor only decides where `/`
+  lands.
 
   A mount without an `:athanor` param (the root redirect) passes through
   with the session's athanor in focus.

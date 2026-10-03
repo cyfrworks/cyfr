@@ -27,7 +27,7 @@ defmodule Sanctum.IssuanceTest do
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceCerts, Issuance, Pairing, Person}
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   @source "198.51.100.9"
 
@@ -519,6 +519,235 @@ defmodule Sanctum.IssuanceTest do
       assert {{:error, :unauthenticated}, retired} = mint(session_ctx)
       refute minted?(retired)
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A platform membership
+  # ---------------------------------------------------------------------------
+
+  test "a platform membership cannot authorize tenant credential issuance", %{
+    user: user,
+    athanor: athanor,
+    session_ctx: session_ctx
+  } do
+    {:ok, platform} = Members.ensure_platform(user.id)
+    assert {platform.scope, platform.athanor_id} == {"platform", nil}
+
+    # A live session focused on the athanor that names the person's
+    # platform row as its focus basis, which no focus stamps but a context
+    # built by hand can carry. The expectation takes the id for its shape
+    # alone; the stored row it names is a platform row, which seats nobody
+    # in an athanor.
+    retained = %{
+      session_ctx
+      | credential_binding: %{session_ctx.credential_binding | focus_basis: platform.id}
+    }
+
+    assert {:ok, expectation} = Issuance.expectation(retained, [])
+    assert {expectation.athanor_id, expectation.membership_id} == {athanor.id, platform.id}
+    assert {{:error, :unauthenticated}, refused} = mint(retained)
+    refute minted?(refused)
+
+    # The same session through its seat mints: the row refused, not the
+    # session.
+    assert {:ok, seated} = mint(session_ctx)
+    assert minted?(seated)
+
+    # The seat lost while another member keeps the group open: the
+    # platform row still stands, and a context that kept its id, read at
+    # the person's and the athanor's current generations, still issues
+    # nothing in the athanor.
+    {:ok, other} =
+      Users.upsert_from_provider(%{
+        id: "github|https://github.com|issuance-other-#{System.unique_integer([:positive])}",
+        provider: "github",
+        email: "issuance-other#{System.unique_integer([:positive])}@example.com",
+        verified: true
+      })
+
+    {:ok, :added} = Members.add(athanor, [user_id: other.id], user.id)
+    :ok = Members.remove_member(athanor, user_id: user.id)
+    refute Members.member?(user.id, athanor.id)
+    assert {:ok, %{status: "active"}} = Athanors.get(athanor.id)
+    assert {:ok, %{id: platform_id}} = Members.platform_seat(user.id)
+    assert platform_id == platform.id
+
+    {:ok, standing} = Sanctum.Tenancy.generation_snapshot(user.id, athanor.id)
+
+    kept = %{
+      retained
+      | session_token_hash: nil,
+        credential_binding: %{
+          source_kind: :identity,
+          source_id: nil,
+          focus_basis: platform.id,
+          user_generation: standing.user_generation,
+          athanor_generation: standing.athanor_generation
+        }
+    }
+
+    assert {{:error, :unauthenticated}, refused} = mint(kept)
+    refute minted?(refused)
+
+    # Platform-only issuance, naming no athanor, stands on the platform
+    # row: a session for the person, outside every athanor.
+    {:ok, standing} = Sanctum.Tenancy.generation_snapshot(user.id, nil)
+
+    unfocused = %{
+      kept
+      | athanor_id: nil,
+        credential_binding: %{
+          kept.credential_binding
+          | user_generation: standing.user_generation,
+            athanor_generation: nil
+        }
+    }
+
+    assert {:ok, expectation} = Issuance.expectation(unfocused, [])
+    assert {expectation.athanor_id, expectation.membership_id} == {nil, platform.id}
+    hash = :crypto.strong_rand_bytes(32)
+
+    assert :ok =
+             Arca.SessionStorage.create_session(
+               hash,
+               %{
+                 user_id: user.id,
+                 provider: "github",
+                 expires_at: DateTime.add(DateTime.utc_now(), 60, :second)
+               },
+               lock: Issuance.lock(expectation),
+               verify: Issuance.verify(expectation)
+             )
+
+    assert {:ok, %{user_id: user_id, athanor_id: nil}} = Arca.SessionStorage.get_session(hash)
+    assert user_id == user.id
+  end
+
+  test "a platform administrator's paired device has no standing where they hold no seat", %{
+    user: user,
+    athanor: athanor,
+    session_ctx: session_ctx
+  } do
+    device = pair!(session_ctx)
+    {:ok, platform} = Members.ensure_platform(user.id)
+
+    # Seated, the device stands on the seat, and the platform row is only
+    # the capability flag.
+    ctx = verified!(device)
+    assert ctx.platform_admin
+    assert ctx.credential_binding.focus_basis != platform.id
+
+    assert {:ok, %{seat: %{scope: "athanor", athanor_id: seated_in}, platform_admin: true}} =
+             DeviceCerts.standing(user.id, athanor.id)
+
+    assert seated_in == athanor.id
+
+    # The seat lost, another member keeping the group open: the platform
+    # row still stands, and stands for nothing in the athanor.
+    {:ok, other} =
+      Users.upsert_from_provider(%{
+        id: "github|https://github.com|device-other-#{System.unique_integer([:positive])}",
+        provider: "github",
+        email: "device-other#{System.unique_integer([:positive])}@example.com",
+        verified: true
+      })
+
+    {:ok, :added} = Members.add(athanor, [user_id: other.id], user.id)
+    :ok = Members.remove_member(athanor, user_id: user.id)
+    assert {:ok, %{status: "active"}} = Athanors.get(athanor.id)
+    assert {:ok, %{id: platform_id}} = Members.platform_seat(user.id)
+    assert platform_id == platform.id
+
+    assert {:error, :not_standing} = DeviceCerts.standing(user.id, athanor.id)
+    assert {:error, _refused} = DeviceCerts.client_standing(ctx)
+  end
+
+  test "a derived session credential resting on a platform row is refused", %{
+    user: user,
+    athanor: athanor,
+    session_ctx: session_ctx
+  } do
+    {:ok, platform} = Members.ensure_platform(user.id)
+
+    # What a tincture asset or frame credential minted from this session
+    # names: its person, athanor, generations, source and focus basis.
+    claims =
+      Map.merge(session_ctx.credential_binding, %{
+        user_id: user.id,
+        athanor_id: athanor.id
+      })
+
+    assert claims.source_kind == :session
+    assert {:ok, _standing} = Sanctum.Caller.derived_standing(claims)
+
+    # The same credential resting on the person's platform row instead of
+    # their seat: every derived credential names an athanor, and a platform
+    # row is no seat in it.
+    assert {:error, :not_member} =
+             Sanctum.Caller.derived_standing(%{claims | focus_basis: platform.id})
+  end
+
+  test "a pairing invitation resting on a platform row is refused at redemption", %{
+    user: user
+  } do
+    n = System.unique_integer([:positive])
+    {:ok, platform} = Members.ensure_platform(user.id)
+
+    # A group the person holds no seat in, kept open by its own member.
+    {:ok, other} =
+      Users.upsert_from_provider(%{
+        id: "github|https://github.com|pairing-other-#{n}",
+        provider: "github",
+        email: "pairing-other#{n}@example.com",
+        verified: true
+      })
+
+    {:ok, elsewhere} = Athanors.create_group(other.id, "Elsewhere #{n}")
+    refute Members.member?(user.id, elsewhere.id)
+
+    # An invitation there whose only basis is the person's platform row,
+    # which `Sanctum.Pairing.begin/2` never opens but a stored row can
+    # carry: written through the invitations' own store, under a policy
+    # that lets it open.
+    secret = :crypto.strong_rand_bytes(16)
+    secret_hash = Prima.Digest.sha256(secret)
+
+    {:ok, %{membership_id: membership_id}} =
+      Arca.PairingInvitations.open(
+        Prima.Actor.in_athanor(elsewhere.id),
+        %{
+          user_id: user.id,
+          membership_id: platform.id,
+          secret_hash: secret_hash,
+          audience_home: Person.home(),
+          lifetime_ms: 600_000
+        },
+        fn _rows -> :ok end
+      )
+
+    assert membership_id == platform.id
+
+    # The glass holding the secret asks for its challenge and answers it:
+    # the redemption locks the platform row, which is no seat in the
+    # athanor, and pairs nothing.
+    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+    glass = Context.build(%{authenticated: false, client_ip: @source})
+    submission = %{device_key: device_key}
+
+    {:ok, %{challenge: challenge}} = Pairing.complete(glass, secret, submission)
+
+    assert {:error, :not_standing} =
+             Pairing.complete(
+               glass,
+               secret,
+               Map.put(submission, :proof, Proof.sign(challenge, private))
+             )
+
+    assert {:ok, %{state: "pending"}} = Arca.PairingInvitations.lookup(secret_hash)
+
+    refute Arca.Repo.exists?(
+             from(p in Arca.Schemas.PairedClient, where: p.athanor_id == ^elsewhere.id)
+           )
   end
 
   # ---------------------------------------------------------------------------

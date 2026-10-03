@@ -605,7 +605,8 @@ defmodule Sanctum.Pairing do
 
   # The standing a redemption is held to, over the rows locked for it: the
   # person the invitation names active, the athanor open, and their seat
-  # there (or their platform row) still active.
+  # there still active. A platform row is no seat: an invitation resting on
+  # one, however it was opened, pairs nothing.
   defp redeemable(%{user: user, athanor: athanor, membership: membership}, invitation) do
     if active?(user, invitation.user_id) and match?(%{status: "active"}, athanor) and
          seated?(membership, invitation),
@@ -621,9 +622,6 @@ defmodule Sanctum.Pairing do
          %{user_id: user_id, athanor_id: athanor_id}
        ),
        do: true
-
-  defp seated?(%{status: "active", user_id: user_id, scope: "platform"}, %{user_id: user_id}),
-    do: true
 
   defp seated?(_membership, _invitation), do: false
 

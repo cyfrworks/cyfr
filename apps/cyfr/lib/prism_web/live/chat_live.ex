@@ -208,10 +208,9 @@ defmodule PrismWeb.ChatLive do
   end
 
   # `Context.focus/2` decides who may open the athanor named in the URL: a
-  # member, or a platform admin through the audited operator open. That
-  # the operator's open is reachable from this global address — not only
-  # from a workbench page — is deliberate: the audit event is the
-  # safeguard, wherever the open is made from.
+  # member, and no one else — a platform admin with no seat there is
+  # refused like anyone, so a URL naming another person's athanor opens
+  # nothing for them.
   defp focus_on(ctx, _default_id, route, _athanors) when is_binary(route) do
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, focus} <- Sanctum.Context.focus(ctx, athanor) do
@@ -753,10 +752,9 @@ defmodule PrismWeb.ChatLive do
   # This person's own seats changed — a group they were added to, a DM the
   # other person minted, a seat withdrawn. The guard (`CyfrWeb.ContextGuard`)
   # revalidates the page's context first and hands the message on: a seat
-  # lost under the athanor this page has open ends the page there, unless an
-  # operator's audited open still stands, and then the seat is what this
-  # page was showing, so it goes back to the default. Anything else re-reads
-  # the set of athanors.
+  # lost under the athanor this page has open ends the page there — nothing
+  # else keeps anyone in it, an operator's capability included — so it goes
+  # back to the default. Anything else re-reads the set of athanors.
   def handle_info(
         %Cyfr.Bus.Membership{athanor_id: id, change: :left},
         %{assigns: %{athanor: %{id: id}}} = socket

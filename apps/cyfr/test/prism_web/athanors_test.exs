@@ -3,8 +3,8 @@
 
 defmodule PrismWeb.AthanorsTest do
   # One spelling of "what to call this athanor to this person": the
-  # person's OWN athanor is "You" — theirs, not any person-kind athanor an
-  # operator happens to have opened.
+  # person's OWN athanor is "You" — the one their row names as theirs, not
+  # any person-kind athanor.
   use ExUnit.Case, async: false
 
   alias Sanctum.Tenancy.{Athanors, Members, Users}

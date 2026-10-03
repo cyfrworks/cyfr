@@ -21,9 +21,9 @@ defmodule Aqua.Aloud do
 
     * A source you cannot read, or a target you cannot write. Membership in
       both athanors, checked separately — sharing is not a way to reach an
-      athanor you are not in, and there is **no operator bypass**: focusing
-      an athanor is an audited open, but a copy out of it is a second act,
-      and it belongs to members alone.
+      athanor you are not in, and there is **no operator bypass**: a
+      platform administrator holds no seat by the capability and focuses
+      only where they are a member, and a copy belongs to members alone.
     * A line that is not YOURS. You say aloud what you said — every
       selected message must be authored by the caller, or the verb would
       let one person speak another's words under their own name. One
@@ -85,10 +85,10 @@ defmodule Aqua.Aloud do
       true ->
         with :ok <- member_of(ctx, ctx.athanor_id),
              :ok <- member_of(ctx, target_athanor_id),
-             # Membership was just proven for THIS user, so focus takes its
-             # member branch (the operator arm is unreachable past
-             # `member_of/2`) — and adds the archive refusal a raw swap
-             # skipped: nothing is said aloud into a closed furnace.
+             # Membership was just proven for THIS user, so focus finds
+             # their seat — the only thing it admits, an operator's
+             # capability included — and adds the archive refusal a raw
+             # swap skipped: nothing is said aloud into a closed furnace.
              {:ok, target_ctx} <- Context.focus(ctx, target_athanor_id),
              {:ok, _} <- Threads.get(Sanctum.Context.actor(target_ctx), target_id),
              {:ok, rows} <- take(ctx, source_id, message_ids) do
@@ -109,11 +109,11 @@ defmodule Aqua.Aloud do
   # athanors. The tenant-keyed reads would refuse a foreign thread
   # anyway; this refuses it by name instead of as a confusing miss.
   #
-  # Deliberately NO `platform_admin` arm. An operator's open of an athanor
-  # is audited (`Context.focus/2`); a copy out of one is a second, quieter
-  # act, and letting the capability bypass membership here would make it
-  # an unaudited export verb. An operator who is not a member is refused
-  # like anyone else.
+  # Deliberately NO `platform_admin` arm. The capability is over the
+  # instance and is no seat: `Context.focus/2` refuses an operator in an
+  # athanor they are not in, and letting the capability bypass membership
+  # here would make the copy an export verb into or out of one. An
+  # operator who is not a member is refused like anyone else.
   defp member_of(%Context{user_id: user_id}, athanor_id)
        when is_binary(user_id) and is_binary(athanor_id) do
     if Members.member?(user_id, athanor_id), do: :ok, else: {:error, :not_a_member}

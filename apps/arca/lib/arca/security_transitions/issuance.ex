@@ -20,6 +20,14 @@ defmodule Arca.SecurityTransitions.Issuance do
   session, the key, or the paired client and its certificates; the
   credential `write` changes comes last.
 
+  The membership is read by its id as it is stored, whatever the caller
+  believed of it, and handed to `verify` with its `scope` and
+  `athanor_id`: a policy decides on those whether the row stands for the
+  issuance at all. A platform row names no athanor and seats nobody in
+  one, so it can stand only for an issuance that names no athanor
+  (`Sanctum.Issuance`); a caller that names an athanor and a platform row
+  is refused there, never seated by the row's id.
+
   A paired device's source is its paired-client row, locked after the
   person, the athanor and the membership, and the certificates of that
   client that expire at `expires_at`, the expiry of the one the caller's
@@ -163,7 +171,7 @@ defmodule Arca.SecurityTransitions.Issuance do
 
   defp lock_athanor(_athanor_id), do: nil
 
-  # arca:unscoped-ok the membership an issuing context was focused through, by its own id; a platform row names no athanor.
+  # arca:unscoped-ok the membership an issuing context was focused through, by its own id; a platform row names no athanor, and the policy holds the stored row's scope and athanor to the issuance's.
   defp lock_membership(membership_id) when is_binary(membership_id) do
     from(m in Membership, where: m.id == ^membership_id)
     |> QueryHelpers.for_update()

@@ -1126,8 +1126,8 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # What to call the athanor in its own chat: the person's own is "your
-  # AQUA" — theirs, not any person-kind athanor an operator opened — a DM
-  # or a group goes by its label.
+  # AQUA" — the one their row names as theirs, not any person-kind
+  # athanor — a DM or a group goes by its label.
   defp athanor_label(%{} = athanor, ctx) do
     if PrismWeb.Athanors.own?(athanor, ctx),
       do: "your AQUA",
@@ -1842,8 +1842,8 @@ defmodule PrismWeb.ThreadPaneLive do
       else: label
   end
 
-  # A member from the labels read at mount; anyone since gone (or an
-  # operator reading a room they hold no seat in) by the same rule.
+  # A member from the labels read at mount; anyone since gone by the same
+  # rule.
   defp label_for(members, user_id, ctx) when is_binary(user_id) do
     Map.get(members, user_id) || PrismWeb.People.label(user_id, ctx)
   end

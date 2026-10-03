@@ -1087,9 +1087,12 @@ Postgres / a custom registry. There is no separate "edition" or "mode".
 Once authentication is configured, two lists do two jobs. `CYFR_PLATFORM_ADMIN_EMAILS`
 names the server's operators (platform admins): always let in, minted their
 own athanor past the server caps, and able to run the operator verbs
-(`door.*`, `execution.force_release`)
-— but working inside one athanor at a time like everyone else; there is no
-cross-athanor reach. The **server allowlist** (the door — `cyfr admin allow
+(`door.*`, `execution.force_release`, `athanor.purge`, `athanor.destroy`).
+The capability is over the instance, not a seat: an operator works inside one
+athanor at a time like everyone else, and only in one they are a member of.
+They enter no other athanor — opening one they hold no seat in is refused like
+anyone's, and a session that names one they have left falls back to their own
+— and there is no cross-athanor reach. The **server allowlist** (the door — `cyfr admin allow
 <email|user_id|identifier|*>`, `cyfr admin deny …`, or the Settings page) is who else may
 sign in at all: a match on first sign-in lets them in, no match is a 403, and
 `*` lets in anyone the configured provider authenticates. Groups never open the
@@ -1101,11 +1104,21 @@ request for the operator.
 
 Archiving an athanor revokes its keys and cancels its running work but
 deliberately leaves its storage tree (`data/athanors/<id>/`) in place, so
-`athanor.unarchive` reopens the furnace intact. When the bytes should
-actually be reclaimed, a platform admin runs `athanor.purge` (the `athanor`
-tool) against the archived athanor: it deletes the whole tree — blobs only,
-rows remain — and is final. A purged athanor that is later unarchived comes
-back with empty storage.
+`athanor.unarchive` reopens the furnace intact; a member unarchives a group,
+and allowing a denied person at the door reopens their own athanor. When the
+bytes should actually be reclaimed, a platform admin runs `athanor.purge`
+(the `athanor` tool) naming the archived athanor: it deletes the whole tree —
+blobs only, rows remain — and is final. `athanor.destroy` deletes the rows
+too, leaving only the archived tombstone, and refuses a person's own athanor.
+Both are platform-scope operations: they need no seat in the athanor, never
+read the one in focus, and open nothing in it. An operator with no seat may
+read an archived athanor's public facts with `athanor.get` (its id, name,
+status and when it was archived) and nothing it holds; `athanor.unarchive`
+and every other verb refuse them like any non-member. A purged athanor that
+is later unarchived comes back with empty storage. A group whose members were
+all denied keeps no member to unarchive it — allowing them again at the door
+reopens only their own athanors — so it can be purged or destroyed, and
+reopened by no one.
 
 With no auth configured, the deployment runs without sign-in: requests reach the
 public read-only surface as an unauthenticated context, and tenant-scoped

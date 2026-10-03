@@ -5,10 +5,11 @@ defmodule PrismWeb.Athanors do
   @moduledoc """
   How an athanor is named on the console, once, to the person looking.
 
-  The person's OWN athanor reads as "You" — theirs, not any person-kind
-  athanor: an operator opening someone else's athanor must never be told
-  it is theirs. A DM (a frozen pair) reads as the other person's name, a
-  group as its own. `PrismWeb.People.label/2` is the sibling for people.
+  The person's OWN athanor reads as "You" — the one their row names as
+  theirs, not any person-kind athanor. No one, an operator included,
+  opens another person's athanor, so no one is shown one as theirs. A DM
+  (a frozen pair) reads as the other person's name, a group as its own.
+  `PrismWeb.People.label/2` is the sibling for people.
   """
 
   alias Sanctum.Tenancy.Members
@@ -28,8 +29,8 @@ defmodule PrismWeb.Athanors do
 
   # A DM reads as the other person, named the way every person on the
   # console is named (`PrismWeb.People.label/2`) — one ladder, not a
-  # second one for pairs. A pair the viewer is not in (an operator's open)
-  # keeps its stored name.
+  # second one for pairs. A pair whose other seat cannot be read (an ended
+  # DM holds one member) keeps its stored name.
   defp pair_label(%{id: id, name: name}, %{user_id: user_id} = ctx) do
     with {:ok, rows} <- Members.list_by_athanor(id),
          %{user_id: other} <- Enum.find(rows, &(&1.user_id != user_id and &1.status == "active")) do

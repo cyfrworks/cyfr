@@ -37,8 +37,8 @@ defmodule Cyfr.ContextSwapTest do
     "apps/sanctum/lib/sanctum/tenancy.ex" => 1,
     # `resolve/3` narrows through `focus/2`; the one swap left is its
     # open of an ARCHIVED athanor for `get`/`unarchive`, hand-built under
-    # the same two admissions (membership, or the operator's audited open)
-    # because `focus/2` rightly refuses an archived athanor.
+    # the one admission focus grants (a seat) because `focus/2` rightly
+    # refuses an archived athanor.
     "apps/sanctum/lib/sanctum/providers/athanor.ex" => 1
   }
 

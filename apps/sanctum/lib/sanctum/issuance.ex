@@ -16,11 +16,13 @@ defmodule Sanctum.Issuance do
   # it and a person focused on an athanor through no membership. The rows it names are then locked and reread inside the issuing
   # transaction (`Arca.SecurityTransitions.Issuance`): the person must be
   # active at the generation read, the focused athanor active at its
-  # generation read, the membership that authorized the focus still an
-  # active seat, and the credential the context holds still live. A
-  # generation that moved is `{:error, :stale_generation}`; a row that no
-  # longer stands is `{:error, :unauthenticated}` — the credential the
-  # issuing context presents opens nothing any more.
+  # generation read, the membership that authorized the focus still the
+  # person's active seat in that athanor — a platform row stands only for
+  # an issuance that names no athanor — and the credential the context
+  # holds still live. A generation that moved is
+  # `{:error, :stale_generation}`; a row that no longer stands is
+  # `{:error, :unauthenticated}` — the credential the issuing context
+  # presents opens nothing any more.
   #
   # A paired device's context (`auth_method: :device`) issues only under
   # its own binding, which names its paired client (`source_kind:
@@ -171,7 +173,10 @@ defmodule Sanctum.Issuance do
 
   # A focused person names the membership that authorized the focus, and
   # the seat check below rereads it; a key's focus is the key itself. A
-  # focus no membership backs is not an issuing standing.
+  # focus no membership backs is not an issuing standing. This checks the
+  # shape alone and authorizes nothing: which row the id names, and whether
+  # it seats the person in the athanor the issuance names, is decided on
+  # the stored row, locked, by `seat/2`.
   defp basis_for(nil, _basis), do: :ok
   defp basis_for(_athanor_id, :key), do: :ok
   defp basis_for(_athanor_id, basis) when is_binary(basis), do: :ok
@@ -300,16 +305,27 @@ defmodule Sanctum.Issuance do
   defp athanor(%{status: "active"}, _expectation), do: {:error, :stale_generation}
   defp athanor(_athanor, _expectation), do: {:error, :unauthenticated}
 
+  # The stored membership the expectation names, as the lock read it. An
+  # issuance into an athanor stands on the person's active seat in that
+  # athanor and on nothing else: a platform row is the operator's
+  # capability over the instance, never a seat, so a context still naming
+  # one — read before its holder lost the seat, or built by hand — issues
+  # no tenant credential. A platform row stands only for an issuance that
+  # names no athanor.
   defp seat(_membership, %{membership_id: nil}), do: :ok
 
   defp seat(
          %{status: "active", user_id: user_id, scope: "athanor", athanor_id: athanor_id},
          %{user_id: user_id, athanor_id: athanor_id}
-       ),
+       )
+       when is_binary(athanor_id),
        do: :ok
 
-  defp seat(%{status: "active", user_id: user_id, scope: "platform"}, %{user_id: user_id}),
-    do: :ok
+  defp seat(
+         %{status: "active", user_id: user_id, scope: "platform"},
+         %{user_id: user_id, athanor_id: nil}
+       ),
+       do: :ok
 
   defp seat(_membership, _expectation), do: {:error, :unauthenticated}
 

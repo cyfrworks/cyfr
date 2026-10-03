@@ -348,7 +348,7 @@ defmodule Sanctum.Caller do
   # The rows a device's verification read agree with each other, as they
   # were read (nothing is read here): one active device client of the
   # person in the athanor, the person and the athanor active, the seat
-  # theirs (their seat there or their platform row), and the certificate,
+  # theirs there (a platform row is no seat), and the certificate,
   # when there is one, naming that client, athanor, person and device key:
   # a local subject by the person's id, an identity subject by the
   # identifier of the identity row the verifier resolved them by
@@ -379,7 +379,6 @@ defmodule Sanctum.Caller do
   defp device_stands?(_device), do: false
 
   defp seated?(%{scope: "athanor", athanor_id: athanor_id}, athanor_id), do: true
-  defp seated?(%{scope: "platform"}, _athanor_id), do: true
   defp seated?(_seat, _athanor_id), do: false
 
   defp certifies?(nil, _client, _identity), do: true
@@ -497,7 +496,8 @@ defmodule Sanctum.Caller do
       expired; a key source is unrevoked, the athanor's, the person's,
       and its allowlist admits `client_ip:`;
     * the membership a session's focus rested on is still that active
-      seat (a rejoin is a new row); a key's focus is the key, so its
+      seat, the person's in that athanor (a rejoin is a new row; a
+      platform row is no seat); a key's focus is the key, so its
       creator leaving the athanor does not end it.
 
   A session source of a remote person stands, as the session itself does
@@ -581,17 +581,15 @@ defmodule Sanctum.Caller do
 
   defp derived_athanor(_athanor, _claims), do: {:error, :not_standing}
 
+  # Every derived credential names an athanor (`derived_athanor/2`), and a
+  # session's stands there on the person's seat in it alone: a platform
+  # row is the operator's capability, no seat in any athanor, so a
+  # credential resting on one is refused like a seat that is gone.
   defp derived_focus(nil, %{focus_basis: :key, source_kind: :api_key}), do: :ok
 
   defp derived_focus(
          %{status: "active", user_id: user_id, scope: "athanor", athanor_id: athanor_id},
          %{user_id: user_id, athanor_id: athanor_id, source_kind: :session}
-       ),
-       do: :ok
-
-  defp derived_focus(
-         %{status: "active", user_id: user_id, scope: "platform"},
-         %{user_id: user_id, source_kind: :session}
        ),
        do: :ok
 

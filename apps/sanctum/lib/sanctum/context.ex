@@ -41,12 +41,12 @@ defmodule Sanctum.Context do
   session or `focus/2` named. `:platform` is the server itself: the internal
   contexts `internal/1` builds for sweepers, retention, health probes and
   seeding, which cross athanors by nature. A platform admin (the operator)
-  is a person like any other, focused on one athanor at a time; the
-  capability rides on the context as `platform_admin: true`, is re-derived
-  from the membership row whenever the context is established (behind
-  `Sanctum.Caller`'s short memo, which revocation invalidates), and is what
-  the `door.*` verbs and the audited "open another athanor" check — never a
-  widened scope.
+  is a person like any other, focused on one athanor at a time and only on
+  one they hold a seat in; the capability rides on the context as
+  `platform_admin: true`, is re-derived from the membership row whenever
+  the context is established (behind `Sanctum.Caller`'s short memo, which
+  revocation invalidates), and is what the platform-scope operations check
+  — never a widened scope and never a seat.
   Only *how* a context is constructed varies by deployment configuration —
   never the functions that consume it.
   """
@@ -231,7 +231,8 @@ defmodule Sanctum.Context do
     # caller must never reach operator credentials.
     anonymous: false,
     # The server's operator: a platform-scope membership row grants it. It is
-    # a capability, not a scope — the context still works inside one athanor.
+    # a capability, not a scope and not a seat — the context still works
+    # inside one athanor, and only one the person is seated in.
     platform_admin: false,
     # Which authorization plane this context is on. :external is every real
     # ingress; :guest is stamped one-way by enter_guest/1 when a context
@@ -759,12 +760,14 @@ defmodule Sanctum.Context do
 
   @doc """
   Focus the context on an athanor: the one narrowing entry every LiveView
-  mount, `session.use` and the operator's "open another athanor" run through.
+  mount and `session.use` run through.
 
-  A member of the athanor may focus it. A platform admin may focus any
-  athanor — an audited act (`Sanctum.Telemetry.platform_context_event/1`),
-  never a widened scope: the result works inside that athanor exactly as a
-  member's context does. An archived athanor cannot be focused by anyone.
+  A member of the athanor may focus it, and no one else: a platform admin
+  holding no seat there is `{:error, :not_member}` like anyone else, since
+  the capability is over the instance and is not a seat. What an operator
+  does to an athanor they are not in is a platform-scope operation that
+  focuses nothing (`Sanctum.Providers.Athanor`'s purge and destroy). An
+  archived athanor cannot be focused by anyone.
 
   The athanor is named by its id, or by a map carrying it (`:id`), and
   only the id is read: its row, its standing and the seat are read again
@@ -791,18 +794,6 @@ defmodule Sanctum.Context do
     case Sanctum.Tenancy.Members.active_seat(ctx.user_id, id) do
       {:ok, seat} ->
         {:ok, refocused(ctx, athanor, seat.id)}
-
-      :none when ctx.platform_admin ->
-        with {:ok, basis} <- platform_basis(ctx) do
-          Sanctum.Telemetry.platform_context_event(%{
-            caller: :focus,
-            user_id: ctx.user_id,
-            athanor_id: id,
-            auth_method: ctx.auth_method
-          })
-
-          {:ok, refocused(ctx, athanor, basis)}
-        end
 
       :none ->
         {:error, :not_member}
@@ -833,23 +824,13 @@ defmodule Sanctum.Context do
     }
   end
 
-  defp platform_basis(%__MODULE__{credential_binding: nil}), do: {:ok, nil}
-
-  defp platform_basis(%__MODULE__{user_id: user_id}) do
-    case Sanctum.Tenancy.Members.platform_seat(user_id) do
-      {:ok, seat} -> {:ok, seat.id}
-      :none -> {:ok, nil}
-      {:error, _unreadable} -> {:error, :unavailable}
-    end
-  end
-
   @doc """
   Focuses the caller on another athanor for domain reads or writes after
   checking membership and archive status. Archived-athanor management uses
   `Sanctum.Providers.Athanor.resolve/3`, which permits get and unarchive.
 
-  A user context goes through `focus/2` whole: membership or the audited
-  operator open, and an archived athanor refused. A **system** context
+  A user context goes through `focus/2` whole: a seat, and an archived
+  athanor refused. A **system** context
   (`auth_method: :system`) crosses tenants by design — recovery resolving
   a stored agent from its owner's tree has no member to speak as — but an
   archived athanor is still refused; the platform plane gets no door into
