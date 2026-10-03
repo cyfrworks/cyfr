@@ -36,7 +36,10 @@ defmodule Cyfr.Test.AttemptFixtures do
   - `:authority` — default `Prima.Authority.zero/0`;
   - `:vault` — attributes of a vault entry to create
     (`Sanctum.Vault.create/2`); the authority's edge is bound to it and
-    pinned to an active profile, so attach unseals its fields;
+    pinned to an active profile, so attach unseals its fields. The entry
+    is disclosed, since the attach reads it, and goes to the fixture's
+    destination unless the attributes name `:destination` and
+    `:disclose` of their own;
   - `:component_ref` — default a reference of its own, so no two fixtures
     share a rate bucket;
   - `:component_type` — the row's type (default `:catalyst`);
@@ -353,7 +356,11 @@ defmodule Cyfr.Test.AttemptFixtures do
   @doc """
   `authority` with its edge bound to a new vault entry made from `attrs` in
   `ctx`'s athanor, and pinned to an active profile at its head consent, so
-  an attach unseals the entry. Answers the authority and the entry.
+  an attach unseals the entry. The entry is created disclosed, to the
+  consent fixture's destination (`Sanctum.Test.ConsentFixtures`), unless
+  `attrs` name `:disclose` and `:destination`; the bound resource carries
+  the entry's scope, destination and the binding's key, as a consent's
+  does. Answers the authority and the entry.
   """
   @spec vault_authority!(Sanctum.Context.t(), map(), Authority.t()) ::
           {Authority.t(), Arca.Schemas.VaultEntry.t()}
@@ -385,7 +392,11 @@ defmodule Cyfr.Test.AttemptFixtures do
           given
       end
 
-    params = Map.put_new(attrs, :name, "attempt-fixture-#{System.unique_integer([:positive])}")
+    params =
+      attrs
+      |> Map.put_new(:name, "attempt-fixture-#{System.unique_integer([:positive])}")
+      |> Map.put_new(:destination, Sanctum.Test.ConsentFixtures.fixture_destination())
+      |> Map.put_new(:disclose, true)
 
     # Entering the credential is a sensitive change, confirmed as its
     # person confirms it (`Sanctum.TestContext.confirmed/3`).
@@ -412,7 +423,22 @@ defmodule Cyfr.Test.AttemptFixtures do
         head_consent_id: consent_id
       })
 
-    vault = %{entry_id: entry.id, binding_digest: digest, projection: projection}
+    {:ok, destination} = entry.destination |> Jason.decode!() |> Prima.Destination.from_map()
+
+    vault = %{
+      entry_id: entry.id,
+      binding_digest: digest,
+      scope: "athanor",
+      binding_key:
+        Prima.Authority.Blob.binding_key(
+          "catalyst:local.attempt-fixture",
+          Prima.Authority.Blob.ingress_key(),
+          nil
+        ),
+      destination: destination,
+      attach: nil,
+      projection: projection
+    }
 
     {%{
        authority

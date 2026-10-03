@@ -53,10 +53,16 @@ defmodule Sanctum.Test.AuthorityGen do
     end
   end
 
-  @doc "A random resource set for one edge; sometimes empty (invocation-only)."
+  @doc """
+  A random resource set for one edge; sometimes empty (invocation-only).
+  A bound vault is an athanor entry with its destination, attached or
+  disclose-only; its binding key is its place's, set where the edge is
+  placed (`build_graph/8`).
+  """
   def edge_resources do
     gen all(
           vault? <- boolean(),
+          attached? <- boolean(),
           entry <- string(?a..?z, min_length: 3, max_length: 6),
           domains <- list_of(member_of(["a.example", "b.example"]), max_length: 2),
           tools <-
@@ -67,15 +73,29 @@ defmodule Sanctum.Test.AuthorityGen do
       base = %{"egress" => %{"domains" => Enum.uniq(domains)}, "tools" => Enum.uniq(tools)}
 
       if vault? do
-        Map.put(base, "vault", %{
+        vault = %{
           "entry_id" => "vault-" <> entry,
-          "binding_digest" => "sha256:bind-" <> entry
-        })
+          "binding_digest" => "sha256:bind-" <> entry,
+          "scope" => "athanor",
+          "destination" => %{"hosts" => ["a.example"], "scheme" => "https"}
+        }
+
+        attach = %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
+        Map.put(base, "vault", if(attached?, do: Map.put(vault, "attach", attach), else: vault))
       else
         base
       end
     end
   end
+
+  # An edge's bound vault takes the key of the place it is put.
+  defp placed(%{"vault" => vault} = resources, from, edge_key),
+    do: %{
+      resources
+      | "vault" => Map.put(vault, "binding_key", Blob.binding_key(from, edge_key, nil))
+    }
+
+  defp placed(resources, _from, _edge_key), do: resources
 
   @doc """
   A randomized graph: `{graph_map, meta}`.
@@ -147,9 +167,10 @@ defmodule Sanctum.Test.AuthorityGen do
       edges
       |> Enum.zip(resources_list)
       |> Enum.reduce(base_nodes, fn {{from, to, need}, resources}, acc ->
-        put_in(acc, [from, "edges", Blob.edge_key(to, need)], resources)
+        key = Blob.edge_key(to, need)
+        put_in(acc, [from, "edges", key], placed(resources, from, key))
       end)
-      |> put_in([source, "edges", "@ingress"], ingress_resources)
+      |> put_in([source, "edges", "@ingress"], placed(ingress_resources, source, "@ingress"))
 
     activation = node_refs |> Enum.zip(digests) |> Map.new()
 

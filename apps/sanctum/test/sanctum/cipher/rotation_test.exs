@@ -93,6 +93,7 @@ defmodule Sanctum.Cipher.RotationTest do
         name: name,
         provider_hint: hint,
         kind: "bundle",
+        destination: ~s({"hosts":["api.example.com"],"scheme":"https"}),
         status: Map.get(over, :status, "active"),
         payload_rev: 0,
         sealed_payload: sealed,

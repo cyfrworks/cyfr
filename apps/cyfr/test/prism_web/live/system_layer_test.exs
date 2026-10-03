@@ -459,7 +459,11 @@ defmodule PrismWeb.SystemLayerTest do
 
       view
       |> layer()
-      |> render_submit("enter_credential", %{"prompt_id" => "n3", "secret" => "sk-none"})
+      |> render_submit("enter_credential", %{
+        "prompt_id" => "n3",
+        "secret" => "sk-none",
+        "destination_hosts" => "api.example.com"
+      })
 
       assert {:refused, _reason} = outcome("n3")
       refute render(view) =~ "sk-none"
@@ -558,7 +562,8 @@ defmodule PrismWeb.SystemLayerTest do
     params = %{
       name: "layer key #{System.unique_integer([:positive])}",
       kind: "api_key",
-      fields: %{"LAYER_API_KEY" => "sk-layer-not-shown"}
+      fields: %{"LAYER_API_KEY" => "sk-layer-not-shown"},
+      destination: %{"hosts" => ["api.example.com"]}
     }
 
     entering =
@@ -722,7 +727,8 @@ defmodule PrismWeb.SystemLayerTest do
       params = %{
         name: "second key #{System.unique_integer([:positive])}",
         kind: "api_key",
-        fields: %{"LAYER_API_KEY" => "sk-second-not-shown"}
+        fields: %{"LAYER_API_KEY" => "sk-second-not-shown"},
+        destination: %{"hosts" => ["api.example.com"]}
       }
 
       entering =
@@ -1075,7 +1081,8 @@ defmodule PrismWeb.SystemLayerTest do
         PrismWeb.Ops.call_tool(other, "vault/create", %{
           "name" => "quiet-#{System.unique_integer([:positive])}",
           "kind" => "api_key",
-          "fields" => %{"KEY" => "sk-quiet"}
+          "fields" => %{"KEY" => "sk-quiet"},
+          "destination" => %{"hosts" => ["api.example.com"]}
         })
       end
 
@@ -1297,6 +1304,13 @@ defmodule PrismWeb.SystemLayerTest do
       assert has_element?(view, ~s(button[type="submit"][form="system-layer-credential"]))
       refute html =~ secret
 
+      # Where the value may go is asked, with nothing prefilled, and the
+      # app reading it is off until the person turns it on.
+      assert has_element?(view, ~s(input[name="destination_hosts"][required]))
+      refute has_element?(view, ~s(input[name="destination_hosts"][value]))
+      assert has_element?(view, ~s(input[type="checkbox"][name="disclose"]))
+      refute has_element?(view, ~s(input[type="checkbox"][name="disclose"][checked]))
+
       previous = Logger.level()
       Logger.configure(level: :debug)
       on_exit(fn -> Logger.configure(level: previous) end)
@@ -1304,7 +1318,10 @@ defmodule PrismWeb.SystemLayerTest do
       {id, log} =
         with_log([level: :debug], fn ->
           view
-          |> form("#system-layer-credential", %{"secret" => secret})
+          |> form("#system-layer-credential", %{
+            "secret" => secret,
+            "destination_hosts" => "API.example.com"
+          })
           |> render_submit()
 
           # The prompt stays, waiting on its record, and reports nothing.
@@ -1361,7 +1378,10 @@ defmodule PrismWeb.SystemLayerTest do
       log =
         capture_log([level: :debug], fn ->
           view
-          |> form("#system-layer-credential", %{"secret" => secret})
+          |> form("#system-layer-credential", %{
+            "secret" => secret,
+            "destination_hosts" => "API.example.com"
+          })
           |> render_submit()
 
           assert outcome("c1") == :confirmed
@@ -1378,7 +1398,12 @@ defmodule PrismWeb.SystemLayerTest do
       refute render(view) =~ secret
 
       {:ok, entries} = Sanctum.Vault.list(ctx)
-      assert Enum.any?(entries, &(&1.name == name and &1.field_names == ["API_KEY"]))
+      assert %{field_names: ["API_KEY"]} = entry = Enum.find(entries, &(&1.name == name))
+
+      # Bound where the person said, and attach-only: they did not let the
+      # app read it.
+      assert entry.destination == %{"hosts" => ["api.example.com"], "scheme" => "https"}
+      assert entry.attach_only == true
 
       # The secret reached no request-log row or decision.
       refute logged() =~ id
@@ -1390,12 +1415,21 @@ defmodule PrismWeb.SystemLayerTest do
       name = "system-layer-early-#{System.unique_integer([:positive])}"
       prompt(view, credential("c3", name))
 
-      view |> form("#system-layer-credential", %{"secret" => "sk-early"}) |> render_submit()
+      submit = fn ->
+        view
+        |> form("#system-layer-credential", %{
+          "secret" => "sk-early",
+          "destination_hosts" => "api.example.com"
+        })
+        |> render_submit()
+      end
+
+      submit.()
       id = held_secret(view)
 
       # Submitted again before anyone proved it: the same record, still
       # waiting, and nothing new opened.
-      view |> form("#system-layer-credential", %{"secret" => "sk-early"}) |> render_submit()
+      submit.()
       assert held_secret(view) == id
       assert render(view) =~ ~s(data-status="waiting")
 
@@ -1405,7 +1439,14 @@ defmodule PrismWeb.SystemLayerTest do
 
     test "a request cancelled from its prompt ends the wait and says so", %{view: view, ctx: ctx} do
       prompt(view, credential("c4", "system-layer-cancel-#{System.unique_integer([:positive])}"))
-      view |> form("#system-layer-credential", %{"secret" => "sk-cancel"}) |> render_submit()
+
+      view
+      |> form("#system-layer-credential", %{
+        "secret" => "sk-cancel",
+        "destination_hosts" => "api.example.com"
+      })
+      |> render_submit()
+
       ref = Prima.Confirmation.ref(held_secret(view))
 
       view |> element(~s([data-test="confirm-cancel"])) |> render_click()
@@ -1430,6 +1471,57 @@ defmodule PrismWeb.SystemLayerTest do
       assert open_prompt(view) == "c2"
       no_outcome("c2")
     end
+
+    test "a value with no host to go to is asked for again and dispatches nothing",
+         %{view: view, ctx: ctx} do
+      name = "no-host-entry-#{System.unique_integer([:positive])}"
+      prompt(view, credential("c5", name))
+
+      html =
+        view
+        |> form("#system-layer-credential", %{
+          "secret" => "sk-nowhere",
+          "destination_hosts" => " "
+        })
+        |> render_submit()
+
+      assert html =~ "Name the host the credential may be sent to."
+      refute html =~ "sk-nowhere"
+      assert open_prompt(view) == "c5"
+      no_outcome("c5")
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+    end
+
+    test "the form's destination is what the person typed, and disclosure only an explicit yes" do
+      assert PrismWeb.SystemLayer.destination_params(%{
+               "destination_hosts" => "API.example.com, *.cdn.example.com\nother.example",
+               "destination_scheme" => "http",
+               "destination_port" => " 8443 ",
+               "destination_methods" => "get post",
+               "destination_paths" => "/v1/ /v2/"
+             }) == %{
+               "hosts" => ["api.example.com", "*.cdn.example.com", "other.example"],
+               "scheme" => "http",
+               "port" => 8443,
+               "methods" => ["GET", "POST"],
+               "paths" => ["/v1/", "/v2/"]
+             }
+
+      # Nothing named is nothing sent, and https unless http is chosen; a
+      # port that is not a number goes as typed, for the vault to refuse.
+      assert PrismWeb.SystemLayer.destination_params(%{}) == %{"hosts" => [], "scheme" => "https"}
+
+      assert %{"port" => "eighty"} =
+               PrismWeb.SystemLayer.destination_params(%{
+                 "destination_hosts" => "api.example.com",
+                 "destination_port" => "eighty"
+               })
+
+      assert PrismWeb.SystemLayer.disclose_param(%{"disclose" => "true"})
+      assert PrismWeb.SystemLayer.disclose_param(%{"disclose" => "on"})
+      refute PrismWeb.SystemLayer.disclose_param(%{"disclose" => "false"})
+      refute PrismWeb.SystemLayer.disclose_param(%{})
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1444,7 +1536,13 @@ defmodule PrismWeb.SystemLayerTest do
       authenticator = Sanctum.TestContext.passkey!(user.user_id)
       other = other_session!(ctx)
       name = "asked-elsewhere-#{System.unique_integer([:positive])}"
-      args = %{"name" => name, "kind" => "api_key", "fields" => %{"KEY" => "sk-elsewhere"}}
+
+      args = %{
+        "name" => name,
+        "kind" => "api_key",
+        "fields" => %{"KEY" => "sk-elsewhere"},
+        "destination" => %{"hosts" => ["api.example.com"]}
+      }
 
       # Another session of the person asks; it alone holds the secret.
       assert {:error, {:confirmation_required, %{id: id}}} =
@@ -1487,7 +1585,8 @@ defmodule PrismWeb.SystemLayerTest do
                PrismWeb.Ops.call_tool(other, "vault/create", %{
                  "name" => "ref-alone-#{System.unique_integer([:positive])}",
                  "kind" => "api_key",
-                 "fields" => %{"KEY" => "x"}
+                 "fields" => %{"KEY" => "x"},
+                 "destination" => %{"hosts" => ["api.example.com"]}
                })
 
       ref = Prima.Confirmation.ref(id)
@@ -1523,7 +1622,8 @@ defmodule PrismWeb.SystemLayerTest do
                PrismWeb.Ops.call_tool(other, "vault/create", %{
                  "name" => name,
                  "kind" => "api_key",
-                 "fields" => %{"KEY" => "sk-before"}
+                 "fields" => %{"KEY" => "sk-before"},
+                 "destination" => %{"hosts" => ["api.example.com"]}
                })
 
       {:ok, view, _html} =

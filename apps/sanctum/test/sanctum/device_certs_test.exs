@@ -1134,7 +1134,8 @@ defmodule Sanctum.DeviceCertsTest do
           endpoints: %{
             "authorize_url" => "https://acme-mail.example/authorize",
             "token_url" => "https://127.0.0.1:9/token"
-          }
+          },
+          destination: %{"hosts" => ["mail.acme-mail.example"]}
         }
 
         confirmed =

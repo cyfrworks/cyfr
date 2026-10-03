@@ -55,7 +55,10 @@ defmodule Sanctum.Consent.FlowTest do
           %{
             name: "conn-#{System.unique_integer([:positive])}",
             kind: "api_key",
-            fields: %{"url" => "https://db.example", "anon_key" => "anon"}
+            fields: %{"url" => "https://db.example", "anon_key" => "anon"},
+            # A case reads what the attach answers, so the entry is disclosed.
+            destination: %{"hosts" => ["db.example"]},
+            disclose: true
           },
           over
         )
@@ -212,11 +215,28 @@ defmodule Sanctum.Consent.FlowTest do
       assert auth.resources.vault.entry_id == entry.id
       assert auth.resources.vault.projection.fields == ["anon_key", "url"]
 
+      # The binding is the athanor's own, keyed where it sits; a manifest
+      # declaring no need is disclose-only, so nothing is attached.
+      assert auth.resources.vault.scope == "athanor"
+      assert auth.resources.vault.binding_key == "reagent:local.flow-happy|@ingress|default"
+      assert auth.resources.vault.attach == nil
+
       {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
 
-      assert consent.vault_refs == [
-               %{vault_entry_id: entry.id, binding_digest: auth.resources.vault.binding_digest}
-             ]
+      entry_id = entry.id
+      digest = auth.resources.vault.binding_digest
+
+      assert [
+               %{
+                 binding_key: "reagent:local.flow-happy|@ingress|default",
+                 scope: "athanor",
+                 vault_entry_id: ^entry_id,
+                 binding_digest: ^digest,
+                 via_label: nil,
+                 instance_entry_id: nil,
+                 lifetime_kind: "standing"
+               }
+             ] = consent.vault_refs
     end
 
     test "a second walk writes a delta revision and advances the head", %{ctx: ctx} do

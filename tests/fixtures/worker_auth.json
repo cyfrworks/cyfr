@@ -22,7 +22,7 @@
     "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
     "ts": 1789305249602
   },
-  "comment": "The vectors pinning Prima.WorkerAuth and Prima.Assignment: the suite derives every key here from the root, the worker service id and the attempt, reproduces every canonical string, header, MAC, sealed value and assignment token from the fields and fixed IVs, opens every sealed value, and decodes every valid root text to the root and refuses every invalid one. Integers are written in decimal in canonical strings, headers and key labels. The service id is the key input; the boot is signed beside it and compared, never derived over. The member is the control-plane member that issued the assignment and answers that attempt's host calls: a call header field, an assignment field beside host_url (the address those calls are posted to) and an argument of the exit report. A member that is not the one named refuses the call, whatever it asked for. This file holds the primitives only: the messages of the wire, sealed and signed with these keys, are tests/fixtures/host_api.json's and tests/fixtures/worker_api.json's, and a status answer's vectors are worker_api.json's.",
+  "comment": "The vectors pinning Prima.WorkerAuth and Prima.Assignment: the suite derives every key here from the root, the worker service id and the attempt, reproduces every canonical string, header, MAC, sealed value and assignment token from the fields and fixed IVs, opens every sealed value, and decodes every valid root text to the root and refuses every invalid one. Integers are written in decimal in canonical strings, headers and key labels. The service id is the key input; the boot is signed beside it and compared, never derived over. The member is the control-plane member that issued the assignment and answers that attempt's host calls: a call header field, an assignment field beside host_url (the address those calls are posted to) and an argument of the exit report. A member that is not the one named refuses the call, whatever it asked for. This file holds the primitives only: the messages of the wire, sealed and signed with these keys, are tests/fixtures/host_api.json's and tests/fixtures/worker_api.json's, and a status answer's vectors are worker_api.json's. sealed_frames are the frames of one attached request's answer for call_id: each a kind byte in clear and the plaintext sealed with the attempt seal key under label with call_id, seq and kind as fields, from iv_hex; frame_hex is the frame as it crosses, its 4-byte length first.",
   "host_url": "http://cyfr-1:4300",
   "keys": {
     "assign_hex": "bef5afc6d2ed1e87fcc2216116e7142e139bc74b7308f9c02b4bc5f7c300e506",
@@ -73,6 +73,39 @@
     "answer_sealed": "wMHCw8TFxsfIycrLLbC8fmRaIsR4x8Zz2NqMjvhANVBVNMuaW6VUiQYAVRw5y3bAJGAM6GvFJ3ZGeT7tsGCIseURNX20nyeLgw",
     "body_iv_hex": "b0b1b2b3b4b5b6b7b8b9babb",
     "body_sealed": "sLGys7S1tre4ubq73FDYpPujnSaU0uxRbduzcVyQ-D2MgSfQKj_rhlE_wLkgZYOPQPSnqmXVNikRnGWPbIKGh1tMjcAs"
+  },
+  "sealed_frames": {
+    "call_id": "AAECAwQFBgcICQoLDA0ODw",
+    "frames": [
+      {
+        "call_id": "AAECAwQFBgcICQoLDA0ODw",
+        "frame_hex": "000000796838504879385f5431397666342d666f416d5a4f4445734d524d6650354153537150616a44472d7a4a6162466246705f6b615473706731673168754161434b524b38423166685253476e716a4577445079784e43506d697164694e796b486a794e6e7a436f30584a4a5a70443955673839476f4d3742696a76",
+        "iv_hex": "f0f1f2f3f4f5f6f7f8f9fa00",
+        "kind": "head",
+        "plaintext_b64": "eyJzdGF0dXMiOjIwMCwiaGVhZGVycyI6W1siY29udGVudC10eXBlIiwiYXBwbGljYXRpb24vanNvbiJdXX0=",
+        "sealed": "8PHy8_T19vf4-foAmZODEsMRMfP5ASSqPajDG-zJabFbFp_kaTspg1g1huAaCKRK8B1fhRSGnqjEwDPyxNCPmiqdiNykHjyNnzCo0XJJZpD9Ug89GoM7Bijv",
+        "seq": 0
+      },
+      {
+        "call_id": "AAECAwQFBgcICQoLDA0ODw",
+        "frame_hex": "0000003b6338504879385f5431397666342d666f42566b356e66756e5f69587158325464616c794a634c6a6c4a6b45694176574b696c504d32527676303441",
+        "iv_hex": "f0f1f2f3f4f5f6f7f8f9fa01",
+        "kind": "chunk",
+        "plaintext_b64": "eyJpdGVtcyI6WzEsMl19",
+        "sealed": "8PHy8_T19vf4-foBVk5nfun_iXqX2TdalyJcLjlJkEiAvWKilPM2Rvv04A",
+        "seq": 1
+      },
+      {
+        "call_id": "AAECAwQFBgcICQoLDA0ODw",
+        "frame_hex": "000000276538504879385f5431397666342d666f43346f4d2d7174553475424a55623362374b4c306d5951",
+        "iv_hex": "f0f1f2f3f4f5f6f7f8f9fa02",
+        "kind": "end",
+        "plaintext_b64": "",
+        "sealed": "8PHy8_T19vf4-foC4oM-qtU4uBJUb3b7KL0mYQ",
+        "seq": 2
+      }
+    ],
+    "label": "cyfr-opus/v1/frame-answer"
   },
   "service": "wrk_4f3c2a1e9d8b7c6a"
 }

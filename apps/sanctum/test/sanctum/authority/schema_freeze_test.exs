@@ -125,6 +125,22 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
       }
     end
 
+    egress = fn domain ->
+      %{domains: [domain], methods: ["GET", "POST"], schemes: ["https"], private_ips: []}
+    end
+
+    destination = fn hosts, extra ->
+      struct!(Prima.Destination, [hosts: hosts, scheme: "https"] ++ extra)
+    end
+
+    key = fn need, slot ->
+      Blob.binding_key(
+        "formula:local.daily-report",
+        "catalyst:supabase.com.database|" <> need,
+        slot
+      )
+    end
+
     assert blob == %Blob{
              canonical: "jcs-1",
              nodes: %{
@@ -136,14 +152,17 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
                      vault: %{
                        entry_id: "vault-entry-my-supabase",
                        binding_digest: "sha256:bind-my-supabase",
+                       scope: "athanor",
+                       binding_key: key.("source", nil),
+                       destination:
+                         destination.(["prod.supabase.co"],
+                           methods: ["GET", "POST"],
+                           paths: ["/rest/v1"]
+                         ),
+                       attach: %{in: "header", name: "apikey", template: "{value}"},
                        projection: %{fields: ["url", "anon_key"], scopes: []}
                      },
-                     egress: %{
-                       domains: ["prod.supabase.co"],
-                       methods: ["GET", "POST"],
-                       schemes: ["https"],
-                       private_ips: []
-                     },
+                     egress: egress.("prod.supabase.co"),
                      storage: %{paths: [], actions: []},
                      tools: [],
                      tool_servers: []
@@ -152,13 +171,57 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
                      vault: %{
                        entry_id: "vault-entry-warehouse",
                        binding_digest: "sha256:bind-warehouse",
-                       projection: %{fields: ["url", "service_key"], scopes: []}
+                       scope: "athanor",
+                       binding_key: key.("dest", nil),
+                       destination: destination.(["warehouse.supabase.co"], []),
+                       attach: nil,
+                       projection: %{fields: ["url", "service_key"], scopes: []},
+                       named: %{
+                         "Archive" => %{
+                           entry_id: "vault-entry-archive",
+                           binding_digest: "sha256:bind-archive",
+                           scope: "instance",
+                           binding_key: key.("dest", "Archive"),
+                           destination:
+                             destination.(["archive.supabase.co"],
+                               port: 8443,
+                               methods: ["GET"],
+                               paths: ["/rest/v1"]
+                             ),
+                           attach: %{
+                             in: "header",
+                             name: "Authorization",
+                             template: "Bearer {value}"
+                           },
+                           projection: nil
+                         }
+                       }
                      },
-                     egress: %{
-                       domains: ["warehouse.supabase.co"],
-                       methods: ["GET", "POST"],
-                       schemes: ["https"],
-                       private_ips: []
+                     egress: egress.("warehouse.supabase.co")
+                   },
+                   "catalyst:supabase.com.database|lent" => %Edge{
+                     vault: %{
+                       entry_id: "vault-entry-lent",
+                       binding_digest: "sha256:bind-lent",
+                       scope: "athanor",
+                       binding_key: key.("lent", nil),
+                       destination: destination.(["*.supabase.co"], []),
+                       attach: %{in: "query", name: "apikey", template: "{value}"},
+                       projection: nil,
+                       lender: %{
+                         profile_id: "prof-supabase",
+                         consent_id: "consent-supabase-3",
+                         binding_key: "catalyst:supabase.com.database|@ingress|default"
+                       }
+                     }
+                   },
+                   "catalyst:supabase.com.database|public" => %Edge{
+                     vault: %{
+                       provided: %{
+                         destination: destination.(["public.supabase.co"], paths: ["/rest/v1"]),
+                         values: %{"anon_key" => "public-anon-key"},
+                         attach: %{in: "header", name: "apikey", template: "{value}"}
+                       }
                      }
                    }
                  }
@@ -217,5 +280,17 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
     {:child, dest} = Transition.step(auth, :call, dest_invoke)
     assert dest.resources.vault.entry_id == "vault-entry-warehouse"
     assert dest.resources.egress.domains == ["warehouse.supabase.co"]
+    refute Map.has_key?(dest.resources.vault, :named)
+
+    # A call naming the edge's second account gets that binding alone; a
+    # name the edge lacks is refused.
+    {_tag, target} = dest_invoke
+    named_invoke = {:invoke, Map.put(target, :connection, "Archive")}
+    {:child, archive} = Transition.step(auth, :call, named_invoke)
+    assert archive.resources.vault.entry_id == "vault-entry-archive"
+    assert archive.resources.vault.scope == "instance"
+
+    assert {:deny, :connection_not_granted} =
+             Transition.step(auth, :call, {:invoke, Map.put(target, :connection, "Other")})
   end
 end

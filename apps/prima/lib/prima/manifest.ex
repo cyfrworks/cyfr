@@ -9,26 +9,27 @@ defmodule Prima.Manifest do
 
   `decode/1` and `decode_strict/1` normalize a manifest from its storage
   representations (nil, JSON string, map) into a map. `validate/2` holds a
-  decoded manifest to the schema; the `needs` and `caps` blocks are
-  `Prima.Manifest.Needs` and `Prima.Manifest.Caps`, and the tincture's
+  decoded manifest to the schema; the `needs`, `caps` and `provides`
+  blocks are `Prima.Manifest.Needs`, `Prima.Manifest.Caps` and
+  `Prima.Manifest.Provides`, and the tincture's
   frame, cards, streams and actions `Prima.Manifest.Tincture`. Which storage paths a
   guest may name is the storage boundary's fact, so the validator takes
   that predicate as an argument (`Arca.Storage.valid_guest_path?/1` at
   every caller) and restates nothing about the layout.
   """
 
-  alias Prima.Manifest.{Caps, Needs, Tincture}
+  alias Prima.Manifest.{Caps, Needs, Provides, Tincture}
 
   # The closed top-level key roster — every field a manifest may carry,
   # which is also the roster component-guide.md documents. Identity fields
   # are validated against the directory at registration; presentational
-  # fields are free text; `needs`/`caps` delegate to their owners.
+  # fields are free text; `needs`/`caps`/`provides` delegate to their owners.
   @known_keys ~w(
     name type version publisher
     description license tags category
     needs caps dependencies tincture
     schema examples defaults forked_from
-    contracts agent
+    contracts agent provides
   )
 
   # A contract is `<family>/<name>@<major>`: the operations a component
@@ -73,7 +74,11 @@ defmodule Prima.Manifest do
       * malformed `needs` or `caps` blocks;
       * malformed `tincture`, `contracts` or `agent` blocks;
       * a malformed `dependencies` block, which feeds activation-graph and
-        release-digest validation.
+        release-digest validation;
+      * a malformed `provides` block, or one naming a dependency
+        `dependencies.static` does not. Whether that dependency declares
+        the need it provides for is the registry's check at publish, since
+        the dependency's manifest is not knowable here.
 
   A value that is not a map declares nothing and passes; decoding is
   `decode_strict/1`'s.
@@ -87,7 +92,8 @@ defmodule Prima.Manifest do
          :ok <- validate_tincture_block(manifest),
          :ok <- validate_contracts_block(manifest),
          :ok <- validate_agent_block(manifest),
-         :ok <- validate_dependencies_block(manifest) do
+         :ok <- validate_dependencies_block(manifest),
+         :ok <- Provides.validate(manifest) do
       :ok
     else
       {:error, {tag, detail}} -> {:error, {:invalid_manifest, [{tag, detail}]}}

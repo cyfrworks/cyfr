@@ -410,7 +410,8 @@ func renderPreview(w io.Writer, preview map[string]any) {
 		fmt.Fprintf(w, "\n  Admits runs started: %s\n", origins)
 	}
 
-	fmt.Fprint(w, "\n  Vault entries are sealed at rest; a component receives only the fields listed.\n\n")
+	fmt.Fprint(w, "\n  Vault entries are sealed at rest; CYFR attaches a credential to a component's requests,\n"+
+		"  and a component holds a field's value only where the row says it is disclosed.\n\n")
 }
 
 // describeRow is one row in the CLI's words, its first line naming it.
@@ -428,9 +429,26 @@ func describeRow(row map[string]any) []string {
 		if label := str(values["label"]); label != "" {
 			head += fmt.Sprintf(", the key bound on its '%s' profile", label)
 		}
-		return []string{head,
-			"fields: " + listOr(values["fields"], "none"),
-			"scopes: " + listOr(values["scopes"], "none")}
+		if connection := str(values["connection"]); connection != "" {
+			head += fmt.Sprintf(", as the account '%s'", connection)
+		}
+		lines := []string{head, "source: " + sourceLabel(str(values["source"]))}
+		if provider := str(values["provider"]); provider != "" {
+			lines = append(lines, "provider: "+provider)
+		}
+		lines = append(lines,
+			"goes to: "+destinationLabel(values["destination"]),
+			disclosureLabel(values["disclosed"]),
+			"lifetime: "+lifetimeLabel(values["lifetime"]),
+			"fields: "+listOr(values["fields"], "none"),
+			"scopes: "+listOr(values["scopes"], "none"))
+		if values["suggested"] == true {
+			lines = append(lines, "suggested")
+		}
+		if values["choice_required"] == true {
+			lines = append(lines, "choose which entry to use")
+		}
+		return append(lines, "binding: "+str(values["binding_key"]))
 
 	case "egress":
 		return []string{node + narrowed,
@@ -500,6 +518,60 @@ func describeRow(row map[string]any) []string {
 	default:
 		raw, _ := json.Marshal(values)
 		return []string{fmt.Sprintf("%s %s: %s", str(row["kind"]), node, raw)}
+	}
+}
+
+// sourceLabel says whose credential a row binds: the athanor's own entry,
+// an entry the instance offers, or the publisher's provided configuration.
+func sourceLabel(source string) string {
+	switch source {
+	case "own":
+		return "own (an entry of this athanor)"
+	case "instance":
+		return "instance (an entry this instance offers)"
+	case "provided":
+		return "provided (the publisher's public configuration)"
+	default:
+		return source
+	}
+}
+
+// destinationLabel spells where a credential may go: its scheme, hosts and
+// port, and the methods and path prefixes it is limited to, when it is.
+func destinationLabel(value any) string {
+	destination, _ := value.(map[string]any)
+	label := str(destination["scheme"]) + "://" + listOr(destination["hosts"], "no host")
+	if port, ok := destination["port"]; ok {
+		label += " port " + num(port)
+	}
+	if methods := joinStrings(destination["methods"]); methods != "" {
+		label += ", methods " + methods
+	}
+	if paths := joinStrings(destination["paths"]); paths != "" {
+		label += ", paths " + paths
+	}
+	return label
+}
+
+func disclosureLabel(disclosed any) string {
+	if disclosed == true {
+		return "disclosed: the component reads the value itself"
+	}
+	return "attached by CYFR: the component never holds the value"
+}
+
+// lifetimeLabel spells how long a binding stands.
+func lifetimeLabel(value any) string {
+	lifetime, _ := value.(map[string]any)
+	switch str(lifetime["kind"]) {
+	case "standing":
+		return "until revoked"
+	case "until":
+		return "until " + str(lifetime["until"])
+	case "once":
+		return "one run"
+	default:
+		return str(lifetime["kind"])
 	}
 }
 

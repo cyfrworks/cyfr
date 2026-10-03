@@ -80,7 +80,12 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
   defp entry!(ctx, name, fields) do
     {:ok, view} =
-      Sanctum.TestContext.create_vault(ctx, %{name: name, kind: "api_key", fields: fields})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: name,
+        kind: "api_key",
+        fields: fields,
+        destination: %{"hosts" => ["api.example.com"]}
+      })
 
     view
   end
@@ -165,6 +170,8 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
     # The lent key is a typed row on the source, on the edge into the
     # dependency, naming the entry, its fields and the lending label.
+    borrower_key = "reagent:local.sel-source|#{@dep}|default"
+
     assert [
              %{
                "kind" => "credential",
@@ -175,7 +182,13 @@ defmodule Sanctum.Consent.SelectionFlowTest do
                  "edge" => @dep,
                  "label" => "default",
                  "fields" => ["KEY", "ORG"],
-                 "scopes" => []
+                 "scopes" => [],
+                 # The borrower's own binding, standing, chosen by the person.
+                 "source" => "own",
+                 "binding_key" => ^borrower_key,
+                 "suggested" => false,
+                 "choice_required" => false,
+                 "lifetime" => %{"kind" => "standing", "until" => nil}
                }
              }
            ] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
@@ -194,20 +207,38 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert %{
              entry_id: ^home_id,
              binding_digest: ^home_digest,
-             projection: %{fields: ["KEY", "ORG"]}
+             projection: %{fields: ["KEY", "ORG"]},
+             binding_key: ^borrower_key,
+             lender: %{binding_key: lender_key}
            } =
              edge_vault(ctx, "reagent:local.sel-source")
+
+    # Both identities: the borrower's binding where it sits, the lender's
+    # on the dependency's own ingress.
+    assert lender_key == "#{@dep}|@ingress|default"
 
     assert %{entry_id: ^work_id, projection: %{fields: ["KEY"], scopes: []}} =
              edge_vault(ctx, "reagent:local.sel-source-two")
 
     # The stored blob carries the selection, pinned, and references no entry
-    # of its own.
+    # of its own: its row is the borrower's binding, naming the label it
+    # borrows and the digest it pinned.
     {:ok, [profile]} =
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "reagent:local.sel-source")
 
     {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
-    assert head.vault_refs == []
+
+    assert [
+             %{
+               binding_key: ^borrower_key,
+               scope: "athanor",
+               via_label: "default",
+               binding_digest: ^home_digest,
+               vault_entry_id: nil,
+               instance_entry_id: nil
+             }
+           ] = head.vault_refs
+
     {:ok, blob} = Blob.parse(head.resolved_policy)
     {:ok, edge} = Blob.lookup_edge(blob, "reagent:local.sel-source", @dep, "")
     assert %{via: %{label: "default", binding_digest: ^home_digest}} = edge.vault
@@ -299,6 +330,76 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     # selecting it: the edge stays a selection no run can unseal.
     :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), lenders.default, "revoked")
     assert %{via: %{label: "default"}} = edge_vault(ctx, ref)
+  end
+
+  test "a lender's entry revoked or rebound after the borrower's consent refuses the borrower's use",
+       %{ctx: ctx} do
+    actor = Sanctum.Context.actor(ctx)
+
+    # Two disclosed keys, so a borrower's read reaches the material until
+    # the entry under it changes: one lent as "default", one as "work".
+    [home, work] =
+      for name <- ["home key", "work key"] do
+        {:ok, view} =
+          Sanctum.TestContext.create_vault(ctx, %{
+            name: name,
+            kind: "api_key",
+            fields: %{"KEY" => "k-#{name}", "ORG" => "o-#{name}"},
+            destination: %{"hosts" => ["api.example.com"]},
+            disclose: true
+          })
+
+        view
+      end
+
+    {{:ok, %{profile_id: home_lender}}, _} =
+      walk!(ctx, @dep, %{bindings: [%{need: "api_key", entry_id: home.id}]})
+
+    {{:ok, %{profile_id: work_lender}}, _} =
+      walk!(ctx, @dep, %{label: "work", bindings: [%{need: "api_key", entry_id: work.id}]})
+
+    rebound_ref = "reagent:local.sel-source"
+    revoked_ref = "reagent:local.sel-source-two"
+
+    {{:ok, %{profile_id: rebound_borrower}}, _} =
+      walk!(ctx, rebound_ref, %{selections: [%{dep: @dep, label: "default"}]})
+
+    {{:ok, %{profile_id: revoked_borrower}}, _} =
+      walk!(ctx, revoked_ref, %{selections: [%{dep: @dep, label: "work"}]})
+
+    rebound_vault = edge_vault(ctx, rebound_ref)
+    revoked_vault = edge_vault(ctx, revoked_ref)
+
+    assert {:ok, %{"KEY" => "k-home key"}} = Sanctum.VaultReader.fetch(ctx, rebound_vault)
+    assert {:ok, %{"KEY" => "k-work key"}} = Sanctum.VaultReader.fetch(ctx, revoked_vault)
+
+    # Rebound: the lender's head is blocked and the borrower's is not, yet
+    # the borrower's use refuses at both checks: the read under what it
+    # loaded before, and the selection resolved after.
+    assert {:ok, %{affected: [^home_lender]}} =
+             Sanctum.Vault.rebind(ctx, %{
+               id: home.id,
+               destination: %{"hosts" => ["api.example.com"], "paths" => ["/v1/"]}
+             })
+
+    assert {:error, :binding_mismatch} = Sanctum.VaultReader.fetch(ctx, rebound_vault)
+    assert %{via: %{label: "default"}} = edge_vault(ctx, rebound_ref)
+
+    # Revoked: both heads stand, the selection still resolves to the entry,
+    # and its material is read by no one.
+    assert {:ok, %{affected: [^work_lender]}} = Sanctum.Vault.revoke(ctx, work.id)
+
+    assert {:error, {:entry_unavailable, "revoked"}} =
+             Sanctum.VaultReader.fetch(ctx, revoked_vault)
+
+    work_id = work.id
+    assert %{entry_id: ^work_id} = fresh = edge_vault(ctx, revoked_ref)
+    assert {:error, {:entry_unavailable, "revoked"}} = Sanctum.VaultReader.fetch(ctx, fresh)
+
+    # Nothing about either was persisted on the borrowers.
+    for borrower <- [rebound_borrower, revoked_borrower] do
+      assert {:ok, %{status: "active"}} = Arca.ProfileStorage.get(actor, borrower)
+    end
   end
 
   test "the profile tool decodes selections on the wire", %{ctx: ctx} do

@@ -6,7 +6,8 @@ defmodule Crucible.Host do
   Where a runner's host calls reach CYFR: `attach`, `renew`, `complete`,
   `fail`, `push_deltas`, `oauth_token`, `take_rate`, `storage`,
   `fetch_artifact`, `record_denial`, `admit_child`, `tool_call`,
-  `release_child` and `egress_pin`, as `Prima.HostAPI` describes them.
+  `release_child`, `egress_pin` and `attached_fetch`, as `Prima.HostAPI`
+  describes them.
 
   `call/2` is the one entry point. It takes a host call's header
   (`Prima.WorkerAuth.host_call_header/3`) and its JSON body,
@@ -93,7 +94,14 @@ defmodule Crucible.Host do
       `resolution` or `redirect_credentials` for a pin CYFR does not grant
       (`Crucible.Host.Egress`);
     * `guest_error` with its `type` and `message`, and a `remediation` for
-      a `setup_required` one, a refusal the runner hands its guest.
+      a `setup_required` one, a refusal the runner hands its guest; for
+      `attached_fetch`, beside them the request's `call_id`, so the runner
+      takes the refusal for the fetch it made, and `malformed` for args
+      that do not even name a call id.
+
+  `attached_fetch` is not built yet: every attached request is refused
+  before admission, `attach_unavailable`, with nothing resolved, charged,
+  emitted or fetched.
 
   | Operation | `args` | `ok` |
   |---|---|---|
@@ -110,6 +118,7 @@ defmodule Crucible.Host do
   | `admit_child` | `reference`, optional `need`, `input` (object), `guest_fn` (`call` or `spawn`), `child_key` | `assignment`, `attempt_keys` (sealed), `input` (JSON text), `secrets` |
   | `tool_call` | `name`, `args` (object), `guest_fn` (`call` or `spawn`) | the tool's result |
   | `egress_pin` | `url`, `purpose` (`fetch`, `stream` or `redirect`), `from` for a redirect | the pin (`Prima.PinnedTarget`) |
+  | `attached_fetch` | `Prima.AttachedRequest`'s members | sealed frames, once built |
 
   An outcome names its `execution_id`, `attempt` and `fence`. `storage`,
   `fetch_artifact` and `record_denial` are `Crucible.Host.Storage`'s;
@@ -145,7 +154,7 @@ defmodule Crucible.Host do
 
   require Logger
 
-  alias Prima.{Assignment, Delta, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
+  alias Prima.{AttachedRequest, Assignment, Delta, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
   alias Crucible.{Attempt, Keys, Lapse}
   alias Prima.Outcome
   alias Crucible.Host.{Children, Egress}
@@ -311,6 +320,17 @@ defmodule Crucible.Host do
   defp dispatch(caller, {:egress_pin, request}),
     do: egress_pin(caller, request.url, purpose: request.purpose, from: request.from)
 
+  # One answer crosses here: an admitted request's frames are the
+  # listener's to stream, so this path's `emit` takes none. Whatever the
+  # answer, it names the request's call id (`wire/1`).
+  defp dispatch(caller, {:attached_fetch, %AttachedRequest{} = request}) do
+    answer = attached_fetch(caller, request, fn _frame -> {:error, :not_streamed} end)
+    {:attached, request.call_id, answer}
+  end
+
+  defp dispatch(_caller, {:attached_refusal, call_id, refusal}),
+    do: {:attached, call_id, {:error, refusal}}
+
   @impl HostAPI
   def attach(caller, token) do
     with {:ok, assignment} <-
@@ -390,6 +410,13 @@ defmodule Crucible.Host do
     request = %{url: url, purpose: Keyword.fetch!(opts, :purpose), from: Keyword.get(opts, :from)}
     Egress.pin(caller, request)
   end
+
+  # Not built yet: every attached request is refused before admission. It
+  # resolves no entry, charges no rate, emits no frame and reaches no
+  # upstream.
+  @impl HostAPI
+  def attached_fetch(_caller, %AttachedRequest{}, emit) when is_function(emit, 1),
+    do: {:error, {:guest_error, "attach_unavailable", Prima.Refusal.message(:attach_unavailable)}}
 
   # Reached from `runner_exited/2` once the report has verified and names
   # this member: `report` is the verified report header.
@@ -527,7 +554,34 @@ defmodule Crucible.Host do
     end
   end
 
+  # A request that does not read is refused before admission like any
+  # other, for the call id it names; one naming none is malformed.
+  defp operation("attached_fetch", args) do
+    case AttachedRequest.read(args) do
+      {:ok, request} ->
+        {:ok, {:attached_fetch, request}}
+
+      {:error, reason} ->
+        call_id = args["call_id"]
+
+        if AttachedRequest.valid_call_id?(call_id),
+          do: {:ok, {:attached_refusal, call_id, attached_refusal(reason)}},
+          else: {:error, :malformed}
+    end
+  end
+
   defp operation(_op, _args), do: {:error, :lost}
+
+  defp attached_refusal(:credential_header_refused),
+    do:
+      {:guest_error, "credential_header_refused",
+       Prima.Refusal.message(:credential_header_refused)}
+
+  defp attached_refusal({:invalid_request, header}),
+    do: {:guest_error, "invalid_request", "An attached request cannot set the #{header} header."}
+
+  defp attached_refusal(_reason),
+    do: {:guest_error, "invalid_request", "The attached request does not read."}
 
   defp outcome(%{"execution_id" => id, "attempt" => attempt, "fence" => fence} = wire, status)
        when is_binary(id) and is_binary(attempt) and is_integer(fence) and fence > 0 do
@@ -581,6 +635,14 @@ defmodule Crucible.Host do
       "remediation" => remediation
     })
   end
+
+  # An attached request's refusal names its call id, so the runner takes it
+  # for the fetch it made.
+  defp wire({:attached, call_id, {:error, {:guest_error, type, message}}}) do
+    WorkerWire.error(:guest_error, %{"type" => type, "message" => message, "call_id" => call_id})
+  end
+
+  defp wire({:attached, _call_id, answer}), do: wire(answer)
 
   defp wire({:error, {:failed, message}}), do: WorkerWire.error(:failed, %{"message" => message})
   defp wire({:error, reason}) when reason in @refusals, do: WorkerWire.error(reason)

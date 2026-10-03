@@ -474,7 +474,8 @@ defmodule Sanctum.IssuanceTest do
         "action" => "create",
         "name" => "unbound-entry",
         "kind" => "api_key",
-        "fields" => %{"token" => "t-1"}
+        "fields" => %{"token" => "t-1"},
+        "destination" => %{"hosts" => ["api.example.com"]}
       }
 
       {answer, log} =
@@ -914,7 +915,13 @@ defmodule Sanctum.IssuanceTest do
     test "refuses a vault entry's creation: no entry is written", %{session_ctx: session_ctx} do
       device = pair!(session_ctx)
       ctx = verified!(device)
-      params = %{name: "glass-entry", kind: "api_key", fields: %{"token" => "t-1"}}
+
+      params = %{
+        name: "glass-entry",
+        kind: "api_key",
+        fields: %{"token" => "t-1"},
+        destination: %{"hosts" => ["api.example.com"]}
+      }
 
       confirmed =
         Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
@@ -942,7 +949,8 @@ defmodule Sanctum.IssuanceTest do
         Sanctum.TestContext.create_vault(session_ctx, %{
           name: "glass-rotated",
           kind: "api_key",
-          fields: %{"token" => "t-1"}
+          fields: %{"token" => "t-1"},
+          destination: %{"hosts" => ["api.example.com"]}
         })
 
       {:ok, stored} = Arca.VaultStorage.get(Context.actor(ctx), entry.id)
@@ -1093,7 +1101,8 @@ defmodule Sanctum.IssuanceTest do
         "action" => "create",
         "name" => "glass-tool-entry",
         "kind" => "api_key",
-        "fields" => %{"token" => "t-1"}
+        "fields" => %{"token" => "t-1"},
+        "destination" => %{"hosts" => ["api.example.com"]}
       }
 
       {answer, log} =

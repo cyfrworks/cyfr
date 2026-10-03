@@ -18,7 +18,7 @@ defmodule Prima.WorkerAuth do
   | `dispatch_key/1` | a worker key, `cyfr-opus/v1/dispatch` | CYFR and that worker service | signs WorkerAPI requests to it and its reports |
   | `dispatch_seal_key/1` | a worker key, `cyfr-opus/v1/dseal` | CYFR and that worker service | seals the keys of an attempt started on it (`seal_attempt_keys/3`) |
   | `attempt_call_key/2` | the root, `cyfr-opus/v1/call` and the attempt | CYFR and the attempt's runner | signs the attempt's host calls |
-  | `attempt_seal_key/2` | the root, `cyfr-opus/v1/seal` and the attempt | CYFR and the attempt's runner | seals the attempt's host call bodies and answers (`seal_call/4`) |
+  | `attempt_seal_key/2` | the root, `cyfr-opus/v1/seal` and the attempt | CYFR and the attempt's runner | seals the attempt's host call bodies and answers (`seal_call/4`) and its attached answers' frames (`seal_frame/7`) |
 
   A key derived over fields is HMAC-SHA256 over its label followed by the
   field values, one per line (`Prima.MacEnvelope.derive/4`).
@@ -77,6 +77,31 @@ defmodule Prima.WorkerAuth do
   by the call's header fields, one per line; its answer is sealed the same
   way under `cyfr-opus/v1/call-answer`. Each opens (`open_call/4`) only
   as the direction and the call it was sealed for.
+
+  ## Sealed answer frames
+
+  An attached request's answer (`c:Prima.HostAPI.attached_fetch/3`) is a
+  stream of frames rather than one sealed answer. A frame is a 4-byte
+  big-endian length, one kind byte in clear (`h` head, `c` chunk, `e` end,
+  `x` error) and the sealed value (`seal_frame/7`): `Prima.MacEnvelope`'s
+  seal under the attempt's seal key, its additional data
+  `cyfr-opus/v1/frame-answer` followed by the call id the runner chose
+  for the request, the frame's sequence number and its kind, one per line.
+  The length counts the kind byte and the sealed value, at most
+  `max_frame_bytes/0`; a `chunk` carries at most `max_chunk_bytes/0` of
+  the body. So a frame opens (`open_frame/6`) only as the call, place and
+  kind it was sealed for, and a changed kind byte does not open.
+
+  Sequence numbers count from 0 per call. Seq 0 is a `head` (the answer's
+  status and headers, `head_plaintext/2`) or an `error` (a type and a
+  sentence, `error_plaintext/2`); after a `head` come zero or more
+  `chunk`s and then exactly one `end` (empty) or `error`, and nothing
+  follows. `read_frames/2` holds a stream to that and ends it as an error
+  on a frame out of sequence, under another call, with a bad tag, over the
+  bound or of an unknown kind, never as a shorter body. The seal binds
+  each frame's integrity, order and call; the worker service that relays
+  the frames holds the attempt's keys, and what it can read is the masked
+  answer the runner may read.
 
   ## Headers
 
@@ -224,6 +249,14 @@ defmodule Prima.WorkerAuth do
 
   @sealed_directions %{body: "cyfr-opus/v1/call-body", answer: "cyfr-opus/v1/call-answer"}
 
+  @frame_directions %{answer: "cyfr-opus/v1/frame-answer"}
+  @frame_fields [call_id: :string, seq: :integer, kind: :string]
+  @frame_kinds [:head, :chunk, :end, :error]
+  @kind_bytes %{head: ?h, chunk: ?c, end: ?e, error: ?x}
+  @max_frame_bytes 65_536
+  @max_chunk_bytes 32_768
+  @max_frame_message_bytes 512
+
   @typedoc "The attempt an attempt's keys are bound to."
   @type attempt :: %{
           required(:athanor_id) => String.t(),
@@ -278,6 +311,21 @@ defmodule Prima.WorkerAuth do
 
   @typedoc "Which half of a host call a sealed value is: the runner's body or CYFR's answer."
   @type direction :: :body | :answer
+
+  @typedoc "The kind of an attached request's answer frame."
+  @type frame_kind :: :head | :chunk | :end | :error
+
+  @typedoc "Where a reader of one call's answer frames stands (`frame_reader/2`)."
+  @type frame_reader :: %{
+          seal_key: binary(),
+          call_id: String.t(),
+          seq: non_neg_integer(),
+          state: :head | :body | :done
+        }
+
+  @typedoc "Why a stream of answer frames ends as an error (`read_frames/2`)."
+  @type frame_refusal ::
+          :frame_too_large | :malformed | :unknown_kind | :out_of_sequence | :unsealable
 
   @type dispatch_refusal :: :unknown_version | :malformed | :outside_window | :bad_mac
   @type call_refusal :: dispatch_refusal() | :generation_mismatch | :member_mismatch
@@ -441,6 +489,266 @@ defmodule Prima.WorkerAuth do
       {:error, _} -> {:error, :unsealable}
     end
   end
+
+  # ============================================================================
+  # Answer frames
+  # ============================================================================
+
+  @doc "The frame kinds of an attached request's answer, in their order."
+  @spec frame_kinds() :: [frame_kind()]
+  def frame_kinds, do: @frame_kinds
+
+  @doc """
+  The most bytes one answer frame spans after its length prefix: its kind
+  byte and its sealed value.
+  """
+  @spec max_frame_bytes() :: pos_integer()
+  def max_frame_bytes, do: @max_frame_bytes
+
+  @doc "The most body bytes one `chunk` frame carries."
+  @spec max_chunk_bytes() :: pos_integer()
+  def max_chunk_bytes, do: @max_chunk_bytes
+
+  @doc "The most bytes an `error` frame's sentence spans."
+  @spec max_frame_message_bytes() :: pos_integer()
+  def max_frame_message_bytes, do: @max_frame_message_bytes
+
+  @doc """
+  Seal one frame of an attached request's answer, `seq` of the call
+  `call_id`, as the bytes it crosses in: a 4-byte big-endian length, the
+  kind byte in clear and `sealed`, `Prima.MacEnvelope`'s seal of
+  `plaintext` under the attempt's seal key with `call_id`, `seq` and the
+  kind as its additional data, so a frame opens only as the call, place
+  and kind it was sealed for. `direction` is `:answer`, the one direction
+  frames flow. A `chunk` past `max_chunk_bytes/0`, or a frame past
+  `max_frame_bytes/0`, is `{:error, :frame_too_large}`. `iv` is the 12
+  bytes the sealer draws, fresh for every frame: a frame takes no entropy
+  of its own.
+  """
+  @spec seal_frame(
+          binary(),
+          :answer,
+          String.t(),
+          non_neg_integer(),
+          frame_kind(),
+          binary(),
+          binary()
+        ) ::
+          {:ok, binary()} | {:error, :frame_too_large | MacEnvelope.invalid_field()}
+  def seal_frame(seal_key, direction, call_id, seq, kind, plaintext, iv)
+      when byte_size(seal_key) == 32 and is_map_key(@frame_directions, direction) and
+             is_map_key(@kind_bytes, kind) and is_binary(plaintext) and byte_size(iv) == 12 do
+    with :ok <- chunk_within(kind, plaintext),
+         {:ok, sealed} <-
+           MacEnvelope.seal(
+             seal_key,
+             Map.fetch!(@frame_directions, direction),
+             @frame_fields,
+             frame_message(call_id, seq, kind),
+             plaintext,
+             iv
+           ) do
+      framed(kind, sealed)
+    end
+  end
+
+  defp framed(kind, sealed) do
+    length = 1 + byte_size(sealed)
+
+    if length <= @max_frame_bytes,
+      do: {:ok, <<length::32, Map.fetch!(@kind_bytes, kind), sealed::binary>>},
+      else: {:error, :frame_too_large}
+  end
+
+  @doc """
+  Open the `sealed` value of a frame read as `kind`, at `seq` of the call
+  `call_id`. Anything that was not sealed for exactly that call, place and
+  kind is `{:error, :unsealable}`.
+  """
+  @spec open_frame(binary(), :answer, String.t(), non_neg_integer(), frame_kind(), term()) ::
+          {:ok, binary()} | {:error, :unsealable}
+  def open_frame(seal_key, direction, call_id, seq, kind, sealed)
+      when byte_size(seal_key) == 32 and is_map_key(@frame_directions, direction) and
+             is_map_key(@kind_bytes, kind) do
+    case MacEnvelope.open(
+           seal_key,
+           Map.fetch!(@frame_directions, direction),
+           @frame_fields,
+           frame_message(call_id, seq, kind),
+           sealed
+         ) do
+      {:ok, plaintext} -> {:ok, plaintext}
+      {:error, _} -> {:error, :unsealable}
+    end
+  end
+
+  @doc "A `head` frame's plaintext: the answer's status and its headers, in order."
+  @spec head_plaintext(100..599, [{String.t(), String.t()}]) :: binary()
+  def head_plaintext(status, headers) when status in 100..599 and is_list(headers) do
+    Jason.OrderedObject.new([
+      {"status", status},
+      {"headers", Enum.map(headers, fn {name, value} -> [name, value] end)}
+    ])
+    |> Jason.encode!()
+  end
+
+  @doc """
+  An `error` frame's plaintext: a guest error's type and its sentence, at
+  most `max_frame_message_bytes/0`, which carries no material.
+  """
+  @spec error_plaintext(String.t(), String.t()) :: binary()
+  def error_plaintext(type, message)
+      when is_binary(type) and is_binary(message) and
+             byte_size(message) <= @max_frame_message_bytes do
+    Jason.OrderedObject.new([{"type", type}, {"message", message}]) |> Jason.encode!()
+  end
+
+  @doc """
+  A reader of one attached request's answer frames, for the call `call_id`
+  under the attempt's seal key, before its first frame.
+  """
+  @spec frame_reader(binary(), String.t()) :: frame_reader()
+  def frame_reader(seal_key, call_id) when byte_size(seal_key) == 32 and is_binary(call_id),
+    do: %{seal_key: seal_key, call_id: call_id, seq: 0, state: :head}
+
+  @doc """
+  The complete frames at the head of a stream of answer frames, each its
+  kind byte and sealed value without the length prefix, and the bytes
+  after them, which wait for more; or `{:error, :frame_too_large}` for a
+  length above `max_frame_bytes/0`, as soon as the length is in, and
+  `{:error, :malformed}` for one below two bytes. Nothing is opened: this
+  is how a relay that carries the frames unopened splits the stream.
+  """
+  @spec split_frames(binary()) :: {:ok, [binary()], binary()} | {:error, frame_refusal()}
+  def split_frames(buffer) when is_binary(buffer), do: split_frames(buffer, [])
+
+  defp split_frames(<<length::32, _rest::binary>>, _frames) when length > @max_frame_bytes,
+    do: {:error, :frame_too_large}
+
+  defp split_frames(<<length::32, _rest::binary>>, _frames) when length < 2,
+    do: {:error, :malformed}
+
+  defp split_frames(<<length::32, frame::binary-size(length), rest::binary>>, frames),
+    do: split_frames(rest, [frame | frames])
+
+  defp split_frames(rest, frames), do: {:ok, Enum.reverse(frames), rest}
+
+  @doc """
+  One answer frame, its kind byte and sealed value, opened and read as the
+  next frame of the reader's call, and the reader after it; or the first
+  reason the answer ends as an error, never as a shorter body:
+
+    1. `:malformed` — a frame of no kind byte and sealed value;
+    2. `:unknown_kind` — a kind byte other than `h`, `c`, `e` and `x`;
+    3. `:out_of_sequence` — a kind out of the answer's order: seq 0 is a
+       `head` or an `error`, after a `head` come `chunk`s and then one
+       `end` or `error`, and nothing follows an `end` or an `error`;
+    4. `:unsealable` — a sealed value that does not open as this call's
+       frame at this place of this kind: another call's, one out of its
+       place, or one whose tag or kind byte was changed;
+    5. `:malformed` or `:frame_too_large` — a plaintext its kind does not
+       carry: a `head` that is not a status and its header pairs, a
+       `chunk` past `max_chunk_bytes/0`, an `end` that is not empty, an
+       `error` that is not a type and a sentence within its bound.
+
+  A frame read is `%{kind: :head, status:, headers:}`, `%{kind: :chunk,
+  body:}`, `%{kind: :end}` or `%{kind: :error, type:, message:}`.
+  """
+  @spec read_frame(frame_reader(), binary()) ::
+          {:ok, map(), frame_reader()} | {:error, frame_refusal()}
+  def read_frame(%{} = reader, <<byte, sealed::binary>>) when sealed != "" do
+    with {:ok, kind} <- kind_of_byte(byte),
+         :ok <- in_sequence(reader.state, kind),
+         {:ok, plaintext} <-
+           open_frame(reader.seal_key, :answer, reader.call_id, reader.seq, kind, sealed),
+         {:ok, read} <- read_plaintext(kind, plaintext) do
+      {:ok, read, %{reader | seq: reader.seq + 1, state: next_state(kind)}}
+    end
+  end
+
+  def read_frame(%{}, frame) when is_binary(frame), do: {:error, :malformed}
+
+  @doc """
+  The complete frames at the head of a length-prefixed stream
+  (`split_frames/1`), each read as `read_frame/2` reads it, the bytes after
+  them and the reader after them; or the first refusal of either, at which
+  the answer ends as an error.
+  """
+  @spec read_frames(frame_reader(), binary()) ::
+          {:ok, [map()], binary(), frame_reader()} | {:error, frame_refusal()}
+  def read_frames(%{} = reader, buffer) when is_binary(buffer) do
+    with {:ok, frames, rest} <- split_frames(buffer) do
+      frames
+      |> Enum.reduce_while({:ok, [], reader}, fn frame, {:ok, read, reader} ->
+        case read_frame(reader, frame) do
+          {:ok, one, reader} -> {:cont, {:ok, [one | read], reader}}
+          {:error, _reason} = error -> {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, read, reader} -> {:ok, Enum.reverse(read), rest, reader}
+        {:error, _reason} = error -> error
+      end
+    end
+  end
+
+  defp kind_of_byte(byte) do
+    case Enum.find(@kind_bytes, fn {_kind, kind_byte} -> kind_byte == byte end) do
+      {kind, _byte} -> {:ok, kind}
+      nil -> {:error, :unknown_kind}
+    end
+  end
+
+  defp in_sequence(:head, kind) when kind in [:head, :error], do: :ok
+  defp in_sequence(:body, kind) when kind in [:chunk, :end, :error], do: :ok
+  defp in_sequence(_state, _kind), do: {:error, :out_of_sequence}
+
+  defp next_state(kind) when kind in [:head, :chunk], do: :body
+  defp next_state(kind) when kind in [:end, :error], do: :done
+
+  defp read_plaintext(:head, plaintext) do
+    case Jason.decode(plaintext) do
+      {:ok, %{"status" => status, "headers" => headers} = head}
+      when map_size(head) == 2 and is_integer(status) and status in 100..599 and
+             is_list(headers) ->
+        if Enum.all?(headers, &header_pair?/1),
+          do: {:ok, %{kind: :head, status: status, headers: Enum.map(headers, &List.to_tuple/1)}},
+          else: {:error, :malformed}
+
+      _other ->
+        {:error, :malformed}
+    end
+  end
+
+  defp read_plaintext(:chunk, body) when byte_size(body) > @max_chunk_bytes,
+    do: {:error, :frame_too_large}
+
+  defp read_plaintext(:chunk, body), do: {:ok, %{kind: :chunk, body: body}}
+  defp read_plaintext(:end, ""), do: {:ok, %{kind: :end}}
+  defp read_plaintext(:end, _plaintext), do: {:error, :malformed}
+
+  defp read_plaintext(:error, plaintext) do
+    case Jason.decode(plaintext) do
+      {:ok, %{"type" => type, "message" => message} = error}
+      when map_size(error) == 2 and is_binary(type) and type != "" and is_binary(message) and
+             byte_size(message) <= @max_frame_message_bytes ->
+        {:ok, %{kind: :error, type: type, message: message}}
+
+      _other ->
+        {:error, :malformed}
+    end
+  end
+
+  defp header_pair?([name, value]) when is_binary(name) and is_binary(value), do: true
+  defp header_pair?(_pair), do: false
+
+  defp chunk_within(:chunk, plaintext) when byte_size(plaintext) > @max_chunk_bytes,
+    do: {:error, :frame_too_large}
+
+  defp chunk_within(_kind, _plaintext), do: :ok
+
+  defp frame_message(call_id, seq, kind),
+    do: %{call_id: call_id, seq: seq, kind: Atom.to_string(kind)}
 
   @doc "The header for a host call of `body`, signed with the attempt's call key."
   @spec host_call_header(binary(), host_call(), binary()) ::

@@ -4,6 +4,10 @@
 defmodule Emissary.External.ReconcilerTest do
   use ExUnit.Case, async: false
 
+  # Where the cases' entries may go: an external server's credential is
+  # resolved by name, and its destination is not what these cases test.
+  @destination %{"hosts" => ["api.example.com"]}
+
   import Ecto.Query, only: [from: 2]
   import ExUnit.CaptureLog
 
@@ -51,7 +55,8 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "gh-header-token",
         kind: "api_key",
-        fields: %{"token" => "ghp_original"}
+        fields: %{"token" => "ghp_original"},
+        destination: @destination
       })
 
     {:ok, _} =
@@ -82,7 +87,8 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "prod-token",
         kind: "api_key",
-        fields: %{"token" => "ghp_prod"}
+        fields: %{"token" => "ghp_prod"},
+        destination: @destination
       })
 
     {:ok, _} =
@@ -107,7 +113,8 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "bearer-token",
         kind: "api_key",
-        fields: %{"token" => "t1"}
+        fields: %{"token" => "t1"},
+        destination: @destination
       })
 
     {:ok, _} =
@@ -133,7 +140,8 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "env-token",
         kind: "api_key",
-        fields: %{"token" => "t1"}
+        fields: %{"token" => "t1"},
+        destination: @destination
       })
 
     {:ok, %{epoch: 1}} =
@@ -197,7 +205,8 @@ defmodule Emissary.External.ReconcilerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "slot-token",
           kind: "api_key",
-          fields: %{"token" => "t1"}
+          fields: %{"token" => "t1"},
+          destination: @destination
         })
 
       {:ok, server} =
@@ -318,7 +327,8 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "unrelated",
         kind: "api_key",
-        fields: %{"k" => "v"}
+        fields: %{"k" => "v"},
+        destination: @destination
       })
 
     {:ok, _} =
@@ -367,7 +377,8 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "revoke-me",
         kind: "api_key",
-        fields: %{"token" => "ghp_live"}
+        fields: %{"token" => "ghp_live"},
+        destination: @destination
       })
 
     # While active, the header resolves through the host-side unseal path.
@@ -426,7 +437,8 @@ defmodule Emissary.External.ReconcilerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "swept-token",
           kind: "api_key",
-          fields: %{"token" => "v1"}
+          fields: %{"token" => "v1"},
+          destination: @destination
         })
 
       sync_reconciler()
@@ -457,7 +469,8 @@ defmodule Emissary.External.ReconcilerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "rebound-token",
           kind: "api_key",
-          fields: %{"token" => "v1"}
+          fields: %{"token" => "v1"},
+          destination: @destination
         })
 
       sync_reconciler()
@@ -493,7 +506,8 @@ defmodule Emissary.External.ReconcilerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "gone-token",
           kind: "api_key",
-          fields: %{"token" => "v1"}
+          fields: %{"token" => "v1"},
+          destination: @destination
         })
 
       sync_reconciler()
@@ -513,7 +527,8 @@ defmodule Emissary.External.ReconcilerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "idle-token",
           kind: "api_key",
-          fields: %{"token" => "v1"}
+          fields: %{"token" => "v1"},
+          destination: @destination
         })
 
       {:ok, pid} =

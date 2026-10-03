@@ -233,8 +233,18 @@ defmodule Cyfr.Test.StepBench do
     ctx
   end
 
+  # The stub reads its key itself, so the entry is disclosed; it names the
+  # stub's provider and the host the stub's need speaks to, which no
+  # request of the bench reaches.
   defp bind_key!(ctx) do
-    params = %{name: "step-stub key", kind: "api_key", fields: %{@key_field => "sk-step-stub"}}
+    params = %{
+      name: "step-stub key",
+      kind: "api_key",
+      provider_hint: "step-stub",
+      fields: %{@key_field => "sk-step-stub"},
+      destination: %{"hosts" => ["step-stub.test"], "scheme" => "https"},
+      disclose: true
+    }
 
     # Entering the key is a sensitive change, confirmed as its person
     # confirms it (`Sanctum.TestContext.confirmed/3`).

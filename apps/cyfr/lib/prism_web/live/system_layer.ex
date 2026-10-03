@@ -66,7 +66,11 @@ defmodule PrismWeb.SystemLayer do
       subject's name holding the one value typed, which travels on the
       shell's LiveView socket, is never assigned, rendered or logged, and
       never reaches a frame (its parameter name is on the redaction
-      roster, `Prima.Sanitizer`);
+      roster, `Prima.Sanitizer`). The person also names where the value
+      may go — the destination's hosts, and optionally its scheme, port,
+      methods and paths — and whether the app may read it; nothing is
+      prefilled and disclosure is off until they turn it on
+      (`destination_params/1`, `disclose_param/1`);
     * pairing — `pairing.list` when it opens, `pairing.begin`, whose
       answer's `invitation_url` it draws as a QR code, and `pairing.revoke`;
     * safe mode's default desktop — `layout.edit` at the revision safe mode
@@ -1092,7 +1096,7 @@ defmodule PrismWeb.SystemLayer do
   def handle_event("enter_credential", %{"prompt_id" => id} = params, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case open(socket, id, [:credential_entry]) do
-        {:ok, prompt} -> {:noreply, enter_credential(socket, prompt, Map.get(params, "secret"))}
+        {:ok, prompt} -> {:noreply, enter_credential(socket, prompt, params)}
         :none -> {:noreply, socket}
       end
     end)
@@ -1312,24 +1316,90 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  defp enter_credential(socket, %{subject: subject} = prompt, secret) do
-    case present(secret) do
-      :ok ->
+  defp enter_credential(socket, %{subject: subject} = prompt, params) do
+    secret = Map.get(params, "secret")
+    destination = destination_params(params)
+
+    cond do
+      present(secret) == :blank ->
+        assign(socket, :error, "Enter the credential to save it.")
+
+      destination["hosts"] == [] ->
+        assign(socket, :error, "Name the host the credential may be sent to.")
+
+      true ->
         args = %{
           "name" => subject.name,
           "kind" => "api_key",
-          "fields" => %{subject.field => secret}
+          "fields" => %{subject.field => secret},
+          "destination" => destination,
+          "disclose" => disclose_param(params)
         }
 
         case layer_call(socket, prompt, :resubmit, "vault/create", args) do
           {:asked, socket} -> socket
           {:done, result, socket} -> dispatched(socket, prompt, result)
         end
-
-      :blank ->
-        assign(socket, :error, "Enter the credential to save it.")
     end
   end
+
+  @doc """
+  The destination a credential form names (`vault.create`'s
+  `destination`): `hosts` from the `destination_hosts` field (comma,
+  space or line separated, lower-cased), `scheme` from
+  `destination_scheme` (`https` unless `http` is chosen), and `port`,
+  `methods` and `paths` only when their fields name them. Nothing is
+  prefilled from anywhere but what the person typed; the vault holds the
+  result to `Prima.Destination`'s grammar.
+  """
+  @spec destination_params(map()) :: %{String.t() => term()}
+  def destination_params(params) when is_map(params) do
+    %{
+      "hosts" =>
+        params |> Map.get("destination_hosts", "") |> words() |> Enum.map(&String.downcase/1),
+      "scheme" => if(Map.get(params, "destination_scheme") == "http", do: "http", else: "https")
+    }
+    |> put_words(
+      "methods",
+      params |> Map.get("destination_methods", "") |> words() |> Enum.map(&String.upcase/1)
+    )
+    |> put_words("paths", params |> Map.get("destination_paths", "") |> words())
+    |> put_port(Map.get(params, "destination_port", ""))
+  end
+
+  @doc """
+  Whether a credential form asks for the value to be disclosed to the
+  app: only an explicit `disclose` checkbox turned on. Absent, the entry
+  is attach-only.
+  """
+  @spec disclose_param(map()) :: boolean()
+  def disclose_param(params) when is_map(params),
+    do: Map.get(params, "disclose") in ["true", "on"]
+
+  defp words(text) when is_binary(text),
+    do: text |> String.split(~r/[\s,]+/, trim: true)
+
+  defp words(_other), do: []
+
+  defp put_words(map, _key, []), do: map
+  defp put_words(map, key, words), do: Map.put(map, key, words)
+
+  # A port the person typed is sent as typed when it is not a number, so
+  # the vault's declaration refuses it rather than this form guessing.
+  defp put_port(map, port) when is_binary(port) do
+    case String.trim(port) do
+      "" ->
+        map
+
+      trimmed ->
+        case Integer.parse(trimmed) do
+          {number, ""} -> Map.put(map, "port", number)
+          _ -> Map.put(map, "port", trimmed)
+        end
+    end
+  end
+
+  defp put_port(map, _port), do: map
 
   defp choose(socket, %{subject: safe_mode} = prompt, offer) do
     case SafeMode.choose(safe_mode, offer) do
@@ -1903,6 +1973,82 @@ defmodule PrismWeb.SystemLayer do
           data-test="credential-secret"
           class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
         />
+        <fieldset class="space-y-2" data-test="credential-destination">
+          <legend class="text-sm font-medium">Where it may be sent</legend>
+          <label for={"#{@id}-destination-hosts"} class="block text-xs text-gray-400">
+            Hosts (for example api.example.com, or *.example.com)
+          </label>
+          <input
+            id={"#{@id}-destination-hosts"}
+            name="destination_hosts"
+            type="text"
+            autocomplete="off"
+            required
+            data-test="credential-destination-hosts"
+            class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+          />
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label for={"#{@id}-destination-scheme"} class="block text-xs text-gray-400">
+                Scheme
+              </label>
+              <select
+                id={"#{@id}-destination-scheme"}
+                name="destination_scheme"
+                class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 text-sm"
+              >
+                <option value="https">https</option>
+                <option value="http">http</option>
+              </select>
+            </div>
+            <div>
+              <label for={"#{@id}-destination-port"} class="block text-xs text-gray-400">
+                Port (optional)
+              </label>
+              <input
+                id={"#{@id}-destination-port"}
+                name="destination_port"
+                type="text"
+                inputmode="numeric"
+                autocomplete="off"
+                class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm"
+              />
+            </div>
+          </div>
+          <label for={"#{@id}-destination-methods"} class="block text-xs text-gray-400">
+            Methods (optional, for example GET POST)
+          </label>
+          <input
+            id={"#{@id}-destination-methods"}
+            name="destination_methods"
+            type="text"
+            autocomplete="off"
+            class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm"
+          />
+          <label for={"#{@id}-destination-paths"} class="block text-xs text-gray-400">
+            Path prefixes (optional, for example /v1/)
+          </label>
+          <input
+            id={"#{@id}-destination-paths"}
+            name="destination_paths"
+            type="text"
+            autocomplete="off"
+            class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm"
+          />
+        </fieldset>
+        <label class="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            name="disclose"
+            value="true"
+            data-test="credential-disclose"
+            class="mt-1"
+          />
+          <span>
+            Let the app read the value itself. Left off, the value is never handed to the
+            app, and an app asking for it is refused.
+          </span>
+        </label>
       </form>
     </div>
     """

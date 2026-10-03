@@ -22,11 +22,17 @@ defmodule Prima.HostAPITest do
   origin of the pin it follows (`Prima.Network.same_origin?/2`); the
   headers a hop to another origin keeps are
   `Prima.Network.strip_credentials/1`'s.
+
+  The `attached_fetch` call reads as a `Prima.AttachedRequest`, carries no
+  single answer and is refused only by sealed guest errors naming its
+  call id; every frame case reads frame by frame to its expected frames
+  and refusal; and an `egress_pin` naming the purpose CYFR alone takes is
+  refused `malformed`.
   """
 
   use ExUnit.Case, async: true
 
-  alias Prima.{HostAPI, Network, PinnedTarget, WorkerAuth, WorkerWire}
+  alias Prima.{AttachedRequest, HostAPI, Network, PinnedTarget, Refusal, WorkerAuth, WorkerWire}
 
   @vectors Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
            |> File.read!()
@@ -50,21 +56,18 @@ defmodule Prima.HostAPITest do
   end
 
   # A call reproduces from its fields and verifies at the vector standing,
-  # header first and then over its body; its answer opens as its own.
+  # header first and then over its body; its answer, where it has one,
+  # opens as its own.
   defp reproduces(call) do
     fields = atoms(call["fields"], @call_fields)
     keys = keys!(fields)
     body_iv = Base.decode16!(call["body_iv_hex"], case: :lower)
-    answer_iv = Base.decode16!(call["answer_iv_hex"], case: :lower)
 
     assert {:ok, call["body_sealed"]} ==
              WorkerAuth.seal_call(keys.seal, :body, fields, call["body"], body_iv)
 
     assert {:ok, call["header"]} ==
              WorkerAuth.host_call_header(keys.call, fields, call["body_sealed"])
-
-    assert {:ok, call["answer_sealed"]} ==
-             WorkerAuth.seal_call(keys.seal, :answer, fields, call["answer"], answer_iv)
 
     standing = standing(@vectors["standing"])
 
@@ -74,15 +77,34 @@ defmodule Prima.HostAPITest do
     assert :ok = WorkerAuth.verify_body(hash, call["body_sealed"])
     assert {:ok, body} = WorkerAuth.open_call(keys.seal, :body, fields, call["body_sealed"])
     assert body == call["body"]
-    assert {:ok, answer} = WorkerAuth.open_call(keys.seal, :answer, fields, call["answer_sealed"])
-    assert answer == call["answer"]
-
-    assert {:error, :unsealable} =
-             WorkerAuth.open_call(keys.seal, :body, fields, call["answer_sealed"])
 
     {:ok, callback, args} = WorkerWire.read_request_body(HostAPI, Jason.decode!(body))
     assert Atom.to_string(callback) == call["callback"]
-    {fields, args, WorkerWire.read_answer(Jason.decode!(answer))}
+    {fields, args, answer_of_call(call, keys, fields)}
+  end
+
+  defp answer_of_call(%{"answer" => _} = call, keys, fields),
+    do: sealed_answer(call, keys, fields) |> Jason.decode!() |> WorkerWire.read_answer()
+
+  defp answer_of_call(_call, _keys, _fields), do: nil
+
+  # An answer reproduces from its iv, opens as its call's answer and as
+  # nothing else.
+  defp sealed_answer(answer, keys, fields) do
+    iv = Base.decode16!(answer["answer_iv_hex"], case: :lower)
+
+    assert {:ok, answer["answer_sealed"]} ==
+             WorkerAuth.seal_call(keys.seal, :answer, fields, answer["answer"], iv)
+
+    assert {:ok, opened} =
+             WorkerAuth.open_call(keys.seal, :answer, fields, answer["answer_sealed"])
+
+    assert opened == answer["answer"]
+
+    assert {:error, :unsealable} =
+             WorkerAuth.open_call(keys.seal, :body, fields, answer["answer_sealed"])
+
+    opened
   end
 
   describe "the host API vectors" do
@@ -110,7 +132,12 @@ defmodule Prima.HostAPITest do
 
       for call <- @vectors["calls"] do
         assert {_fields, _args, answer} = reproduces(call)
-        assert match?({:ok, _value}, answer), call["callback"]
+
+        # An attached request's success is its frames, not one answer.
+        if call["callback"] == "attached_fetch",
+          do: assert(answer == nil),
+          else: assert(match?({:ok, _value}, answer), call["callback"])
+
         assert call["refusals"] != [], call["callback"]
 
         for %{"answer" => refused, "why" => why} <- call["refusals"] do
@@ -345,7 +372,7 @@ defmodule Prima.HostAPITest do
     do: name in Enum.map(PinnedTarget.refusals(), &Atom.to_string/1)
 
   defp refusal_of?(callback, name)
-       when callback in ~w(oauth_token take_rate storage admit_child tool_call),
+       when callback in ~w(oauth_token take_rate storage admit_child tool_call attached_fetch),
        do: name == "guest_error"
 
   defp refusal_of?(_callback, _name), do: false
@@ -379,6 +406,153 @@ defmodule Prima.HostAPITest do
   end
 
   test "a denial reported to CYFR is never retried: its effect may have happened" do
+    assert HostAPI.retry(:record_denial) == :never
+  end
+
+  describe "an attached request" do
+    setup do
+      [call] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
+      %{call: call}
+    end
+
+    test "is never retried, at its own route, within the window", %{call: call} do
+      assert HostAPI.retry(:attached_fetch) == :never
+      assert WorkerWire.host_route(:attached_fetch) == "/host/v1/attached_fetch"
+      assert HostAPI.request_timeout_ms(:attached_fetch) == WorkerAuth.window_ms()
+      assert :attached_fetch in HostAPI.callbacks()
+      assert WorkerWire.attached_frames_content_type() == "application/vnd.cyfr.frames"
+      refute Map.has_key?(call, "answer")
+    end
+
+    test "its args read as the attached request, and back", %{call: call} do
+      {_fields, args, nil} = reproduces(call)
+      assert {:ok, %AttachedRequest{} = request} = AttachedRequest.read(args)
+      assert AttachedRequest.to_args(request) == args
+      assert request.purpose == :stream and request.body == ~s({"q":1})
+    end
+
+    test "is refused only by sealed guest errors naming its call id", %{call: call} do
+      {fields, args, nil} = reproduces(call)
+      keys = keys!(fields)
+
+      types =
+        for refusal <- call["refusals"] do
+          opened = sealed_answer(refusal, keys, fields)
+
+          assert {:error, "guest_error", %{"type" => type, "message" => message, "call_id" => id}} =
+                   opened |> Jason.decode!() |> WorkerWire.read_answer()
+
+          assert id == args["call_id"] and refusal["call_id"] == id
+
+          reason = String.to_existing_atom(type)
+
+          assert reason in Refusal.credential_reasons() or reason == :attach_unavailable
+          assert message == Refusal.message(reason)
+
+          type
+        end
+
+      assert types ==
+               ~w(credential_header_refused connection_not_granted destination_mismatch
+                  connection_cap component_not_admitted attach_unavailable)
+
+      assert [unavailable] =
+               Enum.filter(call["refusals"], &(&1["answer"] =~ "attach_unavailable"))
+
+      assert Jason.decode!(unavailable["answer"]) == %{
+               "v" => 1,
+               "error" => "guest_error",
+               "type" => "attach_unavailable",
+               "message" => "Attached requests are not built yet.",
+               "call_id" => args["call_id"]
+             }
+    end
+
+    test "every frame case reads, frame by frame, to its frames and refusal" do
+      cases = @vectors["frame_cases"]
+      seal = keys!(atoms(hd(@vectors["calls"])["fields"], @call_fields)).seal
+      assert cases["max_frame_bytes"] == WorkerAuth.max_frame_bytes()
+      assert cases["max_chunk_bytes"] == WorkerAuth.max_chunk_bytes()
+
+      assert Enum.map(cases["cases"], & &1["name"]) ==
+               ~w(head_chunk_end head_end error_after_head error_first out_of_sequence
+                  chunk_first after_end another_call bad_tag kind_byte_changed unknown_kind
+                  oversize)
+
+      for kase <- cases["cases"] do
+        stream = Enum.map_join(kase["frames"], &Base.decode16!(&1["frame_hex"], case: :lower))
+
+        for %{"sealed_for" => sealed_for, "frame_hex" => frame_hex} <- kase["frames"] do
+          kind = String.to_existing_atom(sealed_for["kind"])
+          iv = Base.decode16!(sealed_for["iv_hex"], case: :lower)
+          plaintext = Base.decode64!(sealed_for["plaintext_b64"])
+
+          assert {:ok, Base.decode16!(frame_hex, case: :lower)} ==
+                   WorkerAuth.seal_frame(
+                     seal,
+                     :answer,
+                     sealed_for["call_id"],
+                     sealed_for["seq"],
+                     kind,
+                     plaintext,
+                     iv
+                   ),
+                 kase["name"]
+        end
+
+        assert frames_read(seal, cases["call_id"], stream) ==
+                 {kase["expect"]["read"], kase["expect"]["error"]},
+               kase["name"]
+      end
+    end
+  end
+
+  # The frames a runner reads from `stream`, one at a time, and the refusal
+  # that ended it, both as the vectors write them.
+  defp frames_read(seal, call_id, stream) do
+    reader = WorkerAuth.frame_reader(seal, call_id)
+
+    case WorkerAuth.split_frames(stream) do
+      {:error, reason} ->
+        {[], Atom.to_string(reason)}
+
+      {:ok, frames, ""} ->
+        Enum.reduce_while(frames, {reader, []}, fn frame, {reader, read} ->
+          case WorkerAuth.read_frame(reader, frame) do
+            {:ok, one, reader} -> {:cont, {reader, read ++ [wire(one)]}}
+            {:error, reason} -> {:halt, {:refused, read, Atom.to_string(reason)}}
+          end
+        end)
+        |> case do
+          {:refused, read, reason} -> {read, reason}
+          {_reader, read} -> {read, nil}
+        end
+    end
+  end
+
+  defp wire(%{kind: :head, status: status, headers: headers}),
+    do: %{"kind" => "head", "status" => status, "headers" => Enum.map(headers, &Tuple.to_list/1)}
+
+  defp wire(%{kind: :chunk, body: body}),
+    do: %{"kind" => "chunk", "body_b64" => Base.encode64(body)}
+
+  defp wire(%{kind: :end}), do: %{"kind" => "end"}
+
+  defp wire(%{kind: :error, type: type, message: message}),
+    do: %{"kind" => "error", "type" => type, "message" => message}
+
+  test "an egress_pin naming the purpose CYFR alone takes is refused malformed" do
+    assert [%{"name" => "attached"} = call] = @vectors["egress_pin_internal_purposes"]
+    {_fields, args, answer} = reproduces(call)
+    assert args["purpose"] == "attached"
+    assert answer == {:error, "malformed", %{}}
+    assert PinnedTarget.read_request(args) == {:error, :malformed}
+    assert PinnedTarget.request_args(args["url"], :attached) == :error
+    refute :attached in PinnedTarget.purposes()
+  end
+
+  test "a field denial is secret_denied or disclosure_refused, each naming a field" do
+    assert HostAPI.field_denials() == ["secret_denied", "disclosure_refused"]
     assert HostAPI.retry(:record_denial) == :never
   end
 

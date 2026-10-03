@@ -836,6 +836,88 @@ defmodule Crucible.HostTest do
     end
   end
 
+  describe "an attached request" do
+    @tag :capture_log
+    test "is not built: refused before admission naming its call id, with nothing emitted" do
+      [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+      %{"v" => 1, "op" => "attached_fetch", "args" => args} = Jason.decode!(vector["body"])
+      body = :attached_fetch |> WorkerWire.request_body(args) |> Jason.encode!()
+
+      answer =
+        fixture |> AttemptFixtures.header(body) |> Crucible.Host.call(body) |> Jason.decode!()
+
+      assert answer == %{
+               "v" => 1,
+               "error" => "guest_error",
+               "type" => "attach_unavailable",
+               "message" => "Attached requests are not built yet.",
+               "call_id" => args["call_id"]
+             }
+
+      [listed] = Enum.filter(vector["refusals"], &(&1["answer"] =~ "attach_unavailable"))
+      assert Jason.decode!(listed["answer"]) == answer
+
+      {:ok, request} = Prima.AttachedRequest.read(args)
+      test_pid = self()
+
+      emit = fn frame ->
+        send(test_pid, {:frame, frame})
+        :ok
+      end
+
+      assert Crucible.Host.attached_fetch(%{}, request, emit) ==
+               {:error,
+                {:guest_error, "attach_unavailable", "Attached requests are not built yet."}}
+
+      refute_received {:frame, _}
+      assert row(fixture).status == "running"
+    end
+
+    @tag :capture_log
+    test "a request carrying a credential header is refused by shape, naming its call id" do
+      [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+      %{"args" => args} = Jason.decode!(vector["body"])
+
+      for {forged, expected} <- [
+            {%{args | "headers" => [["Authorization", "Bearer sk"]]},
+             %{"type" => "credential_header_refused", "call_id" => args["call_id"]}},
+            {%{args | "purpose" => "redirect"},
+             %{"type" => "invalid_request", "call_id" => args["call_id"]}},
+            {%{args | "headers" => [["Host", "evil.example"]]},
+             %{
+               "type" => "invalid_request",
+               "call_id" => args["call_id"],
+               "message" => "An attached request cannot set the Host header."
+             }},
+            {%{args | "headers" => [["X-Forwarded-Host", "evil.example"]]},
+             %{
+               "type" => "invalid_request",
+               "call_id" => args["call_id"],
+               "message" => "An attached request cannot set the X-Forwarded-Host header."
+             }}
+          ] do
+        body = :attached_fetch |> WorkerWire.request_body(forged) |> Jason.encode!()
+
+        answer =
+          fixture |> AttemptFixtures.header(body) |> Crucible.Host.call(body) |> Jason.decode!()
+
+        assert %{"v" => 1, "error" => "guest_error"} = answer
+        assert Map.take(answer, Map.keys(expected)) == expected
+      end
+
+      no_call_id = Map.delete(args, "call_id")
+      body = :attached_fetch |> WorkerWire.request_body(no_call_id) |> Jason.encode!()
+
+      assert %{"v" => 1, "error" => "malformed"} =
+               fixture
+               |> AttemptFixtures.header(body)
+               |> Crucible.Host.call(body)
+               |> Jason.decode!()
+    end
+  end
+
   describe "the vectors of tests/fixtures/host_api.json" do
     @tag :capture_log
     test "every call's body reads, and its answer is written as the vector writes it" do
@@ -862,8 +944,12 @@ defmodule Crucible.HostTest do
         answer = Jason.decode!(raw)
 
         # The version is the answer's first member, as the vector writes it.
+        # An attached request's success is its frames, never one answer.
         assert String.starts_with?(raw, ~s({"v":1,)), op
-        assert String.starts_with?(vector["answer"], ~s({"v":1,)), op
+
+        if op == "attached_fetch",
+          do: refute(Map.has_key?(vector, "answer")),
+          else: assert(String.starts_with?(vector["answer"], ~s({"v":1,)), op)
 
         listed = for %{"answer" => refused} <- vector["refusals"], do: Jason.decode!(refused)
 
@@ -973,7 +1059,9 @@ defmodule Crucible.HostTest do
 
   defp expected("fetch_artifact"), do: "not_found"
   defp expected("release_child"), do: "lost"
-  defp expected(op) when op in ~w(oauth_token storage admit_child tool_call), do: "guest_error"
+
+  defp expected(op) when op in ~w(oauth_token storage admit_child tool_call attached_fetch),
+    do: "guest_error"
 
   defp answer_name(%{"ok" => _value}), do: "ok"
   defp answer_name(%{"error" => name}), do: name

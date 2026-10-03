@@ -102,6 +102,133 @@ defmodule Prima.Authority.TransitionInvokeTest do
     end
   end
 
+  # ============================================================================
+  # Named accounts
+  # ============================================================================
+
+  # The fixture graph with a second account, "Archive", bound beside the
+  # source edge's default.
+  defp named_root!(profile_overrides \\ %{}) do
+    source = "#{@catalyst}|source"
+
+    archive =
+      Fixtures.bound_vault(@formula, source, "vault-archive", "sha256:bind-archive",
+        name: "Archive",
+        attach: Fixtures.attach_map()
+      )
+
+    {:ok, blob} =
+      Fixtures.graph_map()
+      |> put_in(["nodes", @formula, "edges", source, "vault", "named"], %{"Archive" => archive})
+      |> Prima.Authority.Blob.parse()
+
+    {:ok, auth} =
+      Authority.root(Fixtures.profile(profile_overrides), blob, ceiling: Fixtures.ceiling())
+
+    auth
+  end
+
+  defp source(opts),
+    do:
+      Fixtures.invoke(
+        @catalyst,
+        [need: "source", declared_needs: Fixtures.formula_needs()] ++ opts
+      )
+
+  describe "named accounts" do
+    test "a call naming no account gets the default binding, and no named one" do
+      {:child, child} = Transition.step(named_root!(), :call, source([]))
+      assert child.resources.vault.entry_id == "vault-source"
+      refute Map.has_key?(child.resources.vault, :named)
+
+      {:child, child} = Transition.step(named_root!(), :spawn, source(connection: nil))
+      assert child.resources.vault.entry_id == "vault-source"
+    end
+
+    test "a call naming an account the edge binds gets that binding alone" do
+      {:child, child} = Transition.step(named_root!(), :call, source(connection: "Archive"))
+      assert child.resources.vault.entry_id == "vault-archive"
+      assert child.resources.vault.binding_key == "#{@formula}|#{@catalyst}|source|name:Archive"
+      assert child.resources.egress.domains == ["prod.supabase.co"]
+    end
+
+    test "a call naming an account the edge lacks is connection_not_granted" do
+      for name <- ["archive", "default", "Other"] do
+        assert {:deny, :connection_not_granted} =
+                 Transition.step(named_root!(), :call, source(connection: name)),
+               name
+      end
+
+      # An edge with no named bindings binds no account at all.
+      assert {:deny, :connection_not_granted} =
+               Transition.step(
+                 Fixtures.root!(),
+                 :spawn,
+                 Fixtures.invoke(@catalyst,
+                   need: "dest",
+                   declared_needs: Fixtures.formula_needs(),
+                   connection: "Archive"
+                 )
+               )
+    end
+
+    test "no account is picked where no edge is crossed" do
+      auth = named_root!()
+
+      # An edge-less child, under :open_inert and :edge_only alike.
+      assert {:deny, :connection_not_granted} =
+               Transition.step(
+                 auth,
+                 :call,
+                 Fixtures.invoke("formula:evil.corp.helper", connection: "Archive")
+               )
+
+      assert {:deny, :connection_not_granted} =
+               Transition.step(
+                 named_root!(%{kind: :public, invoke_mode: :edge_only}),
+                 :call,
+                 Fixtures.invoke("formula:evil.corp.helper", connection: "Archive")
+               )
+
+      # A self-invocation keeps its cursor and its binding.
+      assert {:deny, :connection_not_granted} =
+               Transition.step(
+                 auth,
+                 :call,
+                 Fixtures.invoke(@formula,
+                   activation_digest: "sha256:act-formula",
+                   connection: "Archive"
+                 )
+               )
+
+      # An unbound cursor holds no binding to pick.
+      unbound = Authority.unbound_child(auth, "formula:evil.corp.helper")
+
+      assert {:deny, :connection_not_granted} =
+               Transition.step(
+                 unbound,
+                 :call,
+                 Fixtures.invoke(@catalyst, connection: "Archive")
+               )
+
+      assert {:child_zero, _child} =
+               Transition.step(unbound, :call, Fixtures.invoke(@catalyst))
+    end
+
+    test "the refusal reads in the chain authority's own words" do
+      assert Transition.refusal?(:connection_not_granted)
+
+      assert Transition.deny_message(:connection_not_granted) ==
+               "the named account is not bound on this edge"
+    end
+
+    test "a connection that is not a name is no target" do
+      assert_raise ArgumentError, fn ->
+        Transition.step(named_root!(), :call, source(connection: :archive))
+      end
+    end
+  end
+
   # Need rules
 
   describe "need rules" do

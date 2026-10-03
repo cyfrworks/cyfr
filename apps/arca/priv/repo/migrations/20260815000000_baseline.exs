@@ -57,6 +57,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     logs()
     retention()
     vault_and_consent()
+    file_offers()
     registrations()
     schedules()
     threads()
@@ -1795,9 +1796,48 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp vault_and_consent do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # SQLite takes a check only inside CREATE TABLE and Postgres only as a
+    # table constraint, so each rule is spelled once per adapter.
+    policy_known = known("instance_entries_policy_known", "component_policy", ~w(any shipped))
+    audience_known = known("instance_entries_audience_known", "audience", ~w(everyone listed))
+    instance_attach_only = %{name: "instance_entries_attach_only", expr: "attach_only"}
+
+    default_names_one = %{
+      name: "vault_defaults_names_one",
+      expr:
+        "(vault_entry_id IS NOT NULL AND instance_entry_id IS NULL) OR " <>
+          "(vault_entry_id IS NULL AND instance_entry_id IS NOT NULL)"
+    }
+
+    # A binding names exactly one of an athanor's entry, an instance entry
+    # and a selection's label; an entry is bound at a digest, and a
+    # selection pins one only when it was chosen against one.
+    ref_names_one = %{
+      name: "consent_vault_refs_names_one",
+      expr:
+        "(scope = 'athanor' AND vault_entry_id IS NOT NULL AND instance_entry_id IS NULL " <>
+          "AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
+          "(scope = 'instance' AND instance_entry_id IS NOT NULL AND vault_entry_id IS NULL " <>
+          "AND via_label IS NULL AND binding_digest IS NOT NULL) OR " <>
+          "(scope = 'athanor' AND via_label IS NOT NULL AND vault_entry_id IS NULL " <>
+          "AND instance_entry_id IS NULL)"
+    }
+
+    ref_lifetime = %{
+      name: "consent_vault_refs_lifetime",
+      expr:
+        "(lifetime_kind = 'until' AND expires_at IS NOT NULL) OR " <>
+          "(lifetime_kind IN ('standing', 'once') AND expires_at IS NULL)"
+    }
+
     # One row per external account. Credentials are shared, never copied:
     # several profiles reference one entry through consent edges. The sealed
-    # payload arrives encrypted — Arca stores bytes.
+    # payload arrives encrypted — Arca stores bytes. `destination` is where
+    # its material may go (`Prima.Destination`'s JCS text), required of
+    # every entry; `attach_only` holds unless the entry was created to be
+    # disclosed.
     create table(:vault_entries, primary_key: false) do
       add :id, :string, primary_key: true
       add :athanor_id, :string, null: false
@@ -1809,6 +1849,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :binding_digest, :string
       add :oauth_endpoints, :text
       add :oauth_scopes, :text
+      add :destination, :text, null: false
+      add :attach_only, :boolean, null: false, default: true
       add :status, :string, null: false, default: "active"
       add :payload_rev, :integer, null: false, default: 0
       add :sealed_payload, :binary
@@ -1823,6 +1865,108 @@ defmodule Arca.Repo.Migrations.Baseline do
              where: "status != 'tombstoned'",
              name: :vault_entries_active_name_index
            )
+
+    # The instance's own credentials (`Arca.InstanceEntries`): the columns
+    # of a vault entry less the athanor, always attach-only, offered to the
+    # `audience` (`everyone`, or the `listed` people of
+    # `instance_entry_members`) under a component policy and two daily
+    # caps (`nil` takes the platform setting's default). No athanor owns
+    # one and no athanor's erasure touches one; a deleted one is a
+    # tombstone, so the consents that bound it keep their rows.
+    create table(:instance_entries, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :name, :string, null: false
+      add :provider_hint, :string, null: false, default: ""
+      add :kind, :string, null: false
+      add :provenance, :string, null: false, default: "user"
+      add :field_names, :text, null: false, default: "[]"
+      add :binding_digest, :string
+      add :oauth_endpoints, :text
+      add :oauth_scopes, :text
+      add :destination, :text, null: false
+
+      add :attach_only, :boolean,
+        null: false,
+        default: true,
+        check: if(sqlite?, do: instance_attach_only)
+
+      add :status, :string, null: false, default: "active"
+      add :payload_rev, :integer, null: false, default: 0
+      add :sealed_payload, :binary
+      add :last_used_at, :utc_datetime_usec
+      add :audience, :string, null: false, check: if(sqlite?, do: audience_known)
+      add :person_daily, :integer
+      add :total_daily, :integer
+
+      add :component_policy, :text,
+        null: false,
+        default: "any",
+        check: if(sqlite?, do: policy_known)
+
+      add :created_by, :string, null: false
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :instance_entries, [policy_known, audience_known, instance_attach_only])
+
+    create unique_index(:instance_entries, [:name],
+             where: "status != 'tombstoned'",
+             name: :instance_entries_active_name_index
+           )
+
+    # The listed people of an instance entry whose audience is `listed`.
+    create table(:instance_entry_members, primary_key: false) do
+      add :instance_entry_id, references(:instance_entries, column: :id, type: :string),
+        null: false
+
+      add :user_id, :string, null: false
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:instance_entry_members, [:instance_entry_id, :user_id])
+    create index(:instance_entry_members, [:user_id])
+
+    # Use of an instance entry, counted by the database's UTC day: one row
+    # per person and day, and the entry's own day total under the empty
+    # `user_id`. Rows older than the sweep's window go
+    # (`Arca.InstanceEntryUsage`).
+    create table(:instance_entry_usage, primary_key: false) do
+      add :instance_entry_id, references(:instance_entries, column: :id, type: :string),
+        null: false
+
+      add :user_id, :string, null: false
+      add :day, :date, null: false
+      add :count, :integer, null: false, default: 0
+      add :updated_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:instance_entry_usage, [:instance_entry_id, :user_id, :day])
+    create index(:instance_entry_usage, [:day])
+
+    # The athanor's default entry per provider: one row per provider hint,
+    # naming either one of its own entries (the composite key keeps it the
+    # athanor's) or an instance entry. Written by one upsert, so a provider
+    # never has two.
+    create table(:vault_defaults, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :provider_hint, :string, null: false
+
+      add :vault_entry_id,
+          references(:vault_entries, column: :id, type: :string, with: [athanor_id: :athanor_id]),
+          check: if(sqlite?, do: default_names_one)
+
+      add :instance_entry_id, references(:instance_entries, column: :id, type: :string)
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :vault_defaults, [default_names_one])
+
+    create unique_index(:vault_defaults, [:athanor_id, :provider_hint])
+    create index(:vault_defaults, [:vault_entry_id, :athanor_id])
+    create index(:vault_defaults, [:instance_entry_id])
 
     create table(:profiles, primary_key: false) do
       add :id, :string, primary_key: true
@@ -1876,19 +2020,39 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:consents, [:athanor_id, :profile_id])
     create unique_index(:consents, [:profile_id, :revision])
 
+    # One row per binding of a revision, keyed by its `binding_key`
+    # (`<source node reference>|<edge key>|<slot>`): the entry it binds,
+    # the athanor's own or the instance's, or the label of the profile a
+    # selection borrows from, and the binding's own lifetime. An entry may
+    # appear in several rows of one consent. `consumed_by_root` is the root
+    # execution a `once` binding was consumed under.
     create table(:consent_vault_refs, primary_key: false) do
       add :consent_id, references(:consents, column: :id, type: :string), null: false
       add :athanor_id, :string, null: false
+      add :binding_key, :text, null: false
+      add :scope, :string, null: false, check: if(sqlite?, do: ref_names_one)
 
       add :vault_entry_id,
-          references(:vault_entries, column: :id, type: :string, with: [athanor_id: :athanor_id]),
-          null: false
+          references(:vault_entries, column: :id, type: :string, with: [athanor_id: :athanor_id])
 
-      add :binding_digest, :string, null: false
+      add :instance_entry_id, references(:instance_entries, column: :id, type: :string)
+      add :via_label, :string
+      add :binding_digest, :string
+
+      add :lifetime_kind, :string,
+        null: false,
+        default: "standing",
+        check: if(sqlite?, do: ref_lifetime)
+
+      add :expires_at, :utc_datetime_usec
+      add :consumed_by_root, :string
     end
 
-    create unique_index(:consent_vault_refs, [:consent_id, :vault_entry_id])
+    checked(sqlite?, :consent_vault_refs, [ref_names_one, ref_lifetime])
+
+    create unique_index(:consent_vault_refs, [:consent_id, :binding_key])
     create index(:consent_vault_refs, [:vault_entry_id, :athanor_id])
+    create index(:consent_vault_refs, [:instance_entry_id])
 
     # Single-use, delete-on-read. No foreign keys by design: a proof outlives
     # the plan it came from and must not be cascaded away.
@@ -1963,6 +2127,100 @@ defmodule Arca.Repo.Migrations.Baseline do
            )
 
     create index(:tool_grants, [:athanor_id, :agent_name])
+  end
+
+  # ==========================================================================
+  # Send a copy: offers and receipts
+  # ==========================================================================
+
+  # A person's offer of files to another (`Arca.FileOffers`): one row per
+  # file, under the offer id the files share, owned by the SENDER's athanor,
+  # so an offer not yet accepted dies with it. The snapshot it names lives
+  # under the sender's reserved `payloads/offers/<offer id>/`. An accepted
+  # transfer is the recipient's `file_receipts` row, in the RECIPIENT's
+  # athanor, which drives the publication whatever becomes of the sender:
+  # the custody copy it names (`custody_path`, under
+  # `payloads/receipts/<offer id>/<attempt>/`), the path a
+  # completer recorded before writing (`attempt_path`, `attempt_state`),
+  # every path a write was ever sent to (`issued_paths`, a JSON array) and
+  # whether one ever was (`ever_issued`, never cleared), and the claim of
+  # the completer working on it (`completing_by` until `completing_until`,
+  # database time).
+  defp file_offers do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    offer_status =
+      known("file_offers_status_known", "status", ~w(offered accepted declined withdrawn expired))
+
+    receipt_status =
+      known("file_receipts_status_known", "status", ~w(received published completed failed))
+
+    attempt_state = %{
+      name: "file_receipts_attempt_state_known",
+      expr:
+        "(attempt_path IS NULL AND attempt_state IS NULL) OR " <>
+          "(attempt_path IS NOT NULL AND attempt_state IS NOT NULL " <>
+          "AND attempt_state IN ('chosen', 'issued'))"
+    }
+
+    create table(:file_offers, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :offer_id, :string, null: false
+      add :sender_user_id, :string, null: false
+      add :recipient_user_id, :string, null: false
+      add :filename, :text, null: false
+      add :digest, :string, null: false
+      add :size, :bigint, null: false
+
+      add :status, :string,
+        null: false,
+        default: "offered",
+        check: if(sqlite?, do: offer_status)
+
+      add :expires_at, :utc_datetime_usec, null: false
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :file_offers, [offer_status])
+
+    create unique_index(:file_offers, [:offer_id, :filename])
+    create index(:file_offers, [:athanor_id, :sender_user_id, :status])
+    create index(:file_offers, [:recipient_user_id, :status])
+    create index(:file_offers, [:athanor_id, :status, :expires_at])
+
+    create table(:file_receipts, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :offer_id, :string, null: false
+      add :sender_user_id, :string, null: false
+      add :recipient_user_id, :string, null: false
+      add :filename, :text, null: false
+      add :digest, :string, null: false
+      add :size, :bigint, null: false
+      add :folder, :text, null: false
+      add :custody_path, :text, null: false
+
+      add :status, :string,
+        null: false,
+        default: "received",
+        check: if(sqlite?, do: receipt_status)
+
+      add :attempt_path, :text, check: if(sqlite?, do: attempt_state)
+      add :attempt_state, :string
+      add :issued_paths, :text, null: false, default: "[]"
+      add :ever_issued, :boolean, null: false, default: false
+      add :completing_by, :string
+      add :completing_until, :utc_datetime_usec
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :file_receipts, [receipt_status, attempt_state])
+
+    create unique_index(:file_receipts, [:athanor_id, :offer_id, :filename])
+    create index(:file_receipts, [:athanor_id, :status])
   end
 
   # ==========================================================================

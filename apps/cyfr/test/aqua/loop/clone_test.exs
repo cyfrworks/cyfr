@@ -104,7 +104,10 @@ defmodule Aqua.Loop.CloneTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: Keyword.fetch!(opts, :name),
         kind: "api_key",
-        fields: %{"ANTHROPIC_API_KEY" => Keyword.fetch!(opts, :key)}
+        fields: %{"ANTHROPIC_API_KEY" => Keyword.fetch!(opts, :key)},
+        # The run reads the key itself, so the entry is disclosed.
+        destination: %{"hosts" => ["api.anthropic.com"]},
+        disclose: true
       })
 
     label = Keyword.get(opts, :label, "default")

@@ -95,6 +95,40 @@ func TestRenderPreview_ShowsEveryRowValue(t *testing.T) {
 	}
 }
 
+// A credential row says whose entry it binds, where it goes, whether the
+// component holds it and how long it stands, in the CLI's words.
+func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
+	v := loadPreviewVectors(t)
+	var out bytes.Buffer
+	renderPreview(&out, v.Preview)
+	text := out.String()
+
+	for _, want := range []string{
+		"source: own (an entry of this athanor)",
+		"source: instance (an entry this instance offers)",
+		"source: provided (the publisher's public configuration)",
+		"goes to: https://api.weather.example",
+		"goes to: https://tiles.maps.example, methods GET, paths /v1/tiles",
+		"goes to: https://*.weather.example port 8443, methods GET, POST, paths /v2",
+		"attached by CYFR: the component never holds the value",
+		"disclosed: the component reads the value itself",
+		"lifetime: until revoked",
+		"lifetime: until 2026-10-04T13:00:00Z",
+		"lifetime: one run",
+		"weather-api lent by reagent:local.weather to reagent:local.geo, as the account 'Geo account'",
+		"binding: reagent:local.weather|reagent:local.geo|name:Geo account",
+		"provider: weather.example",
+		"suggested",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "choose which entry to use") {
+		t.Errorf("no row of the vectors asks for a choice:\n%s", text)
+	}
+}
+
 // One entry lent on two edges, and one stream under two subjects, are two
 // lines each, never folded into one.
 func TestRenderPreview_KeepsRowsApartByEdgeAndSubject(t *testing.T) {
@@ -318,6 +352,46 @@ func expected(row map[string]any, field string, value any) []string {
 	case field == "rate_limit":
 		rate := value.(map[string]any)
 		return []string{num(rate["requests"]) + " per " + str(rate["window"])}
+	case field == "destination":
+		destination := value.(map[string]any)
+		wants := []string{str(destination["scheme"]) + "://"}
+		for _, key := range []string{"hosts", "methods", "paths"} {
+			if list, ok := destination[key].([]any); ok {
+				for _, item := range list {
+					wants = append(wants, str(item))
+				}
+			}
+		}
+		if port, ok := destination["port"]; ok {
+			wants = append(wants, "port "+num(port))
+		}
+		return wants
+	case field == "lifetime":
+		lifetime := value.(map[string]any)
+		switch str(lifetime["kind"]) {
+		case "standing":
+			return []string{"until revoked"}
+		case "until":
+			return []string{"until " + str(lifetime["until"])}
+		default:
+			return []string{"one run"}
+		}
+	case field == "source":
+		return []string{"source: " + str(value)}
+	case field == "disclosed" && value == true:
+		return []string{"the component reads the value itself"}
+	case field == "disclosed":
+		return []string{"the component never holds the value"}
+	case field == "suggested" && value == true:
+		return []string{"suggested"}
+	case field == "choice_required" && value == true:
+		return []string{"choose which entry to use"}
+	case field == "suggested" || field == "choice_required":
+		return nil
+	case field == "binding_key":
+		return []string{"binding: " + str(value)}
+	case field == "connection":
+		return []string{"as the account '" + str(value) + "'"}
 	}
 
 	switch typed := value.(type) {

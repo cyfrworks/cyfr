@@ -71,13 +71,18 @@ defmodule Sanctum.Vault.OAuthGrant do
       names others: re-authorization is the one way an entry's scopes
       change, and its callback rebinds them with the bundle granted for
       them. Naming an empty list is refused `:scopes_required`.
-    * `%{name: n, provider: p, scopes: [...], endpoints: %{...}?}` — a new
-      entry. A provider with a preset (`Sanctum.Vault.OAuth.preset/1`)
-      takes the preset's endpoints, and naming any beside it is refused
+    * `%{name: n, provider: p, scopes: [...], endpoints: %{...}?,
+      destination: %{...}, disclose: boolean?}` — a new entry. A provider
+      with a preset (`Sanctum.Vault.OAuth.preset/1`) takes the preset's
+      endpoints, and naming any beside it is refused
       `:endpoints_preset_conflict`; any other provider must name them
       (`:endpoints_required`): `authorize_url` + `token_url` (https),
       optional `auth_style` / `extra_params`
-      (`Sanctum.Vault.OAuth.validate_endpoints/1`).
+      (`Sanctum.Vault.OAuth.validate_endpoints/1`). The new entry's
+      `destination`, where its token may go, is required
+      (`:destination_required`) and held to `Prima.Destination`'s grammar
+      as `Sanctum.Vault.create/2` holds it; it is attach-only unless
+      `disclose` is true. Both are the entry's once the grant completes.
 
   Starting one is a sensitive change (`credential_entry`): the grant it
   completes seals a credential into the vault.
@@ -273,7 +278,9 @@ defmodule Sanctum.Vault.OAuthGrant do
   # with none, the ones the request names; never both and never neither.
   defp resolve_target(_ctx, %{name: name, provider: provider} = params)
        when is_binary(name) and name != "" and is_binary(provider) and provider != "" do
-    with {:ok, endpoints} <- new_endpoints(provider, Map.get(params, :endpoints)) do
+    with {:ok, endpoints} <- new_endpoints(provider, Map.get(params, :endpoints)),
+         {:ok, destination} <- new_destination(params),
+         {:ok, disclose} <- Sanctum.Vault.disclose_param(params) do
       {:ok,
        %{
          kind: :new,
@@ -281,7 +288,9 @@ defmodule Sanctum.Vault.OAuthGrant do
          name: name,
          provider: provider,
          endpoints: endpoints,
-         scopes: Map.get(params, :scopes, [])
+         scopes: Map.get(params, :scopes, []),
+         destination: destination,
+         attach_only: not disclose
        }}
     end
   end
@@ -291,6 +300,14 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   defp no_new_endpoints(params) do
     if is_nil(Map.get(params, :endpoints)), do: :ok, else: {:error, :endpoints_immutable}
+  end
+
+  # A new entry names where its token may go; nothing is defaulted.
+  defp new_destination(params) do
+    case Map.get(params, :destination) do
+      nil -> {:error, :destination_required}
+      destination -> Sanctum.Vault.destination_text(destination)
+    end
   end
 
   # A re-authorization keeps the entry's scopes when it names none and
@@ -406,7 +423,9 @@ defmodule Sanctum.Vault.OAuthGrant do
         provider_hint: target.provider,
         field_names: "[]",
         oauth_endpoints: Jason.encode!(target.endpoints),
-        oauth_scopes: Jason.encode!(target.scopes)
+        oauth_scopes: Jason.encode!(target.scopes),
+        destination: target.destination,
+        attach_only: target.attach_only
       }
 
       with {:ok, digest} <- VaultReader.binding_digest(binding),

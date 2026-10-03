@@ -12,13 +12,22 @@ defmodule Sanctum.Vault do
       compare-and-swap. Binding fields are untouched, so the derived
       binding digest is unchanged and no consent is disturbed.
     * **rebind** changes what the credential *talks to* (its field
-      schema). The derived binding digest moves, every profile whose head
-      consent references the entry flips to `needs_consent`, and nothing
-      runs against the new binding until a human re-consents. An OAuth
-      entry's endpoints are not among them, being fixed when the entry is
-      created, nor its scopes, which are the scopes its token was granted
-      for and change only by re-authorization
-      (`Sanctum.Vault.OAuthGrant`).
+      schema, its destination, whether it is disclosed). The derived
+      binding digest moves, every profile whose head consent references
+      the entry flips to `needs_consent`, and nothing runs against the new
+      binding until a human re-consents. An OAuth entry's endpoints are
+      not among them, being fixed when the entry is created, nor its
+      scopes, which are the scopes its token was granted for and change
+      only by re-authorization (`Sanctum.Vault.OAuthGrant`).
+
+  Every entry names its **destination** (`Prima.Destination`): where its
+  material may go, its hosts, scheme and port and, optionally, methods
+  and paths. It is required when the entry is created and never
+  defaulted. An entry is **attach-only** unless it is created or rebound
+  with `disclose: true`: its material is never handed to a component, and
+  only a disclosed entry's fields can be read by one
+  (`Sanctum.VaultReader`). Both join the
+  binding digest.
 
   Every mutation requires the interactive consent class (`:oidc`
   surface, external plane) — no permission wildcard and no scoped key
@@ -69,6 +78,8 @@ defmodule Sanctum.Vault do
           provenance: String.t(),
           field_names: [String.t()],
           oauth_scopes: [String.t()],
+          destination: %{String.t() => term()} | nil,
+          attach_only: boolean(),
           payload_rev: non_neg_integer(),
           last_used_at: DateTime.t() | nil
         }
@@ -140,6 +151,12 @@ defmodule Sanctum.Vault do
     * `:oauth` — token bundle map (see `Sanctum.Vault.Payload`)
     * `:provider_hint` — immutable; defaults `""`
     * `:oauth_endpoints` / `:oauth_scopes` — binding fields
+    * `:destination` (required) — where the material may go, a
+      `Prima.Destination` map (string or atom keys); absent is
+      `:destination_required` and one outside the grammar
+      `{:invalid_destination, reason}`, both before anything is asked
+    * `:disclose` — `true` to let a component read the fields; `false`
+      when absent, so the entry is attach-only unless it says otherwise
 
   An `oauth` entry names its provider (`:provider_required`), and its
   endpoints are fixed here and never change: a provider hint with a preset
@@ -156,6 +173,8 @@ defmodule Sanctum.Vault do
          {:ok, name} <- required_name(params),
          {:ok, kind} <- required_kind(params),
          {:ok, endpoints} <- create_endpoints(kind, params),
+         {:ok, destination} <- required_destination(params),
+         {:ok, disclose} <- disclose_param(params),
          {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
          :ok <-
            Authz.confirm(ctx, :credential_entry, %{
@@ -173,7 +192,9 @@ defmodule Sanctum.Vault do
         provider_hint: hint,
         field_names: Jason.encode!(Enum.sort(Map.keys(fields))),
         oauth_endpoints: encode_optional_map(endpoints),
-        oauth_scopes: encode_optional_list(Map.get(params, :oauth_scopes))
+        oauth_scopes: encode_optional_list(Map.get(params, :oauth_scopes)),
+        destination: destination,
+        attach_only: not disclose
       }
 
       # The tenant is the caller's, never an attribute's: the facade stamps
@@ -283,7 +304,9 @@ defmodule Sanctum.Vault do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Change the binding field `:field_names`, the material's field schema.
+  Change the binding fields: `:field_names`, the material's field schema;
+  `:destination`, where the material may go (held to the grammar as at
+  `create/2`); and `:disclose`, whether a component may read the fields.
   `provider_hint` cannot change — it lives in the AAD — and neither can
   an entry's OAuth endpoints or scopes, each refused before the entry is
   read: a params map naming `:oauth_endpoints` is refused
@@ -301,9 +324,8 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          :ok <- endpoints_unnamed(params),
          :ok <- scopes_unnamed(params),
+         {:ok, changes} <- rebind_changes(params),
          {:ok, entry} <- get_living(ctx, id) do
-      changes = put_change(%{}, :field_names, params, &encode_optional_list/1)
-
       if changes == %{} do
         {:error, :no_binding_changes}
       else
@@ -401,6 +423,8 @@ defmodule Sanctum.Vault do
       provenance: entry.provenance,
       field_names: decode_list(entry.field_names, "field_names"),
       oauth_scopes: decode_list(entry.oauth_scopes, "oauth_scopes"),
+      destination: decode_destination(entry.destination),
+      attach_only: entry.attach_only,
       payload_rev: entry.payload_rev,
       last_used_at: entry.last_used_at
     }
@@ -411,6 +435,87 @@ defmodule Sanctum.Vault do
 
   defp required_kind(%{kind: kind}) when kind in @kinds, do: {:ok, kind}
   defp required_kind(_), do: {:error, {:invalid_kind, @kinds}}
+
+  # Where an entry's material may go: named by the caller, never defaulted,
+  # and stored as the destination's canonical text, the bytes its binding
+  # digest covers.
+  defp required_destination(params) do
+    case Map.fetch(params, :destination) do
+      {:ok, destination} when not is_nil(destination) -> destination_text(destination)
+      _absent -> {:error, :destination_required}
+    end
+  end
+
+  @doc false
+  # A destination as a caller names it, string or atom keys, held to
+  # `Prima.Destination`'s athanor-entry grammar and answered as its
+  # canonical text. `Sanctum.Vault.OAuthGrant` holds a new entry's to the
+  # same rule.
+  @spec destination_text(term()) :: {:ok, String.t()} | {:error, term()}
+  def destination_text(%{} = destination) when not is_struct(destination) do
+    with {:ok, parsed} <- Prima.Destination.from_map(string_keys(destination)) do
+      {:ok, Prima.Destination.canonical(parsed)}
+    end
+  end
+
+  def destination_text(_other), do: {:error, {:invalid_destination, :not_a_map}}
+
+  defp string_keys(map),
+    do:
+      Map.new(map, fn {key, value} ->
+        {if(is_atom(key), do: Atom.to_string(key), else: key), value}
+      end)
+
+  @doc false
+  # Whether a create asks for disclosure: `false` when it says nothing, and
+  # only a boolean otherwise.
+  @spec disclose_param(map()) :: {:ok, boolean()} | {:error, :invalid_disclose}
+  def disclose_param(params) do
+    case Map.get(params, :disclose) do
+      nil -> {:ok, false}
+      disclose when is_boolean(disclose) -> {:ok, disclose}
+      _other -> {:error, :invalid_disclose}
+    end
+  end
+
+  # The binding columns a rebind names: the field schema, the destination
+  # and the disclosure, each only when the caller named it.
+  defp rebind_changes(params) do
+    changes = put_change(%{}, :field_names, params, &encode_optional_list/1)
+
+    with {:ok, changes} <- put_destination(changes, params) do
+      case Map.fetch(params, :disclose) do
+        {:ok, disclose} when is_boolean(disclose) ->
+          {:ok, Map.put(changes, :attach_only, not disclose)}
+
+        {:ok, _other} ->
+          {:error, :invalid_disclose}
+
+        :error ->
+          {:ok, changes}
+      end
+    end
+  end
+
+  defp put_destination(changes, params) do
+    case Map.fetch(params, :destination) do
+      {:ok, destination} ->
+        with {:ok, text} <- destination_text(destination),
+             do: {:ok, Map.put(changes, :destination, text)}
+
+      :error ->
+        {:ok, changes}
+    end
+  end
+
+  defp decode_destination(text) when is_binary(text) do
+    case Prima.Json.decode(text) do
+      {:ok, %{} = destination} -> destination
+      _ -> nil
+    end
+  end
+
+  defp decode_destination(_absent), do: nil
 
   # The endpoints an entry is created with. An `oauth` entry's come from its
   # provider's preset or are named for a provider with none, never both and

@@ -16,8 +16,11 @@ defmodule Prima.Operation do
   string argument, `uri`.
 
   `resource` names the argument that names the resource an action touches
-  and that resource's kind, `{"path", :storage_path}` or
-  `{"domain", :egress_domain}` (`resource_kinds/0`). It is validated at
+  and that resource's kind, `{"path", :storage_path}`,
+  `{"domain", :egress_domain}` or `{"connection", :vault_entry}`
+  (`resource_kinds/0`). A `vault_entry` argument names an account the
+  caller's edge binds, resolved to its entry before any standing approval
+  is read, so a constraint's patterns are entry ids. It is validated at
   declaration: the argument must be one of the action's own string
   arguments. A standing approval may be constrained to resources of that
   kind only for an action that declares one; an action that declares none
@@ -65,10 +68,10 @@ defmodule Prima.Operation do
         }
 
   @typedoc "The kinds of resource an action's argument may name."
-  @type resource_kind :: :storage_path | :egress_domain
+  @type resource_kind :: :storage_path | :egress_domain | :vault_entry
 
   @valid_planes [:external, :in_chain]
-  @resource_kinds [:storage_path, :egress_domain]
+  @resource_kinds [:storage_path, :egress_domain, :vault_entry]
 
   @doc "The kinds of resource a `resource:` declaration may name."
   @spec resource_kinds() :: [resource_kind()]
@@ -153,7 +156,11 @@ defmodule Prima.Operation do
   end
 
   defp validate_resource!(%__MODULE__{}),
-    do: raise(ArgumentError, "a resource is {argument, :storage_path | :egress_domain}")
+    do:
+      raise(
+        ArgumentError,
+        "a resource is {argument, :storage_path | :egress_domain | :vault_entry}"
+      )
 
   # A URI scheme as RFC 3986 spells it, lowercase only, so one scheme has
   # one spelling in the index the resource adapter derives.

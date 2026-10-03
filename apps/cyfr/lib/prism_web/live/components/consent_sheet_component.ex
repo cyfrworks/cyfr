@@ -757,8 +757,9 @@ defmodule PrismWeb.ConsentSheetComponent do
             Admits runs started: {Enum.map_join(@preview.origins, ", ", &origin_label/1)}.
           </p>
           <p class="consent-sheet__note text-gray-400">
-            Vault entries are sealed at rest. A component only ever receives the
-            fields listed above.
+            Vault entries are sealed at rest. CYFR attaches a credential to a
+            component's requests, and a component holds a field's value only
+            where its row says it is disclosed.
           </p>
         </section>
 
@@ -813,6 +814,9 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   # One row, in the sheet's own words, every value it carries shown, with
   # the node it is for, and the home's refusal of a choice made on it.
+  # A credential row is one binding: whose entry it is, where its value may
+  # go, whether the component holds the value and how long it stands, in
+  # plain words. Choosing an account or a lifetime is not offered here.
   defp row(%{row: %{"kind" => "credential"}} = assigns) do
     ~H"""
     <div class="consent-sheet__row" data-row="credential" data-node={@row["node"]}>
@@ -821,8 +825,21 @@ defmodule PrismWeb.ConsentSheetComponent do
       <span :if={@row["values"]["label"]}>
         — the key bound on its '{@row["values"]["label"]}' profile
       </span>
+      <span :if={@row["values"]["connection"]}>
+        — as the account '{@row["values"]["connection"]}'
+      </span>
+      <div>Source: {source_label(@row["values"]["source"])}</div>
+      <div :if={@row["values"]["provider"]}>Provider: {@row["values"]["provider"]}</div>
+      <div>
+        Goes to: <span class="font-mono">{destination_label(@row["values"]["destination"])}</span>
+      </div>
+      <div>{disclosure_label(@row["values"]["disclosed"])}</div>
+      <div>Lifetime: {lifetime_label(@row["values"]["lifetime"])}</div>
+      <div :if={@row["values"]["suggested"] == true}>Suggested</div>
+      <div :if={@row["values"]["choice_required"] == true}>Choose which entry to use</div>
       <div>Fields: {list_label(@row["values"]["fields"], "none")}</div>
       <div>Scopes: {list_label(@row["values"]["scopes"], "none")}</div>
+      <div class="font-mono text-xs">Binding: {@row["values"]["binding_key"]}</div>
     </div>
     """
   end
@@ -1113,6 +1130,34 @@ defmodule PrismWeb.ConsentSheetComponent do
   end
 
   defp edge_label(_node, _edge), do: ""
+
+  # Whose credential a row binds.
+  defp source_label("own"), do: "own (an entry of this athanor)"
+  defp source_label("instance"), do: "instance (an entry this instance offers)"
+  defp source_label("provided"), do: "provided (the publisher's public configuration)"
+  defp source_label(source), do: to_string(source)
+
+  # Where a credential may go: its scheme and hosts, its port, and the
+  # methods and path prefixes it is limited to, when it is.
+  defp destination_label(%{} = destination) do
+    [
+      "#{destination["scheme"]}://#{list_label(destination["hosts"], "no host")}",
+      if(destination["port"], do: " port #{destination["port"]}"),
+      if(destination["methods"], do: ", methods #{list_label(destination["methods"], "")}"),
+      if(destination["paths"], do: ", paths #{list_label(destination["paths"], "")}")
+    ]
+    |> Enum.join()
+  end
+
+  defp destination_label(_destination), do: ""
+
+  defp disclosure_label(true), do: "Disclosed: the component reads the value itself"
+  defp disclosure_label(_attached), do: "Attached by CYFR: the component never holds the value"
+
+  defp lifetime_label(%{"kind" => "standing"}), do: "until revoked"
+  defp lifetime_label(%{"kind" => "until", "until" => until}), do: "until #{until}"
+  defp lifetime_label(%{"kind" => "once"}), do: "one run"
+  defp lifetime_label(_lifetime), do: ""
 
   defp subject_label("*"), do: "— any subject"
   defp subject_label(subject) when is_binary(subject), do: "— for #{subject}"

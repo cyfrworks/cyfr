@@ -16,10 +16,16 @@ defmodule Arca.TenantTables do
 
   `@roster` is ordered children-first, so the deletes hold whether or not
   the backend enforces `ON DELETE CASCADE` (SQLite only does with
-  `PRAGMA foreign_keys=ON`). `consent_vault_refs` before `consents` and
-  `vault_entries`; `consents` before `profiles` (its `profile_id` is a
-  composite FK); `messages` before `threads`; `webhook_deliveries`
-  before `webhooks`.
+  `PRAGMA foreign_keys=ON`). `consent_vault_refs` and `vault_defaults`
+  before `consents` and `vault_entries`; `consents` before `profiles` (its
+  `profile_id` is a composite FK); `messages` before `threads`;
+  `webhook_deliveries` before `webhooks`.
+
+  A file offer is the sender's athanor's row (`file_offers`), so an offer
+  not yet accepted dies with it; an accepted transfer is the recipient's
+  (`file_receipts`), and lives and completes there whatever happens to
+  the sender. The instance's own credentials are no athanor's rows at
+  all.
 
   ## What this does NOT promise
 
@@ -50,6 +56,7 @@ defmodule Arca.TenantTables do
     "agent_revisions",
     "execution_payloads",
     "consent_vault_refs",
+    "vault_defaults",
     "consents",
     "profiles",
     "vault_entries",
@@ -79,6 +86,8 @@ defmodule Arca.TenantTables do
     "decision_logs",
     "retention_settings",
     "oauth_provider_credentials",
+    "file_offers",
+    "file_receipts",
     "mcp_servers",
     "schedule_occurrences",
     "cron_schedules",
@@ -146,6 +155,10 @@ defmodule Arca.TenantTables do
   # `installation_claims` are the node's claims by a restore, and
   # `request_rate_windows` the node's pre-authentication limits: no
   # session, and so no athanor, stands behind either.
+  #
+  # `instance_entries`, `instance_entry_members` and
+  # `instance_entry_usage` are the instance's own credentials, offered to
+  # athanors and deleted with none of them.
   @not_athanor_scoped [
     "registry_tokens",
     "server_meta",
@@ -161,7 +174,10 @@ defmodule Arca.TenantTables do
     "passkeys",
     "device_certifications",
     "installation_claims",
-    "request_rate_windows"
+    "request_rate_windows",
+    "instance_entries",
+    "instance_entry_members",
+    "instance_entry_usage"
   ]
 
   @doc "The closed roster, children first."

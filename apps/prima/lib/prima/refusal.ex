@@ -119,7 +119,47 @@ defmodule Prima.Refusal do
     "dispatch_error" => :internal,
     "unknown" => :internal,
     "task_failed" => :internal,
-    "cancel_failed" => :internal
+    "cancel_failed" => :internal,
+    # A credential's refusals, by the reason a host call's guest error
+    # names (`credential_reasons/0`).
+    "destination_mismatch" => :forbidden,
+    "scope_not_attenuable" => :forbidden,
+    "disclosure_refused" => :forbidden,
+    "not_offered" => :forbidden,
+    "component_not_admitted" => :forbidden,
+    "provider_mismatch" => :invalid_argument,
+    "credential_header_refused" => :invalid_argument,
+    "endpoints_immutable" => :invalid_argument,
+    "connection_not_granted" => :setup_required,
+    "connection_cap" => :rate_limited,
+    "grant_expired" => :consent_required,
+    # The development host's answer to every attached request, before
+    # attaching is built.
+    "attach_unavailable" => :unavailable
+  }
+
+  # The credential refusals, each with its class and its fixed sentence:
+  # the condition in words, never the entry, its value or its address.
+  @credential %{
+    destination_mismatch:
+      {:forbidden, "The request goes outside the destination its credential is bound to."},
+    scope_not_attenuable:
+      {:forbidden,
+       "This provider cannot narrow the entry's scopes; grant them whole or not at all."},
+    disclosure_refused:
+      {:forbidden, "This credential is attached by CYFR and never disclosed to a component."},
+    not_offered: {:forbidden, "This instance entry is not offered to you."},
+    component_not_admitted:
+      {:forbidden, "This instance entry requires an unmodified shipped component."},
+    provider_mismatch: {:invalid_argument, "The entry is for another provider than this need."},
+    credential_header_refused:
+      {:invalid_argument, "A request that names a connection carries no credential header."},
+    endpoints_immutable:
+      {:invalid_argument, "An OAuth entry's endpoints are fixed when it is created."},
+    connection_not_granted:
+      {:setup_required, "This account is not granted to the component; grant it first."},
+    connection_cap: {:rate_limited, "This instance entry's request cap for today is reached."},
+    grant_expired: {:consent_required, "The grant for this account has expired; grant it again."}
   }
 
   # A turn or a runner refused a transition the caller asked for: the
@@ -197,6 +237,15 @@ defmodule Prima.Refusal do
   @doc "The sixteen refusal classes."
   @spec classes() :: [class()]
   def classes, do: @classes
+
+  @doc """
+  The credential refusals' reasons, each a typed reason of this table and
+  a guest error `type` a host call may answer: where a credential may go,
+  how it is disclosed, which provider and account it is for, and how an
+  instance entry is offered and capped.
+  """
+  @spec credential_reasons() :: [atom()]
+  def credential_reasons, do: @credential |> Map.keys() |> Enum.sort()
 
   @doc """
   The normalized refusal for `reason`. A `%Prima.Refusal{}` classifies as
@@ -417,6 +466,11 @@ defmodule Prima.Refusal do
   # A store or a check that could not answer, where nothing was done.
   defp row(:unavailable), do: {:unavailable, "The service could not answer — retry shortly"}
 
+  # Attaching a credential to a request is not built in this release, so
+  # every attached request is refused before it is admitted; asking again
+  # changes nothing, and the sentence says so rather than "retry".
+  defp row(:attach_unavailable), do: {:unavailable, "Attached requests are not built yet."}
+
   # The row is committed. The unit is published; only the move of its
   # objects to where readers read did not finish, and the storage sweep
   # finishes it.
@@ -439,6 +493,14 @@ defmodule Prima.Refusal do
     do: {Map.get(@guest_error_classes, type, :internal), message}
 
   defp row({:failed, message}) when is_binary(message), do: {:internal, message}
+
+  # A credential's refusals. Two carry a detail beside the reason — the
+  # provider the need asked for, the instant a cap resets — which the
+  # reason keeps and the sentence never names.
+  defp row(reason) when is_map_key(@credential, reason), do: Map.fetch!(@credential, reason)
+
+  defp row({:provider_mismatch, _provider}), do: Map.fetch!(@credential, :provider_mismatch)
+  defp row({:connection_cap, _reset_at}), do: Map.fetch!(@credential, :connection_cap)
 
   # A component whose registry row carries no type: registering it again
   # writes one.

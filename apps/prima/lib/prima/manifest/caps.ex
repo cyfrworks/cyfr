@@ -24,7 +24,9 @@ defmodule Prima.Manifest.Caps do
       }
 
   Closed vocabulary at every level; everything optional. `tools` speaks
-  the `Prima.ToolPattern` grammar and is expanded at consent time.
+  the `Prima.ToolPattern` grammar and is expanded at consent time. A
+  credential need's `hosts` (`Prima.Manifest.Needs`) fall within
+  `egress.domains`: a need speaks only where its component asks to reach.
   `limits` carries the `Prima.Limits` field names — suggestions under
   the platform ceiling, operator-adjustable at commit. `schemes` absent
   means `["https"]` at consent.
@@ -74,14 +76,14 @@ defmodule Prima.Manifest.Caps do
 
   def validate(nil, storage_path_ok?) when is_function(storage_path_ok?, 1), do: :ok
 
-  def validate(%{"caps" => caps}, storage_path_ok?)
+  def validate(%{"caps" => caps} = manifest, storage_path_ok?)
       when is_map(caps) and is_function(storage_path_ok?, 1) do
     with :ok <- only_keys(caps, ~w(egress storage tools limits), :caps),
          :ok <- validate_egress(caps["egress"]),
          :ok <- validate_storage(caps["storage"], storage_path_ok?),
          :ok <- validate_tools(caps["tools"]),
          :ok <- validate_limits(caps["limits"]) do
-      :ok
+      need_hosts_within(manifest, egress_domains(caps["egress"]))
     end
   end
 
@@ -90,7 +92,7 @@ defmodule Prima.Manifest.Caps do
 
   def validate(manifest, storage_path_ok?)
       when is_map(manifest) and is_function(storage_path_ok?, 1),
-      do: :ok
+      do: need_hosts_within(manifest, [])
 
   @doc """
   Whether a storage grant's path is spelled as the storage door reaches
@@ -212,24 +214,29 @@ defmodule Prima.Manifest.Caps do
   defp validate_storage_paths(nil, _storage_path_ok?), do: :ok
 
   defp validate_storage_paths(paths, storage_path_ok?) when is_list(paths) do
-    case Enum.find(paths, fn path -> path != "*" and not storage_path_ok?.(path) end) do
+    case Enum.find_index(paths, fn path -> path != "*" and not storage_path_ok?.(path) end) do
       nil ->
-        case Enum.find(paths, &(not canonical_storage_path?(&1))) do
-          nil -> :ok
-          bad -> {:error, {:invalid_caps, {:non_canonical_storage_path, bad}}}
+        case Enum.find_index(paths, &(not canonical_storage_path?(&1))) do
+          nil ->
+            :ok
+
+          index ->
+            {:error, {:invalid_caps, {:non_canonical_storage_path, Enum.at(paths, index)}}}
         end
 
-      bad ->
-        {:error, {:invalid_caps, {:invalid_storage_path, bad}}}
+      index ->
+        {:error, {:invalid_caps, {:invalid_storage_path, Enum.at(paths, index)}}}
     end
   end
 
   defp validate_tools(nil), do: :ok
 
+  # The index of the first pattern refused, never the pattern itself: a nil
+  # member is refused as itself, not read as "none refused".
   defp validate_tools(tools) when is_list(tools) do
-    case Enum.find(tools, &(not Prima.ToolPattern.valid?(&1))) do
+    case Enum.find_index(tools, &(not Prima.ToolPattern.valid?(&1))) do
       nil -> :ok
-      bad -> {:error, {:invalid_caps, {:invalid_tool_pattern, bad}}}
+      index -> {:error, {:invalid_caps, {:invalid_tool_pattern, Enum.at(tools, index)}}}
     end
   end
 
@@ -281,6 +288,53 @@ defmodule Prima.Manifest.Caps do
 
   defp validate_limit("rate_limit", value),
     do: {:error, {:invalid_caps, {:invalid_limit, "rate_limit", value}}}
+
+  # A need's `hosts` (`Prima.Manifest.Needs`) name where the component
+  # sends that need's credential, so each falls within what the manifest
+  # asks to reach: an exact host matched by an egress domain, a wildcard
+  # host covered by a wildcard domain at or above it. A manifest asking no
+  # egress names no host. Needs that do not read are `Needs.validate/1`'s
+  # to refuse; their hosts are skipped here.
+  defp need_hosts_within(%{"needs" => needs}, domains) when is_map(needs) do
+    hosts =
+      needs
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.flat_map(fn
+        {name, %{"hosts" => hosts}} when is_list(hosts) ->
+          for host <- hosts, is_binary(host), do: {name, host}
+
+        _other ->
+          []
+      end)
+
+    case Enum.find_index(hosts, fn {_name, host} -> not host_within?(host, domains) end) do
+      nil ->
+        :ok
+
+      index ->
+        {name, host} = Enum.at(hosts, index)
+        {:error, {:invalid_caps, {:need_host_outside_egress, name, host}}}
+    end
+  end
+
+  defp need_hosts_within(_manifest, _domains), do: :ok
+
+  defp egress_domains(%{"domains" => domains}) when is_list(domains), do: domains
+  defp egress_domains(_egress), do: []
+
+  defp host_within?("*." <> base, domains) do
+    base = String.downcase(base)
+
+    Enum.any?(domains, fn domain ->
+      case String.downcase(domain) do
+        "*" -> true
+        "*." <> covering -> base == covering or String.ends_with?(base, "." <> covering)
+        _exact -> false
+      end
+    end)
+  end
+
+  defp host_within?(host, domains), do: Prima.Network.domain_allowed?(host, domains)
 
   # ---------------------------------------------------------------------------
   # Pieces

@@ -34,7 +34,13 @@ defmodule Sanctum.AuthorityTest do
             "edges" => %{
               "@ingress" => %{},
               "#{@catalyst}|source" => %{
-                "vault" => %{"entry_id" => "vault-1", "binding_digest" => "sha256:aaa"},
+                "vault" =>
+                  Prima.Test.AuthorityFixtures.bound_vault(
+                    @formula,
+                    "#{@catalyst}|source",
+                    "vault-1",
+                    "sha256:aaa"
+                  ),
                 "egress" => %{"domains" => ["prod.supabase.co"]}
               }
             }

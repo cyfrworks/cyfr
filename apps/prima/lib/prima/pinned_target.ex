@@ -16,7 +16,11 @@ defmodule Prima.PinnedTarget do
 
     * `url` — an `http` or `https` URL with a host (`Prima.Network.parse_url/1`);
     * `purpose` — `fetch` for a request answered whole, `stream` for one
-      whose answer is streamed, `redirect` for the next hop of a redirect;
+      whose answer is streamed, `redirect` for the next hop of a redirect
+      (`purposes/0`). A runner asks for no other: `attached`, the pin CYFR
+      takes for an attached request (`c:Prima.HostAPI.attached_fetch/3`)
+      so its egress decision is recorded as its own kind, is CYFR's alone,
+      and an `egress_pin` naming it is refused `malformed`;
     * `from` — the `id` of the pin the redirecting answer came from, and
       only for a `redirect`.
 
@@ -50,8 +54,11 @@ defmodule Prima.PinnedTarget do
   @enforce_keys [:id, :ip, :family, :scheme, :port, :host, :expires_at]
   defstruct @enforce_keys
 
-  @typedoc "Why the next request is made: whole, streamed, or a redirect's next hop."
-  @type purpose :: :fetch | :stream | :redirect
+  @typedoc """
+  Why the next request is made: whole, streamed, a redirect's next hop, or
+  an attached request CYFR makes itself (`:attached`, never a runner's).
+  """
+  @type purpose :: :fetch | :stream | :redirect | :attached
 
   @typedoc "A pin `egress_pin` refuses, as its error answer names it."
   @type refusal :: :denied | :metadata | :resolution | :redirect_credentials | :malformed
@@ -79,7 +86,7 @@ defmodule Prima.PinnedTarget do
   # 2^53 − 1: the largest integer every JSON reader holds exactly.
   @max_integer 9_007_199_254_740_991
 
-  @doc "The purposes a pin is asked for."
+  @doc "The purposes a runner may ask a pin for; `:attached` is CYFR's own and not among them."
   @spec purposes() :: [purpose()]
   def purposes, do: @purposes
 

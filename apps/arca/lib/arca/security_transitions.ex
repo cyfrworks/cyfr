@@ -17,7 +17,10 @@ defmodule Arca.SecurityTransitions do
   (`Arca.PairedClients`), device certificates (`Arca.DeviceCertificates`)
   and pending pairing invitations (`Arca.PairingInvitations`) of the
   person and of every athanor it archives, and the person's passkeys
-  (`Arca.Passkeys`). An archive revokes the athanor's keys, frame
+  (`Arca.Passkeys`); it removes the person from every instance entry's
+  listed audience (`Arca.InstanceEntries`), withdraws every file offer
+  they sent and declines every offer addressed to them
+  (`Arca.FileOffers`), whose snapshots are released once it commits. An archive revokes the athanor's keys, frame
   credentials, paired clients, device certificates and pending pairing
   invitations with it. Leaving one athanor (`leave_athanor/3`) removes the
   person's membership of it and their follows there, deletes their
@@ -120,7 +123,9 @@ defmodule Arca.SecurityTransitions do
     Athanor,
     DeviceCertificate,
     DirectoryHead,
+    FileOffer,
     FrameCredential,
+    InstanceEntryMember,
     Membership,
     PairedClient,
     PairingInvitation,
@@ -163,7 +168,9 @@ defmodule Arca.SecurityTransitions do
           required(:seated_membership_ids) => [String.t()],
           required(:member_user_ids) => %{String.t() => [String.t()]},
           required(:unfollowed) => non_neg_integer(),
-          required(:dropped_head_identifier) => String.t() | nil
+          required(:dropped_head_identifier) => String.t() | nil,
+          required(:instance_audiences_left) => non_neg_integer(),
+          required(:ended_offer_ids) => [String.t()]
         }
 
   @doc """
@@ -176,7 +183,18 @@ defmodule Arca.SecurityTransitions do
   def deny_user(%Prima.Actor{scope: :platform, system: true}, user_id, opts)
       when is_binary(user_id) and user_id != "" and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
-    run("Arca.SecurityTransitions.deny_user", fn -> deny(user_id, verify) end)
+
+    case run("Arca.SecurityTransitions.deny_user", fn -> deny(user_id, verify) end) do
+      {:ok, change} ->
+        # The offers the denial ended release their snapshots and announce
+        # themselves only once it committed.
+        {ended, change} = Map.pop(change, :ended_offers, [])
+        Arca.FileOffers.after_end(ended)
+        {:ok, change}
+
+      refusal ->
+        refusal
+    end
   end
 
   def deny_user(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
@@ -330,6 +348,8 @@ defmodule Arca.SecurityTransitions do
           dependents = PairedClients.retire_dependents!(paired_ids)
           by_passkeys = PendingConfirmations.void_confirmed_by!(:passkey, passkey_ids)
           own = void_confirmations(from(c in PendingConfirmation, where: c.user_id == ^user_id))
+          audiences_left = Arca.InstanceEntries.remove_person!(user_id)
+          ended_offers = Arca.FileOffers.end_for_person!(user_id)
 
           with :ok <- deny_holds(user_id, retire) do
             %{
@@ -358,8 +378,12 @@ defmodule Arca.SecurityTransitions do
                 removed_memberships: removed,
                 withdrawn_invitations: withdrawn,
                 member_user_ids: members_by_athanor(Map.keys(archived), peers),
-                unfollowed: unfollowed
+                unfollowed: unfollowed,
+                instance_audiences_left: audiences_left,
+                ended_offer_ids:
+                  ended_offers |> Enum.map(& &1.offer_id) |> Enum.uniq() |> Enum.sort()
             }
+            |> Map.put(:ended_offers, ended_offers)
           end
         end
       end
@@ -588,7 +612,13 @@ defmodule Arca.SecurityTransitions do
       from(c in PendingConfirmation,
         where: c.user_id == ^user_id and c.state in ^@open_confirmation
       ),
-      from(a in Athanor, where: a.id in ^athanor_ids and a.status != "archived")
+      from(a in Athanor, where: a.id in ^athanor_ids and a.status != "archived"),
+      from(m in InstanceEntryMember, where: m.user_id == ^user_id),
+      from(o in FileOffer,
+        where:
+          o.status == "offered" and
+            (o.sender_user_id == ^user_id or o.recipient_user_id == ^user_id)
+      )
     ]
 
     if Enum.any?(survivors, &Arca.Repo.exists?/1),
@@ -1156,7 +1186,9 @@ defmodule Arca.SecurityTransitions do
       seated_membership_ids: [],
       member_user_ids: %{},
       unfollowed: 0,
-      dropped_head_identifier: nil
+      dropped_head_identifier: nil,
+      instance_audiences_left: 0,
+      ended_offer_ids: []
     }
   end
 end

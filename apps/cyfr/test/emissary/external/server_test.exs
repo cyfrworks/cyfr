@@ -4,6 +4,10 @@
 defmodule Emissary.External.ServerTest do
   use ExUnit.Case, async: false
 
+  # Where the cases' entries may go: an external server's credential is
+  # resolved by name, and its destination is not what these cases test.
+  @destination %{"hosts" => ["api.example.com"]}
+
   alias Emissary.External.Server
 
   @registry Emissary.External.ServerRegistry
@@ -288,7 +292,8 @@ defmodule Emissary.External.ServerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "ext-bearer",
           kind: "api_key",
-          fields: %{"token" => "sk-ext-0123456789"}
+          fields: %{"token" => "sk-ext-0123456789"},
+          destination: @destination
         })
 
       assert {:ok, %{"authorization" => "Bearer sk-ext-0123456789", "accept" => "text/plain"}} =
@@ -415,7 +420,8 @@ defmodule Emissary.External.ServerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: entry_name,
           kind: "api_key",
-          fields: %{"token" => "ghp_stop_race_0123456789"}
+          fields: %{"token" => "ghp_stop_race_0123456789"},
+          destination: @destination
         })
 
       {:ok, row} =
@@ -527,7 +533,8 @@ defmodule Emissary.External.ServerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: name,
           kind: "api_key",
-          fields: %{"token" => "t-" <> name}
+          fields: %{"token" => "t-" <> name},
+          destination: @destination
         })
     end
 

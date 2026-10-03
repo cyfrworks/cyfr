@@ -497,7 +497,9 @@ defmodule Cyfr.Test.TwoServices do
   def arm!(ctx, ref, key: key, token: token) do
     # The entry names the provider its token is dispensed for (`stub`,
     # `dispense/4`), which has no preset, so it names its endpoints, ones
-    # nothing answers: the token it holds never expires.
+    # nothing answers: the token it holds never expires. The stub reads
+    # its key and is dispensed its token, so the entry is disclosed, to
+    # the stub's own host.
     params = %{
       name: "#{ref} key",
       kind: "oauth",
@@ -508,7 +510,9 @@ defmodule Cyfr.Test.TwoServices do
       oauth_endpoints: %{
         "authorize_url" => "https://idp.step-stub.example/authorize",
         "token_url" => "https://idp.step-stub.example/token"
-      }
+      },
+      destination: %{"hosts" => ["step-stub.example"], "scheme" => "https"},
+      disclose: true
     }
 
     # Entering the key is a sensitive change, confirmed as its person

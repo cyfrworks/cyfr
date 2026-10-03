@@ -7,7 +7,9 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   binds on its own ingress — and only then: an inactive profile, a
   profile of another source, a moved binding, a projection the ingress
   cannot satisfy or a tampered target consent leave the selection in
-  place, which no run can unseal.
+  place, which no run can unseal. A resolved selection carries both
+  identities: the borrower's binding key where the selection sits, and
+  the lender's profile, consent and binding key.
   """
 
   use ExUnit.Case, async: false
@@ -27,6 +29,9 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   @key_vault %{
     "entry_id" => "vault-anthropic",
     "binding_digest" => "sha256:anthropic",
+    "scope" => "athanor",
+    "destination" => %{"hosts" => ["api.anthropic.com"], "scheme" => "https"},
+    "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
     "projection" => %{"fields" => ["ANTHROPIC_API_KEY", "ANTHROPIC_ORG"]}
   }
 
@@ -58,7 +63,13 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
       status: status
     }
 
-    ingress = if vault, do: %{"vault" => vault}, else: %{}
+    # A bound vault's key is its place's: the lender's own ingress.
+    ingress =
+      if vault,
+        do: %{
+          "vault" => Map.put(vault, "binding_key", Blob.binding_key(source_ref, "@ingress", nil))
+        },
+        else: %{}
 
     policy =
       Jason.encode!(%{
@@ -70,7 +81,14 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
 
     refs =
       if vault,
-        do: [%{vault_entry_id: vault["entry_id"], binding_digest: vault["binding_digest"]}],
+        do: [
+          %{
+            binding_key: Blob.binding_key(source_ref, "@ingress", nil),
+            scope: vault["scope"],
+            vault_entry_id: vault["entry_id"],
+            binding_digest: vault["binding_digest"]
+          }
+        ],
         else: []
 
     :ok =
@@ -90,8 +108,9 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
       })
   end
 
-  # The formula's profile: its edge to the catalyst selects the profile above.
-  defp put_formula!(ctx, selection, origins \\ [:interactive]) do
+  # The formula's profile: its edge to the catalyst selects the profile
+  # above. Its rows are the selection's own unless `refs` names others.
+  defp put_formula!(ctx, selection, origins \\ [:interactive], refs \\ nil) do
     profile = %{
       id: "prof-aqua",
       kind: :owner,
@@ -131,11 +150,26 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         resolved_policy: policy,
         activation: @activation,
         admitted_origins: origins,
-        vault_refs: []
+        vault_refs: refs || selection_refs(@formula, @catalyst, selection)
       })
 
     profile
   end
+
+  # The borrower's own row for what its edge holds: a selection names the
+  # lender's label and the digest it pinned, if any.
+  defp selection_refs(from, edge, %{"via" => via}) do
+    [
+      %{
+        binding_key: Blob.binding_key(from, edge, nil),
+        scope: "athanor",
+        via_label: via["label"],
+        binding_digest: via["binding_digest"]
+      }
+    ]
+  end
+
+  defp selection_refs(_from, _edge, _vault), do: []
 
   defp load!(ctx, profile) do
     {:ok, authority, _stamp} = load(ctx, profile)
@@ -171,8 +205,18 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     assert edge_vault(authority) == %{
              entry_id: "vault-anthropic",
              binding_digest: "sha256:anthropic",
+             scope: "athanor",
+             # The borrower's binding, where the selection sits.
+             binding_key: "#{@formula}|#{@catalyst}|default",
+             destination: %Prima.Destination{hosts: ["api.anthropic.com"], scheme: "https"},
+             attach: %{in: "header", name: "x-api-key", template: "{value}"},
              projection: %{fields: ["ANTHROPIC_API_KEY", "ANTHROPIC_ORG"], scopes: []},
-             lender: %{profile_id: "prof-claude", consent_id: "consent-claude"}
+             # And the lender's: its profile, its consent and its own binding.
+             lender: %{
+               profile_id: "prof-claude",
+               consent_id: "consent-claude",
+               binding_key: "#{@catalyst}|@ingress|default"
+             }
            }
 
     # The formula's own ingress lends nothing; its consent references no entry.
@@ -188,8 +232,30 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
 
     assert child.resources.vault.lender == %{
              profile_id: "prof-claude",
-             consent_id: "consent-claude"
+             consent_id: "consent-claude",
+             binding_key: "#{@catalyst}|@ingress|default"
            }
+
+    # Both identities cross the wire.
+    {:ok, back} = child |> Authority.to_wire() |> Authority.from_wire()
+    assert back.resources.vault.lender == child.resources.vault.lender
+    assert back.resources.vault.binding_key == "#{@formula}|#{@catalyst}|default"
+  end
+
+  test "a lender's named accounts are not lent", %{ctx: ctx} do
+    named =
+      @key_vault
+      |> Map.merge(%{
+        "entry_id" => "vault-anthropic-work",
+        "binding_key" => Blob.binding_key(@catalyst, "@ingress", "Work")
+      })
+
+    put_catalyst!(ctx, vault: Map.put(@key_vault, "named", %{"Work" => named}))
+    profile = put_formula!(ctx, %{"via" => %{"label" => "default"}})
+
+    vault = edge_vault(load!(ctx, profile))
+    assert vault.entry_id == "vault-anthropic"
+    refute Map.has_key?(vault, :named)
   end
 
   test "a pinned digest resolves only while the binding stands", %{ctx: ctx} do
@@ -207,6 +273,37 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
 
     assert %{via: %{label: "default", binding_digest: "sha256:anthropic"}} =
              edge_vault(load!(ctx, profile))
+  end
+
+  test "a selection whose row names another label or another pinned digest is refused",
+       %{ctx: ctx} do
+    put_catalyst!(ctx)
+    selection = %{"via" => %{"label" => "default", "binding_digest" => "sha256:anthropic"}}
+    [row] = selection_refs(@formula, @catalyst, selection)
+    key = row.binding_key
+
+    # The row is the borrower's binding: its label and pin are compared with
+    # the blob's as an entry row's entry and digest are, before anything
+    # resolves.
+    for stale <- [
+          %{row | via_label: "work"},
+          %{row | binding_digest: "sha256:other"},
+          %{row | binding_digest: nil}
+        ] do
+      profile = put_formula!(ctx, selection, [:interactive], [stale])
+
+      assert {:error, {:blob_refs_mismatch, %{blob_only: blob_only, refs_only: refs_only}}} =
+               load(ctx, profile)
+
+      assert blob_only == [{:via, "athanor", key, "default", "sha256:anthropic"}]
+      assert refs_only == [{:via, "athanor", key, stale.via_label, stale.binding_digest}]
+    end
+
+    # A selection with no row of its own is refused the same way.
+    profile = put_formula!(ctx, selection, [:interactive], [])
+
+    assert {:error, {:blob_refs_mismatch, %{blob_only: [{:via, "athanor", ^key, _, _}]}}} =
+             load(ctx, profile)
   end
 
   test "a projection narrows to what both allow, and never widens", %{ctx: ctx} do
@@ -281,11 +378,10 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     # only way it can arrive at all: one consent cannot hold two reference
     # rows for one entry.
     put_catalyst!(ctx,
-      vault: %{
-        "entry_id" => "vault-anthropic",
-        "binding_digest" => "sha256:other",
-        "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]}
-      }
+      vault:
+        @key_vault
+        |> Map.put("binding_digest", "sha256:other")
+        |> Map.put("projection", %{"fields" => ["ANTHROPIC_API_KEY"]})
     )
 
     profile = %{
@@ -305,11 +401,10 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
             "edges" => %{
               "@ingress" => %{},
               @catalyst => %{
-                "vault" => %{
-                  "entry_id" => "vault-anthropic",
-                  "binding_digest" => "sha256:anthropic",
-                  "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]}
-                }
+                "vault" =>
+                  @key_vault
+                  |> Map.put("projection", %{"fields" => ["ANTHROPIC_API_KEY"]})
+                  |> Map.put("binding_key", Blob.binding_key(@formula, @catalyst, nil))
               }
             }
           },
@@ -340,9 +435,15 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         blob_digest: JCS.hash_binary(policy),
         resolved_policy: policy,
         activation: Map.put(@activation, role, "sha256:act-r"),
-        vault_refs: [
-          %{vault_entry_id: "vault-anthropic", binding_digest: "sha256:anthropic"}
-        ]
+        vault_refs:
+          [
+            %{
+              binding_key: Blob.binding_key(@formula, @catalyst, nil),
+              scope: "athanor",
+              vault_entry_id: "vault-anthropic",
+              binding_digest: "sha256:anthropic"
+            }
+          ] ++ selection_refs(role, @catalyst, %{"via" => %{"label" => "default"}})
       })
 
     graph = Map.put(@activation, role, "sha256:act-r")

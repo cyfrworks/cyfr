@@ -29,6 +29,15 @@ defmodule Prima.Authority.Transition do
   them from guest input would hand the guest control of the need-rejection
   and self-invocation gates.
 
+  ## Named accounts
+
+  An `:invoke` target may carry `connection`, the account name the call
+  asks its edge for (`Prima.Authority.Blob.vault_for/2`): the child holds
+  that named binding, or the edge's default when the call names none. A
+  name the edge does not bind is `{:deny, :connection_not_granted}`, and
+  so is any name where no edge is crossed: a self-invocation, an
+  edge-less child and an unbound cursor reach no binding to pick.
+
   ## Root budget
 
   `step/3` is the decision alone and charges nothing. Where spawned work is
@@ -57,7 +66,8 @@ defmodule Prima.Authority.Transition do
           required(:reference) => String.t(),
           required(:need) => String.t() | nil,
           required(:activation_digest) => String.t() | nil,
-          required(:declared_needs) => [String.t()]
+          required(:declared_needs) => [String.t()],
+          optional(:connection) => String.t() | nil
         }
 
   @type target ::
@@ -77,6 +87,7 @@ defmodule Prima.Authority.Transition do
           | :tool_not_granted
           | :tool_server_not_granted
           | :unbound_control_plane
+          | :connection_not_granted
 
   @type outcome ::
           {:child, Authority.t()}
@@ -120,6 +131,9 @@ defmodule Prima.Authority.Transition do
   def deny_message(:unbound_control_plane),
     do: "an unbound context cannot reach the control plane"
 
+  def deny_message(:connection_not_granted),
+    do: "the named account is not bound on this edge"
+
   def deny_message(:stale_attempt), do: "the invoking attempt no longer holds its execution"
 
   def deny_message(:reservation_released),
@@ -143,6 +157,7 @@ defmodule Prima.Authority.Transition do
              :tool_not_granted,
              :tool_server_not_granted,
              :unbound_control_plane,
+             :connection_not_granted,
              :stale_attempt,
              :reservation_released
            ],
@@ -348,9 +363,12 @@ defmodule Prima.Authority.Transition do
         deny
 
       :ok ->
-        # Self-invocation bypasses need and edge selection.
+        # Self-invocation bypasses need and edge selection, so it picks
+        # no account.
         if self_invocation?(auth, node, inv) do
-          {:child, Authority.self_child(auth, inv.reference)}
+          if connection(inv),
+            do: {:deny, :connection_not_granted},
+            else: {:child, Authority.self_child(auth, inv.reference)}
         else
           case check_need(inv) do
             {:error, reason} -> {:deny, {:need, reason}}
@@ -363,25 +381,39 @@ defmodule Prima.Authority.Transition do
   defp dispatch_edge(auth, node, inv) do
     case Blob.lookup_edge(auth.policy, node, inv.reference, inv.need || "") do
       {:ok, edge} ->
-        {:child, Authority.bound_child(auth, inv.reference, edge)}
+        case Blob.vault_for(edge, connection(inv)) do
+          {:ok, vault} -> {:child, Authority.bound_child(auth, inv.reference, edge, vault)}
+          {:error, :connection_not_granted} -> {:deny, :connection_not_granted}
+        end
 
       {:error, :no_edge} ->
-        case auth.invoke_mode do
+        cond do
+          # No edge binds an account to pick.
+          connection(inv) ->
+            {:deny, :connection_not_granted}
+
           # Dynamic dispatch is normal; it just carries nothing.
-          :open_inert -> {:child_zero, Authority.unbound_child(auth, inv.reference)}
+          auth.invoke_mode == :open_inert ->
+            {:child_zero, Authority.unbound_child(auth, inv.reference)}
+
           # Containment: a public profile cannot even trampoline inertly.
-          :edge_only -> {:deny, :edge_only}
+          auth.invoke_mode == :edge_only ->
+            {:deny, :edge_only}
         end
     end
   end
 
+  defp connection(inv), do: Map.get(inv, :connection)
+
   # Unbound invoke consults no blob node — the Authority has none to
   # consult (policy is :none, structurally). Only the universal bounds
-  # apply; the outcome is always a zero child.
+  # apply; the outcome is a zero child, and a named account, which no
+  # binding of an unbound cursor holds, is refused.
   defp invoke_unbound(auth, inv) do
-    case check_depth(auth) do
-      {:deny, _} = deny -> deny
-      :ok -> {:child_zero, Authority.unbound_child(auth, inv.reference)}
+    with :ok <- check_depth(auth) do
+      if connection(inv),
+        do: {:deny, :connection_not_granted},
+        else: {:child_zero, Authority.unbound_child(auth, inv.reference)}
     end
   end
 
@@ -469,10 +501,13 @@ defmodule Prima.Authority.Transition do
 
   defp target_tag(
          {:invoke,
-          %{reference: ref, need: need, activation_digest: digest, declared_needs: declared}}
+          %{reference: ref, need: need, activation_digest: digest, declared_needs: declared} =
+            invoke}
        )
        when is_binary(ref) and (is_nil(need) or is_binary(need)) and
-              (is_nil(digest) or is_binary(digest)) and is_list(declared),
+              (is_nil(digest) or is_binary(digest)) and is_list(declared) and
+              (not is_map_key(invoke, :connection) or is_nil(invoke.connection) or
+                 is_binary(invoke.connection)),
        do: :invoke
 
   defp target_tag({:tool, %{tool: tool, action: action}})

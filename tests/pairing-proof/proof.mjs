@@ -303,6 +303,8 @@ async function askForEntry(desk, name, value) {
   const form = desk.locator("#vault-create-form");
   await form.locator('input[name="name"]').fill(name);
   await form.locator('textarea[name="fields"]').fill(`API_KEY=${value}`);
+  // Every entry names the hosts it may go to; nothing prefills them.
+  await form.locator('input[name="destination_hosts"]').fill("fixture.test");
   await form.locator('button[type="submit"]').click();
   await desk.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"] [data-status="waiting"]`, { timeout: 30_000 });
 }

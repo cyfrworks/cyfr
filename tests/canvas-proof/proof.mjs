@@ -417,6 +417,13 @@ async function vault(page, name, proxy, record) {
     }
   }
   await page.keyboard.type(secret);
+  // Then the host it may go to, the field after the value, which nothing
+  // prefills: the form is not sent without one.
+  await page.keyboard.press("Tab");
+  const onHosts = await page.evaluate(() =>
+    document.activeElement && document.activeElement.getAttribute("name") === "destination_hosts");
+  if (!onHosts) await page.locator('#system-layer-dialog input[name="destination_hosts"]').focus();
+  await page.keyboard.type("fixture.test");
   await page.keyboard.press("Enter");
 
   // Entering a credential is a sensitive change: the credential prompt

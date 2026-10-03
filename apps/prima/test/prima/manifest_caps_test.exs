@@ -61,6 +61,86 @@ defmodule Prima.ManifestCapsTest do
     end
   end
 
+  describe "a list member that is no string" do
+    test "is a tool pattern refused as itself, wherever it stands" do
+      for {tools, bad} <- [
+            {[nil], nil},
+            {[nil, "a**"], nil},
+            {["execution.run", nil], nil},
+            {["execution.run", 1], 1}
+          ] do
+        assert {:error, {:invalid_caps, {:invalid_tool_pattern, ^bad}}} =
+                 Caps.validate(%{"caps" => %{"tools" => tools}}, &guest_path?/1),
+               inspect(tools)
+      end
+    end
+
+    test "is a storage path refused, wherever it stands" do
+      for paths <- [[nil], [nil, "data/../x"], ["data", nil]] do
+        assert {:error,
+                {:invalid_caps, {:invalid_string_list, [:caps, :storage, "paths"], ^paths}}} =
+                 Caps.validate(asking(paths), &guest_path?/1),
+               inspect(paths)
+      end
+    end
+  end
+
+  describe "a need's hosts" do
+    defp need_hosting(hosts, egress) do
+      manifest = %{
+        "needs" => %{
+          "api_key" => %{"type" => "api_key:example.com", "reason" => "r", "hosts" => hosts}
+        }
+      }
+
+      if egress,
+        do: Map.put(manifest, "caps", %{"egress" => %{"domains" => egress}}),
+        else: manifest
+    end
+
+    test "fall within the egress domains the manifest asks" do
+      for {hosts, egress} <- [
+            {["api.example.com"], ["api.example.com"]},
+            {["api.example.com"], ["*.example.com"]},
+            {["api.example.com", "b.example.com"], ["*.example.com"]},
+            {["*.example.com"], ["*.example.com"]},
+            {["*.eu.example.com"], ["*.example.com"]},
+            {["*.example.com"], ["*"]},
+            {["api.example.com"], ["API.Example.com"]}
+          ] do
+        assert :ok = Caps.validate(need_hosting(hosts, egress), &guest_path?/1),
+               inspect({hosts, egress})
+      end
+    end
+
+    test "outside them, or with no egress asked, are refused" do
+      for {hosts, egress, outside} <- [
+            {["api.example.com"], ["other.example.com"], "api.example.com"},
+            {["example.com"], ["*.example.com"], "example.com"},
+            {["*.example.com"], ["api.example.com"], "*.example.com"},
+            {["*.example.com"], ["*.eu.example.com"], "*.example.com"},
+            {["api.example.com", "evil.test"], ["*.example.com"], "evil.test"},
+            {["api.example.com"], nil, "api.example.com"},
+            {["api.example.com"], [], "api.example.com"}
+          ] do
+        assert {:error, {:invalid_caps, {:need_host_outside_egress, "api_key", ^outside}}} =
+                 Caps.validate(need_hosting(hosts, egress), &guest_path?/1),
+               inspect({hosts, egress})
+      end
+
+      # A stored manifest whose need speaks outside its egress reads as no caps.
+      assert Caps.from_manifest(
+               need_hosting(["evil.test"], ["api.example.com"]),
+               &guest_path?/1
+             ) == nil
+    end
+
+    test "a need naming no hosts asks nothing of egress" do
+      manifest = %{"needs" => %{"api_key" => %{"type" => "api_key:x.com", "reason" => "r"}}}
+      assert :ok = Caps.validate(manifest, &guest_path?/1)
+    end
+  end
+
   describe "canonical_storage_path?/1" do
     test "is the door's spelling, and the wildcard" do
       for path <- ["data/notes/", "data/report.md", "data", "*"],

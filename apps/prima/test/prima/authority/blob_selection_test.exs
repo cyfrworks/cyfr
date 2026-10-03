@@ -65,6 +65,56 @@ defmodule Prima.Authority.BlobSelectionTest do
     assert Blob.edge_to_map(edge)["vault"] == unpinned
   end
 
+  test "a resolved selection carries the borrower's key where it sits and the lender's three fields" do
+    lender = %{
+      "profile_id" => "prof-claude",
+      "consent_id" => "consent-claude",
+      "binding_key" => Blob.binding_key(@catalyst, "@ingress", nil)
+    }
+
+    resolved =
+      Fixtures.bound_vault(@formula, @catalyst, "vault-anthropic", "sha256:key",
+        attach: %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+        destination: Fixtures.destination_map(["api.anthropic.com"]),
+        projection: %{"fields" => ["ANTHROPIC_API_KEY"], "scopes" => []},
+        lender: lender
+      )
+
+    assert {:ok, blob} = Blob.parse(graph(resolved))
+    assert {:ok, edge} = Blob.lookup_edge(blob, @formula, @catalyst, "")
+    assert edge.vault.binding_key == "#{@formula}|#{@catalyst}|default"
+
+    assert edge.vault.lender == %{
+             profile_id: "prof-claude",
+             consent_id: "consent-claude",
+             binding_key: "#{@catalyst}|@ingress|default"
+           }
+
+    assert Blob.bound_vault?(edge.vault)
+    assert Blob.edge_to_map(edge)["vault"] == resolved
+    assert Blob.parse(Blob.to_map(blob)) == {:ok, blob}
+
+    # The lender's three fields are all required.
+    for field <- Map.keys(lender) do
+      assert {:error, {:invalid_resource, _, _, :vault, _}} =
+               Blob.parse(graph(%{resolved | "lender" => Map.delete(lender, field)})),
+             field
+    end
+  end
+
+  test "a selection names no account and carries no key until it resolves" do
+    named =
+      Fixtures.bound_vault(@formula, @catalyst, "vault-anthropic", "sha256:key", name: "Work")
+
+    for vault <- [
+          %{"via" => %{"label" => "default"}, "named" => %{"Work" => named}},
+          %{"via" => %{"label" => "default"}, "binding_key" => "#{@formula}|#{@catalyst}|default"}
+        ] do
+      assert {:error, {:invalid_resource, @formula, @catalyst, :vault, _}} =
+               Blob.parse(graph(vault))
+    end
+  end
+
   test "a vault is bound or selected, never both and never something else" do
     mixed = %{"entry_id" => "e", "binding_digest" => "d", "via" => %{"profile_id" => "p"}}
 

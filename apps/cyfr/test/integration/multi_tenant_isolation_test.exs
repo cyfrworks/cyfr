@@ -221,11 +221,31 @@ defmodule MultiTenantIsolationTest do
 
   # Vault entries are the only credential store, so the credential-store
   # isolation smoke lives here.
+  # Where the cases' entries may go; none is ever sent.
+  @destination %{"hosts" => ["api.example.com"]}
+
   describe "Sanctum.Vault isolation" do
     test "athanor A cannot read or enumerate athanor B's vault entries", %{a: ctx_a, b: ctx_b} do
-      {:ok, _} = Sanctum.TestContext.create_vault(ctx_a, %{name: "shared-name", kind: "api_key"})
-      {:ok, _} = Sanctum.TestContext.create_vault(ctx_b, %{name: "shared-name", kind: "api_key"})
-      {:ok, b_only} = Sanctum.TestContext.create_vault(ctx_b, %{name: "b-only", kind: "api_key"})
+      {:ok, _} =
+        Sanctum.TestContext.create_vault(ctx_a, %{
+          name: "shared-name",
+          kind: "api_key",
+          destination: @destination
+        })
+
+      {:ok, _} =
+        Sanctum.TestContext.create_vault(ctx_b, %{
+          name: "shared-name",
+          kind: "api_key",
+          destination: @destination
+        })
+
+      {:ok, b_only} =
+        Sanctum.TestContext.create_vault(ctx_b, %{
+          name: "b-only",
+          kind: "api_key",
+          destination: @destination
+        })
 
       {:ok, list_a} = Sanctum.Vault.list(ctx_a)
       names_a = Enum.map(list_a, & &1.name)
@@ -240,7 +260,12 @@ defmodule MultiTenantIsolationTest do
 
     test "no Sanctum.Vault verb reaches another athanor's entry by id",
          %{a: ctx_a, b: ctx_b} do
-      {:ok, b_entry} = Sanctum.TestContext.create_vault(ctx_b, %{name: "b-cred", kind: "api_key"})
+      {:ok, b_entry} =
+        Sanctum.TestContext.create_vault(ctx_b, %{
+          name: "b-cred",
+          kind: "api_key",
+          destination: @destination
+        })
 
       # The id must not resolve through any verb — read, rename, revoke,
       # rotate or delete.
@@ -336,7 +361,8 @@ defmodule MultiTenantIsolationTest do
         name: "unresolved-probe",
         kind: "api_key",
         status: "active",
-        sealed_payload: <<4, 2, "k1", 0>>
+        sealed_payload: <<4, 2, "k1", 0>>,
+        destination: ~s({"hosts":["api.example.com"],"scheme":"https"})
       }
 
       # The facade takes the tenant from the actor and has no fallback:
@@ -391,7 +417,11 @@ defmodule MultiTenantIsolationTest do
       assert ^ctx = Sanctum.Context.require_tenant!(ctx)
 
       assert {:ok, view} =
-               Sanctum.TestContext.create_vault(ctx, %{name: "ok-entry", kind: "api_key"})
+               Sanctum.TestContext.create_vault(ctx, %{
+                 name: "ok-entry",
+                 kind: "api_key",
+                 destination: @destination
+               })
 
       {:ok, listed} = Sanctum.Vault.list(ctx)
       assert Enum.any?(listed, &(&1.id == view.id))

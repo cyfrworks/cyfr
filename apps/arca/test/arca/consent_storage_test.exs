@@ -5,10 +5,15 @@ defmodule Arca.ConsentStorageTest do
   use ExUnit.Case, async: false
 
   require Ecto.Query
+  require Arca.Repo.Errors
 
   alias Arca.ConsentStorage
   alias Arca.ProfileStorage
   alias Arca.VaultStorage
+
+  @key "reagent:local.storage-test|@ingress|default"
+  @second_key "reagent:local.storage-test|reagent:local.dep|default"
+  @standing_key "reagent:local.storage-test|reagent:local.standing|default"
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -36,10 +41,24 @@ defmodule Arca.ConsentStorageTest do
       VaultStorage.put(%Prima.Actor{athanor_id: athanor}, %{
         name: "entry-#{System.unique_integer([:positive])}",
         kind: "api_key",
-        sealed_payload: "sealed"
+        sealed_payload: "sealed",
+        destination: ~s({"hosts":["api.example.com"],"scheme":"https"})
       })
 
     entry
+  end
+
+  # The source's own binding of `entry_id`, standing, or `over` beside it.
+  defp ref(entry_id, over \\ %{}) do
+    Map.merge(
+      %{
+        binding_key: "reagent:local.storage-test|@ingress|default",
+        scope: "athanor",
+        vault_entry_id: entry_id,
+        binding_digest: "sha256:b"
+      },
+      over
+    )
   end
 
   defp consent_attrs(athanor, profile_id, revision) do
@@ -95,7 +114,7 @@ defmodule Arca.ConsentStorageTest do
       assert {:ok, consent} =
                ConsentStorage.insert_revision(
                  consent_attrs(athanor, profile.id, 1),
-                 [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}],
+                 [ref(entry.id)],
                  nil
                )
 
@@ -113,7 +132,7 @@ defmodule Arca.ConsentStorageTest do
       assert {:error, :binding_went_stale} =
                ConsentStorage.insert_revision(
                  consent_attrs(athanor, profile.id, 1),
-                 [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}],
+                 [ref(entry.id)],
                  nil,
                  verify: fn -> {:error, :binding_went_stale} end
                )
@@ -163,7 +182,7 @@ defmodule Arca.ConsentStorageTest do
       assert {:error, _} =
                ConsentStorage.insert_revision(
                  consent_attrs(athanor, profile.id, 1),
-                 [%{vault_entry_id: "vlt_never_existed", binding_digest: "sha256:b"}],
+                 [ref("vlt_never_existed")],
                  nil
                )
 
@@ -171,6 +190,46 @@ defmodule Arca.ConsentStorageTest do
                ConsentStorage.get_head(Prima.Actor.in_athanor(athanor), profile.id)
 
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
+    end
+  end
+
+  describe "a binding key is stored whole on either adapter" do
+    # A publisher namespace of 54 characters and names of 64: both refs
+    # are valid and the source ref fits `profiles.source_ref`, while the
+    # dependency binding's key is 264 characters.
+    @publisher "connectors.enterprise-integration-platform.example.com"
+    @node "catalyst:" <> @publisher <> "." <> String.duplicate("n", 64)
+    @dep "reagent:" <> @publisher <> "." <> String.duplicate("d", 64)
+
+    test "a dependency binding key the grammar admits, over 255 characters", %{athanor: athanor} do
+      assert {:ok, %Prima.ComponentRef{}} = Prima.ComponentRef.parse(@node)
+      assert {:ok, %Prima.ComponentRef{}} = Prima.ComponentRef.parse(@dep)
+
+      key = Prima.Authority.Blob.binding_key(@node, @dep, nil)
+      assert {:ok, {@node, @dep, nil}} = Prima.Authority.Blob.parse_binding_key(key)
+      assert String.length(key) > 255
+
+      {:ok, profile} =
+        ProfileStorage.put(%{
+          id: "prof_bk_#{System.unique_integer([:positive])}",
+          athanor_id: athanor,
+          source_ref: @node,
+          kind: "owner",
+          label: "default",
+          status: "active"
+        })
+
+      entry = entry!(athanor)
+
+      assert {:ok, _consent} =
+               ConsentStorage.insert_revision(
+                 consent_attrs(athanor, profile.id, 1),
+                 [ref(entry.id, %{binding_key: key})],
+                 nil
+               )
+
+      assert {:ok, %{vault_refs: [%{binding_key: ^key}]}} =
+               ConsentStorage.head_consent(%Prima.Actor{athanor_id: athanor}, profile.id)
     end
   end
 
@@ -191,7 +250,7 @@ defmodule Arca.ConsentStorageTest do
                ConsentStorage.mint_profile_with_revision(
                  attrs,
                  consent_attrs(athanor, "prof_mint_1", 1),
-                 [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}]
+                 [ref(entry.id)]
                )
 
       {:ok, profile} = ProfileStorage.get(Prima.Actor.in_athanor(athanor), "prof_mint_1")
@@ -234,7 +293,7 @@ defmodule Arca.ConsentStorageTest do
       {:ok, _consent} =
         ConsentStorage.insert_revision(
           consent_attrs(athanor, profile.id, 1),
-          [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}],
+          [ref(entry.id)],
           nil
         )
 
@@ -413,7 +472,7 @@ defmodule Arca.ConsentStorageTest do
     test "answers each active profile with its head revision and that revision's refs",
          %{athanor: athanor} do
       entry = entry!(athanor)
-      ref = %{vault_entry_id: entry.id, binding_digest: "sha256:b"}
+      ref = ref(entry.id)
 
       first = granted!(athanor, "prof_heads_a", "active", [ref])
       _second = granted!(athanor, "prof_heads_b", "active")
@@ -444,7 +503,7 @@ defmodule Arca.ConsentStorageTest do
       {:ok, second} =
         ConsentStorage.insert_revision(
           consent_attrs(athanor, "prof_heads_moved", 2),
-          [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}],
+          [ref(entry.id)],
           first.id
         )
 
@@ -582,4 +641,725 @@ defmodule Arca.ConsentStorageTest do
       refute Enum.any?(exported, &String.starts_with?(&1, "update"))
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Bindings: one row per binding key, each with its own lifetime
+  # ---------------------------------------------------------------------------
+
+  describe "a ref is one binding" do
+    test "two rows of one consent may name one entry under two keys, each with its lifetime",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_two_keys")
+      entry = entry!(athanor)
+      expires = DateTime.add(DateTime.utc_now(), 3600, :second)
+
+      assert {:ok, consent} =
+               ConsentStorage.insert_revision(
+                 consent_attrs(athanor, profile.id, 1),
+                 [
+                   ref(entry.id),
+                   ref(entry.id, %{
+                     binding_key: "reagent:local.storage-test|reagent:local.dep|default",
+                     lifetime_kind: "until",
+                     expires_at: expires
+                   }),
+                   ref(entry.id, %{
+                     binding_key: "reagent:local.storage-test|reagent:local.other|default",
+                     lifetime_kind: "once"
+                   })
+                 ],
+                 nil
+               )
+
+      {:ok, head} = ConsentStorage.head_consent(actor(athanor), profile.id)
+      assert head.id == consent.id
+
+      lifetimes = Map.new(head.vault_refs, &{&1.binding_key, &1.lifetime_kind})
+
+      assert lifetimes == %{
+               "reagent:local.storage-test|@ingress|default" => "standing",
+               "reagent:local.storage-test|reagent:local.dep|default" => "until",
+               "reagent:local.storage-test|reagent:local.other|default" => "once"
+             }
+
+      assert Enum.all?(head.vault_refs, &(&1.vault_entry_id == entry.id))
+    end
+
+    test "Alice→Supabase and Bob→Supabase in one consent are two keys and two rows",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_alice_bob")
+      entry = entry!(athanor)
+
+      assert {:ok, _} =
+               ConsentStorage.insert_revision(
+                 consent_attrs(athanor, profile.id, 1),
+                 [
+                   ref(entry.id, %{binding_key: "catalyst:local.alice|supabase:x|default"}),
+                   ref(entry.id, %{binding_key: "catalyst:local.bob|supabase:x|default"})
+                 ],
+                 nil
+               )
+
+      {:ok, head} = ConsentStorage.head_consent(actor(athanor), profile.id)
+
+      assert Enum.sort(Enum.map(head.vault_refs, & &1.binding_key)) == [
+               "catalyst:local.alice|supabase:x|default",
+               "catalyst:local.bob|supabase:x|default"
+             ]
+    end
+
+    test "an account named default beside the unnamed binding is two slots and two rows",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_default_name")
+      entry = entry!(athanor)
+      other = entry!(athanor)
+
+      assert {:ok, _} =
+               ConsentStorage.insert_revision(
+                 consent_attrs(athanor, profile.id, 1),
+                 [
+                   ref(entry.id),
+                   ref(other.id, %{
+                     binding_key: "reagent:local.storage-test|@ingress|name:default"
+                   })
+                 ],
+                 nil
+               )
+
+      {:ok, head} = ConsentStorage.head_consent(actor(athanor), profile.id)
+
+      assert Enum.sort(Enum.map(head.vault_refs, & &1.binding_key)) == [
+               "reagent:local.storage-test|@ingress|default",
+               "reagent:local.storage-test|@ingress|name:default"
+             ]
+    end
+
+    test "two rows with one binding key are refused, and nothing is written",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_dup_key")
+      entry = entry!(athanor)
+      other = entry!(athanor)
+
+      assert {:error, {:invalid, %{vault_refs: ["names a binding key twice"]}}} =
+               ConsentStorage.insert_revision(
+                 consent_attrs(athanor, profile.id, 1),
+                 [ref(entry.id), ref(other.id)],
+                 nil
+               )
+
+      assert {:error, :no_head} = ConsentStorage.get_head(actor(athanor), profile.id)
+    end
+
+    test "an until without its expiry, or a once with one, is refused", %{athanor: athanor} do
+      profile = profile!(athanor, "prof_bad_lifetime")
+      entry = entry!(athanor)
+      at = DateTime.add(DateTime.utc_now(), 60, :second)
+
+      for bad <- [
+            %{lifetime_kind: "until"},
+            %{lifetime_kind: "once", expires_at: at},
+            %{lifetime_kind: "standing", expires_at: at},
+            %{lifetime_kind: "forever"}
+          ] do
+        assert {:error, {:invalid, %{vault_refs: [_ | _]}}} =
+                 ConsentStorage.insert_revision(
+                   consent_attrs(athanor, profile.id, 1),
+                   [ref(entry.id, bad)],
+                   nil
+                 )
+      end
+
+      assert {:error, :no_head} = ConsentStorage.get_head(actor(athanor), profile.id)
+    end
+
+    test "a ref naming two of an entry, an instance entry and a selection, or none, is refused",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_names_one")
+      entry = entry!(athanor)
+      instance = instance_entry!()
+
+      for bad <- [
+            ref(entry.id, %{instance_entry_id: instance.id}),
+            ref(entry.id, %{via_label: "default"}),
+            ref(nil),
+            ref(nil, %{scope: "instance"}),
+            ref(nil, %{scope: "instance", instance_entry_id: instance.id, via_label: "x"}),
+            ref(entry.id, %{scope: "instance"}),
+            ref(entry.id, %{binding_digest: nil})
+          ] do
+        assert {:error, {:invalid, %{vault_refs: [_ | _]}}} =
+                 ConsentStorage.insert_revision(
+                   consent_attrs(athanor, profile.id, 1),
+                   [bad],
+                   nil
+                 )
+      end
+
+      assert {:error, :no_head} = ConsentStorage.get_head(actor(athanor), profile.id)
+    end
+
+    test "the baseline's check refuses a row naming two, or none, written around the changeset",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_raw_refs")
+      entry = entry!(athanor)
+      instance = instance_entry!()
+
+      {:ok, consent} =
+        ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
+
+      row = %{
+        consent_id: consent.id,
+        athanor_id: athanor,
+        binding_key: "k|@ingress|default",
+        scope: "athanor",
+        vault_entry_id: nil,
+        instance_entry_id: nil,
+        via_label: nil,
+        binding_digest: "sha256:b",
+        lifetime_kind: "standing",
+        expires_at: nil
+      }
+
+      for {bad, key} <- [
+            {%{row | vault_entry_id: entry.id, instance_entry_id: instance.id}, "a"},
+            {%{row | vault_entry_id: entry.id, via_label: "default"}, "b"},
+            {row, "c"},
+            {%{row | scope: "instance", vault_entry_id: entry.id}, "d"},
+            {%{row | vault_entry_id: entry.id, lifetime_kind: "until"}, "e"},
+            {%{row | via_label: "default", lifetime_kind: "once", expires_at: DateTime.utc_now()},
+             "f"}
+          ] do
+        assert :refused = raw_insert(%{bad | binding_key: "k|@ingress|" <> key})
+      end
+
+      assert :ok = raw_insert(%{row | via_label: "default", binding_digest: nil})
+      assert :ok = raw_insert(%{row | binding_key: "k|x|default", vault_entry_id: entry.id})
+
+      assert :ok =
+               raw_insert(%{
+                 row
+                 | binding_key: "k|y|default",
+                   scope: "instance",
+                   instance_entry_id: instance.id
+               })
+    end
+
+    test "a pinned and an unpinned selection each write a via row", %{athanor: athanor} do
+      profile = profile!(athanor, "prof_vias")
+
+      assert {:ok, _} =
+               ConsentStorage.insert_revision(
+                 consent_attrs(athanor, profile.id, 1),
+                 [
+                   %{
+                     binding_key: "reagent:local.storage-test|reagent:local.pinned|default",
+                     scope: "athanor",
+                     via_label: "default",
+                     binding_digest: "sha256:pinned"
+                   },
+                   %{
+                     binding_key: "reagent:local.storage-test|reagent:local.unpinned|default",
+                     scope: "athanor",
+                     via_label: "default"
+                   }
+                 ],
+                 nil
+               )
+
+      {:ok, head} = ConsentStorage.head_consent(actor(athanor), profile.id)
+
+      assert [pinned, unpinned] = Enum.sort_by(head.vault_refs, & &1.binding_key)
+
+      assert %{via_label: "default", binding_digest: "sha256:pinned", vault_entry_id: nil} =
+               pinned
+
+      assert %{via_label: "default", binding_digest: nil, instance_entry_id: nil} = unpinned
+
+      # A selection's row names no entry: the reverse lookups never see it.
+      assert {:ok, []} = ConsentStorage.head_referenced_entries(actor(athanor))
+    end
+
+    test "the reverse lookups answer the athanor's entries and the instance's, by head",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_reverse")
+      entry = entry!(athanor)
+      instance = instance_entry!()
+
+      {:ok, _} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, profile.id, 1),
+          [
+            ref(entry.id),
+            ref(nil, %{
+              binding_key: "reagent:local.storage-test|reagent:local.dep|default",
+              scope: "instance",
+              instance_entry_id: instance.id
+            }),
+            ref(nil, %{
+              binding_key: "reagent:local.storage-test|reagent:local.via|default",
+              via_label: "default",
+              binding_digest: nil
+            })
+          ],
+          nil
+        )
+
+      assert {:ok, ids} = ConsentStorage.head_referenced_entries(actor(athanor))
+      assert Enum.sort(ids) == Enum.sort([entry.id, instance.id])
+
+      assert {:ok, [profile_id]} =
+               ConsentStorage.head_profiles_referencing(actor(athanor), entry.id)
+
+      assert profile_id == profile.id
+
+      assert {:ok, [{^athanor, ^profile_id}]} =
+               ConsentStorage.head_profiles_referencing_instance(
+                 Arca.Test.Actor.platform(),
+                 instance.id
+               )
+
+      assert {:error, :cross_tenant} =
+               ConsentStorage.head_profiles_referencing_instance(actor(athanor), instance.id)
+    end
+  end
+
+  describe "consume_once/5" do
+    setup %{athanor: athanor} do
+      profile = profile!(athanor, "prof_once_#{System.unique_integer([:positive])}")
+      entry = entry!(athanor)
+
+      {:ok, consent} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, profile.id, 1),
+          [
+            ref(entry.id, %{lifetime_kind: "once"}),
+            ref(entry.id, %{binding_key: @second_key, lifetime_kind: "once"}),
+            ref(entry.id, %{binding_key: @standing_key})
+          ],
+          nil
+        )
+
+      {:ok, profile: profile, entry: entry, consent: consent}
+    end
+
+    test "the same root consuming twice under the head is admitted, another root refused",
+         %{athanor: athanor, profile: profile, consent: consent} do
+      assert :ok =
+               ConsentStorage.consume_once(actor(athanor), profile.id, consent.id, @key, "exec_a")
+
+      assert :ok =
+               ConsentStorage.consume_once(actor(athanor), profile.id, consent.id, @key, "exec_a")
+
+      assert {:error, :already_consumed} =
+               ConsentStorage.consume_once(actor(athanor), profile.id, consent.id, @key, "exec_b")
+
+      assert consumed(athanor, consent.id) == %{@key => "exec_a", @second_key => nil}
+    end
+
+    test "two rows of one consent with one entry and different lifetimes are consumed apart",
+         %{athanor: athanor, profile: profile, consent: consent} do
+      assert :ok =
+               ConsentStorage.consume_once(actor(athanor), profile.id, consent.id, @key, "exec_a")
+
+      # The other `once` row of the same entry is its own binding.
+      assert :ok =
+               ConsentStorage.consume_once(
+                 actor(athanor),
+                 profile.id,
+                 consent.id,
+                 @second_key,
+                 "exec_b"
+               )
+
+      assert consumed(athanor, consent.id) == %{@key => "exec_a", @second_key => "exec_b"}
+
+      assert {:error, :not_once} =
+               ConsentStorage.consume_once(
+                 actor(athanor),
+                 profile.id,
+                 consent.id,
+                 @standing_key,
+                 "exec_a"
+               )
+
+      assert {:error, :not_found} =
+               ConsentStorage.consume_once(
+                 actor(athanor),
+                 profile.id,
+                 consent.id,
+                 "nowhere|@ingress|default",
+                 "exec_a"
+               )
+    end
+
+    test "a pin that is not the head is superseded, consumed before or not",
+         %{athanor: athanor, profile: profile, consent: a} do
+      assert :ok = ConsentStorage.consume_once(actor(athanor), profile.id, a.id, @key, "exec_a")
+      {:ok, head} = ConsentStorage.head_consent(actor(athanor), profile.id)
+
+      {:ok, b} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, profile.id, 2),
+          head.vault_refs,
+          a.id
+        )
+
+      # Pinned to A after B is the head, having consumed under A: refused,
+      # and B's copied row names the root so no other root consumes it.
+      assert {:error, :superseded} =
+               ConsentStorage.consume_once(actor(athanor), profile.id, a.id, @key, "exec_a")
+
+      assert consumed(athanor, b.id)[@key] == "exec_a"
+
+      assert {:error, :already_consumed} =
+               ConsentStorage.consume_once(actor(athanor), profile.id, b.id, @key, "exec_c")
+
+      # Not having consumed under A: refused, and B's row stays unconsumed
+      # for a root admitted under B.
+      assert {:error, :superseded} =
+               ConsentStorage.consume_once(
+                 actor(athanor),
+                 profile.id,
+                 a.id,
+                 @second_key,
+                 "exec_d"
+               )
+
+      assert consumed(athanor, b.id)[@second_key] == nil
+
+      assert :ok =
+               ConsentStorage.consume_once(
+                 actor(athanor),
+                 profile.id,
+                 b.id,
+                 @second_key,
+                 "exec_e"
+               )
+    end
+
+    test "a revision that changes another binding keeps the consumed once consumed",
+         %{athanor: athanor, profile: profile, consent: a, entry: entry} do
+      assert :ok = ConsentStorage.consume_once(actor(athanor), profile.id, a.id, @key, "exec_a")
+      other = entry!(athanor)
+
+      {:ok, b} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, profile.id, 2),
+          [
+            ref(entry.id, %{lifetime_kind: "once"}),
+            ref(other.id, %{binding_key: @second_key, lifetime_kind: "once"}),
+            ref(entry.id, %{binding_key: @standing_key})
+          ],
+          a.id
+        )
+
+      assert consumed(athanor, b.id) == %{@key => "exec_a", @second_key => nil}
+    end
+
+    test "a revision that marks the binding renew makes it consumable again",
+         %{athanor: athanor, profile: profile, consent: a, entry: entry} do
+      assert :ok = ConsentStorage.consume_once(actor(athanor), profile.id, a.id, @key, "exec_a")
+
+      {:ok, b} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, profile.id, 2),
+          [
+            ref(entry.id, %{lifetime_kind: "once", renew: true}),
+            ref(entry.id, %{binding_key: @second_key, lifetime_kind: "once"}),
+            ref(entry.id, %{binding_key: @standing_key})
+          ],
+          a.id
+        )
+
+      assert consumed(athanor, b.id)[@key] == nil
+      assert :ok = ConsentStorage.consume_once(actor(athanor), profile.id, b.id, @key, "exec_b")
+    end
+
+    test "a changed lifetime, entry or kind of row carries no consumption across",
+         %{athanor: athanor, profile: profile, consent: a, entry: entry} do
+      assert :ok = ConsentStorage.consume_once(actor(athanor), profile.id, a.id, @key, "exec_a")
+
+      assert :ok =
+               ConsentStorage.consume_once(
+                 actor(athanor),
+                 profile.id,
+                 a.id,
+                 @second_key,
+                 "exec_b"
+               )
+
+      # The first key is now a selection of the same key, the second names
+      # another entry: neither is the binding that was consumed.
+      other = entry!(athanor)
+
+      {:ok, b} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, profile.id, 2),
+          [
+            %{
+              binding_key: @key,
+              scope: "athanor",
+              via_label: "default",
+              lifetime_kind: "once"
+            },
+            ref(other.id, %{binding_key: @second_key, lifetime_kind: "once"}),
+            ref(entry.id, %{binding_key: @standing_key})
+          ],
+          a.id
+        )
+
+      assert consumed(athanor, b.id) == %{@key => nil, @second_key => nil}
+    end
+
+    test "two via rows that share nothing carry no consumption across",
+         %{athanor: athanor} do
+      {:ok, profile} =
+        ProfileStorage.put(%{
+          id: "prof_via_carry",
+          athanor_id: athanor,
+          source_ref: "reagent:local.via-carry",
+          kind: "owner",
+          label: "default",
+          status: "active"
+        })
+
+      via = fn label, digest ->
+        %{
+          binding_key: @key,
+          scope: "athanor",
+          via_label: label,
+          binding_digest: digest,
+          lifetime_kind: "once"
+        }
+      end
+
+      {:ok, a} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, profile.id, 1),
+          [via.("default", nil)],
+          nil
+        )
+
+      assert :ok = ConsentStorage.consume_once(actor(athanor), profile.id, a.id, @key, "exec_a")
+
+      {:ok, b} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, profile.id, 2),
+          [via.("work", nil)],
+          a.id
+        )
+
+      assert consumed(athanor, b.id) == %{@key => nil}
+
+      # The same selection, the same pin and the same lifetime is the same
+      # binding, and stays consumed.
+      assert :ok = ConsentStorage.consume_once(actor(athanor), profile.id, b.id, @key, "exec_b")
+
+      {:ok, c} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, profile.id, 3),
+          [via.("work", nil)],
+          b.id
+        )
+
+      assert consumed(athanor, c.id) == %{@key => "exec_b"}
+    end
+
+    test "an actor with no athanor is refused before any query", %{profile: profile, consent: c} do
+      assert {:error, :no_athanor} =
+               ConsentStorage.consume_once(
+                 %Prima.Actor{athanor_id: nil},
+                 profile.id,
+                 c.id,
+                 @key,
+                 "exec_a"
+               )
+    end
+  end
+
+  defp actor(athanor), do: Prima.Actor.in_athanor(athanor)
+
+  defp instance_entry! do
+    {:ok, entry} =
+      Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
+        name: "instance-#{System.unique_integer([:positive])}",
+        kind: "api_key",
+        destination:
+          ~s({"hosts":["api.example.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+        sealed_payload: "sealed",
+        binding_digest: "sha256:i",
+        audience: "everyone",
+        created_by: "usr_admin"
+      })
+
+    entry
+  end
+
+  defp consumed(athanor, consent_id) do
+    Arca.Repo.all(
+      Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef,
+        where:
+          r.athanor_id == ^athanor and r.consent_id == ^consent_id and r.lifetime_kind == "once",
+        select: {r.binding_key, r.consumed_by_root}
+      )
+    )
+    |> Map.new()
+  end
+
+  defp raw_insert(row) do
+    Arca.Repo.transaction(fn -> Arca.Repo.insert_all(Arca.Schemas.ConsentVaultRef, [row]) end)
+    :ok
+  rescue
+    _refused in Arca.Repo.Errors.db_errors() -> :refused
+  end
+end
+
+defmodule Arca.ConsentStorageRaceTest do
+  @moduledoc """
+  Consumption and replacement on connections of their own: inside the
+  sandbox one shared connection would serialize the writers the case is
+  about. Each case works in an athanor of its own, purged when it ends.
+  """
+
+  use ExUnit.Case, async: false
+
+  require Ecto.Query
+
+  alias Arca.ConsentStorage
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @key "reagent:local.race|@ingress|default"
+
+  setup do
+    athanor = "ath_once_race_#{System.unique_integer([:positive])}"
+    on_exit(fn -> unboxed(fn -> Arca.TenantTables.delete_all_for(actor(athanor)) end) end)
+    {:ok, athanor: athanor}
+  end
+
+  test "two roots racing for one once binding: one is admitted", %{athanor: athanor} do
+    for round <- 1..5 do
+      {profile, consent} = granted!(athanor, round)
+
+      results =
+        for root <- ["exec_a#{round}", "exec_b#{round}"] do
+          Task.async(fn ->
+            unboxed(fn ->
+              ConsentStorage.consume_once(actor(athanor), profile, consent, @key, root)
+            end)
+          end)
+        end
+        |> Task.await_many(30_000)
+
+      assert Enum.sort(results) == [:ok, {:error, :already_consumed}]
+    end
+  end
+
+  test "a root consuming under A while a commit replaces it with B: one order or the other",
+       %{athanor: athanor} do
+    for round <- 1..5 do
+      {profile, a} = granted!(athanor, round)
+      root = "exec_root#{round}"
+
+      consume =
+        Task.async(fn ->
+          unboxed(fn -> ConsentStorage.consume_once(actor(athanor), profile, a, @key, root) end)
+        end)
+
+      replace =
+        Task.async(fn ->
+          unboxed(fn ->
+            {:ok, head} = ConsentStorage.head_consent(actor(athanor), profile)
+
+            ConsentStorage.insert_revision(
+              attrs(athanor, profile, 2),
+              head.vault_refs,
+              a
+            )
+          end)
+        end)
+
+      consumed = Task.await(consume, 30_000)
+      {:ok, b} = Task.await(replace, 30_000)
+
+      b_root =
+        unboxed(fn ->
+          Arca.Repo.one(
+            Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef,
+              where: r.athanor_id == ^athanor and r.consent_id == ^b.id,
+              select: r.consumed_by_root
+            )
+          )
+        end)
+
+      # Never an A consumption beside an unconsumed B row: either the
+      # copy saw the consumption, or the consumption was refused.
+      case consumed do
+        :ok -> assert b_root == root
+        {:error, :superseded} -> assert b_root == nil
+      end
+    end
+  end
+
+  defp granted!(athanor, round) do
+    unboxed(fn ->
+      profile = "prof_race_#{round}_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Arca.ProfileStorage.put(%{
+          id: profile,
+          athanor_id: athanor,
+          source_ref: "reagent:local.race-#{profile}",
+          kind: "owner",
+          label: "default",
+          status: "active"
+        })
+
+      {:ok, entry} =
+        Arca.VaultStorage.put(actor(athanor), %{
+          name: "entry-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          sealed_payload: "sealed",
+          destination: ~s({"hosts":["api.example.com"],"scheme":"https"})
+        })
+
+      {:ok, consent} =
+        ConsentStorage.insert_revision(
+          attrs(athanor, profile, 1),
+          [
+            %{
+              binding_key: @key,
+              scope: "athanor",
+              vault_entry_id: entry.id,
+              binding_digest: "sha256:b",
+              lifetime_kind: "once"
+            }
+          ],
+          nil
+        )
+
+      {profile, consent.id}
+    end)
+  end
+
+  defp attrs(athanor, profile, revision) do
+    %{
+      athanor_id: athanor,
+      profile_id: profile,
+      revision: revision,
+      scope: "versionless",
+      pinned_version: "",
+      invoke_mode: "open_inert",
+      shape_digest: "sha256:shape",
+      commit_digest: "sha256:commit",
+      blob_digest: Prima.JCS.hash_binary("{}"),
+      resolved_policy: "{}",
+      activation: "{}",
+      admitted_origins: [:interactive],
+      granted_by: "test",
+      granted_via: "bootstrap"
+    }
+  end
+
+  defp actor(athanor), do: Prima.Actor.in_athanor(athanor)
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
 end

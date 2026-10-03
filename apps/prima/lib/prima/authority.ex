@@ -203,14 +203,28 @@ defmodule Prima.Authority do
 
   @doc """
   The Authority a child receives through a consented edge: bound at the
-  target, carrying exactly that edge's resources.
+  target, carrying exactly that edge's resources, its vault the edge's
+  default binding (`Prima.Authority.Blob.vault_for/2` with no account
+  named), without the edge's named bindings.
   """
   @spec bound_child(t(), String.t(), Blob.Edge.t()) :: t()
   def bound_child(%__MODULE__{cursor: {:bound, _}} = auth, dep_ref, %Blob.Edge{} = edge) do
+    {:ok, vault} = Blob.vault_for(edge, nil)
+    bound_child(auth, dep_ref, edge, vault)
+  end
+
+  @doc """
+  The Authority a child receives through a consented edge when its call
+  picked `vault`, the one binding `Prima.Authority.Blob.vault_for/2`
+  answered for the account the call named: the edge's other resources,
+  and that binding alone as its vault.
+  """
+  @spec bound_child(t(), String.t(), Blob.Edge.t(), Blob.Edge.vault() | nil) :: t()
+  def bound_child(%__MODULE__{cursor: {:bound, _}} = auth, dep_ref, %Blob.Edge{} = edge, vault) do
     %{
       auth
       | cursor: {:bound, dep_ref},
-        resources: edge,
+        resources: %{edge | vault: vault},
         chain: auth.chain ++ [dep_ref],
         depth: auth.depth + 1
     }

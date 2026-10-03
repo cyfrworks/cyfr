@@ -19,10 +19,11 @@ defmodule Sanctum.Consent do
   ## Reading consent from above
 
   Consent rows are security rows: a domain or a surface learns about
-  them only through `profiles/2`, `head_consent/2` and `revoke_source/2`
-  here. Each scopes by the tenant of the caller's context, and each keeps
-  an unreadable store, a damaged row and an absent one apart — a caller
-  that cannot tell them apart would read an outage as "not granted".
+  them only through `profiles/2`, `head_consent/2`, `row_binding/3` and
+  `revoke_source/2` here. Each scopes by the tenant of the caller's
+  context, and each keeps an unreadable store, a damaged row and an
+  absent one apart — a caller that cannot tell them apart would read an
+  outage as "not granted".
 
   ## The protocol
 
@@ -204,6 +205,21 @@ defmodule Sanctum.Consent do
       {:error, _unreadable} -> {:error, :unavailable}
     end
   end
+
+  @doc """
+  What one vault row of the head revision `consent` (from
+  `head_consent/2`) binds now, read by its tag: the athanor's own entry,
+  a selection of another profile's key resolved as a run resolves it
+  under the context's origin, an instance entry, or a row naming none
+  (`Sanctum.Consent.Loader.row_binding/3`). Nothing is raised.
+  """
+  @spec row_binding(Sanctum.Context.t(), map(), map()) ::
+          {:entry, String.t(), String.t()}
+          | {:selection, String.t(), {:ok, map()} | {:error, term()}}
+          | {:instance, String.t()}
+          | :malformed
+  def row_binding(%Sanctum.Context{} = ctx, consent, ref) when is_map(consent) and is_map(ref),
+    do: Sanctum.Consent.Loader.row_binding(ctx, consent, ref)
 
   @doc """
   Revoke every profile of a name-level `source_ref` in the caller's

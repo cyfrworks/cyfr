@@ -11,7 +11,10 @@ defmodule Sanctum.Providers.Vault do
   a value or a field.
 
   Material flows one way: `create` and `rotate` accept field values,
-  nothing ever returns them.
+  nothing ever returns them. Every entry names its `destination`, where
+  its material may go, and is attach-only unless `disclose` is true:
+  `create` requires the destination, `authorize` requires it of a new
+  entry, and `rebind` moves it, its disclosure or its field schema.
   """
 
   alias Sanctum.Context
@@ -29,6 +32,44 @@ defmodule Sanctum.Providers.Vault do
     # Mutations are interactive-consent surfaces (OIDC sessions only,
     # by owner decision — no permission conjunct); list admits the
     # staging class so keys can enumerate entries.
+    destination = fn opts ->
+      Arg.new(
+        "destination",
+        {:record,
+         [
+           Arg.new("hosts", {:array, Arg.new(nil, :string)},
+             required: true,
+             min: 1,
+             max: Prima.Destination.max_entries(),
+             description: "Hosts the material may go to: exact names, or *. and a name"
+           ),
+           Arg.new("scheme", :string,
+             enum: ["http", "https"],
+             description: "https unless http is stated"
+           ),
+           Arg.new("port", :integer,
+             min: 1,
+             max: 65_535,
+             description: "The port; the scheme's default when absent"
+           ),
+           Arg.new("methods", {:array, Arg.new(nil, :string, enum: Prima.Destination.methods())},
+             min: 1,
+             description: "HTTP methods admitted; any when absent"
+           ),
+           Arg.new("paths", {:array, Arg.new(nil, :string)},
+             min: 1,
+             max: Prima.Destination.max_entries(),
+             description: "Path prefixes admitted, each beginning with /; any when absent"
+           )
+         ]},
+        opts
+      )
+    end
+
+    disclose = fn description ->
+      Arg.new("disclose", :boolean, default: false, description: description)
+    end
+
     Operation.tool(
       [
         Operation.new("vault", "list", "List vault", [],
@@ -77,6 +118,14 @@ defmodule Sanctum.Providers.Vault do
                  Arg.new("auth_style", :string, enum: ["params", "header"]),
                  Arg.new("extra_params", {:map, Arg.new(nil, :string)})
                ]}
+            ),
+            destination.(
+              required: true,
+              description: "Binding field: where the material may go — required, never defaulted"
+            ),
+            disclose.(
+              "Binding field: true lets a component read the fields; " <>
+                "otherwise they are never handed to a component"
             )
           ],
           kind: :write,
@@ -126,19 +175,11 @@ defmodule Sanctum.Providers.Vault do
             Arg.new("field_names", {:array, Arg.new(nil, :string)},
               description: "Binding field: the material's field schema (rebind only)"
             ),
-            Arg.new("oauth_scopes", {:array, Arg.new(nil, :string)},
-              description: "Binding field: scopes this credential was authorized for"
-            ),
-            Arg.new(
-              "oauth_endpoints",
-              {:record,
-               [
-                 Arg.new("authorize_url", :string),
-                 Arg.new("token_url", :string),
-                 Arg.new("provider", :string),
-                 Arg.new("auth_style", :string, enum: ["params", "header"]),
-                 Arg.new("extra_params", {:map, Arg.new(nil, :string)})
-               ]}
+            destination.(description: "Binding field: where the material may go"),
+            Arg.new("disclose", :boolean,
+              description:
+                "Binding field: true lets a component read the fields; false makes the " <>
+                  "entry attach-only"
             )
           ],
           kind: :write,
@@ -158,7 +199,9 @@ defmodule Sanctum.Providers.Vault do
               description: "Immutable provider tag (e.g. 'google'); set at create only"
             ),
             Arg.new("oauth_scopes", {:array, Arg.new(nil, :string)},
-              description: "Binding field: scopes this credential was authorized for"
+              description:
+                "Scopes to authorize: a new entry's, or a re-authorization's (the one way " <>
+                  "an entry's scopes change)"
             ),
             Arg.new(
               "oauth_endpoints",
@@ -169,7 +212,17 @@ defmodule Sanctum.Providers.Vault do
                  Arg.new("provider", :string),
                  Arg.new("auth_style", :string, enum: ["params", "header"]),
                  Arg.new("extra_params", {:map, Arg.new(nil, :string)})
-               ]}
+               ]},
+              description:
+                "A new entry's endpoints, for a provider with no preset; fixed once created"
+            ),
+            destination.(
+              description:
+                "A new entry's destination, where its token may go — required for a new entry"
+            ),
+            disclose.(
+              "A new entry's disclosure: true lets a component be dispensed its token; " <>
+                "otherwise it is never handed to a component"
             )
           ],
           kind: :write,
@@ -230,6 +283,8 @@ defmodule Sanctum.Providers.Vault do
       |> Prima.MapUtil.put_present(:provider_hint, args["provider_hint"])
       |> Prima.MapUtil.put_present(:oauth_endpoints, args["oauth_endpoints"])
       |> Prima.MapUtil.put_present(:oauth_scopes, args["oauth_scopes"])
+      |> Prima.MapUtil.put_present(:destination, args["destination"])
+      |> Prima.MapUtil.put_present(:disclose, args["disclose"])
 
     case Vault.create(ctx, params) do
       {:ok, view} -> {:ok, %{entry: view}}
@@ -272,18 +327,24 @@ defmodule Sanctum.Providers.Vault do
 
   # Start a browser OAuth grant for a vault entry: `id` re-authorizes an
   # existing oauth entry (+ optional `oauth_scopes`, the scopes it is
-  # re-granted for); `name` + `provider_hint` (+ optional `oauth_scopes` /
-  # `oauth_endpoints`) mints a new one on completion. Endpoints named
-  # beside an `id` go to the grant, which refuses them: an entry's
-  # endpoints are fixed, and dropping them would answer a request other
-  # than the one made.
+  # re-granted for); `name` + `provider_hint` + `destination` (+ optional
+  # `oauth_scopes` / `oauth_endpoints` / `disclose`) mints a new one on
+  # completion. Endpoints named beside an `id` go to the grant, which
+  # refuses them: an entry's endpoints are fixed, and dropping them would
+  # answer a request other than the one made. A destination or a
+  # disclosure beside an `id` is refused here for the same reason: an
+  # existing entry's are moved by `rebind`.
   def handle(%Context{} = ctx, %{"action" => "authorize"} = args) do
     params =
       case args do
         %{"id" => id} when is_binary(id) ->
-          %{entry_id: id}
-          |> Prima.MapUtil.put_present(:endpoints, args["oauth_endpoints"])
-          |> Prima.MapUtil.put_present(:scopes, args["oauth_scopes"])
+          if Map.has_key?(args, "destination") or Map.has_key?(args, "disclose") do
+            :rebind_fields
+          else
+            %{entry_id: id}
+            |> Prima.MapUtil.put_present(:endpoints, args["oauth_endpoints"])
+            |> Prima.MapUtil.put_present(:scopes, args["oauth_scopes"])
+          end
 
         %{"name" => name, "provider_hint" => provider} ->
           %{
@@ -292,6 +353,8 @@ defmodule Sanctum.Providers.Vault do
             scopes: Map.get(args, "oauth_scopes", []),
             endpoints: args["oauth_endpoints"]
           }
+          |> Prima.MapUtil.put_present(:destination, args["destination"])
+          |> Prima.MapUtil.put_present(:disclose, args["disclose"])
 
         _ ->
           :invalid
@@ -304,7 +367,13 @@ defmodule Sanctum.Providers.Vault do
       :invalid ->
         {:error,
          {:invalid_argument,
-          "authorize requires id (re-auth) or name + provider_hint (new connection)"}}
+          "authorize requires id (re-auth) or name + provider_hint + destination " <>
+            "(new connection)"}}
+
+      :rebind_fields ->
+        {:error,
+         {:invalid_argument,
+          "destination and disclose name a new entry's; change an existing entry's with rebind"}}
 
       {:error, reason} ->
         {:error, fmt(reason)}
@@ -312,11 +381,17 @@ defmodule Sanctum.Providers.Vault do
   end
 
   def handle(%Context{} = ctx, %{"action" => "rebind", "id" => id} = args) do
+    # The declaration names no OAuth endpoints or scopes; a caller that
+    # hands them to the handler past it is refused for them by the vault
+    # (`:endpoints_immutable`, `:scopes_need_reauthorization`), never
+    # answered as though it had asked for less.
     params =
       %{id: id}
       |> Prima.MapUtil.put_present(:oauth_endpoints, args["oauth_endpoints"])
       |> Prima.MapUtil.put_present(:oauth_scopes, args["oauth_scopes"])
       |> Prima.MapUtil.put_present(:field_names, args["field_names"])
+      |> Prima.MapUtil.put_present(:destination, args["destination"])
+      |> Prima.MapUtil.put_present(:disclose, args["disclose"])
 
     case Vault.rebind(ctx, params) do
       {:ok, result} -> {:ok, Map.put(result, :status, "rebound")}
@@ -406,6 +481,16 @@ defmodule Sanctum.Providers.Vault do
 
   defp fmt(:name_required), do: "name_required: an entry needs a name"
 
+  defp fmt(:destination_required),
+    do:
+      "destination_required: an entry names where its material may go " <>
+        "(destination: hosts, and optionally scheme, port, methods and paths)"
+
+  defp fmt({:invalid_destination, reason}),
+    do: "invalid_destination: " <> destination_refusal(reason)
+
+  defp fmt(:invalid_disclose), do: "invalid_disclose: disclose is true or false"
+
   defp fmt(:no_binding_changes),
     do: "no_binding_changes: rebind needs at least one field to change"
 
@@ -469,6 +554,22 @@ defmodule Sanctum.Providers.Vault do
 
     {:unavailable, "Vault"}
   end
+
+  # The destination grammar's refusal, in fixed words: the offending value
+  # is the caller's own input and is not repeated back.
+  defp destination_refusal(:hosts_required), do: "it names at least one host"
+  defp destination_refusal(:not_a_map), do: "it is an object"
+  defp destination_refusal({:unknown_key, _key}), do: "it names an unknown member"
+  defp destination_refusal({:invalid_host, _host}), do: "a host is outside the domain grammar"
+  defp destination_refusal({:invalid_scheme, _}), do: "the scheme is http or https"
+  defp destination_refusal({:invalid_port, _}), do: "the port is 1 to 65535"
+  defp destination_refusal({:invalid_method, _}), do: "a method is outside the HTTP vocabulary"
+  defp destination_refusal({:invalid_path, _}), do: "a path is outside the path grammar"
+  defp destination_refusal({:invalid_list, field}), do: "#{field} is a list"
+  defp destination_refusal({:empty, field}), do: "#{field}, when present, is not empty"
+  defp destination_refusal({:too_many, field}), do: "#{field} names too many entries"
+  defp destination_refusal({:required, field}), do: "#{field} is required"
+  defp destination_refusal(_other), do: "it is outside the destination grammar"
 
   defp action_enum, do: Prima.Provider.action_enum(definition())
 end

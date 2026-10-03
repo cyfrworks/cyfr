@@ -512,6 +512,7 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `forked_from` | string | Optional | The ref this component was forked from (`component.fork` stamps it) |
 | `contracts` | string[] | Catalysts (if they answer one) | Named operation sets the component answers on its `run` export, as `family/name@major` — `model/chat@1` is the one the host reads (see [Model catalysts](#model-catalysts-the-modelchat1-contract)) |
 | `agent` | object | Agents | The agent's catalyst, model, and policy (`auto` / `ask` sets). Only valid on `type` `"agent"` |
+| `provides` | object | Optional | Public configuration for a need of a dependency: keyed by a `dependencies.static` reference, then the dependency's need name, each a `destination` and string `values` (at most 4 KiB). The consent shows that need as satisfied by the publisher |
 
 ### Fields by Type
 
@@ -934,7 +935,7 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 | `cyfr profile grant` | `profile` | `plan` / `preview` / `commit` | `ref`; then `decisions`, `plan_token`, `proof`, `commit_digest` |
 | `cyfr profile list` | `profile` | `list` | `ref` |
 | `cyfr profile revoke` | `profile` | `revoke` | `profile_id` |
-| — | `vault` | `list` / `create` / `rotate` / `rebind` / `authorize` / `revoke` / `delete` | `id`, `name`, `kind`, `fields` |
+| — | `vault` | `list` / `create` / `rotate` / `rebind` / `authorize` / `revoke` / `delete` | `id`, `name`, `kind`, `fields`, `destination`, `disclose` |
 | — | `oauth` | `set_client` | `provider`, `client_id`, `client_secret` |
 | `cyfr log list` | `mcp_log` | `list` | `tool`, `status`, `limit`, `since` |
 | `cyfr log get` | `mcp_log` | `get` | `id` |

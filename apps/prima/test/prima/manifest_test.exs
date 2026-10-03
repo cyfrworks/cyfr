@@ -135,6 +135,49 @@ defmodule Prima.ManifestTest do
                validate(%{"dependencies" => ["catalyst:local.files"]})
     end
 
+    test "a provides block is read, and refused as its owner spells it" do
+      provides = %{
+        "dependencies" => %{"static" => ["catalyst:local.supabase"]},
+        "provides" => %{
+          "catalyst:local.supabase" => %{
+            "database" => %{
+              "destination" => %{"hosts" => ["abc.supabase.co"]},
+              "values" => %{"anon_key" => "public"}
+            }
+          }
+        }
+      }
+
+      assert :ok = validate(provides)
+
+      assert {:error, {:invalid_manifest, [{:invalid_provides, {:undeclared_dependency, _}}]}} =
+               validate(Map.put(provides, "dependencies", %{"static" => []}))
+
+      # A malformed dependencies block is refused first, as its own.
+      assert {:error, {:invalid_manifest, [{:invalid_dependencies, _}]}} =
+               validate(Map.put(provides, "dependencies", ["catalyst:local.supabase"]))
+    end
+
+    test "a need's hosts are refused outside the egress the manifest asks" do
+      needs = %{
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:openai.com",
+            "reason" => "to call OpenAI",
+            "hosts" => ["api.openai.com"]
+          }
+        }
+      }
+
+      assert {:error,
+              {:invalid_manifest,
+               [{:invalid_caps, {:need_host_outside_egress, "api_key", "api.openai.com"}}]}} =
+               validate(needs)
+
+      assert :ok =
+               validate(Map.put(needs, "caps", %{"egress" => %{"domains" => ["api.openai.com"]}}))
+    end
+
     test "the storage-path check is the caller's predicate, never a default" do
       caps = %{"caps" => %{"storage" => %{"paths" => ["aqua/"], "actions" => ["read"]}}}
 
@@ -147,7 +190,7 @@ defmodule Prima.ManifestTest do
 
   describe "known_keys/0 and contracts/1" do
     test "the roster names every block the validator reads" do
-      for key <- ~w(needs caps dependencies tincture contracts agent name type version) do
+      for key <- ~w(needs caps dependencies tincture contracts agent provides name type version) do
         assert key in Manifest.known_keys()
       end
     end

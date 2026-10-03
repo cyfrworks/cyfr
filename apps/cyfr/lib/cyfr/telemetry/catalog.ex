@@ -257,6 +257,14 @@ defmodule Cyfr.Telemetry.Catalog do
           "bytes the change names are served yet. The component domain's reconciler " <>
           "re-derives its projection of the root from it; a lost one costs a read's barrier"
     },
+    # ——— send a copy: one per file of an offer, after each durable
+    # transition (`Arca.FileOffers`), with the offer id, the kind, the
+    # sender's and recipient's ids and the filename, never content ———
+    [:cyfr, :arca, :file_offer, :offered] => %{consumers: [:audit]},
+    [:cyfr, :arca, :file_offer, :accepted] => %{consumers: [:audit]},
+    [:cyfr, :arca, :file_offer, :declined] => %{consumers: [:audit]},
+    [:cyfr, :arca, :file_offer, :withdrawn] => %{consumers: [:audit]},
+    [:cyfr, :arca, :file_offer, :expired] => %{consumers: [:audit]},
     [:cyfr, :storage_gc, :sweep] => %{
       consumers: [:operator],
       note:

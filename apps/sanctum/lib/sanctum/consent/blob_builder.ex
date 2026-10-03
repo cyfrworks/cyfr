@@ -16,9 +16,13 @@ defmodule Sanctum.Consent.BlobBuilder do
   empty ask — deny-all resources under type-default limits.
 
   The caller supplies a `vault_fn` deciding which vault resource (if any)
-  rides each node: a bound entry (`entry_id`, `binding_digest`,
-  `projection`) or a selection (`via` a profile of that node). An
-  optional `opts[:edge_vault_fn]` `(from, dep, row, manifest -> vault | nil)`
+  rides each node: a bound entry (`entry_id`, `binding_digest`, `scope`,
+  the entry's `destination` (`entry_destination/1`), the need's `attach`
+  rule and the `projection`) or a selection (`via` a profile of that
+  node). Every bound resource takes its `binding_key` here, from the node
+  and edge it sits on (`Prima.Authority.Blob.binding_key/3`), so the key
+  is computed once, where the place is known. An optional
+  `opts[:edge_vault_fn]` `(from, dep, row, manifest -> vault | nil)`
   overrides the vault on one dependency edge; `nil` keeps the node's
   default. Commit binds the operator's chosen entries and selections;
   bootstrap selects on each vouched edge into a shipped dependency.
@@ -57,6 +61,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   servers, and `order_rows/1` puts every row in one order.
   """
 
+  alias Prima.Authority.Blob
   alias Prima.Manifest.Tincture
   alias Sanctum.Consent.Components
   alias Prima.JCS
@@ -242,7 +247,7 @@ defmodule Sanctum.Consent.BlobBuilder do
         edges =
           Map.new(node.edges, fn
             {"@ingress" = key, resources} ->
-              {key, finalize_edge(resources)}
+              {key, resources |> finalize_edge() |> place_vault(node_key, key)}
 
             {dep_key, %{"__dep__" => dep_key} = placeholder} ->
               # A dep key the activation graph does not carry is a
@@ -256,7 +261,12 @@ defmodule Sanctum.Consent.BlobBuilder do
 
                 dep ->
                   vault = Map.get(placeholder, "__vault__") || dep.resources["__vault__"]
-                  {dep_key, finalize_edge(Map.put(dep.resources, "__vault__", vault))}
+
+                  {dep_key,
+                   dep.resources
+                   |> Map.put("__vault__", vault)
+                   |> finalize_edge()
+                   |> place_vault(node_key, dep_key)}
               end
           end)
 
@@ -266,31 +276,101 @@ defmodule Sanctum.Consent.BlobBuilder do
     JCS.encode(%{"canonical" => "jcs-1", "nodes" => encoded_nodes})
   end
 
+  # A bound entry's key names where it sits: the node, the edge and the
+  # default slot. A selection carries none until the loader resolves it,
+  # and provided configuration names no binding of an entry.
+  defp place_vault(%{"vault" => %{"entry_id" => _} = vault} = edge, node_key, edge_key) do
+    %{edge | "vault" => Map.put(vault, "binding_key", Blob.binding_key(node_key, edge_key, nil))}
+  end
+
+  defp place_vault(edge, _node_key, _edge_key), do: edge
+
   @doc """
-  The derived vault references for `consent_vault_refs`, deduplicated by
-  `{entry_id, binding_digest}`. Only a bound entry is a reference; a
-  selection names another profile's entry, which that profile's own
-  consent already references.
+  A vault row's stored destination (`Prima.Destination`'s JCS) as its
+  canonical map, or `{:error, {:entry_unavailable, id, :destination}}`
+  for one that does not read.
   """
-  @spec vault_refs(map()) :: [%{vault_entry_id: String.t(), binding_digest: String.t()}]
+  @spec entry_destination(map()) :: {:ok, map()} | {:error, term()}
+  def entry_destination(%{id: id} = entry) do
+    with text when is_binary(text) <- Map.get(entry, :destination),
+         {:ok, map} <- Jason.decode(text),
+         {:ok, destination} <- Prima.Destination.from_map(map) do
+      {:ok, Prima.Destination.to_map(destination)}
+    else
+      _ -> {:error, {:entry_unavailable, id, :destination}}
+    end
+  end
+
+  @doc """
+  The bindings for `consent_vault_refs`: one row per binding, keyed by
+  the binding's own key — the node and edge it sits on and its slot
+  (`Prima.Authority.Blob.binding_key/3`, as `encode/1` places it) — so one
+  entry bound on two edges is two rows. A bound entry's row names its
+  scope, the entry (the athanor's own or the instance's) and the digest it
+  is bound at; a selection's (`via`) is the borrower's own binding, naming
+  the label of the profile it borrows from and the digest it pinned, if
+  any. Each stands until revoked.
+  """
+  @spec vault_refs(map()) :: [Arca.ConsentStorage.ref_input()]
   def vault_refs(nodes) do
-    for {_from, node} <- nodes,
-        vault <- edge_vaults(node, nodes),
-        %{"entry_id" => entry_id, "binding_digest" => digest} <- [vault],
-        uniq: true do
-      %{vault_entry_id: entry_id, binding_digest: digest}
+    for {from, node} <- nodes,
+        {edge_key, vault} <- edge_vaults(node, nodes),
+        is_map(vault) and (Map.has_key?(vault, "entry_id") or Map.has_key?(vault, "via")) do
+      ref_row(Blob.binding_key(from, edge_key, nil), vault)
+    end
+    |> Enum.sort_by(& &1.binding_key)
+  end
+
+  @doc """
+  The `consent_vault_refs` row of one vault resource under `binding_key`,
+  standing until revoked: a bound entry (`entry_id`, `binding_digest`,
+  `scope`) or a selection (`via`: its `label` and pinned
+  `binding_digest`).
+  """
+  @spec ref_row(String.t(), map()) :: Arca.ConsentStorage.ref_input()
+  def ref_row(binding_key, %{"via" => %{"label" => label} = via}) when is_binary(binding_key) do
+    %{
+      binding_key: binding_key,
+      scope: "athanor",
+      via_label: label,
+      binding_digest: Map.get(via, "binding_digest"),
+      lifetime_kind: "standing"
+    }
+  end
+
+  def ref_row(binding_key, %{"entry_id" => entry_id, "binding_digest" => digest} = vault)
+      when is_binary(binding_key) do
+    case Map.get(vault, "scope") do
+      "instance" ->
+        %{
+          binding_key: binding_key,
+          scope: "instance",
+          instance_entry_id: entry_id,
+          binding_digest: digest,
+          lifetime_kind: "standing"
+        }
+
+      scope ->
+        %{
+          binding_key: binding_key,
+          scope: scope,
+          vault_entry_id: entry_id,
+          binding_digest: digest,
+          lifetime_kind: "standing"
+        }
     end
   end
 
   defp edge_vaults(node, nodes) do
-    ingress = node.edges[Prima.Authority.Blob.ingress_key()]
-    ingress_vault = if is_map(ingress), do: [ingress["__vault__"]], else: []
+    ingress_key = Prima.Authority.Blob.ingress_key()
+    ingress = node.edges[ingress_key]
+    ingress_vault = if is_map(ingress), do: [{ingress_key, ingress["__vault__"]}], else: []
 
     dep_vaults =
       for {dep_key, %{"__dep__" => _} = placeholder} <- node.edges,
           dep = nodes[dep_key],
           is_map(dep) do
-        Map.get(placeholder, "__vault__") || dep.resources["__vault__"]
+        {dep_key, Map.get(placeholder, "__vault__") || dep.resources["__vault__"]}
       end
 
     ingress_vault ++ dep_vaults

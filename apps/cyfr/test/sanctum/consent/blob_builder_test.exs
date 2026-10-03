@@ -411,6 +411,108 @@ defmodule Sanctum.Consent.BlobBuilderTest do
     end
   end
 
+  describe "a binding's key" do
+    test "is the place a bound vault sits; a selection carries none until it resolves",
+         %{ctx: ctx} do
+      publish!(ctx, "narrow-dep", %{})
+      publish!(ctx, "narrow-root", %{"dependencies" => %{"static" => [%{"ref" => @dep}]}})
+      root = "reagent:local.narrow-root"
+
+      bound = %{
+        "entry_id" => "vlt_1",
+        "binding_digest" => "sha256:b",
+        "scope" => "athanor",
+        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"}
+      }
+
+      build = fn edge_vault ->
+        {:ok, nodes} =
+          BlobBuilder.build(
+            ctx,
+            %{root => "sha256:r", @dep => "sha256:d"},
+            root,
+            fn node, _row, _manifest -> if node == root, do: bound end,
+            edge_vault_fn: fn _from, _dep, _row, _manifest -> edge_vault end
+          )
+
+        {:ok, json} = BlobBuilder.encode(nodes)
+        {:ok, blob} = Blob.parse(json)
+        blob
+      end
+
+      blob = build.(bound)
+      {:ok, ingress} = Blob.ingress(blob, root)
+      assert ingress.vault.binding_key == "#{root}|@ingress|default"
+      {:ok, edge} = Blob.lookup_edge(blob, root, @dep, "")
+      assert edge.vault.binding_key == "#{root}|#{@dep}|default"
+
+      blob = build.(%{"via" => %{"label" => "default"}})
+      {:ok, edge} = Blob.lookup_edge(blob, root, @dep, "")
+      assert edge.vault == %{via: %{label: "default", binding_digest: nil}, projection: nil}
+    end
+
+    test "keys one row per binding: an entry's names the entry, a selection's its label and pin",
+         %{ctx: ctx} do
+      publish!(ctx, "narrow-dep", %{})
+      publish!(ctx, "narrow-root", %{"dependencies" => %{"static" => [%{"ref" => @dep}]}})
+      root = "reagent:local.narrow-root"
+
+      bound = %{
+        "entry_id" => "vlt_1",
+        "binding_digest" => "sha256:b",
+        "scope" => "athanor",
+        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"}
+      }
+
+      refs = fn edge_vault ->
+        {:ok, nodes} =
+          BlobBuilder.build(
+            ctx,
+            %{root => "sha256:r", @dep => "sha256:d"},
+            root,
+            fn node, _row, _manifest -> if node == root, do: bound end,
+            edge_vault_fn: fn _from, _dep, _row, _manifest -> edge_vault end
+          )
+
+        BlobBuilder.vault_refs(nodes)
+      end
+
+      ingress = %{
+        binding_key: "#{root}|@ingress|default",
+        scope: "athanor",
+        vault_entry_id: "vlt_1",
+        binding_digest: "sha256:b",
+        lifetime_kind: "standing"
+      }
+
+      edge_key = "#{root}|#{@dep}|default"
+
+      # One entry bound on two edges is two rows, one per place.
+      assert refs.(bound) == [ingress, %{ingress | binding_key: edge_key}]
+
+      # A selection is the borrower's own binding: its row names the label
+      # it borrows and the digest it pinned, or none, and never an entry.
+      for {via, pin} <- [
+            {%{"label" => "work", "binding_digest" => "sha256:lent"}, "sha256:lent"},
+            {%{"label" => "work"}, nil}
+          ] do
+        assert refs.(%{"via" => via}) == [
+                 ingress,
+                 %{
+                   binding_key: edge_key,
+                   scope: "athanor",
+                   via_label: "work",
+                   binding_digest: pin,
+                   lifetime_kind: "standing"
+                 }
+               ]
+      end
+
+      # An edge holding no vault is no row.
+      assert refs.(nil) == [ingress]
+    end
+  end
+
   describe "narrow/5" do
     test "answers the ask unchanged, and nothing narrowed, for no narrowing" do
       resources = %{"tools" => ["execution.run"]}

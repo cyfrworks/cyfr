@@ -265,6 +265,35 @@ defmodule Arca.StorageTest do
     end
   end
 
+  describe "the offers' and receipts' prefixes" do
+    test "live under the reserved payloads root, host-only and invisible to a person" do
+      assert Storage.offers_prefix() == ["payloads", "offers"]
+      assert Storage.receipts_prefix() == ["payloads", "receipts"]
+
+      for [root | _] <- [Storage.offers_prefix(), Storage.receipts_prefix()] do
+        assert root in Storage.reserved_roots()
+        assert Storage.tier(root) == :system
+        refute root in Map.values(Storage.guest_scopes())
+      end
+
+      refute Storage.staging_root() in [
+               hd(Storage.offers_prefix()),
+               hd(Storage.receipts_prefix())
+             ]
+    end
+
+    test "a member's write under either is refused before any adapter is asked" do
+      member = %Prima.Actor{athanor_id: "ath_prefix_member", user_id: "usr_member"}
+
+      for prefix <- [Storage.offers_prefix(), Storage.receipts_prefix()] do
+        path = prefix ++ ["ofr_x", "a.txt"]
+        assert {:error, :forbidden} = Arca.put(member, path, "x")
+        assert {:error, :forbidden} = Arca.put_if_none_match(member, path, "x")
+        assert {:error, :forbidden} = Arca.delete(member, path)
+      end
+    end
+  end
+
   describe "the layout table (derived rosters)" do
     test "the rosters are consistent views of one layout" do
       # Every roster is derived from @layout; these pin the derived values
@@ -515,5 +544,75 @@ defmodule Arca.StorageLocatorWiringTest do
 
     # A path no locator shapes needs none installed to say so.
     assert Arca.Storage.locate(["data", "x"]) == :not_overlaid
+  end
+end
+
+defmodule Arca.StorageOffersSweepTest do
+  @moduledoc """
+  The offers' snapshots and the receipts' custody copies are not the
+  staging sweep's, whatever their age, and the facade's conditional
+  create is a capped, accounted tenant write that never overwrites.
+  """
+
+  use ExUnit.Case, async: false
+
+  defmodule Refusing do
+    @moduledoc false
+    @behaviour Prima.Caps
+    @impl Prima.Caps
+    def check_counted(%Prima.Actor{}, _key, count) when is_function(count, 0), do: :ok
+    @impl Prima.Caps
+    def check_storage(%Prima.Actor{}, _incoming),
+      do: {:error, {:limit_reached, :athanor_storage_bytes, 0}}
+  end
+
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+    athanor = "ath_offers_sweep_#{System.unique_integer([:positive])}"
+    actor = %Prima.Actor{athanor_id: athanor, user_id: "usr_offers_sweep"}
+    on_exit(fn -> File.rm_rf(Arca.Adapters.Local.build_path(actor, [])) end)
+    {:ok, actor: actor}
+  end
+
+  test "a snapshot and a custody copy older than fifteen minutes are untouched by the staging sweep",
+       %{actor: actor} do
+    snapshot = Arca.Storage.offers_prefix() ++ ["ofr_old", "a.txt"]
+    custody = Arca.Storage.receipts_prefix() ++ ["ofr_old", "a.txt"]
+
+    for path <- [snapshot, custody] do
+      :ok = Arca.Overlay.with_internal_writes(fn -> Arca.put(actor, path, "held") end)
+      full = Arca.Adapters.Local.build_path(actor, path)
+      :ok = File.touch!(full, System.os_time(:second) - 3600)
+    end
+
+    sweeper = %{Prima.Actor.system() | athanor_id: actor.athanor_id, scope: :athanor}
+    assert {:ok, 0} = Arca.Retention.FencedStaging.prune(sweeper, 1, false)
+
+    assert {:ok, "held"} = Arca.get(actor, snapshot)
+    assert {:ok, "held"} = Arca.get(actor, custody)
+  end
+
+  test "put_if_none_match/4 creates once, answers exists after, and is capped like put/4",
+       %{actor: actor} do
+    path = ["data", "inbox", "once.txt"]
+
+    assert :ok = Arca.put_if_none_match(actor, path, "first")
+    assert {:error, :exists} = Arca.put_if_none_match(actor, path, "second")
+    assert {:ok, "first"} = Arca.get(actor, path)
+
+    installed = Prima.Caps.impl!()
+    Prima.Caps.install!(Refusing)
+
+    try do
+      assert {:error, {:limit_reached, :athanor_storage_bytes, 0}} =
+               Arca.put_if_none_match(actor, ["data", "inbox", "capped.txt"], "x")
+
+      assert :ok =
+               Arca.put_if_none_match(actor, ["data", "inbox", "exempt.txt"], "x", cap: :exempt)
+    after
+      Prima.Caps.install!(installed)
+    end
+
+    assert {:error, :not_found} = Arca.get(actor, ["data", "inbox", "capped.txt"])
   end
 end

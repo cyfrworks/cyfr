@@ -645,7 +645,12 @@ defmodule PrismWeb.AquaLiveTest do
             })
         })
 
-      params = %{name: "keyed key", kind: "api_key", fields: %{"KEYED_API_KEY" => "sk-keyed"}}
+      params = %{
+        name: "keyed key",
+        kind: "api_key",
+        fields: %{"KEYED_API_KEY" => "sk-keyed"},
+        destination: %{"hosts" => ["api.keyed.example"]}
+      }
 
       entering =
         Sanctum.TestContext.confirmed(ctx, :credential_entry, %{

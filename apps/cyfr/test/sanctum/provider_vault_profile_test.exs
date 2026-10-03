@@ -42,7 +42,8 @@ defmodule Sanctum.ProviderVaultProfileTest do
           "action" => "create",
           "name" => "wire-conn",
           "kind" => "api_key",
-          "fields" => %{"url" => "https://db.example", "anon_key" => "anon"}
+          "fields" => %{"url" => "https://db.example", "anon_key" => "anon"},
+          "destination" => %{"hosts" => ["db.example"]}
         })
       )
 

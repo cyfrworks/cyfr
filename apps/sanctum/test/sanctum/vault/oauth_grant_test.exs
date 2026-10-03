@@ -74,7 +74,9 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
               "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
               "token_url" => "https://127.0.0.1:9/token"
             },
-            scopes: ["mail"]
+            scopes: ["mail"],
+            destination: ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"}),
+            attach_only: true
           },
           redirect_uri: @redirect,
           code_verifier: "verifier"

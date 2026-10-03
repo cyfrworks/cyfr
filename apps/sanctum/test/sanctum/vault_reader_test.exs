@@ -6,6 +6,8 @@ defmodule Sanctum.VaultReaderTest do
 
   import ExUnit.CaptureLog
 
+  require Ecto.Query
+
   alias Sanctum.CipherAAD
   alias Sanctum.Vault.Payload
   alias Sanctum.VaultReader
@@ -17,6 +19,10 @@ defmodule Sanctum.VaultReaderTest do
   end
 
   defp actor(ctx), do: Sanctum.Context.actor(ctx)
+
+  # Where the material may go. The cases read what they minted, so an
+  # entry here is disclosed unless the case says `attach_only: true`.
+  @destination ~s({"hosts":["api.example.com"],"scheme":"https"})
 
   defp mint_material_entry(ctx, fields, over \\ %{}) do
     id = Prima.UUID7.generate_id("vlt")
@@ -34,6 +40,8 @@ defmodule Sanctum.VaultReaderTest do
       field_names: Jason.encode!(Map.keys(fields) |> Enum.sort()),
       oauth_endpoints: Map.get(over, :oauth_endpoints),
       oauth_scopes: Map.get(over, :oauth_scopes),
+      destination: @destination,
+      attach_only: Map.get(over, :attach_only, false),
       status: Map.get(over, :status, "active"),
       sealed_payload: sealed
     }
@@ -163,6 +171,8 @@ defmodule Sanctum.VaultReaderTest do
           name: "tampered",
           provider_hint: "",
           kind: "api_key",
+          destination: @destination,
+          attach_only: false,
           sealed_payload: sealed
         })
 
@@ -171,6 +181,86 @@ defmodule Sanctum.VaultReaderTest do
 
       assert {:error, {:invalid_payload, {:unknown_keys, ["extra"]}}} =
                VaultReader.fetch(ctx, resource)
+    end
+  end
+
+  describe "an attach-only entry" do
+    test "is refused disclosure_refused by fetch/2 and oauth_token/3 before it is unsealed",
+         %{ctx: ctx} do
+      {entry, resource} =
+        mint_material_entry(ctx, %{"k" => "v"}, %{
+          attach_only: true,
+          kind: "oauth",
+          provider_hint: "google",
+          oauth: %{"access_token" => "tok-attached", "token_type" => "bearer"},
+          oauth_scopes: Jason.encode!(["gmail.readonly"])
+        })
+
+      # Its sealed bytes replaced by ones that would not open: a refusal
+      # that came after an unseal would say so.
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(v in Arca.Schemas.VaultEntry, where: v.id == ^entry.id),
+          set: [sealed_payload: "not-a-ciphertext"]
+        )
+
+      before = last_used_at(ctx, entry)
+
+      assert {:error, :disclosure_refused} = VaultReader.fetch(ctx, resource)
+
+      token_edge = %{resource | projection: %{fields: [], scopes: ["gmail.readonly"]}}
+      assert {:error, :disclosure_refused} = VaultReader.oauth_token(ctx, token_edge, "google")
+
+      # Nothing was unsealed, so no use was recorded.
+      assert last_used_at(ctx, entry) == before
+    end
+
+    test "disclosed later by a rebind, its fields are read under the new binding", %{ctx: ctx} do
+      {entry, _resource} = mint_material_entry(ctx, %{"k" => "v"}, %{attach_only: true})
+
+      {:ok, digest} = VaultReader.binding_digest(%{entry | attach_only: false})
+
+      {:ok, _} =
+        Arca.VaultStorage.move_binding(
+          actor(ctx),
+          entry.id,
+          entry.binding_digest,
+          %{attach_only: false, binding_digest: digest},
+          "needs_consent"
+        )
+
+      resource = %{
+        entry_id: entry.id,
+        binding_digest: digest,
+        projection: %{fields: ["k"], scopes: []}
+      }
+
+      assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource)
+    end
+  end
+
+  describe "the binding digest" do
+    test "covers the destination and the disclosure, and derives none without them",
+         %{ctx: ctx} do
+      {entry, _resource} = mint_material_entry(ctx, %{"k" => "v"})
+      {:ok, digest} = VaultReader.binding_digest(entry)
+
+      moved = %{entry | destination: ~s({"hosts":["other.example.com"],"scheme":"https"})}
+      assert {:ok, other} = VaultReader.binding_digest(moved)
+      refute other == digest
+
+      assert {:ok, attached} = VaultReader.binding_digest(%{entry | attach_only: true})
+      refute attached == digest
+
+      for broken <- [
+            %{entry | destination: nil},
+            %{entry | destination: ~s({"hosts":[]})},
+            %{entry | destination: "not json"},
+            %{entry | attach_only: nil},
+            Map.delete(entry, :destination)
+          ] do
+        assert {:error, :invalid_binding} = VaultReader.binding_digest(broken)
+      end
     end
   end
 

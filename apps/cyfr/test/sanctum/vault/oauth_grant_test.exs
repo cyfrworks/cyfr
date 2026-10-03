@@ -12,6 +12,11 @@ defmodule Sanctum.Vault.OAuthGrantTest do
   @provider "google"
   @scopes ["https://www.googleapis.com/auth/gmail.readonly"]
 
+  # Where the cases' entries may go. Their tokens are dispensed to the
+  # cases, so the entries are disclosed.
+  @destination %{"hosts" => ["gmail.googleapis.com"]}
+  @destination_text ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"})
+
   setup tags do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
@@ -66,7 +71,9 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       provider_hint: @provider,
       field_names: Jason.encode!(Enum.sort(Map.keys(fields))),
       oauth_endpoints: Jason.encode!(endpoints),
-      oauth_scopes: Jason.encode!(@scopes)
+      oauth_scopes: Jason.encode!(@scopes),
+      destination: @destination_text,
+      attach_only: false
     }
 
     {:ok, digest} = Sanctum.VaultReader.binding_digest(binding)
@@ -115,7 +122,9 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       name: name,
       provider: @provider,
       endpoints: bypass_endpoints(bypass),
-      scopes: @scopes
+      scopes: @scopes,
+      destination: @destination_text,
+      attach_only: false
     }
   end
 
@@ -155,6 +164,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     test "builds a preset-provider URL with PKCE and stores the pending", %{ctx: ctx} do
       assert {:ok, %{url: url, state: state}} =
                Sanctum.TestContext.authorize_vault(ctx, %{
+                 destination: @destination,
                  name: "My Google",
                  provider: @provider,
                  scopes: @scopes
@@ -178,6 +188,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     test "a preset provider naming endpoints of its own is refused", %{ctx: ctx} do
       assert {:error, :endpoints_preset_conflict} =
                Sanctum.TestContext.authorize_vault(ctx, %{
+                 destination: @destination,
                  name: "Not Google",
                  provider: @provider,
                  scopes: @scopes,
@@ -191,6 +202,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     test "a re-auth naming endpoints beside the entry is refused", %{ctx: ctx} do
       {:ok, view} =
         Sanctum.TestContext.create_vault(ctx, %{
+          destination: @destination,
+          disclose: true,
           name: "G-fixed",
           kind: "oauth",
           provider_hint: @provider,
@@ -216,6 +229,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
          %{ctx: ctx} do
       {:ok, view} =
         Sanctum.TestContext.create_vault(ctx, %{
+          destination: @destination,
+          disclose: true,
           name: "G-wire",
           kind: "oauth",
           provider_hint: @provider,
@@ -242,6 +257,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
          %{ctx: ctx} do
       {:ok, view} =
         Sanctum.TestContext.create_vault(ctx, %{
+          destination: @destination,
+          disclose: true,
           name: "G-scopes",
           kind: "oauth",
           provider_hint: @provider,
@@ -275,6 +292,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
          %{ctx: ctx} do
       {:ok, view} =
         Sanctum.TestContext.create_vault(ctx, %{
+          destination: @destination,
+          disclose: true,
           name: "G-noscopes",
           kind: "oauth",
           provider_hint: @provider,
@@ -298,6 +317,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
          %{ctx: ctx} do
       {:ok, view} =
         Sanctum.TestContext.create_vault(ctx, %{
+          destination: @destination,
+          disclose: true,
           name: "G-blankscope",
           kind: "oauth",
           provider_hint: @provider,
@@ -355,6 +376,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
       assert {:error, :endpoints_required} =
                Sanctum.TestContext.authorize_vault(ctx, %{
+                 destination: @destination,
                  name: "Acme",
                  provider: "acme",
                  scopes: []
@@ -366,6 +388,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
       assert {:error, :endpoints_must_use_https} =
                Sanctum.TestContext.authorize_vault(ctx, %{
+                 destination: @destination,
                  name: "Acme",
                  provider: "acme",
                  scopes: [],
@@ -385,6 +408,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       for reserved <- ~w(code_challenge_method state redirect_uri client_id scope) do
         assert {:error, {:reserved_extra_param, ^reserved}} =
                  Sanctum.TestContext.authorize_vault(ctx, %{
+                   destination: @destination,
                    name: "Acme",
                    provider: "acme",
                    scopes: ["read"],
@@ -402,6 +426,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
       assert {:ok, %{url: url, state: state}} =
                Sanctum.TestContext.authorize_vault(ctx, %{
+                 destination: @destination,
                  name: "Acme",
                  provider: "acme",
                  scopes: ["read"],
@@ -424,6 +449,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     test "an unconfigured provider names oauth.set_client", %{ctx: ctx} do
       assert {:error, message} =
                Sanctum.TestContext.authorize_vault(ctx, %{
+                 destination: @destination,
                  name: "Slack",
                  provider: "slack",
                  scopes: [],
@@ -439,6 +465,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     test "re-auth target comes from the entry's own binding fields", %{ctx: ctx} do
       {:ok, view} =
         Sanctum.TestContext.create_vault(ctx, %{
+          destination: @destination,
+          disclose: true,
           name: "G",
           kind: "oauth",
           provider_hint: @provider,
@@ -455,6 +483,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     test "a non-oauth entry cannot be authorized", %{ctx: ctx} do
       {:ok, view} =
         Sanctum.TestContext.create_vault(ctx, %{
+          destination: @destination,
+          disclose: true,
           name: "K",
           kind: "api_key",
           fields: %{"key" => "v"}
@@ -498,6 +528,80 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert payload["oauth"]["access_token"] == "at-1"
       assert payload["oauth"]["refresh_token"] == "rt-1"
       assert payload["oauth"]["scopes"] == @scopes
+
+      # The destination and the disclosure the grant was started with are
+      # the new entry's, and its binding digest covers them.
+      assert entry.destination == @destination_text
+      assert entry.attach_only == false
+      assert {:ok, entry.binding_digest} == VaultReader.binding_digest(entry)
+    end
+
+    test "authorize carries the destination into the new entry, attach-only unless it discloses",
+         %{ctx: ctx} do
+      assert {:ok, %{state: state}} =
+               Sanctum.TestContext.authorize_vault(ctx, %{
+                 name: "Attached Google",
+                 provider: @provider,
+                 scopes: @scopes,
+                 destination: %{"hosts" => ["GMAIL.googleapis.com"], "paths" => ["/gmail/v1/"]}
+               })
+
+      assert {:ok, %{target: target}} = Arca.Cache.get({:vault_oauth_pending, state})
+
+      assert target.destination ==
+               ~s({"hosts":["gmail.googleapis.com"],"paths":["/gmail/v1/"],"scheme":"https"})
+
+      assert target.attach_only == true
+
+      assert {:ok, %{state: disclosed}} =
+               Sanctum.TestContext.authorize_vault(ctx, %{
+                 name: "Disclosed Google",
+                 provider: @provider,
+                 scopes: @scopes,
+                 destination: @destination,
+                 disclose: true
+               })
+
+      assert {:ok, %{target: %{attach_only: false}}} =
+               Arca.Cache.get({:vault_oauth_pending, disclosed})
+    end
+
+    test "a new entry's grant without a destination, or with one off the grammar, is refused",
+         %{ctx: ctx} do
+      assert {:error, :destination_required} =
+               Sanctum.TestContext.authorize_vault(ctx, %{
+                 name: "Nowhere",
+                 provider: @provider,
+                 scopes: @scopes
+               })
+
+      assert {:error, {:invalid_destination, _}} =
+               Sanctum.TestContext.authorize_vault(ctx, %{
+                 name: "Nowhere",
+                 provider: @provider,
+                 scopes: @scopes,
+                 destination: %{"hosts" => ["*"]}
+               })
+
+      # A re-authorization moves no destination: the wire refuses one beside an id.
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          destination: @destination,
+          disclose: true,
+          name: "G-reauth",
+          kind: "oauth",
+          provider_hint: @provider,
+          oauth_scopes: @scopes
+        })
+
+      assert {:error, {:invalid_argument, message}} =
+               Sanctum.Providers.Vault.handle(ctx, %{
+                 "action" => "authorize",
+                 "id" => view.id,
+                 "destination" => %{"hosts" => ["elsewhere.example"]}
+               })
+
+      assert message =~ "rebind"
     end
 
     test "an unknown state is distinguishable for legacy fall-through" do
@@ -903,6 +1007,30 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert_received {:token_request, %{"scope" => @a}}
     end
 
+    test "a refresh whose provider call is in flight when the entry is deleted writes nothing back",
+         %{ctx: ctx} do
+      entry = race_entry!(ctx, [@a], expired_bundle("at-old", "rt-1"))
+
+      # While the refresh is at the provider, the owner deletes the entry:
+      # its material is erased, and the refresh's write-back must not seal
+      # the provider's answer into it again.
+      script!([
+        {fn -> :ok = Arca.VaultStorage.tombstone(Sanctum.Context.actor(ctx), entry.id) end,
+         {:ok,
+          %{"access_token" => "at-refreshed", "refresh_token" => "rt-2", "expires_in" => 3600}}}
+      ])
+
+      result = VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint())
+
+      assert_received {:token_request, %{"refresh_token" => "rt-1"}}
+      refute match?({:ok, _}, result)
+      assert {:error, {:entry_unavailable, "tombstoned"}} = result
+
+      row = row!(ctx, entry)
+      assert row.status == "tombstoned"
+      assert row.sealed_payload == nil
+    end
+
     test "a refresh refused for a moved binding keeps the refresh token the provider rotated",
          %{ctx: ctx} do
       # The third review's case: the field schema is rebound and the
@@ -1061,7 +1189,9 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       provider_hint: hint,
       field_names: "[]",
       oauth_endpoints: Jason.encode!(endpoints),
-      oauth_scopes: Jason.encode!(scopes)
+      oauth_scopes: Jason.encode!(scopes),
+      destination: @destination_text,
+      attach_only: false
     }
 
     {:ok, digest} = Sanctum.VaultReader.binding_digest(binding)

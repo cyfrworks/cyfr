@@ -54,7 +54,10 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
             "token_url" => "http://localhost:#{bypass.port}/token",
             "auth_style" => "params"
           },
-          scopes: ["https://www.googleapis.com/auth/gmail.readonly"]
+          scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+          # Where the new entry may go; attach-only, as the grant left it.
+          destination: ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"}),
+          attach_only: true
         },
         redirect_uri: OAuthGrant.redirect_uri(),
         code_verifier: "verifier-1",

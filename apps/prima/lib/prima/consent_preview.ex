@@ -17,13 +17,26 @@ defmodule Prima.ConsentPreview do
   its values, and whether the person's decision narrowed the ask. The kinds
   and their values:
 
-    * `credential` — `name`, the vault entry; `fields` and `scopes`, its
-      projection; `edge`, the consent edge it rides, from the row's node
-      to the node that uses the entry: `"@ingress"` for the node's own
-      key, otherwise the dependency's name-level ref, spelled `ref|need`
-      for a named need (`Prima.Authority.Blob.edge_key/2`); `label`, when
-      it is lent by a profile of that label. One row per credential and
-      edge, so one entry lent on two edges is two rows.
+    * `credential` — one binding: `name`, the entry's display name;
+      `fields` and `scopes`, its projection; `edge`, the consent edge it
+      rides, from the row's node to the node that uses the entry:
+      `"@ingress"` for the node's own key, otherwise the dependency's
+      name-level ref, spelled `ref|need` for a named need
+      (`Prima.Authority.Blob.edge_key/2`); `label`, when it is lent by a
+      profile of that label; `provider`, the entry's provider hint,
+      absent when it has none; `destination`, where its material may go,
+      as `Prima.Destination.to_map/1` writes it; `source`, `own` for the
+      athanor's entry, `instance` for an instance entry, `provided` for a
+      publisher's provided configuration; `disclosed`, whether the
+      component may read the value itself; `suggested`, whether the plan
+      chose it; `choice_required`, whether the person must choose;
+      `connection`, the account name, present exactly for a named
+      binding; `binding_key`, the binding's own key, the row's node, its
+      edge and its slot (`Prima.Authority.Blob.binding_key/3`); and
+      `lifetime`, `{"kind": standing | until | once, "until": ...}`,
+      `until` an RFC 3339 UTC time for an `until` binding and null
+      otherwise. One row per binding, so one entry lent on two edges, or
+      bound under two names, is two rows.
     * `egress` — `domains`, `methods`, `schemes`, `private_ips`.
     * `storage` — `paths`, `actions`.
     * `tools` — `tools`, the expanded `tool.action` names, or `["*"]`
@@ -193,6 +206,8 @@ defmodule Prima.ConsentPreview.Row do
   @max_set 256
   @max_args_bytes 4096
   @wildcard "*"
+  @sources ~w(own instance provided)
+  @lifetimes ~w(standing until once)
 
   @type t :: %__MODULE__{
           kind: Prima.ConsentPreview.kind(),
@@ -212,7 +227,7 @@ defmodule Prima.ConsentPreview.Row do
          {:ok, node} <- Encoding.check(map, "node", &Encoding.text?(&1, @max_text)),
          {:ok, narrowed} <- Encoding.check(map, "narrowed", &is_boolean/1),
          :ok <- narrowable(kind, narrowed),
-         {:ok, values} <- values(kind, map["values"]),
+         {:ok, values} <- values(kind, map["values"], node),
          :ok <- whole_ask(kind, values, narrowed) do
       {:ok, %__MODULE__{kind: kind, node: node, values: values, narrowed: narrowed}}
     end
@@ -233,15 +248,15 @@ defmodule Prima.ConsentPreview.Row do
 
   @doc """
   What makes a row one of a kind: its kind and node, and for a kind with
-  one row per resource, the resource's name too, with the edge a
-  credential rides and the subject a stream names. A preview holds each
+  one row per resource, the resource's name too, with the subject a
+  stream names; a credential is its binding's key. A preview holds each
   once.
   """
   @spec identity(t()) :: tuple()
   def identity(%__MODULE__{kind: kind, node: node}) when kind in @one_per_node, do: {kind, node}
 
   def identity(%__MODULE__{kind: :credential, node: node, values: values}),
-    do: {:credential, node, values["name"], values["edge"]}
+    do: {:credential, node, values["binding_key"]}
 
   def identity(%__MODULE__{kind: :streams, node: node, values: values}),
     do: {:streams, node, values["name"], values["subject"]}
@@ -252,6 +267,14 @@ defmodule Prima.ConsentPreview.Row do
   @doc "The tools a wildcard row names: every tool, as the grant states it."
   @spec wildcard() :: [String.t()]
   def wildcard, do: [@wildcard]
+
+  @doc "The sources a credential row names."
+  @spec sources() :: [String.t()]
+  def sources, do: @sources
+
+  @doc "The lifetimes a credential row's binding may have."
+  @spec lifetimes() :: [String.t()]
+  def lifetimes, do: @lifetimes
 
   defp kind(name) do
     case Map.fetch(@kinds, name) do
@@ -267,28 +290,39 @@ defmodule Prima.ConsentPreview.Row do
   defp whole_ask(:tools, %{"tools" => [@wildcard]}, true), do: {:error, {:invalid_field, "tools"}}
   defp whole_ask(_kind, _values, _narrowed), do: :ok
 
-  defp values(kind, values) when is_map(values) and not is_struct(values) do
+  defp values(kind, values, node) when is_map(values) and not is_struct(values) do
     {required, optional, checks} = spec(kind)
 
     with :ok <- Encoding.fields(values, required, optional),
          :ok <- each(values, checks),
-         :ok <- whole(kind, values) do
+         :ok <- whole(kind, values),
+         :ok <- placed(kind, values, node) do
       {:ok, values}
     end
   end
 
-  defp values(_kind, _values), do: {:error, {:invalid_field, "values"}}
+  defp values(_kind, _values, _node), do: {:error, {:invalid_field, "values"}}
 
   # {required fields, optional fields, a check per field}
   defp spec(:credential),
     do:
-      {~w(name fields scopes edge), ~w(label),
+      {~w(name fields scopes edge destination source disclosed suggested choice_required
+          binding_key lifetime), ~w(label provider connection),
        %{
          "name" => &text?/1,
          "fields" => &set?/1,
          "scopes" => &set?/1,
          "edge" => &edge?/1,
-         "label" => &text?/1
+         "label" => &text?/1,
+         "provider" => &text?/1,
+         "destination" => &destination?/1,
+         "source" => &(&1 in @sources),
+         "disclosed" => &is_boolean/1,
+         "suggested" => &is_boolean/1,
+         "choice_required" => &is_boolean/1,
+         "connection" => &Prima.Authority.Blob.valid_account_name?/1,
+         "binding_key" => &text?/1,
+         "lifetime" => &lifetime?/1
        }}
 
   defp spec(:egress) do
@@ -325,15 +359,14 @@ defmodule Prima.ConsentPreview.Row do
   defp spec(:system_actions), do: {~w(actions), [], %{"actions" => &operations?/1}}
 
   defp each(values, checks) do
-    invalid =
-      values
-      |> Map.keys()
-      |> Enum.sort()
-      |> Enum.find(fn field ->
-        Map.has_key?(checks, field) and not checks[field].(values[field])
-      end)
+    fields = values |> Map.keys() |> Enum.sort()
 
-    if invalid, do: {:error, {:invalid_field, invalid}}, else: :ok
+    case Enum.find_index(fields, fn field ->
+           Map.has_key?(checks, field) and not checks[field].(values[field])
+         end) do
+      nil -> :ok
+      index -> {:error, {:invalid_field, Enum.at(fields, index)}}
+    end
   end
 
   defp whole(:limits, values) do
@@ -352,6 +385,44 @@ defmodule Prima.ConsentPreview.Row do
   end
 
   defp whole(_kind, _values), do: :ok
+
+  # A credential row is one binding where it sits: its key names the row's
+  # node, its edge and its slot, `name:<connection>` exactly when the row
+  # names an account and `default` otherwise.
+  defp placed(:credential, values, node) do
+    slot = values["connection"]
+
+    if values["binding_key"] == Prima.Authority.Blob.binding_key(node, values["edge"], slot),
+      do: :ok,
+      else: {:error, {:invalid_field, "binding_key"}}
+  end
+
+  defp placed(_kind, _values, _node), do: :ok
+
+  # The canonical spelling alone, so one destination is one row value.
+  defp destination?(value) do
+    case Prima.Destination.from_map(value) do
+      {:ok, destination} -> Prima.Destination.to_map(destination) == value
+      {:error, _reason} -> false
+    end
+  end
+
+  defp lifetime?(%{"kind" => kind, "until" => until} = lifetime) when map_size(lifetime) == 2 do
+    case kind do
+      "until" -> utc?(until)
+      kind when kind in @lifetimes -> until == nil
+      _other -> false
+    end
+  end
+
+  defp lifetime?(_lifetime), do: false
+
+  # An RFC 3339 instant in UTC, spelled with `Z`.
+  defp utc?(value) when is_binary(value) do
+    String.ends_with?(value, "Z") and match?({:ok, _instant, 0}, DateTime.from_iso8601(value))
+  end
+
+  defp utc?(_value), do: false
 
   defp text?(value), do: Encoding.text?(value, @max_text)
 

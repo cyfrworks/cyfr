@@ -52,7 +52,10 @@ defmodule Opus.RetainedInputTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "claude key",
         kind: "api_key",
-        fields: %{"ANTHROPIC_API_KEY" => "sk-test-claude"}
+        fields: %{"ANTHROPIC_API_KEY" => "sk-test-claude"},
+        # The run reads the key itself, so the entry is disclosed.
+        destination: %{"hosts" => ["api.anthropic.com"]},
+        disclose: true
       })
 
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: "catalyst:local.claude"})

@@ -3,8 +3,9 @@
 
 defmodule PrismWeb.VaultLiveTest do
   @moduledoc """
-  Tests sign-in gating, vault-entry server references and management of
-  operator OAuth client credentials on the Vault page.
+  Tests sign-in gating, vault-entry server references, the destination
+  and disclosure a new entry names, and management of operator OAuth
+  client credentials on the Vault page.
 
   Storing client credentials is a sensitive change: the page asks
   through its system layer, and nothing is stored until the person
@@ -47,7 +48,8 @@ defmodule PrismWeb.VaultLiveTest do
           "action" => "create",
           "name" => "bridge-token",
           "kind" => "api_key",
-          "fields" => %{"TOKEN" => "t"}
+          "fields" => %{"TOKEN" => "t"},
+          "destination" => %{"hosts" => ["example.com"]}
         })
       )
 
@@ -77,6 +79,121 @@ defmodule PrismWeb.VaultLiveTest do
   # A secret no rendered page holds by accident: a LiveView's element id and
   # session token are random base64url text, where three letters turn up.
   @client_secret "client secret: never rendered"
+
+  # Submits the create form as typed, proves the record it waits on, and
+  # submits it again when the page asks: the browser's resubmission.
+  defp create_confirmed!(view, ctx, typed) do
+    # A created entry closes the form; the next one opens it again.
+    unless has_element?(view, "#vault-create-form"),
+      do: render_click(view, "show_add", %{"mode" => "fields"})
+
+    view |> form("#vault-create-form", typed) |> render_submit()
+
+    assert {:ok, [%{ref: ref, operation: "vault.create"}]} =
+             Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+    Sanctum.TestContext.prove!(ctx, ref)
+    assert_push_event(view, "system_layer:resubmit", %{form: "vault-create-form"}, 2_000)
+    view |> form("#vault-create-form", typed) |> render_submit()
+
+    {:ok, entries} = Sanctum.Vault.list(ctx)
+    Enum.find(entries, &(&1.name == typed["name"]))
+  end
+
+  test "a new entry names where it may go, nothing prefilled, attached unless disclosed",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    {view, _html} = mount_athanor(conn, "/vault")
+    render_click(view, "show_add", %{"mode" => "fields"})
+
+    # No installed need stands behind this page, so the person types the
+    # destination: no host is offered, and a component reading the value
+    # is off until they turn it on.
+    hosts = ~s(#vault-create-form input[name="destination_hosts"])
+    assert has_element?(view, hosts <> "[required]")
+    refute view |> element(hosts) |> render() =~ ~r/value="[^"]+"/
+    assert has_element?(view, ~s(#vault-create-form input[type="checkbox"][name="disclose"]))
+    refute has_element?(view, ~s(#vault-create-form input[name="disclose"][checked]))
+
+    ctx =
+      Sanctum.Context.build(
+        user_id: user.user_id,
+        athanor_id: seated_athanor().id,
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    attached =
+      create_confirmed!(view, ctx, %{
+        "name" => "routed-#{System.unique_integer([:positive])}",
+        "kind" => "api_key",
+        "fields" => "TOKEN=t0k3n",
+        "destination_hosts" => "API.example.com",
+        "destination_paths" => "/v1/"
+      })
+
+    assert attached.destination == %{
+             "hosts" => ["api.example.com"],
+             "paths" => ["/v1/"],
+             "scheme" => "https"
+           }
+
+    assert attached.attach_only == true
+
+    disclosed =
+      create_confirmed!(view, ctx, %{
+        "name" => "read-#{System.unique_integer([:positive])}",
+        "kind" => "api_key",
+        "fields" => "TOKEN=t0k3n",
+        "destination_hosts" => "db.example.com",
+        "destination_port" => "8443",
+        "disclose" => "true"
+      })
+
+    assert disclosed.destination == %{
+             "hosts" => ["db.example.com"],
+             "port" => 8443,
+             "scheme" => "https"
+           }
+
+    assert disclosed.attach_only == false
+
+    # Each row says where its entry goes, and whether components may read it.
+    html = render(view)
+    assert html =~ "https://api.example.com · /v1/"
+    assert html =~ "https://db.example.com:8443"
+    assert has_element?(view, ~s([data-test="entry-disclosure"]), "never handed to a component")
+    assert has_element?(view, ~s([data-test="entry-disclosure"]), "disclosed: components read it")
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a new entry with no host to go to is refused, and nothing waits on a record",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    {view, _html} = mount_athanor(conn, "/vault")
+    render_click(view, "show_add", %{"mode" => "fields"})
+
+    view
+    |> form("#vault-create-form", %{
+      "name" => "nowhere-#{System.unique_integer([:positive])}",
+      "kind" => "api_key",
+      "fields" => "TOKEN=t0k3n",
+      "destination_hosts" => " "
+    })
+    |> render_submit()
+
+    ctx = %{Sanctum.TestContext.local() | athanor_id: seated_athanor().id, user_id: user.user_id}
+
+    assert {:ok, []} =
+             Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+    assert {:ok, []} = Sanctum.Vault.list(ctx)
+    Cyfr.Test.Sandbox.end_views()
+  end
 
   test "OAuth client credentials are stored, listed by provider only, and removed", %{conn: conn} do
     user = test_user()

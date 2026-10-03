@@ -69,11 +69,16 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   defp storage(paths, actions \\ ["read"]),
     do: %{"storage" => %{"paths" => paths, "actions" => actions}}
 
-  defp vault(entry_id),
+  # `entry_id` bound on `node`'s `edge`: the athanor's own entry, keyed
+  # where it sits.
+  defp vault(entry_id, node, edge),
     do: %{
       "vault" => %{
         "entry_id" => entry_id,
         "binding_digest" => "sha256:binding",
+        "scope" => "athanor",
+        "binding_key" => Prima.Authority.Blob.binding_key(node, edge, nil),
+        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
         "projection" => %{"fields" => ["api_key"], "scopes" => []}
       }
     }
@@ -124,17 +129,42 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
   defp ids(%{grants: grants}), do: Enum.map(grants, & &1.profile_id)
 
+  # The revision's row for `entry` bound on `node`'s `edge`.
+  defp entry_ref(node, edge, entry),
+    do: %{
+      binding_key: Prima.Authority.Blob.binding_key(node, edge, nil),
+      scope: "athanor",
+      vault_entry_id: entry,
+      binding_digest: "sha256:binding"
+    }
+
   # The lender: `@dep`'s own profile, binding `entry` on its ingress.
   defp lender!(ctx, entry, opts \\ []) do
-    ref = %{vault_entry_id: entry, binding_digest: "sha256:binding"}
-    grant!(ctx, "grants-dep", policy(@dep, vault(entry)), [vault_refs: [ref]] ++ opts)
+    ref = entry_ref(@dep, "@ingress", entry)
+
+    grant!(
+      ctx,
+      "grants-dep",
+      policy(@dep, vault(entry, @dep, "@ingress")),
+      [vault_refs: [ref]] ++ opts
+    )
   end
 
   # A borrower: its edge to `@dep` selects `@dep`'s profile through
-  # `selection` (`via`), and grants a domain beside it.
-  defp borrower!(ctx, name, selection, opts \\ []) do
+  # `selection` (`via`), and grants a domain beside it. Its revision's row
+  # for that edge names the label it borrows and the digest it pins.
+  defp borrower!(ctx, name, %{"via" => via} = selection, opts \\ []) do
+    ref = "reagent:local.#{name}"
     edge = Map.put(egress(["borrow.example"]), "vault", selection)
-    grant!(ctx, name, policy("reagent:local.#{name}", %{}, %{"key" => edge}), opts)
+
+    row = %{
+      binding_key: Prima.Authority.Blob.binding_key(ref, borrowed_edge(), nil),
+      scope: "athanor",
+      via_label: via["label"],
+      binding_digest: via["binding_digest"]
+    }
+
+    grant!(ctx, name, policy(ref, %{}, %{"key" => edge}), [vault_refs: [row]] ++ opts)
   end
 
   defp borrowed_edge, do: Prima.Authority.Blob.edge_key(@dep, "key")
@@ -303,25 +333,41 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   describe "a vault entry" do
     test "is reached by its id among the revision's vault references", %{ctx: ctx} do
       entry = "vlt_grants_#{System.unique_integer([:positive])}"
-      ref = %{vault_entry_id: entry, binding_digest: "sha256:binding"}
 
       bound =
-        grant!(ctx, "g-bound", policy("reagent:local.g-bound", vault(entry)), vault_refs: [ref])
+        grant!(
+          ctx,
+          "g-bound",
+          policy("reagent:local.g-bound", vault(entry, "reagent:local.g-bound", "@ingress")),
+          vault_refs: [entry_ref("reagent:local.g-bound", "@ingress", entry)]
+        )
 
       lent =
         grant!(
           ctx,
           "g-lent",
-          policy("reagent:local.g-lent", %{}, %{"key" => vault(entry)}),
-          vault_refs: [ref]
+          policy("reagent:local.g-lent", %{}, %{
+            "key" => vault(entry, "reagent:local.g-lent", borrowed_edge())
+          }),
+          vault_refs: [entry_ref("reagent:local.g-lent", borrowed_edge(), entry)]
         )
 
       # References and blob disagree: the loader refuses such a revision,
       # so it reaches nothing through the entry.
       _refs_only =
-        grant!(ctx, "g-refs-only", policy("reagent:local.g-refs-only", %{}), vault_refs: [ref])
+        grant!(ctx, "g-refs-only", policy("reagent:local.g-refs-only", %{}),
+          vault_refs: [entry_ref("reagent:local.g-refs-only", "@ingress", entry)]
+        )
 
-      _blob_only = grant!(ctx, "g-blob-only", policy("reagent:local.g-blob-only", vault(entry)))
+      _blob_only =
+        grant!(
+          ctx,
+          "g-blob-only",
+          policy(
+            "reagent:local.g-blob-only",
+            vault(entry, "reagent:local.g-blob-only", "@ingress")
+          )
+        )
 
       assert {:ok, answer} = grants(ctx, %{"entry_id" => entry})
       assert answer.resource == %{kind: "entry_id", value: entry}
@@ -348,10 +394,16 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
     test "of another athanor, or of none, is refused as unknown", %{ctx: ctx, theirs: theirs} do
       entry = "vlt_theirs_#{System.unique_integer([:positive])}"
-      ref = %{vault_entry_id: entry, binding_digest: "sha256:binding"}
+      ref = entry_ref("reagent:local.g-theirs-vault", "@ingress", entry)
 
       _theirs =
-        grant!(theirs, "g-theirs-vault", policy("reagent:local.g-theirs-vault", vault(entry)),
+        grant!(
+          theirs,
+          "g-theirs-vault",
+          policy(
+            "reagent:local.g-theirs-vault",
+            vault(entry, "reagent:local.g-theirs-vault", "@ingress")
+          ),
           vault_refs: [ref]
         )
 
@@ -526,7 +578,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
       _mismatched =
         grant!(ctx, "g-mismatched", policy("reagent:local.g-mismatched", canonical),
-          vault_refs: [%{vault_entry_id: entry, binding_digest: "sha256:binding"}]
+          vault_refs: [entry_ref("reagent:local.g-mismatched", "@ingress", entry)]
         )
 
       invalid = grant!(ctx, "g-invalid", policy("reagent:local.g-invalid", canonical))

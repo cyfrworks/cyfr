@@ -193,7 +193,8 @@ defmodule Cyfr.StoredJsonTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "stored-json",
         kind: "api_key",
-        fields: %{"token" => "t0k3n-value"}
+        fields: %{"token" => "t0k3n-value"},
+        destination: %{"hosts" => ["api.example.com"]}
       })
 
     Arca.Repo.update_all(from(e in Arca.Schemas.VaultEntry, where: e.id == ^view.id),
@@ -210,11 +211,21 @@ defmodule Cyfr.StoredJsonTest do
 
     assert_logged(log, "Sanctum.Vault", "field_names")
 
-    empty = %{provider_hint: nil, field_names: nil, oauth_endpoints: nil, oauth_scopes: nil}
+    empty = %{
+      provider_hint: nil,
+      field_names: nil,
+      oauth_endpoints: nil,
+      oauth_scopes: nil,
+      destination: ~s({"hosts":["api.example.com"],"scheme":"https"}),
+      attach_only: true
+    }
+
     corrupt = %{empty | field_names: @corrupt, oauth_endpoints: @corrupt}
 
     log =
       capture_log(fn ->
+        assert {:ok, _digest} = Sanctum.VaultReader.binding_digest(empty)
+
         assert Sanctum.VaultReader.binding_digest(corrupt) ==
                  Sanctum.VaultReader.binding_digest(empty)
       end)

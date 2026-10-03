@@ -13,6 +13,14 @@ defmodule PrismWeb.VaultLive do
   callback completes it server-side and the vault PubSub topic refreshes
   this view when the entry lands.
 
+  Every new entry names where its material may go — the destination's
+  hosts, and optionally its scheme, port, methods and paths — and whether
+  a component may read it. This page is reached with no installed need
+  behind it, so it prefills neither: the person types the destination,
+  and disclosure is off until they turn it on
+  (`PrismWeb.SystemLayer.destination_params/1`). Each entry's row shows
+  where it goes and whether components may read it.
+
   Entering material — an entry, its rotation, an OAuth grant, an OAuth
   app's client credentials — is a sensitive change: the page asks for a
   fresh confirmation through its system layer
@@ -109,10 +117,20 @@ defmodule PrismWeb.VaultLive do
     end
   end
 
-  def handle_event("create", %{"name" => name, "kind" => kind, "fields" => fields_text}, socket) do
+  def handle_event(
+        "create",
+        %{"name" => name, "kind" => kind, "fields" => fields_text} = params,
+        socket
+      ) do
     case parse_fields(fields_text) do
       {:ok, fields} ->
-        args = %{"name" => name, "kind" => kind, "fields" => fields}
+        args = %{
+          "name" => name,
+          "kind" => kind,
+          "fields" => fields,
+          "destination" => SystemLayer.destination_params(params),
+          "disclose" => SystemLayer.disclose_param(params)
+        }
 
         case SystemLayer.call(socket, :create, "vault/create", args, form: create_form()) do
           {:ok, _, socket} ->
@@ -140,7 +158,9 @@ defmodule PrismWeb.VaultLive do
         "action" => "authorize",
         "name" => params["name"],
         "provider_hint" => params["provider"],
-        "oauth_scopes" => split_lines(params["scopes"] || "")
+        "oauth_scopes" => split_lines(params["scopes"] || ""),
+        "destination" => SystemLayer.destination_params(params),
+        "disclose" => SystemLayer.disclose_param(params)
       }
       |> maybe_endpoints(params)
 
@@ -328,7 +348,7 @@ defmodule PrismWeb.VaultLive do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(s) when is_binary(s), do: if(String.trim(s) == "", do: nil, else: s)
 
-  @entry_keys ~w(id name kind provider_hint status provenance field_names oauth_scopes payload_rev last_used_at)a
+  @entry_keys ~w(id name kind provider_hint status provenance field_names oauth_scopes destination attach_only payload_rev last_used_at)a
 
   defp normalize_entry(entry) do
     Map.new(@entry_keys, fn key -> {key, entry[key]} end)
@@ -362,6 +382,22 @@ defmodule PrismWeb.VaultLive do
   # Renders through the console's one refusal seam — never `inspect/1`,
   # which put internal terms on the page.
   defp fmt(reason), do: error_message(reason)
+
+  # Where an entry's material may go, in one line: scheme and hosts, the
+  # port, and the methods and paths it is held to when it names them.
+  defp destination_line(%{} = destination) do
+    hosts = Enum.join(Map.get(destination, "hosts", []), ", ")
+
+    [
+      "#{Map.get(destination, "scheme", "https")}://#{hosts}",
+      if(port = Map.get(destination, "port"), do: ":#{port}"),
+      if(methods = Map.get(destination, "methods"), do: " · #{Enum.join(methods, " ")}"),
+      if(paths = Map.get(destination, "paths"), do: " · #{Enum.join(paths, " ")}")
+    ]
+    |> Enum.join()
+  end
+
+  defp destination_line(_none), do: "no destination"
 
   defp status_class("active"), do: "text-emerald-500"
   defp status_class("needs_reauth"), do: "text-amber-500"
@@ -434,6 +470,7 @@ defmodule PrismWeb.VaultLive do
               class="w-full rounded-md border-gray-600 bg-transparent font-mono text-sm"
             ></textarea>
           </div>
+          <.destination_inputs prefix="create" />
           <.button type="submit">Create entry</.button>
         </form>
       </.card>
@@ -476,6 +513,7 @@ defmodule PrismWeb.VaultLive do
               </div>
             </div>
           </details>
+          <.destination_inputs prefix="oauth" />
           <p class="text-xs text-gray-500">
             The provider's client credentials must be configured first (oauth.set_client).
           </p>
@@ -512,6 +550,16 @@ defmodule PrismWeb.VaultLive do
             <span :if={entry.kind == "oauth"} class="text-xs text-gray-500">
               {Enum.join(entry.oauth_scopes || [], " ")}
             </span>
+          </:col>
+          <:col :let={entry} label="Goes to">
+            <div class="font-mono text-xs" data-test="entry-destination">
+              {destination_line(entry.destination)}
+            </div>
+            <div class="text-xs text-gray-500" data-test="entry-disclosure">
+              {if entry.attach_only == false,
+                do: "disclosed: components read it",
+                else: "attach-only: never handed to a component"}
+            </div>
           </:col>
           <:col :let={entry} label="Status">
             <span class={["text-xs font-medium", status_class(entry.status)]}>
@@ -651,6 +699,57 @@ defmodule PrismWeb.VaultLive do
 
       <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
     </div>
+    """
+  end
+
+  # The destination and disclosure a new entry names, asked of the person:
+  # nothing is prefilled, and disclosure is off until it is turned on.
+  attr :prefix, :string, required: true
+
+  defp destination_inputs(assigns) do
+    ~H"""
+    <fieldset class="space-y-2" data-test={"#{@prefix}-destination"}>
+      <legend class="text-xs text-gray-500 uppercase">Where its material may go</legend>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">
+          Hosts — for example api.example.com, or *.example.com
+        </label>
+        <.input name="destination_hosts" required placeholder="api.example.com" />
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Scheme</label>
+          <select
+            name="destination_scheme"
+            class="w-full rounded-md border-gray-600 bg-transparent text-sm"
+          >
+            <option value="https">https</option>
+            <option value="http">http</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Port (optional)</label>
+          <.input name="destination_port" placeholder="443" />
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Methods (optional)</label>
+          <.input name="destination_methods" placeholder="GET POST" />
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Path prefixes (optional)</label>
+          <.input name="destination_paths" placeholder="/v1/" />
+        </div>
+      </div>
+      <label class="flex items-start gap-2 text-sm">
+        <input type="checkbox" name="disclose" value="true" data-test={"#{@prefix}-disclose"} />
+        <span>
+          Let components read the value itself. Left off, the value is never handed to a
+          component, and a component asking for it is refused.
+        </span>
+      </label>
+    </fieldset>
     """
   end
 

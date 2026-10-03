@@ -7,6 +7,11 @@ defmodule Sanctum.VaultTest do
   alias Sanctum.Vault
   alias Sanctum.VaultReader
 
+  # Where the fixtures' entries may go. The cases here read what they
+  # entered, so their entries are disclosed.
+  @destination %{"hosts" => ["db.example"], "scheme" => "https"}
+  @destination_text ~s({"hosts":["db.example"],"scheme":"https"})
+
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
@@ -19,7 +24,9 @@ defmodule Sanctum.VaultTest do
         %{
           name: "supabase-#{System.unique_integer([:positive])}",
           kind: "api_key",
-          fields: %{"url" => "https://db.example", "anon_key" => "anon"}
+          fields: %{"url" => "https://db.example", "anon_key" => "anon"},
+          destination: @destination,
+          disclose: true
         },
         over
       )
@@ -38,7 +45,9 @@ defmodule Sanctum.VaultTest do
         kind: "oauth",
         provider_hint: "google",
         fields: %{},
-        oauth_scopes: ["gmail.readonly"]
+        oauth_scopes: ["gmail.readonly"],
+        destination: %{"hosts" => ["gmail.googleapis.com"]},
+        disclose: true
       },
       over
     )
@@ -113,7 +122,14 @@ defmodule Sanctum.VaultTest do
           granted_by: "test",
           granted_via: "bootstrap"
         },
-        [%{vault_entry_id: entry_id, binding_digest: binding_digest}],
+        [
+          %{
+            binding_key: "formula:local.consumer|@ingress|default",
+            scope: "athanor",
+            vault_entry_id: entry_id,
+            binding_digest: binding_digest
+          }
+        ],
         nil
       )
 
@@ -153,7 +169,12 @@ defmodule Sanctum.VaultTest do
 
     test "entered from a session with no proof, it answers the signal and seals nothing",
          %{person: person} do
-      params = %{name: "unproven", kind: "api_key", fields: %{"KEY" => "sk-unproven"}}
+      params = %{
+        name: "unproven",
+        kind: "api_key",
+        fields: %{"KEY" => "sk-unproven"},
+        destination: @destination
+      }
 
       assert {:error, {:confirmation_required, %{id: id, operation: "vault.create"}}} =
                Vault.create(person, params)
@@ -180,7 +201,8 @@ defmodule Sanctum.VaultTest do
                Sanctum.Vault.OAuthGrant.authorize_url(person, %{
                  name: "Mail",
                  provider: "google",
-                 scopes: ["mail"]
+                 scopes: ["mail"],
+                 destination: %{"hosts" => ["gmail.googleapis.com"]}
                })
 
       assert {:error, {:confirmation_required, %{operation: "oauth.set_client"}}} =
@@ -191,7 +213,13 @@ defmodule Sanctum.VaultTest do
 
     test "a confirmation enters its one credential: another name or other material asks again",
          %{person: person} do
-      params = %{name: "one", kind: "api_key", fields: %{"KEY" => "sk-one"}}
+      params = %{
+        name: "one",
+        kind: "api_key",
+        fields: %{"KEY" => "sk-one"},
+        destination: @destination
+      }
+
       confirmed = entering(person, "vault.create", params, "one")
 
       other = %{params | fields: %{"KEY" => "sk-two"}}
@@ -229,7 +257,71 @@ defmodule Sanctum.VaultTest do
     test "a living name cannot be reused", %{ctx: ctx} do
       create!(ctx, %{name: "taken"})
 
-      assert {:error, :name_taken} = create(ctx, %{name: "taken", kind: "api_key"})
+      assert {:error, :name_taken} =
+               create(ctx, %{name: "taken", kind: "api_key", destination: @destination})
+    end
+
+    test "an entry names its destination: none, or one off the grammar, is refused before anything is asked",
+         %{ctx: ctx} do
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+
+      # Refused for its shape before any confirmation: nothing to confirm.
+      assert {:error, :destination_required} =
+               Vault.create(person, %{name: "nowhere", kind: "api_key", fields: %{"K" => "v"}})
+
+      for destination <- [
+            %{"hosts" => []},
+            %{"hosts" => ["*"]},
+            %{"hosts" => ["https://api.example.com"]},
+            %{"hosts" => ["api.example.com"], "scheme" => "ftp"},
+            %{"hosts" => ["api.example.com"], "paths" => ["v1"]},
+            %{"hosts" => ["api.example.com"], "port" => 70_000},
+            "api.example.com"
+          ] do
+        assert {:error, {:invalid_destination, _}} =
+                 Vault.create(person, %{
+                   name: "nowhere",
+                   kind: "api_key",
+                   fields: %{"K" => "v"},
+                   destination: destination
+                 })
+      end
+
+      assert {:error, :invalid_disclose} =
+               Vault.create(person, %{
+                 name: "nowhere",
+                 kind: "api_key",
+                 destination: @destination,
+                 disclose: "yes"
+               })
+
+      assert {:ok, listed} = Vault.list(person)
+      refute Enum.any?(listed, &(&1.name == "nowhere"))
+    end
+
+    test "an entry is attach-only unless created with disclose: true, and says where it goes",
+         %{ctx: ctx} do
+      {:ok, attached} =
+        create(ctx, %{
+          name: "attached",
+          kind: "api_key",
+          fields: %{"K" => "v"},
+          destination: @destination
+        })
+
+      assert attached.attach_only == true
+      assert attached.destination == @destination
+
+      disclosed = create!(ctx, %{name: "disclosed"})
+      assert disclosed.attach_only == false
+
+      assert row!(ctx, attached.id).destination == @destination_text
+      assert row!(ctx, attached.id).attach_only == true
+
+      # The binding digest covers both: the same entry otherwise differs.
+      {:ok, a} = VaultReader.binding_digest(row!(ctx, attached.id))
+      {:ok, d} = VaultReader.binding_digest(%{row!(ctx, attached.id) | attach_only: false})
+      refute a == d
     end
 
     test "unknown kinds are refused", %{ctx: ctx} do
@@ -358,6 +450,36 @@ defmodule Sanctum.VaultTest do
       assert row.field_names == ~s(["anon_key","service_key","url"])
       assert row.binding_digest == digest
       assert {:ok, ^digest} = VaultReader.binding_digest(row)
+    end
+
+    test "moving the destination or the disclosure is a rebind: the digest moves, dependents block",
+         %{ctx: ctx} do
+      view = create!(ctx)
+      old_resource = resource_for(ctx, view.id)
+      profile = mint_profile_with_ref(ctx, view.id, old_resource.binding_digest)
+
+      assert {:ok, %{binding_digest: moved, affected: [affected]}} =
+               Vault.rebind(ctx, %{
+                 id: view.id,
+                 destination: %{"hosts" => ["db.example"], "paths" => ["/rest/v1/"]}
+               })
+
+      assert affected == profile.id
+      refute moved == old_resource.binding_digest
+
+      assert row!(ctx, view.id).destination ==
+               ~s({"hosts":["db.example"],"paths":["/rest/v1/"],"scheme":"https"})
+
+      assert {:ok, %{binding_digest: attached}} =
+               Vault.rebind(ctx, %{id: view.id, disclose: false})
+
+      refute attached == moved
+      assert row!(ctx, view.id).attach_only == true
+
+      assert {:error, {:invalid_destination, _}} =
+               Vault.rebind(ctx, %{id: view.id, destination: %{"hosts" => []}})
+
+      assert {:error, :invalid_disclose} = Vault.rebind(ctx, %{id: view.id, disclose: "no"})
     end
 
     test "a rebind with no binding fields is refused", %{ctx: ctx} do
@@ -661,7 +783,8 @@ defmodule Sanctum.VaultTest do
       assert row.sealed_payload == nil
 
       # The living-name unique index ignores tombstones.
-      assert {:ok, _} = create(ctx, %{name: "reusable", kind: "api_key"})
+      assert {:ok, _} =
+               create(ctx, %{name: "reusable", kind: "api_key", destination: @destination})
     end
   end
 

@@ -92,7 +92,15 @@ defmodule PrismWeb.ConsentSheetComponentTest do
               "name" => "Service key",
               "edge" => "@ingress",
               "fields" => ["SERVICE_KEY"],
-              "scopes" => []
+              "scopes" => [],
+              "provider" => "service.example",
+              "destination" => %{"hosts" => ["api.service.example"], "scheme" => "https"},
+              "source" => "own",
+              "disclosed" => false,
+              "suggested" => false,
+              "choice_required" => false,
+              "binding_key" => "tincture:local.sheet-probe|@ingress|default",
+              "lifetime" => %{"kind" => "standing", "until" => nil}
             }
           }
         ],
@@ -118,6 +126,14 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     assert html =~ "to reach the service"
     assert html =~ ~r/data-row="credential"[^>]*>\s*<span[^>]*>Service key<\/span>/
     assert html =~ "tincture:local.sheet-probe&#39;s own calls"
+
+    # The binding in plain words: whose entry, where it goes, that the
+    # component never holds it, and that it stands until revoked.
+    assert html =~ "Source: own (an entry of this athanor)"
+    assert html =~ "https://api.service.example"
+    assert html =~ "Attached by CYFR: the component never holds the value"
+    assert html =~ "Lifetime: until revoked"
+    refute html =~ "Choose which entry to use"
     assert html =~ "tincture:local.sheet-probe · in Home"
     assert html =~ ~r/aria-pressed="true"[^>]*>\s*Service key/
   end

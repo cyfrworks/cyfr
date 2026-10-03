@@ -37,7 +37,10 @@ defmodule Crucible.CredentialedIngressGateTest do
         provider_hint: "",
         kind: "api_key",
         field_names: Jason.encode!(["api_key"]),
-        sealed_payload: sealed
+        sealed_payload: sealed,
+        # The cases read the material back, so the entry is disclosed.
+        destination: ~s({"hosts":["api.example.com"],"scheme":"https"}),
+        attach_only: false
       })
 
     {:ok, digest} = VaultReader.binding_digest(entry)

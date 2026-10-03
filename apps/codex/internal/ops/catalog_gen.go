@@ -3891,6 +3891,10 @@ type RetentionSetArgsSettings struct {
 	ProjectionTombstoneDays Field[int] `json:"projection_tombstone_days,omitzero"`
 	// Days of records kept per athanor
 	FrameCredentialDays Field[int] `json:"frame_credential_days,omitzero"`
+	// Days of records kept per athanor
+	FileOfferDays Field[int] `json:"file_offer_days,omitzero"`
+	// Days of records kept per athanor
+	FileReceiptDays Field[int] `json:"file_receipt_days,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -4697,9 +4701,14 @@ type VaultAuthorizeArgs struct {
 	Name Field[string] `json:"name,omitzero"`
 	// Immutable provider tag (e.g. 'google'); set at create only
 	ProviderHint Field[string] `json:"provider_hint,omitzero"`
-	// Binding field: scopes this credential was authorized for
-	OauthScopes    Field[[]string]                         `json:"oauth_scopes,omitzero"`
+	// Scopes to authorize: a new entry's, or a re-authorization's (the one way an entry's scopes change)
+	OauthScopes Field[[]string] `json:"oauth_scopes,omitzero"`
+	// A new entry's endpoints, for a provider with no preset; fixed once created
 	OauthEndpoints Field[VaultAuthorizeArgsOauthEndpoints] `json:"oauth_endpoints,omitzero"`
+	// A new entry's destination, where its token may go — required for a new entry
+	Destination Field[VaultAuthorizeArgsDestination] `json:"destination,omitzero"`
+	// A new entry's disclosure: true lets a component be dispensed its token; otherwise it is never handed to a component
+	Disclose Field[bool] `json:"disclose,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4730,6 +4739,30 @@ func (args *VaultAuthorizeArgsOauthEndpoints) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type VaultAuthorizeArgsDestination struct {
+	// Hosts the material may go to: exact names, or *. and a name
+	Hosts []string `json:"hosts"`
+	// https unless http is stated
+	Scheme Field[string] `json:"scheme,omitzero"`
+	// The port; the scheme's default when absent
+	Port Field[int] `json:"port,omitzero"`
+	// HTTP methods admitted; any when absent
+	Methods Field[[]string] `json:"methods,omitzero"`
+	// Path prefixes admitted, each beginning with /; any when absent
+	Paths Field[[]string] `json:"paths,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *VaultAuthorizeArgsDestination) UnmarshalJSON(data []byte) error {
+	type fields VaultAuthorizeArgsDestination
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = VaultAuthorizeArgsDestination(value)
+	return nil
+}
+
 // VaultCreateArgs carries arguments for vault.create.
 type VaultCreateArgs struct {
 	// Entry label — unique among living entries in the tenant
@@ -4743,6 +4776,10 @@ type VaultCreateArgs struct {
 	// Binding field: scopes this credential was authorized for
 	OauthScopes    Field[[]string]                      `json:"oauth_scopes,omitzero"`
 	OauthEndpoints Field[VaultCreateArgsOauthEndpoints] `json:"oauth_endpoints,omitzero"`
+	// Binding field: where the material may go — required, never defaulted
+	Destination VaultCreateArgsDestination `json:"destination"`
+	// Binding field: true lets a component read the fields; otherwise they are never handed to a component
+	Disclose Field[bool] `json:"disclose,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4770,6 +4807,30 @@ func (args *VaultCreateArgsOauthEndpoints) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*args = VaultCreateArgsOauthEndpoints(value)
+	return nil
+}
+
+type VaultCreateArgsDestination struct {
+	// Hosts the material may go to: exact names, or *. and a name
+	Hosts []string `json:"hosts"`
+	// https unless http is stated
+	Scheme Field[string] `json:"scheme,omitzero"`
+	// The port; the scheme's default when absent
+	Port Field[int] `json:"port,omitzero"`
+	// HTTP methods admitted; any when absent
+	Methods Field[[]string] `json:"methods,omitzero"`
+	// Path prefixes admitted, each beginning with /; any when absent
+	Paths Field[[]string] `json:"paths,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *VaultCreateArgsDestination) UnmarshalJSON(data []byte) error {
+	type fields VaultCreateArgsDestination
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = VaultCreateArgsDestination(value)
 	return nil
 }
 
@@ -4807,9 +4868,10 @@ type VaultRebindArgs struct {
 	Id string `json:"id"`
 	// Binding field: the material's field schema (rebind only)
 	FieldNames Field[[]string] `json:"field_names,omitzero"`
-	// Binding field: scopes this credential was authorized for
-	OauthScopes    Field[[]string]                      `json:"oauth_scopes,omitzero"`
-	OauthEndpoints Field[VaultRebindArgsOauthEndpoints] `json:"oauth_endpoints,omitzero"`
+	// Binding field: where the material may go
+	Destination Field[VaultRebindArgsDestination] `json:"destination,omitzero"`
+	// Binding field: true lets a component read the fields; false makes the entry attach-only
+	Disclose Field[bool] `json:"disclose,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4821,22 +4883,27 @@ func (args VaultRebindArgs) MarshalJSON() ([]byte, error) {
 	}{Action: VaultRebind, fields: fields(args)})
 }
 
-type VaultRebindArgsOauthEndpoints struct {
-	AuthorizeUrl Field[string]            `json:"authorize_url,omitzero"`
-	TokenUrl     Field[string]            `json:"token_url,omitzero"`
-	Provider     Field[string]            `json:"provider,omitzero"`
-	AuthStyle    Field[string]            `json:"auth_style,omitzero"`
-	ExtraParams  Field[map[string]string] `json:"extra_params,omitzero"`
+type VaultRebindArgsDestination struct {
+	// Hosts the material may go to: exact names, or *. and a name
+	Hosts []string `json:"hosts"`
+	// https unless http is stated
+	Scheme Field[string] `json:"scheme,omitzero"`
+	// The port; the scheme's default when absent
+	Port Field[int] `json:"port,omitzero"`
+	// HTTP methods admitted; any when absent
+	Methods Field[[]string] `json:"methods,omitzero"`
+	// Path prefixes admitted, each beginning with /; any when absent
+	Paths Field[[]string] `json:"paths,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *VaultRebindArgsOauthEndpoints) UnmarshalJSON(data []byte) error {
-	type fields VaultRebindArgsOauthEndpoints
+func (args *VaultRebindArgsDestination) UnmarshalJSON(data []byte) error {
+	type fields VaultRebindArgsDestination
 	var value fields
 	if err := decodeRecord(data, &value); err != nil {
 		return err
 	}
-	*args = VaultRebindArgsOauthEndpoints(value)
+	*args = VaultRebindArgsDestination(value)
 	return nil
 }
 

@@ -21,9 +21,12 @@ defmodule Sanctum.VaultReader do
      the consent's copy — the stored column is a cache, never an
      authority, so a write path that edited endpoints without recomputing
      it cannot pass
-  5. the payload unseals under the entry's AEAD (a tampered pointer fails
+  5. the entry is disclosed: an attach-only entry's material is never
+     handed to a component, so a field read or a token dispense of one is
+     refused `:disclosure_refused` before anything is unsealed
+  6. the payload unseals under the entry's AEAD (a tampered pointer fails
      decrypt)
-  6. every projected field is present in the entry's material, and
+  7. every projected field is present in the entry's material, and
      nothing outside `projection.fields` leaves this module: a field the
      entry lacks refuses the whole resolution, never a partial projection
 
@@ -62,6 +65,7 @@ defmodule Sanctum.VaultReader do
           | :not_found
           | {:entry_unavailable, String.t()}
           | :binding_mismatch
+          | :disclosure_refused
           | :unseal_failed
           | :invalid_payload
           | {:invalid_payload, atom() | tuple()}
@@ -79,7 +83,9 @@ defmodule Sanctum.VaultReader do
   The edge's `projection.fields` is required: an edge without a non-empty
   field list answers `{:error, :corrupt}` before the entry is read, and a
   projected field the entry's material lacks answers
-  `{:error, {:missing_field, name}}`. Either way nothing is dispensed.
+  `{:error, {:missing_field, name}}`. An attach-only entry answers
+  `{:error, :disclosure_refused}` before it is unsealed. Either way
+  nothing is dispensed.
   """
   @spec fetch(Context.t(), vault_resource()) ::
           {:ok, %{String.t() => String.t()}} | {:error, error()}
@@ -104,7 +110,9 @@ defmodule Sanctum.VaultReader do
   provider can never dispense another's token. Scopes the
   entry lacks are refused `{:scope_projection_unsatisfiable, missing}`,
   and fewer than it holds are dispensed only where its provider
-  attenuates a refresh (`:scope_not_attenuable` otherwise).
+  attenuates a refresh (`:scope_not_attenuable` otherwise). A token is
+  dispensed only from a disclosed entry: an attach-only one answers
+  `{:error, :disclosure_refused}` before it is unsealed.
   """
   @spec oauth_token(Context.t(), vault_resource(), String.t()) ::
           {:ok, String.t()} | {:error, error()}
@@ -199,23 +207,47 @@ defmodule Sanctum.VaultReader do
   @doc """
   Derive an entry's binding digest from its binding fields.
 
-  `JCS` over the provider hint, sorted field names, endpoints and scopes —
-  the identity of *what this credential talks to*, excluding the material
-  (rotation must not re-consent) and including everything a rebind edit
-  would change.
+  `JCS` over the provider hint, sorted field names, endpoints, scopes, the
+  destination (`Prima.Destination`'s canonical map) and whether the entry
+  is attach-only — the identity of *what this credential talks to and how
+  it leaves*, excluding the material (rotation must not re-consent) and
+  including everything a rebind edit would change. An entry whose
+  destination is absent or outside the grammar, or whose disclosure is not
+  a boolean, derives no digest (`{:error, :invalid_binding}`): there is no
+  reading of one without them.
   """
   @spec binding_digest(Arca.VaultStorage.entry() | map()) ::
           {:ok, String.t()} | {:error, term()}
   def binding_digest(entry) do
-    input = %{
-      "provider_hint" => entry.provider_hint || "",
-      "field_names" => decode_list(entry.field_names, "field_names"),
-      "oauth_endpoints" => decode_map(entry.oauth_endpoints, "oauth_endpoints"),
-      "oauth_scopes" => decode_list(entry.oauth_scopes, "oauth_scopes")
-    }
+    with {:ok, destination} <- binding_destination(Map.get(entry, :destination)),
+         attach_only when is_boolean(attach_only) <- Map.get(entry, :attach_only) do
+      input = %{
+        "provider_hint" => entry.provider_hint || "",
+        "field_names" => decode_list(entry.field_names, "field_names"),
+        "oauth_endpoints" => decode_map(entry.oauth_endpoints, "oauth_endpoints"),
+        "oauth_scopes" => decode_list(entry.oauth_scopes, "oauth_scopes"),
+        "destination" => destination,
+        "attach_only" => attach_only
+      }
 
-    JCS.hash(input)
+      JCS.hash(input)
+    else
+      _ -> {:error, :invalid_binding}
+    end
   end
+
+  # The destination a digest covers: the stored canonical text read back
+  # through the grammar, so a hand-edited row cannot hash as another.
+  defp binding_destination(text) when is_binary(text) do
+    with {:ok, %{} = map} <- Prima.Json.decode(text),
+         {:ok, destination} <- Prima.Destination.from_map(map) do
+      {:ok, Prima.Destination.to_map(destination)}
+    else
+      _ -> {:error, :invalid_binding}
+    end
+  end
+
+  defp binding_destination(_absent), do: {:error, :invalid_binding}
 
   defp load_and_unseal(%Context{} = ctx, %{entry_id: entry_id} = resource) do
     actor = Context.actor(ctx)
@@ -223,11 +255,17 @@ defmodule Sanctum.VaultReader do
     with {:ok, entry} <- Arca.VaultStorage.get(actor, entry_id),
          :ok <- check_status(entry),
          :ok <- check_binding(entry, resource),
+         :ok <- check_disclosed(entry),
          {:ok, payload} <- unseal_material(actor, entry) do
       Arca.VaultStorage.touch_last_used(actor, entry.id)
       {:ok, entry, payload}
     end
   end
+
+  # Every read here hands material to a component; an attach-only entry's
+  # material never leaves that way, so it is refused before it is unsealed.
+  defp check_disclosed(%{attach_only: false}), do: :ok
+  defp check_disclosed(_entry), do: {:error, :disclosure_refused}
 
   @doc """
   Checks whether an active vault entry’s binding digest matches the

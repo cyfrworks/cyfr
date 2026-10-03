@@ -130,7 +130,7 @@ answer_asks() {
         ;;
       confirmation)
         answer="$(server_fixture "$CELL" console "$other_token" vault/create \
-          "{\"name\":\"asked-over-a-frame-$id\",\"kind\":\"api_key\",\"fields\":{\"API_KEY\":\"not-shown-$id\"}}")"
+          "{\"name\":\"asked-over-a-frame-$id\",\"kind\":\"api_key\",\"fields\":{\"API_KEY\":\"not-shown-$id\"},\"destination\":{\"hosts\":[\"fixture.test\"]}}")"
         printf '%s' "$answer" | grep -q confirmation_required ||
           fail "the second session's change did not wait for a confirmation: $answer"
         answer='{"ok":"asked"}'

@@ -39,6 +39,28 @@ defmodule Sanctum.Consent.LoaderTest do
     )
   end
 
+  # A binding row of the fixture graph: the formula's edge into the
+  # catalyst under `need`, at the entry and digest the blob names.
+  defp ref(need, entry_id, digest) do
+    %{
+      binding_key:
+        Prima.Authority.Blob.binding_key(
+          Fixtures.formula_ref(),
+          "#{Fixtures.catalyst_ref()}|#{need}",
+          nil
+        ),
+      scope: "athanor",
+      vault_entry_id: entry_id,
+      binding_digest: digest
+    }
+  end
+
+  defp source_ref, do: ref("source", "vault-source", "sha256:bind-source")
+  defp dest_ref, do: ref("dest", "vault-dest", "sha256:bind-dest")
+
+  defp identity(%{binding_key: key, vault_entry_id: id, binding_digest: digest}),
+    do: {:entry, "athanor", key, id, digest}
+
   defp consent(overrides \\ %{}) do
     {:ok, policy_json} = Jason.encode(Fixtures.graph_map())
 
@@ -54,10 +76,7 @@ defmodule Sanctum.Consent.LoaderTest do
           commit_digest: "sha256:commit-1",
           resolved_policy: policy_json,
           activation: Fixtures.activation(),
-          vault_refs: [
-            %{vault_entry_id: "vault-source", binding_digest: "sha256:bind-source"},
-            %{vault_entry_id: "vault-dest", binding_digest: "sha256:bind-dest"}
-          ]
+          vault_refs: [source_ref(), dest_ref()]
         },
         overrides
       )
@@ -200,27 +219,44 @@ defmodule Sanctum.Consent.LoaderTest do
     seed(
       ctx,
       profile,
-      consent(%{
-        vault_refs: [%{vault_entry_id: "vault-source", binding_digest: "sha256:bind-source"}]
-      })
+      consent(%{vault_refs: [source_ref()]})
     )
 
     assert {:error, {:blob_refs_mismatch, %{blob_only: blob_only, refs_only: []}}} =
              Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
 
-    assert blob_only == [{"vault-dest", "sha256:bind-dest"}]
+    assert blob_only == [identity(dest_ref())]
   end
 
   test "a stored ref the blob does not carry fails closed too", %{ctx: ctx} do
     profile = profile_summary()
-    extra = %{vault_entry_id: "vault-ghost", binding_digest: "sha256:bind-ghost"}
+    extra = ref("ghost", "vault-ghost", "sha256:bind-ghost")
     base = consent()
     seed(ctx, profile, %{base | vault_refs: base.vault_refs ++ [extra]})
 
     assert {:error, {:blob_refs_mismatch, %{blob_only: [], refs_only: refs_only}}} =
              Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
 
-    assert refs_only == [{"vault-ghost", "sha256:bind-ghost"}]
+    assert refs_only == [identity(extra)]
+  end
+
+  test "a row naming the blob's entry under another key, or at another digest, fails closed",
+       %{ctx: ctx} do
+    profile = profile_summary()
+
+    # The same entry and digest as the blob's dest binding, keyed as a
+    # named account: the identity is the binding, never the entry alone.
+    moved = %{dest_ref() | binding_key: dest_ref().binding_key <> "x"}
+    seed(ctx, profile, consent(%{vault_refs: [source_ref(), moved]}))
+
+    assert {:error, {:blob_refs_mismatch, %{blob_only: [_], refs_only: [_]}}} =
+             Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
+
+    stale = %{dest_ref() | binding_digest: "sha256:other"}
+    seed(ctx, profile, consent(%{vault_refs: [source_ref(), stale]}))
+
+    assert {:error, {:blob_refs_mismatch, %{blob_only: [_], refs_only: [_]}}} =
+             Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
   end
 
   test "versionless drift with unknown live shape demands fresh consent", %{ctx: ctx} do
@@ -416,9 +452,7 @@ defmodule Sanctum.Consent.LoaderTest do
         consent(%{scope: :pinned, pinned_version: ""}),
         consent(%{resolved_policy: "{not json"}),
         %{honest | blob_digest: "sha256:not-these-bytes"},
-        consent(%{
-          vault_refs: [%{vault_entry_id: "vault-source", binding_digest: "sha256:bind-source"}]
-        }),
+        consent(%{vault_refs: [source_ref()]}),
         with_paths(["data//secrets/"])
       ]
 

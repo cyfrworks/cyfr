@@ -84,7 +84,14 @@ defmodule Prima.WorkerProtocolTest do
     assert HostAPI.retry(:push_deltas) == :batch
     assert HostAPI.retry(:admit_child) == :keyed
 
-    for effect <- [:tool_call, :storage, :oauth_token, :take_rate, :record_denial] do
+    for effect <- [
+          :tool_call,
+          :storage,
+          :oauth_token,
+          :take_rate,
+          :record_denial,
+          :attached_fetch
+        ] do
       assert HostAPI.retry(effect) == :never
     end
   end

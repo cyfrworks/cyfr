@@ -58,7 +58,8 @@ defmodule Arca.RecordSinkTest do
         name: "sink-probe",
         kind: "api_key",
         status: "active",
-        sealed_payload: <<4, 2, "k1", 0>>
+        sealed_payload: <<4, 2, "k1", 0>>,
+        destination: ~s({"hosts":["fixture.test"],"scheme":"https"})
       })
 
     actor = %Prima.Actor{athanor_id: "ath_a"}

@@ -655,6 +655,7 @@ defmodule Sanctum.Consent.Commit do
            {:ok, entry} <- fetch_active_entry(ctx, bound.entry_id),
            {:ok, live_digest} <- VaultReader.binding_digest(entry),
            :ok <- check_lender_digest(live_digest, bound, dep, profile.label),
+           {:ok, destination} <- BlobBuilder.entry_destination(entry),
            {:ok, lent} <- lent_fields(bound, dep, profile.label),
            {:ok, fields} <- selected_fields(raw, lent, dep) do
         selection = %{
@@ -665,6 +666,11 @@ defmodule Sanctum.Consent.Commit do
           binding_digest: live_digest,
           entry_id: entry.id,
           entry_name: entry.name,
+          provider: entry.provider_hint,
+          # Where the lent entry may go and whether it is disclosed are the
+          # lender's entry's, read from its row.
+          destination: destination,
+          disclosed: not entry.attach_only,
           fields: fields,
           lent_fields: lent,
           # The selection names no scopes, so the lender's reach the edge.
@@ -726,8 +732,8 @@ defmodule Sanctum.Consent.Commit do
     with {:ok, head} <- Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id),
          {:ok, blob} <- Prima.Authority.Blob.parse(head.resolved_policy),
          {:ok, ingress} <- Prima.Authority.Blob.ingress(blob, profile.source_ref),
-         true <- Prima.Authority.Blob.bound_vault?(ingress.vault) do
-      {:ok, ingress.vault}
+         %{entry_id: _} = vault <- ingress.vault do
+      {:ok, vault}
     else
       _ -> {:error, {:selection_unbound, profile.source_ref, profile.label}}
     end
@@ -869,8 +875,12 @@ defmodule Sanctum.Consent.Commit do
                {:error, {:binding_went_stale, entry.id}} do
         binding = %{
           need: edge_key,
+          binding_key: vault["binding_key"],
           entry_id: entry.id,
           binding_digest: live_digest,
+          scope: vault["scope"],
+          destination: vault["destination"],
+          attach: vault["attach"],
           fields: get_in(vault, ["projection", "fields"]) || [],
           scopes: get_in(vault, ["projection", "scopes"]) || []
         }
@@ -930,11 +940,15 @@ defmodule Sanctum.Consent.Commit do
            {:ok, entry} <- fetch_active_entry(ctx, Map.get(raw, :entry_id)),
            {:ok, digest} <- VaultReader.binding_digest(entry),
            {:ok, fields, scopes} <- named_projection(declared_need, fields, scopes, entry, need),
-           :ok <- check_scope_projection(entry, scopes) do
+           :ok <- check_scope_projection(entry, scopes),
+           {:ok, destination} <- BlobBuilder.entry_destination(entry) do
         binding = %{
           need: need,
           entry_id: entry.id,
           binding_digest: digest,
+          scope: "athanor",
+          destination: destination,
+          attach: attach_rule(declared_need),
           fields: fields,
           scopes: scopes
         }
@@ -956,6 +970,11 @@ defmodule Sanctum.Consent.Commit do
         error
     end
   end
+
+  # The need's attach rule as the blob carries it: nil for a disclose-only
+  # need, and for the `@ingress` binding of a manifest that declares none.
+  defp attach_rule(%{attach: %{} = rule}), do: Prima.Manifest.Needs.attach_to_map(rule)
+  defp attach_rule(_declared_need), do: nil
 
   defp check_known_need("@ingress", nil), do: {:ok, nil}
   defp check_known_need(need, nil), do: {:error, {:unknown_need, need}}
@@ -1095,7 +1114,11 @@ defmodule Sanctum.Consent.Commit do
        kind: kind,
        invoke_mode: invoke_mode,
        origins: origins,
-       bindings: bindings,
+       # A binding's scope, destination and attach rule are the blob's,
+       # which the blob digest above covers; the decision is what the
+       # person chose.
+       bindings:
+         Enum.map(bindings, &Map.take(&1, [:need, :entry_id, :binding_digest, :fields, :scopes])),
        selections:
          Enum.map(selections, &Map.take(&1, [:from, :dep, :label, :binding_digest, :fields])),
        tool_servers:
@@ -1207,11 +1230,19 @@ defmodule Sanctum.Consent.Commit do
   # Blob + persistence
   # ---------------------------------------------------------------------------
 
+  # A published profile's bindings are its owner's, each at the place and
+  # under the key the owner's blob gave it: one row per binding.
   defp build_blob(_ctx, %{publish_nodes: nodes} = prep) when is_map(nodes) do
     refs =
       prep.bindings
-      |> Enum.map(&%{vault_entry_id: &1.entry_id, binding_digest: &1.binding_digest})
-      |> Enum.uniq()
+      |> Enum.map(fn binding ->
+        BlobBuilder.ref_row(binding.binding_key, %{
+          "entry_id" => binding.entry_id,
+          "binding_digest" => binding.binding_digest,
+          "scope" => binding.scope
+        })
+      end)
+      |> Enum.uniq_by(& &1.binding_key)
 
     with {:ok, nodes, narrowed} <- BlobBuilder.narrow_nodes(nodes, prep.source_ref, prep.subset),
          {:ok, blob_json} <- JCS.encode(%{"canonical" => "jcs-1", "nodes" => nodes}),
@@ -1295,15 +1326,22 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
+  # The bound resource the binding names; its place gives it its key
+  # (`BlobBuilder.encode/1`).
   defp vault_resource(binding) do
     projection =
       %{}
       |> put_projection("fields", binding.fields)
       |> put_projection("scopes", binding.scopes)
 
-    base = %{"entry_id" => binding.entry_id, "binding_digest" => binding.binding_digest}
-
-    if projection == %{}, do: base, else: Map.put(base, "projection", projection)
+    %{
+      "entry_id" => binding.entry_id,
+      "binding_digest" => binding.binding_digest,
+      "scope" => binding.scope,
+      "destination" => binding.destination
+    }
+    |> Prima.MapUtil.put_present("attach", binding.attach)
+    |> Prima.MapUtil.put_present("projection", if(projection == %{}, do: nil, else: projection))
   end
 
   defp selection_resource(nil), do: nil
@@ -1483,11 +1521,14 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # One row per credential an edge carries, on the node whose edge carries
+  # One row per binding an edge carries, on the node whose edge carries
   # it: the source for its ingress, the calling node for an edge into a
-  # dependency, with the edge's key, so one entry lent on two edges is two
-  # rows. A bound entry is named by the entry; a selection by the lender's
-  # entry and the label of the profile lending it.
+  # dependency, with the edge's key and the binding's own key, so one
+  # entry lent on two edges is two rows. A bound entry is named by the
+  # entry; a selection by the lender's entry and the label of the profile
+  # lending it. Every binding of this revision is the athanor's own, chosen
+  # by the person, standing until revoked; its destination and disclosure
+  # are its entry's, read from the row.
   defp credential_rows(prep, nodes) do
     carried =
       for {from, node} <- Enum.sort(nodes),
@@ -1504,7 +1545,12 @@ defmodule Sanctum.Consent.Commit do
     case Enum.find(carried, &match?({:error, _}, &1)) do
       nil ->
         rows = for {:ok, row} <- carried, do: row
-        {:ok, Enum.sort_by(rows, &{&1["node"], &1["values"]["name"], &1["values"]["edge"]})}
+
+        {:ok,
+         Enum.sort_by(
+           rows,
+           &{&1["node"], &1["values"]["name"], &1["values"]["edge"], &1["values"]["binding_key"]}
+         )}
 
       error ->
         error
@@ -1523,7 +1569,15 @@ defmodule Sanctum.Consent.Commit do
              "edge" => key,
              "fields" => projection(vault, "fields"),
              "scopes" => projection(vault, "scopes")
-           },
+           }
+           |> Map.merge(
+             binding_values(
+               entry.provider_hint,
+               vault["destination"],
+               not entry.attach_only,
+               vault["binding_key"]
+             )
+           ),
            false
          )}
 
@@ -1554,10 +1608,36 @@ defmodule Sanctum.Consent.Commit do
              "label" => label,
              "fields" => fields,
              "scopes" => Enum.sort(Enum.uniq(selection.lent_scopes))
-           },
+           }
+           |> Map.merge(
+             binding_values(
+               selection.provider,
+               selection.destination,
+               selection.disclosed,
+               # The borrower's binding, where the selection sits.
+               Prima.Authority.Blob.binding_key(from, key, nil)
+             )
+           ),
            false
          )}
     end
+  end
+
+  # What every binding of this revision says beside its entry: the entry's
+  # provider (absent when it names none), destination and stored
+  # disclosure, the person's own choice standing until revoked, and the
+  # binding's key.
+  defp binding_values(provider, destination, disclosed, binding_key) do
+    %{
+      "destination" => destination,
+      "source" => "own",
+      "disclosed" => disclosed,
+      "suggested" => false,
+      "choice_required" => false,
+      "binding_key" => binding_key,
+      "lifetime" => %{"kind" => "standing", "until" => nil}
+    }
+    |> Prima.MapUtil.put_present("provider", provider)
   end
 
   defp projection(vault, key),

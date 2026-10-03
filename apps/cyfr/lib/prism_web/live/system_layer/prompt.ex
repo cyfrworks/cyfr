@@ -31,7 +31,8 @@ defmodule PrismWeb.SystemLayer.Prompt do
     * `:credential_entry` — `name`, the vault entry to create, and
       optionally `field`, the name its one field is stored under
       (`API_KEY` when absent), created through `vault.create` as an `api_key`
-      entry;
+      entry with the destination and disclosure the person enters in the
+      prompt's form; the subject names neither, so nothing is prefilled;
     * `:unlock` — optionally `name`, the vault entry it concerns;
     * `:sign_in` — optionally `message`, a sentence saying why;
     * `:safe_mode` — a `Prism.SafeMode` value;

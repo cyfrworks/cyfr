@@ -345,7 +345,8 @@ defmodule Opus.ChainTest do
           provider_hint: "",
           kind: "api_key",
           field_names: Jason.encode!(["api_key"]),
-          sealed_payload: sealed
+          sealed_payload: sealed,
+          destination: ~s({"hosts":["api.example.com"],"scheme":"https"})
         })
 
       {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
@@ -445,6 +446,9 @@ defmodule Opus.ChainTest do
             "vault" => %{
               "entry_id" => entry.id,
               "binding_digest" => digest,
+              "scope" => "athanor",
+              "binding_key" => Blob.binding_key(@root_node, @target_node, nil),
+              "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
               "projection" => %{"fields" => ["api_key"]}
             }
           }

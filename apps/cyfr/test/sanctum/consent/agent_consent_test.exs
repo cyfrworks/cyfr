@@ -63,7 +63,8 @@ defmodule Sanctum.Consent.AgentConsentTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: Keyword.get(opts, :name, "claude key"),
         kind: "api_key",
-        fields: %{"ANTHROPIC_API_KEY" => Keyword.get(opts, :key, "sk-test")}
+        fields: %{"ANTHROPIC_API_KEY" => Keyword.get(opts, :key, "sk-test")},
+        destination: %{"hosts" => ["api.anthropic.com"]}
       })
 
     label = Keyword.get(opts, :label, "default")
@@ -120,7 +121,20 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {profile, head, refs} = head!(ctx, @soul)
     assert profile.label == "default" and profile.kind == :owner
     assert head.granted_via == "bootstrap"
-    assert refs == []
+
+    # Every selection in the graph is a binding of its own: one row each,
+    # naming the label it borrows and pinning nothing, none naming an entry.
+    selections =
+      for {node, %{"edges" => edges}} <- Jason.decode!(head.resolved_policy)["nodes"],
+          {edge_key, %{"vault" => %{"via" => via}}} <- edges,
+          do: {Blob.binding_key(node, edge_key, nil), via["label"], via["binding_digest"]}
+
+    assert {"#{@soul}|catalyst:local.claude|default", "default", nil} in selections
+
+    assert Enum.sort(Enum.map(refs, &{&1.binding_key, &1.via_label, &1.binding_digest})) ==
+             Enum.sort(selections)
+
+    assert Enum.all?(refs, &(&1.vault_entry_id == nil and &1.instance_entry_id == nil))
 
     # The soul's edge into its model selects the model's default profile;
     # its edge into a role carries no vault; its edges into its hands

@@ -17,6 +17,15 @@
           "vault": {
             "entry_id": "vault-entry-my-supabase",
             "binding_digest": "sha256:bind-my-supabase",
+            "scope": "athanor",
+            "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|source|default",
+            "destination": {
+              "hosts": ["prod.supabase.co"],
+              "scheme": "https",
+              "methods": ["GET", "POST"],
+              "paths": ["/rest/v1"]
+            },
+            "attach": { "in": "header", "name": "apikey", "template": "{value}" },
             "projection": { "fields": ["url", "anon_key"] }
           },
           "egress": {
@@ -33,13 +42,56 @@
           "vault": {
             "entry_id": "vault-entry-warehouse",
             "binding_digest": "sha256:bind-warehouse",
-            "projection": { "fields": ["url", "service_key"] }
+            "scope": "athanor",
+            "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|dest|default",
+            "destination": { "hosts": ["warehouse.supabase.co"], "scheme": "https" },
+            "projection": { "fields": ["url", "service_key"] },
+            "named": {
+              "Archive": {
+                "entry_id": "vault-entry-archive",
+                "binding_digest": "sha256:bind-archive",
+                "scope": "instance",
+                "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|dest|name:Archive",
+                "destination": {
+                  "hosts": ["archive.supabase.co"],
+                  "scheme": "https",
+                  "port": 8443,
+                  "methods": ["GET"],
+                  "paths": ["/rest/v1"]
+                },
+                "attach": { "in": "header", "name": "Authorization", "template": "Bearer {value}" }
+              }
+            }
           },
           "egress": {
             "domains": ["warehouse.supabase.co"],
             "methods": ["GET", "POST"],
             "schemes": ["https"],
             "private_ips": []
+          }
+        },
+        "catalyst:supabase.com.database|lent": {
+          "vault": {
+            "entry_id": "vault-entry-lent",
+            "binding_digest": "sha256:bind-lent",
+            "scope": "athanor",
+            "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|lent|default",
+            "destination": { "hosts": ["*.supabase.co"], "scheme": "https" },
+            "attach": { "in": "query", "name": "apikey", "template": "{value}" },
+            "lender": {
+              "profile_id": "prof-supabase",
+              "consent_id": "consent-supabase-3",
+              "binding_key": "catalyst:supabase.com.database|@ingress|default"
+            }
+          }
+        },
+        "catalyst:supabase.com.database|public": {
+          "vault": {
+            "provided": {
+              "destination": { "hosts": ["public.supabase.co"], "scheme": "https", "paths": ["/rest/v1"] },
+              "values": { "anon_key": "public-anon-key" },
+              "attach": { "in": "header", "name": "apikey", "template": "{value}" }
+            }
           }
         }
       }

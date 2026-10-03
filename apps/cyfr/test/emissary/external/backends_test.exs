@@ -27,6 +27,10 @@ defmodule Emissary.External.BackendsTest do
   """
   use ExUnit.Case, async: false
 
+  # Where the cases' entries may go: an external server's credential is
+  # resolved by name, and its destination is not what these cases test.
+  @destination %{"hosts" => ["api.example.com"]}
+
   import ExUnit.CaptureLog
 
   alias Arca.JobClaims
@@ -193,7 +197,8 @@ defmodule Emissary.External.BackendsTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "gh-token",
         kind: "api_key",
-        fields: %{"token" => @secret}
+        fields: %{"token" => @secret},
+        destination: @destination
       })
 
     entry

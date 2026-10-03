@@ -419,5 +419,36 @@ defmodule Prima.IdentityTest do
 
       assert Encoding.fields(%{"a" => 1}, ["a", "b"], []) == {:error, {:missing_field, "b"}}
     end
+
+    test "a key that is no string is unknown, and hides no unknown key after it" do
+      assert Encoding.fields(%{nil => 1}, [], []) == {:error, {:unknown_field, "nil"}}
+
+      assert Encoding.fields(%{nil => 1, "a" => 1}, ["a"], []) ==
+               {:error, {:unknown_field, "nil"}}
+
+      assert {:error, {:unknown_field, field}} =
+               Encoding.fields(%{nil => 1, "z" => 2, "a" => 1}, ["a"], [])
+
+      assert field in ["nil", "z"]
+    end
+
+    test "a preview row with a key that is no string is refused, at the top and in its values" do
+      row = %{
+        "kind" => "tools",
+        "node" => "formula",
+        "values" => %{"tools" => ["execution.run"]},
+        "narrowed" => false
+      }
+
+      assert {:ok, _row} = Prima.ConsentPreview.Row.decode(row)
+
+      assert {:error, {:unknown_field, field}} =
+               Prima.ConsentPreview.Row.decode(Map.merge(row, %{nil => 1, "extra" => 2}))
+
+      assert field in ["nil", "extra"]
+
+      assert {:error, {:unknown_field, "nil"}} =
+               Prima.ConsentPreview.Row.decode(put_in(row, ["values", nil], 1))
+    end
   end
 end

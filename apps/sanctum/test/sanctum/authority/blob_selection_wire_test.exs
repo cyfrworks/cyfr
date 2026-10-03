@@ -4,7 +4,9 @@
 defmodule Sanctum.Authority.BlobSelectionWireTest do
   @moduledoc """
   A vault resource bound to an entry or selected from a profile of the
-  edge's target travels the wire unchanged, lender included.
+  edge's target travels the wire unchanged, both identities of a resolved
+  selection included: the borrower's binding key where it sits and the
+  lender's profile, consent and binding key.
   """
 
   use ExUnit.Case, async: false
@@ -61,22 +63,36 @@ defmodule Sanctum.Authority.BlobSelectionWireTest do
   end
 
   test "a bound vault's lender survives parse, encode and the wire" do
-    bound = %{
-      "entry_id" => "vault-1",
-      "binding_digest" => "sha256:key",
-      "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]},
-      "lender" => %{"profile_id" => "prof-claude", "consent_id" => "consent-claude"}
+    lender = %{
+      "profile_id" => "prof-claude",
+      "consent_id" => "consent-claude",
+      "binding_key" => Blob.binding_key(@catalyst, "@ingress", nil)
     }
+
+    bound =
+      Fixtures.bound_vault(@formula, @catalyst, "vault-1", "sha256:key",
+        destination: Fixtures.destination_map(["api.anthropic.com"]),
+        attach: %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+        projection: %{"fields" => ["ANTHROPIC_API_KEY"]},
+        lender: lender
+      )
 
     assert {:ok, blob} = Blob.parse(graph(bound))
     assert {:ok, edge} = Blob.lookup_edge(blob, @formula, @catalyst, "")
 
-    assert edge.vault == %{
+    assert %{
              entry_id: "vault-1",
              binding_digest: "sha256:key",
+             scope: "athanor",
+             binding_key: "formula:local.assistant|catalyst:local.claude|default",
+             attach: %{in: "header", name: "x-api-key", template: "{value}"},
              projection: %{fields: ["ANTHROPIC_API_KEY"], scopes: []},
-             lender: %{profile_id: "prof-claude", consent_id: "consent-claude"}
-           }
+             lender: %{
+               profile_id: "prof-claude",
+               consent_id: "consent-claude",
+               binding_key: "catalyst:local.claude|@ingress|default"
+             }
+           } = edge.vault
 
     assert Blob.parse(Blob.to_map(blob)) == {:ok, blob}
 
@@ -98,7 +114,10 @@ defmodule Sanctum.Authority.BlobSelectionWireTest do
 
     assert back.resources.vault.lender == %{
              profile_id: "prof-claude",
-             consent_id: "consent-claude"
+             consent_id: "consent-claude",
+             binding_key: "catalyst:local.claude|@ingress|default"
            }
+
+    assert back.resources.vault.binding_key == edge.vault.binding_key
   end
 end

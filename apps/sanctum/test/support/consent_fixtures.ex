@@ -98,13 +98,25 @@ defmodule Sanctum.Test.ConsentFixtures do
     profile_id
   end
 
+  # Where a key this fixture enters may go when the case names no
+  # destination of its own: a host of the fixture's, which no request of a
+  # case is ever sent to. Stated here, once, so the entry it writes names
+  # its destination as every entry must.
+  @fixture_destination %{"hosts" => ["fixture.test"], "scheme" => "https"}
+
+  @doc "The destination this fixture's entries name when a case names none."
+  def fixture_destination, do: @fixture_destination
+
   @doc """
   Connect a key to `ref` as a person does: a new vault entry holding
   `fields`, bound to the component's `api_key` need through the consent
   walk (plan, preview, commit) under the profile `opts[:label]` (default
   `"default"`). `opts[:origins]` names the origins the grant admits, as a
   person ticks them; absent, the commit admits `interactive` alone.
-  Answers the entry.
+
+  The component reads the key itself, so the entry is created disclosed
+  (`disclose: true`), to `opts[:destination]` or the fixture's own
+  destination (`fixture_destination/0`). Answers the entry.
   """
   def bind_key!(%Context{} = ctx, ref, fields, opts \\ []) when is_map(fields) do
     label = Keyword.get(opts, :label, "default")
@@ -112,7 +124,9 @@ defmodule Sanctum.Test.ConsentFixtures do
     params = %{
       name: Keyword.get(opts, :name, "key #{System.unique_integer([:positive])}"),
       kind: "api_key",
-      fields: fields
+      fields: fields,
+      destination: Keyword.get(opts, :destination, @fixture_destination),
+      disclose: true
     }
 
     # Entering the key is a sensitive change, confirmed as its person
@@ -228,9 +242,11 @@ defmodule Sanctum.Test.ConsentFixtures do
   @doc """
   The vault entry `id`, minted empty in the fixture's tenant if it is not
   there. A consent reference row names an entry through a foreign key,
-  and a binding that named no row could not be committed either.
+  and a binding that named no row could not be committed either. The
+  entry holds no material, so it is attach-only, to the fixture's
+  destination. A selection's row names no entry and mints none.
   """
-  def ensure_entry!(%Context{} = ctx, %{vault_entry_id: id} = ref) do
+  def ensure_entry!(%Context{} = ctx, %{vault_entry_id: id} = ref) when is_binary(id) do
     actor = Context.actor(ctx)
 
     case Arca.VaultStorage.get(actor, id) do
@@ -238,18 +254,24 @@ defmodule Sanctum.Test.ConsentFixtures do
         entry
 
       {:error, :not_found} ->
+        {:ok, destination} = Sanctum.Vault.destination_text(@fixture_destination)
+
         {:ok, entry} =
           Arca.VaultStorage.put(actor, %{
             id: id,
             name: "fixture #{id} #{System.unique_integer([:positive])}",
             kind: "api_key",
             field_names: "[]",
+            destination: destination,
+            attach_only: true,
             binding_digest: Map.get(ref, :binding_digest)
           })
 
         entry
     end
   end
+
+  def ensure_entry!(%Context{}, _ref), do: nil
 
   @doc """
   Write `changes` straight onto the profile's head revision, past every

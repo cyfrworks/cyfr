@@ -29,6 +29,10 @@ defmodule Sanctum.AnonymousIngressTest do
       resource = %{
         entry_id: "vlt_anon_probe",
         binding_digest: "sha256:x",
+        scope: "athanor",
+        binding_key: "tincture:alice.widget|@ingress|default",
+        destination: %Prima.Destination{hosts: ["oauth2.googleapis.com"], scheme: "https"},
+        attach: nil,
         projection: %{fields: [], scopes: []}
       }
 

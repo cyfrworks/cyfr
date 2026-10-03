@@ -188,6 +188,11 @@ defmodule Arca.SecurityTransitions.Fixtures do
     id
   end
 
+  # An athanor's stored tree, for a case that wrote bytes into it to
+  # remove after itself.
+  def storage_root(athanor_id),
+    do: Arca.Adapters.Local.build_path(Prima.Actor.in_athanor(athanor_id), [])
+
   def user(id), do: Arca.Repo.get(User, id)
   def athanor(id), do: Arca.Repo.get(Athanor, id)
   def session?(hash), do: Arca.Repo.exists?(where(Session, token_hash: ^hash))
@@ -527,6 +532,74 @@ defmodule Arca.SecurityTransitionsTest do
       assert invitation_id == invitation.id
       assert change.unfollowed == 1
       assert change.member_user_ids[pair.id] == [peer.id]
+    end
+
+    test "removes the person from every instance audience and ends their offers both ways" do
+      {user, own} = owner!()
+      shared = group!()
+      peer = person!()
+      seat!(shared.id, user.id)
+      seat!(shared.id, peer.id)
+
+      {:ok, listed} =
+        Arca.InstanceEntries.put(
+          server(),
+          %{
+            name: "listed-#{uniq()}",
+            kind: "api_key",
+            provider_hint: "openai.com",
+            destination:
+              ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+            sealed_payload: "sealed",
+            binding_digest: "sha256:i0",
+            audience: "listed",
+            created_by: "usr_admin"
+          },
+          [user.id, peer.id]
+        )
+
+      mine = %Prima.Actor{athanor_id: own.id, user_id: user.id}
+      theirs = %Prima.Actor{athanor_id: shared.id, user_id: peer.id}
+      on_exit(fn -> for a <- [own.id, shared.id], do: File.rm_rf(storage_root(a)) end)
+
+      :ok = Arca.put(mine, ["data", "out.txt"], "from the denied")
+      :ok = Arca.put(theirs, ["data", "in.txt"], "to the denied")
+      {:ok, %{offer_id: sent}} = Arca.FileOffers.offer(mine, peer.id, ["data/out.txt"])
+      {:ok, %{offer_id: incoming}} = Arca.FileOffers.offer(theirs, user.id, ["data/in.txt"])
+
+      test_pid = self()
+      handler = "deny-offers-#{uniq()}"
+
+      :telemetry.attach_many(
+        handler,
+        [[:cyfr, :arca, :file_offer, :withdrawn], [:cyfr, :arca, :file_offer, :declined]],
+        fn event, _m, meta, _c -> send(test_pid, {event, meta.offer_id}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+
+      assert change.instance_audiences_left == 1
+      assert change.ended_offer_ids == Enum.sort([sent, incoming])
+      refute Map.has_key?(change, :ended_offers)
+
+      # The peer stays listed; the denied person is offered nothing.
+      assert {:ok, [%{members: [member]}]} = Arca.InstanceEntries.list(server())
+      assert member == peer.id
+      assert {:ok, []} = Arca.InstanceEntries.offered(mine, [])
+      assert {:ok, [_]} = Arca.InstanceEntries.offered(%Prima.Actor{user_id: peer.id}, [])
+      assert listed.audience == "listed"
+
+      assert {:ok, [%{status: "withdrawn"}]} = Arca.FileOffers.outbox(mine)
+      assert {:ok, [%{status: "declined"}]} = Arca.FileOffers.inbox(mine)
+
+      # Each snapshot is released once the denial commits, and announced.
+      assert {:error, :not_found} = Arca.get(mine, ["payloads", "offers", sent, "out.txt"])
+      assert {:error, :not_found} = Arca.get(theirs, ["payloads", "offers", incoming, "in.txt"])
+      assert_receive {[:cyfr, :arca, :file_offer, :withdrawn], ^sent}
+      assert_receive {[:cyfr, :arca, :file_offer, :declined], ^incoming}
     end
 
     test "a repeated denial moves no generation and still checks what it retires" do

@@ -48,7 +48,13 @@ defmodule Sanctum.ProviderVaultStatusTest do
       name = "#{kind}-#{System.unique_integer([:positive])}"
 
       {:ok, view} =
-        Sanctum.TestContext.create_vault(ctx, Map.merge(%{name: name, kind: kind}, params))
+        Sanctum.TestContext.create_vault(
+          ctx,
+          Map.merge(
+            %{name: name, kind: kind, destination: %{"hosts" => ["api.example.com"]}},
+            params
+          )
+        )
 
       {kind, view}
     end
@@ -110,7 +116,15 @@ defmodule Sanctum.ProviderVaultStatusTest do
           granted_by: "test",
           granted_via: "bootstrap"
         },
-        [%{vault_entry_id: bound_view.id, binding_digest: digest}],
+        [
+          %{
+            binding_key:
+              Prima.Authority.Blob.binding_key("formula:local.status-consumer", "@ingress", nil),
+            scope: "athanor",
+            vault_entry_id: bound_view.id,
+            binding_digest: digest
+          }
+        ],
         nil
       )
 

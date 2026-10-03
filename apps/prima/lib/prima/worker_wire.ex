@@ -53,6 +53,14 @@ defmodule Prima.WorkerWire do
       exit report is answered plain, and so is every WorkerAPI request.
       `ok/1` and `error/2` build answers and `read_answer/1` reads one; an
       answer without `v`, or at another version, is no answer at all.
+    * `c:Prima.HostAPI.attached_fetch/3`, posted to
+      `/host/v1/attached_fetch`, is answered one of two ways. Refused
+      before its request is admitted, it is an ordinary sealed answer, a
+      `guest_error` whose members name the request's `call_id` beside its
+      `type` and `message`. Admitted, the answer's body is
+      `attached_frames_content_type/0` and holds the request's answer as
+      `Prima.WorkerAuth` frames, each sealed for that `call_id`, written
+      as they arrive.
     * `tests/fixtures/host_api.json` and `tests/fixtures/worker_api.json`
       hold every message of both behaviours as it crosses, sealed and
       signed with the keys of `tests/fixtures/worker_auth.json`.
@@ -127,6 +135,10 @@ defmodule Prima.WorkerWire do
   @doc "The HTTP header a `Prima.WorkerAuth` header travels in, lowercase."
   @spec auth_header() :: String.t()
   def auth_header, do: @auth_header
+
+  @doc "The content type of an admitted `attached_fetch` answer: its sealed frames."
+  @spec attached_frames_content_type() :: String.t()
+  def attached_frames_content_type, do: "application/vnd.cyfr.frames"
 
   @doc """
   The base URL `text` spells, with no trailing slash, or `:error`: an

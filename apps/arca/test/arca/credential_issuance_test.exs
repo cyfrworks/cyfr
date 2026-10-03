@@ -45,6 +45,9 @@ defmodule Arca.CredentialIssuanceTest do
   alias Arca.SecurityTransitions.Issuance
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Where a vault entry written here may go, as the canonical text a row holds.
+  @destination ~s({"hosts":["api.example.com"],"scheme":"https"})
+
   @slot_keys [
     {Arca.ControlPlane, :standing},
     {Arca.ControlPlane, :generation},
@@ -605,8 +608,11 @@ defmodule Arca.CredentialIssuanceTest do
     actor = Prima.Actor.in_athanor(athanor_id)
     name = "glass-entry-#{System.unique_integer([:positive])}"
 
-    {&Arca.VaultStorage.put(actor, %{name: name, kind: "api_key", sealed_payload: "sealed"}, &1),
-     fn -> match?({:ok, _}, Arca.VaultStorage.get_by_name(actor, name)) end}
+    {&Arca.VaultStorage.put(
+       actor,
+       %{name: name, kind: "api_key", sealed_payload: "sealed", destination: @destination},
+       &1
+     ), fn -> match?({:ok, _}, Arca.VaultStorage.get_by_name(actor, name)) end}
   end
 
   defp other_write(:vault_commit, _user_id, athanor_id, _seat_id) do
@@ -614,7 +620,12 @@ defmodule Arca.CredentialIssuanceTest do
     name = "glass-entry-#{System.unique_integer([:positive])}"
 
     {:ok, entry} =
-      Arca.VaultStorage.put(actor, %{name: name, kind: "api_key", sealed_payload: "v1"})
+      Arca.VaultStorage.put(actor, %{
+        name: name,
+        kind: "api_key",
+        sealed_payload: "v1",
+        destination: @destination
+      })
 
     plan = %{expected_rev: entry.payload_rev, sealed_payload: "v2", status: nil, rebind: nil}
 

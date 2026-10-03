@@ -332,7 +332,8 @@ def cyfr_controller(image):
         # rows, and both containers' logs) also show that a typed credential
         # held for confirmation is kept nowhere.
         status, refused = person.call("vault", {"action": "create", "name": entry, "kind": "api_key",
-                                                "fields": {"api_key": canary}})
+                                                "fields": {"api_key": canary},
+                                                "destination": {"hosts": ["fixture.test"]}})
         error = (refused or {}).get("error") or {}
         data = error.get("data") or {}
         payload = data.get("payload") or {}

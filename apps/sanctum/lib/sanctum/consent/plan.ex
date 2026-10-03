@@ -407,29 +407,25 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
-  # The dependency's active owner profiles whose head binds a usable entry.
+  # The dependency's active owner profiles whose head binds a usable entry
+  # on its ingress; provided configuration is no entry to lend.
   defp lender_candidates(ctx, dep) do
     case Arca.ConsentStorage.profiles(Context.actor(ctx), dep) do
       {:ok, profiles} ->
         for %{kind: :owner, status: :active} = profile <- profiles,
             {:ok, head} <- [Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)],
             {:ok, blob} <- [Prima.Authority.Blob.parse(head.resolved_policy)],
-            {:ok, ingress} <- [Prima.Authority.Blob.ingress(blob, dep)],
-            Prima.Authority.Blob.bound_vault?(ingress.vault),
+            {:ok, %{vault: %{entry_id: entry_id} = vault}} <- [
+              Prima.Authority.Blob.ingress(blob, dep)
+            ],
             {:ok, entry} <-
-              [
-                Sanctum.VaultReader.usable(
-                  ctx.athanor_id,
-                  ingress.vault.entry_id,
-                  ingress.vault.binding_digest
-                )
-              ] do
+              [Sanctum.VaultReader.usable(ctx.athanor_id, entry_id, vault.binding_digest)] do
           %{
             profile_id: profile.id,
             label: profile.label,
             entry_id: entry.id,
             entry_name: entry.name,
-            fields: (ingress.vault.projection && ingress.vault.projection.fields) || []
+            fields: (vault.projection && vault.projection.fields) || []
           }
         end
 

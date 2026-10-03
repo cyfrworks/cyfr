@@ -26,6 +26,11 @@ defmodule Cyfr.GmailOAuthSmokeTest do
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
   @provider "google"
 
+  # Where the cases' entries may go. Their tokens are dispensed to the
+  # cases, so the entries are disclosed.
+  @destination %{"hosts" => ["gmail.googleapis.com"]}
+  @destination_text ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"})
+
   setup tags do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
@@ -85,7 +90,9 @@ defmodule Cyfr.GmailOAuthSmokeTest do
         provider_hint: @provider,
         fields: %{},
         oauth: oauth,
-        oauth_scopes: ["https://www.googleapis.com/auth/gmail.readonly"]
+        oauth_scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+        destination: @destination,
+        disclose: true
       })
 
     view
@@ -103,7 +110,9 @@ defmodule Cyfr.GmailOAuthSmokeTest do
       provider_hint: @provider,
       field_names: "[]",
       oauth_endpoints: Jason.encode!(endpoints),
-      oauth_scopes: Jason.encode!(["https://www.googleapis.com/auth/gmail.readonly"])
+      oauth_scopes: Jason.encode!(["https://www.googleapis.com/auth/gmail.readonly"]),
+      destination: @destination_text,
+      attach_only: false
     }
 
     {:ok, digest} = VaultReader.binding_digest(binding)
@@ -231,7 +240,9 @@ defmodule Cyfr.GmailOAuthSmokeTest do
           "token_url" => "http://localhost:#{bypass.port}/token",
           "auth_style" => "params"
         },
-        scopes: ["https://www.googleapis.com/auth/gmail.readonly"]
+        scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+        destination: @destination_text,
+        attach_only: false
       },
       redirect_uri: redirect_uri,
       code_verifier: "smoke-verifier",

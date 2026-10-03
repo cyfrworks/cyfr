@@ -860,7 +860,7 @@ cyfr new catalyst supabase --version 0.2.0
 cyfr profile grant c:local.supabase
 ```
 
-Create the vault entry first (console Vault page, or `vault.create` with fields `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`). If you own the Supabase project, you can skip the vault entry entirely and pass the URL and anon key as call arguments — the sealed path is for values that must not appear in logs.
+Create the vault entry first (console Vault page, or `vault.create` with fields `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`, a `destination` naming your project's host, and `disclose: true`, since the catalyst reads the fields itself). If you own the Supabase project, you can skip the vault entry entirely and pass the URL and anon key as call arguments — the sealed path is for values that must not appear in logs.
 
 **Input/output contract:**
 
@@ -953,13 +953,31 @@ A vault entry holds credential material — sealed at rest, never returned by an
 |--------|----------|--------------|
 | `list` | — | Enumerate entries (names + status, never material) |
 | `status` | — | Each living entry's name, kind, status, created and updated times and whether a consent binds it — never material or a field; on both planes, under no consent class, so a tincture that declares it and an in-chain call may read it |
-| `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields` | Mint an entry with sealed material |
+| `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields`, `destination` (+ `disclose`) | Mint an entry with sealed material, bound to where it may go |
 | `rename` | `id`, `name` | Relabel an entry — a label is unique among the athanor's living entries |
 | `rotate` | `id`, `fields`, `expected_payload_rev` | Replace material, same field schema — CAS-guarded, **no re-consent needed** |
-| `rebind` | `id` + binding fields (`field_names`, `oauth_endpoints`, `oauth_scopes`) | Change what the credential *talks to* — dependent consents stop being ready until re-approved |
-| `authorize` | `id` (re-auth) or `name` + `provider_hint` (+ `oauth_scopes`) | Start a browser OAuth grant; the callback completes it into the entry |
+| `rebind` | `id` + binding fields (`field_names`, `destination`, `disclose`) | Change what the credential *talks to* — dependent consents stop being ready until re-approved. Scopes change only by re-authorizing; endpoints never change |
+| `authorize` | `id` (re-auth, + `oauth_scopes`) or `name` + `provider_hint` + `destination` (+ `oauth_scopes`, `oauth_endpoints`, `disclose`) | Start a browser OAuth grant; the callback completes it into the entry |
 | `revoke` | `id` | Kill the material; dependent profiles report not-ready |
 | `delete` | `id` | Remove the entry |
+
+**Every entry names its destination.** `destination` is required at `create` and at a new entry's `authorize`, and there is no default: `hosts` (exact names, or `*.` and a name), and optionally `scheme` (`https` unless `http` is stated), `port`, `methods` and `paths` (prefixes beginning with `/`). An entry is attach-only unless `disclose` is `true`: its value is never handed to a component, and a component asking for it (`cyfr:vault/read`, `cyfr:oauth/token`) is refused. Set `disclose: true` only for a component that must read the values itself. Both are binding fields, so moving either is a `rebind`.
+
+```json
+{
+  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": {
+    "name": "vault",
+    "arguments": {
+      "action": "create",
+      "name": "stripe-live",
+      "kind": "api_key",
+      "fields": {"STRIPE_API_KEY": "sk-live-..."},
+      "destination": {"hosts": ["api.stripe.com"]}
+    }
+  }
+}
+```
 
 Vault mutations require an interactive session — components, tincture frames and guest-plane callers can never reach these verbs; `list` needs a surface that could finish a consent walk. A tincture never takes a secret itself: `cyfr.credential(name)` has the shell prompt the person, and the shell's prompt makes the `create`.
 

@@ -192,18 +192,26 @@ defmodule Prima.WorkerWireTest do
     end
 
     test "every call's and pin case's body and answer read and write back to their bytes" do
-      calls = @host["calls"] ++ @host["egress_pin_cases"]
+      calls =
+        @host["calls"] ++ @host["egress_pin_cases"] ++ @host["egress_pin_internal_purposes"]
+
       assert calls != []
 
-      for %{"callback" => callback, "body" => body, "answer" => answer, "refusals" => refusals} <-
-            calls do
+      for %{"callback" => callback, "body" => body} = call <- calls do
         assert Atom.to_string(writes_back(HostAPI, body)) == callback
-        assert {_ok_or_error, _value} = answers_back(answer)
 
-        for %{"answer" => refused} <- refusals do
+        # An attached request's success is its frames: it has no one answer.
+        case call do
+          %{"answer" => answer} -> assert {_ok_or_error, _value} = answers_back(answer)
+          %{"callback" => "attached_fetch"} -> :ok
+        end
+
+        for %{"answer" => refused} <- Map.get(call, "refusals", []) do
           assert {:error, _name} = answers_back(refused), callback
         end
       end
+
+      assert Enum.any?(calls, &(&1["callback"] == "attached_fetch"))
 
       assert writes_back(HostAPI, @host["report"]["body"]) == :runner_exited
       assert writes_back(HostAPI, @host["report"]["cross_member"]["body"]) == :runner_exited

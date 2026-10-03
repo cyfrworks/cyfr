@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map; accepts each origin spelling and refuses each invalid one; and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools and limits can be narrowed. Origins are answered in the enum's order: interactive, programmatic, schedule, webhook. A row is one per kind and node; a credential one per entry and the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need); a stream one per name and subject; a tool server and a card one per name. So one entry lent on two edges is two rows, and so is one stream under two subjects. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask.",
+  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map; accepts each origin spelling and refuses each invalid one; and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools and limits can be narrowed. Origins are answered in the enum's order: interactive, programmatic, schedule, webhook. A row is one per kind and node; a credential one per binding, keyed by its binding_key: the row's node, the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need) and its slot (default, or name:<connection> for a named account); a stream one per name and subject; a tool server and a card one per name. So one entry lent on two edges is two rows, and so is one stream under two subjects. A credential row names the entry's provider hint (absent when it has none), its destination in Prima.Destination's canonical spelling, its source (own, instance or provided), whether it is disclosed, suggested and a choice the person must make, and its lifetime: standing, until an RFC 3339 UTC time, or once. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask.",
   "kinds": [
     "credential",
     "egress",
@@ -45,12 +45,28 @@
         "narrowed": false,
         "node": "reagent:local.weather",
         "values": {
+          "binding_key": "reagent:local.weather|@ingress|default",
+          "choice_required": false,
+          "destination": {
+            "hosts": [
+              "api.weather.example"
+            ],
+            "scheme": "https"
+          },
+          "disclosed": false,
           "edge": "@ingress",
           "fields": [
             "api_key"
           ],
+          "lifetime": {
+            "kind": "standing",
+            "until": null
+          },
           "name": "weather-api",
-          "scopes": []
+          "provider": "weather.example",
+          "scopes": [],
+          "source": "own",
+          "suggested": false
         }
       },
       {
@@ -58,15 +74,36 @@
         "narrowed": false,
         "node": "reagent:local.weather",
         "values": {
+          "binding_key": "reagent:local.weather|reagent:local.maps|tiles|default",
+          "choice_required": false,
+          "destination": {
+            "hosts": [
+              "tiles.maps.example"
+            ],
+            "methods": [
+              "GET"
+            ],
+            "paths": [
+              "/v1/tiles"
+            ],
+            "scheme": "https"
+          },
+          "disclosed": true,
           "edge": "reagent:local.maps|tiles",
           "fields": [
             "token"
           ],
           "label": "shared-maps",
+          "lifetime": {
+            "kind": "until",
+            "until": "2026-10-04T13:00:00Z"
+          },
           "name": "maps",
           "scopes": [
             "read"
-          ]
+          ],
+          "source": "own",
+          "suggested": false
         }
       },
       {
@@ -74,14 +111,70 @@
         "narrowed": false,
         "node": "reagent:local.weather",
         "values": {
+          "binding_key": "reagent:local.weather|reagent:local.geo|name:Geo account",
+          "choice_required": false,
+          "connection": "Geo account",
+          "destination": {
+            "hosts": [
+              "*.weather.example"
+            ],
+            "methods": [
+              "GET",
+              "POST"
+            ],
+            "paths": [
+              "/v2"
+            ],
+            "port": 8443,
+            "scheme": "https"
+          },
+          "disclosed": false,
           "edge": "reagent:local.geo",
           "fields": [
             "api_key"
           ],
+          "lifetime": {
+            "kind": "once",
+            "until": null
+          },
           "name": "weather-api",
+          "provider": "weather.example",
           "scopes": [
             "read"
-          ]
+          ],
+          "source": "instance",
+          "suggested": true
+        }
+      },
+      {
+        "kind": "credential",
+        "narrowed": false,
+        "node": "reagent:local.weather",
+        "values": {
+          "binding_key": "reagent:local.weather|reagent:local.maps|geocode|default",
+          "choice_required": false,
+          "destination": {
+            "hosts": [
+              "geo.maps.example"
+            ],
+            "paths": [
+              "/geocode"
+            ],
+            "scheme": "https"
+          },
+          "disclosed": true,
+          "edge": "reagent:local.maps|geocode",
+          "fields": [
+            "anon_key"
+          ],
+          "lifetime": {
+            "kind": "standing",
+            "until": null
+          },
+          "name": "maps public key",
+          "scopes": [],
+          "source": "provided",
+          "suggested": false
         }
       },
       {
@@ -279,12 +372,27 @@
             "node": "reagent:local.weather",
             "summary": "Uses your weather key",
             "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
               "edge": "@ingress",
               "fields": [
                 "api_key"
               ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
               "name": "weather-api",
-              "scopes": []
+              "scopes": [],
+              "source": "own",
+              "suggested": false
             }
           }
         ],
@@ -338,12 +446,27 @@
             "narrowed": true,
             "node": "reagent:local.weather",
             "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
               "edge": "@ingress",
               "fields": [
                 "api_key"
               ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
               "name": "weather-api",
-              "scopes": []
+              "scopes": [],
+              "source": "own",
+              "suggested": false
             }
           }
         ],
@@ -364,11 +487,26 @@
             "narrowed": false,
             "node": "reagent:local.weather",
             "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
               "fields": [
                 "api_key"
               ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
               "name": "weather-api",
-              "scopes": []
+              "scopes": [],
+              "source": "own",
+              "suggested": false
             }
           }
         ],
@@ -389,12 +527,27 @@
             "narrowed": false,
             "node": "reagent:local.weather",
             "values": {
+              "binding_key": "reagent:local.weather|@egress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
               "edge": "@egress",
               "fields": [
                 "api_key"
               ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
               "name": "weather-api",
-              "scopes": []
+              "scopes": [],
+              "source": "own",
+              "suggested": false
             }
           }
         ],
@@ -415,14 +568,29 @@
             "narrowed": false,
             "node": "reagent:local.weather",
             "values": {
+              "binding_key": "reagent:local.weather|reagent:local.geo:1.0.0|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
               "edge": "reagent:local.geo:1.0.0",
               "fields": [
                 "api_key"
               ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
               "name": "weather-api",
               "scopes": [
                 "read"
-              ]
+              ],
+              "source": "own",
+              "suggested": false
             }
           }
         ],
@@ -443,14 +611,29 @@
             "narrowed": false,
             "node": "reagent:local.weather",
             "values": {
+              "binding_key": "reagent:local.weather|reagent:local.geo||default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
               "edge": "reagent:local.geo|",
               "fields": [
                 "api_key"
               ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
               "name": "weather-api",
               "scopes": [
                 "read"
-              ]
+              ],
+              "source": "own",
+              "suggested": false
             }
           }
         ],
@@ -915,12 +1098,27 @@
             "narrowed": false,
             "node": "reagent:local.weather",
             "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
               "edge": "@ingress",
               "fields": [
                 "api_key"
               ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
               "name": "weather-api",
-              "scopes": []
+              "scopes": [],
+              "source": "own",
+              "suggested": false
             }
           },
           {
@@ -928,12 +1126,27 @@
             "narrowed": false,
             "node": "reagent:local.weather",
             "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
               "edge": "@ingress",
               "fields": [
                 "token"
               ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
               "name": "weather-api",
-              "scopes": []
+              "scopes": [],
+              "source": "own",
+              "suggested": false
             }
           }
         ],
@@ -1018,6 +1231,589 @@
               "actions": [
                 "execution"
               ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "a credential naming no source",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "a credential naming no binding key",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "a credential naming no lifetime",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a credential of an unknown source",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "borrowed",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a credential whose binding key names another edge",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|reagent:local.geo|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a credential whose binding key names a slot its connection does not",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "connection": "Work",
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a named slot on a credential naming no connection",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|name:Work",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a destination not in its canonical spelling",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "API.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a destination with a bare wildcard",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "*"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "an until lifetime naming no time",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "until",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a standing lifetime naming a time",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "standing",
+                "until": "2026-10-04T13:00:00Z"
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "an until lifetime naming a time outside UTC",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "until",
+                "until": "2026-10-04T13:00:00+02:00"
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a disclosure that is no boolean",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": "no",
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "weather.example",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "an empty provider",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "binding_key": "reagent:local.weather|@ingress|default",
+              "choice_required": false,
+              "destination": {
+                "hosts": [
+                  "api.weather.example"
+                ],
+                "scheme": "https"
+              },
+              "disclosed": false,
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "lifetime": {
+                "kind": "standing",
+                "until": null
+              },
+              "name": "weather-api",
+              "provider": "",
+              "scopes": [],
+              "source": "own",
+              "suggested": false
             }
           }
         ],

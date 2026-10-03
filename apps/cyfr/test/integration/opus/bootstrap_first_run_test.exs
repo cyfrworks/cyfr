@@ -170,7 +170,10 @@ defmodule Opus.BootstrapFirstRunTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "My Anthropic",
         kind: "api_key",
-        fields: %{"ANTHROPIC_API_KEY" => "sk-first-run"}
+        fields: %{"ANTHROPIC_API_KEY" => "sk-first-run"},
+        # The case reads the key back, so the entry is disclosed.
+        destination: %{"hosts" => ["api.anthropic.com"]},
+        disclose: true
       })
 
     {:ok, walk_plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: "catalyst:local.llm"})

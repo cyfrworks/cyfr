@@ -149,7 +149,8 @@ defmodule Sanctum.Consent.CommitTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "conn-#{System.unique_integer([:positive])}",
         kind: "api_key",
-        fields: fields
+        fields: fields,
+        destination: %{"hosts" => ["api.example.com"]}
       })
 
     view
@@ -183,6 +184,83 @@ defmodule Sanctum.Consent.CommitTest do
     head
   end
 
+  describe "a binding" do
+    test "names its scope, its entry's destination, its need's rule and its own key, and its row the rest",
+         %{ctx: ctx} do
+      attach = %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+
+      manifest = %{
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:one.example",
+            "reason" => "to call the example API",
+            "fields" => ["EXAMPLE_API_KEY"],
+            "attach" => attach
+          }
+        },
+        "caps" => @caps
+      }
+
+      ref = "reagent:local.commit-binding"
+      publish!(ctx, "commit-binding", "1.0.0", manifest)
+      entry = entry!(ctx, %{"EXAMPLE_API_KEY" => "k"})
+      {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry.id)
+      {:ok, destination} = Sanctum.Consent.BlobBuilder.entry_destination(row)
+      decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: entry.id}]}
+
+      {:ok, preview} = Commit.preview(ctx, decisions)
+      key = "#{ref}|@ingress|default"
+
+      # The row for today's binding: the person's own entry, standing,
+      # neither suggested nor a choice, disclosed as its entry is stored.
+      assert [%{"values" => values}] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+
+      assert Map.take(
+               values,
+               ~w(source suggested choice_required binding_key lifetime destination)
+             ) ==
+               %{
+                 "source" => "own",
+                 "suggested" => false,
+                 "choice_required" => false,
+                 "binding_key" => key,
+                 "lifetime" => %{"kind" => "standing", "until" => nil},
+                 "destination" => destination
+               }
+
+      assert values["disclosed"] == not row.attach_only
+      refute Map.has_key?(values, "connection")
+
+      assert {:ok, %{revision: 1}} = walk!(ctx, ref, %{bindings: decisions.bindings})
+
+      {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+      {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
+      {:ok, blob} = Prima.Authority.Blob.parse(head.resolved_policy)
+      {:ok, ingress} = Prima.Authority.Blob.ingress(blob, ref)
+
+      assert %{scope: "athanor", binding_key: ^key, attach: rule} = ingress.vault
+      assert Prima.Manifest.Needs.attach_to_map(rule) == attach
+      assert Prima.Destination.to_map(ingress.vault.destination) == destination
+    end
+
+    test "for a disclose-only need attaches nothing", %{ctx: ctx} do
+      publish!(ctx, "commit-disclose")
+      entry = entry!(ctx)
+      ref = "reagent:local.commit-disclose"
+
+      assert {:ok, %{revision: 1}} =
+               walk!(ctx, ref, %{bindings: [%{need: "@ingress", entry_id: entry.id}]})
+
+      {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+      {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
+      refute head.resolved_policy =~ ~s("attach")
+      {:ok, blob} = Prima.Authority.Blob.parse(head.resolved_policy)
+
+      assert {:ok, %{vault: %{attach: nil, scope: "athanor"}}} =
+               Prima.Authority.Blob.ingress(blob, ref)
+    end
+  end
+
   describe "the preview" do
     test "answers a ConsentPreview with the commit digest, and no summary", %{ctx: ctx} do
       publish!(ctx, "commit-preview")
@@ -212,9 +290,22 @@ defmodule Sanctum.Consent.CommitTest do
 
       rows = Enum.group_by(decoded.rows, &{&1.kind, &1.node}, & &1.values)
 
-      # The credential names the edge it rides: the source's own ingress.
+      # The credential names the edge it rides: the source's own ingress,
+      # where the entry may go, and that it is attached, not disclosed.
       assert rows[{:credential, ref}] == [
-               %{"name" => entry.name, "edge" => "@ingress", "fields" => ["url"], "scopes" => []}
+               %{
+                 "name" => entry.name,
+                 "edge" => "@ingress",
+                 "fields" => ["url"],
+                 "scopes" => [],
+                 "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
+                 "disclosed" => false,
+                 "source" => "own",
+                 "suggested" => false,
+                 "choice_required" => false,
+                 "binding_key" => "#{ref}|@ingress|default",
+                 "lifetime" => %{"kind" => "standing", "until" => nil}
+               }
              ]
 
       assert rows[{:egress, ref}] == [
@@ -559,7 +650,8 @@ defmodule Sanctum.Consent.CommitTest do
           kind: "oauth",
           provider_hint: "google",
           oauth: %{"access_token" => "t"},
-          oauth_scopes: scopes
+          oauth_scopes: scopes,
+          destination: %{"hosts" => ["gmail.googleapis.com"]}
         })
 
       view

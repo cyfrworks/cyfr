@@ -245,7 +245,13 @@ defmodule Arca.Storage do
     # what it answered is the athanor's record, never a path a guest
     # writes — and reserved, so only the payload store's own writes
     # (`Arca.ExecutionPayloads`, under the internal-write scope) change
-    # bytes a row names by digest.
+    # bytes a row names by digest. Two prefixes under it are a file
+    # offer's (`Arca.FileOffers`): `payloads/offers/<offer id>/`, the
+    # sender's snapshot a `file_offers` row owns until the offer ends, and
+    # `payloads/receipts/<offer id>/<attempt>/`, the recipient's custody
+    # copy a `file_receipts` row names until its publication completes. Both are
+    # released by their rows and their own retention kinds, never by the
+    # staging sweep, which reads only `staging/`.
     {"payloads", :tenant_reserved, nil, nil, :system},
     # Content staged for a fenced publication (`stage/3`), each attempt
     # under a key of its own and referenced in place once published
@@ -1074,6 +1080,21 @@ defmodule Arca.Storage do
   @doc "The reserved root staged content lives under."
   @spec staging_root() :: String.t()
   def staging_root, do: @staging_root
+
+  @doc """
+  The prefix of a file offer's snapshots under the reserved `payloads/`
+  root (`payloads/offers/<offer id>/`), in the sender's athanor.
+  """
+  @spec offers_prefix() :: path()
+  def offers_prefix, do: ["payloads", "offers"]
+
+  @doc """
+  The prefix of an accepted offer's custody copies under the reserved
+  `payloads/` root (`payloads/receipts/<offer id>/<attempt>/`, one
+  directory per acceptance), in the recipient's athanor.
+  """
+  @spec receipts_prefix() :: path()
+  def receipts_prefix, do: ["payloads", "receipts"]
 
   @doc """
   The reservation window: how long a `stage/3` attempt stays publishable

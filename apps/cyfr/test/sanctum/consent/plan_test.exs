@@ -319,7 +319,8 @@ defmodule Sanctum.Consent.PlanTest do
           kind: "oauth",
           provider_hint: hint,
           oauth: %{"access_token" => "t"},
-          oauth_scopes: scopes
+          oauth_scopes: scopes,
+          destination: %{"hosts" => ["gmail.googleapis.com"]}
         })
 
       view
@@ -335,7 +336,8 @@ defmodule Sanctum.Consent.PlanTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "key-#{System.unique_integer([:positive])}",
           kind: "api_key",
-          fields: %{"KEY" => "k"}
+          fields: %{"KEY" => "k"},
+          destination: %{"hosts" => ["api.example.com"]}
         })
 
       {:ok, plan} = Plan.plan(ctx, %{ref: @mail_ref})

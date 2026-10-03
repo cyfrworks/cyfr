@@ -304,7 +304,7 @@ defmodule Cyfr.Boundaries do
     Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog Arca.DirectoryHeads
     Arca.DeviceCertificates Arca.DeviceCertifications Arca.PairingInvitations Arca.Passkeys
     Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
-    Arca.RequestRateWindows
+    Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage
   )
   @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]
 
@@ -1024,8 +1024,9 @@ defmodule Cyfr.Boundaries do
           "provider credentials, webhooks, " <>
           "the identities, memberships, athanors and doors that decide standing, a " <>
           "person's identity row, keys, attempts and carries, the directory's logs " <>
-          "and cached heads, passkeys, pending confirmations, the installation claim " <>
-          "and the pre-authentication rate windows " <>
+          "and cached heads, passkeys, pending confirmations, the installation claim, " <>
+          "the pre-authentication rate windows, and the instance's own entries and " <>
+          "their use counts " <>
           "are security rows. A domain or a surface learns about them only " <>
           "through Sanctum's entries, which scope by the caller's context and keep an " <>
           "outage, a damaged row and an absent one apart. Arca holds the rows and " <>
@@ -1287,7 +1288,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
     "Sanctum.ClientIp" => [from_connect_info: 1, resolve: 1],
-    "Sanctum.Consent" => [head_consent: 2, profiles: 2, revoke_source: 2],
+    "Sanctum.Consent" => [head_consent: 2, profiles: 2, revoke_source: 2, row_binding: 3],
     "Sanctum.Consent.Authz" => [
       authorize_interactive: 1,
       authorize_interactive_in_chain: 1,

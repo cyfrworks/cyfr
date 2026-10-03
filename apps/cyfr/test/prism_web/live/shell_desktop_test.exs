@@ -114,13 +114,20 @@ defmodule PrismWeb.ShellDesktopTest do
   defp desktop!(ctx, name \\ "desktop"),
     do: tincture!(ctx, name, %{"frame" => %{"placement" => "desktop"}})
 
-  # Type `secret` into the credential prompt, have the person confirm the
-  # record it waits on (by its ref, as another of their clients would),
-  # and type it again when the layer asks: the browser's resubmission.
-  # `waiting` runs while the record waits for its proof.
+  # Type `secret` into the credential prompt, with the host it may go to,
+  # have the person confirm the record it waits on (by its ref, as another
+  # of their clients would), and type it again when the layer asks: the
+  # browser's resubmission. `waiting` runs while the record waits for its
+  # proof.
   defp enter_confirmed!(view, prompt_id, secret, ctx, waiting \\ fn -> :ok end) do
+    typed = %{
+      "prompt_id" => prompt_id,
+      "secret" => secret,
+      "destination_hosts" => "api.example.com"
+    }
+
     view
-    |> form("#system-layer-credential", %{"prompt_id" => prompt_id, "secret" => secret})
+    |> form("#system-layer-credential", typed)
     |> render_submit()
 
     assert {:ok, [%{ref: ref, operation: "vault.create"}]} =
@@ -133,7 +140,7 @@ defmodule PrismWeb.ShellDesktopTest do
     assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
 
     view
-    |> form("#system-layer-credential", %{"prompt_id" => prompt_id, "secret" => secret})
+    |> form("#system-layer-credential", typed)
     |> render_submit()
   end
 
@@ -498,7 +505,8 @@ defmodule PrismWeb.ShellDesktopTest do
         Sanctum.TestContext.create_vault(person(user, athanor), %{
           name: "taken",
           kind: "api_key",
-          fields: %{"API_KEY" => "first"}
+          fields: %{"API_KEY" => "first"},
+          destination: %{"hosts" => ["api.example.com"]}
         })
 
       view = shell!(conn)

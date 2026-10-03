@@ -41,6 +41,9 @@ defmodule Sanctum.VaultOAuthRefreshTest do
         kind: "oauth",
         oauth_endpoints: Map.get(over, :endpoints, ~s({"token_url":"https://127.0.0.1:1/tok"})),
         oauth_scopes: Jason.encode!(@scopes),
+        # Its token is dispensed to the cases here, so the entry is disclosed.
+        destination: ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"}),
+        attach_only: false,
         sealed_payload: sealed
       })
 

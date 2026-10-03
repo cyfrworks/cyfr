@@ -146,6 +146,28 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   defp expected(_row, "rate_limit", %{"requests" => requests, "window" => window}),
     do: ["#{requests} per #{window}"]
 
+  # A credential binding's values, in the renderer's words: whose entry,
+  # where it goes, whether the component holds it, how long it stands.
+  defp expected(_row, "destination", destination) do
+    port = if destination["port"], do: ["port #{destination["port"]}"], else: []
+
+    ["#{destination["scheme"]}://"] ++
+      destination["hosts"] ++
+      Map.get(destination, "methods", []) ++ Map.get(destination, "paths", []) ++ port
+  end
+
+  defp expected(_row, "lifetime", %{"kind" => "standing"}), do: ["until revoked"]
+  defp expected(_row, "lifetime", %{"kind" => "until", "until" => until}), do: ["until #{until}"]
+  defp expected(_row, "lifetime", %{"kind" => "once"}), do: ["one run"]
+  defp expected(_row, "source", source), do: ["Source: #{source}"]
+  defp expected(_row, "disclosed", true), do: ["the component reads the value itself"]
+  defp expected(_row, "disclosed", false), do: ["the component never holds the value"]
+  defp expected(_row, "suggested", true), do: ["Suggested"]
+  defp expected(_row, "choice_required", true), do: ["Choose which entry to use"]
+  defp expected(_row, field, false) when field in ["suggested", "choice_required"], do: []
+  defp expected(_row, "connection", connection), do: ["as the account '#{connection}'"]
+  defp expected(_row, "binding_key", key), do: ["Binding: #{key}"]
+
   defp expected(_row, _field, values) when is_list(values), do: values
   defp expected(_row, _field, value), do: [to_string(value)]
 

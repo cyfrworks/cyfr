@@ -32,6 +32,9 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
   # The edge a consent writes for these entries names the one field they hold.
   @token_projection %{fields: ["token"], scopes: []}
 
+  # Where the entry may go. The cases read it back, so it is disclosed.
+  @destination %{"hosts" => ["api.example.com"]}
+
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
 
@@ -54,7 +57,9 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
           name: "leaky",
           kind: "api_key",
           fields: %{"token" => value},
-          oauth: %{"access_token" => value, "refresh_token" => refresh}
+          oauth: %{"access_token" => value, "refresh_token" => refresh},
+          destination: @destination,
+          disclose: true
         }
 
         # Entering the credential is confirmed as a person confirms it; the
@@ -76,11 +81,17 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
         # And on every refusal, which is where a term gets inspected into
         # a crash report or a 500.
         refusals = [
-          Vault.create(ctx, %{name: "leaky", kind: "api_key", fields: %{"token" => value}}),
+          Vault.create(ctx, %{
+            name: "leaky",
+            kind: "api_key",
+            fields: %{"token" => value},
+            destination: @destination
+          }),
           confirmed_call(ctx, "vault.create", "leaky", &Vault.create/2, %{
             name: "leaky",
             kind: "api_key",
-            fields: %{"token" => value}
+            fields: %{"token" => value},
+            destination: @destination
           }),
           Vault.rotate(ctx, %{id: view.id, fields: %{"token" => value}, expected_payload_rev: 99}),
           confirmed_call(ctx, "vault.rotate", "leaky", &Vault.rotate/2, %{
@@ -170,6 +181,8 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
             id: id,
             name: "tampered",
             kind: "api_key",
+            destination: ~s({"hosts":["api.example.com"],"scheme":"https"}),
+            attach_only: false,
             sealed_payload: sealed
           })
 

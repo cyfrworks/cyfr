@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.RunnerRelay, the relay between a runner and its worker service: the runner's host calls and pinned fetches, carried on a socketpair the keeper makes for every spawn of an isolated pool as the runner's file descriptor 4, beside Prima.RunnerControl on fd 3, and over the attach connection as the keeper's relay stream (5, tests/fixtures/keeper_protocol.json), which the service opens with a zero-length frame. The contracts suite (apps/prima/test/prima/runner_relay_test.exs) reads them now and Opus's runner and worker service read them too. A frame is a 4-byte big-endian length and one JSON object of that many bytes. `exchange` is played in order between a runner's channel and a service's, each opened for `attempt`: the sender encodes each frame to exactly `json` behind its length and the receiver decodes it; a `json_fill` is `prefix`, then `repeat` written `times` times, then `suffix`, and `encoded_sha256` is the SHA-256 of the whole frame, length included. Bodies travel in standard base64 with padding, at most max_body_bytes decoded; a fetch starts with initial_credit, and the service sends no chunk past the credit outstanding. Each refusal is decoded by `receiver` after the first `after` frames of `exchange` have passed, and closes the channel with `reason`. Every host_call's header is a real one: the egress_pin call in `exchange` is signed with tests/fixtures/worker_auth.json's attempt call key over its `call` fields and its body is sealed with that attempt's seal key and `body_iv_hex`, and the host_answer's body is that call's answer, a pin, sealed with `answer_iv_hex`, so a service verifies and opens them as it would a runner's (Prima.WorkerAuth.verify_host_call_header_under/3).",
+  "comment": "The vectors pinning Prima.RunnerRelay, the relay between a runner and its worker service: the runner's host calls and pinned fetches, carried on a socketpair the keeper makes for every spawn of an isolated pool as the runner's file descriptor 4, beside Prima.RunnerControl on fd 3, and over the attach connection as the keeper's relay stream (5, tests/fixtures/keeper_protocol.json), which the service opens with a zero-length frame. The contracts suite (apps/prima/test/prima/runner_relay_test.exs) reads them now and Opus's runner and worker service read them too. A frame is a 4-byte big-endian length and one JSON object of that many bytes. `exchange` is played in order between a runner's channel and a service's, each opened for `attempt`: the sender encodes each frame to exactly `json` behind its length and the receiver decodes it; a `json_fill` is `prefix`, then `repeat` written `times` times, then `suffix`, and `encoded_sha256` is the SHA-256 of the whole frame, length included. Bodies travel in standard base64 with padding, at most max_body_bytes decoded; a fetch starts with initial_credit, and the service sends no chunk past the credit outstanding. Each refusal is decoded by `receiver` after the first `after` frames of `exchange` have passed, and closes the channel with `reason`. Every host_call's header is a real one: the egress_pin call in `exchange` is signed with tests/fixtures/worker_auth.json's attempt call key over its `call` fields and its body is sealed with that attempt's seal key and `body_iv_hex`, and the host_answer's body is that call's answer, a pin, sealed with `answer_iv_hex`, so a service verifies and opens them as it would a runner's (Prima.WorkerAuth.verify_host_call_header_under/3). A fetch is pinned (pin, method, path, headers, body) or attached (call_id, connection, purpose, method, url, headers, body), told apart by the connection it names, and never both: the service posts an attached fetch to CYFR as host_api.json's attached_fetch call, member for member, and relays the answer as attached_frame frames (each frame of the answer, its kind byte and sealed value, unopened, charged to the fetch's credit by those bytes) or one attached_refusal (the call's signed header as posted and CYFR's sealed answer as received), before the fetch_end. The exchange's attached frames open for its first attached fetch's call_id under worker_auth.json's attempt seal key, and its refusal is host_api.json's attached_fetch call refused attach_unavailable, naming the second's. A refusal whose reason names a member carries it as `field`.",
   "version": 1,
   "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
   "max_body_bytes": 5242880,
@@ -53,9 +53,49 @@
       "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":4,\"kind\":\"fetch_end\",\"re\":1,\"error\":null}"
     },
     {
+      "from": "runner",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":3,\"kind\":\"fetch\",\"call_id\":\"AAECAwQFBgcICQoLDA0ODw\",\"connection\":\"api_key\",\"purpose\":\"fetch\",\"method\":\"GET\",\"url\":\"https://api.example.com/v1/items?page=2\",\"headers\":[[\"accept\",\"application/json\"]],\"body\":\"\"}",
+      "why": "fetch: an attached fetch naming the connection api_key, its call id chosen by the runner; it asks for no pin"
+    },
+    {
+      "from": "service",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":5,\"kind\":\"attached_frame\",\"re\":3,\"frame\":\"aDhQSHk4X1QxOXZmNC1mb0FtWk9ERXNNUk1mUDVBU1NxUGFqREctekphYkZiRnBfa2FUc3BnMWcxaHVBYUNLUks4QjFmaFJTR25xakV3RFB5eE5DUG1pcWRpTnlrSGp5Tm56Q28wWEpKWnBEOVVnODlHb003Qmlqdg==\"}",
+      "why": "attached_frame: the answer's head, as CYFR sealed it for the fetch's call id, relayed unopened"
+    },
+    {
+      "from": "service",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":6,\"kind\":\"attached_frame\",\"re\":3,\"frame\":\"YzhQSHk4X1QxOXZmNC1mb0JWazVuZnVuX2lYcVgyVGRhbHlKY0xqbEprRWlBdldLaWxQTTJSdnYwNEE=\"}",
+      "why": "attached_frame: the answer's one chunk"
+    },
+    {
+      "from": "service",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":7,\"kind\":\"attached_frame\",\"re\":3,\"frame\":\"ZThQSHk4X1QxOXZmNC1mb0M0b00tcXRVNHVCSlViM2I3S0wwbVlR\"}",
+      "why": "attached_frame: the answer's end"
+    },
+    {
+      "from": "service",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":8,\"kind\":\"fetch_end\",\"re\":3,\"error\":null}",
+      "why": "fetch_end: the attached answer delivered whole"
+    },
+    {
+      "from": "runner",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":4,\"kind\":\"fetch\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"connection\":\"api_key\",\"purpose\":\"stream\",\"method\":\"POST\",\"url\":\"https://api.example.com/v1/chat\",\"headers\":[[\"content-type\",\"application/json\"]],\"body\":\"eyJxIjoxfQ==\"}",
+      "why": "fetch: an attached streamed POST, which the service posts as host_api.json's attached_fetch call"
+    },
+    {
+      "from": "service",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":9,\"kind\":\"attached_refusal\",\"re\":4,\"header\":\"v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251900 nonce=n_host_attached_fetch body=167e91aca406b45cefe18eb1501d597d7018ad888cd990314bc53a28fa77962b mac=iWTE4Zm0TINdaNIqd_M-lYDv9A4F0eFPJiM6VtsupA4\",\"body\":\"b2FLanBLV21wNmlwcXFzRjViRkFfc1VRbTVQY0hDR1lOZFY1aldMMkVtZHFZQUFkNHlCR3NvWmpZNHI2THBIWnhVaWV6M3ZPMVdKWVB6UERQcjNZQTJsWmV2MjhPS284cGF5R2prd2RfWnM3REdnU2s0ekV6Z2NFRC1wSmY0X2xDeTJKdG5Tckx1bVliRkZidk1pSEc1RVRpQk5nNTlNSXNKYUczYzdFT3phSVlQS0RGUmd6TVZhX3cwNkxZUGxRT0xCQVlHWnRhbUd1dzIyQktXYnNodGh0eGhVOWNPVjBndw==\"}",
+      "why": "attached_refusal: CYFR's refusal before admission, the call's header as posted and its answer sealed as received, naming the fetch's call id"
+    },
+    {
+      "from": "service",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":10,\"kind\":\"fetch_end\",\"re\":4,\"error\":\"refused\"}",
+      "why": "fetch_end: the refused attached fetch ends"
+    },
+    {
       "why": "close: the runner's work is over",
       "from": "runner",
-      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":3,\"kind\":\"close\",\"reason\":\"done\"}"
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":5,\"kind\":\"close\",\"reason\":\"done\"}"
     }
   ],
   "refusals": [
@@ -105,6 +145,59 @@
       "after": 0,
       "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":0,\"kind\":\"host_call\",\"op\":\"renew\",\"header\":\"v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305249602 nonce=n_7d3e9a body=141d8f79ecca2011563361da4189dc088406e2d23e6070032b053ab7ade3a82d mac=e6UxiFy3UfYP6Mw9qAeny450-CJRi5SE5uWZB1--3a8\",\"body\":\"AAEC\"}",
       "reason": "wrong_direction"
+    },
+    {
+      "why": "a fetch naming both a connection and a pin: an attached fetch carries no pin",
+      "receiver": "service",
+      "after": 0,
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":0,\"kind\":\"fetch\",\"call_id\":\"AAECAwQFBgcICQoLDA0ODw\",\"connection\":\"api_key\",\"purpose\":\"fetch\",\"method\":\"GET\",\"url\":\"https://api.example.com/v1/items\",\"headers\":[],\"body\":\"\",\"pin\":\"pin_2mT0c1Fh\"}",
+      "reason": "unknown_field",
+      "field": "pin"
+    },
+    {
+      "why": "a fetch naming neither a pin nor a connection: a pinned fetch's pin is missing",
+      "receiver": "service",
+      "after": 0,
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":0,\"kind\":\"fetch\",\"method\":\"GET\",\"path\":\"/v1/items\",\"headers\":[],\"body\":\"\"}",
+      "reason": "missing_field",
+      "field": "pin"
+    },
+    {
+      "why": "a pinned fetch carrying a member of an attached fetch, its url",
+      "receiver": "service",
+      "after": 0,
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":0,\"kind\":\"fetch\",\"pin\":\"pin_2mT0c1Fh\",\"method\":\"GET\",\"path\":\"/v1/items\",\"headers\":[],\"body\":\"\",\"url\":\"https://api.example.com/v1/items\"}",
+      "reason": "unknown_field",
+      "field": "url"
+    },
+    {
+      "why": "an attached fetch carrying a pinned fetch's path",
+      "receiver": "service",
+      "after": 0,
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":0,\"kind\":\"fetch\",\"call_id\":\"AAECAwQFBgcICQoLDA0ODw\",\"connection\":\"api_key\",\"purpose\":\"fetch\",\"method\":\"GET\",\"url\":\"https://api.example.com/v1/items\",\"headers\":[],\"body\":\"\",\"path\":\"/v1/items\"}",
+      "reason": "unknown_field",
+      "field": "path"
+    },
+    {
+      "why": "an attached_frame for a pinned fetch",
+      "receiver": "runner",
+      "after": 3,
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":1,\"kind\":\"attached_frame\",\"re\":1,\"frame\":\"aDhQSHk4X1QxOXZmNC1mb0FtWk9ERXNNUk1mUDVBU1NxUGFqREctekphYkZiRnBfa2FUc3BnMWcxaHVBYUNLUks4QjFmaFJTR25xakV3RFB5eE5DUG1pcWRpTnlrSGp5Tm56Q28wWEpKWnBEOVVnODlHb003Qmlqdg==\"}",
+      "reason": "wrong_answer"
+    },
+    {
+      "why": "a fetch_chunk for an attached fetch",
+      "receiver": "runner",
+      "after": 9,
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":5,\"kind\":\"fetch_chunk\",\"re\":3,\"status\":200,\"headers\":[],\"body\":\"\"}",
+      "reason": "wrong_answer"
+    },
+    {
+      "why": "an attached_refusal after a frame of the same fetch was relayed",
+      "receiver": "runner",
+      "after": 10,
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":6,\"kind\":\"attached_refusal\",\"re\":3,\"header\":\"v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251900 nonce=n_host_attached_fetch body=167e91aca406b45cefe18eb1501d597d7018ad888cd990314bc53a28fa77962b mac=iWTE4Zm0TINdaNIqd_M-lYDv9A4F0eFPJiM6VtsupA4\",\"body\":\"b2FLanBLV21wNmlwcXFzRjViRkFfc1VRbTVQY0hDR1lOZFY1aldMMkVtZHFZQUFkNHlCR3NvWmpZNHI2THBIWnhVaWV6M3ZPMVdKWVB6UERQcjNZQTJsWmV2MjhPS284cGF5R2prd2RfWnM3REdnU2s0ekV6Z2NFRC1wSmY0X2xDeTJKdG5Tckx1bVliRkZidk1pSEc1RVRpQk5nNTlNSXNKYUczYzdFT3phSVlQS0RGUmd6TVZhX3cwNkxZUGxRT0xCQVlHWnRhbUd1dzIyQktXYnNodGh0eGhVOWNPVjBndw==\"}",
+      "reason": "wrong_answer"
     }
   ]
 }

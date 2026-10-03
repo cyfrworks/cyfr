@@ -77,6 +77,7 @@ defmodule Arca.CipherRotationTest do
         name: "entry-#{id}",
         provider_hint: "legacy",
         kind: "bundle",
+        destination: ~s({"hosts":["api.example.com"],"scheme":"https"}),
         status: if(sealed, do: "active", else: "tombstoned"),
         payload_rev: 0,
         sealed_payload: sealed,

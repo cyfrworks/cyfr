@@ -35,11 +35,24 @@ defmodule Prima.RunnerRelay do
       (`Prima.WorkerAuth.verify_host_call_header_under/3`), posts it
       unchanged to the member the attempt's assignment names and answers
       it once.
-    * `fetch` — `pin` (the id of a pin, `Prima.PinnedTarget`), `method`,
-      `path` (the path and query, from `/`), `headers` and `body`. The
-      service connects to the pin's address itself, and refuses a pin it
-      did not see CYFR grant to the frame's attempt in an `egress_pin`
-      answer it relayed: the runner names a pin, never an address.
+    * `fetch` — one of two shapes, told apart by the member it names:
+      * a pinned fetch: `pin` (the id of a pin, `Prima.PinnedTarget`),
+        `method`, `path` (the path and query, from `/`), `headers` and
+        `body`. The service connects to the pin's address itself, and
+        refuses a pin it did not see CYFR grant to the frame's attempt in
+        an `egress_pin` answer it relayed: the runner names a pin, never
+        an address.
+      * an attached fetch: `call_id` (the runner's name for it,
+        `Prima.AttachedRequest.valid_call_id?/1`), `connection` (the need
+        it is made on), `purpose` (`fetch` or `stream`), `method`, `url`
+        (the guest's absolute `http` or `https` URL), `headers` and
+        `body`. It asks for no pin: the service posts it to CYFR as an
+        `attached_fetch` host call (`Prima.AttachedRequest`, member for
+        member, its body sent as base64 when not empty) and relays the
+        answer.
+      A pinned fetch carries none of `call_id`, `connection`, `purpose`
+      and `url`, an attached fetch neither `pin` nor `path`, and a fetch
+      naming both a pin and a connection, or neither, is refused.
     * `credit` — `re` (the `fetch` it is for) and `bytes`: how many more
       bytes of that fetch's answer body the runner will take.
 
@@ -54,6 +67,18 @@ defmodule Prima.RunnerRelay do
     * `fetch_end` — `re` (the `fetch`) and `error`: null for an answer
       delivered whole, else a code saying why the fetch ended early. It
       may come before any chunk.
+    * `attached_frame` — `re` (an attached `fetch`) and `frame`: one of
+      the answer's frames as CYFR sealed it, its kind byte and sealed
+      value (`Prima.WorkerAuth.seal_frame/7`) without the length prefix,
+      in standard base64. The service relays it unopened; the runner
+      opens it for the fetch's `call_id` (`Prima.WorkerAuth.read_frame/2`).
+    * `attached_refusal` — `re` (an attached `fetch`), `header` (the
+      `attached_fetch` call's signed header as posted) and `body` (CYFR's
+      sealed answer as received): a refusal before the request was
+      admitted. The runner verifies the header under the attempt's call
+      key, opens the answer as that call's, and takes it only when it
+      names the fetch's `call_id`. It comes before any `attached_frame`,
+      and none follows it.
 
   Either side:
 
@@ -69,7 +94,9 @@ defmodule Prima.RunnerRelay do
   granted for that fetch: `initial_credit/0` when the fetch is sent, and
   each `credit` frame's `bytes` after. A `fetch_chunk` whose body is
   larger than the credit outstanding is never sent (`encode/2` answers
-  `{:error, :credit_exceeded}`), and one received closes the channel.
+  `{:error, :credit_exceeded}`), and one received closes the channel. An
+  attached fetch is charged in one unit too: each `attached_frame`'s
+  decoded bytes, its kind byte and sealed value.
 
   ## The channel's state
 
@@ -89,7 +116,7 @@ defmodule Prima.RunnerRelay do
        the length is in;
     2. `:malformed` — the frame is not one JSON object;
     3. `:bad_version` — `v` is absent or is not `1`;
-    4. `:unknown_kind` — `kind` is absent or is not one of the seven;
+    4. `:unknown_kind` — `kind` is absent or is not one of the nine;
     5. `:wrong_direction` — a kind the peer does not send;
     6. `{:unknown_field, name}` — a member the kind does not carry (the
        first, by name);
@@ -102,9 +129,19 @@ defmodule Prima.RunnerRelay do
        the one of the frame `re` names;
     10. `:unknown_reference` — an `re` naming no unanswered call or open
         fetch;
-    11. `{:invalid_field, "status"}` — a chunk's head where it does not
+    11. `:wrong_answer` — an answer its fetch does not take: a
+        `fetch_chunk` for an attached fetch, an `attached_frame` or an
+        `attached_refusal` for a pinned one, an `attached_frame` after a
+        refusal, an `attached_refusal` after a frame or a refusal;
+    12. `{:invalid_field, "status"}` — a chunk's head where it does not
         belong or missing where it does;
-    12. `:credit_exceeded` — a chunk larger than the fetch's credit.
+    13. `:credit_exceeded` — a chunk or a frame larger than the fetch's
+        credit.
+
+  A `fetch`'s shape is read from the member it names: one naming
+  `connection` is an attached fetch, so a `pin` beside it is an unknown
+  field; any other is a pinned fetch, so a missing `pin` is a missing
+  field.
 
   The channel is at fault on any refusal, and nothing after it is read.
   """
@@ -124,18 +161,26 @@ defmodule Prima.RunnerRelay do
   @max_header_name_bytes 256
   @max_header_value_bytes 8192
   @max_path_bytes 8192
+  @max_url_bytes 8192
   @max_signed_header_bytes Prima.WorkerAuth.max_host_call_header_bytes()
+  @max_answer_frame_bytes Prima.WorkerAuth.max_frame_bytes()
 
   # 2^53 − 1: the largest integer every JSON reader holds exactly.
   @max_integer 9_007_199_254_740_991
 
-  @ops HostAPI.callbacks() -- [:runner_exited]
+  # A worker service reports `runner_exited` itself, and posts an
+  # `attached_fetch` for the runner's attached `fetch`: neither is a
+  # runner's host call.
+  @ops HostAPI.callbacks() -- [:runner_exited, :attached_fetch]
   @op_by_name Map.new(@ops, &{Atom.to_string(&1), &1})
   @methods ~w(GET HEAD POST PUT PATCH DELETE OPTIONS)
 
   @id ~r/\A[\x21-\x7E]{1,256}\z/
   @signed_header ~r/\A[\x20-\x7E]+\z/
   @path ~r/\A\/[\x21-\x7E]*\z/
+  @url ~r/\A[\x21-\x7E]+\z/
+  @connection ~r/\A[a-z][a-z0-9_-]{0,31}\z/
+  @purposes ~w(fetch stream)
   @code ~r/\A[a-z][a-z0-9_]{0,63}\z/
   @header_name ~r/\A[!#$%&'*+\-.^_`|~0-9A-Za-z]+\z/
   @header_value ~r/\A[^\x00-\x08\x0A-\x1F\x7F]*\z/u
@@ -149,7 +194,21 @@ defmodule Prima.RunnerRelay do
      [re: :seq, status: {:nullable, :status}, headers: {:nullable, :headers}, body: :body]},
     {:fetch_end, :service, [re: :seq, error: {:nullable, :code}]},
     {:credit, :runner, [re: :seq, bytes: :credit]},
-    {:close, :either, [reason: :code]}
+    {:close, :either, [reason: :code]},
+    {:attached_frame, :service, [re: :seq, frame: :frame]},
+    {:attached_refusal, :service, [re: :seq, header: :signed_header, body: :body]}
+  ]
+
+  # An attached fetch's members, in wire order: the `fetch` kind's other
+  # shape.
+  @attached_fetch [
+    call_id: :call_id,
+    connection: :connection,
+    purpose: :purpose,
+    method: :method,
+    url: :url,
+    headers: :headers,
+    body: :body
   ]
 
   @by_kind Map.new(@kinds, fn {kind, sender, members} -> {kind, {sender, members}} end)
@@ -162,7 +221,16 @@ defmodule Prima.RunnerRelay do
   @type side :: :runner | :service
 
   @typedoc "A frame kind."
-  @type kind :: :host_call | :host_answer | :fetch | :fetch_chunk | :fetch_end | :credit | :close
+  @type kind ::
+          :host_call
+          | :host_answer
+          | :fetch
+          | :fetch_chunk
+          | :fetch_end
+          | :credit
+          | :close
+          | :attached_frame
+          | :attached_refusal
 
   @typedoc "An answer or request header: its name and its value."
   @type header :: {String.t(), String.t()}
@@ -195,6 +263,7 @@ defmodule Prima.RunnerRelay do
           | :out_of_order
           | :unknown_attempt
           | :unknown_reference
+          | :wrong_answer
           | :credit_exceeded
 
   @typedoc "One side's view of a channel."
@@ -207,8 +276,10 @@ defmodule Prima.RunnerRelay do
           fetches: %{
             non_neg_integer() => %{
               attempt: String.t(),
+              mode: :pin | :attached,
               credit: non_neg_integer(),
-              headed: boolean()
+              headed: boolean(),
+              refused: boolean()
             }
           }
         }
@@ -292,6 +363,7 @@ defmodule Prima.RunnerRelay do
   @spec encode(t(), frame()) :: {:ok, iodata(), t()} | {:error, reason()}
   def encode(%__MODULE__{} = channel, %{kind: kind} = frame) when is_map_key(@by_kind, kind) do
     {sender, members} = Map.fetch!(@by_kind, kind)
+    members = members_of(kind, members, Map.has_key?(frame, :connection))
 
     unless sender in [channel.side, :either],
       do: raise(ArgumentError, "a #{channel.side} does not send #{kind}")
@@ -331,7 +403,24 @@ defmodule Prima.RunnerRelay do
 
   def encode(%__MODULE__{}, _frame), do: raise(ArgumentError, "kind is not a frame kind")
 
+  # A fetch naming a connection is an attached fetch; every other frame of
+  # a kind has that kind's one shape.
+  defp members_of(:fetch, _members, true), do: @attached_fetch
+  defp members_of(_kind, members, _attached), do: members
+
   defp write(:op, _name, op) when op in @ops, do: Atom.to_string(op)
+
+  defp write(:call_id, name, value),
+    do: if(Prima.AttachedRequest.valid_call_id?(value), do: value, else: invalid(name))
+
+  defp write(:connection, name, value), do: write_matching(@connection, name, value)
+  defp write(:purpose, _name, value) when value in @purposes, do: value
+  defp write(:url, name, value), do: if(url?(value), do: value, else: invalid(name))
+
+  defp write(:frame, _name, value)
+       when is_binary(value) and byte_size(value) in 2..@max_answer_frame_bytes,
+       do: Base.encode64(value)
+
   defp write(:signed_header, name, value), do: write_matching(@signed_header, name, value)
 
   defp write(:pin, name, value),
@@ -425,6 +514,7 @@ defmodule Prima.RunnerRelay do
          :ok <- known_version(object),
          {:ok, kind, sender, members} <- known_kind(object),
          :ok <- from_peer(channel, sender),
+         members = members_of(kind, members, Map.has_key?(object, "connection")),
          members = [attempt: :id, seq: :seq] ++ members,
          :ok <- no_unknown_field(members, Map.drop(object, ["v", "kind"])),
          {:ok, frame} <- read_members(members, object),
@@ -507,6 +597,34 @@ defmodule Prima.RunnerRelay do
     if PinnedTarget.valid_id?(value), do: {:ok, value}, else: {:error, {:invalid_field, name}}
   end
 
+  defp read(:call_id, name, value) when is_binary(value) do
+    if Prima.AttachedRequest.valid_call_id?(value),
+      do: {:ok, value},
+      else: {:error, {:invalid_field, name}}
+  end
+
+  defp read(:connection, name, value) when is_binary(value),
+    do: matching(@connection, name, value)
+
+  defp read(:purpose, name, value) when is_binary(value) do
+    if value in @purposes, do: {:ok, value}, else: {:error, {:invalid_field, name}}
+  end
+
+  defp read(:url, name, value) when is_binary(value) do
+    if url?(value), do: {:ok, value}, else: {:error, {:invalid_field, name}}
+  end
+
+  defp read(:frame, name, value) when is_binary(value) do
+    if byte_size(value) > div(@max_answer_frame_bytes + 2, 3) * 4 do
+      {:error, {:invalid_field, name}}
+    else
+      case Base.decode64(value) do
+        {:ok, bytes} when byte_size(bytes) in 2..@max_answer_frame_bytes -> {:ok, bytes}
+        _other -> {:error, {:invalid_field, name}}
+      end
+    end
+  end
+
   defp read(:method, name, value) when is_binary(value) do
     if value in @methods, do: {:ok, value}, else: {:error, {:invalid_field, name}}
   end
@@ -555,6 +673,11 @@ defmodule Prima.RunnerRelay do
 
   defp read(_type, name, _value), do: {:error, {:wrong_type, name}}
 
+  defp url?(value) do
+    is_binary(value) and byte_size(value) <= @max_url_bytes and String.valid?(value) and
+      Regex.match?(@url, value) and match?({:ok, _uri}, Prima.Network.parse_url(value))
+  end
+
   defp matching(regex, name, value) do
     if String.valid?(value) and Regex.match?(regex, value),
       do: {:ok, value},
@@ -585,13 +708,23 @@ defmodule Prima.RunnerRelay do
     end
   end
 
-  defp step_kind(channel, :fetch, %{seq: seq, attempt: attempt}) do
-    fetch = %{attempt: attempt, credit: @max_body_bytes, headed: false}
+  defp step_kind(channel, :fetch, %{seq: seq, attempt: attempt} = frame) do
+    mode = if Map.has_key?(frame, :connection), do: :attached, else: :pin
+
+    fetch = %{
+      attempt: attempt,
+      mode: mode,
+      credit: @max_body_bytes,
+      headed: false,
+      refused: false
+    }
+
     {:ok, %{channel | fetches: Map.put(channel.fetches, seq, fetch)}}
   end
 
   defp step_kind(channel, :fetch_chunk, %{re: re} = frame) do
     with {:ok, fetch} <- open_fetch(channel, frame),
+         :ok <- answered_as(fetch, :pin),
          :ok <- head_in_place(fetch, frame),
          :ok <- within_credit(fetch, frame.body) do
       fetch = %{fetch | credit: fetch.credit - byte_size(frame.body), headed: true}
@@ -612,6 +745,37 @@ defmodule Prima.RunnerRelay do
   end
 
   defp step_kind(channel, :close, _frame), do: {:ok, channel}
+
+  defp step_kind(channel, :attached_frame, %{re: re, frame: bytes} = frame) do
+    with {:ok, fetch} <- open_fetch(channel, frame),
+         :ok <- answered_as(fetch, :attached),
+         :ok <- not_refused(fetch),
+         :ok <- within_credit(fetch, bytes) do
+      fetch = %{fetch | credit: fetch.credit - byte_size(bytes), headed: true}
+      {:ok, %{channel | fetches: Map.put(channel.fetches, re, fetch)}}
+    end
+  end
+
+  defp step_kind(channel, :attached_refusal, %{re: re} = frame) do
+    with {:ok, fetch} <- open_fetch(channel, frame),
+         :ok <- answered_as(fetch, :attached),
+         :ok <- not_answered(fetch) do
+      fetch = %{fetch | refused: true}
+      {:ok, %{channel | fetches: Map.put(channel.fetches, re, fetch)}}
+    end
+  end
+
+  # An answer kind fits one shape of fetch: chunks a pinned one, frames
+  # and a refusal an attached one, a refusal before any frame and no frame
+  # after it.
+  defp answered_as(%{mode: mode}, mode), do: :ok
+  defp answered_as(_fetch, _mode), do: {:error, :wrong_answer}
+
+  defp not_refused(%{refused: false}), do: :ok
+  defp not_refused(_fetch), do: {:error, :wrong_answer}
+
+  defp not_answered(%{refused: false, headed: false}), do: :ok
+  defp not_answered(_fetch), do: {:error, :wrong_answer}
 
   defp open_fetch(channel, %{re: re, attempt: attempt}) do
     case Map.fetch(channel.fetches, re) do

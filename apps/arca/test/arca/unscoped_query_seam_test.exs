@@ -299,7 +299,16 @@ defmodule Arca.UnscopedQuerySeamTest do
       "the node's one claim by a restore, before any person or athanor exists",
     "Arca.Schemas.RequestRateWindow" =>
       "a pre-authentication limit, keyed by bucket and hashed key; no session, and so no " <>
-        "athanor, stands behind the requests it bounds"
+        "athanor, stands behind the requests it bounds",
+    "Arca.Schemas.InstanceEntry" =>
+      "the instance's own credentials, offered to athanors and deleted with none of them: " <>
+        "keyed by its id and held by the platform's actor alone (`Arca.InstanceEntries`)",
+    "Arca.Schemas.InstanceEntryMember" =>
+      "a person listed in an instance entry's audience, keyed by the entry and the person; " <>
+        "the instance's own credentials, offered to athanors and deleted with none of them",
+    "Arca.Schemas.InstanceEntryUsage" =>
+      "an instance entry's use by person and day, keyed by the entry, the person and the " <>
+        "day; the instance's own credentials, offered to athanors and deleted with none of them"
   }
 
   test "every schema without an athanor column is classified" do

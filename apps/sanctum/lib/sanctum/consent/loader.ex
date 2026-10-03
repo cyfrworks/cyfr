@@ -215,13 +215,15 @@ defmodule Sanctum.Consent.Loader do
   end
 
   # The blob is what runs; the refs are what "which profiles touch this
-  # entry" queries answer from. If they disagree, one of them lies about
-  # the grant, so neither is trusted.
+  # entry" queries answer from, and what a binding's lifetime is kept on.
+  # If they disagree, one of them lies about the grant, so neither is
+  # trusted. Compared per binding: a bound entry by its key, entry and
+  # digest, a selection by its key, label and pinned digest (nil when it
+  # pinned none).
   defp check_blob_refs_equality(blob, consent) do
     blob_refs = blob_vault_refs(blob)
 
-    stored_refs =
-      MapSet.new(consent.vault_refs, fn ref -> {ref.vault_entry_id, ref.binding_digest} end)
+    stored_refs = MapSet.new(consent.vault_refs, &stored_ref/1)
 
     if MapSet.equal?(blob_refs, stored_refs) do
       :ok
@@ -242,14 +244,38 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
+  # Every binding the blob holds, as the tagged identity its row carries
+  # (`Arca.ConsentStorage.row_identity/1`): each bound entry, its named
+  # accounts included, and each selection, keyed where it sits. Provided
+  # configuration names no binding.
   defp blob_vault_refs(%Blob{nodes: nodes}) do
-    for {_ref, node} <- nodes,
-        {_key, edge} <- node.edges,
-        Blob.bound_vault?(edge.vault),
-        into: MapSet.new() do
-      {edge.vault.entry_id, edge.vault.binding_digest}
-    end
+    for {node_ref, node} <- nodes,
+        {edge_key, %Blob.Edge{vault: vault}} <- node.edges,
+        ref <- edge_refs(node_ref, edge_key, vault),
+        into: MapSet.new(),
+        do: ref
   end
+
+  defp edge_refs(_node_ref, _edge_key, %{entry_id: _} = vault) do
+    named = vault |> Map.get(:named, %{}) |> Map.values()
+    for bound <- [vault | named], do: bound_identity(bound)
+  end
+
+  # A selection is resolved within the borrowing consent's own athanor.
+  defp edge_refs(node_ref, edge_key, %{via: via}),
+    do: [
+      {:via, "athanor", Blob.binding_key(node_ref, edge_key, nil), via.label, via.binding_digest}
+    ]
+
+  defp edge_refs(_node_ref, _edge_key, _vault), do: []
+
+  defp bound_identity(%{scope: "instance"} = bound),
+    do: {:instance, "instance", bound.binding_key, bound.entry_id, bound.binding_digest}
+
+  defp bound_identity(bound),
+    do: {:entry, bound.scope, bound.binding_key, bound.entry_id, bound.binding_digest}
+
+  defp stored_ref(ref), do: Arca.ConsentStorage.row_identity(ref)
 
   # ---------------------------------------------------------------------------
   # Selections — a vault borrowed from the target's own profile
@@ -260,7 +286,10 @@ defmodule Sanctum.Consent.Loader do
   # its head consent must be intact (the same digest check this consent
   # passed), and its ingress must bind an entry whose digest matches the
   # pinned one when the selection pinned it. The bound entry then rides
-  # the edge, projected to what both the selection and the ingress allow.
+  # the edge, projected to what both the selection and the ingress allow,
+  # under two identities: the borrower's binding key, where the selection
+  # sits, and the lender's profile, consent and binding key, so a use
+  # answers to both bindings. The lender's named accounts are not lent.
   # Anything else leaves the selection in place, which no run can unseal.
   #
   # The lender's head must admit the context's origin as the root's must:
@@ -269,7 +298,7 @@ defmodule Sanctum.Consent.Loader do
   defp resolve_selections(%Context{} = ctx, actor, %Blob{nodes: nodes} = blob) do
     nodes
     |> Enum.reduce_while({:ok, %{}}, fn {node_ref, node}, {:ok, resolved} ->
-      case resolve_node(ctx, actor, node) do
+      case resolve_node(ctx, actor, node_ref, node) do
         {:ok, node} -> {:cont, {:ok, Map.put(resolved, node_ref, node)}}
         {:error, _} = refused -> {:halt, refused}
       end
@@ -280,10 +309,10 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  defp resolve_node(ctx, actor, %Blob.Node{edges: edges} = node) do
+  defp resolve_node(ctx, actor, node_ref, %Blob.Node{edges: edges} = node) do
     edges
     |> Enum.reduce_while({:ok, %{}}, fn {key, edge}, {:ok, resolved} ->
-      case resolve_edge(ctx, actor, key, edge) do
+      case resolve_edge(ctx, actor, node_ref, key, edge) do
         {:ok, edge} -> {:cont, {:ok, Map.put(resolved, key, edge)}}
         {:error, _} = refused -> {:halt, refused}
       end
@@ -294,10 +323,12 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  defp resolve_edge(ctx, actor, key, edge) do
+  defp resolve_edge(ctx, actor, node_ref, key, edge) do
     case {edge.vault, Blob.edge_target(key)} do
       {%{via: via, projection: projection}, {:ok, target}} ->
-        case resolve_selection(ctx, actor, target, via, projection) do
+        borrower_key = Blob.binding_key(node_ref, key, nil)
+
+        case resolve_selection(ctx, actor, target, via, projection, borrower_key) do
           {:ok, vault} ->
             {:ok, %{edge | vault: vault}}
 
@@ -315,7 +346,7 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  defp resolve_selection(ctx, actor, target, via, projection) do
+  defp resolve_selection(ctx, actor, target, via, projection, borrower_key) do
     with {:ok, profile} <- selected_profile(actor, target, via.label),
          {:ok, consent} <- fetch_head(actor, profile),
          :ok <- check_origin(ctx, profile, consent),
@@ -326,11 +357,77 @@ defmodule Sanctum.Consent.Loader do
          :ok <- check_pinned_digest(via, bound),
          {:ok, narrowed} <- narrow_projection(projection, bound.projection) do
       {:ok,
-       Map.put(%{bound | projection: narrowed}, :lender, %{
-         profile_id: profile.id,
-         consent_id: consent.id
+       bound
+       |> Map.delete(:named)
+       |> Map.merge(%{
+         projection: narrowed,
+         binding_key: borrower_key,
+         lender: %{profile_id: profile.id, consent_id: consent.id, binding_key: bound.binding_key}
        })}
     end
+  end
+
+  @doc """
+  What one `vault_refs` row of the head revision `consent` binds now,
+  read by its tag (`Arca.ConsentStorage.row_identity/1`):
+
+    * `{:entry, entry_id, binding_digest}` — the athanor's own entry;
+    * `{:selection, label, result}` — a selection (`via`) of the profile
+      `label`, resolved exactly as `load_root/3` resolves it under
+      `ctx`'s origin: `{:ok, vault}`, the lender's bound vault, or
+      `{:error, reason}` when it resolves to nothing;
+    * `{:instance, instance_entry_id}` — an instance entry;
+    * `:malformed` — a row naming none of them.
+
+  The selection is the one the revision's own blob holds at the row's
+  binding key; a blob that fails its digest, does not parse or holds no
+  selection there resolves to `{:error, reason}`. Nothing is raised.
+  """
+  @spec row_binding(Context.t(), map(), map()) ::
+          {:entry, String.t(), String.t()}
+          | {:selection, String.t(), {:ok, map()} | {:error, term()}}
+          | {:instance, String.t()}
+          | :malformed
+  def row_binding(%Context{} = ctx, consent, ref) when is_map(consent) and is_map(ref) do
+    case Arca.ConsentStorage.row_identity(ref) do
+      {:entry, _scope, _key, entry_id, digest} ->
+        {:entry, entry_id, digest}
+
+      {:instance, _scope, _key, instance_entry_id, _digest} ->
+        {:instance, instance_entry_id}
+
+      {:via, _scope, key, label, _digest} ->
+        {:selection, label, resolve_row_selection(ctx, consent, key)}
+
+      :none ->
+        :malformed
+    end
+  end
+
+  defp resolve_row_selection(ctx, consent, key) do
+    with :ok <- check_blob_digest(consent),
+         {:ok, %Blob{nodes: nodes}} <- parse_blob(consent),
+         {:ok, edge_key, vault} <- selection_at(nodes, key),
+         {:ok, target} <- Blob.edge_target(edge_key) do
+      resolve_selection(ctx, Context.actor(ctx), target, vault.via, vault.projection, key)
+    else
+      :ingress -> {:error, :selection_missing}
+      {:error, _} = refused -> refused
+    end
+  end
+
+  # The selection the blob holds at `key`: the edge whose place is the
+  # row's.
+  defp selection_at(nodes, key) do
+    Enum.find_value(nodes, {:error, :selection_missing}, fn {node_ref, %Blob.Node{edges: edges}} ->
+      Enum.find_value(edges, fn
+        {edge_key, %Blob.Edge{vault: %{via: _} = vault}} ->
+          if Blob.binding_key(node_ref, edge_key, nil) == key, do: {:ok, edge_key, vault}
+
+        _other ->
+          nil
+      end)
+    end)
   end
 
   @doc """
@@ -409,9 +506,9 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  defp bound_ingress_vault(%Blob.Edge{vault: vault}) do
-    if Blob.bound_vault?(vault), do: {:ok, vault}, else: {:error, :nothing_bound}
-  end
+  # A lender lends an entry it binds; provided configuration is no entry.
+  defp bound_ingress_vault(%Blob.Edge{vault: %{entry_id: _} = vault}), do: {:ok, vault}
+  defp bound_ingress_vault(_edge), do: {:error, :nothing_bound}
 
   defp check_pinned_digest(%{binding_digest: nil}, _bound), do: :ok
 

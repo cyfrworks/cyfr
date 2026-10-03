@@ -213,6 +213,21 @@ defmodule Prima.RefusalTest do
     {:too_many_attachments, :invalid_argument},
     {:attachment_too_large, :invalid_argument},
     {:storage_error, :internal},
+    {:destination_mismatch, :forbidden},
+    {:scope_not_attenuable, :forbidden},
+    {:disclosure_refused, :forbidden},
+    {:not_offered, :forbidden},
+    {:component_not_admitted, :forbidden},
+    {:provider_mismatch, :invalid_argument},
+    {{:provider_mismatch, "openai.com"}, :invalid_argument},
+    {:credential_header_refused, :invalid_argument},
+    {:endpoints_immutable, :invalid_argument},
+    {:connection_not_granted, :setup_required},
+    {{:invoke_denied, :connection_not_granted}, :forbidden},
+    {:connection_cap, :rate_limited},
+    {{:connection_cap, ~U[2026-10-05 00:00:00Z]}, :rate_limited},
+    {:grant_expired, :consent_required},
+    {:attach_unavailable, :unavailable},
     {"No provider found for scheme ftp", :internal}
   ]
 
@@ -235,7 +250,19 @@ defmodule Prima.RefusalTest do
     "dispatch_error" => :internal,
     "unknown" => :internal,
     "task_failed" => :internal,
-    "cancel_failed" => :internal
+    "cancel_failed" => :internal,
+    "destination_mismatch" => :forbidden,
+    "scope_not_attenuable" => :forbidden,
+    "disclosure_refused" => :forbidden,
+    "not_offered" => :forbidden,
+    "component_not_admitted" => :forbidden,
+    "provider_mismatch" => :invalid_argument,
+    "credential_header_refused" => :invalid_argument,
+    "endpoints_immutable" => :invalid_argument,
+    "connection_not_granted" => :setup_required,
+    "connection_cap" => :rate_limited,
+    "grant_expired" => :consent_required,
+    "attach_unavailable" => :unavailable
   }
 
   describe "the table" do
@@ -283,6 +310,43 @@ defmodule Prima.RefusalTest do
       end
 
       assert %Refusal{class: :internal} = Refusal.classify({:guest_error, "novel", "said"})
+    end
+
+    test "the credential refusals are reasons under the closed classes, in fixed words" do
+      assert Refusal.credential_reasons() ==
+               Enum.sort(~w(destination_mismatch provider_mismatch connection_not_granted
+                            credential_header_refused connection_cap scope_not_attenuable
+                            endpoints_immutable grant_expired disclosure_refused not_offered
+                            component_not_admitted)a)
+
+      assert length(Refusal.classes()) == 16
+
+      for reason <- Refusal.credential_reasons() do
+        refusal = Refusal.classify(reason)
+        assert refusal.class in Refusal.classes(), inspect(reason)
+
+        # The guest error of the same name reads as the same refusal.
+        assert Refusal.classify({:guest_error, Atom.to_string(reason), refusal.message}) ==
+                 %Refusal{
+                   class: refusal.class,
+                   reason: {:guest_error, Atom.to_string(reason), refusal.message},
+                   message: refusal.message
+                 }
+      end
+
+      assert Refusal.message(:component_not_admitted) ==
+               "This instance entry requires an unmodified shipped component."
+
+      # A detail beside the reason stays out of the sentence.
+      assert Refusal.message({:provider_mismatch, "openai.com"}) ==
+               Refusal.message(:provider_mismatch)
+
+      refute Refusal.message({:provider_mismatch, "openai.com"}) =~ "openai"
+
+      assert Refusal.message({:connection_cap, ~U[2026-10-05 00:00:00Z]}) ==
+               Refusal.message(:connection_cap)
+
+      assert Refusal.message({:connection_cap, "anything"}) == Refusal.message(:connection_cap)
     end
 
     test "the corrupt registry credential says what to do" do

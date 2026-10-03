@@ -113,7 +113,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           Overlay PolicyLog ProvisioningClaims RateWindows RecordSink ScheduleOccurrences
           SecurityTransitions ServerMetaStorage Storage StorageProjectionChanges
           StorageProjectionRoots TenantTables ThreadStorage ThreadSubscriptionStorage
-          TurnStorage Usage WebhookDeliveryStorage),
+          TurnStorage Usage VaultDefaults WebhookDeliveryStorage),
        "the storage, lease, claim and cache facades the layers above call downward"},
       {~w(InstallationClaims),
        "the installation mode Sanctum installs and the first-person mint reads"},

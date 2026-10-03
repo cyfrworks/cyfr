@@ -57,7 +57,12 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
   # One row in each of the tables whose survival was the point: a sealed
   # credential, a thread with a message, and a request log.
   defp seed_rows!(ctx) do
-    params = %{name: "to-be-erased", kind: "api_key", fields: %{"token" => "super-secret-value"}}
+    params = %{
+      name: "to-be-erased",
+      kind: "api_key",
+      fields: %{"token" => "super-secret-value"},
+      destination: %{"hosts" => ["api.example.com"]}
+    }
 
     entering =
       Sanctum.TestContext.confirmed(ctx, :credential_entry, %{

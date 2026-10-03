@@ -9,6 +9,14 @@ defmodule Compendium.ConsentSetupPlan do
   whose digest matches the consent. Rebinding or revocation can make it
   unready without changing the manifest.
 
+  Each row of the head revision is read by what it names
+  (`Sanctum.Consent.row_binding/3`): the athanor's own entry, held
+  to the digest the person approved; a selection of another profile's
+  key, resolved as a run resolves it and its lender's entry held to the
+  same check, or reported not ready with the reason it resolves to
+  nothing; and an instance entry, which this check does not read and
+  reports not ready.
+
   `Compendium.Component.setup_plan/2` embeds this as the `consent` section
   of its response and derives the top-level `ready` from it — the consent
   state is the only thing that answers "is this component set up".
@@ -106,14 +114,14 @@ defmodule Compendium.ConsentSetupPlan do
     end
   end
 
-  # One row per vault reference the head consent carries: live, bound,
-  # and still matching the digest the operator approved.
+  # One row per binding the head consent carries, read by what it names.
   defp check_needs(ctx, consent) do
     Enum.map(consent.vault_refs, fn ref ->
-      {satisfied, detail} = check_ref(ctx, ref)
+      {entry_id, satisfied, detail} =
+        check_ref(ctx, Sanctum.Consent.row_binding(ctx, consent, ref))
 
       %{
-        entry_id: ref.vault_entry_id,
+        entry_id: entry_id,
         satisfied: satisfied,
         detail: detail
       }
@@ -138,20 +146,57 @@ defmodule Compendium.ConsentSetupPlan do
     end
   end
 
-  defp check_ref(ctx, ref) do
+  # The athanor's own entry, live and still at the digest approved.
+  defp check_ref(ctx, {:entry, entry_id, digest}), do: usable(ctx, entry_id, digest, "")
+
+  # A selection resolved to its lender's entry is held to the same check.
+  defp check_ref(ctx, {:selection, label, {:ok, %{scope: "athanor"} = vault}}),
+    do: usable(ctx, vault.entry_id, vault.binding_digest, " (lent by its #{label} profile)")
+
+  defp check_ref(_ctx, {:selection, label, {:ok, _instance}}),
+    do:
+      {nil, false, "the #{label} profile lends an instance entry, which this check does not read"}
+
+  defp check_ref(_ctx, {:selection, label, {:error, reason}}),
+    do: {nil, false, unresolved(label, reason)}
+
+  defp check_ref(_ctx, {:instance, _instance_entry_id}),
+    do: {nil, false, "bound to an instance entry, which this check does not read"}
+
+  defp check_ref(_ctx, :malformed), do: {nil, false, "the binding names no entry"}
+
+  defp usable(ctx, entry_id, digest, lent) do
     # Use the shared vault resolution check for status and binding validity.
-    case VaultReader.usable(ctx.athanor_id, ref.vault_entry_id, ref.binding_digest) do
+    case VaultReader.usable(ctx.athanor_id, entry_id, digest) do
       {:ok, entry} ->
-        {true, "bound to #{entry.name}"}
+        {entry_id, true, "bound to #{entry.name}#{lent}"}
 
       {:error, {:binding_mismatch, name}} ->
-        {false, "#{name} was rebound since this consent — re-approve to continue"}
+        {entry_id, false,
+         "#{name}#{lent} was rebound since this consent — re-approve to continue"}
 
       {:error, {:entry_unavailable, name, status}} ->
-        {false, "#{name} is #{status}"}
+        {entry_id, false, "#{name}#{lent} is #{status}"}
 
       {:error, :not_found} ->
-        {false, "the bound vault entry no longer exists"}
+        {entry_id, false, "the bound vault entry no longer exists"}
     end
   end
+
+  # Why a selection resolves to nothing, in the person's words.
+  defp unresolved(label, {:profile_unavailable, status}),
+    do: "the #{label} profile it borrows from is #{status} — re-approve that profile to continue"
+
+  defp unresolved(label, {:no_such_profile, _target, _label}),
+    do: "no #{label} profile lends a key here — grant one to continue"
+
+  defp unresolved(label, :binding_moved),
+    do: "the #{label} profile's key was rebound since this consent — re-approve to continue"
+
+  defp unresolved(label, :nothing_bound), do: "the #{label} profile binds no key"
+
+  defp unresolved(label, {:consent_required, _payload}),
+    do: "the #{label} profile's grant does not admit this origin"
+
+  defp unresolved(label, _reason), do: "the selection of the #{label} profile resolves to nothing"
 end
