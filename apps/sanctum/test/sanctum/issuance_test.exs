@@ -662,6 +662,39 @@ defmodule Sanctum.IssuanceTest do
     assert {:error, _refused} = DeviceCerts.client_standing(ctx)
   end
 
+  test "a device whose seat is a platform row is not established", %{
+    user: user,
+    athanor: athanor,
+    session_ctx: session_ctx
+  } do
+    device = pair!(session_ctx)
+    {:ok, platform} = Members.ensure_platform(user.id)
+    {:ok, standing} = DeviceCerts.standing(user.id, athanor.id)
+    {:ok, client} = DeviceCerts.paired_client(athanor.id, user.id, device.client_id)
+
+    # The rows `Sanctum.DeviceCerts` hands `Sanctum.Caller` once a device
+    # verified, as read: on the person's seat, the device is established.
+    verified = %{
+      certificate: device.certificate,
+      client: client,
+      identity: nil,
+      user: standing.user,
+      athanor: standing.athanor,
+      seat: standing.seat,
+      platform_admin: standing.platform_admin
+    }
+
+    assert {:ok, %Context{auth_method: :device}} =
+             Sanctum.Caller.establish_device(verified, [])
+
+    # The same rows with the person's platform row handed as the seat: the
+    # caller's own check refuses it, whatever `standing/2` answered.
+    assert platform.scope == "platform"
+
+    assert {:error, :unauthenticated} =
+             Sanctum.Caller.establish_device(%{verified | seat: platform}, [])
+  end
+
   test "a derived session credential resting on a platform row is refused", %{
     user: user,
     athanor: athanor,
