@@ -130,7 +130,7 @@ defmodule Compendium.Registry do
          :ok <- validate_publish_origin(publisher, Keyword.get(opts, :origin)),
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
-         :ok <- validate_manifest_capability_blocks(manifest_map),
+         {:ok, warnings} <- validate_manifest_capability_blocks(ctx, manifest_map),
          # Before the unit commit: a refused republish must leave no bytes
          # behind for the scanner to pick up.
          :ok <-
@@ -162,9 +162,15 @@ defmodule Compendium.Registry do
              source: Keyword.get(opts, :source),
              rollback_unit: ComponentPath.version_dir(component_type, publisher, name, version)
            ) do
-      {:ok, component}
+      {:ok, with_warnings(component, warnings)}
     end
   end
+
+  # What the publish says beside the row it landed: each `provides` entry
+  # it could not check, and each value that reads like a key, which the
+  # publisher has published by putting it there.
+  defp with_warnings(component, []), do: component
+  defp with_warnings(component, warnings), do: Map.put(component, :warnings, warnings)
 
   # One unit commit before the row: the artifact, any extra unit files (a
   # pull's README and src/ tree), and the manifest sentinel — synthesized
@@ -309,7 +315,7 @@ defmodule Compendium.Registry do
          # path (publish_bytes/4) already does, and a manifest sourced from a
          # remote registry is no more trustworthy than a directly-published one.
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
-         :ok <- validate_manifest_capability_blocks(manifest_map),
+         {:ok, warnings} <- validate_manifest_capability_blocks(ctx, manifest_map),
          {:ok, validation} <-
            extract_and_store_tincture(ctx, archive_bytes, publisher, name, version,
              # The unit commit itself checks the storage cap against the
@@ -344,7 +350,7 @@ defmodule Compendium.Registry do
              allow_overwrite: allow_overwrite,
              rollback_unit: ComponentPath.version_dir("tincture", publisher, name, version)
            ) do
-      {:ok, component}
+      {:ok, with_warnings(component, warnings)}
     end
   end
 
@@ -536,7 +542,7 @@ defmodule Compendium.Registry do
          :ok <- validate_manifest_identity(manifest, publisher, component_type, name, version),
          :ok <- validate_name(name),
          :ok <- validate_version(version),
-         :ok <- validate_manifest_capability_blocks(manifest),
+         :ok <- validate_manifest_grammar(manifest),
          {:ok, validation} <- validate_artifact_arca(ctx, segments, component_type) do
       metadata = build_metadata_from_manifest(manifest, component_type)
       {:ok, manifest_json} = Jason.encode(manifest)
@@ -1470,12 +1476,101 @@ defmodule Compendium.Registry do
   # roster, needs/caps owners), with the storage layer's guest-path
   # predicate. Its first failure is this surface's refusal, as the block
   # spelled it.
-  defp validate_manifest_capability_blocks(manifest) do
+  # A publish's manifest: its blocks held to their grammar, and its
+  # `provides` block to the dependencies it names. Answers the publish's
+  # warnings.
+  defp validate_manifest_capability_blocks(ctx, manifest) do
+    with :ok <- validate_manifest_grammar(manifest), do: check_provides(ctx, manifest)
+  end
+
+  # The blocks' grammar alone: what a unit the tree registers is held to,
+  # its dependencies registered in whatever order the scan meets them.
+  defp validate_manifest_grammar(manifest) do
     case Prima.Manifest.validate(manifest, &Arca.Storage.valid_guest_path?/1) do
       :ok -> :ok
       {:error, {:invalid_manifest, [{block, detail} | _]}} -> {:error, {block, detail}}
     end
   end
+
+  # Each `provides` entry names a need its dependency declares, as a
+  # credential need with an attach rule, at the version that resolves
+  # here: one it does not, or declares disclose-only, is refused, since it
+  # would provide nothing. A dependency that does not resolve at publish —
+  # a pull lands the app before the dependencies it pulls next — is not
+  # checked, and the publish says so. A value whose name reads as a
+  # private key's (`Prima.Sanitizer.sensitive_key?/1`) is published by
+  # its publisher's declaration; the publish warns and refuses nothing,
+  # since a public key by design reads the same.
+  defp check_provides(ctx, manifest) do
+    case Prima.Manifest.Provides.from_manifest(manifest) do
+      provides when is_map(provides) and provides != %{} ->
+        provides
+        |> Enum.sort()
+        |> Enum.reduce_while({:ok, []}, fn {dep, needs}, {:ok, warnings} ->
+          case provided_needs_check(ctx, dep, needs) do
+            {:ok, more} -> {:cont, {:ok, warnings ++ more}}
+            {:error, _} = refusal -> {:halt, refusal}
+          end
+        end)
+
+      _none ->
+        {:ok, []}
+    end
+  end
+
+  defp provided_needs_check(ctx, dep, needs) do
+    keys =
+      for {need, entry} <- Enum.sort(needs),
+          name <- Enum.sort(Map.keys(entry.values)),
+          Prima.Sanitizer.sensitive_key?(name),
+          do: "provides #{dep} #{need}: the value #{name} reads like a key, and it is published"
+
+    case resolve_provided_dependency(ctx, dep) do
+      {:ok, dep_manifest} ->
+        declared =
+          for need <- Prima.Manifest.Needs.from_manifest(dep_manifest) || [],
+              need.kind in ~w(api_key oauth bundle),
+              into: %{},
+              do: {need.name, need}
+
+        needs
+        |> Map.keys()
+        |> Enum.sort()
+        |> Enum.find_value({:ok, keys}, fn need ->
+          case Map.fetch(declared, need) do
+            {:ok, %{attach: %{}}} -> nil
+            {:ok, _disclose_only} -> {:error, {:provides, {:no_attach, dep, need}}}
+            :error -> {:error, {:provides, {:undeclared, dep, need}}}
+          end
+        end)
+
+      :unresolved ->
+        {:ok,
+         [
+           "provides #{dep}: the dependency does not resolve here yet, so the needs it is " <>
+             "given were not checked"
+           | keys
+         ]}
+    end
+  end
+
+  # The dependency's manifest at the version this install resolves it to:
+  # the version its reference pins, or its newest.
+  defp resolve_provided_dependency(ctx, dep) do
+    with {:ok, cref} <- Prima.ComponentRef.parse(dep),
+         {:ok, row} <- provided_dependency_row(ctx, cref),
+         {:ok, dep_manifest} <- Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
+      {:ok, dep_manifest}
+    else
+      _ -> :unresolved
+    end
+  end
+
+  defp provided_dependency_row(ctx, %{version: nil} = cref),
+    do: get_latest(ctx, cref.name, cref.namespace, cref.type)
+
+  defp provided_dependency_row(ctx, cref),
+    do: get(ctx, cref.name, cref.version, cref.namespace, cref.type)
 
   # ============================================================================
   # Registration Helpers

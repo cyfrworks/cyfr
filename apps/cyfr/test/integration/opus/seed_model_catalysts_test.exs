@@ -122,6 +122,12 @@ defmodule Opus.SeedModelCatalystsTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "#{name} key",
           kind: "api_key",
+          # The provider the catalyst's one need names.
+          provider_hint:
+            Enum.find(
+              Prima.Manifest.Needs.from_manifest(component.manifest),
+              &(&1.name == "api_key")
+            ).qualifier,
           fields: %{field => "sk-test-#{name}"},
           # The catalyst reads the key itself, so the entry is disclosed.
           destination: Sanctum.Test.ConsentFixtures.fixture_destination(),
@@ -199,6 +205,8 @@ defmodule Opus.SeedModelCatalystsTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "claude key",
         kind: "api_key",
+        # The provider claude's need names.
+        provider_hint: "anthropic.com",
         fields: %{"ANTHROPIC_API_KEY" => "sk-test-claude"},
         # The run reads the key itself, so the entry is disclosed.
         destination: %{"hosts" => ["api.anthropic.com"]},

@@ -55,6 +55,9 @@ defmodule Sanctum.Consent.FlowTest do
           %{
             name: "conn-#{System.unique_integer([:positive])}",
             kind: "api_key",
+            # The provider the cases' declared need names; a slot of a
+            # manifest declaring none names no provider to match.
+            provider_hint: "anthropic.com",
             fields: %{"url" => "https://db.example", "anon_key" => "anon"},
             # A case reads what the attach answers, so the entry is disclosed.
             destination: %{"hosts" => ["db.example"]},
@@ -945,12 +948,38 @@ defmodule Sanctum.Consent.FlowTest do
       a = entry!(ctx)
       b = entry!(ctx)
 
-      assert {:error, :multiple_source_bindings_unrepresentable} =
+      # Two defaults of one need: the second names no account to ride as.
+      assert {:error, {:invalid_argument, why}} =
                Commit.preview(ctx, %{
                  ref: "reagent:local.flow-needs-two",
                  bindings: [
                    %{need: "api_key", entry_id: a.id},
                    %{need: "api_key", entry_id: b.id}
+                 ]
+               })
+
+      assert why =~ "Two bindings for api_key name no account"
+
+      # Bindings of two needs have one edge to ride: unrepresentable.
+      publish!(ctx, "flow-needs-pair", "1.0.0", %{
+        manifest:
+          Jason.encode!(%{
+            "name" => "flow-needs-pair",
+            "version" => "1.0.0",
+            "type" => "reagent",
+            "needs" => %{
+              "api_key" => @needs_manifest["needs"]["api_key"],
+              "other_key" => @needs_manifest["needs"]["api_key"]
+            }
+          })
+      })
+
+      assert {:error, :multiple_source_bindings_unrepresentable} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.flow-needs-pair",
+                 bindings: [
+                   %{need: "api_key", entry_id: a.id},
+                   %{need: "other_key", entry_id: b.id}
                  ]
                })
     end
@@ -965,7 +994,7 @@ defmodule Sanctum.Consent.FlowTest do
       a = entry!(ctx)
       b = entry!(ctx)
 
-      assert {:error, :multiple_source_bindings_unrepresentable} =
+      assert {:error, {:invalid_argument, why}} =
                Commit.preview(ctx, %{
                  ref: "reagent:local.flow-implicit-two",
                  bindings: [
@@ -973,6 +1002,8 @@ defmodule Sanctum.Consent.FlowTest do
                    %{need: "@ingress", entry_id: b.id}
                  ]
                })
+
+      assert why =~ "Two bindings for @ingress name no account"
 
       # One still binds.
       assert {:ok, preview} =

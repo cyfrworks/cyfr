@@ -171,7 +171,20 @@ var profileGrantCmd = &cobra.Command{
 
 		commitBindings := make([]ops.ProfileCommitArgsDecisionsBindingsItem, len(bindings))
 		for i, binding := range bindings {
-			commitBindings[i] = ops.ProfileCommitArgsDecisionsBindingsItem(binding)
+			commitBindings[i] = ops.ProfileCommitArgsDecisionsBindingsItem{
+				Need: binding.Need, EntryId: binding.EntryId, InstanceEntryId: binding.InstanceEntryId,
+				Name: binding.Name, Renew: binding.Renew, Fields: binding.Fields, Scopes: binding.Scopes}
+			// The two operations' lifetime records are distinct types of one
+			// wire shape; a supplied lifetime crosses as its JSON.
+			if !binding.Lifetime.IsZero() {
+				lifetime, err := json.Marshal(binding.Lifetime)
+				if err == nil {
+					err = json.Unmarshal(lifetime, &commitBindings[i].Lifetime)
+				}
+				if err != nil {
+					return fmt.Errorf("invalid binding lifetime: %w", err)
+				}
+			}
 		}
 		planToken, tokenOK := plan["plan_token"].(string)
 		proof, proofOK := preview["proof"].(string)
@@ -234,7 +247,7 @@ func collectBindings(cmd *cobra.Command, plan map[string]any) ([]ops.ProfilePrev
 		name := str(need["need"])
 
 		if entryID, given := preset[name]; given {
-			bindings = append(bindings, ops.ProfilePreviewArgsDecisionsBindingsItem{Need: ops.Value(name), EntryId: entryID})
+			bindings = append(bindings, ops.ProfilePreviewArgsDecisionsBindingsItem{Need: ops.Value(name), EntryId: ops.Value(entryID)})
 			continue
 		}
 
@@ -247,7 +260,7 @@ func collectBindings(cmd *cobra.Command, plan map[string]any) ([]ops.ProfilePrev
 			return nil, err
 		}
 		if entryID != "" {
-			bindings = append(bindings, ops.ProfilePreviewArgsDecisionsBindingsItem{Need: ops.Value(name), EntryId: entryID})
+			bindings = append(bindings, ops.ProfilePreviewArgsDecisionsBindingsItem{Need: ops.Value(name), EntryId: ops.Value(entryID)})
 		}
 	}
 

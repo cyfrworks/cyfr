@@ -72,6 +72,10 @@ defmodule Sanctum.InstanceEntriesTest do
 
       {:ok, answered}
     end
+
+    # The install media ships no newer version of anything here.
+    @impl true
+    def newer_shipped(_ctx, _row), do: {:ok, nil}
   end
 
   # An inference-only account: chat completions and the model list, and
@@ -1181,6 +1185,76 @@ defmodule Sanctum.InstanceEntriesTest do
                InstanceEntries.resolve(anonymous, entry.id, request("/v1/models", "GET"), @custom)
 
       assert {0, []} = usage(entry.id)
+    end
+  end
+
+  describe "binding/2" do
+    test "answers the entry as offered with the digest it stands at, unsealing nothing and " <>
+           "claiming no use",
+         %{admin: admin} do
+      entry = create!(admin)
+      alice = person("alice")
+
+      assert {:ok, view} = InstanceEntries.binding(alice, entry.id)
+      assert view.id == entry.id
+      assert view.binding_digest == stored(entry.id).binding_digest
+      assert view.provider_hint == "openai.com"
+      assert view.oauth_scopes == []
+      assert view.component_policy == "any"
+      refute inspect(view) =~ @secret
+      assert {0, []} = usage(entry.id)
+      assert stored(entry.id).last_used_at == nil
+
+      # The offer view carries the scopes too: none for a key.
+      assert {:ok, [offer]} = InstanceEntries.offered(alice)
+      assert offer.oauth_scopes == []
+    end
+
+    test "refuses in resolve/4's order, up to the status", %{admin: admin} do
+      listed = create!(admin, %{audience: "listed", members: [id("alice")]})
+      revoked = create!(admin)
+      {:ok, _} = InstanceEntries.revoke(admin, revoked.id)
+      assert_received {:instance_entry, :revoked, _}
+
+      assert {:error, :anonymous_denied} =
+               InstanceEntries.binding(%{person("alice") | anonymous: true}, listed.id)
+
+      stranger = %{person("bob") | user_id: Prima.UUID7.generate_id(Prima.PersonId.prefix())}
+      assert {:error, :denied} = InstanceEntries.binding(stranger, listed.id)
+
+      assert {:error, :not_offered} = InstanceEntries.binding(person("bob"), listed.id)
+      assert {:error, :not_offered} = InstanceEntries.binding(person("bob"), "ine_missing")
+
+      assert {:error, {:entry_unavailable, "revoked"}} =
+               InstanceEntries.binding(person("bob"), revoked.id)
+
+      assert {:ok, _} = InstanceEntries.binding(person("alice"), listed.id)
+    end
+  end
+
+  describe "binding_facts/1" do
+    test "answers the kind, provider, status, digest and scopes alone, whatever the audience, " <>
+           "unsealing nothing and claiming no use",
+         %{admin: admin} do
+      listed = create!(admin, %{audience: "listed", members: [id("alice")]})
+
+      assert {:ok, facts} = InstanceEntries.binding_facts(listed.id)
+
+      assert facts == %{
+               kind: "api_key",
+               provider_hint: "openai.com",
+               status: "active",
+               binding_digest: stored(listed.id).binding_digest,
+               oauth_scopes: []
+             }
+
+      refute inspect(facts) =~ @secret
+      assert {0, []} = usage(listed.id)
+      assert stored(listed.id).last_used_at == nil
+
+      {:ok, _} = InstanceEntries.revoke(admin, listed.id)
+      assert {:ok, %{status: "revoked"}} = InstanceEntries.binding_facts(listed.id)
+      assert {:error, :not_found} = InstanceEntries.binding_facts("ine_missing")
     end
   end
 

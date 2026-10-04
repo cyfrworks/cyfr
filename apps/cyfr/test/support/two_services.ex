@@ -63,8 +63,8 @@ defmodule Cyfr.Test.TwoServices do
   def stub, do: @stub
 
   @doc """
-  The scopes the step stub's OAuth need declares and `arm!/3` authorizes
-  its entry for; a catalyst armed through `arm!/4` declares the same.
+  The scopes the step stub's OAuth need declares and `arm!/2` authorizes
+  its entry for; a catalyst armed through `arm!/3` declares the same.
   """
   @spec stub_scopes() :: [String.t()]
   def stub_scopes, do: @stub_scopes
@@ -486,24 +486,30 @@ defmodule Cyfr.Test.TwoServices do
   token is dispensed under the scopes — and dispense `token` to every run
   of the stub once its runner has attached, before the attach is answered
   and its guest runs, as a guest's `cyfr:oauth` call dispenses one
-  (`dispense_after_attach!/3`).
+  (`dispense_after_attach!/4`).
   Answers both, the credentials to look for.
   """
   @spec arm!(Sanctum.Context.t(), key: String.t(), token: String.t()) :: [String.t()]
   def arm!(ctx, key: key, token: token), do: arm!(ctx, @stub, key: key, token: token)
 
-  @doc "`arm!/2` for the catalyst `ref`, whose need is the step stub's."
+  @doc """
+  `arm!/2` for the catalyst `ref`, whose `api_key` need reads the step
+  stub's field and scopes for the provider it names.
+  """
   @spec arm!(Sanctum.Context.t(), String.t(), key: String.t(), token: String.t()) :: [String.t()]
   def arm!(ctx, ref, key: key, token: token) do
-    # The entry names the provider its token is dispensed for (`stub`,
-    # `dispense/4`), which has no preset, so it names its endpoints, ones
-    # nothing answers: the token it holds never expires. The stub reads
-    # its key and is dispensed its token, so the entry is disclosed, to
-    # the stub's own host.
+    # The entry names the provider `ref`'s need names, the one its token is
+    # dispensed for (`dispense/5`): `step-stub` for the stub, the brief's
+    # own for the brief. None has a preset, so the entry names its
+    # endpoints, ones nothing answers: the token it holds never expires.
+    # The catalyst reads its key and is dispensed its token, so the entry
+    # is disclosed, to the stub's own host.
+    provider = need_provider!(ctx, ref)
+
     params = %{
       name: "#{ref} key",
       kind: "oauth",
-      provider_hint: "stub",
+      provider_hint: provider,
       fields: %{@key_field => key},
       oauth: %{"access_token" => token},
       oauth_scopes: @stub_scopes,
@@ -539,8 +545,21 @@ defmodule Cyfr.Test.TwoServices do
         expected_consent_revision: plan.expected_consent_revision
       })
 
-    dispense_after_attach!(ctx, ref, token)
+    dispense_after_attach!(ctx, ref, token, provider)
     [key, token]
+  end
+
+  # The provider `ref`'s credential need is for: the qualifier of its
+  # type, read from the component's manifest as a consent reads it.
+  defp need_provider!(ctx, ref) do
+    {:ok, cref} = Prima.ComponentRef.parse(ref)
+    {:ok, row} = Sanctum.Consent.Components.get_latest(ctx, cref.name, cref.namespace, cref.type)
+    {:ok, manifest} = Prima.Manifest.decode_strict(Map.get(row, :manifest))
+
+    %{qualifier: qualifier} =
+      Enum.find(Prima.Manifest.Needs.from_manifest(manifest), &(&1.name == "api_key"))
+
+    qualifier
   end
 
   @doc """
@@ -549,33 +568,33 @@ defmodule Cyfr.Test.TwoServices do
   answered, or, for a child a formula's runner is handed at its admission,
   when that admission is answered; in either case before the answer
   reaches the runner, so the token is in the run's masking set before its
-  guest starts.
+  guest starts. `provider` is the one the entry and its need name.
   """
-  @spec dispense_after_attach!(Sanctum.Context.t(), String.t(), String.t()) :: :ok
-  def dispense_after_attach!(ctx, ref, token) do
+  @spec dispense_after_attach!(Sanctum.Context.t(), String.t(), String.t(), String.t()) :: :ok
+  def dispense_after_attach!(ctx, ref, token, provider) do
     wire = watch!()
 
     Wire.after_answer(wire, fn
       %{callback: :attach, fields: %{execution_id: id}, answer: %{"ok" => _secrets}} ->
-        dispense(ctx, ref, id, token)
+        dispense(ctx, ref, id, token, provider)
 
       %{callback: :admit_child, answer: %{"ok" => %{"assignment" => assignment}}} ->
         {:ok, %{execution_id: id}} = Prima.Assignment.read(assignment)
-        dispense(ctx, ref, id, token)
+        dispense(ctx, ref, id, token, provider)
 
       _call ->
         :ok
     end)
   end
 
-  defp dispense(ctx, ref, id, token) do
+  defp dispense(ctx, ref, id, token, provider) do
     case Arca.Repo.get(Arca.Schemas.Execution, id) do
       %{reference: reference} ->
         if String.starts_with?(reference, ref <> ":") do
           attempt = AttemptFixtures.current!(ctx.athanor_id, id)
 
           %{"ok" => ^token} =
-            AttemptFixtures.call(attempt, "oauth_token", %{"provider" => "stub"})
+            AttemptFixtures.call(attempt, "oauth_token", %{"provider" => provider})
         end
 
         :ok

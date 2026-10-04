@@ -28,6 +28,29 @@ defmodule Sanctum.Providers.Profile do
     # Dispatch applies the coarse consent class; the domain applies
     # the exact one (commit's digest-pinned key-capability arm lives
     # in Sanctum.Consent.Commit and stays there).
+    lifetime_arg =
+      Arg.new(
+        "lifetime",
+        {:record,
+         [
+           Arg.new("kind", :string,
+             required: true,
+             enum: ["standing", "until", "once"],
+             description: "standing until revoked, until a time, or once (one root run)"
+           ),
+           Arg.new("until", :string,
+             description:
+               "until only: an RFC 3339 instant in UTC, after now and at most 24 hours away"
+           )
+         ]},
+        description: "How long the binding lives; standing when absent"
+      )
+
+    renew_arg =
+      Arg.new("renew", :boolean,
+        description: "true makes a consumed once binding consumable again; false by default"
+      )
+
     bindings_arg =
       Arg.new(
         "bindings",
@@ -37,13 +60,29 @@ defmodule Sanctum.Providers.Profile do
            {:record,
             [
               Arg.new("need", :string),
-              Arg.new("entry_id", :string, required: true),
+              Arg.new("entry_id", :string,
+                description:
+                  "An entry of the athanor (vlt_…); exactly one of entry_id and instance_entry_id"
+              ),
+              Arg.new("instance_entry_id", :string,
+                description:
+                  "An instance entry offered to you (ine_…); exactly one of entry_id and " <>
+                    "instance_entry_id"
+              ),
+              Arg.new("name", :string,
+                description:
+                  "The account name of a named binding beside the need's default; absent " <>
+                    "for the default"
+              ),
+              lifetime_arg,
+              renew_arg,
               Arg.new("fields", {:array, Arg.new(nil, :string)}),
               Arg.new("scopes", {:array, Arg.new(nil, :string)})
             ]}
          )},
         description:
-          "grant only: the credentials to bind, [{need:'@ingress', entry_id, fields, scopes}]"
+          "The credentials to bind, one need's: [{need:'@ingress', entry_id | " <>
+            "instance_entry_id, name, lifetime, renew, fields, scopes}]"
       )
 
     decisions_arg =
@@ -65,9 +104,26 @@ defmodule Sanctum.Providers.Profile do
                 {:record,
                  [
                    Arg.new("dep", :string, required: true),
-                   Arg.new("label", :string),
+                   Arg.new("label", :string,
+                     description:
+                       "The dependency's profile that lends its key; at most one of label, " <>
+                         "entry_id and instance_entry_id, label 'default' when none"
+                   ),
+                   Arg.new("entry_id", :string,
+                     description: "An entry of the athanor bound on the dependency's edge"
+                   ),
+                   Arg.new("instance_entry_id", :string,
+                     description: "An instance entry offered to you, bound on the edge"
+                   ),
+                   Arg.new("need", :string,
+                     description:
+                       "The dependency's credential need the entry is for; required when it " <>
+                         "declares several, never with a label"
+                   ),
                    Arg.new("from", :string),
-                   Arg.new("fields", {:array, Arg.new(nil, :string)})
+                   Arg.new("fields", {:array, Arg.new(nil, :string)}),
+                   lifetime_arg,
+                   renew_arg
                  ]}
               )}
            ),
@@ -98,7 +154,9 @@ defmodule Sanctum.Providers.Profile do
          ]},
         required: true,
         description:
-          "The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id, fields, scopes}], override"
+          "The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', " <>
+            "entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}], selections, " <>
+            "override"
       )
 
     Operation.tool(
@@ -238,7 +296,7 @@ defmodule Sanctum.Providers.Profile do
         )
       ],
       description:
-        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates, preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; grants reads which grants reach a resource. Nothing is granted outside this walk.",
+        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates: each need, and each need of a dependency, answers its candidates (own or instance entries of its kind and provider), the one it has suggested, whether a choice_required, and its source (own, instance, or provided by the app); preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; grants reads which grants reach a resource. Nothing is granted outside this walk.",
       title: "Profiles & Consent"
     )
   end
@@ -774,10 +832,12 @@ defmodule Sanctum.Providers.Profile do
   defp decode_bindings(list) when is_list(list) do
     decoded =
       Enum.map(list, fn binding ->
-        %{
-          need: Map.get(binding, "need", Prima.Authority.Blob.ingress_key()),
-          entry_id: binding["entry_id"]
-        }
+        %{need: Map.get(binding, "need", Prima.Authority.Blob.ingress_key())}
+        |> Prima.MapUtil.put_present(:entry_id, binding["entry_id"])
+        |> Prima.MapUtil.put_present(:instance_entry_id, binding["instance_entry_id"])
+        |> Prima.MapUtil.put_present(:name, binding["name"])
+        |> Prima.MapUtil.put_present(:lifetime, decode_lifetime(binding["lifetime"]))
+        |> put_given(:renew, binding, "renew")
         |> Prima.MapUtil.put_present(:fields, binding["fields"])
         |> Prima.MapUtil.put_present(:scopes, binding["scopes"])
       end)
@@ -787,16 +847,43 @@ defmodule Sanctum.Providers.Profile do
 
   defp decode_bindings(_), do: {:error, "bindings must be a list"}
 
-  # A selection names a dependency edge of the closure and one of its
-  # profiles by label (the default one when unnamed); `from` defaults to
-  # the source at commit. The fields, when given, narrow what that
-  # profile's entry lends.
+  # A lifetime record in the commit's vocabulary; a member it does not
+  # name stays as it came, so the commit refuses it rather than reading
+  # less than was sent.
+  defp decode_lifetime(%{} = lifetime) do
+    Map.new(lifetime, fn
+      {"kind", kind} -> {:kind, kind}
+      {"until", until} -> {:until, until}
+      {other, value} -> {other, value}
+    end)
+  end
+
+  defp decode_lifetime(other), do: other
+
+  # A member the caller sent, false included, reaches the commit.
+  defp put_given(decoded, key, raw, wire_key) do
+    case Map.fetch(raw, wire_key) do
+      {:ok, value} -> Map.put(decoded, key, value)
+      :error -> decoded
+    end
+  end
+
+  # A selection names a dependency edge of the closure and what fills it:
+  # one of its profiles by label (the default one when it names nothing),
+  # or an entry or instance entry for one of its needs. `from` defaults to
+  # the source at commit. The fields, when given, narrow what is lent.
   defp decode_selections(list) when is_list(list) do
     decoded =
       Enum.map(list, fn selection ->
-        %{dep: selection["dep"], label: selection["label"] || "default"}
+        %{dep: selection["dep"]}
+        |> Prima.MapUtil.put_present(:label, selection["label"])
+        |> Prima.MapUtil.put_present(:entry_id, selection["entry_id"])
+        |> Prima.MapUtil.put_present(:instance_entry_id, selection["instance_entry_id"])
+        |> Prima.MapUtil.put_present(:need, selection["need"])
         |> Prima.MapUtil.put_present(:from, selection["from"])
         |> Prima.MapUtil.put_present(:fields, selection["fields"])
+        |> Prima.MapUtil.put_present(:lifetime, decode_lifetime(selection["lifetime"]))
+        |> put_given(:renew, selection, "renew")
       end)
 
     {:ok, decoded}
@@ -883,6 +970,28 @@ defmodule Sanctum.Providers.Profile do
   defp fmt({:entry_unavailable, id, status}),
     do: "entry_unavailable: #{id} is #{inspect(status)}"
 
+  # The revision's own lock found an entry it binds changed since it was
+  # read (`Arca.ConsentStorage`): which one, the store does not say.
+  defp fmt({:entry_unavailable, status}) when is_binary(status),
+    do: "entry_unavailable: an entry this consent binds is now #{inspect(status)}"
+
+  # A binding's refusals name the need and never the entry's material.
+  defp fmt({:provider_mismatch, need}) when is_binary(need),
+    do: "provider_mismatch: #{inspect(need)} takes an entry of its own kind and provider"
+
+  defp fmt({:disclosure_refused, need}) when is_binary(need),
+    do:
+      "disclosure_refused: the component reads #{inspect(need)} itself, so it takes a " <>
+        "disclosed entry of the athanor"
+
+  defp fmt({:component_not_admitted, need}) when is_binary(need),
+    do:
+      "component_not_admitted: the instance entry for #{inspect(need)} admits no such " <>
+        "component under its component policy"
+
+  defp fmt({:not_offered, need}) when is_binary(need),
+    do: "not_offered: the instance entry for #{inspect(need)} is not offered to you"
+
   defp fmt(:shape_moved),
     do:
       "shape_moved: the component's shape changed since this revision — plan, preview and commit again"
@@ -909,6 +1018,9 @@ defmodule Sanctum.Providers.Profile do
        do:
          "activation_unresolvable: #{ref} has no release digest — publish it again, " <>
            "then plan again"
+
+  defp fmt({:activation_unresolvable, {:activation_moved, ref}}) when is_binary(ref),
+    do: "activation_unresolvable: #{ref} changed while this grant was read — plan again"
 
   defp fmt({:activation_unresolvable, _reason}),
     do:

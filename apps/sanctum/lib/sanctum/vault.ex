@@ -3,8 +3,8 @@
 
 defmodule Sanctum.Vault do
   @moduledoc """
-  The operator's credential verbs: list, defaults, status, create, rename,
-  rotate, rebind, revoke, delete.
+  The operator's credential verbs: list, defaults, set_default, status,
+  create, rename, rotate, rebind, revoke, delete.
 
   Two mutations are deliberately different classes:
 
@@ -117,6 +117,71 @@ defmodule Sanctum.Vault do
   def defaults(%Context{} = ctx) do
     with {:ok, rows} <- Arca.VaultDefaults.list(Context.actor(ctx)) do
       {:ok, Map.new(rows, &default_view/1)}
+    end
+  end
+
+  @doc """
+  Make an entry the caller's athanor's default for a provider
+  (`params`: `:provider_hint`, and exactly one of `:entry_id`, an active
+  entry of the athanor, and `:instance_entry_id`, an instance entry
+  offered to the caller and active, `Sanctum.InstanceEntries.binding/2`).
+  The entry must be of that provider (`{:error, {:provider_mismatch,
+  hint}}`); an empty provider, or both ids or neither, is
+  `{:error, {:invalid_argument, sentence}}`. One upsert
+  (`Arca.VaultDefaults.set/3`): the provider's earlier default, if any,
+  is replaced. A default only suggests: moving it moves no consent.
+  Interactive consent class, the session alone. Answers
+  `%{provider_hint: hint, vault_entry_id: id}` or
+  `%{provider_hint: hint, instance_entry_id: id}`.
+  """
+  @spec set_default(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  def set_default(%Context{} = ctx, params) when is_map(params) do
+    hint = Map.get(params, :provider_hint)
+
+    with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
+         :ok <- default_provider(hint),
+         {:ok, target} <- default_target(params),
+         :ok <- default_of_provider(ctx, target, hint),
+         {:ok, _default} <- Arca.VaultDefaults.set(Context.actor(ctx), hint, target) do
+      {:ok, Map.put(target, :provider_hint, hint)}
+    else
+      {:error, :invalid_target} -> {:error, default_target_refusal()}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp default_provider(hint) when is_binary(hint) and hint != "", do: :ok
+
+  defp default_provider(_hint),
+    do: {:error, {:invalid_argument, "A default names the provider it is the default of"}}
+
+  defp default_target(params) do
+    case {Map.get(params, :entry_id), Map.get(params, :instance_entry_id)} do
+      {id, nil} when is_binary(id) and id != "" -> {:ok, %{vault_entry_id: id}}
+      {nil, id} when is_binary(id) and id != "" -> {:ok, %{instance_entry_id: id}}
+      _neither_or_both -> {:error, default_target_refusal()}
+    end
+  end
+
+  defp default_target_refusal,
+    do: {:invalid_argument, "A default names exactly one of entry_id and instance_entry_id"}
+
+  # The entry is one the caller's athanor may use, and of the provider it
+  # is made the default of.
+  defp default_of_provider(ctx, %{vault_entry_id: id}, hint) do
+    case Arca.VaultStorage.get(Context.actor(ctx), id) do
+      {:ok, %{status: "active", provider_hint: ^hint}} -> :ok
+      {:ok, %{status: "active"}} -> {:error, {:provider_mismatch, hint}}
+      {:ok, %{status: status}} -> {:error, {:entry_unavailable, status}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp default_of_provider(ctx, %{instance_entry_id: id}, hint) do
+    case Sanctum.InstanceEntries.binding(ctx, id) do
+      {:ok, %{provider_hint: ^hint}} -> :ok
+      {:ok, _other_provider} -> {:error, {:provider_mismatch, hint}}
+      {:error, reason} -> {:error, reason}
     end
   end
 

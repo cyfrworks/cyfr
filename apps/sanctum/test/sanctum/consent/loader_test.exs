@@ -408,6 +408,116 @@ defmodule Sanctum.Consent.LoaderTest do
     end
   end
 
+  describe "an instance entry's row and provided configuration" do
+    @inference ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+
+    defp instance!(over \\ %{}) do
+      {:ok, entry} =
+        Arca.InstanceEntries.put(
+          Arca.Test.Actor.platform(),
+          Map.merge(
+            %{
+              name: "instance-#{System.unique_integer([:positive])}",
+              kind: "api_key",
+              provider_hint: "openai.com",
+              field_names: ~s(["OPENAI_API_KEY"]),
+              destination: @inference,
+              sealed_payload: "sealed",
+              binding_digest: "sha256:instance",
+              audience: "everyone",
+              created_by: "usr_admin"
+            },
+            over
+          )
+        )
+
+      entry
+    end
+
+    defp instance_row(entry, digest) do
+      %{
+        binding_key: Prima.Authority.Blob.binding_key(Fixtures.formula_ref(), "@ingress", nil),
+        scope: "instance",
+        instance_entry_id: entry.id,
+        binding_digest: digest
+      }
+    end
+
+    test "an instance row is read live as the person is offered it, held to its digest", %{
+      ctx: ctx
+    } do
+      {person, _user} =
+        Sanctum.TestContext.person!(%{
+          ctx
+          | user_id: "local|local|loader-person",
+            authenticated: true,
+            auth_method: :oidc
+        })
+
+      entry = instance!()
+
+      assert {:instance, id, {:ok, view}} =
+               Loader.row_binding(person, %{}, instance_row(entry, "sha256:instance"))
+
+      assert id == entry.id and view.binding_digest == "sha256:instance"
+
+      # Rebound since the row was approved.
+      assert {:instance, _, {:error, :binding_went_stale}} =
+               Loader.row_binding(person, %{}, instance_row(entry, "sha256:approved-earlier"))
+
+      # No longer offered, then revoked.
+      listed = instance!(%{audience: "listed"})
+
+      assert {:instance, _, {:error, :not_offered}} =
+               Loader.row_binding(person, %{}, instance_row(listed, "sha256:instance"))
+
+      {:ok, _} =
+        Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), entry.id, "needs_consent")
+
+      assert {:instance, _, {:error, {:entry_unavailable, "revoked"}}} =
+               Loader.row_binding(person, %{}, instance_row(entry, "sha256:instance"))
+    end
+
+    test "provided configuration names no binding and resolves to itself", %{ctx: ctx} do
+      provided = %{
+        "provided" => %{
+          "destination" => %{"hosts" => ["abc.supabase.co"], "scheme" => "https"},
+          "values" => %{"anon_key" => "eyJ-public"},
+          "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+        }
+      }
+
+      policy =
+        Jason.encode!(%{
+          "canonical" => "jcs-1",
+          "nodes" => %{
+            Fixtures.formula_ref() => %{
+              "limits" => Fixtures.limits_map(),
+              "edges" => %{"@ingress" => %{}, Fixtures.catalyst_ref() => %{"vault" => provided}}
+            },
+            Fixtures.catalyst_ref() => %{"limits" => Fixtures.limits_map(), "edges" => %{}}
+          }
+        })
+
+      profile = profile_summary()
+      seed(ctx, profile, consent(%{resolved_policy: policy, vault_refs: []}))
+
+      {:ok, head} = Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)
+      assert head.vault_refs == []
+      assert {:ok, blob} = Loader.admitted_blob(ctx, profile, head)
+
+      {:ok, edge} =
+        Prima.Authority.Blob.lookup_edge(
+          blob,
+          Fixtures.formula_ref(),
+          Fixtures.catalyst_ref(),
+          ""
+        )
+
+      assert %{provided: %{values: %{"anon_key" => "eyJ-public"}}} = edge.vault
+    end
+  end
+
   describe "admitted_blob/3, the stored head's own checks" do
     defp head!(ctx, profile) do
       {:ok, head} = Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)

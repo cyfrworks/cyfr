@@ -559,11 +559,15 @@ defmodule PrismWeb.SystemLayerTest do
           })
       })
 
+    # The provider the need names; the component reads its key itself, so
+    # the entry is disclosed.
     params = %{
       name: "layer key #{System.unique_integer([:positive])}",
       kind: "api_key",
+      provider_hint: "layer.test",
       fields: %{"LAYER_API_KEY" => "sk-layer-not-shown"},
-      destination: %{"hosts" => ["api.example.com"]}
+      destination: %{"hosts" => ["api.example.com"]},
+      disclose: true
     }
 
     entering =
@@ -727,8 +731,10 @@ defmodule PrismWeb.SystemLayerTest do
       params = %{
         name: "second key #{System.unique_integer([:positive])}",
         kind: "api_key",
+        provider_hint: "layer.test",
         fields: %{"LAYER_API_KEY" => "sk-second-not-shown"},
-        destination: %{"hosts" => ["api.example.com"]}
+        destination: %{"hosts" => ["api.example.com"]},
+        disclose: true
       }
 
       entering =

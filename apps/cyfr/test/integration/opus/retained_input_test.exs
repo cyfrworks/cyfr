@@ -52,6 +52,8 @@ defmodule Opus.RetainedInputTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "claude key",
         kind: "api_key",
+        # The provider claude's need names.
+        provider_hint: "anthropic.com",
         fields: %{"ANTHROPIC_API_KEY" => "sk-test-claude"},
         # The run reads the key itself, so the entry is disclosed.
         destination: %{"hosts" => ["api.anthropic.com"]},

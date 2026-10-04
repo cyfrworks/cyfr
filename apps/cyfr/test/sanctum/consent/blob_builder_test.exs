@@ -429,10 +429,10 @@ defmodule Sanctum.Consent.BlobBuilderTest do
         {:ok, nodes} =
           BlobBuilder.build(
             ctx,
-            %{root => "sha256:r", @dep => "sha256:d"},
+            graph!(ctx, root),
             root,
             fn node, _row, _manifest -> if node == root, do: bound end,
-            edge_vault_fn: fn _from, _dep, _row, _manifest -> edge_vault end
+            edge_vault_fn: fn _from, _dep, _row, _manifest, _provided -> edge_vault end
           )
 
         {:ok, json} = BlobBuilder.encode(nodes)
@@ -468,21 +468,24 @@ defmodule Sanctum.Consent.BlobBuilderTest do
         {:ok, nodes} =
           BlobBuilder.build(
             ctx,
-            %{root => "sha256:r", @dep => "sha256:d"},
+            graph!(ctx, root),
             root,
             fn node, _row, _manifest -> if node == root, do: bound end,
-            edge_vault_fn: fn _from, _dep, _row, _manifest -> edge_vault end
+            edge_vault_fn: fn _from, _dep, _row, _manifest, _provided -> edge_vault end
           )
 
         BlobBuilder.vault_refs(nodes)
       end
 
+      # A resource that records no decision stands until revoked.
       ingress = %{
         binding_key: "#{root}|@ingress|default",
         scope: "athanor",
         vault_entry_id: "vlt_1",
         binding_digest: "sha256:b",
-        lifetime_kind: "standing"
+        lifetime_kind: "standing",
+        expires_at: nil,
+        renew: false
       }
 
       edge_key = "#{root}|#{@dep}|default"
@@ -503,13 +506,169 @@ defmodule Sanctum.Consent.BlobBuilderTest do
                    scope: "athanor",
                    via_label: "work",
                    binding_digest: pin,
-                   lifetime_kind: "standing"
+                   lifetime_kind: "standing",
+                   expires_at: nil,
+                   renew: false
                  }
                ]
       end
 
       # An edge holding no vault is no row.
       assert refs.(nil) == [ingress]
+    end
+
+    test "named accounts are rows of their own, each with its decision's lifetime and renew, " <>
+           "an instance entry's row names it, and provided configuration is no row",
+         %{ctx: ctx} do
+      publish!(ctx, "narrow-dep", %{})
+      publish!(ctx, "narrow-root", %{"dependencies" => %{"static" => [%{"ref" => @dep}]}})
+      root = "reagent:local.narrow-root"
+      until = ~U[2026-10-05 10:00:00Z]
+
+      binding = fn entry_id, over ->
+        Map.merge(
+          %{
+            entry_id: entry_id,
+            binding_digest: "sha256:" <> entry_id,
+            scope: "athanor",
+            destination: %{"hosts" => ["api.example.com"], "scheme" => "https"},
+            attach: %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+            fields: ["KEY"],
+            scopes: []
+          },
+          over
+        )
+      end
+
+      source =
+        BlobBuilder.vault_resource(
+          binding.("vlt_default", %{
+            named: [
+              binding.("vlt_one", %{name: "Supabase 1", lifetime: %{kind: "until", until: until}}),
+              binding.("ine_two", %{
+                name: "Supabase 2",
+                scope: "instance",
+                lifetime: %{kind: "once", until: nil},
+                renew: true
+              })
+            ]
+          })
+        )
+
+      provided =
+        BlobBuilder.vault_resource(%{
+          provided: %{
+            destination: %{"hosts" => ["abc.supabase.co"], "scheme" => "https"},
+            values: %{"anon_key" => "eyJ-public"},
+            attach: %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+          }
+        })
+
+      {:ok, nodes} =
+        BlobBuilder.build(
+          ctx,
+          graph!(ctx, root),
+          root,
+          fn node, _row, _manifest -> if node == root, do: source end,
+          edge_vault_fn: fn _from, _dep, _row, _manifest, _provided -> provided end
+        )
+
+      key = fn slot -> "#{root}|@ingress|#{slot}" end
+
+      assert BlobBuilder.vault_refs(nodes) == [
+               %{
+                 binding_key: key.("default"),
+                 scope: "athanor",
+                 vault_entry_id: "vlt_default",
+                 binding_digest: "sha256:vlt_default",
+                 lifetime_kind: "standing",
+                 expires_at: nil,
+                 renew: false
+               },
+               %{
+                 binding_key: key.("name:Supabase 1"),
+                 scope: "athanor",
+                 vault_entry_id: "vlt_one",
+                 binding_digest: "sha256:vlt_one",
+                 lifetime_kind: "until",
+                 expires_at: until,
+                 renew: false
+               },
+               %{
+                 binding_key: key.("name:Supabase 2"),
+                 scope: "instance",
+                 instance_entry_id: "ine_two",
+                 binding_digest: "sha256:ine_two",
+                 lifetime_kind: "once",
+                 expires_at: nil,
+                 renew: true
+               }
+             ]
+
+      # The blob names each binding's place and none of its lifetime; the
+      # provided configuration rides the dependency's edge as it is.
+      {:ok, json} = BlobBuilder.encode(nodes)
+      refute json =~ "__decision__"
+      refute json =~ "until"
+      {:ok, blob} = Blob.parse(json)
+      {:ok, ingress} = Blob.ingress(blob, root)
+
+      assert %{"Supabase 1" => %{binding_key: one}, "Supabase 2" => %{scope: "instance"}} =
+               ingress.vault.named
+
+      assert one == key.("name:Supabase 1")
+      {:ok, edge} = Blob.lookup_edge(blob, root, @dep, "")
+      assert %{provided: %{values: %{"anon_key" => "eyJ-public"}}} = edge.vault
+    end
+  end
+
+  describe "provided/3" do
+    @dep_needs %{
+      "needs" => %{
+        "database" => %{
+          "type" => "api_key:supabase.co",
+          "reason" => "to reach the database",
+          "fields" => ["anon_key"],
+          "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+        },
+        "signing" => %{
+          "type" => "api_key:supabase.co",
+          "reason" => "to sign",
+          "fields" => ["secret"]
+        }
+      }
+    }
+
+    test "covers a need the dependency declares with an attach rule, and nothing else" do
+      entry = %{"destination" => %{"hosts" => ["abc.supabase.co"]}, "values" => %{"k" => "v"}}
+
+      app = %{
+        "dependencies" => %{"static" => ["reagent:local.db:1.0.0"]},
+        "provides" => %{
+          "reagent:local.db:1.0.0" => %{
+            "database" => entry,
+            "signing" => entry,
+            "absent" => entry
+          }
+        }
+      }
+
+      assert %{covered: [{"database", resource}], unprovidable: unprovidable} =
+               BlobBuilder.provided(app, "reagent:local.db", @dep_needs)
+
+      assert unprovidable == [{"absent", :undeclared}, {"signing", :no_attach}]
+
+      assert resource == %{
+               "provided" => %{
+                 "destination" => %{"hosts" => ["abc.supabase.co"], "scheme" => "https"},
+                 "values" => %{"k" => "v"},
+                 "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+               }
+             }
+
+      # Another dependency's block covers nothing here.
+      assert %{covered: [], unprovidable: []} =
+               BlobBuilder.provided(app, "reagent:local.other", @dep_needs)
     end
   end
 
@@ -532,5 +691,15 @@ defmodule Sanctum.Consent.BlobBuilderTest do
                  %{}
                )
     end
+  end
+
+  # The closure the activation resolves for `root`, at the release digests
+  # it records: the builder reads every node at the release the closure
+  # resolved.
+  defp graph!(ctx, root) do
+    {:ok, ref} = Prima.ComponentRef.parse(root)
+    {:ok, row} = Sanctum.Consent.Components.get_latest(ctx, ref.name, ref.namespace, ref.type)
+    {:ok, %{graph: graph}} = Sanctum.Consent.Components.resolve(ctx, row)
+    graph
   end
 end

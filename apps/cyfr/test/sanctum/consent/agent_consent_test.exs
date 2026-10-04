@@ -63,8 +63,12 @@ defmodule Sanctum.Consent.AgentConsentTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: Keyword.get(opts, :name, "claude key"),
         kind: "api_key",
+        # The provider claude's need names; the shipped claude reads its
+        # key itself, so the entry is disclosed.
+        provider_hint: "anthropic.com",
         fields: %{"ANTHROPIC_API_KEY" => Keyword.get(opts, :key, "sk-test")},
-        destination: %{"hosts" => ["api.anthropic.com"]}
+        destination: %{"hosts" => ["api.anthropic.com"]},
+        disclose: true
       })
 
     label = Keyword.get(opts, :label, "default")

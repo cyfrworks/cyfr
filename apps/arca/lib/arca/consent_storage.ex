@@ -28,6 +28,38 @@ defmodule Arca.ConsentStorage do
   written against, and a consumed `once` is renewed only by a decision
   that says so.
 
+  ## A revision and a change to an entry it binds serialize on the entry
+
+  `insert_revision/4` and `mint_profile_with_revision/4` take, as their
+  transaction's first steps and before the profile's lock or insert, a
+  shared lock on every instance entry their bindings name and then on
+  every entry of the athanor's own they name
+  (`Arca.QueryHelpers.for_share/1`, each in id order), and refuse with
+  nothing written when one is not `active` (`{:error, {:entry_unavailable,
+  status}}`) or has no row (`{:error, :not_found}`; an athanor's entry is
+  read in the revision's athanor alone). `Arca.InstanceEntries`' revoke
+  and tombstone, and `Arca.VaultStorage`'s binding move, write the entry
+  row and then lock the profiles whose heads bind it, so the two meet in
+  one order: a change that lands first is seen here (a status refused, a
+  moved digest refused by the caller's in-transaction re-read), and a
+  revision that lands first is seen by the change's head query, which
+  blocks its profile. A revoke of an athanor's entry writes the row and
+  blocks no profile, so the status refused here is what holds a revision
+  to it. A selection names no entry on the borrower's row and takes no
+  lock.
+
+  The one order is the entry rows by id, then the profile. Every writer
+  that holds more than one entry row in a transaction takes them in it:
+  this revision (each table in id order, instance entries first; no other
+  transaction holds rows of both tables), `Arca.RecordSink`'s batch of
+  last-used touches (`{athanor_id, id}` order) and
+  `Arca.TenantTables.delete_all_for/1`, which runs only on an archived
+  athanor, one no context can focus and no seed sync revises, so no
+  revision is written beside it. Every other writer of an entry
+  row holds that one row: a binding move, a status or payload write, a
+  tombstone, a cipher rotation's compare-and-set, a last-used touch and
+  `Arca.VaultDefaults.set/3`'s read of the entry it names.
+
   `profiles/2` and `head_consent/2` are the read side the consent decision
   logic (`Sanctum.Consent.Loader` and the walk around it) sees. They decode
   strictly and fail closed: a stored kind, status, scope or invoke mode
@@ -123,13 +155,24 @@ defmodule Arca.ConsentStorage do
   superseded head's rows are read under that lock, and a new row whose
   key, entry, scope and lifetime equal a superseded row's keeps that
   row's `consumed_by_root` unless it says `renew`. The head then advances
-  by compare-and-set as a second guard.
+  by compare-and-set as a second guard. Before the profile's lock, every
+  instance entry and then every athanor's entry a binding names is locked
+  shared and must be `active` (`{:error, {:entry_unavailable, status}}`,
+  or `{:error, :not_found}` for one with no row), with nothing written
+  otherwise.
 
   `opts[:verify]` is a zero-arity function run **inside the transaction**,
   after the refs land and before the head advances — the seam a consent
   commit uses to re-verify binding liveness so a `vault.rebind` racing the
   commit rolls the whole revision back. It must return `:ok` or
   `{:error, reason}` and must only read.
+
+  `opts[:reactivate]` (default false) makes the revision a re-consent:
+  after the head advances, under the profile lock already held, a profile
+  at `needs_consent` is set `active` by a conditional write, and any
+  other status is left as it is. A revoke that blocks the profile then
+  lands wholly before the revision or after it, never between the
+  revision and its reactivation.
 
   `attrs[:admitted_origins]` is the non-empty list of origins the revision
   admits (`Prima.Origin` atoms or their wire spellings), stored as their
@@ -147,6 +190,8 @@ defmodule Arca.ConsentStorage do
     with {:ok, row} <- revision_row(attrs, athanor_id),
          {:ok, refs} <- ref_inputs(vault_refs, row.id, athanor_id) do
       Ecto.Multi.new()
+      |> Ecto.Multi.run(:instances, fn _repo, _done -> lock_instance_entries(refs) end)
+      |> Ecto.Multi.run(:entries, fn _repo, _done -> lock_vault_entries(refs, athanor_id) end)
       |> Ecto.Multi.run(:locked, fn _repo, _done ->
         {:ok, lock_profile!(athanor_id, row.profile_id)}
       end)
@@ -161,7 +206,9 @@ defmodule Arca.ConsentStorage do
   @doc """
   Mint a profile together with its first revision in one transaction —
   a failed consent insert must not leave an orphan profile whose
-  `head_consent_id` is forever NULL.
+  `head_consent_id` is forever NULL. The instance entries and the
+  athanor's entries its bindings name are locked and held to `active`
+  first, as `insert_revision/4` holds them.
   """
   @spec mint_profile_with_revision(map(), map(), [map()], keyword()) ::
           {:ok, map()} | {:error, term()}
@@ -174,6 +221,8 @@ defmodule Arca.ConsentStorage do
       # and the kind/status vocabulary are the changeset's, and this is the
       # one production mint of a profile. A new profile supersedes nothing.
       Ecto.Multi.new()
+      |> Ecto.Multi.run(:instances, fn _repo, _done -> lock_instance_entries(refs) end)
+      |> Ecto.Multi.run(:entries, fn _repo, _done -> lock_vault_entries(refs, athanor_id) end)
       |> Ecto.Multi.insert(
         :profile,
         Arca.Schemas.Profile.changeset(%Arca.Schemas.Profile{}, profile_attrs)
@@ -273,6 +322,67 @@ defmodule Arca.ConsentStorage do
   end
 
   defp invalid_refs(why), do: {:error, {:invalid, %{vault_refs: [why]}}}
+
+  # The instance entries the bindings name, held shared in id order to the
+  # end of the transaction: a revoke or a tombstone, which writes the
+  # entry row before it reads the heads that bind it, waits for this
+  # revision or is seen by it. Each must be active, and a row that is gone
+  # names nothing to bind.
+  # arca:unscoped-ok the instance's own credentials, offered to athanors and
+  # deleted with none of them: the rows a revision names, read by id.
+  defp lock_instance_entries(refs) do
+    case refs |> Enum.map(& &1.instance_entry_id) |> Enum.reject(&is_nil/1) |> Enum.uniq() do
+      [] ->
+        {:ok, %{}}
+
+      ids ->
+        from(i in Arca.Schemas.InstanceEntry,
+          where: i.id in ^ids,
+          order_by: i.id,
+          select: {i.id, i.status}
+        )
+        |> Arca.QueryHelpers.for_share()
+        |> Arca.Repo.all()
+        |> all_active(ids)
+    end
+  end
+
+  # The athanor's own entries the bindings name, held shared in id order
+  # the same way, after the instance entries and before the profile: a
+  # rebind, which writes the entry row by compare-and-set before it reads
+  # the heads that bind it, waits for this revision or is seen by its
+  # in-transaction digest re-read, and a revoke, which writes the row and
+  # blocks no profile, is refused here by the status. Each must be active,
+  # and a row that is gone, or another athanor's, names nothing to bind.
+  defp lock_vault_entries(refs, athanor_id) do
+    case refs |> Enum.map(& &1.vault_entry_id) |> Enum.reject(&is_nil/1) |> Enum.uniq() do
+      [] ->
+        {:ok, %{}}
+
+      ids ->
+        from(v in Arca.Schemas.VaultEntry,
+          where: v.id in ^ids,
+          order_by: v.id,
+          select: {v.id, v.status}
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.QueryHelpers.for_share()
+        |> Arca.Repo.all()
+        |> all_active(ids)
+    end
+  end
+
+  defp all_active(rows, ids) do
+    held = Map.new(rows)
+
+    Enum.reduce_while(Enum.sort(ids), {:ok, held}, fn id, acc ->
+      case Map.fetch(held, id) do
+        {:ok, "active"} -> {:cont, acc}
+        {:ok, status} -> {:halt, {:error, {:entry_unavailable, status}}}
+        :error -> {:halt, {:error, :not_found}}
+      end
+    end)
+  end
 
   # The profile row, locked before the revision reads or writes anything,
   # answering the head it holds (nil for none, or a profile that is gone:
@@ -454,6 +564,29 @@ defmodule Arca.ConsentStorage do
         {:error, reason} -> {:error, reason}
       end
     end)
+    |> Ecto.Multi.run(:reactivated, fn _repo, _done ->
+      if Keyword.get(opts, :reactivate, false),
+        do: {:ok, reactivate(athanor_id, row.profile_id)},
+        else: {:ok, 0}
+    end)
+  end
+
+  # A profile blocked at `needs_consent` is unblocked by the revision that
+  # re-consents it, in the revision's own transaction and under the
+  # profile lock it holds: a revoke that blocks the profile lands wholly
+  # before the revision (its instance lock refuses the entry) or after it
+  # (its head query sees this head, and its block stands). Only
+  # `needs_consent` moves; every other status stays as it is.
+  # arca:db-raise-ok a step inside the revision's transaction; a raise rolls it back.
+  defp reactivate(athanor_id, profile_id) do
+    {count, _} =
+      from(p in Arca.Schemas.Profile,
+        where: p.id == ^profile_id and p.status == "needs_consent"
+      )
+      |> Arca.QueryHelpers.where_athanor(athanor_id)
+      |> Arca.Repo.update_all(set: [status: "active", updated_at: DateTime.utc_now()])
+
+    count
   end
 
   defp run_multi(multi, return_key) do

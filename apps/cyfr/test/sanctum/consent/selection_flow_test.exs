@@ -78,13 +78,18 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     component
   end
 
+  # An entry of the provider the dependency's need names; the need
+  # declares no attach rule, so the dependency reads the key itself and
+  # the entry is disclosed.
   defp entry!(ctx, name, fields) do
     {:ok, view} =
       Sanctum.TestContext.create_vault(ctx, %{
         name: name,
         kind: "api_key",
+        provider_hint: "example.com",
         fields: fields,
-        destination: %{"hosts" => ["api.example.com"]}
+        destination: %{"hosts" => ["api.example.com"]},
+        disclose: true
       })
 
     view
@@ -144,6 +149,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
              %{
                profile_id: lenders.default,
                label: "default",
+               source: "own",
                entry_id: lenders.home_entry.id,
                entry_name: "home key",
                fields: ["KEY", "ORG"]
@@ -151,11 +157,272 @@ defmodule Sanctum.Consent.SelectionFlowTest do
              %{
                profile_id: lenders.work,
                label: "work",
+               source: "own",
                entry_id: lenders.work_entry.id,
                entry_name: "work key",
                fields: ["KEY"]
              }
            ]
+  end
+
+  @inst_dep "reagent:local.sel-inst-dep"
+  @inst_source "reagent:local.sel-inst-source"
+
+  # A dependency whose need attaches an example.com key, so an instance
+  # entry can meet it, and a source that depends on it.
+  defp instance_lending!(ctx) do
+    publish!(ctx, "sel-inst-dep", %{
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "required" => true,
+          "fields" => ["KEY"],
+          "attach" => %{
+            "in" => "header",
+            "name" => "Authorization",
+            "template" => "Bearer {value}"
+          }
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"], "methods" => ["POST"]}}
+    })
+
+    publish!(ctx, "sel-inst-source", %{"dependencies" => %{"static" => [%{"ref" => @inst_dep}]}})
+
+    {:ok, offered} =
+      Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
+        name: "company example key",
+        kind: "api_key",
+        provider_hint: "example.com",
+        field_names: ~s(["KEY"]),
+        destination:
+          ~s({"hosts":["api.example.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+        sealed_payload: "sealed",
+        binding_digest: "sha256:lent-#{System.unique_integer([:positive])}",
+        audience: "everyone",
+        created_by: "usr_admin"
+      })
+
+    offered
+  end
+
+  test "a dependency's profile bound to an offered instance entry lends it: the plan, the " <>
+         "preview, the commit and the readiness read it as an instance entry",
+       %{ctx: ctx} do
+    {person, _user} = Sanctum.TestContext.person!(ctx)
+    offered = instance_lending!(ctx)
+
+    {{:ok, _}, _} =
+      walk!(person, @inst_dep, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
+
+    {:ok, plan} = Plan.plan(person, %{ref: @inst_source})
+    assert [%{dep: @inst_dep, candidates: [lender]}] = plan.dependency_needs
+    assert %{label: "default", source: "instance", entry_id: id, entry_name: name} = lender
+    assert {id, name} == {offered.id, offered.name}
+
+    {{:ok, %{profile_id: profile_id}}, preview} =
+      walk!(person, @inst_source, %{selections: [%{dep: @inst_dep, label: "default"}]})
+
+    assert [%{"node" => @inst_source, "values" => values}] =
+             Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+
+    assert values["source"] == "instance"
+    assert values["name"] == offered.name
+    assert values["label"] == "default"
+    assert values["disclosed"] == false
+
+    # The borrower's row is the selection, both identities kept: its own
+    # key and label here, the lender's binding resolved at load.
+    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(person), profile_id)
+
+    assert [%{via_label: "default", vault_entry_id: nil, instance_entry_id: nil}] =
+             head.vault_refs
+
+    assert %{entry_id: ^id, scope: "instance", lender: %{profile_id: _}} =
+             edge_vault_of(person, @inst_source, @inst_dep)
+
+    section = Compendium.ConsentSetupPlan.section(person, @inst_source)
+    assert section.ready
+    assert [%{entry_id: ^id, satisfied: true, detail: detail}] = section.needs
+    assert detail =~ "instance entry"
+
+    # Offered to the person no longer (a narrowed audience blocks no
+    # profile), the lent entry is read live and is not ready.
+    :ok =
+      Arca.InstanceEntries.set_audience(
+        Arca.Test.Actor.platform(),
+        offered.id,
+        %{audience: "everyone", members: []},
+        %{audience: "listed", members: ["usr_someone_else"]}
+      )
+
+    section = Compendium.ConsentSetupPlan.section(person, @inst_source)
+    refute section.ready
+    assert [%{satisfied: false, detail: narrowed}] = section.needs
+    assert narrowed =~ "no longer offered to you"
+  end
+
+  test "a lent instance entry is refused to a person it is not offered to, and on a node its " <>
+         "policy does not admit",
+       %{ctx: ctx} do
+    {person, _user} = Sanctum.TestContext.person!(ctx)
+
+    {other, other_user} =
+      Sanctum.TestContext.person!(ctx, %{
+        id:
+          Sanctum.Auth.Identity.builtin_key(
+            :github,
+            "other-#{System.unique_integer([:positive])}"
+          ),
+        email: "other-#{System.unique_integer([:positive])}@example.com"
+      })
+
+    offered = instance_lending!(ctx)
+
+    {{:ok, _}, _} =
+      walk!(person, @inst_dep, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
+
+    selections = [%{dep: @inst_dep, label: "default"}]
+
+    # Offered to the first person alone: the second may not borrow it.
+    :ok =
+      Arca.InstanceEntries.set_audience(
+        Arca.Test.Actor.platform(),
+        offered.id,
+        %{audience: "everyone", members: []},
+        %{audience: "listed", members: [person.user_id]}
+      )
+
+    refute other_user.id == person.user_id
+    {:ok, plan} = Plan.plan(other, %{ref: @inst_source})
+    assert [%{candidates: []}] = plan.dependency_needs
+
+    assert {:error, {:not_offered, @inst_dep}} =
+             Commit.preview(other, %{ref: @inst_source, selections: selections})
+
+    # Its policy admits shipped nodes alone, and the dependency is the
+    # person's own: no one may borrow it on that node.
+    :ok =
+      Arca.InstanceEntries.set_component_policy(
+        Arca.Test.Actor.platform(),
+        offered.id,
+        "any",
+        "shipped"
+      )
+
+    {:ok, plan} = Plan.plan(person, %{ref: @inst_source})
+    assert [%{candidates: []}] = plan.dependency_needs
+
+    assert {:error, {:component_not_admitted, @inst_dep}} =
+             Commit.preview(person, %{ref: @inst_source, selections: selections})
+  end
+
+  @oauth_dep "reagent:local.sel-oauth-dep"
+  @oauth_source "reagent:local.sel-oauth-source"
+  @mail ~s({"hosts":["gmail.googleapis.com"],"methods":["GET"],"paths":["/gmail/"],"scheme":"https"})
+
+  # A dependency whose one need attaches a Google token of exactly
+  # `gmail.readonly`, and a source that depends on it.
+  defp oauth_lending!(ctx) do
+    publish!(ctx, "sel-oauth-dep", %{
+      "needs" => %{
+        "mail" => %{
+          "type" => "oauth:google",
+          "reason" => "to read your mail",
+          "required" => true,
+          "scopes" => ["gmail.readonly"],
+          "attach" => %{"in" => "header", "name" => "Authorization"}
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["gmail.googleapis.com"], "methods" => ["GET"]}}
+    })
+
+    publish!(ctx, "sel-oauth-source", %{
+      "dependencies" => %{"static" => [%{"ref" => @oauth_dep}]}
+    })
+  end
+
+  # The dependency's default profile binds `binding`; the source borrows
+  # it by label, and the borrowed edge carries the lender's scopes whole.
+  defp lend_oauth!(person, binding) do
+    {{:ok, _}, _} = walk!(person, @oauth_dep, %{bindings: [Map.put(binding, :need, "mail")]})
+
+    selections = [%{dep: @oauth_dep, label: "default"}]
+
+    # Naming a field the lender does not lend widens it, and an explicit
+    # empty list names nothing: both are refused.
+    assert {:error, {:selection_fields_unavailable, @oauth_dep, ["KEY"]}} =
+             Commit.preview(person, %{
+               ref: @oauth_source,
+               selections: [%{dep: @oauth_dep, label: "default", fields: ["KEY"]}]
+             })
+
+    assert {:error, {:invalid_argument, _}} =
+             Commit.preview(person, %{
+               ref: @oauth_source,
+               selections: [%{dep: @oauth_dep, label: "default", fields: []}]
+             })
+
+    {{:ok, %{profile_id: profile_id}}, preview} =
+      walk!(person, @oauth_source, %{selections: selections})
+
+    assert [%{"values" => values}] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+    assert values["scopes"] == ["gmail.readonly"] and values["fields"] == []
+
+    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(person), profile_id)
+    assert [%{via_label: "default"}] = head.vault_refs
+
+    # Loaded, the borrowed edge carries the lender's scopes whole.
+    assert %{projection: %{scopes: ["gmail.readonly"], fields: []}, lender: %{}} =
+             edge_vault_of(person, @oauth_source, @oauth_dep)
+
+    values
+  end
+
+  test "an OAuth binding is lent by its scopes: an offered instance entry", %{ctx: ctx} do
+    {person, _user} = Sanctum.TestContext.person!(ctx)
+    oauth_lending!(ctx)
+
+    {:ok, offered} =
+      Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
+        name: "company mail",
+        kind: "oauth",
+        provider_hint: "google",
+        oauth_scopes: ~s(["gmail.readonly"]),
+        destination: @mail,
+        sealed_payload: "sealed",
+        binding_digest: "sha256:mail-#{System.unique_integer([:positive])}",
+        audience: "everyone",
+        created_by: "usr_admin"
+      })
+
+    values = lend_oauth!(person, %{instance_entry_id: offered.id})
+    assert values["source"] == "instance" and values["name"] == offered.name
+  end
+
+  test "an OAuth binding is lent by its scopes: the athanor's own entry", %{ctx: ctx} do
+    {person, _user} = Sanctum.TestContext.person!(ctx)
+    oauth_lending!(ctx)
+
+    {:ok, own} =
+      Sanctum.TestContext.create_vault(person, %{
+        name: "my mail",
+        kind: "oauth",
+        provider_hint: "google",
+        oauth: %{"access_token" => "t"},
+        oauth_scopes: ["gmail.readonly"],
+        destination: %{"hosts" => ["gmail.googleapis.com"]}
+      })
+
+    values = lend_oauth!(person, %{entry_id: own.id})
+    assert values["source"] == "own" and values["name"] == "my mail"
+  end
+
+  defp edge_vault_of(ctx, source_ref, dep) do
+    {:ok, authority} = Crucible.authority_for(ctx, :default, source_ref)
+    {:ok, edge} = Blob.lookup_edge(authority.policy, source_ref, dep, "")
+    edge.vault
   end
 
   test "two sources select two profiles of one dependency and run it with two keys", %{
@@ -183,10 +450,12 @@ defmodule Sanctum.Consent.SelectionFlowTest do
                  "label" => "default",
                  "fields" => ["KEY", "ORG"],
                  "scopes" => [],
-                 # The borrower's own binding, standing, chosen by the person.
+                 # The borrower's own binding, standing, chosen by the
+                 # person: the lent entry is the athanor's default for the
+                 # need's provider, which the plan suggests.
                  "source" => "own",
                  "binding_key" => ^borrower_key,
-                 "suggested" => false,
+                 "suggested" => true,
                  "choice_required" => false,
                  "lifetime" => %{"kind" => "standing", "until" => nil}
                }
@@ -344,6 +613,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
           Sanctum.TestContext.create_vault(ctx, %{
             name: name,
             kind: "api_key",
+            provider_hint: "example.com",
             fields: %{"KEY" => "k-#{name}", "ORG" => "o-#{name}"},
             destination: %{"hosts" => ["api.example.com"]},
             disclose: true
@@ -448,6 +718,72 @@ defmodule Sanctum.Consent.SelectionFlowTest do
              })
 
     assert msg =~ "selection_profile_unavailable"
+  end
+
+  test "a dependency's need offers its own choice, and a selection naming an entry binds " <>
+         "the edge itself, its lifetime on its row",
+       %{ctx: ctx} do
+    lenders = lenders!(ctx)
+    ref = "reagent:local.sel-source"
+
+    {:ok, plan} = Profile.handle(ctx, %{"action" => "plan", "ref" => ref})
+    [%{needs: [need]}] = plan.dependency_needs
+
+    # Both keys are of the need's provider and disclosed; the first of the
+    # provider is the athanor's default, which the plan suggests.
+    assert Enum.sort(Enum.map(need.candidates, & &1.entry_id)) ==
+             Enum.sort([lenders.home_entry.id, lenders.work_entry.id])
+
+    assert need.suggested == %{entry_id: lenders.home_entry.id}
+    assert need.source == "own"
+    refute need.choice_required
+
+    decisions = %{
+      "ref" => ref,
+      "selections" => [
+        %{
+          "dep" => @dep,
+          "entry_id" => lenders.work_entry.id,
+          "fields" => ["KEY"],
+          "lifetime" => %{"kind" => "once"}
+        }
+      ]
+    }
+
+    {:ok, preview} = Profile.handle(ctx, %{"action" => "preview", "decisions" => decisions})
+
+    assert [%{"values" => values}] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+    assert values["lifetime"] == %{"kind" => "once", "until" => nil}
+    assert values["suggested"] == false
+    refute Map.has_key?(values, "label")
+
+    {:ok, %{status: "committed", profile_id: profile_id}} =
+      Profile.handle(ctx, %{
+        "action" => "commit",
+        "decisions" => decisions,
+        "plan_token" => plan.plan_token,
+        "proof" => preview.proof,
+        "commit_digest" => preview.commit_digest,
+        "expected_consent_revision" => plan.expected_consent_revision
+      })
+
+    work_id = lenders.work_entry.id
+
+    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
+
+    assert [
+             %{
+               binding_key: "reagent:local.sel-source|reagent:local.sel-dep|default",
+               vault_entry_id: ^work_id,
+               via_label: nil,
+               lifetime_kind: "once"
+             }
+           ] = head.vault_refs
+
+    # The edge binds the entry itself, under the need's projection as the
+    # selection narrowed it: no lender stands behind it.
+    assert %{entry_id: ^work_id, projection: %{fields: ["KEY"]}} = vault = edge_vault(ctx, ref)
+    refute Map.has_key?(vault, :lender)
   end
 
   test "two roles on one catalyst carry two keys under one root", %{ctx: ctx} do

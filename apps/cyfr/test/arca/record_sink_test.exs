@@ -164,3 +164,200 @@ defmodule Arca.RecordSinkTest do
            "the record sink did not come back"
   end
 end
+
+defmodule Arca.RecordSinkRevisionRaceTest do
+  @moduledoc """
+  A batch of last-used touches and a consent revision binding the same
+  entries, on connections of their own: inside the sandbox one shared
+  connection would serialize the two. The batch updates the rows in the
+  order the revision holds them in, so neither waits on the other in a
+  cycle and both land. The case works in an athanor of its own, purged
+  when it ends.
+  """
+
+  use ExUnit.Case, async: false
+
+  import ExUnit.CaptureLog
+
+  alias Arca.ConsentStorage
+  alias Arca.RecordSink
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @ingress "reagent:local.sink-race|@ingress|default"
+  @named "reagent:local.sink-race|@ingress|name:second"
+
+  setup do
+    athanor = "ath_sink_race_#{System.unique_integer([:positive])}"
+    on_exit(fn -> unboxed(fn -> Arca.TenantTables.delete_all_for(actor(athanor)) end) end)
+    {:ok, athanor: athanor}
+  end
+
+  # Holds the batch inside its transaction once it has updated its first
+  # entry, in the process that marked itself the batch. Runs once.
+  def hold_batch(_event, _measurements, meta, %{test: test}) do
+    if Process.get(:sink_batch) == true and meta[:source] == "vault_entries" and
+         String.starts_with?(meta[:query] || "", "UPDATE") do
+      Process.delete(:sink_batch)
+      send(test, {:holding, self()})
+
+      receive do
+        :go -> :ok
+      end
+    end
+  end
+
+  test "a batch touching two entries and a revision binding both land, whatever order the " <>
+         "touches arrived in",
+       %{athanor: athanor} do
+    {low, high, profile} =
+      unboxed(fn ->
+        [low, high] = Enum.sort([entry!(athanor), entry!(athanor)])
+
+        profile = "prof_sink_race_#{System.unique_integer([:positive])}"
+
+        {:ok, _} =
+          Arca.ProfileStorage.put(%{
+            id: profile,
+            athanor_id: athanor,
+            source_ref: "reagent:local.sink-race",
+            kind: "owner",
+            label: "default",
+            status: "active"
+          })
+
+        {low, high, profile}
+      end)
+
+    handler = {__MODULE__, :hold_batch, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.hold_batch/4, %{
+        test: self()
+      })
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    log =
+      capture_log(fn ->
+        # The touches arrive the higher id first.
+        batch =
+          Task.async(fn ->
+            Process.put(:sink_batch, true)
+
+            unboxed(fn ->
+              RecordSink.write([{:vault_touch, athanor, high}, {:vault_touch, athanor, low}])
+            end)
+          end)
+
+        assert_receive {:holding, holder}, 15_000
+
+        test = self()
+
+        revision =
+          Task.async(fn ->
+            unboxed(fn ->
+              if postgres?(), do: send(test, {:backend, backend_pid()})
+
+              ConsentStorage.insert_revision(
+                attrs(athanor, profile),
+                [ref(@ingress, low), ref(@named, high)],
+                nil
+              )
+            end)
+          end)
+
+        # The batch holds a row the revision locks: the revision waits on it.
+        if postgres?() do
+          assert_receive {:backend, backend}, 15_000
+          await_lock_wait(backend)
+        else
+          refute Task.yield(revision, 300), "the revision did not wait for the batch"
+        end
+
+        send(holder, :go)
+        assert :ok = Task.await(batch, 30_000)
+        assert {:ok, _consent} = Task.await(revision, 30_000)
+      end)
+
+    :telemetry.detach(handler)
+    refute log =~ "deadlock"
+    refute log =~ "batch rolled back"
+
+    touched =
+      unboxed(fn ->
+        for id <- [low, high] do
+          {:ok, entry} = Arca.VaultStorage.get(actor(athanor), id)
+          entry.last_used_at
+        end
+      end)
+
+    assert Enum.all?(touched, &match?(%DateTime{}, &1))
+  end
+
+  defp entry!(athanor) do
+    {:ok, entry} =
+      Arca.VaultStorage.put(actor(athanor), %{
+        name: "sink-race-#{System.unique_integer([:positive])}",
+        kind: "api_key",
+        sealed_payload: "sealed",
+        destination: ~s({"hosts":["api.example.com"],"scheme":"https"})
+      })
+
+    entry.id
+  end
+
+  defp ref(key, entry_id) do
+    %{binding_key: key, scope: "athanor", vault_entry_id: entry_id, binding_digest: "sha256:b"}
+  end
+
+  defp attrs(athanor, profile) do
+    %{
+      athanor_id: athanor,
+      profile_id: profile,
+      revision: 1,
+      scope: "versionless",
+      pinned_version: "",
+      invoke_mode: "open_inert",
+      shape_digest: "sha256:shape",
+      commit_digest: "sha256:commit",
+      blob_digest: Prima.JCS.hash_binary("{}"),
+      resolved_policy: "{}",
+      activation: "{}",
+      admitted_origins: [:interactive],
+      granted_by: "test",
+      granted_via: "bootstrap"
+    }
+  end
+
+  # The backend of the current connection, so another can watch it wait.
+  defp backend_pid do
+    %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+    pid
+  end
+
+  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
+  # by `tries`, never a timing. Only PostgreSQL shows one; SQLite's
+  # immediate transaction waits for the one writer and has none to show.
+  defp await_lock_wait(pid, tries \\ 500)
+
+  defp await_lock_wait(_pid, 0), do: flunk("the waiting backend never waited on a lock")
+
+  defp await_lock_wait(pid, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
+      end)
+
+    if rows == [["Lock"]] do
+      :ok
+    else
+      Process.sleep(20)
+      await_lock_wait(pid, tries - 1)
+    end
+  end
+
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
+
+  defp actor(athanor), do: Prima.Actor.in_athanor(athanor)
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+end

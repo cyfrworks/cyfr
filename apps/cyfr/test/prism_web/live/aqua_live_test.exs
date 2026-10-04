@@ -645,11 +645,15 @@ defmodule PrismWeb.AquaLiveTest do
             })
         })
 
+      # The provider the need names; the model reads its key itself, so
+      # the entry is disclosed.
       params = %{
         name: "keyed key",
         kind: "api_key",
+        provider_hint: "keyed.test",
         fields: %{"KEYED_API_KEY" => "sk-keyed"},
-        destination: %{"hosts" => ["api.keyed.example"]}
+        destination: %{"hosts" => ["api.keyed.example"]},
+        disclose: true
       }
 
       entering =

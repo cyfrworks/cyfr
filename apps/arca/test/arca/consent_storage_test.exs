@@ -191,6 +191,222 @@ defmodule Arca.ConsentStorageTest do
 
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
     end
+
+    test "reactivate moves a needs_consent profile to active with the revision, and no other " <>
+           "status; without it a blocked profile stays blocked",
+         %{athanor: athanor} do
+      actor = Prima.Actor.in_athanor(athanor)
+
+      for {label, status, reactivate, expected} <- [
+            {"blocked", "needs_consent", true, "active"},
+            {"revoked", "revoked", true, "revoked"},
+            {"running", "active", true, "active"},
+            {"unasked", "needs_consent", false, "needs_consent"}
+          ] do
+        {:ok, profile} =
+          ProfileStorage.put(%{
+            id: "prof_reactivate_#{label}",
+            athanor_id: athanor,
+            source_ref: "reagent:local.reactivate-#{label}",
+            kind: "owner",
+            label: "default",
+            status: "active"
+          })
+
+        {:ok, first} =
+          ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
+
+        :ok = ProfileStorage.set_status(actor, profile.id, status)
+
+        assert {:ok, second} =
+                 ConsentStorage.insert_revision(
+                   consent_attrs(athanor, profile.id, 2),
+                   [],
+                   first.id,
+                   reactivate: reactivate
+                 )
+
+        assert {:ok, %{status: ^expected, head_consent_id: head}} =
+                 ProfileStorage.get(actor, profile.id)
+
+        assert head == second.id, "#{label}: the head advanced"
+      end
+
+      # A revision refused writes no status either.
+      {:ok, refused} = ProfileStorage.get(actor, "prof_reactivate_blocked")
+      :ok = ProfileStorage.set_status(actor, refused.id, "needs_consent")
+
+      assert {:error, :head_moved} =
+               ConsentStorage.insert_revision(
+                 consent_attrs(athanor, refused.id, 3),
+                 [],
+                 "cons_not_the_head",
+                 reactivate: true
+               )
+
+      assert {:ok, %{status: "needs_consent"}} = ProfileStorage.get(actor, refused.id)
+    end
+  end
+
+  describe "the instance entries a revision binds" do
+    defp instance!(over \\ %{}) do
+      {:ok, entry} =
+        Arca.InstanceEntries.put(
+          Arca.Test.Actor.platform(),
+          Map.merge(
+            %{
+              name: "instance-#{System.unique_integer([:positive])}",
+              kind: "api_key",
+              provider_hint: "openai.com",
+              field_names: ~s(["API_KEY"]),
+              destination:
+                ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+              sealed_payload: "sealed",
+              binding_digest: "sha256:i0",
+              audience: "everyone",
+              created_by: "usr_admin"
+            },
+            over
+          )
+        )
+
+      entry
+    end
+
+    defp instance_ref(id) do
+      %{
+        binding_key: @key,
+        scope: "instance",
+        instance_entry_id: id,
+        binding_digest: "sha256:i0"
+      }
+    end
+
+    test "an active one is bound; one revoked, tombstoned or without a row writes nothing",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_instance_1")
+      active = instance!()
+
+      assert {:ok, _} =
+               ConsentStorage.insert_revision(
+                 consent_attrs(athanor, profile.id, 1),
+                 [instance_ref(active.id)],
+                 nil
+               )
+
+      {:ok, head, _refs} = ConsentStorage.get_head(Prima.Actor.in_athanor(athanor), profile.id)
+      revoked = instance!()
+
+      {:ok, _} =
+        Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), revoked.id, "needs_consent")
+
+      gone = instance!()
+
+      {:ok, _} =
+        Arca.InstanceEntries.tombstone(Arca.Test.Actor.platform(), gone.id, "needs_consent")
+
+      for {id, refusal} <- [
+            {revoked.id, {:entry_unavailable, "revoked"}},
+            {gone.id, {:entry_unavailable, "tombstoned"}},
+            {"ine_never_existed", :not_found}
+          ] do
+        assert {:error, ^refusal} =
+                 ConsentStorage.insert_revision(
+                   consent_attrs(athanor, profile.id, 2),
+                   [instance_ref(id)],
+                   head.id
+                 )
+
+        # The first commit of a profile is held to the same.
+        minted = "prof_instance_mint_#{System.unique_integer([:positive])}"
+
+        assert {:error, ^refusal} =
+                 ConsentStorage.mint_profile_with_revision(
+                   %{
+                     id: minted,
+                     athanor_id: athanor,
+                     source_ref: "reagent:local.storage-test",
+                     kind: "owner",
+                     label: "mint-#{System.unique_integer([:positive])}",
+                     status: "active"
+                   },
+                   consent_attrs(athanor, minted, 1),
+                   [instance_ref(id)]
+                 )
+
+        assert {:error, :not_found} = ProfileStorage.get(Prima.Actor.in_athanor(athanor), minted)
+      end
+
+      {:ok, still, _refs} = ConsentStorage.get_head(Prima.Actor.in_athanor(athanor), profile.id)
+      assert still.id == head.id
+    end
+  end
+
+  describe "the athanor's own entries a revision binds" do
+    test "an active one is bound; one not active, without a row or another athanor's " <>
+           "writes nothing",
+         %{athanor: athanor} do
+      actor = Prima.Actor.in_athanor(athanor)
+      profile = profile!(athanor, "prof_own_1")
+      active = entry!(athanor)
+
+      assert {:ok, _} =
+               ConsentStorage.insert_revision(
+                 consent_attrs(athanor, profile.id, 1),
+                 [ref(active.id)],
+                 nil
+               )
+
+      {:ok, head, _refs} = ConsentStorage.get_head(actor, profile.id)
+
+      revoked = entry!(athanor)
+      :ok = VaultStorage.set_status(actor, revoked.id, "revoked")
+      reauth = entry!(athanor)
+      :ok = VaultStorage.set_status(actor, reauth.id, "needs_reauth")
+      gone = entry!(athanor)
+      :ok = VaultStorage.tombstone(actor, gone.id)
+      elsewhere = entry!("ath_other")
+
+      for {id, refusal} <- [
+            {revoked.id, {:entry_unavailable, "revoked"}},
+            {reauth.id, {:entry_unavailable, "needs_reauth"}},
+            {gone.id, {:entry_unavailable, "tombstoned"}},
+            {"vlt_never_existed", :not_found},
+            {elsewhere.id, :not_found}
+          ] do
+        assert {:error, ^refusal} =
+                 ConsentStorage.insert_revision(
+                   consent_attrs(athanor, profile.id, 2),
+                   [ref(id)],
+                   head.id
+                 )
+
+        # The first commit of a profile is held to the same.
+        minted = "prof_own_mint_#{System.unique_integer([:positive])}"
+
+        assert {:error, ^refusal} =
+                 ConsentStorage.mint_profile_with_revision(
+                   %{
+                     id: minted,
+                     athanor_id: athanor,
+                     source_ref: "reagent:local.storage-test",
+                     kind: "owner",
+                     label: "mint-#{System.unique_integer([:positive])}",
+                     status: "active"
+                   },
+                   consent_attrs(athanor, minted, 1),
+                   [ref(id)]
+                 )
+
+        assert {:error, :not_found} = ProfileStorage.get(actor, minted)
+      end
+
+      {:ok, still, refs} = ConsentStorage.get_head(actor, profile.id)
+      assert still.id == head.id
+      assert [%{vault_entry_id: id}] = refs
+      assert id == active.id
+      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 1
+    end
   end
 
   describe "a binding key is stored whole on either adapter" do
@@ -1298,6 +1514,136 @@ defmodule Arca.ConsentStorageRaceTest do
         {:error, :superseded} -> assert b_root == nil
       end
     end
+  end
+
+  # A revoke of an instance entry locks the entry and then the profiles
+  # whose heads bind it; a revision binding the entry locks it first.
+  # Whichever lands first, the other sees it: never an active profile
+  # whose head binds a revoked entry.
+  describe "a revision binding an instance entry while a revoke of it runs" do
+    setup %{athanor: athanor} do
+      prefix = "race-#{System.unique_integer([:positive])}-"
+
+      on_exit(fn ->
+        unboxed(fn ->
+          Arca.TenantTables.delete_all_for(actor(athanor))
+
+          Arca.Repo.delete_all(
+            Ecto.Query.from(i in Arca.Schemas.InstanceEntry, where: like(i.name, ^"#{prefix}%"))
+          )
+        end)
+      end)
+
+      {:ok, prefix: prefix}
+    end
+
+    test "one order or the other, revising a head and minting a first one",
+         %{athanor: athanor, prefix: prefix} do
+      for round <- 1..5, write <- [:revise, :mint] do
+        {entry_id, profile} = offered!(athanor, prefix, round, write)
+        refs = [instance_row(entry_id)]
+
+        commit =
+          Task.async(fn ->
+            unboxed(fn ->
+              case write do
+                :revise ->
+                  {:ok, head} = ConsentStorage.head_consent(actor(athanor), profile)
+                  ConsentStorage.insert_revision(attrs(athanor, profile, 2), refs, head.id)
+
+                :mint ->
+                  ConsentStorage.mint_profile_with_revision(
+                    %{
+                      id: profile,
+                      athanor_id: athanor,
+                      source_ref: "reagent:local.race-#{profile}",
+                      kind: "owner",
+                      label: "default",
+                      status: "active"
+                    },
+                    attrs(athanor, profile, 1),
+                    refs
+                  )
+              end
+            end)
+          end)
+
+        revoke =
+          Task.async(fn ->
+            unboxed(fn ->
+              Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), entry_id, "needs_consent")
+            end)
+          end)
+
+        committed = Task.await(commit, 30_000)
+        {:ok, affected} = Task.await(revoke, 30_000)
+
+        status =
+          unboxed(fn ->
+            case Arca.ProfileStorage.get(actor(athanor), profile) do
+              {:ok, row} -> row.status
+              {:error, :not_found} -> nil
+            end
+          end)
+
+        case committed do
+          {:ok, _consent} ->
+            # The revoke saw the revision and blocked its profile.
+            assert {athanor, profile} in affected
+            assert status == "needs_consent"
+
+          {:error, {:entry_unavailable, "revoked"}} ->
+            # The revision saw the revoke and wrote nothing.
+            refute {athanor, profile} in affected
+            if write == :mint, do: assert(status == nil)
+        end
+      end
+    end
+  end
+
+  defp offered!(athanor, prefix, round, write) do
+    unboxed(fn ->
+      {:ok, entry} =
+        Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
+          name: "#{prefix}#{round}-#{write}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          field_names: ~s(["API_KEY"]),
+          destination:
+            ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+          sealed_payload: "sealed",
+          binding_digest: "sha256:i0",
+          audience: "everyone",
+          created_by: "usr_admin"
+        })
+
+      profile = "prof_irace_#{round}_#{write}_#{System.unique_integer([:positive])}"
+
+      if write == :revise do
+        {:ok, _} =
+          Arca.ProfileStorage.put(%{
+            id: profile,
+            athanor_id: athanor,
+            source_ref: "reagent:local.race-#{profile}",
+            kind: "owner",
+            label: "default",
+            status: "active"
+          })
+
+        {:ok, _} = ConsentStorage.insert_revision(attrs(athanor, profile, 1), [], nil)
+      end
+
+      {entry.id, profile}
+    end)
+  end
+
+  defp instance_row(entry_id) do
+    %{
+      binding_key: @key,
+      scope: "instance",
+      instance_entry_id: entry_id,
+      binding_digest: "sha256:i0"
+    }
   end
 
   defp granted!(athanor, round) do

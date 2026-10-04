@@ -242,6 +242,38 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     assert back.resources.vault.binding_key == "#{@formula}|#{@catalyst}|default"
   end
 
+  # A selection naming an entry binds the dependency's edge directly: no
+  # lender stands behind it, and its row is the borrower's own, keyed where
+  # it sits. Its lifetime is the binding's, checked where the binding is
+  # used, never at load.
+  test "an entry bound on the edge itself loads as it stands, whatever its row's lifetime",
+       %{ctx: ctx} do
+    key = Blob.binding_key(@formula, @catalyst, nil)
+    bound = Map.put(@key_vault, "binding_key", key)
+
+    for {kind, expires} <- [
+          {"once", nil},
+          {"until", DateTime.add(DateTime.utc_now(), 3600, :second)}
+        ] do
+      profile =
+        put_formula!(ctx, bound, [:interactive], [
+          %{
+            binding_key: key,
+            scope: "athanor",
+            vault_entry_id: "vault-anthropic",
+            binding_digest: "sha256:anthropic",
+            lifetime_kind: kind,
+            expires_at: expires
+          }
+        ])
+
+      vault = edge_vault(load!(ctx, profile))
+
+      assert %{entry_id: "vault-anthropic", binding_key: ^key} = vault
+      refute Map.has_key?(vault, :lender)
+    end
+  end
+
   test "a lender's named accounts are not lent", %{ctx: ctx} do
     named =
       @key_vault

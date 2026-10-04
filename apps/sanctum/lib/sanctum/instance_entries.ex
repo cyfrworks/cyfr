@@ -55,7 +55,12 @@ defmodule Sanctum.InstanceEntries do
   ## A person's use
 
   `offered/1` answers the active entries offered to the context's
-  person, metadata only. `resolve/4` is the attach path's read
+  person, metadata only, and `binding/2` one of them as a consent binds
+  it, with the digest it stands at and nothing unsealed or claimed.
+  `binding_facts/1` answers an entry's kind, provider, status and digest
+  to a boot's revision that has no person, so it carries a binding only
+  while those still hold.
+  `resolve/4` is the attach path's read
   (`Sanctum.Attach`): in order, the context's person is active (their own
   row, read first: the audience is a filter), the entry is offered to them
   and active, the running node is admitted by the stored component
@@ -120,14 +125,44 @@ defmodule Sanctum.InstanceEntries do
           updated_at: DateTime.t() | nil
         }
 
-  @typedoc "An entry offered to a person: what it reaches and for whom, never material."
+  @typedoc """
+  An entry offered to a person: what it reaches and for whom, never
+  material. `oauth_scopes` are the scopes an OAuth entry was authorized
+  for, `[]` for any other kind.
+  """
   @type offer_view :: %{
           id: String.t(),
           name: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
+          oauth_scopes: [String.t()],
           destination: %{String.t() => term()} | nil,
           component_policy: String.t()
+        }
+
+  @typedoc "An offered entry as a consent binds it: its offer view and the digest it is bound at."
+  @type binding_view :: %{
+          id: String.t(),
+          name: String.t(),
+          kind: String.t(),
+          provider_hint: String.t(),
+          oauth_scopes: [String.t()],
+          destination: %{String.t() => term()} | nil,
+          component_policy: String.t(),
+          binding_digest: String.t() | nil
+        }
+
+  @typedoc """
+  What a carried binding is held to: the entry's kind, provider, status,
+  digest and the scopes an OAuth entry was authorized for (`[]` for
+  another kind).
+  """
+  @type binding_facts :: %{
+          kind: String.t(),
+          provider_hint: String.t(),
+          status: String.t(),
+          binding_digest: String.t() | nil,
+          oauth_scopes: [String.t()]
         }
 
   @typedoc "The running node's facts, taken from the attempt and never from a request."
@@ -171,6 +206,50 @@ defmodule Sanctum.InstanceEntries do
     with :ok <- person(ctx),
          {:ok, entries} <- Store.offered(Context.actor(ctx), []) do
       {:ok, Enum.map(entries, &offer_view/1)}
+    end
+  end
+
+  @doc """
+  The entry `entry_id` as a consent binds it for the context's person:
+  its offer view (`t:offer_view/0`) with the binding digest it stands at
+  (`t:binding_view/0`). The refusals are `resolve/4`'s, in its order, up
+  to the status: an anonymous caller (`{:error, :anonymous_denied}`), a
+  person not active on this server (`{:error, :denied}`), an entry not
+  offered to them (`{:error, :not_offered}`) and one offered but not
+  active (`{:error, {:entry_unavailable, status}}`). Nothing is unsealed
+  and no use is claimed: whether a node may use the entry is the
+  component policy's (`admits?/3`), and a request's is the attach path's.
+  """
+  @spec binding(Context.t(), String.t()) :: {:ok, binding_view()} | {:error, term()}
+  def binding(%Context{} = ctx, entry_id) when is_binary(entry_id) do
+    with :ok <- person(ctx),
+         :ok <- standing(ctx.user_id),
+         {:ok, entry} <- Store.get_offered(Context.actor(ctx), entry_id, active_only: false),
+         :ok <- active(entry) do
+      {:ok, Map.put(offer_view(entry), :binding_digest, entry.binding_digest)}
+    end
+  end
+
+  @doc """
+  The facts a boot's revision with no person holds a carried instance
+  binding to (`Sanctum.Consent.Bootstrap`, its only caller): the entry's
+  `kind`, `provider_hint`, `status`, stored `binding_digest` and
+  `oauth_scopes`, read under the platform's actor, or
+  `{:error, :not_found}`. Metadata only:
+  it unseals nothing, offers nothing and names no person, so it decides
+  no one's use; the attach path (`resolve/4`) holds each request to the
+  audience, the policy and the caps.
+  """
+  @spec binding_facts(String.t()) :: {:ok, binding_facts()} | {:error, term()}
+  def binding_facts(entry_id) when is_binary(entry_id) do
+    with {:ok, entry} <- Store.get(actor(), entry_id) do
+      {:ok,
+       entry
+       |> Map.take([:kind, :provider_hint, :status, :binding_digest])
+       |> Map.put(
+         :oauth_scopes,
+         if(entry.kind == "oauth", do: decode_list(entry.oauth_scopes), else: [])
+       )}
     end
   end
 
@@ -979,6 +1058,7 @@ defmodule Sanctum.InstanceEntries do
       name: entry.name,
       kind: entry.kind,
       provider_hint: entry.provider_hint,
+      oauth_scopes: if(entry.kind == "oauth", do: decode_list(entry.oauth_scopes), else: []),
       destination: decode_destination(entry.destination),
       component_policy: entry.component_policy
     }

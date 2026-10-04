@@ -49,6 +49,18 @@ defmodule Sanctum.Consent.CommitDigest do
   and its empty records dropped; a field left out and a field named empty
   stay distinct.
 
+  ## Accounts and lifetimes
+
+  A binding names exactly one of the athanor's entry (`entry_id`) and an
+  instance entry (`instance_entry_id`), the account `name` it is bound
+  under (absent for the need's default), its `lifetime` (`kind`, and the
+  `until` instant of an `until` binding) and `renew`, whether the person
+  renews a consumed `once`. A need may be bound once per name. A
+  selection names exactly one of the lender's `label`, an entry or an
+  instance entry, the dependency's `need` an entry is chosen for, and its
+  own lifetime and `renew`. Each is a decision, so two commits differing
+  only by `renew` differ in digest.
+
   Explanatory text never enters the digest: a need's reason is prose, so
   rewording it invalidates no consent.
   """
@@ -56,12 +68,21 @@ defmodule Sanctum.Consent.CommitDigest do
   alias Sanctum.Consent.Normalize
   alias Prima.JCS
 
+  @lifetimes ~w(standing until once)
+
+  @typedoc "A lifetime as the digest reads it: its kind and, for `until`, the instant."
+  @type lifetime :: %{required(:kind) => String.t(), optional(:until) => String.t() | nil}
+
   @type binding :: %{
           required(:need) => String.t(),
-          required(:entry_id) => String.t(),
+          optional(:entry_id) => String.t(),
+          optional(:instance_entry_id) => String.t(),
           required(:binding_digest) => String.t(),
+          optional(:name) => String.t() | nil,
           optional(:fields) => [String.t()],
-          optional(:scopes) => [String.t()]
+          optional(:scopes) => [String.t()],
+          optional(:lifetime) => lifetime(),
+          optional(:renew) => boolean()
         }
 
   @type tool_server_grant :: %{
@@ -73,9 +94,14 @@ defmodule Sanctum.Consent.CommitDigest do
   @type selection :: %{
           required(:from) => String.t(),
           required(:dep) => String.t(),
-          required(:label) => String.t(),
+          optional(:label) => String.t(),
+          optional(:entry_id) => String.t(),
+          optional(:instance_entry_id) => String.t(),
+          optional(:need) => String.t(),
           required(:binding_digest) => String.t(),
-          optional(:fields) => [String.t()]
+          optional(:fields) => [String.t()],
+          optional(:lifetime) => lifetime(),
+          optional(:renew) => boolean()
         }
 
   @typedoc """
@@ -211,25 +237,86 @@ defmodule Sanctum.Consent.CommitDigest do
   defp normalize_binding(binding) when is_map(binding) do
     tag = :invalid_commit
 
-    with :ok <- Normalize.only_keys(binding, ~w(need entry_id binding_digest fields scopes)a, tag),
+    with :ok <-
+           Normalize.only_keys(
+             binding,
+             ~w(need entry_id instance_entry_id binding_digest fields scopes name lifetime renew)a,
+             tag
+           ),
          {:ok, need} <- Normalize.required_string(binding, :need, tag),
-         {:ok, entry_id} <- Normalize.required_string(binding, :entry_id, tag),
+         {:ok, entry} <- one_entry(binding, [:entry_id, :instance_entry_id], :bindings),
          {:ok, binding_digest} <- Normalize.required_string(binding, :binding_digest, tag),
+         {:ok, name} <- Normalize.optional_string(binding, :name, tag),
          {:ok, fields} <- Normalize.string_set(binding, :fields, tag),
-         {:ok, scopes} <- Normalize.string_set(binding, :scopes, tag) do
+         {:ok, scopes} <- Normalize.string_set(binding, :scopes, tag),
+         {:ok, lifetime} <- lifetime(binding),
+         {:ok, renew} <- renew(binding) do
       {:ok,
-       %{
+       Map.merge(entry, %{
          "need" => need,
-         "entry_id" => entry_id,
          "binding_digest" => binding_digest,
          "fields" => fields,
-         "scopes" => scopes
-       }}
+         "scopes" => scopes,
+         "lifetime" => lifetime,
+         "renew" => renew
+       })
+       |> Normalize.put_optional("name", name)}
     end
   end
 
   defp normalize_binding(_other) do
     {:error, {:invalid_commit, :bindings, "each binding must be a map"}}
+  end
+
+  # Exactly one of the keys `allowed` names what the item binds or borrows.
+  defp one_entry(item, allowed, field) do
+    case Enum.filter(allowed, &(Map.get(item, &1) != nil)) do
+      [key] ->
+        case Normalize.required_string(item, key, :invalid_commit) do
+          {:ok, value} -> {:ok, %{Atom.to_string(key) => value}}
+          error -> error
+        end
+
+      _none_or_several ->
+        {:error,
+         {:invalid_commit, field,
+          "each names exactly one of #{Enum.map_join(allowed, ", ", &Atom.to_string/1)}"}}
+    end
+  end
+
+  # A lifetime is its kind and, for `until` alone, the instant; standing
+  # when the decision names none.
+  defp lifetime(item) do
+    case Map.get(item, :lifetime) do
+      nil ->
+        {:ok, %{"kind" => "standing"}}
+
+      %{kind: kind} = lifetime when kind in @lifetimes ->
+        case {kind, Map.get(lifetime, :until)} do
+          {"until", until} when is_binary(until) and until != "" ->
+            {:ok, %{"kind" => kind, "until" => until}}
+
+          {"until", _missing} ->
+            {:error, {:invalid_commit, :lifetime, "an until lifetime names its instant"}}
+
+          {_kind, nil} ->
+            {:ok, %{"kind" => kind}}
+
+          {_kind, _until} ->
+            {:error, {:invalid_commit, :lifetime, "only an until lifetime names an instant"}}
+        end
+
+      _other ->
+        {:error,
+         {:invalid_commit, :lifetime, "must name a kind of #{Enum.join(@lifetimes, ", ")}"}}
+    end
+  end
+
+  defp renew(item) do
+    case Map.get(item, :renew, false) do
+      value when is_boolean(value) -> {:ok, value}
+      _other -> {:error, {:invalid_commit, :renew, "must be a boolean"}}
+    end
   end
 
   # One edge, one selected profile: the digest covers which labelled
@@ -260,20 +347,31 @@ defmodule Sanctum.Consent.CommitDigest do
   defp normalize_selection(selection) when is_map(selection) do
     tag = :invalid_commit
 
-    with :ok <- Normalize.only_keys(selection, ~w(from dep label binding_digest fields)a, tag),
+    with :ok <-
+           Normalize.only_keys(
+             selection,
+             ~w(from dep label entry_id instance_entry_id need binding_digest fields lifetime
+                renew)a,
+             tag
+           ),
          {:ok, from} <- Normalize.required_string(selection, :from, tag),
          {:ok, dep} <- Normalize.required_string(selection, :dep, tag),
-         {:ok, label} <- Normalize.required_string(selection, :label, tag),
+         {:ok, lent} <- one_entry(selection, [:label, :entry_id, :instance_entry_id], :selections),
+         {:ok, need} <- Normalize.optional_string(selection, :need, tag),
          {:ok, binding_digest} <- Normalize.required_string(selection, :binding_digest, tag),
-         {:ok, fields} <- Normalize.string_set(selection, :fields, tag) do
+         {:ok, fields} <- Normalize.string_set(selection, :fields, tag),
+         {:ok, lifetime} <- lifetime(selection),
+         {:ok, renew} <- renew(selection) do
       {:ok,
-       %{
+       Map.merge(lent, %{
          "from" => from,
          "dep" => dep,
-         "label" => label,
          "binding_digest" => binding_digest,
-         "fields" => fields
-       }}
+         "fields" => fields,
+         "lifetime" => lifetime,
+         "renew" => renew
+       })
+       |> Normalize.put_optional("need", need)}
     end
   end
 
@@ -292,16 +390,17 @@ defmodule Sanctum.Consent.CommitDigest do
     end
   end
 
-  # One need, one credential. Two bindings for the same need would make the
-  # digest depend on list order and leave the loader to pick.
+  # One need, one credential per name: the default (no name) and each
+  # named account once. Two bindings in one slot would make the digest
+  # depend on list order and leave the loader to pick.
   defp ensure_one_binding_per_need(bindings) do
-    sorted = Enum.sort_by(bindings, & &1["need"])
-    needs = Enum.map(sorted, & &1["need"])
+    sorted = Enum.sort_by(bindings, &{&1["need"], &1["name"] || ""})
+    slots = Enum.map(sorted, &{&1["need"], &1["name"]})
 
-    if length(Enum.uniq(needs)) == length(needs) do
+    if length(Enum.uniq(slots)) == length(slots) do
       {:ok, sorted}
     else
-      {:error, {:invalid_commit, :bindings, "each need may be bound exactly once"}}
+      {:error, {:invalid_commit, :bindings, "each need may be bound exactly once per name"}}
     end
   end
 

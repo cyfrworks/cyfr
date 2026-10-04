@@ -472,6 +472,108 @@ defmodule Sanctum.VaultTest do
 
       assert {:ok, %{"openai.com" => %{instance_entry_id: instance.id}}} == Vault.defaults(ctx)
     end
+
+    test "set_default moves a provider's default to an entry of the athanor or an offered " <>
+           "instance entry, and moves no consent",
+         %{ctx: ctx} do
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      first = create!(person, %{provider_hint: "openai.com"})
+      second = create!(person, %{provider_hint: "openai.com"})
+
+      assert {:ok, %{provider_hint: "openai.com", vault_entry_id: id}} =
+               Vault.set_default(person, %{provider_hint: "openai.com", entry_id: second.id})
+
+      assert id == second.id
+      assert {:ok, %{"openai.com" => %{vault_entry_id: ^id}}} = Vault.defaults(person)
+
+      {:ok, instance} =
+        Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
+          name: "instance-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          destination:
+            ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+          sealed_payload: "sealed",
+          binding_digest: "sha256:instance",
+          audience: "everyone",
+          created_by: "usr_admin"
+        })
+
+      assert {:ok, %{provider_hint: "openai.com", instance_entry_id: instance_id}} =
+               Vault.set_default(person, %{
+                 provider_hint: "openai.com",
+                 instance_entry_id: instance.id
+               })
+
+      assert instance_id == instance.id
+
+      # A profile bound to the first entry stays bound to it.
+      profile = mint_profile_with_ref(person, first.id, "sha256:bound")
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(actor(person), profile.id)
+
+      assert {:ok, _} =
+               Vault.set_default(person, %{provider_hint: "openai.com", entry_id: first.id})
+
+      {:ok, still, refs} = Arca.ConsentStorage.get_head(actor(person), profile.id)
+      assert still.id == head.id
+      assert [%{vault_entry_id: bound}] = refs
+      assert bound == first.id
+    end
+
+    test "set_default refuses an entry of another provider, one not offered or not active, " <>
+           "and a request naming neither or both",
+         %{ctx: ctx} do
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      anthropic = create!(person, %{provider_hint: "anthropic.com"})
+      openai = create!(person, %{provider_hint: "openai.com"})
+
+      assert {:error, {:provider_mismatch, "openai.com"}} =
+               Vault.set_default(person, %{provider_hint: "openai.com", entry_id: anthropic.id})
+
+      for params <- [
+            %{provider_hint: "openai.com"},
+            %{provider_hint: "openai.com", entry_id: openai.id, instance_entry_id: "ine_x"},
+            %{provider_hint: "", entry_id: openai.id},
+            %{entry_id: openai.id}
+          ] do
+        assert {:error, {:invalid_argument, _why}} = Vault.set_default(person, params),
+               "#{inspect(params)} was accepted"
+      end
+
+      {:ok, listed} =
+        Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
+          name: "listed-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          destination:
+            ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+          sealed_payload: "sealed",
+          binding_digest: "sha256:listed",
+          audience: "listed",
+          created_by: "usr_admin"
+        })
+
+      assert {:error, :not_offered} =
+               Vault.set_default(person, %{
+                 provider_hint: "openai.com",
+                 instance_entry_id: listed.id
+               })
+
+      {:ok, _} = Vault.revoke(person, openai.id)
+
+      assert {:error, {:entry_unavailable, "revoked"}} =
+               Vault.set_default(person, %{provider_hint: "openai.com", entry_id: openai.id})
+
+      # The session alone: a scoped key cannot reach it.
+      assert {:error, _not_interactive} =
+               Vault.set_default(%{person | auth_method: :api_key}, %{
+                 provider_hint: "anthropic.com",
+                 entry_id: anthropic.id
+               })
+
+      assert {:ok, %{"anthropic.com" => %{vault_entry_id: kept}}} = Vault.defaults(person)
+      assert kept == anthropic.id
+    end
   end
 
   describe "rotate changes material without requiring re-consent" do

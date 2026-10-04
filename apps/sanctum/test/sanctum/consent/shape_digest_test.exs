@@ -190,6 +190,121 @@ defmodule Sanctum.Consent.ShapeDigestTest do
     end
   end
 
+  describe "how a need attaches, where it goes, and what is provided" do
+    @need %{name: "api_key", type: "api_key:openai.com", fields: ["KEY"]}
+    @attach %{in: "header", name: "Authorization", template: "Bearer {value}"}
+    @provided %{
+      "catalyst:local.supabase" => %{
+        "database" => %{
+          "destination" => %{"hosts" => ["abc.supabase.co"], "scheme" => "https"},
+          "values" => %{"anon_key" => "eyJ-public"}
+        }
+      }
+    }
+
+    test "each declared one changes the digest" do
+      base = Map.put(@base, :needs, [@need])
+
+      variants = [
+        %{needs: [Map.put(@need, :attach, @attach)]},
+        %{needs: [Map.put(@need, :hosts, ["api.openai.com"])]},
+        %{needs: [Map.put(@need, :paths, ["/v1/"])]},
+        %{needs: [Map.put(@need, :disclose, true)]},
+        %{provides: @provided},
+        %{
+          provides:
+            put_in(@provided, ["catalyst:local.supabase", "database", "destination", "hosts"], [
+              "xyz.supabase.co"
+            ])
+        },
+        %{
+          provides:
+            put_in(@provided, ["catalyst:local.supabase", "database", "values"], %{
+              "anon_key" => "eyJ-other"
+            })
+        }
+      ]
+
+      for variant <- variants do
+        assert digest!(base) != digest!(Map.merge(base, variant)),
+               "#{inspect(variant)} did not affect the digest"
+      end
+    end
+
+    test "one not declared is the input it was before they existed" do
+      base = Map.put(@base, :needs, [@need])
+      {:ok, canonical} = ShapeDigest.normalize(base)
+
+      assert canonical["needs"] == [
+               %{
+                 "name" => "api_key",
+                 "type" => "api_key:openai.com",
+                 "fields" => ["KEY"],
+                 "scopes" => []
+               }
+             ]
+
+      refute Map.has_key?(canonical, "provides")
+
+      # A false disclose and empty hosts or paths declare nothing.
+      for undeclared <- [%{disclose: false}, %{hosts: []}, %{paths: []}] do
+        assert digest!(base) ==
+                 digest!(Map.put(@base, :needs, [Map.merge(@need, undeclared)])),
+               "#{inspect(undeclared)} moved the digest"
+      end
+    end
+
+    test "they normalize: sets sorted, the rule's three members, the destination canonical" do
+      need =
+        @need
+        |> Map.put(:attach, @attach)
+        |> Map.put(:hosts, ["b.example", "a.example", "a.example"])
+        |> Map.put(:disclose, true)
+
+      {:ok, canonical} =
+        ShapeDigest.normalize(Map.merge(@base, %{needs: [need], provides: @provided}))
+
+      assert [
+               %{
+                 "attach" => %{
+                   "in" => "header",
+                   "name" => "Authorization",
+                   "template" => "Bearer {value}"
+                 },
+                 "hosts" => ["a.example", "b.example"],
+                 "disclose" => true
+               }
+             ] = canonical["needs"]
+
+      assert canonical["provides"] == @provided
+    end
+
+    test "a malformed rule, disclose or provided entry is refused" do
+      for need <- [
+            Map.put(@need, :attach, %{in: "header", name: "x"}),
+            Map.put(@need, :attach, "Bearer"),
+            Map.put(@need, :disclose, "yes"),
+            Map.put(@need, :hosts, "a.example")
+          ] do
+        assert {:error, {:invalid_shape, _key, _why}} =
+                 ShapeDigest.compute(Map.put(@base, :needs, [need])),
+               "#{inspect(need)} was accepted"
+      end
+
+      for provides <- [
+            ["not", "a", "map"],
+            %{"catalyst:local.supabase" => %{}},
+            put_in(@provided, ["catalyst:local.supabase", "database", "values"], %{"k" => 1}),
+            put_in(@provided, ["catalyst:local.supabase", "database", "destination"], %{}),
+            put_in(@provided, ["catalyst:local.supabase", "database", "extra"], "x")
+          ] do
+        assert {:error, {:invalid_shape, _key, _why}} =
+                 ShapeDigest.compute(Map.put(@base, :provides, provides)),
+               "#{inspect(provides)} was accepted"
+      end
+    end
+  end
+
   describe "normalize/1" do
     test "exposes exactly what was hashed" do
       {:ok, canonical} = ShapeDigest.normalize(Map.put(@base, :tool_actions, ["b.x", "a.y"]))

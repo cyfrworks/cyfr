@@ -53,6 +53,58 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
     assert :ok = RegistrationBinding.authorize(ctx, "#{@target}:1.0.0", "prof-bind")
   end
 
+  # A binding's lifetime and a run's origin are separate facts: a
+  # schedule binds to any profile under the same rule, whatever lifetime
+  # the bindings it will use carry. Where the binding is used, its
+  # lifetime is checked at each fire (`Sanctum.Attach`, the disclosed
+  # dispense), so the fire after it expires is refused there, never here.
+  test "a schedule binds to a profile whose binding lives until a time; the row carries " <>
+         "its expiry, and the binding rule is unchanged",
+       %{ctx: ctx} do
+    expires = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
+    key = "#{@target}|@ingress|default"
+
+    :ok =
+      ConsentFixtures.seed_head!(
+        ctx,
+        %{
+          id: "prof-until",
+          kind: :owner,
+          source_ref: @target,
+          label: "until",
+          status: :active
+        },
+        %{
+          id: "consent-until",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: "sha256:shape-until",
+          commit_digest: "sha256:commit-until",
+          resolved_policy: "{}",
+          activation: %{@target => "sha256:act"},
+          vault_refs: [
+            %{
+              binding_key: key,
+              scope: "athanor",
+              vault_entry_id: "vlt_until",
+              binding_digest: "sha256:until",
+              lifetime_kind: "until",
+              expires_at: expires
+            }
+          ]
+        }
+      )
+
+    assert :ok = RegistrationBinding.authorize(ctx, "#{@target}:1.0.0", "prof-until")
+
+    {:ok, head} = Arca.ConsentStorage.head_consent(Context.actor(ctx), "prof-until")
+
+    assert [%{binding_key: ^key, lifetime_kind: "until", expires_at: at}] = head.vault_refs
+    assert DateTime.compare(at, expires) == :eq
+  end
+
   test "a profile cannot be aimed at another component's registration", %{ctx: ctx} do
     assert {:error, :profile_not_for_target} =
              RegistrationBinding.authorize(ctx, "reagent:local.other:1.0.0", "prof-bind")

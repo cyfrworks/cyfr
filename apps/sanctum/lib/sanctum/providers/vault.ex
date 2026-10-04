@@ -7,7 +7,10 @@ defmodule Sanctum.Providers.Vault do
   mapping over `Sanctum.Vault`, which owns every rule. External plane
   only: guests have no enumeration API and no vault verbs. `list`
   answers the living entries beside the athanor's default per provider,
-  an object keyed by provider hint naming one entry by id. `status`
+  an object keyed by provider hint naming one entry by id, and
+  `set_default` makes one of the athanor's entries, or an instance entry
+  offered to the caller, a provider's default: what a consent suggests,
+  binding nothing. `status`
   answers each living entry's name, kind, status, created and updated
   times and whether a consent binds it, under no consent class, and never
   a value or a field.
@@ -86,6 +89,30 @@ defmodule Sanctum.Providers.Vault do
           [],
           kind: :read,
           planes: [:external]
+        ),
+        Operation.new(
+          "vault",
+          "set_default",
+          "Set the default entry of a provider",
+          [
+            Arg.new("provider_hint", :string,
+              required: true,
+              description: "The provider whose default this becomes (e.g. 'openai.com')"
+            ),
+            Arg.new("entry_id", :string,
+              description:
+                "An entry of the athanor (vlt_…); name exactly one of entry_id and " <>
+                  "instance_entry_id"
+            ),
+            Arg.new("instance_entry_id", :string,
+              description:
+                "An instance entry offered to you (ine_…); name exactly one of entry_id and " <>
+                  "instance_entry_id"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
         ),
         Operation.new(
           "vault",
@@ -278,6 +305,20 @@ defmodule Sanctum.Providers.Vault do
   def handle(%Context{} = ctx, %{"action" => "status"}) do
     case Vault.status(ctx) do
       {:ok, entries} -> {:ok, %{entries: Enum.map(entries, &status_json/1)}}
+      {:error, reason} -> {:error, fmt(reason)}
+    end
+  end
+
+  # The default a consent suggests for a provider: one of the athanor's
+  # entries or an offered instance entry. It binds nothing.
+  def handle(%Context{} = ctx, %{"action" => "set_default"} = args) do
+    params =
+      %{provider_hint: args["provider_hint"]}
+      |> Prima.MapUtil.put_present(:entry_id, args["entry_id"])
+      |> Prima.MapUtil.put_present(:instance_entry_id, args["instance_entry_id"])
+
+    case Vault.set_default(ctx, params) do
+      {:ok, default} -> {:ok, %{status: "default_set", default: default}}
       {:error, reason} -> {:error, fmt(reason)}
     end
   end
@@ -477,6 +518,13 @@ defmodule Sanctum.Providers.Vault do
     do: "oauth_pointer_requires_reauth: re-authorize the provider to convert this entry"
 
   defp fmt(:not_found), do: "not_found"
+
+  defp fmt({:invalid_argument, message} = refusal) when is_binary(message), do: refusal
+
+  defp fmt({:provider_mismatch, hint}) when is_binary(hint),
+    do: "provider_mismatch: the entry is not of the provider #{hint}"
+
+  defp fmt(:not_offered), do: "not_offered: that instance entry is not offered to you"
 
   # The caller's standing, refused where the entry is written
   # (`Sanctum.Issuance`, held from a paired device): a standing refusal in

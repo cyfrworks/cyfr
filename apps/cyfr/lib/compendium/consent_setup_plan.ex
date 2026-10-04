@@ -14,8 +14,15 @@ defmodule Compendium.ConsentSetupPlan do
   to the digest the person approved; a selection of another profile's
   key, resolved as a run resolves it and its lender's entry held to the
   same check, or reported not ready with the reason it resolves to
-  nothing; and an instance entry, which this check does not read and
-  reports not ready.
+  nothing; and an instance entry, read as the person is offered it and
+  held to the digest the person approved.
+
+  An attach-only entry bound where the component reads the value itself
+  (its edge carries no attach rule: a need of a version published before
+  attaching existed) is not ready, and the remedy named is the update —
+  the newer version the install media ships when there is one — or
+  disclosing the entry. A need the app's `provides` covers is the
+  publisher's configuration, never an unbound need.
 
   `Compendium.Component.setup_plan/2` embeds this as the `consent` section
   of its response and derives the top-level `ready` from it — the consent
@@ -116,9 +123,18 @@ defmodule Compendium.ConsentSetupPlan do
 
   # One row per binding the head consent carries, read by what it names.
   defp check_needs(ctx, consent) do
+    read_itself = read_itself_keys(consent)
+
     Enum.map(consent.vault_refs, fn ref ->
       {entry_id, satisfied, detail} =
-        check_ref(ctx, Sanctum.Consent.row_binding(ctx, consent, ref))
+        case Sanctum.Consent.row_binding(ctx, consent, ref) do
+          {:entry, id, digest} ->
+            reads? = MapSet.member?(read_itself, ref.binding_key)
+            usable(ctx, id, digest, "", if(reads?, do: ref.binding_key))
+
+          other ->
+            check_ref(ctx, other)
+        end
 
       %{
         entry_id: entry_id,
@@ -126,6 +142,42 @@ defmodule Compendium.ConsentSetupPlan do
         detail: detail
       }
     end)
+  end
+
+  # The bindings the component reads itself: the bound entries whose edge
+  # carries no attach rule. An unreadable policy names none, which leaves
+  # every row to its own check.
+  defp read_itself_keys(consent) do
+    case Prima.Authority.Blob.parse(consent.resolved_policy) do
+      {:ok, %Prima.Authority.Blob{nodes: nodes}} ->
+        for {_node, %{edges: edges}} <- nodes,
+            {_key, %{vault: %{entry_id: _, attach: nil} = vault}} <- edges,
+            bound <- [vault | Map.values(Map.get(vault, :named, %{}))],
+            into: MapSet.new(),
+            do: bound.binding_key
+
+      _unreadable ->
+        MapSet.new()
+    end
+  end
+
+  defp remedy(ctx, binding_key) do
+    with {:ok, {node, edge_key, _slot}} <- Prima.Authority.Blob.parse_binding_key(binding_key),
+         target = edge_component(node, edge_key),
+         {:ok, cref} <- Prima.ComponentRef.parse(target),
+         {:ok, row} <- Compendium.Registry.get_latest(ctx, cref.name, cref.namespace, cref.type),
+         {:ok, version} when is_binary(version) <- Compendium.ConsentFacts.newer_shipped(ctx, row) do
+      "update #{target} to version #{version}, which attaches it, or disclose the entry"
+    else
+      _ -> "update the component to a version that attaches it, or disclose the entry"
+    end
+  end
+
+  defp edge_component(node, edge_key) do
+    case Prima.Authority.Blob.edge_target(edge_key) do
+      :ingress -> node
+      {:ok, dep} -> dep
+    end
   end
 
   # Check each required need for a binding. Commit validation ensures each
@@ -146,28 +198,47 @@ defmodule Compendium.ConsentSetupPlan do
     end
   end
 
-  # The athanor's own entry, live and still at the digest approved.
-  defp check_ref(ctx, {:entry, entry_id, digest}), do: usable(ctx, entry_id, digest, "")
-
   # A selection resolved to its lender's entry is held to the same check.
   defp check_ref(ctx, {:selection, label, {:ok, %{scope: "athanor"} = vault}}),
-    do: usable(ctx, vault.entry_id, vault.binding_digest, " (lent by its #{label} profile)")
+    do: usable(ctx, vault.entry_id, vault.binding_digest, " (lent by its #{label} profile)", nil)
 
-  defp check_ref(_ctx, {:selection, label, {:ok, _instance}}),
-    do:
-      {nil, false, "the #{label} profile lends an instance entry, which this check does not read"}
+  # A lent instance entry, read live as the person is offered it at the
+  # digest the lender bound (`Sanctum.Consent.row_binding/3`).
+  defp check_ref(_ctx, {:selection, label, {:ok, %{scope: "instance"} = vault}}),
+    do: {vault.entry_id, true, "bound to an instance entry (lent by its #{label} profile)"}
 
   defp check_ref(_ctx, {:selection, label, {:error, reason}}),
     do: {nil, false, unresolved(label, reason)}
 
-  defp check_ref(_ctx, {:instance, _instance_entry_id}),
-    do: {nil, false, "bound to an instance entry, which this check does not read"}
+  # An instance entry, as the person is offered it, at the digest approved.
+  defp check_ref(_ctx, {:instance, id, {:ok, view}}),
+    do: {id, true, "bound to #{view.name}, an instance entry"}
+
+  defp check_ref(_ctx, {:instance, id, {:error, :binding_went_stale}}),
+    do: {id, false, "the instance entry was rebound since this consent — re-approve to continue"}
+
+  defp check_ref(_ctx, {:instance, id, {:error, :not_offered}}),
+    do: {id, false, "the instance entry is no longer offered to you"}
+
+  defp check_ref(_ctx, {:instance, id, {:error, {:entry_unavailable, status}}}),
+    do: {id, false, "the instance entry is #{status}"}
+
+  defp check_ref(_ctx, {:instance, id, {:error, _refused}}),
+    do: {id, false, "the instance entry cannot be used by you"}
 
   defp check_ref(_ctx, :malformed), do: {nil, false, "the binding names no entry"}
 
-  defp usable(ctx, entry_id, digest, lent) do
+  # The athanor's own entry, live and still at the digest approved; under
+  # a binding the component reads itself (`read_itself`, that binding's
+  # key, nil otherwise), a disclosed one.
+  defp usable(ctx, entry_id, digest, lent, read_itself) do
     # Use the shared vault resolution check for status and binding validity.
     case VaultReader.usable(ctx.athanor_id, entry_id, digest) do
+      {:ok, %{attach_only: true}} when is_binary(read_itself) ->
+        {entry_id, false,
+         "the component reads this value itself and its entry is attach-only — " <>
+           remedy(ctx, read_itself)}
+
       {:ok, entry} ->
         {entry_id, true, "bound to #{entry.name}#{lent}"}
 
@@ -197,6 +268,15 @@ defmodule Compendium.ConsentSetupPlan do
 
   defp unresolved(label, {:consent_required, _payload}),
     do: "the #{label} profile's grant does not admit this origin"
+
+  defp unresolved(label, :not_offered),
+    do: "the instance entry the #{label} profile lends is no longer offered to you"
+
+  defp unresolved(label, :binding_went_stale),
+    do: "the instance entry the #{label} profile lends was rebound since — re-approve to continue"
+
+  defp unresolved(label, {:entry_unavailable, status}),
+    do: "the instance entry the #{label} profile lends is #{status}"
 
   defp unresolved(label, _reason), do: "the selection of the #{label} profile resolves to nothing"
 end

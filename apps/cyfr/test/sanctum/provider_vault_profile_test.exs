@@ -43,7 +43,9 @@ defmodule Sanctum.ProviderVaultProfileTest do
           "name" => "wire-conn",
           "kind" => "api_key",
           "fields" => %{"url" => "https://db.example", "anon_key" => "anon"},
-          "destination" => %{"hosts" => ["db.example"]}
+          "destination" => %{"hosts" => ["db.example"]},
+          # A manifest declaring no need: the component reads its key.
+          "disclose" => true
         })
       )
 
@@ -171,6 +173,240 @@ defmodule Sanctum.ProviderVaultProfileTest do
     assert Jason.decode!(wire)["defaults"] == %{"openai.com" => %{"vault_entry_id" => first.id}}
     refute wire =~ "sk-material"
     refute Jason.encode!(defaults) =~ "OPENAI_API_KEY"
+  end
+
+  test "set_default makes an entry a provider's default over the wire", %{ctx: ctx} do
+    create = fn name, hint ->
+      {:ok, %{entry: entry}} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Sanctum.Provider.handle("vault", &1, %{
+            "action" => "create",
+            "name" => name,
+            "kind" => "api_key",
+            "provider_hint" => hint,
+            "fields" => %{"OPENAI_API_KEY" => "sk-material-#{name}"},
+            "destination" => %{"hosts" => ["api.openai.com"]}
+          })
+        )
+
+      entry
+    end
+
+    _first = create.("first-default", "openai.com")
+    second = create.("second-default", "openai.com")
+    other = create.("other-provider", "anthropic.com")
+
+    assert {:ok, %{status: "default_set", default: default}} =
+             Sanctum.Provider.handle("vault", ctx, %{
+               "action" => "set_default",
+               "provider_hint" => "openai.com",
+               "entry_id" => second.id
+             })
+
+    assert default == %{provider_hint: "openai.com", vault_entry_id: second.id}
+
+    {:ok, %{defaults: defaults}} = Sanctum.Provider.handle("vault", ctx, %{"action" => "list"})
+    assert defaults["openai.com"] == %{vault_entry_id: second.id}
+
+    assert {:error, "provider_mismatch: " <> _} =
+             Sanctum.Provider.handle("vault", ctx, %{
+               "action" => "set_default",
+               "provider_hint" => "openai.com",
+               "entry_id" => other.id
+             })
+
+    assert {:error, {:invalid_argument, _}} =
+             Sanctum.Provider.handle("vault", ctx, %{
+               "action" => "set_default",
+               "provider_hint" => "openai.com"
+             })
+
+    # The declaration names what the handler takes, and nothing it ignores.
+    %{args: args} =
+      Enum.find(Sanctum.Providers.Vault.definition().operations, &(&1.action == "set_default"))
+
+    assert Enum.map(args, & &1.name) |> Enum.sort() ==
+             ["entry_id", "instance_entry_id", "provider_hint"]
+  end
+
+  test "the profile tool decodes the extended decisions, and refuses what it cannot keep",
+       %{ctx: ctx} do
+    # A person of this home: an instance entry is offered to people.
+    {ctx, _user} = Sanctum.TestContext.person!(ctx)
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: "mcp-keyed",
+        version: "1.0.0",
+        type: "reagent",
+        manifest:
+          Jason.encode!(%{
+            "name" => "mcp-keyed",
+            "version" => "1.0.0",
+            "type" => "reagent",
+            "needs" => %{
+              "api_key" => %{
+                "type" => "api_key:openai.com",
+                "reason" => "to call the model",
+                "fields" => ["OPENAI_API_KEY"],
+                "attach" => %{
+                  "in" => "header",
+                  "name" => "Authorization",
+                  "template" => "Bearer {value}"
+                }
+              }
+            }
+          })
+      })
+
+    entries =
+      for name <- ["wire-a", "wire-b"] do
+        {:ok, %{entry: entry}} =
+          Sanctum.TestContext.confirming(
+            ctx,
+            &Sanctum.Provider.handle("vault", &1, %{
+              "action" => "create",
+              "name" => name,
+              "kind" => "api_key",
+              "provider_hint" => "openai.com",
+              "fields" => %{"OPENAI_API_KEY" => "sk-#{name}"},
+              "destination" => %{"hosts" => ["api.openai.com"]}
+            })
+          )
+
+        entry
+      end
+
+    [a, b] = entries
+
+    preview = fn bindings ->
+      Sanctum.Provider.handle("profile", ctx, %{
+        "action" => "preview",
+        "decisions" => %{"ref" => "reagent:local.mcp-keyed", "bindings" => bindings}
+      })
+    end
+
+    assert {:ok, %{rows: rows}} =
+             preview.([
+               %{"need" => "api_key", "entry_id" => a.id},
+               %{
+                 "need" => "api_key",
+                 "entry_id" => b.id,
+                 "name" => "Second",
+                 "lifetime" => %{"kind" => "once"},
+                 "renew" => true
+               }
+             ])
+
+    assert [%{"values" => %{"connection" => "Second", "lifetime" => %{"kind" => "once"}}}] =
+             Enum.filter(rows, &(&1["kind"] == "credential" and &1["values"]["connection"]))
+
+    # A lifetime member the commit does not know is refused, never dropped;
+    # and each refusal names the need in its own words.
+    assert {:error, why} =
+             preview.([
+               %{
+                 "need" => "api_key",
+                 "entry_id" => a.id,
+                 "lifetime" => %{"kind" => "once", "x" => 1}
+               }
+             ])
+
+    assert why =~ "The binding for api_key"
+
+    assert {:error, "not_offered: " <> why} =
+             preview.([%{"need" => "api_key", "instance_entry_id" => "ine_missing"}])
+
+    assert why =~ "api_key"
+  end
+
+  # The entry a commit binds, revoked once the commit has read it and
+  # before its revision locks it: run at the commit's first read of an
+  # athanor's entry, once, on the connection the read has just released.
+  def revoke_after_read(_event, _measurements, meta, %{test: test, ctx: ctx, entry_id: id}) do
+    if self() == test and meta[:source] == "vault_entries" and Process.get(:revoked) == nil do
+      revoked =
+        Task.async(fn ->
+          Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), id, "revoked")
+        end)
+        |> Task.await(30_000)
+
+      Process.put(:revoked, revoked)
+    end
+  end
+
+  test "a commit whose entry is revoked after its read is refused by the revision's lock, " <>
+         "in the refusal's own words",
+       %{ctx: ctx} do
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: "mcp-locked",
+        version: "1.0.0",
+        type: "reagent"
+      })
+
+    {:ok, %{entry: entry}} =
+      Sanctum.TestContext.confirming(
+        ctx,
+        &Sanctum.Provider.handle("vault", &1, %{
+          "action" => "create",
+          "name" => "locked-conn",
+          "kind" => "api_key",
+          "fields" => %{"url" => "https://db.example", "anon_key" => "anon"},
+          "destination" => %{"hosts" => ["db.example"]},
+          # A manifest declaring no need: the component reads its key.
+          "disclose" => true
+        })
+      )
+
+    {:ok, plan} =
+      Sanctum.Provider.handle("profile", ctx, %{
+        "action" => "plan",
+        "ref" => "reagent:local.mcp-locked"
+      })
+
+    decisions = %{
+      "ref" => "reagent:local.mcp-locked",
+      "bindings" => [%{"need" => "@ingress", "entry_id" => entry.id}]
+    }
+
+    {:ok, preview} =
+      Sanctum.Provider.handle("profile", ctx, %{"action" => "preview", "decisions" => decisions})
+
+    handler = {__MODULE__, :revoke_after_read, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.revoke_after_read/4, %{
+        test: self(),
+        ctx: ctx,
+        entry_id: entry.id
+      })
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    result =
+      Sanctum.Provider.handle("profile", ctx, %{
+        "action" => "commit",
+        "decisions" => decisions,
+        "plan_token" => plan.plan_token,
+        "proof" => preview.proof,
+        "commit_digest" => preview.commit_digest,
+        "expected_consent_revision" => 0
+      })
+
+    :telemetry.detach(handler)
+    assert Process.get(:revoked) == :ok
+
+    # The store's refusal names no entry; the tool says what it means.
+    assert result ==
+             {:error, ~s(entry_unavailable: an entry this consent binds is now "revoked")}
+
+    assert {:ok, %{profiles: []}} =
+             Sanctum.Provider.handle("profile", ctx, %{
+               "action" => "list",
+               "ref" => "reagent:local.mcp-locked"
+             })
   end
 
   test "the tincture session surface is named in the refusal", %{ctx: ctx} do

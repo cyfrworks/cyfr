@@ -16,16 +16,25 @@ defmodule Sanctum.Consent.BlobBuilder do
   empty ask — deny-all resources under type-default limits.
 
   The caller supplies a `vault_fn` deciding which vault resource (if any)
-  rides each node: a bound entry (`entry_id`, `binding_digest`, `scope`,
-  the entry's `destination` (`entry_destination/1`), the need's `attach`
-  rule and the `projection`) or a selection (`via` a profile of that
-  node). Every bound resource takes its `binding_key` here, from the node
-  and edge it sits on (`Prima.Authority.Blob.binding_key/3`), so the key
-  is computed once, where the place is known. An optional
-  `opts[:edge_vault_fn]` `(from, dep, row, manifest -> vault | nil)`
-  overrides the vault on one dependency edge; `nil` keeps the node's
-  default. Commit binds the operator's chosen entries and selections;
-  bootstrap selects on each vouched edge into a shipped dependency.
+  rides each node, built by `vault_resource/1`: a bound entry (`entry_id`,
+  `binding_digest`, `scope`, the entry's `destination`
+  (`entry_destination/1`), the need's `attach` rule and the `projection`,
+  with the edge's named accounts under `named`), a selection (`via` a
+  profile of that node), or a publisher's provided configuration
+  (`provided`, `provided/3`). Every bound resource, each named one
+  included, takes its `binding_key` here, from the node and edge it sits
+  on and its slot (`Prima.Authority.Blob.binding_key/3`), so the key is
+  computed once, where the place is known. An optional
+  `opts[:edge_vault_fn]` `(from, dep, row, manifest, provided -> vault |
+  nil)` overrides the vault on one dependency edge, told what `from`
+  provides for `dep` (`provided/3`); `nil` keeps the node's default.
+  Commit binds the operator's chosen entries, selections and the
+  configuration the app provides; bootstrap selects on each vouched edge
+  into a shipped dependency.
+
+  A binding's lifetime and its `renew` are the decision's, not the blob's:
+  `vault_resource/1` carries them beside the resource, `encode/1` writes
+  none of it, and `vault_refs/1` answers them on each binding's row.
 
   ## Narrowing
 
@@ -72,8 +81,53 @@ defmodule Sanctum.Consent.BlobBuilder do
           (node_key :: String.t(), row :: map(), manifest :: map() -> map() | nil)
 
   @type edge_vault_fn ::
-          (from :: String.t(), dep :: String.t(), row :: map(), manifest :: map() ->
+          (from :: String.t(),
+           dep :: String.t(),
+           row :: map(),
+           manifest :: map(),
+           provided :: provided() ->
              map() | nil)
+
+  @typedoc """
+  What one node's manifest provides for one dependency (`provided/3`):
+  `covered`, each need the dependency declares as a credential need with
+  an attach rule, with the resource that carries it; and `unprovidable`,
+  each need it names that the dependency does not declare (`:undeclared`)
+  or declares with no attach rule (`:no_attach`), which provides nothing.
+  """
+  @type provided :: %{
+          covered: [{String.t(), map()}],
+          unprovidable: [{String.t(), :undeclared | :no_attach}]
+        }
+
+  @typedoc """
+  A binding as the commit or the bootstrap decided it, which
+  `vault_resource/1` writes: the entry and the digest it is bound at, its
+  scope, destination, attach rule and projection, its lifetime and
+  `renew`, and, on the default binding, the named ones beside it.
+  """
+  @type binding :: %{
+          required(:entry_id) => String.t(),
+          required(:binding_digest) => String.t(),
+          required(:scope) => String.t(),
+          required(:destination) => map(),
+          required(:attach) => map() | nil,
+          required(:fields) => [String.t()],
+          required(:scopes) => [String.t()],
+          optional(:lifetime) => lifetime(),
+          optional(:renew) => boolean(),
+          optional(:named) => [map()]
+        }
+
+  @typedoc "A binding's lifetime: `standing`, `until` an instant, or `once`."
+  @type lifetime :: %{kind: String.t(), until: DateTime.t() | nil}
+
+  @standing %{kind: "standing", until: nil}
+
+  # Where a built resource carries its binding's lifetime and `renew`
+  # until `encode/1` drops it: the blob grammar names neither, since a
+  # lifetime is the binding's row's.
+  @decision "__decision__"
 
   @typedoc "A preview row in its JSON form (`Prima.ConsentPreview.Row.encode/1`)."
   @type row :: %{required(String.t()) => term()}
@@ -103,6 +157,13 @@ defmodule Sanctum.Consent.BlobBuilder do
   it names (`narrow/5`), every node it names being one of the graph's, under
   `opts[:ceiling]` (the platform ceiling when absent); a refused narrowing
   answers `{:error, {:invalid_argument, sentence}}`.
+
+  Every node is read at the release the closure resolved
+  (`Sanctum.Consent.Plan.closure_rows/3`), never at its latest: a
+  dependency its dependent pins is granted what that release asks.
+  `opts[:rows]` are the closure's rows when the caller holds them, and
+  `opts[:source_row]` is the source's row the activation was resolved
+  from, its latest release when neither is given.
   """
   @spec build(Sanctum.Context.t(), map(), String.t(), vault_fn(), keyword()) ::
           {:ok, map()} | {:error, term()}
@@ -111,11 +172,13 @@ defmodule Sanctum.Consent.BlobBuilder do
     vault_fns = {vault_fn, Keyword.get(opts, :edge_vault_fn)}
     subset = Keyword.get(opts, :subset, %{})
 
-    with :ok <- subset_nodes(subset, graph) do
+    with :ok <- subset_nodes(subset, graph),
+         {:ok, rows} <- build_rows(ctx, graph, source_ref, opts) do
       narrowing = {subset, ceiling(subset, opts)}
+      place = {graph, rows}
 
       Enum.reduce_while(Map.keys(graph), {:ok, %{}}, fn node_key, {:ok, acc} ->
-        case build_node(ctx, graph, node_key, source_ref, vault_fns, extras, narrowing) do
+        case build_node(ctx, place, node_key, source_ref, vault_fns, extras, narrowing) do
           {:ok, node} -> {:cont, {:ok, Map.put(acc, node_key, node)}}
           # A refused narrowing names its node already.
           {:error, {:invalid_argument, _sentence} = refusal} -> {:halt, {:error, refusal}}
@@ -277,11 +340,38 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   # A bound entry's key names where it sits: the node, the edge and the
-  # default slot. A selection carries none until the loader resolves it,
-  # and provided configuration names no binding of an entry.
+  # slot, the default for the edge's own binding and `name:<name>` for
+  # each named one. A selection carries none until the loader resolves
+  # it, and provided configuration names no binding of an entry. The
+  # decision's lifetime rides the built nodes for `vault_refs/1` and is
+  # written into no blob.
   defp place_vault(%{"vault" => %{"entry_id" => _} = vault} = edge, node_key, edge_key) do
-    %{edge | "vault" => Map.put(vault, "binding_key", Blob.binding_key(node_key, edge_key, nil))}
+    named =
+      case Map.get(vault, "named") do
+        %{} = named when map_size(named) > 0 ->
+          Map.new(named, fn {name, bound} ->
+            {name,
+             bound
+             |> Map.delete(@decision)
+             |> Map.put("binding_key", Blob.binding_key(node_key, edge_key, name))}
+          end)
+
+        _none ->
+          nil
+      end
+
+    placed =
+      vault
+      |> Map.delete(@decision)
+      |> Map.delete("named")
+      |> Map.put("binding_key", Blob.binding_key(node_key, edge_key, nil))
+      |> Prima.MapUtil.put_present("named", named)
+
+    %{edge | "vault" => placed}
   end
+
+  defp place_vault(%{"vault" => %{} = vault} = edge, _node_key, _edge_key),
+    do: %{edge | "vault" => Map.delete(vault, @decision)}
 
   defp place_vault(edge, _node_key, _edge_key), do: edge
 
@@ -305,37 +395,46 @@ defmodule Sanctum.Consent.BlobBuilder do
   The bindings for `consent_vault_refs`: one row per binding, keyed by
   the binding's own key — the node and edge it sits on and its slot
   (`Prima.Authority.Blob.binding_key/3`, as `encode/1` places it) — so one
-  entry bound on two edges is two rows. A bound entry's row names its
-  scope, the entry (the athanor's own or the instance's) and the digest it
-  is bound at; a selection's (`via`) is the borrower's own binding, naming
-  the label of the profile it borrows from and the digest it pinned, if
-  any. Each stands until revoked.
+  entry bound on two edges, or under two names, is two rows. A bound
+  entry's row names its scope, the entry (the athanor's own or the
+  instance's) and the digest it is bound at, and each named account
+  beside it is a row of its own; a selection's (`via`) is the borrower's
+  own binding, naming the label of the profile it borrows from and the
+  digest it pinned, if any. Each row carries its binding's lifetime and
+  `renew` as `vault_resource/1` recorded them, standing when none was.
+  Provided configuration names no entry and writes no row.
   """
   @spec vault_refs(map()) :: [Arca.ConsentStorage.ref_input()]
   def vault_refs(nodes) do
     for {from, node} <- nodes,
         {edge_key, vault} <- edge_vaults(node, nodes),
-        is_map(vault) and (Map.has_key?(vault, "entry_id") or Map.has_key?(vault, "via")) do
-      ref_row(Blob.binding_key(from, edge_key, nil), vault)
+        is_map(vault) and (Map.has_key?(vault, "entry_id") or Map.has_key?(vault, "via")),
+        {slot, bound} <- [{nil, vault} | named_bindings(vault)] do
+      ref_row(Blob.binding_key(from, edge_key, slot), bound)
     end
     |> Enum.sort_by(& &1.binding_key)
   end
 
+  defp named_bindings(%{"named" => %{} = named}), do: Enum.sort(named)
+  defp named_bindings(_vault), do: []
+
   @doc """
-  The `consent_vault_refs` row of one vault resource under `binding_key`,
-  standing until revoked: a bound entry (`entry_id`, `binding_digest`,
-  `scope`) or a selection (`via`: its `label` and pinned
-  `binding_digest`).
+  The `consent_vault_refs` row of one vault resource under `binding_key`:
+  a bound entry (`entry_id`, `binding_digest`, `scope`) or a selection
+  (`via`: its `label` and pinned `binding_digest`), with the lifetime and
+  `renew` `vault_resource/1` recorded beside it, standing until revoked
+  when it recorded none (a resource read back from a stored blob).
   """
   @spec ref_row(String.t(), map()) :: Arca.ConsentStorage.ref_input()
-  def ref_row(binding_key, %{"via" => %{"label" => label} = via}) when is_binary(binding_key) do
+  def ref_row(binding_key, %{"via" => %{"label" => label} = via} = vault)
+      when is_binary(binding_key) do
     %{
       binding_key: binding_key,
       scope: "athanor",
       via_label: label,
-      binding_digest: Map.get(via, "binding_digest"),
-      lifetime_kind: "standing"
+      binding_digest: Map.get(via, "binding_digest")
     }
+    |> Map.merge(decision_columns(vault))
   end
 
   def ref_row(binding_key, %{"entry_id" => entry_id, "binding_digest" => digest} = vault)
@@ -346,8 +445,7 @@ defmodule Sanctum.Consent.BlobBuilder do
           binding_key: binding_key,
           scope: "instance",
           instance_entry_id: entry_id,
-          binding_digest: digest,
-          lifetime_kind: "standing"
+          binding_digest: digest
         }
 
       scope ->
@@ -355,9 +453,154 @@ defmodule Sanctum.Consent.BlobBuilder do
           binding_key: binding_key,
           scope: scope,
           vault_entry_id: entry_id,
-          binding_digest: digest,
-          lifetime_kind: "standing"
+          binding_digest: digest
         }
+    end
+    |> Map.merge(decision_columns(vault))
+  end
+
+  defp decision_columns(vault) do
+    %{lifetime: lifetime, renew: renew} =
+      Map.get(vault, @decision, %{lifetime: @standing, renew: false})
+
+    %{lifetime_kind: lifetime.kind, expires_at: lifetime.until, renew: renew}
+  end
+
+  @doc """
+  The vault resource a decided binding rides an edge as, the shape the
+  blob's grammar reads (`Prima.Authority.Blob`):
+
+    * a bound entry (`binding/0`): its `entry_id`, `binding_digest`,
+      `scope` (`athanor` or `instance`), `destination` and `attach`
+      rule (absent for a disclose-only need), the `projection` it names,
+      and under `named` each named account's own resource by its name.
+      `encode/1` gives each its `binding_key` where it sits.
+    * a selection (`%{via: label, binding_digest, fields}`): the label of
+      the profile it borrows from, the digest it pinned and the fields it
+      narrows to.
+    * provided configuration (`%{provided: %{destination, values,
+      attach}}`): the publisher's public values and the rule they are
+      attached by.
+
+  The binding's lifetime and `renew` ride beside a bound entry and a
+  selection for `vault_refs/1`, and are written into no blob.
+  """
+  @spec vault_resource(map()) :: map()
+  def vault_resource(%{provided: %{destination: destination, values: values, attach: attach}}) do
+    %{
+      "provided" => %{
+        "destination" => destination,
+        "values" => values,
+        "attach" => attach
+      }
+    }
+  end
+
+  def vault_resource(%{via: label} = selection) when is_binary(label) do
+    via =
+      %{"label" => label}
+      |> Prima.MapUtil.put_present("binding_digest", selection[:binding_digest])
+
+    %{"via" => via}
+    |> put_projection_map(projection_map(selection[:fields] || [], []))
+    |> Map.put(@decision, decision(selection))
+  end
+
+  def vault_resource(%{entry_id: _} = binding) do
+    named =
+      case Map.get(binding, :named, []) do
+        [] -> nil
+        named -> Map.new(named, &{&1.name, bound_resource(&1)})
+      end
+
+    binding
+    |> bound_resource()
+    |> Prima.MapUtil.put_present("named", named)
+  end
+
+  defp bound_resource(binding) do
+    %{
+      "entry_id" => binding.entry_id,
+      "binding_digest" => binding.binding_digest,
+      "scope" => binding.scope,
+      "destination" => binding.destination
+    }
+    |> Prima.MapUtil.put_present("attach", binding.attach)
+    |> put_projection_map(projection_map(binding.fields, binding.scopes))
+    |> Map.put(@decision, decision(binding))
+  end
+
+  defp decision(binding) do
+    %{lifetime: Map.get(binding, :lifetime) || @standing, renew: Map.get(binding, :renew, false)}
+  end
+
+  defp projection_map(fields, scopes) do
+    %{}
+    |> put_list("fields", fields)
+    |> put_list("scopes", scopes)
+  end
+
+  defp put_list(map, _key, []), do: map
+  defp put_list(map, key, values), do: Map.put(map, key, values |> Enum.uniq() |> Enum.sort())
+
+  defp put_projection_map(resource, projection) when projection == %{}, do: resource
+  defp put_projection_map(resource, projection), do: Map.put(resource, "projection", projection)
+
+  @doc """
+  What `from_manifest` provides for the dependency `dep` (its
+  name-level ref), read against the dependency's manifest
+  (`t:provided/0`): each need the `provides` block names for it is
+  covered when the dependency declares it as a credential need with an
+  attach rule, and is otherwise unprovidable — undeclared, or declared
+  disclose-only, since a provided value is attached by the dependency's
+  rule and a blob's provided configuration carries one. A covered need's
+  resource is `vault_resource/1`'s.
+  """
+  @spec provided(map(), String.t(), map()) :: provided()
+  def provided(from_manifest, dep, dep_manifest)
+      when is_map(from_manifest) and is_binary(dep) and is_map(dep_manifest) do
+    entries = provided_entries(from_manifest, dep)
+
+    declared =
+      for need <- Prima.Manifest.Needs.from_manifest(dep_manifest) || [],
+          need.kind in ~w(api_key oauth bundle),
+          into: %{},
+          do: {need.name, need}
+
+    Enum.reduce(Enum.sort(entries), %{covered: [], unprovidable: []}, fn {name, entry}, acc ->
+      case Map.fetch(declared, name) do
+        {:ok, %{attach: %{} = rule}} ->
+          resource =
+            vault_resource(%{
+              provided: %{
+                destination: Prima.Destination.to_map(entry.destination),
+                values: entry.values,
+                attach: Prima.Manifest.Needs.attach_to_map(rule)
+              }
+            })
+
+          %{acc | covered: acc.covered ++ [{name, resource}]}
+
+        {:ok, _disclose_only} ->
+          %{acc | unprovidable: acc.unprovidable ++ [{name, :no_attach}]}
+
+        :error ->
+          %{acc | unprovidable: acc.unprovidable ++ [{name, :undeclared}]}
+      end
+    end)
+  end
+
+  # The block's entries for one dependency, its keys read at name level
+  # as `dependencies.static` may name a version.
+  defp provided_entries(manifest, dep) do
+    case Prima.Manifest.Provides.from_manifest(manifest) do
+      provides when is_map(provides) ->
+        provides
+        |> Enum.filter(fn {key, _needs} -> Prima.ComponentRef.to_name_ref(key) == {:ok, dep} end)
+        |> Enum.reduce(%{}, fn {_key, needs}, acc -> Map.merge(acc, needs) end)
+
+      _none ->
+        %{}
     end
   end
 
@@ -389,10 +632,37 @@ defmodule Sanctum.Consent.BlobBuilder do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp build_node(ctx, graph, node_key, source_ref, vault_fns, extras, {subset, ceiling}) do
+  defp build_rows(ctx, graph, source_ref, opts) do
+    case Keyword.fetch(opts, :rows) do
+      {:ok, rows} when is_map(rows) ->
+        {:ok, rows}
+
+      :error ->
+        with {:ok, source_row} <- source_row(ctx, source_ref, opts) do
+          Sanctum.Consent.Plan.closure_rows(ctx, source_row, graph)
+        end
+    end
+  end
+
+  defp source_row(ctx, source_ref, opts) do
+    case Keyword.fetch(opts, :source_row) do
+      {:ok, row} when is_map(row) ->
+        {:ok, row}
+
+      :error ->
+        with {:ok, ref} <- Prima.ComponentRef.parse(source_ref),
+             {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
+          {:ok, row}
+        else
+          {:error, reason} -> {:error, {:missing_node_row, reason}}
+        end
+    end
+  end
+
+  defp build_node(ctx, {graph, rows}, node_key, source_ref, vault_fns, extras, {subset, ceiling}) do
     {vault_fn, edge_vault_fn} = vault_fns
 
-    with {:ok, row} <- node_row(ctx, node_key),
+    with {:ok, row} <- closure_row(rows, node_key),
          manifest = manifest(row, node_key),
          {:ok, asked, asked_limits} <- node_grant(ctx, node_key, manifest),
          {:ok, resources, limits, narrowed} <-
@@ -404,7 +674,7 @@ defmodule Sanctum.Consent.BlobBuilder do
           {dep_key,
            %{
              "__dep__" => dep_key,
-             "__vault__" => edge_vault(edge_vault_fn, node_key, dep_key, ctx)
+             "__vault__" => edge_vault(edge_vault_fn, {node_key, manifest}, dep_key, rows)
            }}
         end)
 
@@ -430,13 +700,13 @@ defmodule Sanctum.Consent.BlobBuilder do
     end
   end
 
-  defp edge_vault(nil, _from, _dep, _ctx), do: nil
+  defp edge_vault(nil, _from, _dep, _rows), do: nil
 
-  defp edge_vault(edge_vault_fn, from, dep, ctx) do
-    case node_row(ctx, dep) do
+  defp edge_vault(edge_vault_fn, {from, from_manifest}, dep, rows) do
+    case closure_row(rows, dep) do
       {:ok, row} ->
         manifest = manifest(row, dep)
-        edge_vault_fn.(from, dep, row, manifest)
+        edge_vault_fn.(from, dep, row, manifest, provided(from_manifest, dep, manifest))
 
       {:error, _} ->
         nil
@@ -780,14 +1050,16 @@ defmodule Sanctum.Consent.BlobBuilder do
               |> Map.new(fn {kind, index} -> {Atom.to_string(kind), index} end)
 
   @doc """
-  The ask of each node of `node_keys` as preview rows: the resources and
-  limits its manifest declares, none narrowed, and a tincture's
-  declarations.
+  The ask of each node of the closure as preview rows, read from the rows
+  the closure resolved (`Sanctum.Consent.Plan.closure_rows/3`): the
+  resources and limits its manifest declares, none narrowed, and a
+  tincture's declarations.
   """
-  @spec ask_rows(Sanctum.Context.t(), [String.t()]) :: {:ok, [row()]} | {:error, term()}
-  def ask_rows(ctx, node_keys) when is_list(node_keys) do
-    collect_rows(Enum.sort(node_keys), fn node_key ->
-      with {:ok, row} <- node_row(ctx, node_key),
+  @spec ask_rows(Sanctum.Context.t(), %{String.t() => map()}) ::
+          {:ok, [row()]} | {:error, term()}
+  def ask_rows(ctx, rows) when is_map(rows) do
+    collect_rows(rows |> Map.keys() |> Enum.sort(), fn node_key ->
+      with {:ok, row} <- closure_row(rows, node_key),
            manifest = manifest(row, node_key),
            {:ok, resources, limits} <- node_grant(ctx, node_key, manifest),
            {:ok, wildcard} <- wildcard_ask(node_key, manifest),
@@ -800,13 +1072,16 @@ defmodule Sanctum.Consent.BlobBuilder do
   @doc """
   The grant a decoded blob's `nodes` holds as preview rows: each node's
   resources and limits, marked narrowed where `narrowed` names the kind,
-  and a tincture's declarations, which the shape digest binds.
+  and a tincture's declarations, which the shape digest binds. Each node's
+  manifest is read from `rows`, the closure's rows
+  (`Sanctum.Consent.Plan.closure_rows/3`).
   """
-  @spec grant_rows(Sanctum.Context.t(), String.t(), map(), narrowed()) ::
+  @spec grant_rows(String.t(), map(), narrowed(), %{String.t() => map()}) ::
           {:ok, [row()]} | {:error, term()}
-  def grant_rows(ctx, source_ref, nodes, narrowed) when is_map(nodes) and is_map(narrowed) do
+  def grant_rows(source_ref, nodes, narrowed, rows)
+      when is_map(nodes) and is_map(narrowed) and is_map(rows) do
     collect_rows(nodes |> Map.keys() |> Enum.sort(), fn node_key ->
-      with {:ok, row} <- node_row(ctx, node_key),
+      with {:ok, row} <- closure_row(rows, node_key),
            manifest = manifest(row, node_key),
            {:ok, wildcard} <- wildcard_ask(node_key, manifest),
            {:ok, declared} <- tincture_rows(node_key, manifest) do
@@ -970,16 +1245,11 @@ defmodule Sanctum.Consent.BlobBuilder do
     end
   end
 
-  defp node_row(ctx, node_key) do
-    case Prima.ComponentRef.parse(node_key) do
-      {:ok, ref} ->
-        case Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
-          {:ok, row} -> {:ok, row}
-          {:error, reason} -> {:error, {:missing_node_row, reason}}
-        end
-
-      {:error, reason} ->
-        {:error, {:invalid_node_key, reason}}
+  # A closure node's row, at the release the closure resolved.
+  defp closure_row(rows, node_key) do
+    case Map.fetch(rows, node_key) do
+      {:ok, row} -> {:ok, row}
+      :error -> {:error, {:missing_node_row, :not_in_closure}}
     end
   end
 

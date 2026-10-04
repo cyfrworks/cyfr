@@ -170,6 +170,8 @@ defmodule Opus.BootstrapFirstRunTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "My Anthropic",
         kind: "api_key",
+        # The provider the catalyst's need names.
+        provider_hint: "anthropic.com",
         fields: %{"ANTHROPIC_API_KEY" => "sk-first-run"},
         # The case reads the key back, so the entry is disclosed.
         destination: %{"hosts" => ["api.anthropic.com"]},

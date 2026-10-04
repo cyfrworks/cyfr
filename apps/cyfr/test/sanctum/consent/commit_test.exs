@@ -144,14 +144,24 @@ defmodule Sanctum.Consent.CommitTest do
     "tincture:local.#{name}"
   end
 
-  defp entry!(ctx, fields \\ %{"url" => "https://db.example", "anon_key" => "anon"}) do
+  # An entry of the athanor: disclosed unless `over` says otherwise, since
+  # most of these components read their key themselves, and of the
+  # provider `over` names, none by default.
+  defp entry!(ctx, fields \\ %{"url" => "https://db.example", "anon_key" => "anon"}, over \\ %{}) do
     {:ok, view} =
-      Sanctum.TestContext.create_vault(ctx, %{
-        name: "conn-#{System.unique_integer([:positive])}",
-        kind: "api_key",
-        fields: fields,
-        destination: %{"hosts" => ["api.example.com"]}
-      })
+      Sanctum.TestContext.create_vault(
+        ctx,
+        Map.merge(
+          %{
+            name: "conn-#{System.unique_integer([:positive])}",
+            kind: "api_key",
+            fields: fields,
+            destination: %{"hosts" => ["api.example.com"]},
+            disclose: true
+          },
+          over
+        )
+      )
 
     view
   end
@@ -203,7 +213,10 @@ defmodule Sanctum.Consent.CommitTest do
 
       ref = "reagent:local.commit-binding"
       publish!(ctx, "commit-binding", "1.0.0", manifest)
-      entry = entry!(ctx, %{"EXAMPLE_API_KEY" => "k"})
+
+      entry =
+        entry!(ctx, %{"EXAMPLE_API_KEY" => "k"}, %{provider_hint: "one.example", disclose: false})
+
       {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry.id)
       {:ok, destination} = Sanctum.Consent.BlobBuilder.entry_destination(row)
       decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: entry.id}]}
@@ -211,8 +224,9 @@ defmodule Sanctum.Consent.CommitTest do
       {:ok, preview} = Commit.preview(ctx, decisions)
       key = "#{ref}|@ingress|default"
 
-      # The row for today's binding: the person's own entry, standing,
-      # neither suggested nor a choice, disclosed as its entry is stored.
+      # The row for the binding: the person's own entry, standing, the
+      # plan's suggestion (the only entry of the need's provider) and no
+      # choice, disclosed as its entry is stored.
       assert [%{"values" => values}] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
 
       assert Map.take(
@@ -221,7 +235,7 @@ defmodule Sanctum.Consent.CommitTest do
              ) ==
                %{
                  "source" => "own",
-                 "suggested" => false,
+                 "suggested" => true,
                  "choice_required" => false,
                  "binding_key" => key,
                  "lifetime" => %{"kind" => "standing", "until" => nil},
@@ -291,7 +305,9 @@ defmodule Sanctum.Consent.CommitTest do
       rows = Enum.group_by(decoded.rows, &{&1.kind, &1.node}, & &1.values)
 
       # The credential names the edge it rides: the source's own ingress,
-      # where the entry may go, and that it is attached, not disclosed.
+      # where the entry may go, and that the component reads it, as a
+      # manifest declaring no need does; it is the plan's suggestion, the
+      # one entry that can meet the slot.
       assert rows[{:credential, ref}] == [
                %{
                  "name" => entry.name,
@@ -299,9 +315,9 @@ defmodule Sanctum.Consent.CommitTest do
                  "fields" => ["url"],
                  "scopes" => [],
                  "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
-                 "disclosed" => false,
+                 "disclosed" => true,
                  "source" => "own",
-                 "suggested" => false,
+                 "suggested" => true,
                  "choice_required" => false,
                  "binding_key" => "#{ref}|@ingress|default",
                  "lifetime" => %{"kind" => "standing", "until" => nil}
@@ -364,7 +380,7 @@ defmodule Sanctum.Consent.CommitTest do
 
       ref = "reagent:local.commit-reason"
       publish!(ctx, "commit-reason", "1.0.0", needs.("to call the example API"))
-      entry = entry!(ctx, %{"EXAMPLE_API_KEY" => "k"})
+      entry = entry!(ctx, %{"EXAMPLE_API_KEY" => "k"}, %{provider_hint: "example.com"})
       decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: entry.id}]}
       {:ok, before} = Commit.preview(ctx, decisions)
 
@@ -651,7 +667,10 @@ defmodule Sanctum.Consent.CommitTest do
           provider_hint: "google",
           oauth: %{"access_token" => "t"},
           oauth_scopes: scopes,
-          destination: %{"hosts" => ["gmail.googleapis.com"]}
+          destination: %{"hosts" => ["gmail.googleapis.com"]},
+          # The mail need declares no attach rule: the component reads its
+          # token itself.
+          disclose: true
         })
 
       view
@@ -753,5 +772,1299 @@ defmodule Sanctum.Consent.CommitTest do
       assert [%{"values" => %{"actions" => ["read"]}}] =
                Enum.filter(staged.rows, &(&1["kind"] == "storage"))
     end
+
+    test "keeps a standing binding of the athanor's entry, and refuses what it cannot carry",
+         %{ctx: ctx} do
+      ref = "reagent:local.commit-public"
+      publish!(ctx, "commit-public", "1.0.0", keyed_manifest())
+
+      bind = fn bindings ->
+        {:ok, %{profile_id: owner}} = walk!(ctx, ref, %{bindings: bindings})
+        Commit.stage_publish(ctx, %{profile_id: owner, need_ids: ["@ingress"]})
+      end
+
+      standing = key!(ctx)
+      assert {:ok, _staged} = bind.([%{need: "api_key", entry_id: standing.id}])
+
+      assert {:error, {:invalid_argument, once}} =
+               bind.([%{need: "api_key", entry_id: standing.id, lifetime: %{kind: "once"}}])
+
+      assert once =~ "once"
+
+      assert {:error, {:invalid_argument, named}} =
+               bind.([
+                 %{need: "api_key", entry_id: standing.id},
+                 %{need: "api_key", entry_id: key!(ctx).id, name: "Second"}
+               ])
+
+      assert named =~ "named accounts"
+
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      offered = instance!()
+
+      {:ok, %{profile_id: owner}} =
+        walk!(person, ref, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
+
+      assert {:error, {:invalid_argument, instance}} =
+               Commit.stage_publish(person, %{profile_id: owner, need_ids: ["@ingress"]})
+
+      assert instance =~ "instance entry is offered to people"
+    end
   end
+
+  # ===========================================================================
+  # Matching, instance entries, named accounts and lifetimes
+  # ===========================================================================
+
+  @attach %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
+  @inference ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+
+  # A component whose one need attaches an openai.com key.
+  defp keyed_manifest(over \\ %{}) do
+    %{
+      "needs" => %{
+        "api_key" =>
+          Map.merge(
+            %{
+              "type" => "api_key:openai.com",
+              "reason" => "to call the model",
+              "fields" => ["OPENAI_API_KEY"],
+              "attach" => @attach
+            },
+            over
+          )
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.openai.com"], "methods" => ["POST"]}}
+    }
+  end
+
+  # An attach-only openai.com key of the athanor's.
+  defp key!(ctx, over \\ %{}) do
+    entry!(
+      ctx,
+      %{"OPENAI_API_KEY" => "sk-#{System.unique_integer([:positive])}"},
+      Map.merge(%{provider_hint: "openai.com", disclose: false}, over)
+    )
+  end
+
+  defp instance!(over \\ %{}) do
+    {:ok, entry} =
+      Arca.InstanceEntries.put(
+        Arca.Test.Actor.platform(),
+        Map.merge(
+          %{
+            name: "instance-#{System.unique_integer([:positive])}",
+            kind: "api_key",
+            provider_hint: "openai.com",
+            field_names: ~s(["OPENAI_API_KEY"]),
+            destination: @inference,
+            sealed_payload: "sealed",
+            binding_digest: "sha256:instance-#{System.unique_integer([:positive])}",
+            audience: "everyone",
+            created_by: "usr_admin"
+          },
+          over
+        )
+      )
+
+    entry
+  end
+
+  defp rows_by_key(ctx, profile_id) do
+    Map.new(head!(ctx, profile_id).vault_refs, &{&1.binding_key, &1})
+  end
+
+  defp in_hours(hours) do
+    DateTime.utc_now()
+    |> DateTime.add(hours * 3600, :second)
+    |> DateTime.truncate(:second)
+    |> DateTime.to_iso8601()
+  end
+
+  # A source depending on two components that each attach an openai.com
+  # key: two dependency edges an entry may be chosen for.
+  defp two_deps!(ctx) do
+    for dep <- ~w(commit-dep-a commit-dep-b), do: publish!(ctx, dep, "1.0.0", keyed_manifest())
+
+    publish!(ctx, "commit-two", "1.0.0", %{
+      "dependencies" => %{
+        "static" => [
+          %{"ref" => "reagent:local.commit-dep-a"},
+          %{"ref" => "reagent:local.commit-dep-b"}
+        ]
+      }
+    })
+
+    "reagent:local.commit-two"
+  end
+
+  describe "matching and lifetimes" do
+    test "matching and binding lifetimes are committed per edge without implicit disclosure",
+         %{ctx: ctx} do
+      ref = "reagent:local.commit-matched"
+      publish!(ctx, "commit-matched", "1.0.0", keyed_manifest())
+      default = key!(ctx)
+      first = key!(ctx)
+      second = key!(ctx)
+      other_provider = key!(ctx, %{provider_hint: "anthropic.com"})
+
+      # An entry of another provider meets no need of openai.com.
+      assert {:error, {:provider_mismatch, "api_key"}} =
+               Commit.preview(ctx, %{
+                 ref: ref,
+                 bindings: [%{need: "api_key", entry_id: other_provider.id}]
+               })
+
+      # The need attaches: an attach-only entry meets it, and stays
+      # attach-only.
+      until = in_hours(1)
+
+      bindings = [
+        %{need: "api_key", entry_id: default.id},
+        %{
+          need: "api_key",
+          entry_id: first.id,
+          name: "Supabase 1",
+          lifetime: %{kind: "until", until: until}
+        },
+        %{need: "api_key", entry_id: second.id, name: "Supabase 2", lifetime: %{kind: "once"}}
+      ]
+
+      {:ok, preview} = Commit.preview(ctx, %{ref: ref, bindings: bindings})
+      credentials = for %{"kind" => "credential", "values" => v} <- preview.rows, do: v
+
+      assert Enum.map(credentials, &{&1["binding_key"], &1["lifetime"], &1["disclosed"]})
+             |> Enum.sort() == [
+               {"#{ref}|@ingress|default", %{"kind" => "standing", "until" => nil}, false},
+               {"#{ref}|@ingress|name:Supabase 1", %{"kind" => "until", "until" => until}, false},
+               {"#{ref}|@ingress|name:Supabase 2", %{"kind" => "once", "until" => nil}, false}
+             ]
+
+      assert Enum.sort(for v <- credentials, v["connection"], do: v["connection"]) ==
+               ["Supabase 1", "Supabase 2"]
+
+      assert {:ok, %{profile_id: profile_id}} = walk!(ctx, ref, %{bindings: bindings})
+
+      # Each binding is its own row under its own key, with its lifetime.
+      rows = rows_by_key(ctx, profile_id)
+
+      assert %{lifetime_kind: "standing", expires_at: nil, vault_entry_id: id} =
+               rows["#{ref}|@ingress|default"]
+
+      assert id == default.id
+
+      assert %{lifetime_kind: "until", expires_at: %DateTime{} = expires} =
+               rows["#{ref}|@ingress|name:Supabase 1"]
+
+      assert DateTime.to_iso8601(DateTime.truncate(expires, :second)) == until
+      assert %{lifetime_kind: "once"} = rows["#{ref}|@ingress|name:Supabase 2"]
+
+      # The blob carries the default as the edge's vault and each account
+      # under its name, by the need's rule; no lifetime rides the blob.
+      {:ok, blob} = Prima.Authority.Blob.parse(head!(ctx, profile_id).resolved_policy)
+      {:ok, ingress} = Prima.Authority.Blob.ingress(blob, ref)
+      assert ingress.vault.entry_id == default.id
+      assert Map.keys(ingress.vault.named) |> Enum.sort() == ["Supabase 1", "Supabase 2"]
+      assert Prima.Manifest.Needs.attach_to_map(ingress.vault.attach) == @attach
+      refute head!(ctx, profile_id).resolved_policy =~ "once"
+
+      # One entry chosen for two dependency edges under two lifetimes is
+      # two rows under two keys.
+      two = two_deps!(ctx)
+
+      {:ok, %{profile_id: two_id}} =
+        walk!(ctx, two, %{
+          selections: [
+            %{dep: "reagent:local.commit-dep-a", entry_id: default.id, lifetime: %{kind: "once"}},
+            %{
+              dep: "reagent:local.commit-dep-b",
+              entry_id: default.id,
+              lifetime: %{kind: "until", until: until}
+            }
+          ]
+        })
+
+      two_rows = rows_by_key(ctx, two_id)
+
+      assert %{lifetime_kind: "once", vault_entry_id: a} =
+               two_rows["#{two}|reagent:local.commit-dep-a|default"]
+
+      assert %{lifetime_kind: "until", vault_entry_id: b} =
+               two_rows["#{two}|reagent:local.commit-dep-b|default"]
+
+      assert a == default.id and b == default.id
+
+      # A need the component reads itself takes a disclosed entry: an
+      # attach-only one is refused, never disclosed by the binding.
+      publish!(ctx, "commit-reads", "1.0.0", %{
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:openai.com",
+            "reason" => "to read the key",
+            "fields" => ["OPENAI_API_KEY"]
+          }
+        }
+      })
+
+      assert {:error, {:disclosure_refused, "api_key"}} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.commit-reads",
+                 bindings: [%{need: "api_key", entry_id: default.id}]
+               })
+
+      {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), default.id)
+      assert row.attach_only
+    end
+
+    test "a disclose: true need takes a disclosed entry alone", %{ctx: ctx} do
+      publish!(ctx, "commit-discloses", "1.0.0", keyed_manifest(%{"disclose" => true}))
+      ref = "reagent:local.commit-discloses"
+
+      assert {:error, {:disclosure_refused, "api_key"}} =
+               Commit.preview(ctx, %{
+                 ref: ref,
+                 bindings: [%{need: "api_key", entry_id: key!(ctx).id}]
+               })
+
+      disclosed = key!(ctx, %{disclose: true})
+
+      assert {:ok, _} =
+               Commit.preview(ctx, %{
+                 ref: ref,
+                 bindings: [%{need: "api_key", entry_id: disclosed.id}]
+               })
+    end
+
+    test "one need's default and named accounts: two defaults, a repeated name, an account " <>
+           "beside no default and a second need are refused",
+         %{ctx: ctx} do
+      ref = "reagent:local.commit-slots"
+      publish!(ctx, "commit-slots", "1.0.0", keyed_manifest())
+      [a, b] = [key!(ctx), key!(ctx)]
+
+      for bindings <- [
+            [%{need: "api_key", entry_id: a.id}, %{need: "api_key", entry_id: b.id}],
+            [
+              %{need: "api_key", entry_id: a.id},
+              %{need: "api_key", entry_id: a.id, name: "Work"},
+              %{need: "api_key", entry_id: b.id, name: "work"}
+            ],
+            [%{need: "api_key", entry_id: a.id, name: "Work"}],
+            [%{need: "api_key", entry_id: a.id, name: "has|pipe"}]
+          ] do
+        assert {:error, {:invalid_argument, why}} =
+                 Commit.preview(ctx, %{ref: ref, bindings: bindings}),
+               "#{inspect(bindings)} was accepted"
+
+        assert why =~ "api_key"
+      end
+
+      # Neither or both of an entry and an instance entry.
+      for binding <- [
+            %{need: "api_key"},
+            %{need: "api_key", entry_id: a.id, instance_entry_id: "ine_x"}
+          ] do
+        assert {:error, {:invalid_argument, why}} =
+                 Commit.preview(ctx, %{ref: ref, bindings: [binding]})
+
+        assert why =~ "exactly one of entry_id and instance_entry_id"
+      end
+    end
+
+    test "a lifetime is standing, until within a day, or once; anything else is refused",
+         %{ctx: ctx} do
+      ref = "reagent:local.commit-lifetime"
+      publish!(ctx, "commit-lifetime", "1.0.0", keyed_manifest())
+      key = key!(ctx)
+      binding = fn lifetime -> [%{need: "api_key", entry_id: key.id, lifetime: lifetime}] end
+
+      for {lifetime, fragment} <- [
+            {%{kind: "until", until: in_hours(-1)}, "not after now"},
+            {%{kind: "until", until: in_hours(25)}, "more than 24 hours"},
+            {%{kind: "until"}, "without its instant"},
+            {%{kind: "until", until: "tomorrow"}, "RFC 3339"},
+            {%{kind: "until", until: "2026-10-04T12:00:00+02:00"}, "RFC 3339"},
+            {%{kind: "once", until: in_hours(1)}, "an until for a once"},
+            {%{kind: "forever"}, "standing, until or once"},
+            {%{kind: "standing", extra: 1}, "only a kind and an until"},
+            {"once", "not a record"}
+          ] do
+        assert {:error, {:invalid_argument, why}} =
+                 Commit.preview(ctx, %{ref: ref, bindings: binding.(lifetime)}),
+               "#{inspect(lifetime)} was accepted"
+
+        assert why =~ "The binding for api_key"
+        assert why =~ fragment, "#{inspect(lifetime)}: #{why}"
+      end
+
+      assert {:error, {:invalid_argument, _}} =
+               Commit.preview(ctx, %{
+                 ref: ref,
+                 bindings: [%{need: "api_key", entry_id: key.id, renew: "yes"}]
+               })
+
+      # +00:00 is UTC too.
+      utc = String.replace_suffix(in_hours(2), "Z", "+00:00")
+
+      assert {:ok, _} =
+               Commit.preview(ctx, %{ref: ref, bindings: binding.(%{kind: "until", until: utc})})
+    end
+
+    test "an until that passes between preview and commit is refused at commit", %{ctx: ctx} do
+      ref = "reagent:local.commit-passing"
+      publish!(ctx, "commit-passing", "1.0.0", keyed_manifest())
+      key = key!(ctx)
+
+      soon =
+        DateTime.utc_now()
+        |> DateTime.add(3, :second)
+        |> DateTime.to_iso8601()
+
+      decisions = %{
+        ref: ref,
+        bindings: [%{need: "api_key", entry_id: key.id, lifetime: %{kind: "until", until: soon}}]
+      }
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      {:ok, preview} = Commit.preview(ctx, decisions)
+
+      {:ok, passed, 0} = DateTime.from_iso8601(soon)
+
+      Prima.Test.Wait.wait_until(
+        fn -> DateTime.compare(DateTime.utc_now(), passed) == :gt end,
+        5_000,
+        "the until to pass"
+      )
+
+      assert {:error, {:invalid_argument, why}} =
+               Commit.commit(ctx, %{
+                 decisions: decisions,
+                 plan_token: plan.plan_token,
+                 proof: preview.proof,
+                 commit_digest: preview.commit_digest,
+                 expected_consent_revision: plan.expected_consent_revision
+               })
+
+      assert why =~ "not after now"
+    end
+
+    test "a once account is consumed apart from its neighbours, carried across a revision " <>
+           "and renewed only when the decision says so",
+         %{ctx: ctx} do
+      ref = "reagent:local.commit-once"
+      publish!(ctx, "commit-once", "1.0.0", keyed_manifest())
+      [default, one, two, three] = for _ <- 1..4, do: key!(ctx)
+      actor = Sanctum.Context.actor(ctx)
+
+      bindings = [
+        %{need: "api_key", entry_id: default.id},
+        %{need: "api_key", entry_id: one.id, name: "Supabase 1", lifetime: %{kind: "once"}},
+        %{need: "api_key", entry_id: two.id, name: "Supabase 2", lifetime: %{kind: "once"}}
+      ]
+
+      {:ok, %{profile_id: profile}} = walk!(ctx, ref, %{bindings: bindings})
+      first_head = head!(ctx, profile)
+      one_key = "#{ref}|@ingress|name:Supabase 1"
+      two_key = "#{ref}|@ingress|name:Supabase 2"
+
+      # The second consumed by one root: the first is still consumable,
+      # another root is refused the second, and the default is no once.
+      assert :ok =
+               Arca.ConsentStorage.consume_once(actor, profile, first_head.id, two_key, "exec_a")
+
+      assert {:error, :already_consumed} =
+               Arca.ConsentStorage.consume_once(actor, profile, first_head.id, two_key, "exec_b")
+
+      assert :ok =
+               Arca.ConsentStorage.consume_once(actor, profile, first_head.id, one_key, "exec_b")
+
+      assert {:error, :not_once} =
+               Arca.ConsentStorage.consume_once(
+                 actor,
+                 profile,
+                 first_head.id,
+                 "#{ref}|@ingress|default",
+                 "exec_a"
+               )
+
+      # A revision that adds a third account carries the consumed ones.
+      third = %{need: "api_key", entry_id: three.id, name: "Supabase 3"}
+      {:ok, %{revision: 2}} = walk!(ctx, ref, %{bindings: bindings ++ [third]})
+      second_head = head!(ctx, profile)
+      rows = rows_by_key(ctx, profile)
+
+      assert rows[two_key].consumed_by_root == "exec_a"
+      assert rows[one_key].consumed_by_root == "exec_b"
+      assert rows["#{ref}|@ingress|name:Supabase 3"].consumed_by_root == nil
+
+      # The superseded revision admits no consumption, whether or not it
+      # consumed before, and the new head's carried row stays consumed.
+      assert {:error, :superseded} =
+               Arca.ConsentStorage.consume_once(actor, profile, first_head.id, two_key, "exec_a")
+
+      assert {:error, :already_consumed} =
+               Arca.ConsentStorage.consume_once(actor, profile, second_head.id, two_key, "exec_c")
+
+      # A revision marking the second renew makes it consumable again,
+      # and leaves the first as it was.
+      renewed =
+        Enum.map(bindings ++ [third], fn
+          %{name: "Supabase 2"} = binding -> Map.put(binding, :renew, true)
+          binding -> binding
+        end)
+
+      {:ok, %{revision: 3}} = walk!(ctx, ref, %{bindings: renewed})
+      third_head = head!(ctx, profile)
+      rows = rows_by_key(ctx, profile)
+
+      assert rows[two_key].consumed_by_root == nil
+      assert rows[one_key].consumed_by_root == "exec_b"
+
+      assert :ok =
+               Arca.ConsentStorage.consume_once(actor, profile, third_head.id, two_key, "exec_c")
+    end
+
+    test "a root pinned to a superseded revision is no longer intact", %{ctx: ctx} do
+      ref = "reagent:local.commit-pinned"
+      publish!(ctx, "commit-pinned", "1.0.0", keyed_manifest())
+      once = key!(ctx)
+      bindings = [%{need: "api_key", entry_id: once.id, lifetime: %{kind: "once"}}]
+      {:ok, %{profile_id: profile_id}} = walk!(ctx, ref, %{bindings: bindings})
+
+      {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+      {:ok, component} = Compendium.Registry.get_latest(ctx, "commit-pinned", "local", "reagent")
+      {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
+      {:ok, authority, _} = Sanctum.Consent.Loader.load_root(ctx, profile, live: {:ok, live})
+
+      assert Sanctum.Consent.Loader.pinned_intact?(ctx, authority)
+
+      {:ok, %{revision: 2}} =
+        walk!(ctx, ref, %{bindings: bindings, origins: [:interactive, :programmatic]})
+
+      refute Sanctum.Consent.Loader.pinned_intact?(ctx, authority)
+
+      assert {:error, :superseded} =
+               Arca.ConsentStorage.consume_once(
+                 Sanctum.Context.actor(ctx),
+                 profile_id,
+                 authority.consent_id,
+                 "#{ref}|@ingress|default",
+                 "exec_late"
+               )
+    end
+
+    test "a commit differing from its preview only by renew fails the digest check", %{ctx: ctx} do
+      ref = "reagent:local.commit-renew"
+      publish!(ctx, "commit-renew", "1.0.0", keyed_manifest())
+      key = key!(ctx)
+      binding = %{need: "api_key", entry_id: key.id, lifetime: %{kind: "once"}}
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      {:ok, preview} = Commit.preview(ctx, %{ref: ref, bindings: [binding]})
+
+      assert {:error, {:consent_conflict, %{cause: :digest_changed}}} =
+               Commit.commit(ctx, %{
+                 decisions: %{ref: ref, bindings: [Map.put(binding, :renew, true)]},
+                 plan_token: plan.plan_token,
+                 proof: preview.proof,
+                 commit_digest: preview.commit_digest,
+                 expected_consent_revision: plan.expected_consent_revision
+               })
+    end
+  end
+
+  describe "instance entries" do
+    setup %{ctx: ctx} do
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      {:ok, person: person}
+    end
+
+    # A component of the person's own: the install media does not ship it.
+    defp custom!(ctx, name) do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: name,
+          version: "1.0.0",
+          type: "reagent",
+          manifest:
+            Jason.encode!(
+              Map.merge(keyed_manifest(), %{
+                "name" => name,
+                "type" => "reagent",
+                "version" => "1.0.0"
+              })
+            )
+        })
+
+      "reagent:local.#{name}"
+    end
+
+    # A component the install media ships, unmodified.
+    defp shipped!(ctx, name) do
+      Cyfr.Test.SeedBundle.isolate!()
+
+      {:ok, _} =
+        Arca.Test.UnitFixtures.ship_and_register!(ctx, "reagent", "local", name, "1.0.0",
+          manifest:
+            Map.merge(keyed_manifest(), %{
+              "name" => name,
+              "type" => "reagent",
+              "version" => "1.0.0",
+              "publisher" => "local"
+            }),
+          wasm: @wasm
+        )
+
+      "reagent:local.#{name}"
+    end
+
+    defp bind_instance(person, ref, entry),
+      do:
+        Commit.preview(person, %{
+          ref: ref,
+          bindings: [%{need: "api_key", instance_entry_id: entry.id}]
+        })
+
+    # A revoke of `entry_id` landing as the revision's transaction commits:
+    # armed once the revision's binding rows are written, run at the
+    # transaction's commit. The commit is logged after the connection is
+    # checked in, so the revoke runs wholly after the revision and before
+    # anything the commit does next.
+    def revoke_on_commit(_event, _measurements, meta, %{test: test, entry_id: entry_id}) do
+      if self() == test do
+        cond do
+          meta[:source] == "consent_vault_refs" and
+              String.starts_with?(meta[:query] || "", "INSERT") ->
+            Process.put(:a0_refs_written, true)
+
+          Process.get(:a0_refs_written) == true and meta[:query] == "commit" ->
+            Process.delete(:a0_refs_written)
+
+            revoked =
+              Task.async(fn ->
+                Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), entry_id, "needs_consent")
+              end)
+              |> Task.await(30_000)
+
+            Process.put(:a0_revoked, revoked)
+
+          true ->
+            :ok
+        end
+      end
+    end
+
+    test "is bound as a source of its own, scoped instance, and its row names it", %{
+      person: person
+    } do
+      ref = custom!(person, "commit-instance")
+      offered = instance!()
+
+      {:ok, preview} = bind_instance(person, ref, offered)
+
+      assert [%{"values" => values}] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+      assert values["source"] == "instance"
+      assert values["disclosed"] == false
+      assert values["name"] == offered.name
+      assert values["suggested"] == true
+
+      {:ok, %{profile_id: profile_id}} =
+        walk!(person, ref, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
+
+      assert [%{scope: "instance", instance_entry_id: id, vault_entry_id: nil}] =
+               head!(person, profile_id).vault_refs
+
+      assert id == offered.id
+    end
+
+    test "any admits a person's own component; shipped admits only the unmodified shipped one",
+         %{person: person} do
+      custom = custom!(person, "commit-custom")
+      shipped = shipped!(person, "commit-shipped")
+      any = instance!(%{component_policy: "any"})
+      only_shipped = instance!(%{component_policy: "shipped"})
+
+      assert {:ok, _} = bind_instance(person, custom, any)
+      assert {:ok, _} = bind_instance(person, shipped, any)
+      assert {:ok, _} = bind_instance(person, shipped, only_shipped)
+
+      assert {:error, {:component_not_admitted, "api_key"}} =
+               bind_instance(person, custom, only_shipped)
+    end
+
+    test "a policy tightened after preview is read again at commit", %{person: person} do
+      ref = custom!(person, "commit-tightened")
+      entry = instance!(%{component_policy: "any"})
+      decisions = %{ref: ref, bindings: [%{need: "api_key", instance_entry_id: entry.id}]}
+
+      {:ok, plan} = Plan.plan(person, %{ref: ref})
+      {:ok, preview} = Commit.preview(person, decisions)
+
+      :ok =
+        Arca.InstanceEntries.set_component_policy(
+          Arca.Test.Actor.platform(),
+          entry.id,
+          "any",
+          "shipped"
+        )
+
+      assert {:error, {:component_not_admitted, "api_key"}} =
+               Commit.commit(person, %{
+                 decisions: decisions,
+                 plan_token: plan.plan_token,
+                 proof: preview.proof,
+                 commit_digest: preview.commit_digest,
+                 expected_consent_revision: plan.expected_consent_revision
+               })
+    end
+
+    test "an entry not offered to the person, not active, of another provider, or bound " <>
+           "where the component reads the value, is refused",
+         %{person: person} do
+      ref = custom!(person, "commit-refusals")
+
+      listed = instance!(%{audience: "listed"})
+      assert {:error, {:not_offered, "api_key"}} = bind_instance(person, ref, listed)
+
+      revoked = instance!()
+
+      {:ok, _} =
+        Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), revoked.id, "needs_consent")
+
+      assert {:error, {:entry_unavailable, id, "revoked"}} = bind_instance(person, ref, revoked)
+      assert id == revoked.id
+
+      other = instance!(%{provider_hint: "anthropic.com"})
+      assert {:error, {:provider_mismatch, "api_key"}} = bind_instance(person, ref, other)
+
+      publish!(person, "commit-instance-reads", "1.0.0", keyed_manifest(%{"disclose" => true}))
+
+      assert {:error, {:disclosure_refused, "api_key"}} =
+               bind_instance(person, "reagent:local.commit-instance-reads", instance!())
+    end
+
+    test "a revoke landing as a revision commits blocks the profile, and the commit never " <>
+           "unblocks it after",
+         %{person: person} do
+      ref = custom!(person, "commit-revoke-race")
+      entry = instance!()
+      bindings = [%{need: "api_key", instance_entry_id: entry.id}]
+      {:ok, %{profile_id: profile_id, revision: 1}} = walk!(person, ref, %{bindings: bindings})
+
+      handler = {__MODULE__, :revoke_on_commit, System.unique_integer([:positive])}
+
+      :ok =
+        :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.revoke_on_commit/4, %{
+          test: self(),
+          entry_id: entry.id
+        })
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, %{revision: 2}} =
+               walk!(person, ref, %{bindings: bindings, origins: [:interactive, :programmatic]})
+
+      :telemetry.detach(handler)
+
+      # The revoke saw the new head and blocked its profile.
+      assert {:ok, affected} = Process.get(:a0_revoked)
+      assert {person.athanor_id, profile_id} in affected
+      assert [%{instance_entry_id: id}] = head!(person, profile_id).vault_refs
+      assert id == entry.id
+
+      # And the block stands: nothing after the revision unblocks it.
+      assert {:ok, %{status: "needs_consent"}} =
+               Arca.ProfileStorage.get(Sanctum.Context.actor(person), profile_id)
+    end
+  end
+
+  describe "selections and provided configuration" do
+    test "an entry chosen for a dependency's need is held to that need", %{ctx: ctx} do
+      two = two_deps!(ctx)
+
+      # Another provider's entry, a need it does not declare, and a
+      # label beside an entry are refused.
+      assert {:error, {:provider_mismatch, "api_key"}} =
+               Commit.preview(ctx, %{
+                 ref: two,
+                 selections: [
+                   %{
+                     dep: "reagent:local.commit-dep-a",
+                     entry_id: key!(ctx, %{provider_hint: "anthropic.com"}).id
+                   }
+                 ]
+               })
+
+      assert {:error, {:unknown_need, "other"}} =
+               Commit.preview(ctx, %{
+                 ref: two,
+                 selections: [
+                   %{dep: "reagent:local.commit-dep-a", entry_id: key!(ctx).id, need: "other"}
+                 ]
+               })
+
+      assert {:error, {:invalid_argument, _}} =
+               Commit.preview(ctx, %{
+                 ref: two,
+                 selections: [
+                   %{dep: "reagent:local.commit-dep-a", entry_id: key!(ctx).id, label: "default"}
+                 ]
+               })
+
+      # The edge carries the entry under the need's rule and projection.
+      key = key!(ctx)
+
+      {:ok, %{profile_id: profile_id}} =
+        walk!(ctx, two, %{selections: [%{dep: "reagent:local.commit-dep-a", entry_id: key.id}]})
+
+      {:ok, blob} = Prima.Authority.Blob.parse(head!(ctx, profile_id).resolved_policy)
+
+      {:ok, edge} =
+        Prima.Authority.Blob.lookup_edge(blob, two, "reagent:local.commit-dep-a", "")
+
+      assert %{entry_id: id, scope: "athanor", projection: %{fields: ["OPENAI_API_KEY"]}} =
+               edge.vault
+
+      assert id == key.id
+      assert Prima.Manifest.Needs.attach_to_map(edge.vault.attach) == @attach
+    end
+
+    test "a grant re-issues the head's entry selection with the lifetime its row holds", %{
+      ctx: ctx
+    } do
+      two = two_deps!(ctx)
+      key = key!(ctx)
+
+      {:ok, %{profile_id: profile_id}} =
+        walk!(ctx, two, %{
+          selections: [
+            %{dep: "reagent:local.commit-dep-a", entry_id: key.id, lifetime: %{kind: "once"}}
+          ]
+        })
+
+      key_a = "#{two}|reagent:local.commit-dep-a|default"
+      head = head!(ctx, profile_id)
+
+      :ok =
+        Arca.ConsentStorage.consume_once(
+          Sanctum.Context.actor(ctx),
+          profile_id,
+          head.id,
+          key_a,
+          "exec_grant"
+        )
+
+      assert {:ok, %{revision: 2}} =
+               Commit.grant(ctx, %{
+                 profile_id: profile_id,
+                 bindings: [],
+                 expected_consent_revision: 1
+               })
+
+      rows = rows_by_key(ctx, profile_id)
+
+      assert %{lifetime_kind: "once", consumed_by_root: "exec_grant", vault_entry_id: id} =
+               rows[key_a]
+
+      assert id == key.id
+    end
+
+    test "a need the app provides takes no selection, and an edge it would fill twice is " <>
+           "refused",
+         %{ctx: ctx} do
+      publish!(ctx, "commit-db", "1.0.0", %{
+        "needs" => %{
+          "database" => %{
+            "type" => "api_key:supabase.co",
+            "reason" => "to reach the database",
+            "fields" => ["anon_key"],
+            "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+          },
+          "admin" => %{
+            "type" => "api_key:supabase.co",
+            "reason" => "to administer it",
+            "fields" => ["service_key"],
+            "attach" => %{"in" => "header", "name" => "x-admin", "template" => "{value}"}
+          }
+        }
+      })
+
+      provided = %{
+        "destination" => %{"hosts" => ["abc.supabase.co"]},
+        "values" => %{"anon_key" => "eyJ-public"}
+      }
+
+      app = fn name, needs ->
+        publish!(ctx, name, "1.0.0", %{
+          "dependencies" => %{"static" => [%{"ref" => "reagent:local.commit-db"}]},
+          "provides" => %{"reagent:local.commit-db" => needs}
+        })
+
+        "reagent:local.#{name}"
+      end
+
+      ref = app.("commit-app", %{"database" => provided})
+      supabase = key!(ctx, %{provider_hint: "supabase.co"})
+
+      assert {:error, {:invalid_argument, why}} =
+               Commit.preview(ctx, %{
+                 ref: ref,
+                 selections: [
+                   %{dep: "reagent:local.commit-db", entry_id: supabase.id, need: "database"}
+                 ]
+               })
+
+      assert why ==
+               "reagent:local.commit-db's need database is provided by this app; it takes no selection"
+
+      assert {:error, {:invalid_argument, why}} =
+               Commit.preview(ctx, %{
+                 ref: ref,
+                 selections: [
+                   %{dep: "reagent:local.commit-db", entry_id: supabase.id, need: "admin"}
+                 ]
+               })
+
+      assert why ==
+               "reagent:local.commit-db takes one credential on its edge; this app provides database and admin"
+
+      # Provided alone, the edge carries the configuration, shown as the
+      # publisher's, and writes no row.
+      {:ok, preview} = Commit.preview(ctx, %{ref: ref})
+
+      assert [%{"values" => values}] =
+               Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+
+      assert values == %{
+               "name" => "database",
+               "edge" => "reagent:local.commit-db",
+               "fields" => ["anon_key"],
+               "scopes" => [],
+               "destination" => %{"hosts" => ["abc.supabase.co"], "scheme" => "https"},
+               "source" => "provided",
+               "disclosed" => true,
+               "suggested" => false,
+               "choice_required" => false,
+               "binding_key" => "#{ref}|reagent:local.commit-db|default",
+               "lifetime" => %{"kind" => "standing", "until" => nil}
+             }
+
+      {:ok, %{profile_id: profile_id}} = walk!(ctx, ref)
+      assert head!(ctx, profile_id).vault_refs == []
+
+      # Two needs provided for one dependency would fill its edge twice.
+      twice = app.("commit-app-twice", %{"database" => provided, "admin" => provided})
+
+      assert {:error, {:invalid_argument, why}} = Commit.preview(ctx, %{ref: twice})
+      assert why =~ "takes one credential on its edge"
+    end
+
+    test "an optional pin that is not installed is skipped as the activation skips it, while " <>
+           "another path reaches its component",
+         %{ctx: ctx} do
+      publish!(ctx, "opt-c", "1.0.0", %{"caps" => @caps})
+      publish!(ctx, "opt-b", "1.0.0", %{"dependencies" => %{"static" => ["reagent:local.opt-c"]}})
+
+      publish!(ctx, "opt-s", "1.0.0", %{
+        "dependencies" => %{
+          "static" => [
+            %{"ref" => "reagent:local.opt-c:9.9.9", "optional" => true},
+            %{"ref" => "reagent:local.opt-b"}
+          ]
+        }
+      })
+
+      assert {:ok, %{unresolved: nil}} = Plan.plan(ctx, %{ref: "reagent:local.opt-s"})
+      assert {:ok, _preview} = Commit.preview(ctx, %{ref: "reagent:local.opt-s"})
+    end
+
+    test "a public twin of an owner whose grant names a node the source's release no longer " <>
+           "runs is refused in words, and granted again it publishes",
+         %{ctx: ctx} do
+      publish!(ctx, "tw-d", "1.0.0", %{"caps" => @caps})
+      publish!(ctx, "tw-s", "1.0.0", %{"dependencies" => %{"static" => ["reagent:local.tw-d"]}})
+      {:ok, %{profile_id: owner}} = walk!(ctx, "reagent:local.tw-s")
+
+      publish!(ctx, "tw-s", "2.0.0", %{"caps" => @caps})
+
+      assert {:error, {:invalid_argument, why}} =
+               Commit.stage_publish(ctx, %{profile_id: owner})
+
+      assert why ==
+               "The owner profile's grant names reagent:local.tw-d, which this release of " <>
+                 "reagent:local.tw-s no longer runs; grant the owner profile again, then publish"
+
+      {:ok, %{profile_id: ^owner}} = walk!(ctx, "reagent:local.tw-s")
+      assert {:ok, _staged} = Commit.stage_publish(ctx, %{profile_id: owner})
+    end
+
+    test "a dependency its app pins is asked for and granted what the pinned release asks, " <>
+           "never the newest's",
+         %{ctx: ctx} do
+      publish!(ctx, "pin-caps", "1.0.0", %{
+        "caps" => %{"egress" => %{"domains" => ["v1.example.com"]}}
+      })
+
+      publish!(ctx, "pin-caps", "2.0.0", %{
+        "caps" => %{"egress" => %{"domains" => ["v2.example.com"]}}
+      })
+
+      publish!(ctx, "pin-caps-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.pin-caps:1.0.0"}]}
+      })
+
+      ref = "reagent:local.pin-caps-app"
+      dep = "reagent:local.pin-caps"
+
+      egress = fn rows ->
+        for %{"node" => ^dep, "kind" => "egress"} = row <- rows, do: row["values"]["domains"]
+      end
+
+      # The ask the plan shows and the grant the preview shows are the
+      # pinned release's.
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      assert egress.(plan.rows) == [["v1.example.com"]]
+
+      {:ok, preview} = Commit.preview(ctx, %{ref: ref})
+      assert egress.(preview.rows) == [["v1.example.com"]]
+
+      # And the grant the revision holds on the edge into it.
+      {:ok, %{profile_id: profile_id}} = walk!(ctx, ref)
+      {:ok, blob} = Prima.Authority.Blob.parse(head!(ctx, profile_id).resolved_policy)
+      {:ok, edge} = Prima.Authority.Blob.lookup_edge(blob, ref, dep, "")
+      assert Prima.Authority.Blob.Edge.domains(edge) == ["v1.example.com"]
+    end
+
+    test "a dependency its app pins is read at the pinned release: its needs, what the app " <>
+           "provides for it and the rule it attaches by",
+         %{ctx: ctx} do
+      db = fn version, header ->
+        publish!(ctx, "pin-db", version, %{
+          "needs" => %{
+            "database" => %{
+              "type" => "api_key:supabase.co",
+              "reason" => "to reach the database",
+              "fields" => ["anon_key"],
+              "attach" => %{"in" => "header", "name" => header, "template" => "{value}"}
+            }
+          }
+        })
+      end
+
+      # The release the app pins attaches by `apikey`; the newer one, by
+      # another header.
+      db.("1.0.0", "apikey")
+      db.("2.0.0", "x-newer")
+
+      provided = %{
+        "destination" => %{"hosts" => ["abc.supabase.co"]},
+        "values" => %{"anon_key" => "eyJ-public"}
+      }
+
+      publish!(ctx, "pin-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.pin-db:1.0.0"}]},
+        "provides" => %{"reagent:local.pin-db:1.0.0" => %{"database" => provided}}
+      })
+
+      ref = "reagent:local.pin-app"
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+
+      assert [%{dep: "reagent:local.pin-db", needs: [need]}] = plan.dependency_needs
+      assert %{need: "database", source: "provided"} = need
+
+      {:ok, preview} = Commit.preview(ctx, %{ref: ref})
+
+      assert [%{"values" => %{"name" => "database", "source" => "provided"}}] =
+               Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+
+      # The edge attaches the pinned release's rule, never the newest's.
+      {:ok, %{profile_id: profile_id}} = walk!(ctx, ref)
+      {:ok, blob} = Prima.Authority.Blob.parse(head!(ctx, profile_id).resolved_policy)
+      {:ok, edge} = Prima.Authority.Blob.lookup_edge(blob, ref, "reagent:local.pin-db", "")
+      assert %{provided: %{attach: %{name: "apikey"}}} = edge.vault
+
+      # A newer release that declares no such need: the pinned one still
+      # has it, so the plan answers it as provided and the preview shows it.
+      publish!(ctx, "pin-gone", "1.0.0", %{
+        "needs" => %{
+          "database" => %{
+            "type" => "api_key:supabase.co",
+            "reason" => "to reach the database",
+            "fields" => ["anon_key"],
+            "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+          }
+        }
+      })
+
+      publish!(ctx, "pin-gone", "2.0.0", %{})
+
+      publish!(ctx, "pin-gone-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.pin-gone:1.0.0"}]},
+        "provides" => %{"reagent:local.pin-gone:1.0.0" => %{"database" => provided}}
+      })
+
+      gone_app = "reagent:local.pin-gone-app"
+      {:ok, plan} = Plan.plan(ctx, %{ref: gone_app})
+
+      assert [%{dep: "reagent:local.pin-gone", needs: [%{need: "database", source: "provided"}]}] =
+               plan.dependency_needs
+
+      refute Enum.any?(plan.warnings, &(&1 =~ "declares no such need"))
+
+      {:ok, preview} = Commit.preview(ctx, %{ref: gone_app})
+
+      assert [%{"values" => %{"name" => "database", "source" => "provided"}}] =
+               Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+    end
+  end
+end
+
+defmodule Sanctum.Consent.CommitRebindRaceTest do
+  @moduledoc """
+  A commit binding an entry of the athanor's own and a rebind of that
+  entry, on real connections outside the sandbox. The commit holds its
+  transaction open once its rows are written, its digests read again and
+  its head advanced; the rebind started then lands after the revision,
+  never between its digest re-read and its commit, and its block of the
+  new profile stands.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query
+
+  alias Sanctum.Consent.Commit
+  alias Sanctum.Consent.Plan
+
+  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @attach %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
+  @inference %{
+    "hosts" => ["api.openai.com"],
+    "methods" => ["POST"],
+    "paths" => ["/v1/"],
+    "scheme" => "https"
+  }
+
+  defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    Arca.Cache.init()
+    n = System.unique_integer([:positive])
+    athanor = "ath_commit_race_#{n}"
+    test_path = Path.join(System.tmp_dir!(), "consent_commit_race_#{n}")
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
+
+    unboxed(fn ->
+      Arca.Test.Actor.ensure_athanor_row(athanor, name: "Commit race #{n}", slug: "race-#{n}")
+    end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor))
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor))
+      end)
+
+      File.rm_rf!(test_path)
+
+      if original_base_path,
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
+    end)
+
+    ctx = Sanctum.TestContext.via(%{Sanctum.TestContext.local() | athanor_id: athanor}, :prism)
+    {:ok, ctx: ctx}
+  end
+
+  # A component whose one need attaches an openai.com key.
+  defp publish!(ctx, name) do
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "reagent",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:openai.com",
+          "reason" => "to call the model",
+          "fields" => ["OPENAI_API_KEY"],
+          "attach" => @attach
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.openai.com"], "methods" => ["POST"]}}
+    }
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(manifest)
+      })
+
+    "reagent:local.#{name}"
+  end
+
+  # An attach-only openai.com key of the athanor's, at the digest its
+  # binding derives.
+  defp key!(ctx) do
+    {:ok, destination} = Sanctum.Vault.destination_text(@inference)
+
+    attrs = %{
+      name: "race-key-#{System.unique_integer([:positive])}",
+      kind: "api_key",
+      provider_hint: "openai.com",
+      field_names: ~s(["OPENAI_API_KEY"]),
+      oauth_endpoints: nil,
+      oauth_scopes: nil,
+      destination: destination,
+      attach_only: true,
+      sealed_payload: "sealed"
+    }
+
+    {:ok, digest} = Sanctum.VaultReader.binding_digest(attrs)
+
+    {:ok, entry} =
+      Arca.VaultStorage.put(Sanctum.Context.actor(ctx), Map.put(attrs, :binding_digest, digest))
+
+    entry
+  end
+
+  # Holds the committing process inside its transaction once the head has
+  # advanced: after its binding rows are written and its digests read
+  # again, before the transaction commits. Runs once, in the process that
+  # marked itself the committer.
+  def hold_commit(_event, _measurements, meta, %{test: test}) do
+    if Process.get(:race_committer) == true do
+      cond do
+        meta[:source] == "consent_vault_refs" and
+            String.starts_with?(meta[:query] || "", "INSERT") ->
+          Process.put(:race_refs_written, true)
+
+        Process.get(:race_refs_written) == true and meta[:source] == "profiles" and
+            String.starts_with?(meta[:query] || "", "UPDATE") ->
+          Process.delete(:race_refs_written)
+          send(test, {:holding, self()})
+
+          receive do
+            :go -> :ok
+          end
+
+        true ->
+          :ok
+      end
+    end
+  end
+
+  test "a rebind racing a commit that binds the entry lands after the revision, and its " <>
+         "block stands",
+       %{ctx: ctx} do
+    {entry, decisions, plan, preview} =
+      unboxed(fn ->
+        ref = publish!(ctx, "commit-rebind-race")
+        entry = key!(ctx)
+        decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: entry.id}]}
+        {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+        {:ok, preview} = Commit.preview(ctx, decisions)
+        {entry, decisions, plan, preview}
+      end)
+
+    handler = {__MODULE__, :hold_commit, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.hold_commit/4, %{
+        test: self()
+      })
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    committer =
+      Task.async(fn ->
+        Process.put(:race_committer, true)
+
+        unboxed(fn ->
+          Commit.commit(ctx, %{
+            decisions: decisions,
+            plan_token: plan.plan_token,
+            proof: preview.proof,
+            commit_digest: preview.commit_digest,
+            expected_consent_revision: plan.expected_consent_revision
+          })
+        end)
+      end)
+
+    assert_receive {:holding, holder}, 15_000
+
+    test = self()
+
+    rebinder =
+      Task.async(fn ->
+        unboxed(fn ->
+          if postgres?(), do: send(test, {:backend, backend_pid()})
+
+          Sanctum.Vault.rebind(ctx, %{
+            id: entry.id,
+            destination: Map.put(@inference, "paths", ["/v2/"])
+          })
+        end)
+      end)
+
+    # The entry is held by the revision: the rebind waits on it.
+    if postgres?() do
+      assert_receive {:backend, backend}, 15_000
+      await_lock_wait(backend)
+    else
+      refute Task.yield(rebinder, 300), "the rebind landed inside the revision"
+    end
+
+    send(holder, :go)
+    assert {:ok, %{profile_id: profile_id, revision: 1}} = Task.await(committer, 30_000)
+    assert {:ok, %{affected: affected, binding_digest: moved}} = Task.await(rebinder, 30_000)
+    :telemetry.detach(handler)
+
+    # The rebind saw the new head and blocked its profile, and the block
+    # stands over a head still bound at the digest it approved.
+    assert profile_id in affected
+
+    {status, refs} =
+      unboxed(fn ->
+        {:ok, profile} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
+        {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
+        {profile.status, head.vault_refs}
+      end)
+
+    assert status == "needs_consent"
+    assert [%{vault_entry_id: id, binding_digest: bound}] = refs
+    assert id == entry.id
+    assert bound == entry.binding_digest and bound != moved
+  end
+
+  # The backend of the current connection, so another can watch it wait.
+  defp backend_pid do
+    %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+    pid
+  end
+
+  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
+  # by `tries`, never a timing. Only PostgreSQL shows one; SQLite's
+  # immediate transaction waits for the one writer and has none to show.
+  defp await_lock_wait(pid, tries \\ 500)
+
+  defp await_lock_wait(_pid, 0), do: flunk("the waiting backend never waited on a lock")
+
+  defp await_lock_wait(pid, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
+      end)
+
+    if rows == [["Lock"]] do
+      :ok
+    else
+      Process.sleep(20)
+      await_lock_wait(pid, tries - 1)
+    end
+  end
+
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 end

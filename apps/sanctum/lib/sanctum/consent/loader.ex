@@ -375,8 +375,16 @@ defmodule Sanctum.Consent.Loader do
     * `{:selection, label, result}` — a selection (`via`) of the profile
       `label`, resolved exactly as `load_root/3` resolves it under
       `ctx`'s origin: `{:ok, vault}`, the lender's bound vault, or
-      `{:error, reason}` when it resolves to nothing;
-    * `{:instance, instance_entry_id}` — an instance entry;
+      `{:error, reason}` when it resolves to nothing; a lent instance
+      entry is read live as an instance row is, so a refusal of the offer
+      or a rebind is the selection's `{:error, reason}`;
+    * `{:instance, instance_entry_id, result}` — an instance entry, read
+      live as the context's person is offered it
+      (`Sanctum.InstanceEntries.binding/2`): `{:ok, view}` while it stands
+      at the digest the row was approved at, `{:error, :binding_went_stale}`
+      when it was rebound since, and the offer's own refusal otherwise
+      (`:not_offered`, `{:entry_unavailable, status}`, `:denied`,
+      `:anonymous_denied`);
     * `:malformed` — a row naming none of them.
 
   The selection is the one the revision's own blob holds at the row's
@@ -386,15 +394,15 @@ defmodule Sanctum.Consent.Loader do
   @spec row_binding(Context.t(), map(), map()) ::
           {:entry, String.t(), String.t()}
           | {:selection, String.t(), {:ok, map()} | {:error, term()}}
-          | {:instance, String.t()}
+          | {:instance, String.t(), {:ok, map()} | {:error, term()}}
           | :malformed
   def row_binding(%Context{} = ctx, consent, ref) when is_map(consent) and is_map(ref) do
     case Arca.ConsentStorage.row_identity(ref) do
       {:entry, _scope, _key, entry_id, digest} ->
         {:entry, entry_id, digest}
 
-      {:instance, _scope, _key, instance_entry_id, _digest} ->
-        {:instance, instance_entry_id}
+      {:instance, _scope, _key, instance_entry_id, digest} ->
+        {:instance, instance_entry_id, live_instance(ctx, instance_entry_id, digest)}
 
       {:via, _scope, key, label, _digest} ->
         {:selection, label, resolve_row_selection(ctx, consent, key)}
@@ -404,17 +412,48 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
+  # An instance row's liveness: the entry as the loading context's person
+  # is offered it, at the digest the row names, as an athanor's entry is
+  # held to its row's.
+  defp live_instance(ctx, instance_entry_id, digest) do
+    case Sanctum.InstanceEntries.binding(ctx, instance_entry_id) do
+      {:ok, %{binding_digest: live} = view} when is_binary(live) and is_binary(digest) ->
+        if Plug.Crypto.secure_compare(live, digest),
+          do: {:ok, view},
+          else: {:error, :binding_went_stale}
+
+      {:ok, _undigested} ->
+        {:error, :binding_went_stale}
+
+      {:error, _} = refused ->
+        refused
+    end
+  end
+
   defp resolve_row_selection(ctx, consent, key) do
     with :ok <- check_blob_digest(consent),
          {:ok, %Blob{nodes: nodes}} <- parse_blob(consent),
          {:ok, edge_key, vault} <- selection_at(nodes, key),
          {:ok, target} <- Blob.edge_target(edge_key) do
-      resolve_selection(ctx, Context.actor(ctx), target, vault.via, vault.projection, key)
+      ctx
+      |> resolve_selection(Context.actor(ctx), target, vault.via, vault.projection, key)
+      |> live_lent(ctx)
     else
       :ingress -> {:error, :selection_missing}
       {:error, _} = refused -> refused
     end
   end
+
+  # A lent instance entry, held as an instance row is: offered to this
+  # person and at the digest the lender bound it at.
+  defp live_lent({:ok, %{scope: "instance", entry_id: id, binding_digest: digest} = vault}, ctx) do
+    case live_instance(ctx, id, digest) do
+      {:ok, _view} -> {:ok, vault}
+      {:error, _} = refused -> refused
+    end
+  end
+
+  defp live_lent(resolved, _ctx), do: resolved
 
   # The selection the blob holds at `key`: the edge whose place is the
   # row's.

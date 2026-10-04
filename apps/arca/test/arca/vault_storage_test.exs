@@ -39,9 +39,13 @@ defmodule Arca.VaultStorageTest do
 
   # A profile whose head consent references `entry_id` — the dependent a
   # binding move has to block. `source_ref` names the component it
-  # consents for, a fresh one by default.
+  # consents for, a fresh one by default. A revision binds an entry only
+  # while it is active, so an entry at `needs_reauth` is bound first and
+  # then falls to `needs_reauth`, the order production reaches that state.
   defp dependent_profile!(actor, entry_id, source_ref \\ nil) do
     athanor = actor.athanor_id
+    reauth? = status_of(actor, entry_id).status == "needs_reauth"
+    if reauth?, do: :ok = VaultStorage.set_status(actor, entry_id, "active")
 
     {:ok, profile} =
       Arca.ProfileStorage.put(%{
@@ -81,6 +85,7 @@ defmodule Arca.VaultStorageTest do
         nil
       )
 
+    if reauth?, do: :ok = VaultStorage.set_status(actor, entry_id, "needs_reauth")
     profile
   end
 

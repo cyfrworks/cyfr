@@ -24,6 +24,14 @@ defmodule Sanctum.Consent.ShapeDiff do
   `:narrowed`, and both is `:changed`, each read against the head as
   narrowed.
 
+  Configuration the source provides for a dependency's need is one entry
+  per dependency, `provided.<dep>`, since a dependency edge holds one
+  credential: its `added` and `removed` are the destinations
+  (`destination <scheme>://<hosts><paths>`) and value names (`value
+  <name>`) the live block and the head's edge hold, never a value, and
+  `need` names the need the live block provides for that dependency when
+  it names exactly one (the head's blob names none).
+
   Explains the loader's decision without changing it. A derivation failure
   returns an empty diff.
   """
@@ -41,25 +49,19 @@ defmodule Sanctum.Consent.ShapeDiff do
   """
   @spec compute(Sanctum.Context.t(), String.t(), String.t()) :: [map()]
   def compute(ctx, source_ref, resolved_policy) do
-    with {:ok, granted} <- granted_caps(resolved_policy, source_ref),
-         {:ok, live} <- live_caps(ctx, source_ref) do
-      diff_caps(granted, live)
+    with {:ok, blob} <- Blob.parse(resolved_policy),
+         {:ok, edge} <- Blob.ingress(blob, source_ref),
+         {:ok, component} <- Sanctum.Consent.Plan.fetch_component(ctx, source_ref),
+         manifest = manifest(component, source_ref),
+         {:ok, live} <- live_caps(ctx, source_ref, manifest) do
+      diff_caps(flatten_edge(edge), live) ++ diff_provided(blob, source_ref, manifest)
     else
       _ -> []
     end
   end
 
-  defp granted_caps(resolved_policy, source_ref) do
-    with {:ok, blob} <- Blob.parse(resolved_policy),
-         {:ok, edge} <- Blob.ingress(blob, source_ref) do
-      {:ok, flatten_edge(edge)}
-    end
-  end
-
-  defp live_caps(ctx, source_ref) do
-    with {:ok, component} <- Sanctum.Consent.Plan.fetch_component(ctx, source_ref),
-         manifest = manifest(component, source_ref),
-         {:ok, resources, _limits} <-
+  defp live_caps(ctx, source_ref, manifest) do
+    with {:ok, resources, _limits} <-
            Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest) do
       {:ok,
        %{
@@ -69,6 +71,84 @@ defmodule Sanctum.Consent.ShapeDiff do
        }
        |> Map.merge(policy_caps(manifest))}
     end
+  end
+
+  # The provided configuration on the source's edges into its dependencies
+  # against what its manifest provides now, one entry per dependency keyed
+  # `provided.<dep>`: an edge holds one credential, and the blob names no
+  # need, so the entry names the need the live block names for that
+  # dependency when it names exactly one. Its values are the destinations
+  # and value names each side holds, never a value.
+  defp diff_provided(%Blob{nodes: nodes}, source_ref, manifest) do
+    granted =
+      case Map.fetch(nodes, source_ref) do
+        {:ok, %Blob.Node{edges: edges}} ->
+          for {key, %Blob.Edge{vault: %{provided: provided}}} <- edges,
+              {:ok, dep} <- [Blob.edge_target(key)],
+              into: %{},
+              do: {dep, provided_tokens([provided])}
+
+        :error ->
+          %{}
+      end
+
+    live = live_provided(manifest)
+
+    (Map.keys(granted) ++ Map.keys(live))
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.flat_map(fn dep ->
+      {needs, live_tokens} = Map.get(live, dep, {[], []})
+
+      case entry("provided.#{dep}", Map.get(granted, dep, []), live_tokens) do
+        nil -> []
+        diff -> [Map.put(diff, :need, single(needs))]
+      end
+    end)
+  end
+
+  defp live_provided(manifest) do
+    case Prima.Manifest.Provides.from_manifest(manifest) do
+      provides when is_map(provides) ->
+        provides
+        |> Enum.flat_map(fn {dep, needs} ->
+          case Prima.ComponentRef.to_name_ref(dep) do
+            {:ok, name_ref} -> [{name_ref, needs}]
+            {:error, _} -> []
+          end
+        end)
+        |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+        |> Map.new(fn {dep, blocks} ->
+          needs = Enum.reduce(blocks, %{}, &Map.merge(&2, &1))
+          {dep, {needs |> Map.keys() |> Enum.sort(), provided_tokens(Map.values(needs))}}
+        end)
+
+      _none ->
+        %{}
+    end
+  end
+
+  defp single([need]), do: need
+  defp single(_none_or_several), do: nil
+
+  defp provided_tokens(entries) do
+    entries
+    |> Enum.flat_map(fn %{destination: destination, values: values} ->
+      ["destination " <> destination_text(destination)] ++
+        Enum.map(Map.keys(values), &("value " <> &1))
+    end)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  # A destination as one line: the scheme, the hosts and port, the path
+  # prefixes, and the methods when it names them.
+  defp destination_text(destination) do
+    map = Prima.Destination.to_map(destination)
+    port = if map["port"], do: ":#{map["port"]}", else: ""
+    paths = Enum.join(map["paths"] || [], ",")
+    methods = if map["methods"], do: " (#{Enum.join(map["methods"], " ")})", else: ""
+    "#{map["scheme"]}://#{Enum.join(map["hosts"], ",")}#{port}#{paths}#{methods}"
   end
 
   defp flatten_edge(edge) do

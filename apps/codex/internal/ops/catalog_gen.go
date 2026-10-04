@@ -291,6 +291,7 @@ const (
 	VaultRename                     = "rename"
 	VaultRevoke                     = "revoke"
 	VaultRotate                     = "rotate"
+	VaultSetDefault                 = "set_default"
 	VaultStatus                     = "status"
 	WebhookCreate                   = "create"
 	WebhookGet                      = "get"
@@ -339,7 +340,7 @@ var Actions = map[string][]string{
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
 	"turn":                {"recover", "suspend"},
-	"vault":               {"authorize", "create", "delete", "list", "rebind", "rename", "revoke", "rotate", "status"},
+	"vault":               {"authorize", "create", "delete", "list", "rebind", "rename", "revoke", "rotate", "set_default", "status"},
 	"webhook":             {"create", "get", "list", "revoke", "rotate", "update"},
 }
 
@@ -3192,7 +3193,7 @@ func (args PolicyLogListArgs) MarshalJSON() ([]byte, error) {
 
 // ProfileCommitArgs carries arguments for profile.commit.
 type ProfileCommitArgs struct {
-	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id, fields, scopes}], override
+	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}], selections, override
 	Decisions ProfileCommitArgsDecisions `json:"decisions"`
 	// From plan
 	PlanToken string `json:"plan_token"`
@@ -3219,7 +3220,7 @@ type ProfileCommitArgsDecisions struct {
 	Label      Field[string] `json:"label,omitzero"`
 	Scope      Field[string] `json:"scope,omitzero"`
 	InvokeMode Field[string] `json:"invoke_mode,omitzero"`
-	// grant only: the credentials to bind, [{need:'@ingress', entry_id, fields, scopes}]
+	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}]
 	Bindings       Field[[]ProfileCommitArgsDecisionsBindingsItem]    `json:"bindings,omitzero"`
 	Selections     Field[[]ProfileCommitArgsDecisionsSelectionsItem]  `json:"selections,omitzero"`
 	ToolServers    Field[[]ProfileCommitArgsDecisionsToolServersItem] `json:"tool_servers,omitzero"`
@@ -3245,10 +3246,19 @@ func (args *ProfileCommitArgsDecisions) UnmarshalJSON(data []byte) error {
 }
 
 type ProfileCommitArgsDecisionsBindingsItem struct {
-	Need    Field[string]   `json:"need,omitzero"`
-	EntryId string          `json:"entry_id"`
-	Fields  Field[[]string] `json:"fields,omitzero"`
-	Scopes  Field[[]string] `json:"scopes,omitzero"`
+	Need Field[string] `json:"need,omitzero"`
+	// An entry of the athanor (vlt_…); exactly one of entry_id and instance_entry_id
+	EntryId Field[string] `json:"entry_id,omitzero"`
+	// An instance entry offered to you (ine_…); exactly one of entry_id and instance_entry_id
+	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+	// The account name of a named binding beside the need's default; absent for the default
+	Name Field[string] `json:"name,omitzero"`
+	// How long the binding lives; standing when absent
+	Lifetime Field[ProfileCommitArgsDecisionsBindingsItemLifetime] `json:"lifetime,omitzero"`
+	// true makes a consumed once binding consumable again; false by default
+	Renew  Field[bool]     `json:"renew,omitzero"`
+	Fields Field[[]string] `json:"fields,omitzero"`
+	Scopes Field[[]string] `json:"scopes,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3262,11 +3272,40 @@ func (args *ProfileCommitArgsDecisionsBindingsItem) UnmarshalJSON(data []byte) e
 	return nil
 }
 
+type ProfileCommitArgsDecisionsBindingsItemLifetime struct {
+	// standing until revoked, until a time, or once (one root run)
+	Kind string `json:"kind"`
+	// until only: an RFC 3339 instant in UTC, after now and at most 24 hours away
+	Until Field[string] `json:"until,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsBindingsItemLifetime) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsBindingsItemLifetime
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsBindingsItemLifetime(value)
+	return nil
+}
+
 type ProfileCommitArgsDecisionsSelectionsItem struct {
-	Dep    string          `json:"dep"`
-	Label  Field[string]   `json:"label,omitzero"`
+	Dep string `json:"dep"`
+	// The dependency's profile that lends its key; at most one of label, entry_id and instance_entry_id, label 'default' when none
+	Label Field[string] `json:"label,omitzero"`
+	// An entry of the athanor bound on the dependency's edge
+	EntryId Field[string] `json:"entry_id,omitzero"`
+	// An instance entry offered to you, bound on the edge
+	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+	// The dependency's credential need the entry is for; required when it declares several, never with a label
+	Need   Field[string]   `json:"need,omitzero"`
 	From   Field[string]   `json:"from,omitzero"`
 	Fields Field[[]string] `json:"fields,omitzero"`
+	// How long the binding lives; standing when absent
+	Lifetime Field[ProfileCommitArgsDecisionsSelectionsItemLifetime] `json:"lifetime,omitzero"`
+	// true makes a consumed once binding consumable again; false by default
+	Renew Field[bool] `json:"renew,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3277,6 +3316,24 @@ func (args *ProfileCommitArgsDecisionsSelectionsItem) UnmarshalJSON(data []byte)
 		return err
 	}
 	*args = ProfileCommitArgsDecisionsSelectionsItem(value)
+	return nil
+}
+
+type ProfileCommitArgsDecisionsSelectionsItemLifetime struct {
+	// standing until revoked, until a time, or once (one root run)
+	Kind string `json:"kind"`
+	// until only: an RFC 3339 instant in UTC, after now and at most 24 hours away
+	Until Field[string] `json:"until,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSelectionsItemLifetime) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSelectionsItemLifetime
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSelectionsItemLifetime(value)
 	return nil
 }
 
@@ -3389,7 +3446,7 @@ func (args *ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit) UnmarshalJSON(d
 type ProfileGrantArgs struct {
 	// Profile id (grant/list/revoke)
 	ProfileId string `json:"profile_id"`
-	// grant only: the credentials to bind, [{need:'@ingress', entry_id, fields, scopes}]
+	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}]
 	Bindings Field[[]ProfileGrantArgsBindingsItem] `json:"bindings,omitzero"`
 	// The revision plan reported
 	ExpectedConsentRevision *int `json:"expected_consent_revision"`
@@ -3405,10 +3462,19 @@ func (args ProfileGrantArgs) MarshalJSON() ([]byte, error) {
 }
 
 type ProfileGrantArgsBindingsItem struct {
-	Need    Field[string]   `json:"need,omitzero"`
-	EntryId string          `json:"entry_id"`
-	Fields  Field[[]string] `json:"fields,omitzero"`
-	Scopes  Field[[]string] `json:"scopes,omitzero"`
+	Need Field[string] `json:"need,omitzero"`
+	// An entry of the athanor (vlt_…); exactly one of entry_id and instance_entry_id
+	EntryId Field[string] `json:"entry_id,omitzero"`
+	// An instance entry offered to you (ine_…); exactly one of entry_id and instance_entry_id
+	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+	// The account name of a named binding beside the need's default; absent for the default
+	Name Field[string] `json:"name,omitzero"`
+	// How long the binding lives; standing when absent
+	Lifetime Field[ProfileGrantArgsBindingsItemLifetime] `json:"lifetime,omitzero"`
+	// true makes a consumed once binding consumable again; false by default
+	Renew  Field[bool]     `json:"renew,omitzero"`
+	Fields Field[[]string] `json:"fields,omitzero"`
+	Scopes Field[[]string] `json:"scopes,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3419,6 +3485,24 @@ func (args *ProfileGrantArgsBindingsItem) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*args = ProfileGrantArgsBindingsItem(value)
+	return nil
+}
+
+type ProfileGrantArgsBindingsItemLifetime struct {
+	// standing until revoked, until a time, or once (one root run)
+	Kind string `json:"kind"`
+	// until only: an RFC 3339 instant in UTC, after now and at most 24 hours away
+	Until Field[string] `json:"until,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileGrantArgsBindingsItemLifetime) UnmarshalJSON(data []byte) error {
+	type fields ProfileGrantArgsBindingsItemLifetime
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileGrantArgsBindingsItemLifetime(value)
 	return nil
 }
 
@@ -3476,7 +3560,7 @@ func (args ProfilePlanArgs) MarshalJSON() ([]byte, error) {
 
 // ProfilePreviewArgs carries arguments for profile.preview.
 type ProfilePreviewArgs struct {
-	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id, fields, scopes}], override
+	// The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}], selections, override
 	Decisions ProfilePreviewArgsDecisions `json:"decisions"`
 }
 
@@ -3495,7 +3579,7 @@ type ProfilePreviewArgsDecisions struct {
 	Label      Field[string] `json:"label,omitzero"`
 	Scope      Field[string] `json:"scope,omitzero"`
 	InvokeMode Field[string] `json:"invoke_mode,omitzero"`
-	// grant only: the credentials to bind, [{need:'@ingress', entry_id, fields, scopes}]
+	// The credentials to bind, one need's: [{need:'@ingress', entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}]
 	Bindings       Field[[]ProfilePreviewArgsDecisionsBindingsItem]    `json:"bindings,omitzero"`
 	Selections     Field[[]ProfilePreviewArgsDecisionsSelectionsItem]  `json:"selections,omitzero"`
 	ToolServers    Field[[]ProfilePreviewArgsDecisionsToolServersItem] `json:"tool_servers,omitzero"`
@@ -3521,10 +3605,19 @@ func (args *ProfilePreviewArgsDecisions) UnmarshalJSON(data []byte) error {
 }
 
 type ProfilePreviewArgsDecisionsBindingsItem struct {
-	Need    Field[string]   `json:"need,omitzero"`
-	EntryId string          `json:"entry_id"`
-	Fields  Field[[]string] `json:"fields,omitzero"`
-	Scopes  Field[[]string] `json:"scopes,omitzero"`
+	Need Field[string] `json:"need,omitzero"`
+	// An entry of the athanor (vlt_…); exactly one of entry_id and instance_entry_id
+	EntryId Field[string] `json:"entry_id,omitzero"`
+	// An instance entry offered to you (ine_…); exactly one of entry_id and instance_entry_id
+	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+	// The account name of a named binding beside the need's default; absent for the default
+	Name Field[string] `json:"name,omitzero"`
+	// How long the binding lives; standing when absent
+	Lifetime Field[ProfilePreviewArgsDecisionsBindingsItemLifetime] `json:"lifetime,omitzero"`
+	// true makes a consumed once binding consumable again; false by default
+	Renew  Field[bool]     `json:"renew,omitzero"`
+	Fields Field[[]string] `json:"fields,omitzero"`
+	Scopes Field[[]string] `json:"scopes,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3538,11 +3631,40 @@ func (args *ProfilePreviewArgsDecisionsBindingsItem) UnmarshalJSON(data []byte) 
 	return nil
 }
 
+type ProfilePreviewArgsDecisionsBindingsItemLifetime struct {
+	// standing until revoked, until a time, or once (one root run)
+	Kind string `json:"kind"`
+	// until only: an RFC 3339 instant in UTC, after now and at most 24 hours away
+	Until Field[string] `json:"until,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsBindingsItemLifetime) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsBindingsItemLifetime
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsBindingsItemLifetime(value)
+	return nil
+}
+
 type ProfilePreviewArgsDecisionsSelectionsItem struct {
-	Dep    string          `json:"dep"`
-	Label  Field[string]   `json:"label,omitzero"`
+	Dep string `json:"dep"`
+	// The dependency's profile that lends its key; at most one of label, entry_id and instance_entry_id, label 'default' when none
+	Label Field[string] `json:"label,omitzero"`
+	// An entry of the athanor bound on the dependency's edge
+	EntryId Field[string] `json:"entry_id,omitzero"`
+	// An instance entry offered to you, bound on the edge
+	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+	// The dependency's credential need the entry is for; required when it declares several, never with a label
+	Need   Field[string]   `json:"need,omitzero"`
 	From   Field[string]   `json:"from,omitzero"`
 	Fields Field[[]string] `json:"fields,omitzero"`
+	// How long the binding lives; standing when absent
+	Lifetime Field[ProfilePreviewArgsDecisionsSelectionsItemLifetime] `json:"lifetime,omitzero"`
+	// true makes a consumed once binding consumable again; false by default
+	Renew Field[bool] `json:"renew,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3553,6 +3675,24 @@ func (args *ProfilePreviewArgsDecisionsSelectionsItem) UnmarshalJSON(data []byte
 		return err
 	}
 	*args = ProfilePreviewArgsDecisionsSelectionsItem(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSelectionsItemLifetime struct {
+	// standing until revoked, until a time, or once (one root run)
+	Kind string `json:"kind"`
+	// until only: an RFC 3339 instant in UTC, after now and at most 24 hours away
+	Until Field[string] `json:"until,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSelectionsItemLifetime) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSelectionsItemLifetime
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSelectionsItemLifetime(value)
 	return nil
 }
 
@@ -5237,6 +5377,25 @@ func (args VaultRotateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: VaultRotate, fields: fields(args)})
+}
+
+// VaultSetDefaultArgs carries arguments for vault.set_default.
+type VaultSetDefaultArgs struct {
+	// The provider whose default this becomes (e.g. 'openai.com')
+	ProviderHint string `json:"provider_hint"`
+	// An entry of the athanor (vlt_…); name exactly one of entry_id and instance_entry_id
+	EntryId Field[string] `json:"entry_id,omitzero"`
+	// An instance entry offered to you (ine_…); name exactly one of entry_id and instance_entry_id
+	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args VaultSetDefaultArgs) MarshalJSON() ([]byte, error) {
+	type fields VaultSetDefaultArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: VaultSetDefault, fields: fields(args)})
 }
 
 // VaultStatusArgs carries arguments for vault.status.

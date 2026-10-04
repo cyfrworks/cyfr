@@ -163,7 +163,9 @@ defmodule Compendium.ConsentSetupPlanTest do
         name: "plan-damaged-conn",
         kind: "api_key",
         fields: %{"k" => "v"},
-        destination: %{"hosts" => ["api.example.com"]}
+        destination: %{"hosts" => ["api.example.com"]},
+        # A manifest declaring no need: the component reads its key.
+        disclose: true
       })
 
     grant!(ctx, "reagent:local.plan-damaged", [%{need: "@ingress", entry_id: entry.id}])
@@ -202,7 +204,9 @@ defmodule Compendium.ConsentSetupPlanTest do
         name: "plan-conn",
         kind: "api_key",
         fields: %{"k" => "v"},
-        destination: %{"hosts" => ["api.example.com"]}
+        destination: %{"hosts" => ["api.example.com"]},
+        # A manifest declaring no need: the component reads its key.
+        disclose: true
       })
 
     grant!(ctx, "reagent:local.plan-granted", [%{need: "@ingress", entry_id: entry.id}])
@@ -225,7 +229,9 @@ defmodule Compendium.ConsentSetupPlanTest do
         name: "rebound-conn",
         kind: "api_key",
         fields: %{"k" => "v"},
-        destination: %{"hosts" => ["api.example.com"]}
+        destination: %{"hosts" => ["api.example.com"]},
+        # A manifest declaring no need: the component reads its key.
+        disclose: true
       })
 
     grant!(ctx, "reagent:local.plan-rebound", [%{need: "@ingress", entry_id: entry.id}])
@@ -246,7 +252,9 @@ defmodule Compendium.ConsentSetupPlanTest do
         name: "revoked-conn",
         kind: "api_key",
         fields: %{"k" => "v"},
-        destination: %{"hosts" => ["api.example.com"]}
+        destination: %{"hosts" => ["api.example.com"]},
+        # A manifest declaring no need: the component reads its key.
+        disclose: true
       })
 
     grant!(ctx, "reagent:local.plan-revoked", [%{need: "@ingress", entry_id: entry.id}])
@@ -286,8 +294,12 @@ defmodule Compendium.ConsentSetupPlanTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "lent-conn",
           kind: "api_key",
+          # The dependency's need is example.com's, and the dependency
+          # reads its key itself.
+          provider_hint: "example.com",
           fields: %{"KEY" => "k"},
-          destination: %{"hosts" => ["api.example.com"]}
+          destination: %{"hosts" => ["api.example.com"]},
+          disclose: true
         })
 
       walk!(ctx, %{ref: @dep, bindings: [%{need: "api_key", entry_id: entry.id}]})
@@ -337,9 +349,10 @@ defmodule Compendium.ConsentSetupPlanTest do
       refute plan.ready
     end
 
-    test "a row naming an instance entry is not ready, and nothing reads it as the athanor's",
+    test "a row naming an instance entry is read as the person is offered it, at its digest",
          %{ctx: ctx} do
       ref = "reagent:local.plan-loose"
+      {ctx, _user} = Sanctum.TestContext.person!(ctx)
 
       {:ok, instance} =
         Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
@@ -366,10 +379,138 @@ defmodule Compendium.ConsentSetupPlanTest do
 
       {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
 
-      assert [%{entry_id: nil, satisfied: false, detail: detail}] = plan.consent.needs
-      assert detail =~ "instance"
+      instance_id = instance.id
+      assert [%{entry_id: ^instance_id, satisfied: true, detail: detail}] = plan.consent.needs
+      assert detail =~ instance.name and detail =~ "instance entry"
+      assert plan.ready
+
+      # Rebound since the person approved it: not ready, said as such.
+      {:ok, _} =
+        Arca.InstanceEntries.move_binding(
+          Arca.Test.Actor.platform(),
+          instance.id,
+          "sha256:instance",
+          %{
+            destination:
+              ~s({"hosts":["api.example.com"],"methods":["GET"],"paths":["/v2/"],"scheme":"https"}),
+            binding_digest: "sha256:moved"
+          },
+          "needs_consent"
+        )
+
+      {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+      assert [%{entry_id: ^instance_id, satisfied: false, detail: detail}] = plan.consent.needs
+      assert detail =~ "rebound"
       refute plan.ready
+
+      # Revoked: not ready, said as such.
+      {:ok, _} =
+        Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), instance.id, "needs_consent")
+
+      {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+      assert [%{satisfied: false, detail: detail}] = plan.consent.needs
+      assert detail =~ "revoked"
     end
+  end
+
+  test "an attach-only entry the component would read itself is not ready, and the remedy " <>
+         "is the update or disclosing it",
+       %{ctx: ctx} do
+    ref = "reagent:local.plan-reads"
+    publish!(ctx, "plan-reads")
+
+    {:ok, view} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "attach-only-conn",
+        kind: "api_key",
+        fields: %{"k" => "v"},
+        destination: %{"hosts" => ["api.example.com"]}
+      })
+
+    {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
+    {:ok, digest} = Sanctum.VaultReader.binding_digest(row)
+    key = Prima.Authority.Blob.binding_key(ref, "@ingress", nil)
+
+    # A head written before a binding was held to its disclosure: the
+    # slot of a manifest declaring no need, bound to an attach-only entry.
+    vault = %{
+      "entry_id" => view.id,
+      "binding_digest" => digest,
+      "scope" => "athanor",
+      "binding_key" => key,
+      "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
+      "projection" => %{"fields" => ["k"]}
+    }
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.seed_head!(
+        ctx,
+        %{id: "prof_reads", source_ref: ref, kind: :owner, status: :active},
+        %{
+          id: "cons_reads",
+          revision: 1,
+          scope: :versionless,
+          shape_digest: "sha256:shape",
+          commit_digest: "sha256:commit",
+          resolved_policy:
+            Jason.encode!(%{
+              "canonical" => "jcs-1",
+              "nodes" => %{
+                ref => %{"limits" => @limits, "edges" => %{"@ingress" => %{"vault" => vault}}}
+              }
+            }),
+          activation: %{ref => "sha256:act"},
+          admitted_origins: [:interactive],
+          vault_refs: [
+            %{
+              binding_key: key,
+              scope: "athanor",
+              vault_entry_id: view.id,
+              binding_digest: digest
+            }
+          ]
+        }
+      )
+
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+    assert [%{satisfied: false, detail: detail}] = plan.consent.needs
+    assert detail =~ "reads this value itself"
+    assert detail =~ "update"
+    assert detail =~ "disclose the entry"
+    refute plan.ready
+  end
+
+  test "a need the app provides is the publisher's, never an unbound need", %{ctx: ctx} do
+    publish_manifest!(ctx, "plan-db", %{
+      "needs" => %{
+        "database" => %{
+          "type" => "api_key:supabase.co",
+          "reason" => "to reach the database",
+          "required" => true,
+          "fields" => ["anon_key"],
+          "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+        }
+      }
+    })
+
+    publish_manifest!(ctx, "plan-app", %{
+      "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-db"}]},
+      "provides" => %{
+        "reagent:local.plan-db" => %{
+          "database" => %{
+            "destination" => %{"hosts" => ["abc.supabase.co"]},
+            "values" => %{"anon_key" => "eyJ-public"}
+          }
+        }
+      }
+    })
+
+    walk!(Sanctum.TestContext.via(ctx, :prism), %{ref: "reagent:local.plan-app"})
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.plan-app")
+
+    assert plan.consent.needs == []
+    assert plan.consent.ready
   end
 
   test "a consent binding nothing is ready — an egress-only grant is complete",

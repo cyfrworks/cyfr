@@ -49,6 +49,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "vault" => [
       "list",
       "status",
+      "set_default",
       "create",
       "rename",
       "rotate",
@@ -104,7 +105,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "tincture_visibility" => "Invalid tincture_visibility action. Use: get",
     "webhook" => "Invalid webhook action. Use: create, list, get, update, revoke, or rotate",
     "vault" =>
-      "Invalid vault action. Use: list, status, create, rename, rotate, rebind, authorize, revoke, or delete",
+      "Invalid vault action. Use: list, status, set_default, create, rename, rotate, rebind, authorize, revoke, or delete",
     "profile" =>
       "Invalid profile action. Use: plan, preview, commit, grant, publish, list, grants, or revoke",
     "person" => "Unknown action: person.___no_such_action___",
