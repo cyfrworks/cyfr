@@ -188,6 +188,44 @@ defmodule Sanctum.ProviderTest do
       assert result.email == nil
     end
 
+    test "whoami names when the calling session ends: its row's expiry, as RFC 3339",
+         %{ctx: ctx} do
+      ctx = Sanctum.TestContext.issuer!(ctx)
+      {:ok, session} = Sanctum.Session.create(ctx)
+      hash = Sanctum.Session.token_hash(session.token)
+      session_ctx = %{ctx | session_token_hash: hash}
+
+      {:ok, result} = Provider.handle("session", session_ctx, %{"action" => "whoami"})
+      {:ok, expires_at} = Sanctum.Session.expires_at_by_hash(hash)
+
+      assert {:ok, answered, 0} = DateTime.from_iso8601(result.session_expires_at)
+      assert DateTime.compare(answered, expires_at) == :eq
+      assert DateTime.compare(answered, DateTime.utc_now()) == :gt
+
+      # A session that ended answers none, as a key does.
+      :ok = Sanctum.Session.destroy(session.token)
+      {:ok, ended} = Provider.handle("session", session_ctx, %{"action" => "whoami"})
+      assert ended.session_expires_at == nil
+      assert Sanctum.Session.expires_at_by_hash(hash) == {:error, :invalid_session}
+    end
+
+    test "whoami names no session end for a caller an API key authenticated" do
+      ctx =
+        Context.build(
+          user_id: "usr_keyed",
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :api_key,
+          namespace: "testns",
+          authenticated: true
+        )
+
+      assert ctx.session_token_hash == nil
+      {:ok, result} = Provider.handle("session", ctx, %{"action" => "whoami"})
+      assert Map.has_key?(result, :session_expires_at)
+      assert result.session_expires_at == nil
+    end
+
     test "login returns redirect info", %{ctx: ctx} do
       {:ok, result} = Provider.handle("session", ctx, %{"action" => "login"})
       assert result.redirect == "/auth/login"

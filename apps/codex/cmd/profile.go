@@ -4,13 +4,17 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
@@ -19,7 +23,15 @@ import (
 
 func init() {
 	profileGrantCmd.Flags().StringSlice("entry", nil,
-		"Bind a need to a vault entry non-interactively: need=entry_id (repeatable)")
+		"Bind a need of the app: need=id[:lifetime] (repeatable). An id beginning ine_ is an "+
+			"instance entry, any other an entry of the athanor; the lifetime is standing (the "+
+			"default), 5m, 1h, session or once")
+	profileGrantCmd.Flags().StringSlice("selection", nil,
+		"Fill a dependency's credential: dep=id[:lifetime] (repeatable). An id beginning vlt_ "+
+			"or ine_ names an entry, anything else the label of the dependency's profile that "+
+			"lends its key; the lifetime is as --entry's")
+	profileGrantCmd.Flags().Bool("get-head-only", false,
+		"Narrow each catalyst whose network ask names other methods to its GET and HEAD")
 	profileGrantCmd.Flags().StringSlice("origin", nil,
 		"An origin the grant admits: interactive, programmatic, schedule or webhook "+
 			"(repeatable). Absent, a re-grant keeps the grant's origins and a first "+
@@ -109,14 +121,24 @@ var profileRevokeCmd = &cobra.Command{
 var profileGrantCmd = &cobra.Command{
 	Use:   "grant <reference>",
 	Short: "Grant a component the vault entries it needs [interactive]",
-	Long: "Walks plan → preview → commit. You see what would be granted, pick " +
-		"a vault entry for each need, then approve exactly what was rendered.\n\n" +
+	Long: "Walks plan → preview → commit. You see each credential the app and its " +
+		"dependencies need and what can meet it, then approve exactly what was rendered.\n\n" +
+		"A required need the plan suggests an entry for is bound to it unless --entry " +
+		"(or --selection, for a dependency) names another; an optional need is bound only " +
+		"when named. Where several entries can meet a required need and none is suggested, " +
+		"an interactive grant asks and a non-interactive one is refused until the need is " +
+		"named. A binding stands until revoked unless its flag names 5m, 1h, " +
+		sessionLifetimeHelp + " or once (one run). A re-grant keeps each binding the grant " +
+		"holds, its entry and its lifetime, unless a flag names another; one whose time " +
+		"has passed is asked for again, and refused without a terminal until a flag names it.\n\n" +
 		"The grant admits the runs --origin names. With no --origin, a first grant " +
 		"admits interactive alone and a re-grant keeps the origins the grant " +
 		"already admits, so an agent, a script, a schedule or a webhook runs the " +
 		"component only under a grant that names its origin.",
 	Example: `  cyfr profile grant c:moonmoon69.gmail
   cyfr profile grant f:local.daily-report --entry @ingress=vlt_abc123
+  cyfr profile grant c:local.model --entry api_key=ine_abc123:1h
+  cyfr profile grant f:local.report --selection reagent:local.db=vlt_def456:once
   cyfr profile grant f:local.daily-report --origin interactive --origin schedule`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -141,7 +163,42 @@ var profileGrantCmd = &cobra.Command{
 				strings.Join(admitted, ", "))
 		}
 
-		bindings, err := collectBindings(cmd, plan)
+		if !flagJSON {
+			renderPlanNeeds(os.Stdout, plan)
+		}
+
+		entries, _ := cmd.Flags().GetStringSlice("entry")
+		selections, _ := cmd.Flags().GetStringSlice("selection")
+		getHeadOnly, _ := cmd.Flags().GetBool("get-head-only")
+
+		// The session's end is read once, and only when a binding asks to
+		// live as long as the session.
+		var session *sessionEnd
+		endOfSession := func() (time.Time, bool, error) {
+			if session == nil {
+				end, ok, err := whoamiSessionEnd(cmd.Context(), client)
+				if err != nil {
+					return time.Time{}, false, err
+				}
+				session = &sessionEnd{at: end, ok: ok}
+			}
+			return session.at, session.ok, nil
+		}
+
+		note := func(string) {}
+		if !flagJSON {
+			note = func(line string) { fmt.Println(line) }
+		}
+
+		decided, err := collectDecisions(plan,
+			grantFlags{entries: entries, selections: selections, getHeadOnly: getHeadOnly},
+			grantChooser{
+				interactive: !flagJSON && prompt.IsInteractive(flagNoInteractive),
+				ask:         askForChoice,
+				now:         time.Now(),
+				sessionEnd:  endOfSession,
+				note:        note,
+			})
 		if err != nil {
 			if prompt.IsAborted(err) {
 				return prompt.ErrAborted
@@ -150,7 +207,13 @@ var profileGrantCmd = &cobra.Command{
 		}
 
 		decisions := ops.ProfilePreviewArgsDecisions{
-			Ref: ops.Value(ref), Bindings: ops.Value(bindings), Origins: ops.Value(admitted)}
+			Ref: ops.Value(ref), Bindings: ops.Value(decided.bindings), Origins: ops.Value(admitted)}
+		if len(decided.selections) > 0 {
+			decisions.Selections = ops.Value(decided.selections)
+		}
+		if len(decided.subset) > 0 {
+			decisions.Subset = ops.Value(decided.subset)
+		}
 
 		preview, err := client.CallTool(cmd.Context(), ops.Profile, ops.ProfilePreviewArgs{Decisions: decisions})
 		if err != nil {
@@ -169,22 +232,12 @@ var profileGrantCmd = &cobra.Command{
 			}
 		}
 
-		commitBindings := make([]ops.ProfileCommitArgsDecisionsBindingsItem, len(bindings))
-		for i, binding := range bindings {
-			commitBindings[i] = ops.ProfileCommitArgsDecisionsBindingsItem{
-				Need: binding.Need, EntryId: binding.EntryId, InstanceEntryId: binding.InstanceEntryId,
-				Name: binding.Name, Renew: binding.Renew, Fields: binding.Fields, Scopes: binding.Scopes}
-			// The two operations' lifetime records are distinct types of one
-			// wire shape; a supplied lifetime crosses as its JSON.
-			if !binding.Lifetime.IsZero() {
-				lifetime, err := json.Marshal(binding.Lifetime)
-				if err == nil {
-					err = json.Unmarshal(lifetime, &commitBindings[i].Lifetime)
-				}
-				if err != nil {
-					return fmt.Errorf("invalid binding lifetime: %w", err)
-				}
-			}
+		// The commit carries exactly the decisions previewed: the two
+		// operations' decision records are distinct types of one wire shape,
+		// so they cross as their JSON, each until-lifetime as it was computed.
+		commitDecisions, err := commitDecisionsOf(decisions)
+		if err != nil {
+			return err
 		}
 		planToken, tokenOK := plan["plan_token"].(string)
 		proof, proofOK := preview["proof"].(string)
@@ -202,9 +255,8 @@ var profileGrantCmd = &cobra.Command{
 			return fmt.Errorf("invalid consent revision: %w", err)
 		}
 		result, err := client.CallTool(cmd.Context(), ops.Profile, ops.ProfileCommitArgs{
-			Decisions: ops.ProfileCommitArgsDecisions{
-				Ref: ops.Value(ref), Bindings: ops.Value(commitBindings), Origins: ops.Value(admitted)},
-			PlanToken: planToken, Proof: proof, CommitDigest: digest, ExpectedConsentRevision: revision})
+			Decisions: commitDecisions, PlanToken: planToken, Proof: proof, CommitDigest: digest,
+			ExpectedConsentRevision: revision})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -219,81 +271,904 @@ var profileGrantCmd = &cobra.Command{
 	},
 }
 
-// One vault entry per need: from --entry need=entry_id flags, or asked for
-// interactively. A need left unbound
-// is a deliberate choice — an app can be granted with no credentials at all.
-func collectBindings(cmd *cobra.Command, plan map[string]any) ([]ops.ProfilePreviewArgsDecisionsBindingsItem, error) {
-	preset := map[string]string{}
-
-	flags, _ := cmd.Flags().GetStringSlice("entry")
-	for _, pair := range flags {
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("--entry expects need=entry_id, got %q", pair)
-		}
-		preset[parts[0]] = parts[1]
+// commitDecisionsOf is the preview's decisions as the commit takes them.
+func commitDecisionsOf(decisions ops.ProfilePreviewArgsDecisions) (ops.ProfileCommitArgsDecisions, error) {
+	var commit ops.ProfileCommitArgsDecisions
+	raw, err := json.Marshal(decisions)
+	if err == nil {
+		err = json.Unmarshal(raw, &commit)
 	}
+	if err != nil {
+		return commit, fmt.Errorf("invalid grant decisions: %w", err)
+	}
+	return commit, nil
+}
 
-	needs, _ := plan["needs"].([]any)
-	candidates, _ := plan["candidates"].([]any)
-	bindings := []ops.ProfilePreviewArgsDecisionsBindingsItem{}
+// ---------------------------------------------------------------------------
+// The decisions a grant makes
+// ---------------------------------------------------------------------------
 
-	for _, entry := range needs {
-		need, ok := entry.(map[string]any)
+// lifetimeChoices are the five a binding may live by, in the order they
+// are offered: until revoked, five minutes, one hour, until the time the
+// session is now due to end (at most 24 hours on), and one run.
+var lifetimeChoices = []string{"standing", "5m", "1h", "session", "once"}
+
+// sessionHorizon is the furthest an until-lifetime may reach: the home
+// refuses one more than 24 hours after its commit.
+const sessionHorizon = 24 * time.Hour
+
+type sessionEnd struct {
+	at time.Time
+	ok bool
+}
+
+// grantFlags are the choices the command line names.
+type grantFlags struct {
+	entries     []string
+	selections  []string
+	getHeadOnly bool
+}
+
+// grantChooser is how the walk decides what no flag names: whether it may
+// ask, how it asks, the clock an until-lifetime is computed from, the
+// session's end, and where it says what it narrowed or left unbound.
+type grantChooser struct {
+	interactive bool
+	ask         func(title string, options []prompt.Option) (string, error)
+	now         time.Time
+	sessionEnd  func() (time.Time, bool, error)
+	note        func(string)
+}
+
+// grantDecisions are the bindings, selections and narrowing a grant sends,
+// to its preview and, the same, to its commit.
+type grantDecisions struct {
+	bindings   []ops.ProfilePreviewArgsDecisionsBindingsItem
+	selections []ops.ProfilePreviewArgsDecisionsSelectionsItem
+	subset     map[string]ops.ProfilePreviewArgsDecisionsSubsetItem
+}
+
+// askForChoice asks the person to pick one option.
+var askForChoice = prompt.SelectOne
+
+// whoamiSessionEnd is when the command line's session ends, from its own
+// session.whoami: false when its credential is no session (an API key).
+func whoamiSessionEnd(ctx context.Context, client *mcp.Client) (time.Time, bool, error) {
+	who, err := client.CallTool(ctx, ops.Session, ops.SessionWhoamiArgs{})
+	if err != nil {
+		return time.Time{}, false, handleToolError(err)
+	}
+	return sessionEndOf(who)
+}
+
+// sessionEndOf reads session.whoami's session_expires_at.
+func sessionEndOf(who map[string]any) (time.Time, bool, error) {
+	raw, _ := who["session_expires_at"].(string)
+	if raw == "" {
+		return time.Time{}, false, nil
+	}
+	end, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("the home answered an unreadable session end %q", raw)
+	}
+	return end, true, nil
+}
+
+// splitLifetime reads value[:lifetime]: the value, and the lifetime it
+// names, standing when it names none.
+func splitLifetime(flag, value string) (string, string, error) {
+	at := strings.LastIndex(value, ":")
+	if at < 0 {
+		return value, "standing", nil
+	}
+	id, choice := value[:at], value[at+1:]
+	for _, known := range lifetimeChoices {
+		if choice == known && id != "" {
+			return id, choice, nil
+		}
+	}
+	return "", "", fmt.Errorf("%s %q names the lifetime %q; a lifetime is %s",
+		flag, value, choice, strings.Join(lifetimeChoices, ", "))
+}
+
+// What "session" binds, in the words the help and the refusal use: until a
+// time fixed when the grant is made, at most 24 hours on, named by that
+// time and never by what might end a session, since an until is fixed once
+// committed.
+const (
+	sessionLifetimeHelp = "session (until the time your session is now due to end, at most " +
+		"24 hours on, fixed when you grant)"
+	sessionLifetimeRefusal = "the session lifetime lasts until the time this command line's " +
+		"session is now due to end, at most 24 hours on, and this credential is no session " +
+		"(an API key), so it has no such time: choose standing, 5m, 1h or once"
+)
+
+// lifetimeOf is the lifetime a choice sends, computed once, when the
+// command line decides, so the preview and the commit carry the same
+// until. "session" is the time the session is now due to end at, at most
+// 24 hours on, and is said by that time.
+func lifetimeOf(choice string, chooser grantChooser) (string, string, error) {
+	until := func(at time.Time) string { return at.UTC().Truncate(time.Second).Format(time.RFC3339) }
+	switch choice {
+	case "standing", "once":
+		return choice, "", nil
+	case "5m":
+		return "until", until(chooser.now.Add(5 * time.Minute)), nil
+	case "1h":
+		return "until", until(chooser.now.Add(time.Hour)), nil
+	case "session":
+		end, ok, err := chooser.sessionEnd()
+		if err != nil {
+			return "", "", err
+		}
+		if !ok {
+			return "", "", errors.New(sessionLifetimeRefusal)
+		}
+		if limit := chooser.now.Add(sessionHorizon); end.After(limit) {
+			end = limit
+		}
+		if chooser.note != nil {
+			chooser.note("This session: until " + until(end) + ".")
+		}
+		return "until", until(end), nil
+	}
+	return "", "", fmt.Errorf("a lifetime is %s, not %q", strings.Join(lifetimeChoices, ", "), choice)
+}
+
+// idChoice is what a binding or selection names: an entry of the athanor,
+// an instance entry, or (a selection only) a lending profile's label.
+type idChoice struct {
+	value    string
+	instance bool
+	label    bool
+}
+
+func entryChoice(id string) idChoice {
+	return idChoice{value: id, instance: strings.HasPrefix(id, "ine_")}
+}
+
+func selectionChoice(value string) idChoice {
+	switch {
+	case strings.HasPrefix(value, "ine_"):
+		return idChoice{value: value, instance: true}
+	case strings.HasPrefix(value, "vlt_"):
+		return idChoice{value: value}
+	default:
+		return idChoice{value: value, label: true}
+	}
+}
+
+func bindingItem(need string, id idChoice, kind, until string) ops.ProfilePreviewArgsDecisionsBindingsItem {
+	item := ops.ProfilePreviewArgsDecisionsBindingsItem{Need: ops.Value(need)}
+	if id.instance {
+		item.InstanceEntryId = ops.Value(id.value)
+	} else {
+		item.EntryId = ops.Value(id.value)
+	}
+	lifetime := ops.ProfilePreviewArgsDecisionsBindingsItemLifetime{Kind: kind}
+	if until != "" {
+		lifetime.Until = ops.Value(until)
+	}
+	item.Lifetime = ops.Value(lifetime)
+	return item
+}
+
+func selectionItem(row depRow, need string, id idChoice, kind, until string) ops.ProfilePreviewArgsDecisionsSelectionsItem {
+	item := ops.ProfilePreviewArgsDecisionsSelectionsItem{Dep: row.dep}
+	if row.from != "" {
+		item.From = ops.Value(row.from)
+	}
+	switch {
+	case id.label:
+		item.Label = ops.Value(id.value)
+	case id.instance:
+		item.InstanceEntryId = ops.Value(id.value)
+	default:
+		item.EntryId = ops.Value(id.value)
+	}
+	if need != "" && !id.label {
+		item.Need = ops.Value(need)
+	}
+	lifetime := ops.ProfilePreviewArgsDecisionsSelectionsItemLifetime{Kind: kind}
+	if until != "" {
+		lifetime.Until = ops.Value(until)
+	}
+	item.Lifetime = ops.Value(lifetime)
+	return item
+}
+
+// needRow is one credential need of the plan, the app's or a dependency's.
+type needRow struct {
+	name           string
+	kind           string
+	provider       string
+	reason         string
+	required       bool
+	source         string
+	choiceRequired bool
+	suggested      *idChoice
+	candidates     []map[string]any
+	newerShipped   string
+	destination    any
+}
+
+// declared is a need the manifest declares as a credential, unlike the
+// undeclared slot of a manifest that declares no needs.
+func (n needRow) declared() bool {
+	switch n.kind {
+	case "api_key", "oauth", "bundle":
+		return true
+	}
+	return false
+}
+
+func readNeed(raw any) (needRow, bool) {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return needRow{}, false
+	}
+	row := needRow{
+		name:           str(m["need"]),
+		kind:           str(m["kind"]),
+		provider:       str(m["provider"]),
+		reason:         str(m["reason"]),
+		required:       m["required"] == true,
+		source:         str(m["source"]),
+		choiceRequired: m["choice_required"] == true,
+		newerShipped:   str(m["newer_shipped"]),
+		destination:    m["destination"],
+	}
+	if suggested, ok := m["suggested"].(map[string]any); ok {
+		if id := str(suggested["entry_id"]); id != "" {
+			row.suggested = &idChoice{value: id}
+		} else if id := str(suggested["instance_entry_id"]); id != "" {
+			row.suggested = &idChoice{value: id, instance: true}
+		}
+	}
+	for _, c := range asList(m["candidates"]) {
+		if candidate, ok := c.(map[string]any); ok {
+			row.candidates = append(row.candidates, candidate)
+		}
+	}
+	return row, true
+}
+
+// depRow is one dependency edge of the plan whose dependency declares a
+// credential need: who calls it, its needs and the profiles that lend.
+type depRow struct {
+	from    string
+	dep     string
+	needs   []needRow
+	lenders []map[string]any
+}
+
+func readDeps(plan map[string]any) []depRow {
+	var rows []depRow
+	for _, raw := range asList(plan["dependency_needs"]) {
+		m, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
+		row := depRow{from: str(m["from"]), dep: str(m["dep"])}
+		for _, n := range asList(m["needs"]) {
+			if need, ok := readNeed(n); ok {
+				row.needs = append(row.needs, need)
+			}
+		}
+		for _, l := range asList(m["candidates"]) {
+			if lender, ok := l.(map[string]any); ok {
+				row.lenders = append(row.lenders, lender)
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
 
-		name := str(need["need"])
+// provided is whether the calling app's configuration fills the edge,
+// which then holds no other credential.
+func (d depRow) provided() bool {
+	for _, need := range d.needs {
+		if need.source == "provided" {
+			return true
+		}
+	}
+	return false
+}
 
-		if entryID, given := preset[name]; given {
-			bindings = append(bindings, ops.ProfilePreviewArgsDecisionsBindingsItem{Need: ops.Value(name), EntryId: ops.Value(entryID)})
+func asList(value any) []any {
+	list, _ := value.([]any)
+	return list
+}
+
+// headBinding is one binding the profile's head holds (the plan's
+// head_bindings): where it sits, what it binds and how long it lives.
+type headBinding struct {
+	node  string
+	edge  string
+	name  string
+	id    idChoice
+	kind  string
+	until string
+}
+
+// namedNeed is the dependency's need a binding's edge names, if it names
+// one (`<dep>|<need>`).
+func (h headBinding) namedNeed() string {
+	_, need, _ := strings.Cut(h.edge, "|")
+	return need
+}
+
+func readHeads(plan map[string]any) []headBinding {
+	var heads []headBinding
+	for _, raw := range asList(plan["head_bindings"]) {
+		m, ok := raw.(map[string]any)
+		if !ok {
 			continue
 		}
-
-		if flagJSON || !prompt.IsInteractive(flagNoInteractive) {
+		node, edge, name, ok := parseBindingKey(str(m["binding_key"]))
+		if !ok {
 			continue
 		}
+		head := headBinding{node: node, edge: edge, name: name}
+		switch {
+		case str(m["entry_id"]) != "":
+			head.id = idChoice{value: str(m["entry_id"])}
+		case str(m["instance_entry_id"]) != "":
+			head.id = idChoice{value: str(m["instance_entry_id"]), instance: true}
+		case str(m["label"]) != "":
+			head.id = idChoice{value: str(m["label"]), label: true}
+		default:
+			continue
+		}
+		lifetime, _ := m["lifetime"].(map[string]any)
+		head.kind, head.until = str(lifetime["kind"]), str(lifetime["until"])
+		heads = append(heads, head)
+	}
+	return heads
+}
 
-		entryID, err := askForEntry(need, candidates)
+// parseBindingKey reads `<node>|<edge key>|<slot>`: the slot is `default`
+// for the unnamed binding or `name:<name>`, and neither a node nor a name
+// holds a `|`.
+func parseBindingKey(key string) (node, edge, name string, ok bool) {
+	first, last := strings.Index(key, "|"), strings.LastIndex(key, "|")
+	if first < 0 || last <= first {
+		return "", "", "", false
+	}
+	node, edge = key[:first], key[first+1:last]
+	switch slot := key[last+1:]; {
+	case slot == "default":
+		return node, edge, "", true
+	case strings.HasPrefix(slot, "name:") && len(slot) > len("name:"):
+		return node, edge, strings.TrimPrefix(slot, "name:"), true
+	}
+	return "", "", "", false
+}
+
+// headOnEdge is the head's binding of a dependency edge.
+func headOnEdge(heads []headBinding, row depRow) (headBinding, bool) {
+	for _, head := range heads {
+		dep, _, _ := strings.Cut(head.edge, "|")
+		if head.node == row.from && dep == row.dep && head.name == "" {
+			return head, true
+		}
+	}
+	return headBinding{}, false
+}
+
+// headNeed is the need a head binding's entry is for: the one whose
+// candidates hold it, or the only need there is; none when it cannot be
+// told, or when the binding names a lender, which no need of the app's own
+// calls takes.
+func headNeed(needs []needRow, id idChoice) string {
+	if id.label {
+		return ""
+	}
+	var holding []string
+	for _, need := range needs {
+		for _, c := range need.candidates {
+			if str(c["entry_id"]) == id.value || str(c["instance_entry_id"]) == id.value {
+				holding = append(holding, need.name)
+				break
+			}
+		}
+	}
+	switch {
+	case len(holding) == 1:
+		return holding[0]
+	case len(needs) == 1:
+		return needs[0].name
+	}
+	return ""
+}
+
+// edgeNeed is the dependency's need a head binding on its edge is for, and
+// whether it can be told: none to name where the dependency declares one
+// need or a lender lends; else the need the edge names, or the one need
+// whose candidates hold the entry.
+func edgeNeed(row depRow, head headBinding) (string, bool) {
+	if head.id.label || len(row.needs) <= 1 {
+		return "", true
+	}
+	if named := head.namedNeed(); named != "" {
+		for _, need := range row.needs {
+			if need.name == named {
+				return named, true
+			}
+		}
+		return "", false
+	}
+	need := headNeed(row.needs, head.id)
+	return need, need != ""
+}
+
+// headLifetime is the lifetime a head binding reopens with: as it stands,
+// an until kept while it is ahead. One whose time has passed is asked for
+// again where the grant may ask, and refused otherwise, naming what it
+// binds and the flag that names its lifetime.
+func headLifetime(head headBinding, chooser grantChooser, what, flag string) (string, string, error) {
+	switch head.kind {
+	case "standing", "once":
+		return head.kind, "", nil
+	case "until":
+		at, err := time.Parse(time.RFC3339Nano, head.until)
+		if err == nil && at.After(chooser.now) {
+			return "until", head.until, nil
+		}
+		if !chooser.interactive {
+			return "", "", fmt.Errorf("%s was granted until %s, which has passed: name how long "+
+				"it lives with %s", what, head.until, flag)
+		}
+		options := make([]prompt.Option, 0, len(lifetimeChoices))
+		for _, choice := range lifetimeChoices {
+			options = append(options, prompt.Option{Label: choice, Value: choice})
+		}
+		choice, err := chooser.ask(fmt.Sprintf("%s was granted until %s, which has passed: "+
+			"how long should it live now?", what, head.until), options)
+		if err != nil {
+			return "", "", err
+		}
+		return lifetimeOf(choice, chooser)
+	}
+	return "", "", fmt.Errorf("%s holds a lifetime this command line cannot read (%q): name "+
+		"how long it lives with %s", what, head.kind, flag)
+}
+
+// collectDecisions decides each credential the grant binds and the
+// narrowing it asks for. What a flag names is sent as named: any --entry
+// replaces every binding of the app's own calls, and a --selection that
+// dependency's edge. An edge the profile's head binds and no flag names
+// reopens on what the head binds there, its entry and lifetime, never
+// wider; a binding whose need cannot be told is left unbound and said.
+// Any other edge no flag names takes the plan's suggestion for its first
+// required declared need that has one, since the app's own edge carries
+// one need's credentials and a dependency's edge one credential; an
+// optional need and the undeclared slot of a manifest declaring no needs
+// are bound only when named or chosen. Where a required need has several
+// candidates and no suggestion, an interactive grant asks and any other is
+// refused, naming the need.
+func collectDecisions(plan map[string]any, flags grantFlags, chooser grantChooser) (grantDecisions, error) {
+	var decided grantDecisions
+
+	bindings, err := sourceBindings(plan, flags.entries, chooser)
+	if err != nil {
+		return decided, err
+	}
+	decided.bindings = bindings
+
+	selections, err := dependencySelections(plan, flags.selections, chooser)
+	if err != nil {
+		return decided, err
+	}
+	decided.selections = selections
+
+	if flags.getHeadOnly {
+		decided.subset = getHeadOnlySubset(plan, chooser.note)
+	}
+	return decided, nil
+}
+
+func sourceBindings(plan map[string]any, flags []string, chooser grantChooser) ([]ops.ProfilePreviewArgsDecisionsBindingsItem, error) {
+	bindings := []ops.ProfilePreviewArgsDecisionsBindingsItem{}
+
+	for _, pair := range flags {
+		need, value, ok := strings.Cut(pair, "=")
+		if !ok || need == "" || value == "" {
+			return nil, fmt.Errorf("--entry expects need=id[:lifetime], got %q", pair)
+		}
+		id, choice, err := splitLifetime("--entry", value)
 		if err != nil {
 			return nil, err
 		}
-		if entryID != "" {
-			bindings = append(bindings, ops.ProfilePreviewArgsDecisionsBindingsItem{Need: ops.Value(name), EntryId: ops.Value(entryID)})
+		kind, until, err := lifetimeOf(choice, chooser)
+		if err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, bindingItem(need, entryChoice(id), kind, until))
+	}
+	if len(flags) > 0 {
+		return bindings, nil
+	}
+
+	var needs []needRow
+	for _, raw := range asList(plan["needs"]) {
+		if need, ok := readNeed(raw); ok {
+			needs = append(needs, need)
 		}
 	}
 
+	// A re-grant reopens on what the head binds on the app's own calls, its
+	// entry and lifetime, never wider: no suggestion is added beside it.
+	var held []headBinding
+	for _, head := range readHeads(plan) {
+		if head.node == str(plan["source_ref"]) && head.edge == "@ingress" {
+			held = append(held, head)
+		}
+	}
+	if len(held) > 0 {
+		for _, head := range held {
+			need := headNeed(needs, head.id)
+			if need == "" {
+				chooser.note(fmt.Sprintf("The grant's binding of %s is left unbound: no need of "+
+					"the app can be told for it. Name it with --entry <need>=%s to bind it.",
+					head.id.value, head.id.value))
+				continue
+			}
+			what := fmt.Sprintf("need %s", need)
+			if head.name != "" {
+				what = fmt.Sprintf("need %s's account '%s'", need, head.name)
+			}
+			kind, until, err := headLifetime(head, chooser, what,
+				fmt.Sprintf("--entry %s=<id>:<lifetime>", need))
+			if err != nil {
+				return nil, err
+			}
+			item := bindingItem(need, head.id, kind, until)
+			if head.name != "" {
+				item.Name = ops.Value(head.name)
+			}
+			bindings = append(bindings, item)
+		}
+		return bindings, nil
+	}
+
+	for i, need := range needs {
+		chosen, err := chooseFor(need, nil, chooser,
+			fmt.Sprintf("--entry %s=<id>", need.name), fmt.Sprintf("need %s", need.name))
+		if err != nil {
+			return nil, err
+		}
+		if chosen == nil {
+			continue
+		}
+		bindings = append(bindings, bindingItem(need.name, *chosen, "standing", ""))
+		for _, rest := range needs[i+1:] {
+			if rest.declared() && rest.required {
+				chooser.note(fmt.Sprintf("Need %s is left unbound: the app's own calls carry one "+
+					"need's credentials, %s's. Name it with --entry to bind it instead.",
+					rest.name, need.name))
+			}
+		}
+		break
+	}
 	return bindings, nil
 }
 
-func askForEntry(need map[string]any, candidates []any) (string, error) {
-	if len(candidates) == 0 {
-		fmt.Println("No vault entries yet — create one first, or grant without one.")
-		return "", nil
+// chooseFor is the entry a need no flag names is bound to, if any: its
+// suggestion when it is a required declared need; the person's choice
+// when several can meet it, none is suggested and the grant may ask.
+func chooseFor(need needRow, lenders []map[string]any, chooser grantChooser, flag, what string) (*idChoice, error) {
+	if need.source == "provided" {
+		return nil, nil
+	}
+	if need.declared() && need.required && need.suggested != nil {
+		return need.suggested, nil
+	}
+	if !need.choiceRequired {
+		return nil, nil
+	}
+	if !chooser.interactive {
+		if need.declared() && need.required {
+			return nil, fmt.Errorf("%s can be met by several entries and none is suggested: "+
+				"name the one to use with %s", what, flag)
+		}
+		return nil, nil
+	}
+	return askEntry(need, lenders, chooser)
+}
+
+func askEntry(need needRow, lenders []map[string]any, chooser grantChooser) (*idChoice, error) {
+	options := []prompt.Option{{Label: "No entry", Value: ""}}
+	for _, c := range need.candidates {
+		label := str(c["name"]) + ", " + sourceWords(str(c["source"]), "")
+		if destination, ok := c["destination"].(map[string]any); ok {
+			label += ", sent only to " + destinationLabel(destination)
+		}
+		if id := str(c["entry_id"]); id != "" {
+			options = append(options, prompt.Option{Label: label, Value: "vlt:" + id})
+		} else if id := str(c["instance_entry_id"]); id != "" {
+			options = append(options, prompt.Option{Label: label, Value: "ine:" + id})
+		}
+	}
+	for _, l := range lenders {
+		options = append(options, prompt.Option{
+			Label: fmt.Sprintf("%s, through the dependency's '%s' profile", str(l["entry_name"]), str(l["label"])),
+			Value: "label:" + str(l["label"])})
 	}
 
-	options := []prompt.Option{{Label: "No entry", Value: ""}}
-	for _, entry := range candidates {
-		c, ok := entry.(map[string]any)
-		if !ok {
+	title := need.reason
+	if title == "" {
+		title = fmt.Sprintf("Vault entry for %s", need.name)
+	}
+	value, err := chooser.ask(title, options)
+	if err != nil {
+		return nil, err
+	}
+	kind, id, _ := strings.Cut(value, ":")
+	switch kind {
+	case "vlt":
+		return &idChoice{value: id}, nil
+	case "ine":
+		return &idChoice{value: id, instance: true}, nil
+	case "label":
+		return &idChoice{value: id, label: true}, nil
+	}
+	return nil, nil
+}
+
+func dependencySelections(plan map[string]any, flags []string, chooser grantChooser) ([]ops.ProfilePreviewArgsDecisionsSelectionsItem, error) {
+	rows := readDeps(plan)
+	selections := []ops.ProfilePreviewArgsDecisionsSelectionsItem{}
+	named := map[string]bool{}
+
+	for _, pair := range flags {
+		dep, value, ok := strings.Cut(pair, "=")
+		if !ok || dep == "" || value == "" {
+			return nil, fmt.Errorf("--selection expects dep=id[:lifetime], got %q", pair)
+		}
+		raw, choice, err := splitLifetime("--selection", value)
+		if err != nil {
+			return nil, err
+		}
+		kind, until, err := lifetimeOf(choice, chooser)
+		if err != nil {
+			return nil, err
+		}
+		id := selectionChoice(raw)
+		named[dep] = true
+
+		// Every node of the closure that calls the dependency takes it.
+		matched := false
+		for _, row := range rows {
+			if row.dep != dep {
+				continue
+			}
+			matched = true
+			need, err := selectedNeed(row, id)
+			if err != nil {
+				return nil, err
+			}
+			selections = append(selections, selectionItem(row, need, id, kind, until))
+		}
+		if !matched {
+			selections = append(selections, selectionItem(depRow{dep: dep}, "", id, kind, until))
+		}
+	}
+
+	heads := readHeads(plan)
+	for _, row := range rows {
+		if named[row.dep] || row.provided() {
 			continue
 		}
 
-		label := str(c["name"])
-		if fields := joinStrings(c["field_names"]); fields != "" {
-			label = fmt.Sprintf("%s (gets: %s)", label, fields)
+		// The edge the head fills reopens on what it holds there, never
+		// wider: no suggestion takes the place of a binding left unbound.
+		if head, ok := headOnEdge(heads, row); ok {
+			need, told := edgeNeed(row, head)
+			if !told {
+				chooser.note(fmt.Sprintf("The grant's binding of %s for %s is left unbound: no "+
+					"need of %s can be told for it. Name it with --selection %s=%s to bind it.",
+					head.id.value, row.dep, row.dep, row.dep, head.id.value))
+				continue
+			}
+			what := fmt.Sprintf("%s's credential", row.dep)
+			if need != "" {
+				what = fmt.Sprintf("%s's need %s", row.dep, need)
+			}
+			kind, until, err := headLifetime(head, chooser, what,
+				fmt.Sprintf("--selection %s=<id>:<lifetime>", row.dep))
+			if err != nil {
+				return nil, err
+			}
+			selections = append(selections, selectionItem(row, need, head.id, kind, until))
+			continue
 		}
 
-		options = append(options, prompt.Option{Label: label, Value: str(c["id"])})
+		for i, need := range row.needs {
+			chosen, err := chooseFor(need, row.lenders, chooser,
+				fmt.Sprintf("--selection %s=<id>", row.dep), fmt.Sprintf("%s's need %s", row.dep, need.name))
+			if err != nil {
+				return nil, err
+			}
+			if chosen == nil {
+				continue
+			}
+			name := ""
+			if len(row.needs) > 1 {
+				name = need.name
+			}
+			selections = append(selections, selectionItem(row, name, *chosen, "standing", ""))
+			for _, rest := range row.needs[i+1:] {
+				if rest.required {
+					chooser.note(fmt.Sprintf("%s's need %s is left unbound: its edge carries one "+
+						"credential, %s's. Name it with --selection to fill it instead.",
+						row.dep, rest.name, need.name))
+				}
+			}
+			break
+		}
+	}
+	return selections, nil
+}
+
+// selectedNeed is the need of the dependency an entry selection is for:
+// none to name when the dependency declares one credential need or a
+// label lends; otherwise the one need whose candidates hold the entry.
+func selectedNeed(row depRow, id idChoice) (string, error) {
+	if id.label || len(row.needs) <= 1 {
+		return "", nil
+	}
+	var holding, names []string
+	for _, need := range row.needs {
+		names = append(names, need.name)
+		for _, c := range need.candidates {
+			if str(c["entry_id"]) == id.value || str(c["instance_entry_id"]) == id.value {
+				holding = append(holding, need.name)
+				break
+			}
+		}
+	}
+	if len(holding) == 1 {
+		return holding[0], nil
+	}
+	which := "none of them"
+	if len(holding) > 1 {
+		which = "several of them (" + strings.Join(holding, ", ") + ")"
+	}
+	return "", fmt.Errorf("%s declares the credential needs %s, and %s can meet %s: the "+
+		"command line cannot tell which need it is for", row.dep, strings.Join(names, ", "),
+		id.value, which)
+}
+
+// getHeadOnlySubset narrows each catalyst whose network ask names methods
+// beside GET and HEAD to the GET and HEAD it asks for, said by those
+// methods: a GET can still disclose, so the narrowing claims no more.
+func getHeadOnlySubset(plan map[string]any, note func(string)) map[string]ops.ProfilePreviewArgsDecisionsSubsetItem {
+	subset := map[string]ops.ProfilePreviewArgsDecisionsSubsetItem{}
+	for _, raw := range asList(plan["rows"]) {
+		row, ok := raw.(map[string]any)
+		if !ok || str(row["kind"]) != "egress" || !strings.HasPrefix(str(row["node"]), "catalyst:") {
+			continue
+		}
+		values, _ := row["values"].(map[string]any)
+		asked := stringList(values["methods"])
+		kept := getAndHead(asked)
+		if len(kept) == 0 || len(kept) == len(asked) {
+			continue
+		}
+		node := str(row["node"])
+		subset[node] = ops.ProfilePreviewArgsDecisionsSubsetItem{
+			Egress: ops.Value(ops.ProfilePreviewArgsDecisionsSubsetItemEgress{Methods: ops.Value(kept)})}
+		note(fmt.Sprintf("%s: %s (it asks for %s)", node, methodsOnlyLabel(kept), strings.Join(asked, ", ")))
+	}
+	return subset
+}
+
+// getAndHead is the GET and HEAD a method ask names, in that order.
+func getAndHead(asked []string) []string {
+	var kept []string
+	for _, method := range []string{"GET", "HEAD"} {
+		for _, a := range asked {
+			if strings.EqualFold(a, method) {
+				kept = append(kept, method)
+				break
+			}
+		}
+	}
+	return kept
+}
+
+// methodsOnlyLabel names a narrowing by the methods it keeps.
+func methodsOnlyLabel(methods []string) string {
+	return strings.Join(methods, " and ") + " only"
+}
+
+// renderPlanNeeds draws each credential need of the app and of its
+// dependencies, and what can meet it, before anything is previewed.
+func renderPlanNeeds(w io.Writer, plan map[string]any) {
+	source := str(plan["source_ref"])
+	var lines []string
+	declared := false
+
+	for _, raw := range asList(plan["needs"]) {
+		need, ok := readNeed(raw)
+		if !ok {
+			continue
+		}
+		if need.declared() {
+			declared = true
+		}
+		lines = append(lines, needLines(source, source, need, nil)...)
+	}
+	for _, row := range readDeps(plan) {
+		for _, need := range row.needs {
+			declared = true
+			lines = append(lines, needLines(row.dep, row.from, need, row.lenders)...)
+		}
 	}
 
-	title := str(need["reason"])
-	if title == "" {
-		title = fmt.Sprintf("Vault entry for %s", str(need["need"]))
+	fmt.Fprintln(w, "Vault entries:")
+	if !declared {
+		fmt.Fprintln(w, "  This app asks for no credentials.")
+	}
+	for _, line := range lines {
+		fmt.Fprintln(w, line)
+	}
+	fmt.Fprintln(w)
+}
+
+// needLines is one need as the plan answers it: what it is, and what can
+// meet it — the suggestion, the entries to choose from, the profiles that
+// lend, or the publisher's configuration.
+func needLines(component, from string, need needRow, lenders []map[string]any) []string {
+	head := fmt.Sprintf("  %s: %s", component, need.name)
+	if need.declared() {
+		optional := ""
+		if !need.required {
+			optional = ", optional"
+		}
+		head += fmt.Sprintf(" (%s for %s%s)", need.kind, need.provider, optional)
+	} else {
+		head += " (any entry it reads itself, optional)"
+	}
+	if need.reason != "" {
+		head += " — " + need.reason
+	}
+	lines := []string{head}
+
+	if need.source == "provided" {
+		line := "    " + sourceWords("provided", from)
+		if destination, ok := need.destination.(map[string]any); ok {
+			line += ", sent only to " + destinationLabel(destination)
+		}
+		return append(lines, line)
 	}
 
-	return prompt.SelectOne(title, options)
+	switch {
+	case need.suggested != nil:
+		for _, c := range need.candidates {
+			if str(c["entry_id"]) == need.suggested.value || str(c["instance_entry_id"]) == need.suggested.value {
+				lines = append(lines, "    suggested: "+str(c["name"])+", "+sourceWords(str(c["source"]), ""))
+			}
+		}
+	case need.choiceRequired:
+		var names []string
+		for _, c := range need.candidates {
+			names = append(names, str(c["name"]))
+		}
+		lines = append(lines, "    choose one of: "+strings.Join(names, ", "))
+	case len(need.candidates) == 0 && len(lenders) == 0:
+		lines = append(lines, "    no entry can meet it yet: create one first")
+	}
+	for _, l := range lenders {
+		lines = append(lines, fmt.Sprintf("    or %s, through its '%s' profile", str(l["entry_name"]), str(l["label"])))
+	}
+	if need.newerShipped != "" {
+		lines = append(lines, fmt.Sprintf("    it reads the value itself; to update it: cyfr component pull %s:%s",
+			component, need.newerShipped))
+	}
+	return lines
 }
 
 // grantOrigins is what a grant admits, and whether it is the head's kept:
@@ -423,8 +1298,8 @@ func renderPreview(w io.Writer, preview map[string]any) {
 		fmt.Fprintf(w, "\n  Admits runs started: %s\n", origins)
 	}
 
-	fmt.Fprint(w, "\n  Vault entries are sealed at rest; CYFR attaches a credential to a component's requests,\n"+
-		"  and a component holds a field's value only where the row says it is disclosed.\n\n")
+	fmt.Fprint(w, "\n  Vault entries are sealed at rest. A component never holds a vault entry's value\n"+
+		"  unless its row says the value is disclosed to it.\n\n")
 }
 
 // describeRow is one row in the CLI's words, its first line naming it.
@@ -438,23 +1313,10 @@ func describeRow(row map[string]any) []string {
 
 	switch str(row["kind"]) {
 	case "credential":
-		head := str(values["name"]) + " " + edgeLabel(node, str(values["edge"]))
-		if label := str(values["label"]); label != "" {
-			head += fmt.Sprintf(", the key bound on its '%s' profile", label)
-		}
-		if connection := str(values["connection"]); connection != "" {
-			head += fmt.Sprintf(", as the account '%s'", connection)
-		}
-		lines := []string{head, "source: " + sourceLabel(str(values["source"]))}
-		if provider := str(values["provider"]); provider != "" {
-			lines = append(lines, "provider: "+provider)
-		}
-		lines = append(lines,
-			"goes to: "+destinationLabel(values["destination"]),
-			disclosureLabel(values["disclosed"]),
-			"lifetime: "+lifetimeLabel(values["lifetime"]),
-			"fields: "+listOr(values["fields"], "none"),
-			"scopes: "+listOr(values["scopes"], "none"))
+		lines := []string{credentialSentence(node, values),
+			"lifetime: " + lifetimeLabel(values["lifetime"]),
+			"fields: " + listOr(values["fields"], "none"),
+			"scopes: " + listOr(values["scopes"], "none")}
 		if values["suggested"] == true {
 			lines = append(lines, "suggested")
 		}
@@ -534,19 +1396,66 @@ func describeRow(row map[string]any) []string {
 	}
 }
 
-// sourceLabel says whose credential a row binds: the athanor's own entry,
-// an entry the instance offers, or the publisher's provided configuration.
-func sourceLabel(source string) string {
+// credentialSentence is one binding in one sentence: the app or the
+// dependency that uses it, the entry and whose it is, the account it is,
+// where it may go and whether the component holds the value.
+func credentialSentence(node string, values map[string]any) string {
+	name := str(values["name"])
+	source := sourceWords(str(values["source"]), node)
+
+	var sentence string
+	if edge := str(values["edge"]); edge == "@ingress" {
+		sentence = fmt.Sprintf("%s uses %s, %s, for its own calls", node, name, source)
+	} else {
+		dep, need, _ := strings.Cut(edge, "|")
+		sentence = fmt.Sprintf("%s uses %s, %s", dep, name, source)
+		if label := str(values["label"]); label != "" {
+			sentence = fmt.Sprintf("%s will use %s, %s, through its '%s' profile", dep, name, source, label)
+		}
+		sentence += ", from " + node
+		if need != "" {
+			sentence += " for its " + need + " need"
+		}
+	}
+	if connection := str(values["connection"]); connection != "" {
+		sentence += fmt.Sprintf(", as the account '%s'", connection)
+	}
+
+	sentence += ": "
+	if provider := str(values["provider"]); provider != "" {
+		sentence += "a " + provider + " account, "
+	}
+	sentence += "sent only to " + destinationLabel(values["destination"]) + ". " +
+		disclosureLabel(values["disclosed"])
+	return sentence
+}
+
+// sourceWords says whose credential a binding is: the athanor's own entry,
+// an entry the instance offers, or the public configuration the
+// publisher of node ships.
+func sourceWords(source, node string) string {
 	switch source {
 	case "own":
-		return "own (an entry of this athanor)"
+		return "an entry of this athanor"
 	case "instance":
-		return "instance (an entry this instance offers)"
+		return "provided by this instance"
 	case "provided":
-		return "provided (the publisher's public configuration)"
+		return "provided by " + publisherOf(node, "its publisher") + ", the app's public configuration"
 	default:
 		return source
 	}
+}
+
+// publisherOf is the namespace that publishes the component node names.
+func publisherOf(node, otherwise string) string {
+	_, rest, ok := strings.Cut(node, ":")
+	if !ok {
+		return otherwise
+	}
+	if namespace, _, ok := strings.Cut(rest, "."); ok && namespace != "" {
+		return namespace
+	}
+	return otherwise
 }
 
 // destinationLabel spells where a credential may go: its scheme, hosts and
@@ -566,11 +1475,13 @@ func destinationLabel(value any) string {
 	return label
 }
 
+// disclosureLabel says whether the component holds the value: a value not
+// disclosed to it is one it never holds.
 func disclosureLabel(disclosed any) string {
 	if disclosed == true {
-		return "disclosed: the component reads the value itself"
+		return "The component reads the value itself."
 	}
-	return "attached by CYFR: the component never holds the value"
+	return "The component never holds the value."
 }
 
 // lifetimeLabel spells how long a binding stands.
@@ -586,19 +1497,6 @@ func lifetimeLabel(value any) string {
 	default:
 		return str(lifetime["kind"])
 	}
-}
-
-// edgeLabel names the edge a credential rides: its node's own key, or the
-// key it lends a dependency on that edge.
-func edgeLabel(node, edge string) string {
-	if edge == "@ingress" {
-		return "for " + node + "'s own calls"
-	}
-	dep, need, named := strings.Cut(edge, "|")
-	if named {
-		return fmt.Sprintf("lent by %s to %s for its %s need", node, dep, need)
-	}
-	return fmt.Sprintf("lent by %s to %s", node, dep)
 }
 
 func subjectLabel(subject any) string {

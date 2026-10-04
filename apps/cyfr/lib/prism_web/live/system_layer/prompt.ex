@@ -24,15 +24,28 @@ defmodule PrismWeb.SystemLayer.Prompt do
       `preview` of the decisions — a `Prima.ConsentPreview` (`v`, `rows`,
       `origins`, `commit_digest`) with the `proof` a commit presents, or
       `nil` for a plan whose closure is `unresolved`, which has nothing to
-      preview or commit — and the `decisions` payload (`%{"ref" => ref,
-      "bindings" => [...]}`, with the `origins`, `subset` and `label` it
-      names), committed through `profile.commit`
-      (`PrismWeb.SystemLayer.grant_prompt/4` builds it);
+      preview or commit — the `decisions` payload (`%{"ref" => ref,
+      "bindings" => [...]}`, with the `selections`, `origins`, `subset` and
+      `label` it names), committed through `profile.commit`, and optionally
+      `session_expires_at`, when the person's session ends (RFC 3339, as
+      `session.whoami` answers it), which the sheet's "this session"
+      lifetime is held to, and `suggestion_refused`, the home's sentence
+      when it refused to preview the plan's suggestions and the grant
+      opened with nothing bound (`PrismWeb.SystemLayer.grant_prompt/4`
+      builds it);
     * `:credential_entry` — `name`, the vault entry to create, and
       optionally `field`, the name its one field is stored under
       (`API_KEY` when absent), created through `vault.create` as an `api_key`
       entry with the destination and disclosure the person enters in the
-      prompt's form; the subject names neither, so nothing is prefilled;
+      prompt's form. A prompt a grant's sheet raises for a need ("Connect
+      your <provider> account") also names the `athanor_id` its grant was
+      planned in, which the entry is made in or not at all, the need's
+      `provider`, the `hosts` and `paths` it declares and whether the
+      component reads the value itself (`disclose_needed`), which the form
+      is prefilled from,
+      and `return`, the grant it goes back to: `%{prompt, need}` for a need
+      of the app, `%{prompt, from, dep, need}` for a dependency's. Any
+      other prompt names none of them, and nothing is prefilled;
     * `:unlock` — optionally `name`, the vault entry it concerns;
     * `:sign_in` — optionally `message`, a sentence saying why;
     * `:safe_mode` — a `Prism.SafeMode` value;
@@ -67,6 +80,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   @default_field "API_KEY"
   @field_name ~r/\A[A-Za-z_][A-Za-z0-9_]{0,127}\z/
+  @prefill_keys [:athanor_id, :provider, :hosts, :paths, :disclose_needed, :return]
 
   @methods ~w(passkey oidc email)
 
@@ -178,23 +192,30 @@ defmodule PrismWeb.SystemLayer.Prompt do
            plan: %{} = plan,
            preview: preview,
            decisions: decisions
-         }
+         } = subject
        )
        when is_binary(ref) and ref != "" and is_binary(athanor_id) and athanor_id != "" do
-    if plan?(plan) and preview?(preview, plan) and decisions?(decisions, ref),
-      do:
-        {:ok,
-         %{ref: ref, athanor_id: athanor_id, plan: plan, preview: preview, decisions: decisions}},
-      else: {:error, :invalid_prompt}
+    session_end = Map.get(subject, :session_expires_at)
+    refused = Map.get(subject, :suggestion_refused)
+
+    if plan?(plan) and preview?(preview, plan) and decisions?(decisions, ref) and
+         instant?(session_end) and sentence?(refused),
+       do:
+         {:ok,
+          %{ref: ref, athanor_id: athanor_id, plan: plan, preview: preview, decisions: decisions}
+          |> Prima.MapUtil.put_present(:session_expires_at, session_end)
+          |> Prima.MapUtil.put_present(:suggestion_refused, refused)},
+       else: {:error, :invalid_prompt}
   end
 
   defp subject(:credential_entry, %{name: name} = subject)
        when is_binary(name) and name != "" do
     field = Map.get(subject, :field, @default_field)
+    prefill = Map.take(subject, @prefill_keys)
 
-    if map_size(Map.drop(subject, [:name, :field])) == 0 and is_binary(field) and
-         Regex.match?(@field_name, field),
-       do: {:ok, %{name: name, field: field}},
+    if map_size(Map.drop(subject, [:name, :field | @prefill_keys])) == 0 and is_binary(field) and
+         Regex.match?(@field_name, field) and prefill?(prefill),
+       do: {:ok, Map.merge(%{name: name, field: field}, prefill)},
        else: {:error, :invalid_prompt}
   end
 
@@ -242,6 +263,52 @@ defmodule PrismWeb.SystemLayer.Prompt do
   end
 
   defp subject(_kind, _subject), do: {:error, :invalid_prompt}
+
+  # What a credential entry raised for a need is prefilled from, and the
+  # grant it returns to: all of them or none.
+  defp prefill?(prefill) when map_size(prefill) == 0, do: true
+
+  defp prefill?(%{
+         athanor_id: athanor_id,
+         provider: provider,
+         hosts: hosts,
+         paths: paths,
+         disclose_needed: disclose,
+         return: return
+       })
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(provider) and provider != "" and
+              is_boolean(disclose) do
+    words?(hosts) and words?(paths) and return?(return)
+  end
+
+  defp prefill?(_partial), do: false
+
+  defp words?(list), do: is_list(list) and Enum.all?(list, &(is_binary(&1) and &1 != ""))
+
+  defp return?(%{prompt: prompt, need: need} = return)
+       when is_binary(prompt) and prompt != "" and is_binary(need) and need != "" do
+    case Map.drop(return, [:prompt, :need]) do
+      empty when map_size(empty) == 0 ->
+        true
+
+      %{from: from, dep: dep} = dep_return when map_size(dep_return) == 2 ->
+        ref?(from) and ref?(dep)
+
+      _other ->
+        false
+    end
+  end
+
+  defp return?(_return), do: false
+
+  defp ref?(ref), do: is_binary(ref) and ref != ""
+
+  defp sentence?(nil), do: true
+  defp sentence?(text), do: is_binary(text) and text != ""
+
+  defp instant?(nil), do: true
+  defp instant?(at) when is_binary(at), do: match?({:ok, _at, _offset}, DateTime.from_iso8601(at))
+  defp instant?(_at), do: false
 
   # A confirmation's fields beyond its ref, operation and expiry: absent,
   # or the shape `confirmation.pending` answers.

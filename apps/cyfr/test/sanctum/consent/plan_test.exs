@@ -694,6 +694,270 @@ defmodule Sanctum.Consent.PlanTest do
     end
   end
 
+  describe "what a surface prefills, the head's bindings and what a lender lends" do
+    @prefill_app "reagent:local.plan-prefill-app"
+    @prefill_dep "reagent:local.plan-prefill-dep"
+    @bearer %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
+
+    defp prefill_closure!(ctx) do
+      publish!(ctx, "plan-prefill-dep", "1.0.0", %{
+        "needs" => %{
+          "signing" => %{
+            "type" => "api_key:openai.com",
+            "reason" => "to sign with your key",
+            "fields" => ["OPENAI_API_KEY"],
+            "attach" => @bearer,
+            "hosts" => ["api.openai.com"],
+            "paths" => ["/v1/"],
+            "disclose" => true
+          }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.openai.com"]}}
+      })
+
+      publish!(ctx, "plan-prefill-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => @prefill_dep}]},
+        "needs" => %{
+          "model" => %{
+            "type" => "api_key:anthropic.com",
+            "reason" => "to call the model",
+            "fields" => ["ANTHROPIC_API_KEY"],
+            "required" => false
+          }
+        }
+      })
+    end
+
+    test "each declared need names its kind, provider, disclosure and declared destination, " <>
+           "the app's and a dependency's alike; the undeclared slot declares none",
+         %{ctx: ctx} do
+      prefill_closure!(ctx)
+      {:ok, plan} = Plan.plan(ctx, %{ref: @prefill_app})
+
+      assert %{
+               kind: "api_key",
+               provider: "anthropic.com",
+               disclose_only: true,
+               disclose: false,
+               hosts: nil,
+               paths: nil,
+               required: false
+             } = Enum.find(plan.needs, &(&1.need == "model"))
+
+      assert [%{from: @prefill_app, dep: @prefill_dep, needs: [signing]}] = plan.dependency_needs
+
+      assert %{
+               need: "signing",
+               kind: "api_key",
+               provider: "openai.com",
+               disclose_only: false,
+               disclose: true,
+               hosts: ["api.openai.com"],
+               paths: ["/v1/"],
+               required: true
+             } = signing
+
+      # A manifest declaring no needs has the slot the component reads
+      # itself, which names no kind or provider and declares nothing.
+      publish!(ctx, "plan-prefill-none", "1.0.0", %{})
+      {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-prefill-none"})
+      assert [slot] = plan.needs
+      assert %{need: "@ingress", hosts: nil, paths: nil, disclose: false} = slot
+      refute Map.has_key?(slot, :kind)
+      refute Map.has_key?(slot, :provider)
+    end
+
+    test "the head's bindings name each key, what it binds, its lifetime and whether a root " <>
+           "consumed its once",
+         %{ctx: ctx} do
+      ref = "reagent:local.plan-keyed"
+
+      publish!(ctx, "plan-keyed", "1.0.0", %{
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:openai.com",
+            "reason" => "to call the model with a key",
+            "fields" => ["OPENAI_API_KEY"],
+            "attach" => @bearer
+          }
+        }
+      })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      assert plan.head_bindings == []
+
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "keyed-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          fields: %{"OPENAI_API_KEY" => "sk-keyed"},
+          destination: %{"hosts" => ["api.openai.com"]}
+        })
+
+      until = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+      commit!(ctx, ref, %{
+        bindings: [
+          %{need: "api_key", entry_id: entry.id, lifetime: %{kind: "once"}},
+          %{
+            need: "api_key",
+            entry_id: entry.id,
+            name: "later",
+            lifetime: %{kind: "until", until: DateTime.to_iso8601(until)}
+          }
+        ]
+      })
+
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, ref)
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+      [once_key] = for r <- head.vault_refs, r.lifetime_kind == "once", do: r.binding_key
+      [until_key] = for r <- head.vault_refs, r.lifetime_kind == "until", do: r.binding_key
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+
+      assert Enum.sort_by(plan.head_bindings, & &1.binding_key) ==
+               Enum.sort_by(
+                 [
+                   %{
+                     binding_key: once_key,
+                     entry_id: entry.id,
+                     lifetime: %{kind: "once", until: nil},
+                     consumed: false
+                   },
+                   %{
+                     binding_key: until_key,
+                     entry_id: entry.id,
+                     lifetime: %{kind: "until", until: DateTime.to_iso8601(until)},
+                     consumed: false
+                   }
+                 ],
+                 & &1.binding_key
+               )
+
+      :ok =
+        Arca.ConsentStorage.consume_once(
+          Sanctum.Context.actor(ctx),
+          profile_id,
+          head.id,
+          once_key,
+          "exec_plan_once"
+        )
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      assert %{consumed: true} = Enum.find(plan.head_bindings, &(&1.binding_key == once_key))
+      assert %{consumed: false} = Enum.find(plan.head_bindings, &(&1.binding_key == until_key))
+    end
+
+    test "a head binding of an instance entry names that entry, and an edge a lending " <>
+           "profile fills names the profile's label, never an entry",
+         %{ctx: ctx} do
+      ref = "reagent:local.plan-head-offered"
+      # An instance entry is bound by a person active on this server.
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      publish!(person, "plan-head-offered", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      offered = instance!()
+
+      commit!(person, ref, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
+
+      {:ok, plan} = Plan.plan(person, %{ref: ref})
+
+      assert plan.head_bindings == [
+               %{
+                 binding_key: "#{ref}|@ingress|default",
+                 instance_entry_id: offered.id,
+                 lifetime: %{kind: "standing", until: nil},
+                 consumed: false
+               }
+             ]
+
+      dep = "reagent:local.plan-head-lend-dep"
+      app = "reagent:local.plan-head-lend-app"
+      publish!(ctx, "plan-head-lend-dep", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+
+      publish!(ctx, "plan-head-lend-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      key = own!(ctx, "openai.com")
+      commit!(ctx, dep, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+      commit!(ctx, app, %{selections: [%{dep: dep, label: "default", lifetime: %{kind: "once"}}]})
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: app})
+
+      assert plan.head_bindings == [
+               %{
+                 binding_key: "#{app}|#{dep}|default",
+                 label: "default",
+                 lifetime: %{kind: "once", until: nil},
+                 consumed: false
+               }
+             ]
+    end
+
+    test "a lender names the fields and the scopes its binding lends", %{ctx: ctx} do
+      publish!(ctx, "plan-lend-dep", "1.0.0", %{
+        "needs" => %{
+          "mail" => %{
+            "type" => "oauth:google",
+            "reason" => "to read your mail",
+            "scopes" => ["gmail.readonly"],
+            "attach" => %{"in" => "header", "name" => "Authorization"}
+          }
+        }
+      })
+
+      publish!(ctx, "plan-lend-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-lend-dep"}]}
+      })
+
+      mail = oauth_entry!(ctx, ["gmail.readonly"])
+
+      commit!(ctx, "reagent:local.plan-lend-dep", %{
+        bindings: [%{need: "mail", entry_id: mail.id}]
+      })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-lend-app"})
+      assert [%{candidates: [lender]}] = plan.dependency_needs
+
+      assert %{label: "default", entry_id: id, fields: [], scopes: ["gmail.readonly"]} = lender
+      assert id == mail.id
+
+      # A key's lender lends its fields and no scope.
+      publish!(ctx, "plan-lend-key", "1.0.0", %{
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:openai.com",
+            "reason" => "to call the model",
+            "fields" => ["OPENAI_API_KEY"],
+            "attach" => @bearer
+          }
+        }
+      })
+
+      publish!(ctx, "plan-lend-key-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-lend-key"}]}
+      })
+
+      {:ok, key} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "lent-key-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          fields: %{"OPENAI_API_KEY" => "sk-lent"},
+          destination: %{"hosts" => ["api.openai.com"]}
+        })
+
+      commit!(ctx, "reagent:local.plan-lend-key", %{
+        bindings: [%{need: "api_key", entry_id: key.id}]
+      })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-lend-key-app"})
+      assert [%{candidates: [key_lender]}] = plan.dependency_needs
+      assert %{fields: ["OPENAI_API_KEY"], scopes: []} = key_lender
+    end
+  end
+
   describe "a closure that cannot be resolved" do
     test "is unresolved, naming what is missing, with no rows and no selection", %{ctx: ctx} do
       publish!(ctx, "plan-orphan", "1.0.0", %{

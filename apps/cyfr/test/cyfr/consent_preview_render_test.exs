@@ -50,6 +50,24 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   @vectors Path.expand("../../../../tests/fixtures/consent_preview.json", __DIR__)
   @ref "tincture:local.dashboard"
 
+  # The vectors' four credentials, each as its row's sentence.
+  @sentences [
+    "reagent:local.weather uses weather-api, an entry of this athanor, for its own calls: " <>
+      "a weather.example account, sent only to https://api.weather.example. " <>
+      "The component never holds the value.",
+    "reagent:local.maps will use maps, an entry of this athanor, through its 'shared-maps' " <>
+      "profile, from reagent:local.weather for its tiles need: sent only to " <>
+      "https://tiles.maps.example, methods GET, paths /v1/tiles. " <>
+      "The component reads the value itself.",
+    "reagent:local.geo uses weather-api, provided by this instance, from reagent:local.weather, " <>
+      "as the account 'Geo account': a weather.example account, sent only to " <>
+      "https://*.weather.example port 8443, methods GET, POST, paths /v2. " <>
+      "The component never holds the value.",
+    "reagent:local.maps uses maps public key, provided by local, the app's public " <>
+      "configuration, from reagent:local.weather for its geocode need: sent only to " <>
+      "https://geo.maps.example, paths /geocode. The component reads the value itself."
+  ]
+
   defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
 
   # The preview as `profile.preview` answers it: the document beside the
@@ -124,16 +142,34 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     for origin <- Prima.Origin.spellings() -- preview.origins do
       refute admits =~ "(#{origin})"
     end
+
+    # Each credential reads as one sentence, the whole of it in its row.
+    sentences =
+      doc
+      |> LazyHTML.query(~s([data-row="credential"] .consent-sheet__sentence))
+      |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+
+    for sentence <- @sentences, do: assert(sentence in sentences, "missing: #{sentence}")
+
+    # No control claims more than its methods, and nothing says CYFR
+    # attaches a value: a value not disclosed is one the component never
+    # holds.
+    text = html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.downcase()
+
+    for claim <- ["read only", "read-only", "attached by cyfr", "cyfr attaches"] do
+      refute text =~ claim, "the rendering says #{claim}"
+    end
   end
 
   # How a value reads in a row: as the row holds it, or in the renderer's
-  # words where it names a relation rather than a resource.
-  defp expected(row, "edge", "@ingress"), do: ["#{row["node"]}'s own calls"]
+  # words where it names a relation rather than a resource. A credential
+  # is one sentence naming the app or the dependency that uses it.
+  defp expected(row, "edge", "@ingress"), do: ["#{row["node"]} uses", "for its own calls"]
 
-  defp expected(_row, "edge", edge) do
+  defp expected(row, "edge", edge) do
     case String.split(edge, "|", parts: 2) do
-      [dep, need] -> ["to #{dep} for its #{need} need"]
-      [dep] -> ["to #{dep}"]
+      [dep, need] -> ["#{dep} ", "from #{row["node"]} for its #{need} need"]
+      [dep] -> ["#{dep} ", "from #{row["node"]}"]
     end
   end
 
@@ -159,9 +195,18 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   defp expected(_row, "lifetime", %{"kind" => "standing"}), do: ["until revoked"]
   defp expected(_row, "lifetime", %{"kind" => "until", "until" => until}), do: ["until #{until}"]
   defp expected(_row, "lifetime", %{"kind" => "once"}), do: ["one run"]
-  defp expected(_row, "source", source), do: ["Source: #{source}"]
-  defp expected(_row, "disclosed", true), do: ["the component reads the value itself"]
-  defp expected(_row, "disclosed", false), do: ["the component never holds the value"]
+  defp expected(_row, "source", "own"), do: ["an entry of this athanor"]
+  defp expected(_row, "source", "instance"), do: ["provided by this instance"]
+
+  defp expected(row, "source", "provided") do
+    {:ok, %{namespace: publisher}} = Prima.ComponentRef.parse(row["node"])
+    ["provided by #{publisher}, the app's public configuration"]
+  end
+
+  defp expected(_row, "label", label), do: ["through its '#{label}' profile"]
+  defp expected(_row, "provider", provider), do: ["a #{provider} account"]
+  defp expected(_row, "disclosed", true), do: ["The component reads the value itself."]
+  defp expected(_row, "disclosed", false), do: ["The component never holds the value."]
   defp expected(_row, "suggested", true), do: ["Suggested"]
   defp expected(_row, "choice_required", true), do: ["Choose which entry to use"]
   defp expected(_row, field, false) when field in ["suggested", "choice_required"], do: []

@@ -32,10 +32,16 @@ defmodule Sanctum.Consent.Plan do
 
   A plan for a profile with a head says what the head holds:
   `head_origins`, the origins it admits, so a re-grant starts from them
-  rather than quietly dropping one; and, when the component's shape moved
-  since the head, `shape_diff`, the head as the person narrowed it against
-  the live ask (`Sanctum.Consent.ShapeDiff`). With no head, `head_origins` is nil
-  and `shape_diff` empty.
+  rather than quietly dropping one; `head_bindings`, each binding the head
+  holds as `%{binding_key, lifetime: %{kind, until}, consumed}` and what
+  it binds (`entry_id`, `instance_entry_id` or a lending profile's
+  `label`) from its `consent_vault_refs` row (`consumed` when a root has
+  used a `once` binding), so a re-grant reopens on what the head holds,
+  never wider, and a surface can offer to grant a consumed `once` binding
+  again; and, when the component's shape moved since the head,
+  `shape_diff`, the head as the person narrowed it against the live ask
+  (`Sanctum.Consent.ShapeDiff`). With no head, `head_origins` is nil and
+  `head_bindings` and `shape_diff` are empty.
 
   `candidates` are the athanor's active entries. An OAuth candidate answers
   `narrowable`, whether a token for fewer of its scopes can be dispensed,
@@ -75,6 +81,14 @@ defmodule Sanctum.Consent.Plan do
     * `newer_shipped` — for a disclose-only need, the newer version the
       install media ships of the component (`Components.newer_shipped/2`),
       or nil.
+
+  Each declared need, the app's own and a dependency's, also names what a
+  surface prefills a new entry for it from: its `kind` and `provider` (the
+  type's qualifier), `disclose_only` (it declares no attach rule),
+  `disclose` (true only where it declares `disclose: true`), and the
+  `hosts` and `paths` it declares, nil where it declares none. A
+  dependency row's lenders (`candidates`) each name the `fields` and the
+  OAuth `scopes` the lending profile's binding projects, `[]` for none.
 
   `warnings` names, for each required need nothing can meet, the need
   and its provider, and for a disclose-only need that the component reads
@@ -129,11 +143,22 @@ defmodule Sanctum.Consent.Plan do
           unresolved: %{reason: String.t(), missing: String.t() | nil} | nil,
           origins: [String.t(), ...],
           head_origins: [String.t(), ...] | nil,
+          head_bindings: [head_binding()],
           shape_diff: [map()],
           candidates: [map()],
           tool_server_candidates: [Sanctum.Grimoire.tool_server_candidate()],
           warnings: [String.t()],
           defaults: map()
+        }
+
+  @typedoc "One binding of the profile's head, as its `consent_vault_refs` row holds it."
+  @type head_binding :: %{
+          required(:binding_key) => String.t(),
+          required(:lifetime) => %{kind: String.t(), until: String.t() | nil},
+          required(:consumed) => boolean(),
+          optional(:entry_id) => String.t(),
+          optional(:instance_entry_id) => String.t(),
+          optional(:label) => String.t()
         }
 
   @doc "The origins a grant admits when its decision names none: `interactive` alone."
@@ -188,6 +213,7 @@ defmodule Sanctum.Consent.Plan do
          unresolved: unresolved(closure),
          origins: Prima.Origin.to_wire_list(@default_origins),
          head_origins: head.origins,
+         head_bindings: head.bindings,
          shape_diff: head.shape_diff,
          candidates: candidates,
          tool_server_candidates: Sanctum.Grimoire.tool_server_candidates(ctx),
@@ -269,7 +295,10 @@ defmodule Sanctum.Consent.Plan do
           %{
             need: Prima.Authority.Blob.ingress_key(),
             reason: "credentials this component may use when invoked",
-            required: false
+            required: false,
+            hosts: nil,
+            paths: nil,
+            disclose: false
           }
           |> Map.merge(choice_row(ctx, sources, nil, facts))
           |> Map.put(:newer_shipped, newer.())
@@ -280,14 +309,12 @@ defmodule Sanctum.Consent.Plan do
           %{
             need: need.name,
             type: "#{need.kind}:#{need.qualifier}",
-            kind: need.kind,
-            provider: need.qualifier,
             reason: need.reason,
             fields: need.fields,
             scopes: need.scopes,
-            required: need.required,
-            disclose_only: credential?(need) and Prima.Manifest.Needs.disclose_only?(need)
+            required: need.required
           }
+          |> Map.merge(prefill(need))
           |> Map.merge(choice_row(ctx, sources, need, facts))
           |> put_newer_shipped(need, newer)
         end)
@@ -295,6 +322,23 @@ defmodule Sanctum.Consent.Plan do
   end
 
   defp credential?(%{kind: kind}), do: kind in @credential_kinds
+
+  # What a declared need says of the entry that can meet it, which a
+  # surface prefills a new entry from: its kind and provider, whether the
+  # component reads the value itself, and the destination it declares.
+  defp prefill(need) do
+    %{
+      kind: need.kind,
+      provider: need.qualifier,
+      disclose_only: credential?(need) and Prima.Manifest.Needs.disclose_only?(need),
+      disclose: Map.get(need, :disclose) == true,
+      hosts: declared_list(Map.get(need, :hosts)),
+      paths: declared_list(Map.get(need, :paths))
+    }
+  end
+
+  defp declared_list([_ | _] = list), do: list
+  defp declared_list(_none), do: nil
 
   # A disclose-only credential need names the newer shipped version, which
   # may attach rather than disclose; every other need names none.
@@ -578,13 +622,15 @@ defmodule Sanctum.Consent.Plan do
   # What the profile's head holds: the origins it admits, and what changed
   # against it when the shape moved. A head that cannot be read answers as
   # none, which the commit's own revision check still fences.
-  defp head_facts(_ctx, nil, _shape_digest, _source_ref), do: %{origins: nil, shape_diff: []}
+  defp head_facts(_ctx, nil, _shape_digest, _source_ref),
+    do: %{origins: nil, bindings: [], shape_diff: []}
 
   defp head_facts(ctx, profile_id, shape_digest, source_ref) do
     case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id) do
       {:ok, head} ->
         %{
           origins: Prima.Origin.to_wire_list(head.admitted_origins),
+          bindings: Enum.map(head.vault_refs, &head_binding/1),
           shape_diff:
             if(head.shape_digest == shape_digest,
               do: [],
@@ -593,9 +639,31 @@ defmodule Sanctum.Consent.Plan do
         }
 
       {:error, _no_head} ->
-        %{origins: nil, shape_diff: []}
+        %{origins: nil, bindings: [], shape_diff: []}
     end
   end
+
+  # A head row as a re-grant reopens it: its key, what it binds (the
+  # athanor's entry, the instance entry or the lending profile's label,
+  # never material), its lifetime and whether a root consumed it.
+  defp head_binding(ref) do
+    %{
+      binding_key: ref.binding_key,
+      lifetime: %{kind: ref.lifetime_kind, until: until_of(ref.expires_at)},
+      consumed: is_binary(ref.consumed_by_root)
+    }
+    |> Prima.MapUtil.put_present(:entry_id, ref.vault_entry_id)
+    |> Prima.MapUtil.put_present(:instance_entry_id, ref.instance_entry_id)
+    |> Prima.MapUtil.put_present(:label, ref.via_label)
+  end
+
+  # The instant as it was decided: a whole second is spelled without the
+  # store's microseconds, so it reads as the RFC 3339 the decision sent.
+  defp until_of(%DateTime{microsecond: {0, _precision}} = at),
+    do: at |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+  defp until_of(%DateTime{} = at), do: DateTime.to_iso8601(at)
+  defp until_of(_none), do: nil
 
   # The activation closure's graph and the rows it resolved, or what keeps
   # it from resolving: the reason's tag and the ref the resolution names
@@ -800,6 +868,7 @@ defmodule Sanctum.Consent.Plan do
                      required: need.required,
                      fields: need.fields
                    }
+                   |> Map.merge(prefill(need))
                    |> Map.merge(dependency_choice(ctx, sources, need, facts, covered))
                    |> put_newer_shipped(need, newer)
                  end),
@@ -848,7 +917,8 @@ defmodule Sanctum.Consent.Plan do
             source: lent.source,
             entry_id: lent.id,
             entry_name: lent.name,
-            fields: (vault.projection && vault.projection.fields) || []
+            fields: projected(vault.projection, :fields),
+            scopes: projected(vault.projection, :scopes)
           }
         end
 
@@ -856,6 +926,9 @@ defmodule Sanctum.Consent.Plan do
         []
     end
   end
+
+  defp projected(%{} = projection, key), do: Map.get(projection, key) || []
+  defp projected(_none, _key), do: []
 
   # The entry a lender's binding names, usable by this person at the
   # digest the lender bound: the athanor's own, or an instance entry as it

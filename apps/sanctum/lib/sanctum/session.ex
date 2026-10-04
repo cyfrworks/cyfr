@@ -408,6 +408,22 @@ defmodule Sanctum.Session do
   end
 
   @doc """
+  When the session whose row key is `token_hash` (`token_hash/1`, a
+  context's `session_token_hash`) ends unless activity extends it: its
+  row's `expires_at`. `{:error, :invalid_session}` when no living session
+  has that key, `{:error, :database_error}` when the store cannot say.
+  """
+  @spec expires_at_by_hash(binary()) ::
+          {:ok, DateTime.t()} | {:error, :invalid_session | :database_error}
+  def expires_at_by_hash(token_hash) when is_binary(token_hash) do
+    case Arca.SessionStorage.get_session(token_hash) do
+      {:ok, row} -> {:ok, row.expires_at}
+      {:error, :not_found} -> {:error, :invalid_session}
+      {:error, :database_error} -> {:error, :database_error}
+    end
+  end
+
+  @doc """
   Refresh a session, extending its expiration time.
 
   ## Examples

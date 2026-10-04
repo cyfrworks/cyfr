@@ -117,6 +117,93 @@ defmodule PrismWeb.ComponentsLiveTest do
     assert {:ok, [_profile | _]} = Sanctum.Consent.profiles(ctx, "reagent:local.shelf-tool")
   end
 
+  test "a grant asked here opens on the plan's suggestion, and a need the component reads " <>
+         "itself links to the update this page offers",
+       %{conn: conn, ctx: ctx} do
+    manifest = fn version ->
+      %{
+        "name" => "shelf-model",
+        "type" => "catalyst",
+        "version" => version,
+        "publisher" => "local",
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:shelf.example",
+            "reason" => "to call the shelf's model",
+            "fields" => ["SHELF_KEY"]
+          }
+        }
+      }
+    end
+
+    # A shipped catalyst that reads its key itself, and a newer version
+    # shipped since.
+    {:ok, _} =
+      Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "shelf-model", "1.0.0",
+        manifest: manifest.("1.0.0"),
+        wasm: @valid_wasm
+      )
+
+    Arca.Test.UnitFixtures.seed_component!("catalyst", "local", "shelf-model", "1.1.0",
+      manifest: manifest.("1.1.0"),
+      wasm: @valid_wasm
+    )
+
+    grant = fn ->
+      {view, _html} = mount_athanor(conn, "/components")
+      render_click(view, "toggle_expand", %{"ref" => "catalyst:local.shelf-model"})
+      render(view)
+      view |> element("button[phx-click=open_consent]", "Grant access") |> render_click()
+      render(view)
+      view
+    end
+
+    # No entry it may read: the sheet names the newer version, linking to
+    # this page's entry for the component, where Update is.
+    view = grant.()
+
+    assert has_element?(
+             view,
+             ~s(#system-layer-dialog a[data-test="grant-update"]),
+             "Update catalyst:local.shelf-model to 1.1.0"
+           )
+
+    [href] =
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s(a[data-test="grant-update"]))
+      |> LazyHTML.attribute("href")
+
+    assert href =~ "/components?"
+
+    assert URI.decode_query(URI.parse(href).query) == %{
+             "ref" => "catalyst:local.shelf-model",
+             "setup" => "true"
+           }
+
+    # An entry it may read: the grant opens with it bound.
+    person = %{Sanctum.TestContext.local() | athanor_id: ctx.athanor_id}
+
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(person, %{
+        name: "shelf key",
+        kind: "api_key",
+        provider_hint: "shelf.example",
+        fields: %{"SHELF_KEY" => "sk-shelf"},
+        destination: %{"hosts" => ["api.shelf.example"]},
+        disclose: true
+      })
+
+    view = grant.()
+
+    assert has_element?(
+             view,
+             ~s(#system-layer-dialog [data-test="grant-pick"][aria-pressed="true"]),
+             entry.name
+           )
+  end
+
   test "a newer shipped version is offered as Update and pulled in beside the copy", %{
     conn: conn,
     ctx: ctx,

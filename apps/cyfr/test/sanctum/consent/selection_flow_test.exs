@@ -152,7 +152,8 @@ defmodule Sanctum.Consent.SelectionFlowTest do
                source: "own",
                entry_id: lenders.home_entry.id,
                entry_name: "home key",
-               fields: ["KEY", "ORG"]
+               fields: ["KEY", "ORG"],
+               scopes: []
              },
              %{
                profile_id: lenders.work,
@@ -160,7 +161,8 @@ defmodule Sanctum.Consent.SelectionFlowTest do
                source: "own",
                entry_id: lenders.work_entry.id,
                entry_name: "work key",
-               fields: ["KEY"]
+               fields: ["KEY"],
+               scopes: []
              }
            ]
   end
