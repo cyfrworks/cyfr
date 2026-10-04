@@ -227,8 +227,11 @@ defmodule Sanctum.TinctureAuthTest do
                reference: @tincture,
                version_digest: @digest,
                grant_revision: 4,
+               mode: :live,
                deadline: ^deadline
              } = authority
+
+      assert %{purpose: "live"} = Arca.Repo.get(Arca.Schemas.FrameCredential, id)
 
       assert authority.user_id == ctx.user_id
       assert authority.credential_binding.source_kind == :session
@@ -347,7 +350,8 @@ defmodule Sanctum.TinctureAuthTest do
                frame_id: frame,
                reference: @tincture,
                version_digest: @digest,
-               grant_revision: 2
+               grant_revision: 2,
+               mode: :live
              }
 
       assert {framed.user_id, framed.athanor_id} == {ctx.user_id, "ath_acme"}
@@ -378,5 +382,34 @@ defmodule Sanctum.TinctureAuthTest do
       {:ok, %{credential: asset}} = TinctureAuth.mint_asset_credential(ctx, @digest)
       assert {:error, :invalid_credential} = TinctureAuth.verify_frame_credential(asset)
     end
+
+    test "a context's frame names its mode, and a frame without a known one is refused" do
+      frame = %{
+        id: "frc_mode",
+        frame_id: "frm_mode_aaaaaaaa",
+        reference: @tincture,
+        version_digest: @digest,
+        grant_revision: 0
+      }
+
+      for mode <- [:live, :validation] do
+        assert %Context{frame: %{mode: ^mode}} = framed_context(Map.put(frame, :mode, mode))
+      end
+
+      for malformed <- [frame, Map.put(frame, :mode, "live"), Map.put(frame, :mode, :trial)] do
+        assert_raise ArgumentError, ~r/frame is malformed/, fn -> framed_context(malformed) end
+      end
+    end
+  end
+
+  defp framed_context(frame) do
+    Context.build(
+      user_id: "usr_framed",
+      athanor_id: "ath_acme",
+      scope: :athanor,
+      auth_method: :tincture,
+      authenticated: true,
+      frame: frame
+    )
   end
 end

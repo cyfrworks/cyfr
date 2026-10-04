@@ -3,13 +3,16 @@
 
 defmodule Arca.FrameCredentialsTest do
   @moduledoc """
-  The per-open frame credential rows: minted active, only with a frame id
-  and a deadline, once per frame id in an athanor, and only by a member
-  that owns its slot; suspended, resumed (under ownership, before the
-  deadline) and revoked, with `revoked` terminal; read and written only in
-  the actor's own athanor; revoked by source and by person, across
-  athanors only for the platform's own actor; and swept by retention only
-  once revoked and aged.
+  The per-open frame credential rows: minted active, `live` unless minted
+  for validation, only with a frame id and a deadline, once per frame id
+  in an athanor, and only by a member that owns its slot; suspended,
+  resumed (under ownership, before the deadline) and revoked, with
+  `revoked` terminal, and a validation row never suspended or resumed;
+  a validation row consumed once, by its own person, before its deadline,
+  for its own digest and under ownership, and nothing else consumed;
+  read and written only in the actor's own athanor; revoked by source and
+  by person, across athanors only for the platform's own actor; and swept
+  by retention only once revoked and aged.
   """
 
   # Takes a slot through `Arca.ControlPlane`, which writes the process-wide
@@ -77,6 +80,20 @@ defmodule Arca.FrameCredentialsTest do
     row
   end
 
+  @digest "sha256:" <> String.duplicate("a", 64)
+
+  # The actor of the person the rows are minted for.
+  defp person(actor, user_id \\ "usr_frc"), do: %{actor | user_id: user_id}
+
+  defp take_over!(slot) do
+    {1, _} =
+      Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+        set: [owner: "someone-else", generation: slot.generation + 1]
+      )
+
+    :ok
+  end
+
   describe "mint/2" do
     test "records an active row in the actor's athanor, as a plain map", %{actor: actor} do
       assert {:ok, row} = FrameCredentials.mint(actor, attrs())
@@ -131,6 +148,22 @@ defmodule Arca.FrameCredentialsTest do
     test "an actor that names no athanor is refused" do
       assert {:error, :no_athanor} = FrameCredentials.mint(Prima.Actor.system(), attrs())
     end
+
+    test "a row is live unless minted for validation, and no other purpose is minted", %{
+      actor: actor
+    } do
+      assert FrameCredential.purposes() == ~w(live validation)
+      assert %{purpose: "live"} = mint!(actor)
+      assert %{purpose: "validation"} = validation = mint!(actor, %{purpose: "validation"})
+      assert {:ok, %{purpose: "validation"}} = FrameCredentials.get(actor, validation.id)
+
+      for purpose <- ["trial", "Validation", nil, :validation] do
+        assert {:error, {:invalid, %{purpose: _}}} =
+                 FrameCredentials.mint(actor, attrs(%{purpose: purpose}))
+      end
+
+      assert Arca.Repo.aggregate(FrameCredential, :count) == 2
+    end
   end
 
   describe "the state machine" do
@@ -180,6 +213,101 @@ defmodule Arca.FrameCredentialsTest do
 
       assert {:ok, %{state: "active"}} = FrameCredentials.get(actor, row.id)
       assert {:error, :no_athanor} = FrameCredentials.get(Prima.Actor.system(), row.id)
+    end
+
+    test "a validation row is neither suspended nor resumed, and is revoked as any row is", %{
+      actor: actor
+    } do
+      row = mint!(actor, %{purpose: "validation"})
+
+      assert {:error, :validation} = FrameCredentials.suspend(actor, row.id)
+      assert {:error, :validation} = FrameCredentials.resume(actor, row.id)
+      assert FrameCredentials.get(actor, row.id) == {:ok, row}
+
+      assert {:ok, %{state: "revoked", purpose: "validation"} = revoked} =
+               FrameCredentials.revoke(actor, row.id)
+
+      assert {:ok, ^revoked} = FrameCredentials.revoke(actor, row.id)
+      assert {:error, :validation} = FrameCredentials.suspend(actor, row.id)
+      assert {:error, :validation} = FrameCredentials.resume(actor, row.id)
+      assert FrameCredentials.get(actor, row.id) == {:ok, revoked}
+    end
+  end
+
+  describe "consume/3" do
+    test "spends a validation row once, by its frame id", %{actor: actor} do
+      row = mint!(actor, %{purpose: "validation"})
+
+      assert {:ok, %{id: id, state: "revoked", purpose: "validation"} = spent} =
+               FrameCredentials.consume(person(actor), row.frame_id, @digest)
+
+      assert id == row.id
+      assert DateTime.compare(spent.updated_at, row.updated_at) != :lt
+      assert FrameCredentials.get(actor, row.id) == {:ok, spent}
+
+      assert {:error, :not_live} = FrameCredentials.consume(person(actor), row.frame_id, @digest)
+      assert FrameCredentials.get(actor, row.id) == {:ok, spent}
+    end
+
+    test "a live row is not consumable", %{actor: actor} do
+      row = mint!(actor)
+
+      assert {:error, :not_live} = FrameCredentials.consume(person(actor), row.frame_id, @digest)
+      assert FrameCredentials.get(actor, row.id) == {:ok, row}
+    end
+
+    test "an expired row is not consumable", %{actor: actor} do
+      row =
+        mint!(actor, %{
+          purpose: "validation",
+          deadline: DateTime.add(DateTime.utc_now(), -1, :second)
+        })
+
+      assert {:error, :not_live} = FrameCredentials.consume(person(actor), row.frame_id, @digest)
+      assert FrameCredentials.get(actor, row.id) == {:ok, row}
+    end
+
+    test "another person's row, another athanor's, or one revoked is not consumable", %{
+      actor: actor
+    } do
+      row = mint!(actor, %{purpose: "validation"})
+      elsewhere = Prima.Actor.in_athanor("ath_frc_other_#{System.unique_integer([:positive])}")
+
+      for stranger <- [person(actor, "usr_other"), actor, person(elsewhere)] do
+        assert {:error, :not_live} = FrameCredentials.consume(stranger, row.frame_id, @digest)
+      end
+
+      assert FrameCredentials.get(actor, row.id) == {:ok, row}
+
+      {:ok, revoked} = FrameCredentials.revoke(actor, row.id)
+      assert {:error, :not_live} = FrameCredentials.consume(person(actor), row.frame_id, @digest)
+      assert FrameCredentials.get(actor, row.id) == {:ok, revoked}
+
+      assert {:error, :not_live} = FrameCredentials.consume(person(actor), "frm_absent", @digest)
+
+      assert {:error, :no_athanor} =
+               FrameCredentials.consume(Prima.Actor.system(), row.frame_id, @digest)
+    end
+
+    test "a wrong digest changes nothing, and the right one then spends the row", %{
+      actor: actor
+    } do
+      row = mint!(actor, %{purpose: "validation"})
+      wrong = "sha256:" <> String.duplicate("b", 64)
+
+      assert {:error, :not_live} = FrameCredentials.consume(person(actor), row.frame_id, wrong)
+      assert FrameCredentials.get(actor, row.id) == {:ok, row}
+
+      assert {:ok, %{state: "revoked"}} =
+               FrameCredentials.consume(person(actor), row.frame_id, @digest)
+    end
+
+    test "a stale owner spends nothing", %{actor: actor, slot: slot} do
+      row = mint!(actor, %{purpose: "validation"})
+      take_over!(slot)
+
+      assert {:error, :not_owner} = FrameCredentials.consume(person(actor), row.frame_id, @digest)
+      assert FrameCredentials.get(actor, row.id) == {:ok, row}
     end
   end
 

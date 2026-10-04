@@ -19,14 +19,21 @@ defmodule Arca.FrameCredentials do
   is when a revoked row was retired; `Arca.Retention.FrameCredentials`
   removes revoked rows older than the athanor's value.
 
+  ## Purposes
+
+  A row's `purpose` is `live`, a frame that shows its tincture, or
+  `validation`, a candidate version's hidden trial. A validation row is
+  never suspended or resumed (`:validation`); it is spent once, by
+  `consume/3`, which revokes it. A revoke treats both purposes alike.
+
   ## Ownership
 
-  A mint and a resume widen what a bearer opens, so each runs in a locking
-  transaction that checks the member still owns its slot
-  (`Arca.ControlPlane.verify_held/1`) before it writes: a stale owner
-  dispenses no credential and re-opens none. A suspend and a revoke only
-  narrow, and are never refused for ownership: a member that lost its slot
-  may still close what it opened.
+  A mint, a resume and a consume each run in a locking transaction that
+  checks the member still owns its slot (`Arca.ControlPlane.verify_held/1`)
+  before it writes: a stale owner dispenses no credential, re-opens none
+  and spends none, since an activation rests on the consume. A suspend
+  and a revoke only narrow, and are never refused for ownership: a member
+  that lost its slot may still close what it opened.
 
   Every function takes the actor first. An athanor actor reads and writes
   its own athanor's rows; `revoke_for_source/2` and `revoke_for_user/2`
@@ -40,6 +47,7 @@ defmodule Arca.FrameCredentials do
   alias Arca.Schemas.FrameCredential
 
   @required ~w(user_id publisher name version version_digest grant_revision frame_id source_kind source_id deadline)a
+  @optional ~w(purpose)a
 
   @typedoc "A frame credential row, as a plain map."
   @type row :: %{
@@ -55,6 +63,7 @@ defmodule Arca.FrameCredentials do
           source_kind: String.t(),
           source_id: String.t(),
           state: String.t(),
+          purpose: String.t(),
           deadline: DateTime.t(),
           inserted_at: DateTime.t(),
           updated_at: DateTime.t()
@@ -68,7 +77,9 @@ defmodule Arca.FrameCredentials do
   actor's athanor: `user_id`, the tincture version it opened (`publisher`,
   `name`, `version`) and its `version_digest`, `grant_revision`,
   `frame_id`, `source_kind` (`"session"` or `"api_key"`), `source_id` and
-  `deadline`, each required. The row starts `active`.
+  `deadline`, each required, and `purpose`, one of
+  `Arca.Schemas.FrameCredential.purposes/0`, `"live"` when absent. The
+  row starts `active`.
 
   Refused with `:no_athanor` for an actor that names none, `{:invalid,
   errors}` for a missing or malformed field, `:conflict` for a frame id
@@ -81,7 +92,8 @@ defmodule Arca.FrameCredentials do
   # arca:db-raise-ok the insert runs inside `owned/2`, which rescues around its transaction.
   def mint(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
-    changeset = changeset(QueryHelpers.stamp_tenant!(actor, Map.take(attrs, @required)))
+    changeset =
+      changeset(QueryHelpers.stamp_tenant!(actor, Map.take(attrs, @required ++ @optional)))
 
     if changeset.valid? do
       owned("Arca.FrameCredentials.mint", fn ->
@@ -121,10 +133,13 @@ defmodule Arca.FrameCredentials do
 
   @doc """
   Suspend an active row: the frame's bearer opens nothing until it is
-  resumed. A suspended row answers as it is; a revoked one is `:revoked`.
+  resumed. A suspended row answers as it is; a revoked one is `:revoked`,
+  and a validation row, whatever its state, `:validation`, which changes
+  nothing.
   """
   @spec suspend(Prima.Actor.t(), String.t()) ::
-          {:ok, row()} | {:error, :not_found | :revoked | :no_athanor | :database_error}
+          {:ok, row()}
+          | {:error, :not_found | :revoked | :validation | :no_athanor | :database_error}
   def suspend(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.FrameCredentials.suspend", fn ->
@@ -138,19 +153,29 @@ defmodule Arca.FrameCredentials do
 
   @doc """
   Resume a suspended row, under the member's live ownership. An active row
-  answers as it is; a revoked one is `:revoked`, and one past its deadline
-  on the database's clock `:expired`, which resumes nothing.
+  answers as it is; a revoked one is `:revoked`, one past its deadline on
+  the database's clock `:expired`, and a validation row, whatever its
+  state, `:validation`, each of which resumes nothing.
   """
   @spec resume(Prima.Actor.t(), String.t()) ::
           {:ok, row()}
           | {:error,
-             :not_found | :revoked | :expired | :not_owner | :no_athanor | :database_error}
+             :not_found
+             | :revoked
+             | :expired
+             | :validation
+             | :not_owner
+             | :no_athanor
+             | :database_error}
   def resume(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     owned("Arca.FrameCredentials.resume", fn ->
       now = Arca.ServerMetaStorage.now!()
 
       case locked_row(actor, id) do
+        %FrameCredential{purpose: "validation"} ->
+          {:error, :validation}
+
         %FrameCredential{deadline: deadline} = row ->
           if DateTime.compare(deadline, now) == :gt,
             do: set_state(row, "suspended", "active"),
@@ -183,6 +208,38 @@ defmodule Arca.FrameCredentials do
   end
 
   def revoke(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+
+  @doc """
+  Spend the validation row of the frame `frame_id` in the actor's
+  athanor, once: revoke it, under the member's live ownership, only when
+  it is a `validation` row, `active`, before its deadline on the
+  database's clock, the actor's person's, and of `expected_digest`. Every
+  condition is read on the row this transaction locked, before it writes,
+  so of two consumes of one row exactly one revokes it.
+
+  Answers the revoked row. A row that is absent or fails any condition is
+  `:not_live`, and a member that lost its slot `:not_owner`; neither
+  writes anything, so a consume with the wrong digest leaves the row to
+  one with the right one.
+  """
+  @spec consume(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_live | :not_owner | :no_athanor | :database_error}
+  def consume(%Prima.Actor{athanor_id: athanor_id} = actor, frame_id, expected_digest)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(frame_id) and
+             is_binary(expected_digest) do
+    owned("Arca.FrameCredentials.consume", fn ->
+      # The row is locked before the clock is read, so a consume that
+      # waited behind another judges the deadline as it acts.
+      row = locked_frame(actor, frame_id)
+      now = Arca.ServerMetaStorage.now!()
+
+      if consumable?(row, actor, expected_digest, now),
+        do: set_state(row, "active", "revoked"),
+        else: {:error, :not_live}
+    end)
+  end
+
+  def consume(%Prima.Actor{}, _frame_id, _expected_digest), do: {:error, :no_athanor}
 
   @doc """
   Revoke every unrevoked row minted under `source`, the retired session
@@ -246,9 +303,10 @@ defmodule Arca.FrameCredentials do
 
   defp changeset(attrs) do
     %FrameCredential{id: Prima.UUID7.generate_id("frc")}
-    |> Ecto.Changeset.cast(attrs, [:athanor_id | @required])
-    |> Ecto.Changeset.validate_required([:athanor_id | @required])
+    |> Ecto.Changeset.cast(attrs, [:athanor_id | @required] ++ @optional)
+    |> Ecto.Changeset.validate_required([:athanor_id | @required] ++ @optional)
     |> Ecto.Changeset.validate_inclusion(:source_kind, FrameCredential.source_kinds())
+    |> Ecto.Changeset.validate_inclusion(:purpose, FrameCredential.purposes())
     |> Ecto.Changeset.validate_number(:grant_revision, greater_than_or_equal_to: 0)
     |> Ecto.Changeset.validate_length(:frame_id, min: 1, max: 64)
     |> Ecto.Changeset.unique_constraint([:athanor_id, :frame_id])
@@ -292,9 +350,39 @@ defmodule Arca.FrameCredentials do
     |> Arca.Repo.one()
   end
 
+  # The row of a frame id, which names one open in its athanor, read and
+  # locked under the actor's athanor.
+  defp locked_frame(actor, frame_id) do
+    FrameCredential
+    |> QueryHelpers.where_tenant(actor)
+    |> where([f], f.frame_id == ^frame_id)
+    |> QueryHelpers.for_update()
+    |> Arca.Repo.one()
+  end
+
+  # A row a consume may spend: every condition holds on the locked row
+  # before anything is written.
+  defp consumable?(
+         %FrameCredential{
+           purpose: "validation",
+           state: "active",
+           user_id: user_id,
+           version_digest: digest,
+           deadline: deadline
+         },
+         %Prima.Actor{user_id: user_id},
+         digest,
+         now
+       )
+       when is_binary(user_id) and user_id != "",
+       do: DateTime.compare(deadline, now) == :gt
+
+  defp consumable?(_row, _actor, _expected_digest, _now), do: false
+
   defp move(actor, id, from, to) do
     case locked_row(actor, id) do
       nil -> {:error, :not_found}
+      %FrameCredential{purpose: "validation"} -> {:error, :validation}
       %FrameCredential{state: ^to} = row -> {:ok, row}
       %FrameCredential{state: ^from} = row -> set_state(row, from, to)
       %FrameCredential{state: "revoked"} -> {:error, :revoked}
@@ -304,7 +392,7 @@ defmodule Arca.FrameCredentials do
   defp set_state(%FrameCredential{state: to} = row, _from, to), do: {:ok, row}
   defp set_state(%FrameCredential{state: "revoked"}, _from, _to), do: {:error, :revoked}
 
-  # arca:unscoped-ok the row was read and locked under the actor's athanor (`locked_row/2`).
+  # arca:unscoped-ok the row was read and locked under the actor's athanor (`locked_row/2` or `locked_frame/2`).
   defp set_state(%FrameCredential{state: from} = row, from, to) do
     row
     |> Ecto.Changeset.change(state: to, updated_at: Arca.ServerMetaStorage.now!())

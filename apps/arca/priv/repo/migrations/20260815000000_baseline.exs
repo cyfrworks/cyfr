@@ -377,13 +377,21 @@ defmodule Arca.Repo.Migrations.Baseline do
       expr: "grant_revision >= 0"
     }
 
+    purpose_known = %{
+      name: "frame_credentials_purpose_known",
+      expr: "purpose IN ('live', 'validation')"
+    }
+
     # One row per frame a shell opened: the standing of the bearer the
     # frame holds, read by every member. `publisher`, `name` and `version`
     # are the tincture version the frame opened, whose release digest is
     # `version_digest`. `source_kind`/`source_id` name the session (its
     # base64url token hash) or the key it was minted under, lookup
-    # identifiers and never bearer credentials. A revoked row is terminal;
-    # `Arca.Retention.FrameCredentials` removes it once aged.
+    # identifiers and never bearer credentials. `purpose` is `live` for a
+    # frame that shows its tincture and `validation` for a candidate
+    # version's hidden trial, whose row is never suspended or resumed and
+    # is spent once by `Arca.FrameCredentials.consume/3`. A revoked row is
+    # terminal; `Arca.Retention.FrameCredentials` removes it once aged.
     create table(:frame_credentials, primary_key: false) do
       add :id, :string, primary_key: true
       add :athanor_id, :string, null: false
@@ -401,6 +409,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :source_kind, :string, null: false
       add :source_id, :string, null: false
       add :state, :string, null: false, default: "active", check: if(sqlite?, do: state_known)
+      add :purpose, :text, null: false, default: "live", check: if(sqlite?, do: purpose_known)
       add :deadline, :utc_datetime_usec, null: false
 
       timestamps(type: :utc_datetime_usec)
@@ -409,6 +418,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     unless sqlite? do
       create constraint(:frame_credentials, state_known.name, check: state_known.expr)
       create constraint(:frame_credentials, revision_counted.name, check: revision_counted.expr)
+      create constraint(:frame_credentials, purpose_known.name, check: purpose_known.expr)
     end
 
     # A frame id names one open in its athanor.

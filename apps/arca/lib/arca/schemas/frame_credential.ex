@@ -16,6 +16,7 @@ defmodule Arca.Schemas.FrameCredential do
 
   @states ~w(active suspended revoked)
   @source_kinds ~w(session api_key)
+  @purposes ~w(live validation)
 
   @doc "The states a frame credential may be in; `revoked` is terminal."
   @spec states() :: [String.t()]
@@ -24,6 +25,13 @@ defmodule Arca.Schemas.FrameCredential do
   @doc "What a frame credential may be minted under."
   @spec source_kinds() :: [String.t()]
   def source_kinds, do: @source_kinds
+
+  @doc """
+  What a frame credential is for: `live`, a frame that shows its tincture,
+  or `validation`, a candidate version's hidden trial.
+  """
+  @spec purposes() :: [String.t()]
+  def purposes, do: @purposes
 
   schema "frame_credentials" do
     field :athanor_id, :string
@@ -37,6 +45,7 @@ defmodule Arca.Schemas.FrameCredential do
     field :source_kind, :string
     field :source_id, :string
     field :state, :string, default: "active"
+    field :purpose, :string, default: "live"
     field :deadline, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec)
   end

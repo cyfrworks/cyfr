@@ -267,6 +267,52 @@ defmodule Arca.SchemaFingerprintTest do
              })
   end
 
+  test "a frame credential's purpose is the fingerprinted baseline's: live unless named, one of two" do
+    [baseline] =
+      Path.wildcard(Path.expand("../../priv/repo/migrations/*_baseline.exs", __DIR__))
+
+    assert File.read!(baseline) =~ ~r/add :purpose, :text, null: false, default: "live"/
+    assert :purpose in Arca.Schemas.FrameCredential.__schema__(:fields)
+
+    now = DateTime.utc_now()
+
+    row = %{
+      id: "frcp_fp_1",
+      athanor_id: "ath_fingerprint_#{System.unique_integer([:positive])}",
+      user_id: "usr_fp",
+      publisher: "acme",
+      name: "dash",
+      version: "1.0.0",
+      version_digest: "sha256:x",
+      grant_revision: 0,
+      frame_id: "frm_fp_1",
+      source_kind: "session",
+      source_id: "c2Vzc2lvbg",
+      deadline: now,
+      inserted_at: now,
+      updated_at: now
+    }
+
+    assert :ok = insert_row("frame_credentials", row)
+
+    assert ["live"] ==
+             Arca.Repo.all(
+               from(f in "frame_credentials", where: f.id == "frcp_fp_1", select: f.purpose)
+             )
+
+    validation = %{row | id: "frcp_fp_2", frame_id: "frm_fp_2"}
+    assert :ok = insert_row("frame_credentials", Map.put(validation, :purpose, "validation"))
+
+    for {purpose, n} <- [{"trial", 3}, {"", 4}, {nil, 5}] do
+      assert :refused =
+               insert_row(
+                 "frame_credentials",
+                 Map.merge(row, %{id: "frcp_fp_#{n}", frame_id: "frm_fp_#{n}", purpose: purpose})
+               ),
+             "purpose #{inspect(purpose)} was accepted"
+    end
+  end
+
   defp insert_row(table, row) do
     Arca.Repo.transaction(fn -> Arca.Repo.insert_all(table, [row]) end)
     :ok

@@ -129,14 +129,17 @@ defmodule Sanctum.Context do
   (`Sanctum.Caller.establish({:frame_credential, bearer}, …)`): the
   credential row's `id`, the shell's `frame_id`, the tincture version the
   frame opened (`reference`) and its release digest (`version_digest`),
-  and the `grant_revision` the frame was opened under.
+  the `grant_revision` the frame was opened under, and its `mode`:
+  `:live` for a frame that shows its tincture, `:validation` for a
+  candidate version's hidden trial.
   """
   @type frame :: %{
           id: String.t(),
           frame_id: String.t(),
           reference: %{publisher: String.t(), name: String.t(), version: String.t()},
           version_digest: String.t(),
-          grant_revision: non_neg_integer()
+          grant_revision: non_neg_integer(),
+          mode: :live | :validation
         }
 
   @type t :: %__MODULE__{
@@ -541,11 +544,13 @@ defmodule Sanctum.Context do
            frame_id: frame_id,
            reference: %{publisher: publisher, name: name, version: version},
            version_digest: digest,
-           grant_revision: revision
+           grant_revision: revision,
+           mode: mode
          } = frame
        )
        when is_binary(id) and is_binary(frame_id) and is_binary(publisher) and is_binary(name) and
-              is_binary(version) and is_binary(digest) and is_integer(revision) and revision >= 0,
+              is_binary(version) and is_binary(digest) and is_integer(revision) and revision >= 0 and
+              mode in [:live, :validation],
        do: frame
 
   defp frame!(other),

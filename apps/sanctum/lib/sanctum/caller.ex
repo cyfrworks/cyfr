@@ -32,7 +32,8 @@ defmodule Sanctum.Caller do
       `derived_standing/2`). The context acts as the person
       in the row's athanor, bound to the frame (`Sanctum.Context`'s
       `frame`: the tincture version and its digest, the grant revision,
-      the frame id and the row's id), with the frame's deadline as its
+      the frame id, the row's id and its mode, `:live` or `:validation`
+      for a candidate version's trial), with the frame's deadline as its
       credential deadline and no interactive class. A holder that keeps it
       establishes the bearer again rather than revalidating the context.
     * `{:webhook, webhook}` — a verified webhook row (`request_id:`).
@@ -234,7 +235,8 @@ defmodule Sanctum.Caller do
               frame_id: authority.frame_id,
               reference: authority.reference,
               version_digest: authority.version_digest,
-              grant_revision: authority.grant_revision
+              grant_revision: authority.grant_revision,
+              mode: authority.mode
             },
             authenticated: true
           )

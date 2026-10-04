@@ -162,6 +162,22 @@ defmodule Arca.SchemaBaselineTest do
     end
   end
 
+  test "a frame credential names its purpose, live unless minted for validation", %{
+    declared: declared
+  } do
+    column = Enum.find(columns("frame_credentials"), &(&1.name == "purpose"))
+    assert column.not_null?, "frame_credentials.purpose is NOT NULL"
+    assert to_string(column.default) =~ "live", "frame_credentials.purpose defaults to live"
+
+    fields =
+      Arca.Schemas.FrameCredential.__schema__(:fields) |> Enum.map(&Atom.to_string/1)
+
+    assert Enum.sort(fields) == Enum.sort(Map.keys(declared["frame_credentials"])),
+           "Arca.Schemas.FrameCredential drifts from the frame_credentials table"
+
+    assert %Arca.Schemas.FrameCredential{}.purpose == "live"
+  end
+
   test "api_keys and webhooks have no scope-type column; vault_entries has no system column" do
     fossil = "scope" <> "_type"
     refute fossil in Enum.map(columns("api_keys"), & &1.name)

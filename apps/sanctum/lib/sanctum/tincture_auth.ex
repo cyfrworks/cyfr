@@ -31,6 +31,13 @@ defmodule Sanctum.TinctureAuth do
   `verify_frame_credential/2`, `suspend_frame/2`, `resume_frame/2`,
   `revoke_frame/2`).
 
+  A candidate version's hidden trial holds a **validation credential**: a
+  frame credential of the same form whose row's purpose is `validation`
+  (`mint_validation_credential/5`), with a deadline of 60 seconds capped
+  the same way. It is never suspended or resumed, and it is spent once,
+  by the activation that names its frame and the version digest it
+  trialled (`consume_validation/3`).
+
   Minting and every use hold a credential to the rows its source names as
   they are now (`Sanctum.Caller.derived_standing/2`): a source logged out,
   deleted, expired, revoked or rotated, a person denied and allowed again,
@@ -65,7 +72,8 @@ defmodule Sanctum.TinctureAuth do
   @typedoc """
   What a verified frame credential opens: its row's id, the frame id, the
   person, the athanor, the tincture version the frame opened and its
-  digest, the grant revision, the deadline and the source binding.
+  digest, the grant revision, the frame's mode (its row's purpose), the
+  deadline and the source binding.
   """
   @type frame_authority :: %{
           id: String.t(),
@@ -75,9 +83,13 @@ defmodule Sanctum.TinctureAuth do
           reference: tincture_version(),
           version_digest: String.t(),
           grant_revision: non_neg_integer(),
+          mode: frame_mode(),
           deadline: DateTime.t(),
           credential_binding: Context.credential_binding()
         }
+
+  @typedoc "A frame credential's mode: a live frame's, or a validation trial's."
+  @type frame_mode :: :live | :validation
 
   @typedoc "A frame credential's row, as `Arca.FrameCredentials` answers it."
   @type frame_row :: Arca.FrameCredentials.row()
@@ -99,6 +111,10 @@ defmodule Sanctum.TinctureAuth do
   @asset_credential_salt "tincture_asset_credential_v1"
   @frame_credential_salt "tincture_frame_credential_v1"
   @version 1
+
+  # A validation credential's life, in seconds: a trial answers within
+  # its own deadline, and the credential is spent at activation.
+  @validation_deadline_s 60
 
   @doc """
   The key both tincture credentials are signed with.
@@ -428,14 +444,59 @@ defmodule Sanctum.TinctureAuth do
              | :invalid_version
              | :invalid_grant_revision
              | :conflict}
-  def mint_frame_credential(%Context{} = ctx, reference, version_digest, grant_revision, frame_id) do
+  def mint_frame_credential(
+        %Context{} = ctx,
+        reference,
+        version_digest,
+        grant_revision,
+        frame_id
+      ),
+      do: mint_frame(ctx, reference, version_digest, grant_revision, frame_id, :live)
+
+  @doc """
+  Mint the validation credential of one hidden frame a candidate tincture
+  version is trialled in: `mint_frame_credential/5`'s arguments, checks
+  and refusals, and a bearer of the same form, whose row's purpose is
+  `validation` — the established frame's mode says so (`Sanctum.Context`'s
+  `frame.mode`). Its deadline is 60 seconds from now, never past the
+  source's own expiry, and not the `frame_credential_deadline_s` setting.
+
+  It is never suspended or resumed (`suspend_frame/2` and `resume_frame/2`
+  answer `:validation`); `revoke_frame/2` discards it, and
+  `consume_validation/3` spends it.
+  """
+  @spec mint_validation_credential(
+          Context.t(),
+          tincture_version(),
+          String.t(),
+          non_neg_integer(),
+          String.t()
+        ) ::
+          {:ok, %{credential: String.t(), id: String.t(), deadline: DateTime.t()}}
+          | {:error,
+             mint_refusal()
+             | :missing_frame_id
+             | :invalid_reference
+             | :invalid_version
+             | :invalid_grant_revision
+             | :conflict}
+  def mint_validation_credential(
+        %Context{} = ctx,
+        reference,
+        version_digest,
+        grant_revision,
+        frame_id
+      ),
+      do: mint_frame(ctx, reference, version_digest, grant_revision, frame_id, :validation)
+
+  defp mint_frame(ctx, reference, version_digest, grant_revision, frame_id, mode) do
     with :ok <- owner(),
          :ok <- primary(ctx),
          :ok <- frame_id(frame_id),
          :ok <- tincture_version(reference),
          :ok <- version_digest(version_digest),
          :ok <- grant_revision(grant_revision),
-         {:ok, lifetime} <- setting("frame_credential_deadline_s", :missing_deadline),
+         {:ok, lifetime} <- frame_lifetime(mode),
          {:ok, claims} <- claims(ctx),
          {:ok, %{now: now, source_expires_at: source}} <-
            Sanctum.Caller.derived_standing(claims, client_ip: ctx.client_ip),
@@ -452,6 +513,7 @@ defmodule Sanctum.TinctureAuth do
                frame_id: frame_id,
                source_kind: Atom.to_string(claims.source_kind),
                source_id: claims.source_id,
+               purpose: Atom.to_string(mode),
                deadline: deadline
              })
            ) do
@@ -487,7 +549,8 @@ defmodule Sanctum.TinctureAuth do
   a key's allowlist.
 
   Answers the frame's authority — the person, the athanor, the tincture
-  version (`reference`) and its digest, the grant revision, the frame id, the row's id, its deadline and
+  version (`reference`) and its digest, the grant revision, the frame id,
+  the row's id, its mode (`:live` or `:validation`), its deadline and
   the source binding — or `:invalid_credential` for a bearer this server
   did not sign as one, `:suspended`, `:revoked`, `:expired_credential`
   past its deadline, and a source's or a standing's refusal
@@ -525,6 +588,7 @@ defmodule Sanctum.TinctureAuth do
            reference: %{publisher: row.publisher, name: row.name, version: row.version},
            version_digest: row.version_digest,
            grant_revision: row.grant_revision,
+           mode: frame_mode(row.purpose),
            deadline: row.deadline,
            credential_binding: claims_binding(claims)
          }}
@@ -537,10 +601,13 @@ defmodule Sanctum.TinctureAuth do
   @doc """
   Suspend the frame credential `id` of the context's person: its bearer
   opens nothing until `resume_frame/2`. `:not_found` for a row that is
-  not the person's in the context's athanor; `:revoked` for one revoked.
+  not the person's in the context's athanor; `:revoked` for one revoked;
+  `:validation` for a validation credential, which is never suspended and
+  stays as it is.
   """
   @spec suspend_frame(Context.t(), String.t()) ::
-          {:ok, frame_row()} | {:error, :not_found | :revoked | :no_athanor | :unavailable}
+          {:ok, frame_row()}
+          | {:error, :not_found | :revoked | :validation | :no_athanor | :unavailable}
   def suspend_frame(%Context{} = ctx, id) when is_binary(id) do
     with {:ok, _row} <- own_frame(ctx, id) do
       stored(Arca.FrameCredentials.suspend(Context.actor(ctx), id))
@@ -551,12 +618,14 @@ defmodule Sanctum.TinctureAuth do
   Resume the suspended frame credential `id` of the context's person, on
   a member that owns its slot and while the context's own source still
   stands. `:expired` past its deadline, `:revoked` for one revoked,
+  `:validation` for a validation credential, which is never resumed,
   `:not_owner` on a member that lost its slot, and the standing's
   refusals as `mint_frame_credential/5` answers them.
   """
   @spec resume_frame(Context.t(), String.t()) ::
           {:ok, frame_row()}
-          | {:error, mint_refusal() | :not_found | :revoked | :expired | :no_athanor}
+          | {:error,
+             mint_refusal() | :not_found | :revoked | :expired | :validation | :no_athanor}
   def resume_frame(%Context{} = ctx, id) when is_binary(id) do
     with :ok <- owner(),
          :ok <- primary(ctx),
@@ -580,6 +649,37 @@ defmodule Sanctum.TinctureAuth do
     end
   end
 
+  @doc """
+  Spend the validation credential of the frame `frame_id`, once, for the
+  context's person: on a member that owns its slot, from a person's
+  session or key context, and only while the credential is a validation
+  credential of the person's, standing and unexpired, and was minted for
+  `expected_digest`, the version the activation names
+  (`Arca.FrameCredentials.consume/3`). What is checked is checked before
+  anything is written, in one transaction.
+
+  `:ok` once it is spent. `:not_validated` for a frame with no such
+  credential, a wrong digest included, which spends nothing, so the right
+  digest then still succeeds. `:not_owner` on a member that lost its slot,
+  `:not_primary` for a context that is not a person's session or key,
+  `:no_athanor` for one with no athanor, and `:unavailable` when the store
+  cannot answer; none spends anything.
+  """
+  @spec consume_validation(Context.t(), String.t(), String.t()) ::
+          :ok
+          | {:error, :not_validated | :not_owner | :not_primary | :no_athanor | :unavailable}
+  def consume_validation(%Context{} = ctx, frame_id, expected_digest)
+      when is_binary(frame_id) and is_binary(expected_digest) do
+    with :ok <- owner(),
+         :ok <- primary(ctx) do
+      case stored(Arca.FrameCredentials.consume(Context.actor(ctx), frame_id, expected_digest)) do
+        {:ok, _row} -> :ok
+        {:error, :not_live} -> {:error, :not_validated}
+        {:error, _reason} = refusal -> refusal
+      end
+    end
+  end
+
   defp frame_id(id),
     do: if(Prima.TinctureWire.frame_id?(id), do: :ok, else: {:error, :missing_frame_id})
 
@@ -598,6 +698,17 @@ defmodule Sanctum.TinctureAuth do
 
   defp grant_revision(revision) when is_integer(revision) and revision >= 0, do: :ok
   defp grant_revision(_revision), do: {:error, :invalid_grant_revision}
+
+  # How long a frame credential lives before its source caps it: the
+  # setting for a live frame, the module's own constant for a validation
+  # trial.
+  defp frame_lifetime(:live), do: setting("frame_credential_deadline_s", :missing_deadline)
+  defp frame_lifetime(:validation), do: {:ok, @validation_deadline_s}
+
+  # A frame's mode, from its row's purpose, which the store holds to
+  # these two.
+  defp frame_mode("live"), do: :live
+  defp frame_mode("validation"), do: :validation
 
   defp frame_deadline(now, lifetime, source) do
     deadline =

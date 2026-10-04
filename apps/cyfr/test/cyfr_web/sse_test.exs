@@ -45,7 +45,8 @@ defmodule CyfrWeb.SSETest do
       frame_id: "frm_sse_#{id}",
       reference: %{publisher: "local", name: "dash", version: "1.0.0"},
       version_digest: "sha256:" <> String.duplicate("a", 64),
-      grant_revision: 0
+      grant_revision: 0,
+      mode: :live
     }
   end
 
