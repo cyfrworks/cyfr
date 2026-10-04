@@ -9,7 +9,14 @@ defmodule Crucible.Schedules.Provider do
   (`Crucible.Schedules.Scheduler`) what changed. A schedule's `concurrency`
   — `forbid` (the default) or `allow` — says whether a due occurrence may
   run while another of the same schedule is still open.
+
+  Every action reads rows of kind `schedule` only: a feed shares the
+  table (`Crucible.Feeds`), but its id or name is `not_found` here, `list`
+  omits it, and the schedules' cap counts schedules alone.
   """
+
+  # The one kind of row this tool reads and writes.
+  @kind "schedule"
 
   # The refusals a profile binding answers besides its sentences.
   @binding_refusals [:invalid_argument, :consent_class_required]
@@ -258,7 +265,7 @@ defmodule Crucible.Schedules.Provider do
   def handle("schedule", %Context{} = ctx, %{"action" => "list"} = args) do
     limit = min(args["limit"] || 25, 1000)
 
-    case Arca.CronSchedule.list(Sanctum.Context.actor(ctx), limit: limit) do
+    case Arca.CronSchedule.list(Sanctum.Context.actor(ctx), limit: limit, kind: @kind) do
       {:ok, schedules} ->
         {:ok,
          %{
@@ -273,7 +280,7 @@ defmodule Crucible.Schedules.Provider do
 
   # Get
   def handle("schedule", %Context{} = ctx, %{"action" => "get", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id) do
+    case schedule(ctx, id) do
       {:ok, schedule} -> {:ok, format_schedule(schedule)}
       {:error, reason} -> {:error, format_store_error(reason, id)}
     end
@@ -286,7 +293,7 @@ defmodule Crucible.Schedules.Provider do
   # Update
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
     with {:schedule, {:ok, schedule}} <-
-           {:schedule, Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id)},
+           {:schedule, schedule(ctx, id)},
          :ok <- validate_cron_if_present(args["cron_expression"]),
          :ok <- validate_concurrency(args["concurrency"]) do
       update_attrs = %{}
@@ -357,7 +364,7 @@ defmodule Crucible.Schedules.Provider do
 
   # Pause
   def handle("schedule", %Context{} = ctx, %{"action" => "pause", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id) do
+    case schedule(ctx, id) do
       {:error, reason} ->
         {:error, format_store_error(reason, id)}
 
@@ -379,12 +386,12 @@ defmodule Crucible.Schedules.Provider do
 
   # Resume
   def handle("schedule", %Context{} = ctx, %{"action" => "resume", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id) do
+    case schedule(ctx, id) do
       {:error, reason} ->
         {:error, format_store_error(reason, id)}
 
       {:ok, schedule} ->
-        # No cap check here: the cap counts every non-deleted row, so a
+        # No cap check here: the cap counts every non-deleted schedule, so a
         # paused schedule still occupies its slot and resume never mints one.
         next_run =
           case compute_next_run(schedule.cron_expression) do
@@ -412,7 +419,7 @@ defmodule Crucible.Schedules.Provider do
 
   # Delete
   def handle("schedule", %Context{} = ctx, %{"action" => "delete", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id) do
+    case schedule(ctx, id) do
       {:error, reason} ->
         {:error, format_store_error(reason, id)}
 
@@ -434,7 +441,7 @@ defmodule Crucible.Schedules.Provider do
 
   # Re-resolve — bump resolved_reference to latest version without recreating the schedule
   def handle("schedule", %Context{} = ctx, %{"action" => "re_resolve", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id) do
+    case schedule(ctx, id) do
       {:error, reason} ->
         {:error, format_store_error(reason, id)}
 
@@ -470,6 +477,11 @@ defmodule Crucible.Schedules.Provider do
   end
 
   # Helpers
+
+  # A schedule by id or name: a feed's id or name, or one a feed shares
+  # with no schedule, is not found here.
+  defp schedule(ctx, id_or_name),
+    do: Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id_or_name, kind: @kind)
 
   defp validate_required(args, keys) do
     missing = Enum.filter(keys, fn k -> !args[k] || args[k] == "" end)
@@ -507,7 +519,7 @@ defmodule Crucible.Schedules.Provider do
   defp validate_limit(ctx) do
     # A cap check the store cannot answer refuses — a default of zero
     # would wave every create through during an outage.
-    case Arca.CronSchedule.count_active(Sanctum.Context.actor(ctx)) do
+    case Arca.CronSchedule.count_active(Sanctum.Context.actor(ctx), @kind) do
       {:ok, count} when count >= @max_schedules_per_athanor ->
         {:error, "Schedule limit reached (#{@max_schedules_per_athanor} per athanor)"}
 

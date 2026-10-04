@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.Feed, read by apps/prima/test/prima/feed_test.exs and, for the stream payload, by the toolkit's JavaScript tests (apps/cyfr/assets/test/toolkit/worker.test.mjs). Every row is plain JSON. Every valid binding reads and writes back as its `json`, its result shape normalized; every invalid binding is refused at `path`, an RFC 6901 pointer into it, for `reason`, one of `reasons`. `inputs` are the component inputs a binding (by index) or its run action (by index) runs with, and `crons` each interval's cron expression. Each binding's `results` pass or are refused at `path` for `reason`. Each envelope is the stream payload for its binding id, binding, revision, time and result: it names the binding and the feed and never the operation, args, reference or interval. A binding's args and a result are bounded by the bytes of their JSON text: `args_max_bytes` and `result_max_bytes`. `bounds` pins the byte bounds on the binding at index `binding`, each row stating `bytes`, the length of its value's Prima.Json text: a result of `result_max_bytes` is accepted and one of a byte more is refused at `path` for `reason`, `size`, even when the value also breaks the shape, whose own refusal `shape_refusal` names; args of `args_max_bytes` are accepted and one byte more is refused `size` at `/args`.",
+  "comment": "The vectors pinning Prima.Feed, read by apps/prima/test/prima/feed_test.exs and, for the stream payload, by the toolkit's JavaScript tests (apps/cyfr/assets/test/toolkit/worker.test.mjs). Every row is plain JSON. Every valid binding reads and writes back as its `json`, its result shape normalized; every invalid binding is refused at `path`, an RFC 6901 pointer into it, for `reason`, one of `reasons`. `inputs` are the component inputs a binding (by index) or its run action (by index) runs with, and `crons` each interval's cron expression. Each binding's `results` pass or are refused at `path` for `reason`. Each envelope is the stream payload for its binding id, binding, revision, time and result: it names the binding and the feed and never the operation, args, reference or interval. A binding's args and a result are bounded by the bytes of their JSON text: `args_max_bytes` and `result_max_bytes`. `bounds` pins the byte bounds on the binding at index `binding`, each row stating `bytes`, the length of its value's Prima.Json text: a result of `result_max_bytes` is accepted and one of a byte more is refused at `path` for `reason`, `size`, even when the value also breaks the shape, whose own refusal `shape_refusal` names; args of `args_max_bytes` are accepted and one byte more is refused `size` at `/args`. `outputs` pins what a feed keeps of a run's output (`Crucible.Feeds.accept/5`), read by apps/cyfr/test/crucible/feeds_test.exs, which hands each row's `output` to a feed bound to the binding at index `binding`, as its JSON text and, for an object or a list, also as the decoded value. A run's output, a catalyst's or a formula's alike, is an envelope: an object of exactly `status`, an integer, and `data`, or an object holding `error`. The result is the `data` of an envelope whose `status` is 200 to 299, kept as `accepted` once the binding's result shape holds, and data outside that shape is refused at `path`, a pointer into the data, for `reason`. Every other output is refused at the root for `error`, naming the output's `status` when it carries an integer one and nothing else of it.",
   "intervals": [
     1,
     2,
@@ -2015,5 +2015,300 @@
         }
       ]
     }
+  },
+  "outputs": {
+    "binding": 0,
+    "rows": [
+      {
+        "why": "a 200 envelope: its data is the result",
+        "output": {
+          "status": 200,
+          "data": {
+            "symbol": "BTC",
+            "price": 42000.5,
+            "change": -0.75,
+            "at": "2026-10-04T12:00:00Z",
+            "candles": []
+          }
+        },
+        "accepted": {
+          "symbol": "BTC",
+          "price": 42000.5,
+          "change": -0.75,
+          "at": "2026-10-04T12:00:00Z",
+          "candles": []
+        }
+      },
+      {
+        "why": "a 299 envelope: every 2xx status is a result",
+        "output": {
+          "status": 299,
+          "data": {
+            "symbol": "BTC",
+            "price": 42001.25,
+            "change": -0.75,
+            "at": "2026-10-04T12:00:00Z",
+            "candles": []
+          }
+        },
+        "accepted": {
+          "symbol": "BTC",
+          "price": 42001.25,
+          "change": -0.75,
+          "at": "2026-10-04T12:00:00Z",
+          "candles": []
+        }
+      },
+      {
+        "why": "a 2xx envelope whose data is outside its shape, refused at the pointer into the data",
+        "output": {
+          "status": 200,
+          "data": {
+            "symbol": "BTC"
+          }
+        },
+        "refused": {
+          "path": "/at",
+          "reason": "required"
+        }
+      },
+      {
+        "why": "a non-2xx data envelope",
+        "output": {
+          "status": 503,
+          "data": {
+            "symbol": "BTC",
+            "price": 42000.5,
+            "change": -0.75,
+            "at": "2026-10-04T12:00:00Z",
+            "candles": []
+          }
+        },
+        "refused": {
+          "path": "",
+          "reason": "error",
+          "status": 503
+        }
+      },
+      {
+        "why": "a status below 200",
+        "output": {
+          "status": 199,
+          "data": {
+            "symbol": "BTC",
+            "price": 42000.5,
+            "change": -0.75,
+            "at": "2026-10-04T12:00:00Z",
+            "candles": []
+          }
+        },
+        "refused": {
+          "path": "",
+          "reason": "error",
+          "status": 199
+        }
+      },
+      {
+        "why": "a status of 300",
+        "output": {
+          "status": 300,
+          "data": {
+            "symbol": "BTC",
+            "price": 42000.5,
+            "change": -0.75,
+            "at": "2026-10-04T12:00:00Z",
+            "candles": []
+          }
+        },
+        "refused": {
+          "path": "",
+          "reason": "error",
+          "status": 300
+        }
+      },
+      {
+        "why": "an error envelope with a status",
+        "output": {
+          "status": 429,
+          "error": {
+            "type": "rate_limited",
+            "message": "slow down"
+          }
+        },
+        "refused": {
+          "path": "",
+          "reason": "error",
+          "status": 429
+        }
+      },
+      {
+        "why": "an error envelope without a status",
+        "output": {
+          "error": {
+            "type": "rate_limited",
+            "message": "slow down"
+          }
+        },
+        "refused": {
+          "path": "",
+          "reason": "error"
+        }
+      },
+      {
+        "why": "an error envelope whose status is 2xx",
+        "output": {
+          "status": 200,
+          "error": "boom"
+        },
+        "refused": {
+          "path": "",
+          "reason": "error",
+          "status": 200
+        }
+      },
+      {
+        "why": "a 2xx envelope with a key besides status and data",
+        "output": {
+          "status": 200,
+          "data": {
+            "symbol": "BTC",
+            "price": 42000.5,
+            "change": -0.75,
+            "at": "2026-10-04T12:00:00Z",
+            "candles": []
+          },
+          "note": "kept nowhere"
+        },
+        "refused": {
+          "path": "",
+          "reason": "error",
+          "status": 200
+        }
+      },
+      {
+        "why": "a 2xx envelope that also holds an error",
+        "output": {
+          "status": 200,
+          "data": {
+            "symbol": "BTC",
+            "price": 42000.5,
+            "change": -0.75,
+            "at": "2026-10-04T12:00:00Z",
+            "candles": []
+          },
+          "error": {
+            "type": "rate_limited",
+            "message": "slow down"
+          }
+        },
+        "refused": {
+          "path": "",
+          "reason": "error",
+          "status": 200
+        }
+      },
+      {
+        "why": "a status with no data",
+        "output": {
+          "status": 200
+        },
+        "refused": {
+          "path": "",
+          "reason": "error",
+          "status": 200
+        }
+      },
+      {
+        "why": "a status that is a string is no envelope",
+        "output": {
+          "status": "200",
+          "data": {
+            "symbol": "BTC",
+            "price": 42000.5,
+            "change": -0.75,
+            "at": "2026-10-04T12:00:00Z",
+            "candles": []
+          }
+        },
+        "refused": {
+          "path": "",
+          "reason": "error"
+        }
+      },
+      {
+        "why": "a status that is not an integer is no envelope",
+        "output": {
+          "status": 200.5,
+          "data": {
+            "symbol": "BTC",
+            "price": 42000.5,
+            "change": -0.75,
+            "at": "2026-10-04T12:00:00Z",
+            "candles": []
+          }
+        },
+        "refused": {
+          "path": "",
+          "reason": "error"
+        }
+      },
+      {
+        "why": "the data alone, with no envelope",
+        "output": {
+          "symbol": "BTC",
+          "price": 42000.5,
+          "change": -0.75,
+          "at": "2026-10-04T12:00:00Z",
+          "candles": []
+        },
+        "refused": {
+          "path": "",
+          "reason": "error"
+        }
+      },
+      {
+        "why": "an empty object",
+        "output": {},
+        "refused": {
+          "path": "",
+          "reason": "error"
+        }
+      },
+      {
+        "why": "a list holding an envelope",
+        "output": [
+          {
+            "status": 200,
+            "data": {
+              "symbol": "BTC",
+              "price": 42000.5,
+              "change": -0.75,
+              "at": "2026-10-04T12:00:00Z",
+              "candles": []
+            }
+          }
+        ],
+        "refused": {
+          "path": "",
+          "reason": "error"
+        }
+      },
+      {
+        "why": "a number",
+        "output": 42,
+        "refused": {
+          "path": "",
+          "reason": "error"
+        }
+      },
+      {
+        "why": "null",
+        "output": null,
+        "refused": {
+          "path": "",
+          "reason": "error"
+        }
+      }
+    ]
   }
 }

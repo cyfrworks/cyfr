@@ -64,6 +64,9 @@ defmodule Cyfr.Test.ScriptedWorker do
   - `{:refuse, %{"type", "message"}}` — the run completes with the
     contract's typed refusal as its envelope,
     `%{"status" => 429, "error" => error}`.
+  - `{:output, value}` — the run completes with exactly `value` as its
+    output, no envelope added: a component whose answer is not the one a
+    contract names.
   - `{:emit, events}` — push the events (maps) on the run's stream before
     the next item.
   - `{:sleep, ms}` — wait before the next item.
@@ -668,6 +671,9 @@ defmodule Cyfr.Test.ScriptedWorker do
 
       {:refuse, %{"type" => _} = error} ->
         complete(runner, %{"status" => 429, "error" => error})
+
+      {:output, value} ->
+        complete(runner, value)
 
       %{} = data when crash_after? ->
         # Suspended, the waiter cannot return the answer the close sends it.

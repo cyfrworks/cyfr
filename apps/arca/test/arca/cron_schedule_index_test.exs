@@ -7,10 +7,13 @@ defmodule Arca.CronScheduleIndexTest do
   alias Arca.CronSchedule
 
   # The partial unique index:
-  #   (athanor_id, name) WHERE status != 'deleted'  — :cron_schedules_athanor_name_active
-  # These tests pin its semantics on both adapters: soft-deleted rows release
-  # the name, everything else (active AND paused) holds it, and the name is
-  # scoped to the athanor — a schedule is the athanor's, whoever created it.
+  #   (athanor_id, kind, name) WHERE status != 'deleted'
+  #     — :cron_schedules_athanor_kind_name_active
+  # A live name is unique per kind, so a feed may share a schedule's name.
+  # These tests pin its semantics for schedules on both adapters:
+  # soft-deleted rows release the name, everything else (active AND paused)
+  # holds it, and the name is scoped to the athanor — a schedule is the
+  # athanor's, whoever created it.
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)

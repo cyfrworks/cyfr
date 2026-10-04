@@ -313,6 +313,61 @@ defmodule Arca.SchemaFingerprintTest do
     end
   end
 
+  test "a feed is the fingerprinted baseline's: a kind, a spec exactly for a feed, a live name once per kind" do
+    [baseline] =
+      Path.wildcard(Path.expand("../../priv/repo/migrations/*_baseline.exs", __DIR__))
+
+    assert File.read!(baseline) =~ ~r/add :kind, :string, null: false, default: "schedule"/
+
+    for field <- ~w(kind feed_spec feed_fire_seq feed_result_seq feed_result feed_result_at)a do
+      assert field in Arca.Schemas.CronSchedule.__schema__(:fields)
+    end
+
+    now = DateTime.utc_now()
+
+    row = %{
+      id: "sched_fp_1",
+      athanor_id: "ath_fingerprint_#{System.unique_integer([:positive])}",
+      user_id: "usr_fp",
+      name: "btc",
+      cron_expression: "*/5 * * * *",
+      reference: "catalyst:local.markets",
+      profile_id: "prof_fp",
+      created_at: now,
+      updated_at: now
+    }
+
+    # A row is a schedule unless it says otherwise, with no spec and no seq.
+    assert :ok = insert_row("cron_schedules", row)
+
+    assert [{"schedule", nil, 0, 0}] ==
+             Arca.Repo.all(
+               from(c in "cron_schedules",
+                 where: c.id == "sched_fp_1",
+                 select: {c.kind, c.feed_spec, c.feed_fire_seq, c.feed_result_seq}
+               )
+             )
+
+    # A feed may hold a schedule's live name, but not another live feed's.
+    feed = Map.merge(row, %{id: "feed_fp_2", kind: "feed", feed_spec: "{}"})
+    assert :ok = insert_row("cron_schedules", feed)
+    assert :refused = insert_row("cron_schedules", %{feed | id: "feed_fp_3"})
+
+    assert :ok =
+             insert_row("cron_schedules", Map.merge(feed, %{id: "feed_fp_4", status: "deleted"}))
+
+    # A feed carries its spec, a schedule carries none, and no third kind is.
+    for {wrong, n} <- [
+          {%{kind: "feed", feed_spec: nil}, 5},
+          {%{kind: "schedule", feed_spec: "{}"}, 6},
+          {%{kind: "card", feed_spec: nil}, 7},
+          {%{kind: nil, feed_spec: nil}, 8}
+        ] do
+      attempt = Map.merge(row, Map.merge(wrong, %{id: "sched_fp_#{n}", name: "fp-#{n}"}))
+      assert :refused = insert_row("cron_schedules", attempt), "#{inspect(wrong)} was accepted"
+    end
+  end
+
   defp insert_row(table, row) do
     Arca.Repo.transaction(fn -> Arca.Repo.insert_all(table, [row]) end)
     :ok

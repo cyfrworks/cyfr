@@ -2329,8 +2329,27 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp schedules do
+    # A row is a schedule or a feed, and only a feed carries its binding's
+    # JSON text. SQLite takes a check only inside CREATE TABLE and Postgres
+    # only as a table constraint, so the one rule is spelled once per
+    # adapter.
+    kind_spec = %{
+      name: "cron_schedules_kind_spec",
+      expr:
+        "(kind = 'schedule' AND feed_spec IS NULL) OR (kind = 'feed' AND feed_spec IS NOT NULL)"
+    }
+
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # A feed (`kind = 'feed'`) is a schedule of one component operation whose
+    # row id is its binding id: `feed_spec` is the binding's JSON text,
+    # `feed_fire_seq` the last seq a run claimed, and `feed_result` the
+    # accepted result's JSON text, written at `feed_result_at` by the run
+    # that claimed `feed_result_seq`. An earlier-claimed result never
+    # replaces a later one (`Arca.CronSchedule.accept_feed_result/5`).
     create table(:cron_schedules, primary_key: false) do
       add :id, :string, primary_key: true
+      add :kind, :string, null: false, default: "schedule", check: if(sqlite?, do: kind_spec)
       # Attribution: who created the schedule. The athanor owns it.
       add :user_id, :string, null: false
       add :name, :string, null: false
@@ -2350,8 +2369,17 @@ defmodule Arca.Repo.Migrations.Baseline do
       # forbid | allow: whether a due occurrence may be claimed while another
       # of the same schedule is still open.
       add :concurrency, :string, null: false, default: "forbid"
+      add :feed_spec, :text
+      add :feed_fire_seq, :integer, null: false, default: 0
+      add :feed_result_seq, :integer, null: false, default: 0
+      add :feed_result, :text
+      add :feed_result_at, :utc_datetime_usec
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
+    end
+
+    unless sqlite? do
+      create constraint(:cron_schedules, kind_spec.name, check: kind_spec.expr)
     end
 
     create unique_index(:cron_schedules, [:id, :athanor_id])
@@ -2359,9 +2387,10 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:cron_schedules, [:next_run_at])
     create index(:cron_schedules, [:athanor_id])
 
-    create unique_index(:cron_schedules, [:athanor_id, :name],
+    # A live name is unique per kind: a feed may share a schedule's name.
+    create unique_index(:cron_schedules, [:athanor_id, :kind, :name],
              where: "status != 'deleted'",
-             name: :cron_schedules_athanor_name_active
+             name: :cron_schedules_athanor_kind_name_active
            )
 
     # An occurrence of a schedule is a row of its own: claimed by one node

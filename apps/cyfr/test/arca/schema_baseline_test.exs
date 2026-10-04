@@ -178,6 +178,34 @@ defmodule Arca.SchemaBaselineTest do
     assert %Arca.Schemas.FrameCredential{}.purpose == "live"
   end
 
+  test "a schedule row names its kind, schedule unless a feed, and a live name is unique per kind",
+       %{declared: declared} do
+    columns = Map.new(columns("cron_schedules"), &{&1.name, &1})
+
+    assert columns["kind"].not_null?, "cron_schedules.kind is NOT NULL"
+    assert to_string(columns["kind"].default) =~ "schedule"
+
+    for seq <- ~w(feed_fire_seq feed_result_seq) do
+      assert columns[seq].not_null?, "cron_schedules.#{seq} is NOT NULL"
+      assert to_string(columns[seq].default) =~ "0", "cron_schedules.#{seq} defaults to 0"
+    end
+
+    for optional <- ~w(feed_spec feed_result feed_result_at) do
+      refute columns[optional].not_null?, "cron_schedules.#{optional} is nullable"
+    end
+
+    fields = Arca.Schemas.CronSchedule.__schema__(:fields) |> Enum.map(&Atom.to_string/1)
+
+    assert Enum.sort(fields) == Enum.sort(Map.keys(declared["cron_schedules"])),
+           "Arca.Schemas.CronSchedule drifts from the cron_schedules table"
+
+    assert %Arca.Schemas.CronSchedule{}.kind == "schedule"
+
+    indexes = index_names("cron_schedules")
+    assert "cron_schedules_athanor_kind_name_active" in indexes
+    refute "cron_schedules_athanor_name_active" in indexes
+  end
+
   test "api_keys and webhooks have no scope-type column; vault_entries has no system column" do
     fossil = "scope" <> "_type"
     refute fossil in Enum.map(columns("api_keys"), & &1.name)
@@ -555,6 +583,23 @@ defmodule Arca.SchemaBaselineTest do
   # Adapter-aware introspection
 
   defp sqlite?, do: Cyfr.RuntimeConfig.repo_adapter() == Ecto.Adapters.SQLite3
+
+  defp index_names(table) do
+    rows =
+      if sqlite?() do
+        Arca.Repo.query!(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1",
+          [table]
+        ).rows
+      else
+        Arca.Repo.query!(
+          "SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1",
+          [table]
+        ).rows
+      end
+
+    List.flatten(rows)
+  end
 
   defp table_names do
     rows =

@@ -50,6 +50,18 @@ defmodule Crucible.Schedules.Scheduler do
   occurrence row, the schedule's run was recorded, and the generation still
   holds when checked again just before the publish. The row's stored
   metadata says whether the outcome is kept (`keep_outcome/1`).
+
+  A row of kind `feed` (`Crucible.Feeds`) fires through the same claim,
+  decision, run, profile and options as a schedule, its first occurrence
+  included. Its run task first claims the feed's next seq
+  (`Arca.CronSchedule.claim_feed_seq/2`) under the member slot it reads
+  then; a refused claim opens no decision and runs nothing. On the run's
+  answer the output is accepted under that seq and slot
+  (`Crucible.Feeds.accept/5`) before the occurrence finishes: accepted,
+  stale or removed completes it, and a refused output (not a 2xx envelope,
+  or data outside its shape) fails it with the refusal's reason, path and
+  any status as its error. A feed announces no completion and no schedule
+  update.
   """
 
   use GenServer
@@ -146,7 +158,7 @@ defmodule Crucible.Schedules.Scheduler do
 
         if still_ours?(task.generation) do
           if failed_run?(reason), do: runner_died(schedule_id, task, reason)
-          broadcast_update(task.ctx, schedule_id)
+          unless task.feed?, do: broadcast_update(task.ctx, schedule_id)
           {:noreply, schedule_timer(schedule_id, state)}
         else
           {:noreply, defer_occurrence(schedule_id, state)}
@@ -596,14 +608,15 @@ defmodule Crucible.Schedules.Scheduler do
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
-        if still_ours?(generation), do: broadcast_update(ctx, schedule.id)
+        if not feed?(schedule) and still_ours?(generation), do: broadcast_update(ctx, schedule.id)
 
         task = %{
           ref: ref,
           occurrence_id: occurrence.id,
           athanor_id: occurrence.athanor_id,
           generation: generation,
-          ctx: ctx
+          ctx: ctx,
+          feed?: feed?(schedule)
         }
 
         %{state | tasks: Map.put(state.tasks, schedule.id, task)}
@@ -630,12 +643,61 @@ defmodule Crucible.Schedules.Scheduler do
     end
   end
 
+  # A feed's fire first claims the feed's next seq, the one its result is
+  # accepted under, before any decision is opened: a refused claim opens
+  # none and runs nothing. A recovered re-run of a never-invoked occurrence
+  # takes the same step, so it runs under a seq of its own.
+  defp run(schedule, occurrence, ctx, exec_reference, input, generation) do
+    case claim_seq(schedule, ctx) do
+      {:ok, feed} ->
+        fire(schedule, occurrence, ctx, exec_reference, input, generation, feed)
+
+      {:error, :not_owner} ->
+        # This member no longer owns its slot: it writes nothing more, and
+        # the claimed occurrence is recovered as one never invoked.
+        Logger.warning(
+          "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq not claimed: this member " <>
+            "no longer owns its slot — left to recovery"
+        )
+
+      {:error, reason} ->
+        if still_ours?(generation), do: seq_refused(schedule, occurrence, ctx, reason)
+    end
+  end
+
+  # A schedule claims no seq. A feed claims its next one under the member
+  # slot read now, which its result's acceptance is later fenced by.
+  defp claim_seq(%{kind: "feed", id: id}, ctx) do
+    with {:ok, slot} <- Arca.ControlPlane.member_slot(),
+         {:ok, seq} <- CronSchedule.claim_feed_seq(Sanctum.Context.actor(ctx), id) do
+      {:ok, %{seq: seq, slot: slot}}
+    end
+  end
+
+  defp claim_seq(_schedule, _ctx), do: {:ok, nil}
+
+  defp seq_refused(schedule, occurrence, ctx, reason) do
+    _ =
+      ScheduleOccurrences.finish(
+        Prima.Actor.in_athanor(occurrence.athanor_id),
+        occurrence.id,
+        "failed"
+      )
+
+    Logger.warning(
+      "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq not claimed (#{inspect(reason)}) — not run"
+    )
+
+    emit_schedule_failed(schedule.id, ctx, reason)
+    record_error(ctx, schedule.id, Grimoire.render(reason))
+  end
+
   # One root run, the occurrence joined to
   # the execution by its admission; the occurrence closes with the
   # answer, whichever it is. The fire is one admission decision, recorded
   # before the run under a call id the context carries, so the root's row
   # names it, and completed with the run's answer.
-  defp run(schedule, occurrence, ctx, exec_reference, input, generation) do
+  defp fire(schedule, occurrence, ctx, exec_reference, input, generation, feed) do
     request_id = Prima.UUID7.request_id()
     call_id = Prima.UUID7.generate_id("call")
     ctx = %{ctx | request_id: request_id, call_id: call_id}
@@ -691,6 +753,17 @@ defmodule Crucible.Schedules.Scheduler do
 
     if still_ours?(generation) do
       case run_result do
+        {:ok, result} when is_map(feed) ->
+          fired = %{
+            call_id: call_id,
+            request_id: request_id,
+            execution_id: execution_id,
+            reference: exec_reference,
+            duration_ms: duration_ms
+          }
+
+          feed_completed(schedule, occurrence, ctx, feed, Map.get(result, :output, result), fired)
+
         {:ok, result} ->
           output = Map.get(result, :output, result)
 
@@ -761,6 +834,100 @@ defmodule Crucible.Schedules.Scheduler do
           record_error(ctx, schedule.id, Grimoire.render(reason))
       end
     end
+  end
+
+  # A feed's run answered. Its decision is closed with the run's answer
+  # whatever the acceptance then decides; the result is accepted, fenced by
+  # the slot read when the seq was claimed, before the occurrence finishes.
+  # An accepted result, a stale one (a later-claimed run's result is
+  # already in) and a feed removed during the run each complete the
+  # occurrence and record the run; a refused result fails it, and the
+  # error names the refusal's reason and path, never the result. A member
+  # that lost its slot writes nothing more and leaves the occurrence to
+  # recovery. A feed announces no completion and no schedule update.
+  defp feed_completed(schedule, occurrence, ctx, feed, output, fired) do
+    Grimoire.close_decision(ctx, fired.call_id, %{
+      result: {:ok, output},
+      duration_ms: fired.duration_ms,
+      routed_to: Crucible.service()
+    })
+
+    case Crucible.Feeds.accept(ctx, schedule.id, feed.seq, output, feed.slot) do
+      answer when answer in [:ok, {:error, :stale}, {:error, :not_found}] ->
+        _ = finish(occurrence, "completed")
+        _ = record_run(ctx, schedule.id, fired.execution_id)
+
+        :telemetry.execute(
+          [:cyfr, :schedules, :completed],
+          %{system_time: System.system_time(), duration_ms: fired.duration_ms},
+          fired_meta(schedule, occurrence, ctx, fired)
+        )
+
+        Logger.debug(
+          "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq} completed " <>
+            "(#{fired.execution_id}): #{inspect(answer)}"
+        )
+
+      {:error, :not_owner} ->
+        Logger.warning(
+          "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq}: this member no " <>
+            "longer owns its slot — result not accepted, occurrence left to recovery"
+        )
+
+      {:error, {:refused, refusal}} ->
+        reason = refused_result(refusal)
+        _ = finish(occurrence, "failed")
+
+        Logger.warning(
+          "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq} failed: " <>
+            Grimoire.render(reason)
+        )
+
+        emit_schedule_failed(schedule.id, ctx, reason, fired.execution_id)
+        record_error(ctx, schedule.id, Grimoire.render(reason))
+
+      {:error, reason} ->
+        _ = finish(occurrence, "failed")
+
+        Logger.warning(
+          "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq} failed: #{inspect(reason)}"
+        )
+
+        emit_schedule_failed(schedule.id, ctx, reason, fired.execution_id)
+        record_error(ctx, schedule.id, Grimoire.render(reason))
+    end
+  end
+
+  # A refused result, named by the refusal's reason, its path in the result
+  # and the output's status when it carries one, never by the result.
+  defp refused_result(%{path: path, reason: reason} = refusal) do
+    status =
+      case refusal do
+        %{status: status} when is_integer(status) -> " (status #{status})"
+        _none -> ""
+      end
+
+    {:invalid_argument, "feed result refused: #{reason} at #{inspect(path)}#{status}"}
+  end
+
+  defp finish(occurrence, state),
+    do:
+      ScheduleOccurrences.finish(
+        Prima.Actor.in_athanor(occurrence.athanor_id),
+        occurrence.id,
+        state
+      )
+
+  defp fired_meta(schedule, occurrence, ctx, fired) do
+    %{
+      request_id: fired.request_id,
+      schedule_id: schedule.id,
+      occurrence_id: occurrence.id,
+      reference: fired.reference,
+      execution_id: fired.execution_id,
+      athanor_id: ctx.athanor_id,
+      user_id: ctx.user_id
+    }
   end
 
   # The runner died without answering: the occurrence it held ends as
@@ -1031,6 +1198,11 @@ defmodule Crucible.Schedules.Scheduler do
       _ -> {:error, :invalid_json}
     end
   end
+
+  # A feed is a row of kind `feed`: it fires as a schedule does, and
+  # announces no schedule update and no completion.
+  defp feed?(%{kind: "feed"}), do: true
+  defp feed?(_schedule), do: false
 
   # An occurrence started or its run ended: the schedules view re-reads.
   defp broadcast_update(ctx, schedule_id) do

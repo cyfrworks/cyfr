@@ -536,4 +536,87 @@ defmodule Crucible.Schedules.ProviderTest do
       assert {:error, _} = Provider.handle("unknown", %Context{}, %{})
     end
   end
+
+  describe "feeds" do
+    test "a feed is invisible to the schedule tool, by id and by name", %{ctx: ctx} do
+      {:ok, feed} = feed!(ctx, "btc")
+
+      assert {:ok, %{schedules: schedules, count: 0}} =
+               Provider.handle("schedule", ctx, %{"action" => "list"})
+
+      assert schedules == []
+
+      for action <- ~w(get update pause resume delete re_resolve), id <- [feed.id, "btc"] do
+        assert {:error, message} =
+                 Provider.handle("schedule", ctx, %{"action" => action, "schedule_id" => id}),
+               "#{action} #{id} reached a feed"
+
+        assert message =~ "Schedule not found"
+      end
+
+      # Nothing the tool was asked touched the feed.
+      assert {:ok, %{status: "active", name: "btc", run_count: 0}} =
+               Arca.CronSchedule.get_feed(Context.actor(ctx), feed.id)
+    end
+
+    test "a schedule may take a feed's name, and the tool finds only the schedule", %{ctx: ctx} do
+      {:ok, feed} = feed!(ctx, "btc")
+      {:ok, created} = Provider.handle("schedule", ctx, schedule_args("btc"))
+      refute created.schedule_id == feed.id
+
+      assert {:ok, %{schedule_id: id}} =
+               Provider.handle("schedule", ctx, %{"action" => "get", "schedule_id" => "btc"})
+
+      assert id == created.schedule_id
+
+      assert {:ok, %{deleted: true, schedule_id: ^id}} =
+               Provider.handle("schedule", ctx, %{"action" => "delete", "schedule_id" => "btc"})
+
+      assert {:ok, %{status: "active"}} = Arca.CronSchedule.get_feed(Context.actor(ctx), feed.id)
+    end
+
+    test "the schedule cap ignores feeds", %{ctx: ctx} do
+      for i <- 1..Crucible.Feeds.max_per_athanor(), do: {:ok, _} = feed!(ctx, "feed-#{i}")
+
+      for i <- 1..25 do
+        assert {:ok, _} = Provider.handle("schedule", ctx, schedule_args("cap-#{i}"))
+      end
+
+      assert {:error, message} = Provider.handle("schedule", ctx, schedule_args("cap-26"))
+      assert message =~ "limit reached"
+      assert {:ok, 25} = Arca.CronSchedule.count_active(Context.actor(ctx), "schedule")
+      assert {:ok, 10} = Arca.CronSchedule.count_active(Context.actor(ctx), "feed")
+    end
+  end
+
+  defp schedule_args(name) do
+    %{
+      "action" => "create",
+      "profile_id" => "prof-cron",
+      "name" => name,
+      "cron_expression" => "0 * * * *",
+      "reference" => "reagent:local.test:1.0.0"
+    }
+  end
+
+  defp feed!(ctx, name) do
+    {:ok, binding} =
+      Prima.Feed.Binding.validate(%{
+        "name" => name,
+        "label" => "Feed #{name}",
+        "reference" => "catalyst:local.markets",
+        "operation" => "quote",
+        "args" => %{},
+        "interval_minutes" => 5,
+        "result_shape" => %{"type" => "json"},
+        "actions" => []
+      })
+
+    Arca.CronSchedule.create_feed(Context.actor(ctx), %{
+      binding: binding,
+      resolved_reference: "catalyst:local.markets:1.0.0",
+      profile_id: "prof-cron",
+      cap: Crucible.Feeds.max_per_athanor()
+    })
+  end
 end
