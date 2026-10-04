@@ -670,11 +670,19 @@ defmodule Arca.CronSchedule do
     end
   end
 
-  defp feed_held(%Row{kind: "feed"}) do
+  defp feed_held(%Row{kind: "feed"}), do: feed_fence()
+  defp feed_held(%Row{}), do: :ok
+
+  @doc false
+  # The fence a write to a feed's row passes when it carries no slot of
+  # its own: the member's slot, read now and verified inside the caller's
+  # locking transaction, before anything is written. The generic writers
+  # here and `Arca.ScheduleOccurrences.claim/3` use it, so a member that
+  # lost its slot moves no feed's row and claims no feed's occurrence.
+  @spec feed_fence() :: :ok | {:error, :not_owner}
+  def feed_fence do
     with {:ok, slot} <- Arca.ControlPlane.member_slot(), do: held(slot)
   end
-
-  defp feed_held(%Row{}), do: :ok
 
   defp committed({:ok, value}), do: value
   defp committed({:error, reason}), do: Arca.Repo.rollback(reason)

@@ -11,7 +11,9 @@ defmodule Arca.ScheduleOccurrences do
   so of two members firing the same due time one holds the row and the
   other is told `:held`. A schedule whose `concurrency` is `forbid` is
   not claimed while another of its occurrences is still open
-  (`:overlapping`). The execution's admission moves the occurrence to
+  (`:overlapping`). A feed's occurrence is claimed only under the
+  member's live slot, checked in the same transaction (`:not_owner`
+  otherwise). The execution's admission moves the occurrence to
   `started` inside its own transaction (`start!/3`, from
   `Arca.Execution.admit/2`), so a `claimed` occurrence is one nothing
   ever invoked, and the run's end closes it (`finish/3`).
@@ -52,13 +54,20 @@ defmodule Arca.ScheduleOccurrences do
 
   `schedule` is read for its `id`, its `athanor_id` and the
   `next_run_at` the caller saw, which is the cursor the write compares
-  against; everything else the claim decides on, concurrency included,
-  is read from the row as it stands. Due is decided on the cell's clock,
-  so a member whose own clock runs fast cannot fire a schedule before it
-  is due for its peers.
+  against; everything else the claim decides on, concurrency and kind
+  included, is read from the row as it stands. Due is decided on the
+  cell's clock, so a member whose own clock runs fast cannot fire a
+  schedule before it is due for its peers.
+
+  A feed's row (`kind` `feed`) is claimed only under the member's live
+  slot: the row is locked and its kind read before the cursor moves, and
+  a member that lost its slot is answered `{:error, :not_owner}` with the
+  cursor unmoved and no occurrence written
+  (`Arca.CronSchedule.feed_fence/0`). A schedule's row is claimed as it
+  always was.
   """
   @spec claim(map(), String.t(), DateTime.t()) ::
-          {:ok, map()} | :held | :overlapping | {:error, :database_error}
+          {:ok, map()} | :held | :overlapping | {:error, :not_owner | :database_error}
   def claim(%{next_run_at: nil}, _claimant, _next_run), do: :held
 
   def claim(
@@ -72,7 +81,15 @@ defmodule Arca.ScheduleOccurrences do
     Errors.with_db_rescue("ScheduleOccurrences.claim", fn ->
       now = Arca.ServerMetaStorage.now!()
 
-      Arca.Repo.transaction(fn ->
+      Arca.Repo.locking_transaction(fn ->
+        # The row is locked and its kind read before the cursor moves; a
+        # feed's claim passes the feed writers' fence first, so a member
+        # that lost its slot moves nothing.
+        if locked_kind(athanor_id, id) == "feed" do
+          with {:error, reason} <- Arca.CronSchedule.feed_fence(),
+               do: Arca.Repo.rollback(reason)
+        end
+
         {count, _} =
           from(s in CronSchedule,
             where: s.id == ^id and s.athanor_id == ^athanor_id,
@@ -318,6 +335,16 @@ defmodule Arca.ScheduleOccurrences do
         o.claimed_at < ^claimed_before or is_nil(o.claimed_by) or
           o.claimed_by not in subquery(live_owners)
     )
+  end
+
+  # arca:db-raise-ok inside the claim transaction
+  defp locked_kind(athanor_id, schedule_id) do
+    from(s in CronSchedule,
+      where: s.id == ^schedule_id and s.athanor_id == ^athanor_id,
+      select: s.kind
+    )
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
   end
 
   # arca:db-raise-ok inside the claim transaction

@@ -95,6 +95,60 @@ defmodule Arca.ScheduleOccurrencesTest do
     row.next_run_at
   end
 
+  # A feed bound under the member's slot, its first occurrence due.
+  defp due_feed!(actor) do
+    {:ok, binding} =
+      Prima.Feed.Binding.validate(%{
+        "name" => "feed-#{System.unique_integer([:positive])}",
+        "label" => "A feed",
+        "reference" => "catalyst:local.markets",
+        "operation" => "quote",
+        "args" => %{},
+        "interval_minutes" => 5,
+        "result_shape" => %{"type" => "json"},
+        "actions" => []
+      })
+
+    {:ok, feed} =
+      CronSchedule.create_feed(actor, %{
+        binding: binding,
+        resolved_reference: "catalyst:local.markets:1.0.0",
+        profile_id: "prof_test",
+        cap: 10
+      })
+
+    due_again!(feed)
+  end
+
+  # A claimant runs, as a deployment's does, and this member holds its
+  # slot, whatever the build's own configuration says; the switch is put
+  # back when the case ends, as the standing record is by `setup`.
+  defp claimant! do
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+
+    on_exit(fn ->
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+    end)
+
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    node = "node-occ-#{System.unique_integer([:positive])}"
+    {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+    slot
+  end
+
+  # A successor takes the slot over in the database; this member's cached
+  # standing is left as it was.
+  defp take_over!(%{node: node, generation: generation}) do
+    {1, _} =
+      Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+        set: [owner: node <> "#boot_b", generation: generation + 1]
+      )
+
+    :ok
+  end
+
   test "one claimant wins the occurrence and the cursor moves with it", %{actor: actor} do
     schedule = due!(actor)
     advanced_to = next_occurrence()
@@ -341,6 +395,45 @@ defmodule Arca.ScheduleOccurrencesTest do
                "boot-a",
                "boot-c"
              )
+  end
+
+  describe "a feed's claim" do
+    test "is refused :not_owner after a takeover, its cursor unmoved and no occurrence written",
+         %{actor: actor} do
+      slot = claimant!()
+      feed = due_feed!(actor)
+      before = CronSchedule.get_for_daemon(feed.id)
+
+      # A successor takes the slot over; this member's cached standing
+      # still says it holds it, so only the claim's own check stands
+      # between it and the row.
+      take_over!(slot)
+      assert Arca.ControlPlane.held?()
+
+      assert {:error, :not_owner} =
+               ScheduleOccurrences.claim(feed, "boot-stale", next_occurrence())
+
+      assert CronSchedule.get_for_daemon(feed.id) == before
+      assert {:ok, []} = ScheduleOccurrences.list(actor, feed.id)
+
+      # A schedule's claim is not fenced: it keeps today's claim.
+      schedule = due!(actor)
+
+      assert {:ok, %{state: "claimed"}} =
+               ScheduleOccurrences.claim(schedule, "boot-stale", next_occurrence())
+    end
+
+    test "is claimed as a schedule's is while the member holds its slot", %{actor: actor} do
+      claimant!()
+      feed = due_feed!(actor)
+      advanced_to = next_occurrence()
+
+      assert {:ok, %{state: "claimed", claimed_by: "boot-live"}} =
+               ScheduleOccurrences.claim(feed, "boot-live", advanced_to)
+
+      assert DateTime.compare(cursor!(feed.id), advanced_to) == :eq
+      assert :held = ScheduleOccurrences.claim(feed, "boot-other", next_occurrence())
+    end
   end
 
   test "an execution admitted for an occurrence nobody claimed is refused", %{actor: actor} do

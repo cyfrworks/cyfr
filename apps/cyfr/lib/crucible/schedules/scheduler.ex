@@ -53,7 +53,10 @@ defmodule Crucible.Schedules.Scheduler do
 
   A row of kind `feed` (`Crucible.Feeds`) fires through the same claim,
   decision, run, profile and options as a schedule, its first occurrence
-  included. Its run task first claims the feed's next seq
+  included. Its occurrence claim checks the member's slot in the claim's
+  own transaction, so the cached standing never stands in for it: a
+  claim answered `:not_owner` wrote nothing and defers, as a lost
+  generation does. Its run task first claims the feed's next seq
   (`Arca.CronSchedule.claim_feed_seq/2`) under the member slot it reads
   then; a refused claim opens no decision and runs nothing. On the run's
   answer the output is accepted under that seq and slot
@@ -548,6 +551,12 @@ defmodule Crucible.Schedules.Scheduler do
             # schedule forbids overlap: the due one waits, and is looked
             # at again shortly.
             recheck_later(schedule.id, state)
+
+          {:error, :not_owner} ->
+            # A feed's claim checks the member's slot itself, so the
+            # cached standing never stands in for it: a member that lost
+            # its slot wrote nothing, and defers as a lost generation does.
+            defer_occurrence(schedule.id, state)
 
           {:error, :database_error} ->
             retry_later(schedule.id, state)

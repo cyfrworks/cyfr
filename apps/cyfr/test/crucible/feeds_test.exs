@@ -344,6 +344,36 @@ defmodule Crucible.FeedsTest do
       refute_received {:schedule_outcome, _, _}
     end
 
+    test "a member that lost its slot claims no feed's occurrence: it defers, writing nothing",
+         %{actor: actor} do
+      slot = claimant!()
+      script!([%{"price" => 1.0}])
+      watch_outcomes(actor)
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+
+      # A successor takes the slot over before the first fire; this
+      # member's cached standing still says it holds it, so the scheduler
+      # fires, and only the claim's own check stands between it and the row.
+      take_over!(slot)
+      assert Arca.ControlPlane.held?()
+
+      scheduler = scheduler!()
+
+      # The fire was answered `:not_owner` and deferred, as a lost
+      # generation defers: the occurrence is looked at again later and
+      # recovery is armed.
+      wait_until(fn -> is_reference(:sys.get_state(scheduler).recovery_ref) end)
+      state = :sys.get_state(scheduler)
+      assert is_integer(Process.read_timer(state.timers[feed.id]))
+
+      assert occurrences(actor, feed.id) == []
+      assert {:ok, row} = CronSchedule.get_for_daemon(feed.id)
+      assert DateTime.compare(row.next_run_at, feed.next_run_at) == :eq
+      assert %{feed_fire_seq: 0, run_count: 0, error_count: 0} = row
+      assert ScriptedWorker.calls() == []
+      refute_received {:schedule_outcome, _, _}
+    end
+
     test "a feed created and removed before its first claim leaves no occurrence and no run",
          %{actor: actor} do
       script!([%{"price" => 1.0}])
