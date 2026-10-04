@@ -435,7 +435,7 @@ Memory is an assistant capability, `Aqua.Memory`, not a process the person tends
 - **`Cyfr.Boundaries`** holds the rows the compiler cannot express, each with its reason: narrower allow lists, cross-application reaches, the security-read seam, the admission entries, the bus, gate, configuration, settings, route and port rosters, and the marker groups.
 - **Seam tests** hold actor-first arguments, the unscoped and bypass markers, roster membership, the surface reads each surface may make, Sanctum-only security storage, refusal rendering, the rule that no frame reaches a facade, and the rule that no sandbox token, CSP directive or served file type is written outside the tincture rules.
 - **Drift tests** compare every derived view with its owner: the CLI catalog, discovery, telemetry rosters, protocol vectors in every language, environment variables against the shipped examples, the configuration guide against the settings roster, the guides' tables, the route map and the glossary.
-- **Containment suites** run the shipped images: runner isolation, memory and network, builder and backend isolation, and the credential canary. *Not built yet:* the credential canary.
+- **Containment suites** run the shipped images: runner isolation, memory and network, builder and backend isolation, and the credential canary.
 
 ### Sources of truth
 

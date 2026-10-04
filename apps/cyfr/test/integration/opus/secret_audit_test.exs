@@ -442,20 +442,40 @@ defmodule Opus.SecretAuditTest do
       assert_receive {:upstream, sent}, 5_000
       assert {"x-api-key", @canary} in sent.headers
 
-      # One entry for the attached request, naming the field it filled, the
-      # connection and the request's origin, never its path or query.
+      # One entry for the attached request, under the attempt's identity,
+      # naming the field it filled, the connection and the request's origin,
+      # and nothing more: not the value, nor the request's path or query.
       mine = Enum.filter(audited(), &(&1.metadata[:execution_id] == id))
       assert [dispensed] = of(mine, @dispensed, id)
-      assert dispensed.metadata.field == "KEY"
-      assert dispensed.metadata.connection == "api_key"
-      assert dispensed.metadata.destination == "http://127.0.0.1:#{port}"
-      assert dispensed.metadata.consent_id == consent_id
-      assert dispensed.athanor_id == person.athanor_id
+      assert Enum.count(mine, &match?([:cyfr, :opus, :secret | _], &1.name)) == 1
 
       # The runner's attach handed nothing; neither it nor the runner's
       # events carried the value, nor did anything the trail recorded.
-      assert [%{answer: %{"ok" => handed}}] = TwoServices.calls(:attach, id)
+      assert [%{args: %{"assignment" => token}, answer: %{"ok" => handed}}] =
+               TwoServices.calls(:attach, id)
+
       assert handed == %{}
+      {:ok, assignment} = Prima.Assignment.read(token)
+      row = Arca.ExecutionAttempts.current(Sanctum.Context.actor(person), id)
+
+      assert dispensed.metadata == %{
+               athanor_id: person.athanor_id,
+               user_id: person.user_id,
+               execution_id: id,
+               attempt: row.attempt,
+               fence: row.fence,
+               component_ref: assignment.component.ref,
+               consent_id: consent_id,
+               runner: row.claimed_by,
+               service: OpusService.service(),
+               connection: "api_key",
+               field: "KEY",
+               destination: "http://127.0.0.1:#{port}"
+             }
+
+      assert dispensed.athanor_id == person.athanor_id and dispensed.user_id == person.user_id
+      refute inspect(dispensed) =~ "/audited"
+      refute inspect(dispensed) =~ "q=1"
 
       assert ChatFixture.leaks(@canary,
                audit: mine,

@@ -2,22 +2,25 @@
 // Copyright 2026 CYFR Works Inc.
 //
 // step-stub: a `model/chat@1` catalyst that answers at once. `describe`
-// answers its capabilities (and a window for any named model); `chat` reads
-// its key through `cyfr:vault/read`, emits a few `text.delta` events, `usage`
-// and `stop` through `cyfr:emit/events`, and answers one text block. Nothing
-// is dialled. See ../README.md for the rebuild procedure.
+// answers its capabilities (and a window for any named model); `chat` emits
+// a few `text.delta` events, `usage` and `stop` through `cyfr:emit/events`,
+// and answers one text block. It reads no credential. A `chat` whose last
+// user message's text is a JSON object naming `bench_fetch`, whole or after
+// a display name, first makes that one request through `cyfr:http/fetch`,
+// before its first delta, and refuses unless it is answered 200; any other
+// `chat` dials nothing.
+// See ../README.md for the rebuild procedure.
 
 #[allow(warnings)]
 mod bindings;
 
 use bindings::cyfr::emit::events;
-use bindings::cyfr::vault::read;
+use bindings::cyfr::http::fetch;
 use bindings::exports::cyfr::catalyst::run::Guest;
 
 use serde_json::{json, Value};
 
 const CONTRACT: &str = "model/chat@1";
-const KEY_FIELD: &str = "STUB_API_KEY";
 const CONTEXT_WINDOW: u64 = 1_000_000;
 const DELTAS: [&str; 4] = ["The stub ", "answers ", "at ", "once."];
 
@@ -30,7 +33,7 @@ impl Guest for Component {
 
         match parsed.get("operation").and_then(Value::as_str) {
             Some("describe") => describe(&params),
-            Some("chat") => chat(),
+            Some("chat") => chat(&params),
             Some("models") => ok(json!({"models": [{"id": "step-stub"}]})),
             _ => refuse(400, "invalid_request", "the stub answers describe, models and chat"),
         }
@@ -59,9 +62,11 @@ fn describe(params: &Value) -> String {
     ok(data)
 }
 
-fn chat() -> String {
-    if let Err(e) = read::get(KEY_FIELD) {
-        return refuse(500, "secret_denied", &format!("Failed to read {KEY_FIELD}: {e}"));
+fn chat(params: &Value) -> String {
+    if let Some(request) = bench_fetch(params) {
+        if let Err(refusal) = fetched(&request) {
+            return refusal;
+        }
     }
 
     for text in DELTAS {
@@ -77,6 +82,59 @@ fn chat() -> String {
         "stop_reason": "end_turn",
         "usage": usage
     }))
+}
+
+// The bench's request: `bench_fetch` of the last user message, when that
+// message's text is a JSON object naming it, either whole or after the
+// display name and ": " the turn loop writes before a line where several
+// people talk (split at the first ": ", since a display name holds none).
+// A person's words, or a chat with no messages, name none.
+fn bench_fetch(params: &Value) -> Option<Value> {
+    let messages = params.get("messages").and_then(Value::as_array)?;
+    let last = messages
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))?;
+    let text = text_of(last.get("content"));
+
+    named_fetch(&text).or_else(|| text.split_once(": ").and_then(|(_name, line)| named_fetch(line)))
+}
+
+fn named_fetch(text: &str) -> Option<Value> {
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(fields)) => fields.get("bench_fetch").cloned(),
+        _ => None,
+    }
+}
+
+// Makes the request as it came; anything but a 200 answer is the chat's
+// refusal, so a bench step never measures a fetch that did not happen.
+fn fetched(request: &Value) -> Result<(), String> {
+    let answer = fetch::request(&request.to_string());
+    let answer: Value = serde_json::from_str(&answer).unwrap_or(Value::Null);
+
+    match (answer.get("status").and_then(Value::as_i64), answer.get("error")) {
+        (Some(200), None) => Ok(()),
+        (_, Some(error)) => {
+            let kind = error.get("type").and_then(Value::as_str).unwrap_or("http_error");
+            let message = error.get("message").and_then(Value::as_str).unwrap_or("the request failed");
+            Err(refuse(502, kind, message))
+        }
+        _ => Err(refuse(502, "http_error", "the bench request was not answered 200")),
+    }
+}
+
+fn text_of(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
 }
 
 // A refused event is dropped: the answer still returns.

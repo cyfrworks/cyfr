@@ -5,12 +5,13 @@
 
 Components written in WebAssembly text that push against what the engine
 lets one run hold (`Opus.Runtime.store_limits/1`), what its vault hands
-it, or what a request naming a connection may carry. Each `.wat` says
-what it does; the tests that run them are `Opus.StoreLimitsTest` and
-`Opus.VaultDenialTest` in this suite, and `Opus.MemoryBoundTest`,
-`Opus.SecretAuditTest`, `Opus.AttachedFetchTest`,
-`Crucible.Schedules.SchedulerTest` and
-`CyfrWeb.WebhookFlowIntegrationTest` in CYFR's.
+it, what a request naming a connection may carry, or what reaches a guest
+of the credential CYFR attaches for it. Each `.wat` says what it does; the
+tests that run them are `Opus.StoreLimitsTest` and `Opus.VaultDenialTest`
+in this suite, `Opus.MemoryBoundTest`, `Opus.SecretAuditTest`,
+`Opus.AttachedFetchTest`, `Crucible.Schedules.SchedulerTest` and
+`CyfrWeb.WebhookFlowIntegrationTest` in CYFR's, and the worker image's
+`tests/worker-image/runners.py` and `tests/worker-image/canary.py`.
 
 | Guest | World | Does |
 |---|---|---|
@@ -19,6 +20,7 @@ what it does; the tests that run them are `Opus.StoreLimitsTest` and
 | `grower` | reagent | grows its memory and its table until refused, and answers the sizes reached |
 | `vault_probe` | catalyst | reads a granted, an ungranted, an overlong and a control-byte field name |
 | `attached_header_probe` | catalyst | sends its input as its one request, naming a connection, and answers the request's answer; an input that adds an `Authorization` header is refused by shape |
+| `credential_canary` | catalyst | sends its input as its one request, naming a connection, reads `CANARY_KEY` from its vault, and writes the request's answer and the read's result to one event and to its output |
 
 ## Rebuilding
 
@@ -46,4 +48,6 @@ vault_probe.wat            sha256:4b110e1e10e335a559a97e1ad7067dd94f868c204603e5
 vault_probe.wasm           sha256:eb637d8910fca67b2c6b20644560394275604776e3e9b81a32c3c0a7f2566b91
 attached_header_probe.wat  sha256:15557a58c237f2afc8cedf7aea4ac107575a25b06a1cb37d145074168468b468
 attached_header_probe.wasm sha256:f2fa5a4dfa9937d1d80f0f15424ba525f9f1a9765c058796d95c786f73a8caa4
+credential_canary.wat      sha256:1a6454ba0eb640603d8e19e53798ab1b40f651857c2bd79c78ae983ed2d2022d
+credential_canary.wasm     sha256:bc0c6317f5c45b2463367c8a3aa458587c1de16a7f15ed469f5d3b03c3a95a92
 ```

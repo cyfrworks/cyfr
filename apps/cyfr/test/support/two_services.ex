@@ -576,8 +576,8 @@ defmodule Cyfr.Test.TwoServices do
     # dispensed for (`dispense/5`): `step-stub` for the stub, the brief's
     # own for the brief. None has a preset, so the entry names its
     # endpoints, ones nothing answers: the token it holds never expires.
-    # The catalyst reads its key and is dispensed its token, so the entry
-    # is disclosed, to the stub's own host.
+    # The run is handed the key and dispensed the token, which puts both in
+    # its masking set, so the entry is disclosed, to the stub's own host.
     provider = need_provider!(ctx, ref)
 
     params = %{

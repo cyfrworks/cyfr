@@ -774,6 +774,16 @@ jobs:
       # homes, groups, memory and CPU show it.
       - name: Runner kills, memory bound, settlement and cleanup
         run: python3 tests/worker-image/runners.py cyfr-opus:smoke
+      # The credential canary (tests/worker-image/canary.py): a hostile
+      # catalyst names its connection on a request to an upstream that
+      # reflects it, and the scripted control plane attaches a canary value;
+      # with the attempt's close held, the runner's and the service's process
+      # memory, the runner's home, the container's log, the exit report, the
+      # attach answer, the event and the output hold no trace of it while
+      # the upstream's log does. A positive control plants another canary in
+      # a disclosed field and the same dump finds it.
+      - name: The credential canary
+        run: python3 tests/worker-image/canary.py cyfr-opus:smoke
 
       # The same scan docker.yml runs before publishing the worker image.
       - name: Scan the image
