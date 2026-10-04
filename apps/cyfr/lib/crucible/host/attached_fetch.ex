@@ -62,25 +62,27 @@ defmodule Crucible.Host.AttachedFetch do
   upstream wrote it can be masked, so the request asks for
   `accept-encoding: identity` in place of any encoding the guest asked
   for, and a guest's `Range`, `If-Range` and `Request-Range` are not
-  sent. It is then made by a process of its own to exactly the pinned
-  address (`Prima.Network.pin/3`'s options: the host kept for SNI,
-  verification and the `Host` header, no redirect, no retry, no
-  decoding), through Req's `finch_request` hook, so the answer's status
-  and every header line arrive unmerged before any body byte; its body is
-  streamed back as it arrives, one piece at a time. Each request is one
-  request on its own pinned connection, and asks the upstream to close it
-  after the answer (`connection: close`); an upstream that keeps it open
-  is not relied on to close it. The head is the first header block after
-  the answer's final status: an informational answer's lines are set
-  aside, and a later block is a trailer section, and neither is ever
-  relayed. The request's own process decides, as the status and the head
-  arrive, the answers that end the stream with an `error` before its head
-  or any of its body, and stops reading there, which closes the
-  connection before it could be kept for another request, even when the
-  answer was complete in its head: a status outside 100..599 is "an
-  answer with no valid status", and a 101, which switches to a protocol
-  nothing in CYFR asks for, is "an answer switching protocols". The final
-  answer's head, whatever its status code, is refused when the masker
+  sent. It is then made by a process of its own, on a connection of its
+  own that Mint opens to exactly the pinned address
+  (`Prima.Network.pin/3`'s options: the host kept for SNI, verification
+  and the `Host` header, no redirect, no retry, no decoding), so the
+  answer's status and every header line arrive unmerged before any body
+  byte; its body is streamed back as it arrives, one piece at a time. No
+  pool holds the connection: the process closes it before its last word
+  to the caller, or, raising, ends right after it, and the process ending
+  closes it on every path. The
+  request also asks the upstream to close it after the answer
+  (`connection: close`), which nothing relies on. The head is the first
+  header block after the answer's final status: an informational
+  answer's lines are set aside, and a later block is a trailer section,
+  and neither is ever relayed. The request's own process decides, as the
+  status and the head arrive, the answers that end the stream with an
+  `error` before its head or any of its body, and stops reading there and
+  closes the connection, even when the answer was complete in its head:
+  a status outside 100..599 is "an answer with no valid status", and a
+  101, which switches to a protocol nothing in CYFR asks for, is "an
+  answer switching protocols". The final answer's head, whatever its
+  status code, is refused when the masker
   could not read the answer whole: one in any `content-encoding` but
   `identity`, or in any `transfer-encoding` but a single `chunked`, as
   "an encoded answer", and a 206, or an answer whose head carries a
@@ -119,16 +121,8 @@ defmodule Crucible.Host.AttachedFetch do
   alias Prima.Manifest.Needs
 
   @credential_kinds ~w(api_key oauth bundle)
-  @methods %{
-    "DELETE" => :delete,
-    "GET" => :get,
-    "HEAD" => :head,
-    "OPTIONS" => :options,
-    "PATCH" => :patch,
-    "POST" => :post,
-    "PUT" => :put
-  }
   @ambiguous "This connection's binding holds more than one value, and its attach rule takes one"
+  @connect_timeout_ms 5_000
   @no_status "HTTP request failed: an answer with no valid status is not relayed"
   @switching "HTTP request failed: an answer switching protocols is not relayed"
   @encoded "HTTP request failed: an encoded answer is not relayed"
@@ -593,89 +587,154 @@ defmodule Crucible.Host.AttachedFetch do
            protocols: [:http1]
          ) do
       {:ok, pinned} ->
-        options =
-          pinned.req_opts
-          |> Keyword.put(:method, Map.fetch!(@methods, request.method))
-          |> Keyword.put(:headers, headers)
-          |> then(&if(request.body != "", do: Keyword.put(&1, :body, request.body), else: &1))
+        # The pin's own connect options, opened as a pooled client opens
+        # them: its connect timeout and `nodelay` unless the pin sets them,
+        # TCP keepalive always, read passively, HTTP/1 only. The TLS
+        # options are Mint's defaults, the host kept for SNI and the
+        # hostname check; no key log is written for this connection.
+        connect = Keyword.fetch!(pinned.req_opts, :connect_options)
 
-        {:ok, options}
+        transport_opts =
+          connect
+          |> Keyword.get(:transport_opts, [])
+          |> Keyword.put_new(:timeout, @connect_timeout_ms)
+          |> Keyword.put_new(:nodelay, true)
+          |> Keyword.put(:keepalive, true)
+
+        conn_opts = [
+          hostname: Keyword.fetch!(connect, :hostname),
+          transport_opts: transport_opts,
+          mode: :passive,
+          protocols: [:http1]
+        ]
+
+        path = if uri.path in [nil, ""], do: "/", else: uri.path
+
+        {:ok,
+         %{
+           scheme: if(uri.scheme == "https", do: :https, else: :http),
+           address: pinned.ip_tuple,
+           port: uri.port,
+           conn_opts: conn_opts,
+           method: request.method,
+           path: if(uri.query in [nil, ""], do: path, else: path <> "?" <> uri.query),
+           headers: headers,
+           body: if(request.body == "", do: nil, else: request.body),
+           deadline: deadline
+         }}
 
       {:error, _blocked, _sentence} ->
         :error
     end
   end
 
-  # The request, in a process of its own: its answer comes back one piece
-  # at a time, each waiting until the caller has written it, so a reader
-  # that stops reading stops the request. It ends with its caller, whether
-  # it is waiting on the caller or on the upstream, and nothing of it is
-  # left behind once it ends.
+  # The request, in a process of its own on a connection of its own: its
+  # answer comes back one piece at a time, each waiting until the caller has
+  # written it, so a reader that stops reading stops the request. It ends
+  # with its caller, whether it is waiting on the caller or on the upstream.
   #
-  # Req opens the connection from the pin's options, and its `finch_request`
-  # hook hands over the answer as Finch reads it: the status and every
-  # header line, unmerged, before any body byte. Req's own streaming keeps
-  # one line of a repeated header, and the decision on an answer needs all
-  # of them. A status that follows an informational one starts the answer
-  # again. The head is the first header block after its status: Finch
-  # names a trailer section a trailer only after a body byte, so a later
-  # block, with a body before it or not, is a trailer section, never
-  # relayed. A refusal decided on the status or the head is the last thing
-  # it tells its caller.
-  defp upstream(parent, tag, options) do
+  # Mint connects to exactly the pinned address, under the pin's options,
+  # and this process reads it passively, so the connection is this
+  # process's alone: no pool holds it, it is closed before the process
+  # tells its caller its last word (or, when something raises here, the
+  # process ends right after that word), and the process ending closes it
+  # on every path, a kill included. Mint hands over the answer as it reads
+  # it: the status and every header line, unmerged, before any body byte.
+  # A status that follows an informational one starts the answer again.
+  # The head is the first header block after its status; a later block is
+  # a trailer section, never relayed. A refusal decided on the status or
+  # the head is the last thing it tells its caller.
+  defp upstream(parent, tag, target) do
     watched(parent)
 
-    finch = fn req, finch_req, finch_name, finch_options ->
-      case Finch.stream_while(
-             finch_req,
-             finch_name,
-             unread(),
-             &piece(parent, tag, &1, &2),
-             finch_options
-           ) do
-        {:ok, answer} ->
-          case ended(answer) do
-            {:refused, refused} ->
-              {req, Req.Response.put_private(Req.Response.new(), :refused, refused)}
-
-            :relayed ->
-              head_once(parent, tag, answer)
-              {req, Req.Response.new(status: answer.status)}
-          end
-
-        {:error, exception, _answer} ->
-          {req, exception}
-      end
-    end
-
-    result =
+    last =
       try do
-        Req.request(Keyword.put(options, :finch_request, finch))
+        requested(parent, tag, target)
       rescue
-        _exception -> {:error, :raised}
+        _exception -> {:failed, :http_error}
       catch
-        :exit, _reason -> {:error, :exited}
+        :exit, _reason -> {:failed, :http_error}
       end
 
-    case result do
-      {:ok, %Req.Response{private: %{refused: refused}}} ->
-        send(parent, {tag, :refused, refused})
-
-      {:ok, _resp} ->
-        send(parent, {tag, :done})
-
-      {:error, %{__exception__: true, reason: reason}} ->
-        send(parent, {tag, :failed, reason})
-
-      {:error, _other} ->
-        send(parent, {tag, :failed, :http_error})
+    case last do
+      {:refused, refused} -> send(parent, {tag, :refused, refused})
+      :done -> send(parent, {tag, :done})
+      {:failed, reason} -> send(parent, {tag, :failed, reason})
     end
   end
 
+  defp requested(parent, tag, target) do
+    with {:ok, conn} <-
+           Mint.HTTP.connect(target.scheme, target.address, target.port, target.conn_opts),
+         {:ok, conn, ref} <-
+           Mint.HTTP.request(conn, target.method, target.path, target.headers, target.body) do
+      read(conn, ref, unread(), parent, tag, target.deadline)
+    else
+      {:error, %{reason: reason}} -> {:failed, reason}
+      {:error, conn, %{reason: reason}} -> closed(conn, {:failed, reason})
+    end
+  end
+
+  defp read(conn, ref, answer, parent, tag, deadline) do
+    case Mint.HTTP.recv(conn, 0, max(deadline - now(), 1)) do
+      {:ok, conn, responses} ->
+        case answered(responses, ref, answer, parent, tag) do
+          {:more, answer} ->
+            read(conn, ref, answer, parent, tag, deadline)
+
+          {:halt, answer} ->
+            closed(conn, {:refused, answer.refused})
+
+          {:done, answer} ->
+            closed(conn, nil)
+
+            case ended(answer) do
+              {:refused, refused} ->
+                {:refused, refused}
+
+              :relayed ->
+                head_once(parent, tag, answer)
+                :done
+            end
+
+          {:error, reason} ->
+            closed(conn, {:failed, reason})
+        end
+
+      {:error, conn, error, _responses} ->
+        closed(conn, {:failed, reason(error)})
+    end
+  end
+
+  # The pieces of one read, in order, until the answer ends, fails or is
+  # refused.
+  defp answered([], _ref, answer, _parent, _tag), do: {:more, answer}
+  defp answered([{:done, ref} | _rest], ref, answer, _parent, _tag), do: {:done, answer}
+
+  defp answered([{:error, ref, error} | _rest], ref, _answer, _parent, _tag),
+    do: {:error, reason(error)}
+
+  defp answered([{kind, ref, value} | rest], ref, answer, parent, tag)
+       when kind in [:status, :headers, :data] do
+    case piece(parent, tag, {kind, value}, answer) do
+      {:cont, answer} -> answered(rest, ref, answer, parent, tag)
+      {:halt, answer} -> {:halt, answer}
+    end
+  end
+
+  defp answered([_other | rest], ref, answer, parent, tag),
+    do: answered(rest, ref, answer, parent, tag)
+
+  defp closed(conn, last) do
+    _ = Mint.HTTP.close(conn)
+    last
+  end
+
+  defp reason(%{reason: reason}) when is_atom(reason), do: reason
+  defp reason(_error), do: :http_error
+
   # A piece is decided before it is relayed, and a refusal halts the stream
-  # where it is decided: Finch closes a connection it stops reading, so a
-  # refused answer's connection never returns to a pool, even one whose
-  # answer was complete in its head.
+  # where it is decided: the request closes its connection there.
   defp piece(parent, tag, piece, answer) do
     case decide(piece, answer) do
       {:cont, answer} -> relay_piece(parent, tag, piece, answer)
@@ -729,10 +788,7 @@ defmodule Crucible.Host.AttachedFetch do
   defp decide({:trailers, _fields}, answer), do: {:cont, answer}
 
   # How an answer read to its end stands: a held refusal of the final head
-  # is a refusal still. Finch has kept that connection by then, so the
-  # status-first refusals above are what close it, and no client this
-  # module runs on hands over a final answer under a set-aside status
-  # without a body piece first.
+  # is a refusal still.
   defp ended(%{refused: refused}) when is_binary(refused), do: {:refused, refused}
   defp ended(%{pending: refused}) when is_binary(refused), do: {:refused, refused}
   defp ended(_answer), do: :relayed

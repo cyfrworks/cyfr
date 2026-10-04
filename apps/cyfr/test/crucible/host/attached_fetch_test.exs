@@ -607,6 +607,89 @@ defmodule Crucible.Host.AttachedFetchTest do
     {result, running, holder}
   end
 
+  # A TLS upstream on loopback under a test authority no trust store holds,
+  # its certificate naming `host`: it pauses its handshake at the client's
+  # hello to tell the test the name and protocols the client offered, then
+  # tells it how the handshake ended.
+  defp tls_upstream!(host) do
+    test = self()
+    ref = make_ref()
+    key = [key: {:namedCurve, :secp256r1}, digest: :sha256]
+    san = {:Extension, {2, 5, 29, 17}, false, [{:dNSName, String.to_charlist(host)}]}
+
+    tls =
+      :public_key.pkix_test_data(%{
+        server_chain: %{root: key, intermediates: [], peer: key ++ [extensions: [san]]},
+        client_chain: %{root: key, intermediates: [], peer: key}
+      })
+
+    spawn_link(fn ->
+      {:ok, listen} =
+        :ssl.listen(
+          0,
+          tls[:server_config] ++
+            [ip: {127, 0, 0, 1}, active: false, mode: :binary, reuseaddr: true, handshake: :hello]
+        )
+
+      {:ok, {_address, port}} = :ssl.sockname(listen)
+      send(test, {ref, :port, port})
+      {:ok, socket} = :ssl.transport_accept(listen, :infinity)
+      {:ok, socket, hello} = :ssl.handshake(socket, 5_000)
+      send(test, {ref, :hello, Map.take(hello, [:sni, :alpn])})
+      send(test, {ref, :handshake, :ssl.handshake_continue(socket, [], 5_000)})
+      :ssl.close(listen)
+    end)
+
+    assert_receive {^ref, :port, port}, 5_000
+    {ref, port, tls[:client_config][:cacerts]}
+  end
+
+  # The default trust store (`:public_key.cacerts_get/0`, which Mint reads
+  # when no CA option is passed) made to hold `ders` for this test, and
+  # restored when it ends; the path's own options are untouched.
+  defp trust!(ders) do
+    path = Path.join(System.tmp_dir!(), "attached-ca-#{System.unique_integer([:positive])}.pem")
+    pem = :public_key.pem_encode(for der <- ders, do: {:Certificate, der, :not_encrypted})
+    File.write!(path, pem)
+    on_exit(fn -> :public_key.cacerts_clear() end)
+    :ok = :public_key.cacerts_load(path)
+    File.rm!(path)
+  end
+
+  # The scenario for an `https` upstream named `upstream.test`.
+  defp https_scenario!(ctx, port, opts \\ []) do
+    scenario!(
+      ctx,
+      port,
+      [
+        egress: egress(%{"schemes" => ["https"]}),
+        destination: %{
+          "hosts" => ["upstream.test"],
+          "scheme" => "https",
+          "port" => port,
+          "methods" => ["GET"]
+        }
+      ] ++ opts
+    )
+  end
+
+  # An emit that hands each frame to the test and raises on the first frame
+  # of the kind `byte` names (`?h` a head, `?e` an end), as a runner's
+  # connection breaking there would.
+  defp breaking_on(byte, request) do
+    test = self()
+
+    fn <<_length::32, kind, _sealed::binary>> = frame ->
+      if kind == byte and not Process.get(:broke, false) do
+        Process.put(:broke, true)
+        raise "the runner's connection broke"
+      else
+        send(test, {:frame, request.call_id, frame})
+        :ok
+      end
+    end
+  end
+
   # An upstream answering its first connection with `answer`, byte for
   # byte, then telling the test what reading that connection finds: the
   # client closing it, or nothing within five seconds. It waits for its
@@ -1532,6 +1615,48 @@ defmodule Crucible.Host.AttachedFetchTest do
       end
     end
 
+    test "an admitted answer's connection closes when it completes, kept by no pool", %{
+      ctx: ctx
+    } do
+      {ref, port} = one_shot!("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+      %{fixture: fixture} = scenario!(ctx, port)
+      request = request("http://127.0.0.1:#{port}/")
+      {result, running, holder} = run_held(fixture, request)
+
+      assert :ok = result
+      frames = frames(fixture, request.call_id)
+      assert [:head | _] = Enum.map(frames, & &1.kind)
+      assert %{kind: :end} = List.last(frames)
+      assert body_of(frames) == "ok"
+      assert running == []
+
+      # The upstream keeps the connection open; only the request's end can
+      # have closed it, and the caller still runs.
+      assert_receive {^ref, :socket, {:error, :closed}}, 5_000
+      send(holder, :release)
+    end
+
+    test "an exception after an admitted answer was read whole still closes its connection", %{
+      ctx: ctx
+    } do
+      for {breaks_on, answer, written} <- [
+            {?h, "HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n", []},
+            {?e, "HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok", [:head, :chunk]}
+          ] do
+        {ref, port} = one_shot!(answer)
+        %{fixture: fixture} = scenario!(ctx, port)
+        request = request("http://127.0.0.1:#{port}/")
+        {result, running, holder} = run_held(fixture, request, breaking_on(breaks_on, request))
+
+        assert :ok = result
+        frames = frames(fixture, request.call_id)
+        assert Enum.map(frames, & &1.kind) == written ++ [:error], <<breaks_on>>
+        assert running == []
+        assert_receive {^ref, :socket, {:error, :closed}}, 5_000, "#{<<breaks_on>>}: still open"
+        send(holder, :release)
+      end
+    end
+
     test "a runner connection that no longer takes a frame stops the request", %{
       ctx: ctx,
       port: port
@@ -1560,7 +1685,81 @@ defmodule Crucible.Host.AttachedFetchTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Through the listener
+  # Over TLS
+  # ---------------------------------------------------------------------------
+
+  describe "an upstream over TLS" do
+    test "is named by the pinned host, spoken to in HTTP/1.1, and refused an unverified chain",
+         %{ctx: ctx} do
+      start_supervised!({Resolver, %{"upstream.test" => [{127, 0, 0, 1}]}})
+      {ref, port, _roots} = tls_upstream!("upstream.test")
+      %{fixture: fixture} = https_scenario!(ctx, port)
+
+      request = request("https://upstream.test:#{port}/tls")
+      assert :ok = fetched(fixture, request, resolver: Resolver)
+      assert [%{kind: :error, type: "http_error"}] = frames(fixture, request.call_id)
+
+      # The client connected to the pinned address, named the pinned host
+      # for SNI, negotiated no protocol (an HTTP/1.1 client offers none; one
+      # that could speak HTTP/2 offers h2), and refused the chain: its
+      # authority is in no trust store, and nothing was sent.
+      assert_receive {^ref, :hello, %{sni: ~c"upstream.test", alpn: :undefined}}, 5_000
+      assert_receive {^ref, :handshake, {:error, {:tls_alert, {:unknown_ca, _sentence}}}}, 5_000
+    end
+
+    test "refuses a trusted chain that names another host, before anything is sent", %{ctx: ctx} do
+      start_supervised!({Resolver, %{"upstream.test" => [{127, 0, 0, 1}]}})
+      {ref, port, roots} = tls_upstream!("other.test")
+      trust!(roots)
+      %{fixture: fixture} = https_scenario!(ctx, port)
+      request = request("https://upstream.test:#{port}/tls")
+
+      assert :ok = fetched(fixture, request, resolver: Resolver)
+      assert [%{kind: :error, type: "http_error"}] = frames(fixture, request.call_id)
+
+      # The chain is trusted now; the name it carries is not the pinned
+      # host, which the client named for SNI and holds the certificate to.
+      assert_receive {^ref, :hello, %{sni: ~c"upstream.test"}}, 5_000
+      assert_receive {^ref, :handshake, {:error, {:tls_alert, {:bad_certificate, _}}}}, 5_000
+    end
+
+    test "gives up on an upstream that never answers its hello after the connect timeout", %{
+      ctx: ctx
+    } do
+      start_supervised!({Resolver, %{"upstream.test" => [{127, 0, 0, 1}]}})
+      test = self()
+      ref = make_ref()
+
+      # A listener that takes the connection and the client's hello, and
+      # never answers it.
+      spawn_link(fn ->
+        {:ok, listen} =
+          :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+        {:ok, port} = :inet.port(listen)
+        send(test, {ref, :port, port})
+        {:ok, socket} = :gen_tcp.accept(listen, :infinity)
+        _hello = :gen_tcp.recv(socket, 0, 60_000)
+        send(test, {ref, :after, :gen_tcp.recv(socket, 0, 60_000)})
+      end)
+
+      assert_receive {^ref, :port, port}, 5_000
+      %{fixture: fixture} = https_scenario!(ctx, port, timeout_ms: 60_000)
+      request = request("https://upstream.test:#{port}/never")
+      started = System.monotonic_time(:millisecond)
+
+      assert :ok = fixture |> fetch(request, resolver: Resolver) |> Task.await(60_000)
+      elapsed = System.monotonic_time(:millisecond) - started
+
+      # Well inside the attempt's deadline: the connect timeout ends it.
+      assert [%{kind: :error, type: "timeout"}] = frames(fixture, request.call_id)
+      assert elapsed < 15_000, "the request gave up after #{elapsed} ms"
+      assert_receive {^ref, :after, {:error, :closed}}, 5_000
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # The decision on an answer
   # ---------------------------------------------------------------------------
 
   describe "the decision on an answer as the client hands it over" do
@@ -1632,6 +1831,10 @@ defmodule Crucible.Host.AttachedFetchTest do
                ])
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Through the listener
+  # ---------------------------------------------------------------------------
 
   describe "through the host listener" do
     setup do
