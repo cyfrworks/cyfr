@@ -848,6 +848,85 @@ defmodule Arca.ExecutionTest do
     end
   end
 
+  describe "an admission for a schedule's occurrence" do
+    test "a claimant whose claim a recoverer took over starts nothing: refused, nothing written" do
+      actor = Arca.Test.Actor.local()
+
+      {:ok, schedule} =
+        Arca.CronSchedule.create(%{
+          user_id: actor.user_id,
+          athanor_id: @athanor,
+          name: "start-claimant-#{System.unique_integer([:positive])}",
+          cron_expression: "0 * * * *",
+          reference: "reagent:local.test:1.0.0",
+          resolved_reference: "reagent:local.test:1.0.0",
+          profile_id: "prof_test"
+        })
+
+      past = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(s in Arca.Schemas.CronSchedule, where: s.id == ^schedule.id),
+          set: [next_run_at: past]
+        )
+
+      # This boot claims the occurrence; a recoverer takes it over.
+      next = DateTime.add(DateTime.utc_now(), 300, :second)
+
+      {:ok, occurrence} =
+        Arca.ScheduleOccurrences.claim(%{schedule | next_run_at: past}, Prima.Boot.id(), next)
+
+      assert :ok =
+               Arca.ScheduleOccurrences.recover(
+                 actor,
+                 occurrence.id,
+                 Prima.Boot.id(),
+                 "boot-recoverer"
+               )
+
+      # The original claimant's slow admission starts nothing.
+      execution_id = Prima.UUID7.execution_id()
+
+      assert {:error, :occurrence_not_claimed} =
+               Execution.admit(
+                 %{
+                   id: execution_id,
+                   reference: "reagent:local.test:1.0.0",
+                   user_id: actor.user_id,
+                   athanor_id: @athanor,
+                   component_type: "reagent",
+                   schedule_id: schedule.id,
+                   origin: :schedule
+                 },
+                 occurrence_id: occurrence.id,
+                 grant: Arca.Test.Actor.grant(@athanor),
+                 verify: &Arca.Test.Actor.admits/1
+               )
+
+      assert Arca.Repo.get(Row, execution_id) == nil
+
+      assert [] =
+               Arca.Repo.all(
+                 Ecto.Query.from(a in Arca.Schemas.ExecutionAttempt,
+                   where: a.execution_id == ^execution_id
+                 )
+               )
+
+      assert [] =
+               Arca.Repo.all(
+                 Ecto.Query.from(e in "execution_events",
+                   where: e.execution_id == ^execution_id,
+                   select: e.id
+                 )
+               )
+
+      assert {:ok,
+              %{state: "claimed", claimed_by: "boot-recoverer", execution_id: nil, attempts: 0}} =
+               Arca.ScheduleOccurrences.get(actor, occurrence.id)
+    end
+  end
+
   describe "hash_input/1" do
     test "returns consistent hash for same input" do
       input = %{"method" => "GET", "url" => "https://example.com"}
@@ -972,7 +1051,7 @@ defmodule Arca.ExecutionTakeoverTest do
   test "a feed's admission after ownership loss writes no execution, attempt, started occurrence or event",
        %{actor: actor, slot: slot} do
     athanor = actor.athanor_id
-    {feed, occurrence} = unboxed(fn -> claimed_feed!(actor, slot) end)
+    {feed, occurrence} = unboxed(fn -> claimed_feed!(actor) end)
     grant = unboxed(fn -> Arca.Test.Actor.grant(athanor) end)
     execution_id = Prima.UUID7.execution_id()
 
@@ -1008,13 +1087,13 @@ defmodule Arca.ExecutionTakeoverTest do
       assert {:ok, %{state: "claimed", execution_id: nil, attempts: 0, claimed_by: claimant}} =
                ScheduleOccurrences.get(actor, occurrence.id)
 
-      assert claimant == slot.owner
+      assert claimant == Prima.Boot.id()
     end)
   end
 
   # A feed bound and its first occurrence claimed, each under the member's
   # live slot.
-  defp claimed_feed!(actor, slot) do
+  defp claimed_feed!(actor) do
     {:ok, binding} =
       Prima.Feed.Binding.validate(%{
         "name" => "feed-#{System.unique_integer([:positive])}",
@@ -1044,7 +1123,8 @@ defmodule Arca.ExecutionTakeoverTest do
 
     feed = %{feed | next_run_at: past}
     next = DateTime.add(DateTime.utc_now(), 300, :second)
-    {:ok, occurrence} = ScheduleOccurrences.claim(feed, slot.owner, next)
+    # Claimed as this boot, the boot admission starts an occurrence for.
+    {:ok, occurrence} = ScheduleOccurrences.claim(feed, Prima.Boot.id(), next)
     {feed, occurrence}
   end
 

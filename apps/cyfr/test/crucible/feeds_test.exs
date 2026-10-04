@@ -360,11 +360,17 @@ defmodule Crucible.FeedsTest do
       scheduler = scheduler!()
 
       # The fire was answered `:not_owner` and deferred, as a lost
-      # generation defers: the occurrence is looked at again later and
-      # recovery is armed.
-      wait_until(fn -> is_reference(:sys.get_state(scheduler).recovery_ref) end)
+      # generation defers: the occurrence is looked at again later, its
+      # timer a recheck a tick or more away rather than the fire it was
+      # loaded with, and the deferral's own pass, a tick away, fires before
+      # the one the scheduler's start asked for two ticks away.
+      wait_until(fn ->
+        timer = :sys.get_state(scheduler).timers[feed.id]
+        is_reference(timer) and (Process.read_timer(timer) || 0) > 15_000
+      end)
+
       state = :sys.get_state(scheduler)
-      assert is_integer(Process.read_timer(state.timers[feed.id]))
+      assert Process.read_timer(state.recovery_ref) <= 30_000
 
       assert occurrences(actor, feed.id) == []
       assert {:ok, row} = CronSchedule.get_for_daemon(feed.id)

@@ -14,9 +14,11 @@ defmodule Arca.ScheduleOccurrences do
   (`:overlapping`). Every occurrence, whatever its schedule's kind, is
   claimed only under the member's live slot, checked in the same
   transaction (`:not_owner` otherwise). The execution's admission moves
-  the occurrence to `started` inside its own transaction (`start!/3`,
-  from `Arca.Execution.admit/2`), so a `claimed` occurrence is one
-  nothing ever invoked, and the run's end closes it (`finish/5`).
+  the occurrence to `started` inside its own transaction (`start!/4`,
+  from `Arca.Execution.admit/2`), and only for the boot that claims it:
+  a member whose claim a recoverer took over (`recover/4`) starts
+  nothing, so only the recoverer's re-run runs. A `claimed` occurrence is
+  one nothing ever invoked, and the run's end closes it (`finish/5`).
 
   An occurrence is ended only by the claimant that holds it, for the
   execution it intends to end: `finish/5` and `settle_dead/4` are each a
@@ -34,7 +36,7 @@ defmodule Arca.ScheduleOccurrences do
   Every function that names an athanor takes the `Prima.Actor` first and
   matches it in its head; an actor whose athanor is nil or the empty
   string is refused before any query, as `{:error, :no_athanor}` from an
-  entry point and as a raise from `start!/3`, which runs inside
+  entry point and as a raise from `start!/4`, which runs inside
   admission's transaction. `claim/3` takes the schedule it advances and
   `recoverable/1` is the daemon's read across every athanor. Every row a
   function here answers is a plain map (`Arca.Data`).
@@ -141,16 +143,20 @@ defmodule Arca.ScheduleOccurrences do
 
   @doc """
   Move a `claimed` occurrence to `started` for `execution_id`, counting
-  the attempt. Answers the rows moved: 0 when the occurrence was not
-  claimed, so the admission it runs inside rolls back.
+  the attempt, only while `claimed_by` (the admitting boot) is its
+  claimant: the state and the claimant are checked in the one guarded
+  statement that moves it. Answers the rows moved: 0 when the occurrence
+  is not claimed, or is claimed by another boot since a recoverer took
+  it over, so the admission it runs inside rolls back.
   """
-  @spec start!(Prima.Actor.t(), String.t(), String.t()) :: non_neg_integer()
+  @spec start!(Prima.Actor.t(), String.t(), String.t(), String.t()) :: non_neg_integer()
   # arca:db-raise-ok inside the admission transaction
-  def start!(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, execution_id)
-      when is_binary(athanor_id) and athanor_id != "" do
+  def start!(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, claimed_by, execution_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(claimed_by) do
     {count, _} =
       from(o in ScheduleOccurrence,
-        where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id and o.state == "claimed"
+        where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id and o.state == "claimed",
+        where: o.claimed_by == ^claimed_by
       )
       |> Arca.Repo.update_all(
         set: [state: "started", execution_id: execution_id],
@@ -160,8 +166,8 @@ defmodule Arca.ScheduleOccurrences do
     count
   end
 
-  def start!(%Prima.Actor{}, _occurrence_id, _execution_id),
-    do: Arca.QueryHelpers.no_athanor!("Arca.ScheduleOccurrences.start!/3")
+  def start!(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ScheduleOccurrences.start!/4")
 
   @doc """
   End an open occurrence as `completed`, `failed` or `uncertain`, only
@@ -334,6 +340,15 @@ defmodule Arca.ScheduleOccurrences do
   started ones whose execution has ended or was swept while the occurrence
   stayed open (the run's outcome is unknown here: uncertain).
 
+  A started occurrence is answered by whose it is. One whose claimant is no
+  live member has no task left to end it, and is `lapsed`, to be ended
+  now. One whose claimant is a live member is `lapsed_live`: a run closes
+  its execution before its task ends the occurrence, so the caller gives
+  that task its grace, timed on the caller's own clock
+  (`Crucible.Schedules.Scheduler`), and no member's wall clock is read
+  here. Whether an execution ended is its status alone, or its row being
+  gone; when it ended is never compared.
+
   An occurrence is ABANDONED, and only then recoverable, when its
   `claimed_by` is no longer a live member's boot
   (`Arca.ControlPlane.live_member?/1`, read here as one statement against
@@ -345,30 +360,41 @@ defmodule Arca.ScheduleOccurrences do
   The liveness test is a subquery over the cell's live slots rather than a
   round trip per row: every occurrence is judged against one instant of
   database time, so two members recovering at once see the same roster.
+  All three reads seek the occurrences' `(state, claimed_at)` index, so a pass
+  reads the open occurrences and never the kept history.
   """
   @spec recoverable(DateTime.t()) ::
-          {:ok, %{never_invoked: [map()], lapsed: [map()]}}
+          {:ok, %{never_invoked: [map()], lapsed: [map()], lapsed_live: [map()]}}
           | {:error, :database_error}
   # arca:unscoped-ok the daemon's read spans every athanor; each row is
   # acted on under its own schedule's actor.
   def recoverable(%DateTime{} = claimed_before) do
     Errors.with_db_rescue("ScheduleOccurrences.recoverable", fn ->
-      abandoned = abandoned(claimed_before)
+      live = live_owners()
+      abandoned = abandoned(claimed_before, live)
 
       never_invoked = Arca.Repo.all(from(o in abandoned, where: o.state == "claimed"))
 
-      lapsed =
-        Arca.Repo.all(
-          from(o in abandoned,
-            left_join: e in Arca.Schemas.Execution,
-            on: e.id == o.execution_id and e.athanor_id == o.athanor_id,
-            where: o.state == "started",
-            where: is_nil(e.id) or e.status not in ["running", "paused"],
-            select: o
-          )
+      ended =
+        from(o in abandoned,
+          left_join: e in Arca.Schemas.Execution,
+          on: e.id == o.execution_id and e.athanor_id == o.athanor_id,
+          where: o.state == "started",
+          where: is_nil(e.id) or e.status not in ["running", "paused"],
+          select: o
         )
 
-      {:ok, %{never_invoked: never_invoked, lapsed: lapsed}}
+      lapsed =
+        Arca.Repo.all(
+          from(o in ended, where: is_nil(o.claimed_by) or o.claimed_by not in subquery(live))
+        )
+
+      lapsed_live =
+        Arca.Repo.all(
+          from(o in ended, where: not is_nil(o.claimed_by) and o.claimed_by in subquery(live))
+        )
+
+      {:ok, %{never_invoked: never_invoked, lapsed: lapsed, lapsed_live: lapsed_live}}
     end)
     |> Arca.Data.project()
   end
@@ -409,17 +435,19 @@ defmodule Arca.ScheduleOccurrences do
   # whoever made it. `claimed_by` is never null for a row `claim/3` wrote;
   # one that is has no claimant to be alive. The query is built here and
   # run by `recoverable/1`, which carries the tenancy marker for it.
-  defp abandoned(claimed_before) do
-    live_owners =
-      from(l in Arca.Schemas.CellLease,
-        where: l.lease_until > ^Arca.ServerMetaStorage.now!(),
-        select: l.owner
-      )
-
+  defp abandoned(claimed_before, live) do
     from(o in ScheduleOccurrence,
       where:
         o.claimed_at < ^claimed_before or is_nil(o.claimed_by) or
-          o.claimed_by not in subquery(live_owners)
+          o.claimed_by not in subquery(live)
+    )
+  end
+
+  # The boots the cell's live slots name, at one instant of database time.
+  defp live_owners do
+    from(l in Arca.Schemas.CellLease,
+      where: l.lease_until > ^Arca.ServerMetaStorage.now!(),
+      select: l.owner
     )
   end
 

@@ -90,6 +90,17 @@ defmodule Arca.ScheduleOccurrencesTest do
     :ok
   end
 
+  # The occurrence's claim older than any cutoff the cases read with.
+  defp age_claim!(id) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(o in Arca.Schemas.ScheduleOccurrence, where: o.id == ^id),
+        set: [claimed_at: DateTime.add(now(), -120, :second)]
+      )
+
+    :ok
+  end
+
   defp cursor!(id) do
     {:ok, row} = CronSchedule.get_for_daemon(id)
     row.next_run_at
@@ -214,6 +225,7 @@ defmodule Arca.ScheduleOccurrencesTest do
                ScheduleOccurrences.start!(
                  actor,
                  occurrence.id,
+                 "node-a",
                  "exec_#{occurrence.id}"
                )
     end
@@ -245,7 +257,7 @@ defmodule Arca.ScheduleOccurrencesTest do
   test "the claim decides on the row's concurrency, never on the caller's copy", %{actor: actor} do
     forbid = due!(actor, %{concurrency: "forbid"})
     {:ok, open} = ScheduleOccurrences.claim(forbid, "node-a", next_occurrence())
-    assert 1 = ScheduleOccurrences.start!(actor, open.id, "exec_#{open.id}")
+    assert 1 = ScheduleOccurrences.start!(actor, open.id, "node-a", "exec_#{open.id}")
 
     # A stale or forged copy that says `allow` is read for its id, its
     # athanor and the cursor it saw; the row still forbids an overlap.
@@ -260,8 +272,8 @@ defmodule Arca.ScheduleOccurrencesTest do
     schedule = due!(actor)
     {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
 
-    assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "exec_1")
-    assert 0 = ScheduleOccurrences.start!(actor, occurrence.id, "exec_2")
+    assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_1")
+    assert 0 = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_2")
 
     assert {:ok, %{state: "started", execution_id: "exec_1", attempts: 1}} =
              ScheduleOccurrences.get(actor, occurrence.id)
@@ -330,6 +342,23 @@ defmodule Arca.ScheduleOccurrencesTest do
              )
   end
 
+  test "start! moves only the claimant's own occurrence: another claimant moves nothing", %{
+    actor: actor
+  } do
+    schedule = due!(actor)
+    {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
+
+    assert 0 = ScheduleOccurrences.start!(actor, occurrence.id, "node-b", "exec_other")
+
+    assert {:ok, %{state: "claimed", claimed_by: "node-a", execution_id: nil, attempts: 0}} =
+             ScheduleOccurrences.get(actor, occurrence.id)
+
+    assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_own")
+
+    assert {:ok, %{state: "started", execution_id: "exec_own", attempts: 1}} =
+             ScheduleOccurrences.get(actor, occurrence.id)
+  end
+
   test "a finish naming no claimant ends only an occurrence that names none", %{actor: actor} do
     schedule = due!(actor)
     {:ok, claimed} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
@@ -365,8 +394,9 @@ defmodule Arca.ScheduleOccurrencesTest do
     schedule = due!(actor)
     {:ok, claimed} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
 
+    # Admission starts only the admitting boot's claim.
     running = due!(actor)
-    {:ok, started} = ScheduleOccurrences.claim(running, "node-a", next_occurrence())
+    {:ok, started} = ScheduleOccurrences.claim(running, Prima.Boot.id(), next_occurrence())
 
     {:ok, %{attempt: attempt}} =
       Arca.Execution.admit(
@@ -402,6 +432,100 @@ defmodule Arca.ScheduleOccurrencesTest do
 
     assert {:ok, %{lapsed: [%{id: started_id}]}} = ScheduleOccurrences.recoverable(now())
     assert started_id == started.id
+  end
+
+  test "a started occurrence whose execution ended is answered by whose it is, whatever its member's clock wrote",
+       %{actor: actor} do
+    # This boot holds a live slot, so what it claims is a live member's.
+    member = "node-ending-#{System.unique_integer([:positive])}"
+    assert {:ok, _} = Arca.ControlPlane.take(member, Prima.Boot.id(), 60_000)
+
+    schedule = due!(actor)
+    {:ok, started} = ScheduleOccurrences.claim(schedule, Prima.Boot.id(), next_occurrence())
+
+    {:ok, %{attempt: attempt}} =
+      Arca.Execution.admit(
+        %{
+          id: "exec_ending",
+          reference: "reagent:local.test:1.0.0",
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
+          component_type: "reagent",
+          schedule_id: schedule.id,
+          origin: :schedule
+        },
+        occurrence_id: started.id,
+        grant: Arca.Test.Actor.grant(actor.athanor_id),
+        verify: &Arca.Test.Actor.admits/1
+      )
+
+    # The run has gone on past the cutoff, so its claim is abandoned by age.
+    age_claim!(started.id)
+    cutoff = DateTime.add(now(), -60_000, :millisecond)
+
+    answered = fn ->
+      {:ok, %{lapsed: lapsed, lapsed_live: live}} = ScheduleOccurrences.recoverable(cutoff)
+      {started.id in Enum.map(lapsed, & &1.id), started.id in Enum.map(live, & &1.id)}
+    end
+
+    # Running: neither.
+    assert answered.() == {false, false}
+
+    # Ended, its member's wall clock a minute behind the cell's: a live
+    # member's, for the caller to grace, never ended at once.
+    {:ok, _} =
+      Arca.Execution.record_end(
+        actor,
+        "exec_ending",
+        "completed",
+        %{completed_at: DateTime.add(DateTime.utc_now(), -61, :second), duration_ms: 1},
+        attempt.attempt,
+        Arca.Test.Actor.stored()
+      )
+
+    assert answered.() == {false, true}
+
+    # Its member's clock an hour ahead, or no end time recorded: the same.
+    for written <- [DateTime.add(DateTime.utc_now(), 3_600, :second), nil] do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.Execution, where: e.id == "exec_ending"),
+          set: [completed_at: written]
+        )
+
+      assert answered.() == {false, true}
+    end
+
+    # Its claimant no live member: lapsed, to be ended now.
+    expire(member)
+    assert answered.() == {true, false}
+  end
+
+  test "a started occurrence whose execution row is gone is answered by whose it is", %{
+    actor: actor
+  } do
+    member = "node-orphan-#{System.unique_integer([:positive])}"
+    assert {:ok, _} = Arca.ControlPlane.take(member, Prima.Boot.id(), 60_000)
+    schedule = due!(actor)
+    {:ok, orphan} = ScheduleOccurrences.claim(schedule, Prima.Boot.id(), next_occurrence())
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(o in Arca.Schemas.ScheduleOccurrence, where: o.id == ^orphan.id),
+        set: [state: "started", execution_id: "exec_gone"]
+      )
+
+    age_claim!(orphan.id)
+    cutoff = DateTime.add(now(), -60_000, :millisecond)
+
+    {:ok, %{lapsed: lapsed, lapsed_live: live}} = ScheduleOccurrences.recoverable(cutoff)
+    refute orphan.id in Enum.map(lapsed, & &1.id)
+    assert orphan.id in Enum.map(live, & &1.id)
+
+    expire(member)
+    {:ok, %{lapsed: lapsed, lapsed_live: live}} = ScheduleOccurrences.recoverable(cutoff)
+    assert orphan.id in Enum.map(lapsed, & &1.id)
+    refute orphan.id in Enum.map(live, & &1.id)
   end
 
   test "a live member's freshly claimed occurrence is nobody else's to recover", %{actor: actor} do
@@ -457,7 +581,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert DateTime.compare(row.claimed_at, abandoned.claimed_at) != :lt
 
     # A started occurrence is not re-run by this door at all.
-    assert 1 = ScheduleOccurrences.start!(actor, abandoned.id, "exec_started")
+    assert 1 = ScheduleOccurrences.start!(actor, abandoned.id, "boot-a", "exec_started")
     assert :held = ScheduleOccurrences.recover(actor, abandoned.id, "boot-a", "boot-c")
 
     # Nor is another athanor's.
@@ -512,7 +636,7 @@ defmodule Arca.ScheduleOccurrencesTest do
   test "an execution admitted for an occurrence nobody claimed is refused", %{actor: actor} do
     schedule = due!(actor)
     {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
-    assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "exec_first")
+    assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_first")
 
     assert {:error, :occurrence_not_claimed} =
              Arca.Execution.admit(
@@ -637,7 +761,7 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
       # abandoned claim, and its execution's admission starts it.
       recovered_and_started = fn ->
         :ok = ScheduleOccurrences.recover(actor, occurrence.id, slot.owner, successor)
-        1 = ScheduleOccurrences.start!(actor, occurrence.id, "exec_successor")
+        1 = ScheduleOccurrences.start!(actor, occurrence.id, successor, "exec_successor")
       end
 
       # The old member's late callback names its own claim and the

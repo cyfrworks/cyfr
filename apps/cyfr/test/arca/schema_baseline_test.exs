@@ -206,6 +206,12 @@ defmodule Arca.SchemaBaselineTest do
     refute "cron_schedules_athanor_name_active" in indexes
   end
 
+  test "schedule occurrences are found by state, so recovery reads the open set and not the history" do
+    # `Arca.ScheduleOccurrences.recoverable/1` reads every athanor's open
+    # occurrences by state; the kept history is never scanned for them.
+    assert "schedule_occurrences_state_claimed_at_index" in index_names("schedule_occurrences")
+  end
+
   test "api_keys and webhooks have no scope-type column; vault_entries has no system column" do
     fossil = "scope" <> "_type"
     refute fossil in Enum.map(columns("api_keys"), & &1.name)

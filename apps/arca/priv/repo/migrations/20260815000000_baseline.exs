@@ -2420,6 +2420,10 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create unique_index(:schedule_occurrences, [:schedule_id, :scheduled_for])
     create index(:schedule_occurrences, [:athanor_id, :state])
+    # Recovery reads the open occurrences across every athanor by state
+    # (`Arca.ScheduleOccurrences.recoverable/1`); the history, which is
+    # kept, is never scanned for them.
+    create index(:schedule_occurrences, [:state, :claimed_at])
   end
 
   # ==========================================================================

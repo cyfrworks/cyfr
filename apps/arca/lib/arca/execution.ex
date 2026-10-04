@@ -165,10 +165,13 @@ defmodule Arca.Execution do
     committed for the attempt in the same transaction; one that cannot
     be kept refuses admission `{:error, {:payload_not_retained, why}}`.
   - `:occurrence_id` — the schedule occurrence this root runs; it moves
-    from `claimed` to `started` in the same transaction
-    (`Arca.ScheduleOccurrences.start!/3`), and admission is refused
-    `{:error, :occurrence_not_claimed}` when it is not claimed. A row that
-    names a `schedule_id` runs an occurrence, and is refused the same way
+    from `claimed` to `started` in the same transaction, only while this
+    boot (`Prima.Boot.id/0`, the boot the scheduler claims as) is its
+    claimant (`Arca.ScheduleOccurrences.start!/4`). Admission is refused
+    `{:error, :occurrence_not_claimed}` when it is not claimed, or is
+    claimed by another boot since a recoverer took it over, so a stale
+    claimant's slow admission starts nothing. A row that names a
+    `schedule_id` runs an occurrence, and is refused the same way
     without one.
   - `:grant` and `:verify` (required, `Arca.ExecutionStanding`) — the
     `Prima.ExecutionGrant` the attempt is stamped with and the caller's
@@ -326,6 +329,7 @@ defmodule Arca.Execution do
           if Arca.ScheduleOccurrences.start!(
                Prima.Actor.in_athanor(athanor_id),
                occurrence_id,
+               Prima.Boot.id(),
                execution.id
              ) != 1,
              do: Arca.Repo.rollback(:occurrence_not_claimed)

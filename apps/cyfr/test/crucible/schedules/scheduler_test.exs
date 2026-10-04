@@ -588,7 +588,7 @@ defmodule Crucible.Schedules.SchedulerTest do
       schedule_id: schedule.id,
       scheduled_for: DateTime.add(now, -60, :second),
       state: "claimed",
-      claimed_by: "gone",
+      claimed_by: Prima.Boot.id(),
       claimed_at: now
     })
 

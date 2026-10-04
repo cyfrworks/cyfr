@@ -55,6 +55,58 @@ defmodule Crucible.Schedules.Scheduler do
       decision this member opened is still closed with the run's answer,
       and nothing else is written, recorded, published or announced.
 
+  An occurrence left to recovery is reached by a recovery pass, even when
+  the member that left it is still live. Every task that leaves one (an
+  admission refused for the slot, a feed's seq claim or result refused
+  `:not_owner`, a task that finds its cached standing gone before it
+  starts the run, writes its answer or ends a refused seq, or one whose
+  own end of the occurrence did not happen) ends with
+  `{:shutdown, :left_to_recovery}`, whatever the standing reads by the
+  time the scheduler sees the exit. The task is monitored before it runs
+  (`Task.Supervisor.async_nolink/3`), so that reason reaches the
+  scheduler; an exit whose reason never did (`:noproc`) is taken for it.
+  The scheduler then asks for a pass
+  due two ticks and a second after the exit: by then the claim is older
+  than the two ticks (`abandoned_before/0`) that make it any member's to
+  recover. A task that ends after this member lost its generation asks
+  for the same, and so does a dead runner whose occurrence its
+  settlement did not end. The scheduler asks for the same pass wherever
+  it leaves open, itself, an occurrence it has just claimed or re-taken:
+  a run not started because the standing ran out or the task could not
+  be spawned, a re-taken occurrence it did not end, a claim or a take
+  answered by a store error that may have committed, and a fire or a
+  recovery pass cut short by a store error. A scheduler process that
+  dies is started again in the same boot, with the runs it left still in
+  flight under the task supervisor: the new process watches each of them
+  and asks for the pass when one ends, and at its start asks for one
+  pass two ticks away, which reaches a claim committed just before the
+  death whose run never started. Those requests are the fast path: while
+  this member holds its slot, a standing pass runs every two ticks
+  whatever was asked, so an occurrence left by a path no request names is
+  reached all the same, and a member that does not hold its slot runs
+  none. A pass reads the open occurrences through their `(state,
+  claimed_at)` index, never their history, and skips only an occurrence
+  a run of this process holds in flight; runs are kept by their monitor,
+  so a second run of an `allow` schedule never displaces the first. A
+  live member's started occurrence whose execution ended, or whose
+  execution row is gone, is ended only once the pass's own process has
+  seen it so for two ticks on its monotonic clock: a run's own task has at
+  least those two ticks after its execution closes to end its occurrence,
+  on this member's pass or a peer's, and no member's wall clock enters the
+  decision; a task slower than that loses its end to recovery as
+  `uncertain`. One whose claimant is no live member is ended as soon as
+  its execution has. That includes a task whose lease lapsed with no
+  successor before it ended its occurrence: a peer's pass may end it first,
+  and the task's own end then answers `:stale`, the stale owner's window,
+  accepted. A `forbid` schedule's fire
+  that answers `:overlapping` asks for a pass a tick away, so an
+  occurrence that holds it back is reached once it is old enough. One
+  timer serves every request: the earliest due is armed, the latest is
+  kept (`recovery_due`), and the pass that fires re-arms for it while it
+  is still ahead. A pass that comes early finds nothing yet, and re-runs
+  an occurrence only through `recover/4`'s compare-and-set and the
+  fences of the claim and the admission.
+
   Each fire is one admission decision (`Grimoire.open_decision/3`, tool
   `schedule`, action `fire`), recorded before the run under a call id the
   run's context carries, so the root execution's row names it, and
@@ -98,6 +150,9 @@ defmodule Crucible.Schedules.Scheduler do
   @max_timer_ms 60 * 60 * 1_000
   @max_load_retries 5
   @recheck_ms 30_000
+  # Two ticks: the standing pass's period, and the age at which a claim is
+  # any member's to recover (`abandoned_before/0`).
+  @standing_ms 2 * @recheck_ms
 
   def start_link(opts \\ []) do
     # Long-lived, querying on boot and on timers: under the test sandbox
@@ -121,13 +176,33 @@ defmodule Crucible.Schedules.Scheduler do
   def init(_opts) do
     Process.flag(:trap_exit, true)
 
-    {:ok, %{timers: %{}, tasks: %{}, load_retry_count: 0, recovery_ref: nil},
-     {:continue, :load_schedules}}
+    {:ok,
+     %{
+       timers: %{},
+       tasks: %{},
+       orphans: MapSet.new(),
+       load_retry_count: 0,
+       recovery_ref: nil,
+       recovery_due: nil,
+       standing_ref: nil,
+       lapsed_seen: %{}
+     }, {:continue, :load_schedules}}
   end
 
   @impl true
+  # A start after this process died within the same boot finds the runs
+  # its predecessor left in flight, and may follow a claim committed just
+  # before the death whose task never started: the surviving runs are
+  # watched, and one two-tick pass is asked for beside the pass run now,
+  # which finds this boot's young claims not yet abandoned.
   def handle_continue(:load_schedules, state) do
-    {:noreply, state |> load_all_schedules() |> recover_if_held()}
+    {:noreply,
+     state
+     |> adopt_runs()
+     |> left_open()
+     |> arm_standing()
+     |> load_all_schedules()
+     |> recover_if_held()}
   end
 
   @impl true
@@ -157,9 +232,23 @@ defmodule Crucible.Schedules.Scheduler do
       else: {:noreply, recheck_later(schedule_id, state)}
   end
 
+  # A pass runs, and the one timer is armed again for the latest due a
+  # request recorded while it is still ahead.
   def handle_info(:recover_occurrences, state) do
     if state.recovery_ref, do: Process.cancel_timer(state.recovery_ref)
-    {:noreply, recover_if_held(%{state | recovery_ref: nil})}
+    {:noreply, state |> rearm_recovery() |> recover_if_held()}
+  end
+
+  # The standing pass: every two ticks, while this member holds its slot,
+  # whatever any exit asked for. A member that does not hold it runs
+  # nothing, and looks again at the next.
+  def handle_info(:standing_pass, state) do
+    state = arm_standing(state)
+    generation = Arca.ControlPlane.generation()
+
+    if still_ours?(generation),
+      do: {:noreply, recover_occurrences(state, generation)},
+      else: {:noreply, state}
   end
 
   def handle_info({:recheck, schedule_id}, state) do
@@ -170,22 +259,15 @@ defmodule Crucible.Schedules.Scheduler do
       else: {:noreply, recheck_later(schedule_id, state)}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
-    case Enum.find(state.tasks, fn {_id, task} -> task.ref == ref end) do
-      {schedule_id, task} ->
-        state = %{state | tasks: Map.delete(state.tasks, schedule_id)}
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state),
+    do: {:noreply, run_ended(ref, reason, state)}
 
-        if still_ours?(task.generation) do
-          if failed_run?(reason), do: runner_died(schedule_id, task, reason)
-          unless task.feed?, do: broadcast_update(task.ctx, schedule_id)
-          {:noreply, schedule_timer(schedule_id, state)}
-        else
-          {:noreply, defer_occurrence(schedule_id, state)}
-        end
-
-      nil ->
-        {:noreply, state}
-    end
+  # A run's task answers its alias when its function returns (it was
+  # started by `Task.Supervisor.async_nolink/3`); it has ended normally,
+  # and its monitor goes with the answer.
+  def handle_info({ref, _answer}, state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, run_ended(ref, :normal, state)}
   end
 
   def handle_info(:retry_load, state) do
@@ -216,17 +298,69 @@ defmodule Crucible.Schedules.Scheduler do
   def terminate(_reason, state) do
     Enum.each(state.timers, fn {_id, ref} -> Process.cancel_timer(ref) end)
     if state.recovery_ref, do: Process.cancel_timer(state.recovery_ref)
+    if state.standing_ref, do: Process.cancel_timer(state.standing_ref)
 
     if map_size(state.tasks) > 0 do
-      ids = state.tasks |> Map.keys() |> Enum.join(", ")
+      ids =
+        state.tasks
+        |> Map.values()
+        |> Enum.map(& &1.schedule_id)
+        |> Enum.uniq()
+        |> Enum.join(", ")
+
       Logger.info("[Crucible.Schedules.Scheduler] shutting down with running schedules: #{ids}")
     end
 
     :ok
   end
 
-  # A task exit that is not the run failing: it finished before its
-  # monitor was installed, or the scheduler is going down.
+  # A run's end, by its monitor or its answer. A run this process started
+  # is settled as its reason says; one a predecessor of this process left
+  # in flight (`adopt_runs/1`) is not known here, so whatever it left is
+  # reached by the two-tick pass, and so is any other run not known here
+  # that ends left to recovery.
+  defp run_ended(ref, reason, state) do
+    case Map.pop(state.tasks, ref) do
+      {%{schedule_id: schedule_id} = task, tasks} ->
+        state = %{state | tasks: tasks}
+
+        if still_ours?(task.generation) do
+          # A dead runner whose occurrence its settlement did not end
+          # leaves it open.
+          state =
+            if failed_run?(reason),
+              do: left_open_unless_ended(state, runner_died(schedule_id, task, reason)),
+              else: state
+
+          unless task.feed?, do: broadcast_update(task.ctx, schedule_id)
+
+          # A run left to recovery asks for the pass that reaches it.
+          state = if left_to_recovery?(reason), do: left_open(state), else: state
+
+          schedule_timer(schedule_id, state)
+        else
+          # The generation was lost under the run: whatever it left is
+          # reached by the same pass.
+          defer_occurrence(schedule_id, left_open(state))
+        end
+
+      {nil, _tasks} ->
+        cond do
+          MapSet.member?(state.orphans, ref) ->
+            left_open(%{state | orphans: MapSet.delete(state.orphans, ref)})
+
+          left_to_recovery?(reason) ->
+            left_open(state)
+
+          true ->
+            state
+        end
+    end
+  end
+
+  # A task exit that is not the run failing: the scheduler is going down,
+  # the run left its occurrence to recovery, or its reason was lost
+  # (`:noproc`).
   @doc false
   @spec failed_run?(term()) :: boolean()
   def failed_run?(:normal), do: false
@@ -234,6 +368,39 @@ defmodule Crucible.Schedules.Scheduler do
   def failed_run?(:shutdown), do: false
   def failed_run?({:shutdown, _}), do: false
   def failed_run?(_reason), do: true
+
+  # The exits that leave the run's occurrence open for recovery to reach:
+  # the run's own word for it, and an exit whose reason never reached this
+  # process (`:noproc`, a run already gone when its monitor was placed),
+  # which may have been that word.
+  defp left_to_recovery?({:shutdown, :left_to_recovery}), do: true
+  defp left_to_recovery?(:noproc), do: true
+  defp left_to_recovery?(_reason), do: false
+
+  # The runs a predecessor of this process left in flight under the task
+  # supervisor, which outlives it: each is watched, and its end asks for
+  # the two-tick pass (`run_ended/3`). They are read from the supervisor's
+  # links, every child of a supervisor being linked to it, rather than
+  # asked of it: a start never waits on a task supervisor that is busy or
+  # held. A run already gone is answered `:noproc` and asks the same; a
+  # process linked to the supervisor that is not a run asks at most one
+  # pass more. With no task supervisor there is nothing to watch, and the
+  # two-tick pass asked for at the start still comes.
+  defp adopt_runs(state) do
+    with sup when is_pid(sup) <- Process.whereis(Crucible.Schedules.TaskSupervisor),
+         {:links, links} <- Process.info(sup, :links),
+         {:parent, parent} <- Process.info(sup, :parent) do
+      orphans =
+        for pid <- links,
+            is_pid(pid) and pid != parent,
+            into: MapSet.new(),
+            do: Process.monitor(pid)
+
+      %{state | orphans: orphans}
+    else
+      _gone -> state
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Loading and recovery
@@ -323,10 +490,86 @@ defmodule Crucible.Schedules.Scheduler do
     known? and Arca.ControlPlane.held?() and Arca.ControlPlane.generation() == expected
   end
 
-  defp recover_later(%{recovery_ref: ref} = state) when is_reference(ref), do: state
+  defp recover_later(state), do: request_recovery(state, @recheck_ms)
 
-  defp recover_later(state),
-    do: %{state | recovery_ref: Process.send_after(self(), :recover_occurrences, @recheck_ms)}
+  # A live member's started occurrence whose execution ended is ended only
+  # once this process has seen it so for two ticks on its own monotonic
+  # clock: the run's own task closes its execution before it ends the
+  # occurrence, and has at least those two ticks to do it whatever any
+  # member's wall clock says. `seen_at` is read after the reads that saw the
+  # occurrence, so the grace never starts before the end it waits on: a
+  # grace given to another process's run starts late, where the control
+  # plane reads its own clock early so that its own belief runs out first.
+  # What is no longer answered lapsed is forgotten, so the seen-set is
+  # bounded by the open set; a restart forgets it all, and waits two ticks
+  # more.
+  defp graced(lapsed_live, state, seen_at) do
+    seen = Map.new(lapsed_live, &{&1.id, Map.get(state.lapsed_seen, &1.id, seen_at)})
+    graced = Enum.filter(lapsed_live, &(seen_at - Map.fetch!(seen, &1.id) >= @standing_ms))
+    {graced, %{state | lapsed_seen: seen}}
+  end
+
+  # Whether a run this process holds in flight is running `occurrence_id`.
+  defp in_flight?(state, occurrence_id),
+    do: Enum.any?(state.tasks, fn {_ref, task} -> task.occurrence_id == occurrence_id end)
+
+  # The standing pass's own timer, two ticks away, armed again by each pass.
+  defp arm_standing(state) do
+    if state.standing_ref, do: Process.cancel_timer(state.standing_ref)
+    %{state | standing_ref: Process.send_after(self(), :standing_pass, @standing_ms)}
+  end
+
+  # Two ticks and the margin `Arca.ControlPlane` gives up: the exit comes
+  # after the claim on the cell's clock, so a pass at this due finds the
+  # claim older than `abandoned_before/0`'s two ticks.
+  defp left_to_recovery_ms, do: 2 * @recheck_ms + Arca.ControlPlane.margin_ms()
+
+  # One timer serves every request for a recovery pass. With none armed, a
+  # request arms one for its due; with one armed, whichever of the two
+  # fires first is kept and the other cancelled. `recovery_due` keeps the
+  # latest due any request asked for, on the monotonic clock, so the pass
+  # that fires re-arms for it (`rearm_recovery/1`): a pass runs at or after
+  # every requested due, and one that runs early finds nothing yet.
+  defp request_recovery(state, delay_ms) do
+    due = System.monotonic_time(:millisecond) + delay_ms
+    state = %{state | recovery_due: max(state.recovery_due || due, due)}
+
+    case state.recovery_ref && Process.read_timer(state.recovery_ref) do
+      left when is_integer(left) and left > delay_ms ->
+        Process.cancel_timer(state.recovery_ref)
+        arm_recovery(state, delay_ms)
+
+      nil ->
+        arm_recovery(state, delay_ms)
+
+      # Armed, and firing first, or fired with its message on its way.
+      _first ->
+        state
+    end
+  end
+
+  defp rearm_recovery(%{recovery_due: due} = state) when is_integer(due) do
+    case due - System.monotonic_time(:millisecond) do
+      left when left > 0 -> arm_recovery(state, left)
+      _passed -> %{state | recovery_ref: nil, recovery_due: nil}
+    end
+  end
+
+  defp rearm_recovery(state), do: %{state | recovery_ref: nil, recovery_due: nil}
+
+  defp arm_recovery(state, delay_ms),
+    do: %{state | recovery_ref: Process.send_after(self(), :recover_occurrences, delay_ms)}
+
+  # An occurrence this member claimed or re-took and left open, neither
+  # run nor ended: the pass that reaches it is asked for, due when its
+  # claim is two ticks old.
+  defp left_open(state), do: request_recovery(state, left_to_recovery_ms())
+
+  # An end of this member's own occurrence that did not happen leaves it
+  # open. Ended, or another member's now (`:stale`), it asks for nothing.
+  defp left_open_unless_ended(state, {:ok, _ended}), do: state
+  defp left_open_unless_ended(state, {:error, :stale}), do: state
+  defp left_open_unless_ended(state, _not_ended), do: left_open(state)
 
   defp defer_occurrence(schedule_id, state), do: recheck_later(schedule_id, recover_later(state))
 
@@ -338,36 +581,49 @@ defmodule Crucible.Schedules.Scheduler do
   # is recovered.
   defp recover_occurrences(state, generation) do
     case ScheduleOccurrences.recoverable(abandoned_before()) do
-      {:ok, %{never_invoked: never_invoked, lapsed: lapsed}} ->
-        state =
-          Enum.reduce(lapsed, state, fn occurrence, acc ->
-            if still_ours?(generation) do
-              Logger.warning(
-                "[Crucible.Schedules.Scheduler] occurrence #{occurrence.id} of #{occurrence.schedule_id} started " <>
-                  "and its execution ended without it: uncertain"
-              )
+      {:ok, %{never_invoked: never_invoked, lapsed: lapsed, lapsed_live: lapsed_live}} ->
+        # Read once the reads that saw these occurrences have returned.
+        seen_at = System.monotonic_time(:millisecond)
+        {graced, state} = graced(lapsed_live, state, seen_at)
 
-              # Ended only as it was read: a row another member moved since
-              # is `:stale`, and left alone.
-              ScheduleOccurrences.finish(
-                Prima.Actor.in_athanor(occurrence.athanor_id),
-                occurrence.id,
-                occurrence.claimed_by,
-                occurrence.execution_id,
-                "uncertain"
-              )
-              |> logged_stale(occurrence)
-              |> case do
-                {:error, :database_error} -> recover_later(acc)
-                _ -> acc
-              end
-            else
-              recover_later(acc)
+        # A lapsed occurrence a run of this process still holds is that
+        # run's to end: its execution closed before the run's own end.
+        state =
+          Enum.reduce(lapsed ++ graced, state, fn occurrence, acc ->
+            cond do
+              in_flight?(acc, occurrence.id) ->
+                acc
+
+              still_ours?(generation) ->
+                Logger.warning(
+                  "[Crucible.Schedules.Scheduler] occurrence #{occurrence.id} of #{occurrence.schedule_id} started " <>
+                    "and its execution ended without it: uncertain"
+                )
+
+                # Ended only as it was read: a row another member moved since
+                # is `:stale`, and left alone.
+                ScheduleOccurrences.finish(
+                  Prima.Actor.in_athanor(occurrence.athanor_id),
+                  occurrence.id,
+                  occurrence.claimed_by,
+                  occurrence.execution_id,
+                  "uncertain"
+                )
+                |> logged_stale(occurrence)
+                |> case do
+                  {:error, :database_error} -> recover_later(acc)
+                  _ -> acc
+                end
+
+              true ->
+                recover_later(acc)
             end
           end)
 
+        # Only the occurrence a run in flight holds is skipped: another of
+        # the same schedule, left while that run goes on, is re-run.
         Enum.reduce(never_invoked, state, fn occurrence, acc ->
-          if Map.has_key?(acc.tasks, occurrence.schedule_id),
+          if in_flight?(acc, occurrence.id),
             do: acc,
             else: rerun_claimed(occurrence, acc, generation)
         end)
@@ -381,14 +637,15 @@ defmodule Crucible.Schedules.Scheduler do
         "[Crucible.Schedules.Scheduler] occurrence recovery failed: #{Exception.message(e)}"
       )
 
-      state
+      # Part-way through, perhaps after a take that committed.
+      left_open(state)
   catch
     :exit, reason ->
       Logger.warning(
         "[Crucible.Schedules.Scheduler] occurrence recovery exited: #{Prima.LogFilter.inspect_reason(reason)}"
       )
 
-      state
+      left_open(state)
   end
 
   # The occurrence is taken from its abandoned claimant in one statement
@@ -428,7 +685,9 @@ defmodule Crucible.Schedules.Scheduler do
         state
 
       {:error, :database_error} ->
-        recover_later(state)
+        # After a take that may have succeeded: the occurrence may be this
+        # member's claim now, fresh, so the tick's pass would not reach it.
+        state |> recover_later() |> left_open()
 
       {:error, {:not_standing, schedule}} ->
         Logger.warning(
@@ -438,18 +697,20 @@ defmodule Crucible.Schedules.Scheduler do
         )
 
         # The occurrence is ended first, so one that is another member's
-        # now records no error and announces no failure.
-        if still_ours?(generation) and fail_recovered(occurrence, generation) != {:error, :stale} do
+        # now records no error and announces no failure. One this member
+        # re-took and did not end is left open.
+        ended = fail_recovered(occurrence, generation)
+
+        if ended != nil and ended != {:error, :stale} do
           ctx = context_of(schedule)
           record_error(ctx, schedule.id, "Athanor or creator no longer active — run skipped")
           emit_schedule_failed(schedule.id, ctx, "athanor_or_creator_inactive")
         end
 
-        state
+        left_open_unless_ended(state, ended)
 
       _ ->
-        fail_recovered(occurrence, generation)
-        state
+        left_open_unless_ended(state, fail_recovered(occurrence, generation))
     end
   end
 
@@ -460,7 +721,9 @@ defmodule Crucible.Schedules.Scheduler do
   end
 
   # A recovered occurrence that will not run, ended as this member's:
-  # `recover/4` made it this member's claim, never started.
+  # `recover/4` made it this member's claim, never started. Answers the
+  # end's answer, or nil when the member no longer holds its standing and
+  # ends nothing.
   defp fail_recovered(occurrence, generation) do
     if still_ours?(generation) do
       ScheduleOccurrences.finish(
@@ -533,14 +796,15 @@ defmodule Crucible.Schedules.Scheduler do
         schedule_id: schedule_id
       })
 
-      retry_later(schedule_id, state)
+      # Perhaps after a claim that committed, whose run never started.
+      retry_later(schedule_id, left_open(state))
   catch
     :exit, reason ->
       Logger.warning(
         "[Crucible.Schedules.Scheduler] fire_schedule #{schedule_id} exited (#{Prima.LogFilter.inspect_reason(reason)}), retrying in 30s"
       )
 
-      retry_later(schedule_id, state)
+      retry_later(schedule_id, left_open(state))
   end
 
   defp fire_active_schedule(schedule, ctx, state) do
@@ -577,8 +841,10 @@ defmodule Crucible.Schedules.Scheduler do
           :overlapping ->
             # An occurrence of this schedule is still open and the
             # schedule forbids overlap: the due one waits, and is looked
-            # at again shortly.
-            recheck_later(schedule.id, state)
+            # at again shortly. A recovery pass is asked for too, so an
+            # open occurrence nothing will run is reached once it is old
+            # enough; a running one is not touched by it.
+            recheck_later(schedule.id, recover_later(state))
 
           {:error, :not_owner} ->
             # The claim checks the member's slot itself, whatever the
@@ -588,7 +854,9 @@ defmodule Crucible.Schedules.Scheduler do
             defer_occurrence(schedule.id, state)
 
           {:error, :database_error} ->
-            retry_later(schedule.id, state)
+            # The claim's commit may have happened, leaving this member's
+            # claim open with no run.
+            retry_later(schedule.id, left_open(state))
         end
     end
   end
@@ -630,9 +898,12 @@ defmodule Crucible.Schedules.Scheduler do
          state,
          generation \\ Arca.ControlPlane.generation()
        ) do
+    # Right after the claim or the take, the claim is this member's and
+    # fresh: the tick's pass would find it too young, so the two-tick pass
+    # is asked for beside it.
     if still_ours?(generation),
       do: start_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation),
-      else: defer_occurrence(schedule.id, state)
+      else: defer_occurrence(schedule.id, left_open(state))
   end
 
   # The run's execution id is minted here, before the task is spawned: it
@@ -642,18 +913,23 @@ defmodule Crucible.Schedules.Scheduler do
     logger_metadata = Prima.LoggerContext.capture()
     execution_id = Prima.UUID7.execution_id()
 
-    case Task.Supervisor.start_child(Crucible.Schedules.TaskSupervisor, fn ->
+    case spawn_run(fn ->
            Prima.LoggerContext.restore(logger_metadata)
 
+           # A task that starts after the cached standing ran out runs
+           # nothing and leaves its claim to recovery.
            if still_ours?(generation),
-             do: run(schedule, occurrence, ctx, exec_reference, input, generation, execution_id)
+             do: run(schedule, occurrence, ctx, exec_reference, input, generation, execution_id),
+             else: left_to_recovery()
+
+           :ok
          end) do
-      {:ok, pid} ->
-        ref = Process.monitor(pid)
+      {:ok, ref} ->
         if not feed?(schedule) and still_ours?(generation), do: broadcast_update(ctx, schedule.id)
 
         task = %{
           ref: ref,
+          schedule_id: schedule.id,
           occurrence_id: occurrence.id,
           execution_id: execution_id,
           athanor_id: occurrence.athanor_id,
@@ -662,7 +938,9 @@ defmodule Crucible.Schedules.Scheduler do
           feed?: feed?(schedule)
         }
 
-        %{state | tasks: Map.put(state.tasks, schedule.id, task)}
+        # Keyed by the run's monitor: a second run of an `allow` schedule
+        # never replaces the first while it is in flight.
+        %{state | tasks: Map.put(state.tasks, ref, task)}
 
       {:error, reason} ->
         if still_ours?(generation) do
@@ -670,17 +948,32 @@ defmodule Crucible.Schedules.Scheduler do
             "[Crucible.Schedules.Scheduler] failed to spawn task for schedule #{schedule.id}: #{inspect(reason)}"
           )
 
-          # Never started, so the end matches the claim with no execution.
-          unless finish(occurrence, execution_id, "failed") == {:error, :stale} do
+          # Never started, so the end matches the claim with no execution;
+          # an end that did not happen leaves the claim open.
+          ended = finish(occurrence, execution_id, "failed")
+
+          unless ended == {:error, :stale} do
             emit_schedule_failed(schedule.id, ctx, {:spawn_failed, reason})
             record_error(ctx, schedule.id, Grimoire.render(:unavailable))
           end
 
-          schedule_timer(schedule.id, state)
+          schedule_timer(schedule.id, left_open_unless_ended(state, ended))
         else
-          defer_occurrence(schedule.id, state)
+          defer_occurrence(schedule.id, left_open(state))
         end
     end
+  end
+
+  # A run's task, monitored before its function runs:
+  # `Task.Supervisor.async_nolink/3` places the monitor and only then lets
+  # the task start, so no exit comes before the monitor and its reason
+  # reaches `run_ended/3`. The task supervisor's ceiling on tasks is the
+  # one refusal it raises for.
+  defp spawn_run(fun) do
+    %Task{ref: ref} = Task.Supervisor.async_nolink(Crucible.Schedules.TaskSupervisor, fun)
+    {:ok, ref}
+  rescue
+    RuntimeError -> {:error, :max_children}
   end
 
   # A feed's fire first claims the feed's next seq, the one its result is
@@ -700,9 +993,15 @@ defmodule Crucible.Schedules.Scheduler do
             "no longer owns its slot — left to recovery"
         )
 
+        left_to_recovery()
+
       {:error, reason} ->
+        # Refused for another reason, it is ended here while the standing
+        # holds; past it, nothing is written and the claim is left to
+        # recovery.
         if still_ours?(generation),
-          do: seq_refused(schedule, occurrence, ctx, reason, execution_id)
+          do: seq_refused(schedule, occurrence, ctx, reason, execution_id),
+          else: left_to_recovery()
     end
   end
 
@@ -720,7 +1019,9 @@ defmodule Crucible.Schedules.Scheduler do
   # The seq was refused before the run: the occurrence never started, so
   # its end matches the claim with no execution.
   defp seq_refused(schedule, occurrence, ctx, reason, execution_id) do
-    unless finish(occurrence, execution_id, "failed") == {:error, :stale} do
+    ended = finish(occurrence, execution_id, "failed")
+
+    unless ended == {:error, :stale} do
       Logger.warning(
         "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq not claimed (#{inspect(reason)}) — not run"
       )
@@ -728,6 +1029,8 @@ defmodule Crucible.Schedules.Scheduler do
       emit_schedule_failed(schedule.id, ctx, reason)
       record_error(ctx, schedule.id, Grimoire.render(reason))
     end
+
+    left_to_recovery_unless_ended(ended)
   end
 
   # One root run, admitted as `execution_id`, the occurrence joined to the
@@ -846,6 +1149,8 @@ defmodule Crucible.Schedules.Scheduler do
               Logger.debug(
                 "[Crucible.Schedules.Scheduler] schedule #{schedule.id} completed (#{execution_id})"
               )
+
+              left_to_recovery_unless_ended(finished)
           end
 
         {:error, reason} when reason in [:not_owner, :control_plane_lost] ->
@@ -863,6 +1168,8 @@ defmodule Crucible.Schedules.Scheduler do
             "[Crucible.Schedules.Scheduler] schedule #{schedule.id}: this member no longer " <>
               "owns its slot — run not admitted, occurrence left to recovery"
           )
+
+          left_to_recovery()
 
         {:error, reason} ->
           # An admission that failed left the occurrence claimed; a run
@@ -884,7 +1191,15 @@ defmodule Crucible.Schedules.Scheduler do
             emit_schedule_failed(schedule.id, ctx, reason, execution_id)
             record_error(ctx, schedule.id, Grimoire.render(reason))
           end
+
+          left_to_recovery_unless_ended(ended)
       end
+    else
+      # The run answered after this member's cached standing ran out:
+      # nothing of its answer is written, and the occurrence it held is
+      # left to recovery, however the standing reads when the scheduler
+      # sees the exit.
+      left_to_recovery()
     end
   end
 
@@ -907,7 +1222,9 @@ defmodule Crucible.Schedules.Scheduler do
     case Crucible.Feeds.accept(ctx, schedule.id, feed.seq, output, feed.slot) do
       answer when answer in [:ok, {:error, :stale}, {:error, :not_found}] ->
         # An occurrence that is another member's now records no run.
-        unless finish(occurrence, fired.execution_id, "completed") == {:error, :stale} do
+        ended = finish(occurrence, fired.execution_id, "completed")
+
+        unless ended == {:error, :stale} do
           _ = record_run(ctx, schedule.id, fired.execution_id)
 
           :telemetry.execute(
@@ -922,16 +1239,21 @@ defmodule Crucible.Schedules.Scheduler do
           )
         end
 
+        left_to_recovery_unless_ended(ended)
+
       {:error, :not_owner} ->
         Logger.warning(
           "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq}: this member no " <>
             "longer owns its slot — result not accepted, occurrence left to recovery"
         )
 
+        left_to_recovery()
+
       {:error, {:refused, refusal}} ->
         reason = refused_result(refusal)
+        ended = finish(occurrence, fired.execution_id, "failed")
 
-        unless finish(occurrence, fired.execution_id, "failed") == {:error, :stale} do
+        unless ended == {:error, :stale} do
           Logger.warning(
             "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq} failed: " <>
               Grimoire.render(reason)
@@ -941,8 +1263,12 @@ defmodule Crucible.Schedules.Scheduler do
           record_error(ctx, schedule.id, Grimoire.render(reason))
         end
 
+        left_to_recovery_unless_ended(ended)
+
       {:error, reason} ->
-        unless finish(occurrence, fired.execution_id, "failed") == {:error, :stale} do
+        ended = finish(occurrence, fired.execution_id, "failed")
+
+        unless ended == {:error, :stale} do
           Logger.warning(
             "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq} failed: #{inspect(reason)}"
           )
@@ -950,6 +1276,8 @@ defmodule Crucible.Schedules.Scheduler do
           emit_schedule_failed(schedule.id, ctx, reason, fired.execution_id)
           record_error(ctx, schedule.id, Grimoire.render(reason))
         end
+
+        left_to_recovery_unless_ended(ended)
     end
   end
 
@@ -993,6 +1321,20 @@ defmodule Crucible.Schedules.Scheduler do
 
   defp logged_stale(answer, _occurrence), do: answer
 
+  # The run task's end when it leaves its claimed occurrence to recovery:
+  # the exit reason tells the scheduler (`handle_info({:DOWN, …})`) to ask
+  # for the pass that reaches it. A `{:shutdown, _}` exit is not a failed
+  # run (`failed_run?/1`), so the runner is not taken for dead.
+  @spec left_to_recovery() :: no_return()
+  defp left_to_recovery, do: exit({:shutdown, :left_to_recovery})
+
+  # A task whose own end of its occurrence did not happen leaves it open,
+  # and ends left to recovery once it has done the rest. Ended, or another
+  # member's now (`:stale`), it ends as it would.
+  defp left_to_recovery_unless_ended({:ok, _ended}), do: :ok
+  defp left_to_recovery_unless_ended({:error, :stale}), do: :ok
+  defp left_to_recovery_unless_ended(_not_ended), do: left_to_recovery()
+
   defp fired_meta(schedule, occurrence, ctx, fired) do
     %{
       request_id: fired.request_id,
@@ -1008,6 +1350,8 @@ defmodule Crucible.Schedules.Scheduler do
   # The runner died without answering: the occurrence it held ends as
   # what the row says — never invoked, or started under the execution this
   # member minted with an unknown end — while it is still this member's.
+  # Answers the settlement, so a settlement that did not happen leaves
+  # the occurrence open (`left_open_unless_ended/2`).
   defp runner_died(schedule_id, task, reason) do
     Logger.warning(
       "[Crucible.Schedules.Scheduler] schedule #{schedule_id} execution failed: " <>
@@ -1025,6 +1369,8 @@ defmodule Crucible.Schedules.Scheduler do
 
     unless settled == {:error, :stale},
       do: record_error(task.ctx, schedule_id, Grimoire.render(reason))
+
+    settled
   end
 
   defp record_run(ctx, schedule_id, execution_id) do
