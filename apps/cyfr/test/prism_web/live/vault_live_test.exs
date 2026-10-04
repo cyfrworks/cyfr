@@ -166,8 +166,202 @@ defmodule PrismWeb.VaultLiveTest do
     assert html =~ "https://api.example.com · /v1/"
     assert html =~ "https://db.example.com:8443"
     assert has_element?(view, ~s([data-test="entry-disclosure"]), "never handed to a component")
+
+    # An attach-only entry's row, and the form's disclosure choice, say what
+    # happens to the value instead: CYFR attaches it.
+    assert has_element?(
+             view,
+             ~s([data-test="entry-disclosure"]),
+             "CYFR attaches it to requests bound for its destination"
+           )
+
+    render_click(view, "show_add", %{"mode" => "fields"})
+
+    assert view |> element("#vault-create-form") |> render() =~
+             "CYFR attaches it to requests bound for the entry&#39;s destination"
+
     assert has_element?(view, ~s([data-test="entry-disclosure"]), "disclosed: components read it")
     Cyfr.Test.Sandbox.end_views()
+  end
+
+  describe "provided by this instance" do
+    @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+    @inference ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+    @sealed "sealed-instance-material-sentinel"
+    @keyed "reagent:local.vault-keyed"
+
+    # An instance entry as its administrator left it, offered to `members`
+    # when its audience is listed.
+    defp offer!(over \\ %{}, members \\ []) do
+      {:ok, entry} =
+        Arca.InstanceEntries.put(
+          Prima.Actor.system(),
+          Map.merge(
+            %{
+              name: "offered-#{System.unique_integer([:positive])}",
+              kind: "api_key",
+              provider_hint: "openai.com",
+              field_names: ~s(["OPENAI_API_KEY"]),
+              destination: @inference,
+              sealed_payload: @sealed,
+              binding_digest: "sha256:offered",
+              audience: "everyone",
+              created_by: "usr_admin"
+            },
+            over
+          ),
+          members
+        )
+
+      entry
+    end
+
+    defp person_ctx(user, athanor_id) do
+      Sanctum.Context.build(
+        user_id: user.user_id,
+        athanor_id: athanor_id,
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+    end
+
+    defp offered_row(entry), do: ~s([data-test="offered-entry"][data-id="#{entry.id}"])
+
+    test "lists the entries offered to the person with their own use today, and never one " <>
+           "they are not offered",
+         %{conn: conn} do
+      user = test_user()
+      other = test_user()
+      conn = log_in_user(conn, user)
+      shared = offer!(%{name: "Shared OpenAI"})
+      _theirs = offer!(%{name: "Listed for another", audience: "listed"}, [other.user_id])
+
+      caps = %{person_daily: 100, total_daily: 1_000}
+      claim = &Arca.InstanceEntryUsage.claim(Prima.Actor.system(), shared.id, &1, caps)
+
+      for _ <- 1..2, do: {:ok, _} = claim.(user.user_id)
+      {:ok, _} = claim.(other.user_id)
+
+      {view, html} = mount_athanor(conn, "/vault")
+
+      assert has_element?(view, offered_row(shared), "Shared OpenAI")
+      assert has_element?(view, offered_row(shared), "openai.com")
+      assert has_element?(view, offered_row(shared), "https://api.openai.com · POST · /v1/")
+      assert has_element?(view, offered_row(shared), "Any consented component")
+
+      # The person's own two requests today, not the entry's three.
+      use = offered_row(shared) <> ~s( [data-test="offered-use"])
+      assert has_element?(view, use, "2 requests today")
+      assert html =~ "CYFR attaches it to requests bound for its"
+
+      refute html =~ "Listed for another"
+      refute html =~ @sealed
+      section = view |> element(~s([data-test="instance-offered"])) |> render()
+      assert length(Regex.scan(~r/data-test="offered-entry"/, section)) == 1
+    end
+
+    test "use by default makes the entry this athanor's default for its provider, which a " <>
+           "need of that provider here suggests; another athanor's default is unchanged",
+         %{conn: conn} do
+      Cyfr.Test.SeedBundle.isolate!()
+      user = test_user()
+      conn = log_in_user(conn, user)
+      home = seated_athanor()
+
+      {:ok, group} =
+        Sanctum.Tenancy.Athanors.create_group(user.user_id, "Second #{user.namespace}")
+
+      for athanor_id <- [home.id, group.id] do
+        seed_ctx =
+          Sanctum.internal_context(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
+
+        {:ok, _} =
+          Arca.Test.UnitFixtures.ship_and_register!(
+            seed_ctx,
+            "reagent",
+            "local",
+            "vault-keyed",
+            "1.0.0",
+            manifest: %{
+              "needs" => %{
+                "api_key" => %{
+                  "type" => "api_key:openai.com",
+                  "reason" => "to call the model with a key",
+                  "fields" => ["OPENAI_API_KEY"],
+                  "attach" => %{
+                    "in" => "header",
+                    "name" => "Authorization",
+                    "template" => "Bearer {value}"
+                  }
+                }
+              }
+            },
+            wasm: @wasm
+          )
+      end
+
+      _first = offer!()
+      second = offer!()
+
+      suggested = fn athanor_id ->
+        {:ok, plan} = Sanctum.Consent.Plan.plan(person_ctx(user, athanor_id), %{ref: @keyed})
+        row = Enum.find(plan.needs, &(&1.need == "api_key"))
+        {row.suggested, row.choice_required}
+      end
+
+      # Two offered and no default: the person is asked to choose, here and
+      # in the group alike.
+      assert suggested.(home.id) == {nil, true}
+      assert suggested.(group.id) == {nil, true}
+
+      {view, _html} = mount_athanor(conn, "/vault")
+      refute has_element?(view, ~s([data-test="offered-default"]))
+
+      view
+      |> element(offered_row(second) <> ~s( [data-test="offered-use-by-default"]))
+      |> render_click()
+
+      assert render(view) =~ "Used by default for openai.com in this athanor."
+      assert has_element?(view, offered_row(second) <> ~s( [data-test="offered-default"]))
+
+      assert {:ok, %{"openai.com" => %{instance_entry_id: id}}} =
+               Sanctum.Vault.defaults(person_ctx(user, home.id))
+
+      assert id == second.id
+      assert suggested.(home.id) == {%{instance_entry_id: second.id}, false}
+
+      # The group's own default is untouched, so it still asks.
+      assert {:ok, defaults} = Sanctum.Vault.defaults(person_ctx(user, group.id))
+      refute Map.has_key?(defaults, "openai.com")
+      assert suggested.(group.id) == {nil, true}
+    end
+
+    test "a policy changed anywhere is shown again", %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      shared = offer!()
+      {view, _html} = mount_athanor(conn, "/vault")
+      policy = offered_row(shared) <> ~s( [data-test="offered-policy"])
+      assert has_element?(view, policy, "Any consented component")
+
+      ops = test_user()
+      {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops.user_id)
+      admin = %{person_ctx(ops, Sanctum.TestContext.athanor_id()) | platform_admin: true}
+
+      assert {:ok, :changed} =
+               Sanctum.InstanceEntries.set_component_policy(admin, %{
+                 entry_id: shared.id,
+                 component_policy: "shipped"
+               })
+
+      wait_until(
+        fn -> has_element?(view, policy, "Unmodified shipped components") end,
+        2_000,
+        "the policy shown again"
+      )
+    end
   end
 
   test "a new entry with no host to go to is refused, and nothing waits on a record",

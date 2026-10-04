@@ -45,7 +45,16 @@ defmodule PrismWeb.SystemLayer.Prompt do
       is prefilled from,
       and `return`, the grant it goes back to: `%{prompt, need}` for a need
       of the app, `%{prompt, from, dep, need}` for a dependency's. Any
-      other prompt names none of them, and nothing is prefilled;
+      other prompt names none of them, and nothing is prefilled.
+      `target` says where the value goes: `:vault` (the default when
+      absent), the athanor's own vault, as above; or `:instance`, an
+      instance entry the platform administrator's card collected
+      everything else of, so the prompt asks for the value alone. An
+      `:instance` subject names the `operation`, `:create` or `:rotate`,
+      and the card's `arguments` for `instance_entry.create` (no
+      `fields`: the value is the one thing the prompt adds, under `field`)
+      or `instance_entry.rotate` (the `entry_id` and the
+      `expected_payload_rev` the card read), and none of the prefill keys;
     * `:unlock` — optionally `name`, the vault entry it concerns;
     * `:sign_in` — optionally `message`, a sentence saying why;
     * `:safe_mode` — a `Prism.SafeMode` value;
@@ -81,6 +90,12 @@ defmodule PrismWeb.SystemLayer.Prompt do
   @default_field "API_KEY"
   @field_name ~r/\A[A-Za-z_][A-Za-z0-9_]{0,127}\z/
   @prefill_keys [:athanor_id, :provider, :hosts, :paths, :disclose_needed, :return]
+  @instance_keys [:target, :operation, :arguments]
+  @instance_operations [:create, :rotate]
+  # What the card collects for an instance entry's creation: everything of
+  # `instance_entry.create` but the value, which the prompt alone takes.
+  @instance_create_args ~w(name kind provider_hint destination audience members
+                           component_policy person_daily total_daily)
 
   @methods ~w(passkey oidc email)
 
@@ -208,14 +223,39 @@ defmodule PrismWeb.SystemLayer.Prompt do
        else: {:error, :invalid_prompt}
   end
 
+  # An instance entry's value: the card's arguments for the operation it
+  # names, and nothing a grant prefills.
+  defp subject(:credential_entry, %{name: name, target: :instance} = subject)
+       when is_binary(name) and name != "" do
+    field = Map.get(subject, :field, @default_field)
+    operation = Map.get(subject, :operation)
+    arguments = Map.get(subject, :arguments)
+
+    if map_size(Map.drop(subject, [:name, :field | @instance_keys])) == 0 and is_binary(field) and
+         Regex.match?(@field_name, field) and operation in @instance_operations and
+         instance_arguments?(operation, arguments),
+       do:
+         {:ok,
+          %{
+            name: name,
+            field: field,
+            target: :instance,
+            operation: operation,
+            arguments: arguments
+          }},
+       else: {:error, :invalid_prompt}
+  end
+
   defp subject(:credential_entry, %{name: name} = subject)
        when is_binary(name) and name != "" do
     field = Map.get(subject, :field, @default_field)
     prefill = Map.take(subject, @prefill_keys)
+    target = Map.take(subject, [:target])
 
-    if map_size(Map.drop(subject, [:name, :field | @prefill_keys])) == 0 and is_binary(field) and
-         Regex.match?(@field_name, field) and prefill?(prefill),
-       do: {:ok, Map.merge(%{name: name, field: field}, prefill)},
+    if map_size(Map.drop(subject, [:name, :field, :target | @prefill_keys])) == 0 and
+         is_binary(field) and Regex.match?(@field_name, field) and prefill?(prefill) and
+         target in [%{}, %{target: :vault}],
+       do: {:ok, %{name: name, field: field} |> Map.merge(target) |> Map.merge(prefill)},
        else: {:error, :invalid_prompt}
   end
 
@@ -263,6 +303,18 @@ defmodule PrismWeb.SystemLayer.Prompt do
   end
 
   defp subject(_kind, _subject), do: {:error, :invalid_prompt}
+
+  # A creation names only what `instance_entry.create` takes beside the
+  # value; a rotation names the entry and the revision the card read.
+  # Neither carries a value.
+  defp instance_arguments?(:create, %{"name" => name} = arguments) when is_binary(name),
+    do: Enum.all?(Map.keys(arguments), &(&1 in @instance_create_args))
+
+  defp instance_arguments?(:rotate, %{"entry_id" => id, "expected_payload_rev" => rev} = args)
+       when is_binary(id) and id != "" and is_integer(rev) and rev >= 0,
+       do: map_size(args) == 2
+
+  defp instance_arguments?(_operation, _arguments), do: false
 
   # What a credential entry raised for a need is prefilled from, and the
   # grant it returns to: all of them or none.

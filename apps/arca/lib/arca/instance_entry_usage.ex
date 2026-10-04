@@ -25,8 +25,9 @@ defmodule Arca.InstanceEntryUsage do
   The caps are the caller's resolved values, each an integer from 0 to
   `Arca.Schemas.InstanceEntry.max_cap/0`, `0` admitting no use: no claim
   is uncapped, and an entry's unset cap takes its platform setting's
-  default above this module. `sweep/1` deletes the rows of days older
-  than thirty-five.
+  default above this module. `used_today/3` reads one person's count for
+  the day, for that person's own view. `sweep/1` deletes the rows of days
+  older than thirty-five.
 
   Not an athanor's: no row carries a tenant, so every query here crosses
   athanors by design, under the platform's actor alone.
@@ -128,6 +129,42 @@ defmodule Arca.InstanceEntryUsage do
 
   def usage(%Prima.Actor{}, entry_id, days)
       when is_binary(entry_id) and is_integer(days) and days > 0,
+      do: {:error, :cross_tenant}
+
+  @doc """
+  How many times `user_id` used `entry_id` today, on the database's date
+  as `claim/4` counts it: that person's own day row and no other's, `0`
+  when they have none. What a person is shown of their own use; the
+  entry's total and every other person's count are the administrator's
+  (`usage/3`). An empty `user_id`, the total's key, is refused
+  `{:error, {:invalid, _}}`. Platform scope only.
+  """
+  @spec used_today(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :cross_tenant | {:invalid, map()} | term()}
+  # arca:unscoped-ok an instance entry's use is read by the entry and the
+  # person, in no athanor: the instance's own credentials are offered to
+  # athanors and deleted with none of them.
+  def used_today(actor, entry_id, user_id)
+      when platform(actor) and is_binary(entry_id) and is_binary(user_id) and user_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.InstanceEntryUsage.used_today", fn ->
+      day = DateTime.to_date(Arca.ServerMetaStorage.now!())
+
+      count =
+        from(u in Usage,
+          where: u.instance_entry_id == ^entry_id and u.user_id == ^user_id and u.day == ^day,
+          select: u.count
+        )
+        |> Arca.Repo.one()
+
+      {:ok, count || 0}
+    end)
+  end
+
+  def used_today(actor, entry_id, "") when platform(actor) and is_binary(entry_id),
+    do: {:error, {:invalid, %{user_id: ["names a person"]}}}
+
+  def used_today(%Prima.Actor{}, entry_id, user_id)
+      when is_binary(entry_id) and is_binary(user_id),
       do: {:error, :cross_tenant}
 
   @doc """

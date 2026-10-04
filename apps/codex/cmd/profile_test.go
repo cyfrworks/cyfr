@@ -103,7 +103,8 @@ func TestRenderPreview_ShowsEveryRowValue(t *testing.T) {
 // it, the entry and whose it is (or the publisher's configuration), the
 // account, where it may go and whether the component holds the value;
 // then how long it stands. A value the component is not disclosed is one
-// it never holds, and nothing says CYFR attaches it.
+// CYFR attaches and the component never holds, and its row says so; a
+// disclosed one's row never does.
 func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 	v := loadPreviewVectors(t)
 	var out bytes.Buffer
@@ -113,14 +114,14 @@ func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 	for _, want := range []string{
 		"reagent:local.weather uses weather-api, an entry of this athanor, for its own calls: " +
 			"a weather.example account, sent only to https://api.weather.example. " +
-			"The component never holds the value.",
+			"CYFR attaches the value and the component never holds it.",
 		"reagent:local.maps will use maps, an entry of this athanor, through its 'shared-maps' " +
 			"profile, from reagent:local.weather for its tiles need: sent only to " +
 			"https://tiles.maps.example, methods GET, paths /v1/tiles. The component reads the value itself.",
 		"reagent:local.geo uses weather-api, provided by this instance, from reagent:local.weather, " +
 			"as the account 'Geo account': a weather.example account, sent only to " +
 			"https://*.weather.example port 8443, methods GET, POST, paths /v2. " +
-			"The component never holds the value.",
+			"CYFR attaches the value and the component never holds it.",
 		"reagent:local.maps uses maps public key, provided by local, the app's public configuration, " +
 			"from reagent:local.weather for its geocode need: sent only to https://geo.maps.example, " +
 			"paths /geocode. The component reads the value itself.",
@@ -137,8 +138,18 @@ func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 	if strings.Contains(text, "choose which entry to use") {
 		t.Errorf("no row of the vectors asks for a choice:\n%s", text)
 	}
+	// The attach claim is each attach-only row's, and no disclosed row's: the
+	// vectors hold two of each.
+	attached := "CYFR attaches the value and the component never holds it."
+	if got := strings.Count(text, attached); got != 2 {
+		t.Errorf("%q said %d times, want once per attach-only row (2):\n%s", attached, got, text)
+	}
+	if got := strings.Count(text, "The component never holds the value."); got != 0 {
+		t.Errorf("an attach-only row says the component never holds the value without "+
+			"saying CYFR attaches it, %d times:\n%s", got, text)
+	}
 	lower := strings.ToLower(text)
-	for _, claim := range []string{"attached by cyfr", "cyfr attaches", "read only", "read-only"} {
+	for _, claim := range []string{"attached by cyfr", "read only", "read-only"} {
 		if strings.Contains(lower, claim) {
 			t.Errorf("the rendering says %q:\n%s", claim, text)
 		}
@@ -1124,7 +1135,7 @@ func expected(row map[string]any, field string, value any) []string {
 	case field == "disclosed" && value == true:
 		return []string{"The component reads the value itself."}
 	case field == "disclosed":
-		return []string{"The component never holds the value."}
+		return []string{"CYFR attaches the value and the component never holds it."}
 	case field == "suggested" && value == true:
 		return []string{"suggested"}
 	case field == "choice_required" && value == true:

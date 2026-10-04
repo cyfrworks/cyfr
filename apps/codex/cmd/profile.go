@@ -1476,12 +1476,13 @@ func destinationLabel(value any) string {
 }
 
 // disclosureLabel says whether the component holds the value: a value not
-// disclosed to it is one it never holds.
+// disclosed to it is one CYFR attaches to the requests bound for the
+// entry's destination, and the component never holds it.
 func disclosureLabel(disclosed any) string {
 	if disclosed == true {
 		return "The component reads the value itself."
 	}
-	return "The component never holds the value."
+	return "CYFR attaches the value and the component never holds it."
 }
 
 // lifetimeLabel spells how long a binding stands.

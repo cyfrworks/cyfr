@@ -91,7 +91,8 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "delete",
       "list",
       "usage",
-      "offered"
+      "offered",
+      "people"
     ]
   }
 
@@ -114,7 +115,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "confirmation" => "Unknown action: confirmation.___no_such_action___",
     "instance_entry" =>
       "Invalid instance_entry action. Use: create, rotate, rebind, set_audience, " <>
-        "set_component_policy, set_caps, revoke, delete, list, usage, or offered"
+        "set_component_policy, set_caps, revoke, delete, list, usage, offered, or people"
   }
 
   describe "tools/0 — frozen surface" do

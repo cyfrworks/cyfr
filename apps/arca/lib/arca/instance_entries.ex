@@ -39,11 +39,13 @@ defmodule Arca.InstanceEntries do
   widening that needed a confirmation is never written over a state it
   was not decided against. `put/3` and `set_audience/4` take the lock of
   every person a listed audience names first, people being first in
-  `Arca.SecurityTransitions`' lock order, and refuse a denied person
-  `{:error, {:person_denied, user_id}}` with nothing written, so a denial
-  and an audience naming the person serialize, and a denied person is
-  never listed again. `set_caps/3` writes only the caps it names.
-  `move_binding/5` moves the destination by
+  `Arca.SecurityTransitions`' lock order. They refuse an id no person row
+  has `{:error, {:person_unknown, user_id}}`, so a typed email is never
+  stored, and then a denied person `{:error, {:person_denied, user_id}}`,
+  each with nothing written, so a denial and an audience naming the
+  person serialize, and a denied person is never listed again.
+  `set_caps/3` writes only the caps it names. `move_binding/5` moves the
+  destination by
   compare-and-set on the binding digest. `commit_payload/3` rotates the
   material under `payload_rev`, on an active row only. `revoke/3` and
   `tombstone/3` end the entry; `tombstone/3` also erases the material and
@@ -110,9 +112,10 @@ defmodule Arca.InstanceEntries do
   `{:error, :destination_required}` or `{:error, {:invalid_destination,
   reason}}` for a destination that is absent, not a destination's
   canonical text, or missing its methods or paths,
-  `{:error, {:invalid, errors}}` for a row outside the vocabularies, and
-  `{:error, {:person_denied, user_id}}` for a listed person who is
-  denied, read under that person's lock.
+  `{:error, {:invalid, errors}}` for a row outside the vocabularies,
+  `{:error, {:person_unknown, user_id}}` for a listed id no person has,
+  and `{:error, {:person_denied, user_id}}` for a listed person who is
+  denied, each read under the listed people's locks.
   """
   @spec put(Prima.Actor.t(), map(), [String.t()]) ::
           {:ok, entry()}
@@ -121,6 +124,7 @@ defmodule Arca.InstanceEntries do
              | :destination_required
              | {:invalid_destination, term()}
              | {:invalid, map()}
+             | {:person_unknown, String.t()}
              | {:person_denied, String.t()}}
           | refusal()
   def put(actor, attrs, members \\ [])
@@ -216,8 +220,9 @@ defmodule Arca.InstanceEntries do
   confirmation that asks, are the caller's.
 
   In one locking transaction the people a listed `change` names are
-  locked first, and a denied one refused `{:error, {:person_denied,
-  user_id}}`; then the entry's row and its member rows are read under a
+  locked first, an id no person has refused `{:error, {:person_unknown,
+  user_id}}` and a denied person `{:error, {:person_denied, user_id}}`;
+  then the entry's row and its member rows are read under a
   lock, and the write lands only while they still hold `expected`,
   members compared as a set, and otherwise answers `{:error, :conflict}`
   with nothing written. So two writers who read the same audience cannot
@@ -227,7 +232,12 @@ defmodule Arca.InstanceEntries do
   """
   @spec set_audience(Prima.Actor.t(), String.t(), audience(), audience()) ::
           :ok
-          | {:error, :conflict | :not_found | {:invalid, map()} | {:person_denied, String.t()}}
+          | {:error,
+             :conflict
+             | :not_found
+             | {:invalid, map()}
+             | {:person_unknown, String.t()}
+             | {:person_denied, String.t()}}
           | refusal()
   def set_audience(
         actor,
@@ -825,23 +835,31 @@ defmodule Arca.InstanceEntries do
   # The people a listed audience names, locked first and in id order, the
   # order every security transition takes people in: a denial, which
   # removes the person from every list under the same lock, and an
-  # audience write naming the person serialize there. A person who is
-  # denied is refused, naming them, and nothing is written. An id with no
-  # person row names no one a denial can reach.
+  # audience write naming the person serialize there. An id with no person
+  # row (a typed email among them) names no one, so it is refused, the
+  # first in id order, before any denied person; a person who is denied is
+  # refused, naming them. Either way nothing is written. Person rows are
+  # never deleted, so a row found here stays found.
   defp listed_people("listed", members) do
-    denied =
+    listed = members |> Enum.uniq() |> Enum.sort()
+
+    found =
       from(u in User,
-        where: u.id in ^Enum.uniq(members),
+        where: u.id in ^listed,
         order_by: [asc: u.id],
         select: {u.id, u.status}
       )
       |> Arca.QueryHelpers.for_update()
       |> Arca.Repo.all()
-      |> Enum.find(fn {_id, status} -> status == "denied" end)
 
-    case denied do
-      nil -> :ok
+    known = MapSet.new(found, fn {id, _status} -> id end)
+
+    with nil <- Enum.find(listed, &(not MapSet.member?(known, &1))),
+         nil <- Enum.find(found, fn {_id, status} -> status == "denied" end) do
+      :ok
+    else
       {user_id, _status} -> {:error, {:person_denied, user_id}}
+      user_id -> {:error, {:person_unknown, user_id}}
     end
   end
 

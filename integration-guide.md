@@ -1000,21 +1000,22 @@ Vault mutations require an interactive session — components, tincture frames a
 
 ### Instance entries (`instance_entry` tool)
 
-An instance entry is a credential the platform admin enters once for the whole instance and offers to the people on it, owned by no athanor. It is always attach-only, and its destination names its `methods` and `paths` as well as its hosts. It is an API key or a bundle of fields: `kind` admits `api_key` and `bundle` alone, and an OAuth account is entered in an athanor's own vault, since nothing can yet dispense an instance entry's token. Every action but `offered` is a platform admin's, from an interactive session; `offered` is any signed-in person's read of what they may use.
+An instance entry is a credential the platform admin enters once for the whole instance and offers to the people on it, owned by no athanor. It is always attach-only, and its destination names its `methods` and `paths` as well as its hosts. It is an API key or a bundle of fields: `kind` admits `api_key` and `bundle` alone, and an OAuth account is entered in an athanor's own vault, since nothing can yet dispense an instance entry's token. Every action but `offered` is a platform admin's, from an interactive session; `offered` is any signed-in person's read of what they may use and their own use of it today.
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
 | `create` | `name`, `kind` (`api_key` \| `bundle`), `fields`, `destination` (with `methods` and `paths`), `audience` (`everyone` \| `listed`, + `members`), optional `component_policy` (`any` \| `shipped`, `any` when omitted), `person_daily`, `total_daily` | Seal the material and offer it — needs a fresh confirmation |
 | `rotate` | `entry_id`, `fields`, `expected_payload_rev` | Replace material, same field schema, CAS-guarded — needs a fresh confirmation |
 | `rebind` | `entry_id`, `destination` | Move where it may go — every profile that binds it, in every athanor, stops being ready until re-approved |
-| `set_audience` | `entry_id`, `audience`, `members` | Who it is offered to — widening (to `everyone`, or adding a person) needs a fresh confirmation; narrowing the session alone |
+| `set_audience` | `entry_id`, `audience`, `members` | Who it is offered to — widening (to `everyone`, or adding a person) needs a fresh confirmation; narrowing the session alone. `members` are person ids (`people`): one that names no one who has signed in, a typed email among them, is refused `person_unknown`, and a denied person `person_denied` |
 | `set_component_policy` | `entry_id`, `component_policy` | `shipped` admits only an unmodified shipped component; `shipped` to `any` needs a fresh confirmation, `any` to `shipped` the session alone |
 | `set_caps` | `entry_id`, `person_daily`, `total_daily` | The day's request caps, at least one named; `null` takes the platform default, `0` admits no use, an omitted cap keeps its value |
 | `revoke` | `entry_id` | Refuse its next use; every profile that binds it stops being ready |
 | `delete` | `entry_id` | Erase the material; every profile that binds it stops being ready |
 | `list` | — | Every living entry with its audience, policy and caps, never material |
 | `usage` | `entry_id`, `days` (1–35) | Requests by person and day, and the day totals |
-| `offered` | — | The active entries offered to you: provider, destination and component policy |
+| `offered` | — | The active entries offered to you: provider, destination and component policy, and `used_today`, the requests you made through each today (never another person's) |
+| `people` | — | Everyone who has signed in to this instance and stands active, each as an `id` and a `display_name`: the people an audience may list. Someone who has not signed in yet has no id here and cannot be listed |
 
 A change that widens is decided against what is stored, and written only while it still is: an audience or a policy that moved in between answers a conflict with nothing written; read it again and ask anew. Use is counted in requests at each attach, under the entry's own caps or, when unset, the `instance_entry_person_daily` and `instance_entry_total_daily` platform settings; a request past a cap is refused until the next UTC day.
 

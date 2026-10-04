@@ -36,6 +36,28 @@ defmodule PrismWeb.SettingsLive do
       layer's `webauthn:create` ceremony, listed, and revoked through
       `passkey.revoke`.
 
+    * **Instance entries** (platform admins) — the credentials this
+      instance offers to the people on it, owned by no athanor: each
+      entry's provider, destination, audience, component policy, caps,
+      status and last use, and every change through `instance_entry.*`.
+      The page never holds a value: a new entry's key, and a rotation's,
+      is typed in the system layer's credential prompt, which the card
+      raises with everything else it collected (`target: :instance`). A
+      new entry's destination is prefilled from the newest shipped
+      catalyst of its provider in the administrator's own athanor
+      (`component.list`, `component.inspect`): the need's hosts, and its
+      paths where it declares them. The audience lists people who have
+      signed in (`instance_entry.people`). A change that needs a fresh
+      confirmation (entering a key, widening an audience, a policy from
+      `shipped` to `any`) is asked through the page's system layer and
+      made again once confirmed; a narrowing needs the session alone.
+    * **Use** (platform admins) — each entry's requests by person and day
+      over the last seven days, and its day totals
+      (`instance_entry.usage`).
+
+  Both instance-entry cards read again on every
+  `Cyfr.Bus.instance_entries/0` announcement.
+
   The refusals each change can meet, the last door and the last passkey
   among them, are shown as the refusal's own sentence.
 
@@ -49,7 +71,9 @@ defmodule PrismWeb.SettingsLive do
   `door-link-github`, `door-link-google`, `door-link-oidcc`,
   `door-link-flow`, `door-link-code`, `door-link-cancel`; `passkeys`,
   `passkey` (with `data-id` and `data-state`), `passkey-register` and
-  `passkey-revoke`.
+  `passkey-revoke`. The instance-entry cards carry `instance-entries`,
+  `instance-entry` (with `data-id`), `instance-create`, `instance-error`,
+  `instance-people`, `instance-policy` and `instance-use`.
   """
 
   use PrismWeb, :live_view
@@ -57,10 +81,33 @@ defmodule PrismWeb.SettingsLive do
   require Logger
 
   alias PrismWeb.SystemLayer
-  alias PrismWeb.SystemLayer.Recovery
+  alias PrismWeb.SystemLayer.{Prompt, Recovery}
   alias Sanctum.Auth.DeviceFlow
 
   @default_link_poll_s 5
+
+  # The days of use the Use card reads for each entry, today included.
+  @instance_days 7
+  @instance_kinds ~w(api_key bundle)
+  @instance_policies ~w(any shipped)
+
+  # The new-entry form as typed. It never holds a value: the key is typed
+  # in the system layer's prompt alone.
+  @instance_draft %{
+    "name" => "",
+    "provider_hint" => "",
+    "kind" => "api_key",
+    "destination_hosts" => "",
+    "destination_scheme" => "https",
+    "destination_port" => "",
+    "destination_methods" => "",
+    "destination_paths" => "",
+    "component_policy" => "any",
+    "audience" => "everyone",
+    "members" => [],
+    "person_daily" => "",
+    "total_daily" => ""
+  }
 
   @impl true
   def mount(_params, session, socket) do
@@ -72,6 +119,7 @@ defmodule PrismWeb.SettingsLive do
     if connected?(socket) and socket.assigns.context.platform_admin do
       Cyfr.Bus.subscribe_global(Cyfr.Bus.platform_notify())
       Cyfr.Bus.subscribe_global(Cyfr.Bus.settings_changed())
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.instance_entries())
     end
 
     socket =
@@ -88,6 +136,12 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:settings_revision, nil)
       |> assign(:settings_members, [])
       |> assign(:settings_ttl_ms, nil)
+      |> assign(:instance_entries, [])
+      |> assign(:instance_usage, %{})
+      |> assign(:instance_people, [])
+      |> assign(:instance_prefill, %{})
+      |> assign(:instance_draft, @instance_draft)
+      |> assign(:instance_error, nil)
       |> assign(:mode, Prism.Labels.default(socket.assigns.context))
       |> assign(:loading, true)
       |> assign(:identity, nil)
@@ -252,6 +306,96 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
+  # ---- instance entries ------------------------------------------------------
+
+  def handle_event("instance_draft", params, socket),
+    do: {:noreply, assign(socket, instance_draft: draft(socket, params), instance_error: nil)}
+
+  # Everything an entry is but its key, held to the card's rules; the key
+  # is then asked in the system layer, which makes the entry.
+  def handle_event("instance_create", params, socket) do
+    draft = draft(socket, params)
+    socket = assign(socket, :instance_draft, draft)
+
+    case instance_create_args(draft) do
+      {:ok, args} ->
+        {:noreply,
+         socket |> assign(:instance_error, nil) |> ask_value(:create, args["name"], args)}
+
+      {:error, sentence} ->
+        {:noreply, assign(socket, :instance_error, sentence)}
+    end
+  end
+
+  # The prompt takes one value, so only an entry of one field rotates here.
+  def handle_event("instance_rotate", %{"id" => id}, socket) do
+    case Enum.find(socket.assigns.instance_entries, &(&1.id == id)) do
+      %{field_names: [field], payload_rev: rev, name: name} ->
+        args = %{"entry_id" => id, "expected_payload_rev" => rev}
+        {:noreply, ask_value(socket, :rotate, name, args, field)}
+
+      %{} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Instance entries: this entry holds several fields, so it rotates through " <>
+             "instance_entry.rotate, not here."
+         )}
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("instance_rebind", %{"entry_id" => id} = params, socket) do
+    args = %{"entry_id" => id, "destination" => SystemLayer.destination_params(params)}
+
+    instance_call(
+      socket,
+      "instance_entry/rebind",
+      args,
+      "Destination saved: every consent that binds the entry asks again."
+    )
+  end
+
+  def handle_event("instance_audience", %{"entry_id" => id} = params, socket) do
+    audience = params["audience"]
+    members = if audience == "listed", do: members(params), else: []
+    set_audience(socket, id, %{"entry_id" => id, "audience" => audience, "members" => members})
+  end
+
+  # A policy that is neither word is refused here, and the operation
+  # refuses it again whoever sends it.
+  def handle_event("instance_policy", %{"entry_id" => id} = params, socket) do
+    case policy(params["component_policy"]) do
+      {:ok, policy} ->
+        set_policy(socket, id, %{"entry_id" => id, "component_policy" => policy})
+
+      {:error, sentence} ->
+        {:noreply, put_flash(socket, :error, "Instance entries: " <> sentence)}
+    end
+  end
+
+  # A blank cap takes the platform default and `0` admits no use: each is
+  # sent as it means, `null` and `0`.
+  def handle_event("instance_caps", %{"entry_id" => id} = params, socket) do
+    with {:ok, person} <- cap(params["person_daily"]),
+         {:ok, total} <- cap(params["total_daily"]) do
+      args = %{"entry_id" => id, "person_daily" => person, "total_daily" => total}
+      instance_call(socket, "instance_entry/set_caps", args, "Caps saved.")
+    else
+      {:error, sentence} ->
+        {:noreply, put_flash(socket, :error, "Instance entries: " <> sentence)}
+    end
+  end
+
+  def handle_event("instance_revoke", %{"id" => id}, socket),
+    do: instance_call(socket, "instance_entry/revoke", %{"entry_id" => id}, "Entry revoked.")
+
+  def handle_event("instance_delete", %{"id" => id}, socket),
+    do: instance_call(socket, "instance_entry/delete", %{"entry_id" => id}, "Entry deleted.")
+
   @impl true
   def handle_info(:load, socket) do
     socket =
@@ -260,6 +404,9 @@ defmodule PrismWeb.SettingsLive do
       |> load_log_stats()
       |> load_door()
       |> load_settings()
+      |> load_instance()
+      |> load_instance_people()
+      |> load_instance_prefill()
       |> load_prefs()
       |> load_identity()
       |> load_passkeys()
@@ -293,10 +440,23 @@ defmodule PrismWeb.SettingsLive do
       {:repeat, {:passkey_revoke, id}, _tool, _args, socket} ->
         revoke_passkey(socket, id)
 
+      {:repeat, {:instance_audience, id}, _tool, args, socket} ->
+        set_audience(socket, id, args)
+
+      {:repeat, {:instance_policy, id}, _tool, args, socket} ->
+        set_policy(socket, id, args)
+
       {:ok, socket} ->
-        if recovery_prompt?(prompt_id),
-          do: {:noreply, socket |> recovery_ended(report) |> load_identity()},
-          else: {:noreply, socket}
+        cond do
+          recovery_prompt?(prompt_id) ->
+            {:noreply, socket |> recovery_ended(report) |> load_identity()}
+
+          instance_prompt?(prompt_id) ->
+            {:noreply, instance_prompt_ended(socket, report)}
+
+          true ->
+            {:noreply, socket}
+        end
     end
   end
 
@@ -333,6 +493,10 @@ defmodule PrismWeb.SettingsLive do
   end
 
   def handle_info(%Cyfr.Bus.SettingsChanged{kind: :observed}, socket), do: {:noreply, socket}
+
+  # The announcement carries an entry id and a kind; the cards read the
+  # entries again through the operations.
+  def handle_info(%Cyfr.Bus.InstanceEntryChanged{}, socket), do: {:noreply, load_instance(socket)}
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
@@ -425,6 +589,372 @@ defmodule PrismWeb.SettingsLive do
   end
 
   defp load_settings(socket), do: assign(socket, :platform_settings, [])
+
+  # ---- instance entries ------------------------------------------------------
+
+  # The entries and each one's use, the operator's like the door; a socket
+  # whose capability went drops what it read.
+  defp load_instance(%{assigns: %{context: %{platform_admin: true}}} = socket) do
+    case call_tool(socket, "instance_entry/list", %{}) do
+      {:ok, %{entries: entries}} ->
+        usage = Map.new(entries, &{&1.id, entry_usage(socket, &1.id)})
+        assign(socket, instance_entries: entries, instance_usage: usage)
+
+      {:error, reason} ->
+        socket
+        |> assign(instance_entries: [], instance_usage: %{})
+        |> put_flash(:error, "Instance entries: #{error_message(reason)}")
+    end
+  end
+
+  defp load_instance(socket), do: assign(socket, instance_entries: [], instance_usage: %{})
+
+  defp entry_usage(socket, id) do
+    case call_tool(socket, "instance_entry/usage", %{"entry_id" => id, "days" => @instance_days}) do
+      {:ok, %{people: people, totals: totals}} -> %{people: people, totals: totals}
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp load_instance_people(%{assigns: %{context: %{platform_admin: true}}} = socket) do
+    case call_tool(socket, "instance_entry/people", %{}) do
+      {:ok, %{people: people}} -> assign(socket, :instance_people, people)
+      {:error, _reason} -> assign(socket, :instance_people, [])
+    end
+  end
+
+  defp load_instance_people(socket), do: assign(socket, :instance_people, [])
+
+  # What a new entry of a provider is prefilled with: the need of that
+  # provider in the newest shipped catalyst that declares one, among the
+  # catalysts of the administrator's own athanor, its hosts and, where it
+  # declares them, its paths. A catalyst the athanor wrote or pulled is
+  # never a source: only what the install media ships.
+  defp load_instance_prefill(%{assigns: %{context: %{platform_admin: true}}} = socket) do
+    shipped =
+      case call_tool(socket, "component/list", %{"type" => "catalyst"}) do
+        {:ok, %{components: rows}} -> Enum.filter(rows, &(f(&1, :provenance) == "bundled"))
+        _unread -> []
+      end
+
+    prefill =
+      shipped
+      |> Prima.Semver.sort_desc_by(&to_string(f(&1, :version)))
+      |> Enum.reduce(%{}, fn row, acc ->
+        row |> shipped_needs(socket) |> Enum.reduce(acc, &put_prefill/2)
+      end)
+
+    assign(socket, :instance_prefill, prefill)
+  end
+
+  defp load_instance_prefill(socket), do: assign(socket, :instance_prefill, %{})
+
+  defp shipped_needs(row, socket) do
+    with ref when is_binary(ref) <- f(row, :component_ref),
+         {:ok, inspected} <- call_tool(socket, "component/inspect", %{"reference" => ref}),
+         needs when is_list(needs) <-
+           inspected
+           |> f(:manifest)
+           |> Prima.Manifest.decode()
+           |> Prima.Manifest.Needs.from_manifest() do
+      Enum.filter(needs, &(&1.kind in @instance_kinds))
+    else
+      _unread -> []
+    end
+  end
+
+  # The newest catalyst's need of a provider stands; an older one does not
+  # replace it.
+  defp put_prefill(need, acc),
+    do: Map.put_new(acc, need.qualifier, %{hosts: need.hosts, paths: need.paths})
+
+  # The create form as typed: choosing a provider whose shipped need
+  # declares a destination fills in its hosts and, where declared, its
+  # paths, and leaves everything else as the administrator typed it.
+  defp draft(socket, params) do
+    previous = socket.assigns.instance_draft
+
+    draft =
+      @instance_draft
+      |> Map.merge(Map.take(params, Map.keys(@instance_draft)))
+      |> Map.put("members", members(params))
+
+    provider = draft["provider_hint"]
+    chosen? = provider != previous["provider_hint"]
+
+    case socket.assigns.instance_prefill do
+      %{^provider => prefill} when chosen? ->
+        draft
+        |> put_prefilled("destination_hosts", prefill.hosts)
+        |> put_prefilled("destination_paths", prefill.paths)
+
+      _no_prefill ->
+        draft
+    end
+  end
+
+  defp put_prefilled(draft, _key, []), do: draft
+  defp put_prefilled(draft, key, words), do: Map.put(draft, key, Enum.join(words, " "))
+
+  defp members(params) do
+    case Map.get(params, "members") do
+      list when is_list(list) -> Enum.filter(list, &(is_binary(&1) and &1 != ""))
+      _none -> []
+    end
+  end
+
+  # The card's rules, before the key is asked: a name and a provider, a
+  # destination naming its hosts, methods and paths, one of the two kinds
+  # and policies, an audience, and caps that are whole numbers or blank.
+  defp instance_create_args(draft) do
+    destination = SystemLayer.destination_params(draft)
+    missing = for key <- ~w(hosts methods paths), Map.get(destination, key, []) == [], do: key
+    name = String.trim(to_string(draft["name"]))
+    provider = String.trim(to_string(draft["provider_hint"]))
+
+    with :ok <- named(name, "Name the entry."),
+         :ok <- named(provider, "Name the provider it is for, for example openai.com."),
+         :ok <- destination_named(missing),
+         {:ok, kind} <- kind(draft["kind"]),
+         {:ok, policy} <- policy(draft["component_policy"]),
+         {:ok, audience, members} <- audience(draft),
+         {:ok, person} <- cap(draft["person_daily"]),
+         {:ok, total} <- cap(draft["total_daily"]) do
+      {:ok,
+       %{
+         "name" => name,
+         "kind" => kind,
+         "provider_hint" => provider,
+         "destination" => destination,
+         "component_policy" => policy,
+         "audience" => audience,
+         "members" => members
+       }
+       |> put_cap("person_daily", person)
+       |> put_cap("total_daily", total)}
+    end
+  end
+
+  defp named("", sentence), do: {:error, sentence}
+  defp named(_text, _sentence), do: :ok
+
+  defp destination_named([]), do: :ok
+
+  defp destination_named(missing),
+    do:
+      {:error,
+       "The destination names no #{Enum.join(missing, " and no ")}: an instance entry names " <>
+         "where its key may go, its hosts, methods and paths."}
+
+  defp kind(kind) when kind in @instance_kinds, do: {:ok, kind}
+
+  defp kind(_kind),
+    do:
+      {:error,
+       "An instance entry is an API key or a bundle of fields: one of kind oauth is refused " <>
+         "until this instance can dispense an OAuth token itself."}
+
+  defp policy(policy) when policy in @instance_policies, do: {:ok, policy}
+
+  defp policy(_policy),
+    do: {:error, "Choose Any consented component or Unmodified shipped components."}
+
+  defp audience(%{"audience" => "everyone"}), do: {:ok, "everyone", []}
+  defp audience(%{"audience" => "listed", "members" => members}), do: {:ok, "listed", members}
+  defp audience(_draft), do: {:error, "Offer it to everyone, or to the people listed."}
+
+  # A blank cap is `nil`, the platform default; a whole number is the
+  # entry's own, `0` admitting no use.
+  defp cap(text) when is_binary(text) do
+    case String.trim(text) do
+      "" ->
+        {:ok, nil}
+
+      trimmed ->
+        case Integer.parse(trimmed) do
+          {number, ""} when number >= 0 -> {:ok, number}
+          _not_a_count -> {:error, cap_refusal()}
+        end
+    end
+  end
+
+  defp cap(nil), do: {:ok, nil}
+  defp cap(_other), do: {:error, cap_refusal()}
+
+  defp cap_refusal,
+    do:
+      "A cap is a whole number of requests a day: 0 admits no use, and a blank takes the " <>
+        "platform default."
+
+  defp put_cap(args, _key, nil), do: args
+  defp put_cap(args, key, cap), do: Map.put(args, key, cap)
+
+  # The system layer's credential prompt for an instance entry's key: the
+  # card's arguments for the operation, the value typed there alone.
+  defp ask_value(socket, operation, name, arguments, field \\ Prompt.default_field()) do
+    SystemLayer.show(SystemLayer.layer_id(), %{
+      id: "instance-#{operation}-#{System.unique_integer([:positive])}",
+      kind: :credential_entry,
+      action: :credential_entry,
+      subject: %{
+        name: name,
+        field: field,
+        target: :instance,
+        operation: operation,
+        arguments: arguments
+      }
+    })
+
+    socket
+  end
+
+  defp instance_prompt?("instance-" <> _rest), do: true
+  defp instance_prompt?(_prompt_id), do: false
+
+  # A key the prompt saved: the entries read again, and a new entry's form
+  # emptied. A prompt dismissed or refused leaves the card as it was.
+  defp instance_prompt_ended(socket, {:system_layer, "instance-create-" <> _, :confirmed}) do
+    socket
+    |> assign(:instance_draft, @instance_draft)
+    |> load_instance()
+    |> put_flash(:info, "Instance entry created.")
+  end
+
+  defp instance_prompt_ended(socket, {:system_layer, "instance-rotate-" <> _, :confirmed}),
+    do: socket |> load_instance() |> put_flash(:info, "Key rotated.")
+
+  defp instance_prompt_ended(socket, _report), do: socket
+
+  defp instance_call(socket, tool, args, ok_message) do
+    case call_tool(socket, tool, args) do
+      {:ok, _result} ->
+        {:noreply, socket |> load_instance() |> put_flash(:info, ok_message)}
+
+      {:error, reason} ->
+        {:noreply, instance_refused(socket, reason)}
+    end
+  end
+
+  defp instance_refused(socket, reason),
+    do:
+      socket
+      |> load_instance()
+      |> put_flash(:error, "Instance entries: #{error_message(reason)}")
+
+  # A widening asks for a fresh confirmation through the page's layer and
+  # is made again once confirmed; a narrowing is saved with the session.
+  defp set_audience(socket, id, args) do
+    case SystemLayer.call(socket, {:instance_audience, id}, "instance_entry/set_audience", args) do
+      {:ok, %{changed: changed}, socket} ->
+        message = if changed, do: "Audience saved.", else: "The audience is already that."
+        {:noreply, socket |> load_instance() |> put_flash(:info, message)}
+
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
+        {:noreply, instance_refused(socket, reason)}
+    end
+  end
+
+  defp set_policy(socket, id, args) do
+    tool = "instance_entry/set_component_policy"
+
+    case SystemLayer.call(socket, {:instance_policy, id}, tool, args) do
+      {:ok, %{changed: changed}, socket} ->
+        message = if changed, do: "Component policy saved.", else: "The policy is already that."
+        {:noreply, socket |> load_instance() |> put_flash(:info, message)}
+
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
+        {:noreply, instance_refused(socket, reason)}
+    end
+  end
+
+  # What a blank cap becomes: the platform setting's value, as the
+  # platform settings card lists it.
+  defp platform_cap(settings, key) do
+    case Enum.find(settings, &(&1.key == key)) do
+      %{value: value} when is_integer(value) -> value
+      _unread -> nil
+    end
+  end
+
+  defp cap_text(nil, default) when is_integer(default),
+    do: "the platform default, #{default} a day"
+
+  defp cap_text(nil, _default), do: "the platform default"
+  defp cap_text(0, _default), do: "0: no use is admitted"
+  defp cap_text(cap, _default), do: "#{cap} a day"
+
+  # What the cap as typed admits: a blank, the platform default's value;
+  # 0, no use at all.
+  defp cap_hint(typed, default) do
+    case String.trim(to_string(typed)) do
+      "" -> "Blank: " <> cap_text(nil, default) <> ". 0 admits no use."
+      "0" -> "0: no use is admitted."
+      _number -> "A blank takes " <> cap_text(nil, default) <> "; 0 admits no use."
+    end
+  end
+
+  defp input_cap(nil), do: ""
+  defp input_cap(cap), do: Integer.to_string(cap)
+
+  defp policy_label("any"), do: "Any consented component"
+  defp policy_label("shipped"), do: "Unmodified shipped components"
+  defp policy_label(other), do: to_string(other)
+
+  defp audience_label(%{audience: "everyone"}, _names), do: "everyone on this instance"
+  defp audience_label(%{members: []}, _names), do: "nobody listed"
+
+  defp audience_label(%{members: members}, names),
+    do: "listed: " <> Enum.map_join(members, ", ", &Map.get(names, &1, &1))
+
+  defp audience_label(_entry, _names), do: "-"
+
+  defp people_names(people), do: Map.new(people, &{&1.id, &1.display_name})
+
+  # Where an entry's key may go, in one line.
+  defp destination_text(%{} = destination) do
+    hosts = Enum.join(Map.get(destination, "hosts", []), ", ")
+
+    [
+      "#{Map.get(destination, "scheme", "https")}://#{hosts}",
+      if(port = Map.get(destination, "port"), do: ":#{port}"),
+      if(methods = Map.get(destination, "methods"), do: " · #{Enum.join(methods, " ")}"),
+      if(paths = Map.get(destination, "paths"), do: " · #{Enum.join(paths, " ")}")
+    ]
+    |> Enum.join()
+  end
+
+  defp destination_text(_none), do: "no destination"
+
+  defp destination_words(%{} = destination, key),
+    do: Enum.join(Map.get(destination, key, []), " ")
+
+  defp destination_words(_none, _key), do: ""
+
+  defp last_use(nil), do: "never"
+  defp last_use(%DateTime{} = at), do: Calendar.strftime(at, "%Y-%m-%d %H:%M UTC")
+  defp last_use(other), do: to_string(other)
+
+  # The Use card's rows for one entry: each day of the window with use,
+  # newest first, with the day's total and each person's count.
+  defp use_rows(nil, _names), do: []
+
+  defp use_rows(%{people: people, totals: totals}, names) do
+    totals
+    |> Enum.sort_by(& &1.day, {:desc, Date})
+    |> Enum.map(fn %{day: day, count: total} ->
+      persons =
+        for %{day: ^day, user_id: user_id, count: count} <- people,
+            do: "#{Map.get(names, user_id, user_id)} #{count}"
+
+      %{day: Date.to_iso8601(day), total: total, people: Enum.join(persons, ", ")}
+    end)
+  end
 
   defp setting_text(nil), do: "none"
   defp setting_text(value) when is_binary(value), do: value
@@ -770,8 +1300,8 @@ defmodule PrismWeb.SettingsLive do
         />
 
         <.passkeys_card passkeys={@passkeys} error={@passkeys_error} />
-        
-    <!-- System Status -->
+
+        <%!-- System Status --%>
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">System Status</h3>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -799,8 +1329,8 @@ defmodule PrismWeb.SettingsLive do
             </div>
           </div>
         </.card>
-        
-    <!-- Services -->
+
+        <%!-- Services --%>
         <.card :if={@services != %{}}>
           <h3 class="text-sm font-medium text-gray-400 mb-4">Services</h3>
           <div class="flex flex-wrap gap-x-4 gap-y-2">
@@ -812,8 +1342,8 @@ defmodule PrismWeb.SettingsLive do
             <% end %>
           </div>
         </.card>
-        
-    <!-- Request Metrics -->
+
+        <%!-- Request Metrics --%>
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">Request Metrics (1h)</h3>
           <div class="grid grid-cols-3 gap-4">
@@ -833,8 +1363,8 @@ defmodule PrismWeb.SettingsLive do
             </div>
           </div>
         </.card>
-        
-    <!-- The door: who may sign in (platform admins) -->
+
+        <%!-- The door: who may sign in (platform admins) --%>
         <.card :if={@context.platform_admin}>
           <h3 class="text-sm font-medium text-gray-400 mb-1">Server allowlist — the door</h3>
           <p class="text-xs text-gray-500 mb-4">
@@ -916,8 +1446,8 @@ defmodule PrismWeb.SettingsLive do
             </div>
           </form>
         </.card>
-        
-    <!-- The platform settings (platform admins) -->
+
+        <%!-- The platform settings (platform admins) --%>
         <.card :if={@context.platform_admin and @platform_settings != []}>
           <h3 class="text-sm font-medium text-gray-400 mb-1">Platform settings</h3>
           <p class="text-xs text-gray-500 mb-1">
@@ -975,8 +1505,27 @@ defmodule PrismWeb.SettingsLive do
             </:col>
           </.table>
         </.card>
-        
-    <!-- Preferences -->
+
+        <%!-- Instance entries (platform admins) --%>
+        <.instance_entries_card
+          :if={@context.platform_admin}
+          entries={@instance_entries}
+          people={@instance_people}
+          prefill={@instance_prefill}
+          draft={@instance_draft}
+          error={@instance_error}
+          person_default={platform_cap(@platform_settings, "instance_entry_person_daily")}
+          total_default={platform_cap(@platform_settings, "instance_entry_total_daily")}
+        />
+
+        <.instance_use_card
+          :if={@context.platform_admin}
+          entries={@instance_entries}
+          usage={@instance_usage}
+          people={@instance_people}
+        />
+
+        <%!-- Preferences --%>
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">Preferences</h3>
           <div class="flex items-center gap-3">
@@ -991,8 +1540,8 @@ defmodule PrismWeb.SettingsLive do
             </.button>
           </div>
         </.card>
-        
-    <!-- User Profile -->
+
+        <%!-- User Profile --%>
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">User Profile</h3>
           <dl class="grid grid-cols-2 gap-4">
@@ -1304,4 +1853,428 @@ defmodule PrismWeb.SettingsLive do
   defp passkey_state(%{state: "active", registered_at: at}), do: "registered #{at}"
   defp passkey_state(%{state: "pending"}), do: "awaiting this home's administrator"
   defp passkey_state(%{state: state}), do: state
+
+  attr :entries, :list, required: true
+  attr :people, :list, required: true
+  attr :prefill, :map, required: true
+  attr :draft, :map, required: true
+  attr :error, :string, default: nil
+  attr :person_default, :integer, default: nil
+  attr :total_default, :integer, default: nil
+
+  # The credentials this instance offers: each entry and its controls, and
+  # the form a new one starts from. No value is ever on this card.
+  defp instance_entries_card(assigns) do
+    assigns = assign(assigns, :names, people_names(assigns.people))
+
+    ~H"""
+    <.card>
+      <section data-test="instance-entries" class="space-y-4">
+        <h3 class="text-sm font-medium text-gray-400">Instance entries</h3>
+        <p class="text-xs text-gray-500">
+          Credentials this instance offers to the people on it, owned by no athanor. Instance
+          entries are API keys or bundles of fields: creating one of kind oauth is refused until
+          this instance can dispense an OAuth token itself. An instance entry is attach-only: its
+          key is never handed to a component; CYFR attaches it to requests bound for its
+          destination. Its key is typed in a prompt and never shown again.
+        </p>
+
+        <p :if={@entries == []} class="text-sm text-gray-400">No instance entry yet.</p>
+
+        <div
+          :for={entry <- @entries}
+          class="space-y-2 rounded-md border border-gray-800 p-3 text-sm"
+          data-test="instance-entry"
+          data-id={entry.id}
+        >
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <span>
+              <span class="font-medium">{entry.name}</span>
+              <span class="ml-2 font-mono text-xs text-gray-500">{entry.id}</span>
+            </span>
+            <span class="text-xs" data-test="instance-status">{entry.status}</span>
+          </div>
+          <dl class="grid grid-cols-3 gap-1 text-xs">
+            <dt class="text-gray-500">Provider</dt>
+            <dd class="col-span-2">{entry.provider_hint} · {entry.kind}</dd>
+            <dt class="text-gray-500">Goes to</dt>
+            <dd class="col-span-2 font-mono" data-test="instance-destination">
+              {destination_text(entry.destination)}
+            </dd>
+            <dt class="text-gray-500">Offered to</dt>
+            <dd class="col-span-2" data-test="instance-audience">
+              {audience_label(entry, @names)}
+            </dd>
+            <dt class="text-gray-500">Components</dt>
+            <dd class="col-span-2" data-test="instance-policy-shown">
+              {policy_label(entry.component_policy)}
+            </dd>
+            <dt class="text-gray-500">Caps</dt>
+            <dd class="col-span-2" data-test="instance-caps">
+              each person {cap_text(entry.person_daily, @person_default)}; everyone together {cap_text(
+                entry.total_daily,
+                @total_default
+              )}
+            </dd>
+            <dt class="text-gray-500">Last use</dt>
+            <dd class="col-span-2">{last_use(entry.last_used_at)}</dd>
+          </dl>
+
+          <div class="flex flex-wrap gap-2">
+            <.button
+              :if={length(entry.field_names) == 1}
+              variant="ghost"
+              phx-click="instance_rotate"
+              phx-value-id={entry.id}
+            >
+              Rotate the key
+            </.button>
+            <.button
+              variant="ghost"
+              phx-click="instance_revoke"
+              phx-value-id={entry.id}
+              data-confirm="Revoke this instance entry? Every consent that binds it, in every athanor, stops until granted again."
+            >
+              Revoke
+            </.button>
+            <.button
+              variant="ghost"
+              phx-click="instance_delete"
+              phx-value-id={entry.id}
+              data-confirm="Delete this instance entry and erase its key?"
+            >
+              Delete
+            </.button>
+          </div>
+
+          <details class="space-y-3">
+            <summary class="cursor-pointer text-xs text-gray-400">Change</summary>
+
+            <form
+              id={"instance-policy-" <> entry.id}
+              phx-submit="instance_policy"
+              class="space-y-1"
+              data-test="instance-policy"
+            >
+              <input type="hidden" name="entry_id" value={entry.id} />
+              <.policy_control selected={entry.component_policy} />
+              <.button type="submit" variant="ghost">Save the policy</.button>
+            </form>
+
+            <form
+              id={"instance-audience-" <> entry.id}
+              phx-submit="instance_audience"
+              class="space-y-1"
+            >
+              <input type="hidden" name="entry_id" value={entry.id} />
+              <.audience_control
+                audience={entry.audience}
+                members={entry.members}
+                people={@people}
+                prefix={"audience-" <> entry.id}
+              />
+              <.button type="submit" variant="ghost">Save the audience</.button>
+            </form>
+
+            <form id={"instance-caps-" <> entry.id} phx-submit="instance_caps" class="space-y-1">
+              <input type="hidden" name="entry_id" value={entry.id} />
+              <.caps_control
+                person={input_cap(entry.person_daily)}
+                total={input_cap(entry.total_daily)}
+                person_default={@person_default}
+                total_default={@total_default}
+              />
+              <.button type="submit" variant="ghost">Save the caps</.button>
+            </form>
+
+            <form
+              id={"instance-rebind-" <> entry.id}
+              phx-submit="instance_rebind"
+              class="space-y-1"
+            >
+              <input type="hidden" name="entry_id" value={entry.id} />
+              <.destination_control
+                hosts={destination_words(entry.destination, "hosts")}
+                scheme={entry.destination && entry.destination["scheme"]}
+                port={entry.destination && entry.destination["port"]}
+                methods={destination_words(entry.destination, "methods")}
+                paths={destination_words(entry.destination, "paths")}
+              />
+              <p class="text-xs text-gray-500">
+                Moving the destination asks every consent that binds the entry again.
+              </p>
+              <.button type="submit" variant="ghost">Save the destination</.button>
+            </form>
+          </details>
+        </div>
+
+        <form
+          id="instance-create"
+          phx-change="instance_draft"
+          phx-submit="instance_create"
+          class="space-y-3 border-t border-gray-800 pt-4"
+          data-test="instance-create"
+        >
+          <h4 class="text-xs uppercase text-gray-500">A new instance entry</h4>
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1" for="instance-name">Name</label>
+              <.input id="instance-name" name="name" value={@draft["name"]} required />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1" for="instance-provider">
+                Provider
+              </label>
+              <input
+                id="instance-provider"
+                name="provider_hint"
+                value={@draft["provider_hint"]}
+                list="instance-providers"
+                placeholder="openai.com"
+                required
+                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white"
+              />
+              <datalist id="instance-providers">
+                <option :for={provider <- Enum.sort(Map.keys(@prefill))} value={provider} />
+              </datalist>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1" for="instance-kind">Kind</label>
+              <select
+                id="instance-kind"
+                name="kind"
+                class="w-full rounded-md border-gray-600 bg-transparent text-sm"
+              >
+                <option value="api_key" selected={@draft["kind"] == "api_key"}>API key</option>
+                <option value="bundle" selected={@draft["kind"] == "bundle"}>
+                  Bundle of fields
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <.destination_control
+            hosts={@draft["destination_hosts"]}
+            scheme={@draft["destination_scheme"]}
+            port={@draft["destination_port"]}
+            methods={@draft["destination_methods"]}
+            paths={@draft["destination_paths"]}
+          />
+          <p class="text-xs text-gray-500">
+            The hosts, and the paths where they are declared, are filled in from the newest
+            shipped catalyst of the provider. An instance entry names its hosts, methods and
+            paths.
+          </p>
+
+          <.policy_control selected={@draft["component_policy"]} />
+
+          <.audience_control
+            audience={@draft["audience"]}
+            members={@draft["members"]}
+            people={@people}
+            prefix="create"
+          />
+
+          <.caps_control
+            person={@draft["person_daily"]}
+            total={@draft["total_daily"]}
+            person_default={@person_default}
+            total_default={@total_default}
+          />
+
+          <p :if={@error} role="alert" class="text-sm text-red-400" data-test="instance-error">
+            {@error}
+          </p>
+
+          <.button type="submit">Enter the key</.button>
+        </form>
+      </section>
+    </.card>
+    """
+  end
+
+  attr :selected, :string, default: "any"
+
+  # One control, two options: no component is picked here.
+  defp policy_control(assigns) do
+    ~H"""
+    <fieldset class="space-y-1">
+      <legend class="text-xs uppercase text-gray-500">Which components may use it</legend>
+      <label class="flex items-center gap-2 text-sm">
+        <input type="radio" name="component_policy" value="any" checked={@selected == "any"} />
+        Any consented component
+      </label>
+      <label class="flex items-center gap-2 text-sm">
+        <input
+          type="radio"
+          name="component_policy"
+          value="shipped"
+          checked={@selected == "shipped"}
+        /> Unmodified shipped components
+      </label>
+      <p class="text-xs text-gray-500">
+        Any component a person consents to can use this account within these destination methods and paths, including operations shipped components do not use.
+      </p>
+    </fieldset>
+    """
+  end
+
+  attr :audience, :string, default: "everyone"
+  attr :members, :list, default: []
+  attr :people, :list, required: true
+  attr :prefix, :string, required: true
+
+  # Everyone, or the people listed: a person is picked from those who have
+  # signed in here, never typed.
+  defp audience_control(assigns) do
+    assigns = assign(assigns, :members, assigns.members || [])
+
+    ~H"""
+    <fieldset class="space-y-1" data-test="instance-people">
+      <legend class="text-xs uppercase text-gray-500">Offered to</legend>
+      <label class="flex items-center gap-2 text-sm">
+        <input type="radio" name="audience" value="everyone" checked={@audience == "everyone"} />
+        Everyone on this instance
+      </label>
+      <label class="flex items-center gap-2 text-sm">
+        <input type="radio" name="audience" value="listed" checked={@audience == "listed"} />
+        The people listed
+      </label>
+      <div class="flex flex-wrap gap-x-4 gap-y-1 pl-6">
+        <label :for={person <- @people} class="flex items-center gap-1 text-sm">
+          <input
+            type="checkbox"
+            name="members[]"
+            value={person.id}
+            checked={person.id in @members}
+            id={"#{@prefix}-member-#{person.id}"}
+          />
+          {person.display_name}
+        </label>
+      </div>
+      <p class="text-xs text-gray-500">
+        A person who has not signed in yet cannot be added.
+      </p>
+    </fieldset>
+    """
+  end
+
+  attr :person, :string, default: ""
+  attr :total, :string, default: ""
+  attr :person_default, :integer, default: nil
+  attr :total_default, :integer, default: nil
+
+  # Two caps of requests a day. A blank takes the platform default, shown
+  # with its value; 0 admits no use.
+  defp caps_control(assigns) do
+    ~H"""
+    <fieldset class="grid grid-cols-2 gap-2">
+      <legend class="text-xs uppercase text-gray-500">Requests a day</legend>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Each person</label>
+        <.input name="person_daily" value={@person} />
+        <p class="text-xs text-gray-500" data-test="cap-person">
+          {cap_hint(@person, @person_default)}
+        </p>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Everyone together</label>
+        <.input name="total_daily" value={@total} />
+        <p class="text-xs text-gray-500" data-test="cap-total">
+          {cap_hint(@total, @total_default)}
+        </p>
+      </div>
+    </fieldset>
+    """
+  end
+
+  attr :hosts, :string, default: ""
+  attr :scheme, :string, default: "https"
+  attr :port, :any, default: nil
+  attr :methods, :string, default: ""
+  attr :paths, :string, default: ""
+
+  defp destination_control(assigns) do
+    ~H"""
+    <fieldset class="grid grid-cols-2 gap-2">
+      <legend class="text-xs uppercase text-gray-500">Where its key may go</legend>
+      <div class="col-span-2">
+        <label class="block text-xs text-gray-500 mb-1">Hosts</label>
+        <.input name="destination_hosts" value={@hosts} placeholder="api.example.com" />
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Scheme</label>
+        <select
+          name="destination_scheme"
+          class="w-full rounded-md border-gray-600 bg-transparent text-sm"
+        >
+          <option value="https" selected={@scheme != "http"}>https</option>
+          <option value="http" selected={@scheme == "http"}>http</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Port (optional)</label>
+        <.input name="destination_port" value={@port && to_string(@port)} placeholder="443" />
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Methods</label>
+        <.input name="destination_methods" value={@methods} placeholder="GET POST" />
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Path prefixes</label>
+        <.input name="destination_paths" value={@paths} placeholder="/v1/" />
+      </div>
+    </fieldset>
+    """
+  end
+
+  attr :entries, :list, required: true
+  attr :usage, :map, required: true
+  attr :people, :list, required: true
+
+  # Each entry's requests over the last seven days: each day's total and
+  # each person's count.
+  defp instance_use_card(assigns) do
+    assigns = assign(assigns, :names, people_names(assigns.people))
+
+    ~H"""
+    <.card>
+      <section data-test="instance-use" class="space-y-3">
+        <h3 class="text-sm font-medium text-gray-400">Use</h3>
+        <p class="text-xs text-gray-500">
+          Requests through each instance entry over the last seven days, by person and in all,
+          counted by UTC day.
+        </p>
+        <p :if={@entries == []} class="text-sm text-gray-400">No instance entry yet.</p>
+        <div
+          :for={entry <- @entries}
+          class="text-sm"
+          data-test="instance-use-entry"
+          data-id={entry.id}
+        >
+          <h4 class="font-medium">{entry.name}</h4>
+          <p :if={use_rows(@usage[entry.id], @names) == []} class="text-xs text-gray-400">
+            No use in these days.
+          </p>
+          <table :if={use_rows(@usage[entry.id], @names) != []} class="w-full text-xs">
+            <thead>
+              <tr class="text-left text-gray-500">
+                <th>Day</th>
+                <th>In all</th>
+                <th>By person</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={row <- use_rows(@usage[entry.id], @names)} data-day={row.day}>
+                <td class="font-mono">{row.day}</td>
+                <td>{row.total}</td>
+                <td>{row.people}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </.card>
+    """
+  end
 end

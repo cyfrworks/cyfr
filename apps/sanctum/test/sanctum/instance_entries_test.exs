@@ -529,7 +529,8 @@ defmodule Sanctum.InstanceEntriesTest do
               }),
               InstanceEntries.set_caps(member, %{entry_id: entry.id, person_daily: 1}),
               InstanceEntries.revoke(member, entry.id),
-              InstanceEntries.delete(member, entry.id)
+              InstanceEntries.delete(member, entry.id),
+              InstanceEntries.people(member)
             ] do
           assert refused == {:error, :platform_admin_required}
         end
@@ -949,6 +950,37 @@ defmodule Sanctum.InstanceEntriesTest do
       refute_received {:instance_entry, :rebound, _}
     end
 
+    test "people answers whoever has signed in and stands active, as an id and a display " <>
+           "name alone",
+         %{admin: admin} do
+      alice = person("alice")
+      bob = person("bob")
+      carol = person("carol")
+      deny!(carol.user_id)
+
+      assert {:ok, people} = InstanceEntries.people(admin)
+
+      # Everyone active with a person row here, the administrator included,
+      # each named as other people are shown them; a denied person, whom no
+      # audience can list, is not among them.
+      ids = Enum.map(people, & &1.id)
+      for user_id <- [alice.user_id, bob.user_id, admin.user_id], do: assert(user_id in ids)
+      refute carol.user_id in ids
+      assert length(Enum.uniq(ids)) == length(ids)
+
+      for person <- people do
+        assert Map.keys(person) |> Enum.sort() == [:display_name, :id]
+        assert person.display_name == Sanctum.Tenancy.Users.display_name(person.id)
+        assert {:ok, %{status: "active"}} = Sanctum.Tenancy.Users.get(person.id)
+      end
+
+      # A key is no interactive session, and a member no operator.
+      assert {:error, {:surface_not_permitted, :api_key}} =
+               InstanceEntries.people(%{admin | auth_method: :api_key})
+
+      refute_received {:instance_entry, _, _}
+    end
+
     test "usage refuses days outside the kept window before any read", %{admin: admin} do
       entry = create!(admin)
 
@@ -1003,6 +1035,49 @@ defmodule Sanctum.InstanceEntriesTest do
                )
 
       assert {0, []} = usage(listed.id)
+    end
+
+    test "offered with use answers each person's own count today, and no one else's",
+         %{admin: admin} do
+      listed = create!(admin, %{audience: "listed", members: [id("alice")]})
+      everyone = create!(admin)
+      alice = person("alice")
+      bob = person("bob")
+
+      assert {:ok, offers} = InstanceEntries.offered_with_use(alice)
+
+      assert Enum.map(offers, &{&1.id, &1.used_today}) |> Enum.sort() ==
+               Enum.sort([{listed.id, 0}, {everyone.id, 0}])
+
+      for _ <- 1..2 do
+        {:ok, _, _} =
+          InstanceEntries.resolve(alice, everyone.id, request("/v1/models", "GET"), @custom)
+      end
+
+      {:ok, _, _} =
+        InstanceEntries.resolve(bob, everyone.id, request("/v1/models", "GET"), @custom)
+
+      {:ok, _, _} =
+        InstanceEntries.resolve(alice, listed.id, request("/v1/models", "GET"), @custom)
+
+      # Alice's own two on the shared entry, not the entry's three; Bob his
+      # one, and nothing of the entry he is not offered.
+      assert {:ok, offers} = InstanceEntries.offered_with_use(alice)
+
+      assert Enum.map(offers, &{&1.id, &1.used_today}) |> Enum.sort() ==
+               Enum.sort([{listed.id, 1}, {everyone.id, 2}])
+
+      assert {:ok, [%{id: id, used_today: 1} = offer]} = InstanceEntries.offered_with_use(bob)
+      assert id == everyone.id
+      refute inspect(offer) =~ @secret
+      refute Map.has_key?(offer, :members)
+
+      # The offer is offered/1's, with the person's count beside it.
+      {:ok, [plain]} = InstanceEntries.offered(bob)
+      assert Map.delete(offer, :used_today) == plain
+
+      assert {:error, :anonymous_denied} =
+               InstanceEntries.offered_with_use(%{bob | anonymous: true})
     end
 
     test "a request outside the destination unseals nothing and takes no claim", %{admin: admin} do

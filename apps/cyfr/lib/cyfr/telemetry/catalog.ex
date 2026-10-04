@@ -270,15 +270,16 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :arca, :file_offer, :expired] => %{consumers: [:audit]},
     # ——— the instance's own credentials: one per durable change
     # (`Sanctum.InstanceEntries`), with the entry id, the kind and the
-    # acting person, never a name, a field or a value ———
-    [:cyfr, :sanctum, :instance_entry, :created] => %{consumers: [:audit]},
-    [:cyfr, :sanctum, :instance_entry, :rotated] => %{consumers: [:audit]},
-    [:cyfr, :sanctum, :instance_entry, :rebound] => %{consumers: [:audit]},
-    [:cyfr, :sanctum, :instance_entry, :audience] => %{consumers: [:audit]},
-    [:cyfr, :sanctum, :instance_entry, :policy] => %{consumers: [:audit]},
-    [:cyfr, :sanctum, :instance_entry, :caps] => %{consumers: [:audit]},
-    [:cyfr, :sanctum, :instance_entry, :revoked] => %{consumers: [:audit]},
-    [:cyfr, :sanctum, :instance_entry, :deleted] => %{consumers: [:audit]},
+    # acting person, never a name, a field or a value. The bridge carries
+    # the entry id and the kind to `Cyfr.Bus.instance_entries/0` ———
+    [:cyfr, :sanctum, :instance_entry, :created] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :rotated] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :rebound] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :audience] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :policy] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :caps] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :revoked] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :deleted] => %{consumers: [:audit, :bridge]},
     [:cyfr, :storage_gc, :sweep] => %{
       consumers: [:operator],
       note:

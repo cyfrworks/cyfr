@@ -77,19 +77,23 @@ defmodule Cyfr.TelemetryCatalogTest do
   end
 
   # The instance's own credentials are audited at each durable change, and
-  # nothing yet carries the change to a page: no topic, payload or bridge
-  # consumes these until the pages that listen for them exist.
-  test "every instance entry change is audited, one event per kind, and bridged nowhere" do
-    kinds = ~w(created rotated rebound audience policy caps revoked deleted)a
+  # the bridge carries each to the pages that show them: one event per
+  # kind of `Cyfr.Bus.InstanceEntryChanged`, consumed by both.
+  test "every instance entry change is audited and bridged, one event per kind" do
+    kinds = Cyfr.Bus.InstanceEntryChanged.kinds()
+
+    assert Enum.sort(kinds) ==
+             Enum.sort(~w(created rotated rebound audience policy caps revoked deleted)a)
+
     events = for kind <- kinds, do: [:cyfr, :sanctum, :instance_entry, kind]
 
     assert Enum.filter(Catalog.events(), &match?([:cyfr, :sanctum, :instance_entry | _], &1)) ==
              Enum.sort(events)
 
     for event <- events do
-      assert Catalog.all()[event].consumers == [:audit], inspect(event)
+      assert Catalog.all()[event].consumers == [:audit, :bridge], inspect(event)
       assert event in Catalog.consumed_by(:audit)
-      refute event in Catalog.consumed_by(:bridge)
+      assert event in Catalog.consumed_by(:bridge)
     end
   end
 

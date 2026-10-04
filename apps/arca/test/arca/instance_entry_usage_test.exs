@@ -137,7 +137,44 @@ defmodule Arca.InstanceEntryUsageTest do
 
     assert {:error, :cross_tenant} = Usage.claim(tenant, entry.id, "usr_alice", caps)
     assert {:error, :cross_tenant} = Usage.usage(tenant, entry.id, 1)
+    assert {:error, :cross_tenant} = Usage.used_today(tenant, entry.id, "usr_alice")
     assert {:error, :cross_tenant} = Usage.sweep(tenant)
+  end
+
+  test "a person's use today is their own day row of that entry, and no one else's",
+       %{platform: platform, entry: entry} do
+    other = entry!(platform)
+    caps = %{person_daily: 10, total_daily: 1_000}
+
+    assert {:ok, 0} = Usage.used_today(platform, entry.id, "usr_alice")
+
+    for _ <- 1..2, do: {:ok, _} = Usage.claim(platform, entry.id, "usr_alice", caps)
+    {:ok, _} = Usage.claim(platform, entry.id, "usr_bob", caps)
+    {:ok, _} = Usage.claim(platform, other.id, "usr_alice", caps)
+
+    # Alice's two on this entry: not Bob's, not the entry's total of three,
+    # and not her use of the other entry.
+    assert {:ok, 2} = Usage.used_today(platform, entry.id, "usr_alice")
+    assert {:ok, 1} = Usage.used_today(platform, entry.id, "usr_bob")
+    assert {:ok, 1} = Usage.used_today(platform, other.id, "usr_alice")
+    assert {:ok, 0} = Usage.used_today(platform, other.id, "usr_bob")
+
+    # A count of an earlier day is not today's.
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.InstanceEntryUsage, [
+        %{
+          instance_entry_id: other.id,
+          user_id: "usr_bob",
+          day: Date.add(today(), -1),
+          count: 7,
+          updated_at: DateTime.utc_now()
+        }
+      ])
+
+    assert {:ok, 0} = Usage.used_today(platform, other.id, "usr_bob")
+
+    # The entry's total is keyed by no person, and is never read as one.
+    assert {:error, {:invalid, %{user_id: _}}} = Usage.used_today(platform, entry.id, "")
   end
 
   test "the sweep removes the days older than thirty-five", %{platform: platform, entry: entry} do

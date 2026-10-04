@@ -142,6 +142,7 @@ const (
 	InstanceEntryDelete             = "delete"
 	InstanceEntryList               = "list"
 	InstanceEntryOffered            = "offered"
+	InstanceEntryPeople             = "people"
 	InstanceEntryRebind             = "rebind"
 	InstanceEntryRevoke             = "revoke"
 	InstanceEntryRotate             = "rotate"
@@ -319,7 +320,7 @@ var Actions = map[string][]string{
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
 	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status", "usage"},
 	"file":                {"accept", "decline", "delete", "list", "offer", "offers", "read", "withdraw", "write"},
-	"instance_entry":      {"create", "delete", "list", "offered", "rebind", "revoke", "rotate", "set_audience", "set_caps", "set_component_policy", "usage"},
+	"instance_entry":      {"create", "delete", "list", "offered", "people", "rebind", "revoke", "rotate", "set_audience", "set_caps", "set_component_policy", "usage"},
 	"key":                 {"create", "get", "list", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "fan_outs", "get", "list", "stats"},
@@ -1898,6 +1899,19 @@ func (args InstanceEntryOfferedArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: InstanceEntryOffered, fields: fields(args)})
+}
+
+// InstanceEntryPeopleArgs carries arguments for instance_entry.people.
+type InstanceEntryPeopleArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntryPeopleArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntryPeopleArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntryPeople, fields: fields(args)})
 }
 
 // InstanceEntryRebindArgs carries arguments for instance_entry.rebind.

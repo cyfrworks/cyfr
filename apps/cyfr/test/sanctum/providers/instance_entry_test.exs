@@ -19,7 +19,7 @@ defmodule Sanctum.Providers.InstanceEntryTest do
   }
 
   @platform ~w(create rotate rebind set_audience set_component_policy set_caps revoke delete
-               list usage)
+               list usage people)
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -31,6 +31,19 @@ defmodule Sanctum.Providers.InstanceEntryTest do
   end
 
   defp call(ctx, args), do: Grimoire.call_external("instance_entry", ctx, args)
+
+  # A person signed in at this home, whom an audience can list.
+  defp person_named(name) do
+    Sanctum.Context.build(
+      user_id: "local|local|ie-#{name}-#{System.unique_integer([:positive])}",
+      provider: "local",
+      athanor_id: TestContext.athanor_id(),
+      permissions: Sanctum.Context.person_permissions(),
+      scope: :athanor,
+      auth_method: :oidc,
+      authenticated: true
+    )
+  end
 
   defp operation(action) do
     {:ok, {_module, tool}} = Grimoire.lookup("instance_entry")
@@ -74,7 +87,9 @@ defmodule Sanctum.Providers.InstanceEntryTest do
       end
 
       for action <- ~w(revoke delete), do: assert(operation(action).kind == :destructive)
-      for action <- ~w(list usage offered), do: assert(operation(action).kind == :read)
+
+      for action <- ~w(list usage offered people),
+          do: assert(operation(action).kind == :read)
 
       offered = operation("offered")
 
@@ -207,7 +222,8 @@ defmodule Sanctum.Providers.InstanceEntryTest do
         %{"action" => "revoke", "entry_id" => entry.id},
         %{"action" => "delete", "entry_id" => entry.id},
         %{"action" => "list"},
-        %{"action" => "usage", "entry_id" => entry.id, "days" => 1}
+        %{"action" => "usage", "entry_id" => entry.id, "days" => 1},
+        %{"action" => "people"}
       ]
 
       assert Enum.map(calls, & &1["action"]) |> Enum.sort() == Enum.sort(@platform)
@@ -231,12 +247,14 @@ defmodule Sanctum.Providers.InstanceEntryTest do
       refute inspect(offer) =~ "sk-instance"
 
       # A listed audience that does not name the caller offers them nothing.
+      {someone_else, _user} = TestContext.person!(person_named("someone-else"))
+
       assert {:ok, %{status: "updated", changed: true}} =
                call(admin, %{
                  "action" => "set_audience",
                  "entry_id" => entry.id,
                  "audience" => "listed",
-                 "members" => ["usr_someone_else"]
+                 "members" => [someone_else.user_id]
                })
 
       assert {:ok, %{entries: []}} = call(member, %{"action" => "offered"})
@@ -260,21 +278,45 @@ defmodule Sanctum.Providers.InstanceEntryTest do
       assert entries() == []
     end
 
+    test "an id no person has, a typed email among them, is an invalid argument naming " <>
+           "members, and nothing is stored",
+         %{admin: admin} do
+      typed = "someone-#{System.unique_integer([:positive])}@example.com"
+
+      # At create: refused once the key is proven, and no entry is made.
+      args = create_args(%{"audience" => "listed", "members" => [admin.user_id, typed]})
+
+      assert {:error, {:invalid_argument, message}} =
+               TestContext.confirming(admin, &call(&1, args))
+
+      assert message =~ "person_unknown"
+      assert message =~ "members"
+      refute message =~ typed
+      assert entries() == []
+
+      # At set_audience: refused, and the stored audience stands.
+      entry = create!(admin, %{"audience" => "listed", "members" => [admin.user_id]})
+
+      args = %{
+        "action" => "set_audience",
+        "entry_id" => entry.id,
+        "audience" => "listed",
+        "members" => [admin.user_id, typed]
+      }
+
+      assert {:error, {:invalid_argument, message}} =
+               TestContext.confirming(admin, &call(&1, args))
+
+      assert message =~ "person_unknown"
+      refute message =~ typed
+      assert [%{audience: "listed", members: [member]}] = entries()
+      assert member == admin.user_id
+    end
+
     test "a denied person listed in an audience is an invalid argument naming the person", %{
       admin: admin
     } do
-      {denied, _user} =
-        TestContext.person!(
-          Sanctum.Context.build(
-            user_id: "local|local|ie-denied-#{System.unique_integer([:positive])}",
-            provider: "local",
-            athanor_id: TestContext.athanor_id(),
-            permissions: Sanctum.Context.person_permissions(),
-            scope: :athanor,
-            auth_method: :oidc,
-            authenticated: true
-          )
-        )
+      {denied, _user} = TestContext.person!(person_named("denied"))
 
       {:ok, _} =
         Arca.SecurityTransitions.deny_user(Prima.Actor.system(), denied.user_id,

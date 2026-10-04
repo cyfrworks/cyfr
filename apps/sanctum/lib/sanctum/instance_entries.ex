@@ -13,7 +13,7 @@ defmodule Sanctum.InstanceEntries do
 
   `create/2`, `rotate/2`, `rebind/2`, `set_audience/2`,
   `set_component_policy/2`, `set_caps/2`, `revoke/2`, `delete/2`,
-  `list/1` and `usage/3` each require the operator capability
+  `list/1`, `usage/3` and `people/1` each require the operator capability
   (`ctx.platform_admin`, the platform scope the gate already checked;
   `{:error, :platform_admin_required}` otherwise) and the interactive
   consent class (`Sanctum.Consent.Authz.authorize_interactive/1`). The
@@ -33,9 +33,11 @@ defmodule Sanctum.InstanceEntries do
   preview names the widening and no value: the audience it becomes or
   how many people it adds, or the policy it moves from and to. Narrowing
   either, an unchanged setting, a rebind, the caps, a revoke and a delete
-  need the session alone. A listed person who is denied on this server is
-  refused `{:error, {:person_denied, user_id}}`, under that person's lock
-  (`Arca.InstanceEntries`), and nothing is written.
+  need the session alone. A listed id no person has (a typed email
+  among them) is refused `{:error, {:person_unknown, user_id}}`, and a
+  listed person who is denied on this server
+  `{:error, {:person_denied, user_id}}`, each under the listed people's
+  locks (`Arca.InstanceEntries`), with nothing written.
 
   An entry is always attach-only, and its destination
   (`Prima.Destination`) names its methods and paths. Its component
@@ -55,7 +57,9 @@ defmodule Sanctum.InstanceEntries do
   ## A person's use
 
   `offered/1` answers the active entries offered to the context's
-  person, metadata only, and `binding/2` one of them as a consent binds
+  person, metadata only, and `offered_with_use/1` the same with the
+  person's own count of each one's use today and no other person's.
+  `binding/2` answers one of them as a consent binds
   it, with the digest it stands at and nothing unsealed or claimed.
   `binding_facts/1` answers an entry's kind, provider, status and digest
   to a boot's revision that has no person, so it carries a binding only
@@ -140,6 +144,25 @@ defmodule Sanctum.InstanceEntries do
           component_policy: String.t()
         }
 
+  @typedoc """
+  An entry offered to a person, as that person's vault page shows it: its
+  offer view and how many times the person used it today
+  (`used_today`), never anyone else's count.
+  """
+  @type offer_use_view :: %{
+          id: String.t(),
+          name: String.t(),
+          kind: String.t(),
+          provider_hint: String.t(),
+          oauth_scopes: [String.t()],
+          destination: %{String.t() => term()} | nil,
+          component_policy: String.t(),
+          used_today: non_neg_integer()
+        }
+
+  @typedoc "A person an administrator may list in an audience: an id and a display name."
+  @type person_view :: %{id: String.t(), display_name: String.t()}
+
   @typedoc "An offered entry as a consent binds it: its offer view and the digest it is bound at."
   @type binding_view :: %{
           id: String.t(),
@@ -207,6 +230,60 @@ defmodule Sanctum.InstanceEntries do
          {:ok, entries} <- Store.offered(Context.actor(ctx), []) do
       {:ok, Enum.map(entries, &offer_view/1)}
     end
+  end
+
+  @doc """
+  `offered/1`, each entry with the context's person's own count of its
+  use today (`used_today`, `Arca.InstanceEntryUsage.used_today/3`, on the
+  database's date as a claim counts it): what that person's vault page
+  shows. No other person's count and no entry total is read. A count the
+  store cannot answer is the read's refusal, never a zero.
+  """
+  @spec offered_with_use(Context.t()) :: {:ok, [offer_use_view()]} | {:error, term()}
+  def offered_with_use(%Context{} = ctx) do
+    with {:ok, offers} <- offered(ctx) do
+      offers
+      |> Enum.reduce_while({:ok, []}, fn offer, {:ok, acc} ->
+        case Usage.used_today(actor(), offer.id, ctx.user_id) do
+          {:ok, count} -> {:cont, {:ok, [Map.put(offer, :used_today, count) | acc]}}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, used} -> {:ok, Enum.reverse(used)}
+        {:error, _} = error -> error
+      end
+    end
+  end
+
+  @doc """
+  The people who have signed in to this instance and stand `active` on
+  it, each as an `id` and a `display_name`
+  (`Sanctum.Tenancy.Users.display_name/1`) and nothing more: whom an
+  administrator may list in an entry's audience, which can name no one
+  else. Someone who has not signed in yet has no person id here and
+  cannot be listed. Read under the operator capability, as `usage/3` is,
+  and confirms nothing.
+  """
+  @spec people(Context.t()) :: {:ok, [person_view()]} | {:error, term()}
+  def people(%Context{} = ctx) do
+    with :ok <- administer(ctx) do
+      {:ok, people_from(0, [])}
+    end
+  end
+
+  # Every page of `Sanctum.Tenancy.Users.list/1`, in its order: a page
+  # short of the limit is the last one. A person not active is left out.
+  defp people_from(offset, acc) do
+    page = Arca.Users.max_page()
+    users = Sanctum.Tenancy.Users.list(limit: page, offset: offset)
+
+    acc =
+      acc ++
+        for %{status: "active"} = user <- users,
+            do: %{id: user.id, display_name: Sanctum.Tenancy.Users.display_name(user.id)}
+
+    if length(users) < page, do: acc, else: people_from(offset + page, acc)
   end
 
   @doc """

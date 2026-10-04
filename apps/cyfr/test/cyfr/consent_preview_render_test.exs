@@ -54,7 +54,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   @sentences [
     "reagent:local.weather uses weather-api, an entry of this athanor, for its own calls: " <>
       "a weather.example account, sent only to https://api.weather.example. " <>
-      "The component never holds the value.",
+      "CYFR attaches the value and the component never holds it.",
     "reagent:local.maps will use maps, an entry of this athanor, through its 'shared-maps' " <>
       "profile, from reagent:local.weather for its tiles need: sent only to " <>
       "https://tiles.maps.example, methods GET, paths /v1/tiles. " <>
@@ -62,7 +62,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     "reagent:local.geo uses weather-api, provided by this instance, from reagent:local.weather, " <>
       "as the account 'Geo account': a weather.example account, sent only to " <>
       "https://*.weather.example port 8443, methods GET, POST, paths /v2. " <>
-      "The component never holds the value.",
+      "CYFR attaches the value and the component never holds it.",
     "reagent:local.maps uses maps public key, provided by local, the app's public " <>
       "configuration, from reagent:local.weather for its geocode need: sent only to " <>
       "https://geo.maps.example, paths /geocode. The component reads the value itself."
@@ -151,14 +151,28 @@ defmodule Cyfr.ConsentPreviewRenderTest do
 
     for sentence <- @sentences, do: assert(sentence in sentences, "missing: #{sentence}")
 
-    # No control claims more than its methods, and nothing says CYFR
-    # attaches a value: a value not disclosed is one the component never
-    # holds.
+    # An attach-only credential's sentence says CYFR attaches the value and
+    # the component never holds it; a disclosed one's never says so.
+    attached = "CYFR attaches the value and the component never holds it."
+    credentials = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+
+    for {row, sentence} <- Enum.zip(credentials, sentences) do
+      if row["values"]["disclosed"] == true,
+        do: refute(sentence =~ attached, "a disclosed row says #{attached}: #{sentence}"),
+        else: assert(sentence =~ attached, "an attach-only row does not say it: #{sentence}")
+    end
+
+    assert Enum.any?(credentials, &(&1["values"]["disclosed"] != true))
+
+    # No control claims more than its methods, and no row says the
+    # component never holds a value without saying CYFR attaches it.
     text = html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.downcase()
 
-    for claim <- ["read only", "read-only", "attached by cyfr", "cyfr attaches"] do
+    for claim <- ["read only", "read-only", "attached by cyfr"] do
       refute text =~ claim, "the rendering says #{claim}"
     end
+
+    refute text =~ "the component never holds the value"
   end
 
   # How a value reads in a row: as the row holds it, or in the renderer's
@@ -206,7 +220,10 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   defp expected(_row, "label", label), do: ["through its '#{label}' profile"]
   defp expected(_row, "provider", provider), do: ["a #{provider} account"]
   defp expected(_row, "disclosed", true), do: ["The component reads the value itself."]
-  defp expected(_row, "disclosed", false), do: ["The component never holds the value."]
+
+  defp expected(_row, "disclosed", false),
+    do: ["CYFR attaches the value and the component never holds it."]
+
   defp expected(_row, "suggested", true), do: ["Suggested"]
   defp expected(_row, "choice_required", true), do: ["Choose which entry to use"]
   defp expected(_row, field, false) when field in ["suggested", "choice_required"], do: []

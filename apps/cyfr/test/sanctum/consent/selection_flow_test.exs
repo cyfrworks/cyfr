@@ -263,12 +263,22 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
     # Offered to the person no longer (a narrowed audience blocks no
     # profile), the lent entry is read live and is not ready.
+    {someone_else, _user} =
+      Sanctum.TestContext.person!(ctx, %{
+        id:
+          Sanctum.Auth.Identity.builtin_key(
+            :github,
+            "someone-else-#{System.unique_integer([:positive])}"
+          ),
+        email: "someone-else-#{System.unique_integer([:positive])}@example.com"
+      })
+
     :ok =
       Arca.InstanceEntries.set_audience(
         Arca.Test.Actor.platform(),
         offered.id,
         %{audience: "everyone", members: []},
-        %{audience: "listed", members: ["usr_someone_else"]}
+        %{audience: "listed", members: [someone_else.user_id]}
       )
 
     section = Compendium.ConsentSetupPlan.section(person, @inst_source)

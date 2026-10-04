@@ -178,19 +178,20 @@ defmodule Arca.InstanceEntriesTest do
 
   describe "the offer" do
     test "everyone covers every person; listed covers its members alone", %{platform: platform} do
+      alice = person!().id
+      bob = person!().id
       everyone = put!(platform, %{name: "for-everyone"})
-      listed = put!(platform, %{name: "for-alice", audience: "listed"}, ["usr_alice"])
+      listed = put!(platform, %{name: "for-alice", audience: "listed"}, [alice])
 
-      assert {:ok, alice} = InstanceEntries.offered(person("usr_alice"), [])
-      assert Enum.map(alice, & &1.id) |> Enum.sort() == Enum.sort([everyone.id, listed.id])
+      assert {:ok, offers} = InstanceEntries.offered(person(alice), [])
+      assert Enum.map(offers, & &1.id) |> Enum.sort() == Enum.sort([everyone.id, listed.id])
 
-      assert {:ok, bob} = InstanceEntries.offered(person("usr_bob"), [])
-      assert Enum.map(bob, & &1.id) == [everyone.id]
+      assert {:ok, offers} = InstanceEntries.offered(person(bob), [])
+      assert Enum.map(offers, & &1.id) == [everyone.id]
 
-      assert {:error, :not_offered} =
-               InstanceEntries.get_offered(person("usr_bob"), listed.id, [])
+      assert {:error, :not_offered} = InstanceEntries.get_offered(person(bob), listed.id, [])
 
-      assert {:ok, %{id: id}} = InstanceEntries.get_offered(person("usr_alice"), listed.id, [])
+      assert {:ok, %{id: id}} = InstanceEntries.get_offered(person(alice), listed.id, [])
       assert id == listed.id
 
       assert {:error, :no_person} =
@@ -199,33 +200,32 @@ defmodule Arca.InstanceEntriesTest do
 
     test "offered/2 never answers a listed entry whose audience lacks the person",
          %{platform: platform} do
-      listed = put!(platform, %{audience: "listed"}, ["usr_alice"])
+      [alice, carol, dan] = for _ <- 1..3, do: person!().id
+      listed = put!(platform, %{audience: "listed"}, [alice])
 
       assert :ok =
                InstanceEntries.set_audience(
                  platform,
                  listed.id,
-                 %{audience: "listed", members: ["usr_alice"]},
-                 %{audience: "listed", members: ["usr_carol"]}
+                 %{audience: "listed", members: [alice]},
+                 %{audience: "listed", members: [carol]}
                )
 
-      assert {:ok, []} = InstanceEntries.offered(person("usr_alice"), [])
+      assert {:ok, []} = InstanceEntries.offered(person(alice), [])
+      assert {:error, :not_offered} = InstanceEntries.get_offered(person(alice), listed.id, [])
 
-      assert {:error, :not_offered} =
-               InstanceEntries.get_offered(person("usr_alice"), listed.id, [])
-
-      assert {:ok, [%{id: id}]} = InstanceEntries.offered(person("usr_carol"), [])
+      assert {:ok, [%{id: id}]} = InstanceEntries.offered(person(carol), [])
       assert id == listed.id
 
-      assert {:ok, [%{members: ["usr_carol"]}]} = InstanceEntries.list(platform)
+      assert {:ok, [%{members: [^carol]}]} = InstanceEntries.list(platform)
 
       # Widening to everyone keeps no list.
       assert :ok =
                InstanceEntries.set_audience(
                  platform,
                  listed.id,
-                 %{audience: "listed", members: ["usr_carol"]},
-                 %{audience: "everyone", members: ["usr_dan"]}
+                 %{audience: "listed", members: [carol]},
+                 %{audience: "everyone", members: [dan]}
                )
 
       assert {:ok, [%{audience: "everyone", members: []}]} = InstanceEntries.list(platform)
@@ -683,8 +683,9 @@ defmodule Arca.InstanceEntriesTest do
   describe "set_audience/4" do
     test "writes only from the audience and members it was decided against",
          %{platform: platform} do
-      entry = put!(platform, %{audience: "listed"}, ["usr_alice", "usr_bob"])
-      read = %{audience: "listed", members: ["usr_alice", "usr_bob"]}
+      [alice, bob, carol] = for _ <- 1..3, do: person!().id
+      entry = put!(platform, %{audience: "listed"}, [alice, bob])
+      read = %{audience: "listed", members: [alice, bob]}
 
       # Members compare as a set: the order a caller read them in is not a
       # difference.
@@ -692,8 +693,8 @@ defmodule Arca.InstanceEntriesTest do
                InstanceEntries.set_audience(
                  platform,
                  entry.id,
-                 %{read | members: ["usr_bob", "usr_alice"]},
-                 %{audience: "listed", members: ["usr_alice"]}
+                 %{read | members: [bob, alice]},
+                 %{audience: "listed", members: [alice]}
                )
 
       # A second writer that read the same list: refused, nothing written,
@@ -701,7 +702,7 @@ defmodule Arca.InstanceEntriesTest do
       assert {:error, :conflict} =
                InstanceEntries.set_audience(platform, entry.id, read, %{
                  audience: "listed",
-                 members: ["usr_alice", "usr_bob", "usr_carol"]
+                 members: [alice, bob, carol]
                })
 
       assert {:error, :conflict} =
@@ -712,14 +713,13 @@ defmodule Arca.InstanceEntriesTest do
                  %{audience: "everyone", members: []}
                )
 
-      assert {:ok, [%{audience: "listed", members: ["usr_alice"]}]} =
-               InstanceEntries.list(platform)
+      assert {:ok, [%{audience: "listed", members: [^alice]}]} = InstanceEntries.list(platform)
 
       assert {:error, :not_found} =
                InstanceEntries.set_audience(platform, "ine_missing", read, read)
 
       {:ok, []} = InstanceEntries.tombstone(platform, entry.id, "needs_consent")
-      held = %{audience: "listed", members: ["usr_alice"]}
+      held = %{audience: "listed", members: [alice]}
 
       assert {:error, :not_found} =
                InstanceEntries.set_audience(platform, entry.id, held, %{
@@ -811,6 +811,69 @@ defmodule Arca.InstanceEntriesTest do
                  %{audience: "listed", members: [alice.id]},
                  %{audience: "everyone", members: [denied]}
                )
+    end
+  end
+
+  # An audience lists people: an id no person row has, a typed email
+  # among them, names no one, and is refused under the same lock.
+  describe "an id no person has" do
+    test "is refused from a listed audience at create and at set_audience, nothing written",
+         %{platform: platform} do
+      alice = person!()
+      bob = person!()
+      typed = "someone@example.com"
+      nobody = "usr_nobody_#{System.unique_integer([:positive])}"
+
+      # The first id with no row, in id order, is the one named.
+      first = Enum.min([typed, nobody])
+
+      assert {:error, {:person_unknown, ^first}} =
+               InstanceEntries.put(platform, attrs(%{audience: "listed"}), [
+                 alice.id,
+                 nobody,
+                 typed
+               ])
+
+      assert {:ok, []} = InstanceEntries.list(platform)
+
+      entry = put!(platform, %{audience: "listed"}, [alice.id])
+
+      assert {:error, {:person_unknown, ^typed}} =
+               InstanceEntries.set_audience(
+                 platform,
+                 entry.id,
+                 %{audience: "listed", members: [alice.id]},
+                 %{audience: "listed", members: [alice.id, typed]}
+               )
+
+      assert {:ok, [%{members: [held]}]} = InstanceEntries.list(platform)
+      assert held == alice.id
+
+      # Unknown before denied: a list naming both is refused for the id
+      # that names no one.
+      {:ok, _} =
+        Arca.SecurityTransitions.deny_user(Prima.Actor.system(), bob.id,
+          verify: fn _rows -> :ok end
+        )
+
+      assert {:error, {:person_unknown, ^nobody}} =
+               InstanceEntries.set_audience(
+                 platform,
+                 entry.id,
+                 %{audience: "listed", members: [alice.id]},
+                 %{audience: "listed", members: [bob.id, nobody]}
+               )
+
+      # An everyone audience lists no one, so it names no one to refuse.
+      assert :ok =
+               InstanceEntries.set_audience(
+                 platform,
+                 entry.id,
+                 %{audience: "listed", members: [alice.id]},
+                 %{audience: "everyone", members: [nobody]}
+               )
+
+      assert {:ok, [%{audience: "everyone", members: []}]} = InstanceEntries.list(platform)
     end
   end
 
@@ -963,10 +1026,12 @@ defmodule Arca.InstanceEntriesAudienceRaceTest do
   require Ecto.Query
 
   alias Arca.InstanceEntries
+  alias Arca.Schemas.{ExternalIdentity, User}
   alias Ecto.Adapters.SQL.Sandbox
 
   setup do
     platform = Arca.Test.Actor.platform()
+    [alice, bob, carol] = for _ <- 1..3, do: unboxed(fn -> person!().id end)
 
     entry =
       unboxed(fn ->
@@ -984,7 +1049,7 @@ defmodule Arca.InstanceEntriesAudienceRaceTest do
               audience: "listed",
               created_by: "usr_admin"
             },
-            ["usr_alice", "usr_bob"]
+            [alice, bob]
           )
 
         entry
@@ -1001,23 +1066,31 @@ defmodule Arca.InstanceEntriesAudienceRaceTest do
         Arca.Repo.delete_all(
           Ecto.Query.from(i in Arca.Schemas.InstanceEntry, where: i.id == ^entry.id)
         )
+
+        for id <- [alice, bob, carol] do
+          Arca.Repo.delete_all(Ecto.Query.from(e in ExternalIdentity, where: e.user_id == ^id))
+          Arca.Repo.delete_all(Ecto.Query.from(u in User, where: u.id == ^id))
+        end
       end)
     end)
 
-    {:ok, platform: platform, entry: entry}
+    {:ok, platform: platform, entry: entry, alice: alice, bob: bob, carol: carol}
   end
 
   test "two writers decided against one audience: one lands, the other writes nothing", %{
     platform: platform,
-    entry: entry
+    entry: entry,
+    alice: alice,
+    bob: bob,
+    carol: carol
   } do
-    read = %{audience: "listed", members: ["usr_alice", "usr_bob"]}
+    read = %{audience: "listed", members: [alice, bob]}
 
     # One narrows Bob out; the other, decided against the same read, adds
     # Carol. Landing both would put Bob back without anyone deciding it.
     changes = [
-      %{audience: "listed", members: ["usr_alice"]},
-      %{audience: "listed", members: ["usr_alice", "usr_bob", "usr_carol"]}
+      %{audience: "listed", members: [alice]},
+      %{audience: "listed", members: [alice, bob, carol]}
     ]
 
     results =
@@ -1036,6 +1109,37 @@ defmodule Arca.InstanceEntriesAudienceRaceTest do
     stored = Enum.find(entries, &(&1.id == entry.id))
     assert stored.audience == won.audience
     assert Enum.sort(stored.members) == Enum.sort(won.members)
+  end
+
+  # A person an audience can list: a row minted as a sign-in mints one.
+  defp person! do
+    n = System.unique_integer([:positive])
+    now = DateTime.utc_now()
+
+    {:ok, user} =
+      Arca.Users.mint(
+        Prima.Actor.system(),
+        %{
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          provider: "github",
+          email: "iea#{n}@example.com",
+          email_verified: true,
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        %{
+          key: "github|https://github.com|iea#{n}",
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "iea#{n}",
+          first_seen_at: now,
+          last_seen_at: now
+        }
+      )
+
+    user
   end
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)

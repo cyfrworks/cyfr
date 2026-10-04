@@ -23,6 +23,7 @@ defmodule Cyfr.TelemetryBridgeTest do
     Components,
     Confirmation,
     Execution,
+    InstanceEntryChanged,
     Membership,
     Notify,
     PolicyDecision,
@@ -100,7 +101,16 @@ defmodule Cyfr.TelemetryBridgeTest do
        {ApiKeys, %{kind: :changed}}},
       {[:cyfr, :sanctum, :webhooks, :changed], tenant, Bus.webhooks(@actor),
        {Webhooks, %{kind: :changed}}}
-    ] ++ confirmation_cases(tenant)
+    ] ++ confirmation_cases(tenant) ++ instance_entry_cases()
+  end
+
+  # An instance entry's durable changes, each on the one global topic as
+  # its entry id and kind, whatever else the emitter attached.
+  defp instance_entry_cases do
+    for kind <- InstanceEntryChanged.kinds() do
+      {[:cyfr, :sanctum, :instance_entry, kind], %{entry_id: "ine_1", kind: kind, user_id: @user},
+       Bus.instance_entries(), {InstanceEntryChanged, %{kind: kind, entry_id: "ine_1"}}}
+    end
   end
 
   # A pending confirmation's life, each on its person's own topic, carrying
@@ -223,6 +233,43 @@ defmodule Cyfr.TelemetryBridgeTest do
 
       assert_receive %VaultEntryChanged{kind: :rename, old_name: "old"}
       assert_receive %VaultEntryChanged{kind: :rename, old_name: "old"}
+    end
+
+    test "an instance entry's change carries its id and kind and nothing else" do
+      listen(Bus.instance_entries())
+
+      :telemetry.execute([:cyfr, :sanctum, :instance_entry, :policy], %{count: 1}, %{
+        entry_id: "ine_policy",
+        kind: :policy,
+        user_id: @user,
+        component_policy: "any",
+        binding_digest: "sha256:digest",
+        nodes: ["catalyst:local.openai:1.4.0"],
+        fields: %{"API_KEY" => "sk-instance-never-bridged"}
+      })
+
+      assert_receive %InstanceEntryChanged{} = heard
+
+      assert Map.from_struct(heard) == %{kind: :policy, entry_id: "ine_policy"}
+      refute inspect(heard) =~ "sk-instance"
+      refute inspect(heard) =~ @user
+      refute inspect(heard) =~ "sha256"
+
+      # Published once, on the one global topic.
+      refute_receive %InstanceEntryChanged{}, 100
+    end
+
+    test "an instance entry event naming no entry, or another kind, is dropped and counted" do
+      count_drops(self())
+      listen(Bus.instance_entries())
+      event = [:cyfr, :sanctum, :instance_entry, :caps]
+
+      for metadata <- [%{kind: :caps}, %{entry_id: "", kind: :caps}, %{entry_id: "i", kind: :x}] do
+        :telemetry.execute(event, %{count: 1}, metadata)
+        assert_receive {:dropped, %{count: 1}, %{event: ^event}}
+      end
+
+      refute_receive %InstanceEntryChanged{}, 100
     end
 
     test "a notify naming no athanor is the operators'" do

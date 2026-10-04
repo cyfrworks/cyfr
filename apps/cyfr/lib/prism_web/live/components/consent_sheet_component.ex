@@ -2454,9 +2454,13 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp destination_label(_destination), do: ""
 
-  # A value not disclosed to the component is one it never holds.
+  # A value not disclosed to the component is one CYFR attaches to the
+  # requests bound for the entry's destination, and the component never
+  # holds it.
   defp disclosure_label(true), do: "The component reads the value itself."
-  defp disclosure_label(_not_disclosed), do: "The component never holds the value."
+
+  defp disclosure_label(_not_disclosed),
+    do: "CYFR attaches the value and the component never holds it."
 
   defp lifetime_label(%{"kind" => "standing"}), do: "until revoked"
   defp lifetime_label(%{"kind" => "until", "until" => until}), do: "until #{until}"

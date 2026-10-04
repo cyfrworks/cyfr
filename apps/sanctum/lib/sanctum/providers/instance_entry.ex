@@ -10,8 +10,10 @@ defmodule Sanctum.Providers.InstanceEntry do
   Every action but `offered` is the operator's (`scope: :platform`, the
   interactive consent class, checked at admission), and the verbs check
   both again. `offered` is a read any signed-in person makes: the active
-  entries offered to them, metadata only. Material flows one way:
-  `create` and `rotate` take field values, and nothing returns them.
+  entries offered to them, metadata only, each with their own count of
+  its use today. `people` is the operator's read of whom an audience may
+  list. Material flows one way: `create` and `rotate` take field values,
+  and nothing returns them.
   """
 
   require Logger
@@ -233,13 +235,28 @@ defmodule Sanctum.Providers.InstanceEntry do
           ],
           [kind: :read] ++ platform
         ),
-        Operation.new("instance_entry", "offered", "Offered instance entries", [],
+        Operation.new(
+          "instance_entry",
+          "offered",
+          "Offered instance entries: each active entry offered to you, with its provider, " <>
+            "destination and component policy, and how many requests you made through it " <>
+            "today (used_today); never another person's use",
+          [],
           kind: :read,
           planes: [:external]
+        ),
+        Operation.new(
+          "instance_entry",
+          "people",
+          "People an audience may list: everyone who has signed in to this instance and " <>
+            "stands active, each as an id and a display name; someone who has not signed in " <>
+            "yet cannot be listed",
+          [],
+          [kind: :read] ++ platform
         )
       ],
       description:
-        "The instance's own credentials: entered once by the platform administrator and offered to the people on it, attached to their components' requests and never disclosed. offered lists what you may use; every other action is the platform administrator's.",
+        "The instance's own credentials: entered once by the platform administrator and offered to the people on it, attached to their components' requests and never disclosed. offered lists what you may use and your use of it today; every other action is the platform administrator's.",
       title: "Instance Entries"
     )
   end
@@ -370,8 +387,15 @@ defmodule Sanctum.Providers.InstanceEntry do
   end
 
   def handle(%Context{} = ctx, %{"action" => "offered"}) do
-    case InstanceEntries.offered(ctx) do
+    case InstanceEntries.offered_with_use(ctx) do
       {:ok, entries} -> {:ok, %{entries: entries}}
+      {:error, reason} -> {:error, fmt(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "people"}) do
+    case InstanceEntries.people(ctx) do
+      {:ok, people} -> {:ok, %{people: people}}
       {:error, reason} -> {:error, fmt(reason)}
     end
   end
@@ -512,6 +536,14 @@ defmodule Sanctum.Providers.InstanceEntry do
 
     {:invalid_argument, "invalid: " <> rules}
   end
+
+  # An id that names no one is the caller's own input, perhaps any text
+  # at all, and is not repeated back: the sentence names the argument.
+  defp fmt({:person_unknown, user_id}) when is_binary(user_id),
+    do:
+      {:invalid_argument,
+       "person_unknown: members names someone who has not signed in to this instance; " <>
+         "members are the person ids of people who have"}
 
   defp fmt({:person_denied, user_id}) when is_binary(user_id),
     do:

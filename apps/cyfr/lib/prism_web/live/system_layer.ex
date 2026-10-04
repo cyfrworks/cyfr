@@ -84,7 +84,13 @@ defmodule PrismWeb.SystemLayer do
       the need declares, and disclosure turned on where the component
       reads the value itself; its provider is the entry's
       `provider_hint`. Any other prompt prefills nothing, and disclosure is
-      off until the person turns it on;
+      off until the person turns it on. A value left undisclosed is never
+      handed to the app: CYFR attaches it to the requests bound for the
+      entry's destination. A prompt whose `target` is `:instance` is the
+      platform administrator's card asking for an instance entry's value
+      alone: `instance_entry.create` with the arguments the card
+      collected, or `instance_entry.rotate` of the entry the card names,
+      the one value typed under the subject's field;
     * pairing — `pairing.list` when it opens, `pairing.begin`, whose
       answer's `invitation_url` it draws as a QR code, and `pairing.revoke`;
     * safe mode's default desktop — `layout.edit` at the revision safe mode
@@ -1386,6 +1392,24 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
+  # An instance entry's value: the operation the card named, with the
+  # card's arguments and the one value typed. The page that asked never
+  # holds the value; the layer hands it to the dispatch alone.
+  defp enter_credential(socket, %{subject: %{target: :instance} = subject} = prompt, params) do
+    secret = Map.get(params, "secret")
+
+    if present(secret) == :blank do
+      assign(socket, :error, "Enter the credential to save it.")
+    else
+      {tool, args} = instance_call(subject, secret)
+
+      case layer_call(socket, prompt, :resubmit, tool, args) do
+        {:asked, socket} -> socket
+        {:done, result, socket} -> dispatched(socket, prompt, result)
+      end
+    end
+  end
+
   defp enter_credential(socket, %{subject: subject} = prompt, params) do
     secret = Map.get(params, "secret")
     destination = destination_params(params)
@@ -1421,6 +1445,12 @@ defmodule PrismWeb.SystemLayer do
         end
     end
   end
+
+  defp instance_call(%{operation: :create, arguments: arguments, field: field}, secret),
+    do: {"instance_entry/create", Map.put(arguments, "fields", %{field => secret})}
+
+  defp instance_call(%{operation: :rotate, arguments: arguments, field: field}, secret),
+    do: {"instance_entry/rotate", Map.put(arguments, "fields", %{field => secret})}
 
   # The name an entry is saved under: the subject's, or, for an entry a
   # grant asked for, the one the person left in the form's name field.
@@ -2156,6 +2186,40 @@ defmodule PrismWeb.SystemLayer do
     """
   end
 
+  # An instance entry's value is all the prompt asks: the card collected
+  # the rest. The form is the browser's, as below.
+  defp body(%{prompt: %{kind: :credential_entry, subject: %{target: :instance}}} = assigns) do
+    ~H"""
+    <div id={"#{@id}-credential-#{@prompt.id}"} phx-update="ignore">
+      <form
+        id={"#{@id}-credential"}
+        phx-submit="enter_credential"
+        phx-target={@myself}
+        class="space-y-2"
+        data-target="instance"
+      >
+        <input type="hidden" name="prompt_id" value={@prompt.id} />
+        <label for={"#{@id}-secret"} class="block text-sm font-medium">
+          {@prompt.subject.field} for the instance entry {@prompt.subject.name}
+        </label>
+        <input
+          id={"#{@id}-secret"}
+          name="secret"
+          type="password"
+          autocomplete="off"
+          required
+          data-test="credential-secret"
+          class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+        />
+        <p class="text-sm text-gray-300" data-test="credential-attach">
+          An instance entry's value is never handed to a component: CYFR attaches it to
+          requests bound for the entry's destination, for the people it is offered to.
+        </p>
+      </form>
+    </div>
+    """
+  end
+
   # The form is the browser's: kept as typed across every update, so the
   # value can be submitted again once its record is confirmed, and gone
   # with the prompt.
@@ -2274,7 +2338,8 @@ defmodule PrismWeb.SystemLayer do
           />
           <span>
             Let the app read the value itself. Left off, the value is never handed to the
-            app, and an app asking for it is refused.
+            app: CYFR attaches it to requests bound for the entry's destination, and an app
+            asking for it is refused.
             <span :if={@prompt.subject[:disclose_needed] == true}>
               The app asking for this account reads the value itself, so this is on.
             </span>
@@ -2530,7 +2595,11 @@ defmodule PrismWeb.SystemLayer do
         data-test="credential-submit"
         class={button_class(true)}
       >
-        {if @may, do: "Save to vault", else: "Request confirmation"}
+        {cond do
+          not @may -> "Request confirmation"
+          @prompt.subject[:target] == :instance -> "Save to this instance"
+          true -> "Save to vault"
+        end}
       </button>
     </div>
     """
@@ -2555,6 +2624,12 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :grant, subject: %{ref: ref}}), do: "Grant #{ref}"
   defp title(%{kind: :unlock}), do: "Unlock the vault"
   defp title(%{kind: :sign_in}), do: "Sign in"
+
+  defp title(%{kind: :credential_entry, subject: %{target: :instance, operation: :rotate} = s}),
+    do: "Rotate the instance entry #{s.name}"
+
+  defp title(%{kind: :credential_entry, subject: %{target: :instance, name: name}}),
+    do: "Enter the key for the instance entry #{name}"
 
   defp title(%{kind: :credential_entry, subject: %{return: _return, provider: provider}}),
     do: "Connect your #{provider} account"
@@ -2582,6 +2657,11 @@ defmodule PrismWeb.SystemLayer do
 
   defp description(%{kind: :sign_in, subject: subject}),
     do: subject[:message] || "Sign in to go on. You leave this page to do it."
+
+  defp description(%{kind: :credential_entry, subject: %{target: :instance}}),
+    do:
+      "The value goes straight to this instance's own entries, sealed at rest. No app " <>
+        "sees it, and it is never shown again."
 
   defp description(%{kind: :credential_entry}),
     do:

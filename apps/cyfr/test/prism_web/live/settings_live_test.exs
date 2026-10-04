@@ -130,6 +130,561 @@ defmodule PrismWeb.SettingsLiveTest do
     assert Arca.PlatformSettings.get("mcp_rate_limit_max") == {:error, :not_found}
   end
 
+  # ---------------------------------------------------------------------------
+  # The instance's own entries
+  # ---------------------------------------------------------------------------
+
+  describe "the instance-entry cards" do
+    @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+
+    @create %{
+      "name" => "shared-model",
+      "provider_hint" => "example.com",
+      "kind" => "api_key",
+      "destination_hosts" => "api.example.com",
+      "destination_scheme" => "https",
+      "destination_methods" => "GET POST",
+      "destination_paths" => "/v1/chat/completions /v1/models",
+      "component_policy" => "any",
+      "audience" => "everyone",
+      "person_daily" => "",
+      "total_daily" => ""
+    }
+
+    @destination %{
+      "hosts" => ["api.example.com"],
+      "scheme" => "https",
+      "methods" => ["GET", "POST"],
+      "paths" => ["/v1/chat/completions", "/v1/models"]
+    }
+
+    # A platform administrator, signed in to their own athanor, on the
+    # Settings page; `ctx` is their context there.
+    defp admin!(conn) do
+      ops = test_user(%{name: "Ops Person"})
+      {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops.user_id)
+      conn = log_in_user(conn, ops)
+      ctx = admin_context(ops, seated_athanor().id)
+      {view, html} = mount_athanor(conn, "/settings")
+      %{view: view, html: html, ops: ops, ctx: ctx}
+    end
+
+    defp admin_context(ops, athanor_id) do
+      Sanctum.Context.build(
+        user_id: ops.user_id,
+        athanor_id: athanor_id,
+        permissions: Sanctum.Context.person_permissions(),
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true,
+        platform_admin: true
+      )
+    end
+
+    # An entry the administrator made, under its proven confirmation.
+    defp entry!(ctx, over \\ %{}) do
+      params =
+        Map.merge(
+          %{
+            name: "entry-#{System.unique_integer([:positive])}",
+            kind: "api_key",
+            provider_hint: "example.com",
+            fields: %{"API_KEY" => "sk-settings-entry"},
+            destination: @destination,
+            audience: "everyone"
+          },
+          over
+        )
+
+      confirmed =
+        Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+          operation: "instance_entry.create",
+          arguments: params,
+          resource: params.name
+        })
+
+      {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
+      entry
+    end
+
+    defp stored(id) do
+      {:ok, entries} = Arca.InstanceEntries.list(Prima.Actor.system())
+      Enum.find(entries, &(&1.id == id))
+    end
+
+    defp open_records(ctx) do
+      {:ok, open} = Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+      open
+    end
+
+    defp state_of(view),
+      do: inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity)
+
+    test "are the operator's: a member sees neither, and the operations refuse them regardless",
+         %{conn: conn} do
+      member = test_user()
+      {view, html} = conn |> log_in_user(member) |> mount_athanor("/settings")
+
+      refute has_element?(view, ~s([data-test="instance-entries"]))
+      refute has_element?(view, ~s([data-test="instance-use"]))
+      refute has_element?(view, "#instance-create")
+
+      # Not even a card's title reaches a member's page, in a comment or
+      # anywhere else.
+      for title <- ["Instance entries", "A new instance entry", "Server allowlist"],
+          do: refute(html =~ title, title)
+
+      ctx = %{admin_context(member, seated_athanor().id) | platform_admin: false}
+
+      for action <- ~w(list people) do
+        assert {:error, refusal} =
+                 Grimoire.call_external("instance_entry", ctx, %{"action" => action})
+
+        assert Grimoire.render(refusal) =~ ~r/platform admin/i, action
+      end
+    end
+
+    test "a new entry's key is typed in the layer's prompt alone, and the entry is made once " <>
+           "its record is confirmed",
+         %{conn: conn} do
+      %{view: view, html: html, ctx: ctx} = admin!(conn)
+      secret = "sk-settings-#{System.unique_integer([:positive])}-sentinel"
+      name = "shared-#{System.unique_integer([:positive])}"
+
+      assert html =~ "Instance entries"
+      assert html =~ "creating one of kind oauth is refused"
+      assert has_element?(view, ~s(#instance-create option[value="api_key"]))
+      refute has_element?(view, ~s(#instance-create option[value="oauth"]))
+
+      # The card has no field for the key.
+      refute has_element?(view, ~s(#instance-create input[type="password"]))
+      refute has_element?(view, ~s(#instance-create [name="fields"]))
+
+      view |> form("#instance-create", Map.put(@create, "name", name)) |> render_submit()
+
+      # The layer asks for the key, with everything else the card collected.
+      assert has_element?(
+               view,
+               ~s(#system-layer form#system-layer-credential[data-target="instance"])
+             )
+
+      assert render(view) =~ "Enter the key for the instance entry #{name}"
+
+      view
+      |> form("#system-layer-credential", %{"secret" => secret})
+      |> render_submit()
+
+      assert [%{ref: ref, operation: "instance_entry.create"}] = open_records(ctx)
+      refute state_of(view) =~ secret
+
+      assert Enum.all?(
+               Arca.InstanceEntries.list(Prima.Actor.system()) |> elem(1),
+               &(&1.name != name)
+             )
+
+      Sanctum.TestContext.prove!(ctx, ref)
+      assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
+      view |> form("#system-layer-credential", %{"secret" => secret}) |> render_submit()
+
+      wait_until(fn -> render(view) =~ "Instance entry created." end, 2_000, "the entry created")
+
+      {:ok, entries} = Arca.InstanceEntries.list(Prima.Actor.system())
+      entry = Enum.find(entries, &(&1.name == name))
+
+      assert {entry.provider_hint, entry.component_policy, entry.audience} ==
+               {"example.com", "any", "everyone"}
+
+      assert Jason.decode!(entry.destination) == @destination
+      assert has_element?(view, ~s([data-test="instance-entry"][data-id="#{entry.id}"]))
+
+      refute state_of(view) =~ secret
+      refute render(view) =~ secret
+    end
+
+    test "a create with no path, or no method, is refused, and the card says which",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+
+      view |> form("#instance-create", %{@create | "destination_paths" => ""}) |> render_submit()
+
+      assert has_element?(view, ~s([data-test="instance-error"]), "names no paths")
+      refute has_element?(view, ~s(#system-layer-credential))
+
+      view
+      |> form("#instance-create", %{
+        @create
+        | "destination_paths" => "",
+          "destination_methods" => ""
+      })
+      |> render_submit()
+
+      assert has_element?(view, ~s([data-test="instance-error"]), "names no methods and no paths")
+      refute has_element?(view, ~s(#system-layer-credential))
+      assert open_records(ctx) == []
+    end
+
+    test "the component policy is one control, any at first, with its two options and its " <>
+           "sentence and no component picker; anything else forged is refused",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+
+      policy = ~s(#instance-create input[name="component_policy"])
+      assert view |> element(policy <> ~s([value="any"][checked])) |> has_element?()
+      refute view |> element(policy <> ~s([value="shipped"][checked])) |> has_element?()
+      assert render(view) =~ "Any consented component"
+      assert render(view) =~ "Unmodified shipped components"
+
+      assert render(view) =~
+               "Any component a person consents to can use this account within these " <>
+                 "destination methods and paths, including operations shipped components do not use."
+
+      # Two options of one control, and nothing that names a component.
+      html = view |> element("#instance-create") |> render()
+      assert length(Regex.scan(~r/name="component_policy"/, html)) == 2
+      refute html =~ ~r/name="component[s]?(\[\])?"/
+
+      # A value the control never offers is refused before any key is asked.
+      view
+      |> element("#instance-create")
+      |> render_submit(%{@create | "component_policy" => "everything"})
+
+      assert has_element?(
+               view,
+               ~s([data-test="instance-error"]),
+               "Choose Any consented component"
+             )
+
+      refute has_element?(view, ~s(#system-layer-credential))
+
+      # And an entry's own policy form refuses it, as the operation does
+      # whoever sends it.
+      entry = entry!(ctx)
+      send(view.pid, :load)
+
+      view
+      |> element("#instance-policy-#{entry.id}")
+      |> render_submit(%{"entry_id" => entry.id, "component_policy" => "everything"})
+
+      assert render(view) =~ "Choose Any consented component or Unmodified shipped components."
+
+      assert {:error, _refused} =
+               Grimoire.call_external("instance_entry", ctx, %{
+                 "action" => "set_component_policy",
+                 "entry_id" => entry.id,
+                 "component_policy" => "everything"
+               })
+
+      assert stored(entry.id).component_policy == "any"
+    end
+
+    test "a rotation asks for the key in the prompt and waits on its confirmation", %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      entry = entry!(ctx)
+      send(view.pid, %Cyfr.Bus.InstanceEntryChanged{kind: :created, entry_id: entry.id})
+      render(view)
+
+      view
+      |> element(~s(button[phx-click="instance_rotate"][phx-value-id="#{entry.id}"]))
+      |> render_click()
+
+      assert render(view) =~ "Rotate the instance entry #{entry.name}"
+
+      view |> form("#system-layer-credential", %{"secret" => "sk-rotated"}) |> render_submit()
+
+      assert [%{operation: "instance_entry.rotate"}] = open_records(ctx)
+      assert has_element?(view, ~s(#system-layer [data-test="confirmation"][data-own="true"]))
+      assert stored(entry.id).payload_rev == entry.payload_rev
+    end
+
+    test "an audience that widens asks for a fresh confirmation; one that narrows is saved",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      alice = test_user(%{name: "Alice Listed"})
+      bob = test_user(%{name: "Bob Listed"})
+      entry = entry!(ctx, %{audience: "listed", members: [alice.user_id]})
+
+      # The people the picker offers have signed in; someone who has not
+      # cannot be added.
+      send(view.pid, :load)
+      html = render(view)
+      assert html =~ "Alice Listed" and html =~ "Bob Listed"
+      assert html =~ "A person who has not signed in yet cannot be added."
+      assert has_element?(view, ~s(#instance-audience-#{entry.id} input[value="#{bob.user_id}"]))
+
+      widen = %{
+        "entry_id" => entry.id,
+        "audience" => "listed",
+        "members" => [alice.user_id, bob.user_id]
+      }
+
+      view |> element("#instance-audience-#{entry.id}") |> render_submit(widen)
+
+      assert [%{ref: ref, operation: "instance_entry.set_audience"}] = open_records(ctx)
+      assert has_element?(view, ~s(#system-layer [data-test="confirmation"][data-own="true"]))
+      assert stored(entry.id).members == [alice.user_id]
+
+      Sanctum.TestContext.prove!(ctx, ref)
+      wait_until(fn -> render(view) =~ "Audience saved." end, 2_000, "the widening made")
+      assert Enum.sort(stored(entry.id).members) == Enum.sort([alice.user_id, bob.user_id])
+
+      narrow = %{"entry_id" => entry.id, "audience" => "listed", "members" => [alice.user_id]}
+      view |> element("#instance-audience-#{entry.id}") |> render_submit(narrow)
+
+      assert open_records(ctx) == []
+      assert stored(entry.id).members == [alice.user_id]
+      assert render(view) =~ "Audience saved."
+
+      # A typed email sent past the picker names no one: refused once its
+      # widening is proven, and never stored.
+      typed = "typed-#{System.unique_integer([:positive])}@example.com"
+      forged = %{narrow | "members" => [alice.user_id, typed]}
+      view |> element("#instance-audience-#{entry.id}") |> render_submit(forged)
+
+      assert [%{ref: ref, operation: "instance_entry.set_audience"}] = open_records(ctx)
+      Sanctum.TestContext.prove!(ctx, ref)
+      wait_until(fn -> render(view) =~ "person_unknown" end, 2_000, "the refusal shown")
+
+      assert render(view) =~ "members names someone who has not signed in"
+      refute render(view) =~ typed
+      assert stored(entry.id).members == [alice.user_id]
+
+      # A person denied here is no one an audience can name, so the picker
+      # does not offer them.
+      {:ok, _} =
+        Arca.SecurityTransitions.deny_user(Prima.Actor.system(), bob.user_id,
+          verify: fn _rows -> :ok end
+        )
+
+      send(view.pid, :load)
+      refute has_element?(view, ~s(#instance-audience-#{entry.id} input[value="#{bob.user_id}"]))
+
+      assert has_element?(
+               view,
+               ~s(#instance-audience-#{entry.id} input[value="#{alice.user_id}"])
+             )
+    end
+
+    test "shipped to any asks a fresh confirmation bound to the entry and the setting; any to " <>
+           "shipped is saved with the session",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      entry = entry!(ctx)
+      send(view.pid, :load)
+      render(view)
+
+      tighten = %{"entry_id" => entry.id, "component_policy" => "shipped"}
+      view |> element("#instance-policy-#{entry.id}") |> render_submit(tighten)
+
+      assert open_records(ctx) == []
+      assert stored(entry.id).component_policy == "shipped"
+      assert render(view) =~ "Component policy saved."
+
+      widen = %{"entry_id" => entry.id, "component_policy" => "any"}
+      view |> element("#instance-policy-#{entry.id}") |> render_submit(widen)
+
+      assert [%{ref: ref, operation: "instance_entry.set_component_policy"}] = open_records(ctx)
+      {:ok, record} = Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), ref)
+      preview = inspect(record.preview)
+      assert preview =~ entry.name
+      assert preview =~ "shipped → any"
+      assert stored(entry.id).component_policy == "shipped"
+
+      Sanctum.TestContext.prove!(ctx, ref)
+      wait_until(fn -> stored(entry.id).component_policy == "any" end, 2_000, "the widening made")
+    end
+
+    test "a policy changed anywhere is shown again", %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      entry = entry!(ctx)
+      send(view.pid, :load)
+
+      shown =
+        ~s([data-test="instance-entry"][data-id="#{entry.id}"] [data-test="instance-policy-shown"])
+
+      assert has_element?(view, shown, "Any consented component")
+
+      # Changed by another page of the instance: the announcement alone
+      # brings the page the new setting.
+      {:ok, :changed} =
+        Sanctum.InstanceEntries.set_component_policy(ctx, %{
+          entry_id: entry.id,
+          component_policy: "shipped"
+        })
+
+      wait_until(
+        fn -> has_element?(view, shown, "Unmodified shipped components") end,
+        2_000,
+        "the policy shown again"
+      )
+    end
+
+    test "a new entry's destination is prefilled from the newest shipped catalyst of the " <>
+           "provider; what it does not declare is entered",
+         %{conn: conn} do
+      Cyfr.Test.SeedBundle.isolate!()
+      ops = test_user()
+      {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops.user_id)
+      conn = log_in_user(conn, ops)
+      athanor_id = seated_athanor().id
+
+      seed_ctx =
+        Sanctum.internal_context(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
+
+      ship = fn name, version, provider, need ->
+        {:ok, _} =
+          Arca.Test.UnitFixtures.ship_and_register!(seed_ctx, "catalyst", "local", name, version,
+            manifest: %{
+              "name" => name,
+              "type" => "catalyst",
+              "version" => version,
+              "publisher" => "local",
+              "needs" => %{
+                "api_key" =>
+                  Map.merge(
+                    %{
+                      "type" => "api_key:#{provider}",
+                      "reason" => "to call the model",
+                      "fields" => ["API_KEY"],
+                      "attach" => %{
+                        "in" => "header",
+                        "name" => "Authorization",
+                        "template" => "Bearer {value}"
+                      }
+                    },
+                    need
+                  )
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.example.com", "old.example.com"]}}
+            },
+            wasm: @wasm
+          )
+      end
+
+      ship.("prefill-model", "1.0.0", "example.com", %{
+        "hosts" => ["old.example.com"],
+        "paths" => ["/v0/"]
+      })
+
+      ship.("prefill-model", "1.1.0", "example.com", %{
+        "hosts" => ["api.example.com"],
+        "paths" => ["/v1/chat/completions"]
+      })
+
+      ship.("prefill-hosts", "1.0.0", "hosts-only.example", %{"hosts" => ["api.example.com"]})
+
+      {view, _html} = mount_athanor(conn, "/settings")
+      assert has_element?(view, ~s(#instance-providers option[value="example.com"]))
+
+      view |> form("#instance-create", %{"provider_hint" => "example.com"}) |> render_change()
+
+      assert has_element?(
+               view,
+               ~s(#instance-create input[name="destination_hosts"][value="api.example.com"])
+             )
+
+      assert has_element?(
+               view,
+               ~s(#instance-create input[name="destination_paths"][value="/v1/chat/completions"])
+             )
+
+      # A need that declares no paths leaves them to be entered, and the
+      # card refuses a create until they are.
+      view
+      |> form("#instance-create", %{
+        "provider_hint" => "hosts-only.example",
+        "destination_paths" => ""
+      })
+      |> render_change()
+
+      assert has_element?(
+               view,
+               ~s(#instance-create input[name="destination_hosts"][value="api.example.com"])
+             )
+
+      refute has_element?(view, ~s(#instance-create input[name="destination_paths"][value^="/"]))
+
+      view
+      |> form("#instance-create", %{
+        "name" => "hosts-only",
+        "provider_hint" => "hosts-only.example",
+        "destination_methods" => "POST",
+        "destination_paths" => ""
+      })
+      |> render_submit()
+
+      assert has_element?(view, ~s([data-test="instance-error"]), "names no paths")
+    end
+
+    test "a blank cap shows the platform default it takes, and 0 says that no use is admitted",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      {:ok, person_default} = Arca.PlatformSettings.effective("instance_entry_person_daily")
+      {:ok, total_default} = Arca.PlatformSettings.effective("instance_entry_total_daily")
+
+      assert has_element?(
+               view,
+               ~s(#instance-create [data-test="cap-person"]),
+               "the platform default, #{person_default} a day"
+             )
+
+      assert has_element?(
+               view,
+               ~s(#instance-create [data-test="cap-total"]),
+               "the platform default, #{total_default} a day"
+             )
+
+      view |> form("#instance-create", %{"person_daily" => "0"}) |> render_change()
+
+      assert has_element?(
+               view,
+               ~s(#instance-create [data-test="cap-person"]),
+               "no use is admitted"
+             )
+
+      entry = entry!(ctx, %{person_daily: 0})
+      send(view.pid, :load)
+      caps = ~s([data-test="instance-entry"][data-id="#{entry.id}"] [data-test="instance-caps"])
+      assert has_element?(view, caps, "each person 0: no use is admitted")
+      assert has_element?(view, caps, "the platform default, #{total_default} a day")
+
+      # A blank is sent as the platform default, a 0 as no use.
+      view
+      |> element("#instance-caps-#{entry.id}")
+      |> render_submit(%{"entry_id" => entry.id, "person_daily" => "", "total_daily" => "0"})
+
+      assert %{person_daily: nil, total_daily: 0} = stored(entry.id)
+    end
+
+    test "Use shows each entry's requests by person and day", %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      entry = entry!(ctx)
+      reader = test_user(%{name: "Rita Reader"})
+
+      person =
+        Sanctum.Context.build(
+          user_id: reader.user_id,
+          athanor_id: ctx.athanor_id,
+          permissions: Sanctum.Context.person_permissions(),
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      request = %{uri: URI.parse("https://api.example.com/v1/models"), method: "GET"}
+      facts = %{node_ref: "catalyst:local.any-model:1.0.0", activation_digest: "sha256:any"}
+
+      for _ <- 1..2,
+          do: {:ok, _, _} = Sanctum.InstanceEntries.resolve(person, entry.id, request, facts)
+
+      send(view.pid, :load)
+      today = Date.to_iso8601(DateTime.to_date(Arca.ServerMetaStorage.now!()))
+      row = ~s([data-test="instance-use-entry"][data-id="#{entry.id}"] tr[data-day="#{today}"])
+
+      assert has_element?(view, row, "Rita Reader 2")
+      assert view |> element(row) |> render() =~ ~r/<td>\s*2\s*<\/td>/
+    end
+  end
+
   test "the mode preference is written to the person's row", %{conn: conn} do
     person = test_user()
     {view, _} = conn |> log_in_user(person) |> mount_athanor("/settings")

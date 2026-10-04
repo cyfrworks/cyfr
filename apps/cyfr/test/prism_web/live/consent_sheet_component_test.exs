@@ -131,12 +131,13 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     assert html =~ "to reach the service"
 
     # The binding in one sentence: who uses it, whose entry, the account,
-    # where it may go and that the component never holds the value; then
-    # that it stands until revoked.
+    # where it may go and that CYFR attaches the value and the component
+    # never holds it; then that it stands until revoked.
     assert sentences(html) == [
              "tincture:local.sheet-probe uses Service key, an entry of this athanor, for its " <>
                "own calls: a service.example account, sent only to " <>
-               "https://api.service.example. The component never holds the value."
+               "https://api.service.example. CYFR attaches the value and the component " <>
+               "never holds it."
            ]
 
     assert html =~ "Lifetime: until revoked"
