@@ -1000,11 +1000,11 @@ Vault mutations require an interactive session — components, tincture frames a
 
 ### Instance entries (`instance_entry` tool)
 
-An instance entry is a credential the platform admin enters once for the whole instance and offers to the people on it, owned by no athanor. It is always attach-only, and its destination names its `methods` and `paths` as well as its hosts. Every action but `offered` is a platform admin's, from an interactive session; `offered` is any signed-in person's read of what they may use.
+An instance entry is a credential the platform admin enters once for the whole instance and offers to the people on it, owned by no athanor. It is always attach-only, and its destination names its `methods` and `paths` as well as its hosts. It is an API key or a bundle of fields: `kind` admits `api_key` and `bundle` alone, and an OAuth account is entered in an athanor's own vault, since nothing can yet dispense an instance entry's token. Every action but `offered` is a platform admin's, from an interactive session; `offered` is any signed-in person's read of what they may use.
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
-| `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields`, `destination` (with `methods` and `paths`), `audience` (`everyone` \| `listed`, + `members`), optional `component_policy` (`any` \| `shipped`, `any` when omitted), `person_daily`, `total_daily` | Seal the material and offer it — needs a fresh confirmation |
+| `create` | `name`, `kind` (`api_key` \| `bundle`), `fields`, `destination` (with `methods` and `paths`), `audience` (`everyone` \| `listed`, + `members`), optional `component_policy` (`any` \| `shipped`, `any` when omitted), `person_daily`, `total_daily` | Seal the material and offer it — needs a fresh confirmation |
 | `rotate` | `entry_id`, `fields`, `expected_payload_rev` | Replace material, same field schema, CAS-guarded — needs a fresh confirmation |
 | `rebind` | `entry_id`, `destination` | Move where it may go — every profile that binds it, in every athanor, stops being ready until re-approved |
 | `set_audience` | `entry_id`, `audience`, `members` | Who it is offered to — widening (to `everyone`, or adding a person) needs a fresh confirmation; narrowing the session alone |
@@ -1014,7 +1014,7 @@ An instance entry is a credential the platform admin enters once for the whole i
 | `delete` | `entry_id` | Erase the material; every profile that binds it stops being ready |
 | `list` | — | Every living entry with its audience, policy and caps, never material |
 | `usage` | `entry_id`, `days` (1–35) | Requests by person and day, and the day totals |
-| `offered` | — | The active entries offered to you: provider, destination, component policy and, for an OAuth entry, its scopes |
+| `offered` | — | The active entries offered to you: provider, destination and component policy |
 
 A change that widens is decided against what is stored, and written only while it still is: an audience or a policy that moved in between answers a conflict with nothing written; read it again and ask anew. Use is counted in requests at each attach, under the entry's own caps or, when unset, the `instance_entry_person_daily` and `instance_entry_total_daily` platform settings; a request past a cap is refused until the next UTC day.
 

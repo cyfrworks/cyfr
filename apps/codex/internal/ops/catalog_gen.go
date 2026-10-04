@@ -1806,7 +1806,7 @@ func (args FileWriteArgs) MarshalJSON() ([]byte, error) {
 type InstanceEntryCreateArgs struct {
 	// Entry label — unique among living instance entries
 	Name string `json:"name"`
-	// What the entry holds
+	// What the entry holds: an API key or a bundle of fields; an OAuth account is an athanor's own entry
 	Kind string `json:"kind"`
 	// Immutable provider tag (e.g. 'openai.com'); set at create only
 	ProviderHint Field[string] `json:"provider_hint,omitzero"`
@@ -1814,10 +1814,6 @@ type InstanceEntryCreateArgs struct {
 	Fields Field[map[string]string] `json:"fields,omitzero"`
 	// Where the material may go, its methods and paths included
 	Destination InstanceEntryCreateArgsDestination `json:"destination"`
-	// An OAuth entry's endpoints, for a provider with no preset; fixed once created
-	OauthEndpoints Field[InstanceEntryCreateArgsOauthEndpoints] `json:"oauth_endpoints,omitzero"`
-	// The scopes the credential was authorized for
-	OauthScopes Field[[]string] `json:"oauth_scopes,omitzero"`
 	// Who it is offered to: everyone on the instance, or the listed people
 	Audience string `json:"audience"`
 	// The listed people, by person id; an everyone audience keeps none
@@ -1860,25 +1856,6 @@ func (args *InstanceEntryCreateArgsDestination) UnmarshalJSON(data []byte) error
 		return err
 	}
 	*args = InstanceEntryCreateArgsDestination(value)
-	return nil
-}
-
-type InstanceEntryCreateArgsOauthEndpoints struct {
-	AuthorizeUrl Field[string]            `json:"authorize_url,omitzero"`
-	TokenUrl     Field[string]            `json:"token_url,omitzero"`
-	Provider     Field[string]            `json:"provider,omitzero"`
-	AuthStyle    Field[string]            `json:"auth_style,omitzero"`
-	ExtraParams  Field[map[string]string] `json:"extra_params,omitzero"`
-}
-
-// UnmarshalJSON refuses unknown fields and preserves required presence.
-func (args *InstanceEntryCreateArgsOauthEndpoints) UnmarshalJSON(data []byte) error {
-	type fields InstanceEntryCreateArgsOauthEndpoints
-	var value fields
-	if err := decodeRecord(data, &value); err != nil {
-		return err
-	}
-	*args = InstanceEntryCreateArgsOauthEndpoints(value)
 	return nil
 }
 

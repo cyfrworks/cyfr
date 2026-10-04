@@ -91,7 +91,7 @@ defmodule Sanctum.InstanceEntries do
 
   require Logger
 
-  @kinds ~w(api_key oauth bundle)
+  @kinds ~w(api_key bundle)
   @policies ~w(any shipped)
   @audiences ~w(everyone listed)
   @rebind_attempts 3
@@ -261,12 +261,12 @@ defmodule Sanctum.InstanceEntries do
   Create an instance entry. `params`:
 
     * `:name` (required) — unique among living instance entries
-    * `:kind` (required) — `"api_key" | "oauth" | "bundle"`
+    * `:kind` (required) — `"api_key" | "bundle"`. An `oauth` entry is
+      refused `{:kind_unavailable, "oauth"}`: nothing can dispense an
+      instance entry's token, since an OAuth dispense refreshes under an
+      athanor's actor and storage
     * `:fields` — `%{name => value}` material (default empty)
     * `:provider_hint` — immutable; defaults `""`
-    * `:oauth_endpoints` / `:oauth_scopes` — an `oauth` entry's endpoints
-      are its provider's preset's or named for a provider with none, and
-      fixed from here on, as an athanor's entry's are
     * `:destination` (required) — a `Prima.Destination` map naming its
       `methods` and `paths`
     * `:audience` (required) — `"everyone"` or `"listed"`; `:members`, the
@@ -288,9 +288,7 @@ defmodule Sanctum.InstanceEntries do
          {:ok, name} <- required_name(params),
          {:ok, kind} <- required_kind(params),
          {:ok, hint} <- provider_hint(params),
-         {:ok, endpoints} <- create_endpoints(kind, params),
          {:ok, destination} <- required_destination(params),
-         {:ok, scopes} <- create_scopes(params),
          {:ok, policy} <- create_policy(params),
          {:ok, audience, members} <- audience_change(params),
          {:ok, caps} <- create_caps(params),
@@ -306,8 +304,8 @@ defmodule Sanctum.InstanceEntries do
       binding = %{
         provider_hint: hint,
         field_names: Jason.encode!(Enum.sort(Map.keys(fields))),
-        oauth_endpoints: encode_optional_map(endpoints),
-        oauth_scopes: encode_optional_list(scopes),
+        oauth_endpoints: nil,
+        oauth_scopes: nil,
         destination: destination,
         attach_only: true
       }
@@ -821,6 +819,7 @@ defmodule Sanctum.InstanceEntries do
   # points: a grapheme of a letter and a combining mark is two.
   defp code_points(text), do: text |> String.codepoints() |> length()
 
+  defp required_kind(%{kind: "oauth"}), do: {:error, {:kind_unavailable, "oauth"}}
   defp required_kind(%{kind: kind}) when kind in @kinds, do: {:ok, kind}
   defp required_kind(_params), do: {:error, {:invalid_kind, @kinds}}
 
@@ -867,21 +866,6 @@ defmodule Sanctum.InstanceEntries do
     do: {:ok, policy}
 
   defp policy_value(_absent_or_other), do: {:error, :invalid_component_policy}
-
-  defp create_scopes(params) do
-    case Map.get(params, :oauth_scopes) do
-      nil ->
-        {:ok, nil}
-
-      scopes when is_list(scopes) ->
-        if Enum.all?(scopes, &(is_binary(&1) and &1 != "")),
-          do: {:ok, scopes},
-          else: {:error, :invalid_oauth_scopes}
-
-      _other ->
-        {:error, :invalid_oauth_scopes}
-    end
-  end
 
   # The audience a request names, its members de-duplicated and sorted:
   # the form the confirmation binds and the store compares. An `everyone`
@@ -951,28 +935,6 @@ defmodule Sanctum.InstanceEntries do
   end
 
   defp usage_days(_days), do: {:error, :invalid_days}
-
-  # The endpoints an entry is created with. An `oauth` entry's come from
-  # its provider's preset or are named for a provider with none, never
-  # both and never neither; other kinds store what they are given.
-  defp create_endpoints("oauth", params) do
-    hint = Map.get(params, :provider_hint, "")
-    given = Map.get(params, :oauth_endpoints)
-    named? = not (is_nil(given) or given == %{})
-
-    if hint in [nil, ""] do
-      {:error, :provider_required}
-    else
-      case Sanctum.Vault.OAuth.preset(hint) do
-        %{endpoints: _} when named? -> {:error, :endpoints_preset_conflict}
-        %{endpoints: endpoints} -> {:ok, endpoints}
-        nil when named? -> Sanctum.Vault.OAuth.validate_endpoints(given)
-        nil -> {:error, :endpoints_required}
-      end
-    end
-  end
-
-  defp create_endpoints(_kind, params), do: {:ok, Map.get(params, :oauth_endpoints)}
 
   # `Sanctum.Cipher.encrypt/2` raises on a keyring that went wrong under a
   # running node; the request answers a typed refusal instead.
@@ -1087,10 +1049,4 @@ defmodule Sanctum.InstanceEntries do
       Map.new(map, fn {key, value} ->
         {if(is_atom(key), do: Atom.to_string(key), else: key), value}
       end)
-
-  defp encode_optional_map(nil), do: nil
-  defp encode_optional_map(map) when is_map(map), do: Jason.encode!(map)
-
-  defp encode_optional_list(nil), do: nil
-  defp encode_optional_list(list) when is_list(list), do: Jason.encode!(list)
 end

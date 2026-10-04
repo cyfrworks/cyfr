@@ -82,9 +82,13 @@ defmodule Sanctum.Providers.InstanceEntryTest do
                {nil, nil, [:external], []}
 
       assert Enum.map(operation("create").args, & &1.name) |> Enum.sort() ==
-               Enum.sort(~w(name kind provider_hint fields destination oauth_endpoints
-                            oauth_scopes audience members component_policy person_daily
-                            total_daily))
+               Enum.sort(~w(name kind provider_hint fields destination audience members
+                            component_policy person_daily total_daily))
+
+      # An instance entry is an API key or a bundle: nothing can dispense an
+      # instance entry's OAuth token, so the door offers no such kind.
+      kind = Enum.find(operation("create").args, &(&1.name == "kind"))
+      assert kind.enum == ["api_key", "bundle"]
 
       policy = Enum.find(operation("create").args, &(&1.name == "component_policy"))
       assert {policy.required, policy.nullable, policy.enum} == {false, false, ["any", "shipped"]}
@@ -118,6 +122,18 @@ defmodule Sanctum.Providers.InstanceEntryTest do
       end
 
       # Refused at admission: nothing was written.
+      assert entries() == []
+    end
+
+    test "an OAuth instance entry is refused at the door and, past it, in the handler's words",
+         %{admin: admin} do
+      assert {:error, %Prima.Refusal{stage: :admission, class: :invalid_argument}} =
+               call(admin, create_args(%{"kind" => "oauth"}))
+
+      assert {:error, {:invalid_argument, "kind_unavailable: " <> why}} =
+               Sanctum.Providers.InstanceEntry.handle(admin, create_args(%{"kind" => "oauth"}))
+
+      assert why =~ "athanor's own vault"
       assert entries() == []
     end
 

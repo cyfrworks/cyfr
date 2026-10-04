@@ -132,8 +132,10 @@ defmodule Sanctum.Providers.InstanceEntry do
             ),
             Arg.new("kind", :string,
               required: true,
-              description: "What the entry holds",
-              enum: ["api_key", "oauth", "bundle"]
+              description:
+                "What the entry holds: an API key or a bundle of fields; an OAuth account " <>
+                  "is an athanor's own entry",
+              enum: ["api_key", "bundle"]
             ),
             Arg.new("provider_hint", :string,
               description: "Immutable provider tag (e.g. 'openai.com'); set at create only"
@@ -142,22 +144,6 @@ defmodule Sanctum.Providers.InstanceEntry do
               description: "Secret material as name → value"
             ),
             destination.("Where the material may go, its methods and paths included"),
-            Arg.new(
-              "oauth_endpoints",
-              {:record,
-               [
-                 Arg.new("authorize_url", :string),
-                 Arg.new("token_url", :string),
-                 Arg.new("provider", :string),
-                 Arg.new("auth_style", :string, enum: ["params", "header"]),
-                 Arg.new("extra_params", {:map, Arg.new(nil, :string)})
-               ]},
-              description:
-                "An OAuth entry's endpoints, for a provider with no preset; fixed once created"
-            ),
-            Arg.new("oauth_scopes", {:array, Arg.new(nil, :string)},
-              description: "The scopes the credential was authorized for"
-            ),
             audience.(),
             members,
             policy.(default: "any"),
@@ -269,8 +255,6 @@ defmodule Sanctum.Providers.InstanceEntry do
       }
       |> Prima.MapUtil.put_present(:provider_hint, args["provider_hint"])
       |> Prima.MapUtil.put_present(:destination, args["destination"])
-      |> Prima.MapUtil.put_present(:oauth_endpoints, args["oauth_endpoints"])
-      |> Prima.MapUtil.put_present(:oauth_scopes, args["oauth_scopes"])
       |> put_given(args, "component_policy", :component_policy)
       |> put_given(args, "person_daily", :person_daily)
       |> put_given(args, "total_daily", :total_daily)
@@ -494,9 +478,6 @@ defmodule Sanctum.Providers.InstanceEntry do
       {:invalid_argument,
        "invalid_days: days is from 1 to #{Arca.InstanceEntryUsage.kept_days()}"}
 
-  defp fmt(:invalid_oauth_scopes),
-    do: {:invalid_argument, "invalid_oauth_scopes: oauth_scopes is a list of scope names"}
-
   defp fmt(:no_binding_changes),
     do: {:invalid_argument, "no_binding_changes: the destination is the entry's already"}
 
@@ -509,34 +490,15 @@ defmodule Sanctum.Providers.InstanceEntry do
   defp fmt(:schema_change_requires_rebind),
     do: {:invalid_argument, "schema_change_requires_rebind: rotate keeps the entry's field names"}
 
+  defp fmt({:kind_unavailable, "oauth"}),
+    do:
+      {:invalid_argument,
+       "kind_unavailable: an instance entry is an API key or a bundle of fields; an OAuth " <>
+         "account is entered in an athanor's own vault, since nothing can yet dispense an " <>
+         "instance entry's token"}
+
   defp fmt({:entry_unavailable, status}) when is_binary(status),
     do: {:invalid_argument, "entry_unavailable: the entry is #{status}"}
-
-  defp fmt(:provider_required),
-    do:
-      {:invalid_argument, "provider_required: an OAuth entry names its provider in provider_hint"}
-
-  defp fmt(:endpoints_preset_conflict),
-    do:
-      {:invalid_argument,
-       "endpoints_preset_conflict: this provider's endpoints are preset; leave oauth_endpoints out"}
-
-  defp fmt(:endpoints_required),
-    do:
-      {:invalid_argument,
-       "endpoints_required: this provider has no preset; oauth_endpoints must name an " <>
-         "authorize_url and a token_url"}
-
-  defp fmt(:endpoints_must_use_https),
-    do:
-      {:invalid_argument,
-       "endpoints_must_use_https: an authorize_url and a token_url must both use https://"}
-
-  defp fmt({:reserved_extra_param, name}) when is_binary(name),
-    do:
-      {:invalid_argument,
-       "reserved_extra_param: extra_params may not set #{inspect(name)}, which the " <>
-         "authorization flow sets itself"}
 
   # A row the vocabularies refuse, here or in the store: each field named
   # with its rule, never the value given.

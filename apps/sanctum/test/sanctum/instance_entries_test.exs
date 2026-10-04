@@ -614,7 +614,8 @@ defmodule Sanctum.InstanceEntriesTest do
         {%{audience: "listed", members: [""]}, :invalid_members},
         {%{person_daily: -1}, :invalid_caps},
         {%{total_daily: Arca.InstanceEntries.max_cap() + 1}, :invalid_caps},
-        {%{kind: "password"}, {:invalid_kind, ~w(api_key oauth bundle)}},
+        {%{kind: "password"}, {:invalid_kind, ~w(api_key bundle)}},
+        {%{kind: "oauth"}, {:kind_unavailable, "oauth"}},
         {%{name: ""}, :name_required}
       ]
 
