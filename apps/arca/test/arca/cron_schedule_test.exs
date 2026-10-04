@@ -451,9 +451,90 @@ defmodule Arca.CronScheduleTest do
 
       assert id == feed.id
     end
+
+    # The generic writers, one case each: a feed's row is fenced on every
+    # path, the scheduler's and an uninstall's included.
+    for writer <- [:update, :record_run, :record_error, :soft_delete] do
+      test "#{writer} writes no feed's row, and still writes a schedule's", %{
+        actor: actor,
+        slot: slot
+      } do
+        {:ok, feed} = feed!(actor, "btc")
+        {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "btc"}))
+        take_over!(slot)
+
+        before = CronSchedule.get_for_daemon(feed.id)
+        assert {:error, :not_owner} = write(unquote(writer), actor, feed.id)
+        assert CronSchedule.get_for_daemon(feed.id) == before
+
+        id = schedule.id
+        assert {:ok, %{id: ^id}} = write(unquote(writer), actor, id)
+      end
+    end
+
+    test "a feed's row is written by the generic writers while the slot holds", %{actor: actor} do
+      {:ok, feed} = feed!(actor, "btc")
+
+      assert {:ok, %{run_count: 1, last_execution_id: "exec_1"}} =
+               CronSchedule.record_run(actor, feed.id, "exec_1")
+
+      assert {:ok, %{error_count: 1}} = CronSchedule.record_error(actor, feed.id, "boom")
+      assert {:ok, %{status: "paused"}} = CronSchedule.update(actor, feed.id, %{status: "paused"})
+      assert {:ok, %{status: "deleted"}} = CronSchedule.soft_delete(actor, feed.id)
+    end
+  end
+
+  describe "check_feed_acceptance/4" do
+    test "answers what an acceptance would for the slot and the seq, and writes nothing", %{
+      actor: actor,
+      slot: slot
+    } do
+      {:ok, feed} = feed!(actor, "btc")
+      {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "btc"}))
+      {:ok, 1} = CronSchedule.claim_feed_seq(actor, feed.id)
+      {:ok, 2} = CronSchedule.claim_feed_seq(actor, feed.id)
+      {:ok, _} = accept(actor, feed.id, 2, ~s({"price":2}), slot)
+      before = CronSchedule.get_for_daemon(feed.id)
+
+      assert {:error, :stale} = CronSchedule.check_feed_acceptance(actor, feed.id, 1, slot)
+      assert {:error, :stale} = CronSchedule.check_feed_acceptance(actor, feed.id, 2, slot)
+      assert {:error, :unclaimed} = CronSchedule.check_feed_acceptance(actor, feed.id, 3, slot)
+
+      for id <- [schedule.id, Prima.UUID7.generate_id("feed")] do
+        assert {:error, :not_found} = CronSchedule.check_feed_acceptance(actor, id, 1, slot)
+      end
+
+      foreign = %{actor | athanor_id: "ath_other"}
+      assert {:error, :not_found} = CronSchedule.check_feed_acceptance(foreign, feed.id, 3, slot)
+
+      assert {:error, :no_athanor} =
+               CronSchedule.check_feed_acceptance(%{actor | athanor_id: nil}, feed.id, 3, slot)
+
+      {:ok, 3} = CronSchedule.claim_feed_seq(actor, feed.id)
+      assert :ok = CronSchedule.check_feed_acceptance(actor, feed.id, 3, slot)
+
+      # The slot comes before the seq: a stale owner is answered as one,
+      # whatever its seq.
+      take_over!(slot)
+
+      for seq <- [1, 3, 9] do
+        assert {:error, :not_owner} =
+                 CronSchedule.check_feed_acceptance(actor, feed.id, seq, slot)
+      end
+
+      # Nothing was written by any check.
+      {:ok, unchanged} = CronSchedule.get_for_daemon(feed.id)
+      assert {:ok, %{unchanged | feed_fire_seq: 2}} == before
+    end
   end
 
   # ---- feed helpers ------------------------------------------------------------
+
+  # One write of each generic writer.
+  defp write(:update, actor, id), do: CronSchedule.update(actor, id, %{status: "paused"})
+  defp write(:record_run, actor, id), do: CronSchedule.record_run(actor, id, "exec_1")
+  defp write(:record_error, actor, id), do: CronSchedule.record_error(actor, id, "boom")
+  defp write(:soft_delete, actor, id), do: CronSchedule.soft_delete(actor, id)
 
   defp feed_binding(name) do
     {:ok, binding} =

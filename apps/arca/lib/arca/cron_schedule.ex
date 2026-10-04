@@ -38,8 +38,16 @@ defmodule Arca.CronSchedule do
     * `accept_feed_result/5` writes a result only under the slot its
       claimant read, only for a claimed seq, and only when that seq is
       above the accepted one, so an earlier-started result never replaces
-      a later one;
+      a later one; `check_feed_acceptance/4` answers the same for the
+      slot and the seq, writing nothing, so a caller checks both before
+      it reads a result;
     * `remove_feed/2` soft-deletes.
+
+  The generic writers (`update/3`, `record_run/3`, `record_error/3`,
+  `soft_delete/2`) read and lock their row tenant-scoped in a transaction
+  of their own, and write a feed's row only after the same check of the
+  member's slot in it, so no path writes a feed for a member that lost its
+  slot. A schedule's row is written as it always was.
 
   `list_feeds/1` and `get_feed/2` read the live feed rows and decode
   nothing.
@@ -95,21 +103,25 @@ defmodule Arca.CronSchedule do
     |> Arca.Data.project()
   end
 
-  @doc "Updates an existing cron schedule with tenant-scoped lookup."
+  @doc """
+  Updates an existing row with tenant-scoped lookup. A feed's row is
+  written only under the member's live slot (`:not_owner` otherwise).
+  """
   @spec update(Prima.Actor.t(), String.t(), map()) ::
           {:ok, map()}
-          | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
+          | {:error,
+             :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
   def update(%Prima.Actor{} = actor, id, attrs) do
     Errors.with_db_rescue("CronSchedule.update", fn ->
-      with {:ok, schedule} <- get_tenant(actor, id) do
+      guarded(actor, id, fn schedule ->
         attrs = Map.put(attrs, :updated_at, DateTime.utc_now())
 
         schedule
         |> Row.update_changeset(attrs)
         |> Arca.Repo.update()
         |> mapped_validation()
-      end
+      end)
     end)
     |> Arca.Data.project()
   end
@@ -224,12 +236,13 @@ defmodule Arca.CronSchedule do
   @doc "Records a successful run with tenant-scoped lookup."
   @spec record_run(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, map()}
-          | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok get_tenant/2 in the same with establishes row ownership.
+          | {:error,
+             :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
   # Increment atomically; concurrent runs must not overwrite each other’s counts.
   def record_run(%Prima.Actor{} = actor, id, execution_id) do
     Errors.with_db_rescue("CronSchedule.record_run", fn ->
-      with {:ok, schedule} <- get_tenant(actor, id) do
+      guarded(actor, id, fn schedule ->
         now = DateTime.utc_now()
 
         from(s in Row, where: s.id == ^schedule.id)
@@ -239,20 +252,24 @@ defmodule Arca.CronSchedule do
         )
 
         get_tenant(actor, id)
-      end
+      end)
     end)
     |> Arca.Data.project()
   end
 
-  @doc "Records an error with tenant-scoped lookup."
+  @doc """
+  Records an error with tenant-scoped lookup. A feed's row is written only
+  under the member's live slot (`:not_owner` otherwise).
+  """
   @spec record_error(Prima.Actor.t(), String.t(), term()) ::
           {:ok, map()}
-          | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
+          | {:error,
+             :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
   # Atomic increment, for the reason spelled out at `record_run/3`.
   def record_error(%Prima.Actor{} = actor, id, _reason) do
     Errors.with_db_rescue("CronSchedule.record_error", fn ->
-      with {:ok, schedule} <- get_tenant(actor, id) do
+      guarded(actor, id, fn schedule ->
         from(s in Row, where: s.id == ^schedule.id)
         |> Arca.Repo.update_all(
           set: [updated_at: DateTime.utc_now()],
@@ -260,23 +277,28 @@ defmodule Arca.CronSchedule do
         )
 
         get_tenant(actor, id)
-      end
+      end)
     end)
     |> Arca.Data.project()
   end
 
-  @doc "Soft-deletes a schedule with tenant-scoped lookup."
+  @doc """
+  Soft-deletes a row with tenant-scoped lookup. A feed's row is written
+  only under the member's live slot (`:not_owner` otherwise).
+  """
   @spec soft_delete(Prima.Actor.t(), String.t()) ::
           {:ok, map()}
-          | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
+          | {:error,
+             :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
   def soft_delete(%Prima.Actor{} = actor, id) do
     Errors.with_db_rescue("CronSchedule.soft_delete", fn ->
-      with {:ok, schedule} <- get_tenant(actor, id) do
+      guarded(actor, id, fn schedule ->
         schedule
         |> Row.delete_changeset(DateTime.utc_now())
         |> Arca.Repo.update()
         |> mapped_validation()
-      end
+      end)
     end)
     |> Arca.Data.project()
   end
@@ -400,6 +422,38 @@ defmodule Arca.CronSchedule do
 
   def accept_feed_result(%Prima.Actor{}, _binding_id, _seq, _result_json, _slot),
     do: {:error, :no_athanor}
+
+  @doc """
+  What `accept_feed_result/5` would answer for `slot` and `seq`, before a
+  result is handed to it: `:ok`, or the refusal it would make for the slot
+  (`:not_owner`) or the sequence (`:not_found`, `:unclaimed`, `:stale`),
+  checked in that order under the same fence and writing nothing. A
+  caller checks this before it reads a result's bytes, so a stale owner or
+  a stale seq is answered as such, never as a refusal of the result.
+  `accept_feed_result/5` checks both again in its own transaction, so
+  anything that moves between the two writes nothing.
+  """
+  @spec check_feed_acceptance(
+          Prima.Actor.t(),
+          String.t(),
+          integer(),
+          Arca.ControlPlane.slot() | :none
+        ) ::
+          :ok
+          | {:error,
+             :stale | :unclaimed | :not_found | :not_owner | :no_athanor | :database_error}
+  def check_feed_acceptance(%Prima.Actor{athanor_id: athanor_id} = actor, binding_id, seq, slot)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(binding_id) and
+             is_integer(seq) and (slot == :none or is_map(slot)) do
+    case fenced("CronSchedule.check_feed_acceptance", slot, fn ->
+           with {:ok, _row} <- acceptable(unlocked_feed(actor, binding_id), seq), do: {:ok, :ok}
+         end) do
+      {:ok, :ok} -> :ok
+      {:error, _reason} = refused -> refused
+    end
+  end
+
+  def check_feed_acceptance(%Prima.Actor{}, _binding_id, _seq, _slot), do: {:error, :no_athanor}
 
   @doc """
   Soft-deletes the athanor's live feed `binding_id`, under the member's
@@ -571,14 +625,56 @@ defmodule Arca.CronSchedule do
   defp fenced(tag, slot, write) do
     Errors.with_db_rescue(tag, fn ->
       Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
+        case held(slot) do
           :ok -> write.() |> committed()
-          :lost -> Arca.Repo.rollback(:not_owner)
+          {:error, :not_owner} -> Arca.Repo.rollback(:not_owner)
         end
       end)
     end)
     |> Arca.Data.project()
   end
+
+  # The fence's one check, inside the caller's locking transaction: the
+  # slot still names the member under a standing lease.
+  defp held(slot) do
+    case Arca.ControlPlane.verify_held(slot) do
+      :ok -> :ok
+      :lost -> {:error, :not_owner}
+    end
+  end
+
+  # A generic writer's transaction (`update/3`, `record_run/3`,
+  # `record_error/3`, `soft_delete/2`): the row is read and locked
+  # tenant-scoped, and a feed's row is written only after the fence's
+  # check in the same transaction, so a member that lost its slot writes
+  # no feed through these either. A schedule's row is written as before.
+  defp guarded(actor, id, write) do
+    Arca.Repo.locking_transaction(fn ->
+      with {:ok, row} <- locked_tenant(actor, id),
+           :ok <- feed_held(row) do
+        write.(row) |> committed()
+      else
+        {:error, reason} -> Arca.Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp locked_tenant(actor, id) do
+    from(s in Row, where: s.id == ^id)
+    |> where_tenant_unless_platform(actor)
+    |> QueryHelpers.for_update()
+    |> Arca.Repo.one()
+    |> case do
+      nil -> {:error, :not_found}
+      row -> {:ok, row}
+    end
+  end
+
+  defp feed_held(%Row{kind: "feed"}) do
+    with {:ok, slot} <- Arca.ControlPlane.member_slot(), do: held(slot)
+  end
+
+  defp feed_held(%Row{}), do: :ok
 
   defp committed({:ok, value}), do: value
   defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
@@ -640,6 +736,14 @@ defmodule Arca.CronSchedule do
     |> Arca.Repo.one()
   end
 
+  # A check that writes nothing reads the row without holding it.
+  defp unlocked_feed(actor, binding_id) do
+    actor
+    |> live_feeds()
+    |> where([s], s.id == ^binding_id)
+    |> Arca.Repo.one()
+  end
+
   # arca:unscoped-ok the row was read and locked under the actor's athanor (`locked_feed/2`).
   defp claim_seq(actor, binding_id) do
     case locked_feed(actor, binding_id) do
@@ -657,26 +761,26 @@ defmodule Arca.CronSchedule do
 
   # arca:unscoped-ok the row was read and locked under the actor's athanor (`locked_feed/2`).
   defp accept_result(actor, binding_id, seq, result_json) do
-    case locked_feed(actor, binding_id) do
-      nil ->
-        {:error, :not_found}
-
-      %Row{feed_fire_seq: fired} when seq > fired ->
-        {:error, :unclaimed}
-
-      %Row{feed_result_seq: accepted} when seq <= accepted ->
-        {:error, :stale}
-
-      row ->
-        row
-        |> Ecto.Changeset.change(
-          feed_result: result_json,
-          feed_result_at: Arca.ServerMetaStorage.now!(),
-          feed_result_seq: seq
-        )
-        |> Arca.Repo.update()
+    with {:ok, row} <- acceptable(locked_feed(actor, binding_id), seq) do
+      row
+      |> Ecto.Changeset.change(
+        feed_result: result_json,
+        feed_result_at: Arca.ServerMetaStorage.now!(),
+        feed_result_seq: seq
+      )
+      |> Arca.Repo.update()
     end
   end
+
+  # The one sequence rule, read on the row the caller's transaction holds:
+  # a live feed, a claimed seq, and one above the accepted result's.
+  defp acceptable(nil, _seq), do: {:error, :not_found}
+  defp acceptable(%Row{feed_fire_seq: fired}, seq) when seq > fired, do: {:error, :unclaimed}
+
+  defp acceptable(%Row{feed_result_seq: accepted}, seq) when seq <= accepted,
+    do: {:error, :stale}
+
+  defp acceptable(%Row{} = row, _seq), do: {:ok, row}
 
   # arca:unscoped-ok the row was read and locked under the actor's athanor (`locked_feed/2`).
   defp soft_delete_feed(actor, binding_id) do

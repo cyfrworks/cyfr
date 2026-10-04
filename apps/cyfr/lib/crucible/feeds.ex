@@ -18,6 +18,7 @@ defmodule Crucible.Feeds do
     * `list/1` and `get/2` answer the caller's athanor's live feeds, each
       as `t:feed/0`.
     * `accept/5` takes a run's output for the seq the run claimed: it
+      checks the member's slot and the seq first, writing nothing, then
       decodes the output, unwraps its envelope, holds the data to the
       binding's result bound and shape (`Prima.Feed.check_result/2`) and
       writes its JSON text fenced (`Arca.CronSchedule.accept_feed_result/5`).
@@ -125,12 +126,17 @@ defmodule Crucible.Feeds do
   the run claimed (`Arca.CronSchedule.claim_feed_seq/2`) under `slot`, the
   member slot read when it was claimed.
 
-  A binary output is decoded as JSON text, and a map or list is taken as
-  the decoded value; anything else is not JSON. The decoded output must be
-  a 2xx envelope (the moduledoc's), whose `data` is the result. The result
-  is then held to the binding's bound and shape
-  (`Prima.Feed.check_result/2`) and written as its `Prima.Json.encode/1`
-  text, fenced.
+  The checks run in one order: the slot, then the sequence, then the
+  output's size and shape. The slot and the sequence are checked first,
+  writing nothing (`Arca.CronSchedule.check_feed_acceptance/4`), so a
+  member that lost its slot is answered `:not_owner` and an earlier seq
+  `:stale` whatever the output holds. Then a binary output is decoded as
+  JSON text, and a map or list is taken as the decoded value; anything
+  else is not JSON. The decoded output must be a 2xx envelope (the
+  moduledoc's), whose `data` is the result. The result is held to the
+  binding's bound and shape (`Prima.Feed.check_result/2`) and written as
+  its `Prima.Json.encode/1` text, fenced, the slot and the sequence checked
+  again in the write's own transaction.
 
   Answers `:ok` once written; `{:error, :stale}` when a later-claimed
   result was already accepted; `{:error, {:refused, refusal}}` for an
@@ -156,7 +162,8 @@ defmodule Crucible.Feeds do
       when is_binary(binding_id) and is_integer(seq) do
     actor = Context.actor(ctx)
 
-    with {:ok, row} <- CronSchedule.get_feed(actor, binding_id),
+    with :ok <- CronSchedule.check_feed_acceptance(actor, binding_id, seq, slot),
+         {:ok, row} <- CronSchedule.get_feed(actor, binding_id),
          {:ok, binding} <- stored_binding(row),
          {:ok, decoded} <- decoded(output),
          {:ok, result} <- unwrapped(decoded),

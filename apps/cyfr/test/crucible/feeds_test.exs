@@ -276,6 +276,74 @@ defmodule Crucible.FeedsTest do
       assert {:ok, %{"price" => 2.0}} == Prima.Json.decode(row.feed_result)
     end
 
+    test "an older fire's invalid result is stale, so its occurrence completes and records no error",
+         %{ctx: ctx, actor: actor} do
+      script!([{:probe, self()}, %{"price" => "not a number"}])
+      watch_outcomes(actor)
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+      scheduler = scheduler!()
+      assert_receive {:scripted_probe, worker, _execution_id}, 10_000
+
+      # A refresh claims the next seq and is accepted while the fire runs.
+      {:ok, slot} = Arca.ControlPlane.member_slot()
+      assert {:ok, 2} = CronSchedule.claim_feed_seq(actor, feed.id)
+      assert :ok = Feeds.accept(ctx, feed.id, 2, answer(2.0), slot)
+
+      task = running_task()
+      ref = Process.monitor(task)
+      send(worker, :continue)
+      assert_receive {:DOWN, ^ref, :process, ^task, _}, 10_000
+      _ = :sys.get_state(scheduler)
+
+      # The fire's output would be refused for its shape, but its seq is
+      # stale first: the occurrence completes, the run is recorded, no
+      # error is.
+      assert [%{state: "completed"}] = occurrences(actor, feed.id)
+
+      assert {:ok, %{feed_result_seq: 2, run_count: 1, error_count: 0} = row} =
+               CronSchedule.get_feed(actor, feed.id)
+
+      assert {:ok, %{"price" => 2.0}} == Prima.Json.decode(row.feed_result)
+      assert_received {:schedule_outcome, [:cyfr, :schedules, :completed], _}
+      refute_received {:schedule_outcome, [:cyfr, :schedules, :failed], _}
+    end
+
+    test "a fire whose member lost its slot during the run writes nothing for its invalid result",
+         %{actor: actor} do
+      slot = claimant!()
+      script!([{:probe, self()}, %{"price" => "not a number"}])
+      watch_outcomes(actor)
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+      scheduler = scheduler!()
+      assert_receive {:scripted_probe, worker, _execution_id}, 10_000
+      assert {:ok, %{feed_fire_seq: 1}} = CronSchedule.get_feed(actor, feed.id)
+
+      # A successor takes the slot over while the run is in flight; this
+      # member still believes it holds it, so only the acceptance's own
+      # check stands between it and the row.
+      take_over!(slot)
+
+      task = running_task()
+      ref = Process.monitor(task)
+
+      log =
+        capture_log(fn ->
+          send(worker, :continue)
+          assert_receive {:DOWN, ^ref, :process, ^task, _}, 10_000
+          _ = :sys.get_state(scheduler)
+        end)
+
+      # The output would be refused for its shape, but the slot is checked
+      # first: nothing is written, and the occurrence is left to recovery.
+      assert log =~ "no longer owns its slot"
+      assert [%{state: "started"}] = occurrences(actor, feed.id)
+
+      assert {:ok, %{feed_result_seq: 0, feed_result: nil, run_count: 0, error_count: 0}} =
+               CronSchedule.get_feed(actor, feed.id)
+
+      refute_received {:schedule_outcome, _, _}
+    end
+
     test "a feed created and removed before its first claim leaves no occurrence and no run",
          %{actor: actor} do
       script!([%{"price" => 1.0}])
@@ -391,6 +459,45 @@ defmodule Crucible.FeedsTest do
 
       assert {:ok, %{feed_result_seq: 0, feed_result: nil}} =
                CronSchedule.get_feed(actor, feed.id)
+    end
+
+    test "the slot is checked first: a stale member's invalid result is :not_owner", %{
+      ctx: ctx,
+      actor: actor
+    } do
+      slot = claimant!()
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+      {:ok, seq} = CronSchedule.claim_feed_seq(actor, feed.id)
+      take_over!(slot)
+
+      for output <- invalid_outputs() do
+        assert {:error, :not_owner} = Feeds.accept(ctx, feed.id, seq, output, slot),
+               "#{inspect(output)} was not answered :not_owner"
+      end
+
+      assert {:ok, %{feed_result_seq: 0, feed_result: nil}} =
+               CronSchedule.get_feed(actor, feed.id)
+    end
+
+    test "the seq is checked before the result: an older invalid result is :stale", %{
+      ctx: ctx,
+      actor: actor
+    } do
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+      {:ok, slot} = Arca.ControlPlane.member_slot()
+      {:ok, 1} = CronSchedule.claim_feed_seq(actor, feed.id)
+      {:ok, 2} = CronSchedule.claim_feed_seq(actor, feed.id)
+      :ok = Feeds.accept(ctx, feed.id, 2, answer(2), slot)
+
+      for output <- invalid_outputs(), seq <- [1, 2] do
+        assert {:error, :stale} = Feeds.accept(ctx, feed.id, seq, output, slot),
+               "#{inspect(output)} at seq #{seq} was not answered :stale"
+      end
+
+      # And an unclaimed seq is answered as one, whatever it carries.
+      assert {:error, :unclaimed} = Feeds.accept(ctx, feed.id, 3, "not json", slot)
+
+      assert {:ok, %{result: %{"price" => 2}, feed_result_seq: 2}} = Feeds.get(ctx, feed.id)
     end
   end
 
@@ -662,6 +769,20 @@ defmodule Crucible.FeedsTest do
       %{"status" => status} -> %{path: path, reason: reason, status: status}
       _none -> %{path: path, reason: reason}
     end
+  end
+
+  # Outputs each refused for its own bytes when slot and seq hold: not
+  # JSON, no 2xx envelope, past the bound, outside the shape.
+  defp invalid_outputs do
+    pad = String.duplicate("x", Prima.Feed.result_max_bytes())
+
+    [
+      "not json",
+      %{"status" => 503, "data" => %{"price" => 1}},
+      %{"price" => 1},
+      envelope(%{"price" => 1, "pad" => pad}),
+      envelope(%{"price" => "high"})
+    ]
   end
 
   defp error_refusal, do: %{path: "", reason: "error"}
