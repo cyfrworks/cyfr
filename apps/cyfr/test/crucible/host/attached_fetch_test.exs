@@ -330,6 +330,16 @@ defmodule Crucible.Host.AttachedFetchTest do
           "connection: close\r\n\r\n0\r\nx-trailer: visible-trailer\r\nx-key: " <>
           key <> "\r\n\r\n"
 
+    # A 101 nothing asked for, its head saying its body is gzip, the gzip
+    # of the credential in the same write; and one carrying a content-range.
+    defp answer("/switching-gzip", key),
+      do: "HTTP/1.1 101 Switching Protocols\r\ncontent-encoding: gzip\r\n\r\n" <> gz(key)
+
+    defp answer("/switching-range", key),
+      do:
+        "HTTP/1.1 101 Switching Protocols\r\ncontent-range: bytes 0-9/100\r\n\r\n" <>
+          binary_part("key: " <> key, 0, 10)
+
     defp answer(_path, _key), do: fixed("HTTP/1.1 200 OK", [], "plain")
   end
 
@@ -549,32 +559,87 @@ defmodule Crucible.Host.AttachedFetchTest do
 
   # The request run by a caller that outlives it, as the host listener's
   # connection does, so the request's watcher never stops it for the
-  # caller's end: the answer, every process the caller spawned that has not
-  # ended within five seconds of it, and the caller, which runs until it is
-  # sent `:release`.
-  defp run_held(fixture, request) do
+  # caller's end.
+  defp run_held(fixture, request, emit \\ nil) do
     test = self()
     caller = AttemptFixtures.caller(fixture)
 
-    emit = fn frame ->
-      send(test, {:frame, request.call_id, frame})
-      :ok
-    end
+    emit =
+      emit ||
+        fn frame ->
+          send(test, {:frame, request.call_id, frame})
+          :ok
+        end
+
+    held(fn -> AttachedFetch.run(caller, request, emit, []) end)
+  end
+
+  # `fun` run by a caller that runs on until it is sent `:release`: what it
+  # answered (or the exception it raised), every process the caller spawned
+  # that has not ended within five seconds of the answer, and the caller.
+  # Once they have ended, nothing of the request is left in the caller's
+  # mailbox.
+  defp held(fun) do
+    test = self()
 
     holder =
       spawn_link(fn ->
-        result = AttachedFetch.run(caller, request, emit, [])
+        result =
+          try do
+            fun.()
+          rescue
+            exception -> {:raised, exception.__struct__}
+          end
+
         me = self()
         spawned = for pid <- Process.list(), Process.info(pid, :parent) == {:parent, me}, do: pid
-        send(test, {:held, result, Enum.reject(spawned, &ended?(&1, 5_000))})
+        running = Enum.reject(spawned, &ended?(&1, 5_000))
+        {:messages, left} = Process.info(self(), :messages)
+        send(test, {:held, result, running, left})
 
         receive do
           :release -> :ok
         end
       end)
 
-    assert_receive {:held, result, running}, 20_000
+    assert_receive {:held, result, running, left}, 20_000
+    assert left == [], "the request left #{inspect(left)} in its caller's mailbox"
     {result, running, holder}
+  end
+
+  # An upstream answering its first connection with `answer`, byte for
+  # byte, then telling the test what reading that connection finds: the
+  # client closing it, or nothing within five seconds. It waits for its
+  # connection as long as the test runs, since it ends with the test.
+  defp one_shot!(answer) do
+    test = self()
+    ref = make_ref()
+
+    spawn_link(fn ->
+      {:ok, listen} =
+        :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+      {:ok, port} = :inet.port(listen)
+      send(test, {ref, :port, port})
+      {:ok, socket} = :gen_tcp.accept(listen, :infinity)
+      _head = request_head(socket, "")
+      :ok = :gen_tcp.send(socket, answer)
+      send(test, {ref, :socket, :gen_tcp.recv(socket, 0, 5_000)})
+      :gen_tcp.close(socket)
+      :gen_tcp.close(listen)
+    end)
+
+    assert_receive {^ref, :port, port}, 5_000
+    {ref, port}
+  end
+
+  defp request_head(socket, read) do
+    if String.contains?(read, "\r\n\r\n") do
+      read
+    else
+      {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
+      request_head(socket, read <> data)
+    end
   end
 
   defp ended?(pid, timeout) do
@@ -729,6 +794,16 @@ defmodule Crucible.Host.AttachedFetchTest do
 
       refute message =~ @secret
       assert message =~ "[REDACTED]"
+    end
+
+    test "asks the upstream to close its connection after the answer", %{ctx: ctx, port: port} do
+      %{fixture: fixture} = scenario!(ctx, port)
+      request = request("http://127.0.0.1:#{port}/plain")
+
+      assert :ok = fetched(fixture, request)
+      assert {:upstream, _pid, %{headers: headers}} = receive_upstream()
+      assert {"connection", "close"} in headers
+      assert [%{kind: :head} | _] = frames(fixture, request.call_id)
     end
 
     test "an upstream echoing the credential is masked in the head and across a chunk boundary",
@@ -986,6 +1061,24 @@ defmodule Crucible.Host.AttachedFetchTest do
         Base.url_encode64(secret, padding: false),
         secret
       )
+    end
+
+    test "an answer switching protocols ends in an error, no head and no body", %{
+      ctx: ctx,
+      raw: raw
+    } do
+      for path <- ["/switching-gzip", "/switching-range"] do
+        {read, _sent} = raw_fetch(ctx, raw, path)
+        assert [%{kind: :error, type: "http_error"}] = read, path
+      end
+    end
+
+    test "a 101 is refused at its status, as switching protocols", %{ctx: ctx, raw: raw} do
+      for path <- ["/switching-gzip", "/switching-range"] do
+        {read, _sent} = raw_fetch(ctx, raw, path)
+        assert [%{kind: :error, message: message}] = read, path
+        assert message =~ "an answer switching protocols is not relayed", path
+      end
     end
 
     test "an informational answer and a trailer are never relayed", %{ctx: ctx, raw: raw} do
@@ -1351,6 +1444,94 @@ defmodule Crucible.Host.AttachedFetchTest do
       end
     end
 
+    test "an answer whose status is no HTTP status ends in one error frame, its request stopped",
+         %{ctx: ctx} do
+      {ref, port} = one_shot!("HTTP/1.1 999 Canary\r\ncontent-length: 100\r\n\r\nx")
+      %{fixture: fixture} = scenario!(ctx, port)
+      request = request("http://127.0.0.1:#{port}/")
+      test = self()
+      body = AttemptFixtures.body("attached_fetch", AttachedRequest.to_args(request))
+      header = AttemptFixtures.header(fixture, body)
+
+      emit = fn frame ->
+        send(test, {:frame, request.call_id, frame})
+        :ok
+      end
+
+      {answer, running, holder} = held(fn -> Crucible.Host.call(header, body, emit) end)
+
+      refute answer =~ "lost"
+
+      assert [%{kind: :error, type: "http_error", message: message}] =
+               frames(fixture, request.call_id)
+
+      assert message =~ "no valid status"
+      assert running == []
+      assert_receive {^ref, :socket, {:error, :closed}}, 5_000
+      send(holder, :release)
+    end
+
+    test "a refused answer complete in its head closes its connection, never pooled", %{ctx: ctx} do
+      for {as, answer} <- [
+            encoded: "HTTP/1.1 200 OK\r\ncontent-encoding: gzip\r\ncontent-length: 0\r\n\r\n",
+            partial: "HTTP/1.1 206 Partial Content\r\ncontent-length: 0\r\n\r\n",
+            ranged: "HTTP/1.1 200 OK\r\ncontent-range: bytes 0-0/1\r\ncontent-length: 0\r\n\r\n"
+          ] do
+        {ref, port} = one_shot!(answer)
+        %{fixture: fixture} = scenario!(ctx, port)
+        request = request("http://127.0.0.1:#{port}/")
+        {result, running, holder} = run_held(fixture, request)
+
+        assert :ok = result
+        assert [%{kind: :error, type: "http_error"}] = frames(fixture, request.call_id), "#{as}"
+        assert running == []
+
+        # The caller still runs, so only the refusal can have closed it.
+        assert_receive {^ref, :socket, {:error, :closed}},
+                       5_000,
+                       "#{as}: the connection stays open"
+
+        send(holder, :release)
+      end
+    end
+
+    test "an exception while relaying ends in one error frame after the last one written", %{
+      ctx: ctx,
+      port: port
+    } do
+      %{fixture: fixture} = scenario!(ctx, port)
+
+      # The runner's connection breaks on the head, or on the first chunk
+      # after it, and takes every frame after the break.
+      for {breaks_at, written} <- [{1, []}, {2, [:head]}] do
+        request = request("http://127.0.0.1:#{port}/slow")
+        test = self()
+
+        emit = fn frame ->
+          count = Process.get(:frames, 0) + 1
+          Process.put(:frames, count)
+
+          if count == breaks_at do
+            raise "the runner's connection broke"
+          else
+            send(test, {:frame, request.call_id, frame})
+            :ok
+          end
+        end
+
+        {result, running, holder} = run_held(fixture, request, emit)
+        assert_receive {:upstream, upstream, %{path: "/slow"}}, 5_000
+
+        assert :ok = result
+        frames = frames(fixture, request.call_id)
+        assert Enum.map(frames, & &1.kind) == written ++ [:error]
+        assert %{type: "http_error"} = List.last(frames)
+        assert running == []
+        assert_receive {:upstream_closed, ^upstream}, 5_000
+        send(holder, :release)
+      end
+    end
+
     test "a runner connection that no longer takes a frame stops the request", %{
       ctx: ctx,
       port: port
@@ -1381,6 +1562,76 @@ defmodule Crucible.Host.AttachedFetchTest do
   # ---------------------------------------------------------------------------
   # Through the listener
   # ---------------------------------------------------------------------------
+
+  describe "the decision on an answer as the client hands it over" do
+    @encoded_sentence "HTTP request failed: an encoded answer is not relayed"
+    @partial_sentence "HTTP request failed: a partial answer is not relayed"
+
+    test "an informational block is set aside, whatever its lines, and the final head decides" do
+      early = [{"content-encoding", "gzip"}, {"content-range", "bytes 0-9/100"}]
+      final = [{"content-type", "text/plain"}]
+
+      for status <- [100, 102, 103, 199] do
+        assert {:head, 200, ^final} =
+                 AttachedFetch.decision([
+                   {:status, status},
+                   {:headers, early},
+                   {:status, 200},
+                   {:headers, final},
+                   {:data, "body"}
+                 ])
+      end
+    end
+
+    test "a block a client takes as the final head is checked, whatever its status code" do
+      for status <- [100, 102, 103, 199],
+          {lines, sentence} <- [
+            {[{"content-encoding", "gzip"}], @encoded_sentence},
+            {[{"transfer-encoding", "gzip, chunked"}], @encoded_sentence},
+            {[{"content-range", "bytes 0-9/100"}], @partial_sentence}
+          ],
+          ending <- [[{:data, "key"}], []] do
+        assert {:refused, ^sentence} =
+                 AttachedFetch.decision([{:status, status}, {:headers, lines}] ++ ending)
+      end
+    end
+
+    test "a final head is refused before any body, at any status from 200" do
+      for status <- [200, 204, 206, 302, 404, 599] do
+        assert {:refused, _sentence} =
+                 AttachedFetch.decision([
+                   {:status, status},
+                   {:headers, [{"content-encoding", "br"}]}
+                 ])
+      end
+
+      assert {:refused, @partial_sentence} =
+               AttachedFetch.decision([{:status, 206}, {:headers, []}])
+    end
+
+    test "a 101, and a status outside 100..599, are refused at the status" do
+      assert {:refused, "HTTP request failed: an answer switching protocols is not relayed"} =
+               AttachedFetch.decision([{:status, 101}, {:headers, []}, {:data, "x"}])
+
+      for status <- [0, 99, 600, 999] do
+        assert {:refused, "HTTP request failed: an answer with no valid status is not relayed"} =
+                 AttachedFetch.decision([{:status, status}])
+      end
+
+      assert {:head, 599, []} = AttachedFetch.decision([{:status, 599}, {:headers, []}])
+    end
+
+    test "a trailer section decides nothing" do
+      assert {:head, 200, [{"x-kept", "kept"}]} =
+               AttachedFetch.decision([
+                 {:status, 200},
+                 {:headers, [{"x-kept", "kept"}]},
+                 {:data, "body"},
+                 {:trailers, [{"content-encoding", "gzip"}]},
+                 {:headers, [{"content-range", "bytes 0-9/100"}]}
+               ])
+    end
+  end
 
   describe "through the host listener" do
     setup do

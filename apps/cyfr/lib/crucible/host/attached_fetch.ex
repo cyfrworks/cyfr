@@ -67,15 +67,24 @@ defmodule Crucible.Host.AttachedFetch do
   verification and the `Host` header, no redirect, no retry, no
   decoding), through Req's `finch_request` hook, so the answer's status
   and every header line arrive unmerged before any body byte; its body is
-  streamed back as it arrives, one piece at a time. The head is the first
-  header block after the answer's final status: an informational
-  answer's lines are set aside, and a later block is a trailer section,
-  and neither is ever relayed. An answer the masker cannot read whole
-  ends the stream with an `error` before its head or any of its body: one
-  in any `content-encoding` but `identity`, or in any `transfer-encoding`
-  but a single `chunked`, is "an encoded answer"; a 206, or an answer
-  carrying a `content-range` on any status, is "a partial answer". The
-  caller writes the frames
+  streamed back as it arrives, one piece at a time. Each request is one
+  request on its own pinned connection, and asks the upstream to close it
+  after the answer (`connection: close`); an upstream that keeps it open
+  is not relied on to close it. The head is the first header block after
+  the answer's final status: an informational answer's lines are set
+  aside, and a later block is a trailer section, and neither is ever
+  relayed. The request's own process decides, as the status and the head
+  arrive, the answers that end the stream with an `error` before its head
+  or any of its body, and stops reading there, which closes the
+  connection before it could be kept for another request, even when the
+  answer was complete in its head: a status outside 100..599 is "an
+  answer with no valid status", and a 101, which switches to a protocol
+  nothing in CYFR asks for, is "an answer switching protocols". The final
+  answer's head, whatever its status code, is refused when the masker
+  could not read the answer whole: one in any `content-encoding` but
+  `identity`, or in any `transfer-encoding` but a single `chunked`, as
+  "an encoded answer", and a 206, or an answer whose head carries a
+  `content-range`, as "a partial answer". The caller writes the frames
   (`Prima.WorkerAuth.seal_frame/7`, under the attempt's seal key, for the
   request's call id, numbered from 0, each with a fresh IV): a `head` with
   the status and the headers, every value masked whole, a header whose
@@ -89,7 +98,9 @@ defmodule Crucible.Host.AttachedFetch do
   `max_response_size`, a transport failure and the attempt's deadline end
   the stream with an `error` and close the upstream connection. A write
   the runner's connection no longer takes (`{:error, :closed}`) stops the
-  request and closes the upstream connection.
+  request and closes the upstream connection. Anything that raises while
+  the answer is relayed ends it as a failure does: the request stopped,
+  its connection closed, and one `error` after the last frame written.
 
   The attempt refuses a nonce it has seen, and the pin makes its own
   attempt call, so the steps after the first call on the attempt present
@@ -97,6 +108,8 @@ defmodule Crucible.Host.AttachedFetch do
   `/attached`): a replayed header is refused at its first step, and no
   step repeats within one request.
   """
+
+  require Logger
 
   alias Crucible.{Admission, Attempt, Keys}
   alias Crucible.Host.Egress
@@ -116,6 +129,14 @@ defmodule Crucible.Host.AttachedFetch do
     "PUT" => :put
   }
   @ambiguous "This connection's binding holds more than one value, and its attach rule takes one"
+  @no_status "HTTP request failed: an answer with no valid status is not relayed"
+  @switching "HTTP request failed: an answer switching protocols is not relayed"
+  @encoded "HTTP request failed: an encoded answer is not relayed"
+  @partial "HTTP request failed: a partial answer is not relayed"
+
+  # What a caller has written of the answer it is relaying: the next
+  # frame's sequence number and whether an `end` or `error` was written.
+  @written {__MODULE__, :written}
 
   @typedoc "What `run/4` answers: `:ok` once the frames were written, or the refusal."
   @type answer ::
@@ -514,7 +535,7 @@ defmodule Crucible.Host.AttachedFetch do
         tag = make_ref()
         parent = self()
         {pid, monitor} = spawn_monitor(fn -> upstream(parent, tag, options) end)
-        await(stream, %{pid: pid, monitor: monitor, tag: tag, deadline: deadline})
+        relayed(stream, %{pid: pid, monitor: monitor, tag: tag, deadline: deadline})
 
       :error ->
         failed(stream, "http_error", "HTTP request failed")
@@ -545,13 +566,13 @@ defmodule Crucible.Host.AttachedFetch do
     # encoded body would carry the value past it, so CYFR asks for no
     # encoding, in place of whatever the guest asked for; and a range would
     # cut a reflected value into pieces the masker never sees whole, so a
-    # guest's range is not sent.
+    # guest's range is not sent. The connection is the request's alone.
     identity =
       request.headers
       |> Enum.reject(fn {name, _value} ->
         String.downcase(name) in ["accept-encoding", "range", "if-range", "request-range"]
       end)
-      |> Kernel.++([{"accept-encoding", "identity"}])
+      |> Kernel.++([{"accept-encoding", "identity"}, {"connection", "close"}])
 
     {uri, headers} =
       case rule do
@@ -599,23 +620,28 @@ defmodule Crucible.Host.AttachedFetch do
   # again. The head is the first header block after its status: Finch
   # names a trailer section a trailer only after a body byte, so a later
   # block, with a body before it or not, is a trailer section, never
-  # relayed.
+  # relayed. A refusal decided on the status or the head is the last thing
+  # it tells its caller.
   defp upstream(parent, tag, options) do
     watched(parent)
 
     finch = fn req, finch_req, finch_name, finch_options ->
-      answer = %{status: nil, headers: nil, headed: false}
-
       case Finch.stream_while(
              finch_req,
              finch_name,
-             answer,
+             unread(),
              &piece(parent, tag, &1, &2),
              finch_options
            ) do
         {:ok, answer} ->
-          head_once(parent, tag, answer)
-          {req, Req.Response.new(status: answer.status)}
+          case ended(answer) do
+            {:refused, refused} ->
+              {req, Req.Response.put_private(Req.Response.new(), :refused, refused)}
+
+            :relayed ->
+              head_once(parent, tag, answer)
+              {req, Req.Response.new(status: answer.status)}
+          end
 
         {:error, exception, _answer} ->
           {req, exception}
@@ -632,6 +658,9 @@ defmodule Crucible.Host.AttachedFetch do
       end
 
     case result do
+      {:ok, %Req.Response{private: %{refused: refused}}} ->
+        send(parent, {tag, :refused, refused})
+
       {:ok, _resp} ->
         send(parent, {tag, :done})
 
@@ -643,15 +672,18 @@ defmodule Crucible.Host.AttachedFetch do
     end
   end
 
-  defp piece(_parent, _tag, {:status, status}, answer),
-    do: {:cont, %{answer | status: status, headers: nil}}
+  # A piece is decided before it is relayed, and a refusal halts the stream
+  # where it is decided: Finch closes a connection it stops reading, so a
+  # refused answer's connection never returns to a pool, even one whose
+  # answer was complete in its head.
+  defp piece(parent, tag, piece, answer) do
+    case decide(piece, answer) do
+      {:cont, answer} -> relay_piece(parent, tag, piece, answer)
+      {:halt, answer} -> {:halt, answer}
+    end
+  end
 
-  defp piece(_parent, _tag, {:headers, fields}, %{headers: nil} = answer),
-    do: {:cont, %{answer | headers: fields}}
-
-  defp piece(_parent, _tag, {:headers, _trailers}, answer), do: {:cont, answer}
-
-  defp piece(parent, tag, {:data, data}, answer) do
+  defp relay_piece(parent, tag, {:data, data}, answer) do
     answer = head_once(parent, tag, answer)
     send(parent, {tag, :data, data})
 
@@ -660,7 +692,71 @@ defmodule Crucible.Host.AttachedFetch do
     end
   end
 
-  defp piece(_parent, _tag, {:trailers, _fields}, answer), do: {:cont, answer}
+  defp relay_piece(_parent, _tag, _piece, answer), do: {:cont, answer}
+
+  defp unread, do: %{status: nil, headers: nil, headed: false, refused: nil, pending: nil}
+
+  # The decision on each piece. A 101 switches protocols, which nothing in
+  # CYFR asks for, and its bytes would be relayed as a body; a status
+  # outside 100..599 is no answer. Every header block that follows a status
+  # is checked. A refused block whose status is 200 or more is the final
+  # answer's head, and halts at once. One whose status is lower is held: a
+  # later status shows the client set it aside as informational, and a
+  # body after it, or its end, shows it was the final answer's head. So
+  # the checks reach whatever block the client takes as the head, whatever
+  # its status code.
+  defp decide({:status, 101}, answer), do: {:halt, %{answer | refused: @switching}}
+
+  defp decide({:status, status}, answer) when status in 100..599,
+    do: {:cont, %{answer | status: status, headers: nil, pending: nil}}
+
+  defp decide({:status, _status}, answer), do: {:halt, %{answer | refused: @no_status}}
+
+  defp decide({:headers, fields}, %{headers: nil} = answer) do
+    case {refusal(answer.status, fields), answer.status} do
+      {nil, _status} -> {:cont, %{answer | headers: fields}}
+      {refused, status} when status >= 200 -> {:halt, %{answer | refused: refused}}
+      {refused, _status} -> {:cont, %{answer | headers: fields, pending: refused}}
+    end
+  end
+
+  defp decide({:headers, _trailers}, answer), do: {:cont, answer}
+
+  defp decide({:data, _data}, %{pending: refused} = answer) when is_binary(refused),
+    do: {:halt, %{answer | refused: refused}}
+
+  defp decide({:data, _data}, answer), do: {:cont, answer}
+  defp decide({:trailers, _fields}, answer), do: {:cont, answer}
+
+  # How an answer read to its end stands: a held refusal of the final head
+  # is a refusal still. Finch has kept that connection by then, so the
+  # status-first refusals above are what close it, and no client this
+  # module runs on hands over a final answer under a set-aside status
+  # without a body piece first.
+  defp ended(%{refused: refused}) when is_binary(refused), do: {:refused, refused}
+  defp ended(%{pending: refused}) when is_binary(refused), do: {:refused, refused}
+  defp ended(_answer), do: :relayed
+
+  @doc false
+  # What the hook decides for an answer handed over as `pieces`, in order,
+  # relaying nothing: `{:refused, sentence}`, or `{:head, status, headers}`
+  # for the head it would relay. For the decision's own test.
+  @spec decision([term()]) :: {:refused, String.t()} | {:head, integer() | nil, list()}
+  def decision(pieces) when is_list(pieces) do
+    pieces
+    |> Enum.reduce_while(unread(), fn piece, answer ->
+      case decide(piece, answer) do
+        {:cont, answer} -> {:cont, answer}
+        {:halt, answer} -> {:halt, answer}
+      end
+    end)
+    |> then(fn answer ->
+      case ended(answer) do
+        {:refused, refused} -> {:refused, refused}
+        :relayed -> {:head, answer.status, answer.headers || []}
+      end
+    end)
+  end
 
   # A watcher of its own stops the request when its caller ends, and ends
   # itself when the request does.
@@ -687,6 +783,38 @@ defmodule Crucible.Host.AttachedFetch do
     %{answer | headed: true}
   end
 
+  # Whatever raises while the answer is relayed ends it as a failure does:
+  # the request stopped, which closes its connection, and one `error` frame
+  # after the last frame written, unless an `end` or `error` already was.
+  # The log names the kind of failure, never a value.
+  defp relayed(stream, upstream) do
+    Process.delete(@written)
+    await(stream, upstream)
+  catch
+    kind, reason ->
+      stop(upstream)
+
+      Logger.error(
+        "[Crucible.Host.AttachedFetch] relaying an answer failed (#{kind}: " <>
+          "#{if is_exception(reason), do: inspect(reason.__struct__), else: "a term"}); " <>
+          "the request is stopped"
+      )
+
+      case Process.get(@written) do
+        %{ended: true} -> :ok
+        %{seq: seq} -> last_error(%{stream | seq: seq})
+        nil -> last_error(stream)
+      end
+  after
+    Process.delete(@written)
+  end
+
+  defp last_error(stream) do
+    failed(stream, "http_error", "HTTP request failed")
+  catch
+    _kind, _reason -> :ok
+  end
+
   # The deadline is read before every piece, so an upstream that never
   # pauses cannot carry the stream past it.
   defp await(stream, upstream) do
@@ -701,7 +829,11 @@ defmodule Crucible.Host.AttachedFetch do
   defp receive_piece(stream, upstream) do
     receive do
       {tag, :head, status, headers} when tag == upstream.tag ->
-        headed(stream, upstream, status, headers)
+        relay(stream, upstream, status, headers)
+
+      {tag, :refused, message} when tag == upstream.tag ->
+        stop(upstream)
+        failed(stream, "http_error", message)
 
       {tag, :data, data} when tag == upstream.tag ->
         bytes = stream.bytes + byte_size(data)
@@ -743,27 +875,20 @@ defmodule Crucible.Host.AttachedFetch do
     end
   end
 
-  # An answer the masker cannot read as it arrives is not relayed: one in
-  # any content coding but identity, in any transfer coding but a single
-  # chunked, or a part nobody asked for (a 206, or a content-range on any
-  # status, since a reflection split into ranges is a copy the masker never
-  # sees whole) ends before its head or any of its body. A redirect is
-  # answered, never followed.
-  defp headed(stream, upstream, status, headers) do
+  # An answer the masker cannot read as it arrives is not relayed: a part
+  # nobody asked for (a 206, or a content-range in the head, since a
+  # reflection split into ranges is a copy the masker never sees whole), or
+  # one in any content coding but identity or in any transfer coding but a
+  # single chunked.
+  defp refusal(status, headers) do
     cond do
-      status == 206 or ranged?(headers) ->
-        stop(upstream)
-        failed(stream, "http_error", "HTTP request failed: a partial answer is not relayed")
-
-      encoded?(headers) ->
-        stop(upstream)
-        failed(stream, "http_error", "HTTP request failed: an encoded answer is not relayed")
-
-      true ->
-        relay(stream, upstream, status, headers)
+      status == 206 or ranged?(headers) -> @partial
+      encoded?(headers) -> @encoded
+      true -> nil
     end
   end
 
+  # A redirect is answered, never followed.
   defp relay(stream, upstream, status, headers) do
     case head(stream, status, headers) do
       {:ok, stream} when status in 300..399 ->
@@ -858,7 +983,7 @@ defmodule Crucible.Host.AttachedFetch do
   defp sealed_head(stream, status, headers) do
     case seal(stream, :head, WorkerAuth.head_plaintext(status, headers)) do
       {:ok, frame} ->
-        write(stream, frame)
+        write(stream, :head, frame)
 
       {:error, :frame_too_large} when headers != [] ->
         sealed_head(stream, status, Enum.drop(headers, -1))
@@ -895,7 +1020,7 @@ defmodule Crucible.Host.AttachedFetch do
     <<piece::binary-size(^size), rest::binary>> = out
     {:ok, frame} = seal(stream, :chunk, piece)
 
-    with {:ok, stream} <- write(stream, frame), do: chunks(stream, rest)
+    with {:ok, stream} <- write(stream, :chunk, frame), do: chunks(stream, rest)
   end
 
   # The end: the tail masked once more, then the `end` frame.
@@ -904,7 +1029,7 @@ defmodule Crucible.Host.AttachedFetch do
 
     with {:ok, stream} <- chunks(%{stream | pending: ""}, tail),
          {:ok, frame} <- seal(stream, :end, ""),
-         {:ok, _stream} <- write(stream, frame) do
+         {:ok, _stream} <- write(stream, :end, frame) do
       :ok
     else
       _closed -> :ok
@@ -916,7 +1041,7 @@ defmodule Crucible.Host.AttachedFetch do
     plaintext = WorkerAuth.error_plaintext(type, SecretMasker.mask(message, stream.set))
     {:ok, frame} = seal(stream, :error, plaintext)
 
-    case write(stream, frame) do
+    case write(stream, :error, frame) do
       {:ok, _stream} -> :ok
       :closed -> :ok
     end
@@ -934,10 +1059,14 @@ defmodule Crucible.Host.AttachedFetch do
     )
   end
 
-  defp write(stream, frame) do
+  defp write(stream, kind, frame) do
     case stream.emit.(frame) do
-      :ok -> {:ok, %{stream | seq: stream.seq + 1}}
-      {:error, _closed} -> :closed
+      :ok ->
+        Process.put(@written, %{seq: stream.seq + 1, ended: kind in [:end, :error]})
+        {:ok, %{stream | seq: stream.seq + 1}}
+
+      {:error, _closed} ->
+        :closed
     end
   end
 
