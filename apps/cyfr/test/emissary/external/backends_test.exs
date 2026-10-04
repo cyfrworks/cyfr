@@ -192,14 +192,23 @@ defmodule Emissary.External.BackendsTest do
     row
   end
 
-  defp vault_entry(ctx) do
+  # A backend's environment hands the value to the process it starts, so
+  # the entry it reads is disclosed.
+  defp vault_entry(ctx, over \\ %{}) do
     {:ok, entry} =
-      Sanctum.TestContext.create_vault(ctx, %{
-        name: "gh-token",
-        kind: "api_key",
-        fields: %{"token" => @secret},
-        destination: @destination
-      })
+      Sanctum.TestContext.create_vault(
+        ctx,
+        Map.merge(
+          %{
+            name: "gh-token",
+            kind: "api_key",
+            fields: %{"token" => @secret},
+            destination: @destination,
+            disclose: true
+          },
+          over
+        )
+      )
 
     entry
   end
@@ -922,6 +931,125 @@ defmodule Emissary.External.BackendsTest do
              Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
     refute_receive {:control, "sync", _sync, _fields}, 200
+  end
+
+  test "stdio refuses an attach-only entry before starting a backend", %{ctx: ctx, fake: fake} do
+    start_controller(fake)
+    attached = vault_entry(ctx, %{disclose: false})
+    admin = %{ctx | permissions: MapSet.new([:*])}
+    actor = Sanctum.Context.actor(ctx)
+
+    naming = fn entry ->
+      %{
+        "transport" => "stdio",
+        "backends" => [
+          %{
+            "name" => "github",
+            "command" => "npx -y @modelcontextprotocol/server-github",
+            "env" => %{"GITHUB_TOKEN" => "vault:" <> entry, "NODE_ENV" => "production"}
+          }
+        ]
+      }
+    end
+
+    refusal =
+      "Backend 'github' env GITHUB_TOKEN names no active disclosed vault entry; " <>
+        "a backend's environment takes only a disclosed entry"
+
+    # Neither definition verb stores it, and neither names the entry.
+    assert {:error, {:invalid_argument, ^refusal}} =
+             Provider.handle("mcp_servers", admin, %{
+               "action" => "create",
+               "name" => "attached",
+               "config" => naming.("gh-token")
+             })
+
+    assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "attached")
+
+    literal = stdio_row(ctx, "literal", %{"NODE_ENV" => "production"})
+
+    assert {:error, {:invalid_argument, ^refusal}} =
+             Provider.handle("mcp_servers", admin, %{
+               "action" => "update",
+               "name" => "literal",
+               "epoch" => literal.epoch,
+               "config" => naming.("gh-token")
+             })
+
+    assert {:ok, %{epoch: 1, config_json: unchanged}} =
+             Arca.McpServerStorage.get(actor, "literal")
+
+    refute unchanged =~ "gh-token"
+
+    # A row naming it underneath is refused at sync, in the reader's words,
+    # before its env is sealed or anything reaches the service.
+    underneath = stdio_row(ctx, "underneath")
+
+    assert {:error, :disclosure_refused} =
+             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: underneath.id, epoch: 1})
+
+    refute_receive {:control, "sync", _sync, _fields}, 200
+    refute_received {:sealed_env, _server, _env}
+
+    # Its server process and its Test answer say why, never which entry.
+    assert {:error, connect_sentence} = Servers.ensure_started(underneath, ctx)
+    assert connect_sentence == Grimoire.render(:disclosure_refused)
+
+    assert {:ok, %{status: "error", error: sentence}} =
+             Provider.handle("mcp_servers", admin, %{"action" => "test", "name" => "underneath"})
+
+    assert sentence == Grimoire.render(:disclosure_refused)
+    refute sentence =~ "gh-token"
+    refute_receive {:control, "sync", _sync, _fields}, 200
+
+    # Nothing of the entry was unsealed.
+    assert {:ok, %{last_used_at: nil}} = Arca.VaultStorage.get(actor, attached.id)
+
+    # A disclosed entry is admitted at create and reaches the backend's env.
+    vault_entry(ctx, %{name: "gh-disclosed"})
+
+    assert {:ok, %{status: "ready"}} =
+             Provider.handle("mcp_servers", admin, %{
+               "action" => "create",
+               "name" => "disclosed",
+               "config" => naming.("gh-disclosed")
+             })
+
+    assert_receive {:sealed_env, _server, %{"github" => %{"GITHUB_TOKEN" => @secret}}}, 2_000
+  end
+
+  test "a disclosed entry beside an attach-only one is not unsealed: the sync is refused first",
+       %{ctx: ctx, fake: fake} do
+    start_controller(fake)
+    disclosed = vault_entry(ctx)
+    vault_entry(ctx, %{name: "gh-attached", disclose: false})
+
+    # The disclosed entry's variable sorts first, so a resolution that
+    # unsealed as it went would have read it before meeting the other.
+    row =
+      stdio_row(ctx, "mixed", %{
+        "A_TOKEN" => "vault:gh-token",
+        "B_TOKEN" => "vault:gh-attached"
+      })
+
+    assert {:error, :disclosure_refused} =
+             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+
+    assert {:ok, %{last_used_at: nil}} =
+             Arca.VaultStorage.get(Sanctum.Context.actor(ctx), disclosed.id)
+
+    refute_receive {:control, "sync", _sync, _fields}, 200
+    refute_received {:sealed_env, _server, _env}
+
+    # An entry that is not there refuses the sync alike, the disclosed one
+    # still unread.
+    absent = stdio_row(ctx, "absent", %{"A_TOKEN" => "vault:gh-token", "B_TOKEN" => "vault:nope"})
+
+    assert {:error, {:env_unresolved, "github", "B_TOKEN"}} =
+             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: absent.id, epoch: 1})
+
+    assert {:ok, %{last_used_at: nil}} =
+             Arca.VaultStorage.get(Sanctum.Context.actor(ctx), disclosed.id)
   end
 
   test "get reports what the service runs for a stdio server", %{ctx: ctx, fake: fake} do

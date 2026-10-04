@@ -27,7 +27,10 @@ defmodule Sanctum.Vault do
   with `disclose: true`: its material is never handed to a component, and
   only a disclosed entry's fields can be read by one
   (`Sanctum.VaultReader`). Both join the
-  binding digest.
+  binding digest. An external MCP server definition is held to both
+  before it is stored: a header names an entry whose destination covers
+  the server's URL (`destination_matches?/3`), and a stdio backend's
+  environment a disclosed entry (`disclosed?/2`).
 
   Every mutation requires the interactive consent class (`:oidc`
   surface, external plane) — no permission wildcard and no scoped key
@@ -159,6 +162,41 @@ defmodule Sanctum.Vault do
     end
   end
 
+  @doc """
+  Whether an external MCP server definition at `url` may name the entry
+  `name` in a header: true only when the caller's athanor holds an active
+  entry of that name whose destination admits a `POST` to `url`
+  (`Prima.Destination.matches?/3`), the one method Streamable HTTP sends.
+  A missing, inactive or unreadable entry is false. Metadata only:
+  nothing is unsealed and no use is recorded.
+  """
+  @spec destination_matches?(Context.t(), String.t(), String.t()) :: boolean()
+  def destination_matches?(%Context{} = ctx, name, url) when is_binary(name) and is_binary(url) do
+    case active_by_name(ctx, name) do
+      {:ok, entry} -> VaultReader.destination_admits?(entry, url)
+      :error -> false
+    end
+  end
+
+  @doc """
+  Whether an external MCP server definition may name the entry `name` in a
+  stdio backend's environment: true only when the caller's athanor holds
+  an active entry of that name that is disclosed. A missing, inactive or
+  unreadable entry is false. Metadata only: nothing is unsealed and no use
+  is recorded.
+  """
+  @spec disclosed?(Context.t(), String.t()) :: boolean()
+  def disclosed?(%Context{} = ctx, name) when is_binary(name) do
+    match?({:ok, %{attach_only: false}}, active_by_name(ctx, name))
+  end
+
+  defp active_by_name(ctx, name) do
+    case Arca.VaultStorage.get_by_name(Context.actor(ctx), name) do
+      {:ok, %{status: "active"} = entry} -> {:ok, entry}
+      _missing_inactive_or_unreadable -> :error
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Create
   # ---------------------------------------------------------------------------
@@ -249,11 +287,12 @@ defmodule Sanctum.Vault do
   Rename the mutable label. Identity, bindings and consents are untouched.
 
   It is announced like every other mutation even so. Consents bind an entry
-  *id*, but the external-MCP header plane binds a `vault:<name>` reference
-  that `Sanctum.VaultReader.unseal_by_name/2` resolves at request time — so
-  moving a name from one entry to another changes what a running server
-  dispenses without any entry's material changing. That is a resolution
-  change, and the reconciler is what acts on those.
+  *id*, but an external MCP server's headers and backend env bind a
+  `vault:<name>` reference that `Sanctum.VaultReader.unseal_for/3` and
+  `unseal_disclosed/2` resolve at connect time — so moving a name from one
+  entry to another changes what a running server dispenses without any
+  entry's material changing. That is a resolution change, and the
+  reconciler is what acts on those.
   """
   @spec rename(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def rename(%Context{} = ctx, id, new_name) when is_binary(new_name) and new_name != "" do

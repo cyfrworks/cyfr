@@ -30,6 +30,13 @@ defmodule Sanctum.VaultReader do
      nothing outside `projection.fields` leaves this module: a field the
      entry lacks refuses the whole resolution, never a partial projection
 
+  ## By name
+
+  An external MCP server's credentials have no consent edge. An http
+  server's header entry is read with `unseal_for/3`, held to the entry's
+  destination, and a stdio backend's env entry with `unseal_disclosed/2`,
+  held to its disclosure; each refuses before anything is unsealed.
+
   ## The payload
 
   The sealed payload (`Sanctum.Vault.Payload`) carries the material
@@ -65,6 +72,7 @@ defmodule Sanctum.VaultReader do
           | :not_found
           | {:entry_unavailable, String.t()}
           | :binding_mismatch
+          | :destination_mismatch
           | :disclosure_refused
           | :unseal_failed
           | :invalid_payload
@@ -129,31 +137,92 @@ defmodule Sanctum.VaultReader do
   end
 
   @doc """
-  Unseal an entry's material by name, returning `%{field => value}`.
+  Unseal by name the entry an http server's header sends to `url`,
+  returning `%{field => value}`.
 
   For the external MCP servers' credentials, which have **no consent edge**:
-  a `vault:<name>` template in an http server's headers or a stdio backend's
-  env maps to a single-field entry. The binding is the server definition
-  itself, and only an interactive session writes one (`mcp_servers.create`
-  and `update` declare `consent: :interactive`). No binding-digest check
-  (there is no consent digest to compare against) and no projection; the
-  caller enforces its own single-value policy. This is host code, not guest
-  code, so there is no anonymous caller to reject. Fails closed on a
-  missing, non-`active`, or unreadable entry, exactly as the consent path
-  does.
+  a `vault:<name>` template in an http server's headers maps to a
+  single-field entry, and the binding is the server definition itself,
+  which only an interactive session writes (`mcp_servers.create` and
+  `update` declare `consent: :interactive`). No binding-digest check (there
+  is no consent digest to compare against) and no projection; the caller
+  enforces its own single-value policy. This is host code, not guest code,
+  so there is no anonymous caller to reject.
+
+  Fails closed on a missing, non-`active` or unreadable entry, as the
+  consent path does, and answers `{:error, :destination_mismatch}` before
+  anything is unsealed when the entry's destination does not admit a
+  `POST` to `url` (`destination_admits?/2`), so a definition edited to
+  point elsewhere carries nothing there.
   """
-  @spec unseal_by_name(String.t(), String.t()) ::
+  @spec unseal_for(String.t(), String.t(), String.t()) ::
           {:ok, %{String.t() => String.t()}} | {:error, error()}
-  def unseal_by_name(athanor_id, name) when is_binary(athanor_id) and is_binary(name) do
+  def unseal_for(athanor_id, name, url)
+      when is_binary(athanor_id) and is_binary(name) and is_binary(url) do
     actor = tenant_actor(athanor_id)
 
     with {:ok, entry} <- Arca.VaultStorage.get_by_name(actor, name),
          :ok <- check_status(entry),
-         {:ok, %{"v" => 3, "fields" => fields}} <- unseal_material(actor, entry) do
-      Arca.VaultStorage.touch_last_used(actor, entry.id)
-      {:ok, fields}
+         :ok <- check_destination(entry, url) do
+      unseal_fields(actor, entry)
+    end
+  end
+
+  @doc """
+  Unseal by name the entry a stdio backend's environment reads, returning
+  `%{field => value}`.
+
+  The same host-side read as `unseal_for/3`, for a `vault:<name>` template
+  in a stdio backend's env: an environment hands the value to the process
+  it starts, so only a disclosed entry is read, and an attach-only one
+  answers `{:error, :disclosure_refused}` before anything is unsealed.
+  Fails closed on a missing, non-`active` or unreadable entry.
+  """
+  @spec unseal_disclosed(String.t(), String.t()) ::
+          {:ok, %{String.t() => String.t()}} | {:error, error()}
+  def unseal_disclosed(athanor_id, name) when is_binary(athanor_id) and is_binary(name) do
+    actor = tenant_actor(athanor_id)
+
+    with {:ok, entry} <- Arca.VaultStorage.get_by_name(actor, name),
+         :ok <- check_status(entry),
+         :ok <- check_disclosed(entry) do
+      unseal_fields(actor, entry)
+    end
+  end
+
+  @doc false
+  # Whether `entry`'s stored destination admits a `POST` to `url`, the one
+  # method Streamable HTTP sends. The stored text is read back through the
+  # grammar, so a row whose destination does not read admits nothing.
+  # `Sanctum.Vault.destination_matches?/3` asks the same question of a
+  # definition before it is stored.
+  @spec destination_admits?(map(), String.t()) :: boolean()
+  def destination_admits?(entry, url) when is_binary(url) do
+    with text when is_binary(text) <- Map.get(entry, :destination),
+         {:ok, %{} = map} <- Prima.Json.decode(text),
+         {:ok, destination} <- Prima.Destination.from_map(map) do
+      Prima.Destination.matches?(destination, URI.parse(url), "POST")
     else
-      {:error, reason} -> {:error, reason}
+      _ -> false
+    end
+  end
+
+  defp check_destination(entry, url) do
+    if destination_admits?(entry, url), do: :ok, else: {:error, :destination_mismatch}
+  end
+
+  # A by-name read records its use only once the material opened.
+  defp unseal_fields(actor, entry) do
+    case unseal_material(actor, entry) do
+      {:ok, %{"v" => 3, "fields" => fields}} when is_map(fields) ->
+        Arca.VaultStorage.touch_last_used(actor, entry.id)
+        {:ok, fields}
+
+      {:ok, _other} ->
+        {:error, :invalid_payload}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -166,9 +235,9 @@ defmodule Sanctum.VaultReader do
   from its binding fields, which a rebind moves — so the token changes on
   either. One that is missing, tombstoned or otherwise not `active`
   answers `:inactive`. A holder of material resolved by name
-  (`unseal_by_name/2`) compares these with the tokens it resolved under,
-  so a rotation, rebind or revocation whose announcement never reached it
-  is still found. A store that cannot answer refuses whole, so an outage
+  (`unseal_for/3`, `unseal_disclosed/2`) compares these with the tokens it
+  resolved under, so a rotation, rebind or revocation whose announcement
+  never reached it is still found. A store that cannot answer refuses whole, so an outage
   never reads as a changed credential.
   """
   @spec revisions(String.t(), [String.t()]) ::
@@ -262,8 +331,9 @@ defmodule Sanctum.VaultReader do
     end
   end
 
-  # Every read here hands material to a component; an attach-only entry's
-  # material never leaves that way, so it is refused before it is unsealed.
+  # A consent read hands material to a component and a by-name env read to
+  # a backend's process; an attach-only entry's material never leaves
+  # either way, so it is refused before it is unsealed.
   defp check_disclosed(%{attach_only: false}), do: :ok
   defp check_disclosed(_entry), do: {:error, :disclosure_refused}
 
@@ -337,13 +407,13 @@ defmodule Sanctum.VaultReader do
   defp unseal_material(%Prima.Actor{}, _entry), do: {:error, :unseal_failed}
 
   # The one place a bare athanor becomes an actor, and it is inside the
-  # layer that owns tenancy. `usable/3` and `unseal_by_name/2` are reached
-  # by host-side callers that hold a resolved tenant and no context — the
-  # external-MCP reconciler resolving a `vault:<name>` template, the
-  # consent planner checking an edge — so what they get is the narrowest
-  # actor there is: this athanor, no person, athanor scope, no system
-  # authority. Nothing here widens a caller; it names the tenant it was
-  # already given.
+  # layer that owns tenancy. `usable/3`, `unseal_for/3` and
+  # `unseal_disclosed/2` are reached by host-side callers that hold a
+  # resolved tenant and no context — an external MCP server resolving a
+  # `vault:<name>` template, the consent planner checking an edge — so what
+  # they get is the narrowest actor there is: this athanor, no person,
+  # athanor scope, no system authority. Nothing here widens a caller; it
+  # names the tenant it was already given.
   defp tenant_actor(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
     %Prima.Actor{athanor_id: athanor_id}
   end

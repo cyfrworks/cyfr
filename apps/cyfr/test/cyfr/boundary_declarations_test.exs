@@ -131,7 +131,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           Door Door.Store Egress ExecutionStanding Namespace Network Notify
           Policy.Enforcement Provisioning Session SignIn Tenancy Tenancy.Athanors
           Tenancy.Members Tenancy.Users TinctureAuth ToolServerDigest Unauthorized
-          UnauthorizedError Vault.OAuthGrant VaultReader),
+          UnauthorizedError Vault Vault.OAuthGrant VaultReader),
        "the identity, authority, consent and vault entries the layers above call " <>
          "downward, each rostered for its callers in `Cyfr.Boundaries`' surface rows"},
       {~w(Consent.Components Grimoire Tenancy.Caps),

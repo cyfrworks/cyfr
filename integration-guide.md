@@ -961,7 +961,7 @@ A vault entry holds credential material — sealed at rest, never returned by an
 | `revoke` | `id` | Kill the material; dependent profiles report not-ready |
 | `delete` | `id` | Remove the entry |
 
-**Every entry names its destination.** `destination` is required at `create` and at a new entry's `authorize`, and there is no default: `hosts` (exact names, or `*.` and a name), and optionally `scheme` (`https` unless `http` is stated), `port`, `methods` and `paths` (prefixes beginning with `/`). An entry is attach-only unless `disclose` is `true`: its value is never handed to a component, and a component asking for it (`cyfr:vault/read`, `cyfr:oauth/token`) is refused. Set `disclose: true` only for a component that must read the values itself. Both are binding fields, so moving either is a `rebind`.
+**Every entry names its destination.** `destination` is required at `create` and at a new entry's `authorize`, and there is no default: `hosts` (exact names, or `*.` and a name), and optionally `scheme` (`https` unless `http` is stated), `port`, `methods` and `paths` (prefixes beginning with `/`). An entry is attach-only unless `disclose` is `true`: its value is never handed to a component, and a component asking for it (`cyfr:vault/read`, `cyfr:oauth/token`) is refused. Set `disclose: true` only for a component that must read the values itself. Both are binding fields, so moving either is a `rebind`. An external MCP server definition is refused, at create, at update and again when it connects, when a header names an entry whose destination does not cover its URL, or when a stdio backend's environment names an attach-only entry; nothing is unsealed first.
 
 ```json
 {

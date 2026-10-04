@@ -274,11 +274,13 @@ defmodule Emissary.External.ServerTest do
       :ok
     end
 
+    @inside "https://api.example.com/mcp"
+
     test "reports only the header name on a missing vault entry" do
       assert {:error, message} =
                Server.resolve_headers(
                  %{"authorization" => "vault:EXT_MISSING"},
-                 "ath_test"
+                 {"ath_test", @inside}
                )
 
       assert message =~ "authorization"
@@ -299,14 +301,45 @@ defmodule Emissary.External.ServerTest do
       assert {:ok, %{"authorization" => "Bearer sk-ext-0123456789", "accept" => "text/plain"}} =
                Server.resolve_headers(
                  %{"authorization" => "Bearer vault:ext-bearer", "accept" => "text/plain"},
-                 ctx.athanor_id
+                 {ctx.athanor_id, @inside}
                )
+    end
+
+    test "an entry whose destination does not cover the server's URL is refused unsealed" do
+      ctx = Sanctum.TestContext.local()
+
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "openai-key",
+          kind: "api_key",
+          fields: %{"token" => "sk-openai-0123456789"},
+          destination: %{"hosts" => ["api.openai.com"], "paths" => ["/v1"]}
+        })
+
+      headers = %{"authorization" => "Bearer vault:openai-key"}
+
+      for url <- [
+            "https://evil.example/mcp",
+            "https://api.openai.com/v2/mcp",
+            nil
+          ] do
+        assert {:error, :destination_mismatch} =
+                 Server.resolve_headers(headers, {ctx.athanor_id, url}),
+               inspect(url)
+      end
+
+      assert {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry.id)
+      assert row.last_used_at == nil
+
+      # Inside the entry's host and paths, it is sent.
+      assert {:ok, %{"authorization" => "Bearer sk-openai-0123456789"}} =
+               Server.resolve_headers(headers, {ctx.athanor_id, "https://api.openai.com/v1/mcp"})
     end
 
     test "a reference this server does not resolve is refused, never sent as a literal" do
       for unresolved <- ["secret:EXT_TOKEN", "Token secret:EXT_TOKEN"] do
         assert {:error, message} =
-                 Server.resolve_headers(%{"x-client" => unresolved}, "ath_test")
+                 Server.resolve_headers(%{"x-client" => unresolved}, {"ath_test", @inside})
 
         assert message =~ "x-client"
         refute message =~ "EXT_TOKEN"
@@ -605,7 +638,8 @@ defmodule Emissary.External.ServerTest do
 
       Arca.Repo.query!("ALTER TABLE vault_entries RENAME TO vault_entries_unreadable")
 
-      assert {:error, {:unavailable, "Vault"}} = connect(pid)
+      assert {:error, sentence} = connect(pid)
+      assert sentence == Grimoire.render({:unavailable, "Vault"})
 
       state = :sys.get_state(pid)
       assert state.vault_revisions == nil
@@ -620,9 +654,164 @@ defmodule Emissary.External.ServerTest do
       Arca.Repo.query!("ALTER TABLE vault_entries RENAME TO vault_entries_unreadable")
 
       assert {:error, reason} = connect(pid)
-      refute reason == {:unavailable, "Vault"}
+      refute reason == Grimoire.render({:unavailable, "Vault"})
       assert :sys.get_state(pid).vault_revisions == %{}
     end
+  end
+
+  describe "a connect to a URL outside a header entry's destination" do
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      {:ok, ctx: Sanctum.TestContext.local()}
+    end
+
+    test "fails destination_mismatch, resolving and sending nothing", %{name: name, ctx: ctx} do
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "openai-key",
+          kind: "api_key",
+          fields: %{"token" => "sk-openai-0123456789"},
+          destination: %{"hosts" => ["api.openai.com"]}
+        })
+
+      pid =
+        start_server(name, ctx.athanor_id,
+          url: "https://evil.example/mcp",
+          headers: %{"Authorization" => "vault:openai-key"}
+        )
+
+      assert {:error, sentence} = GenServer.call(pid, :get_tools, 30_000)
+      assert sentence == Grimoire.render(:destination_mismatch)
+
+      state = :sys.get_state(pid)
+      assert state.status == :error
+      assert state.headers == %{}
+      assert state.error == sentence
+      refute state.error =~ "openai-key"
+
+      assert {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry.id)
+      assert row.last_used_at == nil
+    end
+
+    test "one covered header beside one that is not unseals neither", %{name: name, ctx: ctx} do
+      {:ok, covered} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "covered-key",
+          kind: "api_key",
+          fields: %{"token" => "sk-covered-0123456789"},
+          destination: @destination
+        })
+
+      {:ok, _elsewhere} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "openai-key",
+          kind: "api_key",
+          fields: %{"token" => "sk-openai-0123456789"},
+          destination: %{"hosts" => ["api.openai.com"]}
+        })
+
+      # The covered header sorts first, so a resolution that unsealed as
+      # it went would have read it before meeting the other.
+      pid =
+        start_server(name, ctx.athanor_id,
+          url: "https://api.example.com/mcp",
+          headers: %{"a-covered" => "vault:covered-key", "b-elsewhere" => "vault:openai-key"}
+        )
+
+      assert {:error, sentence} = GenServer.call(pid, :get_tools, 30_000)
+
+      assert {:ok, %{last_used_at: nil}} =
+               Arca.VaultStorage.get(Sanctum.Context.actor(ctx), covered.id)
+
+      assert sentence == Grimoire.render(:destination_mismatch)
+
+      # An entry that is not there refuses the set alike, in the header's
+      # own words, with the covered one still unread.
+      assert {:error, "Failed to resolve header 'b-missing'"} =
+               Server.resolve_headers(
+                 %{"a-covered" => "vault:covered-key", "b-missing" => "vault:no-such-key"},
+                 {ctx.athanor_id, "https://api.example.com/mcp"}
+               )
+
+      assert {:ok, %{last_used_at: nil}} =
+               Arca.VaultStorage.get(Sanctum.Context.actor(ctx), covered.id)
+    end
+  end
+
+  describe "a connect refused by an upstream that echoes the header it was sent" do
+    @echoed "sk-echo-server-0123456789"
+
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      ctx = Sanctum.TestContext.local()
+      bypass = Bypass.open()
+
+      {:ok, _} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "echo-key",
+          kind: "api_key",
+          fields: %{"token" => @echoed},
+          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => bypass.port}
+        })
+
+      {:ok, ctx: ctx, bypass: bypass, url: "http://127.0.0.1:#{bypass.port}/mcp"}
+    end
+
+    for era <- [:modern, :legacy] do
+      test "answers its caller with the masked sentence it keeps (#{era} peer)", %{
+        name: name,
+        ctx: ctx,
+        bypass: bypass,
+        url: url
+      } do
+        echo_upstream(bypass, unquote(era))
+
+        pid =
+          start_server(name, ctx.athanor_id,
+            url: url,
+            headers: %{"authorization" => "Bearer vault:echo-key"}
+          )
+
+        on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+
+        assert {:error, sentence} = GenServer.call(pid, :get_tools, 30_000)
+        assert sentence == "rejected credential [REDACTED]"
+        assert sentence == :sys.get_state(pid).error
+
+        assert {:error, again} = Server.reinitialize(name, ctx.athanor_id)
+        assert again == sentence
+        refute inspect({sentence, again}) =~ @echoed
+      end
+    end
+  end
+
+  # An upstream that refuses the connect with an error quoting the
+  # Authorization header it was sent: at `tools/list` for a current peer,
+  # and at `initialize` for one that answers the current probe as a legacy
+  # peer does.
+  defp echo_upstream(bypass, era) do
+    Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      request = Jason.decode!(body)
+      [auth] = Plug.Conn.get_req_header(conn, "authorization")
+
+      case {era, request["method"]} do
+        {:legacy, "tools/list"} ->
+          Plug.Conn.resp(conn, 400, "Bad Request")
+
+        _echoed ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(
+            200,
+            Jason.encode!(%{
+              "jsonrpc" => "2.0",
+              "id" => request["id"],
+              "error" => %{"code" => -32001, "message" => "rejected credential #{auth}"}
+            })
+          )
+      end
+    end)
   end
 
   describe "crash-report redaction" do

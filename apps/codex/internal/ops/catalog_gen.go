@@ -1922,11 +1922,11 @@ func (args McpServersCreateArgs) MarshalJSON() ([]byte, error) {
 }
 
 type McpServersCreateArgsConfig struct {
-	// The stdio backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
+	// The stdio backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
 	Backends Field[[]McpServersCreateArgsConfigBackendsItem] `json:"backends,omitzero"`
 	// Allow this server's tools to be called from the console (external plane). Default false: proxied tools are reachable only from inside a chain.
 	Console Field[bool] `json:"console,omitzero"`
-	// HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to reference a single-field vault entry.
+	// HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to reference a single-field vault entry whose destination covers this server's URL.
 	Headers Field[map[string]string] `json:"headers,omitzero"`
 	// Request timeout in milliseconds (default: 30000)
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`
@@ -2104,11 +2104,11 @@ func (args McpServersUpdateArgs) MarshalJSON() ([]byte, error) {
 }
 
 type McpServersUpdateArgsConfig struct {
-	// The stdio backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
+	// The stdio backends, at most 4: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals.
 	Backends Field[[]McpServersUpdateArgsConfigBackendsItem] `json:"backends,omitzero"`
 	// Allow this server's tools to be called from the console (external plane). Default false: proxied tools are reachable only from inside a chain.
 	Console Field[bool] `json:"console,omitzero"`
-	// HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to reference a single-field vault entry.
+	// HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to reference a single-field vault entry whose destination covers this server's URL.
 	Headers Field[map[string]string] `json:"headers,omitzero"`
 	// Request timeout in milliseconds (default: 30000)
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`

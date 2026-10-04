@@ -40,7 +40,7 @@ defmodule Sanctum.VaultReaderTest do
       field_names: Jason.encode!(Map.keys(fields) |> Enum.sort()),
       oauth_endpoints: Map.get(over, :oauth_endpoints),
       oauth_scopes: Map.get(over, :oauth_scopes),
-      destination: @destination,
+      destination: Map.get(over, :destination, @destination),
       attach_only: Map.get(over, :attach_only, false),
       status: Map.get(over, :status, "active"),
       sealed_payload: sealed
@@ -150,14 +150,21 @@ defmodule Sanctum.VaultReaderTest do
       assert VaultReader.fetch(foreign, resource) ==
                VaultReader.fetch(foreign, %{resource | entry_id: "vlt_nonexistent"})
 
-      assert {:error, :not_found} = VaultReader.unseal_by_name("ath_other", "a-only")
+      assert {:error, :not_found} =
+               VaultReader.unseal_for("ath_other", "a-only", "https://api.example.com/mcp")
+
+      assert {:error, :not_found} = VaultReader.unseal_disclosed("ath_other", "a-only")
 
       assert {:error, :not_found} =
                VaultReader.usable("ath_other", resource.entry_id, resource.binding_digest)
 
       # The same reads inside the owning athanor still answer.
       assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource)
-      assert {:ok, %{"k" => "v"}} = VaultReader.unseal_by_name(ctx.athanor_id, "a-only")
+
+      assert {:ok, %{"k" => "v"}} =
+               VaultReader.unseal_for(ctx.athanor_id, "a-only", "https://api.example.com/mcp")
+
+      assert {:ok, %{"k" => "v"}} = VaultReader.unseal_disclosed(ctx.athanor_id, "a-only")
     end
 
     test "a payload with unknown keys is refused at decode", %{ctx: ctx} do
@@ -236,6 +243,131 @@ defmodule Sanctum.VaultReaderTest do
       }
 
       assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource)
+    end
+  end
+
+  describe "unseal_for/3 — an http server's header entry" do
+    # Its sealed bytes replaced by ones that would not open: a refusal that
+    # came after an unseal would say so instead.
+    defp unopenable!(entry) do
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(v in Arca.Schemas.VaultEntry, where: v.id == ^entry.id),
+          set: [sealed_payload: "not-a-ciphertext"]
+        )
+    end
+
+    test "answers the fields for a URL its destination admits, and records the use",
+         %{ctx: ctx} do
+      {entry, _resource} = mint_material_entry(ctx, %{"k" => "v"}, %{name: "hdr"})
+
+      assert {:ok, %{"k" => "v"}} =
+               VaultReader.unseal_for(ctx.athanor_id, "hdr", "https://api.example.com/mcp")
+
+      assert %DateTime{} = last_used_at(ctx, entry)
+    end
+
+    test "refuses destination_mismatch for a URL outside its destination, before it is unsealed",
+         %{ctx: ctx} do
+      {entry, _resource} =
+        mint_material_entry(ctx, %{"k" => "v"}, %{
+          name: "openai-key",
+          destination: ~s({"hosts":["api.openai.com"],"paths":["/v1"],"scheme":"https"})
+        })
+
+      unopenable!(entry)
+      before = last_used_at(ctx, entry)
+
+      for url <- [
+            # another host
+            "https://evil.example/mcp",
+            # the host, outside the entry's paths
+            "https://api.openai.com/v2/mcp",
+            # the host, another scheme
+            "http://api.openai.com/v1/mcp",
+            # the host, another port
+            "https://api.openai.com:8443/v1/mcp",
+            # the host, with user information
+            "https://user@api.openai.com/v1/mcp",
+            # no URL at all
+            "not a url"
+          ] do
+        assert {:error, :destination_mismatch} =
+                 VaultReader.unseal_for(ctx.athanor_id, "openai-key", url),
+               url
+      end
+
+      assert last_used_at(ctx, entry) == before
+
+      # Inside the destination, the same row is read, and its bytes do not open.
+      assert {:error, :unseal_failed} =
+               VaultReader.unseal_for(
+                 ctx.athanor_id,
+                 "openai-key",
+                 "https://api.openai.com/v1/mcp"
+               )
+    end
+
+    test "a wildcard host admits a name below it and not the name itself", %{ctx: ctx} do
+      mint_material_entry(ctx, %{"k" => "v"}, %{
+        name: "wild",
+        destination: ~s({"hosts":["*.example.com"],"scheme":"https"})
+      })
+
+      assert {:ok, %{"k" => "v"}} =
+               VaultReader.unseal_for(ctx.athanor_id, "wild", "https://mcp.example.com/mcp")
+
+      assert {:error, :destination_mismatch} =
+               VaultReader.unseal_for(ctx.athanor_id, "wild", "https://example.com/mcp")
+    end
+
+    test "an attach-only entry is attached to its destination: a header is no disclosure",
+         %{ctx: ctx} do
+      mint_material_entry(ctx, %{"k" => "v"}, %{name: "attached", attach_only: true})
+
+      assert {:ok, %{"k" => "v"}} =
+               VaultReader.unseal_for(ctx.athanor_id, "attached", "https://api.example.com/mcp")
+    end
+
+    test "a missing or inactive entry is refused as before", %{ctx: ctx} do
+      mint_material_entry(ctx, %{"k" => "v"}, %{name: "revoked", status: "revoked"})
+      url = "https://api.example.com/mcp"
+
+      assert {:error, :not_found} = VaultReader.unseal_for(ctx.athanor_id, "absent", url)
+
+      assert {:error, {:entry_unavailable, "revoked"}} =
+               VaultReader.unseal_for(ctx.athanor_id, "revoked", url)
+    end
+  end
+
+  describe "unseal_disclosed/2 — a stdio backend's env entry" do
+    test "answers a disclosed entry's fields", %{ctx: ctx} do
+      {entry, _resource} = mint_material_entry(ctx, %{"k" => "v"}, %{name: "env"})
+
+      assert {:ok, %{"k" => "v"}} = VaultReader.unseal_disclosed(ctx.athanor_id, "env")
+      assert %DateTime{} = last_used_at(ctx, entry)
+    end
+
+    test "refuses an attach-only entry disclosure_refused before it is unsealed", %{ctx: ctx} do
+      {entry, _resource} =
+        mint_material_entry(ctx, %{"k" => "v"}, %{name: "attach-only", attach_only: true})
+
+      unopenable!(entry)
+      before = last_used_at(ctx, entry)
+
+      assert {:error, :disclosure_refused} =
+               VaultReader.unseal_disclosed(ctx.athanor_id, "attach-only")
+
+      assert last_used_at(ctx, entry) == before
+    end
+
+    test "a missing or inactive entry is refused as before", %{ctx: ctx} do
+      mint_material_entry(ctx, %{"k" => "v"}, %{name: "revoked-env", status: "revoked"})
+
+      assert {:error, :not_found} = VaultReader.unseal_disclosed(ctx.athanor_id, "absent")
+
+      assert {:error, {:entry_unavailable, "revoked"}} =
+               VaultReader.unseal_disclosed(ctx.athanor_id, "revoked-env")
     end
   end
 

@@ -329,6 +329,81 @@ defmodule Sanctum.VaultTest do
     end
   end
 
+  describe "what an external server definition may name, read from metadata alone" do
+    test "a header's entry is one whose destination admits a POST to the server's URL",
+         %{ctx: ctx} do
+      exact = create!(ctx, %{destination: %{"hosts" => ["api.openai.com"], "paths" => ["/v1"]}})
+      wild = create!(ctx, %{destination: %{"hosts" => ["*.example.com"]}})
+      get_only = create!(ctx, %{destination: %{"hosts" => ["db.example"], "methods" => ["GET"]}})
+
+      assert Vault.destination_matches?(ctx, exact.name, "https://api.openai.com/v1/mcp")
+      # Another host, the host outside the entry's paths, and another scheme.
+      refute Vault.destination_matches?(ctx, exact.name, "https://evil.example/mcp")
+      refute Vault.destination_matches?(ctx, exact.name, "https://api.openai.com/v2/mcp")
+      refute Vault.destination_matches?(ctx, exact.name, "http://api.openai.com/v1/mcp")
+
+      # A wildcard host admits a name below it, never the name itself.
+      assert Vault.destination_matches?(ctx, wild.name, "https://mcp.example.com/mcp")
+      refute Vault.destination_matches?(ctx, wild.name, "https://example.com/mcp")
+
+      # Streamable HTTP posts every request: an entry bound to GET is not sent.
+      refute Vault.destination_matches?(ctx, get_only.name, "https://db.example/mcp")
+
+      # Nothing was unsealed, so no use was recorded.
+      for entry <- [exact, wild, get_only], do: assert(row!(ctx, entry.id).last_used_at == nil)
+    end
+
+    test "a missing, inactive or foreign entry covers no URL", %{ctx: ctx} do
+      url = "https://db.example/mcp"
+      revoked = create!(ctx)
+      {:ok, _} = Vault.revoke(ctx, revoked.id)
+      living = create!(ctx)
+
+      refute Vault.destination_matches?(ctx, "absent", url)
+      refute Vault.destination_matches?(ctx, revoked.name, url)
+      refute Vault.destination_matches?(%{ctx | athanor_id: "ath_other"}, living.name, url)
+      assert Vault.destination_matches?(ctx, living.name, url)
+    end
+
+    test "a rebind moves where the entry may be sent", %{ctx: ctx} do
+      entry = create!(ctx)
+      url = "https://db.example/mcp"
+      assert Vault.destination_matches?(ctx, entry.name, url)
+
+      {:ok, _} =
+        Vault.rebind(ctx, %{id: entry.id, destination: %{"hosts" => ["elsewhere.example"]}})
+
+      refute Vault.destination_matches?(ctx, entry.name, url)
+    end
+
+    test "a backend's env entry is an active, disclosed one", %{ctx: ctx} do
+      disclosed = create!(ctx)
+
+      {:ok, attached} =
+        create(ctx, %{
+          name: "attached-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          fields: %{"K" => "v"},
+          destination: @destination
+        })
+
+      revoked = create!(ctx)
+      {:ok, _} = Vault.revoke(ctx, revoked.id)
+
+      assert Vault.disclosed?(ctx, disclosed.name)
+      refute Vault.disclosed?(ctx, attached.name)
+      refute Vault.disclosed?(ctx, revoked.name)
+      refute Vault.disclosed?(ctx, "absent")
+      refute Vault.disclosed?(%{ctx | athanor_id: "ath_other"}, disclosed.name)
+
+      # Disclosed by a rebind, the attach-only entry may be named.
+      {:ok, _} = Vault.rebind(ctx, %{id: attached.id, disclose: true})
+      assert Vault.disclosed?(ctx, attached.name)
+
+      for entry <- [disclosed, attached], do: assert(row!(ctx, entry.id).last_used_at == nil)
+    end
+  end
+
   describe "defaults" do
     test "the first entry of a provider is its default, and a second is not", %{ctx: ctx} do
       first = create!(ctx, %{provider_hint: "openai.com"})

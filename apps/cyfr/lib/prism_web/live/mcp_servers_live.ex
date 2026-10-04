@@ -12,11 +12,17 @@ defmodule PrismWeb.McpServersLive do
     * **Add stdio server** — one stdio backend (a command such as
       `npx -y @modelcontextprotocol/server-github` and its env) that the
       backends service runs under a uid of its own. Env values are `vault:ENTRY`
-      templates; only the non-secret names `Emissary.External.BackendDefinition`
-      lists may hold a literal. More backends for one server go through the
-      config form.
+      templates naming disclosed entries; only the non-secret names
+      `Emissary.External.BackendDefinition` lists may hold a literal. More
+      backends for one server go through the config form.
     * **Add server** — the config as JSON: an http server's `url` and
-      `headers`, or a stdio server's `transport` and `backends`.
+      `headers`, whose `vault:ENTRY` templates name entries whose
+      destination covers the URL, or a stdio server's `transport` and
+      `backends`.
+
+  A definition the catalog refuses says why in its form. A server saved
+  whose connect is refused, and a Test whose connect is refused, say why
+  in the flash.
 
   An expanded stdio server shows what the backends service reports for each backend
   and offers Restart, which releases its backends and starts them again.
@@ -135,6 +141,12 @@ defmodule PrismWeb.McpServersLive do
 
   def handle_event("test", %{"name" => name}, socket) do
     case call_tool(socket, "mcp_servers/test", %{"name" => name}) do
+      {:ok, %{error: sentence}} when is_binary(sentence) ->
+        {:noreply,
+         socket
+         |> refresh_servers()
+         |> put_flash(:error, "Test #{name}: #{sentence}")}
+
       {:ok, result} ->
         status = result[:status] || "unknown"
 
@@ -235,12 +247,20 @@ defmodule PrismWeb.McpServersLive do
          |> refresh_servers()
          |> assign(:show_add, nil)
          |> assign(:form_error, nil)
-         |> put_flash(:info, "Server '#{name}' added (#{result[:status] || "saved"}).")}
+         |> added_flash(name, result)}
 
       {:error, reason} ->
         {:noreply, assign(socket, :form_error, "Failed to add: #{error_message(reason)}")}
     end
   end
+
+  # A server saved whose connect was then refused says why, where it was
+  # added: the sentence the create answered.
+  defp added_flash(socket, name, %{error: sentence}) when is_binary(sentence),
+    do: put_flash(socket, :error, "Server '#{name}' added — #{sentence}")
+
+  defp added_flash(socket, name, result),
+    do: put_flash(socket, :info, "Server '#{name}' added (#{result[:status] || "saved"}).")
 
   # One `NAME=value` per line; blank lines are skipped.
   defp parse_env(text) do
@@ -380,8 +400,8 @@ defmodule PrismWeb.McpServersLive do
             </label>
             <.textarea name="env" rows="3" placeholder={@placeholder_env} class="font-mono" />
             <p class="text-xs text-gray-600 mt-1">
-              A value is <code class="text-gray-500">vault:ENTRY</code>
-              (a single-field entry on the Vault page); only NODE_ENV, LOG_LEVEL, TZ, LANG,
+              A value is <code class="text-gray-500">vault:ENTRY</code>, a single-field
+              disclosed entry on the Vault page; only NODE_ENV, LOG_LEVEL, TZ, LANG,
               LC_ALL, NO_COLOR and DEBUG may hold a literal. A command never names a vault entry.
             </p>
           </div>
@@ -408,10 +428,9 @@ defmodule PrismWeb.McpServersLive do
               class="font-mono"
             />
             <p class="text-xs text-gray-600 mt-1">
-              Use <code class="text-gray-500">vault:ENTRY</code>
-              or <code class="text-gray-500">Bearer vault:ENTRY</code>
-              in header values to reference a stored vault entry
-              (create one on the Vault page). A stdio server's config is <code class="text-gray-500">{"{\"transport\": \"stdio\", \"backends\": [...]}"}</code>.
+              A header value may be <code class="text-gray-500">vault:ENTRY</code>
+              or <code class="text-gray-500">Bearer vault:ENTRY</code>, a single-field entry
+              whose destination covers this server's URL (create one on the Vault page). A stdio server's config is <code class="text-gray-500">{"{\"transport\": \"stdio\", \"backends\": [...]}"}</code>.
             </p>
           </div>
           <div :if={@form_error} class="text-sm text-red-400">{@form_error}</div>

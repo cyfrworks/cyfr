@@ -418,12 +418,19 @@ defmodule Cyfr.Boundaries do
         Sanctum.ExecutionStanding
         Sanctum.Network Sanctum.Recovery Sanctum.Session Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
-        Sanctum.UnauthorizedError Sanctum.Vault.OAuthGrant Sanctum.VaultReader Sanctum.Webhook
+        Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Vault.OAuthGrant Sanctum.VaultReader
+        Sanctum.Webhook
       ),
       reason:
         "the auth fabric's own front door, where a wide roster is the front door doing " <>
           "its job. The MCP transport carries tenancy, reads a server's vault edge, and " <>
           "uses Sanctum.Network/Egress for external servers and the backends service. " <>
+          "`Sanctum.Vault` is the check of a server definition against the entries it " <>
+          "names, metadata only, which the external provider makes before storing one " <>
+          "and the server process and the backends controller make again before " <>
+          "unsealing any: a header's entry's destination covers the server's URL " <>
+          "(`destination_matches?/3`) and a backend env's entry is disclosed " <>
+          "(`disclosed?/2`). " <>
           "An outbound call's row runs under its caller's grant, checked through " <>
           "Sanctum.ExecutionStanding as it is admitted and closed, and the MCP " <>
           "controller answers a `Sanctum.UnauthorizedError` raised in the request " <>
@@ -1403,12 +1410,14 @@ defmodule Cyfr.Boundaries do
       tool_patterns: 1
     ],
     "Sanctum.Unauthorized" => [class: 1, code_override: 1, message: 1, message: 2, reason?: 1],
+    "Sanctum.Vault" => [destination_matches?: 3, disclosed?: 2],
     "Sanctum.Vault.OAuthGrant" => [complete: 3, redirect_uri: 0],
     "Sanctum.VaultReader" => [
       fetch: 2,
       oauth_token: 3,
       revisions: 2,
-      unseal_by_name: 2,
+      unseal_disclosed: 2,
+      unseal_for: 3,
       usable: 3
     ],
     "Sanctum.Webhook" => [
@@ -2206,10 +2215,10 @@ defmodule Cyfr.Boundaries do
       path: "Sanctum.VaultReader.tenant_actor/1",
       file: "apps/sanctum/lib/sanctum/vault_reader.ex",
       reason:
-        "private, and inside the layer that owns tenancy: `usable/3` and " <>
-          "`unseal_by_name/2` are reached by host-side callers that hold a resolved " <>
-          "tenant and no context. It names the tenant it was already given and " <>
-          "widens nothing."
+        "private, and inside the layer that owns tenancy: `usable/3`, `unseal_for/3` " <>
+          "and `unseal_disclosed/2` are reached by host-side callers that hold a " <>
+          "resolved tenant and no context. It names the tenant it was already given " <>
+          "and widens nothing."
     }
   ]
 

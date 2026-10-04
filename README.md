@@ -323,7 +323,9 @@ cyfr mcp list
 Header values support vault references (`vault:ENTRY_NAME`, or with a scheme,
 `Bearer vault:ENTRY_NAME`) — the named vault entry's single field is resolved at request
 time, after the scheme when there is one, so credentials stay encrypted at rest and never
-appear in the server config.
+appear in the server config. The entry's destination must cover the server's URL: a
+definition whose header names an entry it does not cover is refused at create, at update
+and again when it connects.
 
 ## Deploy to a Server
 
@@ -404,7 +406,7 @@ CYFR reaches an **http** MCP server at its URL. A **stdio** MCP server (anything
 Adding one from Prism:
 
 1. Open **MCP Servers** in the sidebar and click **Add stdio server**.
-2. Give the server a name (e.g. `github`), a backend name, the command (e.g. `npx -y @modelcontextprotocol/server-github`), and its env, one `NAME=value` per line. A credential is always a vault template — `GITHUB_PERSONAL_ACCESS_TOKEN=vault:github-token`, naming a single-field entry on the **Vault** page; only `NODE_ENV`, `LOG_LEVEL`, `TZ`, `LANG`, `LC_ALL`, `NO_COLOR` and `DEBUG` may hold a literal, and a command may never name a vault entry, because every process on the backends service can read command lines.
+2. Give the server a name (e.g. `github`), a backend name, the command (e.g. `npx -y @modelcontextprotocol/server-github`), and its env, one `NAME=value` per line. A credential is always a vault template — `GITHUB_PERSONAL_ACCESS_TOKEN=vault:github-token`, naming a single-field disclosed entry on the **Vault** page (an attach-only entry is refused at create and when the backend starts); only `NODE_ENV`, `LOG_LEVEL`, `TZ`, `LANG`, `LC_ALL`, `NO_COLOR` and `DEBUG` may hold a literal, and a command may never name a vault entry, because every process on the backends service can read command lines.
 3. On first use the backends service starts the backend and its tools surface as `github:github__search_repositories`, … on CYFR's tool list. AQUA uses them like any other external MCP tool. A backend that takes longer than 15 s to start (an `npx -y` download, say) has its tools added to the list once it is ready, without a refresh.
 
 From the CLI or MCP, the same server is `cyfr mcp add github '{"transport":"stdio","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:github-token"}}]}'`; a server may define up to four backends.

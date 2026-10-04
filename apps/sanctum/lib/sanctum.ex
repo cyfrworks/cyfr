@@ -95,6 +95,7 @@ defmodule Sanctum do
       ToolServerDigest,
       Unauthorized,
       UnauthorizedError,
+      Vault,
       Vault.OAuthGrant,
       VaultReader,
       Webhook

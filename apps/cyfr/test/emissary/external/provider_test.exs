@@ -246,7 +246,254 @@ defmodule Emissary.External.ProviderTest do
     end
   end
 
+  describe "handle/3 - a header's vault entry and the server's URL" do
+    @header_refusal "Header 'Authorization' names no active vault entry whose destination " <>
+                      "covers this server's URL"
+
+    setup %{ctx: ctx} do
+      on_exit(fn ->
+        for name <- ["relay", "local", "kept"],
+            do: Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id)
+      end)
+
+      {:ok, openai} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "openai-key",
+          kind: "api_key",
+          fields: %{"token" => "sk-openai-0123456789"},
+          destination: %{"hosts" => ["api.openai.com"], "paths" => ["/v1"]}
+        })
+
+      {:ok, local} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "local-key",
+          kind: "api_key",
+          fields: %{"token" => "sk-local-0123456789"},
+          destination: %{"hosts" => ["127.0.0.1"], "port" => 9}
+        })
+
+      {:ok, openai: openai, local: local}
+    end
+
+    defp http(url, header), do: %{"url" => url, "headers" => %{"Authorization" => header}}
+
+    defp define(ctx, action, name, config, extra \\ %{}) do
+      Provider.handle(
+        "mcp_servers",
+        ctx,
+        Map.merge(%{"action" => action, "name" => name, "config" => config}, extra)
+      )
+    end
+
+    defp last_used_at(ctx, entry) do
+      {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry.id)
+      row.last_used_at
+    end
+
+    test "an external definition cannot send an entry outside its destination",
+         %{ctx: ctx, openai: openai} do
+      actor = Sanctum.Context.actor(ctx)
+
+      # Another host, the entry's host outside its paths, and an entry that
+      # is not there: the one refusal, naming the header and never the entry.
+      for config <- [
+            http("https://evil.example/mcp", "vault:openai-key"),
+            http("https://evil.example/mcp", "Bearer vault:openai-key"),
+            http("https://api.openai.com/v2/mcp", "vault:openai-key"),
+            http("https://evil.example/mcp", "vault:no-such-key")
+          ] do
+        assert {:error, {:invalid_argument, @header_refusal}} =
+                 define(ctx, "create", "relay", config),
+               inspect(config)
+      end
+
+      assert {:error, :not_found} = Arca.McpServerStorage.get(actor, "relay")
+
+      # An update is held to the same rule, and leaves the row as it was.
+      {:ok, kept} =
+        Arca.McpServerStorage.insert(actor, %{
+          name: "kept",
+          url: "https://127.0.0.1:9/mcp",
+          enabled: false,
+          config_json: Jason.encode!(%{"headers" => %{"Authorization" => "vault:local-key"}})
+        })
+
+      assert {:error, {:invalid_argument, @header_refusal}} =
+               define(
+                 ctx,
+                 "update",
+                 "kept",
+                 http("https://evil.example/mcp", "vault:openai-key"),
+                 %{"epoch" => kept.epoch}
+               )
+
+      assert {:ok, %{url: "https://127.0.0.1:9/mcp", epoch: epoch}} =
+               Arca.McpServerStorage.get(actor, "kept")
+
+      assert epoch == kept.epoch
+
+      # A row edited underneath to send the entry elsewhere connects to
+      # nothing: the connect refuses in the reader's words, unsealed.
+      {:ok, _} =
+        Arca.McpServerStorage.update(actor, "kept", %{
+          url: "https://evil.example/mcp",
+          enabled: true,
+          config_json: Jason.encode!(%{"headers" => %{"Authorization" => "vault:openai-key"}})
+        })
+
+      assert {:ok, %{status: "error", error: sentence}} =
+               Provider.handle("mcp_servers", ctx, %{"action" => "test", "name" => "kept"})
+
+      assert sentence == Grimoire.render(:destination_mismatch)
+      refute sentence =~ "openai-key"
+      assert last_used_at(ctx, openai) == nil
+    end
+
+    test "an entry whose destination covers the URL is admitted", %{ctx: ctx, local: local} do
+      # Saved, and the connect resolved the header before the upstream
+      # refused the connection.
+      assert {:ok, %{name: "local", status: "error"}} =
+               define(ctx, "create", "local", http("https://127.0.0.1:9/mcp", "vault:local-key"))
+
+      assert {:ok, _} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "local")
+      assert %DateTime{} = last_used_at(ctx, local)
+    end
+
+    test "a wildcard host admits a name below it, and the URL is validated next", %{ctx: ctx} do
+      {:ok, _} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "wild-key",
+          kind: "api_key",
+          fields: %{"token" => "sk-wild-0123456789"},
+          destination: %{"hosts" => ["*.example.invalid"]}
+        })
+
+      # Past the header's check, the URL itself is what refuses: `.invalid`
+      # never resolves.
+      assert {:error, {:invalid_argument, "Invalid URL:" <> _}} =
+               define(
+                 ctx,
+                 "create",
+                 "relay",
+                 http("https://mcp.example.invalid/mcp", "vault:wild-key")
+               )
+
+      assert {:error, {:invalid_argument, @header_refusal}} =
+               define(
+                 ctx,
+                 "create",
+                 "relay",
+                 http("https://example.invalid/mcp", "vault:wild-key")
+               )
+    end
+
+    test "an inactive entry is refused like a missing one", %{ctx: ctx, local: local} do
+      {:ok, _} = Sanctum.Vault.revoke(ctx, local.id)
+
+      assert {:error, {:invalid_argument, @header_refusal}} =
+               define(ctx, "create", "local", http("https://127.0.0.1:9/mcp", "vault:local-key"))
+    end
+  end
+
+  describe "handle/3 - an upstream that echoes the header it was sent" do
+    @echoed "sk-echo-provider-0123456789"
+
+    setup %{ctx: ctx} do
+      bypass = Bypass.open()
+
+      {:ok, _} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "echo-key",
+          kind: "api_key",
+          fields: %{"token" => @echoed},
+          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => bypass.port}
+        })
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop("echo", ctx.athanor_id) end)
+      {:ok, bypass: bypass, url: "http://127.0.0.1:#{bypass.port}/mcp"}
+    end
+
+    for era <- [:modern, :legacy] do
+      test "create, Test and Refresh answer the mask, never the value (#{era} peer)", %{
+        ctx: ctx,
+        bypass: bypass,
+        url: url
+      } do
+        echo_upstream(bypass, unquote(era))
+        masked = "rejected credential [REDACTED]"
+
+        assert {:ok, %{name: "echo", status: "error", error: ^masked} = created} =
+                 Provider.handle("mcp_servers", ctx, %{
+                   "action" => "create",
+                   "name" => "echo",
+                   "config" => %{
+                     "url" => url,
+                     "headers" => %{"Authorization" => "Bearer vault:echo-key"}
+                   }
+                 })
+
+        assert {:ok, %{status: "error", error: ^masked} = tested} =
+                 Provider.handle("mcp_servers", ctx, %{"action" => "test", "name" => "echo"})
+
+        assert {:error, refreshed} =
+                 Provider.handle("mcp_servers", ctx, %{"action" => "refresh", "name" => "echo"})
+
+        assert refreshed == "Failed to refresh echo: " <> masked
+
+        assert {:ok, %{refreshed: [], failed: [%{name: "echo", error: every}]}} =
+                 Provider.handle("mcp_servers", ctx, %{"action" => "refresh"})
+
+        assert every =~ "rejected credential"
+        refute inspect({created, tested, refreshed, every}) =~ @echoed
+      end
+    end
+
+    # An upstream that refuses the connect with an error quoting the
+    # Authorization header it was sent: at `tools/list` for a current peer,
+    # and at `initialize` for one that answers the current probe as a
+    # legacy peer does.
+    defp echo_upstream(bypass, era) do
+      Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        request = Jason.decode!(body)
+        [auth] = Plug.Conn.get_req_header(conn, "authorization")
+
+        case {era, request["method"]} do
+          {:legacy, "tools/list"} ->
+            Plug.Conn.resp(conn, 400, "Bad Request")
+
+          _echoed ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.resp(
+              200,
+              Jason.encode!(%{
+                "jsonrpc" => "2.0",
+                "id" => request["id"],
+                "error" => %{"code" => -32001, "message" => "rejected credential #{auth}"}
+              })
+            )
+        end
+      end)
+    end
+  end
+
   describe "handle/3 - stdio servers" do
+    # The entry the backends' env reads, disclosed: an environment hands it
+    # to the process it starts.
+    setup %{ctx: ctx} do
+      {:ok, _} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "gh-token",
+          kind: "api_key",
+          fields: %{"token" => "ghp_provider_test_0123456789"},
+          destination: %{"hosts" => ["api.github.com"]},
+          disclose: true
+        })
+
+      :ok
+    end
+
     @stdio_config %{
       "transport" => "stdio",
       "backends" => [
@@ -456,17 +703,30 @@ defmodule Emissary.External.ProviderTest do
     end
 
     test "a vault reference is still shown — it names a vault entry", %{ctx: ctx} do
-      Provider.handle("mcp_servers", ctx, %{
-        "action" => "create",
-        "name" => "hdr-vault",
-        "config" => %{
-          "url" => "https://localhost:99999/mcp",
-          "headers" => %{
-            "authorization" => "Bearer vault:my_entry",
-            "x-api-key" => "vault:other_entry"
+      for name <- ["my_entry", "other_entry"] do
+        {:ok, _} =
+          Sanctum.TestContext.create_vault(ctx, %{
+            name: name,
+            kind: "api_key",
+            fields: %{"token" => "t-" <> name},
+            destination: %{"hosts" => ["127.0.0.1"], "port" => 9}
+          })
+      end
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop("hdr-vault", ctx.athanor_id) end)
+
+      {:ok, _} =
+        Provider.handle("mcp_servers", ctx, %{
+          "action" => "create",
+          "name" => "hdr-vault",
+          "config" => %{
+            "url" => "https://127.0.0.1:9/mcp",
+            "headers" => %{
+              "authorization" => "Bearer vault:my_entry",
+              "x-api-key" => "vault:other_entry"
+            }
           }
-        }
-      })
+        })
 
       assert {:ok, %{config: config}} =
                Provider.handle("mcp_servers", ctx, %{
