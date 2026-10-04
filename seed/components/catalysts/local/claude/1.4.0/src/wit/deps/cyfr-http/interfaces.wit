@@ -1,0 +1,30 @@
+package cyfr:http@0.1.0;
+
+/// Synchronous HTTP request/response. The host enforces domain allowlisting,
+/// rate limits, SSRF prevention, and size limits before executing the request.
+/// Input and output are JSON-encoded strings.
+interface fetch {
+    /// Execute an HTTP request. JSON format:
+    /// Request: {"method": "GET", "url": "...", "headers": {...}, "body": "..."}
+    /// Response: {"status": 200, "headers": {...}, "body": "..."} or
+    /// {"error": {"type": "...", "message": "..."}}
+    ///
+    /// A request may name a "connection": the name of the manifest need it
+    /// satisfies. CYFR then makes the request itself and attaches the
+    /// credential bound to that need, as the need's attach rule places it,
+    /// so the request carries no credential header and the component never
+    /// holds the value.
+    request: func(json-request: string) -> string;
+}
+
+/// Polling-based streaming HTTP for consuming SSE and other streaming responses.
+/// All the same policy enforcement as fetch applies, and a request may name a
+/// "connection" as a fetch request does.
+interface streaming {
+    /// Start a streaming HTTP request. Returns a JSON handle ID.
+    request: func(json-request: string) -> string;
+    /// Read next chunk. Returns {"data": "...", "done": false} or {"data": "", "done": true}.
+    read: func(handle: string) -> string;
+    /// Close and clean up the stream.
+    close: func(handle: string) -> string;
+}

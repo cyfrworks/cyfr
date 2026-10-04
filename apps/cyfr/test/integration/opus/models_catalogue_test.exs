@@ -5,9 +5,9 @@ defmodule Opus.ModelsCatalogueTest do
   @moduledoc """
   The console's model listing is a fan-out over the installed catalysts
   that speak `model/chat@1`, through the catalog: every such catalyst is
-  named under `refs` at its versionless ref, one that binds no key has
-  its key read refused and lands under `errors`, and a catalyst that
-  speaks no contract is not asked at all.
+  named under `refs` at its versionless ref, one whose connection binds
+  no key has its listing's request refused by CYFR and lands under
+  `errors`, and a catalyst that speaks no contract is not asked at all.
   """
 
   use ExUnit.Case, async: false
@@ -65,15 +65,16 @@ defmodule Opus.ModelsCatalogueTest do
     expected_refs = Map.new(models, &{&1.name, &1.ref})
     assert catalogue["refs"] == expected_refs
 
-    # No key is bound: the key read is refused before anything is dialled,
-    # and that refusal is the provider's row.
+    # No key is bound: each catalyst's listing names its connection, CYFR
+    # refuses it before anything is dialled, and that refusal is the
+    # provider's row.
     assert catalogue["models"] == %{}
 
     assert Map.keys(catalogue["errors"]) |> Enum.sort() ==
              expected_refs |> Map.keys() |> Enum.sort()
 
     for {_name, message} <- catalogue["errors"] do
-      assert message =~ "not granted"
+      assert message =~ Prima.Refusal.message(:connection_not_granted)
     end
 
     refute Map.has_key?(catalogue["refs"], "files")

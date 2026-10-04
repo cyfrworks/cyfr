@@ -68,6 +68,22 @@ scrubbed, the container's CPU flat).
   bound vault the plane attaches and projects `PROBE_KEY` with nothing
   handed over, reads `PROBE_KEY` refused, and the plane is told
   `disclosure_refused`. Nothing the plane recorded carries the value.
+- The shipped model catalysts name their connection as shipped
+  (`shipped_model_attached_request`): each of the five, at the version
+  whose `api_key` need CYFR attaches, run as its seed artifact under its
+  manifest's egress, lists its models and asks for a chat. Every request
+  reaches the plane as one `attached_fetch` naming the connection
+  `api_key`, at its provider's URL, with the purpose its reading takes
+  (`fetch`, or `stream` for the chat) and no credential header; the plane
+  attaches the value by the manifest's own rule and answers sealed frames,
+  and the catalyst reads them into its contract's answer: the listing, or
+  the provider's refusal. A shipped catalyst names its provider's HTTPS
+  origin, whose port no unprivileged listener can take, so the plane
+  makes these requests to the harness's provider stand-in over plain
+  HTTP, the URL's host kept for `Host`; the request the service posted is
+  recorded as it came. The shipped artifact runs against the scripted
+  host here; CYFR's own attachment of a shipped artifact's request to a
+  provider is not composed in this suite or any other.
 - An answer body larger than one credit window of the relay
   (`Prima.RunnerRelay.initial_credit/0`) completes: the catalyst's `links`
   of a page past the window, under an authority whose limits admit it,
@@ -88,13 +104,14 @@ import shutil
 import sys
 import threading
 import time
+import urllib.parse
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import memory  # noqa: E402
 import worker_auth as auth  # noqa: E402
-from control_plane import DROP, ZERO_AUTHORITY, ControlPlane  # noqa: E402
+from control_plane import DROP, RESERVED_HEADERS, ZERO_AUTHORITY, ControlPlane  # noqa: E402
 from stack import (  # noqa: E402
     HOME_ROOT, KEEPER_CAPS, POOL_FIRST, POOL_LAST, ROOT, SERVICE, SERVICE_UID, Stack, StatusSampler, expect, run, wait_until,
 )
@@ -163,6 +180,22 @@ ATTACHED_AUTHORITY = {
         },
     },
 }
+# The shipped model catalysts at the version whose `api_key` need CYFR
+# attaches, each run as its seed artifact: the seed refs this suite names.
+SHIPPED_MODELS = {name: "1.4.0" for name in ("claude", "gemini", "grok", "openai", "openrouter")}
+SHIPPED = {name: os.path.join(ROOT, "seed", "components", "catalysts", "local", name, version)
+           for name, version in SHIPPED_MODELS.items()}
+SHIPPED_MANIFESTS = {}
+# The model a shipped catalyst's chat names, and the paths its `models` and
+# its `chat` ask its provider for.
+SHIPPED_MODEL = "scripted-model"
+SHIPPED_PATHS = {
+    "claude": ("/v1/models?limit=1000", "/v1/messages"),
+    "gemini": ("/v1beta/models?pageSize=1000", f"/v1beta/models/{SHIPPED_MODEL}:streamGenerateContent?alt=sse"),
+    "grok": ("/v1/models", "/v1/responses"),
+    "openai": ("/v1/models", "/v1/responses"),
+    "openrouter": ("/api/v1/models", "/api/v1/chat/completions"),
+}
 STUB_KEY = {"STUB_API_KEY": "sk-worker-image-test"}
 # A runner is a VM booting from nothing: its first attach takes seconds.
 BOOT_S = 60
@@ -185,6 +218,14 @@ def prerequisites(image):
             sys.exit(f"FAIL: prerequisite missing: the {name} guest {path}")
         with open(path, "rb") as f:
             WASM[name] = f.read()
+    for name, directory in SHIPPED.items():
+        for file in ("catalyst.wasm", "cyfr-manifest.json"):
+            if not os.path.isfile(os.path.join(directory, file)):
+                sys.exit(f"FAIL: prerequisite missing: the shipped {name} {os.path.join(directory, file)}")
+        with open(os.path.join(directory, "catalyst.wasm"), "rb") as f:
+            WASM["shipped:" + name] = f.read()
+        with open(os.path.join(directory, "cyfr-manifest.json")) as f:
+            SHIPPED_MANIFESTS[name] = json.load(f)
     memory.prerequisites()
     fixtures = os.path.join(ROOT, "tests", "fixtures")
     for name in ("worker_auth.json", "host_api.json", "worker_api.json"):
@@ -297,6 +338,91 @@ class Origin:
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(5)
+
+
+class Provider:
+    """The harness's stand-in for a model provider, on this machine: every
+    request it receives is recorded whole; a GET is answered with a model
+    listing in every shipped provider's shape at once, and a POST is
+    refused 400 with an error each provider's catalyst reads back."""
+
+    LISTING = {"data": [{"id": SHIPPED_MODEL}],
+               "models": [{"name": f"models/{SHIPPED_MODEL}", "supportedGenerationMethods": ["generateContent"]}]}
+    REFUSAL = {"error": {"message": "the scripted provider refuses the chat", "type": "invalid_request_error"}}
+
+    def __init__(self):
+        provider = self
+        self.lock = threading.Lock()
+        self.requests = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):
+                pass
+
+            def answer(self, status, payload):
+                length = int(self.headers.get("content-length") or 0)
+                body = self.rfile.read(length) if length else b""
+                with provider.lock:
+                    provider.requests.append({"method": self.command, "path": self.path, "host": self.headers.get("host"),
+                                              "headers": [(k.lower(), v) for k, v in self.headers.items()], "body": body})
+                encoded = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def do_GET(self):
+                self.answer(200, Provider.LISTING)
+
+            def do_POST(self):
+                self.answer(400, Provider.REFUSAL)
+
+        class Server(http.server.ThreadingHTTPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+
+        self.server = Server(("0.0.0.0", 0), Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        self.thread.start()
+
+    def seen(self):
+        with self.lock:
+            return list(self.requests)
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(5)
+
+
+def made_at(plane, port):
+    """Have the plane make each attached request to this machine at `port`
+    over plain HTTP, the URL's host kept for `Host`, where it would use the
+    URL's own port; the request the service posted is recorded as it came.
+    Answers the function that puts the plane back."""
+    make = plane.attached_fetch
+
+    def at_port(handler, args, call, seal_key, entry):
+        parts = urllib.parse.urlsplit(args.get("url") or "")
+        if parts.hostname:
+            args = {**args, "url": parts._replace(scheme="http", netloc=f"{parts.hostname}:{port}").geturl()}
+        return make(handler, args, call, seal_key, entry)
+
+    plane.attached_fetch = at_port
+    return lambda: delattr(plane, "attached_fetch")
+
+
+def closed_output(plane, attempt, what):
+    """The guest's output, once its attempt closed completed."""
+    closes = plane.wait_for(
+        lambda: [r for r in plane.seen(None, attempt["execution_id"]) if r["op"] in ("complete", "fail") and "answered" in r],
+        BOOT_S, f"the {what} attempt to close")
+    expect(closes[0]["op"] == "complete", f"{what}: the guest answered, and its attempt closed completed", closes[0])
+    return closes[0]["args"]["outcome"]["output"]
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +613,87 @@ def test_attached_fetch(stack, plane):
         expect(value not in logged, "the plane's record names the connection and the URL, and never the value")
     finally:
         origin.stop()
+
+
+def test_shipped_model_attached_request(stack, plane):
+    """scenario shipped_model_attached_request: every shipped model catalyst
+    names its connection on each request it makes, carries no credential,
+    and reads the plane's sealed frames into its contract's answer."""
+    provider = Provider()
+    restore = made_at(plane, provider.port)
+    # The egress case's athanor: its idle runner runs these attempts, as it
+    # runs the attached case's.
+    athanor = "ath_egress"
+    values = []
+    try:
+        for name, version in SHIPPED_MODELS.items():
+            manifest = SHIPPED_MANIFESTS[name]
+            need = manifest["needs"]["api_key"]
+            hosts = manifest["caps"]["egress"]["domains"]
+            expect(need.get("hosts") == hosts and "attach" in need and not need.get("disclose"),
+                   f"{name} {version}: its one need is attached by CYFR, to its egress hosts", need)
+            host, rule = hosts[0], need["attach"]
+            value = f"sk-shipped-{name}-" + secrets.token_hex(12)
+            values.append(value)
+            attached = {"api_key": {"value": value, "attach": rule, "hosts": hosts}}
+            authority = {**ZERO_AUTHORITY,
+                         "resources": {"egress": {"domains": hosts, "methods": manifest["caps"]["egress"]["methods"],
+                                                  "schemes": ["https"]}}}
+            ref = f"catalyst:local.{name}:{version}"
+            listing_path, chat_path = SHIPPED_PATHS[name]
+            chat = {"model": SHIPPED_MODEL, "messages": [{"role": "user", "content": "hello"}]}
+
+            for operation, params, method, path, purpose in (("models", {}, "GET", listing_path, "fetch"),
+                                                              ("chat", chat, "POST", chat_path, "stream")):
+                what = f"{name} {operation}"
+                before = len(provider.seen())
+                attempt = plane.mint(stack.boot, "catalyst", ref, WASM["shipped:" + name],
+                                     {"operation": operation, "params": params}, athanor, 30_000,
+                                     authority=authority, attached=attached)
+                expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"{what}: {ref} starts")
+                output = closed_output(plane, attempt, what)
+
+                fetches = plane.seen("attached_fetch", attempt["execution_id"])
+                expect(len(fetches) == 1 and fetches[0]["answered"] == "frames",
+                       f"{what}: the service posted the request once, as the attached_fetch host call, and the plane "
+                       "answered it in sealed frames", fetches)
+                args = fetches[0]["args"]
+                expect(args["connection"] == "api_key" and args["method"] == method and args["purpose"] == purpose
+                       and args["url"] == f"https://{host}{path}",
+                       f"{what}: the request names the connection, at {method} https://{host}{path}, read as {purpose}",
+                       {k: args.get(k) for k in ("connection", "method", "url", "purpose")})
+                refused = [header for header, _ in args["headers"] if auth.attached_header_refusal(header, RESERVED_HEADERS)]
+                expect(refused == [], f"{what}: the request carries no credential, routing or override header",
+                       [header for header, _ in args["headers"]])
+                expect(plane.seen("egress_pin", attempt["execution_id"]) == []
+                       and plane.seen("take_rate", attempt["execution_id"]) == [],
+                       f"{what}: no pin was asked and no rate taken for it: both are the control plane's",
+                       plane.seen(None, attempt["execution_id"]))
+
+                received = provider.seen()[before:]
+                rendered = rule["template"].replace("{value}", value)
+                expect(len(received) == 1 and received[0]["method"] == method and received[0]["path"] == path
+                       and (rule["name"].lower(), rendered) in received[0]["headers"],
+                       f"{what}: the provider received the request with the value attached by the manifest's rule "
+                       f"({rule['name']})",
+                       [{**r, "headers": [(k, v.replace(value, "<value>")) for k, v in r["headers"]]} for r in received])
+
+                if operation == "models":
+                    models = ((output or {}).get("data") or {}).get("models") if isinstance(output, dict) else None
+                    expect(output.get("status") == 200 and [m.get("id") for m in models or []] == [SHIPPED_MODEL],
+                           f"{what}: the catalyst read the frames into its contract's listing", output)
+                else:
+                    error = (output.get("error") or {}) if isinstance(output, dict) else {}
+                    expect(output.get("status") == 400 and error.get("type") == "invalid_request"
+                           and error.get("message") == Provider.REFUSAL["error"]["message"],
+                           f"{what}: the catalyst read the streamed frames into the provider's typed refusal", output)
+
+        logged = json.dumps(plane.requests, default=str)
+        expect(not any(value in logged for value in values),
+               "the plane's record names each connection and URL, and never a value")
+    finally:
+        restore()
+        provider.stop()
 
 
 def test_relay_window(stack, plane):
@@ -847,6 +1054,7 @@ def main(image):
         test_runner_has_no_route(stack, plane)
         test_pinned_egress(stack, plane)
         test_attached_fetch(stack, plane)
+        test_shipped_model_attached_request(stack, plane)
         test_relay_window(stack, plane)
         test_spinning_guest_killed_at_bound(stack, plane)
         test_sibling_survives(stack, plane)

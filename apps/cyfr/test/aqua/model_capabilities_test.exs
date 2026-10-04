@@ -16,7 +16,7 @@ defmodule Aqua.ModelCapabilitiesTest do
 
   alias Aqua.Models
 
-  @ref "catalyst:local.claude:1.3.1"
+  @ref "catalyst:local.claude:1.4.0"
 
   setup do
     Arca.Cache.init()
@@ -85,12 +85,15 @@ defmodule Aqua.ModelCapabilitiesTest do
     assert {:error, {:unknown_model, "gpt-x"}} =
              Models.capabilities(ctx, @ref, "gpt-x", "sha256:u", run: unknown)
 
+    # What the catalyst answers when its connection is bound to nothing.
+    unbound = Prima.Refusal.message(:connection_not_granted)
+
     {denied, runs} =
       counted(fn _ ->
-        {:ok, refusal(%{"type" => "secret_denied", "message" => "no key"})}
+        {:ok, refusal(%{"type" => "provider_error", "message" => unbound})}
       end)
 
-    assert {:error, {:model_refused, %{"type" => "secret_denied"}}} =
+    assert {:error, {:model_refused, %{"type" => "provider_error", "message" => ^unbound}}} =
              Models.capabilities(ctx, @ref, "m", "sha256:d", run: denied)
 
     assert {:error, {:model_refused, _}} =
@@ -162,7 +165,7 @@ defmodule Aqua.ModelCapabilitiesTest do
 
     # So is no binding at all, and another release of the catalyst.
     assert {:ok, _} = Models.capabilities(ctx, @ref, "m", nil, run: run)
-    assert {:ok, _} = Models.capabilities(ctx, "catalyst:local.claude:1.3.2", "m", nil, run: run)
+    assert {:ok, _} = Models.capabilities(ctx, "catalyst:local.claude:1.4.1", "m", nil, run: run)
     assert runs.() == 4
 
     # And another athanor never reads this one's entry.

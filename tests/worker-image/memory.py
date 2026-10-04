@@ -637,12 +637,20 @@ def test_bound_unavailable(image, plane, window_s=5.0):
 # ---------------------------------------------------------------------------
 
 
+def semver(version):
+    """A shipped version's order: its major, minor and patch numbers, as numbers (1.10.0 after 1.9.0)."""
+    return tuple(int(part) for part in version.split("-", 1)[0].split("+", 1)[0].split("."))
+
+
 def seed(kind, name):
+    """The newest shipped version of `name`, with a stand-in value for each field its runner is handed: a need
+    with an `attach` rule is CYFR's to attach, and its runner is handed nothing for it."""
     base = os.path.join(SEED, f"{kind}s", "local", name)
-    version = sorted(os.listdir(base))[-1]
+    version = max(os.listdir(base), key=semver)
     with open(os.path.join(base, version, "cyfr-manifest.json")) as f:
         manifest = json.load(f)
-    fields = [field for need in (manifest.get("needs") or {}).values() if isinstance(need, dict) for field in need.get("fields", [])]
+    fields = [field for need in (manifest.get("needs") or {}).values()
+              if isinstance(need, dict) and "attach" not in need for field in need.get("fields", [])]
     binary = {"catalyst": "catalyst.wasm", "formula": "formula.wasm", "reagent": "reagent.wasm"}[kind]
     return {"ref": f"{kind}:local.{name}:{version}", "name": name, "type": kind,
             "wasm": wasm(os.path.join(base, version, binary)), "secrets": {f: "sk-memory-measure" for f in fields}}

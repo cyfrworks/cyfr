@@ -53,6 +53,21 @@ defmodule Compendium.ReleaseDigestTest do
       end
     end
 
+    test "a need's attach rule and hosts change the identity even at identical bytes" do
+      need = %{
+        "type" => "api_key:anthropic.com",
+        "reason" => "to call the API",
+        "fields" => ["K"]
+      }
+
+      rule = %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+      attached = Map.put(need, "attach", rule)
+      hosted = Map.put(attached, "hosts", ["api.anthropic.com"])
+
+      digests = for n <- [need, attached, hosted], do: compute!(%{"needs" => %{"api_key" => n}})
+      assert digests == Enum.uniq(digests)
+    end
+
     test "a widened capability changes the identity even at identical bytes" do
       narrow = %{"caps" => %{"egress" => %{"domains" => ["a.example"]}}}
       wide = %{"caps" => %{"egress" => %{"domains" => ["*"]}}}

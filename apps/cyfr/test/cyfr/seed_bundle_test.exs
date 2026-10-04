@@ -27,6 +27,16 @@ defmodule Cyfr.Test.SeedBundleTest do
     refute "http" in names
   end
 
+  test "each model catalyst's newest version has CYFR attach its key, to its egress hosts" do
+    for unit <- SeedBundle.model_chat_units() do
+      assert [need] = Prima.Manifest.Needs.from_manifest(unit.manifest), unit.rel
+      assert %{name: "api_key", kind: "api_key", disclose: false} = need
+      assert %{in: "header", template: template} = need.attach
+      assert template =~ "{value}"
+      assert need.hosts == Enum.sort(unit.manifest["caps"]["egress"]["domains"]), unit.rel
+    end
+  end
+
   test "local_unit! takes the newest shipped version of a named hand" do
     files = SeedBundle.local_unit!("catalysts", "files")
     refute Prima.Model.speaks_chat?(files.manifest)

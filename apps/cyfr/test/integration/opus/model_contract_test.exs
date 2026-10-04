@@ -16,6 +16,14 @@ defmodule Opus.ModelContractTest do
   each execution's event stream (`Cyfr.Test.ChatFixture.observe!/2`), the
   rows, the retained payloads and the log. Nothing here attaches to the
   engine or reads a process of it.
+
+  The fixture is laid in the mode a case names. Disclosed, the default
+  here, binds the key as a disclosed entry the fixture reads, so a script
+  can name it and the host's masking is what keeps it from a viewer.
+  Attach (`@tag mode: :attach`) offers everyone an instance entry to a
+  loopback upstream, which the athanor's first sign-in binds: the
+  fixture's step makes its request on the connection, CYFR attaches the
+  key, and the key reaches the upstream and nothing else.
   """
 
   use ExUnit.Case, async: false
@@ -28,12 +36,14 @@ defmodule Opus.ModelContractTest do
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ChatFixture, as: Fixture
+  alias Cyfr.Test.TwoServices
 
   @moduletag timeout: 180_000
 
   @canary "sk-canary-7f3a9c51e8b24d06"
   @redacted "[REDACTED]"
   @turn_ms 90_000
+  @upstream_answer ~s({"id":"msg_upstream","content":"answered upstream"})
   @emit_budget 3000
   @settle_ms 10_000
 
@@ -41,13 +51,21 @@ defmodule Opus.ModelContractTest do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
 
+    mode = Map.get(tags, :mode, :disclosed)
     run_dir = Path.join(System.tmp_dir!(), "model_contract_#{System.unique_integer([:positive])}")
     keys = [arca: :base_path, arca: :seed_path, cyfr: :registry_url]
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
-    seed = Fixture.lay_seed!(Path.join(run_dir, "seed"), limits: Map.get(tags, :limits, %{}))
+
+    seed =
+      Fixture.lay_seed!(Path.join(run_dir, "seed"),
+        mode: mode,
+        limits: Map.get(tags, :limits, %{})
+      )
+
     Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
     Application.put_env(:arca, :seed_path, seed)
-    # The seed names no published component, and nothing may be dialled.
+    # The seed names no published component, and nothing may be dialled
+    # but the attach-mode upstream.
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
 
     on_exit(fn ->
@@ -63,10 +81,25 @@ defmodule Opus.ModelContractTest do
     # The turns' work stops before the paths it runs under are restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    ctx = Fixture.athanor!()
-    on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
-    :ok = Fixture.bind_key!(ctx, @canary)
-    {:ok, ctx: ctx}
+    case mode do
+      :disclosed ->
+        ctx = Fixture.athanor!()
+        on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
+        :ok = Fixture.bind_key!(ctx, @canary)
+        {:ok, ctx: ctx}
+
+      :attach ->
+        # The entry is offered before the athanor is filled, so its person's
+        # first sign-in binds it; the wire is watched for what the runner
+        # sent.
+        TwoServices.watch!()
+        port = Fixture.upstream!(@upstream_answer)
+        admin = Fixture.instance_admin!()
+        entry = Fixture.offer_instance_entry!(admin, port, @canary, Map.get(tags, :caps, %{}))
+        ctx = Fixture.athanor!()
+        on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
+        {:ok, ctx: ctx, port: port, admin: admin, entry: entry}
+    end
   end
 
   test "the fixture's binary and sources are the ones its README records" do
@@ -857,6 +890,112 @@ defmodule Opus.ModelContractTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Attached
+  # ---------------------------------------------------------------------------
+
+  @tag mode: :attach
+  test "an instance entry drives a streamed model turn without exposing its value", %{
+    ctx: ctx,
+    port: port,
+    entry: entry
+  } do
+    # The athanor's first sign-in bound the one entry it is offered.
+    assert [%{instance_entry_id: bound}] = fixture_refs(ctx)
+    assert bound == entry.id
+
+    body = ~s({"model":"chat-fixture","messages":[{"role":"user","content":"hello"}]})
+    deltas = ["Attached, ", "then ", "streamed."]
+    whole = Enum.join(deltas)
+
+    played =
+      play(ctx, [
+        %{
+          "attached_request" => attached_request(port, "/v1/messages", body),
+          "emit" => Enum.map(deltas, &text/1) ++ [usage(tokens(6, 3)), stop("end_turn")],
+          "answer" => answer([text_block(whole)], "end_turn", tokens(6, 3))
+        }
+      ])
+
+    assert %{status: "completed"} = played.turn
+    assert [%{kind: "text", content: ^whole} = row] = agent_rows(played)
+    assert [%{outcome: "ok", child_execution_id: id, id: step_id}] = model_steps(played)
+
+    # The upstream received the request the fixture named, with the key
+    # CYFR attached; one use is counted against the entry.
+    sent = Fixture.upstream_request!()
+    assert %{method: "POST", path: "/v1/messages", body: ^body} = sent
+    assert for({"x-api-key", value} <- sent.headers, do: value) == [@canary]
+    assert used(entry) == 1
+
+    # The request as the guest built it named the connection and carried no
+    # credential, and the fixture was handed the upstream's answer.
+    assert [%{args: %{"connection" => "api_key", "headers" => headers}}] =
+             TwoServices.calls(:attached_fetch, id)
+
+    refute Enum.any?(headers, fn [name, value] ->
+             Prima.Network.credential_header?(name) or String.contains?(value, @canary)
+           end)
+
+    assert %{"attached" => %{"status" => 200, "body" => @upstream_answer}} = report(ctx, id)
+
+    # The stream reached the thread and the execution's subscribers in
+    # order, ahead of the row.
+    {streamed, [{:message, ^row} | _]} =
+      Enum.split_while(played.seen.thread, &(not match?({:message, ^row}, &1)))
+
+    assert Enum.map_join(for({:delta, %{step_id: ^step_id} = d} <- streamed, do: d), & &1.text) ==
+             whole
+
+    assert streamed_text(emitted(Map.fetch!(played.seen.streams, id))) == whole
+
+    # The value shows nowhere but at the upstream: no row, file, payload,
+    # thing a viewer saw, log line or call across the runner's wire.
+    assert [] = key_leaks(ctx, played) ++ Fixture.leaks(@canary, wire: TwoServices.calls())
+    assert {:term, :upstream} in Fixture.leaks(@canary, upstream: sent)
+  end
+
+  @tag mode: :attach, caps: %{person_daily: 1}
+  test "instance cap and revocation refuse the next model request", %{
+    ctx: ctx,
+    port: port,
+    admin: admin,
+    entry: entry
+  } do
+    assert %{status: "completed"} = play(ctx, attached_step(port, "Within the cap.")).turn
+    assert Fixture.upstream_request!().path == "/v1/messages"
+    assert used(entry) == 1
+
+    # The person's day cap is spent: the next request is refused before the
+    # upstream, and the step fails with the refusal.
+    capped = Prima.Refusal.message(:connection_cap)
+    played = play(ctx, attached_step(port, "Past the cap."))
+    assert %{status: "failed", error: ^capped} = played.turn
+    assert [%{outcome: "error", error: ^capped, child_execution_id: id}] = model_steps(played)
+    assert [%{args: %{"connection" => "api_key"}}] = TwoServices.calls(:attached_fetch, id)
+    refute_received {Fixture, :upstream, _request}
+    assert used(entry) == 1
+
+    # Raised, the cap admits the next request; revoked, the entry admits
+    # none, and the model is not reached.
+    assert {:ok, :changed} =
+             Sanctum.InstanceEntries.set_caps(admin, %{entry_id: entry.id, person_daily: 10})
+
+    assert %{status: "completed"} = play(ctx, attached_step(port, "Raised.")).turn
+    assert Fixture.upstream_request!().path == "/v1/messages"
+    assert used(entry) == 2
+
+    assert {:ok, %{affected: [_ | _]}} = Sanctum.InstanceEntries.revoke(admin, entry.id)
+    played = play(ctx, attached_step(port, "Revoked."))
+    # The revoke blocked the fixture's profile, which the soul's edge to it
+    # selects: the turn asks for setup before the model runs.
+    assert %{status: "failed", error: "Setup required" <> _} = played.turn
+    assert [] = agent_rows(played)
+    refute_received {Fixture, :upstream, _request}
+    assert used(entry) == 2
+    assert [] = key_leaks(ctx, played) ++ Fixture.leaks(@canary, wire: TwoServices.calls())
+  end
+
+  # ---------------------------------------------------------------------------
   # Driving
   # ---------------------------------------------------------------------------
 
@@ -1049,6 +1188,33 @@ defmodule Opus.ModelContractTest do
     end)
     |> Aqua.Loop.Stream.texts()
     |> Enum.map(& &1.text)
+  end
+
+  # A one-step attach-mode script: the attached request to the upstream,
+  # then `said` streamed and answered.
+  defp attached_step(port, said) do
+    [
+      %{
+        "attached_request" => attached_request(port, "/v1/messages", ~s({"said":"#{said}"})),
+        "emit" => [text(said), stop("end_turn")],
+        "answer" => answer([text_block(said)], "end_turn", tokens(1, 1))
+      }
+    ]
+  end
+
+  # The fixture's binding rows on its own default profile's head.
+  defp fixture_refs(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, profiles} = Arca.ConsentStorage.profiles(actor, Fixture.ref())
+    %{id: profile_id} = Enum.find(profiles, &(&1.label == "default"))
+    {:ok, _head, refs} = Arca.ConsentStorage.get_head(actor, profile_id)
+    refs
+  end
+
+  # The uses claimed against an instance entry today.
+  defp used(entry) do
+    {:ok, %{totals: totals}} = Arca.InstanceEntryUsage.usage(Prima.Actor.system(), entry.id, 1)
+    Enum.sum(Enum.map(totals, & &1.count))
   end
 
   # A one-step script that answers "Back.".

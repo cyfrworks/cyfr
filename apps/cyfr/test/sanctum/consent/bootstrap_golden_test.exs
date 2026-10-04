@@ -13,10 +13,11 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
 
   Two cases are pinned: the server's own mint of an athanor no instance
   entry is offered to, and a person's first sign-in to an athanor while
-  one instance entry is offered to them. Every catalyst the bundle ships
-  reads its key itself (its needs declare no attach rule), so no shipped
-  need can be met by an instance entry, and the second case binds
-  nothing: its blobs are the first's.
+  one instance entry, of Anthropic's provider, is offered to them. The
+  newest shipped model catalysts have CYFR attach their key (their
+  `api_key` need declares an attach rule), so that sign-in binds the
+  offered entry on claude's ingress, and every other blob is the first
+  case's.
 
   Only the blob is golden: the activation and its digests move with every
   wasm rebuild, so they are asserted present, not pinned. The origins a
@@ -120,6 +121,8 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     # of a shipped catalyst's provider.
     {:ok, _entry} =
       Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
+        # Fixed, since the binding the blob pins names it.
+        id: "ine_golden-company",
         name: "golden-company",
         kind: "api_key",
         provider_hint: "anthropic.com",
@@ -159,10 +162,15 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
       end
     end
 
-    # No shipped need can be met by an instance entry: the offered entry
-    # binds nothing.
-    assert with_one == without
-    refute Enum.any?(Map.values(with_one), &(&1 =~ ~s("scope":"instance")))
+    # The offered entry binds the need of its provider's catalyst, and
+    # nothing else moves.
+    claude = "catalyst:local.claude"
+    assert Map.delete(with_one, claude) == Map.delete(without, claude)
+
+    assert [^claude] =
+             for({ref, blob} <- with_one, blob =~ ~s("scope":"instance"), do: ref)
+
+    assert with_one[claude] =~ ~s("entry_id":"ine_golden-company")
   end
 
   defp copy_bundle!(dest) do
