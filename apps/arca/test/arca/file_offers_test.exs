@@ -193,9 +193,9 @@ defmodule Arca.FileOffersTest do
     Prima.Caps.install!(Caps)
 
     n = System.unique_integer([:positive])
-    sender = person("usr_fo_s#{n}", "ath_fo_s#{n}")
-    recipient = person("usr_fo_r#{n}", "ath_fo_r#{n}")
-    stranger = person("usr_fo_x#{n}", "ath_fo_x#{n}")
+    sender = person("usr_fo_s#{n}", home!("s", n).id)
+    recipient = person("usr_fo_r#{n}", home!("r", n).id)
+    stranger = person("usr_fo_x#{n}", home!("x", n).id)
     group = group!(n)
 
     for who <- [sender, recipient] do
@@ -333,6 +333,32 @@ defmodule Arca.FileOffersTest do
                FileOffers.offer(sender, stranger.user_id, ["data/docs/a.txt"])
 
       assert {:ok, []} = FileOffers.outbox(sender)
+    end
+
+    test "an offer from an athanor archived since, or from one with no row, is refused under " <>
+           "the lock, and nothing of it stands",
+         %{sender: sender, recipient: recipient} do
+      # The two still share the group; the sender's own athanor is gone.
+      source!(sender, "a.txt", "x")
+
+      assert {:ok, _} =
+               Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), sender.athanor_id,
+                 verify: fn _rows -> :ok end
+               )
+
+      assert {:error, :athanor_archived} =
+               FileOffers.offer(sender, recipient.user_id, ["data/docs/a.txt"])
+
+      nowhere = %{sender | athanor_id: "ath_fo_none#{System.unique_integer([:positive])}"}
+      source!(nowhere, "a.txt", "x")
+
+      assert {:error, :no_athanor} =
+               FileOffers.offer(nowhere, recipient.user_id, ["data/docs/a.txt"])
+
+      for who <- [sender, nowhere] do
+        assert {:ok, []} = FileOffers.outbox(who)
+        assert {:ok, []} = Arca.Storage.list_prefix(who, ["payloads", "offers"])
+      end
     end
 
     test "a path outside data/, a file over max_write and two files of one name are refused",
@@ -1139,6 +1165,19 @@ defmodule Arca.FileOffersTest do
     athanor
   end
 
+  # A person's own athanor, the one their offers are made from.
+  defp home!(tag, n) do
+    {:ok, athanor} =
+      Arca.Athanors.insert(Prima.Actor.system(), %{
+        kind: "group",
+        name: "Home #{tag} #{n}",
+        slug: "offers-home-#{tag}-#{n}",
+        created_by: "system"
+      })
+
+    athanor
+  end
+
   # The retention sweep's actor for the athanor: the server's own, narrowed.
   defp sweeper(who), do: %{Prima.Actor.system() | athanor_id: who.athanor_id, scope: :athanor}
 
@@ -1293,26 +1332,31 @@ defmodule Arca.FileOffersRaceTest do
     Application.put_env(:arca, :storage_adapter, Store)
 
     n = System.unique_integer([:positive])
-    sender = %Prima.Actor{athanor_id: "ath_for_s#{n}", user_id: "usr_for_s#{n}"}
-    recipient = %Prima.Actor{athanor_id: "ath_for_r#{n}", user_id: "usr_for_r#{n}"}
 
-    group =
+    {group, sender, recipient} =
       unboxed(fn ->
-        {:ok, group} =
-          Arca.Athanors.insert(Prima.Actor.system(), %{
-            kind: "group",
-            name: "Race #{n}",
-            slug: "offers-race-#{n}",
-            created_by: "system"
-          })
+        [group, sender_home, recipient_home] =
+          for tag <- ~w(race s r) do
+            {:ok, athanor} =
+              Arca.Athanors.insert(Prima.Actor.system(), %{
+                kind: "group",
+                name: "Race #{tag} #{n}",
+                slug: "offers-race-#{tag}-#{n}",
+                created_by: "system"
+              })
 
+            athanor
+          end
+
+        sender = %Prima.Actor{athanor_id: sender_home.id, user_id: "usr_for_s#{n}"}
+        recipient = %Prima.Actor{athanor_id: recipient_home.id, user_id: "usr_for_r#{n}"}
         seat = %{Prima.Actor.system() | athanor_id: group.id, scope: :athanor}
 
         for who <- [sender, recipient] do
           {:ok, _} = Arca.Members.seat(seat, %{user_id: who.user_id, added_by: "test"})
         end
 
-        group
+        {group, sender, recipient}
       end)
 
     on_exit(fn ->
@@ -1323,11 +1367,13 @@ defmodule Arca.FileOffersRaceTest do
         else: Application.delete_env(:arca, :storage_adapter)
 
       unboxed(fn ->
-        for id <- [sender.athanor_id, recipient.athanor_id, group.id] do
+        ids = [sender.athanor_id, recipient.athanor_id, group.id]
+
+        for id <- ids do
           {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(id))
         end
 
-        Arca.Repo.delete_all(Ecto.Query.from(a in Arca.Schemas.Athanor, where: a.id == ^group.id))
+        Arca.Repo.delete_all(Ecto.Query.from(a in Arca.Schemas.Athanor, where: a.id in ^ids))
       end)
 
       for who <- [sender, recipient] do
@@ -1394,5 +1440,635 @@ defmodule Arca.FileOffersRaceTest do
     end)
   end
 
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+end
+
+defmodule Arca.FileOffersLockOrderTest do
+  @moduledoc """
+  The writers that end one offer, on connections of their own, each
+  forced onto the scan order that once differed: the acceptance on the
+  `(offer_id, filename)` index, which returns its rows in filename order,
+  and the withdrawal or the deny on the table, which returns them in the
+  order the sender listed them. A third connection holds one row until
+  both are seen waiting. Every ending write locks its rows in one order
+  first, so whichever goes first ends the offer and the other is refused
+  in words; neither is aborted. The writers that end an offer beside
+  another transition race it the same way: an offer made while a deny
+  holds its recipient, a decline and a deny beside the purge of the
+  athanor that sent the offer. SQLite's single writer serializes them,
+  so there the order is not forced and only the outcome is asserted.
+  """
+
+  use ExUnit.Case, async: false
+
+  require Ecto.Query
+
+  alias Arca.FileOffers
+  alias Arca.FileOffersTest.Store
+  alias Ecto.Adapters.SQL.Sandbox
+
+  setup do
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+    Application.put_env(:arca, :control_plane_claim_enabled, false)
+    previous_adapter = Application.get_env(:arca, :storage_adapter)
+    Application.put_env(:arca, :storage_adapter, Store)
+
+    n = System.unique_integer([:positive])
+
+    {group, sender, recipient} =
+      unboxed(fn ->
+        sender = person!(n, "s")
+        recipient = person!(n, "r")
+
+        {:ok, group} =
+          Arca.Athanors.insert(Prima.Actor.system(), %{
+            kind: "group",
+            name: "Lock order #{n}",
+            slug: "offers-lock-#{n}",
+            created_by: "system"
+          })
+
+        for who <- [sender, recipient] do
+          {:ok, _} =
+            Arca.Members.seat(Prima.Actor.in_athanor(group.id), %{
+              user_id: who.id,
+              added_by: "test"
+            })
+        end
+
+        {group, sender, recipient}
+      end)
+
+    on_exit(fn ->
+      Store.reset()
+
+      if previous_adapter,
+        do: Application.put_env(:arca, :storage_adapter, previous_adapter),
+        else: Application.delete_env(:arca, :storage_adapter)
+
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+
+      unboxed(fn ->
+        {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(group.id))
+        Arca.Repo.delete_all(Ecto.Query.from(a in Arca.Schemas.Athanor, where: a.id == ^group.id))
+
+        for who <- [sender, recipient] do
+          Arca.Repo.delete_all(
+            Ecto.Query.from(i in "person_identities", where: i.user_id == ^who.id)
+          )
+
+          Arca.Repo.delete_all(Ecto.Query.from(u in Arca.Schemas.User, where: u.id == ^who.id))
+        end
+      end)
+
+      File.rm_rf(Arca.Adapters.Local.build_path(Prima.Actor.in_athanor(group.id), []))
+    end)
+
+    {:ok,
+     group: group,
+     sender: %Prima.Actor{athanor_id: group.id, user_id: sender.id},
+     recipient: %Prima.Actor{athanor_id: group.id, user_id: recipient.id},
+     recipient_id: recipient.id}
+  end
+
+  test "an acceptance and a withdrawal of an offer listed out of filename order: one ends it, " <>
+         "the other is refused in words, neither is aborted",
+       %{sender: sender, recipient: recipient} do
+    offer_id = offer!(sender, recipient)
+
+    {accept, other} =
+      race(offer_id, fn -> FileOffers.accept(recipient, offer_id, "data/inbox") end, fn ->
+        FileOffers.withdraw(sender, offer_id)
+      end)
+
+    assert_one_outcome(accept, other, offer_id, sender)
+  end
+
+  test "a deny of the recipient racing their acceptance is never the side aborted",
+       %{sender: sender, recipient: recipient, recipient_id: recipient_id} do
+    offer_id = offer!(sender, recipient)
+
+    {accept, deny} =
+      race(offer_id, fn -> FileOffers.accept(recipient, offer_id, "data/inbox") end, fn ->
+        Arca.SecurityTransitions.deny_user(Prima.Actor.system(), recipient_id,
+          verify: fn _rows -> :ok end
+        )
+      end)
+
+    refute match?({:error, :database_error}, accept), inspect(accept)
+    assert {:ok, _change} = deny, inspect(deny)
+
+    statuses = statuses(offer_id, sender)
+    assert length(Enum.uniq(statuses)) == 1, inspect(statuses)
+  end
+
+  test "an acceptance on the table's order and a withdrawal on the offer's index, the middle " <>
+         "file held: one ends it, the other is refused in words, neither is aborted",
+       %{sender: sender, recipient: recipient} do
+    offer_id = offer!(sender, recipient)
+
+    {accept, other} =
+      race(
+        offer_id,
+        fn -> FileOffers.accept(recipient, offer_id, "data/inbox") end,
+        fn -> FileOffers.withdraw(sender, offer_id) end,
+        held: "b.txt",
+        scans: {:table, :index}
+      )
+
+    assert_one_outcome(accept, other, offer_id, sender)
+  end
+
+  test "an offer made to a person while their deny holds them waits for it and is refused, " <>
+         "and the deny is not aborted",
+       %{sender: sender, recipient_id: recipient_id} do
+    held_offer = small_offer!(sender, recipient_id, ~w(a b c), "held")
+    deny = fn -> deny!(recipient_id) end
+    late = fn -> small_offer(sender, recipient_id, ~w(x), "late") end
+
+    {denied, offered} =
+      if postgres?() do
+        # The deny takes the person, then waits at its ordered lock on a
+        # held row of the offer it ends; the late offer waits on the
+        # person the deny holds, shared, before writing a row.
+        holder = hold!(held_offer, "a.txt")
+        deny_task = backend_task(:deny, deny)
+        await_lock!(:deny, [~s(FROM "file_offers"), "FOR UPDATE"])
+        offer_task = backend_task(:offer, late)
+        await_lock!(:offer, [~s(FROM "users"), "FOR SHARE"])
+        release!(holder)
+        {Task.await(deny_task, 30_000), Task.await(offer_task, 30_000)}
+      else
+        {unboxed(deny), unboxed(late)}
+      end
+
+    assert {:ok, %{ended_offer_ids: [^held_offer]}} = denied
+    assert {:error, :not_shared} = offered
+
+    # Nothing of the refused offer stands: no row, and no snapshot.
+    assert offered_to(recipient_id) == []
+    snapshots = unboxed(fn -> Arca.list(sender, ["payloads", "offers"]) end)
+    assert snapshots in [{:ok, []}, {:error, :not_found}], inspect(snapshots)
+  end
+
+  test "a decline racing the purge of the archived athanor that sent the offer is refused in " <>
+         "words, and neither is aborted",
+       %{group: group, sender: sender, recipient_id: recipient_id} do
+    offer_id = small_offer!(sender, recipient_id, ~w(c b a), "purged")
+    assert {:ok, %{ended_offer_ids: [^offer_id]}} = archive!(group.id)
+    decline = fn -> FileOffers.decline(%Prima.Actor{user_id: recipient_id}, offer_id) end
+    purge = fn -> purge!(group.id) end
+
+    {declined, purged} =
+      if postgres?() do
+        # The purge waits on a held row of the offer; the decline either
+        # waits beside it or, the archive having ended the offer, does not.
+        holder = hold!(offer_id, "b.txt")
+        purge_task = backend_task(:purge, purge)
+        await_lock!(:purge, [~s(DELETE FROM "file_offers")])
+        decline_task = backend_task(:decline, decline)
+        await_lock_or_done!(:decline, decline_task)
+        release!(holder)
+        {Task.await(decline_task, 30_000), Task.await(purge_task, 30_000)}
+      else
+        {unboxed(decline), unboxed(purge)}
+      end
+
+    assert {:error, {:not_offered, "withdrawn"}} = declined
+    assert {:ok, %{"file_offers" => 3}} = purged
+  end
+
+  test "an expiry writes only the rows its lock took: an offer landing already expired after " <>
+         "the lock began is left to the next run",
+       %{sender: sender} do
+    held = expired_offer!(sender, ~w(a.txt b.txt))
+    expire = fn -> FileOffers.expire(sender) end
+
+    if postgres?() do
+      # The expiry waits at its ordered lock on a held row; an offer
+      # already past its expiry lands meanwhile, which a statement begun
+      # after the lock would match.
+      holder = hold!(held, "a.txt")
+      expire_task = backend_task(:expire, expire)
+      await_lock!(:expire, [~s(FROM "file_offers"), "FOR UPDATE"])
+      late = expired_offer!(sender, ~w(c.txt))
+      release!(holder)
+
+      assert {:ok, 2} = Task.await(expire_task, 30_000)
+      assert statuses(late, sender) == ["offered"]
+      assert {:ok, 1} = unboxed(expire)
+      assert statuses(late, sender) == ["expired"]
+    else
+      late = expired_offer!(sender, ~w(c.txt))
+      assert {:ok, 3} = unboxed(expire)
+      assert statuses(late, sender) == ["expired"]
+    end
+
+    assert Enum.uniq(statuses(held, sender)) == ["expired"]
+  end
+
+  test "a deny racing the purge of an archived group whose one-file offer the archive ended: " <>
+         "neither is aborted",
+       %{group: group, sender: sender, recipient_id: recipient_id} do
+    # One row: there is no order among the offer's rows to get wrong. The
+    # deny holds the person's seat in the group before it takes offers,
+    # and the purge erases offers before seats, so a deny that waited on
+    # the offer the purge holds would hold the seat the purge waits on.
+    offer_id = small_offer!(sender, recipient_id, ~w(x), "one")
+    assert {:ok, %{ended_offer_ids: [^offer_id]}} = archive!(group.id)
+    deny = fn -> deny!(recipient_id) end
+    purge = fn -> purge!(group.id) end
+
+    {denied, purged} =
+      if postgres?() do
+        holder = hold!(offer_id, "x.txt")
+        purge_task = backend_task(:purge, purge)
+        await_lock!(:purge, [~s(DELETE FROM "file_offers")])
+        deny_task = backend_task(:deny, deny)
+        await_lock_or_done!(:deny, deny_task)
+        release!(holder)
+        {Task.await(deny_task, 30_000), Task.await(purge_task, 30_000)}
+      else
+        {unboxed(deny), unboxed(purge)}
+      end
+
+    assert {:ok, %{ended_offer_ids: []}} = denied
+    assert {:ok, %{"file_offers" => 1, "memberships" => _}} = purged
+  end
+
+  # Three files the sender lists last-first, behind a few thousand other
+  # offers of the athanor, so the acceptance's index returns them in
+  # filename order and the table in listing order.
+  defp offer!(sender, recipient) do
+    unboxed(fn ->
+      for name <- ~w(c a b), do: :ok = Arca.put(sender, ["data", "docs", "#{name}.txt"], name)
+      filler!(sender)
+
+      {:ok, %{offer_id: offer_id}} =
+        FileOffers.offer(
+          sender,
+          recipient.user_id,
+          ~w(data/docs/c.txt data/docs/b.txt data/docs/a.txt)
+        )
+
+      if postgres?(), do: Arca.Repo.query!("ANALYZE file_offers")
+      offer_id
+    end)
+  end
+
+  defp filler!(sender) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    expires = DateTime.add(now, 7 * 86_400, :second)
+
+    rows =
+      for i <- 1..2_000 do
+        %{
+          id: Prima.UUID7.generate_id("fof"),
+          athanor_id: sender.athanor_id,
+          offer_id: Prima.UUID7.generate_id("ofr"),
+          sender_user_id: "usr_filler_#{i}",
+          recipient_user_id: "usr_filler_r#{i}",
+          filename: "f#{i}.txt",
+          digest: "sha256:filler",
+          size: 1,
+          status: "offered",
+          expires_at: expires,
+          inserted_at: now,
+          updated_at: now
+        }
+      end
+
+    for chunk <- Enum.chunk_every(rows, 500),
+        do: Arca.Repo.insert_all(Arca.Schemas.FileOffer, chunk)
+
+    :ok
+  end
+
+  # `first` waits on the held row (`a.txt` unless `:held` names another),
+  # then `second` waits too, then the row is released. On PostgreSQL each
+  # runs in an outer transaction whose planner settings force the scan
+  # the two writers once differed by: `first` on the offer's index and
+  # `second` on the table, unless `:scans` swaps them.
+  defp race(offer_id, first, second, opts \\ []) do
+    test = self()
+    held = Keyword.get(opts, :held, "a.txt")
+    {first_scan, second_scan} = Keyword.get(opts, :scans, {:index, :table})
+
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            Arca.Repo.query!(
+              "SELECT id FROM file_offers WHERE offer_id = $1 AND filename = $2" <>
+                if(postgres?(), do: " FOR UPDATE", else: ""),
+              [offer_id, held]
+            )
+
+            send(test, :held)
+
+            receive do
+              :release -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :held, 15_000
+
+    first_task = Task.async(fn -> forced(test, :first, first_scan, first) end)
+    await_waiting(:first, first_task)
+    second_task = Task.async(fn -> forced(test, :second, second_scan, second) end)
+    await_waiting(:second, second_task)
+
+    send(holder.pid, :release)
+    Task.await(holder, 30_000)
+    {Task.await(first_task, 30_000), Task.await(second_task, 30_000)}
+  end
+
+  defp forced(test, tag, scan, fun) do
+    unboxed(fn ->
+      if postgres?() do
+        %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+        send(test, {tag, pid})
+
+        # The writer's own answer, kept even when an abort rolls the
+        # outer transaction back.
+        Arca.Repo.transaction(fn ->
+          for setting <- planner(scan), do: Arca.Repo.query!("SET LOCAL #{setting} = off")
+          Process.put(:forced_answer, fun.())
+        end)
+
+        Process.get(:forced_answer)
+      else
+        send(test, {tag, nil})
+        fun.()
+      end
+    end)
+  end
+
+  defp planner(:index), do: ~w(enable_seqscan enable_bitmapscan)
+  defp planner(:table), do: ~w(enable_indexscan enable_bitmapscan enable_indexonlyscan)
+
+  # PostgreSQL: the backend observed waiting on a lock, bounded. SQLite: one
+  # writer at a time, and the task not finished while the row is held.
+  defp await_waiting(tag, task) do
+    assert_receive {^tag, pid}, 15_000
+
+    if postgres?() do
+      await_lock_wait(pid)
+    else
+      refute Task.yield(task, 300), "#{tag} ran past the held write lock"
+    end
+  end
+
+  defp await_lock_wait(pid, tries \\ 500)
+  defp await_lock_wait(_pid, 0), do: flunk("the backend never waited on a lock")
+
+  defp await_lock_wait(pid, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
+      end)
+
+    if rows == [["Lock"]] do
+      :ok
+    else
+      Process.sleep(20)
+      await_lock_wait(pid, tries - 1)
+    end
+  end
+
+  defp assert_one_outcome(accept, other, offer_id, sender) do
+    refute match?({:error, :database_error}, accept), inspect(accept)
+    refute match?({:error, :database_error}, other), inspect(other)
+
+    case accept do
+      {:ok, _accepted} -> assert {:error, {:not_offered, "accepted"}} = other
+      {:error, {:not_offered, ended}} -> assert other == :ok and ended == "withdrawn"
+    end
+
+    assert length(Enum.uniq(statuses(offer_id, sender))) == 1
+  end
+
+  defp statuses(offer_id, sender) do
+    unboxed(fn ->
+      Ecto.Query.from(o in Arca.Schemas.FileOffer,
+        where: o.offer_id == ^offer_id and o.athanor_id == ^sender.athanor_id,
+        select: o.status
+      )
+      |> Arca.Repo.all()
+    end)
+  end
+
+  # An offer of the sender's athanor, already past its expiry, its rows
+  # committed on a connection of their own.
+  defp expired_offer!(sender, files) do
+    offer_id = Prima.UUID7.generate_id("ofr")
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    past = DateTime.add(now, -86_400, :second)
+
+    unboxed(fn ->
+      Arca.Repo.insert_all(
+        Arca.Schemas.FileOffer,
+        for name <- files do
+          %{
+            id: Prima.UUID7.generate_id("fof"),
+            athanor_id: sender.athanor_id,
+            offer_id: offer_id,
+            sender_user_id: sender.user_id,
+            recipient_user_id: "usr_expiry_recipient",
+            filename: name,
+            digest: "sha256:expired",
+            size: 1,
+            status: "offered",
+            expires_at: past,
+            inserted_at: now,
+            updated_at: now
+          }
+        end
+      )
+    end)
+
+    offer_id
+  end
+
+  # The writers below run on the connection of whoever calls them: a
+  # test's own through `unboxed/1`, or a `backend_task/2`'s.
+  defp small_offer!(sender, recipient_id, names, tag) do
+    {:ok, %{offer_id: offer_id}} =
+      unboxed(fn -> small_offer(sender, recipient_id, names, tag) end)
+
+    offer_id
+  end
+
+  defp small_offer(sender, recipient_id, names, tag) do
+    for name <- names, do: :ok = Arca.put(sender, ["data", tag, "#{name}.txt"], name)
+    FileOffers.offer(sender, recipient_id, Enum.map(names, &"data/#{tag}/#{&1}.txt"))
+  end
+
+  defp deny!(user_id) do
+    Arca.SecurityTransitions.deny_user(Prima.Actor.system(), user_id, verify: fn _rows -> :ok end)
+  end
+
+  defp archive!(athanor_id) do
+    unboxed(fn ->
+      Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), athanor_id,
+        verify: fn _rows -> :ok end
+      )
+    end)
+  end
+
+  defp purge!(athanor_id),
+    do: Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor_id))
+
+  defp offered_to(recipient_id) do
+    unboxed(fn ->
+      Ecto.Query.from(o in Arca.Schemas.FileOffer,
+        where: o.recipient_user_id == ^recipient_id and o.status == "offered",
+        select: o.offer_id
+      )
+      |> Arca.Repo.all()
+    end)
+  end
+
+  # A row of the offer held `FOR UPDATE` on a connection of its own until
+  # `release!/1`.
+  defp hold!(offer_id, filename) do
+    test = self()
+
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            Arca.Repo.query!(
+              "SELECT id FROM file_offers WHERE offer_id = $1 AND filename = $2 FOR UPDATE",
+              [offer_id, filename]
+            )
+
+            send(test, {:held, offer_id, filename})
+
+            receive do
+              :release -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:held, ^offer_id, ^filename}, 15_000
+    holder
+  end
+
+  defp release!(holder) do
+    send(holder.pid, :release)
+    Task.await(holder, 30_000)
+  end
+
+  # `fun` on a connection of its own, its backend pid sent as `{tag, pid}`.
+  defp backend_task(tag, fun) do
+    test = self()
+
+    Task.async(fn ->
+      unboxed(fn ->
+        %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+        send(test, {tag, pid})
+        fun.()
+      end)
+    end)
+  end
+
+  # The tagged backend observed waiting on a lock in a statement holding
+  # every fragment, bounded.
+  defp await_lock!(tag, fragments) do
+    assert_receive {^tag, pid}, 15_000
+    await_statement_lock(pid, fragments, 500)
+  end
+
+  defp await_statement_lock(pid, fragments, 0),
+    do: flunk("backend #{pid} never waited on a lock at #{inspect(fragments)}")
+
+  defp await_statement_lock(pid, fragments, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!(
+          "SELECT wait_event_type, query FROM pg_stat_activity WHERE pid = $1",
+          [pid]
+        )
+      end)
+
+    case rows do
+      [["Lock", query]] when is_binary(query) ->
+        if Enum.all?(fragments, &String.contains?(query, &1)),
+          do: :ok,
+          else: retry_statement_lock(pid, fragments, tries)
+
+      _other ->
+        retry_statement_lock(pid, fragments, tries)
+    end
+  end
+
+  defp retry_statement_lock(pid, fragments, tries) do
+    Process.sleep(20)
+    await_statement_lock(pid, fragments, tries - 1)
+  end
+
+  # The tagged backend either waiting on a lock or finished, bounded.
+  defp await_lock_or_done!(tag, task) do
+    assert_receive {^tag, pid}, 15_000
+    await_lock_or_done(pid, task, 500)
+  end
+
+  defp await_lock_or_done(_pid, _task, 0), do: flunk("the backend neither waited nor finished")
+
+  defp await_lock_or_done(pid, task, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
+      end)
+
+    cond do
+      rows == [["Lock"]] ->
+        :ok
+
+      not Process.alive?(task.pid) ->
+        :ok
+
+      true ->
+        Process.sleep(20)
+        await_lock_or_done(pid, task, tries - 1)
+    end
+  end
+
+  defp person!(n, tag) do
+    now = DateTime.utc_now()
+
+    {:ok, user} =
+      Arca.Users.mint(
+        Prima.Actor.system(),
+        %{
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          provider: "github",
+          email: "lock#{tag}#{n}@example.com",
+          email_verified: true,
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        %{
+          key: "github|https://github.com|lock#{tag}#{n}",
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "lock#{tag}#{n}",
+          first_seen_at: now,
+          last_seen_at: now
+        }
+      )
+
+    user
+  end
+
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
 end

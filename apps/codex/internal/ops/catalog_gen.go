@@ -129,9 +129,14 @@ const (
 	ExecutionRunStream              = "run_stream"
 	ExecutionStatus                 = "status"
 	ExecutionUsage                  = "usage"
+	FileAccept                      = "accept"
+	FileDecline                     = "decline"
 	FileDelete                      = "delete"
 	FileList                        = "list"
+	FileOffer                       = "offer"
+	FileOffers                      = "offers"
 	FileRead                        = "read"
+	FileWithdraw                    = "withdraw"
 	FileWrite                       = "write"
 	InstanceEntryCreate             = "create"
 	InstanceEntryDelete             = "delete"
@@ -313,7 +318,7 @@ var Actions = map[string][]string{
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
 	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status", "usage"},
-	"file":                {"delete", "list", "read", "write"},
+	"file":                {"accept", "decline", "delete", "list", "offer", "offers", "read", "withdraw", "write"},
 	"instance_entry":      {"create", "delete", "list", "offered", "rebind", "revoke", "rotate", "set_audience", "set_caps", "set_component_policy", "usage"},
 	"key":                 {"create", "get", "list", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
@@ -1656,6 +1661,38 @@ func (args ExecutionUsageArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ExecutionUsage, fields: fields(args)})
 }
 
+// FileAcceptArgs carries arguments for file.accept.
+type FileAcceptArgs struct {
+	// The offer, ofr_…
+	OfferId string `json:"offer_id"`
+	// A folder under data/ to accept into; data/inbox/<sender>/ by default
+	Folder Field[string] `json:"folder,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FileAcceptArgs) MarshalJSON() ([]byte, error) {
+	type fields FileAcceptArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FileAccept, fields: fields(args)})
+}
+
+// FileDeclineArgs carries arguments for file.decline.
+type FileDeclineArgs struct {
+	// The offer, ofr_…
+	OfferId string `json:"offer_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FileDeclineArgs) MarshalJSON() ([]byte, error) {
+	type fields FileDeclineArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FileDecline, fields: fields(args)})
+}
+
 // FileDeleteArgs carries arguments for file.delete.
 type FileDeleteArgs struct {
 	// A folder-relative path, like data/reports/q3.csv
@@ -1686,6 +1723,36 @@ func (args FileListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: FileList, fields: fields(args)})
 }
 
+// FileOfferArgs carries arguments for file.offer.
+type FileOfferArgs struct {
+	// The files to send, under data/, like data/reports/q3.csv
+	Paths []string `json:"paths"`
+	// The person to offer them to, by person id (usr_…)
+	To string `json:"to"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FileOfferArgs) MarshalJSON() ([]byte, error) {
+	type fields FileOfferArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FileOffer, fields: fields(args)})
+}
+
+// FileOffersArgs carries arguments for file.offers.
+type FileOffersArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FileOffersArgs) MarshalJSON() ([]byte, error) {
+	type fields FileOffersArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FileOffers, fields: fields(args)})
+}
+
 // FileReadArgs carries arguments for file.read.
 type FileReadArgs struct {
 	// A folder-relative path, like data/reports/q3.csv
@@ -1699,6 +1766,21 @@ func (args FileReadArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: FileRead, fields: fields(args)})
+}
+
+// FileWithdrawArgs carries arguments for file.withdraw.
+type FileWithdrawArgs struct {
+	// The offer, ofr_…
+	OfferId string `json:"offer_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FileWithdrawArgs) MarshalJSON() ([]byte, error) {
+	type fields FileWithdrawArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FileWithdraw, fields: fields(args)})
 }
 
 // FileWriteArgs carries arguments for file.write.

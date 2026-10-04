@@ -19,10 +19,13 @@ defmodule Arca.SecurityTransitions do
   person and of every athanor it archives, and the person's passkeys
   (`Arca.Passkeys`); it removes the person from every instance entry's
   listed audience (`Arca.InstanceEntries`), withdraws every file offer
-  they sent and declines every offer addressed to them
-  (`Arca.FileOffers`), whose snapshots are released once it commits. An archive revokes the athanor's keys, frame
+  they sent or that an athanor it archives holds, and declines every
+  other offer addressed to them (`Arca.FileOffers`), whose snapshots are
+  released once it commits. An archive revokes the athanor's keys, frame
   credentials, paired clients, device certificates and pending pairing
-  invitations with it. Leaving one athanor (`leave_athanor/3`) removes the
+  invitations with it, and withdraws the file offers it holds open, so
+  the purge that erases an archived athanor meets no open offer.
+  Leaving one athanor (`leave_athanor/3`) removes the
   person's membership of it and their follows there, deletes their
   sessions bound to it, and revokes the frame credentials, paired clients,
   device certificates and pending pairing invitations they hold there,
@@ -60,10 +63,14 @@ defmodule Arca.SecurityTransitions do
   athanors sorted by id, then memberships, invitations and follows, then
   cached identity heads, then sessions, then API keys, then frame
   credentials, then paired clients, then device certificates, pairing
-  invitations, passkeys and pending confirmations. A writer of a
-  membership row naming a person takes the person's lock first
-  (`Arca.Members`), so a seat or a claim racing a leave or a denial waits
-  for it, or it for them. A transition taking only a suffix of that order
+  invitations, passkeys and pending confirmations, then instance entry
+  audiences, then file offers by offer and file name (`Arca.FileOffers`).
+  A writer of a membership row naming a person takes the person's lock
+  first (`Arca.Members`), so a seat or a claim racing a leave or a denial
+  waits for it, or it for them; a file offer is written under its two
+  people's locks and its athanor's, shared, so it waits for a denial or
+  an archive holding them, and either sees an offer that landed first.
+  A transition taking only a suffix of that order
   never goes back for an earlier lock. On PostgreSQL the order is the deadlock
   rule; on SQLite the write lock every transaction takes at entry is the
   lock and the order is code order (`Arca.Repo.locking_transaction/2`).
@@ -214,15 +221,28 @@ defmodule Arca.SecurityTransitions do
   def allow_user(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
 
   @doc """
-  Archive the athanor `athanor_id` and revoke its keys. An athanor already
-  archived keeps its generation; its keys are revoked again and checked.
+  Archive the athanor `athanor_id`, revoke its keys and withdraw the file
+  offers it still holds open. An athanor already archived keeps its
+  generation; its keys are revoked and its offers ended again, and
+  checked.
   """
   @spec archive_athanor(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, change()} | {:error, term()}
   def archive_athanor(%Prima.Actor{scope: :platform, system: true}, athanor_id, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
-    run("Arca.SecurityTransitions.archive_athanor", fn -> archive(athanor_id, verify) end)
+
+    case run("Arca.SecurityTransitions.archive_athanor", fn -> archive(athanor_id, verify) end) do
+      {:ok, change} ->
+        # As a denial's: the offers the archive withdrew release their
+        # snapshots and announce themselves only once it committed.
+        {ended, change} = Map.pop(change, :ended_offers, [])
+        Arca.FileOffers.after_end(ended)
+        {:ok, change}
+
+      refusal ->
+        refusal
+    end
   end
 
   def archive_athanor(%Prima.Actor{}, _athanor_id, _opts), do: {:error, :cross_tenant}
@@ -349,7 +369,7 @@ defmodule Arca.SecurityTransitions do
           by_passkeys = PendingConfirmations.void_confirmed_by!(:passkey, passkey_ids)
           own = void_confirmations(from(c in PendingConfirmation, where: c.user_id == ^user_id))
           audiences_left = Arca.InstanceEntries.remove_person!(user_id)
-          ended_offers = Arca.FileOffers.end_for_person!(user_id)
+          ended_offers = Arca.FileOffers.end_for_person!(user_id, retire)
 
           with :ok <- deny_holds(user_id, retire) do
             %{
@@ -617,7 +637,8 @@ defmodule Arca.SecurityTransitions do
       from(o in FileOffer,
         where:
           o.status == "offered" and
-            (o.sender_user_id == ^user_id or o.recipient_user_id == ^user_id)
+            (o.sender_user_id == ^user_id or o.recipient_user_id == ^user_id or
+               o.athanor_id in ^athanor_ids)
       )
     ]
 
@@ -758,6 +779,7 @@ defmodule Arca.SecurityTransitions do
           dependents = PairedClients.retire_dependents!(paired_ids)
           cert_ids = revoke_athanor_certificates(athanor_id)
           invitation_ids = revoke_athanor_invitations(athanor_id)
+          ended_offers = Arca.FileOffers.end_for_athanor!(Prima.Actor.in_athanor(athanor_id))
 
           with :ok <- archive_holds(athanor_id) do
             %{
@@ -772,8 +794,11 @@ defmodule Arca.SecurityTransitions do
                 revoked_device_certificate_ids: merged_ids(dependents.certificate_ids, cert_ids),
                 revoked_pairing_invitation_ids: invitation_ids,
                 voided_confirmation_ids: dependents.confirmation_ids,
-                member_user_ids: %{athanor_id => members}
+                member_user_ids: %{athanor_id => members},
+                ended_offer_ids:
+                  ended_offers |> Enum.map(& &1.offer_id) |> Enum.uniq() |> Enum.sort()
             }
+            |> Map.put(:ended_offers, ended_offers)
           end
         end
       end
@@ -888,7 +913,8 @@ defmodule Arca.SecurityTransitions do
       from(f in FrameCredential, where: f.athanor_id == ^athanor_id and f.state != "revoked"),
       from(p in PairedClient, where: p.athanor_id == ^athanor_id and p.standing != "revoked"),
       from(c in DeviceCertificate, where: c.athanor_id == ^athanor_id and c.state != "revoked"),
-      from(i in PairingInvitation, where: i.athanor_id == ^athanor_id and i.state == "pending")
+      from(i in PairingInvitation, where: i.athanor_id == ^athanor_id and i.state == "pending"),
+      from(o in FileOffer, where: o.athanor_id == ^athanor_id and o.status == "offered")
     ]
 
     if Enum.any?(survivors, &Arca.Repo.exists?/1),

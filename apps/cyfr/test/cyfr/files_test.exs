@@ -1,13 +1,36 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Arca.FilesTest.Store do
+  @moduledoc false
+  # The Local adapter, with folder probes under `data/` answering
+  # `{:error, :eio}` while held: an acceptance commits and its publication
+  # waits for the next sweep.
+  use Arca.Storage.TestDouble
+
+  @held {__MODULE__, :held}
+
+  def hold, do: :persistent_term.put(@held, true)
+  def release, do: :persistent_term.erase(@held)
+
+  def last_modified(actor, path), do: Arca.Adapters.Local.last_modified(actor, path)
+
+  def list_typed(actor, ["data" | _] = path) do
+    if :persistent_term.get(@held, false), do: {:error, :eio}, else: super(actor, path)
+  end
+
+  def list_typed(actor, path), do: super(actor, path)
+end
+
 defmodule Arca.FilesTest do
   @moduledoc """
   The athanor's files as a person sees them (`Arca.Files`): the folders
   are the layout's console tier, the server's own storage has no name,
   `data/` is open, the shaped folders take edits only inside a unit, and
   the read-only folders take none. Every operation takes the actor and
-  refuses one with no athanor before touching storage.
+  refuses one with no athanor before touching storage. A copy another
+  person sent lands in `data/` from the recipient's own custody, beside
+  whatever the recipient keeps there.
   """
 
   use ExUnit.Case, async: false
@@ -409,6 +432,115 @@ defmodule Arca.FilesTest do
              "'components/reagents/acme/theirs/1.0.0/notes.txt': " <>
                Prima.ComponentNamespace.message(:not_local_namespace, "acme")
   end
+
+  test "accepted custody survives sender purge without overwriting recipient bytes" do
+    previous_adapter = Application.get_env(:arca, :storage_adapter)
+    Application.put_env(:arca, :storage_adapter, Arca.FilesTest.Store)
+
+    on_exit(fn ->
+      Arca.FilesTest.Store.release()
+
+      if previous_adapter,
+        do: Application.put_env(:arca, :storage_adapter, previous_adapter),
+        else: Application.delete_env(:arca, :storage_adapter)
+    end)
+
+    n = System.unique_integer([:positive])
+    sender = person!("s", n)
+    recipient = person!("r", n)
+    shared = athanor!("shared", n)
+    for who <- [sender, recipient], do: seat!(shared, who.id)
+
+    {:ok, _} = Files.write(sender.actor, "data/reports/q3.csv", "a,b\n1,2\n")
+
+    assert {:ok, %{offer_id: offer_id}} =
+             file(sender, %{
+               "action" => "offer",
+               "paths" => ["data/reports/q3.csv"],
+               "to" => recipient.id
+             })
+
+    {:ok, _} = Files.write(sender.actor, "data/reports/q3.csv", "edited after offering")
+
+    # The acceptance commits: the bytes are in the recipient's custody and
+    # the receipt names them; publication waits for the sweep.
+    Arca.FilesTest.Store.hold()
+
+    assert {:ok, %{folder: folder, receipts: [%{status: "received", attempt_state: nil}]}} =
+             file(recipient, %{"action" => "accept", "offer_id" => offer_id})
+
+    Arca.FilesTest.Store.release()
+    assert folder == "data/inbox/#{sender.id}/#{offer_id}/"
+
+    # The sender's athanor is archived and erased, rows and blobs.
+    {:ok, home} = Sanctum.Tenancy.Athanors.get(sender.home.id)
+    {:ok, archived} = Sanctum.Tenancy.Athanors.archive(home)
+    assert {:ok, _counts} = Sanctum.Tenancy.Athanors.destroy(archived)
+    assert {:error, :not_found} = Arca.get(sender.actor, ["data", "reports", "q3.csv"])
+
+    # The recipient keeps a file of their own where the transfer would land.
+    {:ok, _} = Files.write(recipient.actor, folder <> "q3.csv", "the recipient's own")
+
+    sweeper = %{Prima.Actor.system() | athanor_id: recipient.home.id, scope: :athanor}
+    assert {:ok, 1} = Arca.Retention.FileReceipts.prune(sweeper, 7, false)
+
+    # The recipient's bytes stand; the offered snapshot lands beside them.
+    assert {:ok, %{content: "the recipient's own"}} =
+             Files.read(recipient.actor, folder <> "q3.csv")
+
+    assert {:ok, %{entries: entries}} =
+             Files.list(recipient.actor, "data/inbox/#{sender.id}")
+
+    assert Enum.map(entries, & &1.name) |> Enum.sort() == [offer_id, "#{offer_id}-2"]
+
+    assert {:ok, %{content: "a,b\n1,2\n"}} =
+             Files.read(recipient.actor, "data/inbox/#{sender.id}/#{offer_id}-2/q3.csv")
+
+    assert {:ok, []} =
+             Arca.Storage.list_prefix(recipient.actor, ["payloads", "receipts", offer_id])
+
+    assert {:ok, %{receipts: [], inbox: []}} = file(recipient, %{"action" => "offers"})
+  end
+
+  # A person working in an athanor of their own, as a session's context.
+  defp person!(label, n) do
+    id = "usr_files#{label}#{n}"
+    home = athanor!("home-#{label}", n)
+    seat!(home, id)
+
+    ctx =
+      Sanctum.Context.build(
+        user_id: id,
+        namespace: "files#{label}#{n}",
+        athanor_id: home.id,
+        permissions: Sanctum.Context.person_permissions(),
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    %{id: id, home: home, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
+  end
+
+  defp athanor!(label, n) do
+    {:ok, athanor} =
+      Arca.Athanors.insert(Prima.Actor.system(), %{
+        kind: "group",
+        name: "Files #{label} #{n}",
+        slug: "files-#{label}-#{n}",
+        created_by: "system"
+      })
+
+    athanor
+  end
+
+  defp seat!(athanor, user_id) do
+    seat = %{Prima.Actor.system() | athanor_id: athanor.id, scope: :athanor}
+    {:ok, _} = Arca.Members.seat(seat, %{user_id: user_id, added_by: "test"})
+    :ok
+  end
+
+  defp file(who, args), do: Grimoire.call_external("file", who.ctx, args)
 
   # A document published straight through the store, as a note is kept:
   # staged bytes and their reference, with no claimant in this suite.

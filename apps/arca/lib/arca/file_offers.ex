@@ -48,6 +48,35 @@ defmodule Arca.FileOffers do
        its custody copy is released inside the internal-write scope (a
        release that fails is left to the receipts sweep).
 
+  ## One order for an offer's rows
+
+  Every write that ends an offer locks the rows it ends first, in one
+  order, by `offer_id` and then `filename` (`FOR UPDATE` on PostgreSQL),
+  and only then writes them: the acceptance's turn to `accepted`,
+  `withdraw/2`, `decline/2`, `expire/2`, a deny's `end_for_person!/2`
+  and an archive's `end_for_athanor!/1`, each writing only the rows its
+  lock took, by id. A row that comes to match after the lock (an offer
+  expiring, or one landing already past its expiry) is left to the next
+  writer, never written unlocked. A conditional update alone locks rows in the
+  order its plan scans them, which differs between the sender's index and
+  the offer's, so two of them ending one offer could each wait on the
+  other. It is the one order of the file-offer rows, as
+  `Arca.ConsentStorage` states the one order of the entry rows a consent
+  revision holds. An offer's rows are inserted together, under the shared
+  locks of its two people and its athanor (`offer/3`), so a deny or an
+  archive in flight is waited for, and one that runs after sees them.
+
+  One other transaction holds more than one offer row:
+  `Arca.TenantTables.delete_all_for/1`, whose single statement erases an
+  archived athanor's rows in scan order. Archiving withdrew every offer
+  the athanor held open, and every write that ends an offer takes only
+  rows still offered, so none waits on a row the purge holds. Ordering
+  the purge's offer rows would not do instead: a deny holds the person's
+  seat in that athanor before it takes their offers, and the purge erases
+  offers before seats, so a deny waiting on even a one-file offer the
+  purge held would hold the seat the purge waits on. The receipt writers
+  touch receipts alone.
+
   ## Ownership of a publication
 
   `complete/2` claims the receipt first (`completing_by`, the member's
@@ -101,8 +130,12 @@ defmodule Arca.FileOffers do
 
   require Logger
 
+  alias Arca.Schemas.Athanor
   alias Arca.Schemas.FileOffer
   alias Arca.Schemas.FileReceipt
+  alias Arca.Schemas.User
+
+  @ids_per_statement 1_000
 
   @lease_ms 30_000
   @max_index 100
@@ -158,10 +191,18 @@ defmodule Arca.FileOffers do
   `{:error, {:too_large, filename}}` for a file over
   `Arca.Files.max_write/0`; `{:error, :not_shared}` when the two share no
   active athanor; the sender's storage cap's refusal; and a read's own
-  error. A snapshot write that fails releases what it wrote; an insert
-  the database did not answer (`{:error, :database_error}`) leaves the
-  snapshot to the offers sweep, since its rows may have landed. Answers
-  the offer id, its files and its expiry.
+  error. The rows are written under the two people's and the sender's
+  athanor's locks, the head of `Arca.SecurityTransitions`' one order, and
+  only once those are still active and still share an athanor: a denial
+  or an archive in flight is waited for, and an offer it overtook is
+  refused, `{:error, :denied}` for the sender, `{:error, :not_shared}`
+  for the recipient and `{:error, :athanor_archived}` for the sender's
+  athanor (`{:error, :no_athanor}` when it has no row). A snapshot write
+  that fails, and an offer refused under the locks, release what was
+  written; an insert the database did not answer
+  (`{:error, :database_error}`) leaves the snapshot to the offers sweep,
+  since its rows may have landed. Answers the offer id, its files and
+  its expiry.
   """
   @spec offer(Prima.Actor.t(), String.t(), [Arca.Storage.path() | String.t()]) ::
           {:ok, %{offer_id: String.t(), expires_at: DateTime.t(), files: [offer_row()]}}
@@ -190,7 +231,12 @@ defmodule Arca.FileOffers do
             # name the snapshot, so the snapshot is left to the offers sweep,
             # which releases one no offer row names only after a day and one
             # an offer names only once it has ended.
+            {:error, :database_error} = error ->
+              error
+
+            # Refused under the parties' locks, before any row was written.
             {:error, _} = error ->
+              release_snapshot(actor, offer_id)
               error
           end
 
@@ -315,18 +361,14 @@ defmodule Arca.FileOffers do
   def decline(%Prima.Actor{user_id: user_id}, offer_id)
       when is_binary(user_id) and user_id != "" and is_binary(offer_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.FileOffers.decline", fn ->
-      now = now()
-
-      declined =
+      query =
         from(o in FileOffer,
           where:
-            o.offer_id == ^offer_id and o.recipient_user_id == ^user_id and o.status == "offered",
-          select: o
+            o.offer_id == ^offer_id and o.recipient_user_id == ^user_id and o.status == "offered"
         )
-        |> Arca.Repo.update_all(set: [status: "declined", updated_at: now])
 
-      case declined do
-        {0, _} ->
+      case end_offers(query, "declined", now()) do
+        {:ok, []} ->
           from(o in FileOffer,
             where: o.offer_id == ^offer_id and o.recipient_user_id == ^user_id,
             select: o.status,
@@ -335,9 +377,12 @@ defmodule Arca.FileOffers do
           |> Arca.Repo.one()
           |> not_ended()
 
-        {_count, rows} ->
-          after_end(rows || [])
+        {:ok, rows} ->
+          after_end(rows)
           :ok
+
+        {:error, _} = error ->
+          error
       end
     end)
   end
@@ -361,10 +406,8 @@ defmodule Arca.FileOffers do
               o.sender_user_id == ^user_id and o.status == "offered"
         )
 
-      case Arca.Repo.update_all(from(o in query, select: o),
-             set: [status: "withdrawn", updated_at: now()]
-           ) do
-        {0, _} ->
+      case end_offers(query, "withdrawn", now()) do
+        {:ok, []} ->
           from(o in FileOffer,
             where:
               o.athanor_id == ^athanor_id and o.offer_id == ^offer_id and
@@ -375,9 +418,12 @@ defmodule Arca.FileOffers do
           |> Arca.Repo.one()
           |> not_ended()
 
-        {_count, rows} ->
-          after_end(rows || [])
+        {:ok, rows} ->
+          after_end(rows)
           :ok
+
+        {:error, _} = error ->
+          error
       end
     end)
   end
@@ -405,14 +451,10 @@ defmodule Arca.FileOffers do
       if Keyword.get(opts, :dry_run, false) do
         {:ok, Arca.Repo.aggregate(query, :count)}
       else
-        {_count, rows} =
-          Arca.Repo.update_all(from(o in query, select: o),
-            set: [status: "expired", updated_at: now]
-          )
-
-        rows = rows || []
-        after_end(rows)
-        {:ok, length(rows)}
+        with {:ok, rows} <- end_offers(query, "expired", now) do
+          after_end(rows)
+          {:ok, length(rows)}
+        end
       end
     end)
   end
@@ -421,32 +463,75 @@ defmodule Arca.FileOffers do
 
   @doc false
   # Inside a deny's transaction (`Arca.SecurityTransitions`): every offer
-  # the person sent is withdrawn and every offer addressed to them
-  # declined, by conditional writes from `offered`. Answers the rows ended,
-  # for `after_end/1` once the transaction commits.
-  @spec end_for_person!(String.t()) :: [FileOffer.t()]
+  # the person sent, and every offer of an athanor the deny retires
+  # (`retired`), is withdrawn, and every other offer addressed to them
+  # declined. Only the rows the one ordered lock took are written: an
+  # offer that commits after it is none of them, and none can, since an
+  # offer waits on the person the deny holds; the deny's postcondition
+  # refuses one left. Answers the rows ended, for `after_end/1` once the
+  # transaction commits.
+  @spec end_for_person!(String.t(), [String.t()]) :: [FileOffer.t()]
   # arca:db-raise-ok a step inside the caller's transaction; a raise rolls it back.
-  # arca:unscoped-ok a denied person's offers are ended in every athanor:
-  # the person's sent and incoming offers cross athanors and are keyed by
-  # the person.
-  def end_for_person!(user_id) when is_binary(user_id) and user_id != "" do
+  def end_for_person!(user_id, retired \\ [])
+      when is_binary(user_id) and user_id != "" and is_list(retired) do
     now = now()
+    mine = dynamic([o], o.sender_user_id == ^user_id or o.recipient_user_id == ^user_id)
+    withdrawn = dynamic([o], o.sender_user_id == ^user_id)
 
-    {_sent, withdrawn} =
+    {held, withdrawn} =
+      if retired == [],
+        do: {mine, withdrawn},
+        else:
+          {dynamic([o], ^mine or o.athanor_id in ^retired),
+           dynamic([o], ^withdrawn or o.athanor_id in ^retired)}
+
+    # Both sets in the one order before either write, so a deny never
+    # waits on a writer that waits on it.
+    ids = lock_offers!(from(o in FileOffer, where: o.status == "offered", where: ^held))
+
+    end_locked!(ids, withdrawn, "withdrawn", now) ++
+      end_locked!(ids, dynamic(true), "declined", now)
+  end
+
+  @doc false
+  # Inside an archive's transaction (`Arca.SecurityTransitions`): every
+  # offer the athanor still holds open is withdrawn, its rows locked in
+  # the one order first, so the purge that later erases the athanor meets
+  # no offer a decline, a deny or an acceptance could still end. Answers
+  # the rows ended, for `after_end/1` once the transaction commits.
+  @spec end_for_athanor!(Prima.Actor.t()) :: [FileOffer.t()]
+  # arca:db-raise-ok a step inside the caller's transaction; a raise rolls it back.
+  def end_for_athanor!(%Prima.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
+    from(o in FileOffer, where: o.athanor_id == ^athanor_id and o.status == "offered")
+    |> lock_offers!()
+    |> end_locked!(dynamic(true), "withdrawn", now())
+  end
+
+  # Ends, as `status`, the rows among `ids` (taken by `lock_offers!/1` in
+  # this transaction) that `which` names and that are still offered, a
+  # bounded number of ids a statement: SQLite binds each element of an
+  # `in` list as its own variable and caps them (32766), and nothing caps
+  # how many offers one person or athanor holds open.
+  defp end_locked!(ids, which, status, now) do
+    ids
+    |> Enum.chunk_every(@ids_per_statement)
+    |> Enum.flat_map(&end_chunk!(&1, which, status, now))
+  end
+
+  # arca:unscoped-ok the rows its caller's lock took in this transaction,
+  # by id, under that lock's own scope: an athanor's, an offer's, or for a
+  # deny the person's, whose sent and incoming offers cross athanors.
+  defp end_chunk!(ids, which, status, now) do
+    {_count, rows} =
       from(o in FileOffer,
-        where: o.sender_user_id == ^user_id and o.status == "offered",
+        where: o.id in ^ids and o.status == "offered",
+        where: ^which,
         select: o
       )
-      |> Arca.Repo.update_all(set: [status: "withdrawn", updated_at: now])
+      |> Arca.Repo.update_all(set: [status: status, updated_at: now])
 
-    {_incoming, declined} =
-      from(o in FileOffer,
-        where: o.recipient_user_id == ^user_id and o.status == "offered",
-        select: o
-      )
-      |> Arca.Repo.update_all(set: [status: "declined", updated_at: now])
-
-    (withdrawn || []) ++ (declined || [])
+    rows || []
   end
 
   @doc false
@@ -743,32 +828,80 @@ defmodule Arca.FileOffers do
          expires_at
        ) do
     Arca.Repo.Errors.with_db_rescue("Arca.FileOffers.offer", fn ->
-      now = now()
-
-      rows =
-        for {filename, bytes} <- contents do
-          %{
-            id: Prima.UUID7.generate_id("fof"),
-            athanor_id: athanor_id,
-            offer_id: offer_id,
-            sender_user_id: sender,
-            recipient_user_id: recipient,
-            filename: filename,
-            digest: Prima.Digest.sha256(bytes),
-            size: byte_size(bytes),
-            status: "offered",
-            expires_at: DateTime.truncate(expires_at, :microsecond),
-            inserted_at: now,
-            updated_at: now
-          }
+      Arca.Repo.locking_transaction(fn ->
+        with :ok <- hold_parties(sender, recipient, athanor_id),
+             :ok <- shared(sender, recipient),
+             {:ok, rows} <-
+               insert_rows(athanor_id, offer_id, sender, recipient, contents, expires_at) do
+          rows
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
         end
-
-      {count, _} = Arca.Repo.insert_all(FileOffer, rows)
-
-      if count == length(rows),
-        do: {:ok, Enum.map(rows, &struct(FileOffer, &1))},
-        else: {:error, :partial_insert}
+      end)
     end)
+  end
+
+  # The head of the one order every transition takes its locks in
+  # (`Arca.SecurityTransitions`): the two people, sorted by id, then the
+  # sender's athanor, each held against a writer, so a denial holding a
+  # person or an archive holding the athanor is waited for and its commit
+  # read; an offer that holds them first is seen by the denial's or the
+  # archive's ordered lock of the offer rows.
+  # arca:unscoped-ok the two people an offer names, each read by id under lock.
+  defp hold_parties(sender, recipient, athanor_id) do
+    people =
+      from(u in User,
+        where: u.id in ^Enum.uniq([sender, recipient]),
+        order_by: [asc: u.id],
+        select: {u.id, u.status}
+      )
+      |> Arca.QueryHelpers.for_share()
+      |> Arca.Repo.all()
+      |> Map.new()
+
+    athanor =
+      from(a in Athanor, where: a.id == ^athanor_id, select: a.status)
+      |> Arca.QueryHelpers.for_share()
+      |> Arca.Repo.one()
+
+    # A person with no row has nothing to hold (`Arca.Members`) and no
+    # standing to lose; their seats are what `shared/2` reads next. An
+    # athanor with no row is no athanor to offer from.
+    cond do
+      Map.get(people, sender, "active") != "active" -> {:error, :denied}
+      Map.get(people, recipient, "active") != "active" -> {:error, :not_shared}
+      is_nil(athanor) -> {:error, :no_athanor}
+      athanor != "active" -> {:error, :athanor_archived}
+      true -> :ok
+    end
+  end
+
+  defp insert_rows(athanor_id, offer_id, sender, recipient, contents, expires_at) do
+    now = now()
+
+    rows =
+      for {filename, bytes} <- contents do
+        %{
+          id: Prima.UUID7.generate_id("fof"),
+          athanor_id: athanor_id,
+          offer_id: offer_id,
+          sender_user_id: sender,
+          recipient_user_id: recipient,
+          filename: filename,
+          digest: Prima.Digest.sha256(bytes),
+          size: byte_size(bytes),
+          status: "offered",
+          expires_at: DateTime.truncate(expires_at, :microsecond),
+          inserted_at: now,
+          updated_at: now
+        }
+      end
+
+    {count, _} = Arca.Repo.insert_all(FileOffer, rows)
+
+    if count == length(rows),
+      do: {:ok, Enum.map(rows, &struct(FileOffer, &1))},
+      else: {:error, :partial_insert}
   end
 
   # ---------------------------------------------------------------------------
@@ -922,11 +1055,14 @@ defmodule Arca.FileOffers do
             o.status == "offered" and o.expires_at > ^now
       )
 
-    case Arca.Repo.update_all(query, set: [status: "accepted", updated_at: now]) do
-      {^files, _} ->
+    # Every file still offered, or nothing is written: the rows the lock
+    # took are the ones turned, by id.
+    case lock_offers!(query) do
+      ids when length(ids) == files ->
+        _turned = end_locked!(ids, dynamic(true), "accepted", now)
         :ok
 
-      {_other, _} ->
+      _fewer ->
         status =
           from(o in FileOffer,
             where:
@@ -939,6 +1075,32 @@ defmodule Arca.FileOffers do
 
         {:error, {:not_offered, status || "expired"}}
     end
+  end
+
+  # Ends with `status` the rows of the offers `query` names that its lock
+  # took (`lock_offers!/1`, the one order), by id, in one transaction.
+  # Answers the rows ended, for `after_end/1` once it has committed.
+  defp end_offers(query, status, now) do
+    Arca.Repo.locking_transaction(fn ->
+      query
+      |> lock_offers!()
+      |> end_locked!(dynamic(true), status, now)
+    end)
+  end
+
+  # The one order every write that ends an offer locks its rows in: by
+  # `offer_id`, then `filename`, before it writes. A conditional UPDATE
+  # alone locks rows in whatever order its plan scans them (the sender's
+  # listing on one index, filename order on another), so two writers
+  # ending one offer could each hold a row the other waits on, and
+  # PostgreSQL would abort one of them. Locked first in one order, the
+  # rows are held by one writer at a time. SQLite's single writer
+  # serializes them already.
+  # arca:db-raise-ok a step inside the caller's transaction; a raise rolls it back.
+  defp lock_offers!(query) do
+    from(o in query, order_by: [asc: o.offer_id, asc: o.filename], select: o.id)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.all()
   end
 
   defp sender_actor([%FileOffer{athanor_id: athanor_id} | _]),

@@ -937,6 +937,20 @@ CYFR has two kinds of storage — don't confuse them:
 
 Your application data stays in the external database. Tinctures invoke backend components via `cyfr.invoke()` — the component fetches from your real data source and returns results. If you stop using CYFR tomorrow, your data is still in your database where it always was. CYFR governs *access* to your data, it doesn't *store* your data.
 
+### Sending a copy of a file (`file` tool)
+
+Beside `list`, `read`, `write` and `delete`, the `file` tool sends a person a copy of files under `data/`. The copy is taken when the offer is made, so later edits do not follow it. It lands only in the recipient's own tree, and only once they accept it; neither person sees the other's tree. `offer`, `offers`, `accept` and `decline` need an interactive session — no API key reaches them; a key with `storage_write` may `withdraw` an offer sent from its athanor.
+
+| Action | Key args | What it does |
+|--------|----------|--------------|
+| `offer` | `paths` (one to ten files under `data/`), `to` (a person id, `usr_…`) | Copy the files and offer them to a person you share an athanor with — never yourself. The copy counts against your storage until the offer ends. Answers the `offer_id` and its `expires_at` (after `file_offer_days`, a retention setting, 7 by default) |
+| `offers` | — | `inbox` (offers sent to you, with `sender`), `outbox` (offers you sent from this athanor, with `recipient`), each file with its `status`, `filename`, `size` and `expires_at`; and `receipts`, the files you accepted that have not landed yet |
+| `accept` | `offer_id`, optional `folder` (under `data/`) | Take the copy into your focused athanor, where you must hold a seat. It needs twice the files' size free until they land. Answers the `folder` they land in: `<folder>/<offer_id>/`, under `data/inbox/<sender>/` by default (the sender's namespace, or their person id), with `-2` and onward when that folder already holds files — nothing of yours is overwritten |
+| `decline` | `offer_id` | Refuse an offer sent to you |
+| `withdraw` | `offer_id` | Take back an offer you sent, while it is not yet accepted. An accepted copy is the recipient's |
+
+An offer ends once: accepted, declined, withdrawn or expired, whichever lands first. Asking again after it ended answers a conflict naming how it ended. A file the sweep has not yet landed — the recipient's storage was full, or the server stopped part-way — stays in `receipts` and lands on a later retention sweep.
+
 ---
 
 ## Granting Components: Vault Entries & Consent

@@ -1194,8 +1194,9 @@ the server's, and each folder is one of three tiers.
 - **Read-only** — `notes/` and `threads/`. Shown and downloaded here,
   written by their own surfaces.
 
-The `file` tool (`list`, `read`, `write`, `delete`) is the same surface on
-the wire; reads take `storage_read`, changes `storage_write`.
+The `file` tool (`list`, `read`, `write`, `delete`, and `offer`, `offers`,
+`accept`, `decline`, `withdraw` to send a person a copy) is the same
+surface on the wire; reads take `storage_read`, changes `storage_write`.
 
 ---
 

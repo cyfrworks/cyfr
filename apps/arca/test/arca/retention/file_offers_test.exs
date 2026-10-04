@@ -21,16 +21,24 @@ defmodule Arca.Retention.FileOffersTest do
     Arca.Test.Sandbox.setup!(tags)
 
     n = System.unique_integer([:positive])
-    sender = %Prima.Actor{athanor_id: "ath_rfo_s#{n}", user_id: "usr_rfo_s#{n}"}
-    recipient = %Prima.Actor{athanor_id: "ath_rfo_r#{n}", user_id: "usr_rfo_r#{n}"}
 
-    {:ok, group} =
-      Arca.Athanors.insert(Prima.Actor.system(), %{
-        kind: "group",
-        name: "Retention #{n}",
-        slug: "retention-offers-#{n}",
-        created_by: "system"
-      })
+    # The group the two share, and each one's own athanor, the one their
+    # offers are made from and accepted into.
+    [group, sender_home, recipient_home] =
+      for tag <- ~w(shared s r) do
+        {:ok, athanor} =
+          Arca.Athanors.insert(Prima.Actor.system(), %{
+            kind: "group",
+            name: "Retention #{tag} #{n}",
+            slug: "retention-offers-#{tag}-#{n}",
+            created_by: "system"
+          })
+
+        athanor
+      end
+
+    sender = %Prima.Actor{athanor_id: sender_home.id, user_id: "usr_rfo_s#{n}"}
+    recipient = %Prima.Actor{athanor_id: recipient_home.id, user_id: "usr_rfo_r#{n}"}
 
     seat = %{Prima.Actor.system() | athanor_id: group.id, scope: :athanor}
 
