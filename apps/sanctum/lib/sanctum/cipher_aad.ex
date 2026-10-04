@@ -42,6 +42,24 @@ defmodule Sanctum.CipherAAD do
   end
 
   @doc """
+  AAD for an instance entry's sealed payload (`:instance_entry` purpose).
+
+  An instance entry is the instance's own, owned by no athanor, so the
+  athanor frame is omitted: the entry id binds as `name` and the provider
+  hint, as immutable per row as a vault entry's, as `sub`. A row
+  repointed at another id or hint, or a vault entry's ciphertext moved
+  into an instance row, fails decryption.
+  """
+  @spec instance_entry(String.t(), String.t()) :: map()
+  def instance_entry(entry_id, provider_hint) when is_binary(entry_id) and entry_id != "" do
+    %{
+      purpose: :instance_entry,
+      name: entry_id,
+      sub: provider_hint
+    }
+  end
+
+  @doc """
   AAD for an OAuth provider client-credential blob
   (`:oauth_provider_credential` purpose).
 

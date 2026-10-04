@@ -158,6 +158,8 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_CLOCK_SKEW_SECONDS` | `clock_skew_seconds` | `duration_s` | `60` | `devices` | live | refuse | How far a certificate's not-before or a signed message's time may sit from this home's clock, in seconds; it never extends a certificate's expiry. |
 | `CYFR_CONFIRMATION_SECONDS` | `confirmation_seconds` | `duration_s` | `300` | `confirmation` | live | refuse | How long a pending confirmation of a sensitive change stays open, in seconds. |
 | `CYFR_REAUTH_SECONDS` | `reauth_seconds` | `duration_s` | `300` | `confirmation` | live | refuse | How recent a local person's door sign-in must be to register their first passkey with no fresh method, in seconds. |
+| `CYFR_INSTANCE_ENTRY_PERSON_DAILY` | `instance_entry_person_daily` | `integer` | `1000` | `instance_entries` | live | refuse | Requests one person may make each day through an instance entry whose own per-person cap is unset; 0 admits no use. |
+| `CYFR_INSTANCE_ENTRY_TOTAL_DAILY` | `instance_entry_total_daily` | `integer` | `2000` | `instance_entries` | live | refuse | Requests everyone together may make each day through an instance entry whose own total cap is unset; 0 admits no use. |
 
 ## Compose-only variables
 

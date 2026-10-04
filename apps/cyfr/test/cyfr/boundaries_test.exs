@@ -720,6 +720,34 @@ defmodule Cyfr.BoundariesTest do
       end
     end
 
+    # The instance's own credentials are Sanctum's to administer and resolve
+    # through declared operations and its own attach path: the host reaches
+    # them for the retention cycle's usage sweep alone, which names no entry
+    # and no person.
+    test "the host reaches the instance's entries for the usage sweep alone" do
+      assert Boundaries.sanctum_exports()["Sanctum.InstanceEntries"] == [sweep_usage: 0]
+
+      reached =
+        for {"Sanctum.InstanceEntries", function, arity} <- host_sanctum_reaches(),
+            uniq: true,
+            do: {function, arity}
+
+      assert reached == [sweep_usage: 0]
+
+      assert [row] =
+               for(
+                 %{into: "Sanctum", allow: allow} = row <- Boundaries.surfaces(),
+                 "Sanctum.InstanceEntries" in allow,
+                 do: row
+               )
+
+      assert "apps/cyfr/lib/cyfr/**/*.ex" in row.from
+
+      assert row.reason =~
+               "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
+                 "instance-entry usage days (`sweep_usage/0`), which names no entry and no person"
+    end
+
     test "a planted call or capture outside the roster is reported, and a dropped one is stale" do
       [{Cyfr.PlantedSanctumReach, binary}] =
         Code.compile_string(~S'''

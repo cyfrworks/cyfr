@@ -63,7 +63,8 @@ defmodule Cyfr.PlatformSettingsRosterTest do
              webhook_max_skew_seconds webhook_idempotency_ttl_seconds
              directory_serve directory_max_identities directory_log_bytes
              directory_recovery_reserve_bytes identity_freshness_seconds device_cert_seconds
-             clock_skew_seconds confirmation_seconds reauth_seconds)
+             clock_skew_seconds confirmation_seconds reauth_seconds
+             instance_entry_person_daily instance_entry_total_daily)
 
   defp stale_violations(entries) do
     for %Entry{key: key, stale: stale} <- entries,
@@ -241,6 +242,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  directory_serve directory_max_identities directory_log_bytes
                  directory_recovery_reserve_bytes identity_freshness_seconds
                  device_cert_seconds clock_skew_seconds confirmation_seconds reauth_seconds
+                 instance_entry_person_daily instance_entry_total_daily
                ))
 
       for key <- ~w(asset_credential_window_s frame_credential_deadline_s) do
@@ -276,6 +278,37 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  {:sanctum, :live, :refuse, nil}
 
         assert entry.variable == "CYFR_" <> String.upcase(key)
+      end
+    end
+
+    # The defaults an instance entry's unset cap takes, read at each attach:
+    # Sanctum's, refused stale, and 0 admits no use, as an entry's own 0
+    # does. There is no value that turns the cap off.
+    test "the instance entry caps are Sanctum's defaults, 0 a value that admits no use" do
+      for {key, default} <- [
+            {"instance_entry_person_daily", 1_000},
+            {"instance_entry_total_daily", 2_000}
+          ] do
+        {:ok, entry} = Roster.fetch(key)
+
+        assert {entry.type, entry.default, entry.group} == {:integer, default, :instance_entries}
+
+        assert {entry.app, entry.scope, entry.stale, entry.config} ==
+                 {:sanctum, :live, :refuse, nil}
+
+        assert entry.variable == "CYFR_" <> String.upcase(key)
+        assert entry.doc =~ "0 admits no use"
+        refute entry.doc =~ ~r/\boff\b/
+
+        assert entry.validator.("0") == {:ok, 0}
+        assert entry.validator.(0) == {:ok, 0}
+        assert entry.validator.("1000000000") == {:ok, 1_000_000_000}
+
+        for bad <- ["-1", "1000000001", "ten", "1.5", "", -1, 1_000_000_001, nil, :x] do
+          assert {:error, "must be a whole number of requests from 0 to 1000000000"} =
+                   entry.validator.(bad),
+                 "#{key} took #{inspect(bad)}"
+        end
       end
     end
 

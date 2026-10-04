@@ -32,24 +32,38 @@ defmodule Arca.InstanceEntries do
 
   ## Writes
 
-  `set_audience/4` replaces the member list in one transaction.
-  `set_component_policy/4` is a compare-and-set on the stored policy: it
-  writes only while the row still holds the policy the caller read and
-  confirmed against, and otherwise answers `{:error, :conflict}` without
-  writing, so an unconfirmed widening is never retried into place.
-  `move_binding/5` moves the destination by compare-and-set on the
-  binding digest and blocks every profile, in every athanor, whose head
-  binds the entry, in one transaction. `commit_payload/3` rotates the
-  material under `payload_rev`, on an active row only. `tombstone/2`
-  erases the material and removes every athanor's default naming the
-  entry (`Arca.VaultDefaults`); the row stays, so the consents that bound
-  it keep theirs.
+  `set_audience/4` and `set_component_policy/4` are compare-and-sets on
+  what the caller read and decided against: the audience with its member
+  list, and the policy. Each writes only while the row still holds it,
+  and otherwise answers `{:error, :conflict}` without writing, so a
+  widening that needed a confirmation is never written over a state it
+  was not decided against. `put/3` and `set_audience/4` take the lock of
+  every person a listed audience names first, people being first in
+  `Arca.SecurityTransitions`' lock order, and refuse a denied person
+  `{:error, {:person_denied, user_id}}` with nothing written, so a denial
+  and an audience naming the person serialize, and a denied person is
+  never listed again. `set_caps/3` writes only the caps it names.
+  `move_binding/5` moves the destination by
+  compare-and-set on the binding digest. `commit_payload/3` rotates the
+  material under `payload_rev`, on an active row only. `revoke/3` and
+  `tombstone/3` end the entry; `tombstone/3` also erases the material and
+  removes every athanor's default naming the entry (`Arca.VaultDefaults`).
+  The row stays, so the consents that bound it keep theirs.
+
+  `move_binding/5`, `revoke/3` and `tombstone/3` each block every profile,
+  in every athanor, whose head consent binds the entry, with the
+  `blocked_status` the caller names, in the same transaction as their own
+  write: a profile is never left ready against an entry that moved or
+  ended, and a write whose dependents cannot be blocked is rolled back. A
+  profile already revoked is not blocked; it stays revoked.
   """
 
   import Ecto.Query
 
   alias Arca.Schemas.InstanceEntry
   alias Arca.Schemas.InstanceEntryMember
+  alias Arca.Schemas.Profile
+  alias Arca.Schemas.User
 
   @typedoc """
   An instance entry as callers see it: the metadata, the binding columns,
@@ -95,8 +109,10 @@ defmodule Arca.InstanceEntries do
   `{:error, :name_taken}` when a living entry holds the name,
   `{:error, :destination_required}` or `{:error, {:invalid_destination,
   reason}}` for a destination that is absent, not a destination's
-  canonical text, or missing its methods or paths, and
-  `{:error, {:invalid, errors}}` for a row outside the vocabularies.
+  canonical text, or missing its methods or paths,
+  `{:error, {:invalid, errors}}` for a row outside the vocabularies, and
+  `{:error, {:person_denied, user_id}}` for a listed person who is
+  denied, read under that person's lock.
   """
   @spec put(Prima.Actor.t(), map(), [String.t()]) ::
           {:ok, entry()}
@@ -104,7 +120,8 @@ defmodule Arca.InstanceEntries do
              :name_taken
              | :destination_required
              | {:invalid_destination, term()}
-             | {:invalid, map()}}
+             | {:invalid, map()}
+             | {:person_denied, String.t()}}
           | refusal()
   def put(actor, attrs, members \\ [])
 
@@ -124,15 +141,17 @@ defmodule Arca.InstanceEntries do
 
       Arca.Repo.Errors.with_db_rescue("Arca.InstanceEntries.put", fn ->
         transact(fn ->
-          case Arca.Repo.insert(changeset) do
-            {:ok, row} ->
-              replace_members!(row.id, if(row.audience == "listed", do: members, else: []))
-              {:ok, view(row)}
+          with :ok <- listed_people(Map.get(attrs, :audience), members) do
+            case Arca.Repo.insert(changeset) do
+              {:ok, row} ->
+                replace_members!(row.id, if(row.audience == "listed", do: members, else: []))
+                {:ok, view(row)}
 
-            {:error, %Ecto.Changeset{errors: errors}} ->
-              if Keyword.has_key?(errors, :name) and name_taken?(errors),
-                do: {:error, :name_taken},
-                else: {:error, {:invalid, errors_map(errors)}}
+              {:error, %Ecto.Changeset{errors: errors}} ->
+                if Keyword.has_key?(errors, :name) and name_taken?(errors),
+                  do: {:error, :name_taken},
+                  else: {:error, {:invalid, errors_map(errors)}}
+            end
           end
         end)
       end)
@@ -185,22 +204,48 @@ defmodule Arca.InstanceEntries do
 
   def list(%Prima.Actor{}, opts) when is_list(opts), do: {:error, :cross_tenant}
 
+  @typedoc "Who an entry is offered to: `everyone`, or the `listed` person ids."
+  @type audience :: %{audience: String.t(), members: [String.t()]}
+
   @doc """
-  Set who an entry is offered to: `audience` `everyone` or `listed`, and
-  the listed `members` (person ids), which replace the entry's list in
-  the same transaction (an `everyone` audience keeps none). Whether the
-  change widens the audience, and the confirmation that asks, are the
-  caller's.
+  Set who an entry is offered to, by compare-and-set: `change` names the
+  `audience` (`everyone` or `listed`) and the listed `members` (person
+  ids), which replace the entry's list (an `everyone` audience keeps
+  none), and `expected` the audience and members the caller read and
+  decided against. Whether the change widens the audience, and the
+  confirmation that asks, are the caller's.
+
+  In one locking transaction the people a listed `change` names are
+  locked first, and a denied one refused `{:error, {:person_denied,
+  user_id}}`; then the entry's row and its member rows are read under a
+  lock, and the write lands only while they still hold `expected`,
+  members compared as a set, and otherwise answers `{:error, :conflict}`
+  with nothing written. So two writers who read the same audience cannot
+  both land, and the one that loses never puts back a person the other
+  removed. An entry that does not exist or is tombstoned is
+  `{:error, :not_found}`.
   """
-  @spec set_audience(Prima.Actor.t(), String.t(), String.t(), [String.t()]) ::
-          :ok | {:error, :not_found | {:invalid, map()}} | refusal()
-  def set_audience(actor, id, audience, members)
-      when platform(actor) and is_binary(id) and is_list(members) do
+  @spec set_audience(Prima.Actor.t(), String.t(), audience(), audience()) ::
+          :ok
+          | {:error, :conflict | :not_found | {:invalid, map()} | {:person_denied, String.t()}}
+          | refusal()
+  def set_audience(
+        actor,
+        id,
+        %{audience: expected_audience, members: expected_members},
+        %{audience: audience, members: members}
+      )
+      when platform(actor) and is_binary(id) and is_list(expected_members) and
+             is_list(members) do
     with :ok <- audience_value(audience),
-         :ok <- member_ids(members) do
+         :ok <- audience_value(expected_audience),
+         :ok <- member_ids(members),
+         :ok <- member_ids(expected_members) do
       Arca.Repo.Errors.with_db_rescue("Arca.InstanceEntries.set_audience", fn ->
         transact(fn ->
-          with :ok <- write(id, audience: audience, updated_at: now()) do
+          with :ok <- listed_people(audience, members),
+               :ok <- audience_held(id, expected_audience, expected_members),
+               :ok <- write(id, audience: audience, updated_at: now()) do
             replace_members!(id, if(audience == "listed", do: members, else: []))
             :ok
           end
@@ -209,8 +254,8 @@ defmodule Arca.InstanceEntries do
     end
   end
 
-  def set_audience(%Prima.Actor{}, id, _audience, members)
-      when is_binary(id) and is_list(members),
+  def set_audience(%Prima.Actor{}, id, %{audience: _, members: _}, %{audience: _, members: _})
+      when is_binary(id),
       do: {:error, :cross_tenant}
 
   @doc """
@@ -247,27 +292,45 @@ defmodule Arca.InstanceEntries do
     do: {:error, :cross_tenant}
 
   @doc """
-  Set the daily caps: `person_daily` and `total_daily`, each an integer
-  from 0 to `Arca.Schemas.InstanceEntry.max_cap/0` (the columns' 32-bit
-  range on PostgreSQL) or nil (the platform setting's default). `0`
-  admits no use.
+  The largest daily cap an entry holds (`Arca.Schemas.InstanceEntry.max_cap/0`):
+  the bound a caller holds a cap to before it asks for the write.
+  """
+  @spec max_cap() :: pos_integer()
+  defdelegate max_cap(), to: InstanceEntry
+
+  @doc """
+  Set the daily caps `caps` names, `person_daily`, `total_daily` or both,
+  each an integer from 0 to `Arca.Schemas.InstanceEntry.max_cap/0` (the
+  columns' 32-bit range on PostgreSQL) or nil (unset, taking the platform
+  setting's default). `0` admits no use. One statement writes exactly the
+  named columns, so a concurrent write to the other cap stands. A map
+  naming neither, or anything beside them, is refused before a query.
   """
   @spec set_caps(Prima.Actor.t(), String.t(), %{
-          person_daily: non_neg_integer() | nil,
-          total_daily: non_neg_integer() | nil
+          optional(:person_daily) => non_neg_integer() | nil,
+          optional(:total_daily) => non_neg_integer() | nil
         }) :: :ok | {:error, :not_found | {:invalid, map()}} | refusal()
-  def set_caps(actor, id, %{person_daily: person, total_daily: total})
-      when platform(actor) and is_binary(id) do
-    if cap?(person) and cap?(total) do
+  def set_caps(actor, id, caps) when platform(actor) and is_binary(id) and is_map(caps) do
+    named = Map.take(caps, [:person_daily, :total_daily])
+
+    if named != %{} and map_size(named) == map_size(caps) and
+         Enum.all?(Map.values(named), &cap?/1) do
       Arca.Repo.Errors.with_db_rescue("Arca.InstanceEntries.set_caps", fn ->
-        write(id, person_daily: person, total_daily: total, updated_at: now())
+        write(id, Map.to_list(named) ++ [updated_at: now()])
       end)
     else
-      {:error, {:invalid, %{caps: ["are integers from 0 to #{InstanceEntry.max_cap()}, or nil"]}}}
+      {:error,
+       {:invalid,
+        %{
+          caps: [
+            "name person_daily, total_daily or both, each an integer from 0 to " <>
+              "#{InstanceEntry.max_cap()} or nil"
+          ]
+        }}}
     end
   end
 
-  def set_caps(%Prima.Actor{}, id, %{person_daily: _, total_daily: _}) when is_binary(id),
+  def set_caps(%Prima.Actor{}, id, caps) when is_binary(id) and is_map(caps),
     do: {:error, :cross_tenant}
 
   @doc """
@@ -281,24 +344,11 @@ defmodule Arca.InstanceEntries do
           :ok
           | {:error, :not_found | {:entry_unavailable, String.t()} | {:invalid, map()}}
           | refusal()
-  # arca:unscoped-ok the instance's own credentials, offered to athanors and
-  # deleted with none of them: written by id, with no athanor to scope to.
   def set_status(actor, id, status) when platform(actor) and is_binary(id) do
     case Arca.StatusTransitions.from(status) do
-      {:ok, from} ->
+      {:ok, _from} ->
         Arca.Repo.Errors.with_db_rescue("Arca.InstanceEntries.set_status", fn ->
-          query = from(i in InstanceEntry, where: i.id == ^id and i.status in ^from)
-
-          case Arca.Repo.update_all(query, set: [status: status, updated_at: now()]) do
-            {1, _} ->
-              :ok
-
-            {0, _} ->
-              case Arca.Repo.one(from(i in InstanceEntry, where: i.id == ^id, select: i.status)) do
-                nil -> {:error, :not_found}
-                current -> {:error, {:entry_unavailable, current}}
-              end
-          end
+          write_status(id, status)
         end)
 
       :error ->
@@ -309,28 +359,75 @@ defmodule Arca.InstanceEntries do
   def set_status(%Prima.Actor{}, id, _status) when is_binary(id), do: {:error, :cross_tenant}
 
   @doc """
-  Tombstone an entry: status flip and material erasure, with every
-  athanor's default naming it removed, in one transaction. The name is
-  free again; the row stays for the consents that bound it.
+  Revoke an entry and block its dependents, in one transaction: the
+  status moves to `revoked` as `Arca.StatusTransitions` admits, and every
+  profile, in every athanor, whose head consent binds the entry and that
+  is not itself revoked takes `blocked_status`. Answers the blocked
+  `{athanor_id, profile_id}` pairs.
+
+  An entry already revoked is revoked again and its dependents blocked
+  again, so a retry finishes what an earlier attempt left. A tombstoned
+  entry is `{:error, {:entry_unavailable, "tombstoned"}}` and one that
+  does not exist `{:error, :not_found}`, each with nothing written; a
+  block that fails rolls the status write back.
   """
-  @spec tombstone(Prima.Actor.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
-  def tombstone(actor, id) when platform(actor) and is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.InstanceEntries.tombstone", fn ->
+  @spec revoke(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, [{String.t(), String.t()}]}
+          | {:error, :not_found | {:entry_unavailable, String.t()}}
+          | refusal()
+  def revoke(actor, id, blocked_status)
+      when platform(actor) and is_binary(id) and is_binary(blocked_status) do
+    Arca.Repo.Errors.with_db_rescue("Arca.InstanceEntries.revoke", fn ->
       transact(fn ->
-        with :ok <-
-               write(id, status: "tombstoned", sealed_payload: nil, updated_at: now()) do
-          Arca.VaultDefaults.drop_instance_entry!(id)
+        with :ok <- write_status(id, "revoked") do
+          block_dependents(actor, id, blocked_status)
         end
       end)
     end)
   end
 
-  def tombstone(%Prima.Actor{}, id) when is_binary(id), do: {:error, :cross_tenant}
+  def revoke(%Prima.Actor{}, id, blocked_status)
+      when is_binary(id) and is_binary(blocked_status),
+      do: {:error, :cross_tenant}
+
+  @doc """
+  Tombstone an entry and block its dependents, in one transaction: the
+  status flip and the material's erasure, every athanor's default naming
+  the entry removed, and every profile, in every athanor, whose head
+  consent binds the entry and that is not itself revoked given
+  `blocked_status`. Answers the blocked
+  `{athanor_id, profile_id}` pairs. The name is free again; the row stays
+  for the consents that bound it.
+
+  An entry already tombstoned is tombstoned again and its dependents
+  blocked again, so a retry finishes what an earlier attempt left. One
+  that does not exist is `{:error, :not_found}`; a block that fails rolls
+  the whole tombstone back.
+  """
+  @spec tombstone(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, [{String.t(), String.t()}]} | {:error, :not_found} | refusal()
+  def tombstone(actor, id, blocked_status)
+      when platform(actor) and is_binary(id) and is_binary(blocked_status) do
+    Arca.Repo.Errors.with_db_rescue("Arca.InstanceEntries.tombstone", fn ->
+      transact(fn ->
+        with :ok <-
+               write(id, status: "tombstoned", sealed_payload: nil, updated_at: now()),
+             :ok <- Arca.VaultDefaults.drop_instance_entry!(id) do
+          block_dependents(actor, id, blocked_status)
+        end
+      end)
+    end)
+  end
+
+  def tombstone(%Prima.Actor{}, id, blocked_status)
+      when is_binary(id) and is_binary(blocked_status),
+      do: {:error, :cross_tenant}
 
   @doc """
   Move a living entry's destination from the binding digest it was read
   at, and block every profile in every athanor whose head binds the entry
-  with `blocked_status`, as one transaction.
+  and that is not itself revoked with `blocked_status`, as one
+  transaction.
 
   `changes` carries `destination` (a destination's canonical text naming
   methods and paths) and the recomputed `binding_digest`; naming the OAuth
@@ -353,11 +450,8 @@ defmodule Arca.InstanceEntries do
     with :ok <- movable(changes) do
       Arca.Repo.Errors.with_db_rescue("Arca.InstanceEntries.move_binding", fn ->
         transact(fn ->
-          with :ok <- cas_binding(id, from_digest, changes),
-               {:ok, affected} <-
-                 Arca.ConsentStorage.head_profiles_referencing_instance(actor, id),
-               :ok <- block_profiles(affected, blocked_status) do
-            {:ok, affected}
+          with :ok <- cas_binding(id, from_digest, changes) do
+            block_dependents(actor, id, blocked_status)
           end
         end)
       end)
@@ -496,6 +590,17 @@ defmodule Arca.InstanceEntries do
   # arca:unscoped-ok the instance's own audiences, keyed by the person
   # denied; no athanor holds them.
   def remove_person!(user_id) when is_binary(user_id) do
+    # The person's rows are locked by entry id before they go, in the one
+    # order an audience write takes member rows in (person id, then entry
+    # id), so the two never wait on each other in a cycle.
+    from(m in InstanceEntryMember,
+      where: m.user_id == ^user_id,
+      order_by: [asc: m.instance_entry_id],
+      select: m.instance_entry_id
+    )
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.all()
+
     {count, _} =
       from(m in InstanceEntryMember, where: m.user_id == ^user_id)
       |> Arca.Repo.delete_all()
@@ -653,6 +758,36 @@ defmodule Arca.InstanceEntries do
     end
   end
 
+  # Every profile, in every athanor, whose head consent binds the entry,
+  # given `blocked_status`: a step inside the caller's transaction, whose
+  # refusal rolls back the write it follows. A revoked profile is not
+  # blocked: it stays revoked and nothing attaches through it, and a
+  # status write would revive it beside the live profile of its identity.
+  defp block_dependents(actor, id, blocked_status) do
+    with {:ok, heads} <- Arca.ConsentStorage.head_profiles_referencing_instance(actor, id),
+         affected = unrevoked(heads),
+         :ok <- block_profiles(affected, blocked_status) do
+      {:ok, affected}
+    end
+  end
+
+  # The pairs whose profile is not revoked, read under a lock athanor by
+  # athanor, so a revoke that commits before the block is seen and one
+  # that starts after it waits.
+  defp unrevoked(pairs) do
+    pairs
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.flat_map(fn {athanor_id, profile_ids} ->
+      from(p in Profile,
+        where: p.athanor_id == ^athanor_id and p.id in ^profile_ids and p.status != "revoked",
+        select: {p.athanor_id, p.id}
+      )
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.all()
+    end)
+    |> Enum.sort()
+  end
+
   defp block_profiles(pairs, blocked_status) do
     Enum.reduce_while(pairs, :ok, fn {athanor_id, profile_id}, :ok ->
       case Arca.ProfileStorage.set_status(
@@ -664,6 +799,91 @@ defmodule Arca.InstanceEntries do
         {:error, _} = error -> {:halt, error}
       end
     end)
+  end
+
+  # A status write held to `Arca.StatusTransitions`: conditional on the
+  # row's current status, so a row the transition does not admit is
+  # refused with the status it holds and nothing is written.
+  # arca:unscoped-ok the instance's own credentials, offered to athanors and
+  # deleted with none of them: the rows carry no athanor to scope to.
+  defp write_status(id, status) do
+    {:ok, from} = Arca.StatusTransitions.from(status)
+    query = from(i in InstanceEntry, where: i.id == ^id and i.status in ^from)
+
+    case Arca.Repo.update_all(query, set: [status: status, updated_at: now()]) do
+      {1, _} ->
+        :ok
+
+      {0, _} ->
+        case current_status(id) do
+          nil -> {:error, :not_found}
+          current -> {:error, {:entry_unavailable, current}}
+        end
+    end
+  end
+
+  # The people a listed audience names, locked first and in id order, the
+  # order every security transition takes people in: a denial, which
+  # removes the person from every list under the same lock, and an
+  # audience write naming the person serialize there. A person who is
+  # denied is refused, naming them, and nothing is written. An id with no
+  # person row names no one a denial can reach.
+  defp listed_people("listed", members) do
+    denied =
+      from(u in User,
+        where: u.id in ^Enum.uniq(members),
+        order_by: [asc: u.id],
+        select: {u.id, u.status}
+      )
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.all()
+      |> Enum.find(fn {_id, status} -> status == "denied" end)
+
+    case denied do
+      nil -> :ok
+      {user_id, _status} -> {:error, {:person_denied, user_id}}
+    end
+  end
+
+  defp listed_people(_audience, _members), do: :ok
+
+  # The audience a compare-and-set was decided against, read under a lock:
+  # the entry's row first, so a second audience write waits here, then its
+  # member rows. Members compare as a set. A tombstoned or missing entry
+  # has no audience to write.
+  # arca:unscoped-ok the instance's own credentials, offered to athanors and
+  # deleted with none of them: the rows carry no athanor to scope to.
+  defp audience_held(id, expected_audience, expected_members) do
+    stored =
+      from(i in InstanceEntry,
+        where: i.id == ^id and i.status != "tombstoned",
+        select: i.audience
+      )
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.one()
+
+    # Member rows are locked in one order everywhere, person id then entry
+    # id (`remove_person!/1` takes a person's rows by entry id), so an
+    # audience write and a denial never wait on each other in a cycle.
+    members =
+      from(m in InstanceEntryMember,
+        where: m.instance_entry_id == ^id,
+        order_by: [asc: m.user_id],
+        select: m.user_id
+      )
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.all()
+
+    cond do
+      is_nil(stored) ->
+        {:error, :not_found}
+
+      stored == expected_audience and MapSet.new(members) == MapSet.new(expected_members) ->
+        :ok
+
+      true ->
+        {:error, :conflict}
+    end
   end
 
   # A plan's status only reactivates an entry.
@@ -760,9 +980,11 @@ defmodule Arca.InstanceEntries do
   end
 
   # A refusal answered from inside rolls the transaction back and is
-  # handed to the caller with its own word.
+  # handed to the caller with its own word. A locking transaction, so the
+  # rows a compare-and-set reads under `Arca.QueryHelpers.for_update/1`
+  # stay as read until it ends.
   defp transact(fun) do
-    case Arca.Repo.transaction(fn ->
+    case Arca.Repo.locking_transaction(fn ->
            case fun.() do
              {:error, reason} -> Arca.Repo.rollback(reason)
              other -> other

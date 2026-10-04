@@ -30,10 +30,11 @@ defmodule Sanctum.Cipher.Rotation do
   3. `audit/0` — assert every row is on a key still in the keyring (and report
      anything not yet on `primary`) before the operator removes the old key.
 
-  Vault entries rotate with everything else; tombstoned rows (`sealed_payload`
-  erased) are excluded by query. Re-sealing never touches `payload_rev` — that
-  column is the material CAS token, and a concurrent `vault.rotate` must not
-  fail because an encryption pass rewrote unchanged material.
+  Vault entries and instance entries rotate with everything else;
+  tombstoned rows (`sealed_payload` erased) are excluded by query.
+  Re-sealing never touches `payload_rev` — that column is the material CAS
+  token, and a concurrent `vault.rotate` or `instance_entry.rotate` must
+  not fail because an encryption pass rewrote unchanged material.
 
   ## Where the halves live
 
@@ -48,9 +49,10 @@ defmodule Sanctum.Cipher.Rotation do
 
   The cipher binds the row's canonical tenant tuple as AAD. This module
   rebuilds that tuple from each row's stored columns; the shapes here MUST
-  stay identical to how `Sanctum.Vault`, `Sanctum.Webhook` and
-  `Sanctum.ProviderCredentials` persist them (the athanor id the storage
-  layer persists is bound through unchanged). Every `Sanctum.CipherAAD`
+  stay identical to how `Sanctum.Vault`, `Sanctum.InstanceEntries`,
+  `Sanctum.Webhook` and `Sanctum.ProviderCredentials` persist them (the
+  athanor id the storage layer persists is bound through unchanged; an
+  instance entry binds none). Every `Sanctum.CipherAAD`
   purpose has a `rotate_row/3` clause here — the roster test pins the two
   lists together.
 
@@ -83,7 +85,8 @@ defmodule Sanctum.Cipher.Rotation do
   nothing; `:batch_size` (default #{@batch}).
 
   Returns `{:ok, %{webhooks: summary, vault_entries: summary,
-  registry_tokens: summary, oauth_provider_credentials: summary,
+  instance_entries: summary, registry_tokens: summary,
+  oauth_provider_credentials: summary,
   person_identities: summary, identity_attempts: summary, dry_run: bool}}`
   or `{:error, {table, reason, sample_id}}` (the run aborted fail-closed;
   rerun after fixing the cause — already-rotated rows are skipped).
@@ -206,6 +209,14 @@ defmodule Sanctum.Cipher.Rotation do
     aad = Sanctum.CipherAAD.vault_entry(row.athanor_id, row.id, row.provider_hint)
 
     rotate_columns(:vault_entries, row, aad, opts)
+  end
+
+  # An instance entry is no athanor's: its AAD is the id and hint alone,
+  # as `Sanctum.InstanceEntries` seals it.
+  defp rotate_row(:instance_entries, row, opts) do
+    aad = Sanctum.CipherAAD.instance_entry(row.id, row.provider_hint)
+
+    rotate_columns(:instance_entries, row, aad, opts)
   end
 
   defp rotate_row(:registry_tokens, row, opts) do

@@ -67,6 +67,7 @@ defmodule Sanctum do
       ExecutionStanding,
       Grimoire,
       IdentityFreshness,
+      InstanceEntries,
       Namespace,
       Network,
       Notify,

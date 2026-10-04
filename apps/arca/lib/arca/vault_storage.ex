@@ -396,7 +396,8 @@ defmodule Arca.VaultStorage do
   each before anything is written. The write lands only while the row's
   `binding_digest` still reads `from_digest`, and every profile whose
   head consent references the entry takes `blocked_status` with it, so no
-  consent is ever left covering a binding it did not approve.
+  consent is ever left covering a binding it did not approve. A profile
+  already revoked is not blocked: it stays revoked.
 
   `{:error, :binding_moved}` when another change landed first or the entry
   is gone; the caller re-reads and recomputes. The answer on success is
@@ -688,14 +689,32 @@ defmodule Arca.VaultStorage do
          blocked_status: blocked_status
        }) do
     with :ok <- cas_binding(athanor_id, id, from_digest, changes),
-         {:ok, affected} <-
+         {:ok, heads} <-
            Arca.ConsentStorage.head_profiles_referencing(
              Prima.Actor.in_athanor(athanor_id),
              id
            ),
+         affected = unrevoked(athanor_id, heads),
          :ok <- block_profiles(athanor_id, affected, blocked_status) do
-      {:ok, Enum.sort(affected)}
+      {:ok, affected}
     end
+  end
+
+  # The profiles not revoked, read under a lock, so a revoke that commits
+  # before the block is seen and one that starts after it waits. A revoked
+  # profile stays revoked and nothing runs through it; a status write
+  # would revive it beside the live profile of its identity.
+  defp unrevoked(_athanor_id, []), do: []
+
+  defp unrevoked(athanor_id, profile_ids) do
+    from(p in Arca.Schemas.Profile,
+      where: p.id in ^profile_ids and p.status != "revoked",
+      select: p.id
+    )
+    |> Arca.QueryHelpers.where_athanor(athanor_id)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.all()
+    |> Enum.sort()
   end
 
   defp block_profiles(athanor_id, profile_ids, blocked_status) do

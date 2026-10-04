@@ -22,10 +22,11 @@ defmodule Arca.InstanceEntryUsage do
   racing for the last request of a day admit one. `reset_at` is the next
   UTC midnight after the claimed day.
 
-  The caps are the caller's resolved values: an integer, `0` admitting no
-  use, or `nil` for no cap; the platform settings' defaults are resolved
-  above this module. `sweep/1` deletes the rows of days older than
-  thirty-five.
+  The caps are the caller's resolved values, each an integer from 0 to
+  `Arca.Schemas.InstanceEntry.max_cap/0`, `0` admitting no use: no claim
+  is uncapped, and an entry's unset cap takes its platform setting's
+  default above this module. `sweep/1` deletes the rows of days older
+  than thirty-five.
 
   Not an athanor's: no row carries a tenant, so every query here crosses
   athanors by design, under the platform's actor alone.
@@ -38,11 +39,8 @@ defmodule Arca.InstanceEntryUsage do
   @total ""
   @kept_days 35
 
-  @typedoc "The caps a claim is held to: an integer (`0` admits none) or nil for none."
-  @type caps :: %{
-          person_daily: non_neg_integer() | nil,
-          total_daily: non_neg_integer() | nil
-        }
+  @typedoc "The caps a claim is held to, each an integer (`0` admits none)."
+  @type caps :: %{person_daily: non_neg_integer(), total_daily: non_neg_integer()}
 
   defguardp platform(actor) when is_struct(actor, Prima.Actor) and actor.scope == :platform
 
@@ -51,7 +49,9 @@ defmodule Arca.InstanceEntryUsage do
 
   Answers the day and both counts after the claim, or
   `{:error, {:connection_cap, reset_at}}` with nothing counted when either
-  cap is reached. Platform scope only.
+  cap is reached. A cap that is not an integer from 0 to
+  `Arca.Schemas.InstanceEntry.max_cap/0`, `nil` included, is refused
+  `{:error, {:invalid, _}}` before any query. Platform scope only.
   """
   @spec claim(Prima.Actor.t(), String.t(), String.t(), caps()) ::
           {:ok, %{day: Date.t(), person: pos_integer(), total: pos_integer()}}
@@ -79,7 +79,8 @@ defmodule Arca.InstanceEntryUsage do
         end)
       end)
     else
-      {:error, {:invalid, %{caps: ["are non-negative integers or nil"]}}}
+      {:error,
+       {:invalid, %{caps: ["are integers from 0 to #{Arca.Schemas.InstanceEntry.max_cap()}"]}}}
     end
   end
 
@@ -152,10 +153,8 @@ defmodule Arca.InstanceEntryUsage do
 
   # ---------------------------------------------------------------------------
 
-  defp cap?(nil), do: true
-  defp cap?(cap), do: is_integer(cap) and cap >= 0
+  defp cap?(cap), do: is_integer(cap) and cap >= 0 and cap <= Arca.Schemas.InstanceEntry.max_cap()
 
-  defp reached?(_count, nil), do: false
   defp reached?(count, cap), do: count >= cap
 
   defp reset_at(day), do: DateTime.new!(Date.add(day, 1), ~T[00:00:00.000000], "Etc/UTC")

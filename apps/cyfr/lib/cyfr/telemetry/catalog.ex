@@ -265,6 +265,17 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :arca, :file_offer, :declined] => %{consumers: [:audit]},
     [:cyfr, :arca, :file_offer, :withdrawn] => %{consumers: [:audit]},
     [:cyfr, :arca, :file_offer, :expired] => %{consumers: [:audit]},
+    # ——— the instance's own credentials: one per durable change
+    # (`Sanctum.InstanceEntries`), with the entry id, the kind and the
+    # acting person, never a name, a field or a value ———
+    [:cyfr, :sanctum, :instance_entry, :created] => %{consumers: [:audit]},
+    [:cyfr, :sanctum, :instance_entry, :rotated] => %{consumers: [:audit]},
+    [:cyfr, :sanctum, :instance_entry, :rebound] => %{consumers: [:audit]},
+    [:cyfr, :sanctum, :instance_entry, :audience] => %{consumers: [:audit]},
+    [:cyfr, :sanctum, :instance_entry, :policy] => %{consumers: [:audit]},
+    [:cyfr, :sanctum, :instance_entry, :caps] => %{consumers: [:audit]},
+    [:cyfr, :sanctum, :instance_entry, :revoked] => %{consumers: [:audit]},
+    [:cyfr, :sanctum, :instance_entry, :deleted] => %{consumers: [:audit]},
     [:cyfr, :storage_gc, :sweep] => %{
       consumers: [:operator],
       note:

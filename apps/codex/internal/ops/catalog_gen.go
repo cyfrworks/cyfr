@@ -23,6 +23,7 @@ const (
 	Door               = "door"
 	Execution          = "execution"
 	File               = "file"
+	InstanceEntry      = "instance_entry"
 	Key                = "key"
 	Layout             = "layout"
 	McpLog             = "mcp_log"
@@ -54,238 +55,249 @@ const (
 
 // Actions, as tool then action.
 const (
-	ApprovalList            = "list"
-	ApprovalResolve         = "resolve"
-	AquaCreate              = "create"
-	AquaDelete              = "delete"
-	AquaGet                 = "get"
-	AquaList                = "list"
-	AquaReset               = "reset"
-	AquaSkillCreate         = "skill_create"
-	AquaSkillDelete         = "skill_delete"
-	AquaSkillGet            = "skill_get"
-	AquaSkillList           = "skill_list"
-	AquaSkillReset          = "skill_reset"
-	AquaSkillUpdate         = "skill_update"
-	AquaStatus              = "status"
-	AquaUpdate              = "update"
-	AthanorArchive          = "archive"
-	AthanorCreate           = "create"
-	AthanorDestroy          = "destroy"
-	AthanorGet              = "get"
-	AthanorList             = "list"
-	AthanorPair             = "pair"
-	AthanorProvision        = "provision"
-	AthanorPurge            = "purge"
-	AthanorRename           = "rename"
-	AthanorSettings         = "settings"
-	AthanorUnarchive        = "unarchive"
-	BuildCompile            = "compile"
-	BuildStatus             = "status"
-	BuildToolchains         = "toolchains"
-	BuildValidate           = "validate"
-	CardPress               = "press"
-	CardRefresh             = "refresh"
-	ComponentCategories     = "categories"
-	ComponentCreate         = "create"
-	ComponentDelete         = "delete"
-	ComponentDeprecate      = "deprecate"
-	ComponentDiscover       = "discover"
-	ComponentFork           = "fork"
-	ComponentGetBlob        = "get_blob"
-	ComponentInspect        = "inspect"
-	ComponentList           = "list"
-	ComponentPull           = "pull"
-	ComponentPush           = "push"
-	ComponentReadResource   = "read_resource"
-	ComponentRegister       = "register"
-	ComponentReset          = "reset"
-	ComponentSearch         = "search"
-	ComponentSetupPlan      = "setup_plan"
-	ComponentStatus         = "status"
-	ComponentYank           = "yank"
-	ConfirmationCancel      = "cancel"
-	ConfirmationConfirm     = "confirm"
-	ConfirmationPending     = "pending"
-	ConfirmationReauth      = "reauth"
-	DecisionCorrelate       = "correlate"
-	DecisionGet             = "get"
-	DecisionGetGlobal       = "get_global"
-	DecisionList            = "list"
-	DecisionListGlobal      = "list_global"
-	DoorAllow               = "allow"
-	DoorDeny                = "deny"
-	DoorList                = "list"
-	DoorRemove              = "remove"
-	DoorRequests            = "requests"
-	DoorResolve             = "resolve"
-	ExecutionCancel         = "cancel"
-	ExecutionForceRelease   = "force_release"
-	ExecutionList           = "list"
-	ExecutionLogs           = "logs"
-	ExecutionReadResource   = "read_resource"
-	ExecutionRun            = "run"
-	ExecutionRunStream      = "run_stream"
-	ExecutionStatus         = "status"
-	ExecutionUsage          = "usage"
-	FileDelete              = "delete"
-	FileList                = "list"
-	FileRead                = "read"
-	FileWrite               = "write"
-	KeyCreate               = "create"
-	KeyGet                  = "get"
-	KeyList                 = "list"
-	KeyRevoke               = "revoke"
-	KeyRotate               = "rotate"
-	LayoutEdit              = "edit"
-	LayoutGet               = "get"
-	McpLogCorrelate         = "correlate"
-	McpLogFanOuts           = "fan_outs"
-	McpLogGet               = "get"
-	McpLogList              = "list"
-	McpLogStats             = "stats"
-	McpServersCreate        = "create"
-	McpServersDelete        = "delete"
-	McpServersDisable       = "disable"
-	McpServersEnable        = "enable"
-	McpServersGet           = "get"
-	McpServersList          = "list"
-	McpServersRefresh       = "refresh"
-	McpServersRestart       = "restart"
-	McpServersTest          = "test"
-	McpServersUpdate        = "update"
-	MemberAdd               = "add"
-	MemberLeave             = "leave"
-	MemberList              = "list"
-	MemberRemove            = "remove"
-	NotesForget             = "forget"
-	NotesKeep               = "keep"
-	NotesList               = "list"
-	NotesPin                = "pin"
-	NotesRead               = "read"
-	NotesSearch             = "search"
-	OauthDeleteClient       = "delete_client"
-	OauthList               = "list"
-	OauthSetClient          = "set_client"
-	PairingBegin            = "begin"
-	PairingComplete         = "complete"
-	PairingList             = "list"
-	PairingRenew            = "renew"
-	PairingRevoke           = "revoke"
-	PasskeyList             = "list"
-	PasskeyRecoverAdmin     = "recover_admin"
-	PasskeyRegister         = "register"
-	PasskeyRevoke           = "revoke"
-	PersonAssert            = "assert"
-	PersonCarryBegin        = "carry_begin"
-	PersonCarryCancel       = "carry_cancel"
-	PersonCarryComplete     = "carry_complete"
-	PersonCarryList         = "carry_list"
-	PersonCertify           = "certify"
-	PersonEnroll            = "enroll"
-	PersonEnrollAbandon     = "enroll_abandon"
-	PersonEnrollHolder      = "enroll_holder"
-	PersonKit               = "kit"
-	PersonKitAck            = "kit_ack"
-	PersonLinkDoor          = "link_door"
-	PersonRenewCertificate  = "renew_certificate"
-	PersonRotate            = "rotate"
-	PersonStatus            = "status"
-	PersonUnlinkDoor        = "unlink_door"
-	PolicyLogCorrelate      = "correlate"
-	PolicyLogGet            = "get"
-	PolicyLogList           = "list"
-	ProfileCommit           = "commit"
-	ProfileGrant            = "grant"
-	ProfileGrants           = "grants"
-	ProfileList             = "list"
-	ProfilePlan             = "plan"
-	ProfilePreview          = "preview"
-	ProfilePublish          = "publish"
-	ProfileRevoke           = "revoke"
-	RecordGet               = "get"
-	RecordList              = "list"
-	RecordPayload           = "payload"
-	RegistryAppeal          = "appeal"
-	RegistryClaimPersonal   = "claim_personal"
-	RegistryClaimPublisher  = "claim_publisher"
-	RegistryGetNamespace    = "get_namespace"
-	RegistryLegalAccept     = "legal_accept"
-	RegistryLegalPage       = "legal_page"
-	RegistryLegalVersion    = "legal_version"
-	RegistryListMyReports   = "list_my_reports"
-	RegistryMembersAdd      = "members_add"
-	RegistryMembersList     = "members_list"
-	RegistryMembersRemove   = "members_remove"
-	RegistryMembersUpdate   = "members_update"
-	RegistryProbe           = "probe"
-	RegistryReport          = "report"
-	RegistryTokensIssue     = "tokens_issue"
-	RegistryTokensList      = "tokens_list"
-	RegistryTokensRevoke    = "tokens_revoke"
-	RegistryVerifyPublisher = "verify_publisher"
-	RegistryWhoami          = "whoami"
-	ResourceRead            = "read"
-	RetentionCleanup        = "cleanup"
-	RetentionGet            = "get"
-	RetentionSet            = "set"
-	ScheduleCreate          = "create"
-	ScheduleDelete          = "delete"
-	ScheduleGet             = "get"
-	ScheduleList            = "list"
-	SchedulePause           = "pause"
-	ScheduleReResolve       = "re_resolve"
-	ScheduleResume          = "resume"
-	ScheduleUpdate          = "update"
-	SessionDeviceInit       = "device_init"
-	SessionDevicePoll       = "device_poll"
-	SessionLogin            = "login"
-	SessionLogout           = "logout"
-	SessionReadResource     = "read_resource"
-	SessionUse              = "use"
-	SessionWhoami           = "whoami"
-	SettingsList            = "list"
-	SettingsReset           = "reset"
-	SettingsSet             = "set"
-	SystemNotify            = "notify"
-	SystemStatus            = "status"
-	ThreadAloud             = "aloud"
-	ThreadApprove           = "approve"
-	ThreadAttach            = "attach"
-	ThreadCreate            = "create"
-	ThreadDecline           = "decline"
-	ThreadDelete            = "delete"
-	ThreadEvents            = "events"
-	ThreadFollow            = "follow"
-	ThreadGet               = "get"
-	ThreadList              = "list"
-	ThreadMessages          = "messages"
-	ThreadRestartForConsent = "restart_for_consent"
-	ThreadRevokeGrant       = "revoke_grant"
-	ThreadSend              = "send"
-	ThreadStop              = "stop"
-	ThreadUnfollow          = "unfollow"
-	TinctureInvokeProtected = "invoke_protected"
-	TinctureInvokePublic    = "invoke_public"
-	TinctureVisibilityGet   = "get"
-	ToolsList               = "list"
-	TurnRecover             = "recover"
-	TurnSuspend             = "suspend"
-	VaultAuthorize          = "authorize"
-	VaultCreate             = "create"
-	VaultDelete             = "delete"
-	VaultList               = "list"
-	VaultRebind             = "rebind"
-	VaultRename             = "rename"
-	VaultRevoke             = "revoke"
-	VaultRotate             = "rotate"
-	VaultStatus             = "status"
-	WebhookCreate           = "create"
-	WebhookGet              = "get"
-	WebhookList             = "list"
-	WebhookRevoke           = "revoke"
-	WebhookRotate           = "rotate"
-	WebhookUpdate           = "update"
+	ApprovalList                    = "list"
+	ApprovalResolve                 = "resolve"
+	AquaCreate                      = "create"
+	AquaDelete                      = "delete"
+	AquaGet                         = "get"
+	AquaList                        = "list"
+	AquaReset                       = "reset"
+	AquaSkillCreate                 = "skill_create"
+	AquaSkillDelete                 = "skill_delete"
+	AquaSkillGet                    = "skill_get"
+	AquaSkillList                   = "skill_list"
+	AquaSkillReset                  = "skill_reset"
+	AquaSkillUpdate                 = "skill_update"
+	AquaStatus                      = "status"
+	AquaUpdate                      = "update"
+	AthanorArchive                  = "archive"
+	AthanorCreate                   = "create"
+	AthanorDestroy                  = "destroy"
+	AthanorGet                      = "get"
+	AthanorList                     = "list"
+	AthanorPair                     = "pair"
+	AthanorProvision                = "provision"
+	AthanorPurge                    = "purge"
+	AthanorRename                   = "rename"
+	AthanorSettings                 = "settings"
+	AthanorUnarchive                = "unarchive"
+	BuildCompile                    = "compile"
+	BuildStatus                     = "status"
+	BuildToolchains                 = "toolchains"
+	BuildValidate                   = "validate"
+	CardPress                       = "press"
+	CardRefresh                     = "refresh"
+	ComponentCategories             = "categories"
+	ComponentCreate                 = "create"
+	ComponentDelete                 = "delete"
+	ComponentDeprecate              = "deprecate"
+	ComponentDiscover               = "discover"
+	ComponentFork                   = "fork"
+	ComponentGetBlob                = "get_blob"
+	ComponentInspect                = "inspect"
+	ComponentList                   = "list"
+	ComponentPull                   = "pull"
+	ComponentPush                   = "push"
+	ComponentReadResource           = "read_resource"
+	ComponentRegister               = "register"
+	ComponentReset                  = "reset"
+	ComponentSearch                 = "search"
+	ComponentSetupPlan              = "setup_plan"
+	ComponentStatus                 = "status"
+	ComponentYank                   = "yank"
+	ConfirmationCancel              = "cancel"
+	ConfirmationConfirm             = "confirm"
+	ConfirmationPending             = "pending"
+	ConfirmationReauth              = "reauth"
+	DecisionCorrelate               = "correlate"
+	DecisionGet                     = "get"
+	DecisionGetGlobal               = "get_global"
+	DecisionList                    = "list"
+	DecisionListGlobal              = "list_global"
+	DoorAllow                       = "allow"
+	DoorDeny                        = "deny"
+	DoorList                        = "list"
+	DoorRemove                      = "remove"
+	DoorRequests                    = "requests"
+	DoorResolve                     = "resolve"
+	ExecutionCancel                 = "cancel"
+	ExecutionForceRelease           = "force_release"
+	ExecutionList                   = "list"
+	ExecutionLogs                   = "logs"
+	ExecutionReadResource           = "read_resource"
+	ExecutionRun                    = "run"
+	ExecutionRunStream              = "run_stream"
+	ExecutionStatus                 = "status"
+	ExecutionUsage                  = "usage"
+	FileDelete                      = "delete"
+	FileList                        = "list"
+	FileRead                        = "read"
+	FileWrite                       = "write"
+	InstanceEntryCreate             = "create"
+	InstanceEntryDelete             = "delete"
+	InstanceEntryList               = "list"
+	InstanceEntryOffered            = "offered"
+	InstanceEntryRebind             = "rebind"
+	InstanceEntryRevoke             = "revoke"
+	InstanceEntryRotate             = "rotate"
+	InstanceEntrySetAudience        = "set_audience"
+	InstanceEntrySetCaps            = "set_caps"
+	InstanceEntrySetComponentPolicy = "set_component_policy"
+	InstanceEntryUsage              = "usage"
+	KeyCreate                       = "create"
+	KeyGet                          = "get"
+	KeyList                         = "list"
+	KeyRevoke                       = "revoke"
+	KeyRotate                       = "rotate"
+	LayoutEdit                      = "edit"
+	LayoutGet                       = "get"
+	McpLogCorrelate                 = "correlate"
+	McpLogFanOuts                   = "fan_outs"
+	McpLogGet                       = "get"
+	McpLogList                      = "list"
+	McpLogStats                     = "stats"
+	McpServersCreate                = "create"
+	McpServersDelete                = "delete"
+	McpServersDisable               = "disable"
+	McpServersEnable                = "enable"
+	McpServersGet                   = "get"
+	McpServersList                  = "list"
+	McpServersRefresh               = "refresh"
+	McpServersRestart               = "restart"
+	McpServersTest                  = "test"
+	McpServersUpdate                = "update"
+	MemberAdd                       = "add"
+	MemberLeave                     = "leave"
+	MemberList                      = "list"
+	MemberRemove                    = "remove"
+	NotesForget                     = "forget"
+	NotesKeep                       = "keep"
+	NotesList                       = "list"
+	NotesPin                        = "pin"
+	NotesRead                       = "read"
+	NotesSearch                     = "search"
+	OauthDeleteClient               = "delete_client"
+	OauthList                       = "list"
+	OauthSetClient                  = "set_client"
+	PairingBegin                    = "begin"
+	PairingComplete                 = "complete"
+	PairingList                     = "list"
+	PairingRenew                    = "renew"
+	PairingRevoke                   = "revoke"
+	PasskeyList                     = "list"
+	PasskeyRecoverAdmin             = "recover_admin"
+	PasskeyRegister                 = "register"
+	PasskeyRevoke                   = "revoke"
+	PersonAssert                    = "assert"
+	PersonCarryBegin                = "carry_begin"
+	PersonCarryCancel               = "carry_cancel"
+	PersonCarryComplete             = "carry_complete"
+	PersonCarryList                 = "carry_list"
+	PersonCertify                   = "certify"
+	PersonEnroll                    = "enroll"
+	PersonEnrollAbandon             = "enroll_abandon"
+	PersonEnrollHolder              = "enroll_holder"
+	PersonKit                       = "kit"
+	PersonKitAck                    = "kit_ack"
+	PersonLinkDoor                  = "link_door"
+	PersonRenewCertificate          = "renew_certificate"
+	PersonRotate                    = "rotate"
+	PersonStatus                    = "status"
+	PersonUnlinkDoor                = "unlink_door"
+	PolicyLogCorrelate              = "correlate"
+	PolicyLogGet                    = "get"
+	PolicyLogList                   = "list"
+	ProfileCommit                   = "commit"
+	ProfileGrant                    = "grant"
+	ProfileGrants                   = "grants"
+	ProfileList                     = "list"
+	ProfilePlan                     = "plan"
+	ProfilePreview                  = "preview"
+	ProfilePublish                  = "publish"
+	ProfileRevoke                   = "revoke"
+	RecordGet                       = "get"
+	RecordList                      = "list"
+	RecordPayload                   = "payload"
+	RegistryAppeal                  = "appeal"
+	RegistryClaimPersonal           = "claim_personal"
+	RegistryClaimPublisher          = "claim_publisher"
+	RegistryGetNamespace            = "get_namespace"
+	RegistryLegalAccept             = "legal_accept"
+	RegistryLegalPage               = "legal_page"
+	RegistryLegalVersion            = "legal_version"
+	RegistryListMyReports           = "list_my_reports"
+	RegistryMembersAdd              = "members_add"
+	RegistryMembersList             = "members_list"
+	RegistryMembersRemove           = "members_remove"
+	RegistryMembersUpdate           = "members_update"
+	RegistryProbe                   = "probe"
+	RegistryReport                  = "report"
+	RegistryTokensIssue             = "tokens_issue"
+	RegistryTokensList              = "tokens_list"
+	RegistryTokensRevoke            = "tokens_revoke"
+	RegistryVerifyPublisher         = "verify_publisher"
+	RegistryWhoami                  = "whoami"
+	ResourceRead                    = "read"
+	RetentionCleanup                = "cleanup"
+	RetentionGet                    = "get"
+	RetentionSet                    = "set"
+	ScheduleCreate                  = "create"
+	ScheduleDelete                  = "delete"
+	ScheduleGet                     = "get"
+	ScheduleList                    = "list"
+	SchedulePause                   = "pause"
+	ScheduleReResolve               = "re_resolve"
+	ScheduleResume                  = "resume"
+	ScheduleUpdate                  = "update"
+	SessionDeviceInit               = "device_init"
+	SessionDevicePoll               = "device_poll"
+	SessionLogin                    = "login"
+	SessionLogout                   = "logout"
+	SessionReadResource             = "read_resource"
+	SessionUse                      = "use"
+	SessionWhoami                   = "whoami"
+	SettingsList                    = "list"
+	SettingsReset                   = "reset"
+	SettingsSet                     = "set"
+	SystemNotify                    = "notify"
+	SystemStatus                    = "status"
+	ThreadAloud                     = "aloud"
+	ThreadApprove                   = "approve"
+	ThreadAttach                    = "attach"
+	ThreadCreate                    = "create"
+	ThreadDecline                   = "decline"
+	ThreadDelete                    = "delete"
+	ThreadEvents                    = "events"
+	ThreadFollow                    = "follow"
+	ThreadGet                       = "get"
+	ThreadList                      = "list"
+	ThreadMessages                  = "messages"
+	ThreadRestartForConsent         = "restart_for_consent"
+	ThreadRevokeGrant               = "revoke_grant"
+	ThreadSend                      = "send"
+	ThreadStop                      = "stop"
+	ThreadUnfollow                  = "unfollow"
+	TinctureInvokeProtected         = "invoke_protected"
+	TinctureInvokePublic            = "invoke_public"
+	TinctureVisibilityGet           = "get"
+	ToolsList                       = "list"
+	TurnRecover                     = "recover"
+	TurnSuspend                     = "suspend"
+	VaultAuthorize                  = "authorize"
+	VaultCreate                     = "create"
+	VaultDelete                     = "delete"
+	VaultList                       = "list"
+	VaultRebind                     = "rebind"
+	VaultRename                     = "rename"
+	VaultRevoke                     = "revoke"
+	VaultRotate                     = "rotate"
+	VaultStatus                     = "status"
+	WebhookCreate                   = "create"
+	WebhookGet                      = "get"
+	WebhookList                     = "list"
+	WebhookRevoke                   = "revoke"
+	WebhookRotate                   = "rotate"
+	WebhookUpdate                   = "update"
 )
 
 // Actions lists every action the catalog serves, per tool.
@@ -301,6 +313,7 @@ var Actions = map[string][]string{
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
 	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status", "usage"},
 	"file":                {"delete", "list", "read", "write"},
+	"instance_entry":      {"create", "delete", "list", "offered", "rebind", "revoke", "rotate", "set_audience", "set_caps", "set_component_policy", "usage"},
 	"key":                 {"create", "get", "list", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "fan_outs", "get", "list", "stats"},
@@ -1704,6 +1717,274 @@ func (args FileWriteArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: FileWrite, fields: fields(args)})
+}
+
+// InstanceEntryCreateArgs carries arguments for instance_entry.create.
+type InstanceEntryCreateArgs struct {
+	// Entry label — unique among living instance entries
+	Name string `json:"name"`
+	// What the entry holds
+	Kind string `json:"kind"`
+	// Immutable provider tag (e.g. 'openai.com'); set at create only
+	ProviderHint Field[string] `json:"provider_hint,omitzero"`
+	// Secret material as name → value
+	Fields Field[map[string]string] `json:"fields,omitzero"`
+	// Where the material may go, its methods and paths included
+	Destination InstanceEntryCreateArgsDestination `json:"destination"`
+	// An OAuth entry's endpoints, for a provider with no preset; fixed once created
+	OauthEndpoints Field[InstanceEntryCreateArgsOauthEndpoints] `json:"oauth_endpoints,omitzero"`
+	// The scopes the credential was authorized for
+	OauthScopes Field[[]string] `json:"oauth_scopes,omitzero"`
+	// Who it is offered to: everyone on the instance, or the listed people
+	Audience string `json:"audience"`
+	// The listed people, by person id; an everyone audience keeps none
+	Members Field[[]string] `json:"members,omitzero"`
+	// Which components may use it: any a person consents to (any), or only an unmodified shipped component (shipped)
+	ComponentPolicy Field[string] `json:"component_policy,omitzero"`
+	// Requests one person may make through it each day; 0 admits none, null takes instance_entry_person_daily
+	PersonDaily Field[*int] `json:"person_daily,omitzero"`
+	// Requests everyone together may make through it each day; 0 admits none, null takes instance_entry_total_daily
+	TotalDaily Field[*int] `json:"total_daily,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntryCreateArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntryCreateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntryCreate, fields: fields(args)})
+}
+
+type InstanceEntryCreateArgsDestination struct {
+	// Hosts the material may go to: exact names, or *. and a name
+	Hosts []string `json:"hosts"`
+	// https unless http is stated
+	Scheme Field[string] `json:"scheme,omitzero"`
+	// The port; the scheme's default when absent
+	Port Field[int] `json:"port,omitzero"`
+	// HTTP methods admitted
+	Methods []string `json:"methods"`
+	// Path prefixes admitted, each beginning with /
+	Paths []string `json:"paths"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *InstanceEntryCreateArgsDestination) UnmarshalJSON(data []byte) error {
+	type fields InstanceEntryCreateArgsDestination
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = InstanceEntryCreateArgsDestination(value)
+	return nil
+}
+
+type InstanceEntryCreateArgsOauthEndpoints struct {
+	AuthorizeUrl Field[string]            `json:"authorize_url,omitzero"`
+	TokenUrl     Field[string]            `json:"token_url,omitzero"`
+	Provider     Field[string]            `json:"provider,omitzero"`
+	AuthStyle    Field[string]            `json:"auth_style,omitzero"`
+	ExtraParams  Field[map[string]string] `json:"extra_params,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *InstanceEntryCreateArgsOauthEndpoints) UnmarshalJSON(data []byte) error {
+	type fields InstanceEntryCreateArgsOauthEndpoints
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = InstanceEntryCreateArgsOauthEndpoints(value)
+	return nil
+}
+
+// InstanceEntryDeleteArgs carries arguments for instance_entry.delete.
+type InstanceEntryDeleteArgs struct {
+	// Instance entry id (ine_…)
+	EntryId string `json:"entry_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntryDeleteArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntryDeleteArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntryDelete, fields: fields(args)})
+}
+
+// InstanceEntryListArgs carries arguments for instance_entry.list.
+type InstanceEntryListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntryListArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntryListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntryList, fields: fields(args)})
+}
+
+// InstanceEntryOfferedArgs carries arguments for instance_entry.offered.
+type InstanceEntryOfferedArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntryOfferedArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntryOfferedArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntryOffered, fields: fields(args)})
+}
+
+// InstanceEntryRebindArgs carries arguments for instance_entry.rebind.
+type InstanceEntryRebindArgs struct {
+	// Instance entry id (ine_…)
+	EntryId string `json:"entry_id"`
+	// Where the material may go from now on
+	Destination InstanceEntryRebindArgsDestination `json:"destination"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntryRebindArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntryRebindArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntryRebind, fields: fields(args)})
+}
+
+type InstanceEntryRebindArgsDestination struct {
+	// Hosts the material may go to: exact names, or *. and a name
+	Hosts []string `json:"hosts"`
+	// https unless http is stated
+	Scheme Field[string] `json:"scheme,omitzero"`
+	// The port; the scheme's default when absent
+	Port Field[int] `json:"port,omitzero"`
+	// HTTP methods admitted
+	Methods []string `json:"methods"`
+	// Path prefixes admitted, each beginning with /
+	Paths []string `json:"paths"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *InstanceEntryRebindArgsDestination) UnmarshalJSON(data []byte) error {
+	type fields InstanceEntryRebindArgsDestination
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = InstanceEntryRebindArgsDestination(value)
+	return nil
+}
+
+// InstanceEntryRevokeArgs carries arguments for instance_entry.revoke.
+type InstanceEntryRevokeArgs struct {
+	// Instance entry id (ine_…)
+	EntryId string `json:"entry_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntryRevokeArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntryRevokeArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntryRevoke, fields: fields(args)})
+}
+
+// InstanceEntryRotateArgs carries arguments for instance_entry.rotate.
+type InstanceEntryRotateArgs struct {
+	// Instance entry id (ine_…)
+	EntryId string `json:"entry_id"`
+	// Secret material as name → value; names mirror field_names
+	Fields map[string]string `json:"fields"`
+	// CAS token for rotate — the revision the caller last saw
+	ExpectedPayloadRev int `json:"expected_payload_rev"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntryRotateArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntryRotateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntryRotate, fields: fields(args)})
+}
+
+// InstanceEntrySetAudienceArgs carries arguments for instance_entry.set_audience.
+type InstanceEntrySetAudienceArgs struct {
+	// Instance entry id (ine_…)
+	EntryId string `json:"entry_id"`
+	// Who it is offered to: everyone on the instance, or the listed people
+	Audience string `json:"audience"`
+	// The listed people, by person id; an everyone audience keeps none
+	Members Field[[]string] `json:"members,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntrySetAudienceArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntrySetAudienceArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntrySetAudience, fields: fields(args)})
+}
+
+// InstanceEntrySetCapsArgs carries arguments for instance_entry.set_caps.
+type InstanceEntrySetCapsArgs struct {
+	// Instance entry id (ine_…)
+	EntryId string `json:"entry_id"`
+	// Requests one person may make through it each day; 0 admits none, null takes instance_entry_person_daily
+	PersonDaily Field[*int] `json:"person_daily,omitzero"`
+	// Requests everyone together may make through it each day; 0 admits none, null takes instance_entry_total_daily
+	TotalDaily Field[*int] `json:"total_daily,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntrySetCapsArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntrySetCapsArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntrySetCaps, fields: fields(args)})
+}
+
+// InstanceEntrySetComponentPolicyArgs carries arguments for instance_entry.set_component_policy.
+type InstanceEntrySetComponentPolicyArgs struct {
+	// Instance entry id (ine_…)
+	EntryId string `json:"entry_id"`
+	// Which components may use it: any a person consents to (any), or only an unmodified shipped component (shipped)
+	ComponentPolicy string `json:"component_policy"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntrySetComponentPolicyArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntrySetComponentPolicyArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntrySetComponentPolicy, fields: fields(args)})
+}
+
+// InstanceEntryUsageArgs carries arguments for instance_entry.usage.
+type InstanceEntryUsageArgs struct {
+	// Instance entry id (ine_…)
+	EntryId string `json:"entry_id"`
+	// Days of use to read, today included
+	Days int `json:"days"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InstanceEntryUsageArgs) MarshalJSON() ([]byte, error) {
+	type fields InstanceEntryUsageArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InstanceEntryUsage, fields: fields(args)})
 }
 
 // KeyCreateArgs carries arguments for key.create.

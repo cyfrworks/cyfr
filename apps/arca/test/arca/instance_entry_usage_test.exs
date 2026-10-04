@@ -40,7 +40,7 @@ defmodule Arca.InstanceEntryUsageTest do
     platform: platform,
     entry: entry
   } do
-    caps = %{person_daily: 10, total_daily: nil}
+    caps = %{person_daily: 10, total_daily: 1_000}
 
     assert {:ok, %{person: 1, total: 1, day: day}} =
              Usage.claim(platform, entry.id, "usr_alice", caps)
@@ -59,7 +59,7 @@ defmodule Arca.InstanceEntryUsageTest do
 
   test "a claim at the person's cap is refused with the day's reset, and counts nothing",
        %{platform: platform, entry: entry} do
-    caps = %{person_daily: 2, total_daily: nil}
+    caps = %{person_daily: 2, total_daily: 1_000}
 
     assert {:ok, _} = Usage.claim(platform, entry.id, "usr_alice", caps)
     assert {:ok, _} = Usage.claim(platform, entry.id, "usr_alice", caps)
@@ -78,7 +78,7 @@ defmodule Arca.InstanceEntryUsageTest do
     platform: platform,
     entry: entry
   } do
-    caps = %{person_daily: nil, total_daily: 2}
+    caps = %{person_daily: 1_000, total_daily: 2}
 
     assert {:ok, _} = Usage.claim(platform, entry.id, "usr_alice", caps)
     assert {:ok, _} = Usage.claim(platform, entry.id, "usr_bob", caps)
@@ -92,23 +92,48 @@ defmodule Arca.InstanceEntryUsageTest do
     refute Enum.any?(people, &(&1.user_id == "usr_carol" and &1.count > 0))
   end
 
-  test "a cap of 0 admits no use, and nil admits any", %{platform: platform, entry: entry} do
+  test "a cap of 0 admits no use", %{platform: platform, entry: entry} do
     assert {:error, {:connection_cap, _}} =
-             Usage.claim(platform, entry.id, "usr_alice", %{person_daily: 0, total_daily: nil})
+             Usage.claim(platform, entry.id, "usr_alice", %{person_daily: 0, total_daily: 1_000})
 
     assert {:error, {:connection_cap, _}} =
-             Usage.claim(platform, entry.id, "usr_alice", %{person_daily: nil, total_daily: 0})
+             Usage.claim(platform, entry.id, "usr_alice", %{person_daily: 1_000, total_daily: 0})
 
-    assert {:ok, _} =
-             Usage.claim(platform, entry.id, "usr_alice", %{person_daily: nil, total_daily: nil})
+    assert {:ok, %{people: [], totals: []}} = Usage.usage(platform, entry.id, 1)
+  end
 
-    assert {:error, {:invalid, _}} =
-             Usage.claim(platform, entry.id, "usr_alice", %{person_daily: -1, total_daily: nil})
+  # No claim is uncapped: an entry's unset cap takes its platform setting's
+  # default above the store, so `nil` is refused here, as is anything else
+  # that is not a cap the entry's columns can hold.
+  test "a cap that is nil, or not an integer within the column's range, is refused",
+       %{platform: platform, entry: entry} do
+    max = Arca.Schemas.InstanceEntry.max_cap()
+
+    Arca.Test.QueryCounter.assert_queries(0, fn ->
+      for caps <- [
+            %{person_daily: nil, total_daily: 1_000},
+            %{person_daily: 1_000, total_daily: nil},
+            %{person_daily: nil, total_daily: nil},
+            %{person_daily: -1, total_daily: 1_000},
+            %{person_daily: 1_000, total_daily: max + 1},
+            %{person_daily: "10", total_daily: 1_000},
+            %{person_daily: 1.5, total_daily: 1_000}
+          ] do
+        assert {:error, {:invalid, %{caps: _}}} =
+                 Usage.claim(platform, entry.id, "usr_alice", caps),
+               inspect(caps)
+      end
+    end)
+
+    assert {:ok, %{people: [], totals: []}} = Usage.usage(platform, entry.id, 1)
+
+    assert {:ok, %{person: 1, total: 1}} =
+             Usage.claim(platform, entry.id, "usr_alice", %{person_daily: max, total_daily: max})
   end
 
   test "only the platform's actor counts or reads use", %{entry: entry} do
     tenant = Arca.Test.Actor.local()
-    caps = %{person_daily: nil, total_daily: nil}
+    caps = %{person_daily: 1_000, total_daily: 1_000}
 
     assert {:error, :cross_tenant} = Usage.claim(tenant, entry.id, "usr_alice", caps)
     assert {:error, :cross_tenant} = Usage.usage(tenant, entry.id, 1)
@@ -201,7 +226,7 @@ defmodule Arca.InstanceEntryUsageRaceTest do
     platform: platform,
     entry: entry
   } do
-    caps = %{person_daily: 1, total_daily: nil}
+    caps = %{person_daily: 1, total_daily: 1_000}
 
     results =
       for _member <- 1..2 do
@@ -219,7 +244,7 @@ defmodule Arca.InstanceEntryUsageRaceTest do
     platform: platform,
     entry: entry
   } do
-    caps = %{person_daily: nil, total_daily: 1}
+    caps = %{person_daily: 1_000, total_daily: 1}
 
     results =
       for person <- ["usr_alice", "usr_bob"] do

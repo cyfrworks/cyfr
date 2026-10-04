@@ -177,7 +177,7 @@ defmodule Arca.VaultDefaults do
   end
 
   @doc false
-  # Inside `Arca.InstanceEntries.tombstone/2`'s transaction: no athanor's
+  # Inside `Arca.InstanceEntries.tombstone/3`'s transaction: no athanor's
   # default names an instance entry that is gone.
   @spec drop_instance_entry!(String.t()) :: :ok
   # arca:db-raise-ok a step inside the caller's transaction; a raise rolls it back.

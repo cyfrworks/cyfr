@@ -288,6 +288,54 @@ defmodule Cyfr.PlatformSettingsTest do
       assert {:ok, _} = mint.()
     end
 
+    # The instance entries' day caps are read at each claim, so a set takes
+    # the next request with no restart; 0 admits no use, and a reset reads
+    # the default again.
+    test "an instance entry's default cap set takes the next claim, with no restart", %{
+      ctx: ctx
+    } do
+      id = Prima.UUID7.generate_id("ine")
+      sealed_material = ~s({"v":3,"fields":{"API_KEY":"sk-instance"}})
+
+      {:ok, sealed} =
+        Sanctum.Cipher.encrypt(
+          sealed_material,
+          Sanctum.CipherAAD.instance_entry(id, "openai.com")
+        )
+
+      {:ok, _entry} =
+        Arca.InstanceEntries.put(Prima.Actor.system(), %{
+          id: id,
+          name: "settings-cap-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          field_names: ~s(["API_KEY"]),
+          destination:
+            ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+          sealed_payload: sealed,
+          binding_digest: "sha256:i0",
+          audience: "everyone",
+          created_by: ctx.user_id
+        })
+
+      {person, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+      request = %{uri: URI.parse("https://api.openai.com/v1/chat/completions"), method: "POST"}
+      node = %{node_ref: "catalyst:local.chat:1.0.0", activation_digest: "sha256:chat"}
+
+      for key <- ["instance_entry_person_daily", "instance_entry_total_daily"] do
+        assert {:ok, %{pending: false, value: 0}} = Settings.set(ctx, key, "0")
+
+        assert {:error, {:connection_cap, _reset}} =
+                 Sanctum.InstanceEntries.resolve(person, id, request, node),
+               key
+
+        assert {:ok, _} = Settings.reset(ctx, key)
+      end
+
+      assert {:ok, _view, %{"fields" => %{"API_KEY" => "sk-instance"}}} =
+               Sanctum.InstanceEntries.resolve(person, id, request, node)
+    end
+
     test "a restart-scoped set is answered pending and applies nothing now", %{ctx: ctx} do
       running = Application.get_env(:cyfr, :crucible_max_concurrent)
 

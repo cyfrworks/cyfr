@@ -378,7 +378,7 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
         Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Egress
-        Sanctum.ExecutionStanding Sanctum.Grimoire Sanctum.Network
+        Sanctum.ExecutionStanding Sanctum.Grimoire Sanctum.InstanceEntries Sanctum.Network
         Sanctum.Policy Sanctum.Session
         Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.VaultReader
@@ -405,6 +405,8 @@ defmodule Cyfr.Boundaries do
           "roots at: its public-profile and private-access policy. " <>
           "`Sanctum.Carry` is `Cyfr.RetentionScheduler`'s periodic sweep of every " <>
           "person's expired sign-in carries (`sweep/1`), which names no store. " <>
+          "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
+          "instance-entry usage days (`sweep_usage/0`), which names no entry and no person. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -1330,6 +1332,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Egress" => [pinned_request: 5],
     "Sanctum.ExecutionStanding" => [capture: 1, retired_attempts: 3, stamp_only: 1, verify: 1],
     "Sanctum.Grimoire" => [install!: 1],
+    "Sanctum.InstanceEntries" => [sweep_usage: 0],
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Notify" => [broadcast: 3],

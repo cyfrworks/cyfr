@@ -155,6 +155,8 @@ defmodule Arca do
       IdentityAttempts,
       IdentityLog,
       InstallationClaims,
+      InstanceEntries,
+      InstanceEntryUsage,
       JobClaims,
       Layouts,
       McpLog,

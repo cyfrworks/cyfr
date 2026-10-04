@@ -105,6 +105,35 @@ defmodule Sanctum.Cipher.RotationTest do
     id
   end
 
+  # An instance entry sealed as `Sanctum.InstanceEntries` seals one: under
+  # its id and provider hint, with no athanor.
+  defp put_instance_row(name, plaintext, over \\ %{}) do
+    id = Map.get(over, :id, "ine_" <> uuid())
+    hint = Map.get(over, :provider_hint, "openai.com")
+    {:ok, sealed} = Cipher.encrypt(plaintext, Sanctum.CipherAAD.instance_entry(id, hint))
+
+    Arca.Repo.insert_all(Arca.Schemas.InstanceEntry, [
+      %{
+        id: id,
+        name: name,
+        provider_hint: hint,
+        kind: "api_key",
+        destination:
+          ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+        audience: "everyone",
+        component_policy: "any",
+        created_by: "usr_admin",
+        status: "active",
+        payload_rev: 0,
+        sealed_payload: sealed,
+        inserted_at: now(),
+        updated_at: now()
+      }
+    ])
+
+    id
+  end
+
   defp put_provider_credential_row(provider, plaintext) do
     aad = Sanctum.CipherAAD.provider_credential(@athanor, provider)
     {:ok, ct} = Cipher.encrypt(plaintext, aad)
@@ -766,6 +795,7 @@ defmodule Sanctum.Cipher.RotationTest do
     # staged keys and pending kit seed of their attempts.
     @purpose_tables %{
       vault_entry: [:vault_entries],
+      instance_entry: [:instance_entries],
       webhook_secret: [:webhooks],
       registry_token: [:registry_tokens],
       oauth_provider_credential: [:oauth_provider_credentials],
@@ -828,6 +858,33 @@ defmodule Sanctum.Cipher.RotationTest do
       assert {:ok, ~s({"v":1,"legacy":{"secrets":[]}})} = Cipher.decrypt(new_ct, aad)
 
       assert col("vault_entries", id, :payload_rev) == 0
+    end
+
+    test "instance entries rotate onto the new primary under their own AAD; payload_rev holds" do
+      plain = ~s({"v":3,"fields":{"API_KEY":"sk-instance"}})
+      id = put_instance_row("shared-openai", plain)
+      put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
+
+      assert {:ok, %{instance_entries: %{scanned: 1, rotated: 1, skipped: 0}}} =
+               Rotation.reencrypt_all()
+
+      new_ct = col("instance_entries", id, :sealed_payload)
+      assert {:ok, {4, "k2"}} = Cipher.envelope(new_ct)
+
+      assert {:ok, ^plain} =
+               Cipher.decrypt(new_ct, Sanctum.CipherAAD.instance_entry(id, "openai.com"))
+
+      assert col("instance_entries", id, :payload_rev) == 0
+
+      # The AAD binds the id and the hint and no athanor: another hint, or
+      # the vault-entry purpose over the same id, opens nothing.
+      assert {:error, _} = Cipher.decrypt(new_ct, Sanctum.CipherAAD.instance_entry(id, "x.com"))
+
+      assert {:error, _} =
+               Cipher.decrypt(new_ct, Sanctum.CipherAAD.vault_entry("", id, "openai.com"))
+
+      assert {:ok, %{instance_entries: %{rotated: 0, skipped: 1}}} = Rotation.reencrypt_all()
+      assert {:ok, %{instance_entries: %{total: 1, on_primary: 1}}} = Rotation.audit()
     end
 
     test "registry tokens rotate onto the new primary and keep decrypting" do

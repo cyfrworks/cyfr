@@ -38,14 +38,15 @@ defmodule Arca.VaultStorageTest do
   end
 
   # A profile whose head consent references `entry_id` — the dependent a
-  # binding move has to block.
-  defp dependent_profile!(actor, entry_id) do
+  # binding move has to block. `source_ref` names the component it
+  # consents for, a fresh one by default.
+  defp dependent_profile!(actor, entry_id, source_ref \\ nil) do
     athanor = actor.athanor_id
 
     {:ok, profile} =
       Arca.ProfileStorage.put(%{
         athanor_id: athanor,
-        source_ref: "formula:local.consumer-#{System.unique_integer([:positive])}",
+        source_ref: source_ref || "formula:local.consumer-#{System.unique_integer([:positive])}",
         kind: "owner",
         label: "default",
         status: "active"
@@ -536,6 +537,35 @@ defmodule Arca.VaultStorageTest do
       assert row.binding_digest == "sha256:d0"
       assert row.payload_rev == 0
       assert profile_status(actor, profile.id) == "active"
+    end
+
+    # A revoked profile is not blocked: blocking it would revive it beside
+    # the live profile of the same component, label and kind, which the
+    # active-identity index refuses, and the whole rebind would roll back.
+    # It stays revoked, and nothing runs through it.
+    test "a revoked profile beside a live one of its identity stays revoked; the live one is blocked",
+         %{actor: actor} do
+      entry = put!(actor, %{binding_digest: "sha256:d0"})
+      source = "formula:local.shared-#{System.unique_integer([:positive])}"
+      old = dependent_profile!(actor, entry.id, source)
+      :ok = Arca.ProfileStorage.set_status(actor, old.id, "revoked")
+      live = dependent_profile!(actor, entry.id, source)
+
+      assert {:ok, [affected]} =
+               VaultStorage.move_binding(
+                 actor,
+                 entry.id,
+                 "sha256:d0",
+                 %{destination: @moved, binding_digest: "sha256:d1"},
+                 @blocked
+               )
+
+      assert affected == live.id
+      assert profile_status(actor, live.id) == @blocked
+      assert profile_status(actor, old.id) == "revoked"
+
+      row = status_of(actor, entry.id)
+      assert {row.destination, row.binding_digest} == {@moved, "sha256:d1"}
     end
 
     test "a tombstoned entry has no binding to move", %{actor: actor} do
