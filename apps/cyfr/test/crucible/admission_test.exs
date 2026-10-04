@@ -1013,6 +1013,114 @@ defmodule Crucible.AdmissionTest do
       assert {:error, refusal} = Admission.admit(ctx, "reagent:local.chain-root:0.1.0", %{}, [])
       refute refusal == :control_plane_lost
     end
+
+    # The cached standing is the fast path, never the authority: a member
+    # whose slot a successor took over still passes it, and the
+    # admission's own transaction refuses it as a barrier, recording
+    # nothing, whether the run was being admitted or an earlier refusal
+    # was being recorded on its row.
+    for {label, input} <- [
+          {"a run", %{"a" => 1}},
+          {"a refused run's record", :oversized}
+        ] do
+      test "#{label} of a member whose slot was taken over is refused :not_owner, with nothing recorded",
+           %{ctx: ctx} do
+        slot = claimant!()
+        lifecycle = watch_lifecycle()
+        take_over!(slot)
+        assert Arca.ControlPlane.held?()
+        execution_id = Prima.UUID7.execution_id()
+
+        log =
+          ExUnit.CaptureLog.capture_log([level: :error], fn ->
+            send(
+              self(),
+              {:answer,
+               Admission.admit(
+                 ctx,
+                 "reagent:local.chain-root:0.1.0",
+                 input(unquote(Macro.escape(input))),
+                 authority: Authority.zero(),
+                 execution_id: execution_id
+               )}
+            )
+          end)
+
+        assert_received {:answer, answer}
+        assert answer == {:error, :not_owner}
+        assert Arca.Repo.get(Arca.Schemas.Execution, execution_id) == nil
+        refute_received {^lifecycle, _event, ^execution_id}
+        assert log == ""
+
+        assert %Prima.Refusal{class: :not_owner} = Grimoire.Error.classify(:not_owner)
+      end
+    end
+  end
+
+  defp input(:oversized),
+    do: %{"blob" => String.duplicate("x", Authority.zero_limits().max_request_size + 1)}
+
+  defp input(input), do: input
+
+  @standing_keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  # A claimant runs, as a deployment's does, and this member holds its
+  # slot: the umbrella's test configuration runs none, which would leave
+  # admission's live check nothing to check. The standing record and the
+  # switch are restored when the case ends.
+  defp claimant! do
+    saved = Map.new(@standing_keys, &{&1, :persistent_term.get(&1, :absent)})
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+
+    on_exit(fn ->
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+    end)
+
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    node = "node-admission-#{System.unique_integer([:positive])}"
+    {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+    slot
+  end
+
+  # A successor takes the slot over in the database; this member's cached
+  # standing is left as it was.
+  defp take_over!(%{node: node, generation: generation}) do
+    {1, _} =
+      Ecto.Query.from(l in Arca.Schemas.CellLease, where: l.node == ^node)
+      |> Arca.Repo.update_all(set: [owner: node <> "#boot_b", generation: generation + 1])
+
+    :ok
+  end
+
+  # The run's start and exception telemetry, tagged for this case.
+  defp watch_lifecycle do
+    test = self()
+    tag = make_ref()
+    handler = "admission-lifecycle-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach_many(
+      handler,
+      [[:cyfr, :opus, :execute, :start], [:cyfr, :opus, :execute, :exception]],
+      fn event, _measurements, metadata, _config ->
+        send(test, {tag, event, metadata[:execution_id]})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    tag
   end
 
   describe "the root's own grant read damaged" do

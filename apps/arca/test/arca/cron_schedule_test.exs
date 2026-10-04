@@ -452,9 +452,9 @@ defmodule Arca.CronScheduleTest do
       assert id == feed.id
     end
 
-    # The generic writers, one case each: a feed's row is fenced on every
-    # path, the scheduler's and an uninstall's included.
-    for writer <- [:update, :record_run, :record_error, :soft_delete] do
+    # A person's writers through a surface, one case each: a feed's row is
+    # fenced on every path, an uninstall's included; a schedule's is not.
+    for writer <- [:update, :soft_delete] do
       test "#{writer} writes no feed's row, and still writes a schedule's", %{
         actor: actor,
         slot: slot
@@ -472,15 +472,34 @@ defmodule Arca.CronScheduleTest do
       end
     end
 
-    test "a feed's row is written by the generic writers while the slot holds", %{actor: actor} do
+    # The scheduler's run writers, one case each: every row is fenced,
+    # whatever its kind.
+    for writer <- [:record_run, :record_error] do
+      test "#{writer} writes no feed's row and no schedule's", %{actor: actor, slot: slot} do
+        {:ok, feed} = feed!(actor, "btc")
+        {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "btc"}))
+        take_over!(slot)
+
+        for id <- [feed.id, schedule.id] do
+          before = CronSchedule.get_for_daemon(id)
+          assert {:error, :not_owner} = write(unquote(writer), actor, id)
+          assert CronSchedule.get_for_daemon(id) == before
+        end
+      end
+    end
+
+    test "every row is written by the generic writers while the slot holds", %{actor: actor} do
       {:ok, feed} = feed!(actor, "btc")
+      {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "btc"}))
 
-      assert {:ok, %{run_count: 1, last_execution_id: "exec_1"}} =
-               CronSchedule.record_run(actor, feed.id, "exec_1")
+      for id <- [feed.id, schedule.id] do
+        assert {:ok, %{run_count: 1, last_execution_id: "exec_1"}} =
+                 CronSchedule.record_run(actor, id, "exec_1")
 
-      assert {:ok, %{error_count: 1}} = CronSchedule.record_error(actor, feed.id, "boom")
-      assert {:ok, %{status: "paused"}} = CronSchedule.update(actor, feed.id, %{status: "paused"})
-      assert {:ok, %{status: "deleted"}} = CronSchedule.soft_delete(actor, feed.id)
+        assert {:ok, %{error_count: 1}} = CronSchedule.record_error(actor, id, "boom")
+        assert {:ok, %{status: "paused"}} = CronSchedule.update(actor, id, %{status: "paused"})
+        assert {:ok, %{status: "deleted"}} = CronSchedule.soft_delete(actor, id)
+      end
     end
   end
 
@@ -584,5 +603,267 @@ defmodule Arca.CronScheduleTest do
       )
 
     :ok
+  end
+end
+
+defmodule Arca.CronScheduleTakeoverTest do
+  @moduledoc """
+  A stale member's run writes to an ordinary schedule's row, in the
+  sequence that makes one stale with no clock drift and no edit to the
+  lease row: the member's cached standing passes, its write waits on the
+  row, its lease runs out on the cell's clock, a successor takes the slot
+  through `Arca.ControlPlane.take/3`, and only then does the write go on.
+  `record_run/3` and `record_error/3` check the member's slot in their own
+  transaction, after the row lock, so the row's counters, `last_run_at`
+  and `last_execution_id` do not move.
+
+  The write runs on a connection of its own, outside the sandbox. On
+  PostgreSQL it really waits, on the schedule's row, which another
+  transaction holds locked across the expiry and the takeover. SQLite's
+  one write lock would hold the successor's take behind that transaction
+  too, so there the takeover commits first and the write runs while this
+  member's cached standing still says it holds the slot: the same
+  divergence between the cache and the row. The case works in an athanor
+  of its own, whose rows it deletes when it ends.
+  """
+
+  # Writes the process-wide standing record and the claimant switch, and
+  # holds a row locked across connections; the case restores both.
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.{ControlPlane, CronSchedule}
+  alias Arca.Schemas.CellLease
+  alias Arca.Schemas.CronSchedule, as: ScheduleRow
+  alias Ecto.Adapters.SQL.Sandbox
+
+  # Short enough to run out while the case waits; the setup is done under
+  # a long lease, which the member then renews to this.
+  @lease_ms 300
+
+  @keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  setup do
+    saved = Map.new(@keys, &{&1, :persistent_term.get(&1, :absent)})
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+    athanor = "ath_cron_fence_#{System.unique_integer([:positive])}"
+    node = "node-cron-fence-#{System.unique_integer([:positive])}"
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor) end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(s in ScheduleRow, where: s.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor))
+        Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node))
+      end)
+
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+    end)
+
+    # A claimant runs, as a deployment's does, and this member holds its
+    # slot under a lease long enough for the case's own setup.
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    {:ok, slot} = unboxed(fn -> ControlPlane.take(node, node <> "#boot_a", 60_000) end)
+
+    {:ok, actor: Arca.Test.Actor.local(athanor_id: athanor), slot: slot}
+  end
+
+  for writer <- [:record_run, :record_error] do
+    test "#{writer} on an ordinary schedule's row after ownership loss is refused :not_owner, the row unmoved",
+         %{actor: actor, slot: slot} do
+      schedule = unboxed(fn -> schedule!(actor) end)
+      before = unboxed(fn -> CronSchedule.get_for_daemon(schedule.id) end)
+
+      answer =
+        stale_write(slot, lock_schedule(schedule.id), fn ->
+          write(unquote(writer), actor, schedule.id)
+        end)
+
+      assert answer == {:error, :not_owner}
+
+      assert {:ok, %{run_count: 1, error_count: 1, last_execution_id: "exec_before"} = row} =
+               before
+
+      assert {:ok, after_write} = unboxed(fn -> CronSchedule.get_for_daemon(schedule.id) end)
+      assert after_write == row
+    end
+  end
+
+  defp write(:record_run, actor, id), do: CronSchedule.record_run(actor, id, "exec_stale")
+  defp write(:record_error, actor, id), do: CronSchedule.record_error(actor, id, "stale")
+
+  # An ordinary schedule with one run and one error on record, so a stale
+  # write would move every column it writes.
+  defp schedule!(actor) do
+    {:ok, schedule} =
+      CronSchedule.create(%{
+        user_id: actor.user_id,
+        athanor_id: actor.athanor_id,
+        name: "cron-fence-#{System.unique_integer([:positive])}",
+        cron_expression: "*/5 * * * *",
+        reference: "reagent:local.test:1.0.0",
+        profile_id: "prof_test"
+      })
+
+    {:ok, _} = CronSchedule.record_run(actor, schedule.id, "exec_before")
+    {:ok, _} = CronSchedule.record_error(actor, schedule.id, "before")
+    schedule
+  end
+
+  defp lock_schedule(id) do
+    fn ->
+      from(s in ScheduleRow, where: s.id == ^id)
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.one()
+    end
+  end
+
+  # ---- the stale write ---------------------------------------------------------
+
+  # The member's cached standing passes, `write` waits, the lease runs out
+  # and a successor takes the slot, then `write` goes on: on PostgreSQL it
+  # waits on `lock`, held by another transaction until the takeover has
+  # committed; on SQLite the takeover commits first. Answers what `write`
+  # answered.
+  defp stale_write(slot, lock, write) do
+    slot = expiring!(slot)
+    assert ControlPlane.held?()
+    test = self()
+
+    if postgres?() do
+      holder = holding(lock)
+
+      writer =
+        Task.async(fn ->
+          unboxed(fn ->
+            send(test, {:backend, backend_pid()})
+            write.()
+          end)
+        end)
+
+      assert_receive {:backend, backend}, 15_000
+      await_lock_wait(backend)
+      taken_over!(slot)
+      release(holder)
+      Task.await(writer, 30_000)
+    else
+      taken_over!(slot)
+      unboxed(write)
+    end
+  end
+
+  # The member renews to a short lease, a write of its own, and its
+  # cached standing is held whatever the lease then does.
+  defp expiring!(slot) do
+    {:ok, renewed} = unboxed(fn -> ControlPlane.renew(@lease_ms) end)
+    assert renewed.generation == slot.generation
+    hold_cached(renewed)
+    renewed
+  end
+
+  defp hold_cached(slot) do
+    ControlPlane.record_slot(slot)
+    ControlPlane.record_generation(slot.generation)
+    ControlPlane.record({:held, 60_000})
+  end
+
+  # The lease runs out on the cell's clock with no edit to its row, and a
+  # successor takes the slot over through `take/3`. `take/3` records what
+  # it won in this VM's standing; the successor is another member, so this
+  # member's own standing is put back.
+  defp taken_over!(slot) do
+    await_expiry(slot.node)
+
+    assert {:ok, %{generation: generation}} =
+             unboxed(fn -> ControlPlane.take(slot.node, slot.node <> "#boot_b", 60_000) end)
+
+    assert generation == slot.generation + 1
+    hold_cached(slot)
+  end
+
+  defp await_expiry(node, tries \\ 500)
+  defp await_expiry(_node, 0), do: flunk("the member's lease never ran out")
+
+  defp await_expiry(node, tries) do
+    expired? =
+      unboxed(fn ->
+        {:ok, %{lease_until: lease_until}} = ControlPlane.slot(node)
+        DateTime.compare(lease_until, Arca.ServerMetaStorage.now!()) != :gt
+      end)
+
+    unless expired? do
+      Process.sleep(20)
+      await_expiry(node, tries - 1)
+    end
+  end
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
+
+  # Run `lock` in a transaction of its own and hold it open until
+  # `release/1`.
+  defp holding(lock) do
+    test = self()
+
+    task =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            lock.()
+            send(test, {:holding, self()})
+
+            receive do
+              :commit -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:holding, _pid}, 15_000
+    task
+  end
+
+  defp release(task) do
+    send(task.pid, :commit)
+    assert {:ok, _} = Task.await(task, 30_000)
+  end
+
+  defp backend_pid do
+    %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+    pid
+  end
+
+  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
+  # by `tries`, never a timing.
+  defp await_lock_wait(pid, tries \\ 500)
+
+  defp await_lock_wait(_pid, 0), do: flunk("the stale write never waited on a lock")
+
+  defp await_lock_wait(pid, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
+      end)
+
+    if rows == [["Lock"]] do
+      :ok
+    else
+      Process.sleep(20)
+      await_lock_wait(pid, tries - 1)
+    end
   end
 end

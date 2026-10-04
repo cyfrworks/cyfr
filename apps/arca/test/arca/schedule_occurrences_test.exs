@@ -234,7 +234,9 @@ defmodule Arca.ScheduleOccurrencesTest do
 
     # Once the open one ends, forbid claims the waiting occurrence.
     {:ok, [open]} = ScheduleOccurrences.list(actor, forbid.id)
-    assert {:ok, 1} = ScheduleOccurrences.finish(actor, open.id, "completed")
+
+    assert {:ok, 1} =
+             ScheduleOccurrences.finish(actor, open.id, "node-a", open.execution_id, "completed")
 
     assert {:ok, %{state: "claimed"}} =
              ScheduleOccurrences.claim(forbid, "node-a", next_occurrence())
@@ -264,20 +266,61 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert {:ok, %{state: "started", execution_id: "exec_1", attempts: 1}} =
              ScheduleOccurrences.get(actor, occurrence.id)
 
+    # A started occurrence is its claimant's under its execution: another
+    # claimant, another execution or none moves nothing.
+    for {claimed_by, execution_id} <- [
+          {"node-b", "exec_1"},
+          {"node-a", "exec_2"},
+          {"node-a", nil}
+        ] do
+      assert {:error, :stale} =
+               ScheduleOccurrences.settle_dead(actor, occurrence.id, claimed_by, execution_id)
+
+      assert {:error, :stale} =
+               ScheduleOccurrences.finish(
+                 actor,
+                 occurrence.id,
+                 claimed_by,
+                 execution_id,
+                 "completed"
+               )
+    end
+
+    assert {:ok, %{state: "started"}} = ScheduleOccurrences.get(actor, occurrence.id)
+
     assert {:ok, "uncertain"} =
-             ScheduleOccurrences.settle_dead(actor, occurrence.id)
+             ScheduleOccurrences.settle_dead(actor, occurrence.id, "node-a", "exec_1")
 
-    assert {:ok, nil} = ScheduleOccurrences.settle_dead(actor, occurrence.id)
+    # Ended, it is nobody's to end again.
+    assert {:error, :stale} =
+             ScheduleOccurrences.settle_dead(actor, occurrence.id, "node-a", "exec_1")
 
-    assert {:ok, 0} =
-             ScheduleOccurrences.finish(actor, occurrence.id, "completed")
+    assert {:error, :stale} =
+             ScheduleOccurrences.finish(actor, occurrence.id, "node-a", "exec_1", "completed")
 
-    # A claimed one nothing invoked fails when its runner dies.
+    assert {:ok, %{state: "uncertain"}} = ScheduleOccurrences.get(actor, occurrence.id)
+
+    # A claimed one nothing invoked fails when its runner dies, whether the
+    # runner names the execution it would have started or none; only its
+    # own claimant ends it.
     later = due!(actor)
     {:ok, claimed} = ScheduleOccurrences.claim(later, "node-a", next_occurrence())
 
+    assert {:error, :stale} =
+             ScheduleOccurrences.settle_dead(actor, claimed.id, "node-b", "exec_3")
+
     assert {:ok, "failed"} =
-             ScheduleOccurrences.settle_dead(actor, claimed.id)
+             ScheduleOccurrences.settle_dead(actor, claimed.id, "node-a", "exec_3")
+
+    # And a finish naming no execution ends only one never started.
+    last = due!(actor)
+    {:ok, unstarted} = ScheduleOccurrences.claim(last, "node-a", next_occurrence())
+
+    assert {:ok, 1} =
+             ScheduleOccurrences.finish(actor, unstarted.id, "node-a", nil, "failed")
+
+    assert {:ok, %{state: "failed", execution_id: nil}} =
+             ScheduleOccurrences.get(actor, unstarted.id)
 
     # Another athanor reads none of it.
     assert {:error, :not_found} =
@@ -285,6 +328,36 @@ defmodule Arca.ScheduleOccurrencesTest do
                %{actor | athanor_id: "ath_elsewhere"},
                occurrence.id
              )
+  end
+
+  test "a finish naming no claimant ends only an occurrence that names none", %{actor: actor} do
+    schedule = due!(actor)
+    {:ok, claimed} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
+
+    # A row with a claimant is not one that names none: nothing moves.
+    assert {:error, :stale} = ScheduleOccurrences.finish(actor, claimed.id, nil, nil, "failed")
+
+    assert {:ok, %{state: "claimed", claimed_by: "node-a", ended_at: nil}} =
+             ScheduleOccurrences.get(actor, claimed.id)
+
+    # A row that names none, as `recoverable/1` reads one, is ended by it.
+    unclaimed =
+      Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+        id: Prima.UUID7.generate_id("occ"),
+        athanor_id: actor.athanor_id,
+        schedule_id: schedule.id,
+        scheduled_for: DateTime.add(DateTime.utc_now(), -3_600, :second),
+        state: "claimed",
+        claimed_by: nil,
+        claimed_at: now()
+      })
+
+    assert {:ok, 1} = ScheduleOccurrences.finish(actor, unclaimed.id, nil, nil, "failed")
+
+    assert {:ok, %{state: "failed", claimed_by: nil}} =
+             ScheduleOccurrences.get(actor, unclaimed.id)
+
+    assert {:ok, %{state: "claimed"}} = ScheduleOccurrences.get(actor, claimed.id)
   end
 
   test "recovery names what a dead scheduler left: claimed never invoked, started with its execution gone",
@@ -397,42 +470,42 @@ defmodule Arca.ScheduleOccurrencesTest do
              )
   end
 
-  describe "a feed's claim" do
-    test "is refused :not_owner after a takeover, its cursor unmoved and no occurrence written",
+  describe "the claim's slot fence" do
+    test "a schedule's and a feed's claim are refused :not_owner after a takeover, nothing moved",
          %{actor: actor} do
       slot = claimant!()
       feed = due_feed!(actor)
-      before = CronSchedule.get_for_daemon(feed.id)
+      schedule = due!(actor)
+      before = for row <- [feed, schedule], do: CronSchedule.get_for_daemon(row.id)
 
       # A successor takes the slot over; this member's cached standing
       # still says it holds it, so only the claim's own check stands
-      # between it and the row.
+      # between it and the row, whatever the row's kind.
       take_over!(slot)
       assert Arca.ControlPlane.held?()
 
-      assert {:error, :not_owner} =
-               ScheduleOccurrences.claim(feed, "boot-stale", next_occurrence())
+      for row <- [feed, schedule] do
+        assert {:error, :not_owner} =
+                 ScheduleOccurrences.claim(row, "boot-stale", next_occurrence())
 
-      assert CronSchedule.get_for_daemon(feed.id) == before
-      assert {:ok, []} = ScheduleOccurrences.list(actor, feed.id)
+        assert {:ok, []} = ScheduleOccurrences.list(actor, row.id)
+      end
 
-      # A schedule's claim is not fenced: it keeps today's claim.
-      schedule = due!(actor)
-
-      assert {:ok, %{state: "claimed"}} =
-               ScheduleOccurrences.claim(schedule, "boot-stale", next_occurrence())
+      assert before == for(row <- [feed, schedule], do: CronSchedule.get_for_daemon(row.id))
     end
 
-    test "is claimed as a schedule's is while the member holds its slot", %{actor: actor} do
+    test "a schedule and a feed are claimed while the member holds its slot", %{actor: actor} do
       claimant!()
-      feed = due_feed!(actor)
-      advanced_to = next_occurrence()
 
-      assert {:ok, %{state: "claimed", claimed_by: "boot-live"}} =
-               ScheduleOccurrences.claim(feed, "boot-live", advanced_to)
+      for row <- [due_feed!(actor), due!(actor)] do
+        advanced_to = next_occurrence()
 
-      assert DateTime.compare(cursor!(feed.id), advanced_to) == :eq
-      assert :held = ScheduleOccurrences.claim(feed, "boot-other", next_occurrence())
+        assert {:ok, %{state: "claimed", claimed_by: "boot-live"}} =
+                 ScheduleOccurrences.claim(row, "boot-live", advanced_to)
+
+        assert DateTime.compare(cursor!(row.id), advanced_to) == :eq
+        assert :held = ScheduleOccurrences.claim(row, "boot-other", next_occurrence())
+      end
     end
   end
 
@@ -458,5 +531,313 @@ defmodule Arca.ScheduleOccurrencesTest do
              )
 
     assert Arca.Repo.get(Arca.Schemas.Execution, "exec_second") == nil
+  end
+end
+
+defmodule Arca.ScheduleOccurrencesTakeoverTest do
+  @moduledoc """
+  A stale member's writes to an occurrence, in the sequence that makes one
+  stale with no clock drift and no edit to the lease row: the member's
+  cached standing passes, its write waits, its lease runs out on the
+  cell's clock, a successor takes the slot through
+  `Arca.ControlPlane.take/3`, and only then does the write go on.
+
+  The writes run on connections of their own, outside the sandbox. On
+  PostgreSQL the write really waits, on a row lock another transaction
+  holds across the expiry and the takeover. SQLite's one write lock would
+  hold the successor's take behind that transaction too, so there the
+  takeover commits first and the write runs while this member's cached
+  standing still says it holds the slot: the same divergence between the
+  cache and the row. Either way the member's cached standing is held
+  throughout, so what refuses the write is the database. Each case works
+  in an athanor of its own, whose rows it deletes when it ends.
+  """
+
+  # Writes the process-wide standing record and the claimant switch, and
+  # holds rows locked across connections; each case restores both.
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.{ControlPlane, CronSchedule, ScheduleOccurrences}
+  alias Arca.Schemas.{CellLease, ScheduleOccurrence}
+  alias Arca.Schemas.CronSchedule, as: ScheduleRow
+  alias Ecto.Adapters.SQL.Sandbox
+
+  # Short enough to run out while the case waits; the setup is done under
+  # a long lease, which the member then renews to this.
+  @lease_ms 300
+
+  @keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  setup do
+    saved = Map.new(@keys, &{&1, :persistent_term.get(&1, :absent)})
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+    athanor = "ath_occ_fence_#{System.unique_integer([:positive])}"
+    node = "node-occ-fence-#{System.unique_integer([:positive])}"
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor) end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(o in ScheduleOccurrence, where: o.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(s in ScheduleRow, where: s.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor))
+        Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node))
+      end)
+
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+    end)
+
+    # A claimant runs, as a deployment's does, and this member holds its
+    # slot under a lease long enough for the case's own setup.
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    {:ok, slot} = unboxed(fn -> ControlPlane.take(node, node <> "#boot_a", 60_000) end)
+
+    {:ok, actor: Arca.Test.Actor.local(athanor_id: athanor), slot: slot}
+  end
+
+  test "an ordinary schedule's claim after a takeover is refused :not_owner, with nothing moved",
+       %{actor: actor, slot: slot} do
+    schedule = unboxed(fn -> due!(actor) end)
+    before = unboxed(fn -> CronSchedule.get_for_daemon(schedule.id) end)
+
+    answer =
+      stale_write(slot, lock_schedule(schedule.id), fn ->
+        ScheduleOccurrences.claim(schedule, slot.owner, next_occurrence())
+      end)
+
+    assert answer == {:error, :not_owner}
+    assert unboxed(fn -> CronSchedule.get_for_daemon(schedule.id) end) == before
+    assert {:ok, []} = unboxed(fn -> ScheduleOccurrences.list(actor, schedule.id) end)
+  end
+
+  for writer <- [:finish, :settle_dead] do
+    test "an old member's late #{writer}, after a successor recovered and started the occurrence, is :stale",
+         %{actor: actor, slot: slot} do
+      schedule = unboxed(fn -> due!(actor) end)
+
+      {:ok, occurrence} =
+        unboxed(fn -> ScheduleOccurrences.claim(schedule, slot.owner, next_occurrence()) end)
+
+      successor = slot.node <> "#boot_b"
+
+      # What the successor does once it holds the slot: it takes the
+      # abandoned claim, and its execution's admission starts it.
+      recovered_and_started = fn ->
+        :ok = ScheduleOccurrences.recover(actor, occurrence.id, slot.owner, successor)
+        1 = ScheduleOccurrences.start!(actor, occurrence.id, "exec_successor")
+      end
+
+      # The old member's late callback names its own claim and the
+      # execution it minted for the run.
+      answer =
+        stale_write(
+          slot,
+          lock_occurrence(occurrence.id),
+          fn -> late(unquote(writer), actor, occurrence.id, slot.owner, "exec_old") end,
+          recovered_and_started
+        )
+
+      assert answer == {:error, :stale}
+
+      assert {:ok, %{state: "started", claimed_by: ^successor, execution_id: "exec_successor"}} =
+               unboxed(fn -> ScheduleOccurrences.get(actor, occurrence.id) end)
+    end
+  end
+
+  defp late(:finish, actor, id, claimed_by, execution_id),
+    do: ScheduleOccurrences.finish(actor, id, claimed_by, execution_id, "failed")
+
+  defp late(:settle_dead, actor, id, claimed_by, execution_id),
+    do: ScheduleOccurrences.settle_dead(actor, id, claimed_by, execution_id)
+
+  defp due!(actor) do
+    {:ok, schedule} =
+      CronSchedule.create(%{
+        user_id: actor.user_id,
+        athanor_id: actor.athanor_id,
+        name: "occ-fence-#{System.unique_integer([:positive])}",
+        cron_expression: "0 * * * *",
+        reference: "reagent:local.test:1.0.0",
+        resolved_reference: "reagent:local.test:1.0.0",
+        profile_id: "prof_test"
+      })
+
+    past = DateTime.add(DateTime.utc_now(), -60, :second)
+
+    {1, _} =
+      Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+        set: [next_run_at: past]
+      )
+
+    %{schedule | next_run_at: past}
+  end
+
+  defp next_occurrence, do: DateTime.add(DateTime.utc_now(), 300, :second)
+
+  defp lock_schedule(id) do
+    fn ->
+      from(s in ScheduleRow, where: s.id == ^id)
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.one()
+    end
+  end
+
+  defp lock_occurrence(id) do
+    fn ->
+      from(o in ScheduleOccurrence, where: o.id == ^id)
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.one()
+    end
+  end
+
+  # ---- the stale write ---------------------------------------------------------
+
+  # The member's cached standing passes, `write` waits, the lease runs out
+  # and a successor takes the slot, then `write` goes on. On PostgreSQL it
+  # waits on `lock`, held by a transaction that runs `then` once the
+  # takeover has committed and commits after it; on SQLite the takeover
+  # and `then` commit first. Answers what `write` answered.
+  defp stale_write(slot, lock, write, then \\ fn -> :ok end) do
+    slot = expiring!(slot)
+    assert ControlPlane.held?()
+    test = self()
+
+    if postgres?() do
+      holder = holding(lock)
+
+      writer =
+        Task.async(fn ->
+          unboxed(fn ->
+            send(test, {:backend, backend_pid()})
+            write.()
+          end)
+        end)
+
+      assert_receive {:backend, backend}, 15_000
+      await_lock_wait(backend)
+      taken_over!(slot)
+      release(holder, then)
+      Task.await(writer, 30_000)
+    else
+      taken_over!(slot)
+      unboxed(then)
+      unboxed(write)
+    end
+  end
+
+  # The member renews to a short lease, a write of its own, and its
+  # cached standing is held whatever the lease then does.
+  defp expiring!(slot) do
+    {:ok, renewed} = unboxed(fn -> ControlPlane.renew(@lease_ms) end)
+    assert renewed.generation == slot.generation
+    hold_cached(renewed)
+    renewed
+  end
+
+  defp hold_cached(slot) do
+    ControlPlane.record_slot(slot)
+    ControlPlane.record_generation(slot.generation)
+    ControlPlane.record({:held, 60_000})
+  end
+
+  # The lease runs out on the cell's clock with no edit to its row, and a
+  # successor takes the slot over through `take/3`. `take/3` records what
+  # it won in this VM's standing; the successor is another member, so this
+  # member's own standing is put back.
+  defp taken_over!(slot) do
+    await_expiry(slot.node)
+
+    assert {:ok, %{generation: generation}} =
+             unboxed(fn -> ControlPlane.take(slot.node, slot.node <> "#boot_b", 60_000) end)
+
+    assert generation == slot.generation + 1
+    hold_cached(slot)
+  end
+
+  defp await_expiry(node, tries \\ 500)
+  defp await_expiry(_node, 0), do: flunk("the member's lease never ran out")
+
+  defp await_expiry(node, tries) do
+    expired? =
+      unboxed(fn ->
+        {:ok, %{lease_until: lease_until}} = ControlPlane.slot(node)
+        DateTime.compare(lease_until, Arca.ServerMetaStorage.now!()) != :gt
+      end)
+
+    unless expired? do
+      Process.sleep(20)
+      await_expiry(node, tries - 1)
+    end
+  end
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
+
+  # Run `lock` in a transaction of its own and hold it open until
+  # `release/2`, which runs its `then` in that transaction before it
+  # commits.
+  defp holding(lock) do
+    test = self()
+
+    task =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            lock.()
+            send(test, {:holding, self()})
+
+            receive do
+              {:commit, then} -> then.()
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:holding, _pid}, 15_000
+    task
+  end
+
+  defp release(task, then) do
+    send(task.pid, {:commit, then})
+    assert {:ok, _} = Task.await(task, 30_000)
+  end
+
+  defp backend_pid do
+    %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+    pid
+  end
+
+  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
+  # by `tries`, never a timing.
+  defp await_lock_wait(pid, tries \\ 500)
+
+  defp await_lock_wait(_pid, 0), do: flunk("the stale write never waited on a lock")
+
+  defp await_lock_wait(pid, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
+      end)
+
+    if rows == [["Lock"]] do
+      :ok
+    else
+      Process.sleep(20)
+      await_lock_wait(pid, tries - 1)
+    end
   end
 end

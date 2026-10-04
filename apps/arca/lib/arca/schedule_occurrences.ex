@@ -11,12 +11,18 @@ defmodule Arca.ScheduleOccurrences do
   so of two members firing the same due time one holds the row and the
   other is told `:held`. A schedule whose `concurrency` is `forbid` is
   not claimed while another of its occurrences is still open
-  (`:overlapping`). A feed's occurrence is claimed only under the
-  member's live slot, checked in the same transaction (`:not_owner`
-  otherwise). The execution's admission moves the occurrence to
-  `started` inside its own transaction (`start!/3`, from
-  `Arca.Execution.admit/2`), so a `claimed` occurrence is one nothing
-  ever invoked, and the run's end closes it (`finish/3`).
+  (`:overlapping`). Every occurrence, whatever its schedule's kind, is
+  claimed only under the member's live slot, checked in the same
+  transaction (`:not_owner` otherwise). The execution's admission moves
+  the occurrence to `started` inside its own transaction (`start!/3`,
+  from `Arca.Execution.admit/2`), so a `claimed` occurrence is one
+  nothing ever invoked, and the run's end closes it (`finish/5`).
+
+  An occurrence is ended only by the claimant that holds it, for the
+  execution it intends to end: `finish/5` and `settle_dead/4` are each a
+  compare-and-set on the claimant and the execution, so a member whose
+  occurrence a successor recovered and started ends nothing of the
+  successor's (`:stale`).
 
   `claimed_by` names the BOOT that took the occurrence (`Prima.Boot.id/0`),
   not its node: an occurrence is held while its claimant is a live member
@@ -54,17 +60,17 @@ defmodule Arca.ScheduleOccurrences do
 
   `schedule` is read for its `id`, its `athanor_id` and the
   `next_run_at` the caller saw, which is the cursor the write compares
-  against; everything else the claim decides on, concurrency and kind
-  included, is read from the row as it stands. Due is decided on the
-  cell's clock, so a member whose own clock runs fast cannot fire a
-  schedule before it is due for its peers.
+  against; everything else the claim decides on, concurrency included,
+  is read from the row as it stands. Due is decided on the cell's clock,
+  so a member whose own clock runs fast cannot fire a schedule before it
+  is due for its peers.
 
-  A feed's row (`kind` `feed`) is claimed only under the member's live
-  slot: the row is locked and its kind read before the cursor moves, and
-  a member that lost its slot is answered `{:error, :not_owner}` with the
-  cursor unmoved and no occurrence written
-  (`Arca.CronSchedule.feed_fence/0`). A schedule's row is claimed as it
-  always was.
+  Every row, a schedule's and a feed's alike, is claimed only under the
+  member's live slot: the row is locked and the slot checked before the
+  cursor moves (`Arca.CronSchedule.slot_fence/0`), so a member that lost
+  its slot, even while it waited on the lock, is answered
+  `{:error, :not_owner}` with the cursor unmoved and no occurrence
+  written.
   """
   @spec claim(map(), String.t(), DateTime.t()) ::
           {:ok, map()} | :held | :overlapping | {:error, :not_owner | :database_error}
@@ -82,13 +88,13 @@ defmodule Arca.ScheduleOccurrences do
       now = Arca.ServerMetaStorage.now!()
 
       Arca.Repo.locking_transaction(fn ->
-        # The row is locked and its kind read before the cursor moves; a
-        # feed's claim passes the feed writers' fence first, so a member
-        # that lost its slot moves nothing.
-        if locked_kind(athanor_id, id) == "feed" do
-          with {:error, reason} <- Arca.CronSchedule.feed_fence(),
-               do: Arca.Repo.rollback(reason)
-        end
+        # The row is locked before the cursor moves, and the slot is
+        # checked once the lock is held, so a member whose slot was taken
+        # over while it waited on the lock moves nothing.
+        lock_schedule(athanor_id, id)
+
+        with {:error, reason} <- Arca.CronSchedule.slot_fence(),
+             do: Arca.Repo.rollback(reason)
 
         {count, _} =
           from(s in CronSchedule,
@@ -157,50 +163,130 @@ defmodule Arca.ScheduleOccurrences do
   def start!(%Prima.Actor{}, _occurrence_id, _execution_id),
     do: Arca.QueryHelpers.no_athanor!("Arca.ScheduleOccurrences.start!/3")
 
-  @doc "End an open occurrence as `completed`, `failed` or `uncertain`. Answers the rows moved."
-  @spec finish(Prima.Actor.t(), String.t(), String.t()) ::
-          {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
-  def finish(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, state)
-      when is_binary(athanor_id) and athanor_id != "" and state in @terminal do
-    Errors.with_db_rescue("ScheduleOccurrences.finish", fn ->
-      {count, _} =
-        from(o in ScheduleOccurrence,
-          where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id and o.state in ^@open
-        )
-        |> Arca.Repo.update_all(set: [state: state, ended_at: DateTime.utc_now()])
+  @doc """
+  End an open occurrence as `completed`, `failed` or `uncertain`, only
+  while it is still the one `claimed_by` holds for `execution_id`: one
+  statement, matching the occurrence's athanor and id, an open state, its
+  claimant, and either that execution or, still `claimed`, none at all.
+  `execution_id` nil matches only an occurrence never started.
 
-      {:ok, count}
+  Answers `{:ok, 1}`, or `{:error, :stale}` when nothing matched: the
+  occurrence was ended already, or another claimant or execution holds
+  it now, and nothing moved.
+  """
+  @spec finish(Prima.Actor.t(), String.t(), String.t() | nil, String.t() | nil, String.t()) ::
+          {:ok, 1} | {:error, :stale | :no_athanor | :database_error}
+  def finish(
+        %Prima.Actor{athanor_id: athanor_id},
+        occurrence_id,
+        claimed_by,
+        execution_id,
+        state
+      )
+      when is_binary(athanor_id) and athanor_id != "" and state in @terminal and
+             (is_binary(claimed_by) or is_nil(claimed_by)) and
+             (is_binary(execution_id) or is_nil(execution_id)) do
+    Errors.with_db_rescue("ScheduleOccurrences.finish", fn ->
+      athanor_id
+      |> open_held_by(occurrence_id, claimed_by)
+      |> where_execution(execution_id)
+      |> ended(state)
     end)
   end
 
-  def finish(%Prima.Actor{}, _occurrence_id, _state), do: {:error, :no_athanor}
+  def finish(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id, _state),
+    do: {:error, :no_athanor}
 
   @doc """
-  End an occurrence whose runner died: one never invoked (`claimed`)
-  failed, one started `uncertain` — the execution may have had its
-  effect. Answers the state written, or nil when it was already closed.
+  End an occurrence whose runner died, only while `claimed_by` still
+  holds it: one never invoked (`claimed`, with no execution) `failed`,
+  one started under `execution_id` `uncertain`, since the execution may
+  have had its effect. Each is a statement guarded on the occurrence's
+  state, claimant and execution; nothing is read first.
+
+  Answers the state written, or `{:error, :stale}` when neither matched:
+  the occurrence was ended already, or another claimant or execution
+  holds it now, and nothing moved.
   """
-  @spec settle_dead(Prima.Actor.t(), String.t()) ::
-          {:ok, String.t() | nil} | {:error, :no_athanor | :database_error}
-  def settle_dead(%Prima.Actor{athanor_id: athanor_id} = actor, occurrence_id)
-      when is_binary(athanor_id) and athanor_id != "" do
+  @spec settle_dead(Prima.Actor.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          {:ok, String.t()} | {:error, :stale | :no_athanor | :database_error}
+  def settle_dead(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, claimed_by, execution_id)
+      when is_binary(athanor_id) and athanor_id != "" and
+             (is_binary(claimed_by) or is_nil(claimed_by)) and
+             (is_binary(execution_id) or is_nil(execution_id)) do
     Errors.with_db_rescue("ScheduleOccurrences.settle_dead", fn ->
-      case Arca.Repo.get_by(ScheduleOccurrence, athanor_id: athanor_id, id: occurrence_id) do
-        %{state: "claimed"} ->
-          {:ok, _} = finish(actor, occurrence_id, "failed")
+      never_invoked =
+        athanor_id
+        |> open_held_by(occurrence_id, claimed_by)
+        |> where_execution(nil)
+        |> ended("failed")
+
+      case {never_invoked, execution_id} do
+        {{:ok, 1}, _execution_id} ->
           {:ok, "failed"}
 
-        %{state: "started"} ->
-          {:ok, _} = finish(actor, occurrence_id, "uncertain")
-          {:ok, "uncertain"}
+        {{:error, :stale}, nil} ->
+          {:error, :stale}
 
-        _ ->
-          {:ok, nil}
+        {{:error, :stale}, execution_id} ->
+          started_uncertain(athanor_id, occurrence_id, claimed_by, execution_id)
       end
     end)
   end
 
-  def settle_dead(%Prima.Actor{}, _occurrence_id), do: {:error, :no_athanor}
+  def settle_dead(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id),
+    do: {:error, :no_athanor}
+
+  # A started occurrence whose runner died, ended `uncertain` only while
+  # it is still `claimed_by`'s under `execution_id`.
+  # arca:db-raise-ok inside the caller's rescue
+  defp started_uncertain(athanor_id, occurrence_id, claimed_by, execution_id) do
+    from(o in open_held_by(athanor_id, occurrence_id, claimed_by),
+      where: o.state == "started" and o.execution_id == ^execution_id
+    )
+    |> ended("uncertain")
+    |> case do
+      {:ok, 1} -> {:ok, "uncertain"}
+      stale -> stale
+    end
+  end
+
+  # The open occurrence, by athanor and id, while `claimed_by` holds it.
+  # A claimant read as nil matches only a row that names none.
+  defp open_held_by(athanor_id, occurrence_id, nil) do
+    from(o in ScheduleOccurrence,
+      where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id and o.state in ^@open,
+      where: is_nil(o.claimed_by)
+    )
+  end
+
+  defp open_held_by(athanor_id, occurrence_id, claimed_by) do
+    from(o in ScheduleOccurrence,
+      where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id and o.state in ^@open,
+      where: o.claimed_by == ^claimed_by
+    )
+  end
+
+  # The execution the caller intends to end, or the occurrence still
+  # `claimed` with none; nil names only the second.
+  defp where_execution(query, nil),
+    do: from(o in query, where: o.state == "claimed" and is_nil(o.execution_id))
+
+  defp where_execution(query, execution_id) do
+    from(o in query,
+      where:
+        o.execution_id == ^execution_id or
+          (o.state == "claimed" and is_nil(o.execution_id))
+    )
+  end
+
+  # arca:db-raise-ok inside the caller's rescue
+  defp ended(query, state) do
+    case Arca.Repo.update_all(query, set: [state: state, ended_at: DateTime.utc_now()]) do
+      {1, _} -> {:ok, 1}
+      {0, _} -> {:error, :stale}
+    end
+  end
 
   @doc "The occurrence, by id, within the actor's athanor."
   @spec get(Prima.Actor.t(), String.t()) ::
@@ -338,10 +424,10 @@ defmodule Arca.ScheduleOccurrences do
   end
 
   # arca:db-raise-ok inside the claim transaction
-  defp locked_kind(athanor_id, schedule_id) do
+  defp lock_schedule(athanor_id, schedule_id) do
     from(s in CronSchedule,
       where: s.id == ^schedule_id and s.athanor_id == ^athanor_id,
-      select: s.kind
+      select: s.id
     )
     |> Arca.QueryHelpers.for_update()
     |> Arca.Repo.one()

@@ -108,6 +108,12 @@ if config_env() == :test do
   # test's rows, and on SQLite it waits behind a test's open write.
   config :arca, control_plane_pool: false
 
+  # No host runs here to claim a control-plane slot, as none claims one in
+  # the umbrella's suite (`config/test.exs`) or in Sanctum's island: the
+  # member counts as holding its slot unless a case records otherwise, and
+  # every case about ownership switches the claimant on itself.
+  config :arca, control_plane_claim_enabled: false
+
   # No write turns under the sandbox either, as in `config/test.exs`: a
   # test's connection holds SQLite's write lock until it ends and its own
   # audit writer runs on it, so it and another sandbox's writer holding

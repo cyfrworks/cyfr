@@ -115,8 +115,9 @@ defmodule Arca.Execution do
   @doc """
   Whether `reason` is the refusal of one of `admit/2`'s barriers: an
   expired hold, a superseded step, a parent that ended, an occurrence not
-  claimed, a grant whose athanor no longer stands at its generation, or an
-  admission that named no grant.
+  claimed, a grant whose athanor no longer stands at its generation, an
+  admission that named no grant, or a member that no longer holds its
+  slot when the admission checks it in its own transaction (`:not_owner`).
   """
   @spec barrier_refusal?(term()) :: boolean()
   def barrier_refusal?(reason),
@@ -127,7 +128,8 @@ defmodule Arca.Execution do
         :parent_ended,
         :occurrence_not_claimed,
         :not_standing,
-        :missing_grant
+        :missing_grant,
+        :not_owner
       ]
 
   @doc """
@@ -176,6 +178,15 @@ defmodule Arca.Execution do
     carries, and one that is not is refused `{:error, :not_standing}`.
     The check's refusal is answered as itself; an admission missing
     either is `{:error, :missing_grant}`.
+
+  The member's slot is the last barrier. After the last lock the
+  transaction takes (the occurrence's start) and before the
+  `execution.started` event is appended, it reads the slot this member
+  believes it holds (`Arca.ControlPlane.member_slot/0`) and verifies it on
+  the database (`Arca.ControlPlane.verify_held/1`): a member whose slot was
+  taken over, even while the transaction waited on a lock, admits nothing
+  and is refused `{:error, :not_owner}`. Where no claimant runs the slot
+  is `:none` and the check passes.
 
   Answers `{:ok, %{execution: row, attempt: row}}`, each a plain map; the
   execution's `event_seq` is the number of the `execution.started` event
@@ -323,6 +334,12 @@ defmodule Arca.Execution do
           Arca.Repo.rollback(:occurrence_not_claimed)
       end
 
+      # The member's slot, checked on the database after the last lock
+      # this transaction takes and before its event: the cached standing
+      # its caller passed is never the authority, and a takeover that
+      # committed while this transaction waited refuses it here.
+      slot_held!()
+
       event =
         Arca.ExecutionEvents.append!(
           Prima.Actor.in_athanor(athanor_id),
@@ -337,6 +354,20 @@ defmodule Arca.Execution do
       }
     end)
     |> duplicate_child_key()
+  end
+
+  # The slot this member believes it holds, verified on the database inside
+  # the admission's transaction (`Arca.ControlPlane.verify_held/1`, a
+  # shared lock on the lease row until the transaction ends): a member
+  # that holds none admits nothing.
+  # arca:db-raise-ok inside the caller's transaction
+  defp slot_held! do
+    with {:ok, slot} <- Arca.ControlPlane.member_slot(),
+         :ok <- Arca.ControlPlane.verify_held(slot) do
+      :ok
+    else
+      _not_held -> Arca.Repo.rollback(:not_owner)
+    end
   end
 
   # The attempt that owns `parent_id` now, read in the admission's

@@ -333,10 +333,17 @@ defmodule Crucible.Schedules.SchedulerTest do
 
       # The occurrence is closed by another closer while the run is in
       # flight: the run's own finish moves no row.
-      [%{id: occurrence_id, state: "started"}] = occurrences(ctx, schedule)
+      [%{id: occurrence_id, state: "started", claimed_by: claimed_by, execution_id: execution_id}] =
+        occurrences(ctx, schedule)
 
       assert {:ok, 1} =
-               ScheduleOccurrences.finish(Sanctum.Context.actor(ctx), occurrence_id, "uncertain")
+               ScheduleOccurrences.finish(
+                 Sanctum.Context.actor(ctx),
+                 occurrence_id,
+                 claimed_by,
+                 execution_id,
+                 "uncertain"
+               )
 
       send(worker, :continue)
       assert_receive {:DOWN, ^ref, :process, ^task, _}, 10_000

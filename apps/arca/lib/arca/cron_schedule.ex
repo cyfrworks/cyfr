@@ -45,9 +45,13 @@ defmodule Arca.CronSchedule do
 
   The generic writers (`update/3`, `record_run/3`, `record_error/3`,
   `soft_delete/2`) read and lock their row tenant-scoped in a transaction
-  of their own, and write a feed's row only after the same check of the
-  member's slot in it, so no path writes a feed for a member that lost its
-  slot. A schedule's row is written as it always was.
+  of their own, and check the member's slot in it after the lock
+  (`slot_fence/0`). The scheduler's run writers, `record_run/3` and
+  `record_error/3`, check it for every row, so a member that lost its
+  slot records no run and no error on any schedule. A person's writers
+  through a surface, `update/3` and `soft_delete/2`, check it for a feed's
+  row, so no path writes a feed for a member that lost its slot, and write
+  a schedule's row as they always did.
 
   `list_feeds/1` and `get_feed/2` read the live feed rows and decode
   nothing.
@@ -111,10 +115,10 @@ defmodule Arca.CronSchedule do
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/2.
   def update(%Prima.Actor{} = actor, id, attrs) do
     Errors.with_db_rescue("CronSchedule.update", fn ->
-      guarded(actor, id, fn schedule ->
+      guarded(actor, id, &feed_held/1, fn schedule ->
         attrs = Map.put(attrs, :updated_at, DateTime.utc_now())
 
         schedule
@@ -233,16 +237,20 @@ defmodule Arca.CronSchedule do
     |> Arca.Data.project()
   end
 
-  @doc "Records a successful run with tenant-scoped lookup."
+  @doc """
+  Records a successful run with tenant-scoped lookup. Every row, whatever
+  its kind, is written only under the member's live slot (`:not_owner`
+  otherwise).
+  """
   @spec record_run(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/2.
   # Increment atomically; concurrent runs must not overwrite each other’s counts.
   def record_run(%Prima.Actor{} = actor, id, execution_id) do
     Errors.with_db_rescue("CronSchedule.record_run", fn ->
-      guarded(actor, id, fn schedule ->
+      guarded(actor, id, &slot_held/1, fn schedule ->
         now = DateTime.utc_now()
 
         from(s in Row, where: s.id == ^schedule.id)
@@ -258,18 +266,19 @@ defmodule Arca.CronSchedule do
   end
 
   @doc """
-  Records an error with tenant-scoped lookup. A feed's row is written only
-  under the member's live slot (`:not_owner` otherwise).
+  Records an error with tenant-scoped lookup. Every row, whatever its
+  kind, is written only under the member's live slot (`:not_owner`
+  otherwise).
   """
   @spec record_error(Prima.Actor.t(), String.t(), term()) ::
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/2.
   # Atomic increment, for the reason spelled out at `record_run/3`.
   def record_error(%Prima.Actor{} = actor, id, _reason) do
     Errors.with_db_rescue("CronSchedule.record_error", fn ->
-      guarded(actor, id, fn schedule ->
+      guarded(actor, id, &slot_held/1, fn schedule ->
         from(s in Row, where: s.id == ^schedule.id)
         |> Arca.Repo.update_all(
           set: [updated_at: DateTime.utc_now()],
@@ -290,10 +299,10 @@ defmodule Arca.CronSchedule do
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/2.
   def soft_delete(%Prima.Actor{} = actor, id) do
     Errors.with_db_rescue("CronSchedule.soft_delete", fn ->
-      guarded(actor, id, fn schedule ->
+      guarded(actor, id, &feed_held/1, fn schedule ->
         schedule
         |> Row.delete_changeset(DateTime.utc_now())
         |> Arca.Repo.update()
@@ -645,13 +654,13 @@ defmodule Arca.CronSchedule do
 
   # A generic writer's transaction (`update/3`, `record_run/3`,
   # `record_error/3`, `soft_delete/2`): the row is read and locked
-  # tenant-scoped, and a feed's row is written only after the fence's
-  # check in the same transaction, so a member that lost its slot writes
-  # no feed through these either. A schedule's row is written as before.
-  defp guarded(actor, id, write) do
+  # tenant-scoped, then `fence` decides on the locked row whether the
+  # member's slot is checked, in the same transaction and before anything
+  # is written: `slot_held/1` for every row, `feed_held/1` for a feed's.
+  defp guarded(actor, id, fence, write) do
     Arca.Repo.locking_transaction(fn ->
       with {:ok, row} <- locked_tenant(actor, id),
-           :ok <- feed_held(row) do
+           :ok <- fence.(row) do
         write.(row) |> committed()
       else
         {:error, reason} -> Arca.Repo.rollback(reason)
@@ -670,17 +679,21 @@ defmodule Arca.CronSchedule do
     end
   end
 
-  defp feed_held(%Row{kind: "feed"}), do: feed_fence()
+  defp slot_held(%Row{}), do: slot_fence()
+
+  defp feed_held(%Row{kind: "feed"}), do: slot_fence()
   defp feed_held(%Row{}), do: :ok
 
   @doc false
-  # The fence a write to a feed's row passes when it carries no slot of
-  # its own: the member's slot, read now and verified inside the caller's
-  # locking transaction, before anything is written. The generic writers
-  # here and `Arca.ScheduleOccurrences.claim/3` use it, so a member that
-  # lost its slot moves no feed's row and claims no feed's occurrence.
-  @spec feed_fence() :: :ok | {:error, :not_owner}
-  def feed_fence do
+  # The fence a write passes when it carries no slot of its own, whatever
+  # the kind of the row it writes: the member's slot, read now and
+  # verified inside the caller's locking transaction, after the caller's
+  # row lock and before anything is written. The generic writers here and
+  # `Arca.ScheduleOccurrences.claim/3` use it, so a member that lost its
+  # slot records no run or error on any row, writes no feed's row and
+  # claims no occurrence.
+  @spec slot_fence() :: :ok | {:error, :not_owner}
+  def slot_fence do
     with {:ok, slot} <- Arca.ControlPlane.member_slot(), do: held(slot)
   end
 

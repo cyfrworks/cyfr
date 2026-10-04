@@ -24,7 +24,10 @@ defmodule Crucible.Admission do
   A run is admitted by `admit/4`: its reference resolved and typed, its
   consented limits, rates and policy enforced, its bytes fetched and their
   attestation checked, its row admitted for the worker service it is
-  dispatched to and its `Crucible.Attempt` opened. A refusal at any
+  dispatched to and its `Crucible.Attempt` opened. The cached standing is
+  a fast path and never the authority: the transaction that admits the
+  row verifies the member's slot on the database (`Arca.Execution.admit/2`)
+  and refuses `:not_owner` as a barrier, recording nothing. A refusal at any
   stage after the row is built closes the row failed
   (`Crucible.Close`) before it answers. `Crucible.Dispatch`
   signs the run's assignment and starts it on the worker service, or claims
@@ -263,8 +266,10 @@ defmodule Crucible.Admission do
   Admit one run of `reference` with `input` in `ctx`, under
   `opts[:authority]`.
 
-  In order: this boot must own the control plane; the run's grant is read
-  — a root's athanor standing now, a child's its parent's stored stamp —
+  In order: this boot must believe it owns the control plane, from its
+  cached standing alone (`Arca.ControlPlane.held?/0`, a fast path that
+  refuses `{:error, :control_plane_lost}` with no query); the run's grant
+  is read — a root's athanor standing now, a child's its parent's stored stamp —
   and one that does not stand refuses with no row
   (`{:error, :not_standing}`); a version-less reference is resolved to
   the pinned one; the registry row must type the
@@ -274,8 +279,10 @@ defmodule Crucible.Admission do
   profile, the profile's and the caller's address buckets) must have room;
   the policy consultation is recorded; the bytes must match the registry
   digest and their attestation must satisfy `opts[:verify]` and the
-  signed-pulls setting; the row is admitted with its barriers; and the
-  attempt opens, owned by the calling process.
+  signed-pulls setting; the row is admitted with its barriers, the last
+  of which is the member's slot, verified on the database in the
+  admitting transaction; and the attempt opens, owned by the calling
+  process.
 
   Options: `:authority` (required — admitting without one raises, and the
   raise closes the row failed), `:type`, `:verify`, `:execution_id`,
@@ -300,8 +307,9 @@ defmodule Crucible.Admission do
   Answers `{:ok, admitted}`. A reference that cannot be resolved or typed
   answers `{:error, reason}` with no row. A row an admission barrier
   refuses (`Arca.Execution.barrier_refusal?/1`) — an expired hold, a
-  superseded step, an occurrence not claimed, or a child whose parent
-  attempt no longer owns its running parent — is not written, and the
+  superseded step, an occurrence not claimed, a child whose parent
+  attempt no longer owns its running parent, or a member whose slot the
+  database no longer names (`:not_owner`) — is not written, and the
   refusal is answered (`Crucible.Close.barred/1`) with no lifecycle
   telemetry: nothing may run, or be recorded, past a barrier. A child
   whose `child_key` another child of the same parent already carries is
@@ -319,7 +327,9 @@ defmodule Crucible.Admission do
   def admit(%Context{} = ctx, reference, input, opts)
       when is_binary(reference) and is_map(input) and is_list(opts) do
     # Every road into the engine — root, child, cron, webhook — is admitted
-    # here, so a member that holds no slot in the cell admits nothing.
+    # here, so a member that holds no slot in the cell admits nothing. This
+    # term read is the fast path only: the admitting transaction verifies
+    # the slot on the database and refuses `:not_owner` as a barrier.
     if Arca.ControlPlane.held?() do
       ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Prima.UUID7.request_id()}
       # An approved launch's entry was compared where its root was loaded;

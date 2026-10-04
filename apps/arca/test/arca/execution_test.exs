@@ -883,3 +883,312 @@ defmodule Arca.ExecutionTest do
     end
   end
 end
+
+defmodule Arca.ExecutionTakeoverTest do
+  @moduledoc """
+  A stale member's admission of a feed's run, in the sequence that makes
+  one stale with no clock drift and no edit to the lease row: the member's
+  cached standing passes, the admission waits on its athanor's row, the
+  member's lease runs out on the cell's clock, a successor takes the slot
+  through `Arca.ControlPlane.take/3`, and only then does the admission go
+  on. Admission verifies the member's slot in its own transaction, after
+  its last lock, so it commits nothing: no execution, no attempt, no
+  started occurrence and no `execution.started` event.
+
+  The admission runs on a connection of its own, outside the sandbox. On
+  PostgreSQL it really waits, on the athanor's row, which another
+  transaction holds locked across the expiry and the takeover. SQLite's
+  one write lock would hold the successor's take behind that transaction
+  too, so there the takeover commits first and the admission runs while
+  this member's cached standing still says it holds the slot: the same
+  divergence between the cache and the row. The case works in an athanor
+  of its own, whose rows it deletes when it ends.
+  """
+
+  # Writes the process-wide standing record and the claimant switch, and
+  # holds a row locked across connections; the case restores both.
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.{ControlPlane, CronSchedule, ScheduleOccurrences}
+  alias Arca.Schemas.{CellLease, ExecutionAttempt, ScheduleOccurrence}
+  alias Arca.Schemas.CronSchedule, as: ScheduleRow
+  alias Arca.Schemas.Execution, as: Row
+  alias Ecto.Adapters.SQL.Sandbox
+
+  # Short enough to run out while the case waits; the setup is done under
+  # a long lease, which the member then renews to this.
+  @lease_ms 300
+
+  @keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  setup do
+    saved = Map.new(@keys, &{&1, :persistent_term.get(&1, :absent)})
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+    athanor = "ath_exec_fence_#{System.unique_integer([:positive])}"
+    node = "node-exec-fence-#{System.unique_integer([:positive])}"
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor) end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        ids = from(e in Row, where: e.athanor_id == ^athanor, select: e.id)
+
+        Arca.Repo.delete_all(
+          from(i in "execution_events", where: i.execution_id in subquery(ids))
+        )
+
+        Arca.Repo.delete_all(from(a in ExecutionAttempt, where: a.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(e in Row, where: e.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(o in ScheduleOccurrence, where: o.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(s in ScheduleRow, where: s.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor))
+        Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node))
+      end)
+
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+    end)
+
+    # A claimant runs, as a deployment's does, and this member holds its
+    # slot under a lease long enough for the case's own setup.
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    {:ok, slot} = unboxed(fn -> ControlPlane.take(node, node <> "#boot_a", 60_000) end)
+
+    {:ok, actor: Arca.Test.Actor.local(athanor_id: athanor), slot: slot}
+  end
+
+  test "a feed's admission after ownership loss writes no execution, attempt, started occurrence or event",
+       %{actor: actor, slot: slot} do
+    athanor = actor.athanor_id
+    {feed, occurrence} = unboxed(fn -> claimed_feed!(actor, slot) end)
+    grant = unboxed(fn -> Arca.Test.Actor.grant(athanor) end)
+    execution_id = Prima.UUID7.execution_id()
+
+    answer =
+      stale_write(slot, lock_athanor(athanor), fn ->
+        Arca.Execution.admit(
+          %{
+            id: execution_id,
+            reference: "catalyst:local.markets:1.0.0",
+            user_id: actor.user_id,
+            athanor_id: athanor,
+            component_type: "catalyst",
+            schedule_id: feed.id,
+            origin: :schedule
+          },
+          occurrence_id: occurrence.id,
+          grant: grant,
+          verify: &Arca.Test.Actor.verify/1
+        )
+      end)
+
+    assert answer == {:error, :not_owner}
+
+    unboxed(fn ->
+      assert Arca.Repo.get(Row, execution_id) == nil
+      assert [] = Arca.Repo.all(from(a in ExecutionAttempt, where: a.athanor_id == ^athanor))
+
+      assert [] =
+               Arca.Repo.all(
+                 from(i in "execution_events", where: i.athanor_id == ^athanor, select: i.id)
+               )
+
+      assert {:ok, %{state: "claimed", execution_id: nil, attempts: 0, claimed_by: claimant}} =
+               ScheduleOccurrences.get(actor, occurrence.id)
+
+      assert claimant == slot.owner
+    end)
+  end
+
+  # A feed bound and its first occurrence claimed, each under the member's
+  # live slot.
+  defp claimed_feed!(actor, slot) do
+    {:ok, binding} =
+      Prima.Feed.Binding.validate(%{
+        "name" => "feed-#{System.unique_integer([:positive])}",
+        "label" => "A feed",
+        "reference" => "catalyst:local.markets",
+        "operation" => "quote",
+        "args" => %{},
+        "interval_minutes" => 5,
+        "result_shape" => %{"type" => "json"},
+        "actions" => []
+      })
+
+    {:ok, feed} =
+      CronSchedule.create_feed(actor, %{
+        binding: binding,
+        resolved_reference: "catalyst:local.markets:1.0.0",
+        profile_id: "prof_test",
+        cap: 10
+      })
+
+    past = DateTime.add(DateTime.utc_now(), -60, :second)
+
+    {1, _} =
+      Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^feed.id),
+        set: [next_run_at: past]
+      )
+
+    feed = %{feed | next_run_at: past}
+    next = DateTime.add(DateTime.utc_now(), 300, :second)
+    {:ok, occurrence} = ScheduleOccurrences.claim(feed, slot.owner, next)
+    {feed, occurrence}
+  end
+
+  defp lock_athanor(athanor) do
+    fn ->
+      from(a in Arca.Schemas.Athanor, where: a.id == ^athanor)
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.one()
+    end
+  end
+
+  # ---- the stale write ---------------------------------------------------------
+
+  # The member's cached standing passes, `write` waits, the lease runs out
+  # and a successor takes the slot, then `write` goes on: on PostgreSQL it
+  # waits on `lock`, held by another transaction until the takeover has
+  # committed; on SQLite the takeover commits first. Answers what `write`
+  # answered.
+  defp stale_write(slot, lock, write) do
+    slot = expiring!(slot)
+    assert ControlPlane.held?()
+    test = self()
+
+    if postgres?() do
+      holder = holding(lock)
+
+      writer =
+        Task.async(fn ->
+          unboxed(fn ->
+            send(test, {:backend, backend_pid()})
+            write.()
+          end)
+        end)
+
+      assert_receive {:backend, backend}, 15_000
+      await_lock_wait(backend)
+      taken_over!(slot)
+      release(holder)
+      Task.await(writer, 30_000)
+    else
+      taken_over!(slot)
+      unboxed(write)
+    end
+  end
+
+  # The member renews to a short lease, a write of its own, and its
+  # cached standing is held whatever the lease then does.
+  defp expiring!(slot) do
+    {:ok, renewed} = unboxed(fn -> ControlPlane.renew(@lease_ms) end)
+    assert renewed.generation == slot.generation
+    hold_cached(renewed)
+    renewed
+  end
+
+  defp hold_cached(slot) do
+    ControlPlane.record_slot(slot)
+    ControlPlane.record_generation(slot.generation)
+    ControlPlane.record({:held, 60_000})
+  end
+
+  # The lease runs out on the cell's clock with no edit to its row, and a
+  # successor takes the slot over through `take/3`. `take/3` records what
+  # it won in this VM's standing; the successor is another member, so this
+  # member's own standing is put back.
+  defp taken_over!(slot) do
+    await_expiry(slot.node)
+
+    assert {:ok, %{generation: generation}} =
+             unboxed(fn -> ControlPlane.take(slot.node, slot.node <> "#boot_b", 60_000) end)
+
+    assert generation == slot.generation + 1
+    hold_cached(slot)
+  end
+
+  defp await_expiry(node, tries \\ 500)
+  defp await_expiry(_node, 0), do: flunk("the member's lease never ran out")
+
+  defp await_expiry(node, tries) do
+    expired? =
+      unboxed(fn ->
+        {:ok, %{lease_until: lease_until}} = ControlPlane.slot(node)
+        DateTime.compare(lease_until, Arca.ServerMetaStorage.now!()) != :gt
+      end)
+
+    unless expired? do
+      Process.sleep(20)
+      await_expiry(node, tries - 1)
+    end
+  end
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
+
+  # Run `lock` in a transaction of its own and hold it open until
+  # `release/1`.
+  defp holding(lock) do
+    test = self()
+
+    task =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            lock.()
+            send(test, {:holding, self()})
+
+            receive do
+              :commit -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:holding, _pid}, 15_000
+    task
+  end
+
+  defp release(task) do
+    send(task.pid, :commit)
+    assert {:ok, _} = Task.await(task, 30_000)
+  end
+
+  defp backend_pid do
+    %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+    pid
+  end
+
+  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
+  # by `tries`, never a timing.
+  defp await_lock_wait(pid, tries \\ 500)
+
+  defp await_lock_wait(_pid, 0), do: flunk("the stale admission never waited on a lock")
+
+  defp await_lock_wait(pid, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
+      end)
+
+    if rows == [["Lock"]] do
+      :ok
+    else
+      Process.sleep(20)
+      await_lock_wait(pid, tries - 1)
+    end
+  end
+end
