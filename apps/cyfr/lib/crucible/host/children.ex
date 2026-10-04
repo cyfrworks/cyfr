@@ -29,17 +29,19 @@ defmodule Crucible.Host.Children do
   formula's authority is stepped, a spawn's charge is taken, the child's
   limits, rates, policy and attestation are applied, its row is admitted
   under the formula attempt's barrier carrying the key, and its attempt is
-  claimed for the calling runner, its vault edge unsealed and handed to
-  that runner. The child's row names the calling execution as its parent
-  and carries the parent's origin (`Prima.Origin`), read where it is
-  admitted: a child of a scheduled root is `schedule`, whatever the body
-  says. The answer carries the child's signed assignment, its
-  attempt's keys sealed with the calling attempt's seal key
-  (`Prima.WorkerAuth.seal_attempt_keys/3`), the JSON of the input it was
-  admitted with, which its assignment's `input_digest` binds, and its
-  vault fields. The child runs in the calling runner, which closes its
-  attempt; its execution slot, invoke-budget slot and charge row go back
-  at its terminal write.
+  claimed for the calling runner, and what its vault edge discloses is
+  handed to that runner: a disclosed entry's fields or a publisher's
+  provided values, never an attach-only or instance entry's, which CYFR
+  attaches to the child's requests instead. The child's row names the
+  calling execution as its parent and carries the parent's origin
+  (`Prima.Origin`), read where it is admitted: a child of a scheduled root
+  is `schedule`, whatever the body says. The answer carries the child's
+  signed assignment, its attempt's keys sealed with the calling attempt's
+  seal key (`Prima.WorkerAuth.seal_attempt_keys/3`), the JSON of the input
+  it was admitted with, which its assignment's `input_digest` binds, and
+  the vault fields its edge discloses. The child runs in the calling
+  runner, which closes its attempt; its execution slot, invoke-budget slot
+  and charge row go back at its terminal write.
 
   A repeat with the same key — a runner retrying a lost answer
   (`Prima.HostAPI.retry/1`, `:keyed`) — admits nothing and answers the child

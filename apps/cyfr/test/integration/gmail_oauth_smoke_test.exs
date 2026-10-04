@@ -166,6 +166,13 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     edge.vault
   end
 
+  # What a dispense under the profile's head is made for, as an attempt
+  # admitted under it names it: the binding's row is the head's.
+  defp use!(ctx, profile_id) do
+    {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
+    %{root_execution_id: "exec_gmail_smoke", profile_id: profile_id, consent_id: consent.id}
+  end
+
   test "the whole arc: connect, grant, dispense, revoke", %{ctx: ctx} do
     # A live token dispenses without touching the provider at all — the
     # refresh arm is the next test.
@@ -182,18 +189,19 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     assert resource.entry_id == entry.id
 
     # Dispensing goes through the vault, not the legacy grant plane.
-    assert {:ok, "ya29.live"} = VaultReader.oauth_token(ctx, resource, @provider)
+    assert {:ok, "ya29.live"} =
+             VaultReader.oauth_token(ctx, resource, @provider, use!(ctx, committed.profile_id))
 
     # A provider the consent does not name never leaves the reader.
     assert {:error, {:provider_mismatch, "github"}} =
-             VaultReader.oauth_token(ctx, resource, "github")
+             VaultReader.oauth_token(ctx, resource, "github", use!(ctx, committed.profile_id))
 
     # Revocation bites at the next retrieval.
     {:ok, %{affected: affected}} = Vault.revoke(ctx, entry.id)
     assert committed.profile_id in affected
 
     assert {:error, {:entry_unavailable, "revoked"}} =
-             VaultReader.oauth_token(ctx, resource, @provider)
+             VaultReader.oauth_token(ctx, resource, @provider, use!(ctx, committed.profile_id))
   end
 
   test "the entry can arrive through the real grant flow", %{ctx: ctx} do
@@ -257,7 +265,8 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     resource = edge_resource!(ctx, committed.profile_id)
     assert resource.entry_id == result.entry_id
 
-    assert {:ok, "ya29.granted"} = VaultReader.oauth_token(ctx, resource, @provider)
+    assert {:ok, "ya29.granted"} =
+             VaultReader.oauth_token(ctx, resource, @provider, use!(ctx, committed.profile_id))
   end
 
   test "a plaintext token endpoint is refused before any provider contact", %{ctx: ctx} do
@@ -293,7 +302,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     # The endpoint must be https, and the refusal comes before the socket
     # is ever opened — a refresh token is never sent in the clear.
     assert {:error, "token_url must use https://"} =
-             VaultReader.oauth_token(ctx, resource, @provider)
+             VaultReader.oauth_token(ctx, resource, @provider, use!(ctx, committed.profile_id))
 
     refute_receive :provider_called, 200
   end

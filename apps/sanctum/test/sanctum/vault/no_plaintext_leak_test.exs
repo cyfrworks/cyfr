@@ -23,6 +23,10 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
 
   use ExUnit.Case, async: false
 
+  # What a dispense is made for, as an attempt names it. These resources
+  # carry no binding key, so no binding lifetime is read for them.
+  @dispense %{root_execution_id: "exec_reader_test", profile_id: nil, consent_id: nil}
+
   import ExUnit.CaptureLog
 
   alias Sanctum.Context
@@ -120,16 +124,24 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
             Vault.blocked_profile_status()
           ),
           Arca.VaultStorage.get(%Prima.Actor{athanor_id: "ath_other"}, view.id),
-          VaultReader.fetch(ctx, %{
-            entry_id: view.id,
-            binding_digest: "sha256:wrong",
-            projection: @token_projection
-          }),
-          VaultReader.fetch(%{ctx | anonymous: true}, %{
-            entry_id: view.id,
-            binding_digest: "sha256:wrong",
-            projection: @token_projection
-          }),
+          VaultReader.fetch(
+            ctx,
+            %{
+              entry_id: view.id,
+              binding_digest: "sha256:wrong",
+              projection: @token_projection
+            },
+            @dispense
+          ),
+          VaultReader.fetch(
+            %{ctx | anonymous: true},
+            %{
+              entry_id: view.id,
+              binding_digest: "sha256:wrong",
+              projection: @token_projection
+            },
+            @dispense
+          ),
           VaultReader.oauth_token(
             ctx,
             %{
@@ -137,7 +149,8 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
               binding_digest: "sha256:wrong",
               projection: %{fields: [], scopes: ["x"]}
             },
-            "google"
+            "google",
+            @dispense
           )
         ]
 
@@ -153,11 +166,15 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
         {:ok, digest} = VaultReader.binding_digest(stored)
 
         assert {:ok, %{"token" => ^value}} =
-                 VaultReader.fetch(ctx, %{
-                   entry_id: view.id,
-                   binding_digest: digest,
-                   projection: @token_projection
-                 })
+                 VaultReader.fetch(
+                   ctx,
+                   %{
+                     entry_id: view.id,
+                     binding_digest: digest,
+                     projection: @token_projection
+                   },
+                   @dispense
+                 )
       end)
 
     refute String.contains?(log, value), "the credential reached a log line"
@@ -189,11 +206,15 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
         {:ok, digest} = VaultReader.binding_digest(entry)
 
         result =
-          VaultReader.fetch(ctx, %{
-            entry_id: id,
-            binding_digest: digest,
-            projection: @token_projection
-          })
+          VaultReader.fetch(
+            ctx,
+            %{
+              entry_id: id,
+              binding_digest: digest,
+              projection: @token_projection
+            },
+            @dispense
+          )
 
         assert {:error, {:invalid_payload, {:unknown_keys, ["extra"]}}} = result
         refute contains?(result, value)

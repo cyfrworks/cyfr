@@ -748,6 +748,35 @@ defmodule Cyfr.BoundariesTest do
                  "instance-entry usage days (`sweep_usage/0`), which names no entry and no person"
     end
 
+    # The vault decides the value an attached request carries; the control
+    # plane's transport is its one caller, and reaches nothing else of it.
+    test "the host reaches the attach decision for resolve/5 alone, from the attached request" do
+      assert Boundaries.sanctum_exports()["Sanctum.Attach"] == [resolve: 5]
+
+      reached =
+        for {"Sanctum.Attach", function, arity} <- host_sanctum_reaches(),
+            uniq: true,
+            do: {function, arity}
+
+      assert reached == [resolve: 5]
+
+      assert [row] =
+               for(
+                 %{into: "Sanctum", allow: allow} = row <- Boundaries.surfaces(),
+                 "Sanctum.Attach" in allow,
+                 do: row
+               )
+
+      assert "apps/cyfr/lib/crucible/**/*.ex" in row.from
+      assert row.reason =~ "`Sanctum.Attach` is `Crucible.Host.AttachedFetch`'s one resolution"
+
+      # The reader's seam it shares stays inside Sanctum: the host reads
+      # material by consent through the disclosed dispense alone.
+      assert Boundaries.sanctum_exports()["Sanctum.VaultReader"][:load_and_unseal] == nil
+      assert Boundaries.sanctum_exports()["Sanctum.VaultReader"][:fetch] == 3
+      assert Boundaries.sanctum_exports()["Sanctum.VaultReader"][:oauth_token] == 4
+    end
+
     test "a planted call or capture outside the roster is reported, and a dropped one is stale" do
       [{Cyfr.PlantedSanctumReach, binary}] =
         Code.compile_string(~S'''

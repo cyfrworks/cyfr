@@ -222,6 +222,9 @@ defmodule Crucible do
   A child admitted for the runner that runs its parent: what
   `Crucible.Dispatch.claim/4` answers, with `:input`, the input the
   child was admitted with, which its assignment's `input_digest` binds.
+  Its `secrets` are what its edge discloses, disclosed fields and
+  provided values only: an attach-only or instance entry bound to it is
+  attached by CYFR to the requests it names a connection on.
   """
   @type admitted_child :: %{
           assignment: Prima.Assignment.token(),

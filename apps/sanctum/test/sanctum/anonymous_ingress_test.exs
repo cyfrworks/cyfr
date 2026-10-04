@@ -4,6 +4,10 @@
 defmodule Sanctum.AnonymousIngressTest do
   use ExUnit.Case, async: false
 
+  # What a dispense is made for, as an attempt names it. An anonymous
+  # caller is refused before any binding lifetime is read.
+  @dispense %{root_execution_id: "exec_reader_test", profile_id: nil, consent_id: nil}
+
   alias Sanctum.Context
 
   setup tags do
@@ -36,7 +40,9 @@ defmodule Sanctum.AnonymousIngressTest do
         projection: %{fields: [], scopes: []}
       }
 
-      assert {:error, reason} = Sanctum.VaultReader.oauth_token(anon, resource, "google")
+      assert {:error, reason} =
+               Sanctum.VaultReader.oauth_token(anon, resource, "google", @dispense)
+
       assert reason == :anonymous_denied or match?({:anonymous_denied, _}, reason)
     end
 

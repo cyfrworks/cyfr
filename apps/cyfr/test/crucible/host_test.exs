@@ -838,27 +838,11 @@ defmodule Crucible.HostTest do
 
   describe "an attached request" do
     @tag :capture_log
-    test "is not built: refused before admission naming its call id, with nothing emitted" do
+    test "a connection the node's edge does not bind is refused before admission, naming its call id" do
       [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
       fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
       %{"v" => 1, "op" => "attached_fetch", "args" => args} = Jason.decode!(vector["body"])
       body = :attached_fetch |> WorkerWire.request_body(args) |> Jason.encode!()
-
-      answer =
-        fixture |> AttemptFixtures.header(body) |> Crucible.Host.call(body) |> Jason.decode!()
-
-      assert answer == %{
-               "v" => 1,
-               "error" => "guest_error",
-               "type" => "attach_unavailable",
-               "message" => "Attached requests are not built yet.",
-               "call_id" => args["call_id"]
-             }
-
-      [listed] = Enum.filter(vector["refusals"], &(&1["answer"] =~ "attach_unavailable"))
-      assert Jason.decode!(listed["answer"]) == answer
-
-      {:ok, request} = Prima.AttachedRequest.read(args)
       test_pid = self()
 
       emit = fn frame ->
@@ -866,12 +850,84 @@ defmodule Crucible.HostTest do
         :ok
       end
 
-      assert Crucible.Host.attached_fetch(%{}, request, emit) ==
-               {:error,
-                {:guest_error, "attach_unavailable", "Attached requests are not built yet."}}
+      answer =
+        fixture |> AttemptFixtures.header(body) |> Crucible.Host.call(body) |> Jason.decode!()
+
+      assert answer == %{
+               "v" => 1,
+               "error" => "guest_error",
+               "type" => "connection_not_granted",
+               "message" => Prima.Refusal.message(:connection_not_granted),
+               "call_id" => args["call_id"]
+             }
+
+      # The vector's refusal is the one the host answers, and no attached
+      # request is refused as anything not yet built.
+      [listed] = Enum.filter(vector["refusals"], &(&1["answer"] =~ "connection_not_granted"))
+      assert Jason.decode!(listed["answer"]) == answer
+      refute Enum.any?(vector["refusals"], &(&1["answer"] =~ "attach_unavailable"))
+
+      {:ok, request} = Prima.AttachedRequest.read(args)
+      caller = AttemptFixtures.caller(fixture)
+
+      assert {:error, {:guest_error, "connection_not_granted", _sentence}} =
+               Crucible.Host.attached_fetch(caller, request, emit)
 
       refute_received {:frame, _}
       assert row(fixture).status == "running"
+
+      # Each refusal is a recorded denial of the attempt's component, naming
+      # no URL.
+      {:ok, rows} = Arca.PolicyLog.list(athanor_id: fixture.athanor_id, limit: 100)
+      denials = Enum.filter(rows, &(&1.component_ref == fixture.component_ref))
+      assert [_, _] = denials
+
+      for denial <- denials do
+        assert denial.decision == "denied"
+        assert denial.decision_reason =~ "attached: "
+        refute denial.decision_reason =~ args["url"]
+      end
+    end
+
+    @tag :capture_log
+    test "a request-supplied policy or provenance fact does not read, and another member's is lost" do
+      [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+      %{"args" => args} = Jason.decode!(vector["body"])
+
+      # What decides is host state; a request naming a policy, a digest or
+      # a node of its own is no attached request.
+      for {member, value} <- [
+            {"component_policy", "any"},
+            {"activation_digest", "sha256:seed-openai"},
+            {"node_ref", "catalyst:local.openai:1.4.0"}
+          ] do
+        body =
+          :attached_fetch
+          |> WorkerWire.request_body(Map.put(args, member, value))
+          |> Jason.encode!()
+
+        assert %{"error" => "guest_error", "type" => "invalid_request", "call_id" => id} =
+                 fixture
+                 |> AttemptFixtures.header(body)
+                 |> Crucible.Host.call(body)
+                 |> Jason.decode!()
+
+        assert id == args["call_id"]
+      end
+
+      # A control plane that is not the member the call is addressed to
+      # answers it as every host call: lost, with nothing decided.
+      body = :attached_fetch |> WorkerWire.request_body(args) |> Jason.encode!()
+
+      assert %{"v" => 1, "error" => "lost"} =
+               fixture
+               |> AttemptFixtures.header(body, member: "cyfr@10.0.0.9#boot_another")
+               |> Crucible.Host.call(body)
+               |> Jason.decode!()
+
+      {:ok, rows} = Arca.PolicyLog.list(athanor_id: fixture.athanor_id, limit: 100)
+      assert Enum.filter(rows, &(&1.component_ref == fixture.component_ref)) == []
     end
 
     @tag :capture_log

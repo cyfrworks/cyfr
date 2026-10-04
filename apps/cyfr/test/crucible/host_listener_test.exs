@@ -229,6 +229,31 @@ defmodule Crucible.HostListenerTest do
       assert {200, %{"ok" => _}} = attach(url, fixture)
     end
 
+    # An admitted attached request's frames stream as a chunked answer
+    # (`Crucible.Host.AttachedFetchTest`, against a loopback upstream);
+    # one refused before its admission is an ordinary sealed answer.
+    @tag :capture_log
+    test "an attached request refused before admission is one sealed answer naming its call id",
+         %{url: url} do
+      [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
+      %{"args" => args} = Jason.decode!(vector["body"])
+
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      assert {200, answer} = call(url, fixture, "attached_fetch", args)
+
+      assert answer == %{
+               "v" => 1,
+               "error" => "guest_error",
+               "type" => "connection_not_granted",
+               "message" => Prima.Refusal.message(:connection_not_granted),
+               "call_id" => args["call_id"]
+             }
+
+      assert row(fixture).status == "running"
+    end
+
     test "a report lapses the reporting service's attempts", %{url: url} do
       fixture =
         AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)

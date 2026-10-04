@@ -202,13 +202,16 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:audit],
       note:
         "a vault field of the consented projection handed to a runner at the attach that " <>
-          "claimed its attempt, by name, once per field and attempt"
+          "claimed its attempt, by name, once per field and attempt; or a field CYFR " <>
+          "attached to a request bound for its destination, by name, connection and " <>
+          "scheme://host:port, once per attached request"
     },
     [:cyfr, :opus, :secret, :denied] => %{
       consumers: [:audit],
       note:
-        "a runner reported its guest refused a vault field outside its projection, by the " <>
-          "name the guest asked for, attributed to the attempt whose call key signed the report"
+        "a runner reported its guest refused a vault field outside its projection, or an " <>
+          "attach-only field it may not read (reason disclosure_refused), by the name the " <>
+          "guest asked for, attributed to the attempt whose call key signed the report"
     },
 
     # ——— key rotation ———

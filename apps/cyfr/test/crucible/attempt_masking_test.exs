@@ -236,6 +236,89 @@ defmodule Crucible.AttemptMaskingTest do
     refute_unmasked(log)
   end
 
+  test "a value attached to a request masks every later event and failure, and shows nowhere",
+       %{ctx: ctx, fixture: fixture, id: id} do
+    attached = "sk-attached-by-cyfr-42"
+    caller = AttemptFixtures.caller(fixture)
+
+    assert :ok = Crucible.Attempt.call(fixture.execution_id, caller, {:attached, attached})
+
+    emit!(fixture, %{"type" => "note", "text" => "the upstream said " <> attached})
+    assert %{"ok" => message} = fail(fixture, "failed with #{attached}")
+    assert message == "failed with #{@redacted}"
+    assert {:error, ^message} = Dispatch.await(fixture.pid, fixture.close)
+
+    live = live_events()
+    assert Enum.map(emitted(live), & &1["text"]) == ["the upstream said #{@redacted}"]
+    refute inspect(live) =~ attached
+    refute inspect(event_rows(ctx, id)) =~ attached
+    refute inspect(Arca.Repo.get!(Arca.Schemas.Execution, id)) =~ attached
+  end
+
+  test "its status shows no value attached to a request", %{fixture: fixture} do
+    attached = "sk-attached-by-cyfr-43"
+    caller = AttemptFixtures.caller(fixture)
+    assert :ok = Crucible.Attempt.call(fixture.execution_id, caller, {:attached, attached})
+
+    status = :sys.get_status(fixture.pid)
+    refute inspect(status, limit: :infinity, printable_limit: :infinity) =~ attached
+    assert :binary.match(:erlang.term_to_binary(status), attached) == :nomatch
+  end
+
+  describe "what attach hands over" do
+    test "an attach-only entry discloses nothing, and the run goes on" do
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          vault: %{kind: "api_key", fields: %{"KEY" => "sk-attach-only"}, disclose: false}
+        )
+
+      assert fixture.secrets == %{}
+      assert Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id).status == "running"
+      assert Process.alive?(fixture.pid)
+    end
+
+    test "a provided value is handed over, and an instance entry is not" do
+      ctx = Sanctum.TestContext.local(:api)
+
+      {pinned, _entry} =
+        AttemptFixtures.vault_authority!(ctx, %{kind: "api_key", fields: %{"KEY" => "k"}})
+
+      {:ok, destination} = Prima.Destination.from_map(%{"hosts" => ["db.example"]})
+      rule = %{in: "header", name: "apikey", template: "{value}"}
+
+      provided = %{
+        pinned
+        | resources: %Prima.Authority.Blob.Edge{
+            vault: %{
+              provided: %{destination: destination, values: %{"anon_key" => "pk"}, attach: rule}
+            }
+          }
+      }
+
+      assert %{secrets: %{"anon_key" => "pk"}} =
+               AttemptFixtures.attached!(ctx: ctx, authority: provided)
+
+      instance = %{
+        pinned
+        | resources: %Prima.Authority.Blob.Edge{
+            vault: %{
+              entry_id: "ine_not_disclosed",
+              binding_digest: "sha256:instance",
+              scope: "instance",
+              binding_key: "catalyst:local.attempt-fixture|@ingress|default",
+              destination: destination,
+              attach: rule,
+              projection: %{fields: ["API_KEY"], scopes: []}
+            }
+          }
+      }
+
+      assert %{secrets: secrets} = AttemptFixtures.attached!(ctx: ctx, authority: instance)
+      assert secrets == %{}
+    end
+  end
+
   # ---------------------------------------------------------------------------
 
   # An attempt whose edge binds a vault entry holding the field and an OAuth

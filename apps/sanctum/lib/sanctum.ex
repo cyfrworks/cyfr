@@ -34,6 +34,7 @@ defmodule Sanctum do
     exports: [
       ApiKey,
       Atoms,
+      Attach,
       Auth,
       Auth.CyfrDoor,
       Auth.DeviceFlow,

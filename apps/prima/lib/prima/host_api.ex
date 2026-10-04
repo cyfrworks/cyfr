@@ -214,11 +214,12 @@ defmodule Prima.HostAPI do
 
   @typedoc """
   How an attached request is refused before its admission boundary: a
-  guest error whose type is the reason (a credential refusal of
-  `Prima.Refusal.credential_reasons/0`, `invalid_request`, or the
-  development refusal `attach_unavailable`, which answers every attached
-  request until attaching is built). On the wire it names the request's
-  `call_id`.
+  guest error whose type is the reason. That is a credential refusal of
+  `Prima.Refusal.credential_reasons/0`, `invalid_request`, an egress
+  refusal a guest's own fetch would get (`method_blocked`,
+  `scheme_blocked`, `domain_blocked`, `private_ip_blocked`, `dns_error`),
+  `rate_limited`, or `request_too_large` for a request past the grant's
+  `max_request_size`. On the wire it names the request's `call_id`.
   """
   @type attached_refusal :: {:guest_error, type :: String.t(), message :: String.t()}
 

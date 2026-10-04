@@ -895,8 +895,14 @@ defmodule Sanctum.Consent.FlowTest do
       # attach's read answers exactly those fields.
       assert auth.resources.vault.projection.fields == ["anon_key", "url"]
 
+      use = %{
+        root_execution_id: "exec_flow",
+        profile_id: auth.profile_id,
+        consent_id: auth.consent_id
+      }
+
       assert {:ok, %{"url" => "https://db.example", "anon_key" => "anon"}} =
-               Sanctum.VaultReader.fetch(ctx, auth.resources.vault)
+               Sanctum.VaultReader.fetch(ctx, auth.resources.vault, use)
     end
 
     test "the preview names the fields the edge projects", %{ctx: ctx} do

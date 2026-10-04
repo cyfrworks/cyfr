@@ -360,7 +360,12 @@ defmodule Cyfr.Test.AttemptFixtures do
   consent fixture's destination (`Sanctum.Test.ConsentFixtures`), unless
   `attrs` name `:disclose` and `:destination`; the bound resource carries
   the entry's scope, destination and the binding's key, as a consent's
-  does. Answers the authority and the entry.
+  does. The head is a revision written through
+  `Arca.ConsentStorage.insert_revision/4` with the binding's
+  `consent_vault_refs` row at its key, `standing` unless `attrs` name a
+  `:lifetime` (`:once`, or `{:until, %DateTime{}}`), so a use is held to
+  that row as a committed consent's is. Answers the authority and the
+  entry.
   """
   @spec vault_authority!(Sanctum.Context.t(), map(), Authority.t()) ::
           {Authority.t(), Arca.Schemas.VaultEntry.t()}
@@ -371,6 +376,7 @@ defmodule Cyfr.Test.AttemptFixtures do
     # provider it dispenses for: `google`, as the fixtures' dispenses ask,
     # whose preset holds its endpoints, when the attrs name none.
     {explicit, attrs} = Map.pop(attrs, :projection, :derived)
+    {lifetime, attrs} = Map.pop(attrs, :lifetime, :standing)
 
     attrs =
       if Map.get(attrs, :kind) == "oauth",
@@ -411,16 +417,27 @@ defmodule Cyfr.Test.AttemptFixtures do
 
     {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
     {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
-    consent_id = Prima.UUID7.generate_id("cons")
+    source = "catalyst:local.attempt-fixture"
+
+    binding_key =
+      Prima.Authority.Blob.binding_key(source, Prima.Authority.Blob.ingress_key(), nil)
 
     {:ok, profile} =
       Arca.ProfileStorage.put(%{
         athanor_id: ctx.athanor_id,
-        source_ref: "catalyst:local.attempt-fixture",
+        source_ref: source,
         kind: "owner",
         label: "fixture-#{System.unique_integer([:positive])}",
-        status: "active",
-        head_consent_id: consent_id
+        status: "active"
+      })
+
+    consent_id =
+      head!(ctx, profile.id, source, %{
+        binding_key: binding_key,
+        scope: "athanor",
+        vault_entry_id: entry.id,
+        binding_digest: digest,
+        lifetime: lifetime
       })
 
     {:ok, destination} = entry.destination |> Jason.decode!() |> Prima.Destination.from_map()
@@ -429,12 +446,7 @@ defmodule Cyfr.Test.AttemptFixtures do
       entry_id: entry.id,
       binding_digest: digest,
       scope: "athanor",
-      binding_key:
-        Prima.Authority.Blob.binding_key(
-          "catalyst:local.attempt-fixture",
-          Prima.Authority.Blob.ingress_key(),
-          nil
-        ),
+      binding_key: binding_key,
       destination: destination,
       attach: nil,
       projection: projection
@@ -446,5 +458,43 @@ defmodule Cyfr.Test.AttemptFixtures do
          consent_id: consent_id,
          resources: %Edge{vault: vault}
      }, entry}
+  end
+
+  # The profile's first revision, holding the one binding `ref` names with
+  # its lifetime, written as a commit writes one; answers its id.
+  defp head!(ctx, profile_id, source, ref) do
+    policy = "{}"
+    {lifetime, ref} = Map.pop(ref, :lifetime)
+
+    ref =
+      case lifetime do
+        :standing -> Map.put(ref, :lifetime_kind, "standing")
+        :once -> Map.put(ref, :lifetime_kind, "once")
+        {:until, %DateTime{} = at} -> Map.merge(ref, %{lifetime_kind: "until", expires_at: at})
+      end
+
+    {:ok, consent} =
+      Arca.ConsentStorage.insert_revision(
+        %{
+          athanor_id: ctx.athanor_id,
+          profile_id: profile_id,
+          revision: 1,
+          scope: "versionless",
+          pinned_version: "",
+          invoke_mode: "open_inert",
+          shape_digest: "sha256:shape-#{profile_id}",
+          commit_digest: "sha256:commit-#{profile_id}",
+          blob_digest: Prima.JCS.hash_binary(policy),
+          resolved_policy: policy,
+          activation: Jason.encode!(%{source => "sha256:act"}),
+          admitted_origins: [:interactive],
+          granted_by: "system:fixture",
+          granted_via: "bootstrap"
+        },
+        [ref],
+        nil
+      )
+
+    consent.id
   end
 end

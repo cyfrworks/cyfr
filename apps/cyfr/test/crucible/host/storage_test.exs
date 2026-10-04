@@ -438,5 +438,46 @@ defmodule Crucible.Host.StorageTest do
       assert %{"error" => "lost"} =
                AttemptFixtures.call(fixture, "record_denial", %{"type" => "domain_blocked"})
     end
+
+    test "a disclosure refusal is audited by field and reason, apart from a secret denial" do
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+      test = self()
+      handler = "storage-denied-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:cyfr, :opus, :secret, :denied],
+        fn _event, _measurements, metadata, _config -> send(test, {:denied, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      for type <- ["disclosure_refused", "secret_denied"] do
+        assert %{"ok" => true} =
+                 AttemptFixtures.call(fixture, "record_denial", %{
+                   "type" => type,
+                   "message" => "API_KEY"
+                 })
+      end
+
+      assert_received {:denied, %{field: "API_KEY", reason: "disclosure_refused"} = refused}
+      assert refused.execution_id == fixture.execution_id
+      assert_received {:denied, secret}
+      assert secret.field == "API_KEY" and not Map.has_key?(secret, :reason)
+
+      # The same field-name bound as a secret denial: a name that is no
+      # field name is lost and audits nothing.
+      for name <- ["", String.duplicate("f", 257), "bad\nname"] do
+        assert %{"error" => "lost"} =
+                 AttemptFixtures.call(fixture, "record_denial", %{
+                   "type" => "disclosure_refused",
+                   "message" => name
+                 })
+      end
+
+      refute_received {:denied, _}
+      assert rows(fixture) == []
+    end
   end
 end

@@ -10,7 +10,8 @@ defmodule Prima.SecretMasker do
   with `[REDACTED]` before the output is recorded.
 
   Each secret is searched in its raw form and, for a secret of four or more
-  characters, as base64, url-safe base64, lower- and upper-case hex, JSON
+  characters, as base64 and url-safe base64 (each with its padding and
+  without it), lower- and upper-case hex, JSON
   string content (as Jason writes it, without the quotes) and URL encoding
   (both `application/x-www-form-urlencoded` and percent-encoding of every
   character outside the unreserved set). A shorter secret is searched raw only: its encodings
@@ -60,6 +61,22 @@ defmodule Prima.SecretMasker do
   end
 
   @doc """
+  Every form `mask/2` replaces for `secret_values`: each usable secret raw
+  and, for one of four or more characters, its encodings listed above,
+  deduplicated and longest first. A caller that must find a secret where
+  it cannot replace it (a header's name, which is dropped rather than
+  rewritten) matches these, and keeps no list of encodings of its own.
+
+      iex> "c2stc2VjcmV0" in Prima.SecretMasker.forms(["sk-secret"])
+      true
+
+      iex> Prima.SecretMasker.forms(["abc"])
+      ["abc"]
+  """
+  @spec forms([String.t()]) :: [String.t()]
+  def forms(secret_values), do: search_forms(secret_values)
+
+  @doc """
   How many bytes at the end of `text` could begin a form `mask/2` replaces
   without completing it: the longest tail of `text` that is a proper prefix
   of one. A stream that holds those bytes back until more text arrives never
@@ -96,7 +113,7 @@ defmodule Prima.SecretMasker do
   defp search_forms(secret_values) do
     secret_values
     |> usable_secrets()
-    |> Enum.flat_map(&forms/1)
+    |> Enum.flat_map(&forms_of/1)
     |> Enum.uniq()
     |> Enum.sort_by(&byte_size/1, :desc)
   end
@@ -152,12 +169,14 @@ defmodule Prima.SecretMasker do
   # A secret and, for one of four or more characters, its encodings; a
   # shorter secret's encodings match too much unrelated text. Every encoding
   # of a four-character secret is at least four characters long.
-  defp forms(secret) do
+  defp forms_of(secret) do
     if String.length(secret) >= 4 do
       [
         secret,
         Base.encode64(secret),
+        Base.encode64(secret, padding: false),
         Base.url_encode64(secret),
+        Base.url_encode64(secret, padding: false),
         Base.encode16(secret, case: :lower),
         Base.encode16(secret, case: :upper)
         | json_escaped(secret) ++ url_encoded(secret)

@@ -133,9 +133,15 @@ defmodule Prima.Refusal do
     "connection_not_granted" => :setup_required,
     "connection_cap" => :rate_limited,
     "grant_expired" => :consent_required,
-    # The development host's answer to every attached request, before
-    # attaching is built.
-    "attach_unavailable" => :unavailable
+    # An attached request's egress refusals, by the type a guest's own
+    # fetch is refused with, and the rate and size it is charged against.
+    "method_blocked" => :forbidden,
+    "scheme_blocked" => :forbidden,
+    "domain_blocked" => :forbidden,
+    "private_ip_blocked" => :forbidden,
+    "dns_error" => :unavailable,
+    "rate_limited" => :rate_limited,
+    "request_too_large" => :invalid_argument
   }
 
   # The credential refusals, each with its class and its fixed sentence:
@@ -465,11 +471,6 @@ defmodule Prima.Refusal do
 
   # A store or a check that could not answer, where nothing was done.
   defp row(:unavailable), do: {:unavailable, "The service could not answer — retry shortly"}
-
-  # Attaching a credential to a request is not built in this release, so
-  # every attached request is refused before it is admitted; asking again
-  # changes nothing, and the sentence says so rather than "retry".
-  defp row(:attach_unavailable), do: {:unavailable, "Attached requests are not built yet."}
 
   # The row is committed. The unit is published; only the move of its
   # objects to where readers read did not finish, and the storage sweep

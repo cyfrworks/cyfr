@@ -12,6 +12,10 @@ defmodule Crucible.CredentialedIngressGateTest do
 
   use ExUnit.Case, async: false
 
+  # What a dispense is made for, as an attempt names it. These resources
+  # carry no binding key, so no binding lifetime is read for them.
+  @dispense %{root_execution_id: "exec_reader_test", profile_id: nil, consent_id: nil}
+
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.CipherAAD
@@ -114,22 +118,30 @@ defmodule Crucible.CredentialedIngressGateTest do
 
       # With it: exactly the granted fields, and only through the reader.
       assert {:ok, %{"api_key" => "sk-operator-only"}} =
-               VaultReader.fetch(ctx, %{
-                 entry_id: entry.id,
-                 binding_digest: digest,
-                 projection: %{fields: ["api_key"], scopes: []}
-               })
+               VaultReader.fetch(
+                 ctx,
+                 %{
+                   entry_id: entry.id,
+                   binding_digest: digest,
+                   projection: %{fields: ["api_key"], scopes: []}
+                 },
+                 @dispense
+               )
     end
 
     test "an anonymous caller is refused even holding a valid edge", %{ctx: ctx} do
       {entry, digest} = seeded_entry(ctx)
 
       assert {:error, :anonymous_denied} =
-               VaultReader.fetch(%{ctx | anonymous: true}, %{
-                 entry_id: entry.id,
-                 binding_digest: digest,
-                 projection: %{fields: ["api_key"], scopes: []}
-               })
+               VaultReader.fetch(
+                 %{ctx | anonymous: true},
+                 %{
+                   entry_id: entry.id,
+                   binding_digest: digest,
+                   projection: %{fields: ["api_key"], scopes: []}
+                 },
+                 @dispense
+               )
     end
   end
 

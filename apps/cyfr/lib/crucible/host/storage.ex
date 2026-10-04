@@ -30,13 +30,16 @@ defmodule Crucible.Host.Storage do
   own component; any other digest, and bytes the store does not hold or
   that do not match it, are `not_found`. `record_denial` records a
   policy-driven egress denial of the attempt's component
-  (`Sanctum.Policy.Enforcement.record/1`), audits a `secret_denied` one as
-  `[:cyfr, :opus, :secret, :denied]` with the field name its guest asked
-  for, and ignores any other refusal type. A denial is attributed to the
-  attempt the call was checked against, under the identity it was
-  admitted with, whatever the runner sent; a `secret_denied` whose name is
-  no field name (`Prima.HostAPI.valid_field_name?/1`) is `lost` and
-  audits nothing.
+  (`Sanctum.Policy.Enforcement.record/1`), audits a field denial
+  (`Prima.HostAPI.field_denials/0`) as `[:cyfr, :opus, :secret, :denied]`
+  with the field name its guest asked for — a `secret_denied` one, a field
+  outside its projection, as it always was, and a `disclosure_refused`
+  one, a field of an entry CYFR attaches and never discloses, with its
+  `reason` beside the field so the two stay apart — and ignores any other
+  refusal type. A denial is attributed to the attempt the call was checked
+  against, under the identity it was admitted with, whatever the runner
+  sent; a field denial whose name is no field name
+  (`Prima.HostAPI.valid_field_name?/1`) is `lost` and audits nothing.
   """
 
   require Logger
@@ -67,6 +70,10 @@ defmodule Crucible.Host.Storage do
   # A denial's message is the runner's sentence, kept to this many
   # characters.
   @message_max 1_024
+
+  # The denial types whose message is a vault field name, held to the
+  # field-name bound.
+  @field_denials Prima.HostAPI.field_denials()
 
   @typedoc "An operation of this module, read from a host call's arguments."
   @type op ::
@@ -107,9 +114,10 @@ defmodule Crucible.Host.Storage do
   def operation("fetch_artifact", %{"digest" => digest}) when is_binary(digest),
     do: {:ok, {:fetch_artifact, digest}}
 
-  def operation("record_denial", %{"type" => "secret_denied", "message" => name}) do
+  def operation("record_denial", %{"type" => type, "message" => name})
+      when type in @field_denials do
     if Prima.HostAPI.valid_field_name?(name),
-      do: {:ok, {:record_denial, %{type: "secret_denied", message: name}}},
+      do: {:ok, {:record_denial, %{type: type, message: name}}},
       else: {:error, :lost}
   end
 
@@ -161,6 +169,14 @@ defmodule Crucible.Host.Storage do
       [:cyfr, :opus, :secret, :denied],
       %{system_time: System.system_time()},
       Map.put(attempt.audit, :field, name)
+    )
+  end
+
+  def run({:record_denial, %{type: "disclosure_refused", message: name}}, attempt) do
+    :telemetry.execute(
+      [:cyfr, :opus, :secret, :denied],
+      %{system_time: System.system_time()},
+      Map.merge(attempt.audit, %{field: name, reason: "disclosure_refused"})
     )
   end
 

@@ -41,6 +41,12 @@ defmodule Prima.HostAPITest do
   @call_fields ~w(athanor_id execution_id attempt fence generation service boot runner member ts nonce)a
   @dispatch_fields ~w(service boot ts nonce)a
 
+  # The refusals of an attached request beside the credential ones
+  # (`t:Prima.HostAPI.attached_refusal/0`): a request that does not read,
+  # an egress refusal a guest's own fetch would get, its rate and its size.
+  @attached_guest_types ~w(invalid_request method_blocked scheme_blocked domain_blocked
+                           private_ip_blocked dns_error rate_limited request_too_large)
+
   defp root, do: Base.decode16!(@vectors["keys"]["root_hex"], case: :lower)
   defp atoms(wire, names), do: Map.new(names, &{&1, Map.fetch!(wire, Atom.to_string(&1))})
   defp standing(wire), do: %{generation: wire["generation"], member: wire["member"]}
@@ -444,26 +450,35 @@ defmodule Prima.HostAPITest do
 
           assert id == args["call_id"] and refusal["call_id"] == id
 
-          reason = String.to_existing_atom(type)
+          credential = Enum.find(Refusal.credential_reasons(), &(Atom.to_string(&1) == type))
 
-          assert reason in Refusal.credential_reasons() or reason == :attach_unavailable
-          assert message == Refusal.message(reason)
+          # A credential refusal reads as its fixed sentence; an egress,
+          # rate or size refusal as the sentence a guest's own fetch is
+          # refused with, naming the host and never the URL.
+          if credential do
+            assert message == Refusal.message(credential)
+          else
+            assert type in @attached_guest_types
+            refute message =~ args["url"]
+            assert Refusal.classify({:guest_error, type, message}).class != :internal
+          end
 
           type
         end
 
       assert types ==
                ~w(credential_header_refused connection_not_granted destination_mismatch
-                  connection_cap component_not_admitted attach_unavailable)
+                  connection_cap component_not_admitted domain_blocked)
 
-      assert [unavailable] =
-               Enum.filter(call["refusals"], &(&1["answer"] =~ "attach_unavailable"))
+      refute Enum.any?(call["refusals"], &(&1["answer"] =~ "attach_unavailable"))
 
-      assert Jason.decode!(unavailable["answer"]) == %{
+      assert [egress] = Enum.filter(call["refusals"], &(&1["answer"] =~ "domain_blocked"))
+
+      assert Jason.decode!(egress["answer"]) == %{
                "v" => 1,
                "error" => "guest_error",
-               "type" => "attach_unavailable",
-               "message" => "Attached requests are not built yet.",
+               "type" => "domain_blocked",
+               "message" => "HTTP egress refused: api.example.com is not in the egress domains",
                "call_id" => args["call_id"]
              }
     end

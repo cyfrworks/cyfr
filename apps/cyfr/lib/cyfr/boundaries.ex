@@ -376,10 +376,10 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
-        Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Egress
-        Sanctum.ExecutionStanding Sanctum.Grimoire Sanctum.InstanceEntries Sanctum.Network
-        Sanctum.Policy Sanctum.Session
+        Sanctum Sanctum.Atoms Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller
+        Sanctum.Carry Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door
+        Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Grimoire Sanctum.InstanceEntries
+        Sanctum.Network Sanctum.Policy Sanctum.Session
         Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.VaultReader
       ),
@@ -407,6 +407,9 @@ defmodule Cyfr.Boundaries do
           "person's expired sign-in carries (`sweep/1`), which names no store. " <>
           "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
           "instance-entry usage days (`sweep_usage/0`), which names no entry and no person. " <>
+          "`Sanctum.Attach` is `Crucible.Host.AttachedFetch`'s one resolution of the value " <>
+          "an attached request carries (`resolve/5`): the vault decides, and the control " <>
+          "plane attaches and performs. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -1270,6 +1273,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
     "Sanctum.Atoms" => [known_permissions: 0],
+    "Sanctum.Attach" => [resolve: 5],
     "Sanctum.Auth" => [provider: 0],
     "Sanctum.Auth.CyfrDoor" => [
       callback: 2,
@@ -1416,8 +1420,8 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Vault" => [destination_matches?: 3, disclosed?: 2],
     "Sanctum.Vault.OAuthGrant" => [complete: 3, redirect_uri: 0],
     "Sanctum.VaultReader" => [
-      fetch: 2,
-      oauth_token: 3,
+      fetch: 3,
+      oauth_token: 4,
       revisions: 2,
       unseal_disclosed: 2,
       unseal_for: 3,

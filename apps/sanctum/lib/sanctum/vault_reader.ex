@@ -24,9 +24,14 @@ defmodule Sanctum.VaultReader do
   5. the entry is disclosed: an attach-only entry's material is never
      handed to a component, so a field read or a token dispense of one is
      refused `:disclosure_refused` before anything is unsealed
-  6. the payload unseals under the entry's AEAD (a tampered pointer fails
+  6. the binding is still live for its use: a resource carrying a
+     `binding_key` is held to its `consent_vault_refs` row's lifetime
+     (`Sanctum.Attach.lifetime/3`), so an expired `until` is
+     `:grant_expired` and a `once` is consumed by its first dispense under
+     a root, before anything is unsealed
+  7. the payload unseals under the entry's AEAD (a tampered pointer fails
      decrypt)
-  7. every projected field is present in the entry's material, and
+  8. every projected field is present in the entry's material, and
      nothing outside `projection.fields` leaves this module: a field the
      entry lacks refuses the whole resolution, never a partial projection
 
@@ -55,10 +60,26 @@ defmodule Sanctum.VaultReader do
   alias Sanctum.Context
   alias Prima.JCS
 
+  # An edge's vault resource as the authority carries it. The reader reads
+  # these keys; `fetch/3` and `oauth_token/4` hand the whole resource to
+  # `Sanctum.Attach.lifetime/3`, which reads its binding key and lender; the
+  # rest (the attach rule, the scope) is its caller's.
   @type vault_resource :: %{
           required(:entry_id) => String.t(),
           required(:binding_digest) => String.t(),
-          optional(:projection) => %{fields: [String.t()], scopes: [String.t()]} | nil
+          optional(:projection) => %{fields: [String.t()], scopes: [String.t()]} | nil,
+          optional(atom()) => term()
+        }
+
+  @typedoc """
+  What a dispense is made for, taken from the attempt that asks, never
+  from a guest's request: the root execution a `once` binding is consumed
+  by, and the profile and consent the run is pinned to.
+  """
+  @type use :: %{
+          required(:root_execution_id) => String.t() | nil,
+          required(:profile_id) => String.t() | nil,
+          required(:consent_id) => String.t() | nil
         }
 
   @typedoc """
@@ -86,28 +107,35 @@ defmodule Sanctum.VaultReader do
           | term()
 
   @doc """
-  Resolve the entry's secret material as a name → value map, projected.
+  Resolve the entry's secret material as a name → value map, projected,
+  for `use` (`t:use/0`).
 
   The edge's `projection.fields` is required: an edge without a non-empty
   field list answers `{:error, :corrupt}` before the entry is read, and a
   projected field the entry's material lacks answers
   `{:error, {:missing_field, name}}`. An attach-only entry answers
-  `{:error, :disclosure_refused}` before it is unsealed. Either way
-  nothing is dispensed.
+  `{:error, :disclosure_refused}` before it is unsealed. A resource
+  carrying a `binding_key` is then held to its binding's lifetime under
+  `use` (`Sanctum.Attach.lifetime/3`): an expired one, or a `once` another
+  root consumed, answers `{:error, :grant_expired}` before it is
+  unsealed, and a `once` is consumed by this dispense. Either way nothing
+  is dispensed.
   """
-  @spec fetch(Context.t(), vault_resource()) ::
+  @spec fetch(Context.t(), vault_resource(), use()) ::
           {:ok, %{String.t() => String.t()}} | {:error, error()}
-  def fetch(%Context{anonymous: true}, _resource), do: {:error, :anonymous_denied}
+  def fetch(%Context{anonymous: true}, _resource, _use), do: {:error, :anonymous_denied}
 
-  def fetch(%Context{} = ctx, resource) do
+  def fetch(%Context{} = ctx, resource, %{} = use) do
     with {:ok, fields} <- projection_fields(resource),
-         {:ok, entry, payload} <- load_and_unseal(ctx, resource) do
+         {:ok, entry, payload} <-
+           load_and_unseal(ctx, resource, &disclosed_use(ctx, &1, resource, use)) do
       resolve_secrets(ctx, entry, payload, fields)
     end
   end
 
   @doc """
-  Resolve an OAuth access token for `provider` from the entry.
+  Resolve an OAuth access token for `provider` from the entry, for `use`
+  (`t:use/0`).
 
   The edge's projection is its `scopes`: an edge naming none is corrupt
   (`{:error, :corrupt}`) unless it names fields, which makes it a key or
@@ -120,19 +148,36 @@ defmodule Sanctum.VaultReader do
   and fewer than it holds are dispensed only where its provider
   attenuates a refresh (`:scope_not_attenuable` otherwise). A token is
   dispensed only from a disclosed entry: an attach-only one answers
-  `{:error, :disclosure_refused}` before it is unsealed.
+  `{:error, :disclosure_refused}` before it is unsealed. The binding's
+  lifetime is held as `fetch/3` holds it, after every other check, so a
+  `once` is consumed only by a dispense that is made.
   """
-  @spec oauth_token(Context.t(), vault_resource(), String.t()) ::
+  @spec oauth_token(Context.t(), vault_resource(), String.t(), use()) ::
           {:ok, String.t()} | {:error, error()}
-  def oauth_token(%Context{anonymous: true}, _resource, provider) when is_binary(provider),
+  def oauth_token(%Context{anonymous: true}, _resource, provider, _use) when is_binary(provider),
     do: {:error, :anonymous_denied}
 
-  def oauth_token(%Context{} = ctx, resource, provider) when is_binary(provider) do
+  def oauth_token(%Context{} = ctx, resource, provider, %{} = use) when is_binary(provider) do
+    admit = fn entry ->
+      with :ok <- check_disclosed(entry),
+           :ok <- check_provider_hint(entry, provider),
+           :ok <- check_scope_projection(entry, resource) do
+        Sanctum.Attach.lifetime(ctx, resource, use)
+      end
+    end
+
     with :ok <- oauth_projection(resource),
-         {:ok, entry, payload} <- load_and_unseal(ctx, resource),
-         :ok <- check_provider_hint(entry, provider),
-         :ok <- check_scope_projection(entry, resource) do
+         {:ok, entry, payload} <- load_and_unseal(ctx, resource, admit) do
       resolve_oauth(ctx, entry, payload, resource, provider)
+    end
+  end
+
+  # A component is handed material only from a disclosed entry, and only
+  # while the binding that names it is live for this use; both are decided
+  # before the material is unsealed.
+  defp disclosed_use(ctx, entry, resource, use) do
+    with :ok <- check_disclosed(entry) do
+      Sanctum.Attach.lifetime(ctx, resource, use)
     end
   end
 
@@ -318,13 +363,25 @@ defmodule Sanctum.VaultReader do
 
   defp binding_destination(_absent), do: {:error, :invalid_binding}
 
-  defp load_and_unseal(%Context{} = ctx, %{entry_id: entry_id} = resource) do
+  @doc false
+  # The consent read of an athanor's entry `resource` binds, shared with
+  # `Sanctum.Attach`: the entry under the caller's actor, active, at the
+  # binding digest the consent approved, unsealed under its AEAD. Whether
+  # its material may leave, and to whom, is the caller's to decide first.
+  @spec load_and_unseal(Context.t(), vault_resource()) ::
+          {:ok, Arca.VaultStorage.entry(), map()} | {:error, error()}
+  def load_and_unseal(%Context{} = ctx, resource),
+    do: load_and_unseal(ctx, resource, fn _entry -> :ok end)
+
+  # `admit` decides, on the entry's metadata alone, whether its material
+  # may be unsealed for this read; nothing is unsealed when it refuses.
+  defp load_and_unseal(%Context{} = ctx, %{entry_id: entry_id} = resource, admit) do
     actor = Context.actor(ctx)
 
     with {:ok, entry} <- Arca.VaultStorage.get(actor, entry_id),
          :ok <- check_status(entry),
          :ok <- check_binding(entry, resource),
-         :ok <- check_disclosed(entry),
+         :ok <- admit.(entry),
          {:ok, payload} <- unseal_material(actor, entry) do
       Arca.VaultStorage.touch_last_used(actor, entry.id)
       {:ok, entry, payload}

@@ -667,11 +667,11 @@
           "why": "the instance entry's stored policy is shipped and the running node is no unmodified shipped component: host state, never a request member"
         },
         {
-          "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"Attached requests are not built yet.\",\"type\":\"attach_unavailable\"}",
+          "answer": "{\"v\":1,\"error\":\"guest_error\",\"call_id\":\"EBESExQVFhcYGRobHB0eHw\",\"message\":\"HTTP egress refused: api.example.com is not in the egress domains\",\"type\":\"domain_blocked\"}",
           "answer_iv_hex": "a1a2a3a4a5a6a7a8a9aaab05",
-          "answer_sealed": "oaKjpKWmp6ipqqsF5bFA_sUQm5PcHCGYNdV5jWL2EmdqYAAd4yBGsoZjY4r6LpHZxUiez3vO1WJYPzPDPr3YA2lZev28OKo8payGjkwd_Zs7DGgSk4zEzgcED-pJf4_lCy2JtnSrLumYbFFbvMiHG5ETiBNg59MIsJaG3c7EOzaIYPKDFRgzMVa_w06LYPlQOLBAYGZtamGuw22BKWbshthtxhU9cOV0gw",
+          "answer_sealed": "oaKjpKWmp6ipqqsFyOlW30GAcWYnnTmh-87ZHWL2EmdqYAAd4yBGsoZjY4r6LpHZxUiez3vO1WJYPzPDPr3YA2lZev28OKo8payGjkwd_Zs7DGgSk4zEzgcED-pJf4_lCy2JtnSrLuC4TGAYscqRXpAF2RRg8tII9ZPOmI_aPWzNeuaHCQB2ZlCkgEzOMa1HJ6FCMyosan2qgGC5Lm3-g5lgxRk-de4l3IxD-KupSx1ijh2WQTh8BUQP7xIhnRJi27Y",
           "call_id": "EBESExQVFhcYGRobHB0eHw",
-          "why": "attaching is not built yet: the development refusal answers every attached request before it is admitted"
+          "why": "the URL's host is outside the grant's egress domains: the denial a guest's own fetch would get, recorded, before the pin"
         }
       ]
     }

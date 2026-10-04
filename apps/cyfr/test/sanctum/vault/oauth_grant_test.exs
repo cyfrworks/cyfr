@@ -4,6 +4,10 @@
 defmodule Sanctum.Vault.OAuthGrantTest do
   use ExUnit.Case, async: false
 
+  # What a dispense is made for, as an attempt names it. These resources
+  # carry no binding key, so no binding lifetime is read for them.
+  @dispense %{root_execution_id: "exec_reader_test", profile_id: nil, consent_id: nil}
+
   alias Sanctum.CipherAAD
   alias Sanctum.Vault.OAuthGrant
   alias Sanctum.Vault.Payload
@@ -863,7 +867,9 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       lock = hold_refresh_lock!(ctx, entry)
 
       dispense =
-        Task.async(fn -> VaultReader.oauth_token(ctx, edge(entry, narrow), @provider) end)
+        Task.async(fn ->
+          VaultReader.oauth_token(ctx, edge(entry, narrow), @provider, @dispense)
+        end)
 
       await_waiting!(lock)
 
@@ -889,7 +895,9 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       lock = hold_refresh_lock!(ctx, entry)
 
       dispense =
-        Task.async(fn -> VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint()) end)
+        Task.async(fn ->
+          VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
+        end)
 
       await_waiting!(lock)
 
@@ -910,7 +918,9 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       lock = hold_refresh_lock!(ctx, entry)
 
       dispense =
-        Task.async(fn -> VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint()) end)
+        Task.async(fn ->
+          VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
+        end)
 
       await_waiting!(lock)
 
@@ -936,7 +946,9 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       lock = hold_refresh_lock!(ctx, entry)
 
       dispense =
-        Task.async(fn -> VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint()) end)
+        Task.async(fn ->
+          VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
+        end)
 
       await_waiting!(lock)
 
@@ -960,7 +972,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       ])
 
       assert {:error, :binding_mismatch} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint())
+               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
 
       assert_received {:token_request, %{"refresh_token" => "rt-1"}}
       assert %{"access_token" => "at-wide", "refresh_token" => "rt-2"} = bundle!(ctx, entry)
@@ -979,7 +991,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       ])
 
       assert {:error, :binding_mismatch} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint())
+               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
 
       assert %{"access_token" => "at-old", "refresh_token" => "rt-1"} = bundle!(ctx, entry)
     end
@@ -1002,7 +1014,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       ])
 
       assert {:error, :binding_mismatch} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint())
+               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
 
       assert_received {:token_request, %{"scope" => @a}}
     end
@@ -1020,7 +1032,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
           %{"access_token" => "at-refreshed", "refresh_token" => "rt-2", "expires_in" => 3600}}}
       ])
 
-      result = VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint())
+      result = VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
 
       assert_received {:token_request, %{"refresh_token" => "rt-1"}}
       refute match?({:ok, _}, result)
@@ -1046,7 +1058,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       ])
 
       assert {:error, :binding_mismatch} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint())
+               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
 
       assert_received {:token_request, %{"refresh_token" => "rt-1"}}
       assert Jason.decode!(row!(ctx, entry).oauth_scopes) == [@a]
@@ -1073,7 +1085,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       ])
 
       assert {:error, :binding_mismatch} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint())
+               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
 
       kept = bundle!(ctx, entry)
       assert kept["refresh_token"] == "rt-2"
@@ -1092,7 +1104,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       ])
 
       assert {:error, :binding_mismatch} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint())
+               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
 
       assert %{"access_token" => "at-wide", "refresh_token" => "rt-2"} = bundle!(ctx, entry)
     end
@@ -1105,7 +1117,9 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       lock = hold_refresh_lock!(ctx, entry)
 
       dispense =
-        Task.async(fn -> VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint()) end)
+        Task.async(fn ->
+          VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
+        end)
 
       await_waiting!(lock)
       :ok = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry.id, "revoked")
@@ -1133,7 +1147,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       ])
 
       assert {:error, :binding_mismatch} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint())
+               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
 
       assert_received {:rebind, {:ok, _}}
       moved = row!(ctx, entry)
@@ -1158,7 +1172,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       ])
 
       assert {:error, :binding_mismatch} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint())
+               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
 
       assert_received {:rebind, {:ok, _}}
     end
@@ -1174,7 +1188,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       ])
 
       assert {:error, {:entry_unavailable, "revoked"}} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint())
+               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
     end
   end
 

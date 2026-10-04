@@ -227,7 +227,6 @@ defmodule Prima.RefusalTest do
     {:connection_cap, :rate_limited},
     {{:connection_cap, ~U[2026-10-05 00:00:00Z]}, :rate_limited},
     {:grant_expired, :consent_required},
-    {:attach_unavailable, :unavailable},
     {"No provider found for scheme ftp", :internal}
   ]
 
@@ -262,7 +261,13 @@ defmodule Prima.RefusalTest do
     "connection_not_granted" => :setup_required,
     "connection_cap" => :rate_limited,
     "grant_expired" => :consent_required,
-    "attach_unavailable" => :unavailable
+    "method_blocked" => :forbidden,
+    "scheme_blocked" => :forbidden,
+    "domain_blocked" => :forbidden,
+    "private_ip_blocked" => :forbidden,
+    "dns_error" => :unavailable,
+    "rate_limited" => :rate_limited,
+    "request_too_large" => :invalid_argument
   }
 
   describe "the table" do
@@ -310,6 +315,12 @@ defmodule Prima.RefusalTest do
       end
 
       assert %Refusal{class: :internal} = Refusal.classify({:guest_error, "novel", "said"})
+
+      # Attaching is built: no reason or guest type stands in for it.
+      refute Refusal.reason?(:attach_unavailable)
+
+      assert %Refusal{class: :internal} =
+               Refusal.classify({:guest_error, "attach_unavailable", "said"})
     end
 
     test "the credential refusals are reasons under the closed classes, in fixed words" do

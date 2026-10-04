@@ -135,6 +135,18 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     edge.vault
   end
 
+  # What a dispense under `source_ref`'s authority is made for: the profile
+  # and consent it is pinned to, and a root of its own.
+  defp edge_use(ctx, source_ref) do
+    {:ok, authority} = Crucible.authority_for(ctx, :default, source_ref)
+
+    %{
+      root_execution_id: "exec_selection_flow",
+      profile_id: authority.profile_id,
+      consent_id: authority.consent_id
+    }
+  end
+
   test "the plan offers the dependency's bound profiles as lenders", %{ctx: ctx} do
     lenders = lenders!(ctx)
     {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.sel-source"})
@@ -641,9 +653,14 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
     rebound_vault = edge_vault(ctx, rebound_ref)
     revoked_vault = edge_vault(ctx, revoked_ref)
+    rebound_use = edge_use(ctx, rebound_ref)
+    revoked_use = edge_use(ctx, revoked_ref)
 
-    assert {:ok, %{"KEY" => "k-home key"}} = Sanctum.VaultReader.fetch(ctx, rebound_vault)
-    assert {:ok, %{"KEY" => "k-work key"}} = Sanctum.VaultReader.fetch(ctx, revoked_vault)
+    assert {:ok, %{"KEY" => "k-home key"}} =
+             Sanctum.VaultReader.fetch(ctx, rebound_vault, rebound_use)
+
+    assert {:ok, %{"KEY" => "k-work key"}} =
+             Sanctum.VaultReader.fetch(ctx, revoked_vault, revoked_use)
 
     # Rebound: the lender's head is blocked and the borrower's is not, yet
     # the borrower's use refuses at both checks: the read under what it
@@ -654,7 +671,9 @@ defmodule Sanctum.Consent.SelectionFlowTest do
                destination: %{"hosts" => ["api.example.com"], "paths" => ["/v1/"]}
              })
 
-    assert {:error, :binding_mismatch} = Sanctum.VaultReader.fetch(ctx, rebound_vault)
+    assert {:error, :binding_mismatch} =
+             Sanctum.VaultReader.fetch(ctx, rebound_vault, rebound_use)
+
     assert %{via: %{label: "default"}} = edge_vault(ctx, rebound_ref)
 
     # Revoked: both heads stand, the selection still resolves to the entry,
@@ -662,11 +681,13 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert {:ok, %{affected: [^work_lender]}} = Sanctum.Vault.revoke(ctx, work.id)
 
     assert {:error, {:entry_unavailable, "revoked"}} =
-             Sanctum.VaultReader.fetch(ctx, revoked_vault)
+             Sanctum.VaultReader.fetch(ctx, revoked_vault, revoked_use)
 
     work_id = work.id
     assert %{entry_id: ^work_id} = fresh = edge_vault(ctx, revoked_ref)
-    assert {:error, {:entry_unavailable, "revoked"}} = Sanctum.VaultReader.fetch(ctx, fresh)
+
+    assert {:error, {:entry_unavailable, "revoked"}} =
+             Sanctum.VaultReader.fetch(ctx, fresh, revoked_use)
 
     # Nothing about either was persisted on the borrowers.
     for borrower <- [rebound_borrower, revoked_borrower] do

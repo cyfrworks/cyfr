@@ -311,7 +311,7 @@ defmodule Prima.RunnerRelayTest do
       assert fields.attempt == @attempt
       assert {:ok, answer} = WorkerAuth.open_call(seal, :answer, fields, refusal.body)
 
-      assert {:error, "guest_error", %{"call_id" => call_id, "type" => "attach_unavailable"}} =
+      assert {:error, "guest_error", %{"call_id" => call_id, "type" => "destination_mismatch"}} =
                answer |> Jason.decode!() |> WorkerWire.read_answer()
 
       assert call_id == refused_fetch.call_id

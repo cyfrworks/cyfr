@@ -68,6 +68,16 @@ defmodule Crucible.HostListener do
   the whole call again itself. A report (`runner_exited`) crosses as
   plain JSON under its report header, and its answer is plain.
 
+  An `attached_fetch` refused before its admission is answered as any
+  call is, sealed. Admitted, its answer is streamed: `Host` writes each
+  sealed frame (`Prima.WorkerAuth.seal_frame/7`) through the stream the
+  listener hands it, which opens a `200` answer of
+  `Prima.WorkerWire.attached_frames_content_type/0` with its first frame
+  and writes every frame as a chunk as it arrives, the last an `end` or
+  an `error`. A runner connection that no longer takes a chunk stops the
+  request (`Crucible.Host.AttachedFetch`), and the attempt's deadline ends
+  the stream with an `error` frame.
+
   Every listener refusal is written by `Prima.WorkerWire.error/2`, so it
   carries the wire's version, and is `{"v": 1, "error": "lost"}` but the
   unknown route's `not_found`, an unowned report's `unavailable`, a
@@ -94,6 +104,10 @@ defmodule Crucible.HostListener do
 
   plug(:match)
   plug(:dispatch)
+
+  # Where the conn an attached request's frames stream on is kept while its
+  # answer is written.
+  @stream {__MODULE__, :stream}
 
   @typedoc """
   How the listener is started: the address to bind, the port (0 for any
@@ -145,9 +159,7 @@ defmodule Crucible.HostListener do
          :ok <- verify_body(read, body_hash, body),
          {:ok, call} <- open(read, callback, fields, header, body),
          :ok <- names_route(read, callback, call.json) do
-      read
-      |> put_resp_content_type("application/json")
-      |> send_resp(200, answer(callback, fields, call))
+      respond(read, callback, fields, call)
     else
       # A refusal after the body was read answers on the conn that read it;
       # one before it, or with the body read only in part, closes the
@@ -373,12 +385,64 @@ defmodule Crucible.HostListener do
     end
   end
 
+  # An attached request's answer is either an ordinary sealed answer (a
+  # refusal before its admission) or, admitted, the frames `Host` writes
+  # through the stream it is handed, in the order it writes them. The
+  # stream opens with its first frame; the conn it was opened on is kept
+  # in this process, the one serving the request, which every frame is
+  # written from.
+  defp respond(read, :attached_fetch, fields, call) do
+    Process.delete(@stream)
+    json = Host.call(call.header, call.json, &stream_frame(read, &1))
+
+    case Process.delete(@stream) do
+      nil -> send_answer(read, seal_answer(call, fields, json))
+      streamed -> streamed
+    end
+  end
+
+  defp respond(read, callback, fields, call),
+    do: send_answer(read, answer(callback, fields, call))
+
+  defp send_answer(read, answer) do
+    read
+    |> put_resp_content_type("application/json")
+    |> send_resp(200, answer)
+  end
+
+  # One sealed frame, written as it arrives. A connection that no longer
+  # takes one is answered `{:error, :closed}`, and the request it answers
+  # stops.
+  defp stream_frame(read, frame) do
+    conn =
+      case Process.get(@stream) do
+        nil ->
+          read
+          |> put_resp_content_type(WorkerWire.attached_frames_content_type(), nil)
+          |> send_chunked(200)
+
+        %Plug.Conn{} = conn ->
+          conn
+      end
+
+    case chunk(conn, frame) do
+      {:ok, conn} ->
+        Process.put(@stream, conn)
+        :ok
+
+      {:error, _reason} ->
+        Process.put(@stream, conn)
+        {:error, :closed}
+    end
+  end
+
   defp answer(:runner_exited, _fields, call), do: Host.runner_exited(call.header, call.json)
 
-  defp answer(_callback, fields, call) do
-    {:ok, sealed} =
-      WorkerAuth.seal_call(call.seal_key, :answer, fields, Host.call(call.header, call.json))
+  defp answer(_callback, fields, call),
+    do: seal_answer(call, fields, Host.call(call.header, call.json))
 
+  defp seal_answer(call, fields, json) do
+    {:ok, sealed} = WorkerAuth.seal_call(call.seal_key, :answer, fields, json)
     sealed
   end
 

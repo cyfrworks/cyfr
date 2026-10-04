@@ -4,6 +4,10 @@
 defmodule Sanctum.VaultReaderTest do
   use ExUnit.Case, async: false
 
+  # What a dispense is made for, as an attempt names it. These resources
+  # carry no binding key, so no binding lifetime is read for them.
+  @dispense %{root_execution_id: "exec_reader_test", profile_id: nil, consent_id: nil}
+
   import ExUnit.CaptureLog
 
   require Ecto.Query
@@ -61,13 +65,13 @@ defmodule Sanctum.VaultReaderTest do
     row.last_used_at
   end
 
-  describe "fetch/2 — material" do
+  describe "fetch/3 — material" do
     test "projects the sealed fields; nothing outside the projection leaves", %{ctx: ctx} do
       fields = %{"url" => "https://db.example", "anon_key" => "anon", "service_key" => "SECRET"}
       {_entry, resource} = mint_material_entry(ctx, fields)
       resource = Map.put(resource, :projection, %{fields: ["url", "anon_key"], scopes: []})
 
-      assert {:ok, resolved} = VaultReader.fetch(ctx, resource)
+      assert {:ok, resolved} = VaultReader.fetch(ctx, resource, @dispense)
       assert resolved == %{"url" => "https://db.example", "anon_key" => "anon"}
       refute Map.has_key?(resolved, "service_key")
     end
@@ -92,7 +96,7 @@ defmodule Sanctum.VaultReaderTest do
       for edge <- unnamed do
         log =
           capture_log(fn ->
-            assert {:error, :corrupt} = VaultReader.fetch(ctx, edge)
+            assert {:error, :corrupt} = VaultReader.fetch(ctx, edge, @dispense)
           end)
 
         assert log =~ "re-consent to the component's current version"
@@ -108,20 +112,21 @@ defmodule Sanctum.VaultReaderTest do
       resource = %{resource | projection: %{fields: ["url", "anon_key"], scopes: []}}
 
       # Never the partial map with `url` alone, and never a silent skip.
-      assert {:error, {:missing_field, "anon_key"}} = VaultReader.fetch(ctx, resource)
+      assert {:error, {:missing_field, "anon_key"}} = VaultReader.fetch(ctx, resource, @dispense)
     end
 
     test "anonymous callers are refused before any load", %{ctx: ctx} do
       {_entry, resource} = mint_material_entry(ctx, %{"k" => "v"})
 
       assert {:error, :anonymous_denied} =
-               VaultReader.fetch(%{ctx | anonymous: true}, resource)
+               VaultReader.fetch(%{ctx | anonymous: true}, resource, @dispense)
     end
 
     test "a non-active entry is unavailable", %{ctx: ctx} do
       {_entry, resource} = mint_material_entry(ctx, %{"k" => "v"}, %{status: "needs_reauth"})
 
-      assert {:error, {:entry_unavailable, "needs_reauth"}} = VaultReader.fetch(ctx, resource)
+      assert {:error, {:entry_unavailable, "needs_reauth"}} =
+               VaultReader.fetch(ctx, resource, @dispense)
     end
 
     test "a rebound entry fails at the derived binding digest", %{ctx: ctx} do
@@ -134,7 +139,7 @@ defmodule Sanctum.VaultReaderTest do
         set: [oauth_endpoints: ~s({"token_url":"https://evil.example/token"})]
       )
 
-      assert {:error, :binding_mismatch} = VaultReader.fetch(ctx, resource)
+      assert {:error, :binding_mismatch} = VaultReader.fetch(ctx, resource, @dispense)
     end
 
     test "a reader in another athanor gets nothing, and not a different nothing", %{ctx: ctx} do
@@ -145,10 +150,10 @@ defmodule Sanctum.VaultReaderTest do
       # tenant; what decides the read is the caller's actor, and the answer
       # is byte-identical to one for an id that exists nowhere — a
       # different refusal would confirm the entry exists somewhere else.
-      assert {:error, :not_found} = VaultReader.fetch(foreign, resource)
+      assert {:error, :not_found} = VaultReader.fetch(foreign, resource, @dispense)
 
-      assert VaultReader.fetch(foreign, resource) ==
-               VaultReader.fetch(foreign, %{resource | entry_id: "vlt_nonexistent"})
+      assert VaultReader.fetch(foreign, resource, @dispense) ==
+               VaultReader.fetch(foreign, %{resource | entry_id: "vlt_nonexistent"}, @dispense)
 
       assert {:error, :not_found} =
                VaultReader.unseal_for("ath_other", "a-only", "https://api.example.com/mcp")
@@ -159,7 +164,7 @@ defmodule Sanctum.VaultReaderTest do
                VaultReader.usable("ath_other", resource.entry_id, resource.binding_digest)
 
       # The same reads inside the owning athanor still answer.
-      assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource)
+      assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource, @dispense)
 
       assert {:ok, %{"k" => "v"}} =
                VaultReader.unseal_for(ctx.athanor_id, "a-only", "https://api.example.com/mcp")
@@ -187,12 +192,12 @@ defmodule Sanctum.VaultReaderTest do
       resource = %{entry_id: id, binding_digest: digest, projection: %{fields: ["k"], scopes: []}}
 
       assert {:error, {:invalid_payload, {:unknown_keys, ["extra"]}}} =
-               VaultReader.fetch(ctx, resource)
+               VaultReader.fetch(ctx, resource, @dispense)
     end
   end
 
   describe "an attach-only entry" do
-    test "is refused disclosure_refused by fetch/2 and oauth_token/3 before it is unsealed",
+    test "is refused disclosure_refused by fetch/3 and oauth_token/4 before it is unsealed",
          %{ctx: ctx} do
       {entry, resource} =
         mint_material_entry(ctx, %{"k" => "v"}, %{
@@ -213,10 +218,12 @@ defmodule Sanctum.VaultReaderTest do
 
       before = last_used_at(ctx, entry)
 
-      assert {:error, :disclosure_refused} = VaultReader.fetch(ctx, resource)
+      assert {:error, :disclosure_refused} = VaultReader.fetch(ctx, resource, @dispense)
 
       token_edge = %{resource | projection: %{fields: [], scopes: ["gmail.readonly"]}}
-      assert {:error, :disclosure_refused} = VaultReader.oauth_token(ctx, token_edge, "google")
+
+      assert {:error, :disclosure_refused} =
+               VaultReader.oauth_token(ctx, token_edge, "google", @dispense)
 
       # Nothing was unsealed, so no use was recorded.
       assert last_used_at(ctx, entry) == before
@@ -242,7 +249,151 @@ defmodule Sanctum.VaultReaderTest do
         projection: %{fields: ["k"], scopes: []}
       }
 
-      assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource)
+      assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource, @dispense)
+    end
+  end
+
+  # A profile whose head binds `resource`'s entry at a binding key, with
+  # `lifetime`; answers the resource carrying that key and the use a run
+  # under the head dispenses for.
+  defp bound(ctx, resource, lifetime) do
+    key = "catalyst:local.reader-lifetime|@ingress|default"
+    profile_id = "prof-reader-#{System.unique_integer([:positive])}"
+    consent_id = Prima.UUID7.generate_id("cons")
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.seed_head!(
+        ctx,
+        %{
+          id: profile_id,
+          source_ref: "catalyst:local.reader-lifetime",
+          kind: :owner,
+          label: profile_id
+        },
+        %{
+          id: consent_id,
+          revision: 1,
+          scope: :versionless,
+          shape_digest: "sha256:shape-#{profile_id}",
+          commit_digest: "sha256:commit-#{profile_id}",
+          resolved_policy: "{}",
+          activation: %{},
+          vault_refs: [
+            Map.merge(
+              %{
+                binding_key: key,
+                scope: "athanor",
+                vault_entry_id: resource.entry_id,
+                binding_digest: resource.binding_digest
+              },
+              lifetime
+            )
+          ]
+        }
+      )
+
+    use = %{root_execution_id: "exec_root_one", profile_id: profile_id, consent_id: consent_id}
+    {Map.put(resource, :binding_key, key), use}
+  end
+
+  defp consumed_by(use) do
+    Arca.Repo.one!(
+      Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef,
+        where: r.consent_id == ^use.consent_id,
+        select: r.consumed_by_root
+      )
+    )
+  end
+
+  describe "a binding's lifetime at dispense" do
+    test "a disclosed once binding is consumed by its first dispense, for its root alone", %{
+      ctx: ctx
+    } do
+      {_entry, resource} = mint_material_entry(ctx, %{"k" => "v"})
+      {resource, use} = bound(ctx, resource, %{lifetime_kind: "once"})
+
+      assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource, use)
+      assert consumed_by(use) == "exec_root_one"
+      assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource, use)
+
+      assert {:error, :grant_expired} =
+               VaultReader.fetch(ctx, resource, %{use | root_execution_id: "exec_root_two"})
+
+      assert consumed_by(use) == "exec_root_one"
+    end
+
+    test "a token dispense is held to the binding's lifetime the same way", %{ctx: ctx} do
+      {_entry, resource} =
+        mint_material_entry(ctx, %{}, %{
+          kind: "oauth",
+          provider_hint: "google",
+          oauth: %{"access_token" => "tok-once", "token_type" => "bearer"},
+          oauth_scopes: Jason.encode!(["gmail.readonly"])
+        })
+
+      {resource, use} = bound(ctx, resource, %{lifetime_kind: "once"})
+
+      assert {:ok, "tok-once"} = VaultReader.oauth_token(ctx, resource, "google", use)
+
+      assert {:error, :grant_expired} =
+               VaultReader.oauth_token(ctx, resource, "google", %{
+                 use
+                 | root_execution_id: "exec_root_two"
+               })
+
+      # A refusal before the lifetime consumes nothing: another provider is
+      # refused by name first.
+      {_entry, other} =
+        mint_material_entry(ctx, %{}, %{
+          kind: "oauth",
+          provider_hint: "google",
+          oauth: %{"access_token" => "tok-other", "token_type" => "bearer"},
+          oauth_scopes: Jason.encode!(["gmail.readonly"])
+        })
+
+      {other, other_use} = bound(ctx, other, %{lifetime_kind: "once"})
+
+      assert {:error, {:provider_mismatch, "github"}} =
+               VaultReader.oauth_token(ctx, other, "github", other_use)
+
+      assert consumed_by(other_use) == nil
+    end
+
+    test "an until past its instant is refused before anything is unsealed", %{ctx: ctx} do
+      {entry, resource} = mint_material_entry(ctx, %{"k" => "v"})
+      past = DateTime.add(DateTime.utc_now(), -60, :second)
+      {resource, use} = bound(ctx, resource, %{lifetime_kind: "until", expires_at: past})
+      before = last_used_at(ctx, entry)
+
+      assert {:error, :grant_expired} = VaultReader.fetch(ctx, resource, use)
+      assert last_used_at(ctx, entry) == before
+    end
+
+    test "an attach-only once binding is never consumed by a dispense", %{ctx: ctx} do
+      {_entry, resource} = mint_material_entry(ctx, %{"k" => "v"}, %{attach_only: true})
+      {resource, use} = bound(ctx, resource, %{lifetime_kind: "once"})
+
+      assert {:error, :disclosure_refused} = VaultReader.fetch(ctx, resource, use)
+      assert consumed_by(use) == nil
+    end
+
+    test "a pin that is not the head, and a key the head holds no row for, are refused", %{
+      ctx: ctx
+    } do
+      {_entry, resource} = mint_material_entry(ctx, %{"k" => "v"})
+      {resource, use} = bound(ctx, resource, %{})
+
+      assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource, use)
+
+      assert {:error, :grant_expired} =
+               VaultReader.fetch(ctx, resource, %{use | consent_id: "cons_not_the_head"})
+
+      assert {:error, :grant_expired} =
+               VaultReader.fetch(
+                 ctx,
+                 %{resource | binding_key: "catalyst:local.reader-lifetime|@ingress|name:x"},
+                 use
+               )
     end
   end
 
@@ -396,7 +547,7 @@ defmodule Sanctum.VaultReaderTest do
     end
   end
 
-  describe "oauth_token/3 — material" do
+  describe "oauth_token/4 — material" do
     @valid_oauth %{"access_token" => "tok-live", "token_type" => "bearer"}
     @readonly Jason.encode!(["gmail.readonly"])
 
@@ -408,7 +559,7 @@ defmodule Sanctum.VaultReaderTest do
           oauth_scopes: @readonly
         })
 
-      assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, resource, "google")
+      assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, resource, "google", @dispense)
     end
 
     test "a consent for one provider never dispenses another's token", %{ctx: ctx} do
@@ -420,7 +571,7 @@ defmodule Sanctum.VaultReaderTest do
         })
 
       assert {:error, {:provider_mismatch, "github"}} =
-               VaultReader.oauth_token(ctx, resource, "github")
+               VaultReader.oauth_token(ctx, resource, "github", @dispense)
     end
 
     test "an OAuth entry serves only the provider it names, and one naming none serves none",
@@ -438,9 +589,9 @@ defmodule Sanctum.VaultReaderTest do
         })
 
       assert {:error, {:provider_mismatch, "google"}} =
-               VaultReader.oauth_token(ctx, of_acme, "google")
+               VaultReader.oauth_token(ctx, of_acme, "google", @dispense)
 
-      assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, of_acme, "acme")
+      assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, of_acme, "acme", @dispense)
 
       # An entry naming no provider, as no create writes one now, serves no
       # provider's dispense at all.
@@ -454,7 +605,7 @@ defmodule Sanctum.VaultReaderTest do
 
       for provider <- ["google", "acme", ""] do
         assert {:error, {:provider_mismatch, ^provider}} =
-                 VaultReader.oauth_token(ctx, of_none, provider)
+                 VaultReader.oauth_token(ctx, of_none, provider, @dispense)
       end
     end
 
@@ -471,7 +622,7 @@ defmodule Sanctum.VaultReaderTest do
         Map.put(resource, :projection, %{fields: [], scopes: ["gmail.readonly", "gmail.send"]})
 
       assert {:error, {:scope_projection_unsatisfiable, ["gmail.send"]}} =
-               VaultReader.oauth_token(ctx, resource, "google")
+               VaultReader.oauth_token(ctx, resource, "google", @dispense)
     end
 
     test "a narrower projection never dispenses the full-scope token", %{ctx: ctx} do
@@ -495,7 +646,7 @@ defmodule Sanctum.VaultReaderTest do
         narrower = Map.put(resource, :projection, %{fields: [], scopes: ["gmail.readonly"]})
 
         assert {:error, :scope_not_attenuable} =
-                 VaultReader.oauth_token(ctx, narrower, "google")
+                 VaultReader.oauth_token(ctx, narrower, "google", @dispense)
       end
 
       assert :counters.get(attempts, 1) == 0
@@ -508,7 +659,7 @@ defmodule Sanctum.VaultReaderTest do
           oauth_scopes: Jason.encode!(["gmail.readonly", "gmail.send"])
         })
 
-      assert {:ok, "tok-wide"} = VaultReader.oauth_token(ctx, whole, "google")
+      assert {:ok, "tok-wide"} = VaultReader.oauth_token(ctx, whole, "google", @dispense)
     end
 
     test "a projection naming the entry's scopes in another order is the whole grant",
@@ -523,7 +674,7 @@ defmodule Sanctum.VaultReaderTest do
       reordered =
         Map.put(resource, :projection, %{fields: [], scopes: ["gmail.send", "gmail.readonly"]})
 
-      assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, reordered, "google")
+      assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, reordered, "google", @dispense)
     end
 
     test "a material entry without an oauth bundle has no token to dispense", %{ctx: ctx} do
@@ -533,7 +684,8 @@ defmodule Sanctum.VaultReaderTest do
           oauth_scopes: @readonly
         })
 
-      assert {:error, :no_oauth_material} = VaultReader.oauth_token(ctx, resource, "google")
+      assert {:error, :no_oauth_material} =
+               VaultReader.oauth_token(ctx, resource, "google", @dispense)
     end
 
     test "an OAuth edge that names no scopes is corrupt and dispenses nothing", %{ctx: ctx} do
@@ -554,7 +706,7 @@ defmodule Sanctum.VaultReaderTest do
           ] do
         log =
           capture_log(fn ->
-            assert {:error, :corrupt} = VaultReader.oauth_token(ctx, edge, "google")
+            assert {:error, :corrupt} = VaultReader.oauth_token(ctx, edge, "google", @dispense)
           end)
 
         assert log =~ "re-consent to the component's current version"
@@ -575,7 +727,9 @@ defmodule Sanctum.VaultReaderTest do
       key_edge = %{resource | projection: %{fields: ["k"], scopes: []}}
       before = last_used_at(ctx, entry)
 
-      assert {:error, :no_oauth_material} = VaultReader.oauth_token(ctx, key_edge, "google")
+      assert {:error, :no_oauth_material} =
+               VaultReader.oauth_token(ctx, key_edge, "google", @dispense)
+
       assert last_used_at(ctx, entry) == before
     end
 
@@ -588,7 +742,7 @@ defmodule Sanctum.VaultReaderTest do
         })
 
       assert {:error, :anonymous_denied} =
-               VaultReader.oauth_token(%{ctx | anonymous: true}, resource, "google")
+               VaultReader.oauth_token(%{ctx | anonymous: true}, resource, "google", @dispense)
     end
   end
 
@@ -623,7 +777,7 @@ defmodule Sanctum.VaultReaderTest do
     end
   end
 
-  describe "oauth_token/3 — a provider that attenuates a refresh" do
+  describe "oauth_token/4 — a provider that attenuates a refresh" do
     @wide ["mail.read", "mail.send"]
     @bundle %{
       "access_token" => "tok-wide",
@@ -695,7 +849,8 @@ defmodule Sanctum.VaultReaderTest do
         {:ok, %{"access_token" => "tok-narrow", "scope" => "mail.read", "expires_in" => 3600}}
       ])
 
-      assert {:ok, "tok-narrow"} = VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint())
+      assert {:ok, "tok-narrow"} =
+               VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
 
       # The refresh asked for exactly the projected scopes, with the
       # entry's refresh token, at the entry's own token endpoint.
@@ -710,11 +865,14 @@ defmodule Sanctum.VaultReaderTest do
 
       # The same projection again is answered from what is held: one
       # refresh, then the cache.
-      assert {:ok, "tok-narrow"} = VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint())
+      assert {:ok, "tok-narrow"} =
+               VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
+
       refute_received {:token_request, _, _}
 
       # And the whole projection is still the entry's own token.
-      assert {:ok, "tok-wide"} = VaultReader.oauth_token(ctx, whole, ScriptedProvider.hint())
+      assert {:ok, "tok-wide"} =
+               VaultReader.oauth_token(ctx, whole, ScriptedProvider.hint(), @dispense)
     end
 
     test "refuses when the provider answers wider, holding nothing", %{
@@ -729,7 +887,7 @@ defmodule Sanctum.VaultReaderTest do
 
       for _answer <- 1..2 do
         assert {:error, :scope_not_attenuable} =
-                 VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint())
+                 VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
 
         assert_received {:token_request, _, %{"scope" => "mail.read"}}
       end
@@ -751,7 +909,7 @@ defmodule Sanctum.VaultReaderTest do
       ])
 
       assert {:error, :scope_not_attenuable} =
-               VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint())
+               VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
 
       # The provider may already have retired rt-1 on answering, so its
       # successor is kept, while the access token it named is neither held
@@ -773,7 +931,9 @@ defmodule Sanctum.VaultReaderTest do
       results =
         1..4
         |> Enum.map(fn _ ->
-          Task.async(fn -> VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint()) end)
+          Task.async(fn ->
+            VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
+          end)
         end)
         |> Task.await_many(30_000)
 
@@ -793,20 +953,25 @@ defmodule Sanctum.VaultReaderTest do
         {:ok, %{"access_token" => "tok-wide-2", "expires_in" => 3600}}
       ])
 
-      assert {:ok, "tok-narrow"} = VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint())
+      assert {:ok, "tok-narrow"} =
+               VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
 
       # The entry's own token expires; its refresh sends no scope.
       {_row, oauth} = held(ctx, entry)
       expire_whole!(ctx, entry, oauth)
 
-      assert {:ok, "tok-wide-2"} = VaultReader.oauth_token(ctx, whole, ScriptedProvider.hint())
+      assert {:ok, "tok-wide-2"} =
+               VaultReader.oauth_token(ctx, whole, ScriptedProvider.hint(), @dispense)
+
       assert_received {:token_request, _, %{"scope" => "mail.read"}}
       assert_received {:token_request, _, full}
       refute Map.has_key?(full, "scope")
 
       {_row, oauth} = held(ctx, entry)
       assert %{"mail.read" => %{"access_token" => "tok-narrow"}} = oauth["tokens"]
-      assert {:ok, "tok-narrow"} = VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint())
+
+      assert {:ok, "tok-narrow"} =
+               VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
     end
 
     defp expire_whole!(ctx, entry, oauth) do

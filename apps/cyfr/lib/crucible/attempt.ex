@@ -21,8 +21,10 @@ defmodule Crucible.Attempt do
     closes the run with;
   - the claim: the runner that attached (`attach/2`) and the nonces its
     calls have presented;
-  - the masking set: the vault fields unsealed at attach, and every OAuth
-    access token it dispenses;
+  - the masking set: the vault fields unsealed at attach, every OAuth
+    access token it dispenses, and every value CYFR attached to a request
+    of its guest's (`{:attached, value}`), so a value attached once masks
+    every later event, output and failure message;
   - the run's emitter (`Crucible.Emit`): its stream, the root whose
     emit budget it draws on, the authority its events are attributed by,
     and the text it holds back;
@@ -133,11 +135,12 @@ defmodule Crucible.Attempt do
   (`Prima.ExecutionGrant`), which its row stores. Every effect a call asks
   for is admitted only while that grant stands
   (`Sanctum.ExecutionStanding.verify/1`), checked in the same transaction
-  as the row's hold. Three effects write no row, and are checked in a
+  as the row's hold. Four effects write no row, and are checked in a
   read transaction that takes no write lock
   (`Arca.Repo.read_transaction/1`): a storage read, list or exists, an
-  artifact fetch, and `take_rate` — the checkpoint of every HTTP request
-  and stream the guest opens, whatever its rate. Every other effect is
+  artifact fetch, `take_rate` — the checkpoint of every HTTP request
+  and stream the guest opens, whatever its rate — and the masking of a
+  value attached to one (`{:attached, value}`). Every other effect is
   checked in a locking transaction (`Arca.Repo.locking_transaction/2`):
   attach and the vault fields it projects, a keyed child's re-handed
   fields (`admitted/2`), `complete`, `push_deltas`, `oauth_token`, storage
@@ -229,6 +232,7 @@ defmodule Crucible.Attempt do
                 ended_by_caller: false,
                 secrets: %{},
                 tokens: [],
+                attached: [],
                 nonces: %{}
               ]
 
@@ -243,16 +247,18 @@ defmodule Crucible.Attempt do
           | {:push_deltas, [Delta.t()]}
           | {:oauth_token, String.t()}
           | {:take_rate, String.t()}
+          | {:attached, String.t()}
           | Host.Storage.op()
 
   @typedoc """
-  What a run's guest's children and catalog tools are decided under: the
-  context its guest's calls run in, the run's authority, its component's
-  reference, its root, the admission decision its row was started under
-  (`call_id`, the parent call of every call its guest makes; nil when
-  none was recorded), the declared needs and activation digest the
-  resolver gave its component, the delegation roster its admitted input
-  carries and the endpoint of the worker service it runs on.
+  What a run's guest's children, catalog tools and attached requests are
+  decided under: the context its guest's calls run in, the run's
+  authority, its component's reference, its root, the admission decision
+  its row was started under (`call_id`, the parent call of every call its
+  guest makes; nil when none was recorded), the declared needs and
+  activation digest the resolver gave its component, the delegation
+  roster its admitted input carries, the endpoint of the worker service it
+  runs on, its subtree deadline and its node's limits.
   """
   @type chain :: %{
           ctx: Context.t(),
@@ -264,7 +270,8 @@ defmodule Crucible.Attempt do
           activation_digest: String.t() | nil,
           roster: [map()],
           worker: Prima.WorkerAPI.endpoint() | nil,
-          deadline: non_neg_integer() | nil
+          deadline: non_neg_integer() | nil,
+          limits: Prima.Limits.t()
         }
 
   @doc """
@@ -412,11 +419,16 @@ defmodule Crucible.Attempt do
 
   @doc """
   Attach the caller's runner, whose claim on the attempt row is written
-  (`Arca.ExecutionAttempts.claim/4`), and answer the fields the run's vault
-  edge projects: an empty map when it grants none.
+  (`Arca.ExecutionAttempts.claim/4`), and answer what the run's vault edge
+  discloses: the fields of a disclosed entry's projection, or a publisher's
+  provided values. An attach-only entry and an instance entry disclose
+  nothing (CYFR attaches their value to the requests the guest names a
+  connection on), and neither does an edge that grants none: each answers
+  an empty map.
 
   The first attach unseals the edge while its consent is still the
-  profile's head, audits each field it hands over as
+  profile's head, holds a disclosed binding to its lifetime (a `once`
+  binding is consumed by this dispense), audits each field it hands over as
   `[:cyfr, :opus, :secret, :dispensed]`, by its name and never its value,
   under the identity this attempt was admitted with, and marks the guest's
   start on the run's clock
@@ -470,6 +482,9 @@ defmodule Crucible.Attempt do
   - `{:take_rate, bucket}` takes one request from the node's consented rate
     for `bucket`, which must be `"http:"` followed by the node's reference:
     `:ok`, or `{:error, {:guest_error, "rate_limited", sentence}}`.
+  - `{:attached, value}` joins a value CYFR attaches to its guest's request
+    (`Crucible.Host.AttachedFetch`) to the masking set before the request
+    is made, for the rest of the attempt: `:ok`.
   - `{:storage, op, args}`, `{:fetch_artifact, digest}` and
     `{:record_denial, denial}` run as `Crucible.Host.Storage.run/2`
     answers them, in the attempt's context, under its edge and limits, for
@@ -902,6 +917,7 @@ defmodule Crucible.Attempt do
       state
       | secrets: @redacted,
         tokens: @redacted,
+        attached: @redacted,
         nonces: @redacted,
         emit: %{state.emit | held: @redacted}
     }
@@ -1100,38 +1116,62 @@ defmodule Crucible.Attempt do
     end
   end
 
-  defp fetch_secrets(%__MODULE__{authority: authority, close: close}) do
+  defp fetch_secrets(%__MODULE__{authority: authority, close: close} = state) do
     case authority do
       %Authority{resources: %Edge{vault: %{via: via}}} ->
         {:setup_required, {:selection_unbound, via.label}}
 
-      # A key or bundle edge's fields are read here; an OAuth edge that
-      # names only scopes reads none, its token flowing through the
-      # dispense call under those scopes. An anonymous caller is refused at
-      # attach on either, as the vault reader refuses it on a field read.
       %Authority{resources: %Edge{vault: %{} = vault}} ->
-        cond do
-          not Sanctum.Consent.Loader.pinned_intact?(close.ctx, authority) ->
-            {:setup_required, :consent_moved}
-
-          reads_fields?(vault) ->
-            case Sanctum.VaultReader.fetch(close.ctx, vault) do
-              {:ok, secrets} -> {:ok, secrets}
-              {:error, reason} -> {:setup_required, reason}
-            end
-
-          close.ctx.anonymous ->
-            {:setup_required, :anonymous_denied}
-
-          true ->
-            {:ok, %{}}
-        end
+        if Sanctum.Consent.Loader.pinned_intact?(close.ctx, authority),
+          do: disclosed(state, vault),
+          else: {:setup_required, :consent_moved}
 
       _ ->
         {:ok, %{}}
     end
   rescue
     exception -> {:raised, Close.exception_message(exception, __STACKTRACE__)}
+  end
+
+  # What the edge discloses to the runner. A publisher's provided values
+  # are public and handed over whole. An instance entry is never
+  # disclosed, and an attach-only entry's fields are refused by the vault
+  # reader before anything is unsealed: CYFR attaches either to the
+  # requests the guest names a connection on, and the run goes on with
+  # nothing handed over. A key or bundle edge's fields are read here; an
+  # OAuth edge that names only scopes reads none, its token flowing
+  # through the dispense call under those scopes. An anonymous caller is
+  # refused at attach on either, as the vault reader refuses it on a field
+  # read.
+  defp disclosed(_state, %{provided: %{values: values}}), do: {:ok, values}
+  defp disclosed(_state, %{scope: "instance"}), do: {:ok, %{}}
+
+  defp disclosed(%__MODULE__{close: close} = state, vault) do
+    cond do
+      reads_fields?(vault) ->
+        case Sanctum.VaultReader.fetch(close.ctx, vault, dispense_use(state)) do
+          {:ok, secrets} -> {:ok, secrets}
+          {:error, :disclosure_refused} -> {:ok, %{}}
+          {:error, reason} -> {:setup_required, reason}
+        end
+
+      close.ctx.anonymous ->
+        {:setup_required, :anonymous_denied}
+
+      true ->
+        {:ok, %{}}
+    end
+  end
+
+  # What a dispense is made for, from what this attempt was admitted
+  # with: its root, which a `once` binding is consumed by, and the
+  # profile and consent its authority is pinned to.
+  defp dispense_use(%__MODULE__{authority: authority} = state) do
+    %{
+      root_execution_id: state.root_execution_id,
+      profile_id: authority.profile_id,
+      consent_id: authority.consent_id
+    }
   end
 
   # An OAuth edge whose projection names its scopes and no fields is served
@@ -1270,6 +1310,7 @@ defmodule Crucible.Attempt do
   defp read_only?({:storage, action, _args}) when action in [:read, :list, :exists], do: true
   defp read_only?({:fetch_artifact, _digest}), do: true
   defp read_only?({:take_rate, _bucket}), do: true
+  defp read_only?({:attached, _value}), do: true
   defp read_only?(_op), do: false
 
   # The grant contract's inputs for this attempt's effects
@@ -1288,7 +1329,8 @@ defmodule Crucible.Attempt do
       activation_digest: state.activation_digest,
       roster: state.roster,
       worker: state.worker,
-      deadline: state.deadline
+      deadline: state.deadline,
+      limits: state.limits
     }
 
     {:reply, {:ok, chain}, state}
@@ -1340,6 +1382,14 @@ defmodule Crucible.Attempt do
 
   defp run({:take_rate, bucket}, state) do
     {:reply, take_rate(state, bucket), state}
+  end
+
+  # Joined before the request it is attached to is made, and kept for the
+  # rest of the attempt: every later event, output and failure message is
+  # masked against it.
+  defp run({:attached, value}, state) when is_binary(value) do
+    attached = if value in state.attached, do: state.attached, else: [value | state.attached]
+    {:reply, :ok, %{state | attached: attached}}
   end
 
   defp run(op, state) when elem(op, 0) in [:storage, :fetch_artifact, :record_denial] do
@@ -1461,7 +1511,7 @@ defmodule Crucible.Attempt do
 
   defp emit_failed, do: Prima.WitResponse.encode_error(:dispatch_error, "The emit call failed.")
 
-  defp masking_set(state), do: Map.values(state.secrets) ++ state.tokens
+  defp masking_set(state), do: Map.values(state.secrets) ++ state.tokens ++ state.attached
 
   defp host_storage(state) do
     %{
@@ -1569,7 +1619,7 @@ defmodule Crucible.Attempt do
   defp resolve_token(%__MODULE__{authority: %Authority{resources: resources}} = state, provider) do
     case resources do
       %Edge{vault: %{} = vault} ->
-        Sanctum.VaultReader.oauth_token(state.ctx, vault, provider)
+        Sanctum.VaultReader.oauth_token(state.ctx, vault, provider, dispense_use(state))
 
       _ ->
         {:error, "no vault resource granted on this edge"}

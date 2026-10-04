@@ -4,6 +4,10 @@
 defmodule Sanctum.VaultTest do
   use ExUnit.Case, async: false
 
+  # What a dispense is made for, as an attempt names it. These resources
+  # carry no binding key, so no binding lifetime is read for them.
+  @dispense %{root_execution_id: "exec_reader_test", profile_id: nil, consent_id: nil}
+
   alias Sanctum.Vault
   alias Sanctum.VaultReader
 
@@ -192,7 +196,7 @@ defmodule Sanctum.VaultTest do
                Vault.rotate(person, params)
 
       assert {:ok, %{"key" => "before"}} =
-               VaultReader.fetch(person, resource_for(person, view.id))
+               VaultReader.fetch(person, resource_for(person, view.id), @dispense)
     end
 
     test "a grant started, or client credentials stored, from a session with no proof ask first",
@@ -251,7 +255,7 @@ defmodule Sanctum.VaultTest do
 
       # The material actually resolves through the reader.
       assert {:ok, %{"url" => "https://db.example", "anon_key" => "anon"}} =
-               VaultReader.fetch(ctx, resource_for(ctx, view.id))
+               VaultReader.fetch(ctx, resource_for(ctx, view.id), @dispense)
     end
 
     test "a living name cannot be reused", %{ctx: ctx} do
@@ -590,7 +594,7 @@ defmodule Sanctum.VaultTest do
 
       # The consent's copy of the binding digest still verifies — rotation
       # never forces a re-consent.
-      assert {:ok, %{"key" => "new-material"}} = VaultReader.fetch(ctx, resource)
+      assert {:ok, %{"key" => "new-material"}} = VaultReader.fetch(ctx, resource, @dispense)
       assert resource_for(ctx, view.id).binding_digest == resource.binding_digest
     end
 
@@ -647,7 +651,7 @@ defmodule Sanctum.VaultTest do
       assert entry.payload_rev == 0
 
       :ok = Arca.VaultStorage.set_status(actor(ctx), view.id, "active")
-      assert {:ok, %{"key" => "before"}} = VaultReader.fetch(ctx, resource)
+      assert {:ok, %{"key" => "before"}} = VaultReader.fetch(ctx, resource, @dispense)
     end
   end
 
@@ -664,7 +668,7 @@ defmodule Sanctum.VaultTest do
       assert affected == [profile.id]
 
       # The old consent's digest no longer verifies.
-      assert {:error, :binding_mismatch} = VaultReader.fetch(ctx, old_resource)
+      assert {:error, :binding_mismatch} = VaultReader.fetch(ctx, old_resource, @dispense)
 
       {:ok, reloaded} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile.id)
       assert reloaded.status == "needs_consent"
@@ -802,7 +806,8 @@ defmodule Sanctum.VaultTest do
         projection: %{fields: [], scopes: ["gmail.readonly"]}
       }
 
-      assert {:error, :scope_not_attenuable} = VaultReader.oauth_token(ctx, narrower, "google")
+      assert {:error, :scope_not_attenuable} =
+               VaultReader.oauth_token(ctx, narrower, "google", @dispense)
 
       # Refused before the entry is read, and whatever else the rebind names.
       assert {:error, :scopes_need_reauthorization} =
@@ -839,7 +844,7 @@ defmodule Sanctum.VaultTest do
         projection: %{fields: [], scopes: ["gmail.readonly"]}
       }
 
-      assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, resource, "google")
+      assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, resource, "google", @dispense)
     end
 
     test "a provider with a preset and endpoints of its own, or one with neither, is refused",
@@ -1017,7 +1022,8 @@ defmodule Sanctum.VaultTest do
       assert {:ok, %{affected: [profile_id]}} = Vault.revoke(ctx, view.id)
       assert profile_id == profile.id
 
-      assert {:error, {:entry_unavailable, "revoked"}} = VaultReader.fetch(ctx, resource)
+      assert {:error, {:entry_unavailable, "revoked"}} =
+               VaultReader.fetch(ctx, resource, @dispense)
     end
 
     test "delete tombstones, erases material, and frees the name", %{ctx: ctx} do

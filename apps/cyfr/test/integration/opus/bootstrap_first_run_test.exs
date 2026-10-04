@@ -204,7 +204,13 @@ defmodule Opus.BootstrapFirstRunTest do
     assert {:ok, auth, _} =
              Loader.load_root(ctx, profile, live: {:ok, live})
 
-    assert {:ok, secrets} = Sanctum.VaultReader.fetch(ctx, auth.resources.vault)
+    use = %{
+      root_execution_id: "exec_first_run",
+      profile_id: auth.profile_id,
+      consent_id: auth.consent_id
+    }
+
+    assert {:ok, secrets} = Sanctum.VaultReader.fetch(ctx, auth.resources.vault, use)
     assert secrets == %{"ANTHROPIC_API_KEY" => "sk-first-run"}
   end
 end

@@ -46,8 +46,15 @@ defmodule Crucible.Host.Egress do
   header window (`Prima.WorkerAuth.window_ms/0`) past the call. Each of
   the four refusals is recorded as a denial of the attempt's component in
   its athanor (`Sanctum.Policy.Enforcement.record/1`, as
-  `Crucible.Host.Storage` records a runner's `record_denial`), naming the
+  `Crucible.Host.Storage` records a runner's `record_denial`), its reason
+  led by the request's purpose (`fetch: …`, `attached: …`) and naming the
   host and never the URL, whose path and query can carry a credential.
+
+  `pin/3` takes the purposes a runner may ask for and `:attached`, the pin
+  CYFR takes for an attached request (`Crucible.Host.AttachedFetch`), which
+  is decided the same way and recorded as its own; a runner's
+  `egress_pin` naming `attached` never reaches here, since its args do not
+  read (`Prima.PinnedTarget.read_request/1`).
 
   Pins are not persisted. The pins an attempt was answered are kept, each
   as its origin (a `%URI{}` of its scheme, host and port) under the
@@ -96,7 +103,7 @@ defmodule Crucible.Host.Egress do
           {:error, :malformed}
 
         {:refused, refusal, sentence} ->
-          record(chain, sentence)
+          record(chain, request.purpose, sentence)
           {:error, refusal}
       end
     end
@@ -218,15 +225,16 @@ defmodule Crucible.Host.Egress do
   end
 
   # The same record a runner's `record_denial` of a policy refusal writes,
-  # attributed to the attempt's component in its guest context.
-  defp record(chain, sentence) do
+  # attributed to the attempt's component in its guest context, its reason
+  # led by the purpose the pin was asked for.
+  defp record(chain, purpose, sentence) do
     Sanctum.Policy.Enforcement.record(%{
       ctx: chain.ctx,
       component_ref: chain.component_ref,
       component_type: :catalyst,
       event_type: :denied,
       decision: :denied,
-      decision_reason: sentence
+      decision_reason: "#{purpose}: #{sentence}"
     })
   end
 

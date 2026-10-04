@@ -29,10 +29,14 @@ defmodule Arca.AuditHandler do
   - `[:cyfr, :opus, :execute, :exception]` — execution fails
   - `[:cyfr, :opus, :secret, :dispensed]` — CYFR handed a runner a vault
     field of its run's consented projection, at the attach that claimed
-    the run's attempt: one entry per field, by name, never its value
+    the run's attempt: one entry per field, by name, never its value; or
+    CYFR attached a field to a request bound for its destination: one
+    entry per attached request, by the field's name, the `connection` and
+    the request's `destination` (`scheme://host:port`), never its value
   - `[:cyfr, :opus, :secret, :denied]` — a runner reported its guest was
-    refused a field outside that projection, by the name the guest asked
-    for
+    refused a field outside that projection, or an attach-only field it
+    may not read (`reason` `disclosure_refused`), by the name the guest
+    asked for
 
   Both carry the identity of the attempt CYFR verified (`athanor_id`,
   `user_id`, `execution_id`, `attempt`, `fence`, `component_ref`,
