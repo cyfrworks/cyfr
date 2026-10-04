@@ -24,15 +24,21 @@ defmodule Prima.CanvasWire do
 
   Prism posts to the toolkit (`to_toolkit_verbs/0`):
 
-    * `boot {mode, credential, data_path, module_url, toolkit}`: `mode`
-      `live` or `validation`; `credential` the frame credential, a
+    * `boot {mode, credential, data_path, module_url, toolkit, streams}`:
+      `mode` `live` or `validation`; `credential` the frame credential, a
       non-empty string; `data_path` the message's own frame's data path
       (`data_path/1`); `module_url` a file under the version's served
       prefix (`Prima.TinctureUrl.asset_path/2`) ending `.js` or `.mjs`;
       `toolkit` a toolkit major, a positive integer, which the toolkit
-      holds to the majors it supports. The host script resolves both paths
+      holds to the majors it supports; `streams` the version's declared
+      streams, at most 64 distinct objects of exactly `name` (a stream
+      name, as `Prima.TinctureWire`'s `stream_open` holds it) and
+      `subject` (a string or null). The host script resolves both paths
       against its document's URL before the worker sees them, since a
-      `blob:` worker cannot resolve a relative URL;
+      `blob:` worker cannot resolve a relative URL. Prism builds
+      `streams` from the stored declaration of the version it serves,
+      never from anything a module, a frame or the page sends; it is
+      required, and `[]` declares no stream;
     * `posture {posture}`, `desk` or `hand`;
     * `covered {rects}`, at most 64 objects of exactly `x`, `y`, `width`
       and `height`, each a non-negative number;
@@ -42,7 +48,9 @@ defmodule Prima.CanvasWire do
 
   `decode/1` reads a message of either direction, and a receiver holds its
   verb to the set its direction names. An unknown verb, an extra or a
-  missing key, or a wrong type is refused.
+  missing key, or a wrong type is refused, and so is any term outside the
+  grammar, an improper list or a struct among them. A refusal names no
+  key or value the message carries.
 
   ## Paths
 
@@ -78,6 +86,7 @@ defmodule Prima.CanvasWire do
   @rect_keys ~w(height width x y)
   @max_tinctures 512
   @max_name 128
+  @max_streams 64
 
   @typedoc "A verb of either direction."
   @type verb ::
@@ -146,9 +155,9 @@ defmodule Prima.CanvasWire do
   The JSON form of `message`, a `%{verb, frame, args}` as `decode/1`
   answers it: `{"v", "verb", "frame", "args"}`. Any other term, the wire
   form itself among them, and any message `decode/1` would refuse raise an
-  `ArgumentError` whose sentence names no value the message carries, since
-  a `boot` carries the frame credential and every message is built by
-  CYFR's own code.
+  `ArgumentError` whose sentence names no key or value the message
+  carries, since a `boot` carries the frame credential and every message
+  is built by CYFR's own code.
   """
   @spec encode(message()) :: map()
   def encode(%{verb: verb, frame: frame, args: args} = message)
@@ -226,12 +235,18 @@ defmodule Prima.CanvasWire do
   end
 
   defp verb_args(:boot, args, frame) do
-    with :ok <- exact(args, ~w(credential data_path mode module_url toolkit), "boot"),
+    with :ok <- exact(args, ~w(credential data_path mode module_url streams toolkit), "boot"),
          :ok <- check(args["mode"] in @modes, "boot's mode is live or validation"),
          :ok <- check(credential?(args["credential"]), "boot carries the frame credential"),
          :ok <- check(args["data_path"] == data_path(frame), "boot's data path is its frame's"),
-         :ok <- check(module_url?(args["module_url"]), "boot's module is a served .js or .mjs") do
-      check(major?(args["toolkit"]), "boot's toolkit is a major, a positive integer")
+         :ok <- check(module_url?(args["module_url"]), "boot's module is a served .js or .mjs"),
+         :ok <- check(major?(args["toolkit"]), "boot's toolkit is a major, a positive integer"),
+         :ok <-
+           check(
+             bounded_list?(args["streams"], @max_streams, &stream?/1),
+             "boot names at most #{@max_streams} streams, each exactly a stream name and a subject"
+           ) do
+      check(distinct?(args["streams"]), "boot names each stream and subject once")
     end
   end
 
@@ -287,10 +302,29 @@ defmodule Prima.CanvasWire do
 
   defp major?(major), do: is_integer(major) and major > 0
 
-  defp bounded_list?(list, max, fun) when is_list(list),
-    do: length(list) <= max and Enum.all?(list, fun)
+  # A list's length is counted only once it is known to be proper: `length/1`
+  # raises on an improper list, and its report prints the list.
+  defp bounded_list?(list, max, fun) do
+    case proper_length(list, 0) do
+      count when is_integer(count) and count <= max -> Enum.all?(list, fun)
+      _improper_or_long -> false
+    end
+  end
 
-  defp bounded_list?(_list, _max, _fun), do: false
+  defp proper_length([], count), do: count
+  defp proper_length([_head | tail], count), do: proper_length(tail, count + 1)
+  defp proper_length(_improper_tail, _count), do: nil
+
+  # A stream `stream_open` could name: the stream-name grammar the tincture
+  # wire holds, and a subject that is a string or null.
+  defp stream?(%{"name" => name, "subject" => subject} = stream) when map_size(stream) == 2 do
+    Prima.Manifest.Tincture.stream_name?(name) and
+      (is_nil(subject) or (is_binary(subject) and String.valid?(subject)))
+  end
+
+  defp stream?(_stream), do: false
+
+  defp distinct?(list), do: length(Enum.uniq(list)) == length(list)
 
   defp rect?(%{} = rect) when not is_struct(rect) do
     rect |> Map.keys() |> Enum.sort() == @rect_keys and
@@ -319,14 +353,10 @@ defmodule Prima.CanvasWire do
       {[], missing} ->
         {:error, "#{where} lacks #{Enum.join(missing, ", ")}"}
 
-      {extra, _missing} ->
-        {:error, "#{where} carries unknown key(s): #{Enum.map_join(extra, ", ", &key_name/1)}"}
+      # A refusal names no key it was handed, since a key is part of what
+      # the message carries.
+      {_extra, _missing} ->
+        {:error, "#{where} carries a key it does not take"}
     end
   end
-
-  # A refusal names a key it was handed only when the key is text, and
-  # never a value.
-  defp key_name(key) when is_binary(key) and byte_size(key) <= 64, do: key
-  defp key_name(key) when is_binary(key), do: "a long key"
-  defp key_name(_key), do: "a key of another kind"
 end

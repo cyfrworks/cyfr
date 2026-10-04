@@ -4,9 +4,9 @@
 defmodule Prima.Feed.Read do
   @moduledoc false
   # The readers `Prima.Feed`, `Prima.Feed.Binding` and `Prima.Feed.Action`
-  # share, each answering a refusal as `%{path, reason}`. `Prima.Feed`
-  # comes last in this file because it matches the two structs, which must
-  # be compiled before it.
+  # share, each answering a refusal as `%{path, reason}` that names no
+  # value it was handed. `Prima.Feed` comes last in this file because it
+  # matches the two structs, which must be compiled before it.
 
   alias Prima.Canvas.Shape
 
@@ -15,8 +15,15 @@ defmodule Prima.Feed.Read do
   def known_keys(map, known, path) do
     case map |> Map.keys() |> Enum.reject(&(&1 in known)) |> Enum.sort() do
       [] -> :ok
-      [key | _] -> refuse(path <> "/" <> Shape.escape(to_string(key)), "unknown_key")
+      [key | _] -> refuse(child(path, key), "unknown_key")
     end
+  end
+
+  # A key that is not a string, a binary that is not UTF-8 text among them,
+  # has no spelling in a pointer, so the refusal stays at its object and
+  # never names the key.
+  defp child(path, key) do
+    if is_binary(key) and String.valid?(key), do: path <> "/" <> Shape.escape(key), else: path
   end
 
   def fetch(map, key, path) do
@@ -72,10 +79,17 @@ defmodule Prima.Feed.Read do
 
   def refuse(path, reason) when is_binary(path) and is_binary(reason) do
     unless Map.has_key?(Prima.Feed.reasons(), reason),
-      do: raise(ArgumentError, "#{reason} is not a feed refusal reason")
+      do: raise(ArgumentError, "a feed refusal names one of Prima.Feed.reasons/0")
 
     {:error, %{path: path, reason: reason}}
   end
+
+  # A proper list's length, or nil for an improper one, which `length/1`
+  # would raise on, its report printing the list.
+  def proper_length(list), do: proper_length(list, 0)
+  defp proper_length([], count), do: count
+  defp proper_length([_head | tail], count), do: proper_length(tail, count + 1)
+  defp proper_length(_improper_tail, _count), do: nil
 end
 
 defmodule Prima.Feed.Action do
@@ -137,7 +151,10 @@ defmodule Prima.Feed.Action do
 
   def validate(_json), do: Read.refuse("", "type")
 
-  @doc "The JSON form: string keys, `operation` and `args` only for `run`."
+  @doc """
+  The JSON form: string keys, `operation` and `args` only for `run`. Any
+  other term raises an `ArgumentError` naming no value.
+  """
   @spec to_json(t()) :: map()
   def to_json(%__MODULE__{kind: :refresh} = action),
     do: %{"name" => action.name, "label" => action.label, "kind" => "refresh"}
@@ -151,6 +168,9 @@ defmodule Prima.Feed.Action do
       "args" => action.args
     }
   end
+
+  # Never a clause error: its report would print the term.
+  def to_json(_action), do: raise(ArgumentError, "to_json/1 takes a Prima.Feed.Action")
 
   defp kind(kind) when is_map_key(@kinds, kind), do: {:ok, Map.fetch!(@kinds, kind)}
   defp kind(kind) when is_binary(kind), do: Read.refuse("/kind", "enum")
@@ -265,9 +285,16 @@ defmodule Prima.Feed.Binding do
 
   def validate(_json), do: Read.refuse("", "type")
 
-  @doc "The JSON form: string keys, every field written."
+  @doc """
+  The JSON form: string keys, every field written. Any other term, or a
+  binding whose actions are not a list of `Prima.Feed.Action`s, raises an
+  `ArgumentError` naming no value.
+  """
   @spec to_json(t()) :: map()
-  def to_json(%__MODULE__{} = binding) do
+  def to_json(%__MODULE__{actions: actions} = binding) do
+    unless Read.proper_length(actions),
+      do: raise(ArgumentError, "a binding's actions are a list of Prima.Feed.Action")
+
     %{
       "name" => binding.name,
       "label" => binding.label,
@@ -276,9 +303,12 @@ defmodule Prima.Feed.Binding do
       "args" => binding.args,
       "interval_minutes" => binding.interval_minutes,
       "result_shape" => binding.result_shape,
-      "actions" => Enum.map(binding.actions, &Action.to_json/1)
+      "actions" => Enum.map(actions, &Action.to_json/1)
     }
   end
+
+  # Never a clause error: its report would print the term.
+  def to_json(_binding), do: raise(ArgumentError, "to_json/1 takes a Prima.Feed.Binding")
 
   defp read(json, key, reader) do
     with {:ok, value} <- Read.fetch(json, key, ""), do: reader.(value, "/" <> key)
@@ -312,7 +342,17 @@ defmodule Prima.Feed.Binding do
     end
   end
 
-  defp actions(actions, path) when is_list(actions) and length(actions) <= @max_actions do
+  defp actions(actions, path) when is_list(actions) do
+    case Read.proper_length(actions) do
+      nil -> Read.refuse(path, "type")
+      count when count <= @max_actions -> distinct_actions(actions, path)
+      _count -> Read.refuse(path, "range")
+    end
+  end
+
+  defp actions(_actions, path), do: Read.refuse(path, "type")
+
+  defp distinct_actions(actions, path) do
     actions
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, [], MapSet.new()}, fn {json, index}, {:ok, acc, names} ->
@@ -333,9 +373,6 @@ defmodule Prima.Feed.Binding do
       refusal -> refusal
     end
   end
-
-  defp actions(actions, path) when is_list(actions), do: Read.refuse(path, "range")
-  defp actions(_actions, path), do: Read.refuse(path, "type")
 end
 
 defmodule Prima.Feed do
@@ -356,8 +393,15 @@ defmodule Prima.Feed do
 
   Every refusal is `%{path, reason}`, the path an RFC 6901 pointer into
   the binding's JSON (or the result's, for `check_result/2`) and the
-  reason one of `reasons/0`. `tests/fixtures/feed.json` holds bindings,
-  inputs, crons, results and envelopes.
+  reason one of `reasons/0`. A refusal names no value it was handed: a
+  term outside the grammar (an improper list, a key that is not a string,
+  a struct) is refused like any other value of the wrong type, and a key
+  that is not a string, a binary that is not UTF-8 text among them, leaves
+  the path at its object, so a path is always text. A function handed
+  an argument outside its type raises an `ArgumentError` naming no value.
+
+  `tests/fixtures/feed.json` holds bindings, inputs, crons, results,
+  envelopes, and results and arguments at their byte bounds.
   """
 
   alias Prima.Canvas.Shape
@@ -368,6 +412,9 @@ defmodule Prima.Feed do
   @intervals [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60]
   @args_max_bytes 4096
   @result_max_bytes 65_536
+
+  @actions_sentence "a binding's actions are a list of Prima.Feed.Action"
+  @time_sentence "an envelope's time is a DateTime"
 
   # The reasons a feed adds to the shape's vocabulary (`Shape.reasons/0`).
   @feed_reasons %{
@@ -418,12 +465,18 @@ defmodule Prima.Feed do
   def input(%Action{kind: :run, operation: operation, args: args}),
     do: %{"operation" => operation, "params" => args}
 
+  # Never a clause error: its report would print the term.
+  def input(_source), do: raise(ArgumentError, "input/1 takes a binding or a run action")
+
   @doc "The binding's cron expression: `*/N * * * *`, or `0 * * * *` for 60."
   @spec cron(Binding.t()) :: String.t()
   def cron(%Binding{interval_minutes: 60}), do: "0 * * * *"
 
   def cron(%Binding{interval_minutes: minutes}) when minutes in @intervals,
     do: "*/#{minutes} * * * *"
+
+  def cron(_binding),
+    do: raise(ArgumentError, "cron/1 takes a binding whose interval is one of intervals/0")
 
   @doc """
   Whether a decoded `result` may be accepted for `binding`: its JSON text
@@ -436,13 +489,17 @@ defmodule Prima.Feed do
     with :ok <- Read.json_text(result, @result_max_bytes, ""), do: Shape.check(shape, result)
   end
 
+  def check_result(_binding, _result),
+    do: raise(ArgumentError, "check_result/2 takes a binding and a decoded result")
+
   @doc """
   The payload a feed's stream carries for one accepted result: exactly
   `binding` (its id), `feed` (its name), `revision` (the accepted seq),
   `at` (ISO 8601 in UTC), `result`, and the binding's display part,
   `label` and `actions` (`[{name, label}]` in the binding's order). It
   never carries the operation, the arguments, the reference or the
-  interval. A binding id outside its grammar raises.
+  interval. A binding id outside its grammar, or any other argument
+  outside its type, raises an `ArgumentError` naming no value.
   """
   @spec envelope(String.t(), Binding.t(), non_neg_integer(), DateTime.t(), term()) :: map()
   def envelope(binding_id, %Binding{} = binding, revision, %DateTime{} = at, result)
@@ -454,10 +511,44 @@ defmodule Prima.Feed do
       "binding" => binding_id,
       "feed" => binding.name,
       "revision" => revision,
-      "at" => at |> DateTime.shift_zone!("Etc/UTC") |> DateTime.to_iso8601(),
+      "at" => utc_iso8601(at),
       "result" => result,
       "label" => binding.label,
-      "actions" => Enum.map(binding.actions, &%{"name" => &1.name, "label" => &1.label})
+      "actions" => display(binding.actions)
     }
+  end
+
+  # Never a clause error: its report would print the binding and result.
+  def envelope(_binding_id, _binding, _revision, _at, _result) do
+    raise ArgumentError,
+          "envelope/5 takes a binding id, a binding, a revision, a DateTime and a result"
+  end
+
+  # A DateTime struct whose fields are not a time's either raises in the
+  # calendar functions, whose reports print the fields, or is written as a
+  # time that is none; both raise here instead, carrying neither.
+  defp utc_iso8601(at) do
+    case utc_iso8601_text(at) do
+      {:ok, iso} -> iso
+      :error -> raise ArgumentError, @time_sentence
+    end
+  end
+
+  # The raise above stays outside this rescue: re-raising the calendar's own
+  # error would carry the fields it prints.
+  defp utc_iso8601_text(at) do
+    iso = at |> DateTime.shift_zone!("Etc/UTC") |> DateTime.to_iso8601()
+    if match?({:ok, _at, 0}, DateTime.from_iso8601(iso)), do: {:ok, iso}, else: :error
+  rescue
+    _not_a_time -> :error
+  end
+
+  defp display(actions) do
+    unless Read.proper_length(actions), do: raise(ArgumentError, @actions_sentence)
+
+    Enum.map(actions, fn
+      %Action{name: name, label: label} -> %{"name" => name, "label" => label}
+      _other -> raise ArgumentError, @actions_sentence
+    end)
   end
 end

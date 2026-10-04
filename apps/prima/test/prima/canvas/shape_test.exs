@@ -11,7 +11,9 @@ defmodule Prima.Canvas.ShapeTest do
   refused at the fixture's path for its reason; and the reasons, types and
   depth limit are the module's. Beside them,
   the bounds the fixture would spell at length: a full enum and object, a
-  list at its max and the depth limit built programmatically.
+  list at its max and the depth limit built programmatically, and the
+  terms JSON cannot spell (an improper list, a key that is not a string, a
+  struct), which are refused, or raise, without the value they carry.
   """
 
   use ExUnit.Case, async: true
@@ -26,9 +28,35 @@ defmodule Prima.Canvas.ShapeTest do
 
   defp feed_vectors, do: @feed_vectors |> File.read!() |> Jason.decode!()
 
+  # A value no refusal may carry.
+  @canary "c4n4ry-shape-3b9a"
+
   defp normalized!(shape) do
     {:ok, normalized} = Shape.validate(shape)
     normalized
+  end
+
+  # The report of the ArgumentError `fun` raises, its stacktrace included;
+  # any other exception, or none, fails the test.
+  defp raised(fun) do
+    fun.()
+    flunk("expected an ArgumentError")
+  rescue
+    e in ArgumentError -> Exception.format(:error, e, __STACKTRACE__)
+  end
+
+  # Whether `text` carries the canary, as its bytes or as the byte list
+  # `inspect/1` prints for a binary that is not UTF-8 text.
+  defp carries_canary?(text) do
+    String.contains?(text, [@canary, @canary |> :binary.bin_to_list() |> Enum.join(", ")])
+  end
+
+  # A refusal is text, its path and its reason, and carries no canary. The
+  # path is read itself, not through `inspect/1`, which would print a
+  # binary that is not UTF-8 text as a byte list.
+  defp value_free!({:error, %{path: path, reason: reason}} = refusal) do
+    assert String.valid?(path) and String.valid?(reason), inspect(refusal)
+    refute carries_canary?(path), inspect(refusal)
   end
 
   describe "the fixture" do
@@ -249,6 +277,123 @@ defmodule Prima.Canvas.ShapeTest do
 
       for value <- [:atom, %{a: 1}, {1, 2}, <<0xFF>>],
           do: assert(Shape.check(json, value) == {:error, %{path: "", reason: "type"}})
+    end
+  end
+
+  describe "refusals name no value they were handed" do
+    test "an improper list in a shape is refused at the list, whichever end carries the value" do
+      for values <- [[@canary | :bad_tail], ["a" | @canary], ["a", "b" | {@canary}]] do
+        refusal = Shape.validate(%{"type" => "enum", "values" => values})
+        assert refusal == {:error, %{path: "/values", reason: "type"}}
+        value_free!(refusal)
+
+        object = %{"type" => "object", "fields" => %{"a" => %{"type" => "json"}}}
+        refusal = Shape.validate(Map.put(object, "required", values))
+        assert refusal == {:error, %{path: "/required", reason: "type"}}
+        value_free!(refusal)
+      end
+    end
+
+    test "an improper list in a checked value is refused as another type" do
+      list = normalized!(%{"type" => "list", "of" => %{"type" => "string"}})
+      json = normalized!(%{"type" => "json"})
+
+      object =
+        normalized!(%{"type" => "object", "fields" => %{"xs" => %{"type" => "json"}}})
+
+      for value <- [[@canary | :bad_tail], ["a" | @canary], ["a", "b" | {@canary}]] do
+        for {shape, checked, path} <- [
+              {list, value, ""},
+              {json, value, ""},
+              {json, %{"a" => value}, ""},
+              {object, %{"xs" => value}, "/xs"}
+            ] do
+          refusal = Shape.check(shape, checked)
+          assert refusal == {:error, %{path: path, reason: "type"}}
+          value_free!(refusal)
+        end
+
+        refute Shape.json?(value)
+      end
+    end
+
+    test "a key that is not a string is refused at its object, never named" do
+      # A binary that is not UTF-8 text is no string either: no pointer
+      # spells it.
+      keys = [
+        {:key, @canary},
+        [@canary],
+        %{@canary => 1},
+        String.to_atom(@canary),
+        7,
+        <<0xFF>> <> @canary,
+        @canary <> <<0xC3>>
+      ]
+
+      object = normalized!(%{"type" => "object", "fields" => %{"a" => %{"type" => "json"}}})
+      json = normalized!(%{"type" => "json"})
+
+      for key <- keys do
+        cases = [
+          {Shape.validate(%{"type" => "json", key => 1}), %{path: "", reason: "unknown_key"}},
+          {Shape.validate(%{"type" => "list", "of" => %{"type" => "json", key => @canary}}),
+           %{path: "/of", reason: "unknown_key"}},
+          {Shape.validate(%{"type" => "object", "fields" => %{key => %{"type" => "json"}}}),
+           %{path: "/fields", reason: "name"}},
+          {Shape.check(object, %{key => @canary}), %{path: "", reason: "unknown_field"}},
+          {Shape.check(object, %{"a" => 1, key => @canary}),
+           %{path: "", reason: "unknown_field"}},
+          {Shape.check(json, %{"a" => %{key => @canary}}), %{path: "", reason: "type"}}
+        ]
+
+        for {refusal, expected} <- cases do
+          assert refusal == {:error, expected}, inspect(key)
+          value_free!(refusal)
+        end
+      end
+    end
+
+    test "a struct is refused as another type" do
+      struct = %URI{path: @canary}
+      object = normalized!(%{"type" => "object", "fields" => %{}})
+
+      for refusal <- [
+            Shape.validate(struct),
+            Shape.validate(%{"type" => "list", "of" => struct}),
+            Shape.validate(%{"type" => "object", "fields" => struct}),
+            Shape.check(object, struct),
+            Shape.check(normalized!(%{"type" => "json"}), [struct])
+          ] do
+        assert {:error, %{reason: "type"}} = refusal
+        value_free!(refusal)
+      end
+    end
+
+    test "a shape that is not a validated one raises without the value it carries" do
+      # Each shape with a value that reaches the part of it that is not a
+      # shape's.
+      shapes = [
+        {@canary, [@canary]},
+        {{@canary}, [@canary]},
+        {%{"type" => @canary}, [@canary]},
+        {%{"type" => "list", "of" => @canary, "max" => 1}, [@canary]},
+        {%{"type" => "object", "fields" => @canary, "required" => []}, %{"a" => [@canary]}},
+        {%{"type" => "object", "fields" => %{"a" => @canary}, "required" => []},
+         %{"a" => [@canary]}},
+        {%{"type" => "enum", "values" => @canary}, @canary}
+      ]
+
+      for {shape, value} <- shapes do
+        refute carries_canary?(raised(fn -> Shape.check(shape, value) end))
+        refute carries_canary?(raised(fn -> Shape.fixture(shape) end))
+      end
+
+      for shape <- [{@canary}, [@canary], %{"k" => [1 | @canary]}, %{{:k, @canary} => 1}] do
+        refute carries_canary?(raised(fn -> Shape.encode(shape) end))
+        refute carries_canary?(raised(fn -> Shape.digest(shape) end))
+      end
+
+      refute carries_canary?(raised(fn -> Shape.escape({@canary}) end))
     end
   end
 end

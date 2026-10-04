@@ -6,9 +6,12 @@ defmodule Prima.FeedTest do
   Feeds against `tests/fixtures/feed.json`: every valid binding reads and
   writes back to itself, every refused binding is refused at its path for
   its reason, the inputs, crons, results and envelopes are the fixture's,
-  and a binding id has its grammar. Beside them, the byte bounds of a
-  feed's JSON text, checked before the shape, and the envelope's refusal
-  to carry anything but the binding's display part.
+  the fixture's rows at the byte bounds are their stated bytes and are
+  accepted or refused as it says, the size before the shape, and a binding
+  id has its grammar. Beside them, the envelope's refusal to carry
+  anything but the binding's display part, and the terms JSON cannot spell
+  (an improper list, a key that is not a string, a struct), which are
+  refused, or raise, without the value they carry.
   """
 
   use ExUnit.Case, async: true
@@ -18,7 +21,41 @@ defmodule Prima.FeedTest do
 
   @vectors Path.expand("../../../../tests/fixtures/feed.json", __DIR__)
 
+  # A value no refusal may carry.
+  @canary "c4n4ry-feed-0a6c"
+
   defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
+
+  defp json_bytes(value) do
+    {:ok, text} = Prima.Json.encode(value)
+    byte_size(text)
+  end
+
+  defp run_action(args),
+    do: %{"name" => "go", "label" => "Go", "kind" => "run", "operation" => "go", "args" => args}
+
+  # The report of the ArgumentError `fun` raises, its stacktrace included;
+  # any other exception, or none, fails the test.
+  defp raised(fun) do
+    fun.()
+    flunk("expected an ArgumentError")
+  rescue
+    e in ArgumentError -> Exception.format(:error, e, __STACKTRACE__)
+  end
+
+  # Whether `text` carries the canary, as its bytes or as the byte list
+  # `inspect/1` prints for a binary that is not UTF-8 text.
+  defp carries_canary?(text) do
+    String.contains?(text, [@canary, @canary |> :binary.bin_to_list() |> Enum.join(", ")])
+  end
+
+  # A refusal is text, its path and its reason, and carries no canary. The
+  # path is read itself, not through `inspect/1`, which would print a
+  # binary that is not UTF-8 text as a byte list.
+  defp value_free!({:error, %{path: path, reason: reason}} = refusal) do
+    assert String.valid?(path) and String.valid?(reason), inspect(refusal)
+    refute carries_canary?(path), inspect(refusal)
+  end
 
   defp bindings do
     for %{"binding" => json} <- vectors()["bindings"]["valid"] do
@@ -102,7 +139,7 @@ defmodule Prima.FeedTest do
 
       [btc | _] = bindings
       refresh = Enum.find(btc.actions, &(&1.kind == :refresh))
-      assert_raise FunctionClauseError, fn -> Feed.input(refresh) end
+      assert_raise ArgumentError, fn -> Feed.input(refresh) end
     end
 
     test "each interval's cron expression" do
@@ -130,6 +167,74 @@ defmodule Prima.FeedTest do
       end
     end
 
+    test "every result row at the byte bound is its stated bytes, the size checked before the shape" do
+      %{"binding" => index, "results" => %{"valid" => valid, "invalid" => invalid}} =
+        vectors()["bounds"]
+
+      binding = Enum.at(bindings(), index)
+      assert valid != [] and invalid != []
+
+      for %{"why" => why, "bytes" => bytes, "result" => result} <- valid do
+        assert json_bytes(result) == bytes, why
+        assert bytes == Feed.result_max_bytes(), why
+        assert Feed.check_result(binding, result) == :ok, why
+      end
+
+      for %{"why" => why, "bytes" => bytes, "result" => result, "path" => path} = row <- invalid do
+        assert json_bytes(result) == bytes, why
+        assert bytes == Feed.result_max_bytes() + 1, why
+
+        assert Feed.check_result(binding, result) ==
+                 {:error, %{path: path, reason: row["reason"]}},
+               why
+
+        # The shape alone: what the size refusal takes precedence over.
+        case row do
+          %{"shape_refusal" => %{"path" => at, "reason" => reason}} ->
+            assert Prima.Canvas.Shape.check(binding.result_shape, result) ==
+                     {:error, %{path: at, reason: reason}},
+                   why
+
+          _within_shape ->
+            assert Prima.Canvas.Shape.check(binding.result_shape, result) == :ok, why
+        end
+      end
+
+      assert Enum.any?(invalid, &Map.has_key?(&1, "shape_refusal"))
+    end
+
+    test "every args row at the byte bound is its stated bytes, refused at /args past it" do
+      %{"binding" => index, "args" => %{"valid" => valid, "invalid" => invalid}} =
+        vectors()["bounds"]
+
+      json = Enum.at(vectors()["bindings"]["valid"], index)["binding"]
+      assert valid != [] and invalid != []
+
+      for %{"why" => why, "bytes" => bytes, "args" => args} <- valid do
+        assert json_bytes(args) == bytes, why
+        assert bytes == Feed.args_max_bytes(), why
+        assert {:ok, %Binding{args: ^args}} = Binding.validate(%{json | "args" => args}), why
+
+        run = run_action(args)
+        assert {:ok, %Action{args: ^args}} = Action.validate(run), why
+      end
+
+      for %{"why" => why, "bytes" => bytes, "args" => args, "path" => path} = row <- invalid do
+        assert json_bytes(args) == bytes, why
+        assert bytes == Feed.args_max_bytes() + 1, why
+
+        assert Binding.validate(%{json | "args" => args}) ==
+                 {:error, %{path: path, reason: row["reason"]}},
+               why
+
+        run = run_action(args)
+
+        assert Binding.validate(%{json | "actions" => [run]}) ==
+                 {:error, %{path: "/actions/0" <> path, reason: row["reason"]}},
+               why
+      end
+    end
+
     test "every envelope is the fixture's" do
       bindings = bindings()
 
@@ -144,26 +249,6 @@ defmodule Prima.FeedTest do
   end
 
   describe "the bounds" do
-    test "a result is at most 65536 bytes of JSON text, checked before its shape" do
-      binding =
-        json_binding(%{"type" => "object", "fields" => %{"s" => %{"type" => "json"}}})
-
-      at_bound = %{"s" => String.duplicate("a", 65_528)}
-      past_bound = %{"s" => String.duplicate("a", 65_529)}
-      assert byte_size(Jason.encode!(at_bound)) == 65_536
-      assert byte_size(Jason.encode!(past_bound)) == 65_537
-
-      assert Feed.check_result(binding, at_bound) == :ok
-      assert Feed.check_result(binding, past_bound) == {:error, %{path: "", reason: "size"}}
-
-      # Past the bound and outside the shape: the size is the refusal.
-      outside = %{"t" => String.duplicate("a", 65_529)}
-      assert Feed.check_result(binding, outside) == {:error, %{path: "", reason: "size"}}
-
-      assert Feed.check_result(binding, %{"t" => 1}) ==
-               {:error, %{path: "/t", reason: "unknown_field"}}
-    end
-
     test "a result JSON text cannot be written for is refused as json" do
       binding = json_binding(%{"type" => "json", "nullable" => true})
 
@@ -177,17 +262,8 @@ defmodule Prima.FeedTest do
       end
     end
 
-    test "args are at most 4096 bytes of JSON text, and may hold floats and nulls" do
+    test "args may hold floats and nulls, and only JSON" do
       [btc | _] = vectors()["bindings"]["valid"] |> Enum.map(& &1["binding"])
-
-      at_bound = %{"pad" => String.duplicate("x", 4086)}
-      assert byte_size(Jason.encode!(at_bound)) == 4096
-      assert {:ok, %Binding{args: ^at_bound}} = Binding.validate(%{btc | "args" => at_bound})
-
-      past_bound = %{"pad" => String.duplicate("x", 4087)}
-
-      assert Binding.validate(%{btc | "args" => past_bound}) ==
-               {:error, %{path: "/args", reason: "size"}}
 
       floats = %{"depth" => 2.5, "venue" => nil, "levels" => [0.1, nil]}
       assert {:ok, %Binding{args: ^floats}} = Binding.validate(%{btc | "args" => floats})
@@ -273,8 +349,124 @@ defmodule Prima.FeedTest do
       assert_raise ArgumentError, fn -> Feed.envelope("btc", btc, 1, at, %{}) end
       assert_raise ArgumentError, fn -> Feed.envelope("", btc, 1, at, %{}) end
 
-      assert_raise FunctionClauseError, fn ->
+      assert_raise ArgumentError, fn ->
         Feed.envelope(Prima.UUID7.generate_id("feed"), btc, -1, at, %{})
+      end
+    end
+  end
+
+  describe "refusals name no value they were handed" do
+    setup do
+      [json | _] = vectors()["bindings"]["valid"] |> Enum.map(& &1["binding"])
+      {:ok, btc} = Binding.validate(json)
+      %{json: json, btc: btc}
+    end
+
+    test "a key that is not a string in a binding, an action, its args or its shape",
+         %{json: json} do
+      [refresh | _] = json["actions"]
+
+      # A binary that is not UTF-8 text is no string either: no pointer
+      # spells it.
+      keys = [
+        {:key, @canary},
+        [@canary],
+        %{@canary => 1},
+        String.to_atom(@canary),
+        <<0xFF>> <> @canary,
+        @canary <> <<0xC3>>
+      ]
+
+      for key <- keys do
+        cases = [
+          {Map.put(json, key, @canary), %{path: "", reason: "unknown_key"}},
+          {%{json | "actions" => [Map.put(refresh, key, @canary)]},
+           %{path: "/actions/0", reason: "unknown_key"}},
+          {%{json | "args" => %{key => @canary}}, %{path: "/args", reason: "json"}},
+          {%{json | "result_shape" => Map.put(json["result_shape"], key, @canary)},
+           %{path: "/result_shape", reason: "unknown_key"}},
+          {%{
+             json
+             | "result_shape" => %{"type" => "object", "fields" => %{key => %{"type" => "json"}}}
+           }, %{path: "/result_shape/fields", reason: "name"}}
+        ]
+
+        for {binding, expected} <- cases do
+          refusal = Binding.validate(binding)
+          assert refusal == {:error, expected}, inspect(key)
+          value_free!(refusal)
+        end
+
+        refusal = Action.validate(Map.put(refresh, key, @canary))
+        assert refusal == {:error, %{path: "", reason: "unknown_key"}}
+        value_free!(refusal)
+      end
+    end
+
+    test "an improper list or a struct in a binding, its actions, its args or a result",
+         %{json: json, btc: btc} do
+      [refresh | _] = json["actions"]
+      struct = %URI{path: @canary}
+
+      cases = [
+        {%{json | "actions" => [refresh | @canary]}, %{path: "/actions", reason: "type"}},
+        {%{json | "actions" => [@canary | :bad_tail]}, %{path: "/actions", reason: "type"}},
+        {%{json | "actions" => [struct]}, %{path: "/actions/0", reason: "type"}},
+        {%{json | "args" => %{"xs" => [1 | @canary]}}, %{path: "/args", reason: "json"}},
+        {%{json | "args" => struct}, %{path: "/args", reason: "type"}},
+        {%{json | "result_shape" => %{"type" => "enum", "values" => ["a" | @canary]}},
+         %{path: "/result_shape/values", reason: "type"}},
+        {struct, %{path: "", reason: "type"}}
+      ]
+
+      for {binding, expected} <- cases do
+        refusal = Binding.validate(binding)
+        assert refusal == {:error, expected}
+        value_free!(refusal)
+      end
+
+      for result <- [
+            [@canary | :bad_tail],
+            %{"candles" => [1 | @canary]},
+            %{{:key, @canary} => 1},
+            %{(<<0xFF>> <> @canary) => 1},
+            struct
+          ] do
+        refusal = Feed.check_result(btc, result)
+        assert refusal == {:error, %{path: "", reason: "json"}}
+        value_free!(refusal)
+      end
+    end
+
+    test "a builder handed a term outside its arguments raises without it", %{btc: btc} do
+      at = ~U[2026-10-04 12:00:00Z]
+      id = Prima.UUID7.generate_id("feed")
+      secret = %{btc | args: %{"key" => @canary}}
+      [refresh | _] = btc.actions
+
+      calls = [
+        fn -> Feed.input(%{"operation" => @canary}) end,
+        fn -> Feed.input(%{refresh | label: @canary}) end,
+        fn -> Feed.cron(%{secret | interval_minutes: 7}) end,
+        fn -> Feed.cron({@canary}) end,
+        fn -> Feed.check_result(%{"result_shape" => @canary}, %{"price" => @canary}) end,
+        fn -> Feed.check_result(%{btc | result_shape: {@canary}}, %{"price" => 1}) end,
+        fn -> Feed.envelope(@canary, btc, 1, at, %{}) end,
+        fn -> Feed.envelope(id, secret, -1, at, %{"price" => @canary}) end,
+        fn -> Feed.envelope(id, secret, 1, @canary, %{"price" => @canary}) end,
+        fn -> Feed.envelope(id, %{secret | actions: [@canary]}, 1, at, %{}) end,
+        fn -> Feed.envelope(id, %{secret | actions: [refresh | @canary]}, 1, at, %{}) end,
+        fn -> Feed.envelope(id, secret, 1, %{at | year: @canary}, %{}) end,
+        fn -> Feed.envelope(id, secret, 1, %{at | month: 13, zone_abbr: @canary}, %{}) end,
+        fn -> Binding.to_json(%{"name" => @canary}) end,
+        fn -> Binding.to_json(%{secret | actions: [@canary]}) end,
+        fn -> Binding.to_json(%{secret | actions: [refresh | @canary]}) end,
+        fn -> Action.to_json(%{"name" => @canary}) end,
+        fn -> Action.to_json(%{refresh | kind: @canary}) end
+      ]
+
+      for call <- calls do
+        refute carries_canary?(raised(call))
       end
     end
   end

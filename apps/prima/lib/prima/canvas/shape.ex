@@ -36,6 +36,14 @@ defmodule Prima.Canvas.Shape do
   sorted order and a list's elements in order, so the refusal is the first
   failing path.
 
+  A refusal names no value it was handed. A term outside the grammar (an
+  improper list, a key that is not a string, a struct) is refused like any
+  other value of the wrong type, and a key that is not a string, a binary
+  that is not UTF-8 text among them, has no pointer spelling and leaves
+  the path at its object, so a path is always text. `check/2`, `fixture/1`,
+  `encode/1` and `digest/1` take a validated shape, and a term they cannot
+  read as one raises an `ArgumentError` naming no value.
+
   `tests/fixtures/canvas_shape.json` holds valid and refused shapes, values
   and `results` blocks.
   """
@@ -125,16 +133,22 @@ defmodule Prima.Canvas.Shape do
   def escape(segment) when is_binary(segment),
     do: segment |> String.replace("~", "~0") |> String.replace("/", "~1")
 
+  def escape(_segment), do: raise(ArgumentError, "a pointer segment is a string or an index")
+
   @doc "Whether `value` is a decoded JSON value: string-keyed objects, lists and scalars."
   @spec json?(term()) :: boolean()
   def json?(value) when is_binary(value), do: String.valid?(value)
   def json?(value) when is_number(value) or is_boolean(value) or is_nil(value), do: true
-  def json?(value) when is_list(value), do: Enum.all?(value, &json?/1)
+  def json?(value) when is_list(value), do: json_list?(value)
 
   def json?(value) when is_map(value) and not is_struct(value),
     do: Enum.all?(value, fn {key, member} -> is_binary(key) and json?(key) and json?(member) end)
 
   def json?(_value), do: false
+
+  defp json_list?([]), do: true
+  defp json_list?([head | tail]), do: json?(head) and json_list?(tail)
+  defp json_list?(_improper_tail), do: false
 
   # ---- the shape -------------------------------------------------------------
 
@@ -168,7 +182,7 @@ defmodule Prima.Canvas.Shape do
   defp known_keys(map, known, path) do
     case map |> Map.keys() |> Enum.reject(&(&1 in known)) |> Enum.sort() do
       [] -> :ok
-      [key | _] -> refuse(path <> "/" <> escape(to_string(key)), "unknown_key")
+      [key | _] -> refuse(child(path, key), "unknown_key")
     end
   end
 
@@ -221,7 +235,17 @@ defmodule Prima.Canvas.Shape do
 
   defp enum_values(:error, path), do: refuse(path, "required")
 
-  defp enum_values({:ok, values}, path) when is_list(values) and length(values) in 1..@enum_max do
+  defp enum_values({:ok, values}, path) when is_list(values) do
+    case proper_length(values) do
+      nil -> refuse(path, "type")
+      count when count in 1..@enum_max -> distinct_values(values, path)
+      _count -> refuse(path, "range")
+    end
+  end
+
+  defp enum_values({:ok, _values}, path), do: refuse(path, "type")
+
+  defp distinct_values(values, path) do
     values
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, MapSet.new()}, fn {value, index}, {:ok, seen} ->
@@ -240,17 +264,13 @@ defmodule Prima.Canvas.Shape do
     end
   end
 
-  defp enum_values({:ok, values}, path) when is_list(values), do: refuse(path, "range")
-
-  defp enum_values({:ok, _values}, path), do: refuse(path, "type")
-
   defp field_names(fields, path) when is_map(fields) and not is_struct(fields) do
     if map_size(fields) > @fields_max do
       refuse(path, "range")
     else
       case fields |> Map.keys() |> Enum.sort() |> Enum.reject(&name?/1) do
         [] -> :ok
-        [name | _] -> refuse(path <> "/" <> escape(to_string(name)), "name")
+        [name | _] -> refuse(child(path, name), "name")
       end
     end
   end
@@ -258,6 +278,14 @@ defmodule Prima.Canvas.Shape do
   defp field_names(_fields, path), do: refuse(path, "type")
 
   defp required(names, fields, path) when is_list(names) do
+    if proper_length(names),
+      do: distinct_required(names, fields, path),
+      else: refuse(path, "type")
+  end
+
+  defp required(_names, _fields, path), do: refuse(path, "type")
+
+  defp distinct_required(names, fields, path) do
     names
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, MapSet.new()}, fn {name, index}, {:ok, seen} ->
@@ -277,8 +305,6 @@ defmodule Prima.Canvas.Shape do
     end
   end
 
-  defp required(_names, _fields, path), do: refuse(path, "type")
-
   defp field_shapes(fields, path, depth) do
     fields
     |> Enum.sort()
@@ -290,22 +316,31 @@ defmodule Prima.Canvas.Shape do
     end)
   end
 
-  @doc "The canonical JSON bytes (`Prima.JCS`) of a validated shape."
+  @doc """
+  The canonical JSON bytes (`Prima.JCS`) of a validated shape. A term
+  `Prima.JCS` cannot encode raises an `ArgumentError` naming no value.
+  """
   @spec encode(t()) :: binary()
-  def encode(shape) when is_map(shape) do
-    {:ok, bytes} = Prima.JCS.encode(shape)
-    bytes
+  def encode(shape) do
+    with true <- is_map(shape) and json?(shape),
+         {:ok, bytes} <- Prima.JCS.encode(shape) do
+      bytes
+    else
+      _refused -> raise ArgumentError, "encode/1 takes a validated shape"
+    end
   end
 
   @doc "A validated shape's digest: `sha256:` over `encode/1`."
   @spec digest(t()) :: String.t()
-  def digest(shape) when is_map(shape), do: Prima.JCS.hash_binary(encode(shape))
+  def digest(shape), do: Prima.JCS.hash_binary(encode(shape))
 
   # ---- values ----------------------------------------------------------------
 
   @doc """
   Whether a decoded JSON `value` has the validated `shape`: `:ok`, or
-  `{:error, %{path, reason}}` for the first failing path.
+  `{:error, %{path, reason}}` for the first failing path. A part of
+  `shape` it cannot read as a validated shape's raises an `ArgumentError`
+  naming no value.
   """
   @spec check(t(), term()) :: :ok | {:error, refusal()}
   def check(shape, value), do: value(shape, value, "")
@@ -338,23 +373,23 @@ defmodule Prima.Canvas.Shape do
     end
   end
 
-  defp value(%{"type" => "enum", "values" => values}, value, path) do
+  defp value(%{"type" => "enum", "values" => values}, value, path) when is_list(values) do
     cond do
       not is_binary(value) -> refuse(path, "type")
-      value in values -> :ok
+      member?(values, value) -> :ok
       true -> refuse(path, "enum")
     end
   end
 
   defp value(%{"type" => "list", "of" => of, "max" => max}, value, path) do
-    cond do
-      not is_list(value) ->
+    case if(is_list(value), do: proper_length(value)) do
+      nil ->
         refuse(path, "type")
 
-      length(value) > max ->
+      count when count > max ->
         refuse(path, "max")
 
-      true ->
+      _count ->
         value
         |> Enum.with_index()
         |> first_refusal(fn {element, index} ->
@@ -363,7 +398,8 @@ defmodule Prima.Canvas.Shape do
     end
   end
 
-  defp value(%{"type" => "object", "fields" => fields, "required" => required}, value, path) do
+  defp value(%{"type" => "object", "fields" => fields, "required" => required}, value, path)
+       when is_map(fields) and is_list(required) do
     if is_map(value) and not is_struct(value) do
       value
       |> Map.keys()
@@ -379,13 +415,17 @@ defmodule Prima.Canvas.Shape do
   defp value(%{"type" => "json"}, value, path),
     do: if(json?(value), do: :ok, else: refuse(path, "type"))
 
+  # Never a clause error: its report would print the value.
+  defp value(_shape, _value, _path),
+    do: raise(ArgumentError, "check/2 takes a validated shape")
+
   defp field(fields, required, value, key, path) do
-    at = path <> "/" <> escape(to_string(key))
+    at = child(path, key)
 
     case {Map.fetch(fields, key), Map.fetch(value, key)} do
       {:error, _present} -> refuse(at, "unknown_field")
       {{:ok, shape}, {:ok, member}} -> value(shape, member, at)
-      {{:ok, _shape}, :error} -> if key in required, do: refuse(at, "required"), else: :ok
+      {{:ok, _shape}, :error} -> if member?(required, key), do: refuse(at, "required"), else: :ok
     end
   end
 
@@ -403,7 +443,9 @@ defmodule Prima.Canvas.Shape do
   @doc """
   A value a validated shape passes, deterministic and never `null`: `""`,
   `0`, `false`, `#{@fixture_time}`, an enum's first value, a list of one
-  fixture, an object with every field's fixture, and `{}` for `json`.
+  fixture, an object with every field's fixture, and `{}` for `json`. A
+  `shape` it cannot read as a validated one raises an `ArgumentError`
+  naming no value.
   """
   @spec fixture(t()) :: term()
   def fixture(%{"type" => "string"}), do: ""
@@ -413,14 +455,34 @@ defmodule Prima.Canvas.Shape do
   def fixture(%{"type" => "enum", "values" => [first | _]}), do: first
   def fixture(%{"type" => "list", "of" => of}), do: [fixture(of)]
 
-  def fixture(%{"type" => "object", "fields" => fields}),
-    do: Map.new(fields, fn {name, shape} -> {name, fixture(shape)} end)
+  def fixture(%{"type" => "object", "fields" => fields})
+      when is_map(fields) and not is_struct(fields),
+      do: Map.new(fields, fn {name, shape} -> {name, fixture(shape)} end)
 
   def fixture(%{"type" => "json"}), do: %{}
+
+  def fixture(_shape), do: raise(ArgumentError, "fixture/1 takes a validated shape")
 
   # ---- helpers ---------------------------------------------------------------
 
   defp code_points(string), do: string |> String.codepoints() |> length()
+
+  # A proper list's length, or nil for an improper one, which `length/1`
+  # would raise on, its report printing the list.
+  defp proper_length(list), do: proper_length(list, 0)
+  defp proper_length([], count), do: count
+  defp proper_length([_head | tail], count), do: proper_length(tail, count + 1)
+  defp proper_length(_improper_tail, _count), do: nil
+
+  defp member?([head | tail], term), do: head === term or member?(tail, term)
+  defp member?(_end, _term), do: false
+
+  # A key's pointer segment. A key that is not a string, a binary that is
+  # not UTF-8 text among them, has no spelling in a pointer, so the path
+  # stays at its object and never names the key.
+  defp child(path, key) do
+    if is_binary(key) and String.valid?(key), do: path <> "/" <> escape(key), else: path
+  end
 
   defp refuse(path, reason) when is_map_key(@reasons, reason),
     do: {:error, %{path: path, reason: reason}}

@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.CanvasWire, read by apps/prima/test/prima/canvas_wire_test.exs and the toolkit's JavaScript test (apps/cyfr/assets/test/toolkit/wire.test.mjs). Every row is plain JSON. A message is exactly v, verb, frame and args, with args required. `to_prism_verbs` are the verbs the toolkit posts to Prism and `to_toolkit_verbs` those Prism posts to the toolkit; every valid message is of its `direction`'s set, decodes and encodes back to itself. Every invalid message is refused for the reason `why` gives, on both sides. Each valid path row is the host page, data prefix and stream route of its credential and frame; each invalid row names a credential or frame id the path builders refuse.",
+  "comment": "The vectors pinning Prima.CanvasWire, read by apps/prima/test/prima/canvas_wire_test.exs and the toolkit's JavaScript test (apps/cyfr/assets/test/toolkit/wire.test.mjs). Every row is plain JSON. A message is exactly v, verb, frame and args, with args required. A boot's `streams` is required: the version's declared streams, at most 64 distinct pairs of exactly `name` (a stream name, as the tincture wire's stream_open holds it) and `subject` (a string or null), `[]` declaring none. `to_prism_verbs` are the verbs the toolkit posts to Prism and `to_toolkit_verbs` those Prism posts to the toolkit; every valid message is of its `direction`'s set, decodes and encodes back to itself. Every invalid message is refused for the reason `why` gives, on both sides. Each valid path row is the host page, data prefix and stream route of its credential and frame; each invalid row names a credential or frame id the path builders refuse.",
   "version": 1,
   "to_prism_verbs": [
     "ready",
@@ -47,11 +47,15 @@
       },
       {
         "direction": "to_toolkit",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": [{"name": "feed.results", "subject": "btc"}, {"name": "feed.results", "subject": "eth"}, {"name": "runs.changes", "subject": null}]}}
       },
       {
         "direction": "to_toolkit",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "validation", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/lib/canvas.mjs", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": [{"name": "feed.results", "subject": "feed-1"}, {"name": "feed.results", "subject": "feed-2"}, {"name": "feed.results", "subject": "feed-3"}, {"name": "feed.results", "subject": "feed-4"}, {"name": "feed.results", "subject": "feed-5"}, {"name": "feed.results", "subject": "feed-6"}, {"name": "feed.results", "subject": "feed-7"}, {"name": "feed.results", "subject": "feed-8"}, {"name": "feed.results", "subject": "feed-9"}, {"name": "feed.results", "subject": "feed-10"}, {"name": "feed.results", "subject": "feed-11"}, {"name": "feed.results", "subject": "feed-12"}, {"name": "feed.results", "subject": "feed-13"}, {"name": "feed.results", "subject": "feed-14"}, {"name": "feed.results", "subject": "feed-15"}, {"name": "feed.results", "subject": "feed-16"}, {"name": "feed.results", "subject": "feed-17"}, {"name": "feed.results", "subject": "feed-18"}, {"name": "feed.results", "subject": "feed-19"}, {"name": "feed.results", "subject": "feed-20"}, {"name": "feed.results", "subject": "feed-21"}, {"name": "feed.results", "subject": "feed-22"}, {"name": "feed.results", "subject": "feed-23"}, {"name": "feed.results", "subject": "feed-24"}, {"name": "feed.results", "subject": "feed-25"}, {"name": "feed.results", "subject": "feed-26"}, {"name": "feed.results", "subject": "feed-27"}, {"name": "feed.results", "subject": "feed-28"}, {"name": "feed.results", "subject": "feed-29"}, {"name": "feed.results", "subject": "feed-30"}, {"name": "feed.results", "subject": "feed-31"}, {"name": "feed.results", "subject": "feed-32"}, {"name": "feed.results", "subject": "feed-33"}, {"name": "feed.results", "subject": "feed-34"}, {"name": "feed.results", "subject": "feed-35"}, {"name": "feed.results", "subject": "feed-36"}, {"name": "feed.results", "subject": "feed-37"}, {"name": "feed.results", "subject": "feed-38"}, {"name": "feed.results", "subject": "feed-39"}, {"name": "feed.results", "subject": "feed-40"}, {"name": "feed.results", "subject": "feed-41"}, {"name": "feed.results", "subject": "feed-42"}, {"name": "feed.results", "subject": "feed-43"}, {"name": "feed.results", "subject": "feed-44"}, {"name": "feed.results", "subject": "feed-45"}, {"name": "feed.results", "subject": "feed-46"}, {"name": "feed.results", "subject": "feed-47"}, {"name": "feed.results", "subject": "feed-48"}, {"name": "feed.results", "subject": "feed-49"}, {"name": "feed.results", "subject": "feed-50"}, {"name": "feed.results", "subject": "feed-51"}, {"name": "feed.results", "subject": "feed-52"}, {"name": "feed.results", "subject": "feed-53"}, {"name": "feed.results", "subject": "feed-54"}, {"name": "feed.results", "subject": "feed-55"}, {"name": "feed.results", "subject": "feed-56"}, {"name": "feed.results", "subject": "feed-57"}, {"name": "feed.results", "subject": "feed-58"}, {"name": "feed.results", "subject": "feed-59"}, {"name": "feed.results", "subject": "feed-60"}, {"name": "feed.results", "subject": "feed-61"}, {"name": "feed.results", "subject": "feed-62"}, {"name": "feed.results", "subject": "feed-63"}, {"name": "feed.results", "subject": "feed-64"}]}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "validation", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/lib/canvas.mjs", "toolkit": 1, "streams": []}}
       },
       {
         "direction": "to_toolkit",
@@ -169,67 +173,99 @@
       },
       {
         "why": "boot carries no worker URL",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "worker_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/worker.js"}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "worker_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/worker.js", "streams": []}}
       },
       {
         "why": "boot lacking its toolkit",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js"}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "streams": []}}
       },
       {
         "why": "a toolkit major is positive",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 0}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 0, "streams": []}}
       },
       {
         "why": "a toolkit major is an integer",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": "1"}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": "1", "streams": []}}
       },
       {
         "why": "a toolkit major is whole",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1.5}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1.5, "streams": []}}
       },
       {
         "why": "an unknown mode",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "debug", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "debug", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": []}}
       },
       {
         "why": "an empty credential",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": []}}
       },
       {
         "why": "another frame's data path",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_00aa11bb22/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_00aa11bb22/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": []}}
       },
       {
         "why": "a data path without its trailing slash",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": []}}
       },
       {
         "why": "a data path as an absolute URL",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "https://cyfr.example/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "https://cyfr.example/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": []}}
       },
       {
         "why": "a module that is not a script",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.css", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.css", "toolkit": 1, "streams": []}}
       },
       {
         "why": "a module on another origin",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "https://evil.example/canvas.js", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "https://evil.example/canvas.js", "toolkit": 1, "streams": []}}
       },
       {
         "why": "a module outside the served prefix",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/assets/canvas.js", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/assets/canvas.js", "toolkit": 1, "streams": []}}
       },
       {
         "why": "a module path climbing out of its version",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/../canvas.js", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/../canvas.js", "toolkit": 1, "streams": []}}
       },
       {
         "why": "a module under a credential outside its grammar",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/short/canvas.js", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/short/canvas.js", "toolkit": 1, "streams": []}}
       },
       {
         "why": "a module path with a query",
-        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js?v=1", "toolkit": 1}}
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js?v=1", "toolkit": 1, "streams": []}}
+      },
+      {
+        "why": "boot lacking its streams",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+      },
+      {
+        "why": "a stream entry with another key",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": [{"name": "feed.results", "subject": "btc", "filter": "feed"}]}}
+      },
+      {
+        "why": "a stream entry lacking its subject",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": [{"name": "runs.changes"}]}}
+      },
+      {
+        "why": "a stream name outside the grammar",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": [{"name": "feed", "subject": "btc"}]}}
+      },
+      {
+        "why": "a subject that is neither a string nor null",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": [{"name": "feed.results", "subject": 7}]}}
+      },
+      {
+        "why": "a stream and subject pair named twice",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": [{"name": "feed.results", "subject": "btc"}, {"name": "runs.changes", "subject": null}, {"name": "feed.results", "subject": "btc"}]}}
+      },
+      {
+        "why": "65 streams",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": [{"name": "feed.results", "subject": "feed-1"}, {"name": "feed.results", "subject": "feed-2"}, {"name": "feed.results", "subject": "feed-3"}, {"name": "feed.results", "subject": "feed-4"}, {"name": "feed.results", "subject": "feed-5"}, {"name": "feed.results", "subject": "feed-6"}, {"name": "feed.results", "subject": "feed-7"}, {"name": "feed.results", "subject": "feed-8"}, {"name": "feed.results", "subject": "feed-9"}, {"name": "feed.results", "subject": "feed-10"}, {"name": "feed.results", "subject": "feed-11"}, {"name": "feed.results", "subject": "feed-12"}, {"name": "feed.results", "subject": "feed-13"}, {"name": "feed.results", "subject": "feed-14"}, {"name": "feed.results", "subject": "feed-15"}, {"name": "feed.results", "subject": "feed-16"}, {"name": "feed.results", "subject": "feed-17"}, {"name": "feed.results", "subject": "feed-18"}, {"name": "feed.results", "subject": "feed-19"}, {"name": "feed.results", "subject": "feed-20"}, {"name": "feed.results", "subject": "feed-21"}, {"name": "feed.results", "subject": "feed-22"}, {"name": "feed.results", "subject": "feed-23"}, {"name": "feed.results", "subject": "feed-24"}, {"name": "feed.results", "subject": "feed-25"}, {"name": "feed.results", "subject": "feed-26"}, {"name": "feed.results", "subject": "feed-27"}, {"name": "feed.results", "subject": "feed-28"}, {"name": "feed.results", "subject": "feed-29"}, {"name": "feed.results", "subject": "feed-30"}, {"name": "feed.results", "subject": "feed-31"}, {"name": "feed.results", "subject": "feed-32"}, {"name": "feed.results", "subject": "feed-33"}, {"name": "feed.results", "subject": "feed-34"}, {"name": "feed.results", "subject": "feed-35"}, {"name": "feed.results", "subject": "feed-36"}, {"name": "feed.results", "subject": "feed-37"}, {"name": "feed.results", "subject": "feed-38"}, {"name": "feed.results", "subject": "feed-39"}, {"name": "feed.results", "subject": "feed-40"}, {"name": "feed.results", "subject": "feed-41"}, {"name": "feed.results", "subject": "feed-42"}, {"name": "feed.results", "subject": "feed-43"}, {"name": "feed.results", "subject": "feed-44"}, {"name": "feed.results", "subject": "feed-45"}, {"name": "feed.results", "subject": "feed-46"}, {"name": "feed.results", "subject": "feed-47"}, {"name": "feed.results", "subject": "feed-48"}, {"name": "feed.results", "subject": "feed-49"}, {"name": "feed.results", "subject": "feed-50"}, {"name": "feed.results", "subject": "feed-51"}, {"name": "feed.results", "subject": "feed-52"}, {"name": "feed.results", "subject": "feed-53"}, {"name": "feed.results", "subject": "feed-54"}, {"name": "feed.results", "subject": "feed-55"}, {"name": "feed.results", "subject": "feed-56"}, {"name": "feed.results", "subject": "feed-57"}, {"name": "feed.results", "subject": "feed-58"}, {"name": "feed.results", "subject": "feed-59"}, {"name": "feed.results", "subject": "feed-60"}, {"name": "feed.results", "subject": "feed-61"}, {"name": "feed.results", "subject": "feed-62"}, {"name": "feed.results", "subject": "feed-63"}, {"name": "feed.results", "subject": "feed-64"}, {"name": "feed.results", "subject": "feed-65"}]}}
+      },
+      {
+        "why": "streams are a list",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "streams": {"name": "feed.results", "subject": "btc"}}}
       },
       {
         "why": "an unknown posture",

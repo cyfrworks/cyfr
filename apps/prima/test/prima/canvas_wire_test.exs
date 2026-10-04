@@ -8,7 +8,9 @@ defmodule Prima.CanvasWireTest do
   to its direction's verb and encodes back to itself, every refused message
   is refused, and the path builders answer the fixture's paths and raise
   on a credential or frame id outside its grammar. Beside them, the bounds
-  the fixture would spell at length.
+  the fixture would spell at length, a boot's streams held to the tincture
+  wire's stream-name grammar, and refusals that name no key or value the
+  message carries, whatever term it is.
   """
 
   use ExUnit.Case, async: true
@@ -16,6 +18,11 @@ defmodule Prima.CanvasWireTest do
   alias Prima.CanvasWire
 
   @vectors Path.expand("../../../../tests/fixtures/canvas_wire.json", __DIR__)
+
+  # A value no refusal may carry.
+  @canary "c4n4ry-wire-7d1e"
+
+  @frame "frm_8f3c2a1b9d"
 
   defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
 
@@ -28,6 +35,37 @@ defmodule Prima.CanvasWireTest do
     flunk("expected an ArgumentError")
   rescue
     e in ArgumentError -> Exception.format(:error, e, __STACKTRACE__)
+  end
+
+  # Whether `text` carries the canary, as its bytes or as the byte list
+  # `inspect/1` prints for a binary that is not UTF-8 text.
+  defp carries_canary?(text) do
+    String.contains?(text, [@canary, @canary |> :binary.bin_to_list() |> Enum.join(", ")])
+  end
+
+  # A refused decode answers a sentence that is text and without the
+  # canary, and the encode of the same message raises an ArgumentError
+  # whose report, stacktrace included, is without it too.
+  defp refused_without_canary(%{"verb" => verb, "args" => args} = message) do
+    assert {:error, sentence} = CanvasWire.decode(message)
+    assert String.valid?(sentence)
+    refute carries_canary?(sentence)
+
+    decoded = %{verb: String.to_existing_atom(verb), frame: message["frame"], args: args}
+    refute carries_canary?(refusal(fn -> CanvasWire.encode(decoded) end))
+  end
+
+  defp message(verb, args), do: %{"v" => 1, "verb" => verb, "frame" => @frame, "args" => args}
+
+  defp boot(streams) do
+    message("boot", %{
+      "mode" => "live",
+      "credential" => "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+      "data_path" => CanvasWire.data_path(@frame),
+      "module_url" => "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js",
+      "toolkit" => 1,
+      "streams" => streams
+    })
   end
 
   describe "the fixture" do
@@ -218,6 +256,140 @@ defmodule Prima.CanvasWireTest do
       for id <- ["frm_8f3c2a1b9d", "x", "../frm_8f3c2a1b9d", nil, String.duplicate("a", 65)] do
         assert CanvasWire.frame_id?(id) == Prima.TinctureWire.frame_id?(id), inspect(id)
       end
+    end
+
+    test "boot names its streams, at most 64 distinct pairs, and [] declares none",
+         %{boot: boot} do
+      streams = fn list -> put_in(boot, ["args", "streams"], list) end
+      stream = &%{"name" => "feed.results", "subject" => "feed-#{&1}"}
+
+      assert {:ok, %{args: %{"streams" => []}}} = CanvasWire.decode(streams.([]))
+      assert {:ok, _} = CanvasWire.decode(streams.(Enum.map(1..64, stream)))
+      assert {:error, _} = CanvasWire.decode(streams.(Enum.map(1..65, stream)))
+
+      # A pair is distinct, not a name: one stream under two subjects, and
+      # one subject spelt as two streams' names, are four pairs.
+      pairs = [
+        %{"name" => "feed.results", "subject" => "btc"},
+        %{"name" => "feed.results", "subject" => nil},
+        %{"name" => "runs.changes", "subject" => nil},
+        %{"name" => "runs.changes", "subject" => ""}
+      ]
+
+      assert {:ok, decoded} = CanvasWire.decode(streams.(pairs))
+      assert CanvasWire.encode(decoded) == streams.(pairs)
+      assert {:error, _} = CanvasWire.decode(streams.(pairs ++ [hd(pairs)]))
+
+      assert {:error, _} =
+               CanvasWire.decode(%{boot | "args" => Map.delete(boot["args"], "streams")})
+
+      assert {:error, _} = CanvasWire.decode(streams.(nil))
+
+      for subject <- [7, true, ["btc"], %{"feed" => "btc"}, <<0xFF>>] do
+        assert {:error, _} =
+                 CanvasWire.decode(streams.([%{"name" => "feed.results", "subject" => subject}])),
+               inspect(subject)
+      end
+    end
+
+    test "a boot stream's name is what the tincture wire's stream_open admits", %{boot: boot} do
+      names = [
+        "feed.results",
+        "runs.changes",
+        "a.b.c",
+        "feed",
+        "Feed.results",
+        "feed.",
+        ".feed",
+        "feed..results",
+        "1feed.results",
+        "feed.results-x",
+        "",
+        nil,
+        7
+      ]
+
+      for name <- names do
+        stream_open = %{"v" => 1, "stream" => name, "subject" => nil}
+        streams = [%{"name" => name, "subject" => nil}]
+
+        assert match?({:ok, _}, CanvasWire.decode(put_in(boot, ["args", "streams"], streams))) ==
+                 match?({:ok, _}, Prima.TinctureWire.decode_request(:stream_open, stream_open)),
+               inspect(name)
+      end
+    end
+  end
+
+  describe "refusals name no key or value the message carries" do
+    test "an improper list of rects, tinctures or streams" do
+      rect = %{"x" => 0, "y" => 0, "width" => 1, "height" => 1}
+      tincture = %{"ref" => "tincture:local.vault", "name" => "Vault"}
+      stream = %{"name" => "feed.results", "subject" => "btc"}
+
+      for {verb, key, element} <- [
+            {"covered", "rects", rect},
+            {"installed", "tinctures", tincture}
+          ],
+          list <- [[@canary | :bad_tail], [element | @canary], [element, element | {@canary}]] do
+        refused_without_canary(message(verb, %{key => list}))
+      end
+
+      for list <- [[@canary | :bad_tail], [stream | @canary]] do
+        refused_without_canary(boot(list))
+      end
+    end
+
+    test "the reviewer's case: covered with rects [canary | :bad_tail]" do
+      message = %{verb: :covered, frame: @frame, args: %{"rects" => [@canary | :bad_tail]}}
+      refute carries_canary?(refusal(fn -> CanvasWire.encode(message) end))
+    end
+
+    test "a key that is not a string, or a string key the verb does not take" do
+      keys = [
+        @canary,
+        {:key, @canary},
+        [@canary],
+        %{@canary => 1},
+        String.to_atom(@canary),
+        <<0xFF>> <> @canary,
+        @canary <> <<0xC3>>
+      ]
+
+      for key <- keys do
+        refused_without_canary(message("ready", %{key => 1}))
+        refused_without_canary(message("covered", %{"rects" => [%{key => 1}]}))
+        refused_without_canary(boot([%{"name" => "feed.results", "subject" => nil, key => 1}]))
+
+        assert {:error, sentence} = CanvasWire.decode(Map.put(message("ready", %{}), key, 1))
+        assert String.valid?(sentence)
+        refute carries_canary?(sentence)
+      end
+    end
+
+    test "a struct, a tuple or a value of another type where the grammar wants one" do
+      struct = %URI{path: @canary}
+
+      for args <- [
+            %{"rects" => struct},
+            %{"rects" => [struct]},
+            %{"rects" => {@canary}},
+            %{"rects" => [%{"x" => @canary, "y" => 0, "width" => 1, "height" => 1}]}
+          ] do
+        refused_without_canary(message("covered", args))
+      end
+
+      for streams <- [struct, [struct], [%{"name" => @canary, "subject" => nil}]] do
+        refused_without_canary(boot(streams))
+      end
+
+      for subject <- [{@canary}, [@canary], %{"s" => @canary}] do
+        refused_without_canary(boot([%{"name" => "feed.results", "subject" => subject}]))
+      end
+
+      assert {:error, sentence} = CanvasWire.decode(%{message("ready", %{}) | "args" => struct})
+      assert String.valid?(sentence)
+      refute carries_canary?(sentence)
+      refute carries_canary?(refusal(fn -> CanvasWire.encode(struct) end))
     end
   end
 end
