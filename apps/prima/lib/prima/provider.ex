@@ -100,18 +100,31 @@ defmodule Prima.Provider do
     compiles and is anchored at both ends (or none), a binding of `nil` or
     `:holder` (a holder-bound stream with a grammar), a positive bound, and
     a `shape`, `refresh` and `filter` each `nil` or as `t:t/0` describes.
+    A struct missing any field is not one.
     """
     @spec valid?(term()) :: boolean()
-    def valid?(%__MODULE__{} = stream) do
-      Prima.Manifest.Tincture.stream_name?(stream.name) and is_atom(stream.topic) and
-        stream.topic not in [nil, true, false] and
-        projection?(stream.projection) and subject_grammar?(stream.subject) and
-        bind?(stream.bind, stream.subject) and
-        is_integer(stream.deadline_bound) and stream.deadline_bound > 0 and
-        shape?(stream.shape, stream.projection) and refresh?(stream.refresh) and
-        filter?(stream.filter, stream.projection, stream.subject)
+    def valid?(%__MODULE__{
+          name: name,
+          topic: topic,
+          projection: projection,
+          subject: subject,
+          bind: bind,
+          deadline_bound: deadline_bound,
+          shape: shape,
+          refresh: refresh,
+          filter: filter
+        }) do
+      Prima.Manifest.Tincture.stream_name?(name) and is_atom(topic) and
+        topic not in [nil, true, false] and
+        projection?(projection) and subject_grammar?(subject) and
+        bind?(bind, subject) and
+        is_integer(deadline_bound) and deadline_bound > 0 and
+        shape?(shape, projection) and refresh?(refresh) and
+        filter?(filter, projection, subject)
     end
 
+    # Every field is matched above before any is read: a key error's report
+    # would print the struct.
     def valid?(_other), do: false
 
     @doc "Whether the stream's subject is its grant holder's own user id (`bind: :holder`)."

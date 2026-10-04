@@ -232,6 +232,25 @@ defmodule Prima.ProviderTest do
       refute ProviderStream.valid?(%{@deltas | filter: "seq", subject: nil})
     end
 
+    test "is not well formed missing any field, and the check reads none it lacks",
+         %{shape: shape} do
+      # Each field read from a struct that lacks it raised a KeyError whose
+      # report printed the struct, this subject grammar included.
+      readable = %{
+        @deltas
+        | subject: ~S"\Ac4n4ry-stream-3b9f\z",
+          shape: shape,
+          refresh: {Streaming, :streams},
+          filter: "seq"
+      }
+
+      assert ProviderStream.valid?(readable)
+
+      for field <- readable |> Map.from_struct() |> Map.keys() do
+        refute ProviderStream.valid?(Map.delete(readable, field)), "without #{field}"
+      end
+    end
+
     test "is read whole through the provider's declaration", %{shape: shape} do
       assert [%ProviderStream{shape: ^shape, refresh: {Readable, :latest}, filter: "seq"}] =
                Provider.streams(Readable)

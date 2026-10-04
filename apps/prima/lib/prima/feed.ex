@@ -7,17 +7,28 @@ defmodule Prima.Feed.Read do
   # share, each answering a refusal as `%{path, reason}` that names no
   # value it was handed. `Prima.Feed` comes last in this file because it
   # matches the two structs, which must be compiled before it.
+  #
+  # Each reader's head establishes every argument it dereferences: the
+  # decoded value where it reads one as a map, the grammar's own terms (a
+  # key list, a key, a bound) and the pointer. Anything else raises
+  # `@misuse`, a fixed sentence, since a clause, key or binary-construction
+  # error would print the arguments.
 
   alias Prima.Canvas.Shape
 
   @control ~r/[\x{0}-\x{1F}\x{7F}-\x{9F}]/u
+  @misuse "a feed reader takes a decoded value, its grammar's terms and a pointer"
 
-  def known_keys(map, known, path) do
+  def known_keys(map, known, path) when is_map(map) and is_list(known) and is_binary(path) do
+    unless proper_length(known), do: raise(ArgumentError, @misuse)
+
     case map |> Map.keys() |> Enum.reject(&(&1 in known)) |> Enum.sort() do
       [] -> :ok
       [key | _] -> refuse(child(path, key), "unknown_key")
     end
   end
+
+  def known_keys(_map, _known, _path), do: raise(ArgumentError, @misuse)
 
   # A key that is not a string, a binary that is not UTF-8 text among them,
   # has no spelling in a pointer, so the refusal stays at its object and
@@ -26,14 +37,16 @@ defmodule Prima.Feed.Read do
     if is_binary(key) and String.valid?(key), do: path <> "/" <> Shape.escape(key), else: path
   end
 
-  def fetch(map, key, path) do
+  def fetch(map, key, path) when is_map(map) and is_binary(key) and is_binary(path) do
     case Map.fetch(map, key) do
       {:ok, value} -> {:ok, value}
       :error -> refuse(path <> "/" <> key, "required")
     end
   end
 
-  def name(value, path) do
+  def fetch(_map, _key, _path), do: raise(ArgumentError, @misuse)
+
+  def name(value, path) when is_binary(path) do
     cond do
       Prima.Feed.name?(value) -> {:ok, value}
       is_binary(value) -> refuse(path, "name")
@@ -41,7 +54,9 @@ defmodule Prima.Feed.Read do
     end
   end
 
-  def label(value, max, path) do
+  def name(_value, _path), do: raise(ArgumentError, @misuse)
+
+  def label(value, max, path) when is_integer(max) and max >= 1 and is_binary(path) do
     cond do
       not (is_binary(value) and String.valid?(value)) ->
         refuse(path, "type")
@@ -54,7 +69,9 @@ defmodule Prima.Feed.Read do
     end
   end
 
-  def operation(value, path) do
+  def label(_value, _max, _path), do: raise(ArgumentError, @misuse)
+
+  def operation(value, path) when is_binary(path) do
     cond do
       Prima.Manifest.Results.operation?(value) -> {:ok, value}
       is_binary(value) -> refuse(path, "name")
@@ -62,13 +79,16 @@ defmodule Prima.Feed.Read do
     end
   end
 
-  def args(%{} = args, path) when not is_struct(args) do
+  def operation(_value, _path), do: raise(ArgumentError, @misuse)
+
+  def args(%{} = args, path) when not is_struct(args) and is_binary(path) do
     with :ok <- json_text(args, Prima.Feed.args_max_bytes(), path), do: {:ok, args}
   end
 
-  def args(_args, path), do: refuse(path, "type")
+  def args(_args, path) when is_binary(path), do: refuse(path, "type")
+  def args(_args, _path), do: raise(ArgumentError, @misuse)
 
-  def json_text(value, max, path) do
+  def json_text(value, max, path) when is_integer(max) and max >= 0 and is_binary(path) do
     with true <- Shape.json?(value),
          {:ok, text} <- Prima.Json.encode(value) do
       if byte_size(text) <= max, do: :ok, else: refuse(path, "size")
@@ -77,12 +97,16 @@ defmodule Prima.Feed.Read do
     end
   end
 
+  def json_text(_value, _max, _path), do: raise(ArgumentError, @misuse)
+
   def refuse(path, reason) when is_binary(path) and is_binary(reason) do
     unless Map.has_key?(Prima.Feed.reasons(), reason),
       do: raise(ArgumentError, "a feed refusal names one of Prima.Feed.reasons/0")
 
     {:error, %{path: path, reason: reason}}
   end
+
+  def refuse(_path, _reason), do: raise(ArgumentError, @misuse)
 
   # A proper list's length, or nil for an improper one, which `length/1`
   # would raise on, its report printing the list.
@@ -153,23 +177,20 @@ defmodule Prima.Feed.Action do
 
   @doc """
   The JSON form: string keys, `operation` and `args` only for `run`. Any
-  other term raises an `ArgumentError` naming no value.
+  other term, an action missing a field it writes among them, raises an
+  `ArgumentError` naming no value.
   """
   @spec to_json(t()) :: map()
-  def to_json(%__MODULE__{kind: :refresh} = action),
-    do: %{"name" => action.name, "label" => action.label, "kind" => "refresh"}
+  def to_json(%__MODULE__{name: name, label: label, kind: :refresh}),
+    do: %{"name" => name, "label" => label, "kind" => "refresh"}
 
-  def to_json(%__MODULE__{kind: :run} = action) do
-    %{
-      "name" => action.name,
-      "label" => action.label,
-      "kind" => "run",
-      "operation" => action.operation,
-      "args" => action.args
-    }
+  def to_json(%__MODULE__{name: name, label: label, kind: :run, operation: operation, args: args}) do
+    %{"name" => name, "label" => label, "kind" => "run", "operation" => operation, "args" => args}
   end
 
-  # Never a clause error: its report would print the term.
+  # Never a clause or key error: either report would print the term. The
+  # heads above match every field they write, so a struct missing one
+  # lands here too.
   def to_json(_action), do: raise(ArgumentError, "to_json/1 takes a Prima.Feed.Action")
 
   defp kind(kind) when is_map_key(@kinds, kind), do: {:ok, Map.fetch!(@kinds, kind)}
@@ -286,28 +307,38 @@ defmodule Prima.Feed.Binding do
   def validate(_json), do: Read.refuse("", "type")
 
   @doc """
-  The JSON form: string keys, every field written. Any other term, or a
-  binding whose actions are not a list of `Prima.Feed.Action`s, raises an
-  `ArgumentError` naming no value.
+  The JSON form: string keys, every field written. Any other term, a
+  binding missing a field among them, or a binding whose actions are not a
+  list of `Prima.Feed.Action`s, raises an `ArgumentError` naming no value.
   """
   @spec to_json(t()) :: map()
-  def to_json(%__MODULE__{actions: actions} = binding) do
+  def to_json(%__MODULE__{
+        name: name,
+        label: label,
+        reference: reference,
+        operation: operation,
+        args: args,
+        interval_minutes: interval_minutes,
+        result_shape: result_shape,
+        actions: actions
+      }) do
     unless Read.proper_length(actions),
       do: raise(ArgumentError, "a binding's actions are a list of Prima.Feed.Action")
 
     %{
-      "name" => binding.name,
-      "label" => binding.label,
-      "reference" => binding.reference,
-      "operation" => binding.operation,
-      "args" => binding.args,
-      "interval_minutes" => binding.interval_minutes,
-      "result_shape" => binding.result_shape,
+      "name" => name,
+      "label" => label,
+      "reference" => reference,
+      "operation" => operation,
+      "args" => args,
+      "interval_minutes" => interval_minutes,
+      "result_shape" => result_shape,
       "actions" => Enum.map(actions, &Action.to_json/1)
     }
   end
 
-  # Never a clause error: its report would print the term.
+  # Never a clause or key error: either report would print the term. The
+  # head above matches every field, so a struct missing one lands here too.
   def to_json(_binding), do: raise(ArgumentError, "to_json/1 takes a Prima.Feed.Binding")
 
   defp read(json, key, reader) do
@@ -499,26 +530,35 @@ defmodule Prima.Feed do
   `label` and `actions` (`[{name, label}]` in the binding's order). It
   never carries the operation, the arguments, the reference or the
   interval. A binding id outside its grammar, or any other argument
-  outside its type, raises an `ArgumentError` naming no value.
+  outside its type, a binding missing a field the envelope carries among
+  them, raises an `ArgumentError` naming no value.
   """
   @spec envelope(String.t(), Binding.t(), non_neg_integer(), DateTime.t(), term()) :: map()
-  def envelope(binding_id, %Binding{} = binding, revision, %DateTime{} = at, result)
+  def envelope(
+        binding_id,
+        %Binding{name: name, label: label, actions: actions},
+        revision,
+        %DateTime{} = at,
+        result
+      )
       when is_integer(revision) and revision >= 0 do
     unless binding_id?(binding_id),
       do: raise(ArgumentError, "an envelope names its binding by a binding id")
 
     %{
       "binding" => binding_id,
-      "feed" => binding.name,
+      "feed" => name,
       "revision" => revision,
       "at" => utc_iso8601(at),
       "result" => result,
-      "label" => binding.label,
-      "actions" => display(binding.actions)
+      "label" => label,
+      "actions" => display(actions)
     }
   end
 
-  # Never a clause error: its report would print the binding and result.
+  # Never a clause or key error: either report would print the binding and
+  # result. The head above matches every binding field it reads, so a
+  # struct missing one lands here too.
   def envelope(_binding_id, _binding, _revision, _at, _result) do
     raise ArgumentError,
           "envelope/5 takes a binding id, a binding, a revision, a DateTime and a result"

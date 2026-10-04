@@ -10,14 +10,15 @@ defmodule Prima.FeedTest do
   accepted or refused as it says, the size before the shape, and a binding
   id has its grammar. Beside them, the envelope's refusal to carry
   anything but the binding's display part, and the terms JSON cannot spell
-  (an improper list, a key that is not a string, a struct), which are
-  refused, or raise, without the value they carry.
+  (an improper list, a key that is not a string, a struct), a struct
+  missing a field, and the shared readers handed a term outside their
+  arguments, which are refused, or raise, without the value they carry.
   """
 
   use ExUnit.Case, async: true
 
   alias Prima.Feed
-  alias Prima.Feed.{Action, Binding}
+  alias Prima.Feed.{Action, Binding, Read}
 
   @vectors Path.expand("../../../../tests/fixtures/feed.json", __DIR__)
 
@@ -41,6 +42,14 @@ defmodule Prima.FeedTest do
     flunk("expected an ArgumentError")
   rescue
     e in ArgumentError -> Exception.format(:error, e, __STACKTRACE__)
+  end
+
+  # What `fun` answers, or the report of the ArgumentError it raises, its
+  # stacktrace included; any other exception fails the test.
+  defp outcome(fun) do
+    {:answered, fun.()}
+  rescue
+    e in ArgumentError -> {:raised, Exception.format(:error, e, __STACKTRACE__)}
   end
 
   # Whether `text` carries the canary, as its bytes or as the byte list
@@ -468,6 +477,137 @@ defmodule Prima.FeedTest do
       for call <- calls do
         refute carries_canary?(raised(call))
       end
+    end
+
+    test "the shared readers raise without a term outside their arguments", %{btc: btc} do
+      terms = [
+        {@canary},
+        [@canary | :bad_tail],
+        %URI{path: @canary},
+        Map.delete(%{btc | args: %{"key" => @canary}}, :name)
+      ]
+
+      # Each reader's arguments, one position at a time replaced by each
+      # term: the decoded value, the grammar's terms and the pointer.
+      readers = [
+        {&Read.known_keys/3, [%{"name" => 1}, ["name"], ""]},
+        {&Read.fetch/3, [%{"name" => 1}, "name", ""]},
+        {&Read.name/2, ["btc", "/name"]},
+        {&Read.label/3, ["Bitcoin", 80, "/label"]},
+        {&Read.operation/2, ["quote", "/operation"]},
+        {&Read.args/2, [%{}, "/args"]},
+        {&Read.json_text/3, [%{}, 4096, "/args"]},
+        {&Read.refuse/2, ["/args", "size"]},
+        {&Read.proper_length/1, [[1]]}
+      ]
+
+      for {reader, args} <- readers,
+          position <- 0..(length(args) - 1),
+          term <- terms do
+        case outcome(fn -> apply(reader, List.replace_at(args, position, term)) end) do
+          {:raised, report} -> refute carries_canary?(report), inspect(reader)
+          {:answered, {:error, _refusal} = refusal} -> value_free!(refusal)
+          {:answered, _value} -> :ok
+        end
+      end
+    end
+  end
+
+  describe "a struct missing a field its function reads raises without the canary" do
+    setup do
+      [json | _] = vectors()["bindings"]["valid"] |> Enum.map(& &1["binding"])
+      {:ok, %Binding{actions: [refresh, run]} = btc} = Binding.validate(json)
+
+      # The canary sits in more than one field of each struct, so it is
+      # still there whichever one field is removed.
+      refresh = %{refresh | name: @canary, label: @canary}
+      run = %{run | name: @canary, label: @canary, operation: @canary, args: %{"key" => @canary}}
+
+      secret = %{
+        btc
+        | name: @canary,
+          label: @canary,
+          reference: "catalyst:local." <> @canary,
+          operation: @canary,
+          args: %{"key" => @canary},
+          actions: [refresh, run]
+      }
+
+      %{
+        secret: secret,
+        refresh: refresh,
+        run: run,
+        id: Prima.UUID7.generate_id("feed"),
+        at: ~U[2026-10-04 12:00:00Z]
+      }
+    end
+
+    # The three cases of the delta check: each raised a KeyError whose
+    # report printed the struct.
+    test "Binding.to_json/1 of a binding without its name", %{secret: secret} do
+      refute carries_canary?(raised(fn -> Binding.to_json(Map.delete(secret, :name)) end))
+    end
+
+    test "Action.to_json/1 of a run action without its operation", %{run: run} do
+      refute carries_canary?(raised(fn -> Action.to_json(Map.delete(run, :operation)) end))
+    end
+
+    test "envelope/5 of a binding without its label", %{secret: secret, id: id, at: at} do
+      binding = Map.delete(secret, :label)
+      refute carries_canary?(raised(fn -> Feed.envelope(id, binding, 1, at, %{}) end))
+    end
+
+    test "every function, each field removed in turn",
+         %{secret: secret, refresh: refresh, run: run, id: id, at: at} do
+      every_binding_field = secret |> Map.from_struct() |> Map.keys()
+
+      # Each function with the binding fields it reads: removing one of them
+      # raises, removing any other either answers or raises, never with the
+      # canary.
+      binding_calls = [
+        {"Binding.to_json/1", &Binding.to_json/1, every_binding_field},
+        {"Feed.envelope/5", &Feed.envelope(id, &1, 1, at, %{}), [:name, :label, :actions]},
+        {"Feed.input/1", &Feed.input/1, [:operation, :args]},
+        {"Feed.cron/1", &Feed.cron/1, [:interval_minutes]},
+        {"Feed.check_result/2", &Feed.check_result(&1, %{"price" => 1}), [:result_shape]}
+      ]
+
+      for field <- every_binding_field, {name, call, read} <- binding_calls do
+        held_to_its_reads(name, field, read, fn -> call.(Map.delete(secret, field)) end)
+      end
+
+      every_action_field = run |> Map.from_struct() |> Map.keys()
+      refresh_reads = [:name, :label, :kind]
+
+      action_calls = [
+        {"Action.to_json/1 of a refresh", refresh, &Action.to_json/1, refresh_reads},
+        {"Action.to_json/1 of a run", run, &Action.to_json/1, every_action_field},
+        {"Feed.input/1 of a run", run, &Feed.input/1, [:kind, :operation, :args]},
+        {"Binding.to_json/1 of a refresh", refresh, &Binding.to_json(%{secret | actions: [&1]}),
+         refresh_reads},
+        {"Binding.to_json/1 of a run", run, &Binding.to_json(%{secret | actions: [&1]}),
+         every_action_field},
+        {"Feed.envelope/5 of an action", run,
+         &Feed.envelope(id, %{secret | actions: [&1]}, 1, at, %{}), [:name, :label]}
+      ]
+
+      for field <- every_action_field, {name, action, call, read} <- action_calls do
+        held_to_its_reads(name, field, read, fn -> call.(Map.delete(action, field)) end)
+      end
+    end
+  end
+
+  # Removing a field `name`'s call reads raises an ArgumentError; removing
+  # any other may answer. Neither the raise nor a refusal carries the
+  # canary.
+  defp held_to_its_reads(name, field, read, fun) do
+    case outcome(fun) do
+      {:raised, report} ->
+        refute carries_canary?(report), "#{name} without #{field}"
+
+      {:answered, answer} ->
+        refute field in read, "#{name} without #{field} answered"
+        with {:error, _refusal} <- answer, do: value_free!(answer)
     end
   end
 end
