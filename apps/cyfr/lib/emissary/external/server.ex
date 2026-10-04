@@ -417,11 +417,13 @@ defmodule Emissary.External.Server do
                    dispatch_upstream_call(snapshot, body, tool_name)
                  rescue
                    e ->
-                     # The exception's message can carry the upstream URL or
-                     # a transport internal; the caller (a guest or the
-                     # console) gets the tool's name only, the log the rest.
+                     # The exception can carry the upstream URL, a transport
+                     # internal or what the upstream answered; the caller (a
+                     # guest or the console) gets the tool's name only, the
+                     # log the rest, the injected values masked.
                      Logger.warning(
-                       "[Emissary.External.Server] call to #{tool_name} raised: #{Exception.message(e)}"
+                       "[Emissary.External.Server] call to #{tool_name} raised: " <>
+                         log_reason(e, snapshot)
                      )
 
                      {:error, "External call failed for #{tool_name}"}
@@ -694,7 +696,9 @@ defmodule Emissary.External.Server do
 
   @impl true
   def terminate(reason, state) do
-    Logger.info("[Emissary.External.Server] #{state.name} shutting down: #{inspect(reason)}")
+    Logger.info(
+      "[Emissary.External.Server] #{state.name} shutting down: #{log_reason(reason, state)}"
+    )
 
     for {task_pid, {task_ref, from, caller_ref}} <- state.in_flight do
       Process.demonitor(task_ref, [:flush])
@@ -797,7 +801,7 @@ defmodule Emissary.External.Server do
             | timeout_ms: call_timeout,
               status: :ready,
               tools: tools,
-              server_info: server_info,
+              server_info: mask_credentials(server_info, state),
               error: nil
           }
 
@@ -882,13 +886,14 @@ defmodule Emissary.External.Server do
   # exception that echoed them can carry one out. The caller is answered
   # with that same masked sentence and never the reason itself, which can
   # be an upstream's own error message quoting a header it was sent. The
-  # log gets the masked term; the credential is never the diagnostic part.
+  # log gets the masked term (`log_reason/2`); the credential is never the
+  # diagnostic part.
   defp fail_initialize(state, reason) do
     state = %{state | status: :error, error: mask_credentials(failure_sentence(reason), state)}
 
     Logger.error(
       "[Emissary.External.Server] Failed to initialize #{state.name}: " <>
-        mask_credentials(inspect(reason), state)
+        log_reason(reason, state)
     )
 
     {:error, state.error, state}
@@ -931,7 +936,7 @@ defmodule Emissary.External.Server do
     with {:ok, init_result, state} <- send_initialize(state),
          :ok <- send_initialized_notification(state),
          {:ok, tools, state} <- send_tools_list(state) do
-      {:ok, tools, init_result["serverInfo"], state}
+      {:ok, tools, server_info(init_result), state}
     else
       # A legacy peer has no fall-forward; a second `:legacy` here would mean the
       # handshake itself was refused, which is a failure rather than an era.
@@ -977,13 +982,17 @@ defmodule Emissary.External.Server do
 
     body = Message.encode_request(request_id, "tools/list", %{})
 
+    # The listing is the upstream's words as much as a result is, and is
+    # stored, answered and drawn: it is masked as a tool call's result is.
     case http_post(state, body) do
-      {:ok, %Message{type: :response, result: %{"tools" => tools}}} ->
-        {:ok, tools, state}
-
       {:ok, %Message{type: :response, result: result}} ->
-        # Some servers return tools at top level
-        {:ok, Map.get(result, "tools", []), state}
+        case listed_tools(result) do
+          {:ok, tools} ->
+            {:ok, mask_credentials(tools, state), state}
+
+          :error ->
+            {:error, {:failed, "#{state.name} answered tools/list without a list of tools"}}
+        end
 
       {:ok, %Message{type: :error, error: error}} ->
         {:error, upstream_message(error)}
@@ -998,6 +1007,19 @@ defmodule Emissary.External.Server do
         {:error, reason}
     end
   end
+
+  # A listing is a list of tool objects, at `tools` or, for some servers,
+  # with no `tools` key at all; anything else is no listing.
+  defp listed_tools(%{"tools" => tools}) when is_list(tools),
+    do: if(Enum.all?(tools, &is_map/1), do: {:ok, tools}, else: :error)
+
+  defp listed_tools(result) when is_map(result) and not is_map_key(result, "tools"),
+    do: {:ok, []}
+
+  defp listed_tools(_result), do: :error
+
+  defp server_info(%{"serverInfo" => info}) when is_map(info), do: info
+  defp server_info(_init_result), do: nil
 
   # ============================================================================
   # HTTP Transport
@@ -1104,7 +1126,8 @@ defmodule Emissary.External.Server do
       # server is not known from here.
       {:error, reason} ->
         Logger.debug(
-          "[Emissary.External.Server] request to #{state.name} failed: #{inspect(reason)}"
+          "[Emissary.External.Server] request to #{state.name} failed: " <>
+            log_reason(reason, state)
         )
 
         {:error, {:uncertain, "Request failed"}}
@@ -1515,6 +1538,37 @@ defmodule Emissary.External.Server do
   end
 
   defp mask_values(term, _values), do: term
+
+  # A reason as the log prints it. The injected values are masked in the
+  # term's own binaries, wherever it holds them, before `inspect/1` renders
+  # it in any form (escaped, or as bytes when a binary is not printable)
+  # and cuts it to its usual bounds; the printed line is masked once more
+  # for a value the term held as a charlist.
+  defp log_reason(reason, state) do
+    values = sensitive_header_values(state)
+
+    reason
+    |> mask_term(values)
+    |> inspect()
+    |> mask_values(values)
+  end
+
+  defp mask_term(term, []), do: term
+  defp mask_term(term, values) when is_binary(term), do: mask_values(term, values)
+  # A struct keeps its type, so its own `Inspect` (the server state's
+  # hides its headers and grant) still decides what is printed.
+  defp mask_term(%_{} = struct, values),
+    do: Map.merge(struct, struct |> Map.from_struct() |> mask_term(values))
+
+  defp mask_term(term, values) when is_map(term),
+    do: Map.new(term, fn {k, v} -> {mask_term(k, values), mask_term(v, values)} end)
+
+  defp mask_term([head | tail], values), do: [mask_term(head, values) | mask_term(tail, values)]
+
+  defp mask_term(term, values) when is_tuple(term),
+    do: term |> Tuple.to_list() |> mask_term(values) |> List.to_tuple()
+
+  defp mask_term(term, _values), do: term
 
   # ============================================================================
   # Helpers

@@ -40,7 +40,12 @@ defmodule Cyfr.RefusalRenderingSeamTest do
         "start and reaches only its boot log",
     {"apps/sanctum/lib/sanctum/oauth/refresh_lock.ex", :describe_exit} =>
       "the refresh lock's exit description, interpolated only into its " <>
-        "`Logger.warning`"
+        "`Logger.warning`",
+    {"apps/cyfr/lib/emissary/external/server.ex", :log_reason} =>
+      "an external server's reason as its log prints it, the injected header values " <>
+        "masked in the term before it is rendered, interpolated only into its four " <>
+        "`Logger` calls: a failed connect, a raised tool call, a transport failure " <>
+        "and its own shutdown"
   }
 
   test "no callee's term is inspected into a rendering" do
