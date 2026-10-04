@@ -1,0 +1,467 @@
+{
+  "comment": "The vectors pinning Prima.Canvas.Shape and Prima.Manifest.Results, read by apps/prima/test/prima/canvas/shape_test.exs and apps/prima/test/prima/manifest/results_test.exs. `types`, `max_depth` and `reasons` are the module's own: every refusal names its path, an RFC 6901 pointer, and one of `reasons`. Every valid shape normalizes to `normalized` (which normalizes to itself) and its fixture is `fixture`, which the shape passes; `canonical` is the quote shape's JCS bytes and digest, and each `spellings` row's shapes normalize to one shape with one digest, `required` sorted. Every invalid shape is refused at `path` for `reason`. Each `values` shape passes its `valid` values and refuses each `invalid` one at `path` for `reason`, the first failing path, an object's keys taken in sorted order. Every valid `results` block answers its `normalized` shapes, and every invalid one is refused.",
+  "types": [
+    "string",
+    "number",
+    "integer",
+    "boolean",
+    "time",
+    "enum",
+    "list",
+    "object",
+    "json"
+  ],
+  "max_depth": 8,
+  "reasons": {
+    "type": "a value of another JSON type than its position takes",
+    "null": "null where the shape is not nullable",
+    "max": "a string or list longer than its max",
+    "enum": "a value none of the values its position admits",
+    "time": "a string DateTime.from_iso8601/1 refuses",
+    "unknown_field": "an object key its fields do not name",
+    "required": "a required field or key absent",
+    "unknown_type": "a shape whose type is none of the types",
+    "unknown_key": "a key its object does not take",
+    "range": "a bound or count outside its range",
+    "name": "a name outside its grammar",
+    "duplicate": "a value repeated where values are distinct",
+    "depth": "a shape deeper than its limit"
+  },
+  "shapes": {
+    "valid": [
+      {
+        "why": "a string takes its default max of 256 code points and is not nullable",
+        "shape": {"type": "string"},
+        "normalized": {"type": "string", "nullable": false, "max": 256},
+        "fixture": ""
+      },
+      {
+        "why": "a string at the largest max",
+        "shape": {"type": "string", "max": 4096, "nullable": true},
+        "normalized": {"type": "string", "nullable": true, "max": 4096},
+        "fixture": ""
+      },
+      {
+        "why": "a number",
+        "shape": {"type": "number"},
+        "normalized": {"type": "number", "nullable": false},
+        "fixture": 0
+      },
+      {
+        "why": "an integer",
+        "shape": {"type": "integer", "nullable": false},
+        "normalized": {"type": "integer", "nullable": false},
+        "fixture": 0
+      },
+      {
+        "why": "a boolean",
+        "shape": {"type": "boolean"},
+        "normalized": {"type": "boolean", "nullable": false},
+        "fixture": false
+      },
+      {
+        "why": "a time",
+        "shape": {"type": "time"},
+        "normalized": {"type": "time", "nullable": false},
+        "fixture": "1970-01-01T00:00:00Z"
+      },
+      {
+        "why": "an enum's fixture is its first value",
+        "shape": {"type": "enum", "values": ["up", "down", "flat"]},
+        "normalized": {"type": "enum", "nullable": false, "values": ["up", "down", "flat"]},
+        "fixture": "up"
+      },
+      {
+        "why": "a list takes its default max of 100, and its fixture is one element",
+        "shape": {"type": "list", "of": {"type": "integer"}},
+        "normalized": {"type": "list", "nullable": false, "max": 100, "of": {"type": "integer", "nullable": false}},
+        "fixture": [0]
+      },
+      {
+        "why": "a list at the largest max",
+        "shape": {"type": "list", "of": {"type": "boolean"}, "max": 1000},
+        "normalized": {"type": "list", "nullable": false, "max": 1000, "of": {"type": "boolean", "nullable": false}},
+        "fixture": [false]
+      },
+      {
+        "why": "an object with no fields, required defaulting to none",
+        "shape": {"type": "object", "fields": {}},
+        "normalized": {"type": "object", "nullable": false, "fields": {}, "required": []},
+        "fixture": {}
+      },
+      {
+        "why": "a json value's fixture is the empty object",
+        "shape": {"type": "json", "nullable": true},
+        "normalized": {"type": "json", "nullable": true},
+        "fixture": {}
+      },
+      {
+        "why": "a field's name may hold any character but a control character, escaped in a path",
+        "shape": {"type": "object", "fields": {"a/b~c": {"type": "string"}, "prix €": {"type": "number"}}},
+        "normalized": {"type": "object", "nullable": false, "fields": {"a/b~c": {"type": "string", "nullable": false, "max": 256}, "prix €": {"type": "number", "nullable": false}}, "required": []},
+        "fixture": {"a/b~c": "", "prix €": 0}
+      },
+      {
+        "why": "a quote: every default written at every depth, and a fixture holding every field",
+        "shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]},
+        "normalized": {"type": "object", "nullable": false, "fields": {"symbol": {"type": "string", "nullable": false, "max": 16}, "price": {"type": "number", "nullable": false}, "change": {"type": "number", "nullable": true}, "at": {"type": "time", "nullable": false}, "candles": {"type": "list", "nullable": false, "max": 500, "of": {"type": "object", "nullable": false, "fields": {"t": {"type": "time", "nullable": false}, "o": {"type": "number", "nullable": false}, "h": {"type": "number", "nullable": false}, "l": {"type": "number", "nullable": false}, "c": {"type": "number", "nullable": false}}, "required": ["c", "h", "l", "o", "t"]}}}, "required": ["at", "price", "symbol"]},
+        "fixture": {"symbol": "", "price": 0, "change": 0, "at": "1970-01-01T00:00:00Z", "candles": [{"t": "1970-01-01T00:00:00Z", "o": 0, "h": 0, "l": 0, "c": 0}]}
+      },
+      {
+        "why": "a shape 8 deep, the limit",
+        "shape": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "string"}}}}}}}},
+        "normalized": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "string", "nullable": false, "max": 256}, "max": 100, "nullable": false}, "max": 100, "nullable": false}, "max": 100, "nullable": false}, "max": 100, "nullable": false}, "max": 100, "nullable": false}, "max": 100, "nullable": false}, "max": 100, "nullable": false},
+        "fixture": [[[[[[[""]]]]]]]
+      }
+    ],
+    "invalid": [
+      {
+        "why": "a shape is an object",
+        "shape": "string",
+        "path": "",
+        "reason": "type"
+      },
+      {
+        "why": "a shape names its type",
+        "shape": {"max": 5},
+        "path": "/type",
+        "reason": "unknown_type"
+      },
+      {
+        "why": "an unknown type",
+        "shape": {"type": "date"},
+        "path": "/type",
+        "reason": "unknown_type"
+      },
+      {
+        "why": "a key no type takes",
+        "shape": {"type": "string", "min": 1},
+        "path": "/min",
+        "reason": "unknown_key"
+      },
+      {
+        "why": "a key another type takes",
+        "shape": {"type": "integer", "max": 5},
+        "path": "/max",
+        "reason": "unknown_key"
+      },
+      {
+        "why": "nullable is a boolean",
+        "shape": {"type": "number", "nullable": "yes"},
+        "path": "/nullable",
+        "reason": "type"
+      },
+      {
+        "why": "a string's max is at least 1",
+        "shape": {"type": "string", "max": 0},
+        "path": "/max",
+        "reason": "range"
+      },
+      {
+        "why": "a string's max is at most 4096",
+        "shape": {"type": "string", "max": 4097},
+        "path": "/max",
+        "reason": "range"
+      },
+      {
+        "why": "a max is an integer",
+        "shape": {"type": "string", "max": "10"},
+        "path": "/max",
+        "reason": "type"
+      },
+      {
+        "why": "a list's max is at most 1000",
+        "shape": {"type": "list", "of": {"type": "number"}, "max": 1001},
+        "path": "/max",
+        "reason": "range"
+      },
+      {
+        "why": "a list names what it holds",
+        "shape": {"type": "list"},
+        "path": "/of",
+        "reason": "required"
+      },
+      {
+        "why": "a list's element is a shape",
+        "shape": {"type": "list", "of": {"type": "decimal"}},
+        "path": "/of/type",
+        "reason": "unknown_type"
+      },
+      {
+        "why": "an enum names its values",
+        "shape": {"type": "enum"},
+        "path": "/values",
+        "reason": "required"
+      },
+      {
+        "why": "an enum has at least one value",
+        "shape": {"type": "enum", "values": []},
+        "path": "/values",
+        "reason": "range"
+      },
+      {
+        "why": "an enum's values are distinct",
+        "shape": {"type": "enum", "values": ["a", "a"]},
+        "path": "/values/1",
+        "reason": "duplicate"
+      },
+      {
+        "why": "an enum's value is at least one code point",
+        "shape": {"type": "enum", "values": [""]},
+        "path": "/values/0",
+        "reason": "range"
+      },
+      {
+        "why": "an enum's value is a string",
+        "shape": {"type": "enum", "values": ["a", 1]},
+        "path": "/values/1",
+        "reason": "type"
+      },
+      {
+        "why": "an object names its fields",
+        "shape": {"type": "object"},
+        "path": "/fields",
+        "reason": "required"
+      },
+      {
+        "why": "an object's fields are an object",
+        "shape": {"type": "object", "fields": ["a"]},
+        "path": "/fields",
+        "reason": "type"
+      },
+      {
+        "why": "a field's name is at least one code point",
+        "shape": {"type": "object", "fields": {"": {"type": "string"}}},
+        "path": "/fields/",
+        "reason": "name"
+      },
+      {
+        "why": "a field's name holds no control character",
+        "shape": {"type": "object", "fields": {"a\u0007": {"type": "string"}}},
+        "path": "/fields/a\u0007",
+        "reason": "name"
+      },
+      {
+        "why": "a field's name is at most 64 code points",
+        "shape": {"type": "object", "fields": {"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx": {"type": "string"}}},
+        "path": "/fields/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "reason": "name"
+      },
+      {
+        "why": "a required name is one of the fields",
+        "shape": {"type": "object", "fields": {"a": {"type": "string"}}, "required": ["b"]},
+        "path": "/required/0",
+        "reason": "unknown_field"
+      },
+      {
+        "why": "required names are distinct",
+        "shape": {"type": "object", "fields": {"a": {"type": "string"}}, "required": ["a", "a"]},
+        "path": "/required/1",
+        "reason": "duplicate"
+      },
+      {
+        "why": "required is a list",
+        "shape": {"type": "object", "fields": {"a": {"type": "string"}}, "required": "a"},
+        "path": "/required",
+        "reason": "type"
+      },
+      {
+        "why": "a field's shape is held to the grammar, its path escaped",
+        "shape": {"type": "object", "fields": {"a/b~c": {"type": "string", "max": 0}}},
+        "path": "/fields/a~1b~0c/max",
+        "reason": "range"
+      },
+      {
+        "why": "a list 9 deep is past the limit",
+        "shape": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "list", "of": {"type": "string"}}}}}}}}},
+        "path": "/of/of/of/of/of/of/of/of",
+        "reason": "depth"
+      },
+      {
+        "why": "an object 9 deep is past the limit",
+        "shape": {"type": "object", "fields": {"a": {"type": "object", "fields": {"b": {"type": "object", "fields": {"c": {"type": "object", "fields": {"d": {"type": "object", "fields": {"e": {"type": "object", "fields": {"f": {"type": "object", "fields": {"g": {"type": "object", "fields": {"h": {"type": "string"}}}}}}}}}}}}}}}}},
+        "path": "/fields/a/fields/b/fields/c/fields/d/fields/e/fields/f/fields/g/fields/h",
+        "reason": "depth"
+      }
+    ]
+  },
+  "canonical": {
+    "shape": {
+      "type": "object",
+      "nullable": false,
+      "fields": {
+        "symbol": {"type": "string", "nullable": false, "max": 16},
+        "price": {"type": "number", "nullable": false},
+        "change": {"type": "number", "nullable": true},
+        "at": {"type": "time", "nullable": false},
+        "candles": {"type": "list", "nullable": false, "max": 500, "of": {"type": "object", "nullable": false, "fields": {"t": {"type": "time", "nullable": false}, "o": {"type": "number", "nullable": false}, "h": {"type": "number", "nullable": false}, "l": {"type": "number", "nullable": false}, "c": {"type": "number", "nullable": false}}, "required": ["c", "h", "l", "o", "t"]}}
+      },
+      "required": [
+        "at",
+        "price",
+        "symbol"
+      ]
+    },
+    "bytes": "{\"fields\":{\"at\":{\"nullable\":false,\"type\":\"time\"},\"candles\":{\"max\":500,\"nullable\":false,\"of\":{\"fields\":{\"c\":{\"nullable\":false,\"type\":\"number\"},\"h\":{\"nullable\":false,\"type\":\"number\"},\"l\":{\"nullable\":false,\"type\":\"number\"},\"o\":{\"nullable\":false,\"type\":\"number\"},\"t\":{\"nullable\":false,\"type\":\"time\"}},\"nullable\":false,\"required\":[\"c\",\"h\",\"l\",\"o\",\"t\"],\"type\":\"object\"},\"type\":\"list\"},\"change\":{\"nullable\":true,\"type\":\"number\"},\"price\":{\"nullable\":false,\"type\":\"number\"},\"symbol\":{\"max\":16,\"nullable\":false,\"type\":\"string\"}},\"nullable\":false,\"required\":[\"at\",\"price\",\"symbol\"],\"type\":\"object\"}",
+    "digest": "sha256:408c4a248e93d772c9c9203af3559b9305f4d7f5c93e7da050ac29705fc7d9ff"
+  },
+  "spellings": [
+    {
+      "why": "two spellings that differ only in required's order normalize, encode and digest alike",
+      "shapes": [
+        {"type": "object", "fields": {"b": {"type": "integer"}, "a": {"type": "string", "max": 8}}, "required": ["b", "a"]},
+        {"type": "object", "fields": {"b": {"type": "integer"}, "a": {"type": "string", "max": 8}}, "required": ["a", "b"], "nullable": false}
+      ],
+      "normalized": {
+        "type": "object",
+        "nullable": false,
+        "fields": {"a": {"type": "string", "nullable": false, "max": 8}, "b": {"type": "integer", "nullable": false}},
+        "required": ["a", "b"]
+      },
+      "digest": "sha256:d8e8ce14921f7eb9e6436075c6268bfb565b0718ae678c9c08508940a583550c"
+    },
+    {
+      "why": "the quote spelt with its required names in another order",
+      "shapes": [
+        {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]},
+        {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "at", "price"]}
+      ],
+      "normalized": {
+        "type": "object",
+        "nullable": false,
+        "fields": {"symbol": {"type": "string", "nullable": false, "max": 16}, "price": {"type": "number", "nullable": false}, "change": {"type": "number", "nullable": true}, "at": {"type": "time", "nullable": false}, "candles": {"type": "list", "nullable": false, "max": 500, "of": {"type": "object", "nullable": false, "fields": {"t": {"type": "time", "nullable": false}, "o": {"type": "number", "nullable": false}, "h": {"type": "number", "nullable": false}, "l": {"type": "number", "nullable": false}, "c": {"type": "number", "nullable": false}}, "required": ["c", "h", "l", "o", "t"]}}},
+        "required": ["at", "price", "symbol"]
+      },
+      "digest": "sha256:408c4a248e93d772c9c9203af3559b9305f4d7f5c93e7da050ac29705fc7d9ff"
+    }
+  ],
+  "values": [
+    {
+      "shape": {
+        "type": "object",
+        "fields": {"name": {"type": "string", "max": 4}, "age": {"type": "integer"}, "tags": {"type": "list", "of": {"type": "enum", "values": ["a", "b"]}, "max": 2}, "note": {"type": "string", "nullable": true}, "at": {"type": "time"}, "extra": {"type": "json"}, "a/b~c": {"type": "boolean"}},
+        "required": ["name", "age"]
+      },
+      "valid": [
+        {"name": "Ada", "age": 36},
+        {"name": "héll", "age": -1, "note": null, "tags": ["a", "b"], "at": "2026-10-04T12:00:00+08:00", "extra": {"x": [1, null, 2.5]}, "a/b~c": true},
+        {"name": "", "age": 0, "note": "a note", "tags": [], "at": "2026-10-04T04:00:00.123Z", "extra": [1, "two"]}
+      ],
+      "invalid": [
+        {"why": "a key the fields do not name", "value": {"name": "Ada", "age": 36, "zip": 1}, "path": "/zip", "reason": "unknown_field"},
+        {"why": "a required field absent", "value": {"name": "Ada"}, "path": "/age", "reason": "required"},
+        {"why": "the first failing path in key order", "value": {"zip": 1}, "path": "/age", "reason": "required"},
+        {"why": "a null where the field is not nullable", "value": {"name": null, "age": 36}, "path": "/name", "reason": "null"},
+        {"why": "a string past its max, in code points", "value": {"name": "héllo", "age": 36}, "path": "/name", "reason": "max"},
+        {"why": "a float where an integer is asked", "value": {"name": "Ada", "age": 36.5}, "path": "/age", "reason": "type"},
+        {"why": "a float of whole value where an integer is asked", "value": {"name": "Ada", "age": 36.0}, "path": "/age", "reason": "type"},
+        {"why": "a string where an integer is asked", "value": {"name": "Ada", "age": "36"}, "path": "/age", "reason": "type"},
+        {"why": "a value none of the enum's", "value": {"name": "Ada", "age": 36, "tags": ["c"]}, "path": "/tags/0", "reason": "enum"},
+        {"why": "a list past its max", "value": {"name": "Ada", "age": 36, "tags": ["a", "b", "a"]}, "path": "/tags", "reason": "max"},
+        {"why": "a time without its offset", "value": {"name": "Ada", "age": 36, "at": "2026-10-04T12:00:00"}, "path": "/at", "reason": "time"},
+        {"why": "a time that is not a string", "value": {"name": "Ada", "age": 36, "at": 1759550400}, "path": "/at", "reason": "type"},
+        {"why": "a null json where json is not nullable", "value": {"name": "Ada", "age": 36, "extra": null}, "path": "/extra", "reason": "null"},
+        {"why": "a field's path escaped", "value": {"name": "Ada", "age": 36, "a/b~c": "yes"}, "path": "/a~1b~0c", "reason": "type"},
+        {"why": "an object where a list is given", "value": [], "path": "", "reason": "type"},
+        {"why": "a null at the root", "value": null, "path": "", "reason": "null"}
+      ]
+    },
+    {
+      "shape": {
+        "type": "list",
+        "of": {"type": "object", "fields": {"price": {"type": "number"}}, "required": ["price"]}
+      },
+      "valid": [
+        [],
+        [{"price": 42000.5}, {"price": -3}, {"price": 1e-07}]
+      ],
+      "invalid": [
+        {"why": "an element's field, by index", "value": [{"price": 1}, {"price": "1"}], "path": "/1/price", "reason": "type"},
+        {"why": "a boolean is not a number", "value": [{"price": true}], "path": "/0/price", "reason": "type"},
+        {"why": "an element null where the element is not nullable", "value": [null], "path": "/0", "reason": "null"}
+      ]
+    },
+    {
+      "shape": {
+        "type": "json",
+        "nullable": true
+      },
+      "valid": [
+        null,
+        1,
+        2.5,
+        "x",
+        true,
+        [null, {"a": [1]}],
+        {}
+      ],
+      "invalid": []
+    },
+    {
+      "shape": {
+        "type": "boolean"
+      },
+      "valid": [
+        true,
+        false
+      ],
+      "invalid": [
+        {"why": "a number is not a boolean", "value": 0, "path": "", "reason": "type"}
+      ]
+    },
+    {
+      "shape": {
+        "type": "object",
+        "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}},
+        "required": ["symbol", "price", "at"]
+      },
+      "valid": [
+        {"symbol": "BTC", "price": 42000.5, "change": null, "at": "2026-10-04T12:00:00Z", "candles": [{"t": "2026-10-04T11:00:00Z", "o": 41900, "h": 42100.25, "l": 41850, "c": 42000.5}]}
+      ],
+      "invalid": [
+        {"why": "a candle lacking its close", "value": {"symbol": "BTC", "price": 42000.5, "change": null, "at": "2026-10-04T12:00:00Z", "candles": [{"t": "2026-10-04T11:00:00Z", "o": 1, "h": 1, "l": 1}]}, "path": "/candles/0/c", "reason": "required"}
+      ]
+    }
+  ],
+  "results": {
+    "valid": [
+      {
+        "why": "a component may declare no results",
+        "block": {},
+        "normalized": {}
+      },
+      {
+        "why": "each operation's shape, normalized",
+        "block": {"quote": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "status": {"type": "enum", "values": ["open", "closed"]}},
+        "normalized": {"quote": {"type": "object", "nullable": false, "fields": {"symbol": {"type": "string", "nullable": false, "max": 16}, "price": {"type": "number", "nullable": false}, "change": {"type": "number", "nullable": true}, "at": {"type": "time", "nullable": false}, "candles": {"type": "list", "nullable": false, "max": 500, "of": {"type": "object", "nullable": false, "fields": {"t": {"type": "time", "nullable": false}, "o": {"type": "number", "nullable": false}, "h": {"type": "number", "nullable": false}, "l": {"type": "number", "nullable": false}, "c": {"type": "number", "nullable": false}}, "required": ["c", "h", "l", "o", "t"]}}}, "required": ["at", "price", "symbol"]}, "status": {"type": "enum", "nullable": false, "values": ["open", "closed"]}}
+      },
+      {
+        "why": "an operation name of 64 code points",
+        "block": {"oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo": {"type": "json"}},
+        "normalized": {"oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo": {"type": "json", "nullable": false}}
+      }
+    ],
+    "invalid": [
+      {
+        "why": "a results block is an object",
+        "block": [{"quote": {"type": "json"}}]
+      },
+      {
+        "why": "an operation name past 64 characters",
+        "block": {"ooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo": {"type": "json"}}
+      },
+      {
+        "why": "an empty operation name",
+        "block": {"": {"type": "json"}}
+      },
+      {
+        "why": "an operation name with a control character",
+        "block": {"quote\n": {"type": "json"}}
+      },
+      {
+        "why": "an operation's shape outside the grammar",
+        "block": {"quote": {"type": "list", "of": {"type": "string"}, "max": 1001}}
+      }
+    ]
+  }
+}

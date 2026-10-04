@@ -1,0 +1,317 @@
+{
+  "comment": "The vectors pinning Prima.CanvasWire, read by apps/prima/test/prima/canvas_wire_test.exs and the toolkit's JavaScript test (apps/cyfr/assets/test/toolkit/wire.test.mjs). Every row is plain JSON. A message is exactly v, verb, frame and args, with args required. `to_prism_verbs` are the verbs the toolkit posts to Prism and `to_toolkit_verbs` those Prism posts to the toolkit; every valid message is of its `direction`'s set, decodes and encodes back to itself. Every invalid message is refused for the reason `why` gives, on both sides. Each valid path row is the host page, data prefix and stream route of its credential and frame; each invalid row names a credential or frame id the path builders refuse.",
+  "version": 1,
+  "to_prism_verbs": [
+    "ready",
+    "tree",
+    "open",
+    "press",
+    "failed"
+  ],
+  "to_toolkit_verbs": [
+    "boot",
+    "posture",
+    "covered",
+    "installed",
+    "state"
+  ],
+  "messages": {
+    "valid": [
+      {
+        "direction": "to_prism",
+        "message": {"v": 1, "verb": "ready", "frame": "frm_8f3c2a1b9d", "args": {}}
+      },
+      {
+        "direction": "to_prism",
+        "message": {"v": 1, "verb": "tree", "frame": "frm_8f3c2a1b9d", "args": {}}
+      },
+      {
+        "direction": "to_prism",
+        "message": {"v": 1, "verb": "open", "frame": "frm_8f3c2a1b9d", "args": {"ref": "tincture:local.vault"}}
+      },
+      {
+        "direction": "to_prism",
+        "message": {"v": 1, "verb": "press", "frame": "frm_8f3c2a1b9d", "args": {"binding": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d", "action": "refresh"}}
+      },
+      {
+        "direction": "to_prism",
+        "message": {"v": 1, "verb": "failed", "frame": "frm_8f3c2a1b9d", "args": {"stage": "load"}}
+      },
+      {
+        "direction": "to_prism",
+        "message": {"v": 1, "verb": "failed", "frame": "frm_8f3c2a1b9d", "args": {"stage": "tree"}}
+      },
+      {
+        "direction": "to_prism",
+        "message": {"v": 1, "verb": "failed", "frame": "frm_8f3c2a1b9d", "args": {"stage": "runtime"}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "validation", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/lib/canvas.mjs", "toolkit": 1}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "posture", "frame": "frm_8f3c2a1b9d", "args": {"posture": "desk"}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "posture", "frame": "frm_8f3c2a1b9d", "args": {"posture": "hand"}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "covered", "frame": "frm_8f3c2a1b9d", "args": {"rects": []}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "covered", "frame": "frm_8f3c2a1b9d", "args": {"rects": [{"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 640, "y": 0, "width": 0, "height": 0}]}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "installed", "frame": "frm_8f3c2a1b9d", "args": {"tinctures": [{"ref": "tincture:local.vault", "name": "Vault"}, {"ref": "tincture:example.com.timer", "name": "Kitchen timer ⏲"}]}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "installed", "frame": "frm_8f3c2a1b9d", "args": {"tinctures": []}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "state", "frame": "frm_8f3c2a1b9d", "args": {"state": "live"}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "state", "frame": "frm_8f3c2a1b9d", "args": {"state": "frozen"}}
+      }
+    ],
+    "invalid": [
+      {
+        "why": "a message is an object",
+        "message": [{"v": 1, "verb": "ready", "frame": "frm_8f3c2a1b9d", "args": {}}]
+      },
+      {
+        "why": "an envelope key the wire does not carry",
+        "message": {"v": 1, "verb": "ready", "frame": "frm_8f3c2a1b9d", "args": {}, "id": 1}
+      },
+      {
+        "why": "args are required even when empty",
+        "message": {"v": 1, "verb": "ready", "frame": "frm_8f3c2a1b9d"}
+      },
+      {
+        "why": "another wire version",
+        "message": {"v": 2, "verb": "ready", "frame": "frm_8f3c2a1b9d", "args": {}}
+      },
+      {
+        "why": "no wire version",
+        "message": {"verb": "ready", "frame": "frm_8f3c2a1b9d", "args": {}}
+      },
+      {
+        "why": "an unknown verb",
+        "message": {"v": 1, "verb": "navigate", "frame": "frm_8f3c2a1b9d", "args": {"url": "/"}}
+      },
+      {
+        "why": "a shell verb of the tincture wire is not a canvas verb",
+        "message": {"v": 1, "verb": "title", "frame": "frm_8f3c2a1b9d", "args": {"title": "x"}}
+      },
+      {
+        "why": "a frame id too short",
+        "message": {"v": 1, "verb": "ready", "frame": "frm_1", "args": {}}
+      },
+      {
+        "why": "a frame id outside the grammar",
+        "message": {"v": 1, "verb": "ready", "frame": "../frm_8f3c2a1b9d", "args": {}}
+      },
+      {
+        "why": "args are an object",
+        "message": {"v": 1, "verb": "ready", "frame": "frm_8f3c2a1b9d", "args": []}
+      },
+      {
+        "why": "ready takes no arguments",
+        "message": {"v": 1, "verb": "ready", "frame": "frm_8f3c2a1b9d", "args": {"x": 1}}
+      },
+      {
+        "why": "tree carries no tree",
+        "message": {"v": 1, "verb": "tree", "frame": "frm_8f3c2a1b9d", "args": {"nodes": []}}
+      },
+      {
+        "why": "open names a tincture",
+        "message": {"v": 1, "verb": "open", "frame": "frm_8f3c2a1b9d", "args": {"ref": "catalyst:local.markets"}}
+      },
+      {
+        "why": "open names a reference",
+        "message": {"v": 1, "verb": "open", "frame": "frm_8f3c2a1b9d", "args": {"ref": "https://example.com/"}}
+      },
+      {
+        "why": "open takes no label",
+        "message": {"v": 1, "verb": "open", "frame": "frm_8f3c2a1b9d", "args": {"ref": "tincture:local.vault", "label": "Vault"}}
+      },
+      {
+        "why": "a press without a binding id",
+        "message": {"v": 1, "verb": "press", "frame": "frm_8f3c2a1b9d", "args": {"action": "refresh"}}
+      },
+      {
+        "why": "a press naming a feed, not a binding id",
+        "message": {"v": 1, "verb": "press", "frame": "frm_8f3c2a1b9d", "args": {"binding": "btc", "action": "refresh"}}
+      },
+      {
+        "why": "a press with an action outside the grammar",
+        "message": {"v": 1, "verb": "press", "frame": "frm_8f3c2a1b9d", "args": {"binding": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d", "action": "Refresh"}}
+      },
+      {
+        "why": "a press carrying args",
+        "message": {"v": 1, "verb": "press", "frame": "frm_8f3c2a1b9d", "args": {"binding": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d", "action": "buy", "args": {"size": 1}}}
+      },
+      {
+        "why": "a failure at an unknown stage",
+        "message": {"v": 1, "verb": "failed", "frame": "frm_8f3c2a1b9d", "args": {"stage": "boot"}}
+      },
+      {
+        "why": "boot carries no worker URL",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1, "worker_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/worker.js"}}
+      },
+      {
+        "why": "boot lacking its toolkit",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js"}}
+      },
+      {
+        "why": "a toolkit major is positive",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 0}}
+      },
+      {
+        "why": "a toolkit major is an integer",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": "1"}}
+      },
+      {
+        "why": "a toolkit major is whole",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1.5}}
+      },
+      {
+        "why": "an unknown mode",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "debug", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+      },
+      {
+        "why": "an empty credential",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+      },
+      {
+        "why": "another frame's data path",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_00aa11bb22/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+      },
+      {
+        "why": "a data path without its trailing slash",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+      },
+      {
+        "why": "a data path as an absolute URL",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "https://cyfr.example/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js", "toolkit": 1}}
+      },
+      {
+        "why": "a module that is not a script",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.css", "toolkit": 1}}
+      },
+      {
+        "why": "a module on another origin",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "https://evil.example/canvas.js", "toolkit": 1}}
+      },
+      {
+        "why": "a module outside the served prefix",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/assets/canvas.js", "toolkit": 1}}
+      },
+      {
+        "why": "a module path climbing out of its version",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/../canvas.js", "toolkit": 1}}
+      },
+      {
+        "why": "a module under a credential outside its grammar",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/short/canvas.js", "toolkit": 1}}
+      },
+      {
+        "why": "a module path with a query",
+        "message": {"v": 1, "verb": "boot", "frame": "frm_8f3c2a1b9d", "args": {"mode": "live", "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", "data_path": "/_f/v1/o/frm_8f3c2a1b9d/", "module_url": "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/canvas.js?v=1", "toolkit": 1}}
+      },
+      {
+        "why": "an unknown posture",
+        "message": {"v": 1, "verb": "posture", "frame": "frm_8f3c2a1b9d", "args": {"posture": "lap"}}
+      },
+      {
+        "why": "a negative rect",
+        "message": {"v": 1, "verb": "covered", "frame": "frm_8f3c2a1b9d", "args": {"rects": [{"x": -1, "y": 120.5, "width": 640, "height": 360.25}]}}
+      },
+      {
+        "why": "a rect lacking its height",
+        "message": {"v": 1, "verb": "covered", "frame": "frm_8f3c2a1b9d", "args": {"rects": [{"x": 0, "y": 0, "width": 1}]}}
+      },
+      {
+        "why": "a rect with another key",
+        "message": {"v": 1, "verb": "covered", "frame": "frm_8f3c2a1b9d", "args": {"rects": [{"x": 0, "y": 120.5, "width": 640, "height": 360.25, "z": 1}]}}
+      },
+      {
+        "why": "a rect's value is a number",
+        "message": {"v": 1, "verb": "covered", "frame": "frm_8f3c2a1b9d", "args": {"rects": [{"x": 0, "y": 120.5, "width": "640", "height": 360.25}]}}
+      },
+      {
+        "why": "65 rects",
+        "message": {"v": 1, "verb": "covered", "frame": "frm_8f3c2a1b9d", "args": {"rects": [{"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}, {"x": 0, "y": 120.5, "width": 640, "height": 360.25}]}}
+      },
+      {
+        "why": "rects are a list",
+        "message": {"v": 1, "verb": "covered", "frame": "frm_8f3c2a1b9d", "args": {"rects": {"x": 0, "y": 120.5, "width": 640, "height": 360.25}}}
+      },
+      {
+        "why": "an installed tincture with no name",
+        "message": {"v": 1, "verb": "installed", "frame": "frm_8f3c2a1b9d", "args": {"tinctures": [{"ref": "tincture:local.vault", "name": ""}]}}
+      },
+      {
+        "why": "an installed name past 128 code points",
+        "message": {"v": 1, "verb": "installed", "frame": "frm_8f3c2a1b9d", "args": {"tinctures": [{"ref": "tincture:local.vault", "name": "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"}]}}
+      },
+      {
+        "why": "an installed entry naming a catalyst",
+        "message": {"v": 1, "verb": "installed", "frame": "frm_8f3c2a1b9d", "args": {"tinctures": [{"ref": "catalyst:local.markets", "name": "Markets"}]}}
+      },
+      {
+        "why": "an installed entry with another key",
+        "message": {"v": 1, "verb": "installed", "frame": "frm_8f3c2a1b9d", "args": {"tinctures": [{"ref": "tincture:local.vault", "name": "Vault", "icon": "v.png"}]}}
+      },
+      {
+        "why": "an unknown state",
+        "message": {"v": 1, "verb": "state", "frame": "frm_8f3c2a1b9d", "args": {"state": "paused"}}
+      }
+    ]
+  },
+  "paths": {
+    "valid": [
+      {
+        "credential": "ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw",
+        "frame": "frm_8f3c2a1b9d",
+        "page_path": "/_c/v1/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/frm_8f3c2a1b9d",
+        "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+        "stream_path": "/_f/v1/o/frm_8f3c2a1b9d/stream"
+      }
+    ],
+    "invalid": [
+      {
+        "why": "a credential outside its grammar",
+        "credential": "short",
+        "frame": "frm_8f3c2a1b9d"
+      },
+      {
+        "why": "a credential with a separator",
+        "credential": "ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/x",
+        "frame": "frm_8f3c2a1b9d"
+      },
+      {
+        "why": "a frame id outside its grammar",
+        "credential": "ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw",
+        "frame": "../x"
+      },
+      {
+        "why": "a frame id too short",
+        "credential": "ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw",
+        "frame": "frm_1"
+      }
+    ]
+  }
+}

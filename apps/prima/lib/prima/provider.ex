@@ -53,6 +53,16 @@ defmodule Prima.Provider do
         holder's id must also match.
       * `deadline_bound` — the longest a grant on it lives, in seconds; a
         grant's own deadline is never later.
+      * `shape` — `nil`, or the normalized `Prima.Canvas.Shape` of its
+        payload, which makes the stream canvas-readable: an `object` whose
+        field names are exactly the projection's.
+      * `refresh` — `nil`, or `{module, function}`, called with the context
+        and the subject and answering `{:ok, [payload]}`: the current state
+        a subscriber is handed before the live events.
+      * `filter` — `nil`, or a projected field whose value must equal the
+        grant's subject for a payload to be delivered, for a stream whose
+        subject selects payloads on one exact topic rather than naming the
+        topic. A filtering stream has a subject grammar.
     """
 
     @type bind :: :holder | nil
@@ -63,11 +73,24 @@ defmodule Prima.Provider do
             projection: [String.t()],
             subject: String.t() | nil,
             bind: bind(),
-            deadline_bound: pos_integer()
+            deadline_bound: pos_integer(),
+            shape: Prima.Canvas.Shape.t() | nil,
+            refresh: {module(), atom()} | nil,
+            filter: String.t() | nil
           }
 
     @enforce_keys [:name, :topic, :projection, :deadline_bound]
-    defstruct [:name, :topic, :projection, :deadline_bound, subject: nil, bind: nil]
+    defstruct [
+      :name,
+      :topic,
+      :projection,
+      :deadline_bound,
+      subject: nil,
+      bind: nil,
+      shape: nil,
+      refresh: nil,
+      filter: nil
+    ]
 
     @field ~r/\A[a-z][a-z0-9_]{0,62}\z/
 
@@ -75,7 +98,8 @@ defmodule Prima.Provider do
     Whether `stream` is a well-formed declaration: a stream name, an atom
     topic, a non-empty list of distinct field names, a subject grammar that
     compiles and is anchored at both ends (or none), a binding of `nil` or
-    `:holder` (a holder-bound stream with a grammar), and a positive bound.
+    `:holder` (a holder-bound stream with a grammar), a positive bound, and
+    a `shape`, `refresh` and `filter` each `nil` or as `t:t/0` describes.
     """
     @spec valid?(term()) :: boolean()
     def valid?(%__MODULE__{} = stream) do
@@ -83,7 +107,9 @@ defmodule Prima.Provider do
         stream.topic not in [nil, true, false] and
         projection?(stream.projection) and subject_grammar?(stream.subject) and
         bind?(stream.bind, stream.subject) and
-        is_integer(stream.deadline_bound) and stream.deadline_bound > 0
+        is_integer(stream.deadline_bound) and stream.deadline_bound > 0 and
+        shape?(stream.shape, stream.projection) and refresh?(stream.refresh) and
+        filter?(stream.filter, stream.projection, stream.subject)
     end
 
     def valid?(_other), do: false
@@ -119,6 +145,33 @@ defmodule Prima.Provider do
           Enum.uniq(fields) == fields
 
     defp projection?(_fields), do: false
+
+    # Normalized already, so the declaration is the shape a canvas is
+    # promised, and its fields are exactly the payload a grant forwards.
+    defp shape?(nil, _projection), do: true
+
+    defp shape?(%{"type" => "object", "fields" => fields} = shape, projection)
+         when is_map(fields) and is_list(projection) do
+      Prima.Canvas.Shape.validate(shape) == {:ok, shape} and
+        Enum.sort(Map.keys(fields)) == Enum.sort(projection)
+    end
+
+    defp shape?(_shape, _projection), do: false
+
+    # As for `topic`, `nil` and the booleans are atoms that name nothing.
+    defp refresh?(nil), do: true
+
+    defp refresh?({module, function}) when is_atom(module) and is_atom(function),
+      do: module not in [nil, true, false] and function not in [nil, true, false]
+
+    defp refresh?(_refresh), do: false
+
+    defp filter?(nil, _projection, _subject), do: true
+
+    defp filter?(field, projection, subject) when is_binary(field) and is_list(projection),
+      do: field in projection and is_binary(subject)
+
+    defp filter?(_field, _projection, _subject), do: false
 
     # Anchored at both ends, so a grammar cannot admit a subject by matching
     # a part of it.

@@ -1,0 +1,438 @@
+{
+  "comment": "The vectors pinning Prima.Feed, read by apps/prima/test/prima/feed_test.exs and, for the stream payload, by the toolkit's JavaScript tests (apps/cyfr/assets/test/toolkit/worker.test.mjs). Every row is plain JSON. Every valid binding reads and writes back as its `json`, its result shape normalized; every invalid binding is refused at `path`, an RFC 6901 pointer into it, for `reason`, one of `reasons`. `inputs` are the component inputs a binding (by index) or its run action (by index) runs with, and `crons` each interval's cron expression. Each binding's `results` pass or are refused at `path` for `reason`. Each envelope is the stream payload for its binding id, binding, revision, time and result: it names the binding and the feed and never the operation, args, reference or interval. A binding's args and a result are bounded by the bytes of their JSON text: `args_max_bytes` and `result_max_bytes`.",
+  "intervals": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    10,
+    12,
+    15,
+    20,
+    30,
+    60
+  ],
+  "args_max_bytes": 4096,
+  "result_max_bytes": 65536,
+  "reasons": {
+    "type": "a value of another JSON type than its position takes",
+    "null": "null where the shape is not nullable",
+    "max": "a string or list longer than its max",
+    "enum": "a value none of the values its position admits",
+    "time": "a string DateTime.from_iso8601/1 refuses",
+    "unknown_field": "an object key its fields do not name",
+    "required": "a required field or key absent",
+    "unknown_type": "a shape whose type is none of the types",
+    "unknown_key": "a key its object does not take",
+    "range": "a bound or count outside its range",
+    "name": "a name outside its grammar",
+    "duplicate": "a value repeated where values are distinct",
+    "depth": "a shape deeper than its limit",
+    "text": "a label outside its code-point range or with a control character",
+    "reference": "not a canonically spelt, versionless catalyst or formula reference",
+    "size": "JSON text longer than its bound",
+    "json": "a value Prima.Json.encode/1 cannot write as JSON text"
+  },
+  "bindings": {
+    "valid": [
+      {
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "json": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "nullable": false, "fields": {"symbol": {"type": "string", "nullable": false, "max": 16}, "price": {"type": "number", "nullable": false}, "change": {"type": "number", "nullable": true}, "at": {"type": "time", "nullable": false}, "candles": {"type": "list", "nullable": false, "max": 500, "of": {"type": "object", "nullable": false, "fields": {"t": {"type": "time", "nullable": false}, "o": {"type": "number", "nullable": false}, "h": {"type": "number", "nullable": false}, "l": {"type": "number", "nullable": false}, "c": {"type": "number", "nullable": false}}, "required": ["c", "h", "l", "o", "t"]}}}, "required": ["at", "price", "symbol"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]}
+      },
+      {
+        "binding": {"name": "lisbon-weather", "label": "Lisbon", "reference": "formula:example.com.weather", "operation": "today", "args": {}, "interval_minutes": 60, "result_shape": {"type": "object", "fields": {"temperature": {"type": "number"}, "summary": {"type": "string", "max": 80}}, "required": ["temperature"]}, "actions": []},
+        "json": {"name": "lisbon-weather", "label": "Lisbon", "reference": "formula:example.com.weather", "operation": "today", "args": {}, "interval_minutes": 60, "result_shape": {"type": "object", "nullable": false, "fields": {"temperature": {"type": "number", "nullable": false}, "summary": {"type": "string", "nullable": false, "max": 80}}, "required": ["temperature"]}, "actions": []}
+      }
+    ],
+    "invalid": [
+      {
+        "why": "a binding is an object",
+        "binding": [{"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]}],
+        "path": "",
+        "reason": "type"
+      },
+      {
+        "why": "a binding carries no id: its id is its row's",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}], "id": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d"},
+        "path": "/id",
+        "reason": "unknown_key"
+      },
+      {
+        "why": "every field is required",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}},
+        "path": "/actions",
+        "reason": "required"
+      },
+      {
+        "why": "a name outside the feed-name grammar",
+        "binding": {"name": "BTC", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/name",
+        "reason": "name"
+      },
+      {
+        "why": "a name beginning with a hyphen",
+        "binding": {"name": "-btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/name",
+        "reason": "name"
+      },
+      {
+        "why": "a name past 48 characters",
+        "binding": {"name": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/name",
+        "reason": "name"
+      },
+      {
+        "why": "an empty label",
+        "binding": {"name": "btc", "label": "", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/label",
+        "reason": "text"
+      },
+      {
+        "why": "a label past 80 code points",
+        "binding": {"name": "btc", "label": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/label",
+        "reason": "text"
+      },
+      {
+        "why": "a label with a control character",
+        "binding": {"name": "btc", "label": "Bit\ncoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/label",
+        "reason": "text"
+      },
+      {
+        "why": "a shorthand reference",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "c:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/reference",
+        "reason": "reference"
+      },
+      {
+        "why": "a padded reference",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": " catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/reference",
+        "reason": "reference"
+      },
+      {
+        "why": "a pinned reference",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets:1.0.0", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/reference",
+        "reason": "reference"
+      },
+      {
+        "why": "a reagent cannot be bound",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "reagent:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/reference",
+        "reason": "reference"
+      },
+      {
+        "why": "a tincture cannot be bound",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "tincture:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/reference",
+        "reason": "reference"
+      },
+      {
+        "why": "an empty operation",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/operation",
+        "reason": "name"
+      },
+      {
+        "why": "an operation past 64 code points",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/operation",
+        "reason": "name"
+      },
+      {
+        "why": "an operation with a control character",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quo\tte", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/operation",
+        "reason": "name"
+      },
+      {
+        "why": "args are an object",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": ["BTC"], "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/args",
+        "reason": "type"
+      },
+      {
+        "why": "args past 4096 bytes of JSON text",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"pad": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/args",
+        "reason": "size"
+      },
+      {
+        "why": "an interval of 7 does not divide an hour",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 7, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/interval_minutes",
+        "reason": "enum"
+      },
+      {
+        "why": "an interval is a whole number",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": "5", "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/interval_minutes",
+        "reason": "type"
+      },
+      {
+        "why": "a result shape outside the grammar",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "decimal"}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "buy", "label": "Buy 0.01", "kind": "run", "operation": "order", "args": {"side": "buy", "size": 0.01}}]},
+        "path": "/result_shape/type",
+        "reason": "unknown_type"
+      },
+      {
+        "why": "nine actions",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "a0", "label": "Refresh", "kind": "refresh"}, {"name": "a1", "label": "Refresh", "kind": "refresh"}, {"name": "a2", "label": "Refresh", "kind": "refresh"}, {"name": "a3", "label": "Refresh", "kind": "refresh"}, {"name": "a4", "label": "Refresh", "kind": "refresh"}, {"name": "a5", "label": "Refresh", "kind": "refresh"}, {"name": "a6", "label": "Refresh", "kind": "refresh"}, {"name": "a7", "label": "Refresh", "kind": "refresh"}, {"name": "a8", "label": "Refresh", "kind": "refresh"}]},
+        "path": "/actions",
+        "reason": "range"
+      },
+      {
+        "why": "actions are a list",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": {"refresh": {"name": "refresh", "label": "Refresh", "kind": "refresh"}}},
+        "path": "/actions",
+        "reason": "type"
+      },
+      {
+        "why": "a run action lacking its operation",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "buy", "label": "Buy", "kind": "run", "args": {}}]},
+        "path": "/actions/0/operation",
+        "reason": "required"
+      },
+      {
+        "why": "a run action lacking its args",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "buy", "label": "Buy", "kind": "run", "operation": "order"}]},
+        "path": "/actions/0/args",
+        "reason": "required"
+      },
+      {
+        "why": "a run action's args past 4096 bytes",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "buy", "label": "Buy", "kind": "run", "operation": "order", "args": {"pad": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}]},
+        "path": "/actions/0/args",
+        "reason": "size"
+      },
+      {
+        "why": "a refresh action carrying an operation",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh", "operation": "quote"}]},
+        "path": "/actions/0/operation",
+        "reason": "unknown_key"
+      },
+      {
+        "why": "a refresh action carrying args",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh", "args": {}}]},
+        "path": "/actions/0/args",
+        "reason": "unknown_key"
+      },
+      {
+        "why": "an action of another kind",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "delete"}]},
+        "path": "/actions/0/kind",
+        "reason": "enum"
+      },
+      {
+        "why": "an action key no action takes",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh", "confirm": true}]},
+        "path": "/actions/0/confirm",
+        "reason": "unknown_key"
+      },
+      {
+        "why": "an action's label past 40 code points",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr", "kind": "refresh"}]},
+        "path": "/actions/0/label",
+        "reason": "text"
+      },
+      {
+        "why": "an action's name outside the grammar",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "Refresh", "label": "Refresh", "kind": "refresh"}]},
+        "path": "/actions/0/name",
+        "reason": "name"
+      },
+      {
+        "why": "two actions of one name",
+        "binding": {"name": "btc", "label": "Bitcoin", "reference": "catalyst:local.markets", "operation": "quote", "args": {"symbol": "BTC", "depth": 2.5, "venue": null}, "interval_minutes": 5, "result_shape": {"type": "object", "fields": {"symbol": {"type": "string", "max": 16}, "price": {"type": "number"}, "change": {"type": "number", "nullable": true}, "at": {"type": "time"}, "candles": {"type": "list", "max": 500, "of": {"type": "object", "fields": {"t": {"type": "time"}, "o": {"type": "number"}, "h": {"type": "number"}, "l": {"type": "number"}, "c": {"type": "number"}}, "required": ["t", "o", "h", "l", "c"]}}}, "required": ["symbol", "price", "at"]}, "actions": [{"name": "refresh", "label": "Refresh", "kind": "refresh"}, {"name": "refresh", "label": "Buy", "kind": "run", "operation": "order", "args": {}}]},
+        "path": "/actions/1/name",
+        "reason": "duplicate"
+      }
+    ]
+  },
+  "binding_ids": {
+    "valid": [
+      "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+      "feed_01a09fee-2e4f-7a5b-bc6d-7e8f9a0b1c2e"
+    ],
+    "invalid": [
+      {
+        "why": "another prefix",
+        "id": "sched_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d"
+      },
+      {
+        "why": "no prefix",
+        "id": "01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d"
+      },
+      {
+        "why": "uppercase hex",
+        "id": "feed_01A09FEE-2E4F-7A5B-9C6D-7E8F9A0B1C2D"
+      },
+      {
+        "why": "a UUID of version 4",
+        "id": "feed_01a09fee-2e4f-4a5b-9c6d-7e8f9a0b1c2d"
+      },
+      {
+        "why": "another variant",
+        "id": "feed_01a09fee-2e4f-7a5b-cc6d-7e8f9a0b1c2d"
+      },
+      {
+        "why": "a short UUID",
+        "id": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2"
+      },
+      {
+        "why": "a feed name",
+        "id": "btc"
+      }
+    ]
+  },
+  "inputs": [
+    {
+      "why": "a binding's input",
+      "binding": 0,
+      "input": {
+        "operation": "quote",
+        "params": {"symbol": "BTC", "depth": 2.5, "venue": null}
+      }
+    },
+    {
+      "why": "a run action's input",
+      "binding": 0,
+      "action": 1,
+      "input": {
+        "operation": "order",
+        "params": {"side": "buy", "size": 0.01}
+      }
+    },
+    {
+      "why": "a binding with no args",
+      "binding": 1,
+      "input": {
+        "operation": "today",
+        "params": {}
+      }
+    }
+  ],
+  "crons": [
+    {
+      "interval_minutes": 1,
+      "cron": "*/1 * * * *"
+    },
+    {
+      "interval_minutes": 2,
+      "cron": "*/2 * * * *"
+    },
+    {
+      "interval_minutes": 3,
+      "cron": "*/3 * * * *"
+    },
+    {
+      "interval_minutes": 4,
+      "cron": "*/4 * * * *"
+    },
+    {
+      "interval_minutes": 5,
+      "cron": "*/5 * * * *"
+    },
+    {
+      "interval_minutes": 6,
+      "cron": "*/6 * * * *"
+    },
+    {
+      "interval_minutes": 10,
+      "cron": "*/10 * * * *"
+    },
+    {
+      "interval_minutes": 12,
+      "cron": "*/12 * * * *"
+    },
+    {
+      "interval_minutes": 15,
+      "cron": "*/15 * * * *"
+    },
+    {
+      "interval_minutes": 20,
+      "cron": "*/20 * * * *"
+    },
+    {
+      "interval_minutes": 30,
+      "cron": "*/30 * * * *"
+    },
+    {
+      "interval_minutes": 60,
+      "cron": "0 * * * *"
+    }
+  ],
+  "results": [
+    {
+      "binding": 0,
+      "valid": [
+        {"symbol": "BTC", "price": 42000.5, "change": null, "at": "2026-10-04T12:00:00Z", "candles": [{"t": "2026-10-04T11:00:00Z", "o": 41900, "h": 42100.25, "l": 41850, "c": 42000.5}]},
+        {"symbol": "BTC", "price": 42000.5, "change": -0.75, "at": "2026-10-04T12:00:00Z", "candles": []}
+      ],
+      "invalid": [
+        {"why": "a result outside its shape", "result": {"symbol": "BTC"}, "path": "/at", "reason": "required"},
+        {"why": "a result with a key its shape does not name", "result": {"symbol": "BTC", "price": 42000.5, "change": null, "at": "2026-10-04T12:00:00Z", "candles": [{"t": "2026-10-04T11:00:00Z", "o": 41900, "h": 42100.25, "l": 41850, "c": 42000.5}], "volume": 12}, "path": "/volume", "reason": "unknown_field"},
+        {"why": "a result that is not an object", "result": [{"symbol": "BTC", "price": 42000.5, "change": null, "at": "2026-10-04T12:00:00Z", "candles": [{"t": "2026-10-04T11:00:00Z", "o": 41900, "h": 42100.25, "l": 41850, "c": 42000.5}]}], "path": "", "reason": "type"}
+      ]
+    },
+    {
+      "binding": 1,
+      "valid": [
+        {"temperature": 21.5, "summary": "Clear"},
+        {"temperature": 19}
+      ],
+      "invalid": [
+        {"why": "a null where the field is not nullable", "result": {"temperature": null}, "path": "/temperature", "reason": "null"}
+      ]
+    }
+  ],
+  "envelopes": [
+    {
+      "why": "an accepted result, its time given at another offset",
+      "binding_id": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+      "binding": 0,
+      "revision": 7,
+      "at": "2026-10-04T20:00:00+08:00",
+      "result": {
+        "symbol": "BTC",
+        "price": 42000.5,
+        "change": null,
+        "at": "2026-10-04T12:00:00Z",
+        "candles": [{"t": "2026-10-04T11:00:00Z", "o": 41900, "h": 42100.25, "l": 41850, "c": 42000.5}]
+      },
+      "envelope": {
+        "binding": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "feed": "btc",
+        "revision": 7,
+        "at": "2026-10-04T12:00:00Z",
+        "result": {"symbol": "BTC", "price": 42000.5, "change": null, "at": "2026-10-04T12:00:00Z", "candles": [{"t": "2026-10-04T11:00:00Z", "o": 41900, "h": 42100.25, "l": 41850, "c": 42000.5}]},
+        "label": "Bitcoin",
+        "actions": [{"name": "refresh", "label": "Refresh"}, {"name": "buy", "label": "Buy 0.01"}]
+      }
+    },
+    {
+      "why": "a binding with no actions, at revision 0",
+      "binding_id": "feed_01a09fee-2e4f-7a5b-bc6d-7e8f9a0b1c2e",
+      "binding": 1,
+      "revision": 0,
+      "at": "2026-10-04T12:00:00.250Z",
+      "result": {
+        "temperature": 21.5,
+        "summary": "Clear"
+      },
+      "envelope": {
+        "binding": "feed_01a09fee-2e4f-7a5b-bc6d-7e8f9a0b1c2e",
+        "feed": "lisbon-weather",
+        "revision": 0,
+        "at": "2026-10-04T12:00:00.250Z",
+        "result": {"temperature": 21.5, "summary": "Clear"},
+        "label": "Lisbon",
+        "actions": []
+      }
+    }
+  ]
+}
