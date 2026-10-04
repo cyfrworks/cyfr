@@ -256,6 +256,8 @@ defmodule Prima.WorkerAuth do
   @max_frame_bytes 65_536
   @max_chunk_bytes 32_768
   @max_frame_message_bytes 512
+  # A sealed value's IV and tag beside its ciphertext (`Prima.MacEnvelope.seal/6`).
+  @sealed_overhead_bytes 12 + 16
 
   @typedoc "The attempt an attempt's keys are bound to."
   @type attempt :: %{
@@ -632,6 +634,34 @@ defmodule Prima.WorkerAuth do
     do: split_frames(rest, [frame | frames])
 
   defp split_frames(rest, frames), do: {:ok, Enum.reverse(frames), rest}
+
+  @doc """
+  The body bytes one answer frame carries, its kind byte and sealed value
+  as `split_frames/1` answers it, read from the sealed value's length
+  without opening it: a `chunk`'s plaintext length under
+  `Prima.MacEnvelope`'s layout (unpadded base64url of the 12-byte IV, the
+  16-byte tag and the ciphertext, as long as its plaintext). Every other
+  kind carries none, and neither does a value no seal produces: 0. This is
+  how a relay that carries the frames unopened counts an answer's body
+  against its bound.
+  """
+  @spec frame_body_bytes(binary()) :: non_neg_integer()
+  def frame_body_bytes(<<?c, sealed::binary>>), do: sealed_plaintext_bytes(byte_size(sealed))
+  def frame_body_bytes(frame) when is_binary(frame), do: 0
+
+  # Unpadded base64 spells 3 bytes in 4 characters, a last 1 byte in 2
+  # and a last 2 in 3; a length leaving 1 character over spells nothing.
+  defp sealed_plaintext_bytes(length) do
+    decoded =
+      case rem(length, 4) do
+        0 -> div(length, 4) * 3
+        2 -> div(length, 4) * 3 + 1
+        3 -> div(length, 4) * 3 + 2
+        1 -> 0
+      end
+
+    max(decoded - @sealed_overhead_bytes, 0)
+  end
 
   @doc """
   One answer frame, its kind byte and sealed value, opened and read as the

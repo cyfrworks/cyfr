@@ -8,7 +8,10 @@ defmodule Opus.HttpHandlerEnforcementTest do
   decisions among them for the audit trail, in the attempt's athanor and
   for the attempt's component: its own edge checks and, since the engine
   resolves nothing, the pin the control plane refuses for a name that does
-  not resolve. It records nothing for a malformed request.
+  not resolve. It records nothing for a malformed request. A request
+  naming a connection, which CYFR makes, is held to the same checks first
+  and recorded the same way; one carrying a credential header is refused
+  by its shape, which is no policy decision.
   """
 
   use ExUnit.Case, async: false
@@ -115,6 +118,48 @@ defmodule Opus.HttpHandlerEnforcementTest do
     assert {:ok, %{cancelled: true}} = Crucible.cancel(attempt.ctx, attempt.execution_id)
 
     assert {:error, :lost} = Opus.HostClient.record_denial(host, "domain_blocked", "blocked")
+    assert rows_for(attempt) == []
+  end
+
+  test "a request naming a connection is held to the runner's own checks, recorded as any other's" do
+    edge = EdgeFixtures.edge(domains: ["api.example.com"], methods: ["GET"])
+    {attempt, host} = attached("catalyst:local.audited-attached:1.0.0")
+
+    request =
+      Jason.encode!(%{
+        "connection" => "api_key",
+        "method" => "GET",
+        "url" => "https://evil.example.net/data"
+      })
+
+    result =
+      HttpHandler.execute(request, edge, EdgeFixtures.limits(), host, attempt.component_ref)
+
+    assert %{"error" => %{"type" => "domain_blocked"}} = Jason.decode!(result)
+    assert [row] = rows_for(attempt)
+    assert row.event_type == "domain_blocked"
+    assert row.decision_reason =~ "evil.example.net"
+  end
+
+  test "a credential header beside a connection is refused by shape, and is no policy decision" do
+    edge = EdgeFixtures.edge(domains: ["api.example.com"], methods: ["GET"])
+    {attempt, host} = attached("catalyst:local.audited-shape:1.0.0")
+
+    request =
+      Jason.encode!(%{
+        "connection" => "api_key",
+        "method" => "GET",
+        "url" => "https://api.example.com/data",
+        "headers" => %{"Authorization" => "Bearer guest-supplied"}
+      })
+
+    result =
+      HttpHandler.execute(request, edge, EdgeFixtures.limits(), host, attempt.component_ref)
+
+    assert %{"error" => %{"type" => "credential_header_refused", "message" => message}} =
+             Jason.decode!(result)
+
+    assert message == Prima.Refusal.message(:credential_header_refused)
     assert rows_for(attempt) == []
   end
 end

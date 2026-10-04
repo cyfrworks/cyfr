@@ -18,6 +18,13 @@ defmodule Opus.SecretAuditTest do
   the report; a name past its bound or carrying a control byte is audited
   by no one. No credential value is audited, logged, stored or published.
 
+  A field CYFR attaches to a guest's request naming a connection, never
+  handing it to the runner, is audited once per request as
+  `[:cyfr, :opus, :secret, :dispensed]`: by the field, the connection and
+  the request's `scheme://host:port`, under the attempt's identity. The
+  runner's attach is handed nothing, and nothing the runner sent or was
+  sent carries the value.
+
   The guest is `test_wasm/hostile/vault_probe` of Opus's suite, run by the
   Opus service in a runner over the suite's wire (`Cyfr.Test.TwoServices`);
   its vault entry holds three fields, and its projection grants two. The
@@ -34,10 +41,15 @@ defmodule Opus.SecretAuditTest do
   alias Prima.Authority.Blob
   alias Prima.Authority.Blob.Edge
   alias Cyfr.Test.{AttemptFixtures, ChatFixture, OpusService, TwoServices}
+  alias Sanctum.Consent.{Commit, Plan}
 
   @moduletag timeout: 120_000
 
   @probe Path.expand("../../../../opus/test/support/test_wasm/hostile/vault_probe.wasm", __DIR__)
+  @attached_probe Path.expand(
+                    "../../../../opus/test/support/test_wasm/hostile/attached_header_probe.wasm",
+                    __DIR__
+                  )
   @node "catalyst:local.vault-probe"
   @ref "catalyst:local.vault-probe:0.1.0"
 
@@ -49,6 +61,21 @@ defmodule Opus.SecretAuditTest do
 
   @dispensed [:cyfr, :opus, :secret, :dispensed]
   @denied [:cyfr, :opus, :secret, :denied]
+
+  defmodule Upstream do
+    @moduledoc false
+    # A loopback upstream that tells the test what it was sent.
+    @behaviour Plug
+
+    @impl true
+    def init(test), do: test
+
+    @impl true
+    def call(conn, test) do
+      send(test, {:upstream, %{path: conn.request_path, headers: conn.req_headers}})
+      Plug.Conn.send_resp(conn, 200, "audited")
+    end
+  end
 
   setup tags do
     Arca.Cache.init()
@@ -369,5 +396,132 @@ defmodule Opus.SecretAuditTest do
       assert %{"ok" => true} = deny(mine, String.duplicate("N", 256))
       assert [_entry] = of(audited(), @denied, mine.execution_id)
     end
+  end
+
+  describe "an attached request" do
+    test "an attached value is audited by field and destination without material" do
+      upstream =
+        start_supervised!(
+          {Bandit, plug: {Upstream, self()}, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(upstream)
+      {person, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
+      probe = publish_attached_probe!(person)
+
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(person, %{
+          name: "attached-audit-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "upstream.test",
+          fields: %{"KEY" => @canary},
+          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => port}
+        })
+
+      consent_id = consent!(person, probe, [%{need: "api_key", entry_id: entry.id}])
+
+      id = Prima.UUID7.execution_id()
+      :ok = Crucible.subscribe_events(id, person)
+
+      {result, log} =
+        with_log(fn ->
+          Crucible.run_root(
+            person,
+            :default,
+            probe <> ":1.0.0",
+            %{
+              "connection" => "api_key",
+              "method" => "GET",
+              "url" => "http://127.0.0.1:#{port}/audited?q=1"
+            },
+            execution_id: id
+          )
+        end)
+
+      assert {:ok, %{output: %{"status" => 200, "body" => "audited"}}} = result
+      assert_receive {:upstream, sent}, 5_000
+      assert {"x-api-key", @canary} in sent.headers
+
+      # One entry for the attached request, naming the field it filled, the
+      # connection and the request's origin, never its path or query.
+      mine = Enum.filter(audited(), &(&1.metadata[:execution_id] == id))
+      assert [dispensed] = of(mine, @dispensed, id)
+      assert dispensed.metadata.field == "KEY"
+      assert dispensed.metadata.connection == "api_key"
+      assert dispensed.metadata.destination == "http://127.0.0.1:#{port}"
+      assert dispensed.metadata.consent_id == consent_id
+      assert dispensed.athanor_id == person.athanor_id
+
+      # The runner's attach handed nothing; neither it nor the runner's
+      # events carried the value, nor did anything the trail recorded.
+      assert [%{answer: %{"ok" => handed}}] = TwoServices.calls(:attach, id)
+      assert handed == %{}
+
+      assert ChatFixture.leaks(@canary,
+               audit: mine,
+               wire: TwoServices.calls(),
+               events: drain(),
+               log: log
+             ) == []
+    end
+  end
+
+  # The probe of Opus's hostile guests that sends its input as its one
+  # request, published as a component of the person's own whose need
+  # `api_key` CYFR attaches by header.
+  defp publish_attached_probe!(ctx) do
+    name = "audited-probe-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "catalyst",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:upstream.test",
+          "reason" => "to call the upstream with your key",
+          "fields" => ["KEY"],
+          "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+        }
+      },
+      "caps" => %{
+        "egress" => %{
+          "domains" => ["127.0.0.1"],
+          "methods" => ["GET"],
+          "schemes" => ["http"],
+          "private_ips" => ["127.0.0.1"]
+        }
+      }
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@attached_probe), %{
+        name: name,
+        version: "1.0.0",
+        type: "catalyst",
+        manifest: Jason.encode!(manifest)
+      })
+
+    "catalyst:local." <> name
+  end
+
+  # `ref`'s owner consent binding `bindings`, through the consent walk;
+  # answers the consent it committed.
+  defp consent!(ctx, ref, bindings) do
+    {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+    decisions = %{ref: ref, bindings: bindings}
+    {:ok, preview} = Commit.preview(ctx, decisions)
+
+    {:ok, %{profile_id: profile_id}} =
+      Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
+    head.id
   end
 end

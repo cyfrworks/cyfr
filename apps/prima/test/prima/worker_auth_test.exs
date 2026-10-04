@@ -694,6 +694,38 @@ defmodule Prima.WorkerAuthTest do
       assert WorkerAuth.frame_kinds() == [:head, :chunk, :end, :error]
     end
 
+    test "a chunk's body bytes read from its sealed value's length, unopened; no other kind carries any" do
+      %{seal: seal} = keys!(@attempt)
+
+      for size <-
+            Enum.uniq([0, 1, 2, 3, 4, 5, 31, 32, 33, 1000] ++ Enum.to_list(32_760..32_768)) do
+        chunk = :crypto.strong_rand_bytes(size)
+
+        assert WorkerAuth.frame_body_bytes(body(frame!(seal, 1, :chunk, chunk))) == size,
+               "a chunk of #{size} bytes"
+      end
+
+      max = WorkerAuth.max_chunk_bytes()
+      full = body(frame!(seal, 1, :chunk, String.duplicate("a", max)))
+      assert WorkerAuth.frame_body_bytes(full) == max
+
+      head = WorkerAuth.head_plaintext(200, [{"content-type", "text/plain"}])
+      error = WorkerAuth.error_plaintext("timeout", "The upstream did not answer in time.")
+
+      for {kind, plaintext} <- [{:head, head}, {:end, ""}, {:error, error}] do
+        assert WorkerAuth.frame_body_bytes(body(frame!(seal, 0, kind, plaintext))) == 0,
+               "a #{kind} frame"
+      end
+
+      # A value no seal produces carries nothing: one past a whole base64
+      # quantum, or shorter than an IV and a tag.
+      <<?c, sealed::binary>> = body(frame!(seal, 1, :chunk, "abc"))
+      assert rem(byte_size(sealed <> "AAA"), 4) == 1
+      assert WorkerAuth.frame_body_bytes(<<?c, sealed::binary, "AAA">>) == 0
+      assert WorkerAuth.frame_body_bytes(<<?c, binary_part(sealed, 0, 36)::binary>>) == 0
+      assert WorkerAuth.frame_body_bytes("c") == 0
+    end
+
     test "a kind byte is bound and known" do
       %{seal: seal} = keys!(@attempt)
       <<length::32, ?h, sealed::binary>> = frame!(seal, 0, :head, "{}")

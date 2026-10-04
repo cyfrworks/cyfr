@@ -43,10 +43,11 @@ defmodule Opus.Relay do
 
   ## Fetches
 
-  A `fetch` names a pin by id and a path, never an address. The pin must
-  be one CYFR granted to the frame's attempt in an answer this process
-  relayed, else the channel closes. The request is checked again against
-  the attempt's edge and limits as the runner checked it (`Opus.EdgeGuard`: method, scheme, the pin's host as
+  A pinned `fetch` names a pin by id and a path, never an address. The
+  pin must be one CYFR granted to the frame's attempt in an answer this
+  process relayed, else the channel closes. The request is checked again
+  against the attempt's edge and limits as the runner checked it
+  (`Opus.EdgeGuard`: method, scheme, the pin's host as
   a domain, the request's size), then taken from the consented rate by a
   `take_rate` call this process signs for the attempt. It then connects
   to the address CYFR answered, with the pin's host for TLS and `Host`
@@ -60,6 +61,24 @@ defmodule Opus.Relay do
   credit, and neither outlives the attempt's deadline: at the deadline
   the fetch is ended `timeout` and its connection closed.
 
+  ## Attached fetches
+
+  A `fetch` naming a connection asks for no pin: CYFR makes the request
+  itself, with the credential the connection's need is bound to attached,
+  and nothing here ever holds that credential. The request is checked
+  against the attempt's edge and limits as a pinned fetch is (the method,
+  the URL's scheme and host as a domain, the request's size), then posted
+  once as the host call `attached_fetch`, which this process composes,
+  seals and signs under the attempt's keys, presenting as the runner, to
+  the member the assignment names (`Opus.HostClient.attached_fetch/3`).
+  CYFR takes the rate for it; this process takes none. What CYFR answers
+  is relayed unopened: a refusal before the request was admitted as an
+  `attached_refusal`, and the fetch ends `refused`; an admitted request's
+  sealed frames as `attached_frame`s, each whole and in order and sent
+  only when the runner's credit covers it, then the fetch's end. Only the
+  runner opens the frames. The deadline ends an attached fetch as it ends
+  a pinned one.
+
   The relay's own bounds: at most 64 calls and 16 fetches in flight per
   runner; a frame past `Prima.RunnerRelay`'s bounds, a sequence out of
   order or a chunk past credit closes the channel as the codec refuses it.
@@ -72,7 +91,17 @@ defmodule Opus.Relay do
 
   require Logger
 
-  alias Prima.{Assignment, Authority, HostAPI, PinnedTarget, RunnerRelay, WorkerAuth, WorkerWire}
+  alias Prima.{
+    Assignment,
+    AttachedRequest,
+    Authority,
+    HostAPI,
+    PinnedTarget,
+    RunnerRelay,
+    WorkerAuth,
+    WorkerWire
+  }
+
   alias Prima.Authority.Blob.Edge
   alias Opus.{EdgeGuard, Egress, HostClient, HttpRequestValidation}
 
@@ -86,6 +115,8 @@ defmodule Opus.Relay do
   # so no one chunk holds the channel's writer for long.
   @chunk_bytes 262_144
   @fetch_timeout_ms 30_000
+
+  @purposes %{"fetch" => :fetch, "stream" => :stream}
 
   @methods %{
     "GET" => :get,
@@ -237,6 +268,9 @@ defmodule Opus.Relay do
   def handle_info({:fetch_deadline, re}, state),
     do: with_fetch(state, re, fn state, fetch -> finish(state, re, fetch, "timeout") end)
 
+  def handle_info({:attached_event, re, event}, state),
+    do: with_fetch(state, re, &attached_event(&1, re, &2, event))
+
   # A call's poster ended without answering: the answer was lost.
   def handle_info({:EXIT, pid, reason}, state) when is_map_key(state.calls, pid) do
     {call, calls} = Map.pop(state.calls, pid)
@@ -290,6 +324,12 @@ defmodule Opus.Relay do
 
       {:message, {:fetch_data, re, data}} ->
         {:message, {:fetch_data, re, {:redacted, byte_size(data)}}}
+
+      {:message, {:attached_event, re, {kind, _header, body}}} ->
+        {:message, {:attached_event, re, {kind, {:redacted, byte_size(body)}}}}
+
+      {:message, {:attached_event, re, {kind, frame}}} ->
+        {:message, {:attached_event, re, {kind, {:redacted, byte_size(frame)}}}}
 
       {:log, _log} ->
         {:log, []}
@@ -537,6 +577,29 @@ defmodule Opus.Relay do
   defp fetch(state, _frame) when map_size(state.fetches) >= @max_fetches,
     do: close(state, :too_many_fetches) |> as_step()
 
+  # An attached fetch names a connection and no pin: CYFR makes the
+  # request, and this process relays its answer.
+  defp fetch(state, %{connection: _connection} = frame) do
+    bound = Map.fetch!(state.attempts, frame.attempt)
+
+    fetch = %{
+      attempt: frame.attempt,
+      mode: :attached,
+      worker: nil,
+      pending: nil,
+      refused: false,
+      done: nil,
+      timer: nil
+    }
+
+    state = %{state | fetches: Map.put(state.fetches, frame.seq, fetch)}
+
+    case attached_admitted(bound, frame) do
+      {:ok, request} -> {:ok, start_attached(state, frame.seq, bound, request)}
+      {:refuse, code} -> finish(state, frame.seq, fetch, code) |> as_step()
+    end
+  end
+
   defp fetch(state, frame) do
     bound = Map.fetch!(state.attempts, frame.attempt)
 
@@ -601,6 +664,92 @@ defmodule Opus.Relay do
         {:ok, Map.merge(request, %{pin: pin, uri: uri, method: frame.method})}
     end
   end
+
+  # The checks the runner made on an attached request, made again outside
+  # it: the method, the URL's scheme and host and the request's size are
+  # within the attempt's edge and limits, before the attempt's deadline.
+  defp attached_admitted(bound, frame) do
+    now = System.system_time(:millisecond)
+    %URI{scheme: scheme, host: host} = URI.parse(frame.url)
+    request = %{url: frame.url, headers: frame.headers, body: frame.body}
+
+    cond do
+      now >= bound.deadline ->
+        {:refuse, "timeout"}
+
+      EdgeGuard.check_method(bound.edge, frame.method) != :ok ->
+        {:refuse, "method_blocked"}
+
+      EdgeGuard.check_scheme(bound.edge, String.downcase(scheme || "")) != :ok ->
+        {:refuse, "scheme_blocked"}
+
+      EdgeGuard.check_domain(bound.edge, unbracket(host || "")) != :ok ->
+        {:refuse, "domain_blocked"}
+
+      EdgeGuard.check_request_size(bound.limits, request) != :ok ->
+        {:refuse, "request_too_large"}
+
+      true ->
+        {:ok,
+         %AttachedRequest{
+           call_id: frame.call_id,
+           connection: frame.connection,
+           method: frame.method,
+           url: frame.url,
+           headers: frame.headers,
+           body: frame.body,
+           purpose: Map.fetch!(@purposes, frame.purpose)
+         }}
+    end
+  end
+
+  # The attached request is CYFR's host call `attached_fetch`, composed,
+  # sealed and signed here under the attempt's keys and posted once by a
+  # poster beside the relay. CYFR takes the rate for it itself. Its answer
+  # comes back one event at a time, each waiting until the relay has sent
+  # it on under the runner's credit; the wait is bounded by the attempt's
+  # deadline, and the relay kills the poster at the deadline, which closes
+  # its connection.
+  defp start_attached(state, re, bound, request) do
+    relay = self()
+    client = rate_client(state, bound)
+    deadline = bound.deadline
+
+    sink = fn event ->
+      send(relay, {:attached_event, re, event})
+
+      receive do
+        {:fetch_sent, ^re} -> :ok
+      after
+        max(deadline - now(), 0) -> :halt
+      end
+    end
+
+    options = %{sink: sink, max_response_size: bound.limits.max_response_size, deadline: deadline}
+
+    worker =
+      spawn_link(fn ->
+        send(
+          relay,
+          {:fetch_done, re, attached_end(HostClient.attached_fetch(client, request, options))}
+        )
+      end)
+
+    timer = Process.send_after(self(), {:fetch_deadline, re}, max(deadline - now(), 0))
+    fetch = %{state.fetches[re] | worker: worker, timer: timer}
+
+    %{
+      state
+      | fetches: Map.put(state.fetches, re, fetch),
+        workers: Map.put(state.workers, worker, re)
+    }
+  end
+
+  # How the poster's answer ends the fetch: nil for an answer relayed
+  # whole; `timeout` for a sink stopped at the deadline.
+  defp attached_end(:ok), do: nil
+  defp attached_end(:halted), do: "timeout"
+  defp attached_end({:error, code}), do: code
 
   defp start_fetch(state, re, bound, request) do
     relay = self()
@@ -765,6 +914,60 @@ defmodule Opus.Relay do
     end
   end
 
+  # What CYFR answered an attached fetch, relayed unopened: its refusal
+  # before admission, sent at once since no frame precedes it, or one
+  # frame of its answer, held until the runner's credit covers it.
+  defp attached_event(state, re, fetch, {:refusal, header, body}) do
+    frame = %{kind: :attached_refusal, attempt: fetch.attempt, re: re, header: header, body: body}
+
+    case encode(state, frame) do
+      {:ok, state} ->
+        send(fetch.worker, {:fetch_sent, re})
+        {:noreply, put_fetch(state, re, %{fetch | refused: true})}
+
+      {:error, :unencodable} ->
+        finish(state, re, fetch, "bad_frame")
+
+      {:error, reason} ->
+        stop_write(state, reason)
+    end
+  end
+
+  defp attached_event(state, re, fetch, {:frame, bytes}),
+    do: pump(state, re, %{fetch | pending: bytes})
+
+  # Send an attached fetch's frame once the runner's credit covers it
+  # whole, a frame never split, and tell the poster it went; the fetch
+  # ends as a pinned one does, once every byte sent was granted back. A
+  # refused fetch ends `refused`.
+  defp pump(state, re, %{mode: :attached} = fetch) do
+    credit = RunnerRelay.credit(state.channel, re) || 0
+
+    cond do
+      is_binary(fetch.pending) and credit >= byte_size(fetch.pending) ->
+        frame = %{kind: :attached_frame, attempt: fetch.attempt, re: re, frame: fetch.pending}
+
+        case encode(state, frame) do
+          {:ok, state} ->
+            send(fetch.worker, {:fetch_sent, re})
+            pump(state, re, %{fetch | pending: nil})
+
+          {:error, reason} ->
+            stop_write(state, reason)
+        end
+
+      is_binary(fetch.pending) ->
+        {:noreply, put_fetch(state, re, fetch)}
+
+      match?({:end, _}, fetch.done) and credit >= RunnerRelay.initial_credit() ->
+        {:end, error} = fetch.done
+        finish(state, re, fetch, if(fetch.refused and is_nil(error), do: "refused", else: error))
+
+      true ->
+        {:noreply, put_fetch(state, re, fetch)}
+    end
+  end
+
   # Send what the fetch holds as far as the runner's credit allows; the
   # worker hears its piece sent once all of it is, and the fetch ends once
   # nothing is held and the worker is done.
@@ -923,13 +1126,32 @@ defmodule Opus.Relay.Runner do
   lets the rest of a fetch drain unread. A frame the codec refuses, or the
   service's `close`, closes the channel: every call and fetch still open
   hears so, and none is sent again.
+
+  `attached_fetch/4` sends a guest's request naming a connection, which
+  CYFR makes with the credential attached, and its caller hears the same
+  events. The answer arrives as CYFR sealed it, relayed unopened by the
+  service; this end opens each frame under the attempt's seal key for the
+  call id the runner chose, in sequence (`Prima.WorkerAuth.read_frame/2`):
+  a `head` is `{:head, status, headers, ""}`, a `chunk` `{:chunk, body}`,
+  the `end` `{:end, nil}` and an `error` `{:end, {:guest_error, type,
+  message}}`. A refusal CYFR answered before admitting the request is
+  taken only when its header verifies under the attempt's call key for
+  the fetch's attempt and its answer opens as that call's and names the
+  fetch's call id: `{:end, {:guest_error, type, message}}`, or
+  `{:end, "lost"}` for CYFR's `lost`. A frame that does not read or a
+  refusal not taken ends the fetch at once with `{:end, "bad_frame"}`,
+  and an answer the service ends before its `end` or `error` with
+  `{:end, code}` (`"truncated"` when the service names none); nothing of
+  the fetch is handed on after, and what follows drains unread. The keys
+  and the frame reader are held in that fetch's entry alone, dropped at
+  its last event, and no status shows them.
   """
 
   use GenServer
 
   require Logger
 
-  alias Prima.RunnerRelay
+  alias Prima.{AttachedRequest, RunnerRelay, WorkerAuth, WorkerWire}
 
   # How much longer than a call's own timeout a caller waits for the
   # service's answer, which the service bounds by that timeout.
@@ -938,7 +1160,7 @@ defmodule Opus.Relay.Runner do
   @type event ::
           {:head, 100..599, [{String.t(), String.t()}], binary()}
           | {:chunk, binary()}
-          | {:end, String.t() | nil}
+          | {:end, String.t() | {:guest_error, String.t(), String.t()} | nil}
 
   @doc false
   def child_spec(opts),
@@ -1000,6 +1222,25 @@ defmodule Opus.Relay.Runner do
         ) :: {:ok, non_neg_integer()} | {:error, term()}
   def fetch(endpoint, attempt, pin, method, path, headers, body) do
     GenServer.call(endpoint, {:fetch, attempt, pin, method, path, headers, body})
+  catch
+    :exit, _reason -> {:error, :closed}
+  end
+
+  @doc """
+  Send, for `attempt`, a guest's request naming a connection (`request`):
+  CYFR makes it with the credential attached, and the caller hears its
+  answer's events as for `fetch/7`, each frame opened here under `keys`:
+  the attempt's call key (`:call`), which a refusal's header verifies
+  under, and its seal key (`:seal`). Answers the fetch's ref, or
+  `{:error, reason}` for a request the relay cannot carry.
+  """
+  @spec attached_fetch(GenServer.server(), String.t(), AttachedRequest.t(), %{
+          call: binary(),
+          seal: binary()
+        }) :: {:ok, non_neg_integer()} | {:error, term()}
+  def attached_fetch(endpoint, attempt, %AttachedRequest{} = request, %{call: call, seal: seal})
+      when is_binary(call) and is_binary(seal) do
+    GenServer.call(endpoint, {:attached_fetch, attempt, request, %{call: call, seal: seal}})
   catch
     :exit, _reason -> {:error, :closed}
   end
@@ -1129,6 +1370,40 @@ defmodule Opus.Relay.Runner do
     end
   end
 
+  def handle_call({:attached_fetch, attempt, request, keys}, {owner, _tag}, state) do
+    frame = %{
+      kind: :fetch,
+      attempt: attempt,
+      call_id: request.call_id,
+      connection: request.connection,
+      purpose: Atom.to_string(request.purpose),
+      method: request.method,
+      url: request.url,
+      headers: request.headers,
+      body: request.body
+    }
+
+    case encode(state, frame) do
+      {:ok, seq, state} ->
+        fetch = %{
+          owner: owner,
+          monitor: Process.monitor(owner),
+          draining: false,
+          received: 0,
+          granted: 0,
+          attempt: attempt,
+          call_id: request.call_id,
+          keys: keys,
+          reader: WorkerAuth.frame_reader(keys.seal, request.call_id)
+        }
+
+        {:reply, {:ok, seq}, %{state | fetches: Map.put(state.fetches, seq, fetch)}}
+
+      {:error, reason, state} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   @impl true
   def handle_cast({:credit, ref, bytes}, state), do: {:noreply, grant(state, ref, bytes)}
 
@@ -1174,13 +1449,24 @@ defmodule Opus.Relay.Runner do
   def format_status(status) do
     Map.new(status, fn
       {:state, %{} = state} ->
-        {:state, %{state | buffer: {:redacted, byte_size(state.buffer)}}}
+        {:state,
+         %{
+           state
+           | buffer: {:redacted, byte_size(state.buffer)},
+             fetches:
+               Map.new(state.fetches, fn {ref, fetch} ->
+                 {ref, Map.drop(fetch, [:keys, :reader])}
+               end)
+         }}
 
       {:message, {:call, a, op, _header, body}} ->
         {:message, {:call, a, op, {:redacted, byte_size(body)}}}
 
       {:message, {:fetch, a, _pin, _m, _p, _h, body}} ->
         {:message, {:fetch, a, {:redacted, byte_size(body)}}}
+
+      {:message, {:attached_fetch, a, %AttachedRequest{body: body}, _keys}} ->
+        {:message, {:attached_fetch, a, {:redacted, byte_size(body)}}}
 
       {:message, {:relay_in, data}} ->
         {:message, {:relay_in, {:redacted, byte_size(data)}}}
@@ -1246,8 +1532,41 @@ defmodule Opus.Relay.Runner do
 
       {fetch, fetches} ->
         Process.demonitor(fetch.monitor, [:flush])
-        unless fetch.draining, do: send(fetch.owner, {__MODULE__, re, {:end, error}})
+
+        unless fetch.draining,
+          do: send(fetch.owner, {__MODULE__, re, {:end, ended(fetch, error)}})
+
         %{state | fetches: fetches}
+    end
+  end
+
+  defp on_frame(%{kind: :attached_frame, re: re, frame: bytes}, state) do
+    case state.fetches[re] do
+      %{draining: true} = fetch ->
+        state
+        |> put_fetch(re, %{fetch | received: fetch.received + byte_size(bytes)})
+        |> grant(re, byte_size(bytes), true)
+
+      %{reader: reader} = fetch ->
+        fetch = %{fetch | received: fetch.received + byte_size(bytes)}
+
+        case WorkerAuth.read_frame(reader, bytes) do
+          {:ok, read, reader} -> hand_on(state, re, %{fetch | reader: reader}, read, bytes)
+          {:error, _refusal} -> last(state, re, fetch, {:end, "bad_frame"})
+        end
+
+      _gone ->
+        state
+    end
+  end
+
+  defp on_frame(%{kind: :attached_refusal, re: re, header: header, body: body}, state) do
+    case state.fetches[re] do
+      %{draining: false, keys: keys} = fetch ->
+        last(state, re, fetch, {:end, refusal(fetch, keys, header, body)})
+
+      _drained_or_gone ->
+        state
     end
   end
 
@@ -1255,6 +1574,80 @@ defmodule Opus.Relay.Runner do
     Logger.error("[Opus.Relay.Runner] the service closed the relay: #{reason}")
     closed(state, {:service, reason})
   end
+
+  # ————— attached fetches —————
+
+  # An attached fetch the service ended before its answer's `end` or
+  # `error` ended short: what it carried is never a whole answer.
+  defp ended(%{reader: %{state: reading}}, code) when reading != :done, do: code || "truncated"
+  defp ended(_fetch, code), do: code
+
+  # A frame read, handed on as a pinned fetch's events are. Every byte of
+  # a head, and a chunk's framing, is granted back at once; the owner
+  # grants a chunk's body as it reads it.
+  defp hand_on(state, re, fetch, %{kind: :head, status: status, headers: headers}, bytes) do
+    send(fetch.owner, {__MODULE__, re, {:head, status, headers, ""}})
+
+    state
+    |> put_fetch(re, fetch)
+    |> grant(re, byte_size(bytes))
+  end
+
+  defp hand_on(state, re, fetch, %{kind: :chunk, body: body}, bytes) do
+    send(fetch.owner, {__MODULE__, re, {:chunk, body}})
+
+    state
+    |> put_fetch(re, fetch)
+    |> grant(re, byte_size(bytes) - byte_size(body))
+  end
+
+  defp hand_on(state, re, fetch, %{kind: :end}, _bytes),
+    do: last(state, re, fetch, {:end, nil})
+
+  defp hand_on(state, re, fetch, %{kind: :error, type: type, message: message}, _bytes),
+    do: last(state, re, fetch, {:end, {:guest_error, type, message}})
+
+  # The fetch's last event: its owner hears it and nothing of the fetch
+  # after it, its keys and reader are dropped, and every byte it received,
+  # or receives until the service ends it, is granted back unread.
+  defp last(state, re, fetch, event) do
+    send(fetch.owner, {__MODULE__, re, event})
+    Process.demonitor(fetch.monitor, [:flush])
+    fetch = fetch |> Map.drop([:keys, :reader]) |> Map.put(:draining, true)
+
+    state
+    |> put_fetch(re, fetch)
+    |> grant(re, fetch.received - fetch.granted, true)
+  end
+
+  # CYFR's refusal of an attached request, taken only as the answer to the
+  # call this fetch's attempt posted: its header verifies under the
+  # attempt's call key and names the attempt, its answer opens as that
+  # call's, and a guest error names the fetch's call id. Anything else
+  # does not read.
+  defp refusal(fetch, keys, header, body) do
+    now = System.system_time(:millisecond)
+
+    with {:ok, fields, _body_hash} <-
+           WorkerAuth.verify_host_call_header_under(keys.call, header, now),
+         true <- fields.attempt == fetch.attempt,
+         {:ok, json} <- WorkerAuth.open_call(keys.seal, :answer, fields, body),
+         {:ok, decoded} <- Jason.decode(json) do
+      refused(WorkerWire.read_answer(decoded), fetch.call_id)
+    else
+      _unread -> "bad_frame"
+    end
+  end
+
+  defp refused(
+         {:error, "guest_error", %{"type" => type, "message" => message, "call_id" => call_id}},
+         call_id
+       )
+       when is_binary(type) and is_binary(message),
+       do: {:guest_error, type, message}
+
+  defp refused({:error, "lost", _fields}, _call_id), do: "lost"
+  defp refused(_answer, _call_id), do: "bad_frame"
 
   # ————— credit —————
 
@@ -1286,9 +1679,10 @@ defmodule Opus.Relay.Runner do
     case state.fetches[ref] do
       %{draining: false} = fetch ->
         Process.demonitor(fetch.monitor, [:flush])
+        fetch = fetch |> Map.drop([:keys, :reader]) |> Map.put(:draining, true)
 
         state
-        |> put_fetch(ref, %{fetch | draining: true})
+        |> put_fetch(ref, fetch)
         |> grant(ref, fetch.received - fetch.granted, true)
 
       _other ->

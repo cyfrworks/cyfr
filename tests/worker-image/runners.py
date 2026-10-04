@@ -56,6 +56,18 @@ scrubbed, the container's CPU flat).
   origin are not driven here, since no shipped guest makes either to a
   URL a test chooses: `apps/opus/test/opus/http_handler_test.exs` and the
   stream handler's boundary test cover them.
+- A guest's request naming a connection is made by the control plane,
+  never by the runner or the service: the hostile `attached_header_probe`
+  sends its input as its one request, naming the connection `api_key`;
+  the service posts it as the `attached_fetch` host call, asking for no
+  pin and taking no rate, and relays the plane's sealed frames unopened;
+  the harness's listener receives the request with the value attached by
+  the plane's rule, and the guest reads the listener's answer. The same
+  request adding an `Authorization` header is refused by its shape in the
+  runner and never posted. `vault_probe`, under the same authority, whose
+  bound vault the plane attaches and projects `PROBE_KEY` with nothing
+  handed over, reads `PROBE_KEY` refused, and the plane is told
+  `disclosure_refused`. Nothing the plane recorded carries the value.
 - An answer body larger than one credit window of the relay
   (`Prima.RunnerRelay.initial_credit/0`) completes: the catalyst's `links`
   of a page past the window, under an authority whose limits admit it,
@@ -93,6 +105,8 @@ FIXTURES = {
     "stub": os.path.join(ROOT, "apps", "cyfr", "test", "support", "test_wasm", "step_stub", "step_stub.wasm"),
     "probe": os.path.join(ROOT, "apps", "cyfr", "test", "integration", "opus", "support", "test_wasm", "nested_probe", "nested_probe.wasm"),
     "web": os.path.join(ROOT, "seed", "components", "catalysts", "local", "http", "1.1.2", "catalyst.wasm"),
+    "attached": os.path.join(ROOT, "apps", "opus", "test", "support", "test_wasm", "hostile", "attached_header_probe.wasm"),
+    "vault": os.path.join(ROOT, "apps", "opus", "test", "support", "test_wasm", "hostile", "vault_probe.wasm"),
 }
 REFS = {
     "spin": "reagent:local.spin:0.1.0",
@@ -100,6 +114,8 @@ REFS = {
     "stub": "catalyst:local.step-stub:0.1.0",
     "probe": "formula:local.nested-probe:0.1.0",
     "web": "catalyst:local.http:1.1.2",
+    "attached": "catalyst:local.attached-header-probe:0.1.0",
+    "vault": "catalyst:local.vault-probe:0.1.0",
 }
 # The hosts the egress case's guest asks for. `.test` names resolve
 # nowhere, so a connection to one reaches only the address pinned for it.
@@ -125,6 +141,27 @@ WINDOW_AUTHORITY = {
         "timeout": "30s", "max_memory_bytes": 134_217_728, "max_request_size": 1_048_576,
         "max_response_size": 3 * WINDOW_BYTES, "rate_limit": {"requests": 100, "window": "1m"},
         "max_concurrent_tasks": 1, "batch_timeout": "30s"}}}},
+}
+# The attached case: the connection `api_key`, which the plane attaches as
+# a bearer token to requests for the egress case's fetch host, and the
+# authority of both its guests: that host's egress, and a vault bound to an
+# entry the plane attaches and never hands over, projecting `PROBE_KEY`.
+ATTACHED_HOST = EGRESS_HOSTS["fetch"]
+ATTACHED_RULE = {"in": "header", "name": "Authorization", "template": "Bearer {value}"}
+ATTACHED_AUTHORITY = {
+    **ZERO_AUTHORITY,
+    "resources": {
+        "egress": {"domains": [ATTACHED_HOST], "methods": ["GET"], "schemes": ["http"]},
+        "vault": {
+            "entry_id": "ent_worker_image_attached",
+            "binding_digest": "sha256:" + "0" * 64,
+            "scope": "athanor",
+            "binding_key": "catalyst:local.attached-header-probe|@ingress|default",
+            "destination": {"hosts": [ATTACHED_HOST], "scheme": "http"},
+            "attach": ATTACHED_RULE,
+            "projection": {"fields": ["PROBE_KEY"], "scopes": []},
+        },
+    },
 }
 STUB_KEY = {"STUB_API_KEY": "sk-worker-image-test"}
 # A runner is a VM booting from nothing: its first attach takes seconds.
@@ -380,6 +417,74 @@ def test_pinned_egress(stack, plane):
             output = outputs[case]
             message = (output.get("error") or {}).get("message", "") if isinstance(output, dict) else ""
             expect(sentence in message, f"{case}: the guest was refused ({message})", output)
+    finally:
+        origin.stop()
+
+
+def test_attached_fetch(stack, plane):
+    """A guest's request naming a connection reaches the harness's listener
+    with the value the plane attached, and nothing of the value reaches
+    the runner; a credential header beside the connection is refused in the
+    runner; a vault read of the attached field is refused as such."""
+    origin = Origin()
+    # The egress case's athanor: its idle runner runs these attempts, so the
+    # case holds no runner of its own and leaves the pool's uids as the
+    # cases after it find them.
+    athanor = "ath_egress"
+    value = "sk-attached-" + secrets.token_hex(12)
+    attached = {"api_key": {"value": value, "attach": ATTACHED_RULE, "hosts": [ATTACHED_HOST]}}
+    url = f"http://{ATTACHED_HOST}:{origin.port}/attached"
+    request = {"connection": "api_key", "method": "GET", "url": url, "headers": {"accept": "text/plain"}}
+
+    def closed(attempt, what):
+        closes = plane.wait_for(
+            lambda: [r for r in plane.seen(None, attempt["execution_id"]) if r["op"] in ("complete", "fail") and "answered" in r],
+            BOOT_S, f"the {what} attempt to close")
+        expect(closes[0]["op"] == "complete", f"{what}: the guest answered, and its attempt closed completed", closes[0])
+        return closes[0]["args"]["outcome"]["output"]
+
+    try:
+        attempt = plane.mint(stack.boot, "catalyst", REFS["attached"], WASM["attached"], request, athanor, 30_000,
+                             authority=ATTACHED_AUTHORITY, attached=attached)
+        expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"a guest naming a connection for {url} starts")
+        output = closed(attempt, "attached")
+        expect(isinstance(output, dict) and output.get("status") == 200 and output.get("body") == "pinned",
+               "attached: the guest read the listener's answer, through the plane's frames", output)
+        _connections, requests = origin.seen()
+        expect(len(requests) == 1 and requests[0]["path"] == "/attached" and requests[0]["authorization"] == f"Bearer {value}"
+               and requests[0]["host"] == f"{ATTACHED_HOST}:{origin.port}",
+               "attached: the listener received one request, the value attached by the plane's rule", [
+                   {**r, "authorization": r["authorization"] and r["authorization"].replace(value, "<value>")} for r in requests])
+        fetches = plane.seen("attached_fetch", attempt["execution_id"])
+        expect(len(fetches) == 1 and fetches[0]["answered"] == "frames" and fetches[0]["args"]["connection"] == "api_key"
+               and fetches[0]["attached"] == {"connection": "api_key", "url": url, "status": 200}
+               and not any(name.lower() == "authorization" for name, _ in fetches[0]["args"]["headers"]),
+               "attached: the service posted the request once, as the attached_fetch host call, carrying no credential", fetches)
+        expect(plane.seen("egress_pin", attempt["execution_id"]) == [] and plane.seen("take_rate", attempt["execution_id"]) == [],
+               "attached: no pin was asked and no rate taken for it: both are the control plane's",
+               plane.seen(None, attempt["execution_id"]))
+
+        hostile = plane.mint(stack.boot, "catalyst", REFS["attached"], WASM["attached"],
+                             {**request, "headers": {"Authorization": "Bearer guest-supplied"}}, athanor, 30_000,
+                             authority=ATTACHED_AUTHORITY, attached=attached)
+        expect(stack.start(hostile)[1] == {"v": 1, "ok": True}, "a guest adding an Authorization header to its connection starts")
+        output = closed(hostile, "hostile")
+        error = (output.get("error") or {}) if isinstance(output, dict) else {}
+        expect(error.get("type") == "credential_header_refused" and plane.seen("attached_fetch", hostile["execution_id"]) == []
+               and len(origin.seen()[1]) == 1,
+               "hostile: the runner refused the request by its shape, and nothing was posted or sent", output)
+
+        probe = plane.mint(stack.boot, "catalyst", REFS["vault"], WASM["vault"], {"operation": "probe"}, athanor, 30_000,
+                           authority=ATTACHED_AUTHORITY)
+        expect(stack.start(probe)[1] == {"v": 1, "ok": True}, "a vault probe under the same authority starts")
+        output = closed(probe, "vault")
+        read = ((output.get("data") or {}).get("read")) if isinstance(output, dict) else None
+        denials = [(r["args"]["type"], r["args"]["message"]) for r in plane.seen("record_denial", probe["execution_id"])]
+        expect(read == "EEEE" and ("disclosure_refused", "PROBE_KEY") in denials and ("secret_denied", "PROBE_HIDDEN") in denials,
+               "vault: the attached field was refused as attached, never handed over, and reported as such", {"read": read, "denials": denials})
+
+        logged = json.dumps(plane.requests, default=str)
+        expect(value not in logged, "the plane's record names the connection and the URL, and never the value")
     finally:
         origin.stop()
 
@@ -741,6 +846,7 @@ def main(image):
         test_process_model(stack)
         test_runner_has_no_route(stack, plane)
         test_pinned_egress(stack, plane)
+        test_attached_fetch(stack, plane)
         test_relay_window(stack, plane)
         test_spinning_guest_killed_at_bound(stack, plane)
         test_sibling_survives(stack, plane)

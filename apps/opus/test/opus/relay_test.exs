@@ -17,11 +17,21 @@ defmodule Opus.RelayTest do
   credit: a slow runner holds the service waiting, and the attempt's
   deadline ends the fetch and closes the upstream connection. Neither end
   shows an attempt's keys in its status.
+
+  A fetch naming a connection is posted by the service as the host call
+  `attached_fetch`, taking no rate and asking no pin, after the attempt's
+  edge and limits are checked again; CYFR's sealed frames are relayed
+  unopened, never past the runner's credit nor the attempt's
+  `max_response_size`, and the runner's end opens them in order for the
+  call id it chose. CYFR's refusal is taken only as the answer to the
+  fetch's own call, naming its call id; a frame that does not read, or an
+  answer that ends short, ends the fetch with nothing more of it handed
+  on.
   """
 
   use ExUnit.Case, async: true
 
-  alias Prima.{Assignment, RunnerRelay, WorkerAuth, WorkerWire}
+  alias Prima.{Assignment, AttachedRequest, RunnerRelay, WorkerAuth, WorkerWire}
   alias Opus.{Egress, HostClient}
   alias Opus.Relay.Runner, as: Endpoint
   alias Opus.Test.{EdgeFixtures, ScriptedHost, ScriptedKeeper}
@@ -483,6 +493,306 @@ defmodule Opus.RelayTest do
       {events, "timeout"} = events(attempt.endpoint, ref, false)
       assert byte_size(body_of(events)) == RunnerRelay.initial_credit()
       assert_receive {:upstream_closed, ^server}, 5_000
+    end
+  end
+
+  describe "attached fetches" do
+    # A guest's request naming a connection, as the runner's handler builds it.
+    defp attached(url \\ "http://api.test/v1/x", opts \\ []) do
+      %AttachedRequest{
+        call_id: AttachedRequest.call_id(:crypto.strong_rand_bytes(16)),
+        connection: "api_key",
+        method: Keyword.get(opts, :method, "GET"),
+        url: url,
+        headers: [{"accept", "text/plain"}],
+        body: Keyword.get(opts, :body, ""),
+        purpose: :fetch
+      }
+    end
+
+    defp attached_fetch(attempt, request) do
+      Endpoint.attached_fetch(attempt.endpoint, attempt.attempt, request, %{
+        call: attempt.keys.call,
+        seal: attempt.keys.seal
+      })
+    end
+
+    test "is posted by the service as the host call attached_fetch, its frames relayed unopened and read by the runner",
+         %{host: host} do
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      request = attached()
+
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, [{"x-up", "1"}]}, {:chunk, "hello "}, {:chunk, "world"}, :end]}
+      )
+
+      assert {:ok, ref} = attached_fetch(attempt, request)
+
+      assert {[{:head, 200, [{"x-up", "1"}], ""}, {:chunk, "hello "}, {:chunk, "world"}], nil} =
+               events(attempt.endpoint, ref)
+
+      # Posted once, as the runner, the request member for member; the
+      # control plane takes the rate for it, the service none.
+      assert [%{args: args, caller: caller}] = ScriptedHost.requests(host, "attached_fetch")
+      assert args == AttachedRequest.to_args(request)
+      assert caller.runner == attempt.runner and caller.attempt == attempt.attempt
+      assert ScriptedHost.requests(host, "take_rate") == []
+      wait_until(fn -> Endpoint.idle?(attempt.endpoint) end)
+    end
+
+    test "a refusal is taken as the answer to the fetch's own call, naming its call id", %{
+      host: host
+    } do
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+
+      ScriptedHost.script(host, "attached_fetch", [
+        {:error, {:guest_error, "destination_mismatch", "Outside the destination."}},
+        {:error, :lost}
+      ])
+
+      assert {:ok, ref} = attached_fetch(attempt, attached())
+
+      assert {[], {:guest_error, "destination_mismatch", "Outside the destination."}} =
+               events(attempt.endpoint, ref)
+
+      assert {:ok, ref} = attached_fetch(attempt, attached())
+      assert {[], "lost"} = events(attempt.endpoint, ref)
+    end
+
+    test "a refusal naming another call, or not the fetch's call's answer, does not read", %{
+      host: host
+    } do
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      other = AttachedRequest.call_id(:crypto.strong_rand_bytes(16))
+
+      ScriptedHost.script(host, "attached_fetch", [
+        {:answer,
+         Jason.encode!(
+           WorkerWire.error(:guest_error, %{
+             "type" => "destination_mismatch",
+             "message" => "Outside the destination.",
+             "call_id" => other
+           })
+         )},
+        {:answer,
+         Jason.encode!(
+           WorkerWire.error(:guest_error, %{"type" => "dispatch_error", "message" => "no call id"})
+         )},
+        {:error, :unavailable}
+      ])
+
+      for _answer <- 1..2 do
+        assert {:ok, ref} = attached_fetch(attempt, attached())
+        assert {[], "bad_frame"} = events(attempt.endpoint, ref)
+      end
+
+      # The third: CYFR answered `unavailable`, which an attached fetch is
+      # not answered by.
+      assert {:ok, ref} = attached_fetch(attempt, attached())
+      assert {[], "bad_frame"} = events(attempt.endpoint, ref)
+    end
+
+    test "a frame out of order, under another call or with a bad tag ends the fetch, and nothing of it is handed on",
+         %{host: host} do
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      seal = attempt.keys.seal
+
+      sealed = fn call_id, seq, kind, plaintext ->
+        {:ok, <<_length::32, frame::binary>> = bytes} =
+          WorkerAuth.seal_frame(seal, :answer, call_id, seq, kind, plaintext, iv())
+
+        {bytes, frame}
+      end
+
+      request = attached()
+      {_bytes, chunk} = sealed.(request.call_id, 1, :chunk, "secret part")
+      <<kind, value::binary>> = chunk
+      tampered = <<byte_size(chunk)::32, kind, flip(value)::binary>>
+
+      {another, _} =
+        sealed.(AttachedRequest.call_id(:crypto.strong_rand_bytes(16)), 1, :chunk, "x")
+
+      for {name, frames, heard} <- [
+            {"a bad tag", [{:head, 200, []}, {:raw, tampered}, :end], [{:head, 200, [], ""}]},
+            {"another call", [{:head, 200, []}, {:raw, another}, :end], [{:head, 200, [], ""}]},
+            {"out of order", [{:chunk, "first"}, :end], []}
+          ] do
+        request = if name == "a bad tag", do: request, else: attached()
+        ScriptedHost.script(host, "attached_fetch", {:frames, frames})
+        assert {:ok, ref} = attached_fetch(attempt, request)
+        assert {^heard, "bad_frame"} = events(attempt.endpoint, ref), name
+      end
+
+      # Each ended fetch drained to its end on the channel.
+      wait_until(fn -> Endpoint.idle?(attempt.endpoint) end)
+    end
+
+    test "an answer that ends before its end or error is an error at the runner", %{host: host} do
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      ScriptedHost.script(host, "attached_fetch", {:frames, [{:head, 200, []}, {:chunk, "part"}]})
+
+      assert {:ok, ref} = attached_fetch(attempt, attached())
+
+      assert {[{:head, 200, [], ""}, {:chunk, "part"}], "truncated"} =
+               events(attempt.endpoint, ref)
+    end
+
+    test "an error frame ends the fetch with CYFR's type and sentence", %{host: host} do
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, []}, {:error, "response_too_large", "Past the bound."}]}
+      )
+
+      assert {:ok, ref} = attached_fetch(attempt, attached())
+
+      assert {[{:head, 200, [], ""}], {:guest_error, "response_too_large", "Past the bound."}} =
+               events(attempt.endpoint, ref)
+    end
+
+    test "the attempt's edge and limits are checked again, outside the runner, before any call",
+         %{host: host} do
+      attempt =
+        attempt!(host, limits: EdgeFixtures.limits(max_request_size: 64))
+        |> ScriptedKeeper.relayed!()
+
+      for {request, code} <- [
+            {attached("http://api.test/x", method: "POST"), "method_blocked"},
+            {attached("http://elsewhere.test/x"), "domain_blocked"},
+            {attached("http://api.test/x", body: String.duplicate("a", 100)), "request_too_large"}
+          ] do
+        assert {:ok, ref} = attached_fetch(attempt, request)
+        assert {[], ^code} = events(attempt.endpoint, ref)
+      end
+
+      https_only =
+        attempt!(host,
+          edge: EdgeFixtures.edge(domains: ["api.test"], methods: ["GET"], schemes: ["https"])
+        )
+        |> ScriptedKeeper.relayed!()
+
+      assert {:ok, ref} = attached_fetch(https_only, attached("http://api.test/x"))
+      assert {[], "scheme_blocked"} = events(https_only.endpoint, ref)
+
+      assert ScriptedHost.requests(host, "attached_fetch") == []
+    end
+
+    test "a body past one credit window completes as the runner grants credit", %{host: host} do
+      chunks = div(RunnerRelay.initial_credit(), WorkerAuth.max_chunk_bytes()) + 20
+      piece = String.duplicate("z", WorkerAuth.max_chunk_bytes())
+
+      attempt =
+        attempt!(host,
+          limits: EdgeFixtures.limits(max_response_size: 4 * chunks * byte_size(piece))
+        )
+        |> ScriptedKeeper.relayed!()
+
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, []}] ++ List.duplicate({:chunk, piece}, chunks) ++ [:end]}
+      )
+
+      assert {:ok, ref} = attached_fetch(attempt, attached())
+      assert read_granting(attempt.endpoint, ref, 0) == chunks * byte_size(piece)
+    end
+
+    test "a runner that grants nothing holds the service at its credit until the deadline", %{
+      host: host
+    } do
+      chunks = div(RunnerRelay.initial_credit(), WorkerAuth.max_chunk_bytes()) + 20
+      piece = String.duplicate("z", WorkerAuth.max_chunk_bytes())
+
+      attempt =
+        attempt!(host,
+          timeout_ms: 1_500,
+          limits: EdgeFixtures.limits(max_response_size: 4 * chunks * byte_size(piece))
+        )
+        |> ScriptedKeeper.relayed!()
+
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, []}] ++ List.duplicate({:chunk, piece}, chunks) ++ [:end]}
+      )
+
+      assert {:ok, ref} = attached_fetch(attempt, attached())
+      {events, "timeout"} = events(attempt.endpoint, ref, false)
+      body = body_of(events)
+
+      # Never past the credit the runner granted: the body's bytes and
+      # each frame's sealing, the head's included.
+      assert byte_size(body) < RunnerRelay.initial_credit()
+      assert byte_size(body) > RunnerRelay.initial_credit() - 2 * byte_size(piece) - 4_096
+    end
+
+    test "the chunks' body is bounded by the attempt's max_response_size", %{host: host} do
+      attempt =
+        attempt!(host, limits: EdgeFixtures.limits(max_response_size: 8))
+        |> ScriptedKeeper.relayed!()
+
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, []}, {:chunk, "12345"}, {:chunk, "67890"}, :end]}
+      )
+
+      assert {:ok, ref} = attached_fetch(attempt, attached())
+
+      assert {[{:head, 200, [], ""}, {:chunk, "12345"}], "response_too_large"} =
+               events(attempt.endpoint, ref)
+    end
+
+    test "neither end shows the keys, and the runner's end drops them with the fetch", %{
+      host: host
+    } do
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      test = self()
+
+      ScriptedHost.script(host, "attached_fetch", fn _args, _caller ->
+        send(test, {:held, self()})
+
+        receive do
+          :go -> {:frames, [{:head, 200, []}, :end]}
+        end
+      end)
+
+      assert {:ok, ref} = attached_fetch(attempt, attached())
+      assert_receive {:held, held}, 5_000
+
+      for process <- [attempt.relay, attempt.endpoint],
+          key <- [attempt.keys.call, attempt.keys.seal] do
+        status = :erlang.term_to_binary(:sys.get_status(process))
+        assert :binary.match(status, key) == :nomatch
+      end
+
+      send(held, :go)
+      assert {[{:head, 200, [], ""}], nil} = events(attempt.endpoint, ref)
+      wait_until(fn -> Endpoint.idle?(attempt.endpoint) end)
+    end
+  end
+
+  defp iv, do: :crypto.strong_rand_bytes(12)
+
+  # A sealed value with one bit of its tag changed.
+  defp flip(sealed) do
+    <<iv::binary-size(12), first, tag::binary-size(15), ciphertext::binary>> =
+      Base.url_decode64!(sealed, padding: false)
+
+    Base.url_encode64(<<iv::binary, Bitwise.bxor(first, 1), tag::binary, ciphertext::binary>>,
+      padding: false
+    )
+  end
+
+  defp wait_until(fun, tries \\ 100) do
+    cond do
+      fun.() -> :ok
+      tries == 0 -> flunk("the condition never held")
+      true -> Process.sleep(20) && wait_until(fun, tries - 1)
     end
   end
 

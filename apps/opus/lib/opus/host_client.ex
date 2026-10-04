@@ -60,6 +60,12 @@ defmodule Opus.HostClient do
   itself, and connects to the address the answer names
   (`Opus.Egress.pin/3`).
 
+  `attached_fetch/3` posts a guest's request naming a connection, which
+  CYFR makes itself with the credential attached, and hands the answer's
+  sealed frames to its caller as they arrive, unopened: the worker
+  service's relay posts it for its runner (`Opus.Relay`), and only the
+  runner opens the frames. Every other call is read whole.
+
   One call reaches CYFR beside a runner's: `runner_exited/4`, a worker
   service's report that one of its runners exited, a plain JSON body
   signed with that worker service's dispatch key and posted to the
@@ -71,7 +77,15 @@ defmodule Opus.HostClient do
 
   require Logger
 
-  alias Prima.{Assignment, BoundedBody, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
+  alias Prima.{
+    Assignment,
+    AttachedRequest,
+    BoundedBody,
+    HostAPI,
+    PinnedTarget,
+    WorkerAuth,
+    WorkerWire
+  }
 
   @derive {Inspect, except: [:call_key, :seal_key]}
   # A client posts through a runner's relay (`relay`) or directly to the
@@ -604,6 +618,231 @@ defmodule Opus.HostClient do
       {:ok, 200, raw} -> {:ok, raw}
       {:ok, status, raw} when is_integer(status) -> {:refused, raw}
       _lost -> :error
+    end
+  end
+
+  @typedoc """
+  What `attached_fetch/3` hands its caller, in order: CYFR's refusal of the
+  request before its admission, as the header posted and the sealed answer
+  received, or each frame of an admitted request's answer as CYFR sealed
+  it, its kind byte and sealed value without the length prefix.
+  """
+  @type attached_event :: {:refusal, String.t(), binary()} | {:frame, binary()}
+
+  @doc """
+  Post a guest's attached request (`c:Prima.HostAPI.attached_fetch/3`) for
+  this client's attempt, once, and hand its answer to `sink` as it
+  arrives, unopened (`t:attached_event/0`). The call is sealed and signed
+  as every host call is, under the attempt's keys, and is never asked
+  again: its effect may have happened.
+
+  A `200` answer of `Prima.WorkerWire.attached_frames_content_type/0` is
+  split into frames (`Prima.WorkerAuth.split_frames/1`), each handed over
+  as it completes, and nothing more is read until `sink` answers: `:ok`
+  reads on, and `:halt` stops and closes the connection. Any other `200`
+  answer is CYFR's refusal, read whole within
+  `Prima.HostAPI.max_answer_bytes/0` and handed over once. The chunk
+  frames' body bytes (`Prima.WorkerAuth.frame_body_bytes/1`) are bounded
+  by `max_response_size`, and every wait by `deadline`, in milliseconds
+  since the epoch.
+
+  Answers `:ok` once the answer was handed over whole, `:halted` when
+  `sink` stopped it, or `{:error, code}`: `"lost"` for any status but
+  `200`; `"uncertain"` when no status reached this service (a transport
+  failure, a timeout, or a refusal past its bound); `"timeout"` for the
+  deadline passing after the status; `"response_too_large"`; `"bad_frame"`
+  for a length `split_frames/1` refuses or a body ending inside a frame;
+  and `"http_error"` for a transport failure after the status. No frame
+  is opened here and no body is logged.
+  """
+  @spec attached_fetch(t(), AttachedRequest.t(), %{
+          sink: (attached_event() -> :ok | :halt),
+          max_response_size: pos_integer(),
+          deadline: integer()
+        }) :: :ok | :halted | {:error, String.t()}
+  def attached_fetch(
+        %__MODULE__{relay: nil} = client,
+        %AttachedRequest{} = request,
+        %{sink: sink, max_response_size: max, deadline: deadline}
+      )
+      when is_function(sink, 1) and is_integer(max) and max > 0 and is_integer(deadline) do
+    json =
+      Jason.encode!(WorkerWire.request_body(:attached_fetch, AttachedRequest.to_args(request)))
+
+    fields = call_fields(client)
+
+    with {:ok, sealed} <- WorkerAuth.seal_call(client.seal_key, :body, fields, json),
+         {:ok, header} <- WorkerAuth.host_call_header(client.call_key, fields, sealed) do
+      caller = self()
+      ref = make_ref()
+
+      # The request is read in a process of its own, so every wait here is
+      # bounded by the deadline whatever the connection does; it hands each
+      # piece of the answer over and reads on only when told.
+      reader =
+        spawn_link(fn ->
+          read_attached(caller, ref, client.host_url, header, sealed, deadline)
+        end)
+
+      state = %{
+        reader: reader,
+        ref: ref,
+        sink: sink,
+        header: header,
+        max: max,
+        deadline: deadline,
+        status: nil,
+        frames?: false,
+        buffer: "",
+        bytes: 0
+      }
+
+      try do
+        attached_answer(state)
+      after
+        stop_reader(reader, ref)
+      end
+    else
+      _unsealable -> {:error, "lost"}
+    end
+  end
+
+  # Each piece of the answer is told to the caller, and the next is read
+  # only once the caller asks for it; a caller that stops reading kills
+  # this process, which closes the connection.
+  defp read_attached(caller, ref, host_url, header, body, deadline) do
+    timeout = max(deadline - System.system_time(:millisecond), 1)
+
+    into = fn {:data, data}, {req, resp} ->
+      send(caller, {ref, :data, resp.status, frames?(resp), data})
+
+      receive do
+        {^ref, :more} -> {:cont, {req, resp}}
+      end
+    end
+
+    result =
+      Req.request(
+        method: :post,
+        url: host_url <> WorkerWire.host_route(:attached_fetch),
+        headers: [{WorkerWire.auth_header(), header}, {"content-type", "application/json"}],
+        body: body,
+        receive_timeout: timeout,
+        connect_options: [timeout: timeout],
+        retry: false,
+        redirect: false,
+        compressed: false,
+        decode_body: false,
+        into: into
+      )
+
+    ended =
+      case result do
+        {:ok, %Req.Response{status: status} = resp} -> {:answered, status, frames?(resp)}
+        {:error, %Req.TransportError{reason: :timeout}} -> :timeout
+        {:error, _exception} -> :failed
+      end
+
+    send(caller, {ref, :done, ended})
+  end
+
+  defp frames?(%Req.Response{} = resp) do
+    resp
+    |> Req.Response.get_header("content-type")
+    |> Enum.any?(fn type ->
+      type |> String.split(";") |> hd() |> String.trim() |> String.downcase() ==
+        WorkerWire.attached_frames_content_type()
+    end)
+  end
+
+  defp attached_answer(%{ref: ref} = state) do
+    receive do
+      {^ref, :data, status, frames?, data} ->
+        on_attached_data(%{state | status: status, frames?: frames?}, data)
+
+      {^ref, :done, ended} ->
+        on_attached_done(state, ended)
+    after
+      max(state.deadline - System.system_time(:millisecond), 0) -> past_deadline(state)
+    end
+  end
+
+  # No status reached this service before the deadline: what CYFR did is
+  # unknown. After it, the deadline ended the answer.
+  defp past_deadline(%{status: nil}), do: {:error, "uncertain"}
+  defp past_deadline(_state), do: {:error, "timeout"}
+
+  defp on_attached_data(%{status: 200, frames?: true} = state, data) do
+    if System.system_time(:millisecond) >= state.deadline do
+      {:error, "timeout"}
+    else
+      case WorkerAuth.split_frames(state.buffer <> data) do
+        {:ok, frames, rest} -> hand_frames(%{state | buffer: rest}, frames)
+        {:error, _refusal} -> {:error, "bad_frame"}
+      end
+    end
+  end
+
+  defp on_attached_data(%{status: 200} = state, data) do
+    buffer = state.buffer <> data
+
+    if byte_size(buffer) > HostAPI.max_answer_bytes(),
+      do: {:error, "uncertain"},
+      else: read_on(%{state | buffer: buffer})
+  end
+
+  defp on_attached_data(_state, _data), do: {:error, "lost"}
+
+  defp hand_frames(state, []), do: read_on(state)
+
+  defp hand_frames(state, [frame | frames]) do
+    bytes = state.bytes + WorkerAuth.frame_body_bytes(frame)
+
+    if bytes > state.max do
+      {:error, "response_too_large"}
+    else
+      case state.sink.({:frame, frame}) do
+        :ok -> hand_frames(%{state | bytes: bytes}, frames)
+        :halt -> :halted
+      end
+    end
+  end
+
+  defp read_on(state) do
+    send(state.reader, {state.ref, :more})
+    attached_answer(state)
+  end
+
+  defp on_attached_done(state, {:answered, 200, true}) do
+    if state.buffer == "", do: :ok, else: {:error, "bad_frame"}
+  end
+
+  defp on_attached_done(state, {:answered, 200, false}) do
+    _ = state.sink.({:refusal, state.header, state.buffer})
+    :ok
+  end
+
+  defp on_attached_done(_state, {:answered, _status, _frames?}), do: {:error, "lost"}
+  defp on_attached_done(%{status: nil}, _failed), do: {:error, "uncertain"}
+  defp on_attached_done(_state, :timeout), do: {:error, "timeout"}
+  defp on_attached_done(_state, :failed), do: {:error, "http_error"}
+
+  # The reader is stopped on every way out, which closes its connection
+  # unless the answer was read to its end, and nothing it sent is left
+  # behind.
+  defp stop_reader(reader, ref) do
+    Process.unlink(reader)
+    Process.exit(reader, :kill)
+    flush(ref, reader)
+  end
+
+  defp flush(ref, reader) do
+    receive do
+      {^ref, :data, _status, _frames?, _data} -> flush(ref, reader)
+      {^ref, :done, _ended} -> flush(ref, reader)
+      {:EXIT, ^reader, _reason} -> flush(ref, reader)
+    after
+      0 -> :ok
     end
   end
 

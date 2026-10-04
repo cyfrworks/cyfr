@@ -11,6 +11,11 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
   plug tests can mask — a working test here means W1 (route) + W2 (body
   reader) + W4 (replay) + W5 (idempotency) are all live in the real
   endpoint.
+
+  A delivery whose target names a connection runs in a real runner of the
+  Opus service: CYFR attaches the bound key to the guest's request while
+  the binding is live, and refuses the request of a delivery after the
+  binding's instant before any upstream request.
   """
 
   use CyfrWeb.ConnCase, async: false
@@ -249,5 +254,177 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
     response = json_response(conn, 200)
     assert response["status"] == "accepted"
     await_invoke_stop(response["request_id"])
+  end
+
+  defmodule Upstream do
+    @moduledoc false
+    # A loopback upstream that tells the test what it was sent.
+    @behaviour Plug
+
+    @impl true
+    def init(test), do: test
+
+    @impl true
+    def call(conn, test) do
+      send(test, {:upstream, %{path: conn.request_path, headers: conn.req_headers}})
+      Plug.Conn.send_resp(conn, 200, "webhook upstream")
+    end
+  end
+
+  @attached_probe Path.expand(
+                    "../../../opus/test/support/test_wasm/hostile/attached_header_probe.wasm",
+                    __DIR__
+                  )
+  @attached_secret "sk-webhook-e7-canary-93c0a7"
+
+  # The probe of Opus's hostile guests that sends its input as its one
+  # request, published as a component of the person's own whose need
+  # `api_key` CYFR attaches by header, its entry bound until `until` under a
+  # consent that admits webhook deliveries, and a webhook firing it with
+  # `input` as its template.
+  defp attached_hook!(ctx, port, until, input) do
+    {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "platform")
+    walk = Sanctum.TestContext.via(ctx, :prism)
+    name = "webhook-probe-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "catalyst",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:upstream.test",
+          "reason" => "to call the upstream with your key",
+          "fields" => ["KEY"],
+          "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+        }
+      },
+      "caps" => %{
+        "egress" => %{
+          "domains" => ["127.0.0.1"],
+          "methods" => ["GET"],
+          "schemes" => ["http"],
+          "private_ips" => ["127.0.0.1"]
+        }
+      }
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(walk, File.read!(@attached_probe), %{
+        name: name,
+        version: "1.0.0",
+        type: "catalyst",
+        manifest: Jason.encode!(manifest)
+      })
+
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(walk, %{
+        name: "#{name} key",
+        kind: "api_key",
+        provider_hint: "upstream.test",
+        fields: %{"KEY" => @attached_secret},
+        destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => port}
+      })
+
+    ref = "catalyst:local." <> name
+
+    decisions = %{
+      ref: ref,
+      bindings: [
+        %{
+          need: "api_key",
+          entry_id: entry.id,
+          lifetime: %{kind: "until", until: DateTime.to_iso8601(until)}
+        }
+      ],
+      origins: [:interactive, :webhook]
+    }
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(walk, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(walk, decisions)
+
+    {:ok, %{profile_id: profile_id}} =
+      Sanctum.Consent.Commit.commit(walk, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    {:ok, hook} =
+      Sanctum.TestContext.create_webhook(ctx, %{
+        name: name,
+        target_ref: ref,
+        profile_id: profile_id,
+        input_template: input,
+        replay_protection: "none"
+      })
+
+    hook
+  end
+
+  # One delivery, signed, and the run it fired, awaited to its end: the
+  # guest's answer as its runner closed the attempt with it.
+  defp deliver!(%{slug: slug, secret: secret}) do
+    body = ~s({"event":"fired"})
+
+    response =
+      build_conn()
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("x-cyfr-signature", "sha256=" <> hmac_hex(secret, body))
+      |> post("/hooks/" <> slug, body)
+      |> json_response(200)
+
+    assert %{"status" => "accepted", "request_id" => request_id} = response
+
+    assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _measurements,
+                    %{request_id: ^request_id}},
+                   30_000
+
+    assert %{args: %{"outcome" => %{"output" => output}}} =
+             Cyfr.Test.TwoServices.calls()
+             |> Enum.filter(&(&1.callback == :complete))
+             |> List.last()
+
+    output
+  end
+
+  test "a webhook attached request succeeds before expiry and is refused after it", %{ctx: ctx} do
+    upstream =
+      start_supervised!(
+        {Bandit, plug: {Upstream, self()}, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(upstream)
+    Cyfr.Test.TwoServices.watch!()
+
+    until = DateTime.utc_now() |> DateTime.add(8, :second) |> DateTime.truncate(:second)
+
+    hook =
+      attached_hook!(ctx, port, until, %{
+        "connection" => "api_key",
+        "method" => "GET",
+        "url" => "http://127.0.0.1:#{port}/delivered"
+      })
+
+    # Before the instant: the delivery's run reaches the upstream, the key
+    # attached by CYFR; the guest's request names the connection beside
+    # the delivery's envelope, which the runner ignores.
+    assert %{"status" => 200, "body" => "webhook upstream"} = deliver!(hook)
+    assert_receive {:upstream, sent}, 5_000
+    assert sent.path == "/delivered" and {"x-api-key", @attached_secret} in sent.headers
+
+    Prima.Test.Wait.wait_until(
+      fn -> DateTime.compare(DateTime.utc_now(), until) == :gt end,
+      15_000,
+      "the binding's instant to pass"
+    )
+
+    # After it: the next delivery's request is refused before any upstream
+    # request.
+    assert %{"error" => %{"type" => "grant_expired", "message" => message}} = deliver!(hook)
+    assert message == Prima.Refusal.message(:grant_expired)
+    refute_received {:upstream, _sent}
   end
 end

@@ -103,6 +103,13 @@ defmodule Cyfr.Test.TwoServices do
     derives it); a runner's exit report is read plain; anything else has
     no fields.
 
+    An answer of `Prima.WorkerWire.attached_frames_content_type/0` (an
+    attached request's sealed frames) is streamed through as it arrives,
+    each piece sent on as it comes and the content type kept, so a guest
+    reads its answer while the control plane is still writing it; such a
+    call is recorded with no opened answer. Every other answer is read
+    whole and forwarded.
+
     A wire a test starts (`start!/1`) records every request; the suite's
     (`serve!/2`) records only while a test watches it (`watch/1`), and
     `reset/1` forgets everything a test asked of it, dropping every call
@@ -252,16 +259,26 @@ defmodule Cyfr.Test.TwoServices do
               planned -> planned
             end
 
-          answer = if action == :drop, do: :dropped, else: forward(conn, target, route, body)
+          answer =
+            if action == :drop,
+              do: :dropped,
+              else: forward(conn, target, route, body, action == :forward)
+
           call = %{call | action: action, answer: answered(call, answer)}
-          if match?(%Req.Response{}, answer), do: hooks(agent, call)
+
+          if match?(%Req.Response{}, answer) or match?({:streamed, _}, answer),
+            do: hooks(agent, call)
+
           record(agent, route, call)
           {action, answer}
         else
-          {:forward, forward(conn, target, route, body)}
+          {:forward, forward(conn, target, route, body, true)}
         end
 
       case {action, answer} do
+        {:forward, {:streamed, conn}} ->
+          conn
+
         {:forward, %Req.Response{status: status, body: answer}} ->
           conn |> put_resp_content_type("application/json") |> send_resp(status, answer)
 
@@ -347,19 +364,75 @@ defmodule Cyfr.Test.TwoServices do
       end)
     end
 
-    defp forward(conn, target, route, body) do
+    # The listener's answer: read whole, or, for an answer of sealed frames
+    # the wire is to pass on, streamed to the client piece by piece as it
+    # arrives (`{:streamed, conn}`).
+    defp forward(conn, target, route, body, stream?) do
       headers =
         for {name, value} <- conn.req_headers,
             name in [WorkerWire.auth_header(), "content-type"],
             do: {name, value}
 
-      Req.post!(target <> route,
-        headers: headers,
-        body: body,
-        retry: false,
-        decode_body: false,
-        receive_timeout: 60_000
-      )
+      Process.delete({__MODULE__, :streamed})
+
+      into = fn {:data, data}, {req, resp} ->
+        cond do
+          not (stream? and frames?(resp)) -> {:cont, {req, %{resp | body: resp.body <> data}}}
+          stream_piece(conn, data) == :ok -> {:cont, {req, resp}}
+          true -> {:halt, {req, resp}}
+        end
+      end
+
+      response =
+        Req.post!(target <> route,
+          headers: headers,
+          body: body,
+          retry: false,
+          decode_body: false,
+          compressed: false,
+          receive_timeout: 60_000,
+          into: into
+        )
+
+      case Process.delete({__MODULE__, :streamed}) do
+        %Plug.Conn{} = streamed ->
+          {:streamed, streamed}
+
+        nil when stream? ->
+          # An answer of frames with no body is a stream with no piece.
+          if frames?(response), do: {:streamed, start_stream(conn)}, else: response
+
+        nil ->
+          response
+      end
+    end
+
+    defp frames?(%Req.Response{} = response) do
+      response
+      |> Req.Response.get_header("content-type")
+      |> Enum.any?(&(&1 == WorkerWire.attached_frames_content_type()))
+    end
+
+    # One piece of a streamed answer sent on, the stream opened with the
+    # first. A client that is gone stops the answer: the rest is not read.
+    defp stream_piece(conn, data) do
+      streaming = Process.get({__MODULE__, :streamed}) || start_stream(conn)
+
+      case chunk(streaming, data) do
+        {:ok, streaming} ->
+          Process.put({__MODULE__, :streamed}, streaming)
+          :ok
+
+        {:error, _closed} ->
+          Process.put({__MODULE__, :streamed}, streaming)
+          :closed
+      end
+    end
+
+    defp start_stream(conn) do
+      conn
+      |> put_resp_content_type(WorkerWire.attached_frames_content_type(), nil)
+      |> send_chunked(200)
     end
 
     # ---------------------------------------------------------------------------
@@ -404,6 +477,7 @@ defmodule Cyfr.Test.TwoServices do
 
     defp answered(%{fields: nil}, _answer), do: nil
     defp answered(_call, :dropped), do: nil
+    defp answered(_call, {:streamed, _conn}), do: nil
 
     defp answered(%{callback: :runner_exited}, %Req.Response{status: 200, body: body}),
       do: decoded(body)

@@ -9,6 +9,7 @@ defmodule Opus.HttpRequestValidationTest do
   alias Opus.HttpRequestValidation
   alias Opus.Test.EdgeFixtures
   alias Opus.Test.ScriptedHost
+  alias Prima.AttachedRequest
 
   # A scripted host, the client of an attempt on it — which asks for each
   # request's address through an `egress_pin` host call, pinned from the
@@ -341,6 +342,177 @@ defmodule Opus.HttpRequestValidationTest do
 
       assert {:error, :request_too_large, _msg} =
                validate(request, localhost_edge(), limits)
+    end
+  end
+
+  describe "a request naming a connection" do
+    defp attached_request(overrides) do
+      encode(
+        Map.merge(%{"connection" => "api_key", "url" => "https://localhost/v1/x"}, overrides)
+      )
+    end
+
+    test "asks for no pin and carries the request CYFR makes, read as CYFR reads it" do
+      {host, client, ref} = attached_host()
+
+      assert {:ok, request} =
+               HttpRequestValidation.validate(
+                 attached_request(%{
+                   "method" => "POST",
+                   "headers" => [["Content-Type", "application/json"], ["X-Trace", "t"]],
+                   "body" => ~s({"a":1}),
+                   "_webhook" => %{"event" => "ignored"}
+                 }),
+                 localhost_edge(),
+                 EdgeFixtures.limits(),
+                 client,
+                 ref
+               )
+
+      assert %AttachedRequest{
+               connection: "api_key",
+               method: "POST",
+               url: "https://localhost/v1/x",
+               headers: [{"Content-Type", "application/json"}, {"X-Trace", "t"}],
+               body: ~s({"a":1}),
+               purpose: :fetch
+             } = attached = request.attached
+
+      assert AttachedRequest.valid_call_id?(attached.call_id)
+      assert AttachedRequest.read(AttachedRequest.to_args(attached)) == {:ok, attached}
+      refute Map.has_key?(request, :pinned)
+      assert ScriptedHost.requests(host) == []
+
+      # Each request has a call id of its own.
+      assert {:ok, again} =
+               HttpRequestValidation.validate(
+                 attached_request(%{}),
+                 localhost_edge(),
+                 EdgeFixtures.limits(),
+                 client,
+                 ref
+               )
+
+      assert again.attached.call_id != attached.call_id
+    end
+
+    test "a stream's request is made for a stream" do
+      assert {:ok, %{attached: %AttachedRequest{purpose: :stream}}} =
+               validate(attached_request(%{}), localhost_edge(), EdgeFixtures.limits(),
+                 purpose: :stream,
+                 allow_multipart: false
+               )
+    end
+
+    test "the runner's own checks run first: the envelope, the edge and the size" do
+      limits = EdgeFixtures.limits(max_request_size: 64)
+
+      assert {:error, :request_too_large, _} =
+               validate(String.duplicate("{", 32_768), localhost_edge(), limits)
+
+      assert {:error, :domain_blocked, _} =
+               validate(
+                 attached_request(%{"url" => "https://elsewhere.test/x"}),
+                 localhost_edge(),
+                 limits
+               )
+
+      assert {:error, :method_blocked, _} =
+               validate(attached_request(%{"method" => "DELETE"}), localhost_edge(), limits)
+
+      assert {:error, :scheme_blocked, _} =
+               validate(attached_request(%{}), localhost_edge(schemes: ["http"]), limits)
+
+      assert {:error, :request_too_large, _} =
+               validate(
+                 attached_request(%{"method" => "POST", "body" => String.duplicate("b", 100)}),
+                 localhost_edge(),
+                 limits
+               )
+    end
+
+    test "a credential header is refused by shape, in any case, and a header CYFR sets by name" do
+      for name <- ["Authorization", "authorization", "X-API-KEY", "Cookie", "Proxy-Authorization"] do
+        assert {:error, :credential_header_refused, message} =
+                 validate(
+                   attached_request(%{"headers" => %{name => "Bearer guest"}}),
+                   localhost_edge(),
+                   EdgeFixtures.limits()
+                 ),
+               name
+
+        assert message == Prima.Refusal.message(:credential_header_refused)
+      end
+
+      for name <- ["Host", "Transfer-Encoding", "X-Forwarded-Host"] do
+        assert {:error, :invalid_request, message} =
+                 validate(
+                   attached_request(%{"headers" => %{name => "x"}}),
+                   localhost_edge(),
+                   EdgeFixtures.limits()
+                 ),
+               name
+
+        assert message =~ name
+      end
+
+      # A pinned request with the same header is the guest's own to send.
+      assert {:ok, %{pinned: _}} =
+               validate(
+                 encode(%{"headers" => %{"Authorization" => "Bearer guest"}}),
+                 localhost_edge(),
+                 EdgeFixtures.limits()
+               )
+    end
+
+    test "a connection that is not a string, or names no need, is refused" do
+      assert {:error, :invalid_request, "Invalid connection: " <> _} =
+               validate(
+                 attached_request(%{"connection" => 7}),
+                 localhost_edge(),
+                 EdgeFixtures.limits()
+               )
+
+      for connection <- ["API KEY", "", "1key", String.duplicate("a", 40)] do
+        assert {:error, :invalid_request, "The attached request does not read."} =
+                 validate(
+                   attached_request(%{"connection" => connection}),
+                   localhost_edge(),
+                   EdgeFixtures.limits()
+                 ),
+               connection
+      end
+    end
+
+    test "a base64 body is sent decoded, and a multipart body encoded as a fetch sends it" do
+      assert {:ok, %{attached: %{body: "raw bytes"}}} =
+               validate(
+                 attached_request(%{
+                   "method" => "POST",
+                   "body" => Base.encode64("raw bytes"),
+                   "body_encoding" => "base64"
+                 }),
+                 localhost_edge(),
+                 EdgeFixtures.limits()
+               )
+
+      assert {:ok, %{attached: %{headers: headers, body: body}}} =
+               validate(
+                 attached_request(%{
+                   "method" => "POST",
+                   "multipart" => [
+                     %{"name" => "model", "value" => "whisper-1"},
+                     %{"name" => "file", "filename" => "a.txt", "data" => Base.encode64("abc")}
+                   ]
+                 }),
+                 localhost_edge(),
+                 EdgeFixtures.limits()
+               )
+
+      assert [{"content-type", "multipart/form-data; boundary=" <> boundary}] = headers
+      assert body =~ ~s(name="model"\r\n\r\nwhisper-1)
+      assert body =~ ~s(filename="a.txt")
+      assert String.ends_with?(body, "--" <> boundary <> "--\r\n")
     end
   end
 
