@@ -333,6 +333,27 @@ config :esbuild,
           "--banner:js=// SPDX-License-Identifier: Apache-2.0\n// Copyright 2026 CYFR Works Inc.\n// Built from apps/cyfr/assets/js/sdk by `mix esbuild sdk`."
         ],
     cd: Path.expand("../apps/cyfr/assets", __DIR__)
+  ],
+  # The canvas toolkit: two self-contained scripts built for a canvas's host
+  # page to embed, the host bundle as its script and the worker bundle as
+  # inert data the host starts its two workers from. `mix esbuild
+  # toolkit_host` and `mix esbuild toolkit_worker` rebuild them; the built
+  # files are tracked, and no `.gz` is built.
+  toolkit_host: [
+    args:
+      ~w(js/toolkit/host.js --bundle --format=iife --target=es2020 --outfile=../priv/static/toolkit/host.js) ++
+        [
+          "--banner:js=// SPDX-License-Identifier: Apache-2.0\n// Copyright 2026 CYFR Works Inc.\n// Built from apps/cyfr/assets/js/toolkit by `mix esbuild toolkit_host`."
+        ],
+    cd: Path.expand("../apps/cyfr/assets", __DIR__)
+  ],
+  toolkit_worker: [
+    args:
+      ~w(js/toolkit/worker.js --bundle --format=iife --target=es2020 --outfile=../priv/static/toolkit/worker.js) ++
+        [
+          "--banner:js=// SPDX-License-Identifier: Apache-2.0\n// Copyright 2026 CYFR Works Inc.\n// Built from apps/cyfr/assets/js/toolkit by `mix esbuild toolkit_worker`."
+        ],
+    cd: Path.expand("../apps/cyfr/assets", __DIR__)
   ]
 
 # Prism tailwind configuration
