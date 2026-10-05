@@ -99,6 +99,13 @@ defmodule Crucible.Admission do
   stored name, a vault that binds none, or a name the ingress no longer
   binds is `{:error, :approved_entry_moved}` before anything runs, in
   place of `:connection_not_granted`.
+
+  The component graph the consent is judged against is read before the
+  loader is asked (`Compendium.resolve_verified_activation/2`). One that
+  cannot be read right now is `{:error, {:unavailable, "The component
+  graph"}}`, and one whose stored rows do not hash is
+  `{:error, {:corrupt, {:component_graph, ref}}}`, `ref` the root's own
+  component ref: an outage and damage, never a setup to make.
   """
   @spec authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
           {:ok, Authority.t()} | {:error, term()}
@@ -1039,29 +1046,52 @@ defmodule Crucible.Admission do
   defp validate_need(other), do: {:error, {:invalid_need, other}}
 
   defp load_authority(ctx, profile, component, opts) do
-    live =
-      case Compendium.resolve_verified_activation(ctx, component) do
-        {:ok, _} = ok -> ok
-        {:error, {:incomplete, _}} = incomplete -> incomplete
-        {:error, _other} -> {:error, {:incomplete, :invalid_graph}}
-      end
+    with {:ok, live} <- live_activation(ctx, component) do
+      # An unchanged live shape permits versionless consent. Derivation failure
+      # leaves the shape unknown and requires fresh consent.
+      opts =
+        Keyword.put_new_lazy(opts, :live_shape_digest, fn ->
+          case Sanctum.Consent.ShapeDerivation.live_digest(ctx, profile.source_ref) do
+            {:ok, digest} -> digest
+            {:error, _} -> nil
+          end
+        end)
 
-    # An unchanged live shape permits versionless consent. Derivation failure
-    # leaves the shape unknown and requires fresh consent.
-    opts =
-      Keyword.put_new_lazy(opts, :live_shape_digest, fn ->
-        case Sanctum.Consent.ShapeDerivation.live_digest(ctx, profile.source_ref) do
-          {:ok, digest} -> digest
-          {:error, _} -> nil
-        end
-      end)
+      Sanctum.Consent.Loader.load_root(
+        ctx,
+        profile,
+        [live: live, shape_diff: shape_diff_fn(ctx, profile)] ++
+          Keyword.take(opts, [:ceiling, :live_shape_digest, :budget_id, :connection])
+      )
+    end
+  end
 
-    Sanctum.Consent.Loader.load_root(
-      ctx,
-      profile,
-      [live: live, shape_diff: shape_diff_fn(ctx, profile)] ++
-        Keyword.take(opts, [:ceiling, :live_shape_digest, :budget_id, :connection])
-    )
+  # The component graph the loader judges the consent against, or why it
+  # cannot be judged, decided before the loader is asked. A graph the
+  # store could not give right now (its projection not caught up, or a
+  # store that did not answer) is an outage, and one whose stored rows do
+  # not hash (a release digest or name that is not text, which only a row
+  # written outside the publish path carries) is damage: neither is a
+  # setup to make. An incomplete graph is the loader's to judge.
+  defp live_activation(ctx, component) do
+    case Compendium.resolve_verified_activation(ctx, component) do
+      {:ok, _} = verified ->
+        {:ok, verified}
+
+      {:error, {:incomplete, _}} = incomplete ->
+        {:ok, incomplete}
+
+      {:error, outage} when outage in [:projection_unavailable, :unavailable, :database_error] ->
+        {:error, {:unavailable, "The component graph"}}
+
+      {:error, {:invalid_graph, _}} ->
+        {:error, {:corrupt, {:component_graph, component["component_ref"]}}}
+
+      # `:no_athanor` among them, which never reaches here: the profile
+      # read before it refuses a context with no athanor.
+      {:error, _other} ->
+        {:ok, {:error, {:incomplete, :invalid_graph}}}
+    end
   end
 
   # Only called when the loader has already decided re-consent is needed,

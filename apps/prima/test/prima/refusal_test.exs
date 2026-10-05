@@ -29,6 +29,7 @@ defmodule Prima.RefusalTest do
     {{:corrupt, {:digest, "The artifact"}}, :corrupt},
     {{:corrupt, {:profile, "prof_1"}}, :corrupt},
     {{:corrupt, {:manifest, "c:local.x:1.0.0"}}, :corrupt},
+    {{:corrupt, {:component_graph, "c:local.x:1.0.0"}}, :corrupt},
     {{:corrupt, {:artifact, "sha256:ab12"}}, :corrupt},
     {{:component_type_mismatch, :formula, :reagent}, :invalid_argument},
     {:invalid_component_type, :invalid_argument},
@@ -404,6 +405,16 @@ defmodule Prima.RefusalTest do
 
       assert Refusal.message({:corrupt, {:settings, :retention}}) ==
                "The stored retention settings are damaged."
+    end
+
+    test "a run's damaged component graph is damage, named without its ref or a grant to make" do
+      assert %Refusal{class: :corrupt, message: message} =
+               Refusal.classify({:corrupt, {:component_graph, "reagent:local.secret-name:1.0.0"}})
+
+      assert message ==
+               "The component graph this run needs is stored damaged and cannot be used."
+
+      assert Refusal.reason?({:corrupt, {:component_graph, "reagent:local.x:1.0.0"}})
     end
 
     test "admission's refusals read as their rows" do

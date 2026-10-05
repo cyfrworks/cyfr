@@ -6,8 +6,11 @@ defmodule Crucible.ProviderTest do
 
   # Runs and cancels run on the opus worker service.
 
+  import Ecto.Query, only: [from: 2]
+
   alias Crucible.Provider
   alias Sanctum.Context
+  alias Sanctum.Test.ConsentFixtures
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
@@ -308,6 +311,477 @@ defmodule Crucible.ProviderTest do
 
       assert logs_result.component_type == "reagent"
     end
+  end
+
+  # ============================================================================
+  # A consent or component graph a run cannot read, as an MCP client reads it
+  # ============================================================================
+
+  describe "a consent or component graph the run cannot read" do
+    # A store that cannot answer a run's consent or component graph, or a
+    # consent or graph stored damaged, is answered in its own class
+    # (`unavailable`, `corrupt`) and sentence, never as an authority error
+    # or a grant to make, and nothing starts. An MCP client reads the
+    # loader's head and lender refusals (`Sanctum.Unauthorized`) as a
+    # JSON-RPC error of that class, and admission's own reads of the
+    # profile rows and the component graph (`Prima.Refusal`) as a failed
+    # tool result whose text is their sentence; the gate's decision log
+    # records the class of each.
+
+    @lender "catalyst:local.lend-key"
+
+    test "a head the store cannot answer is unavailable", %{ctx: ctx, ref: ref} do
+      call = fn ->
+        Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+        answer = over_mcp(ctx, %{"reference" => ref, "input" => %{}})
+        Arca.Repo.query!("ALTER TABLE consents_unavailable RENAME TO consents")
+        answer
+      end
+
+      rpc_error!(
+        ctx,
+        call,
+        -33103,
+        "This app's consent cannot be read right now — try again.",
+        "unavailable"
+      )
+    end
+
+    test "a head stored damaged is corrupt", %{ctx: ctx, ref: ref} do
+      profile_id = own_profile_id(ctx)
+      :ok = ConsentFixtures.hand_edit_head!(ctx, profile_id, scope: "sideways")
+
+      rpc_error!(
+        ctx,
+        fn -> over_mcp(ctx, %{"reference" => ref, "input" => %{}}) end,
+        -33104,
+        "This app's consent is damaged and cannot be used — revoke profile " <>
+          "#{profile_id} and grant it again.",
+        "corrupt"
+      )
+    end
+
+    test "a lender the store cannot answer is unavailable", %{ctx: ctx} do
+      root = lending_root!(ctx)
+
+      # The store stops answering profiles once the run's own head is read
+      # whole, so only the lender's read meets the outage.
+      call = fn ->
+        away_after_head!("profiles", "consent-lent-root")
+        answer = over_mcp(ctx, %{"reference" => root, "input" => %{}})
+        Arca.Repo.query!("ALTER TABLE profiles_unavailable RENAME TO profiles")
+        answer
+      end
+
+      rpc_error!(
+        ctx,
+        call,
+        -33103,
+        "A profile that lends a key here cannot be read right now — try again.",
+        "unavailable"
+      )
+    end
+
+    test "a lender stored damaged is corrupt", %{ctx: ctx} do
+      root = lending_root!(ctx)
+      set_profile!(ctx, "prof-lend-key", kind: "sideways")
+
+      rpc_error!(
+        ctx,
+        fn -> over_mcp(ctx, %{"reference" => root, "input" => %{}}) end,
+        -33104,
+        "A profile that lends a key here is damaged and cannot lend its key — " <>
+          "revoke profile prof-lend-key and grant it again.",
+        "corrupt"
+      )
+    end
+
+    test "a profile list the store cannot answer is unavailable", %{ctx: ctx, ref: ref} do
+      call = fn ->
+        Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+        answer = over_mcp(ctx, %{"reference" => ref, "input" => %{}})
+        Arca.Repo.query!("ALTER TABLE profiles_unavailable RENAME TO profiles")
+        answer
+      end
+
+      failed_tool!(
+        ctx,
+        call,
+        "Consent profiles is unavailable — retry shortly",
+        "unavailable"
+      )
+    end
+
+    test "a profile row stored damaged is corrupt", %{ctx: ctx, ref: ref} do
+      set_profile!(ctx, own_profile_id(ctx), kind: "sideways")
+
+      failed_tool!(
+        ctx,
+        fn -> over_mcp(ctx, %{"reference" => ref, "input" => %{}}) end,
+        "The stored profile is damaged and cannot be used.",
+        "corrupt"
+      )
+    end
+
+    test "a component graph the store cannot give right now is unavailable, never a setup to make",
+         %{ctx: ctx, ref: ref} do
+      # The component's registry row was read within its cache's minutes,
+      # as by an earlier run, so the run's graph is the first read to meet
+      # the component index the edit leaves behind.
+      assert {:ok, _ref, _type, _component} = Crucible.Admission.inspect_component(ctx, ref)
+
+      {:ok, _pending} =
+        Arca.StorageProjectionChanges.begin_edit(
+          Context.actor(ctx),
+          "components",
+          "reagents/local/test-math/0.1.0"
+        )
+
+      failed_tool!(
+        ctx,
+        fn -> over_mcp(ctx, %{"reference" => ref, "input" => %{}}) end,
+        "The component graph is unavailable — retry shortly",
+        "unavailable"
+      )
+    end
+
+    # SQLite keeps whatever bytes a text column is given, so a row written
+    # outside the publish path can hold a release digest that is not text,
+    # and the run's graph does not hash; PostgreSQL refuses the write.
+    test "a component graph stored damaged is corrupt where the store can hold it",
+         %{ctx: ctx, ref: ref} do
+      damage = fn ->
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.Component,
+            where: c.athanor_id == ^ctx.athanor_id and c.name == "test-math"
+          ),
+          set: [release_digest: <<"sha256:", 0xFF, 0xFE>>]
+        )
+      end
+
+      case Arca.Repo.adapter() do
+        Ecto.Adapters.SQLite3 ->
+          assert {1, _} = damage.()
+
+          failed_tool!(
+            ctx,
+            fn -> over_mcp(ctx, %{"reference" => ref, "input" => %{}}) end,
+            "The component graph this run needs is stored damaged and cannot be used.",
+            "corrupt"
+          )
+
+          # The reason names the run's own root, as admission holds it.
+          before = started(ctx)
+
+          assert Provider.handle("execution", ctx, %{
+                   "action" => "run",
+                   "reference" => ref,
+                   "input" => %{}
+                 }) == {:error, {:corrupt, {:component_graph, ref}}}
+
+          assert started(ctx) == before
+
+        Ecto.Adapters.Postgres ->
+          refused =
+            try do
+              damage.()
+            rescue
+              error -> error
+            end
+
+          assert %{postgres: %{pg_code: "22021"}} = refused
+      end
+    end
+
+    test "the assistant's model reads unavailable, not a key to connect, while its graph is",
+         %{ctx: _ctx} do
+      n = System.unique_integer([:positive])
+      user = "local|idp|graph-outage-#{n}"
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Graph outage #{n}")
+      {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+      ctx = PrismWeb.ConnCase.ready_athanor!(athanor.id, user)
+      soul = Prima.AgentRef.soul_ref()
+
+      agents = [
+        %{"type" => Compendium.agent_soul_type(), "catalyst_ref" => "catalyst:local.claude"}
+      ]
+
+      assert %{"catalyst:local.claude" => {:ready, resolved}} = Aqua.model_status(ctx, agents)
+      assert {:ok, _authority} = Crucible.authority_for(ctx, :default, soul)
+
+      # The component index falls behind once the model's own listing and
+      # plan have read ready, as the assistant's load reads its profiles.
+      behind_at_profiles!(ctx, soul)
+
+      assert Aqua.model_status(ctx, agents) == %{
+               "catalyst:local.claude" => {:consent_unavailable, resolved}
+             }
+
+      assert {:error, {:unavailable, "The component graph"}} =
+               Crucible.authority_for(ctx, :default, soul)
+    end
+  end
+
+  # What an MCP client receives for `tools/call` of `execution.run` with
+  # `args`: the JSON-RPC body the transport writes for the router's answer.
+  defp over_mcp(ctx, args) do
+    message = %Prima.MCP.Message{
+      type: :request,
+      id: 1,
+      method: "tools/call",
+      params: %{"name" => "execution", "arguments" => Map.put(args, "action", "run")}
+    }
+
+    case Emissary.MCP.Router.dispatch(ctx, message) do
+      {:ok, result} -> Prima.MCP.Message.encode_result(1, result)
+      {:error, code, text} -> Prima.MCP.Message.encode_error(1, code, text)
+      {:error, code, text, data} -> Prima.MCP.Message.encode_error(1, code, text, data)
+    end
+  end
+
+  # `call` answers an MCP client the JSON-RPC error `code` with `sentence`;
+  # the gate records the call admitted and failed in `class`; nothing reads
+  # the refusal as a reason the refusal table does not know; and nothing
+  # starts.
+  defp rpc_error!(ctx, call, code, sentence, class) do
+    before = started(ctx)
+    {answer, log} = ExUnit.CaptureLog.with_log(call)
+
+    assert answer["error"] == %{"code" => code, "message" => sentence}
+    assert decided(ctx) == [{"admitted", "failed", class}]
+    refute log =~ "Prima.Refusal"
+    assert started(ctx) == before
+  end
+
+  # `call` answers an MCP client a failed tool result whose one text block
+  # is `sentence`, never a JSON-RPC error; the gate records the call
+  # admitted and failed in `class`; nothing reads the refusal as a reason
+  # the refusal table does not know; and nothing starts.
+  defp failed_tool!(ctx, call, sentence, class) do
+    before = started(ctx)
+    {answer, log} = ExUnit.CaptureLog.with_log(call)
+
+    refute Map.has_key?(answer, "error")
+    assert answer["result"]["isError"] == true
+    assert answer["result"]["content"] == [%{"type" => "text", "text" => sentence}]
+    assert decided(ctx) == [{"admitted", "failed", class}]
+    refute log =~ "Prima.Refusal"
+    assert started(ctx) == before
+  end
+
+  # The gate's decisions on `execution.run` in the context's athanor.
+  defp decided(ctx) do
+    Arca.Repo.all(
+      from(d in Arca.Schemas.DecisionLog,
+        where: d.athanor_id == ^ctx.athanor_id and d.tool == "execution" and d.action == "run",
+        select: {d.admission, d.completion, d.completion_class}
+      )
+    )
+  end
+
+  # What has started in the context's athanor: its execution rows and
+  # their attempts.
+  defp started(ctx) do
+    {Arca.Repo.aggregate(
+       from(e in Arca.Schemas.Execution, where: e.athanor_id == ^ctx.athanor_id),
+       :count
+     ),
+     Arca.Repo.aggregate(
+       from(a in Arca.Schemas.ExecutionAttempt, where: a.athanor_id == ^ctx.athanor_id),
+       :count
+     )}
+  end
+
+  # The profile the bootstrap minted for the setup's component.
+  defp own_profile_id(ctx) do
+    {:ok, [%{id: id}]} = Sanctum.Consent.profiles(ctx, "reagent:local.test-math")
+    id
+  end
+
+  # A profile row written as no writer of the table would.
+  defp set_profile!(ctx, id, changes) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(p in Arca.Schemas.Profile, where: p.athanor_id == ^ctx.athanor_id and p.id == ^id),
+        set: changes
+      )
+  end
+
+  # A root of the person's own whose edge to `@lender` selects the key the
+  # lender's own profile binds, labelled `default`; both grants admit a
+  # run over the API. Answers the root's reference.
+  defp lending_root!(ctx) do
+    {:ok, component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+        name: "lent-root",
+        version: "0.1.0",
+        type: "reagent"
+      })
+
+    root = "reagent:local.lent-root"
+    limits = Prima.Test.AuthorityFixtures.limits_map()
+    origins = [:interactive, :programmatic]
+    lender_key = Prima.Authority.Blob.binding_key(@lender, "@ingress", nil)
+
+    lender_policy =
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          @lender => %{
+            "limits" => limits,
+            "edges" => %{
+              "@ingress" => %{
+                "vault" => %{
+                  "entry_id" => "vault-lend-key",
+                  "binding_digest" => "sha256:lend-key",
+                  "scope" => "athanor",
+                  "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
+                  "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+                  "projection" => %{"fields" => ["KEY"]},
+                  "binding_key" => lender_key
+                }
+              }
+            }
+          }
+        }
+      })
+
+    :ok =
+      ConsentFixtures.seed_head!(
+        ctx,
+        %{
+          id: "prof-lend-key",
+          kind: :owner,
+          source_ref: @lender,
+          label: "default",
+          status: :active
+        },
+        %{
+          id: "consent-lend-key",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: "sha256:shape-lend-key",
+          commit_digest: "sha256:commit-lend-key",
+          resolved_policy: lender_policy,
+          activation: %{@lender => "sha256:act-lend-key"},
+          admitted_origins: origins,
+          vault_refs: [
+            %{
+              binding_key: lender_key,
+              scope: "athanor",
+              vault_entry_id: "vault-lend-key",
+              binding_digest: "sha256:lend-key"
+            }
+          ]
+        }
+      )
+
+    root_policy =
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          root => %{
+            "limits" => limits,
+            "edges" => %{
+              "@ingress" => %{},
+              @lender => %{"vault" => %{"via" => %{"label" => "default"}}}
+            }
+          },
+          @lender => %{"limits" => limits, "edges" => %{}}
+        }
+      })
+
+    :ok =
+      ConsentFixtures.seed_head!(
+        ctx,
+        %{
+          id: "prof-lent-root",
+          kind: :owner,
+          source_ref: root,
+          label: "default",
+          status: :active
+        },
+        %{
+          id: "consent-lent-root",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: "sha256:shape-lent-root",
+          commit_digest: "sha256:commit-lent-root",
+          resolved_policy: root_policy,
+          activation: %{root => component.release_digest},
+          admitted_origins: origins,
+          vault_refs: [
+            %{
+              binding_key: Prima.Authority.Blob.binding_key(root, @lender, nil),
+              scope: "athanor",
+              via_label: "default",
+              binding_digest: nil
+            }
+          ]
+        }
+      )
+
+    root <> ":0.1.0"
+  end
+
+  # `table` stops answering once the head `consent_id` names is read whole
+  # (its `consent_vault_refs`, the last read of that head), before what
+  # follows it. The router runs a tool call on a task of this test's, so
+  # the read is this process's or one it started.
+  defp away_after_head!(table, consent_id) do
+    test = self()
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if test in [self() | Process.get(:"$callers", [])] and
+               meta[:source] == "consent_vault_refs" and
+               consent_id in (meta[:params] || []) do
+            :telemetry.detach(handler)
+            Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  # The athanor's component index falls behind (`Arca.StorageProjectionChanges`
+  # leaves a change of a unit whose bytes are still moving) the moment
+  # `source`'s profiles are read, and stays behind.
+  defp behind_at_profiles!(ctx, source) do
+    test = self()
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if self() == test and meta[:source] == "profiles" and
+               source in (meta[:params] || []) do
+            :telemetry.detach(handler)
+
+            {:ok, _pending} =
+              Arca.StorageProjectionChanges.begin_edit(
+                Context.actor(ctx),
+                "components",
+                "catalysts/local/claude/1.0.0"
+              )
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
   end
 
   # ============================================================================
