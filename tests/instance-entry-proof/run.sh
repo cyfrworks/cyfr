@@ -114,8 +114,12 @@ sign_in() {
 
 # The session token of the person the proof names by `user_id`.
 token_of() {
-  local user_id
-  user_id="$(asked "$1" user_id)"
+  token_of_user "$(asked "$1" user_id)"
+}
+
+# The session token of the person whose id is `$1`.
+token_of_user() {
+  local user_id="$1"
   [[ "$user_id" =~ ^[A-Za-z0-9_-]+$ ]] && [ -f "$WORK/token-$user_id" ] || {
     printf 'no-session'
     return
@@ -153,19 +157,43 @@ answer_asks() {
     op="$(asked "$ask" op)"
     case "$op" in
       sign_in) answer="$(sign_in "$(asked "$ask" email)" "instance-entry-proof-$(asked "$ask" name)")" ;;
-      entries) answer="$(entry_fixture entries)" ;;
-      binding) answer="$(entry_fixture binding "$(token_of "$ask")" "$(asked "$ask" entry_id)")" ;;
+      clock) answer="$(entry_fixture clock)" ;;
+      admin)
+        answer="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id']}))" "$admin")"
+        ;;
+      state)
+        # A person not yet signed in is asked for as "".
+        ana_token=-
+        ana_id="$(asked "$ask" ana)"
+        [ -n "$ana_id" ] && ana_token="$(token_of_user "$ana_id")"
+        bea_id="$(asked "$ask" bea)"
+        [ -n "$bea_id" ] || bea_id=-
+        answer="$(entry_fixture state "$ana_token" "$bea_id" \
+          "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['payloads']))" "$ask")")"
+        ;;
+      requested_digest)
+        answer="$(entry_fixture requested_digest "$(asked "$ask" provider)" "$(asked "$ask" field)" \
+          "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
+        ;;
+      derived_head)
+        answer="$(entry_fixture derived_head "$(token_of "$ask")" "$(asked "$ask" entry_id)" \
+          "$(asked "$ask" provider)" "$(asked "$ask" field)" \
+          "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
+        ;;
       admit) answer="$(entry_fixture admit "$(token_of "$ask")")" ;;
       claim)
         answer="$(entry_fixture claim "$(token_of "$ask")" "$(asked "$ask" entry_id)" \
           "$(asked "$ask" count)" "$(asked "$ask" url)" "$(asked "$ask" method)")"
         ;;
       row_binding) answer="$(entry_fixture row_binding "$(token_of "$ask")" "$(asked "$ask" entry_id)")" ;;
-      standing) answer="$(entry_fixture standing "$(asked "$ask" user_id)")" ;;
       focus) answer="$(entry_fixture focus "$admin_token" "$(asked "$ask" athanor_id)")" ;;
       *) fail "the proof asked for '$op', which this script does not do" ;;
     esac
     [ -n "$answer" ] || answer='{"error":"the fixture answered nothing"}'
+    # An ask is removed once answered, before its answer appears: a state
+    # ask carries the digests of the payloads the cards typed, and none may
+    # outlive the read it was for.
+    rm -f "$ask"
     printf '%s\n' "$answer" >"$OUT/answer-$id.part"
     mv "$OUT/answer-$id.part" "$OUT/answer-$id.json"
   done
