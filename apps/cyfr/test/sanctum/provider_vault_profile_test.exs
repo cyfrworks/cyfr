@@ -545,6 +545,155 @@ defmodule Sanctum.ProviderVaultProfileTest do
              })
   end
 
+  # An app whose own calls take an openai.com key (`api_key`) or an
+  # anthropic.com one (`other_key`), granted over the wire with `api_key`'s
+  # default and its account "Work": the profile at revision 1, and the
+  # entries a and c (openai.com), d and b (anthropic.com).
+  defp granted_two_needs!(ctx, name) do
+    ref = "reagent:local.#{name}"
+    attach = %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest:
+          Jason.encode!(%{
+            "name" => name,
+            "version" => "1.0.0",
+            "type" => "reagent",
+            "needs" => %{
+              "api_key" => %{
+                "type" => "api_key:openai.com",
+                "reason" => "to call the model",
+                "fields" => ["OPENAI_API_KEY"],
+                "attach" => attach
+              },
+              "other_key" => %{
+                "type" => "api_key:anthropic.com",
+                "reason" => "to call the other model",
+                "fields" => ["ANTHROPIC_API_KEY"],
+                "attach" => attach
+              }
+            }
+          })
+      })
+
+    entry = fn entry_name, provider, field ->
+      {:ok, %{entry: entry}} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Sanctum.Provider.handle("vault", &1, %{
+            "action" => "create",
+            "name" => "#{name}-#{entry_name}",
+            "kind" => "api_key",
+            "provider_hint" => provider,
+            "fields" => %{field => "sk-#{entry_name}"},
+            "destination" => %{"hosts" => ["api.#{provider}"]}
+          })
+        )
+
+      entry
+    end
+
+    [a, c] = for n <- ["a", "c"], do: entry.(n, "openai.com", "OPENAI_API_KEY")
+    [d, b] = for n <- ["d", "b"], do: entry.(n, "anthropic.com", "ANTHROPIC_API_KEY")
+
+    decisions = %{
+      "ref" => ref,
+      "bindings" => [
+        %{"need" => "api_key", "entry_id" => a.id},
+        %{"need" => "api_key", "entry_id" => c.id, "name" => "Work"}
+      ]
+    }
+
+    {:ok, plan} = Sanctum.Provider.handle("profile", ctx, %{"action" => "plan", "ref" => ref})
+
+    {:ok, preview} =
+      Sanctum.Provider.handle("profile", ctx, %{"action" => "preview", "decisions" => decisions})
+
+    {:ok, %{profile_id: profile_id, revision: 1}} =
+      Sanctum.Provider.handle("profile", ctx, %{
+        "action" => "commit",
+        "decisions" => decisions,
+        "plan_token" => plan.plan_token,
+        "proof" => preview.proof,
+        "commit_digest" => preview.commit_digest,
+        "expected_consent_revision" => 0
+      })
+
+    %{ref: ref, profile_id: profile_id, a: a, c: c, d: d, b: b}
+  end
+
+  # What profile.preview lists as removed for `bindings` over the head at
+  # revision 1, and what profile.grant then answers for them.
+  defp preview_then_grant(ctx, %{ref: ref, profile_id: profile_id}, bindings) do
+    {:ok, preview} =
+      Sanctum.Provider.handle("profile", ctx, %{
+        "action" => "preview",
+        "decisions" => %{"ref" => ref, "bindings" => bindings}
+      })
+
+    {preview.removed,
+     Sanctum.Provider.handle("profile", ctx, %{
+       "action" => "grant",
+       "profile_id" => profile_id,
+       "bindings" => bindings,
+       "expected_consent_revision" => 1
+     })}
+  end
+
+  test "profile.grant for another need answers with the default and the account it removed, " <>
+         "as profile.preview lists them for the same grant over the same head",
+       %{ctx: ctx} do
+    app = granted_two_needs!(ctx, "mcp-grant-other")
+
+    {previewed, granted} =
+      preview_then_grant(ctx, app, [
+        %{"need" => "other_key", "entry_id" => app.d.id},
+        %{"need" => "other_key", "entry_id" => app.b.id, "name" => "Work"}
+      ])
+
+    assert {:ok, %{status: "granted", revision: 2, removed: removed}} = granted
+    assert removed == previewed
+
+    {a_id, c_id} = {app.a.id, app.c.id}
+    default_key = "#{app.ref}|@ingress|default"
+    work_key = "#{app.ref}|@ingress|name:Work"
+
+    assert [
+             %{
+               "binding_key" => ^default_key,
+               "need" => "api_key",
+               "entry_id" => ^a_id,
+               "name" => "mcp-grant-other-a"
+             },
+             %{
+               "binding_key" => ^work_key,
+               "need" => "api_key",
+               "connection" => "Work",
+               "entry_id" => ^c_id,
+               "name" => "mcp-grant-other-c"
+             }
+           ] = removed
+  end
+
+  test "profile.grant for the same need answers that it removed nothing, as profile.preview " <>
+         "lists",
+       %{ctx: ctx} do
+    app = granted_two_needs!(ctx, "mcp-grant-same")
+
+    {previewed, granted} =
+      preview_then_grant(ctx, app, [
+        %{"need" => "api_key", "entry_id" => app.c.id},
+        %{"need" => "api_key", "entry_id" => app.a.id, "name" => "Work"}
+      ])
+
+    assert previewed == []
+    assert {:ok, %{status: "granted", revision: 2, removed: []}} = granted
+  end
+
   test "the tincture session surface is named in the refusal", %{ctx: ctx} do
     session_ctx = %{ctx | auth_method: :session}
 

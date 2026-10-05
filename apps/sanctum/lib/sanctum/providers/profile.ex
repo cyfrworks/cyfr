@@ -416,6 +416,8 @@ defmodule Sanctum.Providers.Profile do
 
   # The simple grant: a credential bound to an existing owner consent
   # whose shape has not moved, with the revision as the compare-and-set.
+  # No preview stands before it, so it answers the head's bindings it
+  # removed (`removed`, as a preview of it lists them) beside the revision.
   def handle(%Context{} = ctx, %{"action" => "grant", "profile_id" => profile_id} = args) do
     with {:ok, bindings} <- decode_bindings(Map.get(args, "bindings", [])) do
       params = %{

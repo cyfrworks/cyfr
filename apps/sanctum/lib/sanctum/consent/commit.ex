@@ -224,6 +224,13 @@ defmodule Sanctum.Consent.Commit do
 
   Params: `:profile_id`, `:bindings` (the commit's binding shape) and
   `:expected_consent_revision`.
+
+  It answers the profile, the revision written, its commit digest and
+  `removed`: the bindings of the head the revision dropped, exactly as a
+  preview of the same grant over the same head lists them (empty when it
+  dropped none). No preview stands before a grant, so its answer is where
+  the caller learns which of the app's bindings a grant for another need
+  replaced.
   """
   @spec grant(Context.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def grant(%Context{} = ctx, %{profile_id: profile_id} = params, _opts \\ []) do
@@ -246,7 +253,10 @@ defmodule Sanctum.Consent.Commit do
        %{
          profile_id: consent.profile_id,
          revision: consent.revision,
-         commit_digest: prep.commit_digest
+         commit_digest: prep.commit_digest,
+         # The preparation's own list, the one its digest covers and a
+         # preview would show: never computed a second way.
+         removed: prep.removed
        }}
     end
   end

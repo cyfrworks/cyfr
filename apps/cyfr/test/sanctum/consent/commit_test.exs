@@ -1515,6 +1515,90 @@ defmodule Sanctum.Consent.CommitTest do
 
       assert {:ok, %{revision: 2}} = walk!(ctx, ref, again)
     end
+
+    test "a grant, which no preview stands before, answers with the bindings it removed, as " <>
+           "a preview of it over the same head lists them",
+         %{ctx: ctx} do
+      ref = two_own_needs!(ctx, "commit-grant-other", false)
+      [a, c] = [key!(ctx), key!(ctx)]
+      [d, b] = [anthropic_key!(ctx), anthropic_key!(ctx)]
+
+      first = [
+        %{need: "api_key", entry_id: a.id},
+        %{need: "api_key", entry_id: c.id, name: "Work"}
+      ]
+
+      second = [
+        %{need: "other_key", entry_id: d.id},
+        %{need: "other_key", entry_id: b.id, name: "Work"}
+      ]
+
+      {:ok, %{profile_id: profile}} = walk!(ctx, ref, %{bindings: first})
+      {:ok, preview} = Commit.preview(ctx, %{ref: ref, bindings: second})
+
+      assert {:ok, %{revision: 2, removed: removed}} =
+               Commit.grant(ctx, %{
+                 profile_id: profile,
+                 bindings: second,
+                 expected_consent_revision: 1
+               })
+
+      assert removed == preview.removed
+
+      assert removed == [
+               %{
+                 "binding_key" => "#{ref}|@ingress|default",
+                 "node" => ref,
+                 "edge" => "@ingress",
+                 "need" => "api_key",
+                 "entry_id" => a.id,
+                 "name" => a.name,
+                 "source" => "own"
+               },
+               %{
+                 "binding_key" => "#{ref}|@ingress|name:Work",
+                 "node" => ref,
+                 "edge" => "@ingress",
+                 "need" => "api_key",
+                 "connection" => "Work",
+                 "entry_id" => c.id,
+                 "name" => c.name,
+                 "source" => "own"
+               }
+             ]
+    end
+
+    test "a same-need grant answers that it removed nothing, as a preview of it lists", %{
+      ctx: ctx
+    } do
+      ref = two_own_needs!(ctx, "commit-grant-same", false)
+      [a, c] = [key!(ctx), key!(ctx)]
+
+      first = [
+        %{need: "api_key", entry_id: a.id},
+        %{need: "api_key", entry_id: c.id, name: "Work"}
+      ]
+
+      # The two entries change places under the same keys and need.
+      again = [
+        %{need: "api_key", entry_id: c.id},
+        %{need: "api_key", entry_id: a.id, name: "Work"}
+      ]
+
+      {:ok, %{profile_id: profile}} = walk!(ctx, ref, %{bindings: first})
+      {:ok, preview} = Commit.preview(ctx, %{ref: ref, bindings: again})
+      assert preview.removed == []
+
+      assert {:ok, %{revision: 2, removed: []}} =
+               Commit.grant(ctx, %{
+                 profile_id: profile,
+                 bindings: again,
+                 expected_consent_revision: 1
+               })
+
+      assert Map.new(rows_by_key(ctx, profile), fn {key, row} -> {key, row.vault_entry_id} end) ==
+               %{"#{ref}|@ingress|default" => c.id, "#{ref}|@ingress|name:Work" => a.id}
+    end
   end
 
   describe "instance entries" do
