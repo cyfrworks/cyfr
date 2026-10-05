@@ -26,9 +26,21 @@ defmodule Sanctum.Consent.RegistrationBinding do
           {:invalid_target, term()}
           | :profile_not_for_target
           | {:no_head_consent, String.t()}
+          | {:head_corrupt, String.t()}
+          | {:head_unavailable, String.t()}
           | {:consent_refused, Authz.refusal()}
           | term()
 
+  @doc """
+  The three checks of the module doc, in order, for binding `target_ref`'s
+  registration to `profile_id`.
+
+  The profile's head is read three ways, never one: a profile with no
+  head is `{:no_head_consent, profile_id}`, a head stored outside the
+  closed vocabulary is `{:head_corrupt, profile_id}`, and one the store
+  could not answer is `{:head_unavailable, profile_id}`; `message/1`
+  gives each its own sentence.
+  """
   @spec authorize(Context.t(), String.t(), String.t()) :: :ok | {:error, error()}
   def authorize(%Context{} = ctx, target_ref, profile_id)
       when is_binary(target_ref) and is_binary(profile_id) do
@@ -56,6 +68,13 @@ defmodule Sanctum.Consent.RegistrationBinding do
   def message({:invalid_target, _reason}), do: "the target reference is not valid"
   def message(:profile_not_for_target), do: "the profile belongs to another component"
   def message({:no_head_consent, _profile_id}), do: "the profile has no live consent"
+
+  def message({:head_corrupt, _profile_id}),
+    do: "the profile's consent is damaged and cannot be used"
+
+  def message({:head_unavailable, _profile_id}),
+    do: "the profile's consent cannot be read right now — try again"
+
   def message(reason), do: Prima.Refusal.message(reason)
 
   defp name_level(target_ref) do
@@ -73,10 +92,22 @@ defmodule Sanctum.Consent.RegistrationBinding do
     end
   end
 
+  # Absent, damaged and unanswered apart, as the loader reads a head: a
+  # registration refused over an outage is told to try again, never that
+  # the profile has no consent.
   defp head_consent(actor, profile_id) do
     case Arca.ConsentStorage.head_consent(actor, profile_id) do
-      {:ok, consent} -> {:ok, consent}
-      {:error, _} -> {:error, {:no_head_consent, profile_id}}
+      {:ok, consent} ->
+        {:ok, consent}
+
+      {:error, absent} when absent in [:not_found, :no_head] ->
+        {:error, {:no_head_consent, profile_id}}
+
+      {:error, {:invalid_stored_value, _}} ->
+        {:error, {:head_corrupt, profile_id}}
+
+      {:error, _unanswered} ->
+        {:error, {:head_unavailable, profile_id}}
     end
   end
 

@@ -127,6 +127,59 @@ defmodule Compendium.ConsentSetupPlanTest do
     ])
   end
 
+  # The dependency's one profile: the lender a selection borrows from.
+  defp lender!(ctx) do
+    {:ok, [%{id: lender}]} = Sanctum.Consent.profiles(ctx, @dep)
+    lender
+  end
+
+  # A profile row written as no writer of the table would.
+  defp set_profile!(ctx, id, changes) do
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(p in Arca.Schemas.Profile,
+          where: p.athanor_id == ^ctx.athanor_id and p.id == ^id
+        ),
+        set: changes
+      )
+  end
+
+  defp revoke!(ctx, profile_id) do
+    {:ok, %{status: "revoked"}} =
+      Sanctum.Provider.handle("profile", ctx, %{"action" => "revoke", "profile_id" => profile_id})
+  end
+
+  # The one need's sentence on `ref`'s setup plan.
+  defp detail!(ctx, ref) do
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+    [%{detail: detail}] = plan.consent.needs
+    detail
+  end
+
+  # `table` stops answering once the borrower's own head rows are read
+  # (its `consent_vault_refs`, the last read of that head), before the
+  # page resolves the borrower's selection.
+  defp away_after_borrower_head!(table, borrower_consent_id) do
+    test = self()
+    handler = "setup-plan-away-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if self() == test and meta[:source] == "consent_vault_refs" and
+               borrower_consent_id in (meta[:params] || []) do
+            :telemetry.detach(handler)
+            Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
   defp grant!(ctx, ref, bindings) do
     {:ok, plan} = Plan.plan(ctx, %{ref: ref})
     decisions = %{ref: ref, bindings: bindings}
@@ -347,6 +400,85 @@ defmodule Compendium.ConsentSetupPlanTest do
       assert [%{entry_id: nil, satisfied: false, detail: detail}] = plan.consent.needs
       assert detail =~ "work"
       refute plan.ready
+    end
+
+    test "a lender with no grant, and one whose head is damaged, each say what to do",
+         %{ctx: ctx, entry: entry} do
+      ref = "reagent:local.plan-loose"
+      seed_selection!(ctx, ref, %{"label" => "default"})
+      lender = lender!(ctx)
+
+      {:ok, %{head_consent_id: head}} =
+        Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), lender)
+
+      set_profile!(ctx, lender, head_consent_id: nil)
+
+      assert detail!(ctx, ref) ==
+               "the default profile it borrows from has no grant — " <>
+                 "re-approve that profile to continue"
+
+      set_profile!(ctx, lender, head_consent_id: head)
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender, scope: "sideways")
+
+      assert detail!(ctx, ref) ==
+               "the default profile it borrows from is damaged and cannot lend its key — " <>
+                 "revoke profile #{lender} and grant it again"
+
+      # Approving the lender again cannot repair it: the walk reads the
+      # head it would revise and refuses the damaged one.
+      assert {:error, {:invalid_stored_value, "sideways"}} = Plan.plan(ctx, %{ref: @dep})
+
+      # The remedy the sentence names: the profile revoked, a new grant
+      # lends the key.
+      revoke!(ctx, lender)
+      walk!(ctx, %{ref: @dep, bindings: [%{need: "api_key", entry_id: entry.id}]})
+
+      assert detail!(ctx, ref) =~ "lent-conn"
+    end
+
+    test "a damaged lending profile row names the profile to revoke, and approving again " <>
+           "does not repair it",
+         %{ctx: ctx, entry: entry} do
+      ref = "reagent:local.plan-loose"
+      seed_selection!(ctx, ref, %{"label" => "default"})
+      lender = lender!(ctx)
+      set_profile!(ctx, lender, kind: "sideways")
+
+      damaged =
+        "the default profile it borrows from is damaged and cannot lend its key — " <>
+          "revoke profile #{lender} and grant it again"
+
+      assert detail!(ctx, ref) == damaged
+
+      # The walk never sees the damaged row: it writes a profile beside it,
+      # and the damaged row still refuses the selection by label.
+      walk!(ctx, %{ref: @dep, bindings: [%{need: "api_key", entry_id: entry.id}]})
+      assert detail!(ctx, ref) == damaged
+
+      revoke!(ctx, lender)
+      assert detail!(ctx, ref) =~ "lent-conn"
+    end
+
+    # The store stops answering right after the borrower's own head is
+    # read, so only the lender's read meets the outage.
+    @tag :capture_log
+    test "a lender the store cannot answer is said to be unreadable, never absent",
+         %{ctx: ctx} do
+      ref = "reagent:local.plan-loose"
+      unreadable = "the default profile it borrows from cannot be read right now — try again"
+
+      for table <- ~w(profiles consents) do
+        seed_selection!(ctx, ref, %{"label" => "default"})
+        away_after_borrower_head!(table, "cons_#{ref}")
+
+        {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+
+        assert %{revision: 1, needs: [%{entry_id: nil, satisfied: false, detail: ^unreadable}]} =
+                 plan.consent,
+               "with #{table} away: #{inspect(plan.consent)}"
+
+        Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
+      end
     end
 
     test "a row naming an instance entry is read as the person is offered it, at its digest",

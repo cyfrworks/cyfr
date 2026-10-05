@@ -8,9 +8,13 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   the lender's binding digest and the digest covers the choice, the
   loaded authority carries the lender's entry on that edge, and two
   sources selecting two profiles of one dependency run it with two keys.
+  A run whose consent, or a lender of it, the store cannot answer or
+  cannot decode is refused in a sentence of its own.
   """
 
   use ExUnit.Case, async: false
+
+  require Ecto.Query
 
   alias Prima.Authority.Blob
   alias Prima.Authority.Transition
@@ -623,6 +627,131 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     # selecting it: the edge stays a selection no run can unseal.
     :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), lenders.default, "revoked")
     assert %{via: %{label: "default"}} = edge_vault(ctx, ref)
+  end
+
+  describe "a run's consent that cannot be read" do
+    # The source borrows the dependency's "default" key; each case breaks
+    # what the run reads, and reads the refusal as a person reads it.
+    setup %{ctx: ctx} do
+      lenders = lenders!(ctx)
+      ref = "reagent:local.sel-source"
+
+      {{:ok, %{profile_id: borrower}}, _} =
+        walk!(ctx, ref, %{selections: [%{dep: @dep, label: "default"}]})
+
+      {:ok, %{id: consent_id}} = Sanctum.Consent.head_consent(ctx, borrower)
+      home_id = lenders.home_entry.id
+      assert %{entry_id: ^home_id} = edge_vault(ctx, ref)
+
+      {:ok, lender: lenders.default, ref: ref, borrower: borrower, consent_id: consent_id}
+    end
+
+    test "a lender that does not decode refuses the run in its own sentence, and an absent " <>
+           "one leaves the selection",
+         %{ctx: ctx, lender: lender, ref: ref} do
+      damaged =
+        "A profile this app borrows a key from is damaged and cannot lend its key — " <>
+          "revoke profile #{lender} and grant it again."
+
+      set_profile!(ctx, lender, kind: "sideways")
+      assert {:error, {:lender_corrupt, @dep, ^lender} = reason} = run(ctx, ref)
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      set_profile!(ctx, lender, kind: "owner", label: "elsewhere")
+      assert %{via: %{label: "default"}} = edge_vault(ctx, ref)
+
+      set_profile!(ctx, lender, label: "default")
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender, scope: "sideways")
+      assert {:error, {:lender_corrupt, @dep, ^lender} = reason} = run(ctx, ref)
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender, scope: "versionless")
+
+      {:ok, %{head_consent_id: head}} =
+        Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), lender)
+
+      set_profile!(ctx, lender, head_consent_id: nil)
+      assert %{via: %{label: "default"}} = edge_vault(ctx, ref)
+
+      set_profile!(ctx, lender, head_consent_id: head)
+      assert %{entry_id: _} = edge_vault(ctx, ref)
+    end
+
+    # The store stops answering once the run's own head is read, so only
+    # the lender's read meets the outage.
+    @tag :capture_log
+    test "a lender the store cannot answer refuses the run in its own sentence",
+         %{ctx: ctx, ref: ref, consent_id: consent_id} do
+      unreadable = "A profile this app borrows a key from cannot be read right now — try again."
+
+      for table <- ~w(profiles consents) do
+        away_after_head!(table, consent_id)
+        assert {:error, {:lender_unavailable, @dep} = reason} = run(ctx, ref), table
+
+        assert %Prima.Refusal{class: :unavailable, message: ^unreadable} =
+                 Grimoire.Error.classify(reason)
+
+        Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
+      end
+    end
+
+    @tag :capture_log
+    test "the run's own head, damaged or unanswered, refuses the run in its own sentence",
+         %{ctx: ctx, ref: ref, borrower: borrower} do
+      damaged =
+        "This app's consent is damaged and cannot be used — " <>
+          "revoke profile #{borrower} and grant it again."
+
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, borrower, scope: "sideways")
+      assert {:error, {:head_corrupt, ^borrower} = reason} = run(ctx, ref)
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, borrower, scope: "versionless")
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+      assert {:error, {:head_unavailable, ^borrower} = reason} = run(ctx, ref)
+
+      assert %Prima.Refusal{
+               class: :unavailable,
+               message: "This app's consent cannot be read right now — try again."
+             } = Grimoire.Error.classify(reason)
+    end
+  end
+
+  # The authority a run of `ref` is admitted under, as `Crucible` loads it.
+  defp run(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
+
+  defp set_profile!(ctx, id, changes) do
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(p in Arca.Schemas.Profile,
+          where: p.athanor_id == ^ctx.athanor_id and p.id == ^id
+        ),
+        set: changes
+      )
+  end
+
+  # `table` stops answering once the head `consent_id` names is read whole
+  # (its `consent_vault_refs`, the last read of that head), before what
+  # follows it.
+  defp away_after_head!(table, consent_id) do
+    test = self()
+    handler = "selection-flow-away-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if self() == test and meta[:source] == "consent_vault_refs" and
+               consent_id in (meta[:params] || []) do
+            :telemetry.detach(handler)
+            Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
   end
 
   test "a lender's entry revoked or rebound after the borrower's consent refuses the borrower's use",

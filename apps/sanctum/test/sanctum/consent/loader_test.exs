@@ -140,6 +140,29 @@ defmodule Sanctum.Consent.LoaderTest do
              Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
   end
 
+  # An outage read as "no grant" sends the person to grant again over a
+  # record that exists, so the three are three answers.
+  @tag :capture_log
+  test "a head that is absent, damaged or unanswered is refused three ways", %{ctx: ctx} do
+    profile = profile_summary()
+    live = live_for(Fixtures.activation())
+
+    :ok = ConsentFixtures.seed_profile!(ctx, profile)
+    assert {:error, {:no_head_consent, "prof-1"}} = Loader.load_root(ctx, profile, live: live)
+
+    seed(ctx, profile, consent())
+    :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-1", scope: "sideways")
+    assert {:error, {:head_corrupt, "prof-1"}} = Loader.load_root(ctx, profile, live: live)
+
+    seed(ctx, profile, consent())
+    :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-1", admitted_origins: "not a list")
+    assert {:error, {:head_corrupt, "prof-1"}} = Loader.load_root(ctx, profile, live: live)
+
+    seed(ctx, profile, consent())
+    Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+    assert {:error, {:head_unavailable, "prof-1"}} = Loader.load_root(ctx, profile, live: live)
+  end
+
   test "the pinned rule holds in both directions", %{ctx: ctx} do
     profile = profile_summary()
 

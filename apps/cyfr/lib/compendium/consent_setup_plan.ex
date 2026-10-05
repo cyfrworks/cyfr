@@ -254,9 +254,29 @@ defmodule Compendium.ConsentSetupPlan do
     end
   end
 
-  # Why a selection resolves to nothing, in the person's words.
+  # Why a selection resolves to nothing, in the person's words. A lender
+  # the store cannot answer, a damaged one and an absent one are told
+  # apart, so an outage or a damaged record never sends the person to
+  # grant again over a record that exists. A lender's profile and its
+  # head answer alike (`Sanctum.Consent.row_binding/3`).
   defp unresolved(label, {:profile_unavailable, status}),
     do: "the #{label} profile it borrows from is #{status} — re-approve that profile to continue"
+
+  defp unresolved(label, {:lender_unavailable, _target}),
+    do: "the #{label} profile it borrows from cannot be read right now — try again"
+
+  # Re-approving cannot repair a damaged lender: the walk reads the head
+  # it would revise and refuses one it cannot decode, and never sees a
+  # profile row it cannot decode. Revoking that profile by its id
+  # (`profile.revoke`) takes it off the target's active profiles, so a
+  # new grant takes its place.
+  defp unresolved(label, {:lender_corrupt, _target, profile_id}),
+    do:
+      "the #{label} profile it borrows from is damaged and cannot lend its key — " <>
+        "revoke profile #{profile_id} and grant it again"
+
+  defp unresolved(label, {:no_head_consent, _profile_id}),
+    do: "the #{label} profile it borrows from has no grant — re-approve that profile to continue"
 
   defp unresolved(label, {:no_such_profile, _target, _label}),
     do: "no #{label} profile lends a key here — grant one to continue"

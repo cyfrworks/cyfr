@@ -53,8 +53,9 @@ defmodule Aqua.ConsentStatus do
   @type refusal :: :unavailable | :corrupt | :forbidden
 
   # What the consent loader answers for a stored profile, consent or blob
-  # it cannot trust, and for a release that does not re-derive from its
-  # row: damage, not an outage and not an absence.
+  # it cannot trust, for an active profile with no head, and for a release
+  # that does not re-derive from its row: damage, not an outage and not an
+  # absence.
   @corrupt [
     :invalid_profile,
     :invalid_consent,
@@ -64,9 +65,14 @@ defmodule Aqua.ConsentStatus do
     :inconsistent_binding_digest,
     :integrity_alarm,
     :no_head_consent,
+    :head_corrupt,
     :unknown_source_node,
     :missing_ingress
   ]
+
+  # What the consent loader answers for a root's head, or a lender, the
+  # store could not answer: an outage.
+  @unanswered [:head_unavailable, :lender_unavailable]
 
   @doc """
   The state of the source `ref`'s consent (`t:state/0`), or why it could
@@ -150,5 +156,9 @@ defmodule Aqua.ConsentStatus do
   # corrupt rows).
   defp classify({:corrupt, _what}), do: {:error, :corrupt}
   defp classify({damage, _}) when damage in @corrupt, do: {:error, :corrupt}
+  # A lender whose profile row or head does not decode
+  # (`{:lender_corrupt, target, profile_id}`).
+  defp classify({:lender_corrupt, _target, _profile_id}), do: {:error, :corrupt}
+  defp classify({outage, _}) when outage in @unanswered, do: {:error, :unavailable}
   defp classify(_unreadable), do: {:error, :unavailable}
 end

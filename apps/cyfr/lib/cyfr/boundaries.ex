@@ -1045,9 +1045,8 @@ defmodule Cyfr.Boundaries do
           "the pre-authentication rate windows, and the instance's own entries and " <>
           "their use counts " <>
           "are security rows. A domain or a surface learns about them only " <>
-          "through Sanctum's entries, which scope by the caller's context and keep an " <>
-          "outage, a damaged row and an absent one apart. Arca holds the rows and " <>
-          "Sanctum reads them; no other tree names the stores. " <>
+          "through Sanctum's entries, which scope by the caller's context. Arca holds " <>
+          "the rows and Sanctum reads them; no other tree names the stores. " <>
           "Boundary's exports are global and its membership is by name, so no declaration " <>
           "exports these stores to Sanctum alone."
     },

@@ -7,14 +7,15 @@ defmodule Sanctum.Consent do
 
   This module holds the **contract** — the protocol shape, the error
   payloads, and the types every participant agrees on. The verbs live
-  beside it:
+  beside it, `plan` in `Sanctum.Consent.Plan` and `preview`, `commit` and
+  `grant` in `Sanctum.Consent.Commit`, and rest on these:
 
   | Module | Role |
   |---|---|
   | `Sanctum.Consent.ShapeDigest` | what the operator was shown, before any choice |
   | `Sanctum.Consent.CommitDigest` | the shape plus every decision made on it |
   | `Sanctum.Consent.Proof` | single-use authorization bound to one commit |
-  | `Sanctum.Consent.Authz` | who may consent at all |
+  | `Sanctum.Consent.Authz` | who may consent at all, and whether a sensitive change is confirmed |
 
   ## Reading consent from above
 
@@ -30,18 +31,29 @@ defmodule Sanctum.Consent do
   Three steps, because the authorization must bind the *exact* thing the
   operator saw — not a plan that could still change underneath it:
 
-      plan     {ref, label?, kind?, scope?}
-               → shape digest, expected revision, candidates, defaults,
-                 the ask as preview rows, the default origins
+      plan     {ref, label?, kind?}
+               → plan token, shape digest, expected revision, candidates,
+                 defaults, the ask as preview rows, the default origins
 
-      preview  {plan_token, decisions}
+      preview  {decisions}
                → the structured preview (rows, origins, the head's
                  bindings it removes, commit digest) and the proof
 
-      commit   {plan_token, decisions, commit_digest, expected_revision, proof}
-               → verify the proof binds THIS commit digest, recompute the
-                 live shape digest, re-verify vault binding liveness, CAS on
-                 the head revision, then insert with its admitted origins
+      commit   {decisions, plan_token, proof, commit_digest,
+                expected_consent_revision}
+               → authorize the caller, recompute the live shape, check
+                 the expected revision, consume the plan token, check the
+                 presented commit digest against the recomputed one,
+                 consume the proof bound to it, then in one transaction
+                 insert the revision with its admitted origins, write its
+                 rows, re-verify vault binding liveness and compare-and-set
+                 the head
+
+  Beside the three steps, `grant` (`profile.grant`) writes a revision of
+  an existing owner profile whose shape has not moved, binding an entry
+  to a need, with no plan, preview or proof: it re-issues the head's
+  scope, invoke mode, origins and narrowing under the same revision
+  compare-and-set (`Sanctum.Consent.Commit.grant/3`).
 
   `preview` exists so a proof can bind the exact commit digest that was
   rendered. Without it, a choice made after approval — a different vault

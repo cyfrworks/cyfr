@@ -449,6 +449,60 @@ defmodule Aqua.Loop.CloneTest do
     assert [%{agent: "web"}] = clones_of(turn)
   end
 
+  # The pinned consent is loaded again at each clone. A consent the store
+  # could not answer, or one stored damaged, is said as such; only a
+  # consent that no longer stands is a moved one. Each answer is the text
+  # the clone step records.
+  @tag :capture_log
+  test "a clone whose pinned consent cannot be read, or is damaged, says so; a moved one does not",
+       %{ctx: ctx} do
+    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
+    profile = soul.profile_id
+    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile)
+
+    parent = %Aqua.Loop.State{
+      spec: %Aqua.Loop.Turn{
+        ctx: ctx,
+        authority: soul,
+        roster: [%{"name" => "planner", "type" => Compendium.agent_role_type()}]
+      }
+    }
+
+    clone = fn ->
+      Clone.run(parent, %{id: "step_clone"}, %Aqua.Loop.Binding.Call{
+        kind: :clone,
+        tool: "planner",
+        target: "planner",
+        args: %{"task" => "plan"}
+      })
+    end
+
+    :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile, scope: "sideways")
+
+    assert clone.() ==
+             {:error,
+              "This app's consent is damaged and cannot be used — " <>
+                "revoke profile #{profile} and grant it again."}
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile,
+        scope: Atom.to_string(head.scope)
+      )
+
+    Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+    assert clone.() == {:error, "This app's consent cannot be read right now — try again."}
+    Arca.Repo.query!("ALTER TABLE consents_unavailable RENAME TO consents")
+
+    # The admission's own outage, before the consent is read.
+    Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+    assert clone.() == {:error, "Consent profiles is unavailable — retry shortly"}
+    Arca.Repo.query!("ALTER TABLE profiles_unavailable RENAME TO profiles")
+
+    # Another revision at the head: the pinned consent moved.
+    _moved = Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile, head.admitted_origins)
+    assert clone.() == {:error, "the soul's consent is no longer in force"}
+  end
+
   test "a member's own role, consented through the soul's walk, clones under the soul's consent",
        %{ctx: ctx, thread: thread} do
     {:ok, %{"cloneable" => true}} =

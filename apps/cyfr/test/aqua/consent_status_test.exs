@@ -5,15 +5,18 @@ defmodule Aqua.ConsentStatusTest do
   @moduledoc """
   Whether a consent still covers its source is answered as a state or a
   typed refusal, never as silence: a source with nothing to judge is
-  `:absent`, a context with no athanor is forbidden, and a store that
+  `:absent`, a context with no athanor is forbidden, a store that
   cannot answer fails the whole list rather than reading as "nothing is
-  stale".
+  stale", and a head the store cannot answer is an outage, never damage.
   """
 
   use ExUnit.Case, async: false
 
   alias Aqua.ConsentStatus
   alias Sanctum.Context
+  alias Sanctum.Test.ConsentFixtures
+
+  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -79,5 +82,54 @@ defmodule Aqua.ConsentStatusTest do
       Arca.StorageProjectionChanges.begin_edit(Context.actor(ctx), "aqua", "roles/scout.md")
 
     assert {:error, :unavailable} = Aqua.stale_consent_refs(ctx)
+  end
+
+  # The loader answers a head three ways; a page that read an outage as
+  # damage would tell the person their grant is broken while the store is
+  # only away.
+  @tag :capture_log
+  test "a head the store cannot answer is an outage; a damaged or missing one is damage",
+       %{ctx: ctx} do
+    ref = "reagent:local.status-head"
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: "status-head",
+        version: "1.0.0",
+        type: "reagent"
+      })
+
+    profile = %{
+      id: "prof-status-head",
+      kind: :owner,
+      source_ref: ref,
+      label: "default",
+      status: :active
+    }
+
+    # An active profile with no head.
+    :ok = ConsentFixtures.seed_profile!(ctx, profile)
+    assert {:error, :corrupt} = ConsentStatus.state(ctx, ref)
+
+    :ok =
+      ConsentFixtures.seed_head!(ctx, profile, %{
+        id: "consent-status-head",
+        revision: 1,
+        scope: :versionless,
+        pinned_version: "",
+        invoke_mode: :open_inert,
+        shape_digest: "sha256:shape-status",
+        commit_digest: "sha256:commit-status",
+        resolved_policy: "{}",
+        activation: %{ref => "sha256:act"},
+        vault_refs: []
+      })
+
+    :ok = ConsentFixtures.hand_edit_head!(ctx, profile.id, scope: "sideways")
+    assert {:error, :corrupt} = ConsentStatus.state(ctx, ref)
+
+    :ok = ConsentFixtures.hand_edit_head!(ctx, profile.id, scope: "versionless")
+    Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+    assert {:error, :unavailable} = ConsentStatus.state(ctx, ref)
   end
 end

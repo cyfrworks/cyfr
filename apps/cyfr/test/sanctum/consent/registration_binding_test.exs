@@ -134,8 +134,35 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
         status: :active
       })
 
-    assert {:error, {:no_head_consent, "prof-headless"}} =
+    assert {:error, {:no_head_consent, "prof-headless"} = reason} =
              RegistrationBinding.authorize(ctx, @target, "prof-headless")
+
+    assert RegistrationBinding.message(reason) == "the profile has no live consent"
+  end
+
+  # A head stored outside the closed vocabulary, or one the store cannot
+  # answer, is not a profile with no consent: each refusal says which.
+  @tag :capture_log
+  test "a damaged head and an unanswered one are refused apart from an absent one",
+       %{ctx: ctx} do
+    :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-bind", scope: "sideways")
+
+    assert {:error, {:head_corrupt, "prof-bind"} = damaged} =
+             RegistrationBinding.authorize(ctx, @target, "prof-bind")
+
+    assert RegistrationBinding.message(damaged) ==
+             "the profile's consent is damaged and cannot be used"
+
+    :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-bind", scope: "versionless")
+    assert :ok = RegistrationBinding.authorize(ctx, @target, "prof-bind")
+
+    Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+    assert {:error, {:head_unavailable, "prof-bind"} = unanswered} =
+             RegistrationBinding.authorize(ctx, @target, "prof-bind")
+
+    assert RegistrationBinding.message(unanswered) ==
+             "the profile's consent cannot be read right now — try again"
   end
 
   # Publishing the target is fixture setup, not the thing under test. The

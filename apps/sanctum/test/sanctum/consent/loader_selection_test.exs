@@ -9,10 +9,14 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   cannot satisfy or a tampered target consent leave the selection in
   place, which no run can unseal. A resolved selection carries both
   identities: the borrower's binding key where the selection sits, and
-  the lender's profile, consent and binding key.
+  the lender's profile, consent and binding key. Read row by row
+  (`row_binding/3`), a lending profile or head that is absent, damaged or
+  unanswered by the store says which.
   """
 
   use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
 
   alias Prima.Authority
   alias Prima.Authority.Blob
@@ -193,6 +197,40 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   defp edge_vault(authority) do
     {:ok, edge} = Blob.lookup_edge(authority.policy, @formula, @catalyst, "")
     edge.vault
+  end
+
+  # `table` stops answering once the head `consent_id` names is read whole
+  # (its `consent_vault_refs`, the last read of that head), before what
+  # follows it.
+  defp away_after_head!(table, consent_id) do
+    test = self()
+    handler = "loader-selection-away-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if self() == test and meta[:source] == "consent_vault_refs" and
+               consent_id in (meta[:params] || []) do
+            :telemetry.detach(handler)
+            Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  # A profile row written as no writer of the table would: the damage a
+  # read must tell apart from an absence.
+  defp set_profile!(ctx, id, changes) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(p in Arca.Schemas.Profile, where: p.athanor_id == ^ctx.athanor_id and p.id == ^id),
+        set: changes
+      )
   end
 
   test "the selection resolves to the catalyst's bound entry, and the child carries it",
@@ -507,6 +545,144 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     assert %Authority{cursor: {:bound, @catalyst}} = child
     assert %{via: %{label: "default"}} = child.resources.vault
     refute Blob.bound_vault?(child.resources.vault)
+  end
+
+  describe "a selection row read by row_binding/3" do
+    # The borrower's own head is read once, before anything is taken
+    # away: each case below breaks only what the lender's side reads.
+    setup %{ctx: ctx} do
+      put_catalyst!(ctx)
+      put_formula!(ctx, %{"via" => %{"label" => "default"}})
+      {:ok, consent} = Arca.ConsentStorage.head_consent(Context.actor(ctx), "prof-aqua")
+      [row] = consent.vault_refs
+
+      assert {:selection, "default", {:ok, %{entry_id: "vault-anthropic"}}} =
+               Loader.row_binding(ctx, consent, row)
+
+      {:ok, consent: consent, row: row}
+    end
+
+    @tag :capture_log
+    test "tells a damaged lending profile, an absent one and an unanswered store apart",
+         %{ctx: ctx, consent: consent, row: row} do
+      # Its kind outside the vocabulary, the row's label cannot be read: it
+      # may be the lender, so it refuses the selection by label.
+      set_profile!(ctx, "prof-claude", kind: "sideways")
+
+      assert {:selection, "default", {:error, {:lender_corrupt, @catalyst, "prof-claude"}}} =
+               Loader.row_binding(ctx, consent, row)
+
+      set_profile!(ctx, "prof-claude", kind: "owner", label: "elsewhere")
+
+      assert {:selection, "default", {:error, {:no_such_profile, @catalyst, "default"}}} =
+               Loader.row_binding(ctx, consent, row)
+
+      set_profile!(ctx, "prof-claude", label: "default")
+      Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+      assert {:selection, "default", {:error, {:lender_unavailable, @catalyst}}} =
+               Loader.row_binding(ctx, consent, row)
+    end
+
+    # A lender's head answers as the lender: `head_*` names a root's own
+    # head alone.
+    @tag :capture_log
+    test "tells an absent, a damaged and an unanswered lending head apart",
+         %{ctx: ctx, consent: consent, row: row} do
+      set_profile!(ctx, "prof-claude", head_consent_id: nil)
+
+      assert {:selection, "default", {:error, {:no_head_consent, "prof-claude"}}} =
+               Loader.row_binding(ctx, consent, row)
+
+      set_profile!(ctx, "prof-claude", head_consent_id: "consent-claude")
+      :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-claude", scope: "sideways")
+
+      assert {:selection, "default", {:error, {:lender_corrupt, @catalyst, "prof-claude"}}} =
+               Loader.row_binding(ctx, consent, row)
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-claude", scope: "versionless")
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+      assert {:selection, "default", {:error, {:lender_unavailable, @catalyst}}} =
+               Loader.row_binding(ctx, consent, row)
+    end
+
+    test "a damaged profile row of the target refuses the selection, though the lender is whole",
+         %{ctx: ctx, consent: consent, row: row} do
+      :ok =
+        ConsentFixtures.seed_profile!(ctx, %{
+          id: "prof-claude-twin",
+          kind: :public,
+          source_ref: @catalyst,
+          label: "default",
+          status: :active
+        })
+
+      set_profile!(ctx, "prof-claude-twin", status: "sideways")
+
+      assert {:selection, "default", {:error, {:lender_corrupt, @catalyst, "prof-claude-twin"}}} =
+               Loader.row_binding(ctx, consent, row)
+
+      # Revoked, the damaged row is no candidate, and the lender lends.
+      set_profile!(ctx, "prof-claude-twin", status: "revoked")
+
+      assert {:selection, "default", {:ok, %{entry_id: "vault-anthropic"}}} =
+               Loader.row_binding(ctx, consent, row)
+    end
+  end
+
+  describe "a run's lender, read by load_root/3" do
+    setup %{ctx: ctx} do
+      put_catalyst!(ctx)
+      profile = put_formula!(ctx, %{"via" => %{"label" => "default"}})
+      assert %{entry_id: "vault-anthropic"} = edge_vault(load!(ctx, profile))
+      {:ok, profile: profile}
+    end
+
+    test "a lender that does not decode refuses the run, and an absent one leaves the selection",
+         %{ctx: ctx, profile: profile} do
+      damaged = {:error, {:lender_corrupt, @catalyst, "prof-claude"}}
+
+      # The lender's profile row, its kind outside the vocabulary.
+      set_profile!(ctx, "prof-claude", kind: "sideways")
+      assert load(ctx, profile) == damaged
+
+      set_profile!(ctx, "prof-claude", kind: "owner", label: "elsewhere")
+      assert %{via: %{label: "default"}} = edge_vault(load!(ctx, profile))
+
+      # The lender's head, its scope outside the vocabulary.
+      set_profile!(ctx, "prof-claude", label: "default")
+      :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-claude", scope: "sideways")
+      assert load(ctx, profile) == damaged
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-claude", scope: "versionless")
+      set_profile!(ctx, "prof-claude", head_consent_id: nil)
+      assert %{via: %{label: "default"}} = edge_vault(load!(ctx, profile))
+
+      set_profile!(ctx, "prof-claude", head_consent_id: "consent-claude")
+      assert %{entry_id: "vault-anthropic"} = edge_vault(load!(ctx, profile))
+    end
+
+    # The store stops answering once the run's own head is read, so only
+    # the lender's read meets the outage.
+    @tag :capture_log
+    test "a lender the store cannot answer refuses the run", %{ctx: ctx, profile: profile} do
+      for table <- ~w(profiles consents) do
+        away_after_head!(table, "consent-aqua")
+        assert load(ctx, profile) == {:error, {:lender_unavailable, @catalyst}}, table
+        Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
+      end
+
+      assert %{entry_id: "vault-anthropic"} = edge_vault(load!(ctx, profile))
+    end
+
+    # A digest mismatch keeps its own answer: the lender is no damaged row,
+    # and the selection stays.
+    test "a lender whose stored bytes fail their digest leaves the selection", %{ctx: ctx} do
+      put_catalyst!(ctx, blob_digest: "sha256:tampered")
+      profile = put_formula!(ctx, %{"via" => %{"label" => "default"}})
+      assert %{via: %{label: "default"}} = edge_vault(load!(ctx, profile))
+    end
   end
 
   test "a lender whose grant does not admit the run's origin refuses the whole load, naming it",
