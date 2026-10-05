@@ -40,10 +40,10 @@ defmodule Cyfr.ContextSwapTest do
     # the one admission focus grants (a seat) because `focus/2` rightly
     # refuses an archived athanor.
     "apps/sanctum/lib/sanctum/providers/athanor.ex" => 1,
-    # A console refusal's decision record, filed under no tenant when the
-    # refused context's athanor is not active: the swap empties the athanor
-    # for the audit write alone, narrows onto no athanor and grants nothing,
-    # and the context is never used to act.
+    # Every console refusal the context guard makes is filed under no
+    # tenant: the swap empties the athanor for that audit write alone,
+    # narrows onto no athanor and grants nothing, and the context is never
+    # used to act.
     "apps/cyfr/lib/prism_web/ops.ex" => 1
   }
 

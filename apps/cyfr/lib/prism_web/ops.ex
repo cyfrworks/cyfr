@@ -46,10 +46,10 @@ defmodule PrismWeb.Ops do
   That refusal never reaches the gate, so it is recorded here as the one
   admission decision of the call, as an entry records a refusal it makes
   before the gate; a call the gate is reached for is the gate's to record.
-  The record names the context's athanor only while that athanor is
-  active; otherwise it keeps the person and names no tenant. A socket
-  with no context is refused `:no_context` and records nothing: there is
-  no caller to attribute it to.
+  The record keeps the person and names no tenant, whatever the state of
+  the athanor the context names, as a refusal before sign-in is filed. A
+  socket with no context is refused `:no_context` and records nothing:
+  there is no caller to attribute it to.
 
   A sensitive change the call makes may answer the consent signal
   `{:error, {:confirmation_required, %{id: id, …}}}`. Once the person
@@ -85,12 +85,13 @@ defmodule PrismWeb.Ops do
 
   # The guard's refusal as the call's one decision, through the path an
   # entry records a refusal before the gate on (`Grimoire.refused_decision/3`):
-  # under the identity the refused context presented, on the plane every
-  # ingress takes, with the operation it named and the guard's reason. The
-  # call id is minted for it, never a call id the context still carries
-  # from an earlier call; the request id is the context's when it has one,
-  # as the gate takes it, and a new one otherwise. Audit never decides the
-  # refusal: the call is refused whether or not the record lands.
+  # under the person the refused context presented and no tenant, on the
+  # plane every ingress takes, with the operation it named and the guard's
+  # reason. The call id is minted for it, never a call id the context still
+  # carries from an earlier call; the request id is the context's when it
+  # has one, as the gate takes it, and a new one otherwise. Audit never
+  # decides the refusal: the call is refused whether or not the record
+  # lands.
   defp record_refusal(ctx, name, args, reason) do
     ctx = attributed(ctx)
 
@@ -105,21 +106,16 @@ defmodule PrismWeb.Ops do
     Grimoire.open_decision(ctx, decision, %{method: "tools/call", input: %{}})
   end
 
-  # The tenant a refusal is filed under. `decision_logs` and `mcp_logs` rows
-  # are erased by athanor id: by retention while the athanor is active, and
-  # all at once when it is destroyed. Retention skips an archived athanor,
-  # and a destroyed one's row stays as an archived tombstone
-  # indistinguishable from an archived one. So a refused context's athanor is the record's
-  # only while it is active: an archived one, a destroyed one, and one whose
-  # status cannot be read leave the record with the person and no tenant,
-  # as a refusal before sign-in has, never a row that could outlive the
-  # erasure. A seat removed in an active athanor is still filed there.
-  defp attributed(%Sanctum.Context{athanor_id: athanor_id} = ctx)
-       when is_binary(athanor_id) and athanor_id != "" do
-    if Sanctum.Tenancy.Athanors.active?(athanor_id), do: ctx, else: %{ctx | athanor_id: nil}
-  end
-
-  defp attributed(ctx), do: ctx
+  # A refusal the guard makes is filed under no tenant, whatever the state
+  # of the athanor the refused context names, as a refusal before sign-in
+  # is: it keeps the person, and the athanor's id reaches neither log.
+  # `decision_logs` and `mcp_logs` rows are erased by athanor id when an
+  # athanor is destroyed, and the room can be archived and destroyed at any
+  # moment before this write lands, so no read of its state made first
+  # could keep a row from outliving that erasure; there is no such read.
+  # The swap empties the athanor for this audit write alone: it narrows
+  # onto no athanor, grants nothing, and the context is never used to act.
+  defp attributed(%Sanctum.Context{} = ctx), do: %{ctx | athanor_id: nil}
 
   # The action as the gate reads it.
   defp action_of(args) when is_map(args), do: Map.get(args, "action") || Map.get(args, :action)
