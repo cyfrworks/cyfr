@@ -73,6 +73,7 @@ defmodule Cyfr.Test.StepBench do
           database: module(),
           storage: module(),
           upstream_port: :inet.port_number(),
+          upstream: pid(),
           fetches: non_neg_integer(),
           attached_fetches: non_neg_integer(),
           admission: percentiles(),
@@ -108,9 +109,12 @@ defmodule Cyfr.Test.StepBench do
   checked out here unless the calling process already owns a checkout.
   `:on_step`, when given, is called after each step, warmup included,
   inside the bench's athanor, with `%{step: n, ctx: ctx, request: request,
-  upstream_port: port, fetches: fetches}`: the person's context, the
-  request each step's message carries, and a function answering how many
-  requests the upstream has received.
+  upstream_port: port, upstream: server, fetches: fetches}`: the person's
+  context, the request each step's message carries, the upstream's port
+  and server, and a function answering how many requests the upstream has
+  received. The report's `upstream` is the server the run stopped, so a
+  caller can see it is down by its process, never by probing a port
+  another process may already hold.
   """
   @spec run(keyword()) :: report()
   def run(opts) do
@@ -211,7 +215,7 @@ defmodule Cyfr.Test.StepBench do
 
     try do
       {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
-      fun.(%{port: port, counts: counts})
+      fun.(%{port: port, counts: counts, server: server})
     after
       stop(server)
     end
@@ -428,6 +432,7 @@ defmodule Cyfr.Test.StepBench do
           ctx: ctx,
           request: request,
           upstream_port: bench.port,
+          upstream: bench.server,
           fetches: fetches
         })
 
@@ -445,6 +450,7 @@ defmodule Cyfr.Test.StepBench do
         database: Cyfr.RuntimeConfig.repo_adapter(),
         storage: Arca.Storage.configured_adapter(),
         upstream_port: bench.port,
+        upstream: bench.server,
         fetches: :counters.get(bench.counts, 1),
         attached_fetches: :counters.get(bench.counts, 2),
         admission: percentiles(samples, & &1.admission),

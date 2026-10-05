@@ -97,7 +97,7 @@ defmodule Crucible.StepSpansTest do
 
       assert %{mode: ^mode, fetches: 3, attached_fetches: ^attached} = report, inspect(mode)
       assert report.steps == 2 and report.warmup == 1
-      assert closed?(report.upstream_port), "the #{mode} run left its upstream listening"
+      refute Process.alive?(report.upstream), "the #{mode} run left its upstream running"
     end
   end
 
@@ -145,8 +145,8 @@ defmodule Crucible.StepSpansTest do
     base_path = Application.get_env(:arca, :base_path)
     seed_path = Application.get_env(:arca, :seed_path)
 
-    failing = fn %{upstream_port: port} ->
-      send(test, {:upstream, port})
+    failing = fn %{upstream: server} ->
+      send(test, {:upstream, server})
       raise "a step failed"
     end
 
@@ -154,20 +154,20 @@ defmodule Crucible.StepSpansTest do
       StepBench.run(steps: 3, warmup: 0, mode: :attached, on_step: failing)
     end
 
-    assert_received {:upstream, port}
-    assert closed?(port), "a failed run left its upstream listening"
+    assert_received {:upstream, server}
+    refute Process.alive?(server), "a failed run left its upstream running"
 
     # A turn that outlives its wait exits the bench (`Task.await/2`).
-    timing_out = fn %{upstream_port: port} ->
-      send(test, {:upstream, port})
+    timing_out = fn %{upstream: server} ->
+      send(test, {:upstream, server})
       exit({:timeout, {Task, :await, [:turn, 60_000]}})
     end
 
     assert {:timeout, _} =
              catch_exit(StepBench.run(steps: 3, warmup: 0, mode: :pinned, on_step: timing_out))
 
-    assert_received {:upstream, port}
-    assert closed?(port), "a run that timed out left its upstream listening"
+    assert_received {:upstream, server}
+    refute Process.alive?(server), "a run that timed out left its upstream running"
 
     assert Application.get_env(:arca, :base_path) == base_path
     assert Application.get_env(:arca, :seed_path) == seed_path
@@ -243,17 +243,6 @@ defmodule Crucible.StepSpansTest do
           do: %{"role" => "user", "content" => [%{"type" => "text", "text" => text}]}
 
     %{"operation" => "chat", "params" => %{"messages" => messages}}
-  end
-
-  defp closed?(port) do
-    case :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 1_000) do
-      {:error, :econnrefused} ->
-        true
-
-      {:ok, socket} ->
-        :gen_tcp.close(socket)
-        false
-    end
   end
 
   defp drain do
