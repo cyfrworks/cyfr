@@ -441,6 +441,43 @@ defmodule Sanctum.ProviderTest do
       assert result.public == false
     end
 
+    # "No profiles" tells a person to publish one; a store that could not
+    # answer says nothing of the tincture's profiles, so it is refused.
+    @tag :capture_log
+    test "an outage is refused in its own sentence, never read as a tincture with no profile",
+         %{ctx: ctx} do
+      get = fn name ->
+        Provider.handle("tincture_visibility", ctx, %{
+          "action" => "get",
+          "publisher" => "local",
+          "name" => name
+        })
+      end
+
+      assert {:ok, %{public: false, note: "No profiles — publish with profile.publish"}} =
+               get.("vis-none")
+
+      {:ok, _} =
+        Arca.ProfileStorage.put(%{
+          id: "prof_vis_owner_#{System.unique_integer([:positive])}",
+          athanor_id: ctx.athanor_id,
+          source_ref: "tincture:local.vis-owner",
+          kind: "owner",
+          label: "default",
+          status: "active"
+        })
+
+      # A tincture with a profile but no public one is private, and is not
+      # told it has none.
+      assert {:ok, %{public: false} = private} = get.("vis-owner")
+      refute Map.has_key?(private, :note)
+
+      Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+      assert {:error, {:unavailable, "Consent profiles"} = reason} = get.("vis-none")
+      assert Grimoire.Error.render(reason) == "Consent profiles is unavailable — retry shortly"
+    end
+
     test "reports public when an active public profile exists", %{ctx: ctx} do
       on_exit(fn ->
         nil

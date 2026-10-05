@@ -8,7 +8,10 @@ defmodule Sanctum.Providers.TinctureVisibility do
   Public-ness is a published profile, not a policy bit: `get` reports
   whether an active public profile exists. There is no `set` — publishing
   is a consent decision with its own proof-bound walk (`profile.publish`),
-  and unpublishing is `profile.revoke` of the public profile.
+  and unpublishing is `profile.revoke` of the public profile. A tincture
+  with no profile at all is told how to publish one; a store that could
+  not answer is refused `{:unavailable, "Consent profiles"}`, never read
+  as a tincture with no profile.
   """
 
   alias Sanctum.Context
@@ -38,7 +41,7 @@ defmodule Sanctum.Providers.TinctureVisibility do
         )
       ],
       description:
-        "Report whether a tincture has an active public profile. Public-ness is a published profile, not a policy bit — publish with profile.publish, unpublish with profile.revoke.",
+        "Report whether a tincture has an active public profile. Public-ness is a published profile, not a policy bit — publish with profile.publish, unpublish with profile.revoke. A store that could not answer is refused, never read as a tincture with no profile.",
       title: "Tincture Visibility"
     )
   end
@@ -66,23 +69,12 @@ defmodule Sanctum.Providers.TinctureVisibility do
             url: public_url(ctx, publisher, name)
           }
 
-          result =
-            if public, do: Map.put(result, :public_profile_id, public.id), else: result
+          {:ok, visibility(result, public, profiles)}
 
-          {:ok, result}
-
-        {:error, _reason} ->
-          # Same shape as the answer above, so a client never has to guess
-          # which keys are there.
-          {:ok,
-           %{
-             publisher: publisher,
-             name: name,
-             public: false,
-             athanor: ctx.athanor_id,
-             url: public_url(ctx, publisher, name),
-             note: "No profiles — publish with profile.publish"
-           }}
+        # A store that could not answer says nothing about the tincture's
+        # profiles, so it is refused rather than read as having none.
+        {:error, _unanswered} ->
+          {:error, {:unavailable, "Consent profiles"}}
       end
     end
   end
@@ -94,6 +86,15 @@ defmodule Sanctum.Providers.TinctureVisibility do
   def handle(_ctx, _args) do
     {:error, Prima.Provider.invalid_action("tincture_visibility", action_enum())}
   end
+
+  # The public profile's id when there is one, and the way to publish when
+  # the tincture has no profile at all.
+  defp visibility(result, %{id: id}, _profiles), do: Map.put(result, :public_profile_id, id)
+
+  defp visibility(result, nil, []),
+    do: Map.put(result, :note, "No profiles — publish with profile.publish")
+
+  defp visibility(result, nil, _profiles), do: result
 
   # The finished public URL, so no client composes the route shape itself.
   # An athanor that cannot be resolved (archived mid-request) yields nil.

@@ -301,7 +301,7 @@ defmodule Sanctum.Providers.Profile do
         )
       ],
       description:
-        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates: each need, and each need of a dependency, answers its candidates (own or instance entries of its kind and provider), the one it has suggested, whether a choice_required, and its source (own, instance, or provided by the app); preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; grants reads which grants reach a resource. Nothing is granted outside this walk.",
+        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates: each need, and each need of a dependency, answers its candidates (own or instance entries of its kind and provider), the one it has suggested, whether a choice_required, and its source (own, instance, or provided by the app); preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; list answers each profile's head_state — present, missing, damaged, or unavailable when the store could not answer — beside head_revision, which is set only when the head is present; grants reads which grants reach a resource, and is refused when a profile a grant borrows a key from cannot be read or is damaged. Nothing is granted outside this walk.",
       title: "Profiles & Consent"
     )
   end
@@ -464,13 +464,8 @@ defmodule Sanctum.Providers.Profile do
          {:ok, profiles} <- Arca.ConsentStorage.profiles(Context.actor(ctx), source_ref) do
       enriched =
         Enum.map(profiles, fn profile ->
-          revision =
-            case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id) do
-              {:ok, consent} -> consent.revision
-              _ -> nil
-            end
-
-          Map.put(profile, :head_revision, revision)
+          {state, revision} = head_state(ctx, profile.id)
+          Map.merge(profile, %{head_state: state, head_revision: revision})
         end)
 
       {:ok, %{profiles: enriched}}
@@ -509,6 +504,19 @@ defmodule Sanctum.Providers.Profile do
     {:error, Prima.Provider.invalid_action("profile", action_enum())}
   end
 
+  # A profile's head as `list` answers it, read three ways, never one: a
+  # head absent, one stored outside the closed vocabulary and one the
+  # store could not answer each say so, so an outage never reads as "no
+  # consent". The revision is the head's only when it was read.
+  defp head_state(ctx, profile_id) do
+    case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id) do
+      {:ok, consent} -> {"present", consent.revision}
+      {:error, absent} when absent in [:not_found, :no_head] -> {"missing", nil}
+      {:error, {:invalid_stored_value, _value}} -> {"damaged", nil}
+      {:error, _unanswered} -> {"unavailable", nil}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # The grant read — which grants reach one resource
   # ---------------------------------------------------------------------------
@@ -519,7 +527,13 @@ defmodule Sanctum.Providers.Profile do
   # narrowing already applied, with every selection the loader resolves
   # resolved. A head the loader refuses outright (validity, digest, parse,
   # canonical storage paths, blob/refs equality, binding-digest conflicts)
-  # reaches nothing. A lender admits a borrower's load only under an origin
+  # reaches nothing. A lender the store could not answer, or whose profile
+  # row or head does not decode, refuses the whole read with that reason
+  # (`Sanctum.Unauthorized`'s sentence): an answer short of that head's
+  # grants would read as "reaches nothing". The heads themselves come from
+  # `Arca.ConsentStorage.active_heads/2`, never through the loader's head
+  # read, so the loader answers no root head's refusal here. A lender
+  # admits a borrower's load only under an origin
   # the lender's own revision names, so a head is loaded under each origin
   # its revision admits and reaches a resource when any of those loads
   # carries it. Every edge counts:
@@ -541,9 +555,8 @@ defmodule Sanctum.Providers.Profile do
 
   defp grants_reaching(ctx, args) do
     with {:ok, resource} <- grants_resource(args),
-         {:ok, heads, truncated?} <- grant_heads(ctx, resource) do
-      grants = Enum.flat_map(heads, &reaching_grant(ctx, &1, resource))
-
+         {:ok, heads, truncated?} <- grant_heads(ctx, resource),
+         {:ok, grants} <- reaching_grants(ctx, heads, resource) do
       {:ok,
        %{
          resource: resource_answer(resource),
@@ -616,40 +629,67 @@ defmodule Sanctum.Providers.Profile do
     end
   end
 
+  # Each head's grant in head order, or the first refusal a head's load
+  # answers that is no grant reaching nothing.
+  defp reaching_grants(ctx, heads, resource) do
+    heads
+    |> Enum.reduce_while({:ok, []}, fn head, {:ok, reached} ->
+      case reaching_grant(ctx, head, resource) do
+        {:ok, grants} -> {:cont, {:ok, [grants | reached]}}
+        {:error, _} = refused -> {:halt, refused}
+      end
+    end)
+    |> case do
+      {:ok, reached} -> {:ok, reached |> Enum.reverse() |> Enum.concat()}
+      {:error, _} = refused -> refused
+    end
+  end
+
   defp reaching_grant(ctx, %{profile: profile, consent: consent}, resource) do
     case reaching_edges(ctx, profile, consent, resource) do
-      [] ->
-        []
+      {:ok, []} ->
+        {:ok, []}
 
-      edges ->
-        [
-          %{
-            profile_id: profile.id,
-            source_ref: profile.source_ref,
-            kind: Atom.to_string(profile.kind),
-            label: profile.label,
-            consent_id: consent.id,
-            revision: consent.revision,
-            admitted_origins: Prima.Origin.to_wire_list(consent.admitted_origins),
-            edges: edges
-          }
-        ]
+      {:ok, edges} ->
+        {:ok,
+         [
+           %{
+             profile_id: profile.id,
+             source_ref: profile.source_ref,
+             kind: Atom.to_string(profile.kind),
+             label: profile.label,
+             consent_id: consent.id,
+             revision: consent.revision,
+             admitted_origins: Prima.Origin.to_wire_list(consent.admitted_origins),
+             edges: edges
+           }
+         ]}
+
+      {:error, _} = refused ->
+        refused
     end
   end
 
   # The edges of the first load, among the origins the revision admits,
-  # that carries the resource; none when no such load does.
+  # that carries the resource; none when no such load does. A lender that
+  # could not be read or does not decode refuses the read.
   defp reaching_edges(ctx, profile, consent, resource) do
-    Enum.find_value(consent.admitted_origins, [], fn origin ->
+    Enum.reduce_while(consent.admitted_origins, {:ok, []}, fn origin, none ->
       case Loader.admitted_blob(%{ctx | origin: origin}, profile, consent) do
         {:ok, blob} ->
           case loaded_edges(blob, consent, resource) do
-            [] -> nil
-            edges -> edges
+            [] -> {:cont, none}
+            edges -> {:halt, {:ok, edges}}
           end
 
+        {:error, {:lender_unavailable, _target}} = refused ->
+          {:halt, refused}
+
+        {:error, {:lender_corrupt, _target, _profile_id}} = refused ->
+          {:halt, refused}
+
         {:error, _refused} ->
-          nil
+          {:cont, none}
       end
     end)
   end

@@ -4,6 +4,8 @@
 defmodule Sanctum.ProviderVaultProfileTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
   setup tags do
@@ -92,6 +94,7 @@ defmodule Sanctum.ProviderVaultProfileTest do
       })
 
     assert profile.head_revision == 1
+    assert profile.head_state == "present"
 
     # profile.revoke closes it out
     {:ok, %{status: "revoked"}} =
@@ -102,6 +105,69 @@ defmodule Sanctum.ProviderVaultProfileTest do
 
     {:ok, reloaded} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), committed.profile_id)
     assert reloaded.status == "revoked"
+  end
+
+  # A head absent, one stored outside the closed vocabulary and one the
+  # store could not answer are three answers, so an outage never reads as
+  # "no consent"; a revision is named only for a head that was read.
+  @tag :capture_log
+  test "profile.list says whether each head is present, missing, damaged or unavailable",
+       %{ctx: ctx} do
+    ref = "reagent:local.list-heads"
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.seed_head!(
+        ctx,
+        %{
+          id: "prof_list_heads",
+          source_ref: ref,
+          kind: :owner,
+          label: "default",
+          status: :active
+        },
+        %{
+          id: "cons_list_heads",
+          revision: 1,
+          scope: :versionless,
+          shape_digest: "sha256:shape",
+          commit_digest: "sha256:commit",
+          resolved_policy: "{}",
+          activation: %{ref => "sha256:act"},
+          vault_refs: []
+        }
+      )
+
+    list = fn ->
+      {:ok, %{profiles: [profile]}} =
+        Sanctum.Provider.handle("profile", ctx, %{"action" => "list", "ref" => ref})
+
+      Map.take(profile, [:id, :head_state, :head_revision])
+    end
+
+    assert list.() == %{id: "prof_list_heads", head_state: "present", head_revision: 1}
+
+    set_profile!(ctx, "prof_list_heads", head_consent_id: nil)
+    assert list.() == %{id: "prof_list_heads", head_state: "missing", head_revision: nil}
+
+    set_profile!(ctx, "prof_list_heads", head_consent_id: "cons_list_heads")
+    :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, "prof_list_heads", scope: "sideways")
+    assert list.() == %{id: "prof_list_heads", head_state: "damaged", head_revision: nil}
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, "prof_list_heads", scope: "versionless")
+
+    Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+    assert list.() == %{id: "prof_list_heads", head_state: "unavailable", head_revision: nil}
+  end
+
+  defp set_profile!(ctx, id, changes) do
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(p in Arca.Schemas.Profile,
+          where: p.athanor_id == ^ctx.athanor_id and p.id == ^id
+        ),
+        set: changes
+      )
   end
 
   test "conflicts cross the boundary as a typed consent signal", %{ctx: ctx} do

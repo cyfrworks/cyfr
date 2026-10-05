@@ -7,9 +7,10 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   revision reaches one domain, storage path or vault entry, read as each
   enforcement point would admit it, so no grant shows wider or narrower
   than it runs. Only an active profile's head counts, a head the loader
-  refuses outright reaches nothing, every edge counts (a borrowed entry
-  among them), at most a thousand heads are read, and a read never
-  reaches past the caller's athanor.
+  refuses outright reaches nothing, a lender that cannot be read or does
+  not decode refuses the read, every edge counts (a borrowed entry among
+  them), at most a thousand heads are read, and a read never reaches past
+  the caller's athanor.
 
   A grant naming one account in two spellings is refused naming both,
   with nothing written, through `profile.preview` and `profile.grant`
@@ -22,6 +23,8 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   """
 
   use ExUnit.Case, async: false
+
+  require Ecto.Query
 
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Loader
@@ -177,6 +180,44 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   end
 
   defp borrowed_edge, do: Prima.Authority.Blob.edge_key(@dep, "key")
+
+  defp set_profile!(ctx, id, changes) do
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(p in Arca.Schemas.Profile,
+          where: p.athanor_id == ^ctx.athanor_id and p.id == ^id
+        ),
+        set: changes
+      )
+  end
+
+  # `table` stops answering once the heads are read whole (their
+  # `consent_vault_refs`, the last read of `Arca.ConsentStorage.active_heads/2`,
+  # which names `consent_id` among the heads it reads), before any head
+  # is loaded.
+  defp away_after_heads!(table, consent_id) do
+    test = self()
+    handler = "profile-grants-away-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if self() == test and meta[:source] == "consent_vault_refs" and
+               Enum.any?(meta[:params] || [], &(&1 == consent_id or names?(&1, consent_id))) do
+            :telemetry.detach(handler)
+            Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  defp names?(ids, consent_id) when is_list(ids), do: consent_id in ids
+  defp names?(_param, _consent_id), do: false
 
   # What `Sanctum.Consent.Loader.load_root/3` carries on the borrower's
   # edge to `@dep` when its profile runs under `origin`.
@@ -499,6 +540,54 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
       assert {:ok, answer} = grants(ctx, %{"entry_id" => entry})
       assert ids(answer) == [lender]
+    end
+
+    # A lender the read cannot read is no grant that reaches nothing: the
+    # read is refused in a sentence of its own, never answered short. The
+    # store stops answering once the heads are read, so only the lender's
+    # read meets the outage.
+    @tag :capture_log
+    test "a borrower whose lender cannot be read or does not decode refuses the read",
+         %{ctx: ctx} do
+      entry = "vlt_unread_#{System.unique_integer([:positive])}"
+      lender = lender!(ctx, entry)
+      _borrower = borrower!(ctx, "g-unread", %{"via" => %{"label" => "default"}})
+      assert {:ok, %{count: 2}} = grants(ctx, %{"entry_id" => entry})
+
+      for table <- ~w(profiles consents) do
+        away_after_heads!(table, "cons_g-unread")
+
+        assert {:error, {:lender_unavailable, @dep} = reason} =
+                 grants(ctx, %{"entry_id" => entry}),
+               table
+
+        assert %Prima.Refusal{
+                 class: :unavailable,
+                 message:
+                   "A profile this app borrows a key from cannot be read right now — try again."
+               } = Grimoire.Error.classify(reason)
+
+        Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
+      end
+
+      damaged =
+        "A profile this app borrows a key from is damaged and cannot lend its key — " <>
+          "revoke profile #{lender} and grant it again."
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, lender, scope: "sideways")
+
+      assert {:error, {:lender_corrupt, @dep, ^lender} = reason} =
+               grants(ctx, %{"entry_id" => entry})
+
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, lender, scope: "versionless")
+      set_profile!(ctx, lender, kind: "sideways")
+
+      assert {:error, {:lender_corrupt, @dep, ^lender} = reason} =
+               grants(ctx, %{"entry_id" => entry})
+
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
     end
 
     test "a borrower reaches the entry only under an origin its lender admits", %{ctx: ctx} do
