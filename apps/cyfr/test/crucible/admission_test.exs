@@ -408,6 +408,140 @@ defmodule Crucible.AdmissionTest do
     %{ref: ref, default: default, work: work}
   end
 
+  describe "an approved launch's entry" do
+    @root_load {Sanctum.Consent.Loader, :load_root, 3}
+    @attempt_open {Crucible.Attempt, :open, 1}
+
+    # A context as `Aqua.Launch` hands it to the run it dispatches: the
+    # entry its card bound and the name the binding stored it under.
+    defp expecting(ctx, entry_id, name),
+      do: Map.put(ctx, :approved_entry, %{entry: entry_id, name: name})
+
+    # `fun`'s answer, and the calls this process made to `mfas` while it
+    # ran, in order. A process's call trace is not delivered to itself, so
+    # a collector takes it; every trace message is delivered before the
+    # collector is asked for what it holds.
+    defp traced(mfas, fun) do
+      test = self()
+      collector = spawn_link(fn -> collect(test, []) end)
+
+      on_exit(fn -> for mfa <- mfas, do: :erlang.trace_pattern(mfa, false, [:global]) end)
+
+      # A pattern applies only to a loaded module, so each is loaded first,
+      # and one that matched nothing fails here rather than tracing nothing.
+      for {module, _function, _arity} = mfa <- mfas do
+        Code.ensure_loaded!(module)
+        assert :erlang.trace_pattern(mfa, true, [:global]) == 1
+      end
+
+      :erlang.trace(test, true, [:call, {:tracer, collector}])
+
+      answer =
+        try do
+          fun.()
+        after
+          :erlang.trace(test, false, [:call])
+        end
+
+      delivered = :erlang.trace_delivered(test)
+      assert_receive {:trace_delivered, ^test, ^delivered}, 5_000
+      send(collector, {:done, delivered})
+      assert_receive {:collected, ^delivered, calls}, 5_000
+      {answer, calls}
+    end
+
+    defp collect(test, calls) do
+      receive do
+        {:trace, ^test, :call, call} -> collect(test, [call | calls])
+        {:done, ref} -> send(test, {:collected, ref, Enum.reverse(calls)})
+      end
+    end
+
+    defp args_of(calls, {module, function, _arity}),
+      do: for({^module, ^function, args} <- calls, do: args)
+
+    test "roots only where the loaded root's binding names the entry under its stored name: " <>
+           "another entry, another stored name, a name no longer bound, or none refuses",
+         %{ctx: ctx, root: root} do
+      person = Sanctum.TestContext.local(:prism)
+      %{ref: ref, default: default, work: work} = named_app!(person)
+
+      assert {:ok, %{authority: rooted}} =
+               Admission.authority_and_stamp_for(expecting(ctx, work.id, "Work"), :default, ref,
+                 connection: "Work"
+               )
+
+      assert rooted.resources.vault.entry_id == work.id
+
+      # The name resolves, on the one read that picks it, to another entry
+      # than the one approved.
+      assert {:error, :approved_entry_moved} =
+               Admission.authority_and_stamp_for(
+                 expecting(ctx, default.id, "Work"),
+                 :default,
+                 ref,
+                 connection: "Work"
+               )
+
+      # The entry approved, under a name its binding does not store: `work`
+      # picks the binding stored as `Work`, which is another stored name.
+      assert {:error, :approved_entry_moved} =
+               Admission.authority_for(expecting(ctx, work.id, "work"), :default, ref,
+                 connection: "work"
+               )
+
+      # A name the ingress no longer binds: for an approved launch the same
+      # stale approval, and an account to grant for anyone else.
+      assert {:error, :approved_entry_moved} =
+               Admission.authority_for(expecting(ctx, work.id, "Home"), :default, ref,
+                 connection: "Home"
+               )
+
+      assert {:error, :connection_not_granted} =
+               Admission.authority_for(ctx, :default, ref, connection: "Home")
+
+      # No account named: the root holds the default, not the approved one.
+      assert {:error, :approved_entry_moved} =
+               Admission.authority_for(expecting(ctx, work.id, "Work"), :default, ref)
+
+      # A root whose own calls bind no entry at all.
+      seed(ctx, profile_summary(), consent(root))
+      assert {:ok, %Authority{}} = Admission.authority_for(ctx, :default, @root_node)
+
+      assert {:error, :approved_entry_moved} =
+               Admission.authority_for(expecting(ctx, work.id, "Work"), :default, @root_node)
+    end
+
+    test "does not outlive the root's admission: the run carries none on" do
+      Cyfr.Test.Sandbox.stop_work_on_exit()
+      person = Sanctum.TestContext.local(:prism)
+      on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, person.athanor_id) end)
+
+      %{ref: ref, work: work} = named_app!(person)
+
+      {_ran, calls} =
+        traced([@root_load, @attempt_open], fn ->
+          Crucible.run_root(expecting(person, work.id, "Work"), :default, ref <> ":1.0.0", %{},
+            connection: "Work"
+          )
+        end)
+
+      # The root is loaded, and compared, with the account in hand ...
+      assert [[root_ctx, _profile, _opts]] = args_of(calls, @root_load)
+      assert Map.get(root_ctx, :approved_entry) == %{entry: work.id, name: "Work"}
+
+      # ... and the run is admitted under it, every context it carries on
+      # holding none: its attempt's (which its chain, its children and its
+      # in-chain calls are given), its close's and its assignment's.
+      assert [[opened]] = args_of(calls, @attempt_open)
+      assert opened[:authority].resources.vault.entry_id == work.id
+
+      for carried <- [opened[:ctx], opened[:close].ctx, opened[:assignment].ctx] do
+        assert Map.get(carried, :approved_entry) == nil
+      end
+    end
+  end
+
   describe "root_edge/4" do
     setup %{ctx: ctx, root: root} do
       blob_with_edge = blob_json(%{@target_node => %{}})

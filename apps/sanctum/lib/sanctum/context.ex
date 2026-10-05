@@ -119,6 +119,12 @@ defmodule Sanctum.Context do
         }
 
   @typedoc """
+  The account an approved launch's card showed: the vault entry it bound
+  (`entry`) and the name its binding stored that entry under (`name`).
+  """
+  @type approved_entry :: %{entry: String.t(), name: String.t()}
+
+  @typedoc """
   The frame a context acts for, when a frame credential established it
   (`Sanctum.Caller.establish({:frame_credential, bearer}, …)`): the
   credential row's `id`, the shell's `frame_id`, the tincture version the
@@ -153,6 +159,7 @@ defmodule Sanctum.Context do
           frame: frame() | nil,
           client_id: String.t() | nil,
           confirmation_id: String.t() | nil,
+          approved_entry: approved_entry() | nil,
           origin: Prima.Origin.t() | nil,
           authenticated: boolean(),
           anonymous: boolean(),
@@ -219,6 +226,15 @@ defmodule Sanctum.Context do
     # never inspected (the derived `Inspect` leaves it out), so a crash
     # report carrying the context does not carry it.
     :confirmation_id,
+    # The account an approved launch's card showed (`t:approved_entry/0`:
+    # the entry it bound and the name its binding stored), or nil. Only
+    # `Aqua.Launch.dispatch/2` sets it, on the approver's context for the
+    # one `execution.run` it dispatches; nothing a caller sends can name
+    # one, and `build/1` never sets it. The run's root admission
+    # (`Crucible.Admission`) refuses unless the root's binding names this
+    # entry under this name, and clears it from the context the run
+    # carries on, so it rides that one call and is never compared again.
+    :approved_entry,
     # How the run this context starts began (`Prima.Origin`): set by the
     # admission entry that builds the context, never from a caller's
     # argument, or nil where no entry named one.

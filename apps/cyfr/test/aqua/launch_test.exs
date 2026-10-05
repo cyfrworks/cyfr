@@ -626,6 +626,258 @@ defmodule Aqua.LaunchTest do
     assert [_launched] = launched_of(ctx, app)
   end
 
+  # ---------------------------------------------------------------------------
+  # The entry the card bound, at the run's root
+  # ---------------------------------------------------------------------------
+
+  @stale_work "The account \"Work\" is not the one this launch was approved for, so nothing " <>
+                "ran: ask again to approve the account as it stands now"
+
+  @root_load {Sanctum.Consent.Loader, :load_root, 3}
+  @attempt_open {Crucible.Attempt, :open, 1}
+
+  # An app whose own calls bind a default and `Work`, with a third entry
+  # a later grant can move `Work` to; and a launch of it naming `Work`.
+  defp work_app!(ctx) do
+    app = publish_app!(ctx)
+    default = disclosed_entry!(ctx, "default")
+    work = disclosed_entry!(ctx, "work")
+    other = disclosed_entry!(ctx, "other")
+
+    grant!(ctx, app, [
+      %{need: "api_key", entry_id: default.id},
+      %{need: "api_key", name: "Work", entry_id: work.id}
+    ])
+
+    %{
+      app: app,
+      default: default,
+      work: work,
+      other: other,
+      args: %{"reference" => app <> ":1.0.0", "input" => %{}, "connection" => "Work"}
+    }
+  end
+
+  defp attempts_of(ctx) do
+    Arca.Repo.aggregate(
+      from(a in Arca.Schemas.ExecutionAttempt, where: a.athanor_id == ^ctx.athanor_id),
+      :count
+    )
+  end
+
+  # `fun`'s answer, and the calls this process made to `mfas` while it ran,
+  # in order. A process's call trace is not delivered to itself, so a
+  # collector takes it; every trace message is delivered before the
+  # collector is asked for what it holds.
+  defp traced(mfas, fun) do
+    test = self()
+    collector = spawn_link(fn -> collect(test, []) end)
+
+    on_exit(fn -> for mfa <- mfas, do: :erlang.trace_pattern(mfa, false, [:global]) end)
+
+    # A pattern applies only to a loaded module, so each is loaded first,
+    # and one that matched nothing fails here rather than tracing nothing.
+    for {module, _function, _arity} = mfa <- mfas do
+      Code.ensure_loaded!(module)
+      assert :erlang.trace_pattern(mfa, true, [:global]) == 1
+    end
+
+    :erlang.trace(test, true, [:call, {:tracer, collector}])
+
+    answer =
+      try do
+        fun.()
+      after
+        :erlang.trace(test, false, [:call])
+      end
+
+    delivered = :erlang.trace_delivered(test)
+    assert_receive {:trace_delivered, ^test, ^delivered}, 5_000
+    send(collector, {:done, delivered})
+    assert_receive {:collected, ^delivered, calls}, 5_000
+    {answer, calls}
+  end
+
+  defp collect(test, calls) do
+    receive do
+      {:trace, ^test, :call, call} -> collect(test, [call | calls])
+      {:done, ref} -> send(test, {:collected, ref, Enum.reverse(calls)})
+    end
+  end
+
+  defp args_of(calls, {module, function, _arity}),
+    do: for({^module, ^function, args} <- calls, do: args)
+
+  # A launch of `work_app!/1`'s app naming `Work`, its card approved on
+  # Work's entry: the fixture, with the step the loop hands the dispatcher.
+  defp approved_work_launch!(ctx, thread, pins, approver) do
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
+
+    %{args: args, work: work} = fixture = work_app!(ctx)
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    Map.put(fixture, :step, approved_named_launch!(ctx, turn, approver, args, work.id))
+  end
+
+  # The app's grant becomes `bindings` at the gate's admission of the
+  # dispatched call: past the dispatcher's own check, and before the
+  # provider builds the run's root.
+  defp regrant_at_admission!(ctx, app, bindings) do
+    test = self()
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :grimoire, :decision, :admitted],
+        fn _event, _measurements, %{tool: tool, action: action}, _config ->
+          if self() == test and {tool, action} == {"execution", "run"} and
+               not Process.get(:regranted, false) do
+            Process.put(:regranted, true)
+            grant!(ctx, app, bindings)
+            send(test, :regranted)
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  # The launch `step` is refused in the stale sentence a person reads, with
+  # nothing started: no execution row and no attempt. The gate's trail
+  # records the call as the conflict it is, and nothing reads the refusal
+  # as a reason the refusal table does not know.
+  defp assert_stale_at_root!(ctx, step, app) do
+    attempts = attempts_of(ctx)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert Launch.dispatch(ctx, step) == {:error, {:conflict, @stale_work}}
+      end)
+
+    assert_received :regranted
+
+    assert launched_of(ctx, app) == []
+    assert attempts_of(ctx) == attempts
+
+    assert Arca.Repo.all(
+             from(d in Arca.Schemas.DecisionLog,
+               where:
+                 d.athanor_id == ^ctx.athanor_id and d.tool == "execution" and d.action == "run",
+               select: {d.admission, d.completion, d.completion_class}
+             )
+           ) == [{"admitted", "failed", "conflict"}]
+
+    refute log =~ "Prima.Refusal"
+  end
+
+  test "a head that binds the launch's account to another entry after the dispatcher's check " <>
+         "refuses at the run's root, in the stale sentence, with nothing started",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    %{app: app, default: default, other: other, step: step} =
+      approved_work_launch!(ctx, thread, pins, approver)
+
+    regrant_at_admission!(ctx, app, [
+      %{need: "api_key", entry_id: default.id},
+      %{need: "api_key", name: "Work", entry_id: other.id}
+    ])
+
+    assert_stale_at_root!(ctx, step, app)
+  end
+
+  test "a head that drops the launch's account after the dispatcher's check refuses at the " <>
+         "run's root as the same stale approval, never as an account to grant",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    %{app: app, default: default, step: step} = approved_work_launch!(ctx, thread, pins, approver)
+
+    regrant_at_admission!(ctx, app, [%{need: "api_key", entry_id: default.id}])
+
+    assert_stale_at_root!(ctx, step, app)
+  end
+
+  test "a head that stores the launch's account under another spelling, on the same entry, " <>
+         "after the dispatcher's check refuses at the run's root as stale",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    %{app: app, default: default, work: work, step: step} =
+      approved_work_launch!(ctx, thread, pins, approver)
+
+    regrant_at_admission!(ctx, app, [
+      %{need: "api_key", entry_id: default.id},
+      %{need: "api_key", name: "WORK", entry_id: work.id}
+    ])
+
+    assert_stale_at_root!(ctx, step, app)
+  end
+
+  test "an unchanged account's launch is rooted on the entry its card bound, read with that " <>
+         "entry in hand, and the run carries no expectation past its root's admission",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
+
+    %{app: app, work: work, args: args} = work_app!(ctx)
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    step = approved_named_launch!(ctx, turn, approver, args, work.id)
+
+    {_dispatched, calls} =
+      traced([@root_load, @attempt_open], fn -> Launch.dispatch(ctx, step) end)
+
+    # The root's one load reads the head with the approved account in hand:
+    # the entry the card bound and the name its binding stored.
+    assert [[root_ctx, _profile, _opts]] = args_of(calls, @root_load)
+    assert Map.fetch(root_ctx, :approved_entry) == {:ok, %{entry: work.id, name: "Work"}}
+
+    # The run is admitted under that entry, and the context its attempt
+    # (and so its chain, its children and its calls), its close and its
+    # assignment carry on holds none.
+    assert [execution_id] = launched_of(ctx, app)
+    assert [[opened]] = args_of(calls, @attempt_open)
+    assert opened[:execution_id] == execution_id
+    assert opened[:authority].resources.vault.entry_id == work.id
+    {:ok, name_ref} = Prima.ComponentRef.to_name_ref(app)
+
+    assert opened[:authority].resources.vault.binding_key ==
+             Prima.Authority.Blob.binding_key(name_ref, "@ingress", "Work")
+
+    for carried <- [opened[:ctx], opened[:close].ctx, opened[:assignment].ctx] do
+      assert Map.fetch(carried, :approved_entry) == {:ok, nil}
+    end
+  end
+
+  test "an external execution.run cannot supply the approved entry: an argument naming it is " <>
+         "refused, and the run it starts is rooted with none",
+       %{ctx: ctx} do
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
+
+    %{app: app, other: other, args: args} = work_app!(ctx)
+    run = Map.put(args, "action", "run")
+
+    {refused, calls} =
+      traced([@root_load], fn ->
+        Grimoire.call_external("execution", ctx, Map.put(run, "approved_entry", other.id))
+      end)
+
+    assert {:error,
+            %Prima.Refusal{
+              class: :invalid_argument,
+              stage: :admission,
+              message: "Unknown field: approved_entry"
+            }} = refused
+
+    assert args_of(calls, @root_load) == []
+    assert launched_of(ctx, app) == []
+
+    # Named nowhere, the expectation is absent: the root is loaded with
+    # none, and the run goes ahead under the account the call names.
+    {_ran, calls} = traced([@root_load], fn -> Grimoire.call_external("execution", ctx, run) end)
+
+    assert [[root_ctx, _profile, _opts]] = args_of(calls, @root_load)
+    assert Map.fetch(root_ctx, :approved_entry) == {:ok, nil}
+    assert [_launched] = launched_of(ctx, app)
+  end
+
   test "an origin the sender's request names is not the turn's", %{
     ctx: ctx,
     thread: thread

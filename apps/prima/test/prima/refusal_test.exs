@@ -152,6 +152,7 @@ defmodule Prima.RefusalTest do
     {:attempt_not_owner, :conflict},
     {:slot_not_held, :not_owner},
     {:conflict, :conflict},
+    {:approved_entry_moved, :conflict},
     {:hold_expired, :conflict},
     {:step_superseded, :conflict},
     {:parent_ended, :conflict},
@@ -358,6 +359,22 @@ defmodule Prima.RefusalTest do
                Refusal.message(:connection_cap)
 
       assert Refusal.message({:connection_cap, "anything"}) == Refusal.message(:connection_cap)
+    end
+
+    test "a launch whose approved entry moved is a conflict that says to ask again, never " <>
+           "an unexpected reason" do
+      log =
+        capture_log(fn ->
+          assert %Refusal{class: :conflict, reason: :approved_entry_moved, message: message} =
+                   Refusal.classify(:approved_entry_moved)
+
+          assert message ==
+                   "The account this launch was approved for has changed since it was approved, " <>
+                     "so nothing ran: ask again to approve it as it stands now."
+        end)
+
+      assert log == ""
+      assert Refusal.reason?(:approved_entry_moved)
     end
 
     test "the corrupt registry credential says what to do" do

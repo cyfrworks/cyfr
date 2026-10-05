@@ -895,6 +895,12 @@ defmodule Crucible.Provider do
   # classes it setup required, in its own sentence (`Prima.Refusal`).
   defp format_root_result({:error, :connection_not_granted} = refused), do: refused
 
+  # A root whose loaded binding is not the account an approved launch's
+  # card showed (its entry under its stored name, or a name no longer
+  # bound) stays typed: the launch answers it in its own sentence, naming
+  # the account, and the gate classes it a conflict (`Prima.Refusal`).
+  defp format_root_result({:error, :approved_entry_moved} = refused), do: refused
+
   # The chain wraps a ref-grammar refusal (`Prima.ComponentRef`'s crafted
   # prose) — client-safe by construction.
   defp format_root_result({:error, {:invalid_reference, reason}}) when is_binary(reason) do

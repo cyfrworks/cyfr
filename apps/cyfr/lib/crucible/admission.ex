@@ -35,6 +35,7 @@ defmodule Crucible.Admission do
   require Logger
 
   alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Prima.Authority.Blob.Edge
   alias Prima.Authority.RootSelect
   alias Crucible.{Artifacts, Assignments, Attempt, Attestation, Close, Delegation}
@@ -91,6 +92,13 @@ defmodule Crucible.Admission do
     name, with its own binding key, and a name the ingress does not bind
     is `{:error, :connection_not_granted}` before anything runs
     (`Prima.Authority.root/3`). Absent or nil, the ingress's default.
+
+  A context carrying `approved_entry` (`Sanctum.Context`, set by an
+  approved launch alone) roots only where the loaded root's binding names
+  that entry under the name its binding stored. Another entry, another
+  stored name, a vault that binds none, or a name the ingress no longer
+  binds is `{:error, :approved_entry_moved}` before anything runs, in
+  place of `:connection_not_granted`.
   """
   @spec authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
           {:ok, Authority.t()} | {:error, term()}
@@ -280,6 +288,11 @@ defmodule Crucible.Admission do
   to answer with that child (`Arca.Execution.child_by_key/3`). Any other
   later refusal closes the row failed first and answers what
   `Crucible.Close.fail/3` answers.
+
+  The context the run is admitted with, which its row, its close and its
+  attempt carry on, holds no `approved_entry` (`Sanctum.Context`): an
+  approved launch's is compared where its root is loaded
+  (`authority_for/4`) and consumed here.
   """
   @spec admit(Context.t(), String.t(), map(), keyword()) :: {:ok, admitted()} | {:error, term()}
   def admit(%Context{} = ctx, reference, input, opts)
@@ -288,6 +301,11 @@ defmodule Crucible.Admission do
     # here, so a member that holds no slot in the cell admits nothing.
     if Arca.ControlPlane.held?() do
       ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Prima.UUID7.request_id()}
+      # An approved launch's entry was compared where its root was loaded;
+      # the context the run carries on (its row, its close, its attempt and
+      # so its chain, its children and its calls) holds none, so nothing
+      # later in the run compares against it.
+      ctx = %{ctx | approved_entry: nil}
       admit_owned(ctx, reference, input, opts)
     else
       {:error, :control_plane_lost}
@@ -932,10 +950,41 @@ defmodule Crucible.Admission do
          {:ok, candidates} <- decoded(entries, pinned),
          {:ok, profile} <- select.(candidates),
          {:ok, _ref, _type, component} <- inspect_component(ctx, reference),
-         {:ok, authority, stamp} <- load_authority(ctx, profile, component, opts) do
+         {:ok, authority, stamp} <-
+           approved_root(ctx, load_authority(ctx, profile, component, opts)) do
       {:ok, %{authority: authority, stamp: stamp, profile: profile}}
     end
   end
+
+  # An approved launch roots only on the account its card showed (the
+  # context's `approved_entry`, which `Aqua.Launch` alone sets), judged on
+  # the loader's own answer: the same read of the head that picked the
+  # root's named binding, with none between. The root's binding must name
+  # the approved entry under the name its binding stored. Another entry,
+  # another stored name, a vault that binds none, or a name the ingress no
+  # longer binds at all (`:connection_not_granted` from the pick) is the
+  # same stale approval, refused before anything starts.
+  defp approved_root(%Context{approved_entry: nil}, loaded), do: loaded
+
+  defp approved_root(%Context{approved_entry: approved}, {:ok, authority, _stamp} = loaded) do
+    if approved_binding?(authority, approved),
+      do: loaded,
+      else: {:error, :approved_entry_moved}
+  end
+
+  defp approved_root(_ctx, {:error, :connection_not_granted}), do: {:error, :approved_entry_moved}
+  defp approved_root(_ctx, refused), do: refused
+
+  # The binding's key spells the name it was stored under
+  # (`Prima.Authority.Blob.binding_key/3`), compared exactly: a name the
+  # head now stores in another case is another stored name.
+  defp approved_binding?(
+         %Authority{resources: %Edge{vault: %{entry_id: entry, binding_key: key}}},
+         %{entry: entry, name: name}
+       ),
+       do: match?({:ok, {_node, _edge, ^name}}, Blob.parse_binding_key(key))
+
+  defp approved_binding?(_authority, _approved), do: false
 
   defp read_profiles(ctx, name_ref) do
     case Sanctum.Consent.profiles(ctx, name_ref) do

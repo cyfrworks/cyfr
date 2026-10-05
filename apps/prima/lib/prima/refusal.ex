@@ -708,6 +708,17 @@ defmodule Prima.Refusal do
 
   defp row(:conflict), do: {:conflict, "Another change landed first — read again and retry"}
 
+  # An approved launch whose root, as loaded, does not hold the account the
+  # approval bound (its entry, under the name its binding stored): nothing
+  # ran, and approving it again is what to do. The launch itself answers
+  # in a sentence naming the account; this one is for a surface that
+  # renders the reason without it.
+  defp row(:approved_entry_moved),
+    do:
+      {:conflict,
+       "The account this launch was approved for has changed since it was approved, so nothing " <>
+         "ran: ask again to approve it as it stands now."}
+
   defp row(reason) when reason in @barrier_conflicts,
     do: {:conflict, "The parent execution moved on — the child was not admitted"}
 
