@@ -1187,6 +1187,9 @@ defmodule PrismWeb.ThreadPaneLive do
   # where someone finds that out — not the drawer. A model whose consent
   # exists but is damaged, or could not be read, is said as such: no model
   # is offered to connect over a consent that exists.
+  # An agents list that could not be read is not a room with no model.
+  defp model_ready(_ctx, :unread), do: :agents_unavailable
+
   defp model_ready(ctx, agents) do
     case Aqua.model_status(ctx, agents) do
       empty when map_size(empty) == 0 -> :no_model
@@ -1199,11 +1202,12 @@ defmodule PrismWeb.ThreadPaneLive do
   # them: the roster names who can be addressed and carries neither, so a
   # model's status read from it would always be none. An in-process
   # answer is atom-keyed and a wire one string-keyed; each agent is read
-  # by string key. A list that cannot be read is no agents.
+  # by string key. A list that cannot be read is `:unread`, never no
+  # agents.
   defp agents(ctx) do
     case PrismWeb.Ops.call_tool(ctx, "aqua", %{"action" => "list", "detail" => true}) do
       {:ok, %{} = listed} -> listed |> guides() |> Enum.map(&string_keyed/1)
-      _unread -> []
+      _unread -> :unread
     end
   end
 
@@ -1538,6 +1542,12 @@ defmodule PrismWeb.ThreadPaneLive do
               <% @model_ready == :consent_unavailable -> %>
                 <span data-test="model-consent">
                   A consent this model runs under cannot be read right now — try again.
+                </span>
+              <% @model_ready == :agents_unavailable -> %>
+                <%!-- Whether the room has agents, or a model, could not be
+                     read: nothing is offered but to try again. --%>
+                <span data-test="agents-unavailable">
+                  The agents cannot be read right now — try again.
                 </span>
               <% @model_ready == :model_unavailable -> %>
                 <%!-- Whether the model is installed could not be read: nothing

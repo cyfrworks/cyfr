@@ -1,6 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# A store that cannot give the AQUA roles listing; every other read is the
+# local adapter's.
+defmodule PrismWeb.ThreadPaneLiveTest.UnreadableRoles do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  @roles Compendium.AquaPath.roles_root()
+
+  def list_typed(_actor, @roles), do: {:error, :eacces}
+  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
+end
+
+# A store that answers, and holds no soul and no role.
+defmodule PrismWeb.ThreadPaneLiveTest.EmptyAqua do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  @roles Compendium.AquaPath.roles_root()
+  @soul Compendium.AquaPath.soul_file()
+
+  def list_typed(_actor, @roles), do: {:ok, []}
+  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
+
+  def get(_actor, @soul), do: {:error, :not_found}
+  def get(actor, path), do: Arca.Adapters.Local.get(actor, path)
+end
+
 defmodule PrismWeb.ThreadPaneLiveTest do
   # The pane on its own: what it says when the session is gone, that a
   # refusal reaches the person as a sentence, that what it pushes names
@@ -1286,6 +1313,64 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       assert render(panel) =~ "not installed here yet"
       assert has_element?(panel, "button[phx-click=install_catalyst]", "Install")
       refute render(panel) =~ @model_unread
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # The storage adapter for the rest of the test.
+  defp storage!(adapter) do
+    original = Application.get_env(:arca, :storage_adapter)
+    Application.put_env(:arca, :storage_adapter, adapter)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:arca, :storage_adapter, original),
+        else: Application.delete_env(:arca, :storage_adapter)
+    end)
+  end
+
+  describe "an agents list that cannot be read" do
+    # A store that cannot give the room's agents leaves whether it has a
+    # model unknown: the pane says so and offers nothing but to try again.
+    # A store that answers with no agents is a room with no model, which
+    # is one to connect.
+    setup %{room: room} do
+      {:ok, _} = Athanors.mark_provisioned(room)
+      :ok
+    end
+
+    @tag :capture_log
+    test "reads unread, never no model, with no link", %{conn: conn, room: room} do
+      storage!(PrismWeb.ThreadPaneLiveTest.UnreadableRoles)
+      pane = empty_pane(conn, room)
+
+      assert has_element?(
+               pane,
+               ~s([data-test="agents-unavailable"]),
+               "The agents cannot be read right now — try again."
+             )
+
+      refute render(pane) =~ "has no model yet"
+      refute render(pane) =~ "Connect one on your AQUA page."
+      refute has_element?(pane, ~s([id$="-thread"] > div.justify-center a))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a store that answers with no agents still offers a model to connect",
+         %{conn: conn, room: room, in_room: in_room} do
+      storage!(PrismWeb.ThreadPaneLiveTest.EmptyAqua)
+
+      # The room's list reads, and holds the guides alone: no soul, no role.
+      assert {:ok, %{guides: guides}} =
+               Aqua.Ops.call_tool("aqua", in_room, %{"action" => "list", "detail" => true})
+
+      assert Enum.all?(guides, &(&1.type == "doc"))
+
+      pane = empty_pane(conn, room)
+
+      assert render(pane) =~ "has no model yet"
+      assert has_element?(pane, "a", "Connect a model")
+      refute has_element?(pane, ~s([data-test="agents-unavailable"]))
       Cyfr.Test.Sandbox.end_views()
     end
   end

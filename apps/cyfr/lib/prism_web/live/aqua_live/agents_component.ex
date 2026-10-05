@@ -31,6 +31,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
      |> assign(:loaded, false)
      |> assign(:agents, [])
      |> assign(:soul, nil)
+     |> assign(:agents_unread, false)
      |> assign(:roles, [])
      |> assign(:default_start, nil)
      |> assign(:tool_actions, nil)
@@ -428,13 +429,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     # One call: list with detail carries every field the cards show, and
     # the roles set aside — `list` leaves them out of the closet; a role
     # disabled from this page must stay on it to be put back.
-    listed =
+    # A list that cannot be read is not a room with no agents: the page
+    # says so in place of the agent cards, the new-role form and the
+    # missing soul's note, and no model can be installed or connected.
+    {listed, unread?} =
       case call_aqua(ctx, %{"action" => "list", "detail" => true, "include_disabled" => true}) do
         {:ok, %{"guides" => guides}} when is_list(guides) ->
-          Enum.filter(guides, &(&1["type"] in types))
+          {Enum.filter(guides, &(&1["type"] in types)), false}
 
-        _ ->
-          []
+        _unread ->
+          {[], true}
       end
 
     agents =
@@ -460,6 +464,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
     socket
     |> assign(:agents, agents)
+    |> assign(:agents_unread, unread?)
     |> assign(:soul, soul)
     |> assign(:roles, roles)
     |> assign(:default_start, default_start(roles))
@@ -702,7 +707,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
             the soul's leave are what the form is about. --%>
       <div class="flex justify-end">
         <form
-          :if={@loaded}
+          :if={@loaded and not @agents_unread}
           phx-submit="editor_create_role"
           phx-target={@myself}
           class="flex flex-col items-end gap-1"
@@ -744,7 +749,15 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       </div>
 
       <div
-        :if={@loaded and @soul == nil}
+        :if={@loaded and @agents_unread}
+        data-test="agents-unavailable"
+        class="text-xs text-amber-300 py-8 text-center border border-dashed border-gray-800 rounded"
+      >
+        The agents cannot be read right now — try again.
+      </div>
+
+      <div
+        :if={@loaded and @soul == nil and not @agents_unread}
         class="text-xs text-gray-500 py-8 text-center border border-dashed border-gray-800 rounded"
       >
         No soul here. The soul ships with the server — restore the shipped files below to bring it back.

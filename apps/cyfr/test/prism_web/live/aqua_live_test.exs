@@ -1,6 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# A store that cannot give the AQUA roles listing; every other read is the
+# local adapter's.
+defmodule PrismWeb.AquaLiveTest.UnreadableRoles do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  @roles Compendium.AquaPath.roles_root()
+
+  def list_typed(_actor, @roles), do: {:error, :eacces}
+  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
+end
+
+# A store that answers, and holds no soul and no role.
+defmodule PrismWeb.AquaLiveTest.EmptyAqua do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  @roles Compendium.AquaPath.roles_root()
+  @soul Compendium.AquaPath.soul_file()
+
+  def list_typed(_actor, @roles), do: {:ok, []}
+  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
+
+  def get(_actor, @soul), do: {:error, :not_found}
+  def get(actor, path), do: Arca.Adapters.Local.get(actor, path)
+end
+
 defmodule PrismWeb.AquaLiveTest do
   # The AQUA page shows the tree of the athanor in focus — a person's own
   # on their page, the group's on the group's — and every write lands
@@ -30,6 +57,18 @@ defmodule PrismWeb.AquaLiveTest do
   end
 
   defp get_agent(ctx, name), do: AgentConfig.call_aqua(ctx, %{"action" => "get", "name" => name})
+
+  # The storage adapter for the rest of the test.
+  defp storage!(adapter) do
+    original = Application.get_env(:arca, :storage_adapter)
+    Application.put_env(:arca, :storage_adapter, adapter)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:arca, :storage_adapter, original),
+        else: Application.delete_env(:arca, :storage_adapter)
+    end)
+  end
 
   test "a group's page shows the group's tree alone, and a person's page edits their own",
        %{conn: conn} do
@@ -509,6 +548,36 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-notes")
       assert has_element?(view, "#aqua-scrolls")
       assert has_element?(view, "form[phx-submit=editor_create_role]")
+    end
+
+    # A store that cannot give the agents: the page says so in place of the
+    # cards, the new-role form and the missing soul's note, and offers no
+    # model to install or connect. One that answers with no agents is an
+    # athanor with no soul, as before.
+    @tag :capture_log
+    test "an agents list that cannot be read says so, and offers nothing to create or connect",
+         %{conn: conn} do
+      storage!(PrismWeb.AquaLiveTest.UnreadableRoles)
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert has_element?(
+               view,
+               ~s([data-test="agents-unavailable"]),
+               "The agents cannot be read right now — try again."
+             )
+
+      refute render(view) =~ "No soul here"
+      refute has_element?(view, "form[phx-submit=editor_create_role]")
+      refute has_element?(view, "button[phx-click=install_catalyst]")
+      refute has_element?(view, "button[phx-click=open_consent]")
+    end
+
+    test "a store that answers with no agents still says no soul is here", %{conn: conn} do
+      storage!(PrismWeb.AquaLiveTest.EmptyAqua)
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert render(view) =~ "No soul here"
+      refute has_element?(view, ~s([data-test="agents-unavailable"]))
     end
 
     test "a catalyst the athanor does not hold is offered an Install, which refuses without a registry",
