@@ -123,7 +123,10 @@ defmodule Arca.FileOffers do
 
   Every durable offer transition emits `[:cyfr, :arca, :file_offer, kind]`
   once after it commits, per file, with the offer id, the kind, the
-  sender's and recipient's ids and the filename, never content.
+  sender's and recipient's ids and the filename, never content. A receipt
+  the receipts sweep fails (`fail_stale/3`) emits
+  `[:cyfr, :arca, :file_offer, :failed]` the same way, once, after its
+  row says so: that is how its recipient is told.
   """
 
   import Ecto.Query
@@ -594,7 +597,10 @@ defmodule Arca.FileOffers do
 
   def complete(%Prima.Actor{}, receipt_id) when is_binary(receipt_id), do: {:error, :no_athanor}
 
-  @doc "The receipts of the actor's athanor, newest first; `status:` narrows to one state."
+  @doc """
+  The receipts of the actor's athanor, newest first; `status:` narrows to
+  one state, or to any of a list of them.
+  """
   @spec receipts(Prima.Actor.t(), keyword()) :: {:ok, [receipt()]} | {:error, term()}
   def receipts(%Prima.Actor{athanor_id: athanor_id}, opts \\ [])
       when resolved(athanor_id) and is_list(opts) do
@@ -607,6 +613,7 @@ defmodule Arca.FileOffers do
         case Keyword.get(opts, :status) do
           nil -> query
           status when is_binary(status) -> where(query, [r], r.status == ^status)
+          statuses when is_list(statuses) -> where(query, [r], r.status in ^statuses)
         end
 
       {:ok, Enum.map(Arca.Repo.all(query), &receipt_view/1)}
@@ -616,8 +623,11 @@ defmodule Arca.FileOffers do
   @doc false
   # The receipts retention kind's failure of a transfer for which no write
   # was ever sent, received before `cutoff` and held by no live claim: the
-  # receipt is `failed` and its custody copy released. One with a write
-  # ever sent is never failed, whatever its age.
+  # receipt is `failed`, its failure announced, and its custody copy
+  # released. One with a write ever sent is never failed, whatever its age.
+  # The retention kind calls this outside any transaction, so the update
+  # has committed when it returns, and only then is a failure announced; a
+  # dry run announces nothing.
   @spec fail_stale(Prima.Actor.t(), DateTime.t(), boolean()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def fail_stale(%Prima.Actor{athanor_id: athanor_id} = actor, %DateTime{} = cutoff, dry_run)
@@ -644,6 +654,7 @@ defmodule Arca.FileOffers do
         rows = rows || []
 
         for row <- rows do
+          announce(:failed, row)
           release_custody(actor, row)
 
           Logger.warning(
@@ -1552,6 +1563,10 @@ defmodule Arca.FileOffers do
     do: emit([:cyfr, :arca, :file_offer, :withdrawn], :withdrawn, row)
 
   defp announce(:expired, row), do: emit([:cyfr, :arca, :file_offer, :expired], :expired, row)
+
+  # A receipt's failure: the row is the recipient's receipt, which names
+  # the same offer, people and file as the offer row it came from.
+  defp announce(:failed, row), do: emit([:cyfr, :arca, :file_offer, :failed], :failed, row)
 
   defp emit(event, kind, row) do
     :telemetry.execute(event, %{system_time: System.system_time()}, %{

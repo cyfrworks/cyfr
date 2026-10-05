@@ -1384,7 +1384,12 @@ defmodule Cyfr.Boundaries do
       route_slug: 1,
       settings: 1
     ],
-    "Sanctum.Tenancy.Members" => [list_by_athanor: 1, member?: 2, solo?: 1],
+    "Sanctum.Tenancy.Members" => [
+      list_by_athanor: 1,
+      member?: 2,
+      people_sharing: 1,
+      solo?: 1
+    ],
     "Sanctum.Tenancy.Users" => [
       display_name: 1,
       get: 1,

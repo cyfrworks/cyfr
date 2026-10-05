@@ -50,6 +50,7 @@ defmodule Cyfr.Bus do
     Confirmation,
     Execution,
     ExecutionEvent,
+    FileOffer,
     InstanceEntryChanged,
     LayoutPublished,
     McpServers,
@@ -414,6 +415,19 @@ defmodule Cyfr.Bus do
           "kind alone, sends the administrator's cards and every person's vault page back " <>
           "to the operations, which answer each under its own context"
     },
+    %{
+      key: :file_offers,
+      scope: :global,
+      struct: FileOffer,
+      match: {:prefix, "arca:file_offers:"},
+      template: "arca:file_offers:<user_id>",
+      producers: ["Cyfr.TelemetryBridge"],
+      consumers: ["PrismWeb.FilesLive", "PrismWeb.TopbarLive"],
+      reason:
+        "an offer crosses athanors and is addressed to a person, not an athanor: each " <>
+          "person it concerns hears its transitions on their own topic, and a page reads " <>
+          "the offers again under its own session"
+    },
     # --- page: one page instance and the views beside it ---
     %{
       key: :page_viewing,
@@ -696,6 +710,15 @@ defmodule Cyfr.Bus do
   @doc "An instance entry changed (`Cyfr.Bus.InstanceEntryChanged`)."
   @spec instance_entries() :: String.t()
   def instance_entries, do: "sanctum:instance_entries"
+
+  @doc """
+  One person's file offers (`Cyfr.Bus.FileOffer`): `user_id` is a person
+  an offer concerns, its sender or its recipient, and only that person's
+  pages hear it.
+  """
+  @spec file_offers(String.t()) :: String.t()
+  def file_offers(user_id) when is_binary(user_id) and user_id != "",
+    do: "arca:file_offers:" <> user_id
 
   # ---------------------------------------------------------------------------
   # Page topics

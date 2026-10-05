@@ -180,7 +180,7 @@ defmodule Arca.FileOffersTest do
   alias Arca.FileOffersTest.{Caps, Store}
   alias Arca.Schemas.{FileOffer, FileReceipt}
 
-  @events for kind <- ~w(offered accepted declined withdrawn expired)a,
+  @events for kind <- ~w(offered accepted declined withdrawn expired failed)a,
               do: [:cyfr, :arca, :file_offer, kind]
 
   setup tags do
@@ -912,6 +912,53 @@ defmodule Arca.FileOffersTest do
       assert %{status: "failed", ever_issued: false} = row!(receipt.id)
       assert {:error, :not_found} = Arca.get(recipient, custody_of(receipt))
       assert {:ok, ["full.bin"]} = Arca.list(recipient, ["data"])
+    end
+
+    test "a receipt the sweep fails is announced once, after its row says failed; a dry run announces nothing",
+         %{sender: sender, recipient: recipient} do
+      offer_id = offered!(sender, recipient, "file.txt", bytes(20))
+      Caps.ceiling(recipient.athanor_id, 100)
+      receipt = stalled_accept!(recipient, offer_id, "data/inbox")
+      filler!(recipient, 70, "full.bin")
+      age_receipt!(receipt.id, 10 * 86_400)
+
+      # What the row says at the moment the announcement is made.
+      test_pid = self()
+      handler = "file-offers-failed-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :arca, :file_offer, :failed],
+          fn _event, _measurements, metadata, _config ->
+            send(test_pid, {:failed_row, metadata.offer_id, row!(receipt.id).status})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, _would} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, true)
+      refute_receive {:offer_event, [:cyfr, :arca, :file_offer, :failed], _}, 50
+      assert %{status: "received"} = row!(receipt.id)
+
+      assert {:ok, 1} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, false)
+
+      assert_receive {:offer_event, [:cyfr, :arca, :file_offer, :failed], metadata}
+
+      assert metadata == %{
+               offer_id: offer_id,
+               kind: :failed,
+               sender_user_id: sender.user_id,
+               recipient_user_id: recipient.user_id,
+               filename: "file.txt"
+             }
+
+      assert_receive {:failed_row, ^offer_id, "failed"}
+
+      # Once: the next sweep finds nothing left to fail.
+      assert {:ok, 0} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, false)
+      refute_receive {:offer_event, [:cyfr, :arca, :file_offer, :failed], _}, 50
     end
 
     test "a receipt past file_receipt_days with a write ever sent is kept and reconciled, never failed",

@@ -745,6 +745,29 @@ defmodule Sanctum.Tenancy.Members do
   def shared_athanor?(_, _), do: false
 
   @doc """
+  The people `user_id` sits with: everyone holding an active seat in an
+  active athanor where `user_id` holds one too, as `%{user_id,
+  display_name, email}`, each once and never `user_id` themself, ordered
+  by name. It is the list a person picks the recipient of a copy from;
+  `shared_athanor?/2` is the same rule asked of one pair, and the offer
+  asks it again. An invitation is not a seat and an archived athanor is
+  not a room. A read the store cannot answer is
+  `{:error, :database_error}`, never a shorter list.
+  """
+  @spec people_sharing(String.t()) ::
+          {:ok, [%{user_id: String.t(), display_name: String.t() | nil, email: String.t() | nil}]}
+          | {:error, :database_error}
+  def people_sharing(user_id) when is_binary(user_id) and user_id != "" do
+    with {:ok, seats} <- list_by_user(user_id),
+         {:ok, rooms} <- active_rooms(seats),
+         {:ok, people} <- people_in(rooms, user_id) do
+      {:ok, Enum.sort_by(people, &{&1.display_name || &1.email || "", &1.user_id})}
+    else
+      {:error, _reason} -> {:error, :database_error}
+    end
+  end
+
+  @doc """
   Whether exactly one human is in this athanor.
 
   Returns whether the athanor has a single human member. Used for implicit
@@ -767,6 +790,56 @@ defmodule Sanctum.Tenancy.Members do
   def broadcast_change(_user_id, _athanor_id, _change), do: :ok
 
   # ---- internal --------------------------------------------------------------
+
+  # The athanors among `seats` that are rooms still: active ones. One gone
+  # since the seats were read is no room either.
+  defp active_rooms(seats) do
+    seats
+    |> Enum.filter(&(&1.scope == "athanor" and is_binary(&1.athanor_id)))
+    |> Enum.map(& &1.athanor_id)
+    |> Enum.uniq()
+    |> Enum.reduce_while({:ok, []}, fn athanor_id, {:ok, rooms} ->
+      case Athanors.get(athanor_id) do
+        {:ok, %{status: "active"}} -> {:cont, {:ok, [athanor_id | rooms]}}
+        {:ok, _archived} -> {:cont, {:ok, rooms}}
+        {:error, :not_found} -> {:cont, {:ok, rooms}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  # Everyone seated in `rooms` but `user_id`, each once.
+  defp people_in(rooms, user_id) do
+    rooms
+    |> Enum.reduce_while({:ok, %{}}, fn athanor_id, {:ok, people} ->
+      case roster(athanor_id, 0, []) do
+        {:ok, rows} -> {:cont, {:ok, Enum.reduce(rows, people, &seated(&1, &2, user_id))}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, people} -> {:ok, Map.values(people)}
+      error -> error
+    end
+  end
+
+  # An athanor's whole roster, a page at a time; the member cap bounds it.
+  defp roster(athanor_id, offset, read) do
+    page = Arca.Members.max_page()
+
+    case list_by_athanor(athanor_id, limit: page, offset: offset) do
+      {:ok, rows} when length(rows) < page -> {:ok, read ++ rows}
+      {:ok, rows} -> roster(athanor_id, offset + page, read ++ rows)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp seated(%{status: "active", user_id: id} = row, people, user_id)
+       when is_binary(id) and id != user_id do
+    Map.put_new(people, id, %{user_id: id, display_name: row.display_name, email: row.email})
+  end
+
+  defp seated(_row, people, _user_id), do: people
 
   # A person's seats span athanors and a platform row names none, so the
   # fabric reads as the server.

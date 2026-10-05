@@ -5,7 +5,8 @@ defmodule PrismWeb.TopbarLiveTest do
   @moduledoc """
   The chat list in the topbar: You and your groups, hidden as a list when
   there is only one, with "New group…" always there — the one create the
-  home screen offers. Badges come from the athanors' notify topics.
+  home screen offers. Badges come from the athanors' notify topics, and
+  the count of files offered to the person from their own topic.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -215,5 +216,85 @@ defmodule PrismWeb.TopbarLiveTest do
     assert pending_after(bar, burst) == MapSet.new([:executions])
 
     wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the second burst to drain")
+  end
+
+  test "a badge counts the offers waiting for the person, on each of their browsers, as they " <>
+         "come and go",
+       %{conn: conn} do
+    rita = test_user(name: "Rita")
+    conn = log_in_user(conn, rita)
+    home = seated_athanor()
+    # A second browser of the same person: a session of its own.
+    other = log_in_user(Phoenix.ConnTest.build_conn(), rita)
+
+    sam = test_user(name: "Sam")
+    {:ok, group} = Athanors.create_group(sam.user_id, "Pair #{sam.namespace}")
+
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure(rita.user_id, scope: "athanor", athanor_id: group.id)
+
+    sam_ctx = session(sam.user_id, group.id)
+    :ok = Arca.ensure_roots(Sanctum.Context.actor(sam_ctx))
+
+    for name <- ~w(a.txt b.txt c.txt),
+        do: :ok = Arca.put(Sanctum.Context.actor(sam_ctx), ["data", name], name)
+
+    offer = fn paths ->
+      {:ok, %{offer_id: offer_id}} =
+        Grimoire.call_external("file", sam_ctx, %{
+          "action" => "offer",
+          "paths" => paths,
+          "to" => rita.user_id
+        })
+
+      offer_id
+    end
+
+    bars =
+      for browser <- [conn, other] do
+        {view, _html} = mount_athanor(browser, "/settings", home)
+        topbar(view)
+      end
+
+    for bar <- bars, do: refute(has_element?(bar, "#file-offers"))
+
+    # One offer of two files is one offer, heard by every browser.
+    first = offer.(["data/a.txt", "data/b.txt"])
+
+    for bar <- bars do
+      :sys.get_state(bar.pid)
+      assert has_element?(bar, "#file-offers", "1 offer")
+    end
+
+    _second = offer.(["data/c.txt"])
+
+    for bar <- bars do
+      :sys.get_state(bar.pid)
+      assert has_element?(bar, "#file-offers", "2 offers")
+    end
+
+    # Declined, it waits no longer; the other still does.
+    assert {:ok, %{status: "declined"}} =
+             Grimoire.call_external("file", session(rita.user_id, home.id), %{
+               "action" => "decline",
+               "offer_id" => first
+             })
+
+    for bar <- bars do
+      :sys.get_state(bar.pid)
+      assert has_element?(bar, "#file-offers", "1 offer")
+      refute has_element?(bar, "#file-offers", "2 offers")
+    end
+  end
+
+  defp session(user_id, athanor_id) do
+    Sanctum.Context.build(
+      user_id: user_id,
+      athanor_id: athanor_id,
+      permissions: Sanctum.Context.person_permissions(),
+      scope: :athanor,
+      auth_method: :oidc,
+      authenticated: true
+    )
   end
 end

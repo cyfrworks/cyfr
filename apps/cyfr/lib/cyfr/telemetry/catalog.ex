@@ -261,13 +261,16 @@ defmodule Cyfr.Telemetry.Catalog do
           "re-derives its projection of the root from it; a lost one costs a read's barrier"
     },
     # ——— send a copy: one per file of an offer, after each durable
-    # transition (`Arca.FileOffers`), with the offer id, the kind, the
-    # sender's and recipient's ids and the filename, never content ———
-    [:cyfr, :arca, :file_offer, :offered] => %{consumers: [:audit]},
-    [:cyfr, :arca, :file_offer, :accepted] => %{consumers: [:audit]},
-    [:cyfr, :arca, :file_offer, :declined] => %{consumers: [:audit]},
-    [:cyfr, :arca, :file_offer, :withdrawn] => %{consumers: [:audit]},
-    [:cyfr, :arca, :file_offer, :expired] => %{consumers: [:audit]},
+    # transition (`Arca.FileOffers`), and one per receipt the receipts
+    # sweep fails, with the offer id, the kind, the sender's and
+    # recipient's ids and the filename, never content. The bridge carries
+    # each to `Cyfr.Bus.file_offers/1` of the people it concerns ———
+    [:cyfr, :arca, :file_offer, :offered] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :arca, :file_offer, :accepted] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :arca, :file_offer, :declined] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :arca, :file_offer, :withdrawn] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :arca, :file_offer, :expired] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :arca, :file_offer, :failed] => %{consumers: [:audit, :bridge]},
     # ——— the instance's own credentials: one per durable change
     # (`Sanctum.InstanceEntries`), with the entry id, the kind and the
     # acting person, never a name, a field or a value. The bridge carries

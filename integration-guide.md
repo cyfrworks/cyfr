@@ -944,12 +944,12 @@ Beside `list`, `read`, `write` and `delete`, the `file` tool sends a person a co
 | Action | Key args | What it does |
 |--------|----------|--------------|
 | `offer` | `paths` (one to ten files under `data/`), `to` (a person id, `usr_…`) | Copy the files and offer them to a person you share an athanor with — never yourself. The copy counts against your storage until the offer ends. Answers the `offer_id` and its `expires_at` (after `file_offer_days`, a retention setting, 7 by default) |
-| `offers` | — | `inbox` (offers sent to you, with `sender`), `outbox` (offers you sent from this athanor, with `recipient`), each file with its `status`, `filename`, `size` and `expires_at`; and `receipts`, the files you accepted that have not landed yet |
+| `offers` | — | `inbox` (offers sent to you, with `sender` and `folder`, the folder `accept` lands them in when you name none), `outbox` (offers you sent from this athanor, with `recipient`), each file with its `status`, `filename`, `size` and `expires_at`; and `receipts`, the files you accepted here that have not landed yet (`status` `received`) or never will (`failed`) |
 | `accept` | `offer_id`, optional `folder` (under `data/`) | Take the copy into your focused athanor, where you must hold a seat. It needs twice the files' size free until they land. Answers the `folder` they land in: `<folder>/<offer_id>/`, under `data/inbox/<sender>/` by default (the sender's namespace, or their person id), with `-2` and onward when that folder already holds files — nothing of yours is overwritten |
 | `decline` | `offer_id` | Refuse an offer sent to you |
 | `withdraw` | `offer_id` | Take back an offer you sent, while it is not yet accepted. An accepted copy is the recipient's |
 
-An offer ends once: accepted, declined, withdrawn or expired, whichever lands first. Asking again after it ended answers a conflict naming how it ended. A file the sweep has not yet landed — the recipient's storage was full, or the server stopped part-way — stays in `receipts` and lands on a later retention sweep.
+An offer ends once: accepted, declined, withdrawn or expired, whichever lands first. Asking again after it ended answers a conflict naming how it ended. A file the sweep has not yet landed — the recipient's storage was full, or the server stopped part-way — stays in `receipts` and lands on a later retention sweep. One for which nothing was written within `file_receipt_days` (a retention setting, 7 by default) is `failed`: its copy is released, the recipient is told, and the sender must offer it again.
 
 ---
 

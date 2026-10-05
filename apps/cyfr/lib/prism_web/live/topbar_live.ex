@@ -6,8 +6,10 @@ defmodule PrismWeb.TopbarLive do
   The chrome — a nested LiveView mounted via `live_render` in the app
   layout, remounted with every page: the brand, the athanor switcher (You,
   then your groups; the one create, New group…), the drawer button, a
-  search icon for the palette, the person, and — for a platform admin —
-  how many door requests wait.
+  search icon for the palette, the person, how many files people have
+  offered the person and wait for their answer (`file/offers`, read again
+  whenever their own topic, `Cyfr.Bus.file_offers/1`, says one moved),
+  and — for a platform admin — how many door requests wait.
 
   In `dev` it also carries the live indicators, each a small icon/badge
   with a click-to-expand popover:
@@ -68,6 +70,9 @@ defmodule PrismWeb.TopbarLive do
       if ctx.platform_admin,
         do: Bus.subscribe_global(Bus.platform_notify())
 
+      if is_binary(ctx.user_id),
+        do: Bus.subscribe_global(Bus.file_offers(ctx.user_id))
+
       if ui_mode == "dev", do: subscribe_indicators(ctx)
       send(self(), :load_topbar)
     end
@@ -84,6 +89,7 @@ defmodule PrismWeb.TopbarLive do
      |> assign(:viewing, ctx.athanor_id)
      |> assign(:badges, %{})
      |> assign(:platform_requests, 0)
+     |> assign(:offers_waiting, 0)
      |> assign(:athanors, [])
      |> assign(:labels, %{})
      |> assign(:open_popover, nil)
@@ -170,6 +176,7 @@ defmodule PrismWeb.TopbarLive do
       # is what clears one, and the chat has done so before this bar loads.
       |> assign(:badges, Prism.Tray.get(socket.assigns.tray_key))
       |> assign(:platform_requests, platform_requests(ctx))
+      |> load_offers_waiting()
       |> load_athanors(ctx)
       |> load_initial_state()
 
@@ -302,12 +309,27 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, load_athanors(socket, socket.assigns.context)}
   end
 
+  # An offer of several files is announced once per file: the messages
+  # already queued behind this one ask for the same count.
+  def handle_info(%Bus.FileOffer{}, socket) do
+    drain_offer_messages()
+    {:noreply, load_offers_waiting(socket)}
+  end
+
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
   defp seated?(socket, athanor_id), do: Enum.any?(socket.assigns.athanors, &(&1.id == athanor_id))
+
+  defp drain_offer_messages do
+    receive do
+      %Bus.FileOffer{} -> drain_offer_messages()
+    after
+      0 -> :ok
+    end
+  end
 
   # ============================================================================
   # Loaders
@@ -330,6 +352,18 @@ defmodule PrismWeb.TopbarLive do
   defp reload(:executions, socket), do: load_running_executions(socket)
   defp reload(:log_stats, socket), do: load_log_stats(socket)
   defp reload(:schedules, socket), do: load_upcoming_schedules(socket)
+
+  # How many offers wait for the person, as the Files page lists them. A
+  # count that cannot be read keeps the one the bar last showed.
+  defp load_offers_waiting(socket) do
+    case call_tool(socket, "file/offers", %{}) do
+      {:ok, %{inbox: inbox}} ->
+        assign(socket, :offers_waiting, length(PrismWeb.FilesLive.awaiting(inbox)))
+
+      _unread ->
+        socket
+    end
+  end
 
   defp load_initial_state(socket) do
     if socket.assigns[:authenticated] and socket.assigns[:ui_mode] == "dev" do
@@ -681,6 +715,17 @@ defmodule PrismWeb.TopbarLive do
         >
           <span class="h-1.5 w-1.5 rounded-full bg-amber-400" />
           {@platform_requests} {if @platform_requests == 1, do: "request", else: "requests"}
+        </.link>
+        <!-- Files offered to the person and waiting for their answer -->
+        <.link
+          :if={@offers_waiting > 0}
+          navigate={PrismWeb.Focus.path(@athanor_route, "/files")}
+          id="file-offers"
+          class="inline-flex items-center gap-1 rounded-full bg-blue-500/20 px-2 py-0.5 text-[11px] text-blue-200 hover:bg-blue-500/30"
+          title="Files offered to you"
+        >
+          <span class="h-1.5 w-1.5 rounded-full bg-blue-400" />
+          {@offers_waiting} {if @offers_waiting == 1, do: "offer", else: "offers"}
         </.link>
         <!-- Search: the palette, by click as well as ⌘⇧K -->
         <button

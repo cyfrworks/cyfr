@@ -99,7 +99,8 @@ defmodule Cyfr.BusTest do
             Bus.platform_notify(),
             Bus.health_check(7),
             Bus.schedule_completions(),
-            Bus.instance_entries()
+            Bus.instance_entries(),
+            Bus.file_offers("user_1")
           ] do
         refute String.starts_with?(topic, "tenant:"), "#{topic} should be global"
       end
@@ -116,7 +117,8 @@ defmodule Cyfr.BusTest do
                "health_check:<nonce>",
                "cyfr:schedule_completions",
                "cyfr:settings_changed",
-               "sanctum:instance_entries"
+               "sanctum:instance_entries",
+               "arca:file_offers:<user_id>"
              ]
 
       for {_topic, reason} <- Bus.global(), do: assert(is_binary(reason) and reason != "")

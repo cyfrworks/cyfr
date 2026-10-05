@@ -34,10 +34,12 @@ defmodule Arca.Providers.Files do
   resource. An acceptance first reads the caller's seat in the focused
   athanor and refuses `:not_member` without one. `offers` lists the
   receipts of the focused athanor that are the caller's own, never
-  another member's. A refusal names the caller's own path, folder or
-  offer and never another person's tree. The lifecycle's telemetry is the
-  store's, emitted once after each transition commits; these handlers
-  emit none.
+  another member's: those still landing and those that failed to. Each
+  incoming offer it lists names the `folder` an acceptance without one
+  lands in, by the one rule the acceptance uses. A refusal names the
+  caller's own path, folder or offer and never another person's tree.
+  The lifecycle's telemetry is the store's, emitted once after each
+  transition commits; these handlers emit none.
 
   The provider declares `context_kind: :actor`: the gate authorizes the
   call with the caller's full context and hands this handler the
@@ -142,7 +144,8 @@ defmodule Arca.Providers.Files do
         Operation.new(
           "file",
           "offers",
-          "The offers sent to you and by you, and accepted files still landing",
+          "The offers sent to you and by you, and accepted files still landing " <>
+            "or that failed to land",
           [],
           kind: :read,
           planes: [:external],
@@ -290,14 +293,26 @@ defmodule Arca.Providers.Files do
   end
 
   # The store answers every receipt of the athanor; another member's are
-  # not the caller's to see.
+  # not the caller's to see. A sender's default folder is read once per
+  # sender in the listing.
   defp listed(%Prima.Actor{user_id: user_id} = actor) do
     with {:ok, inbox} <- FileOffers.inbox(actor),
          {:ok, outbox} <- FileOffers.outbox(actor),
-         {:ok, receipts} <- FileOffers.receipts(actor, status: "received") do
+         {:ok, receipts} <- FileOffers.receipts(actor, status: ["received", "failed"]) do
+      folders =
+        inbox
+        |> Enum.map(& &1.sender_user_id)
+        |> Enum.uniq()
+        |> Map.new(&{&1, default_folder(&1)})
+
       {:ok,
        %{
-         inbox: Enum.map(inbox, &offer_item(&1, :sender, &1.sender_user_id)),
+         inbox:
+           Enum.map(inbox, fn row ->
+             row
+             |> offer_item(:sender, row.sender_user_id)
+             |> Map.put(:folder, Map.fetch!(folders, row.sender_user_id))
+           end),
          outbox: Enum.map(outbox, &offer_item(&1, :recipient, &1.recipient_user_id)),
          receipts:
            for(%{recipient_user_id: ^user_id} = receipt <- receipts, do: receipt_item(receipt))
@@ -346,7 +361,7 @@ defmodule Arca.Providers.Files do
     with {:ok, inbox} <- FileOffers.inbox(actor) do
       case Enum.find(inbox, &(&1.offer_id == offer_id)) do
         nil -> {:error, {:not_found, "Offer", offer_id}}
-        row -> {:ok, "data/inbox/" <> sender_slug(row.sender_user_id)}
+        row -> {:ok, default_folder(row.sender_user_id)}
       end
     else
       {:error, reason} -> refusal("offer #{offer_id}", reason)
@@ -355,6 +370,10 @@ defmodule Arca.Providers.Files do
 
   defp destination(_actor, _offer_id, _folder),
     do: {:error, {:invalid_argument, "folder is a folder under data/"}}
+
+  # Where an offer from `sender` lands when its recipient names no folder:
+  # the one rule, for the acceptance and for the inbox that shows it first.
+  defp default_folder(sender), do: "data/inbox/" <> sender_slug(sender)
 
   # The sender's namespace when it is one storage path segment, their
   # person id otherwise. The person row is read under the platform's

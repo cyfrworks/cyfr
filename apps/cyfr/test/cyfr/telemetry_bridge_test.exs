@@ -23,6 +23,7 @@ defmodule Cyfr.TelemetryBridgeTest do
     Components,
     Confirmation,
     Execution,
+    FileOffer,
     InstanceEntryChanged,
     Membership,
     Notify,
@@ -101,7 +102,25 @@ defmodule Cyfr.TelemetryBridgeTest do
        {ApiKeys, %{kind: :changed}}},
       {[:cyfr, :sanctum, :webhooks, :changed], tenant, Bus.webhooks(@actor),
        {Webhooks, %{kind: :changed}}}
-    ] ++ confirmation_cases(tenant) ++ instance_entry_cases()
+    ] ++ confirmation_cases(tenant) ++ instance_entry_cases() ++ file_offer_cases()
+  end
+
+  # Sending a copy: each transition, and a receipt the sweep failed, heard
+  # on the recipient's own topic as the offer, its kind, its sender and the
+  # filename.
+  defp file_offer_cases do
+    for kind <- ~w(offered accepted declined withdrawn expired failed)a do
+      {[:cyfr, :arca, :file_offer, kind],
+       %{
+         offer_id: "ofr_1",
+         kind: kind,
+         sender_user_id: "usr_sender",
+         recipient_user_id: @user,
+         filename: "q3.csv"
+       }, Bus.file_offers(@user),
+       {FileOffer,
+        %{kind: kind, offer_id: "ofr_1", from_user_id: "usr_sender", filename: "q3.csv"}}}
+    end
   end
 
   # An instance entry's durable changes, each on the one global topic as
@@ -153,6 +172,31 @@ defmodule Cyfr.TelemetryBridgeTest do
     do: Enum.all?(fields, fn {key, value} -> Map.get(heard, key) == value end)
 
   defp matches?(_heard, _expected), do: false
+
+  # A listener of its own on the global `topic`, which hands the test what
+  # it hears tagged with the topic, so a test hearing several knows which
+  # one a message came by.
+  defp relay(topic) do
+    test = self()
+
+    pid =
+      spawn(fn ->
+        :ok = Bus.subscribe_global(topic)
+        send(test, {:relaying, topic})
+        relay_loop(test, topic)
+      end)
+
+    on_exit(fn -> Process.exit(pid, :kill) end)
+    assert_receive {:relaying, ^topic}
+  end
+
+  defp relay_loop(test, topic) do
+    receive do
+      message ->
+        send(test, {:heard, topic, message})
+        relay_loop(test, topic)
+    end
+  end
 
   defp count_drops(test) do
     handler = "bridge-dropped-#{System.unique_integer([:positive])}"
@@ -270,6 +314,78 @@ defmodule Cyfr.TelemetryBridgeTest do
       end
 
       refute_receive %InstanceEntryChanged{}, 100
+    end
+
+    test "an offer's transition reaches both its people, and a failed receipt its recipient alone" do
+      people = ["usr_sender", "usr_recipient", "usr_other"]
+      for person <- people, do: relay(Bus.file_offers(person))
+
+      metadata = %{
+        offer_id: "ofr_both",
+        sender_user_id: "usr_sender",
+        recipient_user_id: "usr_recipient",
+        filename: "q3.csv",
+        digest: "sha256:never-bridged",
+        content: "the bytes, never bridged"
+      }
+
+      expected = fn kind ->
+        %{offer_id: "ofr_both", kind: kind, from_user_id: "usr_sender", filename: "q3.csv"}
+      end
+
+      for kind <- [:offered, :accepted, :declined, :withdrawn, :expired] do
+        :telemetry.execute(
+          [:cyfr, :arca, :file_offer, kind],
+          %{system_time: 1},
+          Map.put(metadata, :kind, kind)
+        )
+
+        for person <- ["usr_sender", "usr_recipient"] do
+          topic = Bus.file_offers(person)
+          assert_receive {:heard, ^topic, heard}
+          assert Map.from_struct(heard) == expected.(kind), "#{kind} on #{person}'s topic"
+        end
+
+        refute_receive {:heard, _topic, _message}, 50
+      end
+
+      :telemetry.execute(
+        [:cyfr, :arca, :file_offer, :failed],
+        %{system_time: 1},
+        Map.put(metadata, :kind, :failed)
+      )
+
+      recipient = Bus.file_offers("usr_recipient")
+      assert_receive {:heard, ^recipient, heard}
+      assert Map.from_struct(heard) == expected.(:failed)
+
+      # The sender's offer is already accepted; the receipt is the recipient's.
+      refute_receive {:heard, _topic, _message}, 100
+    end
+
+    test "a file offer event naming no person, or another kind, is dropped and counted" do
+      count_drops(self())
+      relay(Bus.file_offers("usr_recipient"))
+      event = [:cyfr, :arca, :file_offer, :offered]
+
+      complete = %{
+        offer_id: "ofr_drop",
+        kind: :offered,
+        sender_user_id: "usr_sender",
+        recipient_user_id: "usr_recipient",
+        filename: "a.txt"
+      }
+
+      for metadata <- [
+            Map.delete(complete, :sender_user_id),
+            %{complete | recipient_user_id: ""},
+            %{complete | kind: :failed}
+          ] do
+        :telemetry.execute(event, %{system_time: 1}, metadata)
+        assert_receive {:dropped, %{count: 1}, %{event: ^event}}
+      end
+
+      refute_receive {:heard, _topic, _message}, 100
     end
 
     test "a notify naming no athanor is the operators'" do

@@ -97,6 +97,24 @@ defmodule Cyfr.TelemetryCatalogTest do
     end
   end
 
+  # Sending a copy is audited at each durable transition, a receipt the
+  # sweep fails among them, and the bridge carries each to the people it
+  # concerns on their own topics.
+  test "every file offer transition and failed receipt is audited and bridged" do
+    events =
+      for kind <- ~w(offered accepted declined withdrawn expired failed)a,
+          do: [:cyfr, :arca, :file_offer, kind]
+
+    assert Enum.filter(Catalog.events(), &match?([:cyfr, :arca, :file_offer | _], &1)) ==
+             Enum.sort(events)
+
+    for event <- events do
+      assert Catalog.all()[event].consumers == [:audit, :bridge], inspect(event)
+      assert event in Catalog.consumed_by(:audit)
+      assert event in Catalog.consumed_by(:bridge)
+    end
+  end
+
   test "the telemetry bridge attaches exactly the catalog's :bridge roster" do
     assert Cyfr.TelemetryBridge.events() == Catalog.consumed_by(:bridge)
 

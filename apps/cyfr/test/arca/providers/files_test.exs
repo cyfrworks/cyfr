@@ -406,7 +406,8 @@ defmodule Arca.Providers.FilesTest do
                  filename: "a.txt",
                  size: 5,
                  expires_at: hd(inbox).expires_at,
-                 sender: sender.id
+                 sender: sender.id,
+                 folder: "data/inbox/#{sender.id}"
                },
                %{
                  offer_id: offer_id,
@@ -414,13 +415,15 @@ defmodule Arca.Providers.FilesTest do
                  filename: "b.txt",
                  size: 10,
                  expires_at: hd(inbox).expires_at,
-                 sender: sender.id
+                 sender: sender.id,
+                 folder: "data/inbox/#{sender.id}"
                }
              ]
 
       assert {:ok, %{inbox: [], outbox: outbox}} = call(sender, %{"action" => "offers"})
       assert Enum.all?(outbox, &(&1.recipient == recipient.id and &1.status == "offered"))
       refute Enum.any?(outbox, &Map.has_key?(&1, :sender))
+      refute Enum.any?(outbox, &Map.has_key?(&1, :folder))
 
       assert {:ok, %{offer_id: ^offer_id, folder: folder, receipts: receipts}} =
                call(recipient, %{"action" => "accept", "offer_id" => offer_id})
@@ -769,7 +772,8 @@ defmodule Arca.Providers.FilesTest do
       assert {:ok, %{inbox: [], outbox: [], receipts: []}} = call(other, %{"action" => "offers"})
     end
 
-    test "the default folder is the sender's namespace when it is one path segment",
+    test "the default folder is the sender's namespace when it is one path segment, " <>
+           "and the inbox names it before acceptance",
          %{sender: sender, recipient: recipient} do
       named = person!("n", System.unique_integer([:positive]))
       seat!(recipient.home, named.id)
@@ -785,10 +789,16 @@ defmodule Arca.Providers.FilesTest do
 
         assert {:ok, %{offer_id: offer_id}} = offer(who, ["data/docs/a.txt"], recipient.id)
 
+        # The inbox names the folder an acceptance without one lands in.
+        assert {:ok, %{inbox: inbox}} = call(recipient, %{"action" => "offers"})
+        assert [%{folder: named_folder}] = Enum.filter(inbox, &(&1.offer_id == offer_id))
+        assert named_folder == "data/inbox/#{slug}"
+
         assert {:ok, %{folder: folder}} =
                  call(recipient, %{"action" => "accept", "offer_id" => offer_id})
 
         assert folder == "data/inbox/#{slug}/#{offer_id}/"
+        assert folder == named_folder <> "/" <> offer_id <> "/"
       end
 
       # A folder the recipient names is the destination.
@@ -804,6 +814,51 @@ defmodule Arca.Providers.FilesTest do
 
       assert folder == "data/from-sender/#{offer_id}/"
       assert {:ok, "beta"} = Arca.get(recipient.actor, ["data", "from-sender", offer_id, "b.txt"])
+    end
+
+    test "offers lists the caller's receipts still landing and those that failed, with their status",
+         %{sender: sender, recipient: recipient} do
+      source!(sender, "a.txt", "alpha")
+      source!(sender, "b.txt", "beta")
+      assert {:ok, %{offer_id: waiting}} = offer(sender, ["data/docs/a.txt"], recipient.id)
+      assert {:ok, %{offer_id: lost}} = offer(sender, ["data/docs/b.txt"], recipient.id)
+
+      # Both acceptances commit, and neither publication can start.
+      Store.arm(%{probe: :fail})
+
+      for offer_id <- [waiting, lost] do
+        assert {:ok, %{receipts: [%{status: "received"}]}} =
+                 call(recipient, %{"action" => "accept", "offer_id" => offer_id})
+      end
+
+      # One was received past `file_receipt_days` and no write was ever
+      # sent for it: the sweep fails it.
+      set_receipts!(lost, inserted_at: DateTime.add(DateTime.utc_now(), -10 * 86_400, :second))
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, _} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, false)
+      end)
+
+      Store.reset()
+
+      assert {:ok, %{receipts: receipts}} = call(recipient, %{"action" => "offers"})
+
+      assert Enum.sort_by(receipts, & &1.filename) == [
+               %{
+                 offer_id: waiting,
+                 filename: "a.txt",
+                 size: 5,
+                 status: "received",
+                 attempt_state: nil
+               },
+               %{offer_id: lost, filename: "b.txt", size: 4, status: "failed", attempt_state: nil}
+             ]
+
+      # A receipt that has landed is listed no longer; a failed one stays.
+      assert {:ok, 1} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, false)
+
+      assert {:ok, %{receipts: [%{offer_id: ^lost, status: "failed"}]}} =
+               call(recipient, %{"action" => "offers"})
     end
 
     test "the sender's snapshot outlives the staging sweep", %{

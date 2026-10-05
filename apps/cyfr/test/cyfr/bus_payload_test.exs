@@ -22,6 +22,7 @@ defmodule Cyfr.BusPayloadTest do
     Confirmation,
     Execution,
     ExecutionEvent,
+    FileOffer,
     InstanceEntryChanged,
     LayoutPublished,
     McpServers,
@@ -93,6 +94,7 @@ defmodule Cyfr.BusPayloadTest do
       CallerInvalidated.new(:crypto.hash(:sha256, "session")),
       AthanorArchived.new("ath_payload"),
       InstanceEntryChanged.new(:policy, "ine_payload"),
+      FileOffer.new(:offered, "ofr_payload", "usr_sender", "q3.csv"),
       Notify.new(@actor, :approval_pending, %{thread_id: "t", approval_id: "a"}),
       Ping.new(1),
       Viewing.new("ath_payload"),
@@ -264,7 +266,11 @@ defmodule Cyfr.BusPayloadTest do
             fn -> ExecutionEvent.new(@actor, :durable, %{delta: 1}) end,
             fn -> InstanceEntryChanged.new(:renamed, "ine_1") end,
             fn -> InstanceEntryChanged.new(:policy, "") end,
-            fn -> InstanceEntryChanged.new(:policy, nil) end
+            fn -> InstanceEntryChanged.new(:policy, nil) end,
+            fn -> FileOffer.new(:lost, "ofr_1", "usr_1", "a.txt") end,
+            fn -> FileOffer.new(:offered, "", "usr_1", "a.txt") end,
+            fn -> FileOffer.new(:offered, "ofr_1", nil, "a.txt") end,
+            fn -> FileOffer.new(:offered, "ofr_1", "usr_1", nil) end
           ] do
         assert_raise ArgumentError, build
       end
@@ -396,6 +402,33 @@ defmodule Cyfr.BusPayloadTest do
       assert {row.scope, row.template, row.struct, row.producers, row.consumers} ==
                {:global, "sanctum:instance_entries", InstanceEntryChanged,
                 ["Cyfr.TelemetryBridge"], ["PrismWeb.SettingsLive", "PrismWeb.VaultLive"]}
+    end
+  end
+
+  describe "a file offer's notice" do
+    test "is the offer, its kind, its sender and a filename, and nothing of the file" do
+      fields =
+        FileOffer.new(:failed, "ofr_1", "usr_s", "a.txt") |> Map.from_struct() |> Map.keys()
+
+      assert Enum.sort(fields) == [:filename, :from_user_id, :kind, :offer_id]
+
+      assert Enum.sort(FileOffer.kinds()) ==
+               Enum.sort(~w(offered accepted declined withdrawn expired failed)a)
+
+      row = Enum.find(Bus.topics(), &(&1.key == :file_offers))
+
+      assert {row.scope, row.template, row.struct, row.producers, row.consumers} ==
+               {:global, "arca:file_offers:<user_id>", FileOffer, ["Cyfr.TelemetryBridge"],
+                ["PrismWeb.FilesLive", "PrismWeb.TopbarLive"]}
+    end
+
+    test "rides each person's own topic" do
+      assert Bus.file_offers("usr_1") == "arca:file_offers:usr_1"
+      refute Bus.file_offers("usr_1") == Bus.file_offers("usr_2")
+
+      for nobody <- ["", nil] do
+        assert_raise FunctionClauseError, fn -> apply(Bus, :file_offers, [nobody]) end
+      end
     end
   end
 
