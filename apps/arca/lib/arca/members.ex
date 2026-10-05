@@ -778,6 +778,60 @@ defmodule Arca.Members do
 
   def shared_athanor?(%Prima.Actor{}, _user_a, _user_b), do: {:error, :cross_tenant}
 
+  @doc """
+  The people `user_id` sits with: everyone holding an active athanor seat
+  in an ACTIVE athanor where `user_id` holds an active athanor seat too, as
+  `%{user_id, display_name, email}`, each once and never `user_id`
+  themself, in no particular order. The name and email come from the
+  person's users row alone, never from a seat, and a seat with no users
+  row is not listed. An invitation, a platform grant and an archived
+  athanor are no shared room, on either side.
+
+  One statement reads the caller's seats, their athanors and the people
+  seated there, so all three are one snapshot: a seat removed before it
+  excludes its athanor, and nothing that lands after it reaches the
+  answer. It is not paged; the member cap of each of the caller's
+  athanors bounds it.
+  """
+  @spec people_sharing(Prima.Actor.t(), String.t()) ::
+          {:ok, [%{user_id: String.t(), display_name: String.t() | nil, email: String.t() | nil}]}
+          | refusal()
+  # arca:unscoped-ok who sits with a person is asked across tenants by design, under the
+  # platform actor alone: every row is reached through the caller's own active seat, so the
+  # statement reads nothing of an athanor the caller does not sit in. `shared_athanor?/3`
+  # asks the same rule of one pair.
+  def people_sharing(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Members.people_sharing", fn ->
+      # The answer is the users rows themselves, one row per person by
+      # construction: the seats only decide which rows qualify, so a person
+      # seated with the caller in several athanors is listed once, whatever
+      # their seats carry.
+      {:ok,
+       Arca.Repo.all(
+         from(u in User,
+           where:
+             u.id != ^user_id and
+               u.id in subquery(
+                 from(mine in Membership,
+                   join: a in Athanor,
+                   on: a.id == mine.athanor_id,
+                   join: m in Membership,
+                   on: m.athanor_id == a.id,
+                   where:
+                     mine.user_id == ^user_id and mine.scope == "athanor" and
+                       mine.status == "active" and a.status == "active" and
+                       m.scope == "athanor" and m.status == "active",
+                   select: m.user_id
+                 )
+               ),
+           select: %{user_id: u.id, display_name: u.display_name, email: u.email}
+         )
+       )}
+    end)
+  end
+
+  def people_sharing(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
+
   # ---- internal --------------------------------------------------------------
 
   defp slot_holds(:none), do: :ok
