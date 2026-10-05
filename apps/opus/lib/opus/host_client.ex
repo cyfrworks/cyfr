@@ -41,7 +41,7 @@ defmodule Opus.HostClient do
   wire, so it is not this engine's host, and the call is answered
   `{:error, :lost}` at once, which stops the attempt's work, rather than
   asked again. The attempt's seal key also opens the keys of a child CYFR
-  admits for this client's runner (`admit_child/5`), whose attempt the
+  admits for this client's runner (`admit_child/6`), whose attempt the
   runner's relay then carries.
 
   Each function answers as the `Prima.HostAPI` callback of the same name.
@@ -339,27 +339,32 @@ defmodule Opus.HostClient do
 
   @doc """
   Admit a child the attempt's guest starts on `reference`, through the edge
-  named `need`, with `input`, made with `guest_fn` (`:call` or `:spawn`).
-  CYFR admits it under the authority it holds for this attempt and claims
-  it for this client's runner, under a `child_key` this client mints
-  (`t:Prima.HostAPI.child_key/0`), so a lost answer is asked again for the
-  same child. Answers the child to run (`t:child/0`), once its keys open
-  under this attempt's seal key as the attempt its assignment names on
-  this client's worker service, and its input hashes to the assignment's
-  digest. A refusal of the child is `{:error, guest_error}`
-  (`t:Prima.HostAPI.guest_error/0`).
+  named `need`, with `input`, made with `guest_fn` (`:call` or `:spawn`),
+  asking its edge for the account `connection` names
+  (`t:Prima.HostAPI.connection/0`, nil for the edge's default, which the
+  body then does not name). CYFR admits it under the authority it holds
+  for this attempt and claims it for this client's runner, under a
+  `child_key` this client mints (`t:Prima.HostAPI.child_key/0`), so a lost
+  answer is asked again for the same child and the same account. Answers
+  the child to run (`t:child/0`), once its keys open under this attempt's
+  seal key as the attempt its assignment names on this client's worker
+  service, and its input hashes to the assignment's digest. A refusal of
+  the child is `{:error, guest_error}` (`t:Prima.HostAPI.guest_error/0`).
   """
-  @spec admit_child(t(), String.t(), term(), map(), :call | :spawn) ::
+  @spec admit_child(t(), String.t(), term(), map(), :call | :spawn, Prima.HostAPI.connection()) ::
           {:ok, child()} | {:error, term()}
-  def admit_child(%__MODULE__{} = client, reference, need, input, guest_fn)
-      when is_binary(reference) and is_map(input) and guest_fn in [:call, :spawn] do
-    args = %{
-      "reference" => reference,
-      "need" => need,
-      "input" => input,
-      "guest_fn" => Atom.to_string(guest_fn),
-      "child_key" => nonce()
-    }
+  def admit_child(%__MODULE__{} = client, reference, need, input, guest_fn, connection)
+      when is_binary(reference) and is_map(input) and guest_fn in [:call, :spawn] and
+             (is_nil(connection) or is_binary(connection)) do
+    args =
+      %{
+        "reference" => reference,
+        "need" => need,
+        "input" => input,
+        "guest_fn" => Atom.to_string(guest_fn),
+        "child_key" => nonce()
+      }
+      |> then(&if(connection, do: Map.put(&1, "connection", connection), else: &1))
 
     with {:ok,
           %{

@@ -13,8 +13,11 @@ defmodule Prima.HostAPITest do
   header a listener refuses before the body is refused with its error, in
   `Prima.WorkerAuth`'s order; the report verifies under its service's
   dispatch key and names its member; a retried call is the same body under
-  a fresh header; and every `egress_pin` case's args and answer read
-  through `Prima.PinnedTarget`.
+  a fresh header; a child's `connection` is an optional member of its
+  `admit_child` args, an account its edge lacks is refused
+  `connection_not_granted`, and a key repeated naming another connection
+  is refused `invalid_request`; and every `egress_pin` case's args and answer
+  read through `Prima.PinnedTarget`.
 
   Every `egress_policy` case reproduces and reads the same way, and its
   answer is the policy's: pinned only for a host its `domains` match
@@ -242,6 +245,46 @@ defmodule Prima.HostAPITest do
                WorkerWire.read_request_body(HostAPI, Jason.decode!(first["body"]))
 
       assert HostAPI.valid_child_key?(key)
+      assert HostAPI.retry(:admit_child) == :keyed
+    end
+
+    test "a child's connection crosses as an optional member, and a key names the connection " <>
+           "its child was admitted with" do
+      cases = @vectors["connection_cases"]
+      assert Enum.map(cases, & &1["name"]) == ~w(omitted named reused)
+
+      played =
+        Map.new(cases, fn call ->
+          assert call["callback"] == "admit_child"
+          {_fields, args, answer} = reproduces(call)
+          assert HostAPI.valid_child_key?(args["child_key"]), call["name"]
+          {call["name"], %{args: args, answer: answer}}
+        end)
+
+      %{"omitted" => omitted, "named" => named, "reused" => reused} = played
+
+      refute Map.has_key?(omitted.args, "connection")
+      assert {:ok, %{"assignment" => _}} = omitted.answer
+
+      assert named.args["connection"] == "Work"
+      assert named.args["child_key"] != omitted.args["child_key"]
+
+      # An account the edge lacks is a grant to make: setup required, in
+      # the refusal's own sentence.
+      assert named.answer ==
+               {:error, "guest_error",
+                %{
+                  "type" => "connection_not_granted",
+                  "message" => Refusal.message(:connection_not_granted)
+                }}
+
+      assert Refusal.classify({:guest_error, "connection_not_granted", "x"}).class ==
+               :setup_required
+
+      # The repeat is omitted's call under its key, naming an account.
+      assert Map.delete(reused.args, "connection") == omitted.args
+      assert reused.args["connection"] == "Work"
+      assert {:error, "guest_error", %{"type" => "invalid_request"}} = reused.answer
       assert HostAPI.retry(:admit_child) == :keyed
     end
 

@@ -90,7 +90,8 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
             Probe.probe_ref(),
             nil,
             %{"op" => "echo", "n" => n},
-            :spawn
+            :spawn,
+            nil
           )
 
         send(test_pid, {:admitted, admitted})

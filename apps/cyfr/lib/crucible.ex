@@ -45,7 +45,8 @@ defmodule Crucible do
     check: [aliases: true]
 
   alias Prima.Authority
-  alias Prima.Authority.RootSelect
+  alias Prima.Authority.{Blob, RootSelect}
+  alias Prima.Authority.Blob.Edge
 
   alias Crucible.{
     Admission,
@@ -190,7 +191,13 @@ defmodule Crucible do
   Required options: `:ctx`. `:parent_execution_id`,
   `:root_execution_id`, `:attempt` (the parent's attempt, which a child is
   admitted under), `:guest_fn` (`:call` or `:spawn`), `:declared_needs`
-  and `:activation_digest` are host-threaded by the caller.
+  and `:activation_digest` are host-threaded by the caller. `:connection`
+  is the account the call asks its edge for
+  (`t:Prima.HostAPI.connection/0`), handed to the step
+  (`Crucible.Admission.step_invoke/4`): nil, the default, holds the edge's
+  default binding, and an account the edge does not bind is refused
+  `{:invoke_denied, :connection_not_granted}` with no default in its
+  place.
   `:retained_input` is the map the payload store keeps as the execution's
   input in place of `input`, for a request that carries transient content;
   the row's `input_hash` and envelope still describe `input`. `:charge` and
@@ -251,14 +258,19 @@ defmodule Crucible do
   again — its assignment signed afresh from what it was admitted with, its
   attempt's keys, its secrets and its input — for the runner that holds
   its claim on the caller's service and boot; a key whose child has ended
-  is refused `:lost`, as is one another runner holds. Two admissions
-  racing under one key are decided by the row's unique index: the loser
-  admits nothing, gives back what it charged and answers the winner's
-  child.
+  is refused `:lost`, as is one another runner holds. A key names the
+  connection its child was admitted with, read from the key of the
+  binding the child holds (`Prima.Authority.Blob.parse_binding_key/1`: a
+  named binding's account, nil for any other), and nil for a self-call,
+  which crosses no edge and holds its caller's own binding: a repeat
+  naming another is refused `{:child_key_reused, :connection}` and answers
+  nothing of that child. Two admissions racing under one key are decided
+  by the row's unique index: the loser admits nothing, gives back what it
+  charged and answers the winner's child, under the same rule.
 
   Other options as `run_child/5`'s host-threaded ones (`:ctx`,
   `:parent_execution_id`, `:root_execution_id`, `:attempt`, `:guest_fn`,
-  `:declared_needs`, `:activation_digest`), and the runner the child is
+  `:declared_needs`, `:activation_digest`, `:connection`), and the runner the child is
   claimed for: `:runner`, with `:service_id`, `:boot_id` and `:worker`
   naming its worker service, that service's boot and its `Prima.WorkerAPI`
   module, and `:parent_deadline` (Unix ms), which caps the child's
@@ -270,7 +282,7 @@ defmodule Crucible do
   def admit_child(%Authority{} = authority, reference, need, input, opts) when is_list(opts) do
     case child_under_key(opts) do
       :none -> admit_keyed_child(authority, reference, need, input, opts)
-      {:ok, child} -> admitted_child(child, opts)
+      {:ok, child} -> admitted_child(authority, child, opts)
       {:error, :unavailable} = refused -> refused
     end
   end
@@ -300,7 +312,7 @@ defmodule Crucible do
     else
       {:error, :duplicate_child_key} ->
         case child_under_key(opts) do
-          {:ok, child} -> admitted_child(child, opts)
+          {:ok, child} -> admitted_child(authority, child, opts)
           :none -> {:error, :lost}
           {:error, :unavailable} = refused -> refused
         end
@@ -314,8 +326,11 @@ defmodule Crucible do
   # its attempt answers what its assignment is signed from and its secrets
   # while the calling runner holds its claim and the row is live
   # (`Crucible.Attempt.admitted/2`), and the assignment is signed
-  # afresh from that; its keys derive from the same attempt.
-  defp admitted_child(%{id: child_id}, opts) do
+  # afresh from that; its keys derive from the same attempt. A repeat
+  # naming another connection than the child was admitted with by
+  # `caller` is refused before its assignment is signed or anything of it
+  # is answered.
+  defp admitted_child(caller, %{id: child_id}, opts) do
     holder = %{
       service_id: Keyword.fetch!(opts, :service_id),
       boot_id: Keyword.fetch!(opts, :boot_id),
@@ -323,6 +338,7 @@ defmodule Crucible do
     }
 
     with {:ok, %{assignment: admitted, secrets: secrets}} <- Attempt.admitted(child_id, holder),
+         :ok <- same_connection(caller, admitted.authority, Keyword.get(opts, :connection)),
          {:ok, issued} <- Assignments.issue(admitted) do
       {:ok,
        %{
@@ -333,6 +349,38 @@ defmodule Crucible do
        }}
     end
   end
+
+  defp same_connection(caller, child, connection) do
+    if admitted_connection(caller, child) == connection,
+      do: :ok,
+      else: {:error, {:child_key_reused, :connection}}
+  end
+
+  # The account `caller` admitted `child` with. A self-call crosses no
+  # edge, so it picks no account (`Prima.Authority.Transition` denies one):
+  # its child holds its caller's own cursor and resources
+  # (`Prima.Authority.self_child/2`), and names none whatever account
+  # those carry from the edge that admitted the caller. Any other child
+  # holds the binding its call picked, whose key names the account
+  # (`<node>|<edge>|name:<account>`); a default binding, a provided value,
+  # no binding at all and a zero child name none.
+  defp admitted_connection(
+         %Authority{cursor: cursor, resources: resources},
+         %Authority{cursor: cursor, resources: resources}
+       ),
+       do: nil
+
+  defp admitted_connection(_caller, %Authority{
+         resources: %Edge{vault: %{binding_key: key}}
+       })
+       when is_binary(key) do
+    case Blob.parse_binding_key(key) do
+      {:ok, {_node, _edge, account}} -> account
+      :error -> nil
+    end
+  end
+
+  defp admitted_connection(_caller, _child), do: nil
 
   # A stepped invocation (`Crucible.Admission.step_invoke/4`) run
   # under its child authority by `dispatch`. A spawn-shaped step takes its

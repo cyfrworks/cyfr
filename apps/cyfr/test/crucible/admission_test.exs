@@ -404,6 +404,65 @@ defmodule Crucible.AdmissionTest do
                Admission.step_invoke(auth, "#{@target_node}:0.1.0", "a|b", child_opts(ctx))
     end
 
+    test "a call's connection picks the account its edge binds by that name, and one the edge " <>
+           "lacks is denied with no default in its place",
+         %{ctx: ctx} do
+      bound = fn entry_id, opts ->
+        Prima.Test.AuthorityFixtures.bound_vault(
+          @root_node,
+          @target_node,
+          entry_id,
+          "sha256:bind-" <> entry_id,
+          [projection: %{"fields" => ["KEY"]}] ++ opts
+        )
+      end
+
+      work = bound.("vlt_work", name: "Work")
+
+      named =
+        authority_with_edges(%{
+          @target_node => %{"vault" => bound.("vlt_default", named: %{"Work" => work})}
+        })
+
+      only_default =
+        authority_with_edges(%{@target_node => %{"vault" => bound.("vlt_default", [])}})
+
+      ref = "#{@target_node}:0.1.0"
+
+      assert {:ok, %{bound?: true, authority: child}} =
+               Admission.step_invoke(named, ref, nil, child_opts(ctx, connection: "Work"))
+
+      assert %{entry_id: "vlt_work", binding_key: work_key} = child.resources.vault
+      assert work_key == Blob.binding_key(@root_node, @target_node, "Work")
+
+      for auth <- [named, only_default] do
+        assert {:ok, %{authority: default}} =
+                 Admission.step_invoke(auth, ref, nil, child_opts(ctx))
+
+        assert default.resources.vault.entry_id == "vlt_default"
+
+        assert {:ok, %{authority: default}} =
+                 Admission.step_invoke(auth, ref, nil, child_opts(ctx, connection: nil))
+
+        assert default.resources.vault.entry_id == "vlt_default"
+      end
+
+      assert {:error, {:invoke_denied, :connection_not_granted}} =
+               Admission.step_invoke(named, ref, nil, child_opts(ctx, connection: "Home"))
+
+      assert {:error, {:invoke_denied, :connection_not_granted}} =
+               Admission.step_invoke(only_default, ref, nil, child_opts(ctx, connection: "Work"))
+
+      # A target no edge binds has no account to pick.
+      assert {:error, {:invoke_denied, :connection_not_granted}} =
+               Admission.step_invoke(
+                 authority_with_edges(%{}),
+                 ref,
+                 nil,
+                 child_opts(ctx, connection: "Work")
+               )
+    end
+
     test "a spawn charges the root budget and a denied spawn does not", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
       assert Sanctum.Authority.budget(auth).in_flight == 0

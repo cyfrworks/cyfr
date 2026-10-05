@@ -84,6 +84,14 @@ defmodule Prima.HostAPI do
   """
   @type child_key :: String.t()
 
+  @typedoc """
+  The account a child asks its edge for: nil for the edge's default
+  binding, or the name of an account the edge binds beside it
+  (`Prima.Authority.Blob.valid_account_name?/1`). It crosses as the
+  `connection` member of an `admit_child` body's args, absent for nil.
+  """
+  @type connection :: String.t() | nil
+
   @child_key ~r/\A[A-Za-z0-9_-]{1,128}\z/
 
   @max_field_name_bytes 256
@@ -353,6 +361,16 @@ defmodule Prima.HostAPI do
   already admitted under it, with the same assignment and sealed keys; a
   key whose child has already ended is refused `:lost`; a malformed key
   is refused as a guest error.
+
+  `connection` is the account the child asks its edge for
+  (`t:connection/0`): the child holds that account's binding, or the
+  edge's default for nil. An account the edge does not bind is refused as
+  the guest error `connection_not_granted`, setup required, and no default
+  is used in its place; one that is not an account's name is refused
+  `invalid_request`. A key names the connection its child was admitted
+  with, none for a self-call, which crosses no edge, so a repeat under it
+  naming another is refused `invalid_request` before anything is answered
+  from that child.
   """
   @callback admit_child(
               caller(),
@@ -360,7 +378,8 @@ defmodule Prima.HostAPI do
               need :: String.t() | nil,
               input :: map(),
               guest_fn :: :call | :spawn,
-              child_key()
+              child_key(),
+              connection()
             ) :: {:ok, child()} | {:error, refusal() | guest_error()}
 
   @doc """

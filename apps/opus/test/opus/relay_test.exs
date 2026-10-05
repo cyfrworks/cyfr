@@ -279,7 +279,7 @@ defmodule Opus.RelayTest do
       end)
 
       assert {:ok, admitted} =
-               HostClient.admit_child(attempt.client, @ref, nil, %{"fixture" => true}, :call)
+               HostClient.admit_child(attempt.client, @ref, nil, %{"fixture" => true}, :call, nil)
 
       assert {:ok, %{}} = HostClient.attach(admitted.client, admitted.token)
 

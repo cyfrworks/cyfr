@@ -317,12 +317,17 @@ defmodule Crucible.Provider do
               Arg.new("profile", :string,
                 description:
                   "The owner profile ID or label; omitted selects the default owner profile"
+              ),
+              Arg.new("connection", :string,
+                description:
+                  "The account a formula's child call asks its edge for, by the name it was granted under; omitted uses the edge's default account. A run started outside a chain uses its profile's default accounts and is refused when it names one"
               )
             ],
             host: :intercepted,
             kind: :execute,
             planes: [:external],
-            permission: :execute
+            permission: :execute,
+            resource: {"connection", :vault_entry}
           ),
           Operation.new(
             "execution",
@@ -554,16 +559,27 @@ defmodule Crucible.Provider do
   # under the turn that claims its root; it is never rooted from here,
   # whatever the caller's grants, so the harness and the console start a
   # turn one way.
+  #
+  # A run started here roots at its profile, whose edges it uses with their
+  # default accounts: a `connection` it names would be an account it does
+  # not call, so it is refused rather than ignored.
   def handle("execution", %Context{} = ctx, %{"action" => action} = args)
       when action in ["run", "run_stream"] do
     reference = args["reference"] || ""
 
-    if Prima.AgentRef.agent_ref?(reference) do
-      {:error,
-       {:invalid_argument,
-        "#{reference} is an agent: it is addressed in a thread (thread.send), never run"}}
-    else
-      start_root(action, ctx, args)
+    cond do
+      Map.get(args, "connection") != nil ->
+        {:error,
+         {:invalid_argument,
+          "execution.#{action} cannot name a connection here: a run started outside a chain uses its profile's default accounts"}}
+
+      Prima.AgentRef.agent_ref?(reference) ->
+        {:error,
+         {:invalid_argument,
+          "#{reference} is an agent: it is addressed in a thread (thread.send), never run"}}
+
+      true ->
+        start_root(action, ctx, args)
     end
   end
 

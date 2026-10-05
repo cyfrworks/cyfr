@@ -17,7 +17,9 @@ defmodule Opus.FormulaHandlerTest do
   A formula's tasks run for real: the `nested-probe` formula, in a runner
   of its own, spawns children that run in its runner, awaits them, polls
   them, cancels them or leaves them to end with it, and answers what each
-  host function answered it. What only a runner's VM can see of a
+  host function answered it; and a formula whose calls name accounts its
+  dependency's edge binds has each child's request reach a loopback
+  upstream with that account's credential. What only a runner's VM can see of a
   formula's host functions (their telemetry, their tasks' processes) is
   `Opus.FormulaHandlerRunnerTest`'s, in Opus's own suite.
   """
@@ -43,6 +45,37 @@ defmodule Opus.FormulaHandlerTest do
   @fh_node "formula:local.fh-root"
   @act_fh Prima.Digest.sha256("act-fh")
   @probe_node "formula:local.nested-probe"
+
+  # The hostile probe that sends its input as its one request, naming its
+  # need `api_key` as the request's connection (`Opus.AttachedFetchTest`).
+  @attached_probe Path.expand(
+                    "../../../../opus/test/support/test_wasm/hostile/attached_header_probe.wasm",
+                    __DIR__
+                  )
+  @account_secrets %{
+    "default" => "sk-account-default-5e1c",
+    "Work" => "sk-account-work-8a3f",
+    "Home" => "sk-account-home-2d7b"
+  }
+
+  defmodule Upstream do
+    @moduledoc """
+    A loopback upstream: every request it receives is told to the test,
+    with its path and headers, and answered.
+    """
+    @behaviour Plug
+
+    import Plug.Conn
+
+    @impl true
+    def init(opts), do: opts
+
+    @impl true
+    def call(conn, %{parent: parent}) do
+      send(parent, {:upstream, %{path: conn.request_path, headers: conn.req_headers}})
+      send_resp(conn, 200, "hello from upstream")
+    end
+  end
 
   setup tags do
     test_path = Path.join(System.tmp_dir!(), "formula_handler_test_#{:rand.uniform(100_000)}")
@@ -417,6 +450,99 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   # ============================================================================
+  # A child naming an account
+  # ============================================================================
+
+  describe "a child naming an account" do
+    test "a call, a spawn and a stream naming an account their edge does not bind are answered " <>
+           "connection_not_granted, and no default stands in for it",
+         %{ctx: ctx, ref: ref} do
+      not_bound = Prima.Refusal.message(:connection_not_granted)
+
+      # The edge to the target binds no account at all, and the formula's
+      # dynamic dispatch to a target no edge names has none to pick.
+      for {auth, target} <- [
+            {authority(edges: %{@test_node => %{}}), ref},
+            {authority(), "reagent:local.elsewhere:0.1.0"}
+          ] do
+        host = host!(ctx, auth)
+        {imports, tracker} = imports(host, auth)
+        spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
+
+        named = fn action ->
+          mcp_request("execution", action, %{
+            "reference" => target,
+            "input" => %{"a" => 1},
+            "connection" => "Work"
+          })
+        end
+
+        for answer <- [
+              execute(named.("run"), host, auth),
+              spawn_fn.(named.("run")),
+              execute(named.("run_stream"), host, auth)
+            ] do
+          assert %{"error" => %{"type" => "connection_not_granted", "message" => ^not_bound}} =
+                   Jason.decode!(answer)
+        end
+
+        assert children(host.execution_id) == []
+        FormulaHandler.cleanup_registry(tracker)
+      end
+    end
+
+    test "a connection that is no account's name is refused as the request's error", %{
+      ctx: ctx,
+      ref: ref
+    } do
+      auth = authority(edges: %{@test_node => %{}})
+      host = host!(ctx, auth)
+
+      for connection <- ["", "work|home", "line\nbreak"] do
+        json =
+          mcp_request("execution", "run", %{
+            "reference" => ref,
+            "input" => %{},
+            "connection" => connection
+          })
+
+        assert %{"error" => %{"type" => "invalid_request", "message" => message}} =
+                 Jason.decode!(execute(json, host, auth))
+
+        assert message =~ "connection"
+      end
+
+      assert children(host.execution_id) == []
+    end
+  end
+
+  describe "execution.run from outside a chain" do
+    test "a run naming a connection is refused before anything runs, though the action " <>
+           "declares the argument",
+         %{ctx: ctx, ref: ref} do
+      # The argument is declared as the account a call names, an entry for
+      # a standing approval's constraint.
+      assert {:ok, %{resource: {"connection", :vault_entry}}} =
+               Grimoire.Catalog.action_declaration("execution.run")
+
+      before = Arca.Repo.aggregate(Arca.Schemas.Execution, :count)
+      named = %{"reference" => ref, "input" => %{"a" => 1}, "connection" => "Work"}
+
+      assert {:error, {:invalid_argument, message}} =
+               Grimoire.call_external("execution", ctx, Map.put(named, "action", "run"))
+
+      assert message =~ "outside a chain"
+
+      # A stream declares no connection, and is refused naming it.
+      assert {:error, %Prima.Refusal{class: :invalid_argument, message: message}} =
+               Grimoire.call_external("execution", ctx, Map.put(named, "action", "run_stream"))
+
+      assert message =~ "connection"
+      assert Arca.Repo.aggregate(Arca.Schemas.Execution, :count) == before
+    end
+  end
+
+  # ============================================================================
   # execute/3 - In-chain plane containment
   # ============================================================================
 
@@ -695,6 +821,197 @@ defmodule Opus.FormulaHandlerTest do
 
       wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
     end
+
+    @tag timeout: 180_000
+    test "a real formula runs two named-account children with distinct upstream credentials" do
+      {person, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
+      port = upstream!()
+      probe = publish_attached_probe!(person)
+      app = publish_account_app!(person, probe)
+
+      entries =
+        Map.new(@account_secrets, fn {name, secret} -> {name, account!(person, port, secret)} end)
+
+      # The accounts are granted through the consent walk: the edge's
+      # default and two named accounts beside it, each its own selection.
+      selections =
+        for {name, entry} <- entries do
+          selection = %{dep: probe, entry_id: entry.id}
+          if name == "default", do: selection, else: Map.put(selection, :name, name)
+        end
+
+      grant_accounts!(person, app, selections)
+
+      call = fn connection ->
+        args = %{
+          "reference" => probe <> ":1.0.0",
+          "input" => %{
+            "connection" => "api_key",
+            "method" => "GET",
+            "url" => "http://127.0.0.1:#{port}/hello",
+            "headers" => %{"accept" => "text/plain"}
+          }
+        }
+
+        args = if connection, do: Map.put(args, "connection", connection), else: args
+        %{"call" => %{"tool" => "execution", "action" => "run", "args" => args}}
+      end
+
+      input = %{
+        "op" => "steps",
+        "steps" => [call.("Work"), call.("Home"), call.(nil), call.("Elsewhere")]
+      }
+
+      assert {:ok, %{status: :completed, output: output}} =
+               Crucible.run_root(person, :default, app <> ":1.0.0", input)
+
+      assert %{"op" => "steps", "results" => [work, home, default, elsewhere]} = decoded(output)
+
+      for raw <- [work, home, default] do
+        assert %{"output" => %{"status" => 200, "body" => "hello from upstream"}} =
+                 Jason.decode!(raw)
+      end
+
+      # An account the edge does not bind is a grant to make, and no default
+      # stands in for it: no fourth request reaches the upstream.
+      assert %{"error" => %{"type" => "connection_not_granted", "message" => message}} =
+               Jason.decode!(elsewhere)
+
+      assert message == Prima.Refusal.message(:connection_not_granted)
+
+      # Each child's one request reached the upstream with its own account's
+      # key, attached by CYFR, in the order the formula called.
+      assert for(_ <- 1..3, do: upstream_key!()) ==
+               Enum.map(["Work", "Home", "default"], &Map.fetch!(@account_secrets, &1))
+
+      refute_received {:upstream, _request}
+    end
+  end
+
+  # The loopback upstream's port, for this test.
+  defp upstream! do
+    upstream =
+      start_supervised!(
+        {Bandit,
+         plug: {Upstream, %{parent: self()}},
+         scheme: :http,
+         ip: {127, 0, 0, 1},
+         port: 0,
+         startup_log: false}
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(upstream)
+    port
+  end
+
+  # The `x-api-key` the upstream's next request carried.
+  defp upstream_key! do
+    receive do
+      {:upstream, %{path: "/hello", headers: headers}} ->
+        [key] = for {"x-api-key", value} <- headers, do: value
+        key
+    after
+      10_000 -> flunk("the upstream received nothing")
+    end
+  end
+
+  # The attached probe, published as a component of the person's own whose
+  # need `api_key` is attached to its request as an `x-api-key` header.
+  defp publish_attached_probe!(ctx) do
+    name = "account-probe-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "catalyst",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:upstream.test",
+          "reason" => "to call the upstream with your key",
+          "fields" => ["KEY"],
+          "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+        }
+      },
+      "caps" => %{
+        "egress" => %{
+          "domains" => ["127.0.0.1"],
+          "methods" => ["GET"],
+          "schemes" => ["http"],
+          "private_ips" => ["127.0.0.1"]
+        }
+      }
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@attached_probe), %{
+        name: name,
+        version: "1.0.0",
+        type: "catalyst",
+        manifest: Jason.encode!(manifest)
+      })
+
+    "catalyst:local." <> name
+  end
+
+  # An app of the person's own whose formula, the nested probe's bytes,
+  # calls `probe` as its one dependency.
+  defp publish_account_app!(ctx, probe) do
+    name = "account-app-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "formula",
+      "caps" => %{"tools" => ["execution.run"]},
+      "dependencies" => %{"static" => [%{"ref" => probe}]}
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(Probe.wasm_path()), %{
+        name: name,
+        version: "1.0.0",
+        type: "formula",
+        manifest: Jason.encode!(manifest)
+      })
+
+    "formula:local." <> name
+  end
+
+  # An attach-only entry of the probe's provider holding `secret`, bound
+  # for the upstream.
+  defp account!(ctx, port, secret) do
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "account-#{System.unique_integer([:positive])}",
+        kind: "api_key",
+        provider_hint: "upstream.test",
+        fields: %{"KEY" => secret},
+        destination: %{
+          "hosts" => ["127.0.0.1"],
+          "scheme" => "http",
+          "port" => port,
+          "methods" => ["GET"]
+        }
+      })
+
+    entry
+  end
+
+  # `ref`'s owner consent with `selections` on its dependency's edge,
+  # through the consent walk.
+  defp grant_accounts!(ctx, ref, selections) do
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    decisions = %{ref: ref, selections: selections}
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, %{profile_id: _profile_id}} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
   end
 
   # ============================================================================

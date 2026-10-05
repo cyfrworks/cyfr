@@ -1283,6 +1283,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `invalid_json` | Request not valid JSON |
 | `invalid_request` | Missing required fields (`tool`, `action`, `args`) |
 | `setup_required` | A need with no live vault entry bound — includes `remediation` field |
+| `connection_not_granted` | The call named an account (`connection`) that the formula's edge to the dependency does not bind; the default is never used in its place. Granting that account on the edge is the fix |
 | `dispatch_error` | The dispatched call itself failed (bad reference, refused by the host, sub-component error) |
 | `spawn_failed` | An async task could not be started |
 | `task_failed` | A spawned task ended in failure (including a sub-component panic) |

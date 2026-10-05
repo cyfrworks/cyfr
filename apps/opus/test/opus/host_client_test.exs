@@ -68,7 +68,7 @@ defmodule Opus.HostClientTest do
     assert :ok = HostClient.record_denial(client, "invalid_json", "Invalid JSON request")
 
     assert {:error, {:guest_error, "dispatch_error", _}} =
-             HostClient.admit_child(client, "reagent:local.missing:0.1.0", nil, %{}, :call)
+             HostClient.admit_child(client, "reagent:local.missing:0.1.0", nil, %{}, :call, nil)
 
     assert {:error, {:guest_error, "dispatch_error", _}} =
              HostClient.tool_call(client, "tools", %{"action" => "list"}, :call)
@@ -131,7 +131,14 @@ defmodule Opus.HostClientTest do
     ])
 
     assert {:error, {:guest_error, "dispatch_error", "no"}} =
-             HostClient.admit_child(client, "reagent:local.x:0.1.0", "need", %{"a" => 1}, :spawn)
+             HostClient.admit_child(
+               client,
+               "reagent:local.x:0.1.0",
+               "need",
+               %{"a" => 1},
+               :spawn,
+               nil
+             )
 
     assert [first, second] = ScriptedHost.requests(host, "admit_child")
     assert first.body == second.body
@@ -140,9 +147,43 @@ defmodule Opus.HostClientTest do
 
     # A new admission mints a new key.
     ScriptedHost.script(host, "admit_child", {:error, {:guest_error, "dispatch_error", "no"}})
-    HostClient.admit_child(client, "reagent:local.x:0.1.0", "need", %{"a" => 1}, :spawn)
+    HostClient.admit_child(client, "reagent:local.x:0.1.0", "need", %{"a" => 1}, :spawn, nil)
     [_, _, third] = ScriptedHost.requests(host, "admit_child")
     assert third.args["child_key"] != first.args["child_key"]
+  end
+
+  test "a child's connection crosses as the vectors write it, and a retry asks for the same account",
+       %{host: host, client: client} do
+    cases = Map.new(@host_api["connection_cases"], &{&1["name"], &1})
+
+    for name <- ~w(omitted named) do
+      %{"v" => 1, "op" => "admit_child", "args" => args} = Jason.decode!(cases[name]["body"])
+      ScriptedHost.script(host, "admit_child", {:answer, cases["named"]["answer"]})
+
+      assert {:error, {:guest_error, "connection_not_granted", message}} =
+               HostClient.admit_child(
+                 client,
+                 args["reference"],
+                 args["need"],
+                 args["input"],
+                 String.to_existing_atom(args["guest_fn"]),
+                 args["connection"]
+               )
+
+      assert message == Prima.Refusal.message(:connection_not_granted)
+      [sent] = ScriptedHost.requests(host, "admit_child") |> Enum.take(-1)
+      assert Map.delete(sent.args, "child_key") == Map.delete(args, "child_key"), name
+    end
+
+    # A lost answer asks again under the same key for the same account.
+    ScriptedHost.script(host, "admit_child", [:drop, {:answer, cases["reused"]["answer"]}])
+
+    assert {:error, {:guest_error, "invalid_request", _message}} =
+             HostClient.admit_child(client, "reagent:local.x:0.1.0", nil, %{}, :call, "Work")
+
+    [first, second] = ScriptedHost.requests(host, "admit_child") |> Enum.take(-2)
+    assert first.body == second.body
+    assert first.args["connection"] == "Work"
   end
 
   test "a lost answer to a call that is never retried ends uncertain, asked once", %{
@@ -384,7 +425,7 @@ defmodule Opus.HostClientTest do
     end)
 
     assert {:ok, admitted} =
-             HostClient.admit_child(client, child.component_ref, nil, %{"child" => 1}, :call)
+             HostClient.admit_child(client, child.component_ref, nil, %{"child" => 1}, :call, nil)
 
     assert admitted.assignment.execution_id == child.execution_id
     assert admitted.input == %{"child" => 1}
@@ -412,7 +453,8 @@ defmodule Opus.HostClientTest do
        }}
     end)
 
-    assert {:error, :lost} = HostClient.admit_child(client, child.component_ref, nil, %{}, :call)
+    assert {:error, :lost} =
+             HostClient.admit_child(client, child.component_ref, nil, %{}, :call, nil)
 
     assert [%{args: %{"execution_id" => released}}] = ScriptedHost.requests(host, "release_child")
     assert released == child.execution_id

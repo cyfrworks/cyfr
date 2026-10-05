@@ -1197,6 +1197,31 @@ def check_host_api(path, primitives):
     reproduce(first, "host_api retry first", "admit_child")
     reproduce(second, "host_api retry second", "admit_child")
     assert first["body"] == second["body"] and first["fields"]["nonce"] != second["fields"]["nonce"], "host_api retry: one body, fresh nonces"
+
+    # A child's connection crosses as an optional member of its args: absent
+    # for the edge's default, else the account's name. A key names one child
+    # and the connection it was admitted with, so a repeat naming another is
+    # refused invalid_request.
+    cases = {case["name"]: case for case in v["connection_cases"]}
+    assert [case["name"] for case in v["connection_cases"]] == ["omitted", "named", "reused"], "host_api connection: the cases, in order"
+    args = {}
+    for name, case in cases.items():
+        what = f"host_api connection {name}"
+        assert case["callback"] == "admit_child", f"{what}: an admit_child call"
+        args[name] = reproduce(case, what, "admit_child")
+        connection = args[name].get("connection")
+        assert connection is None or (isinstance(connection, str) and connection != ""), f"{what}: absent or an account's name"
+        assert re.fullmatch(r"[A-Za-z0-9_-]{1,128}", args[name]["child_key"]), f"{what}: a child key"
+    assert "connection" not in args["omitted"], "host_api connection omitted: names none"
+    assert read_answer(cases["omitted"]["answer"])[0] == "ok", "host_api connection omitted: admitted"
+    assert args["named"]["connection"] == args["reused"]["connection"] == "Work", "host_api connection: the account"
+    assert args["named"]["child_key"] != args["omitted"]["child_key"], "host_api connection named: a key of its own"
+    assert {k: x for k, x in args["reused"].items() if k != "connection"} == args["omitted"], "host_api connection reused: omitted's call naming an account"
+    named = read_answer(cases["named"]["answer"])
+    assert named[:2] == ("error", "guest_error") and named[2]["type"] == "connection_not_granted", "host_api connection named: refused connection_not_granted"
+    reused = read_answer(cases["reused"]["answer"])
+    assert reused[:2] == ("error", "guest_error") and reused[2]["type"] == "invalid_request", "host_api connection reused: invalid_request"
+    assert v["retries"]["admit_child"] == "keyed", "host_api connection: admit_child is keyed"
     return True
 
 

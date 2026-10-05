@@ -151,7 +151,11 @@ defmodule Crucible.Admission do
   authority without executing.
 
   Required option: `:ctx`. `:guest_fn` (`:call`, the default, or `:spawn`)
-  and `:declared_needs` are host-threaded by the formula closure. A
+  and `:declared_needs` are host-threaded by the formula closure.
+  `:connection` is the account the call asks its edge for: the child
+  holds that account's binding, or the edge's default for nil (the
+  default), and an account the edge does not bind is denied
+  `:connection_not_granted` (`Prima.Authority.Transition`). A
   spawn-shaped step charges the root's invoke budget; the caller releases
   it (`Sanctum.Authority.release_invoke/1`). A denial charges nothing.
   """
@@ -177,7 +181,8 @@ defmodule Crucible.Admission do
            # `inspect_component/2` answers string keys; a nil digest drops
            # a bound child to zero authority.
            activation_digest: component && component["release_digest"],
-           declared_needs: Keyword.get(opts, :declared_needs, [])
+           declared_needs: Keyword.get(opts, :declared_needs, []),
+           connection: Keyword.get(opts, :connection)
          }}
 
       decision = %{component: component, reference: reference, need: need}

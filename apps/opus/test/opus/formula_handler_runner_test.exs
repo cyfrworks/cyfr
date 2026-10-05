@@ -400,6 +400,95 @@ defmodule Opus.FormulaHandlerRunnerTest do
     end
   end
 
+  describe "a child naming an account" do
+    # CYFR's answer to an account the child's edge lacks, as the host API
+    # vectors write it.
+    @not_granted Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+                 |> File.read!()
+                 |> Jason.decode!()
+                 |> Map.fetch!("connection_cases")
+                 |> Enum.find(&(&1["name"] == "named"))
+                 |> Map.fetch!("answer")
+    @denied Prima.Refusal.message(:connection_not_granted)
+
+    test "a call, a spawn and a stream each ask CYFR for the account they name, and for none " <>
+           "when they name none",
+         %{host: host, formula: formula} do
+      ScriptedHost.script(host, "admit_child", {:answer, @not_granted})
+      {imports, tracker} = imports(formula)
+
+      request = fn action, args ->
+        Jason.encode!(%{
+          "tool" => "execution",
+          "action" => action,
+          "args" => Map.merge(%{"reference" => @child_ref, "input" => %{}}, args)
+        })
+      end
+
+      execute = fn json ->
+        FormulaHandler.execute(json, formula.client,
+          limits: Prima.Limits.defaults(:formula),
+          intercepted: ["execution.run", "execution.run_stream"]
+        )
+      end
+
+      answers = [
+        execute.(request.("run", %{"connection" => "Work"})),
+        fun(imports, "spawn").(request.("run", %{"connection" => "Home"})),
+        execute.(request.("run_stream", %{"connection" => "Archive"})),
+        execute.(request.("run", %{}))
+      ]
+
+      # CYFR's refusal is the guest's answer, as it gave it: a grant to
+      # make, never a denial.
+      for answer <- answers do
+        assert %{"error" => %{"type" => "connection_not_granted", "message" => @denied}} =
+                 Jason.decode!(answer)
+      end
+
+      sent = ScriptedHost.requests(host, "admit_child")
+
+      assert Enum.map(sent, &{&1.args["guest_fn"], Map.fetch(&1.args, "connection")}) == [
+               {"call", {:ok, "Work"}},
+               {"spawn", {:ok, "Home"}},
+               {"spawn", {:ok, "Archive"}},
+               {"call", :error}
+             ]
+
+      FormulaHandler.cleanup_registry(tracker)
+    end
+
+    test "a connection that is not text is refused before CYFR is asked", %{
+      host: host,
+      formula: formula
+    } do
+      {imports, tracker} = imports(formula)
+
+      json =
+        Jason.encode!(%{
+          "tool" => "execution",
+          "action" => "run",
+          "args" => %{"reference" => @child_ref, "input" => %{}, "connection" => 7}
+        })
+
+      for answer <- [
+            FormulaHandler.execute(json, formula.client,
+              limits: Prima.Limits.defaults(:formula),
+              intercepted: ["execution.run"]
+            ),
+            fun(imports, "spawn").(json)
+          ] do
+        assert %{"error" => %{"type" => "invalid_request", "message" => message}} =
+                 Jason.decode!(answer)
+
+        assert message =~ "connection"
+      end
+
+      assert ScriptedHost.requests(host, "admit_child") == []
+      FormulaHandler.cleanup_registry(tracker)
+    end
+  end
+
   describe "a formula's tasks in its runner" do
     test "a spawned task's child runs in the runner and its result is awaited", %{
       host: host,

@@ -13,7 +13,7 @@ defmodule Opus.Attempt do
   attempt's key. A formula's child
   runs in an attempt process of its own in the same subtree
   (`Opus.Subtree.start_child/2`), started from the child CYFR admitted and
-  claimed for the formula's runner (`Opus.HostClient.admit_child/5`), with
+  claimed for the formula's runner (`Opus.HostClient.admit_child/6`), with
   the vault fields that admission unsealed and the process waiting for its
   answer, if any. The process reaches the attempt only through its client.
   In order it:

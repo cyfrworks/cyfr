@@ -107,6 +107,11 @@ defmodule Prima.WorkerProtocolTest do
     refute HostAPI.valid_child_key?(:atom)
   end
 
+  test "admit_child takes the account its child asks its edge for, after the child's key, at one arity" do
+    arities = for {:admit_child, arity} <- HostAPI.behaviour_info(:callbacks), do: arity
+    assert arities == [7]
+  end
+
   test "every worker callback has a retry class and a timeout" do
     assert Enum.sort(WorkerAPI.callbacks()) == behaviour_callbacks(WorkerAPI)
     assert WorkerAPI.retry(:start) == :never

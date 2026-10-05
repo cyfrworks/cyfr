@@ -120,7 +120,7 @@ defmodule Crucible.Host do
   | `storage` | `action`, `path`, optional `content` | the answer's members |
   | `fetch_artifact` | `digest` | the artifact's bytes, base64 |
   | `record_denial` | `type`, `message` | `true` |
-  | `admit_child` | `reference`, optional `need`, `input` (object), `guest_fn` (`call` or `spawn`), `child_key` | `assignment`, `attempt_keys` (sealed), `input` (JSON text), `secrets` |
+  | `admit_child` | `reference`, optional `need`, `input` (object), `guest_fn` (`call` or `spawn`), `child_key`, optional `connection` (an account's name) | `assignment`, `attempt_keys` (sealed), `input` (JSON text), `secrets` |
   | `tool_call` | `name`, `args` (object), `guest_fn` (`call` or `spawn`) | the tool's result |
   | `egress_pin` | `url`, `purpose` (`fetch`, `stream` or `redirect`), `from` for a redirect | the pin (`Prima.PinnedTarget`) |
   | `attached_fetch` | `Prima.AttachedRequest`'s members | sealed frames |
@@ -129,7 +129,9 @@ defmodule Crucible.Host do
   `fetch_artifact` and `record_denial` are `Crucible.Host.Storage`'s;
   `admit_child`, `tool_call` and `release_child` are
   `Crucible.Host.Children`'s. `admit_child` is keyed: a repeat with
-  the same `child_key` answers the child already admitted under it.
+  the same `child_key` answers the child already admitted under it, and
+  one naming another `connection` than that child was admitted with is
+  refused `invalid_request`.
 
   ## A worker service's report
 
@@ -331,7 +333,8 @@ defmodule Crucible.Host do
       child.need,
       child.input,
       child.guest_fn,
-      child.child_key
+      child.child_key,
+      child.connection
     )
   end
 
@@ -400,7 +403,7 @@ defmodule Crucible.Host do
     do: Attempt.call(caller.execution_id, caller, {:record_denial, denial})
 
   @impl HostAPI
-  def admit_child(caller, reference, need, input, guest_fn, child_key) do
+  def admit_child(caller, reference, need, input, guest_fn, child_key, connection) do
     Children.call(
       caller,
       {:admit_child,
@@ -409,7 +412,8 @@ defmodule Crucible.Host do
          need: need,
          input: input,
          guest_fn: guest_fn,
-         child_key: child_key
+         child_key: child_key,
+         connection: connection
        }}
     )
   end
