@@ -200,10 +200,10 @@ defmodule Sanctum.Unauthorized do
         "revoke profile #{profile_id} and grant it again."
 
   def message({:lender_unavailable, _target}, _),
-    do: "A profile this app borrows a key from cannot be read right now — try again."
+    do: "A profile that lends a key here cannot be read right now — try again."
 
   def message({:lender_corrupt, _target, profile_id}, _),
     do:
-      "A profile this app borrows a key from is damaged and cannot lend its key — " <>
+      "A profile that lends a key here is damaged and cannot lend its key — " <>
         "revoke profile #{profile_id} and grant it again."
 end

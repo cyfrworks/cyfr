@@ -68,10 +68,10 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
                "revoke profile prof_app and grant it again."
 
     assert Unauthorized.message({:lender_unavailable, "reagent:local.dep"}) ==
-             "A profile this app borrows a key from cannot be read right now — try again."
+             "A profile that lends a key here cannot be read right now — try again."
 
     assert Unauthorized.message({:lender_corrupt, "reagent:local.dep", "prof_lender"}) ==
-             "A profile this app borrows a key from is damaged and cannot lend its key — " <>
+             "A profile that lends a key here is damaged and cannot lend its key — " <>
                "revoke profile prof_lender and grant it again."
   end
 

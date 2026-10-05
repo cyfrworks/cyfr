@@ -621,6 +621,86 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, ~s(#system-layer-dialog [data-test="grant-needs"]))
     end
 
+    # The model's consent exists but is damaged, or the store cannot answer
+    # it: connecting a key cannot repair it, so none is offered, and the
+    # page says which.
+    @tag :capture_log
+    test "a model whose consent is damaged or unreadable says so, and offers no Connect",
+         %{conn: conn, ctx: ctx} do
+      ref = "catalyst:local.brokenmodel"
+      profile = "prof_brokenmodel"
+      :ok = soul_names_catalyst!(ctx, ref)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "brokenmodel",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A model catalyst",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "api_key" => %{
+                  "type" => "api_key:brokenmodel.test",
+                  "reason" => "to call the model with your key",
+                  "fields" => ["BROKENMODEL_API_KEY"],
+                  "required" => true
+                }
+              }
+            })
+        })
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          ctx,
+          %{id: profile, source_ref: ref, kind: :owner, label: "default", status: :active},
+          %{
+            id: "cons_brokenmodel",
+            revision: 1,
+            scope: :versionless,
+            shape_digest: "sha256:shape",
+            commit_digest: "sha256:commit",
+            resolved_policy: "{}",
+            activation: %{ref => "sha256:act"},
+            vault_refs: []
+          }
+        )
+
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile, scope: "sideways")
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      settled_render(view)
+
+      assert has_element?(
+               view,
+               "span",
+               "A consent this model runs under is damaged and cannot be used — " <>
+                 "revoke the damaged profile and grant it again."
+             )
+
+      refute render(view) =~ "the model has no key yet"
+      refute has_element?(view, "button[phx-click=open_consent]", "Connect a model")
+
+      # The store stops answering: the panel reads the model again.
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile, scope: "versionless")
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+      Phoenix.LiveView.send_update(view.pid, PrismWeb.AquaLive.AgentsComponent,
+        id: "aqua-agents",
+        load: true
+      )
+
+      assert has_element?(
+               view,
+               "span",
+               "A consent this model runs under cannot be read right now — try again."
+             )
+
+      refute has_element?(view, "button[phx-click=open_consent]", "Connect a model")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "connecting a model binds the key in the system layer, and the page says it is connected",
          %{conn: conn, ctx: ctx} do
       ref = "catalyst:local.keyed"

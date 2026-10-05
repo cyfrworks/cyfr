@@ -6,10 +6,19 @@ defmodule PrismWeb.ComponentsLiveTest do
   Provenance in the Components page: a bundled copy wears its badge,
   offers Reset and no Remove (it isn't the athanor's to delete); Reset
   restores the shipped bytes over an edit; a newer shipped version is
-  offered as Update and pulled in beside the copy.
+  offered as Update and pulled in beside the copy. A consent whose head
+  or profile row is damaged, or that the store cannot answer, is said as
+  such and never offered a grant over a consent that exists.
   """
 
   use PrismWeb.ConnCase, async: false
+
+  require Ecto.Query
+
+  alias Sanctum.Test.ConsentFixtures
+
+  @ref "reagent:local.shelf-tool"
+  @profile "prof_shelf_tool"
 
   @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
                 <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
@@ -241,5 +250,143 @@ defmodule PrismWeb.ComponentsLiveTest do
 
     assert {:ok, %{version: "1.1.0"}} =
              Compendium.Registry.get_latest(ctx, "shelf-tool", "local", "reagent")
+  end
+
+  describe "the consent section over a head it cannot read" do
+    # A damaged head or profile row, or one the store cannot answer, is
+    # said in the section's own sentence and offered no grant, which could
+    # not repair it; a head never granted is still a grant to make.
+
+    test "a damaged head is said in its own sentence, and no grant is offered over it",
+         %{conn: conn, ctx: ctx} do
+      grant_head!(ctx)
+      :ok = ConsentFixtures.hand_edit_head!(ctx, @profile, scope: "sideways")
+
+      {view, _html} = expanded_html(conn)
+
+      assert has_element?(
+               view,
+               ~s([data-test="consent-unreadable"]),
+               "this profile's consent is damaged and cannot be used — " <>
+                 "revoke profile #{@profile} and grant it again"
+             )
+
+      refute render(view) =~ "Needs grant"
+      refute has_element?(view, "button[phx-click=open_consent]", "Grant access")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    @tag :capture_log
+    test "a head the store cannot answer is said in its own sentence, and no grant is offered",
+         %{conn: conn, ctx: ctx} do
+      grant_head!(ctx)
+      {view, _html} = mount_athanor(conn, "/components")
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+      render_click(view, "toggle_expand", %{"ref" => @ref})
+
+      assert has_element?(
+               view,
+               ~s([data-test="consent-unreadable"]),
+               "this profile's consent cannot be read right now — try again"
+             )
+
+      refute render(view) =~ "Needs grant"
+      refute has_element?(view, "button[phx-click=open_consent]", "Grant access")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a profile row that does not decode is said in its own sentence, and no grant is offered",
+         %{conn: conn, ctx: ctx} do
+      :ok =
+        ConsentFixtures.seed_profile!(ctx, %{
+          id: @profile,
+          source_ref: @ref,
+          kind: :owner,
+          label: "default",
+          status: :active
+        })
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(p in Arca.Schemas.Profile,
+            where: p.athanor_id == ^ctx.athanor_id and p.id == @profile
+          ),
+          set: [kind: "sideways"]
+        )
+
+      {view, _html} = expanded_html(conn)
+
+      assert has_element?(
+               view,
+               ~s([data-test="consent-unreadable"]),
+               "this profile is damaged and cannot be used — " <>
+                 "revoke profile #{@profile} and grant it again"
+             )
+
+      refute render(view) =~ "Needs grant"
+      refute has_element?(view, "button[phx-click=open_consent]", "Grant access")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    @tag :capture_log
+    test "a profile list the store cannot answer is said in its own sentence, and no grant is offered",
+         %{conn: conn, ctx: ctx} do
+      grant_head!(ctx)
+      {view, _html} = mount_athanor(conn, "/components")
+      Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+      render_click(view, "toggle_expand", %{"ref" => @ref})
+
+      assert has_element?(
+               view,
+               ~s([data-test="consent-unreadable"]),
+               "this component's consent cannot be read right now — try again"
+             )
+
+      refute render(view) =~ "Needs grant"
+      refute has_element?(view, "button[phx-click=open_consent]", "Grant access")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a head never granted is still a grant to make", %{conn: conn, ctx: ctx} do
+      :ok =
+        ConsentFixtures.seed_profile!(ctx, %{
+          id: @profile,
+          source_ref: @ref,
+          kind: :owner,
+          label: "default",
+          status: :active
+        })
+
+      {view, html} = expanded_html(conn)
+
+      assert html =~ "Needs grant"
+      assert has_element?(view, "button[phx-click=open_consent]", "Grant access")
+      refute has_element?(view, ~s([data-test="consent-unreadable"]))
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # The shelf tool's owner profile with a head, as a commit leaves it.
+  defp grant_head!(ctx) do
+    :ok =
+      ConsentFixtures.seed_head!(
+        ctx,
+        %{id: @profile, source_ref: @ref, kind: :owner, label: "default", status: :active},
+        %{
+          id: "cons_shelf_tool",
+          revision: 1,
+          scope: :versionless,
+          shape_digest: "sha256:shape",
+          commit_digest: "sha256:commit",
+          resolved_policy: "{}",
+          activation: %{@ref => "sha256:act"},
+          vault_refs: []
+        }
+      )
   end
 end

@@ -120,7 +120,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:members, member_labels(ctx))
       |> assign(:roster, roster)
       |> assign(:preparing?, preparing?)
-      |> assign(:model_ready, model_ready(ctx, roster))
+      |> assign(:model_ready, model_ready(ctx, if(connected?(socket), do: agents(ctx), else: [])))
       |> assign(:solo_human, Sanctum.Tenancy.Members.solo?(ctx.athanor_id))
       |> assign(:own?, Users.own_athanor?(ctx.user_id, ctx.athanor_id))
       |> assign(:links, [])
@@ -564,7 +564,7 @@ defmodule PrismWeb.ThreadPaneLive do
             socket
             |> assign(:preparing?, false)
             |> assign(:roster, roster)
-            |> assign(:model_ready, model_ready(ctx, roster))
+            |> assign(:model_ready, model_ready(ctx, agents(ctx)))
             |> load_models()
 
           # The send held for the fill goes now, once; a refusal holds it
@@ -1184,11 +1184,44 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # Whether this athanor's AQUA can answer at all: a soul, and a model
   # with a key behind it. A fresh furnace has neither, and the chat is
-  # where someone finds that out — not the drawer.
-  defp model_ready(ctx, roster) do
-    case Aqua.model_status(ctx, roster) do
+  # where someone finds that out — not the drawer. A model whose consent
+  # exists but is damaged, or could not be read, is said as such: no model
+  # is offered to connect over a consent that exists.
+  defp model_ready(ctx, agents) do
+    case Aqua.model_status(ctx, agents) do
       empty when map_size(empty) == 0 -> :no_model
-      statuses -> if Enum.any?(statuses, &match?({_, {:ready, _}}, &1)), do: :ready, else: :no_key
+      statuses -> unready_model(Map.values(statuses))
+    end
+  end
+
+  # The athanor's agents with their type and model, read through the
+  # `aqua` tool's list with detail, as the AQUA page's agents panel reads
+  # them: the roster names who can be addressed and carries neither, so a
+  # model's status read from it would always be none. An in-process
+  # answer is atom-keyed and a wire one string-keyed; each agent is read
+  # by string key. A list that cannot be read is no agents.
+  defp agents(ctx) do
+    case PrismWeb.Ops.call_tool(ctx, "aqua", %{"action" => "list", "detail" => true}) do
+      {:ok, %{} = listed} -> listed |> guides() |> Enum.map(&string_keyed/1)
+      _unread -> []
+    end
+  end
+
+  defp guides(%{"guides" => guides}) when is_list(guides), do: guides
+  defp guides(%{guides: guides}) when is_list(guides), do: guides
+  defp guides(_listed), do: []
+
+  defp string_keyed(%{} = agent),
+    do: Map.new(agent, fn {key, value} -> {to_string(key), value} end)
+
+  defp string_keyed(_agent), do: %{}
+
+  defp unready_model(statuses) do
+    cond do
+      Enum.any?(statuses, &match?({:ready, _}, &1)) -> :ready
+      Enum.any?(statuses, &match?({:consent_damaged, _}, &1)) -> :consent_damaged
+      Enum.any?(statuses, &match?({:consent_unavailable, _}, &1)) -> :consent_unavailable
+      true -> :no_key
     end
   end
 
@@ -1483,21 +1516,32 @@ defmodule PrismWeb.ThreadPaneLive do
             <span>{athanor_label(@athanor, @context)} is still being prepared.</span>
             <span class="text-gray-600">Its agents and components are being installed.</span>
           <% else %>
-            <%= if @model_ready in [:no_model, :no_key] do %>
-              <span>{athanor_label(@athanor, @context)} has no model yet.</span>
-              <%!-- From the panel a navigate would leave the room being read. --%>
-              <.link
-                :if={not @panel?}
-                navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
-                class="inline-flex min-h-6 items-center text-blue-400 hover:text-blue-300"
-              >
-                Connect a model
-              </.link>
-              <span :if={@panel?} class="text-gray-500">Connect one on your AQUA page.</span>
-            <% else %>
-              <span>
-                Ask {assistant_label(current_assistant(@assistant, @roster))} anything.
-              </span>
+            <%= cond do %>
+              <% @model_ready in [:no_model, :no_key] -> %>
+                <span>{athanor_label(@athanor, @context)} has no model yet.</span>
+                <%!-- From the panel a navigate would leave the room being read. --%>
+                <.link
+                  :if={not @panel?}
+                  navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
+                  class="inline-flex min-h-6 items-center text-blue-400 hover:text-blue-300"
+                >
+                  Connect a model
+                </.link>
+                <span :if={@panel?} class="text-gray-500">Connect one on your AQUA page.</span>
+              <% @model_ready == :consent_damaged -> %>
+                <%!-- A consent that exists but is damaged, or could not be read,
+                     is no model to connect: it is said as such. --%>
+                <span data-test="model-consent">
+                  A consent this model runs under is damaged and cannot be used — revoke the damaged profile and grant it again.
+                </span>
+              <% @model_ready == :consent_unavailable -> %>
+                <span data-test="model-consent">
+                  A consent this model runs under cannot be read right now — try again.
+                </span>
+              <% true -> %>
+                <span>
+                  Ask {assistant_label(current_assistant(@assistant, @roster))} anything.
+                </span>
             <% end %>
           <% end %>
         </div>

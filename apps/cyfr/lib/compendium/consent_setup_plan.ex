@@ -38,9 +38,15 @@ defmodule Compendium.ConsentSetupPlan do
 
   A store that cannot be read, or a profile row that cannot be decoded
   where the one asked about would be, is a section that is not ready
-  (`profile_status: :unavailable` or `:corrupt`) — never `nil`, which
+  (`profile_status: :unavailable` or `:corrupt`, with `head_state`
+  `"unavailable"` or `"damaged"` and its `reason`) — never `nil`, which
   would read "nothing granted" and let a component that needs nothing
   report ready on a store nobody could read.
+
+  A profile's section carries its head's `head_state`, as `profile.list`
+  names it: `"present"` when the head was read, and otherwise
+  `"missing"`, `"damaged"` or `"unavailable"`, each with the `reason`
+  sentence a person can act on.
   """
   @spec section(Context.t(), String.t()) :: map() | nil
   def section(%Context{} = ctx, source_ref) do
@@ -64,17 +70,34 @@ defmodule Compendium.ConsentSetupPlan do
     end
   end
 
+  # A section whose profile could not be read: its row does not decode, or
+  # the store could not answer the profile list. Neither is a grant to
+  # make, so each says what the person can do, as a head that cannot be
+  # given does.
   defp not_ready(profile_id, status) do
+    {state, reason} = unread_profile(status, profile_id)
+
     %{
       profile_id: profile_id,
       profile_kind: nil,
       profile_status: status,
+      head_state: state,
+      reason: reason,
       revision: nil,
       scope: nil,
       needs: [],
       ready: false
     }
   end
+
+  defp unread_profile(:corrupt, profile_id),
+    do:
+      {"damaged",
+       "this profile is damaged and cannot be used — " <>
+         "revoke profile #{profile_id} and grant it again"}
+
+  defp unread_profile(:unavailable, _profile_id),
+    do: {"unavailable", "this component's consent cannot be read right now — try again"}
 
   defp name_ref(ref) do
     case Prima.ComponentRef.to_name_ref(ref) do
@@ -102,17 +125,22 @@ defmodule Compendium.ConsentSetupPlan do
           profile_id: profile.id,
           profile_kind: profile.kind,
           profile_status: profile.status,
+          head_state: "present",
           revision: consent.revision,
           scope: consent.scope,
           needs: needs,
           ready: profile.status == :active and Enum.all?(needs, & &1.satisfied)
         }
 
-      _ ->
+      {:error, refused} ->
+        {state, reason} = unread_head(refused, profile.id)
+
         %{
           profile_id: profile.id,
           profile_kind: profile.kind,
           profile_status: profile.status,
+          head_state: state,
+          reason: reason,
           revision: nil,
           scope: nil,
           needs: [],
@@ -120,6 +148,23 @@ defmodule Compendium.ConsentSetupPlan do
         }
     end
   end
+
+  # A head that could not be given, as `profile.list` names its state, and
+  # what the person can do: a head never granted asks for a grant, a
+  # damaged one names the profile to revoke (approving it again cannot
+  # repair a head the walk cannot decode), and one the store could not
+  # answer asks to try again, never for a grant over a consent that exists.
+  defp unread_head(:not_found, _profile_id),
+    do: {"missing", "this profile has no grant yet — grant it to continue"}
+
+  defp unread_head(:corrupt, profile_id),
+    do:
+      {"damaged",
+       "this profile's consent is damaged and cannot be used — " <>
+         "revoke profile #{profile_id} and grant it again"}
+
+  defp unread_head(_unanswered, _profile_id),
+    do: {"unavailable", "this profile's consent cannot be read right now — try again"}
 
   # One row per binding the head consent carries, read by what it names.
   defp check_needs(ctx, consent) do

@@ -221,7 +221,13 @@ defmodule Aqua.Models do
   @doc """
   For each soul's catalyst: the installed release it resolves to and
   whether its consent is complete — `%{catalyst_ref => {:ready | :needs_key
-  | :missing, resolved_ref}}`, keyed by the catalyst ref the agent names.
+  | :consent_damaged | :consent_unavailable | :missing, resolved_ref}}`,
+  keyed by the catalyst ref the agent names. A consent the model runs
+  under that is damaged, or that the store could not answer, is
+  `:consent_damaged` or `:consent_unavailable`, never a key to connect
+  over a consent that exists: the model's own consent, as its setup plan
+  reads it, and, once that reads ready, the assistant's own load
+  (`Aqua.ConsentStatus.classify_refusal/1`).
 
   A model with no key is the one thing that keeps a fresh athanor's AQUA
   silent, so both the AQUA page and the chat's own empty state ask here.
@@ -258,23 +264,61 @@ defmodule Aqua.Models do
              "action" => "setup_plan",
              "reference" => resolved
            }) do
-      if (plan[:ready] || plan["ready"]) == true and lent_to_assistant?(ctx, ref),
-        do: {:ready, resolved},
-        else: {:needs_key, resolved}
+      if (plan[:ready] || plan["ready"]) == true,
+        do: assistant_status(ctx, ref, resolved),
+        else: unready(plan, resolved)
     else
       _ -> {:missing, ref}
     end
   end
 
-  defp lent_to_assistant?(ctx, catalyst_ref) do
+  # The assistant's own load, as a turn would make it, read through
+  # `Aqua.ConsentStatus.classify_refusal/1`: a load that refuses for
+  # damage (the assistant's head, a lender, a stored grant that fails its
+  # checks) or because the store could not answer is said as such, never
+  # as a key to connect; every other refusal, and an edge that binds no
+  # key, is a key to connect.
+  defp assistant_status(ctx, catalyst_ref, resolved) do
     soul = Prima.AgentRef.soul_ref()
 
-    with {:ok, authority} <- Crucible.authority_for(ctx, :default, soul),
-         {:ok, edge} <-
-           Prima.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
-      Prima.Authority.Blob.bound_vault?(edge.vault)
-    else
-      _ -> false
+    case Crucible.authority_for(ctx, :default, soul) do
+      {:ok, authority} ->
+        if lent?(authority, soul, catalyst_ref),
+          do: {:ready, resolved},
+          else: {:needs_key, resolved}
+
+      {:error, reason} ->
+        case Aqua.ConsentStatus.classify_refusal(reason) do
+          {:error, :corrupt} -> {:consent_damaged, resolved}
+          {:error, :unavailable} -> {:consent_unavailable, resolved}
+          _absent_stale_or_forbidden -> {:needs_key, resolved}
+        end
+    end
+  end
+
+  defp lent?(authority, soul, catalyst_ref) do
+    case Prima.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
+      {:ok, edge} -> Prima.Authority.Blob.bound_vault?(edge.vault)
+      _no_edge -> false
+    end
+  end
+
+  # A plan that is not ready because the model's own consent is damaged,
+  # or the store could not answer it, is no key to connect: connecting
+  # cannot repair a consent that exists. A head never granted, or no
+  # profile, is.
+  defp unready(plan, resolved) do
+    case head_state(plan) do
+      "damaged" -> {:consent_damaged, resolved}
+      "unavailable" -> {:consent_unavailable, resolved}
+      _missing_or_ungranted -> {:needs_key, resolved}
+    end
+  end
+
+  defp head_state(plan) do
+    case plan[:consent] || plan["consent"] do
+      %{} = consent -> consent[:head_state] || consent["head_state"]
+      _none -> nil
     end
   end
 end

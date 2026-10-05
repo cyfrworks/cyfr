@@ -25,6 +25,7 @@ defmodule Sanctum.Consent.RegistrationBinding do
   @type error ::
           {:invalid_target, term()}
           | :profile_not_for_target
+          | {:profile_corrupt, String.t()}
           | {:no_head_consent, String.t()}
           | {:head_corrupt, String.t()}
           | {:head_unavailable, String.t()}
@@ -35,11 +36,13 @@ defmodule Sanctum.Consent.RegistrationBinding do
   The three checks of the module doc, in order, for binding `target_ref`'s
   registration to `profile_id`.
 
-  The profile's head is read three ways, never one: a profile with no
-  head is `{:no_head_consent, profile_id}`, a head stored outside the
-  closed vocabulary is `{:head_corrupt, profile_id}`, and one the store
-  could not answer is `{:head_unavailable, profile_id}`; `message/1`
-  gives each its own sentence.
+  A profile of the target whose row is stored outside the closed
+  vocabulary is `{:profile_corrupt, profile_id}`, never a profile of
+  another component. The profile's head is read three ways, never one: a
+  profile with no head is `{:no_head_consent, profile_id}`, a head stored
+  outside the closed vocabulary is `{:head_corrupt, profile_id}`, and one
+  the store could not answer is `{:head_unavailable, profile_id}`.
+  `message/1` gives each its own sentence.
   """
   @spec authorize(Context.t(), String.t(), String.t()) :: :ok | {:error, error()}
   def authorize(%Context{} = ctx, target_ref, profile_id)
@@ -47,7 +50,7 @@ defmodule Sanctum.Consent.RegistrationBinding do
     actor = Context.actor(ctx)
 
     with {:ok, name_ref} <- name_level(target_ref),
-         {:ok, candidates} <- Arca.ConsentStorage.profiles(actor, name_ref),
+         {:ok, candidates} <- Arca.ConsentStorage.profile_entries(actor, name_ref),
          :ok <- check_profile_for_target(candidates, profile_id),
          {:ok, consent} <- head_consent(actor, profile_id),
          {:ok, _via} <-
@@ -67,6 +70,12 @@ defmodule Sanctum.Consent.RegistrationBinding do
 
   def message({:invalid_target, _reason}), do: "the target reference is not valid"
   def message(:profile_not_for_target), do: "the profile belongs to another component"
+
+  def message({:profile_corrupt, profile_id}),
+    do:
+      "the profile is damaged and cannot be used — " <>
+        "revoke profile #{profile_id} and grant it again"
+
   def message({:no_head_consent, _profile_id}), do: "the profile has no live consent"
 
   # Approving the profile again cannot repair a damaged head: the walk
@@ -89,11 +98,13 @@ defmodule Sanctum.Consent.RegistrationBinding do
     end
   end
 
+  # The target's own profiles, a damaged row kept: a profile of this
+  # target whose row does not decode is damaged, not another component's.
   defp check_profile_for_target(candidates, profile_id) do
-    if Enum.any?(candidates, &(&1.id == profile_id)) do
-      :ok
-    else
-      {:error, :profile_not_for_target}
+    case Enum.find(candidates, &(&1.id == profile_id)) do
+      %{status: :corrupt} -> {:error, {:profile_corrupt, profile_id}}
+      %{} -> :ok
+      nil -> {:error, :profile_not_for_target}
     end
   end
 

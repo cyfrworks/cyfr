@@ -160,6 +160,65 @@ defmodule Sanctum.ProviderVaultProfileTest do
     assert list.() == %{id: "prof_list_heads", head_state: "unavailable", head_revision: nil}
   end
 
+  # A profile row whose kind or status is outside the closed vocabulary is
+  # listed as damaged, never dropped, and its head is not read: nothing the
+  # row holds can be trusted. A source with no row at all lists none.
+  @tag :capture_log
+  test "profile.list lists a profile row that does not decode as damaged, its head unread",
+       %{ctx: ctx} do
+    ref = "reagent:local.list-damaged"
+
+    list = fn ->
+      {:ok, %{profiles: profiles}} =
+        Sanctum.Provider.handle("profile", ctx, %{"action" => "list", "ref" => ref})
+
+      profiles
+    end
+
+    assert list.() == []
+
+    for {id, label} <- [{"prof_list_damaged_a", "first"}, {"prof_list_damaged_b", "second"}] do
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          ctx,
+          %{id: id, source_ref: ref, kind: :owner, label: label, status: :active},
+          %{
+            id: "cons_" <> id,
+            revision: 1,
+            scope: :versionless,
+            shape_digest: "sha256:shape",
+            commit_digest: "sha256:commit",
+            resolved_policy: "{}",
+            activation: %{ref => "sha256:act"},
+            vault_refs: []
+          }
+        )
+    end
+
+    set_profile!(ctx, "prof_list_damaged_b", kind: "sideways")
+
+    damaged = %{
+      id: "prof_list_damaged_b",
+      status: :corrupt,
+      head_state: "damaged",
+      head_revision: nil
+    }
+
+    assert [
+             %{id: "prof_list_damaged_a", head_state: "present", head_revision: 1},
+             ^damaged
+           ] = Enum.sort_by(list.(), & &1.id)
+
+    # Its head is never read: the store not answering heads leaves the
+    # damaged row damaged, and only the decoded row's head unanswered.
+    Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+    assert [
+             %{id: "prof_list_damaged_a", head_state: "unavailable", head_revision: nil},
+             ^damaged
+           ] = Enum.sort_by(list.(), & &1.id)
+  end
+
   defp set_profile!(ctx, id, changes) do
     {1, _} =
       Arca.Repo.update_all(

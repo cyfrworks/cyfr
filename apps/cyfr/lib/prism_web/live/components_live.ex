@@ -945,6 +945,17 @@ defmodule PrismWeb.ComponentsLive do
   defp plan_field(nil, _key), do: nil
   defp plan_field(plan, key), do: plan[key]
 
+  # The consent section's own sentence when its head is damaged or the
+  # store could not answer it: a grant cannot help there (the walk refuses
+  # a head it cannot decode), so none is offered over a consent that
+  # exists. A head that is missing, or no profile, is a grant to make.
+  defp unreadable_consent(plan) do
+    case plan_field(plan, :consent) do
+      %{head_state: state, reason: reason} when state in ["damaged", "unavailable"] -> reason
+      _ -> nil
+    end
+  end
+
   # --- Display helpers ---
 
   defp type_label("catalyst"), do: "Catalysts"
@@ -1565,14 +1576,24 @@ defmodule PrismWeb.ComponentsLive do
                                   Ready
                                 </span>
                                 <span
-                                  :if={@expanded_plan && plan_field(@expanded_plan, :ready) != true}
+                                  :if={
+                                    @expanded_plan && plan_field(@expanded_plan, :ready) != true &&
+                                      !unreadable_consent(@expanded_plan)
+                                  }
                                   class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300"
                                 >
                                   Needs grant
                                 </span>
+                                <span
+                                  :if={unreadable_consent(@expanded_plan)}
+                                  data-test="consent-unreadable"
+                                  class="text-xs text-red-300"
+                                >
+                                  {unreadable_consent(@expanded_plan)}
+                                </span>
                               </div>
                               <.button
-                                :if={@expanded_plan}
+                                :if={@expanded_plan && !unreadable_consent(@expanded_plan)}
                                 variant="primary"
                                 class="text-xs px-3 py-1"
                                 phx-click="open_consent"

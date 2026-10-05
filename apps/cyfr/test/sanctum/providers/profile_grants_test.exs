@@ -563,15 +563,14 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
         assert %Prima.Refusal{
                  class: :unavailable,
-                 message:
-                   "A profile this app borrows a key from cannot be read right now — try again."
+                 message: "A profile that lends a key here cannot be read right now — try again."
                } = Grimoire.Error.classify(reason)
 
         Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
       end
 
       damaged =
-        "A profile this app borrows a key from is damaged and cannot lend its key — " <>
+        "A profile that lends a key here is damaged and cannot lend its key — " <>
           "revoke profile #{lender} and grant it again."
 
       :ok = ConsentFixtures.hand_edit_head!(ctx, lender, scope: "sideways")

@@ -301,7 +301,7 @@ defmodule Sanctum.Providers.Profile do
         )
       ],
       description:
-        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates: each need, and each need of a dependency, answers its candidates (own or instance entries of its kind and provider), the one it has suggested, whether a choice_required, and its source (own, instance, or provided by the app); preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; list answers each profile's head_state — present, missing, damaged, or unavailable when the store could not answer — beside head_revision, which is set only when the head is present; grants reads which grants reach a resource, and is refused when a profile a grant borrows a key from cannot be read or is damaged. Nothing is granted outside this walk.",
+        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates: each need, and each need of a dependency, answers its candidates (own or instance entries of its kind and provider), the one it has suggested, whether a choice_required, and its source (own, instance, or provided by the app); preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; list answers each profile's head_state — present, missing, damaged, or unavailable when the store could not answer — beside head_revision, which is set only when the head is present, and lists a profile row that is damaged as status corrupt with head_state damaged, its head not read; grants reads which grants reach a resource, and is refused when a profile a grant borrows a key from cannot be read or is damaged. Nothing is granted outside this walk.",
       title: "Profiles & Consent"
     )
   end
@@ -461,14 +461,8 @@ defmodule Sanctum.Providers.Profile do
     # callers of the handler.
     with :ok <- Sanctum.Consent.Authz.authorize_staging(ctx),
          {:ok, source_ref} <- Plan.name_ref(ref),
-         {:ok, profiles} <- Arca.ConsentStorage.profiles(Context.actor(ctx), source_ref) do
-      enriched =
-        Enum.map(profiles, fn profile ->
-          {state, revision} = head_state(ctx, profile.id)
-          Map.merge(profile, %{head_state: state, head_revision: revision})
-        end)
-
-      {:ok, %{profiles: enriched}}
+         {:ok, entries} <- Arca.ConsentStorage.profile_entries(Context.actor(ctx), source_ref) do
+      {:ok, %{profiles: Enum.map(entries, &listed_profile(ctx, &1))}}
     else
       {:error, reason} -> {:error, fmt(reason)}
     end
@@ -502,6 +496,17 @@ defmodule Sanctum.Providers.Profile do
 
   def handle(_ctx, _args) do
     {:error, Prima.Provider.invalid_action("profile", action_enum())}
+  end
+
+  # A profile as `list` answers it. A row whose kind or status is outside
+  # the closed vocabulary is listed, never dropped, as damaged: its head is
+  # not read, since nothing it holds can be trusted.
+  defp listed_profile(_ctx, %{id: id, status: :corrupt}),
+    do: %{id: id, status: :corrupt, head_state: "damaged", head_revision: nil}
+
+  defp listed_profile(ctx, profile) do
+    {state, revision} = head_state(ctx, profile.id)
+    Map.merge(profile, %{head_state: state, head_revision: revision})
   end
 
   # A profile's head as `list` answers it, read three ways, never one: a

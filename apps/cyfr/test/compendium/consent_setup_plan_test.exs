@@ -204,7 +204,14 @@ defmodule Compendium.ConsentSetupPlanTest do
 
     {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.plan-outage")
 
-    assert %{profile_status: :unavailable, ready: false} = plan.consent
+    # Said as a head the store cannot answer is: a retry, never a grant.
+    assert %{
+             profile_status: :unavailable,
+             head_state: "unavailable",
+             reason: "this component's consent cannot be read right now — try again",
+             ready: false
+           } = plan.consent
+
     assert plan.ready == false
   end
 
@@ -235,8 +242,74 @@ defmodule Compendium.ConsentSetupPlanTest do
 
     {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.plan-damaged")
 
-    assert %{profile_id: ^profile_id, profile_status: :corrupt, ready: false} = plan.consent
+    # Said as a damaged head is: the profile to revoke, never a grant.
+    assert %{
+             profile_id: ^profile_id,
+             profile_status: :corrupt,
+             head_state: "damaged",
+             reason: reason,
+             ready: false
+           } = plan.consent
+
+    assert reason ==
+             "this profile is damaged and cannot be used — " <>
+               "revoke profile #{profile_id} and grant it again"
+
     assert plan.ready == false
+  end
+
+  # A head that cannot be given is said as profile.list names it, with
+  # what the person can do: a grant for a head never granted, the profile
+  # to revoke for a damaged one, and a retry when the store could not
+  # answer, never a grant over a consent that exists.
+  @tag :capture_log
+  test "a profile whose head is missing, damaged or unreadable says which, and what to do",
+       %{ctx: ctx} do
+    publish!(ctx, "plan-head")
+    ref = "reagent:local.plan-head"
+    id = "prof_#{ref}"
+
+    section = fn ->
+      {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+      plan.consent
+    end
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.seed_profile!(ctx, %{
+        id: id,
+        source_ref: ref,
+        kind: :owner,
+        label: "default",
+        status: :active
+      })
+
+    assert %{
+             head_state: "missing",
+             reason: "this profile has no grant yet — grant it to continue",
+             ready: false
+           } = section.()
+
+    seed!(ctx, ref, %{}, [])
+    present = section.()
+    assert %{head_state: "present", revision: 1} = present
+    refute Map.has_key?(present, :reason)
+
+    :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, id, scope: "sideways")
+
+    damaged =
+      "this profile's consent is damaged and cannot be used — " <>
+        "revoke profile #{id} and grant it again"
+
+    assert %{head_state: "damaged", reason: ^damaged, ready: false} = section.()
+
+    :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, id, scope: "versionless")
+    Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+    assert %{
+             head_state: "unavailable",
+             reason: "this profile's consent cannot be read right now — try again",
+             ready: false
+           } = section.()
   end
 
   test "a component with no profile and no needs is ready", %{ctx: ctx} do

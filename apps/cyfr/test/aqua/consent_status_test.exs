@@ -132,4 +132,27 @@ defmodule Aqua.ConsentStatusTest do
     Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
     assert {:error, :unavailable} = ConsentStatus.state(ctx, ref)
   end
+
+  # The one reading of a load's refusal, which the model status reads the
+  # assistant's own load through: damage of the root's head, of a lender
+  # or of the stored grant is damage, a store that did not answer the
+  # head or a lender is an outage, and an answer it does not name is an
+  # outage, never damage and never a state.
+  test "a load's refusal reads as a state, as damage, or as an outage" do
+    for {reason, reading} <- [
+          {{:consent_required, %{profile_id: "prof_x"}}, {:ok, :stale}},
+          {:no_profile, {:ok, :absent}},
+          {{:ambiguous, ["prof_a", "prof_b"]}, {:ok, :absent}},
+          {:no_athanor, {:error, :forbidden}},
+          {{:head_corrupt, "prof_x"}, {:error, :corrupt}},
+          {{:no_head_consent, "prof_x"}, {:error, :corrupt}},
+          {{:blob_digest_mismatch, "sha256:0"}, {:error, :corrupt}},
+          {{:lender_corrupt, "catalyst:local.claude", "prof_y"}, {:error, :corrupt}},
+          {{:head_unavailable, "prof_x"}, {:error, :unavailable}},
+          {{:lender_unavailable, "catalyst:local.claude"}, {:error, :unavailable}},
+          {:database_error, {:error, :unavailable}}
+        ] do
+      assert {reason, ConsentStatus.classify_refusal(reason)} == {reason, reading}
+    end
+  end
 end

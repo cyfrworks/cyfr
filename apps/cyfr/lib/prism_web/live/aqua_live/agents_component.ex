@@ -947,6 +947,14 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={match?({:needs_key, _}, @model_status)} class="text-amber-300">
           Not connected — the model has no key yet
         </span>
+        <%!-- A consent that exists but is damaged, or could not be read, is
+             no key to connect: no Connect button is offered over it. --%>
+        <span :if={match?({:consent_damaged, _}, @model_status)} class="text-red-300">
+          A consent this model runs under is damaged and cannot be used — revoke the damaged profile and grant it again.
+        </span>
+        <span :if={match?({:consent_unavailable, _}, @model_status)} class="text-amber-300">
+          A consent this model runs under cannot be read right now — try again.
+        </span>
         <span :if={match?({:missing, _}, @model_status)} class="text-amber-300">
           The model's catalyst is not installed here yet
         </span>

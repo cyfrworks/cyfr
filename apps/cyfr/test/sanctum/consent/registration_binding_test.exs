@@ -4,6 +4,8 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
   # Binding a webhook or schedule requires consent authority and a profile matching its target.
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Consent.RegistrationBinding
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
@@ -106,6 +108,33 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
   end
 
   test "a profile cannot be aimed at another component's registration", %{ctx: ctx} do
+    assert {:error, :profile_not_for_target = reason} =
+             RegistrationBinding.authorize(ctx, "reagent:local.other:1.0.0", "prof-bind")
+
+    assert RegistrationBinding.message(reason) == "the profile belongs to another component"
+  end
+
+  # A profile of the target whose row is stored outside the closed
+  # vocabulary is damaged, never another component's.
+  test "a damaged profile row is refused as damaged, never as another component's",
+       %{ctx: ctx} do
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(p in Arca.Schemas.Profile,
+          where: p.athanor_id == ^ctx.athanor_id and p.id == "prof-bind"
+        ),
+        set: [kind: "sideways"]
+      )
+
+    assert {:error, {:profile_corrupt, "prof-bind"} = damaged} =
+             RegistrationBinding.authorize(ctx, @target, "prof-bind")
+
+    assert RegistrationBinding.message(damaged) ==
+             "the profile is damaged and cannot be used — " <>
+               "revoke profile prof-bind and grant it again"
+
+    # The same damaged row named for another component's registration is
+    # no profile of that component.
     assert {:error, :profile_not_for_target} =
              RegistrationBinding.authorize(ctx, "reagent:local.other:1.0.0", "prof-bind")
   end

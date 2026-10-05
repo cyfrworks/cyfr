@@ -4,6 +4,8 @@
 defmodule Sanctum.ProviderTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Context
   alias Sanctum.Provider
 
@@ -439,6 +441,55 @@ defmodule Sanctum.ProviderTest do
         })
 
       assert result.public == false
+    end
+
+    # A profile row whose kind is outside the closed vocabulary may be the
+    # public one, so the tincture's visibility cannot be read: it is
+    # refused in its own sentence, never told to publish over a record
+    # that exists.
+    test "a tincture whose one profile row is damaged is refused, never told it has no profile",
+         %{ctx: ctx} do
+      {:ok, _} =
+        Arca.ProfileStorage.put(%{
+          id: "prof_vis_dmg",
+          athanor_id: ctx.athanor_id,
+          source_ref: "tincture:local.vis-dmg",
+          kind: "owner",
+          label: "default",
+          status: "active"
+        })
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(p in Arca.Schemas.Profile,
+            where: p.athanor_id == ^ctx.athanor_id and p.id == "prof_vis_dmg"
+          ),
+          set: [kind: "sideways"]
+        )
+
+      args = %{"action" => "get", "publisher" => "local", "name" => "vis-dmg"}
+
+      assert Provider.handle("tincture_visibility", ctx, args) ==
+               {:error, {:corrupt, {:profile, "prof_vis_dmg"}}}
+
+      # As an MCP client receives it: a failed tool result carrying the
+      # sentence whole.
+      assert Emissary.MCP.Router.dispatch(ctx, %Prima.MCP.Message{
+               type: :request,
+               id: 1,
+               method: "tools/call",
+               params: %{"name" => "tincture_visibility", "arguments" => args}
+             }) ==
+               {:ok,
+                %{
+                  "content" => [
+                    %{
+                      "type" => "text",
+                      "text" => "The stored profile is damaged and cannot be used."
+                    }
+                  ],
+                  "isError" => true
+                }}
     end
 
     # "No profiles" tells a person to publish one; a store that could not

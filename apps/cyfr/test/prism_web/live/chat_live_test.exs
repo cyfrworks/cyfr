@@ -142,6 +142,41 @@ defmodule PrismWeb.ChatLiveTest do
 
   defp athanor, do: Process.get(:chat_athanor)
 
+  # A group filled as the setup fills the chat's athanor (`ready_athanor!/2`)
+  # but with no key bound to the model its soul names: the one state whose
+  # empty chat offers to connect a model. The setup's fill points the seed
+  # path at the shipped tree for the whole test.
+  defp keyless_athanor! do
+    {:ok, athanor} =
+      Sanctum.Tenancy.Athanors.create(%{
+        kind: "group",
+        name: "Keyless",
+        slug: "keyless-#{System.unique_integer([:positive])}",
+        created_by: "system"
+      })
+
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+    user_id = Sanctum.TestContext.local().user_id
+    ctx = %{Sanctum.TestContext.local(:prism) | user_id: user_id, athanor_id: athanor.id}
+    {:ok, _} = Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: athanor.id)
+    :ok = Sanctum.TestContext.shipped!(athanor.id)
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+    {:ok, _} = Crucible.authority_for(ctx, :default, Compendium.AgentSource.soul_ref())
+    athanor
+  end
+
+  # The pane's empty state as a person reads it, its whitespace folded.
+  defp empty_state(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([id$="-thread"] > div.justify-center))
+    |> LazyHTML.text()
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
   # Minimal valid WASM with a `run` export: enough to publish a row.
   @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
           <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
@@ -349,10 +384,10 @@ defmodule PrismWeb.ChatLiveTest do
     assert html =~ "AQUA"
     refute html =~ "A.Q.U.A."
     # The chat says which furnace it is, and whether that furnace can think:
-    # a test athanor has an agent but no key behind its model.
+    # this athanor's fill bound a key behind its soul's model, so its empty
+    # chat asks for a message and offers no model to connect.
     assert html =~ "in Chat"
-    assert html =~ "has no model yet"
-    assert html =~ "Connect a model"
+    assert empty_state(html) == "Ask AQUA anything."
 
     # With multiple human members, the athanor requires an explicit agent mention.
     assert html =~ "Talk to the group"
@@ -870,12 +905,15 @@ defmodule PrismWeb.ChatLiveTest do
 
   test "at 720×720 the page and its drawer draw no text under 12 px and no target under 24 px",
        %{conn: conn} do
-    conn = log_in_user(conn, test_user(), athanor_id: athanor().id)
-    {view, _html} = mount_chat(conn)
+    keyless = keyless_athanor!()
+    conn = log_in_user(conn, test_user(), athanor_id: keyless.id)
+    {view, _html} = mount_chat(conn, keyless)
 
-    # The pane at rest, with no model yet: the phone's Chats button, the
-    # workbench link and the way to a model are each at least 24 px high
-    # (`min-h-6`), and nothing it draws is smaller than `text-xs`.
+    # The pane at rest, its model with no key yet: the phone's Chats
+    # button, the workbench link and the way to a model are each at least
+    # 24 px high (`min-h-6`), and nothing it draws is smaller than
+    # `text-xs`.
+    assert empty_state(render(pane(view))) == "Keyless has no model yet. Connect a model"
     refute render(pane(view)) =~ @under_12px
     assert has_element?(pane(view), "button.min-h-6.text-xs[phx-click=toggle_rail]", "Chats")
     assert has_element?(pane(view), "header a.min-h-6.text-xs", "AQUA")
@@ -886,7 +924,7 @@ defmodule PrismWeb.ChatLiveTest do
     refute view |> element("#thread-list") |> render() =~ @under_12px
     assert has_element?(view, "#thread-list button.min-h-6.text-xs[phx-click=new_thread]")
 
-    row = "#athanor-#{athanor().id}"
+    row = "#athanor-#{keyless.id}"
     assert has_element?(view, "#{row} button.min-h-6.w-6[phx-click=toggle_athanor]")
     assert has_element?(view, "#{row} button.min-h-6[phx-click=open_athanor]")
 

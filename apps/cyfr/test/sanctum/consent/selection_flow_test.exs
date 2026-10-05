@@ -650,7 +650,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
            "one leaves the selection",
          %{ctx: ctx, lender: lender, ref: ref} do
       damaged =
-        "A profile this app borrows a key from is damaged and cannot lend its key — " <>
+        "A profile that lends a key here is damaged and cannot lend its key — " <>
           "revoke profile #{lender} and grant it again."
 
       set_profile!(ctx, lender, kind: "sideways")
@@ -682,7 +682,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     @tag :capture_log
     test "a lender the store cannot answer refuses the run in its own sentence",
          %{ctx: ctx, ref: ref, consent_id: consent_id} do
-      unreadable = "A profile this app borrows a key from cannot be read right now — try again."
+      unreadable = "A profile that lends a key here cannot be read right now — try again."
 
       for table <- ~w(profiles consents) do
         away_after_head!(table, consent_id)
