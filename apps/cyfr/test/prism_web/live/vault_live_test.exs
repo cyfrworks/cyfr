@@ -338,6 +338,23 @@ defmodule PrismWeb.VaultLiveTest do
       assert suggested.(group.id) == {nil, true}
     end
 
+    test "an offered read that fails says the instance's entries could not be read, not that " <>
+           "none is offered",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      shared = offer!()
+      {view, _html} = mount_athanor(conn, "/vault")
+      assert has_element?(view, offered_row(shared))
+
+      Arca.Repo.query!("ALTER TABLE instance_entries RENAME TO instance_entries_unavailable")
+      send(view.pid, :load)
+
+      assert has_element?(view, ~s([data-test="instance-offered-unread"]), "could not be read")
+      refute render(view) =~ "This instance offers you no entry."
+      refute has_element?(view, offered_row(shared))
+    end
+
     test "a policy changed anywhere is shown again", %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
@@ -555,5 +572,218 @@ defmodule PrismWeb.VaultLiveTest do
     assert render(view) =~ "This request expired"
     assert {:error, _} = Sanctum.ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "github")
     Cyfr.Test.Sandbox.end_views()
+  end
+
+  describe "a confirmed form sent again that no longer reads" do
+    defp seated_ctx(user) do
+      Sanctum.Context.build(
+        user_id: user.user_id,
+        athanor_id: seated_athanor().id,
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+    end
+
+    defp open_records(ctx) do
+      {:ok, open} = Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+      open
+    end
+
+    defp record_state(ctx, ref) do
+      {:ok, row} = Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), ref)
+      row.state
+    end
+
+    defp page_state(view),
+      do: inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity)
+
+    test "create: the proof is let go, its record cancelled, and a later valid submit is " <>
+           "asked afresh",
+         %{conn: conn} do
+      user = test_user()
+      {view, _html} = conn |> log_in_user(user) |> mount_athanor("/vault")
+      ctx = seated_ctx(user)
+      render_click(view, "show_add", %{"mode" => "fields"})
+
+      typed = %{
+        "name" => "resent-#{System.unique_integer([:positive])}",
+        "kind" => "api_key",
+        "fields" => "TOKEN=t0k3n",
+        "destination_hosts" => "api.example.com"
+      }
+
+      view |> form("#vault-create-form", typed) |> render_submit()
+      assert [%{ref: ref, operation: "vault.create"}] = open_records(ctx)
+      Sanctum.TestContext.prove!(ctx, ref)
+      assert_push_event(view, "system_layer:resubmit", %{form: "vault-create-form"}, 2_000)
+
+      # The browser sends the form again, its values no longer reading.
+      unreadable = %{typed | "fields" => "no equals sign"}
+      html = view |> form("#vault-create-form", unreadable) |> render_submit()
+
+      assert html =~ "Each line must be FIELD=value"
+      assert record_state(ctx, ref) == "cancelled"
+
+      refute page_state(view) =~ "cnf_",
+             "the page still holds the secret of a change it will not make"
+
+      {:ok, entries} = Sanctum.Vault.list(ctx)
+      refute Enum.any?(entries, &(&1.name == typed["name"]))
+
+      # The same change submitted again is asked for afresh.
+      view |> form("#vault-create-form", typed) |> render_submit()
+      assert [%{ref: again, operation: "vault.create"}] = open_records(ctx)
+      refute again == ref
+    end
+
+    defp hide_confirmations!,
+      do:
+        Arca.Repo.query!("ALTER TABLE pending_confirmations RENAME TO pending_confirmations_gone")
+
+    defp restore_confirmations!,
+      do:
+        Arca.Repo.query!("ALTER TABLE pending_confirmations_gone RENAME TO pending_confirmations")
+
+    @page_not_withdrawn "The approval could not be withdrawn; it ends when it expires."
+    @prompt_not_withdrawn "The approval could not be withdrawn; it ends at its expiry."
+
+    test "create: a cancel that fails is said with the form's error, on the page and in the prompt",
+         %{conn: conn} do
+      user = test_user()
+      {view, _html} = conn |> log_in_user(user) |> mount_athanor("/vault")
+      ctx = seated_ctx(user)
+      render_click(view, "show_add", %{"mode" => "fields"})
+
+      typed = %{
+        "name" => "resent-#{System.unique_integer([:positive])}",
+        "kind" => "api_key",
+        "fields" => "TOKEN=t0k3n",
+        "destination_hosts" => "api.example.com"
+      }
+
+      view |> form("#vault-create-form", typed) |> render_submit()
+      assert [%{ref: ref, operation: "vault.create"}] = open_records(ctx)
+      Sanctum.TestContext.prove!(ctx, ref)
+      assert_push_event(view, "system_layer:resubmit", %{form: "vault-create-form"}, 2_000)
+
+      hide_confirmations!()
+
+      view
+      |> form("#vault-create-form", %{typed | "fields" => "no equals sign"})
+      |> render_submit()
+
+      html = render(view)
+      holds = page_state(view) =~ "cnf_"
+      restore_confirmations!()
+
+      refute holds
+      assert html =~ "Each line must be FIELD=value (line 1 is not). " <> @page_not_withdrawn
+      assert html =~ @prompt_not_withdrawn
+      refute html =~ "so the approval was withdrawn"
+      assert record_state(ctx, ref) == "confirmed"
+    end
+
+    test "rotate: a cancel that fails is said with the form's error, on the page and in the prompt",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      ctx = seated_ctx(user)
+      name = "rotated-#{System.unique_integer([:positive])}"
+
+      # The entry is made before the page opens, so the rotate's prompt is
+      # the only one the page's layer shows.
+      {:ok, _} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Grimoire.call_external("vault", &1, %{
+            "action" => "create",
+            "name" => name,
+            "kind" => "api_key",
+            "fields" => %{"TOKEN" => "first"},
+            "destination" => %{"hosts" => ["api.example.com"]}
+          })
+        )
+
+      {:ok, entries} = Sanctum.Vault.list(ctx)
+      entry = Enum.find(entries, &(&1.name == name))
+      {view, _html} = mount_athanor(conn, "/vault")
+      render_click(view, "show_rotate", %{"id" => entry.id})
+      rotate = "#vault-rotate-form-" <> entry.id
+
+      view |> form(rotate, %{"fields" => "TOKEN=second"}) |> render_submit()
+      assert [%{ref: ref, operation: "vault.rotate"}] = open_records(ctx)
+      Sanctum.TestContext.prove!(ctx, ref)
+      assert_push_event(view, "system_layer:resubmit", %{form: "vault-rotate-form-" <> _}, 2_000)
+
+      hide_confirmations!()
+      view |> form(rotate, %{"fields" => "no equals sign"}) |> render_submit()
+      html = render(view)
+      holds = page_state(view) =~ "cnf_"
+      restore_confirmations!()
+
+      refute holds
+      assert html =~ "Each line must be FIELD=value (line 1 is not). " <> @page_not_withdrawn
+      assert html =~ @prompt_not_withdrawn
+      assert record_state(ctx, ref) == "confirmed"
+    end
+
+    test "a line that does not read is named by its number, never its content",
+         %{conn: conn} do
+      user = test_user()
+      {view, _html} = conn |> log_in_user(user) |> mount_athanor("/vault")
+      render_click(view, "show_add", %{"mode" => "fields"})
+      pasted = "sk-pasted-#{System.unique_integer([:positive])}"
+
+      html =
+        view
+        |> form("#vault-create-form", %{
+          "name" => "pasted-#{System.unique_integer([:positive])}",
+          "kind" => "api_key",
+          "fields" => "TOKEN=ok\n#{pasted}",
+          "destination_hosts" => "api.example.com"
+        })
+        |> render_submit()
+
+      assert html =~ "Each line must be FIELD=value (line 2 is not)"
+      refute html =~ pasted
+      refute inspect(:sys.get_state(view.pid).socket.assigns.flash) =~ pasted
+    end
+
+    test "rotate: the proof is let go, its record cancelled, and a later valid submit is " <>
+           "asked afresh",
+         %{conn: conn} do
+      user = test_user()
+      {view, _html} = conn |> log_in_user(user) |> mount_athanor("/vault")
+      ctx = seated_ctx(user)
+
+      entry =
+        create_confirmed!(view, ctx, %{
+          "name" => "rotated-#{System.unique_integer([:positive])}",
+          "kind" => "api_key",
+          "fields" => "TOKEN=first",
+          "destination_hosts" => "api.example.com"
+        })
+
+      render_click(view, "show_rotate", %{"id" => entry.id})
+      rotate = "#vault-rotate-form-" <> entry.id
+
+      view |> form(rotate, %{"fields" => "TOKEN=second"}) |> render_submit()
+      assert [%{ref: ref, operation: "vault.rotate"}] = open_records(ctx)
+      Sanctum.TestContext.prove!(ctx, ref)
+      assert_push_event(view, "system_layer:resubmit", %{form: "vault-rotate-form-" <> _}, 2_000)
+
+      html = view |> form(rotate, %{"fields" => "no equals sign"}) |> render_submit()
+      assert html =~ "Each line must be FIELD=value"
+      assert record_state(ctx, ref) == "cancelled"
+
+      refute page_state(view) =~ "cnf_",
+             "the page still holds the secret of a change it will not make"
+
+      view |> form(rotate, %{"fields" => "TOKEN=second"}) |> render_submit()
+      assert [%{ref: again, operation: "vault.rotate"}] = open_records(ctx)
+      refute again == ref
+    end
   end
 end

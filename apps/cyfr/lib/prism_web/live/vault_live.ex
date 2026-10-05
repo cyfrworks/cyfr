@@ -66,6 +66,7 @@ defmodule PrismWeb.VaultLive do
       |> assign(:entries, [])
       |> assign(:defaults, %{})
       |> assign(:offered, [])
+      |> assign(:offered_error, nil)
       |> assign(:used_by, %{})
       |> assign(:clients, [])
       |> assign(:show_add, nil)
@@ -163,8 +164,8 @@ defmodule PrismWeb.VaultLive do
             {:noreply, put_flash(socket, :error, "Create failed: #{fmt(reason)}")}
         end
 
-      {:error, line} ->
-        {:noreply, put_flash(socket, :error, "Each line must be FIELD=value (bad: #{line})")}
+      {:error, number} ->
+        {:noreply, unreadable(socket, :create, bad_line(number))}
     end
   end
 
@@ -228,11 +229,11 @@ defmodule PrismWeb.VaultLive do
           {:noreply, put_flash(socket, :error, "Rotate failed: #{fmt(reason)}")}
       end
     else
-      {:error, line} ->
-        {:noreply, put_flash(socket, :error, "Each line must be FIELD=value (bad: #{line})")}
+      {:error, number} ->
+        {:noreply, unreadable(socket, {:rotate, id}, bad_line(number))}
 
       _ ->
-        {:noreply, put_flash(socket, :error, "Rotate failed: bad payload revision")}
+        {:noreply, unreadable(socket, {:rotate, id}, "Rotate failed: bad payload revision")}
     end
   end
 
@@ -353,6 +354,31 @@ defmodule PrismWeb.VaultLive do
   # confirmation is given.
   defp rotate_form(entry_id), do: "vault-rotate-form-" <> entry_id
   defp create_form, do: "vault-create-form"
+
+  # A form this page sends again once its change is confirmed, arriving
+  # with values that no longer read, dispatches nothing: the proof held for
+  # it is let go (`SystemLayer.release/3`), its record cancelled, rather
+  # than kept for a later submit to spend. The form's error is shown, and a
+  # cancel that fails, which still drops the secret, is said in the same
+  # message: the record ends at its expiry.
+  defp unreadable(socket, tag, message) do
+    case SystemLayer.release(socket, tag, :form_unreadable) do
+      {:cancel_failed, socket} ->
+        put_flash(
+          socket,
+          :error,
+          message <> ". The approval could not be withdrawn; it ends when it expires."
+        )
+
+      {_released_or_none, socket} ->
+        put_flash(socket, :error, message)
+    end
+  end
+
+  # A line that does not read is named by its number, never its content: a
+  # value pasted without its FIELD= would otherwise be shown back.
+  defp bad_line(number), do: "Each line must be FIELD=value (line #{number} is not)"
+
   defp client_form, do: "vault-client-form"
 
   # The athanor's entries and its default per provider, read together.
@@ -374,15 +400,16 @@ defmodule PrismWeb.VaultLive do
   end
 
   # The instance entries offered to this person, with their own use today:
-  # an entry not offered to them is never read, so never shown.
+  # an entry not offered to them is never read, so never shown. A read that
+  # failed says so, and is never drawn as nothing offered.
   defp fetch_offered(socket) do
     case fetch_list(socket, "instance_entry/offered", :entries) do
       {:ok, offered} ->
-        assign(socket, :offered, offered)
+        assign(socket, offered: offered, offered_error: nil)
 
       {:error, message} ->
         Logger.warning("[VaultLive] instance_entry/offered failed: #{message}")
-        assign(socket, :offered, [])
+        assign(socket, offered: [], offered_error: message)
     end
   end
 
@@ -427,10 +454,11 @@ defmodule PrismWeb.VaultLive do
   defp parse_fields(text) when is_binary(text) do
     text
     |> split_lines()
-    |> Enum.reduce_while({:ok, %{}}, fn line, {:ok, acc} ->
+    |> Enum.with_index(1)
+    |> Enum.reduce_while({:ok, %{}}, fn {line, number}, {:ok, acc} ->
       case String.split(line, "=", parts: 2) do
         [key, value] when key != "" -> {:cont, {:ok, Map.put(acc, String.trim(key), value)}}
-        _ -> {:halt, {:error, line}}
+        _ -> {:halt, {:error, number}}
       end
     end)
   end
@@ -709,7 +737,18 @@ defmodule PrismWeb.VaultLive do
             is never handed to a component, and CYFR attaches it to requests bound for its
             destination. Your use today counts your own requests alone.
           </p>
-          <div :if={!@loading && @offered == []} class="text-xs text-gray-500">
+          <p
+            :if={@offered_error}
+            role="alert"
+            class="text-xs text-red-400"
+            data-test="instance-offered-unread"
+          >
+            This instance's entries could not be read: {@offered_error}
+          </p>
+          <div
+            :if={!@loading && is_nil(@offered_error) && @offered == []}
+            class="text-xs text-gray-500"
+          >
             This instance offers you no entry.
           </div>
           <ul :if={@offered != []} class="divide-y divide-gray-800">

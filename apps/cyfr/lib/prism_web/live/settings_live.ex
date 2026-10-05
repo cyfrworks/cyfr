@@ -47,16 +47,24 @@ defmodule PrismWeb.SettingsLive do
       catalyst of its provider in the administrator's own athanor
       (`component.list`, `component.inspect`): the need's hosts, and its
       paths where it declares them. The audience lists people who have
-      signed in (`instance_entry.people`). A change that needs a fresh
+      signed in (`instance_entry.people`, read in id order). A save sends
+      only the administrator's own edit of what the form showed: an
+      audience saved is that edit applied to the entry's audience read at
+      submit, and read again when a widening's proof lands, and a cap
+      saved is one changed from the value the form was drawn with, so a
+      change made elsewhere meanwhile stands. A read that fails is shown
+      as such, never as nobody or no use. A change that needs a fresh
       confirmation (entering a key, widening an audience, a policy from
       `shipped` to `any`) is asked through the page's system layer and
-      made again once confirmed; a narrowing needs the session alone.
+      made again once confirmed: an audience as the edit applied to the
+      audience then stored, asked afresh when that is not the change
+      proven. A narrowing needs the session alone.
     * **Use** (platform admins) — each entry's requests by person and day
       over the last seven days, and its day totals
       (`instance_entry.usage`).
 
-  Both instance-entry cards read again on every
-  `Cyfr.Bus.instance_entries/0` announcement.
+  Both instance-entry cards, and the people the picker offers, read again
+  on every `Cyfr.Bus.instance_entries/0` announcement.
 
   The refusals each change can meet, the last door and the last passkey
   among them, are shown as the refusal's own sentence.
@@ -139,6 +147,7 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:instance_entries, [])
       |> assign(:instance_usage, %{})
       |> assign(:instance_people, [])
+      |> assign(:instance_people_error, nil)
       |> assign(:instance_prefill, %{})
       |> assign(:instance_draft, @instance_draft)
       |> assign(:instance_error, nil)
@@ -318,6 +327,9 @@ defmodule PrismWeb.SettingsLive do
     socket = assign(socket, :instance_draft, draft)
 
     case instance_create_args(draft) do
+      {:ok, %{"audience" => "listed"}} when is_binary(socket.assigns.instance_people_error) ->
+        {:noreply, assign(socket, :instance_error, people_unread())}
+
       {:ok, args} ->
         {:noreply,
          socket |> assign(:instance_error, nil) |> ask_value(:create, args["name"], args)}
@@ -359,10 +371,20 @@ defmodule PrismWeb.SettingsLive do
     )
   end
 
+  # An audience is saved as the administrator's own edit of what the form
+  # showed (`audience_edit/1`: the audience chosen, the people added and
+  # removed), never as the whole list the form holds: the people re-read
+  # first, then the edit applied to the entry's audience read afresh
+  # (`save_audience/3`). Someone the form had no checkbox for, added
+  # elsewhere since, is kept; an unedited save changes nothing. With the
+  # people unread no audience is saved, whatever the form sends.
   def handle_event("instance_audience", %{"entry_id" => id} = params, socket) do
-    audience = params["audience"]
-    members = if audience == "listed", do: members(params), else: []
-    set_audience(socket, id, %{"entry_id" => id, "audience" => audience, "members" => members})
+    socket = load_instance_people(socket)
+
+    case socket.assigns.instance_people_error do
+      nil -> save_audience(socket, id, audience_edit(params))
+      _unread -> {:noreply, put_flash(socket, :error, "Instance entries: " <> people_unread())}
+    end
   end
 
   # A policy that is neither word is refused here, and the operation
@@ -378,12 +400,18 @@ defmodule PrismWeb.SettingsLive do
   end
 
   # A blank cap takes the platform default and `0` admits no use: each is
-  # sent as it means, `null` and `0`.
+  # sent as it means, `null` and `0`. Only a cap changed from the value the
+  # form was drawn with (its `_loaded` field) is sent, so a change another
+  # administrator made to the other cap meanwhile stands; a form with
+  # nothing changed sends nothing.
   def handle_event("instance_caps", %{"entry_id" => id} = params, socket) do
-    with {:ok, person} <- cap(params["person_daily"]),
-         {:ok, total} <- cap(params["total_daily"]) do
-      args = %{"entry_id" => id, "person_daily" => person, "total_daily" => total}
-      instance_call(socket, "instance_entry/set_caps", args, "Caps saved.")
+    with {:ok, changed} <- changed_caps(params) do
+      if changed == %{} do
+        {:noreply, put_flash(socket, :info, "Nothing changed.")}
+      else
+        args = Map.put(changed, "entry_id", id)
+        instance_call(socket, "instance_entry/set_caps", args, "Caps saved.")
+      end
     else
       {:error, sentence} ->
         {:noreply, put_flash(socket, :error, "Instance entries: " <> sentence)}
@@ -440,8 +468,11 @@ defmodule PrismWeb.SettingsLive do
       {:repeat, {:passkey_revoke, id}, _tool, _args, socket} ->
         revoke_passkey(socket, id)
 
-      {:repeat, {:instance_audience, id}, _tool, args, socket} ->
-        set_audience(socket, id, args)
+      # The proven widening is made again as the administrator's edit of
+      # the audience as it stands now, not as the list computed before the
+      # prompt: someone listed or removed elsewhere meanwhile stays so.
+      {:repeat, {:instance_audience, id, edit}, _tool, _confirmed, socket} ->
+        save_audience(socket, id, edit)
 
       {:repeat, {:instance_policy, id}, _tool, args, socket} ->
         set_policy(socket, id, args)
@@ -495,8 +526,10 @@ defmodule PrismWeb.SettingsLive do
   def handle_info(%Cyfr.Bus.SettingsChanged{kind: :observed}, socket), do: {:noreply, socket}
 
   # The announcement carries an entry id and a kind; the cards read the
-  # entries again through the operations.
-  def handle_info(%Cyfr.Bus.InstanceEntryChanged{}, socket), do: {:noreply, load_instance(socket)}
+  # entries again through the operations, and the picker's people with
+  # them, so a person another client listed has a checkbox here.
+  def handle_info(%Cyfr.Bus.InstanceEntryChanged{}, socket),
+    do: {:noreply, socket |> load_instance() |> load_instance_people()}
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
@@ -609,21 +642,34 @@ defmodule PrismWeb.SettingsLive do
 
   defp load_instance(socket), do: assign(socket, instance_entries: [], instance_usage: %{})
 
+  # An entry's use, or why it could not be read: a read that failed is
+  # never shown as no use.
   defp entry_usage(socket, id) do
     case call_tool(socket, "instance_entry/usage", %{"entry_id" => id, "days" => @instance_days}) do
       {:ok, %{people: people, totals: totals}} -> %{people: people, totals: totals}
-      {:error, _reason} -> nil
+      {:error, reason} -> {:unread, error_message(reason)}
     end
   end
 
+  # The people an audience may list, or why they could not be read: the
+  # picker then says so and saves no audience, rather than offering no one.
   defp load_instance_people(%{assigns: %{context: %{platform_admin: true}}} = socket) do
     case call_tool(socket, "instance_entry/people", %{}) do
-      {:ok, %{people: people}} -> assign(socket, :instance_people, people)
-      {:error, _reason} -> assign(socket, :instance_people, [])
+      {:ok, %{people: people}} ->
+        assign(socket, instance_people: people, instance_people_error: nil)
+
+      {:error, reason} ->
+        assign(socket, instance_people: [], instance_people_error: error_message(reason))
     end
   end
 
-  defp load_instance_people(socket), do: assign(socket, :instance_people, [])
+  defp load_instance_people(socket),
+    do: assign(socket, instance_people: [], instance_people_error: nil)
+
+  defp people_unread,
+    do:
+      "the people on this instance could not be read, so no one can be listed now; " <>
+        "load the page again"
 
   # What a new entry of a provider is prefilled with: the need of that
   # provider in the newest shipped catalyst that declares one, among the
@@ -781,6 +827,19 @@ defmodule PrismWeb.SettingsLive do
   defp cap(nil), do: {:ok, nil}
   defp cap(_other), do: {:error, cap_refusal()}
 
+  # The caps a form changed: each as typed, held to `cap/1`, when it
+  # differs from the value the form was drawn with (`<cap>_loaded`).
+  defp changed_caps(params) do
+    Enum.reduce_while(~w(person_daily total_daily), {:ok, %{}}, fn key, {:ok, acc} ->
+      with {:ok, typed} <- cap(params[key]),
+           {:ok, loaded} <- cap(params[key <> "_loaded"]) do
+        {:cont, {:ok, if(typed == loaded, do: acc, else: Map.put(acc, key, typed))}}
+      else
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
   defp cap_refusal,
     do:
       "A cap is a whole number of requests a day: 0 admits no use, and a blank takes the " <>
@@ -841,12 +900,136 @@ defmodule PrismWeb.SettingsLive do
       |> load_instance()
       |> put_flash(:error, "Instance entries: #{error_message(reason)}")
 
+  # The entry's audience as stored now, read at submit.
+  defp fresh_audience(socket, id) do
+    case call_tool(socket, "instance_entry/list", %{}) do
+      {:ok, %{entries: entries}} ->
+        case Enum.find(entries, &(&1.id == id)) do
+          %{audience: audience, members: members} ->
+            {:ok, %{audience: audience, members: members}}
+
+          nil ->
+            {:error, :not_found}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The administrator's own edit of what the form showed: the audience
+  # they chose, when it differs from the one the form showed
+  # (`audience_shown`), and the people they checked and unchecked against
+  # those the form showed checked (`members_shown`).
+  defp audience_edit(params) do
+    checked = MapSet.new(members(params))
+    shown = MapSet.new(members(%{"members" => params["members_shown"]}))
+
+    %{
+      audience: if(params["audience"] != params["audience_shown"], do: params["audience"]),
+      adds: checked |> MapSet.difference(shown) |> Enum.sort(),
+      removes: shown |> MapSet.difference(checked) |> Enum.sort()
+    }
+  end
+
+  # `edit` applied to the audience as stored now, and the sentence a save
+  # that changes nothing says. Nobody the edit does not name is touched, so
+  # a person the form had no checkbox for stays listed, and one removed
+  # elsewhere is not added back. A removal from a list the audience no
+  # longer has, since it became everyone elsewhere, has no effect, and the
+  # sentence says so.
+  defp edited_audience(fresh, edit) do
+    audience = edit.audience || fresh.audience
+
+    members =
+      fresh.members
+      |> MapSet.new()
+      |> MapSet.union(MapSet.new(edit.adds))
+      |> MapSet.difference(MapSet.new(edit.removes))
+
+    members = if audience == "listed", do: Enum.sort(members), else: []
+
+    unchanged =
+      if is_nil(edit.audience) and fresh.audience == "everyone" and edit.removes != [],
+        do:
+          "The audience is everyone now, set elsewhere, so removing someone from its list " <>
+            "changes nothing.",
+        else: "Nothing changed."
+
+    {%{"audience" => audience, "members" => members}, unchanged}
+  end
+
+  # Save `edit` against the entry's audience read now. The call is keyed by
+  # the edit itself, so the repeat after a widening's proof applies it again
+  # to a fresh read (`{:repeat, {:instance_audience, id, edit}, …}`): the
+  # same result is made with the proof, and a different one is asked
+  # afresh when it widens, since the proof binds the audience it was given
+  # over, and written when it does not. An edit that leaves the audience as
+  # read sends nothing, a first save and a repeat alike: the owner compares
+  # with a read of its own taken a moment later, so the list read here,
+  # sent back, could write over a change landing between the two reads.
+  # A proof held for the edit never stays behind: it leaves the page by the
+  # one dispatch it binds or is released (`let_go/3`), on an edit that now
+  # changes nothing and on a fresh read that fails. A raise or a navigation
+  # ends the page, and its held secret with it.
+  defp save_audience(socket, id, edit) do
+    tag = {:instance_audience, id, edit}
+
+    case fresh_audience(socket, id) do
+      {:ok, fresh} ->
+        {args, unchanged} = edited_audience(fresh, edit)
+
+        if args == %{"audience" => fresh.audience, "members" => Enum.sort(fresh.members)} do
+          case let_go(socket, tag, :nothing_to_change) do
+            {:let_go, socket} ->
+              {:noreply, socket |> load_instance() |> put_flash(:info, unchanged)}
+
+            {:kept_until_expiry, socket} ->
+              {:noreply,
+               socket
+               |> load_instance()
+               |> put_flash(:error, "Instance entries: #{unchanged} #{withdraw_failed()}")}
+          end
+        else
+          set_audience(socket, tag, Map.put(args, "entry_id", id), unchanged)
+        end
+
+      {:error, reason} ->
+        case let_go(socket, tag, reason) do
+          {:let_go, socket} ->
+            {:noreply, instance_refused(socket, reason)}
+
+          {:kept_until_expiry, socket} ->
+            {:noreply,
+             socket
+             |> load_instance()
+             |> put_flash(
+               :error,
+               "Instance entries: #{error_message(reason)} #{withdraw_failed()}"
+             )}
+        end
+    end
+  end
+
+  # A held proof for `tag` let go with no dispatch: its record cancelled and
+  # its prompt told why. A cancel that fails still drops the secret, and the
+  # caller says, in the one message it shows, that the record ends at its
+  # expiry.
+  defp let_go(socket, tag, reason) do
+    case SystemLayer.release(socket, tag, reason) do
+      {:cancel_failed, socket} -> {:kept_until_expiry, socket}
+      {_released_or_none, socket} -> {:let_go, socket}
+    end
+  end
+
+  defp withdraw_failed, do: "The approval could not be withdrawn; it ends when it expires."
+
   # A widening asks for a fresh confirmation through the page's layer and
   # is made again once confirmed; a narrowing is saved with the session.
-  defp set_audience(socket, id, args) do
-    case SystemLayer.call(socket, {:instance_audience, id}, "instance_entry/set_audience", args) do
+  defp set_audience(socket, tag, args, unchanged) do
+    case SystemLayer.call(socket, tag, "instance_entry/set_audience", args) do
       {:ok, %{changed: changed}, socket} ->
-        message = if changed, do: "Audience saved.", else: "The audience is already that."
+        message = if changed, do: "Audience saved.", else: unchanged
         {:noreply, socket |> load_instance() |> put_flash(:info, message)}
 
       {:asked, socket} ->
@@ -940,10 +1123,14 @@ defmodule PrismWeb.SettingsLive do
   defp last_use(%DateTime{} = at), do: Calendar.strftime(at, "%Y-%m-%d %H:%M UTC")
   defp last_use(other), do: to_string(other)
 
+  # One entry's use as the card draws it: its rows, or why it could not be
+  # read. A use that was not read is never drawn as no use.
+  defp use_state(%{people: _, totals: _} = usage, names), do: {:rows, use_rows(usage, names)}
+  defp use_state({:unread, sentence}, _names), do: {:unread, sentence}
+  defp use_state(_not_read, _names), do: {:unread, "it was not read"}
+
   # The Use card's rows for one entry: each day of the window with use,
   # newest first, with the day's total and each person's count.
-  defp use_rows(nil, _names), do: []
-
   defp use_rows(%{people: people, totals: totals}, names) do
     totals
     |> Enum.sort_by(& &1.day, {:desc, Date})
@@ -1511,6 +1698,7 @@ defmodule PrismWeb.SettingsLive do
           :if={@context.platform_admin}
           entries={@instance_entries}
           people={@instance_people}
+          people_error={@instance_people_error}
           prefill={@instance_prefill}
           draft={@instance_draft}
           error={@instance_error}
@@ -1856,6 +2044,7 @@ defmodule PrismWeb.SettingsLive do
 
   attr :entries, :list, required: true
   attr :people, :list, required: true
+  attr :people_error, :string, default: nil
   attr :prefill, :map, required: true
   attr :draft, :map, required: true
   attr :error, :string, default: nil
@@ -1971,13 +2160,28 @@ defmodule PrismWeb.SettingsLive do
                 audience={entry.audience}
                 members={entry.members}
                 people={@people}
+                people_error={@people_error}
                 prefix={"audience-" <> entry.id}
               />
-              <.button type="submit" variant="ghost">Save the audience</.button>
+              <.button
+                type="submit"
+                variant="ghost"
+                disabled={@people_error != nil}
+                data-test="instance-audience-save"
+              >
+                Save the audience
+              </.button>
             </form>
 
             <form id={"instance-caps-" <> entry.id} phx-submit="instance_caps" class="space-y-1">
               <input type="hidden" name="entry_id" value={entry.id} />
+              <%!-- What the form was drawn with: only a cap changed from it is sent. --%>
+              <input
+                type="hidden"
+                name="person_daily_loaded"
+                value={input_cap(entry.person_daily)}
+              />
+              <input type="hidden" name="total_daily_loaded" value={input_cap(entry.total_daily)} />
               <.caps_control
                 person={input_cap(entry.person_daily)}
                 total={input_cap(entry.total_daily)}
@@ -2072,6 +2276,7 @@ defmodule PrismWeb.SettingsLive do
             audience={@draft["audience"]}
             members={@draft["members"]}
             people={@people}
+            people_error={@people_error}
             prefix="create"
           />
 
@@ -2122,16 +2327,26 @@ defmodule PrismWeb.SettingsLive do
   attr :audience, :string, default: "everyone"
   attr :members, :list, default: []
   attr :people, :list, required: true
+  attr :people_error, :string, default: nil
   attr :prefix, :string, required: true
 
   # Everyone, or the people listed: a person is picked from those who have
-  # signed in here, never typed.
+  # signed in here, never typed. When they could not be read the picker
+  # says so, rather than offering no one.
   defp audience_control(assigns) do
     assigns = assign(assigns, :members, assigns.members || [])
 
     ~H"""
     <fieldset class="space-y-1" data-test="instance-people">
       <legend class="text-xs uppercase text-gray-500">Offered to</legend>
+      <%!-- What the form showed: a save sends only what was changed from it. --%>
+      <input type="hidden" name="audience_shown" value={@audience} />
+      <input
+        :for={person <- Enum.filter(@people, &(&1.id in @members))}
+        type="hidden"
+        name="members_shown[]"
+        value={person.id}
+      />
       <label class="flex items-center gap-2 text-sm">
         <input type="radio" name="audience" value="everyone" checked={@audience == "everyone"} />
         Everyone on this instance
@@ -2152,6 +2367,9 @@ defmodule PrismWeb.SettingsLive do
           {person.display_name}
         </label>
       </div>
+      <p :if={@people_error} role="alert" class="text-xs text-red-400" data-test="people-error">
+        The people on this instance could not be read, so no one can be listed now: {@people_error}
+      </p>
       <p class="text-xs text-gray-500">
         A person who has not signed in yet cannot be added.
       </p>
@@ -2253,10 +2471,19 @@ defmodule PrismWeb.SettingsLive do
           data-id={entry.id}
         >
           <h4 class="font-medium">{entry.name}</h4>
-          <p :if={use_rows(@usage[entry.id], @names) == []} class="text-xs text-gray-400">
+          <% use = use_state(@usage[entry.id], @names) %>
+          <p
+            :if={match?({:unread, _}, use)}
+            role="alert"
+            class="text-xs text-red-400"
+            data-test="instance-use-unread"
+          >
+            Its use could not be read: {elem(use, 1)}
+          </p>
+          <p :if={use == {:rows, []}} class="text-xs text-gray-400">
             No use in these days.
           </p>
-          <table :if={use_rows(@usage[entry.id], @names) != []} class="w-full text-xs">
+          <table :if={match?({:rows, [_ | _]}, use)} class="w-full text-xs">
             <thead>
               <tr class="text-left text-gray-500">
                 <th>Day</th>
@@ -2265,7 +2492,7 @@ defmodule PrismWeb.SettingsLive do
               </tr>
             </thead>
             <tbody>
-              <tr :for={row <- use_rows(@usage[entry.id], @names)} data-day={row.day}>
+              <tr :for={row <- elem(use, 1)} data-day={row.day}>
                 <td class="font-mono">{row.day}</td>
                 <td>{row.total}</td>
                 <td>{row.people}</td>

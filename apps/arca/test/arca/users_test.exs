@@ -76,6 +76,19 @@ defmodule Arca.UsersTest do
     user
   end
 
+  # A person id minted after `id`: ids are time-ordered by the
+  # millisecond, so a later millisecond's id is greater. Bounded by a
+  # second of wall time, far more than the clock needs to move.
+  defp later_id(id, deadline \\ System.monotonic_time(:millisecond) + 1_000) do
+    candidate = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+
+    cond do
+      candidate > id -> candidate
+      System.monotonic_time(:millisecond) < deadline -> later_id(id, deadline)
+      true -> flunk("no person id later than #{id} within a second")
+    end
+  end
+
   defp watch_queries! do
     handler = "users-#{System.unique_integer([:positive])}"
     parent = self()
@@ -311,6 +324,30 @@ defmodule Arca.UsersTest do
       assert {:ok, first} = Users.list(server(), limit: 1)
       assert {:ok, second} = Users.list(server(), limit: 1, offset: 1)
       refute first == second
+    end
+
+    test "list/2 in id order pages after the last id: whoever signs in between pages is read " <>
+           "once, by a later page" do
+      for _ <- 1..3, do: person!()
+      {:ok, everyone} = Users.list(server(), order: :id)
+      ids = Enum.map(everyone, & &1.id)
+      assert ids == Enum.sort(ids)
+
+      assert {:ok, first} = Users.list(server(), order: :id, limit: 2)
+      assert Enum.map(first, & &1.id) == Enum.take(ids, 2)
+
+      # A sign-in between the pages, minted after them: its time-ordered id
+      # follows every id read so far, so the next page has it, and repeats
+      # none.
+      newcomer = person!(%{id: later_id(List.last(ids))})
+
+      assert {:ok, rest} =
+               Users.list(server(), order: :id, after: List.last(first).id, limit: 1_000)
+
+      read = Enum.map(first ++ rest, & &1.id)
+      assert read == Enum.uniq(read)
+      assert Enum.sort(read) == Enum.sort([newcomer.id | ids])
+      assert {:ok, []} = Users.list(server(), order: :id, after: List.last(read))
     end
 
     test "personal_athanor? answers whether any row names the athanor as its own" do

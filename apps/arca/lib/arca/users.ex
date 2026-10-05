@@ -102,30 +102,50 @@ defmodule Arca.Users do
   def list_by_email(%Prima.Actor{}, _email), do: {:error, :cross_tenant}
 
   @doc """
-  Everyone the server knows, newest first. Paged with `limit:` (default
-  and ceiling `max_page/0`) and `offset:`.
+  Everyone the server knows, a page at a time, `limit:` people to a page
+  (default and ceiling `max_page/0`).
+
+  By default the most recently seen first, paged with `offset:`: a
+  display order, in which a sign-in between two pages moves people from
+  one page to another. `order: :id` pages in id order instead, `after:`
+  naming the last id of the previous page (only greater ids follow), so a
+  walk of every page reads no one twice and everyone whose row predates
+  the walk; a row written during it is read when its id sorts after the
+  last page already read, and otherwise by the next walk.
   """
   @spec list(Prima.Actor.t(), keyword()) :: {:ok, [map()]} | refusal()
   def list(actor, opts \\ [])
 
   def list(%Prima.Actor{scope: :platform}, opts) when is_list(opts) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Users.list", fn ->
-      limit = opts |> Keyword.get(:limit, @max_page) |> min(@max_page) |> max(1)
-      offset = opts |> Keyword.get(:offset, 0) |> max(0)
+    limit = opts |> Keyword.get(:limit, @max_page) |> min(@max_page) |> max(1)
+    query = page_query(Keyword.get(opts, :order), opts, limit)
 
-      {:ok,
-       Arca.Repo.all(
-         from(u in User,
-           order_by: [desc: u.last_seen_at, asc: u.id],
-           limit: ^limit,
-           offset: ^offset
-         )
-       )}
-    end)
+    Arca.Repo.Errors.with_db_rescue("Arca.Users.list", fn -> {:ok, Arca.Repo.all(query)} end)
     |> Arca.Data.project()
   end
 
   def list(%Prima.Actor{}, _opts), do: {:error, :cross_tenant}
+
+  defp page_query(nil, opts, limit) do
+    offset = opts |> Keyword.get(:offset, 0) |> max(0)
+
+    from(u in User,
+      order_by: [desc: u.last_seen_at, asc: u.id],
+      limit: ^limit,
+      offset: ^offset
+    )
+  end
+
+  # Keyset paging: ids are unique, so the order is total and a person is
+  # on exactly one page.
+  defp page_query(:id, opts, limit) do
+    query = from(u in User, order_by: [asc: u.id], limit: ^limit)
+
+    case Keyword.get(opts, :after) do
+      nil -> query
+      after_id when is_binary(after_id) -> from(u in query, where: u.id > ^after_id)
+    end
+  end
 
   @doc "Every IdP identity that names this person, oldest first."
   @spec identities(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | refusal()

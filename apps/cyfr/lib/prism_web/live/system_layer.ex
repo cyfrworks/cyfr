@@ -519,6 +519,27 @@ defmodule PrismWeb.SystemLayer do
   end
 
   @doc """
+  Let the change a page holds under `tag` go with no dispatch, when the
+  change it binds is no longer to be made: the record is cancelled
+  (`confirmation.cancel`), the prompt shows `reason` as the change's
+  outcome, and the secret leaves the page. It is the one way a held ask
+  ends without its dispatch, as `call/5`'s settlement is the way it ends
+  with one, so a held proof never stays behind on a page that sends
+  nothing. Answers `{:released, socket}`; `{:cancel_failed, socket}`
+  when the record could not be cancelled, the secret let go all the same,
+  the prompt told so and the record ending at its expiry; or
+  `{:none, socket}` when nothing is held under `tag`.
+  """
+  @spec release(Phoenix.LiveView.Socket.t(), term(), term()) ::
+          {:released | :cancel_failed | :none, Phoenix.LiveView.Socket.t()}
+  def release(socket, tag, reason) do
+    case held_for(socket, tag) do
+      nil -> {:none, socket}
+      held -> release_held(socket, held, {:refused, reason})
+    end
+  end
+
+  @doc """
   What a page does with what its layer reported: `{:repeat, tag, tool,
   args, socket}` when a change it asked for was confirmed and the page
   repeats it (through `call/5`, with the same `tag`), or `{:ok, socket}`.
@@ -579,9 +600,8 @@ defmodule PrismWeb.SystemLayer do
         socket
 
       {:error, {:confirmation_required, _another}} ->
-        _ = Ops.call_tool(socket, "confirmation/cancel", %{"ref" => held.ref})
-        outcome(held, {:refused, :asked_again})
-        drop_ask(socket, prompt_id)
+        {_released, socket} = release_held(socket, held, {:refused, :asked_again})
+        socket
 
       {:ok, _value} ->
         outcome(held, :completed)
@@ -590,6 +610,24 @@ defmodule PrismWeb.SystemLayer do
       {:error, reason} ->
         outcome(held, {:refused, reason})
         drop_ask(socket, prompt_id)
+    end
+  end
+
+  # A held ask let go with no dispatch: its record cancelled, then its
+  # prompt told what came of it — `outcome` once the cancel landed, that the
+  # approval could not be withdrawn when it did not — and its secret dropped
+  # either way.
+  defp release_held(socket, held, outcome) do
+    socket_after = drop_ask(socket, Prompt.confirmation_id(held.ref))
+
+    case Ops.call_tool(socket, "confirmation/cancel", %{"ref" => held.ref}) do
+      {:ok, _} ->
+        outcome(held, outcome)
+        {:released, socket_after}
+
+      {:error, _reason} ->
+        outcome(held, {:refused, :withdraw_failed})
+        {:cancel_failed, socket_after}
     end
   end
 
@@ -2782,6 +2820,15 @@ defmodule PrismWeb.SystemLayer do
 
   defp status(%{status: {:refused, :asked_again}}),
     do: "The request changed, so it was asked for again. Nothing was changed."
+
+  defp status(%{status: {:refused, :nothing_to_change}}),
+    do: "There was nothing left to change, so the approval was withdrawn. Nothing was changed."
+
+  defp status(%{status: {:refused, :withdraw_failed}}),
+    do: "The approval could not be withdrawn; it ends at its expiry. Nothing was changed."
+
+  defp status(%{status: {:refused, :form_unreadable}}),
+    do: "The form sent again no longer reads, so the approval was withdrawn. Nothing was changed."
 
   defp status(%{status: {:refused, reason}}), do: "Refused: " <> Ops.error_message(reason)
   defp status(%{status: {:ended, :cancelled}}), do: "Cancelled. Nothing was changed."

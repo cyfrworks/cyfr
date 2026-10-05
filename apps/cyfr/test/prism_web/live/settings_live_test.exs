@@ -220,6 +220,69 @@ defmodule PrismWeb.SettingsLiveTest do
     defp state_of(view),
       do: inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity)
 
+    defp record_state(ctx, ref) do
+      {:ok, row} = Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), ref)
+      row.state
+    end
+
+    # Every admitted `instance_entry/set_audience` is told to the test.
+    defp watch_saves do
+      test_pid = self()
+      handler = "settings-saves-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :grimoire, :decision, :admitted],
+          fn _event, _measure, meta, _config ->
+            if meta.tool == "instance_entry" and meta.action == "set_audience",
+              do: send(test_pid, :save_admitted)
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+    end
+
+    defp saves_admitted do
+      receive do
+        :save_admitted -> 1 + saves_admitted()
+      after
+        0 -> 0
+      end
+    end
+
+    # A widening asked for and held, then made elsewhere before the proof:
+    # the proof's repeat finds nothing left to change.
+    defp moot_repeat!(conn) do
+      %{view: view, ctx: ctx} = admin!(conn)
+      a = test_user(%{name: "A One"}).user_id
+      b = test_user(%{name: "B Two"}).user_id
+      entry = entry!(ctx, %{audience: "listed", members: [a]})
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+      assert has_element?(view, form <> ~s( input[name="members[]"][value="#{b}"]))
+      watch_saves()
+
+      view |> element(form) |> render_submit(%{"members" => [a, b]})
+      assert saves_admitted() == 1
+      assert [%{ref: ref}] = open_records(ctx)
+
+      assert :ok =
+               Arca.InstanceEntries.set_audience(
+                 Prima.Actor.system(),
+                 entry.id,
+                 %{audience: "listed", members: [a]},
+                 %{audience: "listed", members: Enum.sort([a, b])}
+               )
+
+      send(view.pid, %Cyfr.Bus.InstanceEntryChanged{kind: :audience, entry_id: entry.id})
+      prove_asked!(view, ctx, ref)
+      wait_until(fn -> render(view) =~ "Nothing changed." end, 2_000, "the repeat answered")
+      assert saves_admitted() == 0, "the moot repeat sent a save"
+      %{view: view, ctx: ctx, a: a, b: b, entry: entry, form: form, ref: ref}
+    end
+
     test "are the operator's: a member sees neither, and the operations refuse them regardless",
          %{conn: conn} do
       member = test_user()
@@ -653,6 +716,546 @@ defmodule PrismWeb.SettingsLiveTest do
       |> render_submit(%{"entry_id" => entry.id, "person_daily" => "", "total_daily" => "0"})
 
       assert %{person_daily: nil, total_daily: 0} = stored(entry.id)
+    end
+
+    test "two administrators changing the two caps: each form sends only the cap it changed, " <>
+           "and both changes stand",
+         %{conn: conn} do
+      %{view: first, ctx: ctx} = admin!(conn)
+      %{view: second} = admin!(build_conn())
+      entry = entry!(ctx)
+
+      for view <- [first, second], do: send(view.pid, :load)
+      caps = "#instance-caps-#{entry.id}"
+      assert has_element?(first, caps) and has_element?(second, caps)
+
+      # Both forms were drawn with both caps unset. Each administrator
+      # changes one, and submits the form as their browser still holds it.
+      as_drawn = %{
+        "entry_id" => entry.id,
+        "person_daily_loaded" => "",
+        "total_daily_loaded" => ""
+      }
+
+      first
+      |> element(caps)
+      |> render_submit(Map.merge(as_drawn, %{"person_daily" => "5", "total_daily" => ""}))
+
+      second
+      |> element(caps)
+      |> render_submit(Map.merge(as_drawn, %{"person_daily" => "", "total_daily" => "7"}))
+
+      assert %{person_daily: 5, total_daily: 7} = stored(entry.id)
+
+      # A form submitted as drawn changed nothing, and sends nothing.
+      send(first.pid, :load)
+      first |> element(caps) |> render_submit(%{})
+      assert render(first) =~ "Nothing changed."
+      assert %{person_daily: 5, total_daily: 7} = stored(entry.id)
+    end
+
+    test "a people read that fails says so in the picker and saves no audience",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      entry = entry!(ctx, %{audience: "listed", members: [ctx.user_id]})
+      send(view.pid, :load)
+      save = ~s(#instance-audience-#{entry.id} button[data-test="instance-audience-save"])
+      assert has_element?(view, save)
+      refute has_element?(view, save <> "[disabled]")
+
+      # The page's session stands on what it already checked, so only the
+      # reads this card makes meet the store's refusal.
+      keep_env(:sanctum, [:caller_memo_ttl_ms])
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 600_000)
+      Arca.Repo.query!("ALTER TABLE users RENAME TO users_unavailable")
+      send(view.pid, :load)
+
+      assert has_element?(
+               view,
+               ~s(#instance-audience-#{entry.id} [data-test="people-error"]),
+               "could not be read"
+             )
+
+      assert has_element?(view, save <> "[disabled]")
+
+      # Whatever the form sends, no audience is saved.
+      view
+      |> element("#instance-audience-#{entry.id}")
+      |> render_submit(%{"entry_id" => entry.id, "audience" => "everyone"})
+
+      assert render(view) =~ "no one can be listed now"
+      assert %{audience: "listed"} = stored(entry.id)
+    end
+
+    test "a person another client listed after the page loaded is never dropped by a save: " <>
+           "the picker reloads, and a save sends only the administrator's own edit",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      alice = test_user(%{name: "Alice First"})
+      entry = entry!(ctx, %{audience: "listed", members: [alice.user_id]})
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+      assert has_element?(view, form <> ~s( input[value="#{alice.user_id}"][checked]))
+
+      # A person signs in after this page loaded, and another client lists
+      # them; the announcement reaches this page.
+      bob = test_user(%{name: "Bob Later"})
+      both = Enum.sort([alice.user_id, bob.user_id])
+      args = %{entry_id: entry.id, audience: "listed", members: both}
+
+      assert {:ok, :changed} =
+               Sanctum.TestContext.confirming(
+                 ctx,
+                 &Sanctum.InstanceEntries.set_audience(&1, args)
+               )
+
+      wait_until(
+        fn -> render(view) =~ bob.user_id end,
+        2_000,
+        "the listing reached the page"
+      )
+
+      # A form drawn before the listing, as a browser that never re-drew it
+      # still holds it: Bob has no checkbox and Alice stays checked. Its
+      # save is no edit, and drops no one.
+      as_drawn = %{
+        "entry_id" => entry.id,
+        "audience" => "listed",
+        "audience_shown" => "listed",
+        "members" => [alice.user_id],
+        "members_shown" => [alice.user_id]
+      }
+
+      view |> element(form) |> render_submit(as_drawn)
+
+      assert Enum.sort(stored(entry.id).members) == both,
+             "an unedited save dropped Bob, who had no checkbox"
+
+      # The picker has the newcomer, checked as listed, under their name.
+      assert has_element?(view, form <> ~s( input[value="#{bob.user_id}"][checked]))
+      assert render(view) =~ "listed: Alice First, Bob Later"
+
+      # The form saved as it stands changes nothing.
+      view |> form(form) |> render_submit()
+      assert render(view) =~ "Nothing changed."
+      assert Enum.sort(stored(entry.id).members) == both
+
+      # The administrator's own removal of Alice from the stale form takes
+      # Alice out, and Bob stays.
+      view |> element(form) |> render_submit(%{as_drawn | "members" => []})
+      assert stored(entry.id).members == [bob.user_id]
+    end
+
+    # The page's widening waits on its proof while the audience moves
+    # elsewhere; once the proof lands, the edit is made again over the
+    # audience as it stands. A result other than the one proven is asked
+    # afresh, and its proof makes it.
+    defp prove_widening!(view, ctx, ref, done?) do
+      prove_asked!(view, ctx, ref)
+
+      wait_until(
+        fn -> done?.() or Enum.any?(open_records(ctx), &(&1.ref != ref)) end,
+        2_000,
+        "the repeat answered"
+      )
+
+      case Enum.find(open_records(ctx), &(&1.ref != ref)) do
+        %{ref: again} ->
+          prove_asked!(view, ctx, again)
+          wait_until(done?, 2_000, "the edit made once proven again")
+
+        nil ->
+          :ok
+      end
+    end
+
+    # A request the page asked for is proven once the page holds it and
+    # its layer has heard of it (the update the page sent its layer is
+    # handled before the render that follows): a proof the layer never
+    # heard of is one it never repeats.
+    defp prove_asked!(view, ctx, ref) do
+      wait_until(
+        fn -> state_of(view) =~ "confirmation-" <> ref end,
+        2_000,
+        "the page holds its request"
+      )
+
+      render(view)
+      Sanctum.TestContext.prove!(ctx, ref)
+    end
+
+    test "a person another administrator lists while this page's widening waits on its proof " <>
+           "stays listed once the proof lands",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      %{ctx: other} = admin!(build_conn())
+      alice = test_user(%{name: "Alice First"})
+      bob = test_user(%{name: "Bob Checked"})
+      carol = test_user(%{name: "Carol Elsewhere"})
+      entry = entry!(ctx, %{audience: "listed", members: [alice.user_id]})
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+      assert has_element?(view, form <> ~s( input[name="members[]"][value="#{bob.user_id}"]))
+
+      # This administrator checks Bob in the form as drawn: a widening,
+      # asked in the layer.
+      view |> element(form) |> render_submit(%{"members" => [alice.user_id, bob.user_id]})
+      assert [%{ref: ref, operation: "instance_entry.set_audience"}] = open_records(ctx)
+      assert stored(entry.id).members == [alice.user_id]
+
+      # Before the proof, another administrator lists Carol under their own
+      # confirmation, and the announcement reaches this page.
+      both = Enum.sort([alice.user_id, carol.user_id])
+      args = %{entry_id: entry.id, audience: "listed", members: both}
+
+      assert {:ok, :changed} =
+               Sanctum.TestContext.confirming(
+                 other,
+                 &Sanctum.InstanceEntries.set_audience(&1, args)
+               )
+
+      wait_until(
+        fn ->
+          has_element?(view, form <> ~s( input[name="members_shown[]"][value="#{carol.user_id}"]))
+        end,
+        2_000,
+        "the listing reached the page"
+      )
+
+      prove_widening!(view, ctx, ref, fn -> bob.user_id in stored(entry.id).members end)
+
+      assert Enum.sort(stored(entry.id).members) ==
+               Enum.sort([alice.user_id, bob.user_id, carol.user_id]),
+             "the proof's repeat dropped Carol, listed by another administrator while it waited"
+    end
+
+    test "the same, the other write made at the store and announced", %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      alice = test_user(%{name: "Alice First"})
+      bob = test_user(%{name: "Bob Checked"})
+      carol = test_user(%{name: "Carol Elsewhere"})
+      entry = entry!(ctx, %{audience: "listed", members: [alice.user_id]})
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+      assert has_element?(view, form <> ~s( input[name="members[]"][value="#{bob.user_id}"]))
+
+      view |> element(form) |> render_submit(%{"members" => [alice.user_id, bob.user_id]})
+      assert [%{ref: ref, operation: "instance_entry.set_audience"}] = open_records(ctx)
+
+      assert :ok =
+               Arca.InstanceEntries.set_audience(
+                 Prima.Actor.system(),
+                 entry.id,
+                 %{audience: "listed", members: [alice.user_id]},
+                 %{audience: "listed", members: Enum.sort([alice.user_id, carol.user_id])}
+               )
+
+      send(view.pid, %Cyfr.Bus.InstanceEntryChanged{kind: :audience, entry_id: entry.id})
+      render(view)
+
+      prove_widening!(view, ctx, ref, fn -> bob.user_id in stored(entry.id).members end)
+
+      assert Enum.sort(stored(entry.id).members) ==
+               Enum.sort([alice.user_id, bob.user_id, carol.user_id]),
+             "the proof's repeat dropped Carol, listed at the store while it waited"
+    end
+
+    test "a person another administrator removes while this page's widening waits is not put " <>
+           "back by its save",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      %{ctx: other} = admin!(build_conn())
+      alice = test_user(%{name: "Alice First"})
+      bob = test_user(%{name: "Bob Checked"})
+      dave = test_user(%{name: "Dave Removed"})
+
+      entry =
+        entry!(ctx, %{audience: "listed", members: Enum.sort([alice.user_id, dave.user_id])})
+
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+
+      view
+      |> element(form)
+      |> render_submit(%{"members" => [alice.user_id, dave.user_id, bob.user_id]})
+
+      assert [%{ref: ref, operation: "instance_entry.set_audience"}] = open_records(ctx)
+
+      # Another administrator removes Dave: a narrowing, the session alone.
+      narrowed = %{entry_id: entry.id, audience: "listed", members: [alice.user_id]}
+      assert {:ok, :changed} = Sanctum.InstanceEntries.set_audience(other, narrowed)
+
+      prove_widening!(view, ctx, ref, fn -> bob.user_id in stored(entry.id).members end)
+
+      assert Enum.sort(stored(entry.id).members) == Enum.sort([alice.user_id, bob.user_id]),
+             "this administrator's save put back Dave, whom another administrator removed"
+    end
+
+    test "a removal the audience's switch to everyone made moot says so", %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      alice = test_user(%{name: "Alice First"})
+      bob = test_user(%{name: "Bob Unchecked"})
+      entry = entry!(ctx, %{audience: "listed", members: Enum.sort([alice.user_id, bob.user_id])})
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+      assert has_element?(view, form <> ~s( input[value="#{bob.user_id}"][checked]))
+
+      # The audience becomes everyone at the store; this page has not heard.
+      assert :ok =
+               Arca.InstanceEntries.set_audience(
+                 Prima.Actor.system(),
+                 entry.id,
+                 %{audience: "listed", members: Enum.sort([alice.user_id, bob.user_id])},
+                 %{audience: "everyone", members: []}
+               )
+
+      view |> element(form) |> render_submit(%{"members" => [alice.user_id]})
+
+      assert render(view) =~
+               "The audience is everyone now, set elsewhere, so removing someone from its list " <>
+                 "changes nothing."
+
+      assert %{audience: "everyone"} = stored(entry.id)
+    end
+
+    test "a save with no edit sends nothing, so a write landing before the owner's read stands",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      alice = test_user(%{name: "Alice First"})
+      carol = test_user(%{name: "Carol Elsewhere"})
+      entry = entry!(ctx, %{audience: "listed", members: [alice.user_id]})
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+
+      assert has_element?(
+               view,
+               form <> ~s( input[name="members[]"][value="#{alice.user_id}"][checked])
+             )
+
+      # Another administrator's listing of Carol lands the moment an audience
+      # save is admitted: after the page's read, before the owner's.
+      test_pid = self()
+      handler = "settings-unedited-save-#{System.unique_integer([:positive])}"
+      {id, alice_id, carol_id} = {entry.id, alice.user_id, carol.user_id}
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :grimoire, :decision, :admitted],
+          fn _event, _measure, meta, _config ->
+            if meta.tool == "instance_entry" and meta.action == "set_audience" do
+              :ok =
+                Arca.InstanceEntries.set_audience(
+                  Prima.Actor.system(),
+                  id,
+                  %{audience: "listed", members: [alice_id]},
+                  %{audience: "listed", members: Enum.sort([alice_id, carol_id])}
+                )
+
+              send(test_pid, :listed_elsewhere)
+            end
+          end,
+          nil
+        )
+
+      try do
+        view |> element(form) |> render_submit(%{"members" => [alice.user_id]})
+      after
+        :telemetry.detach(handler)
+      end
+
+      refute_received :listed_elsewhere, "an unedited save sent the audience it read"
+      assert render(view) =~ "Nothing changed."
+      assert stored(entry.id).members == [alice.user_id]
+    end
+
+    test "a proven widening the audience already holds lets its proof go: the record is " <>
+           "cancelled, the page keeps no secret and the prompt says nothing was changed",
+         %{conn: conn} do
+      %{view: view, ctx: ctx, ref: ref} = moot_repeat!(conn)
+
+      assert record_state(ctx, ref) == "cancelled"
+
+      refute state_of(view) =~ "cnf_",
+             "the page still holds the secret of a change it will not make"
+
+      html = render(view)
+      refute html =~ "Approved. Completing the change."
+
+      # The release's own outcome, or the record's cancelled fact heard after
+      # it: both are true, and whichever lands last is shown.
+      assert html =~ "There was nothing left to change, so the approval was withdrawn." or
+               html =~ "Cancelled. Nothing was changed."
+    end
+
+    test "the same edit saved after a released proof is asked afresh, never written on it",
+         %{conn: conn} do
+      %{view: view, ctx: ctx, a: a, b: b, entry: entry, form: form, ref: ref} =
+        moot_repeat!(conn)
+
+      # B is removed elsewhere, and the page draws B unchecked again.
+      assert :ok =
+               Arca.InstanceEntries.set_audience(
+                 Prima.Actor.system(),
+                 entry.id,
+                 %{audience: "listed", members: Enum.sort([a, b])},
+                 %{audience: "listed", members: [a]}
+               )
+
+      send(view.pid, %Cyfr.Bus.InstanceEntryChanged{kind: :audience, entry_id: entry.id})
+
+      wait_until(
+        fn ->
+          not has_element?(view, form <> ~s( input[name="members_shown[]"][value="#{b}"]))
+        end,
+        2_000,
+        "B unchecked on the page"
+      )
+
+      view |> element(form) |> render_submit(%{"members" => [a, b]})
+
+      refute b in stored(entry.id).members, "a widening was written with no prompt"
+      assert [%{ref: again}] = open_records(ctx)
+      refute again == ref
+      assert record_state(ctx, ref) == "cancelled"
+    end
+
+    defp hide_confirmations!,
+      do:
+        Arca.Repo.query!("ALTER TABLE pending_confirmations RENAME TO pending_confirmations_gone")
+
+    defp restore_confirmations!,
+      do:
+        Arca.Repo.query!("ALTER TABLE pending_confirmations_gone RENAME TO pending_confirmations")
+
+    # A held widening proven while the page is held still, its repeat then
+    # run with `break!` done first.
+    defp proven_with!(view, ctx, ref, break!) do
+      wait_until(fn -> state_of(view) =~ "confirmation-" <> ref end, 2_000, "the page holds it")
+      render(view)
+      :sys.suspend(view.pid)
+      Sanctum.TestContext.prove!(ctx, ref)
+      break!.()
+      :sys.resume(view.pid)
+    end
+
+    test "a moot repeat whose cancel fails says so on the page and in the prompt",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      a = test_user(%{name: "A One"}).user_id
+      b = test_user(%{name: "B Two"}).user_id
+      entry = entry!(ctx, %{audience: "listed", members: [a]})
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+      assert has_element?(view, form <> ~s( input[name="members[]"][value="#{b}"]))
+
+      view |> element(form) |> render_submit(%{"members" => [a, b]})
+      assert [%{ref: ref}] = open_records(ctx)
+
+      assert :ok =
+               Arca.InstanceEntries.set_audience(
+                 Prima.Actor.system(),
+                 entry.id,
+                 %{audience: "listed", members: [a]},
+                 %{audience: "listed", members: Enum.sort([a, b])}
+               )
+
+      send(view.pid, %Cyfr.Bus.InstanceEntryChanged{kind: :audience, entry_id: entry.id})
+      proven_with!(view, ctx, ref, &hide_confirmations!/0)
+
+      wait_until(
+        fn -> render(view) =~ "it ends when it expires" end,
+        3_000,
+        "the failed cancel said"
+      )
+
+      html = render(view)
+      holds = state_of(view) =~ "cnf_"
+      restore_confirmations!()
+
+      refute holds
+
+      assert html =~
+               "Nothing changed. The approval could not be withdrawn; it ends when it expires."
+
+      assert html =~ "The approval could not be withdrawn; it ends at its expiry."
+      refute html =~ "so the approval was withdrawn"
+      assert record_state(ctx, ref) == "confirmed"
+    end
+
+    test "a repeat whose fresh read and cancel both fail says both on the page and in the prompt",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      a = test_user(%{name: "A One"}).user_id
+      b = test_user(%{name: "B Two"}).user_id
+      entry = entry!(ctx, %{audience: "listed", members: [a]})
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+
+      view |> element(form) |> render_submit(%{"members" => [a, b]})
+      assert [%{ref: ref}] = open_records(ctx)
+
+      proven_with!(view, ctx, ref, fn ->
+        Arca.Repo.query!("ALTER TABLE instance_entries RENAME TO instance_entries_gone")
+        hide_confirmations!()
+      end)
+
+      wait_until(fn -> not (state_of(view) =~ "cnf_") end, 3_000, "the secret let go")
+      html = render(view)
+      restore_confirmations!()
+      Arca.Repo.query!("ALTER TABLE instance_entries_gone RENAME TO instance_entries")
+
+      assert html =~ "Instance entries:"
+      assert html =~ "The approval could not be withdrawn; it ends when it expires."
+      assert html =~ "The approval could not be withdrawn; it ends at its expiry."
+      assert record_state(ctx, ref) == "confirmed"
+    end
+
+    test "a proven widening whose fresh read fails lets its proof go and says why",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      a = test_user(%{name: "A One"}).user_id
+      b = test_user(%{name: "B Two"}).user_id
+      entry = entry!(ctx, %{audience: "listed", members: [a]})
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+      watch_saves()
+
+      view |> element(form) |> render_submit(%{"members" => [a, b]})
+      assert [%{ref: ref}] = open_records(ctx)
+
+      Arca.Repo.query!("ALTER TABLE instance_entries RENAME TO instance_entries_unavailable")
+      prove_asked!(view, ctx, ref)
+
+      wait_until(
+        fn -> record_state(ctx, ref) == "cancelled" end,
+        2_000,
+        "the repeat let its proof go"
+      )
+
+      assert saves_admitted() == 1, "the failed read's repeat sent a save"
+      refute state_of(view) =~ "cnf_"
+      refute render(view) =~ "Approved. Completing the change."
+    end
+
+    test "a usage read that fails says use could not be read, not that there was none",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      entry = entry!(ctx)
+      send(view.pid, :load)
+      use = ~s([data-test="instance-use-entry"][data-id="#{entry.id}"])
+      assert has_element?(view, use, "No use in these days.")
+
+      Arca.Repo.query!("ALTER TABLE instance_entry_usage RENAME TO usage_unavailable")
+      send(view.pid, :load)
+
+      assert has_element?(
+               view,
+               use <> ~s( [data-test="instance-use-unread"]),
+               "could not be read"
+             )
+
+      refute has_element?(view, use, "No use in these days.")
     end
 
     test "Use shows each entry's requests by person and day", %{conn: conn} do

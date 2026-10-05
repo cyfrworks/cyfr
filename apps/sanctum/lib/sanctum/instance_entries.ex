@@ -28,8 +28,10 @@ defmodule Sanctum.InstanceEntries do
   entry as read, and the write is a compare-and-set on that read
   (`Arca.InstanceEntries.set_audience/4`, `set_component_policy/4`): a
   stored state that moved in between answers `{:error, :conflict}` with
-  nothing written and is never retried, so a widening is only ever
-  written over the state it was confirmed against. The confirmation's
+  nothing written and is never retried. An audience's confirmation also
+  binds the audience it was decided against, so a proof given over one
+  stored audience is asked afresh over another. A widening is therefore
+  only ever written over the state it was confirmed against. The confirmation's
   preview names the widening and no value: the audience it becomes or
   how many people it adds, or the policy it moves from and to. Narrowing
   either, an unchanged setting, a rebind, the caps, a revoke and a delete
@@ -263,27 +265,50 @@ defmodule Sanctum.InstanceEntries do
   administrator may list in an entry's audience, which can name no one
   else. Someone who has not signed in yet has no person id here and
   cannot be listed. Read under the operator capability, as `usage/3` is,
-  and confirms nothing.
+  and confirms nothing. The people are read in id order, a page at a
+  time, each page after the last id of the one before: no one is read
+  twice, and everyone with a row before the read began is read. A person
+  whose row appears during the read is read when their id sorts after
+  the last page already read (a new person's time-ordered id does), and
+  otherwise on the next read; an administrator's save never drops anyone
+  it did not read, since it sends only its own edit. A page the store
+  cannot read is `{:error, :unavailable}`, never a shorter list.
   """
   @spec people(Context.t()) :: {:ok, [person_view()]} | {:error, term()}
   def people(%Context{} = ctx) do
     with :ok <- administer(ctx) do
-      {:ok, people_from(0, [])}
+      people_after(nil, [])
     end
   end
 
-  # Every page of `Sanctum.Tenancy.Users.list/1`, in its order: a page
-  # short of the limit is the last one. A person not active is left out.
-  defp people_from(offset, acc) do
+  # Every page of `Sanctum.Tenancy.Users.list_by_id/1`, in id order, each
+  # after the last id of the one before, so no one is read twice and no
+  # one whose row predates the read is skipped; a page short of the limit
+  # is the last one. A person not active is left out. A page the store
+  # cannot read fails the whole read: an audience is never offered a
+  # partial or empty list for an outage.
+  defp people_after(after_id, acc) do
     page = Arca.Users.max_page()
-    users = Sanctum.Tenancy.Users.list(limit: page, offset: offset)
 
-    acc =
-      acc ++
-        for %{status: "active"} = user <- users,
-            do: %{id: user.id, display_name: Sanctum.Tenancy.Users.display_name(user.id)}
+    case Sanctum.Tenancy.Users.list_by_id(limit: page, after: after_id) do
+      {:ok, users} ->
+        acc =
+          acc ++
+            for %{status: "active"} = user <- users,
+                do: %{id: user.id, display_name: Sanctum.Tenancy.Users.display_name(user.id)}
 
-    if length(users) < page, do: acc, else: people_from(offset + page, acc)
+        if length(users) < page,
+          do: {:ok, acc},
+          else: people_after(List.last(users).id, acc)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Sanctum.InstanceEntries] people could not be read: " <>
+            Prima.LoggerContext.shape(reason)
+        )
+
+        {:error, :unavailable}
+    end
   end
 
   @doc """
@@ -522,6 +547,12 @@ defmodule Sanctum.InstanceEntries do
   session. An unchanged audience writes and announces nothing. The write
   is conditional on the audience read, and a moved one is
   `{:error, :conflict}`, never retried.
+
+  The confirmation binds the audience it was decided against (`read`,
+  its `audience` and sorted `members`) beside the change, so a proof
+  given over one stored audience never writes over another: when the
+  stored audience moved between the proof and its repeat, the repeat is
+  asked afresh.
   """
   @spec set_audience(Context.t(), map()) ::
           {:ok, :changed | :unchanged} | {:error, term()}
@@ -539,7 +570,12 @@ defmodule Sanctum.InstanceEntries do
           with :ok <-
                  Authz.confirm(ctx, :credential_sharing, %{
                    operation: "instance_entry.set_audience",
-                   arguments: %{entry_id: id, audience: audience, members: members},
+                   arguments: %{
+                     entry_id: id,
+                     audience: audience,
+                     members: members,
+                     read: %{audience: held.audience, members: Enum.sort(held.members)}
+                   },
                    resource: entry.name,
                    details: widening(held, requested)
                  }),

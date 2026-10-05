@@ -171,6 +171,15 @@ defmodule Sanctum.InstanceEntriesTest do
     })
   end
 
+  # A proof of an audience widening given over the audience `read`: the
+  # confirmation binds the change and the audience it was decided against.
+  defp audience_proof(admin, change, entry, read, details) do
+    arguments =
+      Map.put(change, :read, %{audience: read.audience, members: Enum.sort(read.members)})
+
+    sharing(admin, "instance_entry.set_audience", arguments, entry, details)
+  end
+
   @policy_widening %{"component_policy" => "shipped → any"}
 
   # A person signed in at this home, named by their own id: the same
@@ -204,6 +213,36 @@ defmodule Sanctum.InstanceEntriesTest do
       )
 
     :ok
+  end
+
+  # A person's row as a sign-in leaves it, under a fresh id unless one is
+  # given.
+  defp user_row(id \\ Prima.UUID7.generate_id(Prima.PersonId.prefix())) do
+    now = DateTime.utc_now()
+
+    %{
+      id: id,
+      provider: "github",
+      status: "active",
+      security_generation: 1,
+      first_seen_at: now,
+      last_seen_at: now,
+      created_at: now,
+      updated_at: now
+    }
+  end
+
+  # A person id minted after `id`: ids are time-ordered by the millisecond,
+  # so a later millisecond's id is greater. Bounded by a second of wall
+  # time, far more than the clock needs to move.
+  defp later_id(id, deadline \\ System.monotonic_time(:millisecond) + 1_000) do
+    candidate = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+
+    cond do
+      candidate > id -> candidate
+      System.monotonic_time(:millisecond) < deadline -> later_id(id, deadline)
+      true -> flunk("no person id later than #{id} within a second")
+    end
   end
 
   defp request(path, method \\ "POST"),
@@ -670,7 +709,7 @@ defmodule Sanctum.InstanceEntriesTest do
       readd = %{add | members: Enum.sort([alice, bob])}
 
       confirmed =
-        sharing(admin, "instance_entry.set_audience", readd, entry, %{
+        audience_proof(admin, readd, entry, %{audience: "listed", members: [alice]}, %{
           "audience" => "listed",
           "people_added" => "1"
         })
@@ -680,13 +719,46 @@ defmodule Sanctum.InstanceEntriesTest do
       assert id == entry.id
 
       confirmed =
-        sharing(admin, "instance_entry.set_audience", everyone, entry, %{"audience" => "everyone"})
+        audience_proof(admin, everyone, entry, %{audience: "listed", members: [alice, bob]}, %{
+          "audience" => "everyone"
+        })
 
       assert {:ok, :changed} = InstanceEntries.set_audience(confirmed, everyone)
       assert {:ok, [%{audience: "everyone", members: []}]} = InstanceEntries.list(admin)
 
       assert {:error, :invalid_audience} =
                InstanceEntries.set_audience(admin, %{everyone | audience: "anyone"})
+    end
+
+    test "a proof given over one stored audience is asked afresh over another, and writes nothing",
+         %{admin: admin} do
+      [alice, bob, carol] = for name <- ~w(alice bob carol), do: id(name)
+      entry = create!(admin, %{audience: "listed", members: [alice]})
+      adding = %{entry_id: entry.id, audience: "listed", members: Enum.sort([alice, bob])}
+
+      assert {:error, {:confirmation_required, %{id: secret}}} =
+               InstanceEntries.set_audience(admin, adding)
+
+      TestContext.prove!(admin, secret)
+
+      # Before the proof's repeat, the stored audience moves: Carol is
+      # listed. The repeat names the same change and adds the same one
+      # person, but over another audience than the proof was given over.
+      :ok =
+        Arca.InstanceEntries.set_audience(
+          Prima.Actor.system(),
+          entry.id,
+          %{audience: "listed", members: [alice]},
+          %{audience: "listed", members: Enum.sort([alice, carol])}
+        )
+
+      assert {:error, {:confirmation_required, %{id: again}}} =
+               InstanceEntries.set_audience(%{admin | confirmation_id: secret}, adding)
+
+      refute again == secret
+      assert {:ok, [%{members: members}]} = InstanceEntries.list(admin)
+      assert members == Enum.sort([alice, carol])
+      refute_received {:instance_entry, :audience, _}
     end
 
     test "an audience write racing a change of what it was decided against is refused, not retried",
@@ -720,7 +792,7 @@ defmodule Sanctum.InstanceEntriesTest do
       )
 
       confirmed =
-        sharing(admin, "instance_entry.set_audience", widening, entry, %{
+        audience_proof(admin, widening, entry, %{audience: "listed", members: [alice, bob]}, %{
           "audience" => "listed",
           "people_added" => "1"
         })
@@ -865,7 +937,7 @@ defmodule Sanctum.InstanceEntriesTest do
       adding = %{entry_id: entry.id, audience: "listed", members: Enum.sort([alice, bob])}
 
       confirmed =
-        sharing(admin, "instance_entry.set_audience", adding, entry, %{
+        audience_proof(admin, adding, entry, %{audience: "listed", members: [alice]}, %{
           "audience" => "listed",
           "people_added" => "1"
         })
@@ -979,6 +1051,64 @@ defmodule Sanctum.InstanceEntriesTest do
                InstanceEntries.people(%{admin | auth_method: :api_key})
 
       refute_received {:instance_entry, _, _}
+    end
+
+    test "people reads every page in id order: a person signing in between the pages is " <>
+           "skipped by no page, and no one is read twice",
+         %{admin: admin} do
+      # More people than one page holds, so the read takes two pages.
+      rows = for _ <- 1..Arca.Users.max_page(), do: user_row()
+      {_count, _} = Arca.Repo.insert_all(Arca.Schemas.User, rows)
+      latest = rows |> Enum.map(& &1.id) |> Enum.max()
+
+      # Someone signs in just after the first page is read: the newest
+      # person on the server, minted after every id read so far.
+      test = self()
+      handler = "people-pages-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          query = to_string(meta[:query])
+
+          if self() == test and meta[:source] == "users" and query =~ "ORDER BY" and
+               query =~ "LIMIT" and Process.get(:signed_in) == nil do
+            Process.put(:signed_in, :pending)
+            newcomer = user_row(later_id(latest))
+            {1, _} = Arca.Repo.insert_all(Arca.Schemas.User, [newcomer])
+            Process.put(:signed_in, newcomer.id)
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, people} = InstanceEntries.people(admin)
+      :telemetry.detach(handler)
+
+      newcomer = Process.get(:signed_in)
+      assert is_binary(newcomer)
+
+      ids = Enum.map(people, & &1.id)
+      assert ids == Enum.uniq(ids)
+      assert newcomer in ids
+
+      active =
+        Arca.Repo.all(
+          Ecto.Query.from(u in Arca.Schemas.User, where: u.status == "active", select: u.id)
+        )
+
+      assert Enum.sort(ids) == Enum.sort(active)
+    end
+
+    test "people is unavailable when a page cannot be read, never a shorter list",
+         %{admin: admin} do
+      _alice = person("alice")
+      Arca.Repo.query!("ALTER TABLE users RENAME TO users_unavailable")
+
+      assert {:error, :unavailable} = InstanceEntries.people(admin)
     end
 
     test "usage refuses days outside the kept window before any read", %{admin: admin} do

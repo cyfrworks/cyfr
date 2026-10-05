@@ -294,6 +294,20 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc """
+  Everyone the server knows, a page at a time in id order: `limit:`
+  (default and ceiling `Arca.Users.max_page/0`) people with ids greater
+  than `after:`, the last id of the previous page. Walking the pages reads
+  no one twice and everyone whose row predates the walk; a row written
+  during the walk is read when its id sorts after the last page already
+  read (a new person's time-ordered id does), and otherwise by the next
+  walk. Answers `{:ok, rows}` or the store's refusal: a read that decides
+  who may be named is never answered with nobody.
+  """
+  @spec list_by_id(keyword()) :: {:ok, [user()]} | {:error, term()}
+  def list_by_id(opts \\ []) when is_list(opts),
+    do: Arca.Users.list(server(), Keyword.put(opts, :order, :id))
+
+  @doc """
   Record the person's cyfr.run namespace once it is known. This row is what
   every request reads for it (`Sanctum.Namespace`), so the write drops the
   cached slug.
