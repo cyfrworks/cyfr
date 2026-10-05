@@ -114,7 +114,7 @@ Owns the operation table, the gate, argument casting, dispatch on the external a
 
 - There is one entry for operations on each plane and one for streams. An operation that is undeclared, unannotated or called on the wrong plane is denied; boot refuses a partial table; every provider module is on the configured roster.
 - **Streams are declared where operations are.** A provider declares the streams it offers beside its operations. The gate admits a stream once, records it once and answers with a bounded grant; the delivery owner above Grimoire keeps enforcing it and closes the stream on a standing change, the grant's deadline, a suspended frame, overflow or failed revalidation. A reconnect is a new admission.
-- Every admission makes one decision record (§6.4). Ownership is checked downward, through Arca, before dispatch.
+- Every admission makes one decision record (§6.4), except an admitted call the catalog lists as unrecorded: discovery, the audit's own reads, and the reads the shell makes of the caller's own state on its own initiative. A refusal is always recorded, whatever the action. Ownership is checked downward, through Arca, before dispatch. *Not built yet:* a console call its page's context guard refuses before the gate leaves no decision.
 - Grimoire names no surface, no Host module and no bus; the delivery owner resolves a granted topic.
 
 ### Cyfr (Host): the machine
@@ -307,7 +307,7 @@ Two kinds, named apart. **Unit publication** stages a component or AQUA unit und
 
 ### 6.4 Decision audit
 
-The gate appends one decision before dispatch and one completion after, each under a small database budget. The audit never decides: a lost write is a catalogued event with an operator counter, and the operation's result stands. Admission is admitted or refused; completion is succeeded, failed, cancelled or uncertain; a missing completion is unknown, never success. A stream open is one decision; the frames it carries are none.
+The gate appends one decision before dispatch and one completion after, each under a small database budget. It appends none for an admitted call the catalog lists as unrecorded (discovery, the audit's own reads, and the shell's reads of the caller's own state), and always appends a refusal, whatever the action. The audit never decides: a lost write is a catalogued event with an operator counter, and the operation's result stands. Admission is admitted or refused; completion is succeeded, failed, cancelled or uncertain; a missing completion is unknown, never success. A stream open is one decision; the frames it carries are none.
 
 Audit traffic cannot consume the capacity needed to renew ownership. Audit writers and their waits are bounded, overload is observable, and any queue introduced to protect renewal has a fixed capacity. Batching or dropping a class of decisions changes this contract and requires a measured design change; best-effort persistence does not make a missing record evidence of success.
 

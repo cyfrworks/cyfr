@@ -1239,10 +1239,11 @@ defmodule Grimoire.Catalog do
     {:refused, {:error, refusal}}
   end
 
-  # A call `Grimoire.Decisions.recorded?/2` leaves out (discovery, the audit's
-  # own reads, the shell's reads of the caller's own state) is neither appended
-  # nor emitted, admitted or refused.
-  defp decide(%{recorded?: false}, _admission, _action, _refusal), do: :ok
+  # An admitted call `Grimoire.Decisions.recorded?/2` leaves out (discovery,
+  # the audit's own reads, the shell's reads of the caller's own state) is
+  # neither appended nor emitted. A refusal of any call is both: it is what
+  # an audit exists to see.
+  defp decide(%{recorded?: false}, :admitted, _action, _refusal), do: :ok
 
   defp decide(audit, admission, action, refusal) do
     ctx = audit.ctx

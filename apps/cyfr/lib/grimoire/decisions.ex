@@ -39,12 +39,14 @@ defmodule Grimoire.Decisions do
 
   ## What is not recorded
 
-  Discovery, the audit's own reads, and the reads the shell makes of the
-  caller's own state on its own initiative (`recorded?/2`): what a caller
-  reads to learn what exists or what was decided, and what the console
-  reads again of the person's own state as they navigate, is neither
-  appended nor emitted. An entry refusing before the gate does not know
-  the operation and records whatever the method (`refused/3`).
+  Admitted discovery, the audit's own reads, and the reads the shell makes
+  of the caller's own state on its own initiative (`recorded?/2`): what a
+  caller is admitted to read to learn what exists or what was decided,
+  and what the console reads again of the person's own state as they
+  navigate, is neither appended nor emitted. A refusal of any call is
+  recorded: it is rare in a healthy client and is what an audit exists to
+  see. An entry refusing before the gate does not know the operation and
+  records whatever the method (`refused/3`).
 
   ## What a tag carries
 
@@ -66,8 +68,9 @@ defmodule Grimoire.Decisions do
   # The tools whose every action reads what exists or what was decided.
   @unrecorded_tools ~w(decision mcp_log record)
 
-  # Single actions of tools that also act: a discovery read, or a read the
-  # shell makes of the caller's own state on its own initiative.
+  # Single actions of tools that also act, unrecorded when admitted: a
+  # discovery read, or a read the shell makes of the caller's own state on
+  # its own initiative. A refusal of one is recorded like any other.
   @unrecorded_actions [
     {"tools", "list"},
     {"system", "status"},
@@ -79,11 +82,12 @@ defmodule Grimoire.Decisions do
   ]
 
   @doc """
-  Whether a call of `tool.action` is recorded. False for discovery, the
-  audit's own reads, and the reads the shell makes of the caller's own
-  state on its own initiative: every `decision`, `mcp_log` and `record`
-  action, `tools.list`, `system.status` and `file.offers`. Every other
-  call — every `tools/call` and `resources/read` among them — is.
+  Whether an admitted call of `tool.action` is recorded. False for
+  discovery, the audit's own reads, and the reads the shell makes of the
+  caller's own state on its own initiative: every `decision`, `mcp_log`
+  and `record` action, `tools.list`, `system.status` and `file.offers`.
+  Every other admitted call — every `tools/call` and `resources/read`
+  among them — is, and a refused call is recorded whatever this answers.
   """
   @spec recorded?(term(), term()) :: boolean()
   def recorded?(tool, _action) when tool in @unrecorded_tools, do: false
