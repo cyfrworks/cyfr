@@ -292,10 +292,10 @@ defmodule Cyfr.TelemetryBridge do
        do: [{:global, Bus.instance_entries(), InstanceEntryChanged.new(kind, entry_id)}]
 
   # Sending a copy, on the topic of each person it concerns: an offer's
-  # transitions reach its sender and its recipient, and a receipt the
-  # sweep failed its recipient alone, the sender's offer having been
-  # accepted already. The offer, the kind, the sender and the filename
-  # travel, and nothing else the emitter attached.
+  # transitions reach its sender and its recipient, and a receipt that
+  # landed or that the sweep failed its recipient alone, the sender's
+  # offer having been accepted already. The offer, the kind, the sender
+  # and the filename travel, and nothing else the emitter attached.
   defp messages(
          [:cyfr, :arca, :file_offer, kind],
          _measurements,
@@ -354,9 +354,9 @@ defmodule Cyfr.TelemetryBridge do
     }
   end
 
-  # Who a file offer's message is for: a failed receipt is its
+  # Who a file offer's message is for: a receipt, failed or landed, is its
   # recipient's; every other transition is both people's.
-  defp told(:failed, _sender, recipient), do: [recipient]
+  defp told(kind, _sender, recipient) when kind in [:failed, :landed], do: [recipient]
   defp told(_kind, sender, recipient), do: Enum.uniq([recipient, sender])
 
   defp schedule_run(meta) do

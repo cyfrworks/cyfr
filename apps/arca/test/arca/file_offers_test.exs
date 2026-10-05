@@ -180,7 +180,7 @@ defmodule Arca.FileOffersTest do
   alias Arca.FileOffersTest.{Caps, Store}
   alias Arca.Schemas.{FileOffer, FileReceipt}
 
-  @events for kind <- ~w(offered accepted declined withdrawn expired failed)a,
+  @events for kind <- ~w(offered accepted declined withdrawn expired failed landed)a,
               do: [:cyfr, :arca, :file_offer, kind]
 
   setup tags do
@@ -961,6 +961,107 @@ defmodule Arca.FileOffersTest do
       refute_receive {:offer_event, [:cyfr, :arca, :file_offer, :failed], _}, 50
     end
 
+    test "a receipt failed for the receipts window is deleted and leaves the offers listing; " <>
+           "a dry run only counts it",
+         %{sender: sender, recipient: recipient} do
+      offer_id = offered!(sender, recipient, "file.txt", bytes(20))
+      Caps.ceiling(recipient.athanor_id, 100)
+      receipt = stalled_accept!(recipient, offer_id, "data/inbox")
+      filler!(recipient, 70, "full.bin")
+      age_receipt!(receipt.id, 10 * 86_400)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, 1} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, false)
+      end)
+
+      assert %{status: "failed"} = row!(receipt.id)
+
+      # Within the window after it failed, it stays and its recipient sees it.
+      assert {:ok, 0} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, false)
+      assert %{status: "failed"} = row!(receipt.id)
+
+      assert {:ok, %{receipts: [%{offer_id: ^offer_id, status: "failed"}]}} =
+               listed(recipient)
+
+      # Failed for longer than the window: a dry run counts it and keeps it,
+      set_receipt!(receipt.id, updated_at: DateTime.add(DateTime.utc_now(), -8 * 86_400, :second))
+      assert {:ok, 1} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, true)
+      assert %{status: "failed"} = row!(receipt.id)
+
+      # and the sweep deletes it, counted once.
+      assert {:ok, 1} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, false)
+      assert Arca.Repo.get(FileReceipt, receipt.id) == nil
+      assert {:ok, %{receipts: []}} = listed(recipient)
+      assert {:ok, 0} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, false)
+    end
+
+    test "a receipt's completion is announced once it commits, by the acceptance or the sweep",
+         %{sender: sender, recipient: recipient} do
+      # What the row says at the moment the announcement is made.
+      test_pid = self()
+      handler = "file-offers-landed-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :arca, :file_offer, :landed],
+          fn _event, _measurements, metadata, _config ->
+            row =
+              Arca.Repo.get_by!(FileReceipt,
+                offer_id: metadata.offer_id,
+                filename: metadata.filename
+              )
+
+            send(test_pid, {:landed_row, metadata.offer_id, metadata.filename, row.status})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # The acceptance completes its own receipts: one announcement each.
+      offer_id = offered_files!(sender, recipient, [{"a.txt", bytes(5)}, {"b.txt", bytes(6)}])
+
+      assert {:ok, %{receipts: receipts}} = FileOffers.accept(recipient, offer_id, "data/inbox")
+      assert Enum.all?(receipts, &(&1.status == "completed"))
+
+      for filename <- ["a.txt", "b.txt"] do
+        assert_receive {:offer_event, [:cyfr, :arca, :file_offer, :landed], metadata}
+
+        assert metadata == %{
+                 offer_id: offer_id,
+                 kind: :landed,
+                 sender_user_id: sender.user_id,
+                 recipient_user_id: recipient.user_id,
+                 filename: filename
+               }
+
+        assert_receive {:landed_row, ^offer_id, ^filename, "completed"}
+      end
+
+      # A completion asked of a receipt already completed announces nothing.
+      for receipt <- receipts do
+        assert {:ok, %{status: "completed"}} = FileOffers.complete(recipient, receipt.id)
+      end
+
+      refute_receive {:offer_event, [:cyfr, :arca, :file_offer, :landed], _}, 50
+
+      # A receipt the acceptance left waiting lands on the sweep's resume.
+      later = offered!(sender, recipient, "c.txt", bytes(7))
+      stalled_accept!(recipient, later, "data/inbox")
+      refute_receive {:offer_event, [:cyfr, :arca, :file_offer, :landed], _}, 50
+
+      assert {:ok, 1} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, false)
+
+      assert_receive {:offer_event, [:cyfr, :arca, :file_offer, :landed],
+                      %{offer_id: ^later, filename: "c.txt"}}
+
+      assert_receive {:landed_row, ^later, "c.txt", "completed"}
+
+      assert {:ok, 0} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, false)
+      refute_receive {:offer_event, [:cyfr, :arca, :file_offer, :landed], _}, 50
+    end
+
     test "a receipt past file_receipt_days with a write ever sent is kept and reconciled, never failed",
          %{sender: sender, recipient: recipient} do
       offer_id = offered!(sender, recipient, "file.txt", bytes(20))
@@ -1227,6 +1328,9 @@ defmodule Arca.FileOffersTest do
 
   # The retention sweep's actor for the athanor: the server's own, narrowed.
   defp sweeper(who), do: %{Prima.Actor.system() | athanor_id: who.athanor_id, scope: :athanor}
+
+  # What `file/offers` answers the person.
+  defp listed(who), do: Arca.Providers.Files.handle("file", who, %{"action" => "offers"})
 
   defp bytes(n), do: :binary.copy("t", n)
 

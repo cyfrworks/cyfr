@@ -413,7 +413,10 @@ defmodule Cyfr.BusPayloadTest do
       assert Enum.sort(fields) == [:filename, :from_user_id, :kind, :offer_id]
 
       assert Enum.sort(FileOffer.kinds()) ==
-               Enum.sort(~w(offered accepted declined withdrawn expired failed)a)
+               Enum.sort(~w(offered accepted declined withdrawn expired failed landed)a)
+
+      assert %FileOffer{kind: :landed, filename: "a.txt"} =
+               FileOffer.new(:landed, "ofr_1", "usr_s", "a.txt")
 
       row = Enum.find(Bus.topics(), &(&1.key == :file_offers))
 

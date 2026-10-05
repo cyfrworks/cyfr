@@ -123,6 +123,16 @@ defmodule Grimoire.DecisionsTest do
       refute Decisions.recorded?("system", "status")
     end
 
+    # The shell reads the caller's own inbox on every navigation and every
+    # offer message; what the person does with an offer is theirs to see.
+    test "the shell's read of the caller's own offers is not recorded; acting on one is" do
+      refute Decisions.recorded?("file", "offers")
+
+      for action <- ~w(offer accept decline withdraw list read write delete) do
+        assert Decisions.recorded?("file", action), "file.#{action} is not recorded"
+      end
+    end
+
     test "every other call is recorded, discovery tools' other actions among them" do
       assert Decisions.recorded?("tools", "call")
       assert Decisions.recorded?("system", "notify")

@@ -268,18 +268,7 @@ defmodule PrismWeb.FilesLiveTest do
         call(sender.ctx, "offer", %{"paths" => ["data/lost.csv"], "to" => ctx.user_id})
 
       {view, _html} = mount_athanor(conn, "/files")
-
-      previous = Application.get_env(:arca, :storage_adapter)
-      Application.put_env(:arca, :storage_adapter, StalledStore)
-      StalledStore.arm()
-
-      on_exit(fn ->
-        StalledStore.reset()
-
-        if previous,
-          do: Application.put_env(:arca, :storage_adapter, previous),
-          else: Application.delete_env(:arca, :storage_adapter)
-      end)
+      stall_publication!()
 
       # The acceptance commits; its publication cannot start.
       assert {:ok, %{receipts: [%{status: "received"}]}} =
@@ -305,6 +294,38 @@ defmodule PrismWeb.FilesLiveTest do
       assert has_element?(view, ~s([data-receipt="#{offer_id}"]), "could not be delivered")
       assert has_element?(view, ~s([data-receipt="#{offer_id}"]), "Sam Sender")
       refute has_element?(view, ~s([data-receipt="#{offer_id}"]), "still landing")
+    end
+
+    test "a transfer the sweep lands later leaves the Inbox as it lands", %{conn: conn, ctx: ctx} do
+      sender = sharing_person!(ctx, name: "Sam Sender")
+      put!(sender, "late.csv", "landed on the sweep")
+
+      {:ok, %{offer_id: offer_id}} =
+        call(sender.ctx, "offer", %{"paths" => ["data/late.csv"], "to" => ctx.user_id})
+
+      assert {:ok, %{inbox: [%{folder: folder}]}} = call(ctx, "offers")
+
+      {view, _html} = mount_athanor(conn, "/files")
+      stall_publication!()
+
+      # The acceptance commits; its publication cannot start.
+      assert {:ok, %{receipts: [%{status: "received"}]}} =
+               call(ctx, "accept", %{"offer_id" => offer_id})
+
+      settled(view)
+      assert has_element?(view, ~s([data-receipt="#{offer_id}"]), "still landing")
+
+      # Storage answers again, and the receipts sweep finishes the transfer.
+      StalledStore.reset()
+      assert {:ok, 1} = Arca.Retention.FileReceipts.prune(sweeper(ctx), 7, false)
+
+      assert {:ok, "landed on the sweep"} =
+               Arca.get(actor(ctx), String.split(folder, "/") ++ [offer_id, "late.csv"])
+
+      html = settled(view)
+      refute has_element?(view, ~s([data-receipt="#{offer_id}"]))
+      refute html =~ "still landing"
+      assert html =~ "Nothing is waiting for you"
     end
 
     test "the people a person may send to are those seated with them in an active athanor, " <>
@@ -389,6 +410,22 @@ defmodule PrismWeb.FilesLiveTest do
 
   # The retention sweep's actor for the athanor: the server's own, narrowed.
   defp sweeper(ctx), do: %{Prima.Actor.system() | athanor_id: ctx.athanor_id, scope: :athanor}
+
+  # Storage under `StalledStore` for the rest of the test, its folder
+  # probes under `data/inbox/` failing until `StalledStore.reset/0`.
+  defp stall_publication! do
+    previous = Application.get_env(:arca, :storage_adapter)
+    Application.put_env(:arca, :storage_adapter, StalledStore)
+    StalledStore.arm()
+
+    on_exit(fn ->
+      StalledStore.reset()
+
+      if previous,
+        do: Application.put_env(:arca, :storage_adapter, previous),
+        else: Application.delete_env(:arca, :storage_adapter)
+    end)
+  end
 
   # The page once every message already sent to it has been handled.
   defp settled(view) do

@@ -5,8 +5,9 @@ defmodule Cyfr.Bus.FileOffer do
   @moduledoc """
   A file offer moved, on the global per-person `Cyfr.Bus.file_offers/1`
   of each person it concerns: an offer's transitions reach its sender and
-  its recipient, and a receipt the sweep failed reaches its recipient
-  alone. One message per file, as the store announces them. The kind is
+  its recipient, and a receipt that landed, or that the sweep failed,
+  reaches its recipient alone. One message per file, as the store
+  announces them. The kind is
   what happened; `offer_id` names the offer, `from_user_id` its sender
   and `filename` the file, and nothing of the file travels: no size,
   digest, path or byte. A page reads the offers again through
@@ -16,12 +17,13 @@ defmodule Cyfr.Bus.FileOffer do
 
   alias Cyfr.Bus.Payload
 
-  @kinds [:offered, :accepted, :declined, :withdrawn, :expired, :failed]
+  @kinds [:offered, :accepted, :declined, :withdrawn, :expired, :failed, :landed]
 
   @enforce_keys [:kind, :offer_id, :from_user_id, :filename]
   defstruct [:kind, :offer_id, :from_user_id, :filename]
 
-  @type kind :: :offered | :accepted | :declined | :withdrawn | :expired | :failed
+  @type kind ::
+          :offered | :accepted | :declined | :withdrawn | :expired | :failed | :landed
 
   @type t :: %__MODULE__{
           kind: kind(),

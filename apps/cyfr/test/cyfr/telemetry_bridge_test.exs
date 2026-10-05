@@ -105,11 +105,11 @@ defmodule Cyfr.TelemetryBridgeTest do
     ] ++ confirmation_cases(tenant) ++ instance_entry_cases() ++ file_offer_cases()
   end
 
-  # Sending a copy: each transition, and a receipt the sweep failed, heard
-  # on the recipient's own topic as the offer, its kind, its sender and the
-  # filename.
+  # Sending a copy: each transition, a receipt that landed and one the
+  # sweep failed, heard on the recipient's own topic as the offer, its
+  # kind, its sender and the filename.
   defp file_offer_cases do
-    for kind <- ~w(offered accepted declined withdrawn expired failed)a do
+    for kind <- ~w(offered accepted declined withdrawn expired failed landed)a do
       {[:cyfr, :arca, :file_offer, kind],
        %{
          offer_id: "ofr_1",
@@ -316,7 +316,8 @@ defmodule Cyfr.TelemetryBridgeTest do
       refute_receive %InstanceEntryChanged{}, 100
     end
 
-    test "an offer's transition reaches both its people, and a failed receipt its recipient alone" do
+    test "an offer's transition reaches both its people, and a receipt that failed or landed " <>
+           "its recipient alone" do
       people = ["usr_sender", "usr_recipient", "usr_other"]
       for person <- people, do: relay(Bus.file_offers(person))
 
@@ -349,18 +350,20 @@ defmodule Cyfr.TelemetryBridgeTest do
         refute_receive {:heard, _topic, _message}, 50
       end
 
-      :telemetry.execute(
-        [:cyfr, :arca, :file_offer, :failed],
-        %{system_time: 1},
-        Map.put(metadata, :kind, :failed)
-      )
-
-      recipient = Bus.file_offers("usr_recipient")
-      assert_receive {:heard, ^recipient, heard}
-      assert Map.from_struct(heard) == expected.(:failed)
-
       # The sender's offer is already accepted; the receipt is the recipient's.
-      refute_receive {:heard, _topic, _message}, 100
+      recipient = Bus.file_offers("usr_recipient")
+
+      for kind <- [:failed, :landed] do
+        :telemetry.execute(
+          [:cyfr, :arca, :file_offer, kind],
+          %{system_time: 1},
+          Map.put(metadata, :kind, kind)
+        )
+
+        assert_receive {:heard, ^recipient, heard}
+        assert Map.from_struct(heard) == expected.(kind)
+        refute_receive {:heard, _topic, _message}, 100
+      end
     end
 
     test "a file offer event naming no person, or another kind, is dropped and counted" do

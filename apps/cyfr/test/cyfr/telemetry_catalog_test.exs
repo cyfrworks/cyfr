@@ -97,12 +97,12 @@ defmodule Cyfr.TelemetryCatalogTest do
     end
   end
 
-  # Sending a copy is audited at each durable transition, a receipt the
-  # sweep fails among them, and the bridge carries each to the people it
-  # concerns on their own topics.
-  test "every file offer transition and failed receipt is audited and bridged" do
+  # Sending a copy is audited at each durable transition, a receipt that
+  # lands or that the sweep fails among them, and the bridge carries each
+  # to the people it concerns on their own topics.
+  test "every file offer transition, landed receipt and failed receipt is audited and bridged" do
     events =
-      for kind <- ~w(offered accepted declined withdrawn expired failed)a,
+      for kind <- ~w(offered accepted declined withdrawn expired failed landed)a,
           do: [:cyfr, :arca, :file_offer, kind]
 
     assert Enum.filter(Catalog.events(), &match?([:cyfr, :arca, :file_offer | _], &1)) ==

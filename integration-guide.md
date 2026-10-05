@@ -833,7 +833,7 @@ cyfr log get <call_id>                     # Full details for a specific log ent
 cyfr log correlate <request_id>            # Find related log entries and decisions
 ```
 
-Every call the server admitted or refused is also recorded once as an admission decision under its call ID, with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_grimoire_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via the `decision` tool or `cyfr decision` CLI commands; a platform admin reads every athanor's decisions and the host's own with `--global`:
+Every call the server admitted or refused is also recorded once as an admission decision under its call ID — all but discovery (`tools.list`, `system.status`), the audit's own reads (every `decision`, `mcp_log` and `record` action) and the reads the shell makes of the caller's own state on its own initiative (`file.offers`), which are recorded neither admitted nor refused — with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_grimoire_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via the `decision` tool or `cyfr decision` CLI commands; a platform admin reads every athanor's decisions and the host's own with `--global`:
 
 ```bash
 cyfr decision list --admission refused     # Recent refusals
@@ -949,7 +949,7 @@ Beside `list`, `read`, `write` and `delete`, the `file` tool sends a person a co
 | `decline` | `offer_id` | Refuse an offer sent to you |
 | `withdraw` | `offer_id` | Take back an offer you sent, while it is not yet accepted. An accepted copy is the recipient's |
 
-An offer ends once: accepted, declined, withdrawn or expired, whichever lands first. Asking again after it ended answers a conflict naming how it ended. A file the sweep has not yet landed — the recipient's storage was full, or the server stopped part-way — stays in `receipts` and lands on a later retention sweep. One for which nothing was written within `file_receipt_days` (a retention setting, 7 by default) is `failed`: its copy is released, the recipient is told, and the sender must offer it again.
+An offer ends once: accepted, declined, withdrawn or expired, whichever lands first. Asking again after it ended answers a conflict naming how it ended. A file the sweep has not yet landed — the recipient's storage was full, or the server stopped part-way — stays in `receipts` and lands on a later retention sweep. One for which nothing was written within `file_receipt_days` (a retention setting, 7 by default) is `failed`: its copy is released, the recipient is told, and the sender must offer it again. A `failed` file stays in `receipts` for another `file_receipt_days`, then leaves.
 
 ---
 

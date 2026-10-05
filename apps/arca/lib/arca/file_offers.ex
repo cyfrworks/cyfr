@@ -124,9 +124,11 @@ defmodule Arca.FileOffers do
   Every durable offer transition emits `[:cyfr, :arca, :file_offer, kind]`
   once after it commits, per file, with the offer id, the kind, the
   sender's and recipient's ids and the filename, never content. A receipt
-  the receipts sweep fails (`fail_stale/3`) emits
-  `[:cyfr, :arca, :file_offer, :failed]` the same way, once, after its
-  row says so: that is how its recipient is told.
+  emits the same way, once, after its row says so: `:landed` when its
+  completion is recorded, whether the acceptance or the receipts sweep
+  completed it, and `:failed` when the sweep fails it (`fail_stale/3`).
+  That is how its recipient is told. A receipt failed for the receipts
+  window is deleted by the sweep (`delete_failed/3`).
   """
 
   import Ecto.Query
@@ -664,6 +666,33 @@ defmodule Arca.FileOffers do
         end
 
         {:ok, length(rows)}
+      end
+    end)
+  end
+
+  @doc false
+  # The receipts retention kind's removal of a transfer `failed` for the
+  # window: one whose failure was written (`updated_at`) before `cutoff`.
+  # Its recipient was told when it failed and has seen it listed since,
+  # and its custody copy was released then; a copy that release missed is
+  # one no receipt names, which `sweep_custody/2` releases. A failed
+  # receipt is held by no claim, so nothing else writes it. Answers how
+  # many went, or on a dry run would.
+  @spec delete_failed(Prima.Actor.t(), DateTime.t(), boolean()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def delete_failed(%Prima.Actor{athanor_id: athanor_id}, %DateTime{} = cutoff, dry_run)
+      when resolved(athanor_id) and is_boolean(dry_run) do
+    Arca.Repo.Errors.with_db_rescue("Arca.FileOffers.delete_failed", fn ->
+      query =
+        from(r in FileReceipt,
+          where: r.athanor_id == ^athanor_id and r.status == "failed" and r.updated_at < ^cutoff
+        )
+
+      if dry_run do
+        {:ok, Arca.Repo.aggregate(query, :count)}
+      else
+        {count, _} = Arca.Repo.delete_all(query)
+        {:ok, count}
       end
     end)
   end
@@ -1299,12 +1328,16 @@ defmodule Arca.FileOffers do
 
   # Step 4: `completed` is written under the claim before anything is
   # released, so a completer whose claim was taken stops having released
-  # nothing. The custody copy goes after it; a release that fails is left
-  # to the receipts sweep, which releases the copy of every completed
+  # nothing. The write is conditional and outside any transaction, so the
+  # one completer it succeeds for announces the landing, once, after it
+  # has committed. The custody copy goes after it; a release that fails is
+  # left to the receipts sweep, which releases the copy of every completed
   # receipt.
   defp finish(actor, row, token) do
     case record(row, token, status: "completed") do
       {:ok, row} ->
+        announce(:landed, row)
+
         with {:error, reason} <- release_custody(actor, row) do
           Logger.warning(
             "[Arca.FileOffers] custody of receipt #{row.id} not released: #{inspect(reason)}; " <>
@@ -1564,9 +1597,11 @@ defmodule Arca.FileOffers do
 
   defp announce(:expired, row), do: emit([:cyfr, :arca, :file_offer, :expired], :expired, row)
 
-  # A receipt's failure: the row is the recipient's receipt, which names
-  # the same offer, people and file as the offer row it came from.
+  # A receipt's failure or landing: the row is the recipient's receipt,
+  # which names the same offer, people and file as the offer row it came
+  # from.
   defp announce(:failed, row), do: emit([:cyfr, :arca, :file_offer, :failed], :failed, row)
+  defp announce(:landed, row), do: emit([:cyfr, :arca, :file_offer, :landed], :landed, row)
 
   defp emit(event, kind, row) do
     :telemetry.execute(event, %{system_time: System.system_time()}, %{

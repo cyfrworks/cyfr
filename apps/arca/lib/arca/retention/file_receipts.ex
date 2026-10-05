@@ -16,13 +16,18 @@ defmodule Arca.Retention.FileReceipts do
        copy released; one with a write ever sent is kept and reconciled on
        every sweep at any age, at its current and earlier issued paths,
        since a write that was sent may still land;
-    3. the custody copy of every `completed` or `failed` receipt still
+    3. a receipt `failed` for longer than the value (its failure written
+       before the cutoff) is deleted: its recipient was told when it
+       failed and has seen it listed since, and its custody copy went
+       then;
+    4. the custody copy of every `completed` or `failed` receipt still
        holding one is released, and copies no receipt row names are
        released once older than a day by the store's own clock.
 
   Nothing here touches a published destination. Answers how many receipts
-  completed or failed and how many copies were released (or, on a dry
-  run, how many receipts would fail and copies would go).
+  completed, failed or were deleted and how many copies were released
+  (or, on a dry run, how many receipts would fail or be deleted and
+  copies would go).
   """
   @behaviour Arca.Retention.Kind
 
@@ -41,10 +46,15 @@ defmodule Arca.Retention.FileReceipts do
   def prune(%Prima.Actor{athanor_id: athanor} = actor, days, dry_run)
       when is_binary(athanor) and athanor != "" and is_integer(days) and days > 0 and
              is_boolean(dry_run) do
+    cutoff = Kind.days_cutoff(days)
+
+    # A receipt failed here is written now, after the cutoff, so it is not
+    # also deleted by the same run.
     with {:ok, completed} <- resume(actor, dry_run),
-         {:ok, failed} <- Arca.FileOffers.fail_stale(actor, Kind.days_cutoff(days), dry_run),
+         {:ok, failed} <- Arca.FileOffers.fail_stale(actor, cutoff, dry_run),
+         {:ok, deleted} <- Arca.FileOffers.delete_failed(actor, cutoff, dry_run),
          {:ok, released} <- Arca.FileOffers.sweep_custody(actor, dry_run) do
-      {:ok, completed + failed + released}
+      {:ok, completed + failed + deleted + released}
     end
   end
 
