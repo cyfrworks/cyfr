@@ -299,6 +299,106 @@ defmodule Crucible.AdmissionTest do
       assert stamp.activation_graph == %{@root_node => root.release_digest}
       assert is_binary(stamp.activation_digest)
     end
+
+    test "a connection roots under the named binding its ingress holds, with its own key, and " <>
+           "a name the ingress lacks is refused with no default in its place",
+         %{ctx: ctx} do
+      person = Sanctum.TestContext.local(:prism)
+      %{ref: ref, default: default, work: work} = named_app!(person)
+      {:ok, name_ref} = Prima.ComponentRef.to_name_ref(ref)
+
+      assert {:ok, %Authority{} = picked} =
+               Admission.authority_for(ctx, :default, ref, connection: "Work")
+
+      assert picked.resources.vault.entry_id == work.id
+      assert picked.resources.vault.binding_key == Blob.binding_key(name_ref, "@ingress", "Work")
+      refute Map.has_key?(picked.resources.vault, :named)
+
+      # A run's root is loaded the same way, the pick included.
+      assert {:ok, %{authority: rooted}} =
+               Admission.authority_and_stamp_for(ctx, :default, ref, connection: "Work")
+
+      assert rooted.resources == picked.resources
+
+      # No account: the ingress's default, as before.
+      assert {:ok, %Authority{} = plain} = Admission.authority_for(ctx, :default, ref)
+      assert plain.resources.vault.entry_id == default.id
+      assert plain.resources.vault.binding_key == Blob.binding_key(name_ref, "@ingress", nil)
+
+      for name <- ["Home", "work", "default"] do
+        assert {:error, :connection_not_granted} =
+                 Admission.authority_for(ctx, :default, ref, connection: name),
+               "#{inspect(name)} was picked"
+      end
+    end
+  end
+
+  # An app of the person's own whose own calls bind a default and the
+  # account "Work" beside it, through the consent walk.
+  defp named_app!(person) do
+    name = "named-root-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "reagent",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "fields" => ["KEY"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(person, File.read!(@math_wasm_path), %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(manifest)
+      })
+
+    entry = fn label ->
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(person, %{
+          name: "#{name} #{label}",
+          kind: "api_key",
+          provider_hint: "example.com",
+          fields: %{"KEY" => "k-#{label}"},
+          destination: %{"hosts" => ["api.example.com"]},
+          disclose: true
+        })
+
+      view
+    end
+
+    default = entry.("default")
+    work = entry.("work")
+    ref = "reagent:local." <> name
+
+    decisions = %{
+      ref: ref,
+      bindings: [
+        %{need: "api_key", entry_id: default.id},
+        %{need: "api_key", name: "Work", entry_id: work.id}
+      ]
+    }
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(person, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    %{ref: ref, default: default, work: work}
   end
 
   describe "root_edge/4" do

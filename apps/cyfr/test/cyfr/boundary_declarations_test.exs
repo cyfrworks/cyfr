@@ -144,7 +144,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(Providers.Assertion Providers.Confirmation Providers.Pairing Providers.Passkey
           Providers.Person),
        "the person, pairing, passkey and confirmation operations, declared here and " <>
-         "driven by the host's suites through their handlers"}
+         "driven by the host's suites through their handlers"},
+      {~w(Consent.Accounts),
+       "the assistant's read of which named accounts an app's own ingress binds and " <>
+         "which entry a name resolves to, never a value, never a write"}
     ],
     Grimoire => [
       {~w(Catalog Supervisor), "the composition root loads the table and starts the gate"},

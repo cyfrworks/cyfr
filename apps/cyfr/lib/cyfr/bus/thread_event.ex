@@ -18,7 +18,10 @@ defmodule Cyfr.Bus.ThreadEvent do
     * `:queued` — how many turns wait;
     * `:grants` — the thread's standing grants;
     * `:restart_prompt` — `%{text:, user_id:}`;
-    * `:consent_required` — `%{ref:, user_id:}`;
+    * `:consent_required` — `%{ref:, user_id:}`, and for a launch naming
+      an account its app's profile does not bind, `account: %{name:,
+      need:}` beside them: the account's name and the app's credential
+      need it is for, nil for the one need or one no binding tells;
     * `:intents` — `%{intents:, user_id:}`;
     * `:usage` — the turn's token totals;
     * `:tool_activity` — the running tool calls;

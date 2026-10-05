@@ -19,6 +19,18 @@ defmodule Aqua.Launch do
   (`{:approver_unavailable, :no_origin}`). The loop marks the step
   dispatched before calling here, which is what makes a launch happen
   once.
+
+  A launch naming an account (`connection`) runs under the account its
+  card showed, or not at all. The card's proposal binds the entry the
+  name resolved to when the card was drawn (`vault_entry`); before
+  anything runs the name is resolved again, as the approver, from the
+  app's stored head (`Sanctum.Consent.Accounts.resolve/4`, the one read
+  the assistant's policy resolves it by), and a
+  different entry, a name the head no longer binds, or an account the
+  card did not show is refused as a stale approval, a conflict that says
+  to ask again. The run itself picks the named binding as its root's
+  vault (`Crucible.run_root/5`); a head that moves between this check and
+  the run's own admission is resolved there again, by name.
   """
 
   alias Aqua.Tape
@@ -39,7 +51,8 @@ defmodule Aqua.Launch do
          {:ok, card} <- Tape.message(ctx, approval.message_id),
          :ok <- card_approved(approval, card),
          {:ok, args} <- launch_args(card),
-         {:ok, approver} <- approver(ctx, approval) do
+         {:ok, approver} <- approver(ctx, approval),
+         :ok <- account_holds(approver, card, args) do
       case Aqua.Ops.call_tool("execution", approver, args) do
         {:ok, result} -> {:ok, %{execution_id: execution_id(result), result: result}}
         {:error, reason} -> {:error, reason}
@@ -91,6 +104,47 @@ defmodule Aqua.Launch do
       _ ->
         {:error, {:invalid_argument, "the card carries no launch"}}
     end
+  end
+
+  # The account the card showed is the account the launch runs under: the
+  # name its arguments carry still resolves, as the approver, to the entry
+  # its proposal bound. A launch naming none runs under the default, and
+  # its card bound no entry.
+  defp account_holds(approver, card, args) do
+    shown = get_in(Arca.ThreadStorage.payload(card), ["intent", "proposal", "vault_entry"])
+
+    case {shown, launch_account(approver, args)} do
+      {nil, {:ok, nil}} -> :ok
+      {entry_id, {:ok, entry_id}} when is_binary(entry_id) -> :ok
+      {_shown, {:error, reason}} when reason != :connection_not_granted -> {:error, reason}
+      _another_account_or_none -> stale(args["connection"])
+    end
+  end
+
+  # The entry the account an `execution.run` names resolves to on the
+  # app's own profile, by the one read of it; none for a launch naming no
+  # account, and for a stream, which declares none and is refused naming
+  # one by the gate.
+  defp launch_account(approver, %{"action" => "run", "connection" => name} = args)
+       when is_binary(name) do
+    Sanctum.Consent.Accounts.resolve(
+      approver,
+      Prima.Authority.RootSelect.decode(args["profile"]),
+      args["reference"],
+      name
+    )
+  end
+
+  defp launch_account(_approver, _args), do: {:ok, nil}
+
+  defp stale(name) do
+    account = if is_binary(name), do: "The account #{inspect(name)}", else: "The default account"
+
+    {:error,
+     {:conflict,
+      account <>
+        " is not the one this launch was approved for, so nothing ran: ask again to " <>
+        "approve the account as it stands now"}}
   end
 
   # The approver continues the turn the approval was opened in, under the

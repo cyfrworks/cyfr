@@ -266,6 +266,26 @@ defmodule Opus.FormulaHandlerTest do
     }
   end
 
+  # `ref`'s owner grant through the consent walk, as a person makes it,
+  # admitting runs over the API, its own calls binding no account.
+  defp grant_programmatic!(ref) do
+    person = Sanctum.TestContext.local(:prism)
+    decisions = %{ref: ref, origins: [:interactive, :programmatic]}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(person, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    :ok
+  end
+
   defp children(parent_id),
     do:
       Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^parent_id))
@@ -517,8 +537,8 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   describe "execution.run from outside a chain" do
-    test "a run naming a connection is refused before anything runs, though the action " <>
-           "declares the argument",
+    test "a run naming an account its profile's ingress lacks is refused setup required " <>
+           "before anything runs, and one with no profile is asked for its consent",
          %{ctx: ctx, ref: ref} do
       # The argument is declared as the account a call names, an entry for
       # a standing approval's constraint.
@@ -528,10 +548,20 @@ defmodule Opus.FormulaHandlerTest do
       before = Arca.Repo.aggregate(Arca.Schemas.Execution, :count)
       named = %{"reference" => ref, "input" => %{"a" => 1}, "connection" => "Work"}
 
-      assert {:error, {:invalid_argument, message}} =
+      # No profile roots the reference: the consent signal, as a run naming
+      # no account meets it.
+      assert {:error, {:consent_required, %{"ref" => ^ref}}} =
                Grimoire.call_external("execution", ctx, Map.put(named, "action", "run"))
 
-      assert message =~ "outside a chain"
+      # Granted, for runs over the API, with no account on its own calls:
+      # the name is a grant to make, never run under the default.
+      grant_programmatic!(@test_node)
+
+      assert {:error, refused} =
+               Grimoire.call_external("execution", ctx, Map.put(named, "action", "run"))
+
+      assert %Prima.Refusal{class: :setup_required, reason: :connection_not_granted} =
+               Prima.Refusal.classify(refused)
 
       # A stream declares no connection, and is refused naming it.
       assert {:error, %Prima.Refusal{class: :invalid_argument, message: message}} =

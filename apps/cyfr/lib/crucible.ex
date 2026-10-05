@@ -84,10 +84,13 @@ defmodule Crucible do
   Root an execution chain under a profile's consent and run `reference`
   with `input` under the authority it grants.
 
-  `profile_selector` and the options `:route`, `:ceiling` and
-  `:live_shape_digest` are
-  `Crucible.Admission.authority_for/4`'s. Remaining options pass
-  through to `Crucible.Dispatch.run/4`.
+  `profile_selector` and the options `:route`, `:ceiling`,
+  `:live_shape_digest` and `:connection` are
+  `Crucible.Admission.authority_for/4`'s: a `:connection` roots the run
+  under the named binding its profile's ingress holds under that name, and
+  a name the ingress does not bind is `{:error, :connection_not_granted}`
+  with nothing run. Remaining options pass through to
+  `Crucible.Dispatch.run/4`.
   """
   @spec run_root(Context.t(), RootSelect.selector(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
@@ -99,7 +102,7 @@ defmodule Crucible do
            Admission.authority_and_stamp_for(ctx, profile_selector, reference, opts) do
       exec_opts =
         opts
-        |> Keyword.drop([:route, :ceiling, :live_shape_digest])
+        |> Keyword.drop([:route, :ceiling, :live_shape_digest, :connection])
         |> Keyword.merge(
           authority: authority,
           activation_stamp: stamp,

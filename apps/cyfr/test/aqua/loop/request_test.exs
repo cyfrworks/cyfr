@@ -92,6 +92,76 @@ defmodule Aqua.Loop.RequestTest do
     assert [%{"role" => "user"}] = Request.instruct([], "now")
   end
 
+  describe "the accounts a launch may name" do
+    defp connection(tools) do
+      tools
+      |> Enum.find(&(&1["name"] == "execution"))
+      |> get_in(["parameters", "properties", "connection", "description"])
+    end
+
+    test "are listed per app with their names and the default, never an entry" do
+      accounts = %{
+        apps: [
+          {"formula:local.mailer", ["Personal", "Work"]},
+          {"reagent:local.db", ["Supabase 2"]}
+        ],
+        truncated?: false
+      }
+
+      text =
+        connection(Request.tool_definitions(%{"execution.run" => "ask"}, accounts: accounts))
+
+      assert text =~ "omit `connection` for its default account"
+      assert text =~ ~s[formula:local.mailer ("Personal", "Work")]
+      assert text =~ ~s[reagent:local.db ("Supabase 2")]
+      refute text =~ "vlt_"
+      refute text =~ "and more"
+
+      # Nothing listed says so, and still names the default.
+      none =
+        connection(
+          Request.tool_definitions(%{"execution.run" => "auto"},
+            accounts: %{apps: [], truncated?: false}
+          )
+        )
+
+      assert none =~ "omit `connection` for its default account"
+      assert none =~ "No app binds a named account"
+
+      # Without the turn's list the declared description stands.
+      declared = connection(Request.tool_definitions(%{"execution.run" => "ask"}))
+      assert declared =~ "a run started outside a chain asks its profile's own calls for it"
+      refute declared =~ "Apps with named accounts"
+    end
+
+    test "list at most fifty apps, and a cut list says how many more" do
+      apps =
+        for n <- 1..53, do: {"reagent:local.app-#{String.pad_leading("#{n}", 2, "0")}", ["Work"]}
+
+      text =
+        connection(
+          Request.tool_definitions(%{"execution.run" => "ask"},
+            accounts: %{apps: apps, truncated?: false}
+          )
+        )
+
+      assert text =~ "reagent:local.app-50"
+      refute text =~ "reagent:local.app-51"
+      assert text =~ "and 3 more."
+
+      # Heads read cut short: more may stand, uncounted.
+      cut =
+        connection(
+          Request.tool_definitions(%{"execution.run" => "ask"},
+            accounts: %{apps: Enum.take(apps, 2), truncated?: true}
+          )
+        )
+
+      assert cut =~ "reagent:local.app-02"
+      assert cut =~ "and more."
+    end
+  end
+
   test "the projection is shaped for the contract" do
     rows = [
       row(1, "text", "usr_a", "@aqua read a.txt"),

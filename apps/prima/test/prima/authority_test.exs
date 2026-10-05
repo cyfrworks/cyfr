@@ -128,6 +128,76 @@ defmodule Prima.AuthorityTest do
       assert auth.invoke_mode == :edge_only
     end
 
+    test "a connection picks the ingress's named binding as the root's vault, with its own key" do
+      named = %{
+        "@ingress" => %{
+          "vault" =>
+            Prima.Test.AuthorityFixtures.bound_vault(
+              @formula,
+              "@ingress",
+              "vault-1",
+              "sha256:aaa",
+              named: %{
+                "Second" =>
+                  Prima.Test.AuthorityFixtures.bound_vault(
+                    @formula,
+                    "@ingress",
+                    "vault-2",
+                    "sha256:bbb",
+                    name: "Second"
+                  )
+              }
+            )
+        }
+      }
+
+      {:ok, picked} =
+        Authority.root(profile(), blob(named), ceiling: @ceiling, connection: "Second")
+
+      assert picked.resources.vault.entry_id == "vault-2"
+      assert picked.resources.vault.binding_key == "#{@formula}|@ingress|name:Second"
+      refute Map.has_key?(picked.resources.vault, :named)
+      assert picked.cursor == {:bound, @formula}
+
+      # The picked binding reads back from the wire as the root holds it.
+      assert {:ok, back} = picked |> Authority.to_wire() |> Authority.from_wire()
+      assert back.resources == picked.resources
+
+      # No account: the ingress as it stands, its default with the named
+      # bindings beside it.
+      {:ok, default} = Authority.root(profile(), blob(named), ceiling: @ceiling)
+      assert default.resources.vault.entry_id == "vault-1"
+      assert default.resources.vault.binding_key == "#{@formula}|@ingress|default"
+      assert %{"Second" => %{entry_id: "vault-2"}} = default.resources.vault.named
+
+      assert {:ok, %{resources: resources}} =
+               Authority.root(profile(), blob(named), ceiling: @ceiling, connection: nil)
+
+      assert resources == default.resources
+    end
+
+    test "a connection the ingress does not bind is refused, never the default" do
+      assert {:error, :connection_not_granted} =
+               Authority.root(profile(), blob(), ceiling: @ceiling, connection: "Second")
+
+      bound = %{
+        "@ingress" => %{
+          "vault" =>
+            Prima.Test.AuthorityFixtures.bound_vault(
+              @formula,
+              "@ingress",
+              "vault-1",
+              "sha256:aaa"
+            )
+        }
+      }
+
+      for name <- ["Second", "vault-1", "default"] do
+        assert {:error, :connection_not_granted} =
+                 Authority.root(profile(), blob(bound), ceiling: @ceiling, connection: name)
+      end
+    end
+
     test "rejects malformed profiles" do
       assert {:error, {:invalid_profile, :profile_id}} =
                Authority.root(profile(%{profile_id: ""}), blob(), ceiling: @ceiling)

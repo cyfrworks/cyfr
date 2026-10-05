@@ -242,6 +242,48 @@ defmodule Crucible.ProviderTest do
       assert err_msg(msg) =~ "Consent required"
     end
 
+    test "a connection roots the run under the account its profile's ingress binds by that " <>
+           "name, and a name it lacks is refused setup required with nothing run" do
+      person = Sanctum.TestContext.local(:prism)
+      caller = Sanctum.TestContext.local(:api)
+      ref = named_app!(person)
+
+      run = fn connection ->
+        Provider.handle("execution", caller, %{
+          "action" => "run",
+          "reference" => ref <> ":1.0.0",
+          "input" => %{"a" => 1, "b" => 2},
+          "connection" => connection
+        })
+      end
+
+      listed = fn ->
+        {:ok, %{executions: executions}} =
+          Provider.handle("execution", caller, %{"action" => "list"})
+
+        executions
+      end
+
+      # A name the ingress does not bind is a grant to make, typed: no row.
+      for name <- ["Home", "work"] do
+        assert {:error, :connection_not_granted} = run.(name)
+      end
+
+      assert listed.() == []
+
+      assert %Prima.Refusal{class: :setup_required} =
+               Prima.Refusal.classify(:connection_not_granted)
+
+      # The account it binds is admitted, never refused for being named:
+      # the run is rooted and recorded.
+      result = run.("Work")
+      refute match?({:error, {:invalid_argument, _}}, result)
+      refute match?({:error, :connection_not_granted}, result)
+      assert [%{execution_id: id}] = listed.()
+      assert %{reference: reference} = Arca.Repo.get!(Arca.Schemas.Execution, id)
+      assert String.starts_with?(reference, ref)
+    end
+
     test "respects component type parameter", %{ctx: ctx, ref: ref} do
       # Component type is extracted from the reference before execution,
       # so it should be present in the record even though execution fails
@@ -1034,6 +1076,74 @@ defmodule Crucible.ProviderTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings (the consent-tag wire forms included) pass through
   # unchanged.
+  # An app of the person's own whose own calls bind a default and the
+  # account "Work" beside it, admitting runs over the API, through the
+  # consent walk.
+  defp named_app!(person) do
+    name = "named-run-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "reagent",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "fields" => ["KEY"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(person, File.read!(@math_wasm_path), %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(manifest)
+      })
+
+    entry = fn label ->
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(person, %{
+          name: "#{name} #{label}",
+          kind: "api_key",
+          provider_hint: "example.com",
+          fields: %{"KEY" => "k-#{label}"},
+          destination: %{"hosts" => ["api.example.com"]},
+          disclose: true
+        })
+
+      view
+    end
+
+    ref = "reagent:local." <> name
+
+    decisions = %{
+      ref: ref,
+      origins: [:interactive, :programmatic],
+      bindings: [
+        %{need: "api_key", entry_id: entry.("default").id},
+        %{need: "api_key", name: "Work", entry_id: entry.("work").id}
+      ]
+    }
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(person, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    ref
+  end
+
   defp err_msg(reason) do
     Grimoire.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")

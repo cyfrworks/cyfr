@@ -51,6 +51,7 @@ defmodule Sanctum do
       Cipher.Rotation,
       ClientIp,
       Consent,
+      Consent.Accounts,
       Consent.Authz,
       Consent.Components,
       Consent.Loader,

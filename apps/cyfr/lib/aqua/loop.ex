@@ -14,9 +14,12 @@ defmodule Aqua.Loop do
   beside each other and everything else alone, each in a worker of its
   own. A round with no calls ends the turn. A card pauses it — the loop
   releases the root itself before it returns — and a continuation
-  resumes it from the rows. A launch a person approved is consumed by
-  `Aqua.Launch` while the root is paused around it, so the application
-  takes a root of its own.
+  resumes it from the rows. Every launch asks, and one a person approved
+  is consumed by `Aqua.Launch` while the root is paused around it, so the
+  application takes a root of its own. A launch naming an account its
+  app's own profile does not bind ends the turn as setup required, naming
+  the app and the account: the person grants it there, and the retry is a
+  new turn, since this one's authority never widens.
 
   Every write goes through `Aqua.Tape` under the actor's guest-planed
   context; the loop process never runs a child on itself.
@@ -865,17 +868,19 @@ defmodule Aqua.Loop do
 
   # Cards first, then the runnable steps in source order; a group of
   # reads runs beside itself, everything else alone; a steer that
-  # arrived skips what has not started.
+  # arrived skips what has not started. A launch naming an account its
+  # app's profile does not bind ends the turn as setup required, with
+  # nothing else of the response started.
   defp dispatch(%State{} = state, items) do
-    # What the turn has already written to, and what this response is about
-    # to. The closed calls alone are a snapshot from before any of these ran,
-    # so a write, a build and a run proposed together were every one of them
-    # judged against a turn that had touched nothing — and the launch rule
-    # that asks for a card after a write never saw the write.
-    touched = MapSet.union(touched(state), proposes(items))
-    {runnable, cards} = Enum.reduce(items, {[], 0}, &decide(state, touched, &1, &2))
+    {runnable, cards, setup} = Enum.reduce(items, {[], 0, nil}, &decide(state, &1, &2))
     runnable = Enum.reverse(runnable)
 
+    if setup,
+      do: end_for_account(state, setup),
+      else: run_dispatched(state, runnable, cards)
+  end
+
+  defp run_dispatched(%State{} = state, runnable, cards) do
     case run_groups(state, group(runnable)) do
       {:halt, result, state} ->
         {:halt, result, state}
@@ -894,16 +899,19 @@ defmodule Aqua.Loop do
     end
   end
 
+  # A launch the turn ends on decides nothing after it: what is left of the
+  # response is skipped with the turn.
+  defp decide(_state, _item, {_runnable, _cards, setup} = acc) when setup != nil, do: acc
+
   # A restricted turn runs replay-safe reads and nothing else — before a
   # card's approval or the policy can say otherwise.
   defp decide(
          %State{restricted?: true} = state,
-         touched,
          %{step: step, call: {:ok, %Call{} = call}} = item,
          acc
        ) do
     if Policy.replay_safe?(call) do
-      decide_open(state, touched, item, acc)
+      decide_open(state, item, acc)
     else
       close(
         state,
@@ -919,32 +927,32 @@ defmodule Aqua.Loop do
     end
   end
 
-  defp decide(state, touched, item, acc), do: decide_open(state, touched, item, acc)
+  defp decide(state, item, acc), do: decide_open(state, item, acc)
 
   # An approved call runs as it was approved: the call recalled from its row
-  # must be the proposal the approval's digest names.
+  # must be the proposal the approval's digest names — for a launch, with
+  # the entry its account resolved to when the card was drawn, as the
+  # card stored it.
   defp decide_open(
          state,
-         _touched,
          %{approval: %{} = approval, step: step, call: {:ok, %Call{} = call}} = item,
-         {runnable, cards}
+         {runnable, cards, setup}
        ) do
-    if Aqua.Approvals.proposal?(approval, Policy.proposal(call)) do
-      {[item | runnable], cards}
+    if Aqua.Approvals.proposal?(approval, approved_proposal(state, approval, call)) do
+      {[item | runnable], cards, setup}
     else
       close(state, step, call, {:error, {:denied, "the call no longer matches its approval"}})
-      {runnable, cards}
+      {runnable, cards, setup}
     end
   end
 
-  defp decide_open(state, _touched, %{step: step, call: {:error, message}}, {runnable, cards}) do
+  defp decide_open(state, %{step: step, call: {:error, message}}, acc) do
     close(state, step, nil, {:error, message})
-    {runnable, cards}
+    acc
   end
 
   defp decide_open(
          %State{clone?: true} = state,
-         _touched,
          %{step: step, call: {:ok, %Call{kind: :clone}}},
          acc
        ) do
@@ -954,59 +962,114 @@ defmodule Aqua.Loop do
 
   defp decide_open(
          state,
-         touched,
          %{step: step, call: {:ok, %Call{} = call}} = item,
-         {runnable, cards}
+         {runnable, cards, setup}
        ) do
     decision =
       Policy.decide(
         call,
         state.spec.policy,
-        [
-          consented?: &consented?(state, &1),
-          touched: touched,
-          restricted?: state.restricted?
-        ] ++ place(state)
+        [restricted?: state.restricted?] ++ place(state)
       )
 
     case decision do
       :auto ->
-        {[item | runnable], cards}
+        {[item | runnable], cards, setup}
 
-      :ask when state.clone? ->
-        close(
-          state,
-          step,
-          call,
-          {:error,
-           "#{call.tool}.#{call.action} needs the person's approval, which a role cannot ask for"}
-        )
+      # A role launches nothing, whatever account it names.
+      {:setup_required, _app, _account} when state.clone? ->
+        ask(state, step, call, [], {runnable, cards, setup})
 
-        {runnable, cards}
+      # Closed before it ran, as the policy closes a call it refuses.
+      {:setup_required, app, {need, account}} ->
+        close(state, step, call, {:error, {:denied, not_granted(app, account)}})
+        {runnable, cards, setup || {app, need, account}}
 
       :ask ->
-        case open_card(state, step, call) do
-          :ok ->
-            {runnable, cards + 1}
+        ask(state, step, call, [], {runnable, cards, setup})
 
-          {:error, reason} ->
-            close(state, step, call, {:error, describe(reason)})
-            {runnable, cards}
-        end
+      {:ask, %{vault_entry: entry_id}} ->
+        ask(state, step, call, [vault_entry: entry_id], {runnable, cards, setup})
 
       {:deny, message} ->
         close(state, step, call, {:error, {:denied, message}})
-        {runnable, cards}
+        {runnable, cards, setup}
 
       {:refuse, message} ->
         close(state, step, call, {:error, {:denied, message}})
-        {runnable, cards}
+        {runnable, cards, setup}
     end
   end
 
-  defp open_card(%State{} = state, step, %Call{} = call) do
+  # A call that asks opens its card; a role has no card to raise.
+  defp ask(%State{clone?: true} = state, step, %Call{} = call, _card_opts, acc) do
+    close(
+      state,
+      step,
+      call,
+      {:error,
+       "#{call.tool}.#{call.action} needs the person's approval, which a role cannot ask for"}
+    )
+
+    acc
+  end
+
+  defp ask(%State{} = state, step, %Call{} = call, card_opts, {runnable, cards, setup}) do
+    case open_card(state, step, call, card_opts) do
+      :ok ->
+        {runnable, cards + 1, setup}
+
+      {:error, reason} ->
+        close(state, step, call, {:error, describe(reason)})
+        {runnable, cards, setup}
+    end
+  end
+
+  # The proposal an approved call is held to. A launch's card stored the
+  # entry its account resolved to beside the call; any other call's is the
+  # call alone.
+  defp approved_proposal(%State{} = state, approval, %Call{kind: :launch} = call) do
+    stored =
+      case Tape.message(guest(state), approval.message_id) do
+        {:ok, card} -> get_in(Tape.payload(card), ["intent", "proposal", "vault_entry"])
+        _ -> nil
+      end
+
+    Policy.proposal(call, stored)
+  end
+
+  defp approved_proposal(_state, _approval, %Call{} = call), do: Policy.proposal(call)
+
+  # What a launch naming an account its app does not bind answers: the
+  # account and the app, never an entry.
+  defp not_granted(app, account),
+    do:
+      "The account #{inspect(account)} is not granted to #{app}: a person grants it on the " <>
+        "app's profile, and the launch is asked again in a new turn"
+
+  # The turn ends on a launch naming an account its app's profile does not
+  # bind: nothing else of the response starts, and the person is asked to
+  # grant that account on the app's own profile. The retry is a new turn.
+  defp end_for_account(%State{} = state, {app, need, account} = setup) do
+    _ =
+      Tape.skip_steps(
+        guest(state),
+        state.turn,
+        "the turn ended: #{app} needs the account #{inspect(account)} granted"
+      )
+
+    announce(state, :consent_required, %{
+      ref: app,
+      user_id: ctx(state).user_id,
+      account: %{name: account, need: need}
+    })
+
+    {:halt, {:failed, {:setup_required, setup}}, state}
+  end
+
+  defp open_card(%State{} = state, step, %Call{} = call, card_opts) do
     intent =
-      Policy.card(call, id: Prima.UUID7.generate_id("apr"))
+      Policy.card(call, [id: Prima.UUID7.generate_id("apr")] ++ card_opts)
       |> Map.put("tool_call_id", call.tool_call_id)
 
     case Tape.open_approval(guest(state), state.turn, step, %{
@@ -1275,24 +1338,6 @@ defmodule Aqua.Loop do
 
   defp execute(%State{} = state, step, %Call{kind: :clone} = call),
     do: Aqua.Loop.Clone.run(state, step, call)
-
-  defp execute(%State{spec: spec} = state, step, %Call{
-         kind: :launch,
-         target: reference,
-         args: args
-       }) do
-    Crucible.run_child(spec.authority, reference, args["need"], args["input"] || %{},
-      ctx: guest(state),
-      execution_id: step.child_execution_id,
-      step_id: step.id,
-      parent_execution_id: state.turn.root_execution_id,
-      root_execution_id: state.turn.root_execution_id,
-      declared_needs: [],
-      retention_class: "chat_step",
-      charge: Binding.charge(step, state.turn),
-      guest_fn: :spawn
-    )
-  end
 
   defp execute(%State{spec: spec} = state, step, %Call{} = call) do
     Binding.dispatch(call, %{
@@ -2085,43 +2130,6 @@ defmodule Aqua.Loop do
   # Helpers
   # ---------------------------------------------------------------------------
 
-  defp consented?(%State{spec: spec}, reference) do
-    target =
-      {:invoke,
-       %{
-         reference: Aqua.Hands.name_level(reference),
-         need: nil,
-         activation_digest: nil,
-         declared_needs: []
-       }}
-
-    match?({:child, _}, Prima.Authority.Transition.step(spec.authority, :call, target))
-  rescue
-    ArgumentError -> false
-  end
-
-  # What this turn and its clones wrote to, from the durable rows.
-  defp touched(%State{} = state) do
-    case Tape.closed_calls(guest(state), state.turn) do
-      {:ok, payloads} -> Policy.touched_refs(payloads)
-      _ -> MapSet.new()
-    end
-  end
-
-  # The references this response's own calls would write to, whatever order
-  # they run in and whether or not they have closed.
-  defp proposes(items) do
-    items
-    |> Enum.flat_map(fn
-      %{call: {:ok, %Call{} = call}} ->
-        [%{"tool" => call.tool, "action" => call.action, "arguments" => call.args}]
-
-      _ ->
-        []
-    end)
-    |> Policy.touched_refs()
-  end
-
   defp pending?(%State{} = state) do
     case Tape.pending_approvals(guest(state), state.turn) do
       {:ok, [_ | _]} -> true
@@ -2213,6 +2221,9 @@ defmodule Aqua.Loop do
 
   defp describe({:model_refused, _catalyst, %{"message" => message}}) when is_binary(message),
     do: "The model could not be described: #{message}"
+
+  defp describe({:setup_required, {app, _need, account}}),
+    do: "setup_required: the account #{inspect(account)} is not granted to #{app}"
 
   defp describe({:unknown_model, model}), do: "#{model} is not a model its catalyst knows"
   defp describe(:no_model), do: "The agent names no model"

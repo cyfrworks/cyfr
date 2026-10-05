@@ -1562,7 +1562,7 @@ type ExecutionRunArgs struct {
 	Verify Field[ExecutionRunArgsVerify] `json:"verify,omitzero"`
 	// The owner profile ID or label; omitted selects the default owner profile
 	Profile Field[string] `json:"profile,omitzero"`
-	// The account a formula's child call asks its edge for, by the name it was granted under; omitted uses the edge's default account. A run started outside a chain uses its profile's default accounts and is refused when it names one
+	// The account the run's root or call uses, by the name it was granted under: a formula's child call asks its edge for it, and a run started outside a chain asks its profile's own calls for it. Omitted uses the default account. A name not granted is refused `connection_not_granted`.
 	Connection Field[string] `json:"connection,omitzero"`
 }
 

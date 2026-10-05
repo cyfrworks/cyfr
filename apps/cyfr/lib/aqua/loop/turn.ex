@@ -8,7 +8,9 @@ defmodule Aqua.Loop.Turn do
   digest must equal the one the turn started under — the roster and the
   roles the soul may clone into, the effective policy composed with the
   standing rows, the resolved model catalyst with its capabilities, the
-  system prompt, the tool surface, the room excerpt the sender attached,
+  system prompt, the tool surface (with the accounts the soul's launches
+  may name, read once here for every request the spec makes,
+  `Aqua.Hands.launch_accounts/1`), the room excerpt the sender attached,
   and the deadline the authority allows, and the admission decision the
   turn's root execution was started under (`call_id`), which every call
   the turn makes names as its parent call.
@@ -106,7 +108,8 @@ defmodule Aqua.Loop.Turn do
           Request.tool_definitions(policy,
             roles: roles,
             external: external_tools(policy),
-            soul?: soul?
+            soul?: soul?,
+            accounts: launch_accounts(ctx, policy, soul?)
           ),
         deadline_ms: deadline_ms(authority),
         approval_ttl_s: Aqua.Approvals.ttl_seconds(ctx),
@@ -314,6 +317,17 @@ defmodule Aqua.Loop.Turn do
       end
     end
   end
+
+  # The apps a launch may name an account of, read once for the spec and
+  # kept for every request it makes: only when the soul may launch at all.
+  # A role launches nothing.
+  defp launch_accounts(ctx, policy, true = _soul?) do
+    if Map.get(policy, "execution.run") in ["auto", "ask"],
+      do: Aqua.Hands.launch_accounts(ctx),
+      else: nil
+  end
+
+  defp launch_accounts(_ctx, _policy, false = _soul?), do: nil
 
   # An external server's tools the policy names (`server:tool`), as the
   # catalog knows them.

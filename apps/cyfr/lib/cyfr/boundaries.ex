@@ -327,8 +327,10 @@ defmodule Cyfr.Boundaries do
           "is filled with on first read has to be there before the turn roots an " <>
           "authority in it. `Sanctum.ExecutionStanding` is `Aqua.Tape`'s check over " <>
           "the grant a turn's root attempt stores, handed to the turn's writes. " <>
-          "`Sanctum.Consent` is `Aqua.ConsentStatus`'s read of what a source " <>
-          "declares, through consent's own derivation; the row below narrows it. " <>
+          "`Sanctum.Consent` is the assistant's two reads of consent: what a source " <>
+          "declares, through consent's own derivation (`Aqua.ConsentStatus`), and which " <>
+          "named accounts an app's own ingress binds (`Sanctum.Consent.Accounts`); the " <>
+          "row below narrows it. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -336,12 +338,15 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Sanctum.Consent",
       depth: 3,
-      allow: ~w(Sanctum.Consent.ShapeDerivation),
+      allow: ~w(Sanctum.Consent.Accounts Sanctum.Consent.ShapeDerivation),
       reason:
         "the assistant reports whether a consent still covers its source and grants " <>
           "nothing: it reads what a source declares through " <>
           "`Sanctum.Consent.ShapeDerivation` and what was consented from the authority " <>
           "a turn would pin, and names nothing of the plane that writes a consent. " <>
+          "It reads which named accounts an app's own ingress binds and which entry a " <>
+          "name resolves to through `Sanctum.Consent.Accounts`, never a value, never a " <>
+          "write. " <>
           "`Sanctum.Consent` is no boundary of its own, and `Sanctum`'s exports, which are " <>
           "global, name more of it than this roster, so no declaration can say it."
     },
@@ -1302,6 +1307,9 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
     "Sanctum.ClientIp" => [from_connect_info: 1, resolve: 1],
     "Sanctum.Consent" => [head_consent: 2, profiles: 2, revoke_source: 2, row_binding: 3],
+    # The assistant reads which named accounts an app's own ingress binds
+    # and which entry a name resolves to, never a value, never a write.
+    "Sanctum.Consent.Accounts" => [list: 1, resolve: 4],
     "Sanctum.Consent.Authz" => [
       authorize_interactive: 1,
       authorize_interactive_in_chain: 1,

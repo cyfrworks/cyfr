@@ -672,6 +672,133 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # An app in `ctx`'s athanor whose own calls carry one credential need,
+  # with an entry of its provider in the vault for the grant to suggest.
+  defp needy_app!(ctx) do
+    name = "pane-account-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "0.1.0",
+      "type" => "catalyst",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "required" => true,
+          "fields" => ["KEY"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: name,
+        version: "0.1.0",
+        type: "catalyst",
+        manifest: Jason.encode!(manifest)
+      })
+
+    {:ok, _entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "#{name} key",
+        kind: "api_key",
+        provider_hint: "example.com",
+        fields: %{"KEY" => "k"},
+        destination: %{"hosts" => ["api.example.com"]},
+        disclose: true
+      })
+
+    {"catalyst:local.#{name}", "catalyst:local.#{name}:0.1.0"}
+  end
+
+  test "a launch's account is asked on the app's own profile, opened on that account, and the " <>
+         "pane then offers the ended turn's message again as a new turn",
+       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+    {_name_ref, ref} = needy_app!(in_room)
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+    settled_render(view)
+    pane = child!(view, "pane-" <> room.id)
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :consent_required,
+      data: %{ref: ref, user_id: user.user_id, account: %{name: "Supabase 2", need: nil}}
+    })
+
+    render(pane)
+    render(view)
+    assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+    # The prompt is for the app's own calls, opened on the account the
+    # launch named.
+    assert %{grant_prompt: prompt_id} = :sys.get_state(pane.pid).socket.assigns
+    assert is_binary(prompt_id)
+    assert render(view) =~ "Supabase 2"
+
+    view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+    Prima.Test.Wait.wait_until(
+      fn -> :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil end,
+      5_000,
+      "the pane to hear its grant"
+    )
+
+    # The turn that asked already ended: nothing is cut, and its message
+    # is offered again, to be sent as a new turn.
+    assigns = :sys.get_state(pane.pid).socket.assigns
+    assert assigns.restart_prompt == "hello"
+    html = render(pane)
+    assert html =~ "send that message again, as a new turn"
+    assert has_element?(pane, ~s(button[phx-click="restart_send"]))
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a launch's card names the account it binds and takes no standing answer", %{
+    conn: conn,
+    room: room,
+    in_room: in_room,
+    thread: thread
+  } do
+    proposal = %{
+      "tool" => "execution",
+      "action" => "run",
+      "args" => %{
+        "reference" => "reagent:local.mailer:1.0.0",
+        "input" => %{},
+        "connection" => "Work"
+      },
+      "vault_entry" => "vlt_work-1"
+    }
+
+    card = card!(in_room, thread, proposal, %{"action_kind" => "execute", "standing" => false})
+    pane = room_pane(conn, room, thread)
+    card_dom = ~s([id$="-card-#{card.id}"])
+
+    assert has_element?(pane, ~s(#{card_dom} [data-test="approval-account"]), "Work")
+    refute has_element?(pane, ~s(#{card_dom} [data-test="approval-standing"]))
+    refute render(pane) =~ "vlt_work-1"
+    assert has_element?(pane, ~s(#{card_dom} button[phx-value-scope="once"]))
+
+    # A launch that names no account says none.
+    {:ok, other} = Threads.create(Sanctum.Context.actor(in_room))
+
+    unnamed = %{
+      "tool" => "execution",
+      "action" => "run",
+      "args" => %{"reference" => "reagent:local.mailer:1.0.0", "input" => %{}}
+    }
+
+    plain =
+      card!(in_room, other, unnamed, %{"action_kind" => "execute", "standing" => false})
+
+    other_pane = room_pane(conn, room, other)
+    refute has_element?(other_pane, ~s([id$="-card-#{plain.id}"] [data-test="approval-account"]))
+  end
+
   test "a pane with no view around it has no layer to ask in, and says so", %{
     conn: conn,
     user: user,

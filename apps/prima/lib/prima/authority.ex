@@ -70,6 +70,7 @@ defmodule Prima.Authority do
           {:invalid_profile, atom()}
           | {:unknown_source_node, String.t()}
           | {:missing_ingress, String.t()}
+          | :connection_not_granted
 
   @type t :: %__MODULE__{
           profile_id: String.t() | nil,
@@ -169,6 +170,13 @@ defmodule Prima.Authority do
       ceiling in production.
     * `:budget_id` — the id of an existing reservation the root budget
       charges; a fresh id when absent.
+    * `:connection` — the account the root's own calls name, by the name
+      its ingress binds it under: the root's vault is that named binding
+      alone (`Prima.Authority.Blob.vault_for/2`), with its own binding
+      key, and a name the ingress does not bind is
+      `{:error, :connection_not_granted}`, never the default in its
+      place. Absent or nil, the root holds the ingress as it stands, its
+      default with the named bindings beside it.
   """
   @spec root(profile(), Blob.t(), keyword()) :: {:ok, t()} | {:error, root_error()}
   def root(profile, %Blob{} = blob, opts) when is_list(opts) do
@@ -177,7 +185,8 @@ defmodule Prima.Authority do
     with :ok <- validate_profile(profile),
          clamped = Blob.clamp(blob, ceiling),
          {:ok, source_node} <- fetch_source_node(clamped, profile.source_ref),
-         {:ok, ingress_edge} <- fetch_ingress(clamped, profile.source_ref) do
+         {:ok, ingress} <- fetch_ingress(clamped, profile.source_ref),
+         {:ok, ingress_edge} <- root_account(ingress, Keyword.get(opts, :connection)) do
       {:ok,
        %__MODULE__{
          profile_id: profile.profile_id,
@@ -435,6 +444,18 @@ defmodule Prima.Authority do
     case Blob.ingress(blob, source_ref) do
       {:ok, edge} -> {:ok, edge}
       {:error, :missing_ingress} -> {:error, {:missing_ingress, source_ref}}
+    end
+  end
+
+  # The ingress a root holds: as it stands for no account, and with the
+  # named binding alone as its vault for one, so the root's attach, its
+  # lifetime and its consumption read that binding's own key.
+  defp root_account(ingress, nil), do: {:ok, ingress}
+
+  defp root_account(%Blob.Edge{} = ingress, connection) do
+    case Blob.vault_for(ingress, connection) do
+      {:ok, vault} -> {:ok, %{ingress | vault: vault}}
+      {:error, :connection_not_granted} = refused -> refused
     end
   end
 

@@ -72,6 +72,7 @@ defmodule Sanctum.Consent.Loader do
           | {:unknown_source_node, String.t()}
           | {:missing_ingress, String.t()}
           | {:inconsistent_binding_digest, String.t()}
+          | :connection_not_granted
 
   @typedoc "What run_root stamps on the execution row."
   @type stamp :: %{activation_digest: String.t(), activation_graph: %{String.t() => String.t()}}
@@ -87,6 +88,9 @@ defmodule Sanctum.Consent.Loader do
   - `:ceiling` — override the platform ceiling (tests only)
   - `:budget_id` — the reservation the authority's budget names (a turn
     resumed or taken over charges the one it was admitted with)
+  - `:connection` — the account the root's own calls name, picked from
+    the ingress by `Prima.Authority.root/3`; a name the ingress does not
+    bind is `{:error, :connection_not_granted}`
   """
   @spec load_root(Context.t(), map(), keyword()) ::
           {:ok, Authority.t(), stamp()} | {:error, load_error()}
@@ -683,7 +687,8 @@ defmodule Sanctum.Consent.Loader do
 
     Authority.root(profile_map, blob,
       ceiling: ceiling,
-      budget_id: Keyword.get(opts, :budget_id)
+      budget_id: Keyword.get(opts, :budget_id),
+      connection: Keyword.get(opts, :connection)
     )
   end
 end

@@ -28,6 +28,9 @@ defmodule Aqua.Hands do
   `files.list` and `files.tree` are one catalyst request (`tree`), so the
   reverse mapping answers both and the caller decides what an ambiguous
   request may do.
+
+  Beside the hands, it supplies what the model is told of the accounts a
+  launch may name (`launch_accounts/1`), read once when a turn starts.
   """
 
   alias Grimoire.VirtualTools
@@ -134,6 +137,40 @@ defmodule Aqua.Hands do
   @spec name_level(String.t()) :: String.t()
   def name_level(reference) when is_binary(reference) do
     reference |> String.split(":", parts: 3) |> Enum.take(2) |> Enum.join(":")
+  end
+
+  # ---------------------------------------------------------------------------
+  # The accounts a launch may name
+  # ---------------------------------------------------------------------------
+
+  @typedoc """
+  The apps a turn's launches may name an account of: each app's
+  reference with the account names its own profile binds, ordered by
+  reference, and whether the heads read were cut short, so that more
+  may stand past the list.
+  """
+  @type launch_accounts :: %{
+          apps: [{String.t(), [String.t()]}],
+          truncated?: boolean()
+        }
+
+  @doc """
+  The apps whose launch may name an account, read once when a turn
+  starts: each app whose default owner profile is active and whose
+  stored head's ingress binds named accounts beside its default, with
+  those names (`Sanctum.Consent.Accounts.list/1`), ordered by
+  reference. An app that binds none needs no account and is not listed,
+  and neither is one whose head cannot be read; a store that cannot
+  answer lists none. Names only: never an entry, its id or a value. What
+  the model reads of it is bounded where it is rendered
+  (`Aqua.Loop.Request.tool_definitions/2`).
+  """
+  @spec launch_accounts(Sanctum.Context.t()) :: launch_accounts()
+  def launch_accounts(%Sanctum.Context{} = ctx) do
+    case Sanctum.Consent.Accounts.list(ctx) do
+      {:ok, apps, truncated?} -> %{apps: apps, truncated?: truncated?}
+      {:error, _unreadable} -> %{apps: [], truncated?: false}
+    end
   end
 
   @doc "Whether a reference names a catalyst a hand runs on, at any version."

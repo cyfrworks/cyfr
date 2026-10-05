@@ -10,7 +10,10 @@ defmodule Aqua.Loop.Request do
   exist: a tool is offered when at least one of its actions is `auto` or
   `ask`, its `action` enum is those actions, and an action that asks says
   so in the description so the model expects the pause. A hand keeps the
-  schema the guest offered; a catalog tool keeps its own; a role the soul
+  schema the guest offered; a catalog tool keeps its own, but for the
+  account an `execution.run` names (`connection`), which lists the apps
+  whose own profile binds named accounts and their names, never an
+  entry or a value; a role the soul
   may clone into is a tool of its own; an external server's tool rides
   under its wire name; the `ui` event and `request_setup` are always
   offered.
@@ -30,6 +33,8 @@ defmodule Aqua.Loop.Request do
   alias Aqua.Tape
 
   @default_max_tokens 16_384
+  # The apps the `connection` argument lists, at most.
+  @accounts_listed 50
   @ui_tool "ui"
 
   @hand_schemas %{
@@ -154,7 +159,9 @@ defmodule Aqua.Loop.Request do
   "auto"`). `opts`: `:roles` (the roster entries the soul may clone into,
   `%{"name", "title", "description"}`), `:external` (the external servers'
   tools as `%{name, description, input_schema}`), `:soul?` (whether roles
-  may be offered at all). Answers the contract's `tools` list.
+  may be offered at all), `:accounts` (the apps a launch may name an
+  account of, `t:Aqua.Hands.launch_accounts/0`, which the `connection`
+  argument's description lists). Answers the contract's `tools` list.
   """
   @spec tool_definitions(map(), keyword()) :: [tool()]
   def tool_definitions(policy, opts \\ []) when is_map(policy) do
@@ -185,9 +192,55 @@ defmodule Aqua.Loop.Request do
         }
       end
 
+    catalog = with_accounts(catalog_tools(policy), Keyword.get(opts, :accounts))
+
     hands ++
-      catalog_tools(policy) ++
+      catalog ++
       roles ++ external ++ [@ui_schema, hand_tool("request_setup", ["open"], policy)]
+  end
+
+  # The account a launch names, described by the apps that bind one: the
+  # names alone, and the default as what omitting it takes.
+  defp with_accounts(tools, nil), do: tools
+
+  defp with_accounts(tools, %{apps: apps, truncated?: truncated?}) do
+    Enum.map(tools, fn
+      %{"name" => "execution", "parameters" => %{"properties" => %{"connection" => _}}} = tool ->
+        put_in(
+          tool,
+          ["parameters", "properties", "connection", "description"],
+          connection_description(apps, truncated?)
+        )
+
+      tool ->
+        tool
+    end)
+  end
+
+  # At most `@accounts_listed` apps, by reference. A list cut short says
+  # how many more stand; when the heads read were themselves cut short, it
+  # says only that more may.
+  defp connection_description(apps, truncated?) do
+    {shown, past} = Enum.split(apps, @accounts_listed)
+
+    listed =
+      Enum.map(shown, fn {ref, names} -> "#{ref} (#{Enum.map_join(names, ", ", &inspect/1)})" end)
+
+    rest =
+      cond do
+        truncated? -> ["and more"]
+        past == [] -> []
+        true -> ["and #{length(past)} more"]
+      end
+
+    head =
+      "The account the launched app's own calls use, by the name its grant binds it under; " <>
+        "omit `connection` for its default account."
+
+    case listed ++ rest do
+      [] -> head <> " No app binds a named account."
+      apps -> head <> " Apps with named accounts: " <> Enum.join(apps, "; ") <> "."
+    end
   end
 
   @doc """

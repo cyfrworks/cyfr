@@ -117,6 +117,15 @@ defmodule Cyfr.BoundariesTest do
 
   defp lines_read(scanned), do: Enum.sum(for {_path, lines} <- scanned, do: length(lines))
 
+  # The application a module is loaded from, nil for one no loaded
+  # application claims.
+  defp app_of(module) do
+    case :application.get_application(module) do
+      {:ok, app} -> app
+      :undefined -> nil
+    end
+  end
+
   # `.../Elixir.Cyfr.JCS.beam` is the module `Prima.JCS`. An Erlang module's
   # beam carries no prefix and yields its own name, which no layer claims.
   defp module_name(path),
@@ -1565,7 +1574,13 @@ defmodule Cyfr.BoundariesTest do
       end
     end
 
-    test "the assistant reads consent's derivation and nothing of the plane that writes it" do
+    # The assistant reads two things of the consent plane: what a source
+    # declares, through consent's derivation, and which accounts an app's
+    # own profile binds, through its accounts read. The facade itself, the
+    # loader and the plane that writes a consent stay out of reach, and the
+    # row allows those two alone, so a later reach fails rather than rides.
+    test "the assistant reads consent's derivation and its accounts read, and nothing else of " <>
+           "the consent plane" do
       row =
         Enum.find(
           Boundaries.surfaces(),
@@ -1577,14 +1592,49 @@ defmodule Cyfr.BoundariesTest do
          CodeLines.aliases(~S'''
          defmodule Aqua.Planted do
            def declared(ctx, ref), do: Sanctum.Consent.ShapeDerivation.manifest_blocks(ctx, ref)
+           def account(ctx, ref), do: Sanctum.Consent.Accounts.resolve(ctx, :default, ref, "Work")
            def grant(ctx), do: Sanctum.Consent.Commit.commit(ctx, %{})
            def profiles(ctx, ref), do: Sanctum.Consent.profiles(ctx, ref)
+           def head(ctx, p, c), do: Sanctum.Consent.Loader.admitted_blob(ctx, p, c)
          end
          ''')}
       ]
 
       assert Boundaries.surface_violations(row, planted) ==
-               ["Sanctum.Consent", "Sanctum.Consent.Commit"]
+               ["Sanctum.Consent", "Sanctum.Consent.Commit", "Sanctum.Consent.Loader"]
+
+      assert Enum.sort(row.allow) == [
+               "Sanctum.Consent.Accounts",
+               "Sanctum.Consent.ShapeDerivation"
+             ]
+    end
+
+    # The accounts read is read-only by construction: every module it calls,
+    # outside the contracts and the language's own runtime, is one of the
+    # reads it is documented to make. A write added there fails here.
+    test "the assistant's accounts read calls only reads of the consent plane" do
+      beam =
+        :sanctum
+        |> Application.app_dir("ebin")
+        |> Path.join("Elixir.Sanctum.Consent.Accounts.beam")
+        |> String.to_charlist()
+
+      runtime = [:prima, :elixir, :stdlib, :kernel, :erts]
+
+      calls =
+        for {module, function, arity} <- Beams.reaches(beam),
+            module != Sanctum.Consent.Accounts,
+            app_of(module) not in runtime,
+            uniq: true,
+            do: "#{inspect(module)}.#{function}/#{arity}"
+
+      assert Enum.sort(calls) == [
+               "Arca.ConsentStorage.active_heads/2",
+               "Sanctum.Consent.Loader.admitted_blob/3",
+               "Sanctum.Consent.head_consent/2",
+               "Sanctum.Consent.profiles/2",
+               "Sanctum.Context.actor/1"
+             ]
     end
 
     test "a domain that takes a connection is reported with its file and line" do

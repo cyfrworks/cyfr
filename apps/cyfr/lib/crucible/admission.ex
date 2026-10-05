@@ -86,6 +86,11 @@ defmodule Crucible.Admission do
     selection ignores authentication entirely and the selector is unused.
   - `:ceiling`, `:live_shape_digest`, `:budget_id` —
     see `Sanctum.Consent.Loader.load_root/3`.
+  - `:connection` — the account the root's own calls name: the root's
+    vault is the named binding its profile's ingress holds under that
+    name, with its own binding key, and a name the ingress does not bind
+    is `{:error, :connection_not_granted}` before anything runs
+    (`Prima.Authority.root/3`). Absent or nil, the ingress's default.
   """
   @spec authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
           {:ok, Authority.t()} | {:error, term()}
@@ -1006,7 +1011,7 @@ defmodule Crucible.Admission do
       ctx,
       profile,
       [live: live, shape_diff: shape_diff_fn(ctx, profile)] ++
-        Keyword.take(opts, [:ceiling, :live_shape_digest, :budget_id])
+        Keyword.take(opts, [:ceiling, :live_shape_digest, :budget_id, :connection])
     )
   end
 

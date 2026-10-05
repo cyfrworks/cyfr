@@ -18,12 +18,12 @@ defmodule Sanctum.Consent do
 
   ## Reading consent from above
 
-  Consent rows are security rows: a domain or a surface learns about
-  them only through `profiles/2`, `head_consent/2`, `row_binding/3` and
-  `revoke_source/2` here. Each scopes by the tenant of the caller's
-  context, and each keeps an unreadable store, a damaged row and an
-  absent one apart — a caller that cannot tell them apart would read an
-  outage as "not granted".
+  Consent rows are security rows, read only inside Sanctum: Arca's
+  consent stores are Sanctum's alone. A domain or a surface reads consent
+  state through Sanctum's exported entries, among them `profiles/2`,
+  `head_consent/2` and `row_binding/3` here, `Sanctum.Consent.Accounts`
+  and `Sanctum.Consent.Loader`, each scoped by the tenant of the caller's
+  context.
 
   ## The protocol
 

@@ -12,10 +12,17 @@ defmodule Aqua.Loop.Policy do
   already under the kind ceiling: a destructive or external action is
   never `auto` without a standing grant. A hand or catalog call reads its
   own key; a clone reads its role's glob; the `ui` event runs at once; an
-  external server's tool always asks; a launch reads `execution.run` and
-  then the launch rule: an application the athanor consented to and this
-  turn has not written to may run under `auto`, anything else needs a
-  card. Reads run beside each other; everything else runs alone.
+  external server's tool always asks; a launch asks, whatever the
+  agent's own policy or a standing answer says, since `Aqua.Launch` runs
+  only a launch a person approved on its card: it is refused when its
+  reference is no component and denied when `execution.run` is, and
+  nothing else. Reads run beside each other; everything else runs alone.
+
+  A launch naming an account (`connection`) has it resolved before it
+  asks (`launch_account/2`): the entry the launched app's own profile
+  binds under that name, the one the card binds its approval to. A name
+  the profile does not bind ends the call as setup required, before any
+  approval is read.
 
   A key that asks runs at once only when a bounded allow covers this very
   call (`Sanctum.ToolGrants.admits?/2`): its lifecycle is the call's own
@@ -24,25 +31,43 @@ defmodule Aqua.Loop.Policy do
   the rows as they stand when the call is decided and again when it
   dispatches, never from the turn's start.
 
-  What this turn wrote to is read from the durable rows, never from
-  memory: `touched_refs/1` names the components the turn's closed write,
-  destructive and execute calls — its own and its clones' — reached, so
-  the rule survives a restart.
+  `touched_refs/1` names the components a turn's closed write,
+  destructive and execute calls reached, from their durable rows.
   """
 
   alias Aqua.Loop.Binding.Call
+  alias Prima.Authority.RootSelect
 
-  @type decision :: :auto | :ask | {:deny, String.t()} | {:refuse, String.t()}
+  @typedoc """
+  A launch's account as its card binds it: the entry the name resolved to
+  (`launch_account/2`).
+  """
+  @type account :: %{vault_entry: String.t()}
+
+  @typedoc """
+  What a call does: run at once; ask, for a launch naming an account with
+  the entry it resolved to; be denied or refused with a sentence; or, for
+  a launch naming an account its app's profile does not bind, end the
+  turn as setup required, naming the app, its credential need (nil: the
+  one need, or one no binding tells) and the account.
+  """
+  @type decision ::
+          :auto
+          | :ask
+          | {:ask, account()}
+          | {:deny, String.t()}
+          | {:refuse, String.t()}
+          | {:setup_required, String.t(), {String.t() | nil, String.t()}}
 
   @doc """
-  The decision for `call` under `policy`. `opts`: `:consented?` (a
-  function of a reference), `:touched` (a `MapSet` of references this
-  turn wrote to), `:restricted?` (the turn holds a call whose outcome is
-  unknown: only a replay-safe read runs, whatever the policy says), and
-  where the call is made, which a bounded allow is judged against:
-  `:ctx` (the member's context its rows are read under), `:agent` (the
-  agent's name), `:thread_id`, `:turn_id` and `:execution_id` (the
-  turn's root). Without them a key that asks, asks.
+  The decision for `call` under `policy`. `opts`: `:restricted?` (the
+  turn holds a call whose outcome is unknown: only a replay-safe read
+  runs, whatever the policy says), and where the call is made, which a
+  bounded allow is judged against and a launch's account is resolved
+  under: `:ctx` (the member's context its rows are read under), `:agent`
+  (the agent's name), `:thread_id`, `:turn_id` and `:execution_id` (the
+  turn's root). Without them a key that asks, asks, and a launch naming
+  an account is refused.
   """
   @spec decide(Call.t(), map(), keyword()) :: decision()
   def decide(%Call{} = call, policy, opts) do
@@ -78,11 +103,19 @@ defmodule Aqua.Loop.Policy do
 
   defp decide_open(%Call{kind: :external}, _policy, _opts), do: :ask
 
+  # A launch runs only from an approved card, so it asks whatever an
+  # authored or standing allow says: an `auto` would reach a dispatch that
+  # refuses it for want of an approval.
   defp decide_open(%Call{kind: :launch, target: reference} = call, policy, opts) do
-    case launch_rule(reference, opts) do
-      {:refuse, text} -> {:refuse, text}
-      :card -> if Map.get(policy, key(call)) == "deny", do: deny(call), else: :ask
-      :child -> by_key(call, policy, opts)
+    cond do
+      not component_ref?(reference) ->
+        {:refuse, "#{inspect(reference)} is not a component reference"}
+
+      Map.get(policy, key(call)) == "deny" ->
+        deny(call)
+
+      true ->
+        ask_launch(call, Keyword.get(opts, :ctx))
     end
   end
 
@@ -93,14 +126,15 @@ defmodule Aqua.Loop.Policy do
 
   The narrow re-check a call makes against the member's live grants as it
   dispatches. It can only withdraw an `auto`, never widen one: a
-  restricted turn, a touched reference and a launch rule have all already
-  had their say by the time a step runs. `opts` are `decide/3`'s place of
+  restricted turn has already had its say by the time a step runs, and a
+  launch is never `auto`. `opts` are `decide/3`'s place of
   the call, so a call a bounded allow let run is asked again whether the
   allow still covers it (`Sanctum.ToolGrants.admits?/2`), from the rows
   as they stand now.
   """
   @spec auto?(Call.t(), map(), keyword()) :: boolean()
   def auto?(%Call{kind: :ui}, _policy, _opts), do: true
+  def auto?(%Call{kind: :launch}, _policy, _opts), do: false
 
   def auto?(%Call{kind: :clone, target: role}, policy, _opts),
     do: Map.get(policy, "#{role}.*") == "auto"
@@ -121,11 +155,11 @@ defmodule Aqua.Loop.Policy do
     end
   end
 
-  # Whether a bounded allow covers this very call, read fresh. Only a
-  # hand, a catalog call or a child launch runs under a standing answer;
-  # a call made nowhere the rows can be read for asks.
+  # Whether a bounded allow covers this very call, read fresh. Only a hand
+  # or a catalog call runs under a standing answer; a call made nowhere
+  # the rows can be read for asks.
   defp admitted?(%Call{kind: kind, tool: tool, action: action, args: args}, opts)
-       when kind in [:hand, :catalog, :launch] and is_binary(action) do
+       when kind in [:hand, :catalog] and is_binary(action) do
     with %Sanctum.Context{} = ctx <- Keyword.get(opts, :ctx),
          agent when is_binary(agent) <- Keyword.get(opts, :agent),
          thread_id when is_binary(thread_id) <- Keyword.get(opts, :thread_id) do
@@ -161,33 +195,70 @@ defmodule Aqua.Loop.Policy do
 
   def overlap(%Call{}), do: :exclusive
 
-  @doc """
-  The launch rule: an `execution.run` of `reference` runs as a child of
-  the turn (`:child`) when the athanor consented to it and this turn did
-  not write to it; a reference this turn wrote to, or one the athanor has
-  not consented to, needs a card (`:card`); a reference that is not a
-  component is refused.
-  """
-  @spec launch_rule(String.t(), keyword()) :: :child | :card | {:refuse, String.t()}
-  def launch_rule(reference, opts) do
-    consented? = Keyword.get(opts, :consented?, fn _ -> false end)
-    touched = Keyword.get(opts, :touched, MapSet.new())
+  defp component_ref?(reference), do: match?({:ok, _}, Prima.ComponentRef.parse(reference))
 
-    case Prima.ComponentRef.parse(reference) do
-      {:ok, _} ->
-        cond do
-          MapSet.member?(touched, name_level(reference)) -> :card
-          consented?.(reference) -> :child
-          true -> :card
-        end
+  # A launch asks, with the entry its named account resolves to; an
+  # account the app's profile does not bind is setup required, and an
+  # account that cannot be read refuses the call, never a setup.
+  defp ask_launch(%Call{} = call, ctx) do
+    case launch_account(call, ctx) do
+      {:ok, nil} ->
+        :ask
 
-      _ ->
-        {:refuse, "#{inspect(reference)} is not a component reference"}
+      {:ok, entry_id} ->
+        {:ask, %{vault_entry: entry_id}}
+
+      {:error, :connection_not_granted} ->
+        {:setup_required, call.target, {nil, call.args["connection"]}}
+
+      {:error, reason} ->
+        {:refuse,
+         "the account #{inspect(call.args["connection"])} of #{call.target} could not be read: " <>
+           Aqua.Ops.render_refusal(reason)}
     end
   end
 
   @doc """
-  The component references the turn's closed write, destructive and
+  The entry a launch's named account resolves to, read under `ctx`: the
+  `connection` an `execution.run` names, resolved on the ingress of the
+  profile the launch roots at (its `profile` argument, else the default
+  owner profile) from that profile's stored head
+  (`Sanctum.Consent.Accounts.resolve/4`). `{:ok, nil}` for a call that is
+  no `execution.run` launch or names no account. A name the profile does
+  not bind is `{:error, :connection_not_granted}`; a store that cannot
+  answer is its own refusal; a launch naming an account with no context
+  to read it under is `{:error, :no_context}`.
+
+  The account an `execution.run_stream` names is never resolved: the
+  action declares no `connection`, and the gate refuses it as an unknown
+  argument.
+  """
+  @spec launch_account(Call.t(), Sanctum.Context.t() | nil) ::
+          {:ok, String.t() | nil} | {:error, term()}
+  def launch_account(
+        %Call{kind: :launch, action: "run", target: reference, args: %{"connection" => name}} =
+          call,
+        ctx
+      )
+      when is_binary(name) do
+    case ctx do
+      %Sanctum.Context{} ->
+        Sanctum.Consent.Accounts.resolve(
+          ctx,
+          RootSelect.decode(call.args["profile"]),
+          reference,
+          name
+        )
+
+      _none ->
+        {:error, :no_context}
+    end
+  end
+
+  def launch_account(%Call{}, _ctx), do: {:ok, nil}
+
+  @doc """
+  The component references a turn's closed write, destructive and
   execute calls reached, from their `tool_call` payloads: an argument
   named `reference` or `ref`, and a `path` at or below a component version
   directory as the component path grammar reads one
@@ -221,11 +292,14 @@ defmodule Aqua.Loop.Policy do
   @doc """
   The card a call that asks becomes: today's intent shape, which the
   console card and the wire read — the proposal canonical, the kind and
-  the standing from the catalog, never from the model.
+  the standing from the catalog, never from the model. A launch's card
+  takes no standing answer, and its proposal carries the entry its named
+  account resolved to (`opts[:vault_entry]`, `proposal/2`), so the
+  approval binds the account the card showed.
   """
   @spec card(Call.t(), keyword()) :: map()
   def card(%Call{} = call, opts \\ []) do
-    proposal = proposal(call)
+    proposal = proposal(call, Keyword.get(opts, :vault_entry))
 
     %{
       "kind" => "request_approval",
@@ -234,16 +308,27 @@ defmodule Aqua.Loop.Policy do
       "summary" => Keyword.get(opts, :summary) || "",
       "action_kind" =>
         Atom.to_string(Aqua.Kinds.kind_for(call.tool, call.action || "") || :external),
-      "standing" =>
-        Grimoire.standing_to_wire(Aqua.Kinds.standing_for(call.tool, call.action || "")),
+      "standing" => standing(call),
       "proposal" => proposal
     }
   end
 
-  @doc "The canonical proposal a card shows for `call`, and its digest hashes."
-  @spec proposal(Call.t()) :: map()
-  def proposal(%Call{} = call),
-    do: %{"tool" => call.tool, "action" => call.action, "args" => call.args}
+  # A launch is an external act, approved one card at a time.
+  defp standing(%Call{kind: :launch}), do: Grimoire.standing_to_wire(false)
+
+  defp standing(%Call{} = call),
+    do: Grimoire.standing_to_wire(Aqua.Kinds.standing_for(call.tool, call.action || ""))
+
+  @doc """
+  The canonical proposal a card shows for `call`, and its digest hashes;
+  with `vault_entry`, the entry a launch's named account resolved to when
+  its card was drawn, beside the call.
+  """
+  @spec proposal(Call.t(), String.t() | nil) :: map()
+  def proposal(%Call{} = call, vault_entry \\ nil) do
+    proposal = %{"tool" => call.tool, "action" => call.action, "args" => call.args}
+    if is_binary(vault_entry), do: Map.put(proposal, "vault_entry", vault_entry), else: proposal
+  end
 
   @doc "The digest a card is consumed by: the canonical proposal, hashed."
   @spec proposal_digest(map()) :: String.t()
