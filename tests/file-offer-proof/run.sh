@@ -41,6 +41,13 @@ case "$VIEWPORT" in
     ;;
 esac
 
+# Every argument and environment check runs before WORK is made, so a
+# refused start leaves nothing behind.
+[ "${RELEASE_BOOT_SKIP_BUILD:-}" = 1 ] || {
+  echo "::error::build the release first and run with RELEASE_BOOT_SKIP_BUILD=1 (README.md)" >&2
+  exit 1
+}
+
 ADAPTER=sqlite
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-file-offer-proof-XXXXXX")"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -93,8 +100,6 @@ offer_fixture() {
     | sed -n 's/^OFFER=//p' | tail -1
 }
 
-[ "${RELEASE_BOOT_SKIP_BUILD:-}" = 1 ] ||
-  fail "build the release first and run with RELEASE_BOOT_SKIP_BUILD=1 (README.md)"
 release_build
 mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-* "$OUT"/setup.json "$OUT"/file-offer-proof.*

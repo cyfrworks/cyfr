@@ -30,6 +30,21 @@
 # which this proof requires).
 set -euo pipefail
 
+# Every argument and environment check runs before WORK is made, so a
+# refused start leaves nothing behind.
+VIEWPORT="${VAULT_PROOF_VIEWPORT:-desktop}"
+case "$VIEWPORT" in
+  desktop | 720x720) ;;
+  *)
+    echo "::error::VAULT_PROOF_VIEWPORT is desktop or 720x720, not '$VIEWPORT'" >&2
+    exit 1
+    ;;
+esac
+[ "${RELEASE_BOOT_SKIP_BUILD:-}" = 1 ] || {
+  echo "::error::build the release first and run with RELEASE_BOOT_SKIP_BUILD=1 (README.md)" >&2
+  exit 1
+}
+
 ADAPTER=sqlite
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-instance-entry-proof-XXXXXX")"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -39,12 +54,6 @@ source "$HERE/../release-boot/release.sh"
 source "$ROOT/tests/browser/harness.sh"
 OUT="${PROOF_OUT:-$WORK/out}"
 PROOF_PID=""
-VIEWPORT="${VAULT_PROOF_VIEWPORT:-desktop}"
-
-case "$VIEWPORT" in
-  desktop | 720x720) ;;
-  *) fail "VAULT_PROOF_VIEWPORT is desktop or 720x720, not '$VIEWPORT'" ;;
-esac
 
 stop_proof_container() {
   local ids
@@ -127,8 +136,6 @@ token_of_user() {
   cat "$WORK/token-$user_id"
 }
 
-[ "${RELEASE_BOOT_SKIP_BUILD:-}" = 1 ] ||
-  fail "build the release first and run with RELEASE_BOOT_SKIP_BUILD=1 (README.md)"
 release_build
 
 step "the run's authority and the home home.test"
