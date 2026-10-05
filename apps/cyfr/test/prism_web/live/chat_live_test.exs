@@ -143,9 +143,11 @@ defmodule PrismWeb.ChatLiveTest do
   defp athanor, do: Process.get(:chat_athanor)
 
   # A group filled as the setup fills the chat's athanor (`ready_athanor!/2`)
-  # but with no key bound to the model its soul names: the one state whose
-  # empty chat offers to connect a model. The setup's fill points the seed
-  # path at the shipped tree for the whole test.
+  # but with no key bound to the model its soul names: one of the states
+  # whose empty chat offers to connect a model. It is the one the setup's
+  # own steps reach by leaving out the key, with nothing removed. The
+  # setup's fill points the seed path at the shipped tree for the whole
+  # test.
   defp keyless_athanor! do
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create(%{
