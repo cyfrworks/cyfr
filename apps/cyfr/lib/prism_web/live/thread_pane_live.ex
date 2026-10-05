@@ -1221,6 +1221,7 @@ defmodule PrismWeb.ThreadPaneLive do
       Enum.any?(statuses, &match?({:ready, _}, &1)) -> :ready
       Enum.any?(statuses, &match?({:consent_damaged, _}, &1)) -> :consent_damaged
       Enum.any?(statuses, &match?({:consent_unavailable, _}, &1)) -> :consent_unavailable
+      Enum.any?(statuses, &match?({:model_unavailable, _}, &1)) -> :model_unavailable
       true -> :no_key
     end
   end
@@ -1537,6 +1538,12 @@ defmodule PrismWeb.ThreadPaneLive do
               <% @model_ready == :consent_unavailable -> %>
                 <span data-test="model-consent">
                   A consent this model runs under cannot be read right now — try again.
+                </span>
+              <% @model_ready == :model_unavailable -> %>
+                <%!-- Whether the model is installed could not be read: nothing
+                     is offered but to try again. --%>
+                <span data-test="model-unavailable">
+                  This model cannot be read right now — try again.
                 </span>
               <% true -> %>
                 <span>

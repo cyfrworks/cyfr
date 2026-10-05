@@ -63,6 +63,42 @@ defmodule Aqua.ModelsTest do
     assert {:error, :unavailable} = Aqua.models(ctx)
   end
 
+  # A catalyst listing that cannot be read is not an empty one: whether
+  # any soul's model is installed is not known, so none reads as a model
+  # to install.
+  test "a catalyst listing that cannot be read leaves every soul's model unread" do
+    n = System.unique_integer([:positive])
+    user = "local|idp|models-unread-#{n}"
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Models unread #{n}")
+    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
+    soul = Compendium.agent_soul_type()
+
+    agents = [
+      %{"type" => soul, "catalyst_ref" => "catalyst:local.claude"},
+      %{"type" => soul, "catalyst_ref" => "catalyst:local.other"}
+    ]
+
+    assert Aqua.model_status(ctx, agents) == %{
+             "catalyst:local.claude" => {:missing, "catalyst:local.claude"},
+             "catalyst:local.other" => {:missing, "catalyst:local.other"}
+           }
+
+    {:ok, _pending} =
+      Arca.StorageProjectionChanges.begin_edit(
+        Context.actor(ctx),
+        "components",
+        "catalysts/local/claude/1.0.0"
+      )
+
+    assert {:error, :catalyst_lookup_failed} = Aqua.AgentConfig.catalyst_listing(ctx)
+
+    assert Aqua.model_status(ctx, agents) == %{
+             "catalyst:local.claude" => {:model_unavailable, "catalyst:local.claude"},
+             "catalyst:local.other" => {:model_unavailable, "catalyst:local.other"}
+           }
+  end
+
   test "a model status needs a context" do
     assert Aqua.model_status(nil, [%{"type" => "soul", "catalyst_ref" => "catalyst:local.x"}]) ==
              %{}

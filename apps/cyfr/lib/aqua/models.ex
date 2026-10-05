@@ -11,7 +11,7 @@ defmodule Aqua.Models do
     * `catalogue/1` — the listing the console's pickers show, every
       installed catalyst that speaks the contract asked for its models;
     * `model_status/2` — whether each agent's model has a key the
-      assistant runs it with.
+      assistant runs it with (`t:status/0`).
 
   The component facts come from `Compendium.model_catalysts/1`; running a
   catalyst goes through the gate like any other call, under the caller's
@@ -19,6 +19,29 @@ defmodule Aqua.Models do
   """
 
   alias Sanctum.Context
+
+  @typedoc """
+  A soul's model as `model_status/2` reads it. The first four carry the
+  release the soul's ref resolves to; `:missing` and `:model_unavailable`
+  carry the ref the soul names, whether or not the listing resolved it:
+
+    * `:ready` — the assistant runs it with a bound key;
+    * `:needs_key` — a key to connect;
+    * `:consent_damaged`, `:consent_unavailable` — a consent it runs
+      under is damaged, or the store could not answer it;
+    * `:missing` — the athanor's catalysts, read, hold no such model, or
+      its setup plan answers that the registry holds no such component;
+    * `:model_unavailable` — the athanor's catalysts could not be read,
+      or its setup plan was refused for any other reason, so whether it is
+      installed is not known.
+  """
+  @type status ::
+          {:ready
+           | :needs_key
+           | :consent_damaged
+           | :consent_unavailable
+           | :missing
+           | :model_unavailable, String.t()}
 
   # A listing runs every contract catalyst the athanor holds; each is one
   # root execution and one provider round trip.
@@ -220,27 +243,30 @@ defmodule Aqua.Models do
 
   @doc """
   For each soul's catalyst: the installed release it resolves to and
-  whether its consent is complete — `%{catalyst_ref => {:ready | :needs_key
-  | :consent_damaged | :consent_unavailable | :missing, resolved_ref}}`,
-  keyed by the catalyst ref the agent names. A consent the model runs
-  under that is damaged, or that the store could not answer, is
+  whether its consent is complete — `%{catalyst_ref => t:status/0}`,
+  keyed by the catalyst ref the agent names: `{:ready | :needs_key |
+  :consent_damaged | :consent_unavailable, resolved_ref}`, or
+  `{:missing | :model_unavailable, catalyst_ref}`. A consent the model
+  runs under that is damaged, or that the store could not answer, is
   `:consent_damaged` or `:consent_unavailable`, never a key to connect
   over a consent that exists: the model's own consent, as its setup plan
   reads it, and, once that reads ready, the assistant's own load
-  (`Aqua.ConsentStatus.classify_refusal/1`).
+  (`Aqua.ConsentStatus.classify_refusal/1`). A catalyst listing that
+  cannot be read is not an empty one, and a setup plan refused for any
+  reason but the component's absence (`{:not_found, {:component, _}}`,
+  `Compendium.Component.resolve_component/2`'s one absence) is not an
+  absence: each is `:model_unavailable`, never a model to install.
 
   A model with no key is the one thing that keeps a fresh athanor's AQUA
   silent, so both the AQUA page and the chat's own empty state ask here.
   """
-  @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => {atom(), String.t()}}
+  @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => status()}
   def model_status(nil, _agents), do: %{}
 
   def model_status(%Context{} = ctx, agents) when is_list(agents) do
-    listing =
-      case Aqua.AgentConfig.catalyst_listing(ctx) do
-        {:ok, components} -> components
-        _ -> []
-      end
+    # The listing's refusal is kept: a listing that cannot be read never
+    # resolves a model against no catalysts.
+    listing = Aqua.AgentConfig.catalyst_listing(ctx)
 
     soul_type = Compendium.agent_soul_type()
 
@@ -257,18 +283,35 @@ defmodule Aqua.Models do
   # the assistant actually runs it with, resolved as a turn would resolve
   # it. A bound key the assistant's edge does not select is still a key
   # to connect.
-  defp catalyst_status(ctx, listing, ref) do
-    with {:ok, resolved} <- Aqua.AgentConfig.resolve_catalyst(listing, ref),
-         {:ok, plan} <-
-           Aqua.Ops.call_tool("component", ctx, %{
-             "action" => "setup_plan",
-             "reference" => resolved
-           }) do
-      if (plan[:ready] || plan["ready"]) == true,
-        do: assistant_status(ctx, ref, resolved),
-        else: unready(plan, resolved)
-    else
-      _ -> {:missing, ref}
+  defp catalyst_status(_ctx, {:error, _unread}, ref), do: {:model_unavailable, ref}
+
+  defp catalyst_status(ctx, {:ok, listing}, ref) do
+    case Aqua.AgentConfig.resolve_catalyst(listing, ref) do
+      {:ok, resolved} -> planned_status(ctx, ref, resolved)
+      {:error, _no_such_catalyst} -> {:missing, ref}
+    end
+  end
+
+  # The setup plan's refusal is classed on its typed reason: the
+  # registry's answer that it holds no such component is an absence, and
+  # every other refusal (a store that could not answer, which the
+  # component domain answers as a sentence, a damaged row, a timeout, a
+  # forbidden call, anything else) leaves whether it is installed unknown.
+  defp planned_status(ctx, ref, resolved) do
+    case Aqua.Ops.call_tool("component", ctx, %{
+           "action" => "setup_plan",
+           "reference" => resolved
+         }) do
+      {:ok, plan} ->
+        if (plan[:ready] || plan["ready"]) == true,
+          do: assistant_status(ctx, ref, resolved),
+          else: unready(plan, resolved)
+
+      {:error, {:not_found, {:component, _reference}}} ->
+        {:missing, ref}
+
+      {:error, _refused} ->
+        {:model_unavailable, ref}
     end
   end
 

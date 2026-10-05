@@ -1164,6 +1164,132 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     end
   end
 
+  @model_unread "This model cannot be read right now — try again."
+
+  # The pane's empty state over a model that could not be read: it says
+  # so, and offers nothing but to try again.
+  defp pane_reads_unread!(conn, room) do
+    pane = empty_pane(conn, room)
+    assert has_element?(pane, ~s([data-test="model-unavailable"]), @model_unread)
+    refute render(pane) =~ "has no model yet"
+    refute render(pane) =~ "anything."
+    refute render(pane) =~ "Connect one on your AQUA page."
+    refute has_element?(pane, "a", "Connect a model")
+  end
+
+  # The AQUA page's agents panel over the same: no model to install, no
+  # key to connect or change.
+  defp panel_reads_unread!(conn, room) do
+    {panel, _html} = mount_athanor(conn, "/aqua", room)
+    assert has_element?(panel, "#aqua-card-aqua span", @model_unread)
+    refute render(panel) =~ "not installed here yet"
+    refute has_element?(panel, "button[phx-click=install_catalyst]")
+    refute has_element?(panel, "button[phx-click=open_consent]")
+  end
+
+  # Runs `inject` each time the gate admits a `component.setup_plan`
+  # call: after the catalyst listing has read and resolved the model, and
+  # before the plan's own read.
+  defp on_setup_plan!(inject) do
+    handler = "pane-setup-plan-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :grimoire, :decision, :admitted],
+        fn _event, _measurements, meta, _config ->
+          if meta[:tool] == "component" and meta[:action] == "setup_plan", do: inject.()
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  describe "a model whose catalysts or setup cannot be read" do
+    # The room is connected (`ready_athanor!/2`). A store that cannot give
+    # the athanor's catalysts, or the model's setup plan, leaves whether
+    # the model is installed unknown: it is said as such, never as a model
+    # to install or to connect. The outage is the component index left
+    # behind by an edit (`Arca.StorageProjectionChanges.begin_edit/3`), as
+    # `Aqua.ModelsTest` leaves it.
+    setup %{room: room, user: user} do
+      ctx = connected_room!(room, user)
+      {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
+    end
+
+    @tag :capture_log
+    test "a catalyst listing that cannot be read reads unread, never a model to install",
+         %{conn: conn, room: room, ctx: ctx, actor: actor} do
+      {:ok, _pending} =
+        Arca.StorageProjectionChanges.begin_edit(
+          actor,
+          "components",
+          "catalysts/local/claude/0.0.0"
+        )
+
+      assert {:error, :catalyst_lookup_failed} = Aqua.AgentConfig.catalyst_listing(ctx)
+
+      pane_reads_unread!(conn, room)
+      panel_reads_unread!(conn, room)
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    @tag :capture_log
+    test "a setup plan the store cannot answer reads unread, never a model to install",
+         %{conn: conn, room: room, actor: actor} do
+      test = self()
+      unit = "catalysts/local/claude/0.0.0"
+
+      on_setup_plan!(fn ->
+        {:ok, generation} = Arca.StorageProjectionChanges.begin_edit(actor, "components", unit)
+        send(test, {:index_behind, generation})
+      end)
+
+      pane_reads_unread!(conn, room)
+      assert_received {:index_behind, generation}
+
+      # The panel's own listing reads; its setup plan meets the outage again.
+      {:ok, _} = Arca.StorageProjectionChanges.finish_edit(actor, "components", unit, generation)
+      panel_reads_unread!(conn, room)
+      assert_received {:index_behind, _again}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a setup plan that finds no such component still reads missing, with Install",
+         %{conn: conn, room: room, ctx: ctx} do
+      test = self()
+      athanor_id = ctx.athanor_id
+
+      named = fn name, to ->
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.Component,
+            where:
+              c.athanor_id == ^athanor_id and c.component_type == "catalyst" and c.name == ^name
+          ),
+          set: [name: to]
+        )
+      end
+
+      on_setup_plan!(fn -> send(test, {:gone, named.("claude", "claude-gone")}) end)
+
+      pane = empty_pane(conn, room)
+      assert_received {:gone, {n, _}} when n > 0
+      assert render(pane) =~ "has no model yet"
+      assert has_element?(pane, "a", "Connect a model")
+      refute has_element?(pane, ~s([data-test="model-unavailable"]))
+
+      # The panel's own listing names the model; its setup plan finds none.
+      {^n, _} = named.("claude-gone", "claude")
+      {panel, _html} = mount_athanor(conn, "/aqua", room)
+      assert_received {:gone, {^n, _}}
+      assert render(panel) =~ "not installed here yet"
+      assert has_element?(panel, "button[phx-click=install_catalyst]", "Install")
+      refute render(panel) =~ @model_unread
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
   test "a pane with no view around it has no layer to ask in, and says so", %{
     conn: conn,
     user: user,

@@ -958,6 +958,11 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         <span :if={match?({:missing, _}, @model_status)} class="text-amber-300">
           The model's catalyst is not installed here yet
         </span>
+        <%!-- A model whose catalysts or setup could not be read may well be
+             installed: nothing is offered but to try again. --%>
+        <span :if={match?({:model_unavailable, _}, @model_status)} class="text-amber-300">
+          This model cannot be read right now — try again.
+        </span>
         <button
           :if={match?({:missing, _}, @model_status)}
           type="button"
