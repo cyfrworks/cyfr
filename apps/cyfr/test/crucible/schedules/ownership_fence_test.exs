@@ -840,7 +840,19 @@ defmodule Crucible.Schedules.OwnershipFenceTest do
       # left, so only the standing pass can reach the occurrence.
       no_pass!(scheduler)
       age!(occurrence_id)
+      fired_at = System.monotonic_time(:millisecond)
       first = standing_fires!(scheduler)
+      returned_at = System.monotonic_time(:millisecond)
+
+      # It comes again two ticks and a second after it fired, asked by
+      # nothing: the pass re-armed its timer between the two instants, so
+      # the timer is due that period after one of them (a millisecond is
+      # allowed for the timer's rounding).
+      state = :sys.get_state(scheduler)
+      assert state.standing_ref != first
+      due = System.monotonic_time(:millisecond) + Process.read_timer(state.standing_ref)
+      period = 2 * @tick_ms + Arca.ControlPlane.margin_ms()
+      assert due >= fired_at + period - 1 and due <= returned_at + period
 
       wait_until(
         fn ->
@@ -849,11 +861,6 @@ defmodule Crucible.Schedules.OwnershipFenceTest do
         10_000
       )
 
-      # It comes again two ticks later, asked by nothing.
-      state = :sys.get_state(scheduler)
-      assert state.standing_ref != first
-      left = Process.read_timer(state.standing_ref)
-      assert is_integer(left) and left > @tick_ms and left <= 2 * @tick_ms
       assert [_call] = ScriptedWorker.calls()
     end
 
@@ -1058,6 +1065,66 @@ defmodule Crucible.Schedules.OwnershipFenceTest do
 
       # The pass saw it lapsed only after the close: its grace starts there.
       assert Map.fetch!(seen(scheduler), occurrence_id) >= closed
+    end
+
+    test "after a slow first sighting, the next standing pass ends the occurrence, two ticks and at most a second later",
+         %{ctx: ctx, actor: actor} do
+      claimant!(Prima.Boot.id())
+      schedule = create_schedule(ctx)
+      {occurrence_id, execution_id} = running_live!(ctx, schedule)
+      scheduler = scheduler!()
+      _ = :sys.get_state(scheduler)
+      no_pass!(scheduler)
+
+      # Its run is gone and its execution closed: nobody will end it but a
+      # recovery pass.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.Execution, where: e.id == ^execution_id),
+          set: [status: "completed", completed_at: DateTime.utc_now()]
+        )
+
+      # A standing pass whose first read is slow, 300 ms, first sees it lapsed.
+      once = hold_first_read!()
+      %{standing_ref: pending} = :sys.get_state(scheduler)
+      Process.cancel_timer(pending)
+      send(scheduler, :standing_pass)
+      assert_receive {^once, :held, held, held_at}, 10_000
+      wait_until(fn -> System.monotonic_time(:millisecond) >= held_at + 300 end)
+      send(held, {once, :release})
+      state = :sys.get_state(scheduler)
+      first = Map.fetch!(state.lapsed_seen, occurrence_id)
+      now = System.monotonic_time(:millisecond)
+      next = now + Process.read_timer(state.standing_ref)
+      assert [%{state: "started"}] = occurrences(actor, schedule.id)
+
+      # The next standing pass, the one its own timer fires, is due at least
+      # the grace after the sighting and at most the grace and a second.
+      assert next - first >= 2 * @tick_ms
+      assert next - first <= 2 * @tick_ms + Arca.ControlPlane.margin_ms()
+
+      # That pass, delivered as its timer would deliver it, ends the
+      # occurrence: the sighting is set back by the time still to wait.
+      :sys.replace_state(scheduler, fn state ->
+        left = next - System.monotonic_time(:millisecond)
+        %{state | lapsed_seen: Map.update!(state.lapsed_seen, occurrence_id, &(&1 - left))}
+      end)
+
+      standing_fires!(scheduler)
+      assert [%{state: "uncertain"}] = occurrences(actor, schedule.id)
+    end
+
+    test "graces a live member's lapsed occurrence for exactly two ticks of its own clock" do
+      occurrence = %{id: "occ_graced"}
+      first = System.monotonic_time(:millisecond)
+
+      # First seen: recorded, not ended.
+      assert {[], %{lapsed_seen: %{"occ_graced" => ^first}}} =
+               Scheduler.graced([occurrence], %{lapsed_seen: %{}}, first)
+
+      seen = %{lapsed_seen: %{"occ_graced" => first}}
+      assert {[], _} = Scheduler.graced([occurrence], seen, first + 2 * @tick_ms - 1)
+      assert {[^occurrence], _} = Scheduler.graced([occurrence], seen, first + 2 * @tick_ms)
     end
 
     test "forgets an occurrence it saw lapsed once it is no longer lapsed", %{ctx: ctx} do

@@ -79,12 +79,12 @@ defmodule Crucible.Schedules.Scheduler do
   dies is started again in the same boot, with the runs it left still in
   flight under the task supervisor: the new process watches each of them
   and asks for the pass when one ends, and at its start asks for one
-  pass two ticks away, which reaches a claim committed just before the
-  death whose run never started. Those requests are the fast path: while
-  this member holds its slot, a standing pass runs every two ticks
-  whatever was asked, so an occurrence left by a path no request names is
-  reached all the same, and a member that does not hold its slot runs
-  none. A pass reads the open occurrences through their `(state,
+  pass two ticks and a second away, which reaches a claim committed just
+  before the death whose run never started. Those requests are the fast
+  path: while this member holds its slot, a standing pass runs every two
+  ticks and a second whatever was asked, so an occurrence left by a path
+  no request names is reached all the same, and a member that does not
+  hold its slot runs none. A pass reads the open occurrences through their `(state,
   claimed_at)` index, never their history, and skips only an occurrence
   a run of this process holds in flight; runs are kept by their monitor,
   so a second run of an `allow` schedule never displaces the first. A
@@ -150,8 +150,9 @@ defmodule Crucible.Schedules.Scheduler do
   @max_timer_ms 60 * 60 * 1_000
   @max_load_retries 5
   @recheck_ms 30_000
-  # Two ticks: the standing pass's period, and the age at which a claim is
-  # any member's to recover (`abandoned_before/0`).
+  # Two ticks: the grace a live member's lapsed run is given, and the age at
+  # which a claim is any member's to recover (`abandoned_before/0`). The
+  # standing pass comes a second later than this (`arm_standing/1`).
   @standing_ms 2 * @recheck_ms
 
   def start_link(opts \\ []) do
@@ -239,7 +240,7 @@ defmodule Crucible.Schedules.Scheduler do
     {:noreply, state |> rearm_recovery() |> recover_if_held()}
   end
 
-  # The standing pass: every two ticks, while this member holds its slot,
+  # The standing pass: every two ticks and a second, while this member holds its slot,
   # whatever any exit asked for. A member that does not hold it runs
   # nothing, and looks again at the next.
   def handle_info(:standing_pass, state) do
@@ -503,7 +504,9 @@ defmodule Crucible.Schedules.Scheduler do
   # What is no longer answered lapsed is forgotten, so the seen-set is
   # bounded by the open set; a restart forgets it all, and waits two ticks
   # more.
-  defp graced(lapsed_live, state, seen_at) do
+  @doc false
+  @spec graced([map()], map(), integer()) :: {[map()], map()}
+  def graced(lapsed_live, state, seen_at) do
     seen = Map.new(lapsed_live, &{&1.id, Map.get(state.lapsed_seen, &1.id, seen_at)})
     graced = Enum.filter(lapsed_live, &(seen_at - Map.fetch!(seen, &1.id) >= @standing_ms))
     {graced, %{state | lapsed_seen: seen}}
@@ -513,10 +516,14 @@ defmodule Crucible.Schedules.Scheduler do
   defp in_flight?(state, occurrence_id),
     do: Enum.any?(state.tasks, fn {_ref, task} -> task.occurrence_id == occurrence_id end)
 
-  # The standing pass's own timer, two ticks away, armed again by each pass.
+  # The standing pass's own timer, armed again by each pass a second past the
+  # grace (the margin `Arca.ControlPlane` gives up): a sighting is stamped
+  # after its pass's reads, so a timer at exactly the grace would come that
+  # read's length short of it and leave the end to the pass after.
   defp arm_standing(state) do
     if state.standing_ref, do: Process.cancel_timer(state.standing_ref)
-    %{state | standing_ref: Process.send_after(self(), :standing_pass, @standing_ms)}
+    delay_ms = @standing_ms + Arca.ControlPlane.margin_ms()
+    %{state | standing_ref: Process.send_after(self(), :standing_pass, delay_ms)}
   end
 
   # Two ticks and the margin `Arca.ControlPlane` gives up: the exit comes
