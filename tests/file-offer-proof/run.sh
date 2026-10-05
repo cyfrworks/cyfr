@@ -10,13 +10,14 @@
 # sender offers files from the Files page, the recipient answers them in
 # its Inbox, the sender edits an offered original and withdraws an offer,
 # and the outsider is offered nothing; the release's own storage copies
-# the bytes, and the recipient's accepted copy is read back.
+# the bytes, and each snapshot and the recipient's accepted copy are read
+# back.
 #
 # The proof asks the server for its part through the output directory
 # (`ask-N.json`), and this script answers each (`answer-N.json`) through
 # the proof's fixture (tests/file-offer-proof/fixture.exs): writing the
-# sender's files, and reading the rows, the storage counts and the
-# accepted bytes the steps left.
+# sender's files, and reading the rows, the storage counts, and the
+# digests of the snapshots and the accepted copy the steps left.
 #
 # The harness runs no execution engine and no model, and nothing here
 # needs one: an offer and an acceptance copy bytes in the release itself.

@@ -8,8 +8,9 @@
 # proof's, in the browser (proof.mjs). What is here seeds the three people,
 # their group and the sender's files through the paths a sign-in and the
 # console take, and reads back what the steps committed. Of the files'
-# bytes it reads the accepted copy's alone, and answers its digest, its
-# size and its first bytes, never the rest.
+# bytes it reads each offer's snapshot and the accepted copy, and answers
+# only the digests and sizes it computes from the bytes read, never the
+# bytes.
 #
 #   person EMAIL SUB NAME
 #       The GitHub identity SUB with the verified EMAIL and the name NAME,
@@ -45,13 +46,16 @@
 #       person's own actor: the offers sent from the sender's athanor and
 #       those addressed to the recipient and to the outsider, the receipts
 #       in the recipient's and the outsider's athanors, the bytes each
-#       offer's snapshot and custody copy hold, each athanor's storage
-#       usage (the whole tree as the storage cap walks it, `data/` and
-#       `payloads/`, and the cap's cached total), and, for each receipt
-#       that records a published path, the bytes at that path read under
-#       the recipient's actor. The rows are the store's own reads
-#       (`Arca.FileOffers`), since `file.offers` lists no receipt once it
-#       has completed.
+#       offer's snapshot and custody copy hold, each file an offer's
+#       snapshot holds (every file stored under its
+#       `payloads/offers/<offer id>/`, read under the sender's actor, with
+#       the size and SHA-256 of the bytes read, never the row's digest),
+#       each athanor's storage usage (the whole tree as the storage cap
+#       walks it, `data/` and `payloads/`, and the cap's cached total),
+#       and, for each receipt that records a published path, the bytes at
+#       that path read under the recipient's actor. The rows are the
+#       store's own reads (`Arca.FileOffers`), since `file.offers` lists no
+#       receipt once it has completed.
 #
 # A step that does not answer `{:ok, _}` raises, and the rpc exits non-zero
 # naming it.
@@ -100,6 +104,30 @@ fn args ->
   bytes_under = fn who, path ->
     {:ok, %{bytes: bytes}} = Arca.usage(who, path)
     bytes
+  end
+
+  sha256 = fn bytes -> Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) end
+
+  # What an offer's snapshot holds, as its stored bytes answer: each entry
+  # under `payloads/offers/<offer id>/`, a file with the size and digest of
+  # the bytes read there. A released snapshot holds nothing.
+  snapshot_files = fn who, offer_id ->
+    dir = ["payloads", "offers", offer_id]
+
+    case Arca.list_typed(who, dir) do
+      {:ok, entries} ->
+        Map.new(entries, fn
+          {name, :file} ->
+            {:ok, bytes} = Arca.get(who, dir ++ [name])
+            {name, %{size: byte_size(bytes), sha256: sha256.(bytes)}}
+
+          {name, kind} ->
+            {name, %{kind: kind}}
+        end)
+
+      {:error, :not_found} ->
+        %{}
+    end
   end
 
   usage = fn who ->
@@ -245,8 +273,7 @@ fn args ->
             offer_id: receipt.offer_id,
             path: path,
             size: byte_size(bytes),
-            sha256: Base.encode16(:crypto.hash(:sha256, bytes), case: :lower),
-            head: binary_part(bytes, 0, min(byte_size(bytes), 48))
+            sha256: sha256.(bytes)
           }
         end
 
@@ -258,6 +285,7 @@ fn args ->
         receipts: Enum.map(receipts, receipt_fact),
         outsider_receipts: Enum.map(outsider_receipts, receipt_fact),
         snapshots: Map.new(offer_ids, &{&1, bytes_under.(sender, ["payloads", "offers", &1])}),
+        snapshot_files: Map.new(offer_ids, &{&1, snapshot_files.(sender, &1)}),
         custody: Map.new(offer_ids, &{&1, bytes_under.(recipient, ["payloads", "receipts", &1])}),
         usage: %{
           sender: usage.(sender),

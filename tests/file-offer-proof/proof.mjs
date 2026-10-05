@@ -13,22 +13,26 @@
 //   picker     the sender's picker lists the recipient alone, never the
 //              outsider, each time it opens
 //   offered    three offers of one file each, sent from the picker: each
-//              row offered from the sender to the recipient, its snapshot
-//              holding the file's bytes, the sender's usage grown by it
+//              row offered from the sender to the recipient; after each,
+//              every snapshot offered so far holds its file's original
+//              bytes; the sender's usage grown by each
 //   notice     each offer reaches the recipient's open Files page, its
 //              Inbox and the topbar's count, without a reload
 //   edited     the sender edits the first offered original and saves it:
-//              the store holds the edit, the snapshot is unchanged
+//              the store holds the edit, every snapshot its original
 //   withdrawn  the sender withdraws the third before the recipient acts on
-//              it: it leaves the recipient's page, nothing lands, and the
+//              it, every open snapshot holding its original just before:
+//              it leaves the recipient's page, nothing lands, and the
 //              sender's usage returns by its snapshot
 //   accepted   the recipient accepts the first into the default folder
-//              the form shows: it lands at data/inbox/<sender slug>/<offer
+//              the form shows, both open snapshots holding their originals
+//              just before: it lands at data/inbox/<sender slug>/<offer
 //              id>/<filename>, its bytes the original's at offer time, not
 //              the edit; the sender's usage returns by the snapshot, and
 //              the recipient's holds the file once, its custody released
-//   declined   the recipient declines the second: it ends declined,
-//              nothing lands, and the sender's usage returns by it
+//   declined   the recipient declines the second, its snapshot holding its
+//              original just before: it ends declined, nothing lands, and
+//              the sender's usage returns by it
 //   outsider   the outsider's open Files page shows no offer at any step,
 //              no offer row names them, the recipient's picker lists the
 //              sender alone, and a picker edited in the sender's browser to
@@ -36,11 +40,17 @@
 //   storage    the storage counts over the whole run, step by step, as the
 //              offer's lifecycle states
 //
+// A snapshot "holds its original" when the fixture, reading what is
+// stored under the offer's `payloads/offers/<offer id>/` as the sender,
+// finds that one file, of the original's size and SHA-256, computed from
+// the bytes read there and compared with the bytes this proof uploaded,
+// never with the digest the offer row records (`snapshotsHold`).
+//
 // The server's part of a step — writing the sender's files, and reading
-// the rows, the storage counts and the accepted bytes — is run.sh's, asked
-// for through OUT_DIR (`ask-N.json`, answered `answer-N.json`). OUT_DIR
-// also holds run.sh's `setup.json`: the people, the group, the viewport
-// and the cases shown elsewhere.
+// the rows, the storage counts, and the snapshots' and the accepted
+// copy's digests — is run.sh's, asked for through OUT_DIR (`ask-N.json`,
+// answered `answer-N.json`). OUT_DIR also holds run.sh's `setup.json`:
+// the people, the group, the viewport and the cases shown elsewhere.
 //
 // Usage: node proof.mjs HOMES_FILE OUT_DIR SENDER_COOKIE RECIPIENT_COOKIE OUTSIDER_COOKIE
 
@@ -254,6 +264,33 @@ async function closeFile(view) {
 const facts = () => ask({ op: "facts" });
 const offerRows = (fact, offerId) => [...fact.outbox, ...fact.inbox].filter((r) => r.offer_id === offerId)
   .filter((r, i, all) => all.findIndex((o) => o.offer_id === r.offer_id && o.filename === r.filename) === i);
+// Whether the snapshot of each offer of `names` holds exactly its file with
+// the bytes this proof uploaded: what is stored under the offer's
+// `payloads/offers/<offer id>/`, hashed by the fixture from the bytes read
+// there, never the digest the offer row records.
+function snapshotsHold(fact, offers, names) {
+  const checked = names.map((name) => {
+    const offerId = offers[name];
+    const stored = fact.snapshot_files[offerId] ?? {};
+    const file = stored[name];
+    const bytes = !file ? "absent" : file.sha256 === sha256(ORIGINAL[name]) ? "the original" :
+      file.sha256 === sha256(EDITED) ? "the sender's edit" : "other bytes";
+    return {
+      file: name, offer_id: offerId, stored: Object.keys(stored), bytes,
+      size: file?.size ?? null, sha256: file?.sha256 ?? null, original_sha256: sha256(ORIGINAL[name]),
+      held: Object.keys(stored).length === 1 && bytes === "the original" && file.size === size(ORIGINAL[name]),
+    };
+  });
+  return { held: checked.length > 0 && checked.every((c) => c.held), checked };
+}
+
+// Whether the snapshot of an ended offer is gone: nothing stored under it.
+const released = (fact, offerId) => fact.snapshots[offerId] === 0 &&
+  Object.keys(fact.snapshot_files[offerId] ?? {}).length === 0;
+
+// What a snapshot check shows, in a row's detail.
+const hashed = (check) => check.checked.map((c) => `${c.file}: ${c.bytes}${c.held ? "" : ` (${c.sha256}, ${c.size} bytes, stored ${JSON.stringify(c.stored)})`}`);
+
 const totals = (fact) => ({
   sender: fact.usage.sender.total, recipient: fact.usage.recipient.total, outsider: fact.usage.outsider.total,
 });
@@ -372,6 +409,7 @@ async function main() {
       const rowsOf = offerRows(fact, offerId);
       offered.push({
         file: name, offer_id: offerId, flash: said.text, sent, rows: rowsOf, snapshot: fact.snapshots[offerId],
+        snapshots: snapshotsHold(fact, offers, Object.keys(offers)),
         step: counted(`offer ${name}`, fact, { sender: size(ORIGINAL[name]) }, previous),
       });
       previous = totals(fact);
@@ -391,13 +429,15 @@ async function main() {
       return o.rows.length === 1 && only.filename === o.file && only.status === "offered" &&
         only.size === size(ORIGINAL[o.file]) && only.digest === `sha256:${sha256(ORIGINAL[o.file])}` &&
         only.sender_user_id === SENDER.user_id && only.recipient_user_id === RECIPIENT.user_id &&
-        o.snapshot === size(ORIGINAL[o.file]) && o.step.held && o.sent.status === "waiting" && o.sent.withdraw;
+        o.snapshot === size(ORIGINAL[o.file]) && o.snapshots.held && o.step.held && o.sent.status === "waiting" &&
+        o.sent.withdraw;
     }) && new Set(offered.map((o) => o.offer_id)).size === 3;
     if (!row("offered", offeredHeld,
-      "three offers of one file each, sent from the picker: offered from the sender to the recipient, each snapshot the file's bytes, the sender's usage grown by each",
+      "three offers of one file each, sent from the picker: offered from the sender to the recipient; after each, every snapshot offered so far holds its file's original bytes, hashed where they are stored; the sender's usage grown by each",
       offered.map((o) => ({
         file: o.file, offer_id: o.offer_id, rows: o.rows.map((r) => `${r.filename} ${r.status} ${r.size}`),
-        snapshot: o.snapshot, sender_moved: o.step.moved.sender, expected: o.step.expected.sender, sent: o.sent.status,
+        snapshot: o.snapshot, hashed: hashed(o.snapshots), sender_moved: o.step.moved.sender,
+        expected: o.step.expected.sender, sent: o.sent.status,
       })))) return;
 
     row("notice",
@@ -423,25 +463,32 @@ async function main() {
     await closeFile(sender);
     const editFact = await facts();
     const editStep = counted("edit alpha.txt", editFact, { sender: size(EDITED) - size(ORIGINAL["alpha.txt"]) }, previous);
+    const editSnapshots = snapshotsHold(editFact, offers, Object.keys(offers));
     previous = totals(editFact);
     await checkOutsider("edit alpha.txt", outsider, editFact);
-    record.steps.edited = { before: sha256(before), after: sha256(after), saved, facts: editFact, step: editStep };
+    record.steps.edited = {
+      before: sha256(before), after: sha256(after), saved, facts: editFact, step: editStep, snapshots: editSnapshots,
+    };
     if (!row("edited",
       before === ORIGINAL["alpha.txt"] && after === EDITED && /alpha\.txt/.test(saved.text) &&
-        editFact.snapshots[offers["alpha.txt"]] === size(ORIGINAL["alpha.txt"]) &&
+        editFact.snapshots[offers["alpha.txt"]] === size(ORIGINAL["alpha.txt"]) && editSnapshots.held &&
         editFact.usage.sender.data - start.usage.sender.data === size(EDITED) - size(ORIGINAL["alpha.txt"]) &&
         editStep.held && (await sameDocument(sender)),
-      "the sender edits the offered original on the Files page; reopened, it reads the edit, and the offer's snapshot is unchanged",
+      "the sender edits the offered original on the Files page; reopened, it reads the edit, and every snapshot still holds its original bytes",
       {
         opened_before: before === ORIGINAL["alpha.txt"] ? "the original" : before.slice(0, 60),
         reopened: after === EDITED ? "the edit" : after.slice(0, 60), saved: saved.text,
-        snapshot: editFact.snapshots[offers["alpha.txt"]], sender_moved: editStep.moved.sender,
+        snapshot: editFact.snapshots[offers["alpha.txt"]], hashed: hashed(editSnapshots),
+        sender_moved: editStep.moved.sender,
       })) return;
 
     // -----------------------------------------------------------------------
     // withdrawn
     // -----------------------------------------------------------------------
     const gamma = offers["gamma.txt"];
+    // Every snapshot still open, the third's included, just before the
+    // withdrawal releases the third's.
+    const beforeWithdraw = snapshotsHold(await facts(), offers, ["alpha.txt", "beta.txt", "gamma.txt"]);
     await sender.page.locator(`#sent-${gamma} button[phx-click="withdraw"]`).click();
     const withdrawnSaid = await flash(sender, /^Withdrawn/, "the sender's withdrawal");
     const senderSent = await waitFor(async () => {
@@ -457,19 +504,24 @@ async function main() {
     previous = totals(withdrawFact);
     await checkOutsider("withdraw gamma.txt", outsider, withdrawFact);
     const gammaRows = offerRows(withdrawFact, gamma);
-    record.steps.withdrawn = { flash: withdrawnSaid, sent: senderSent, recipient: left, facts: withdrawFact, step: withdrawStep };
+    record.steps.withdrawn = {
+      before: beforeWithdraw, flash: withdrawnSaid, sent: senderSent, recipient: left, facts: withdrawFact,
+      step: withdrawStep,
+    };
     if (!row("withdrawn",
-      gammaRows.length === 1 && gammaRows[0].status === "withdrawn" && senderSent && !senderSent.withdraw &&
+      beforeWithdraw.held && gammaRows.length === 1 && gammaRows[0].status === "withdrawn" && senderSent &&
+        !senderSent.withdraw &&
         left && (await sameDocument(recipient)) &&
-        withdrawFact.receipts.every((r) => r.offer_id !== gamma) && withdrawFact.snapshots[gamma] === 0 &&
+        withdrawFact.receipts.every((r) => r.offer_id !== gamma) && released(withdrawFact, gamma) &&
         withdrawFact.custody[gamma] === 0 && withdrawStep.held &&
         offerRows(withdrawFact, offers["alpha.txt"])[0].status === "offered" &&
         offerRows(withdrawFact, offers["beta.txt"])[0].status === "offered",
-      "the sender withdraws the third offer before the recipient acts on it: it leaves the recipient's open page, nothing lands, the sender's usage returns by its snapshot",
+      "the sender withdraws the third offer before the recipient acts on it, its snapshot holding the original's bytes until then: it leaves the recipient's open page, nothing lands, the sender's usage returns by its snapshot",
       {
         rows: gammaRows.map((r) => r.status), sender_sees: senderSent?.status, withdraw_left: senderSent?.withdraw,
         recipient_waiting: left?.inbox.map((o) => o.id), recipient_badge: left?.badge,
-        snapshot: withdrawFact.snapshots[gamma], sender_moved: withdrawStep.moved.sender,
+        hashed_before: hashed(beforeWithdraw), snapshot: withdrawFact.snapshots[gamma],
+        sender_moved: withdrawStep.moved.sender,
       })) return;
 
     // -----------------------------------------------------------------------
@@ -479,6 +531,9 @@ async function main() {
     const landedAt = `${INBOX}/${alphaOffer}/alpha.txt`;
     const form = await shown(recipient);
     const shownFolder = form.inbox.find((o) => o.id === alphaOffer)?.folder ?? null;
+    // Both snapshots still open, just before the acceptance releases the
+    // first's.
+    const beforeAccept = snapshotsHold(await facts(), offers, ["alpha.txt", "beta.txt"]);
     await recipient.page.locator(`#accept-${alphaOffer} button[type="submit"]`).click();
     const acceptedSaid = await flash(recipient, /^Accepted into /, "the recipient's acceptance");
     const afterAccept = await waitFor(async () => {
@@ -504,11 +559,12 @@ async function main() {
     const landedShown = await opened(recipient, landedAt);
     await closeFile(recipient);
     record.steps.accepted = {
-      shown_folder: shownFolder, flash: acceptedSaid, recipient: afterAccept, sender: senderSaw, facts: acceptFact,
+      before: beforeAccept, shown_folder: shownFolder, flash: acceptedSaid, recipient: afterAccept, sender: senderSaw, facts: acceptFact,
       step: acceptStep, listing: landedListing, landed_shown: sha256(landedShown),
     };
     if (!row("accepted",
-      shownFolder === INBOX && acceptedSaid.text === `Accepted into ${INBOX}/${alphaOffer}/` && afterAccept && liveAccept &&
+      beforeAccept.held && shownFolder === INBOX && acceptedSaid.text === `Accepted into ${INBOX}/${alphaOffer}/` &&
+        afterAccept && liveAccept &&
         senderSaw && !senderSaw.withdraw &&
         offerRows(acceptFact, alphaOffer).every((r) => r.status === "accepted") &&
         receipts.length === 1 && receipts[0].status === "completed" && receipts[0].attempt_path === landedAt &&
@@ -516,13 +572,14 @@ async function main() {
         landed.sha256 === sha256(ORIGINAL["alpha.txt"]) && landed.sha256 !== sha256(EDITED) &&
         landedShown === ORIGINAL["alpha.txt"] &&
         JSON.stringify(landedListing) === JSON.stringify(["alpha.txt"]) &&
-        acceptFact.snapshots[alphaOffer] === 0 && acceptFact.custody[alphaOffer] === 0 &&
+        released(acceptFact, alphaOffer) && acceptFact.custody[alphaOffer] === 0 &&
         acceptFact.usage.recipient.payloads === start.usage.recipient.payloads && acceptStep.held,
       "the recipient accepts the first offer into the folder the form shows: it lands at data/inbox/<sender slug>/<offer id>/alpha.txt holding the original's bytes at offer time, not the edit; the sender's usage returns by the snapshot, and the recipient's holds the file once, its custody released",
       {
-        folder_shown: shownFolder, flash: acceptedSaid.text, expected_path: landedAt,
+        hashed_before: hashed(beforeAccept), folder_shown: shownFolder, flash: acceptedSaid.text,
+        expected_path: landedAt,
         receipt: receipts.map((r) => ({ status: r.status, attempt_path: r.attempt_path })),
-        landed: landed && { path: landed.path, size: landed.size, sha256: landed.sha256, head: landed.head },
+        landed: landed && { path: landed.path, size: landed.size, sha256: landed.sha256 },
         landed_bytes: !landed ? "none" : landed.sha256 === sha256(ORIGINAL["alpha.txt"]) ? "the original at offer time" :
           landed.sha256 === sha256(EDITED) ? "the sender's later edit" : "neither the original nor the edit",
         original_sha256: sha256(ORIGINAL["alpha.txt"]), edited_sha256: sha256(EDITED),
@@ -537,6 +594,9 @@ async function main() {
     // declined
     // -----------------------------------------------------------------------
     const beta = offers["beta.txt"];
+    // The second's snapshot, the one still open, just before the decline
+    // releases it.
+    const beforeDecline = snapshotsHold(await facts(), offers, ["beta.txt"]);
     await recipient.page.locator(`#offer-${beta} button[phx-click="decline"]`).click();
     const declinedSaid = await flash(recipient, /^Declined/, "the recipient's decline");
     const afterDecline = await waitFor(async () => {
@@ -555,20 +615,21 @@ async function main() {
     const inboxListing = (await shown(recipient)).listing;
     const senderEnd = await shown(sender);
     record.steps.declined = {
-      flash: declinedSaid, recipient: afterDecline, sender: senderEnd, facts: declineFact, step: declineStep,
+      before: beforeDecline, flash: declinedSaid, recipient: afterDecline, sender: senderEnd, facts: declineFact, step: declineStep,
       inbox_listing: inboxListing,
     };
     const statusOf = (id) => senderEnd.sent.find((s) => s.id === id)?.status ?? null;
     if (!row("declined",
-      offerRows(declineFact, beta).every((r) => r.status === "declined") && afterDecline && senderSawDecline &&
-        declineFact.receipts.every((r) => r.offer_id === alphaOffer) && declineFact.snapshots[beta] === 0 &&
+      beforeDecline.held && offerRows(declineFact, beta).every((r) => r.status === "declined") && afterDecline &&
+        senderSawDecline && declineFact.receipts.every((r) => r.offer_id === alphaOffer) && released(declineFact, beta) &&
         declineFact.custody[beta] === 0 && declineStep.held &&
         JSON.stringify(inboxListing) === JSON.stringify([`${alphaOffer}/`]) &&
         statusOf(alphaOffer) === "accepted" && statusOf(beta) === "declined" && statusOf(gamma) === "withdrawn" &&
         senderEnd.sent.every((s) => !s.withdraw) && (await sameDocument(sender)),
-      "the recipient declines the second offer: it ends declined, nothing lands for it or the withdrawn one, and the sender's usage returns by its snapshot",
+      "the recipient declines the second offer, its snapshot holding the original's bytes until then: it ends declined, nothing lands for it or the withdrawn one, and the sender's usage returns by its snapshot",
       {
-        rows: offerRows(declineFact, beta).map((r) => r.status), flash: declinedSaid.text,
+        hashed_before: hashed(beforeDecline), rows: offerRows(declineFact, beta).map((r) => r.status),
+        flash: declinedSaid.text,
         recipient_inbox_folder: inboxListing, sender_sees: senderEnd.sent.map((s) => `${s.files.join(",")} ${s.status}`),
         snapshot: declineFact.snapshots[beta], sender_moved: declineStep.moved.sender,
         recipient_moved: declineStep.moved.recipient,
