@@ -1211,6 +1211,116 @@ defmodule PrismWeb.SettingsLiveTest do
       assert record_state(ctx, ref) == "confirmed"
     end
 
+    # A widening asked for whose proof lands before the page's layer hears
+    # the ask: the record is proven inside the very event that opens it, and
+    # the event goes on only once the stream's `confirmed` fact is already in
+    # the page's mailbox, ahead of the ask the event then makes. With
+    # `:no_panel` the stream's `opened` fact is taken out first, so the
+    # `confirmed` fact meets no panel at all; with `:stream_panel` it meets
+    # the panel the stream opened, not yet the page's. The handler tells the
+    # test once that order holds: `:telemetry` swallows a handler's failure,
+    # so a bound that ran out shows as the missing message, never as a pass.
+    defp proven_before_the_ask!(view, ctx, mode) do
+      view_pid = view.pid
+      test_pid = self()
+      handler = "settings-proof-first-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :sanctum, :confirmation, :opened],
+          fn _event, _measure, meta, _config ->
+            if self() == view_pid and meta.operation == "instance_entry.set_audience" do
+              ref = meta.ref
+              Sanctum.TestContext.prove!(ctx, ref)
+              wait_until(fn -> queued_fact(ref, "opened") end, 2_000, "the opened fact queued")
+
+              wait_until(
+                fn -> queued_fact(ref, "confirmed") end,
+                2_000,
+                "the confirmed fact queued"
+              )
+
+              if mode == :no_panel, do: take!(queued_fact(ref, "opened"))
+              send(test_pid, {:proven_before_the_ask, ref})
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      handler
+    end
+
+    defp queued_fact(ref, kind) do
+      {:messages, messages} = Process.info(self(), :messages)
+
+      Enum.find(messages, fn
+        {:phoenix, :send_update, {_target, %{fact: %{"ref" => ^ref, "kind" => fact_kind}}}} ->
+          to_string(fact_kind) == kind
+
+        _other ->
+          false
+      end)
+    end
+
+    defp take!(message) do
+      receive do
+        ^message -> :ok
+      after
+        0 -> raise "the message left the mailbox"
+      end
+    end
+
+    for {mode, where} <- [
+          no_panel: "meets no panel",
+          stream_panel: "meets the panel the stream opened"
+        ] do
+      test "a proof that lands before the layer hears the ask, whose fact #{where}, is " <>
+             "repeated once, and the record is spent",
+           %{conn: conn} do
+        %{view: view, ctx: ctx} = admin!(conn)
+        a = test_user(%{name: "A One"}).user_id
+        b = test_user(%{name: "B Two"}).user_id
+        entry = entry!(ctx, %{audience: "listed", members: [a]})
+        send(view.pid, :load)
+        form = "#instance-audience-#{entry.id}"
+        watch_saves()
+        handler = proven_before_the_ask!(view, ctx, unquote(mode))
+
+        view |> element(form) |> render_submit(%{"members" => [a, b]})
+        assert_receive {:proven_before_the_ask, ref}, 5_000
+        :ok = :telemetry.detach(handler)
+
+        wait_until(fn -> b in stored(entry.id).members end, 2_000, "the proven change made")
+        assert record_state(ctx, ref) == "consumed"
+        render(view)
+        assert saves_admitted() == 2, "the change was not repeated exactly once"
+        refute state_of(view) =~ "cnf_"
+      end
+    end
+
+    test "a proof given after the layer heard the ask is still repeated exactly once",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      a = test_user(%{name: "A One"}).user_id
+      b = test_user(%{name: "B Two"}).user_id
+      entry = entry!(ctx, %{audience: "listed", members: [a]})
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+      watch_saves()
+
+      view |> element(form) |> render_submit(%{"members" => [a, b]})
+      assert [%{ref: ref}] = open_records(ctx)
+      prove_asked!(view, ctx, ref)
+
+      wait_until(fn -> b in stored(entry.id).members end, 2_000, "the proven change made")
+      assert record_state(ctx, ref) == "consumed"
+      render(view)
+      assert saves_admitted() == 2, "the change was not repeated exactly once"
+      refute state_of(view) =~ "cnf_"
+    end
+
     test "a proven widening whose fresh read fails lets its proof go and says why",
          %{conn: conn} do
       %{view: view, ctx: ctx} = admin!(conn)

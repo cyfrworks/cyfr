@@ -880,7 +880,13 @@ defmodule PrismWeb.SystemLayer do
   defp fact(socket, _ref, _panel, _kind), do: socket
 
   # A page's own request: its prompt, marked as this client's, or the
-  # prompt the stream opened for it first, marked now.
+  # prompt the stream opened for it first, marked now. A proof can land
+  # before the ask does: the stream's `confirmed` fact then met no panel,
+  # or a panel not yet this client's, and is not delivered again. So a
+  # record that already reads confirmed, by the panel or by the home's own
+  # read, is approved here and reported to the page once, as the fact
+  # would have; a fact arriving after the ask finds it approved and reports
+  # nothing more.
   defp on_ask(socket, %{ref: ref} = ask) do
     case Map.get(socket.assigns.panels, ref) do
       nil ->
@@ -903,6 +909,7 @@ defmodule PrismWeb.SystemLayer do
             })
             |> mark_form(ask.form, prompt.id)
             |> arrive(prompt)
+            |> approve_landed(ref, Map.get(entry, :state) == "confirmed")
 
           {:error, :invalid_prompt} ->
             report(Prompt.confirmation_id(ref), {:refused, :invalid_prompt})
@@ -910,12 +917,31 @@ defmodule PrismWeb.SystemLayer do
         end
 
       panel ->
+        landed = panel.status == :confirmed or Map.get(panel.entry, :state) == "confirmed"
+
         socket
         |> put_panel(ref, %{panel | own: true, origin: :page, form: ask.form, status: :waiting})
         |> mark_form(ask.form, panel.prompt_id)
         |> mark_own(panel.prompt_id)
+        |> approve_landed(ref, landed)
     end
   end
+
+  # A proof that landed before its ask: approved, and reported to the page
+  # (or its form sent again) as the `confirmed` fact does.
+  defp approve_landed(socket, ref, true) do
+    case Map.get(socket.assigns.panels, ref) do
+      %{own: true, origin: :page} = panel ->
+        socket = set_status(socket, ref, :approved)
+        report(panel.prompt_id, :confirmed)
+        if panel.form, do: push_resubmit(socket, panel.form), else: socket
+
+      _other ->
+        socket
+    end
+  end
+
+  defp approve_landed(socket, _ref, false), do: socket
 
   # A completed change lets go of the form that typed it.
   defp on_outcome(socket, ref, outcome) do
