@@ -31,9 +31,9 @@ defmodule Sanctum.Consent.Commit do
   offered to the person (`{:not_offered, need}`), active, and admitted by
   its component policy for the source (`{:component_not_admitted, need}`).
   All of a decision's bindings name one need, since the ingress edge
-  carries one need's bindings: one of them names no `name` and is the
-  default, and each other names its account (`name`) and rides the edge's
-  `named` map.
+  carries one need's bindings (bindings of two needs are refused, naming
+  them): one of them names no `name` and is the default, and each other
+  names its account (`name`) and rides the edge's `named` map.
 
   Every binding, and every selection, carries its `lifetime` —
   `standing` (when it names none), `until` an RFC 3339 UTC instant
@@ -75,9 +75,21 @@ defmodule Sanctum.Consent.Commit do
   ## What preview answers
 
   A `Prima.ConsentPreview` (`t:Sanctum.Consent.preview/0`): the typed
-  rows of what the revision would grant, the origins it would admit and the
-  commit digest binding both, with the proof and the expected revision
-  beside them. Every surface renders the rows itself.
+  rows of what the revision would grant, the origins it would admit, the
+  bindings of the profile's head it would remove and the commit digest
+  binding them all, with the proof and the expected revision beside
+  them. Every surface renders the rows and the removals itself.
+
+  A head binding is removed when the revision binds nothing under its
+  key, or binds it for another need: a grant for another need of the
+  app's own calls replaces every binding those calls held. Neither the
+  blob nor a binding's row records its need, so a head binding's need is
+  told by its entry, as the surfaces tell it: the one need whose
+  candidates hold the entry, or the one need there is (`Plan.need_choice/4`);
+  on a dependency's edge, the need the edge names, or the dependency's
+  one credential need. A head binding whose need cannot be told is
+  compared by its key alone, so an entry changed under a kept key is a
+  change its new row shows, never a removal.
   """
 
   require Logger
@@ -150,6 +162,7 @@ defmodule Sanctum.Consent.Commit do
          rows: document["rows"],
          origins: document["origins"],
          commit_digest: document["commit_digest"],
+         removed: document["removed"],
          proof: proof,
          expected_consent_revision: prep.expected_revision
        }}
@@ -559,12 +572,21 @@ defmodule Sanctum.Consent.Commit do
          },
          {:ok, blob_json, blob_refs, narrowed} <- build_blob(ctx, blob_inputs),
          blob_digest = JCS.hash_binary(blob_json),
+         {:ok, removed} <-
+           removed_bindings(ctx, {profile_id, expected_revision}, %{
+             refs: blob_refs,
+             needs: decided_needs(source_ref, bindings, selections, published),
+             source_ref: source_ref,
+             declared: declared,
+             graph: activation.graph,
+             rows: closure_rows
+           }),
          {:ok, commit_input} <-
            commit_input(
              shape_digest,
              blob_digest,
              {label, kind, invoke_mode},
-             {origins, subset},
+             {origins, subset, removed},
              bindings,
              selections,
              tool_servers,
@@ -594,6 +616,7 @@ defmodule Sanctum.Consent.Commit do
          tool_servers: tool_servers,
          origins: origins,
          subset: subset,
+         removed: removed,
          narrowed: narrowed,
          profile_id: profile_id,
          expected_revision: expected_revision,
@@ -1571,15 +1594,20 @@ defmodule Sanctum.Consent.Commit do
   # The ingress edge carries one need's bindings: one default, which names
   # no account, and each other under a name of its own. A name a person
   # would read as another (differing only in case) is that name again.
+  # Bindings of two needs are refused naming every need bound, so the
+  # person can pick one.
   defp check_binding_slots([]), do: :ok
 
   defp check_binding_slots([%{need: need} | _] = bindings) do
     {unnamed, named} = Enum.split_with(bindings, &is_nil(&1.name))
     folded = Enum.map(named, &String.downcase(&1.name))
+    needs = bindings |> Enum.map(& &1.need) |> Enum.uniq() |> Enum.sort()
 
     cond do
-      Enum.any?(bindings, &(&1.need != need)) ->
-        {:error, :multiple_source_bindings_unrepresentable}
+      length(needs) > 1 ->
+        {:error,
+         {:invalid_argument,
+          "The app's own calls carry one need's credentials: " <> bind_one_of(needs)}}
 
       length(unnamed) > 1 ->
         {:error,
@@ -1604,6 +1632,13 @@ defmodule Sanctum.Consent.Commit do
       true ->
         :ok
     end
+  end
+
+  defp bind_one_of([one, other]), do: "bind #{one} or #{other}, not both"
+
+  defp bind_one_of(needs) do
+    {init, [last]} = Enum.split(needs, -1)
+    "bind one of #{Enum.join(init, ", ")} or #{last}"
   end
 
   # An account name a named binding rides under: absent for the default.
@@ -1938,7 +1973,7 @@ defmodule Sanctum.Consent.Commit do
          shape_digest,
          blob_digest,
          {label, kind, invoke_mode},
-         {origins, subset},
+         {origins, subset, removed},
          bindings,
          selections,
          tool_servers,
@@ -1946,6 +1981,9 @@ defmodule Sanctum.Consent.Commit do
        ) do
     {:ok,
      %{
+       # What the person is shown the revision drops from the head; the
+       # head itself is pinned by the expected revision the proof binds.
+       removed: removed,
        shape_digest: shape_digest,
        blob_digest: blob_digest,
        # Which profile the grant lands on, which the blob cannot say —
@@ -2002,6 +2040,245 @@ defmodule Sanctum.Consent.Commit do
 
   defp digest_lifetime(%{kind: kind}), do: %{kind: kind}
   defp digest_lifetime(nil), do: %{kind: "standing"}
+
+  # ---------------------------------------------------------------------------
+  # What the revision removes from the head
+  # ---------------------------------------------------------------------------
+
+  # The head's bindings the revision drops, each as the preview carries it
+  # (`Prima.ConsentPreview`'s "Removed bindings"), sorted by key: a key the
+  # revision no longer binds, or binds for another need. The head is read
+  # here at the revision the profile was located at; a head that moved
+  # between the two reads is a race, never a list of another head's
+  # bindings.
+  defp removed_bindings(_ctx, {nil, _expected}, _built), do: {:ok, []}
+
+  defp removed_bindings(ctx, {profile_id, expected}, built) do
+    with {:ok, held} <- head_refs(ctx, profile_id, expected),
+         {:ok, sources} <- removal_sources(ctx, held) do
+      kept = MapSet.new(built.refs, & &1.binding_key)
+      reads = {ctx, sources, built}
+
+      held
+      |> Enum.sort_by(& &1.binding_key)
+      |> Enum.reduce_while({:ok, []}, fn ref, {:ok, acc} ->
+        case removal(reads, ref, kept) do
+          :kept -> {:cont, {:ok, acc}}
+          {:ok, item} -> {:cont, {:ok, [item | acc]}}
+          {:error, _reason} = error -> {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, items} -> {:ok, Enum.reverse(items)}
+        error -> error
+      end
+    end
+  end
+
+  defp head_refs(ctx, profile_id, expected) do
+    case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id) do
+      {:ok, %{revision: ^expected, vault_refs: refs}} -> {:ok, refs}
+      {:ok, %{revision: actual}} -> conflict(:race, expected, actual)
+      {:error, :no_head} when expected == 0 -> {:ok, []}
+      {:error, :no_head} -> conflict(:race, expected, 0)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # What a head binding's need is told from, read only when the head holds
+  # a binding.
+  defp removal_sources(_ctx, []), do: {:ok, nil}
+  defp removal_sources(ctx, _held), do: Plan.choice_sources(ctx)
+
+  # A head binding is kept when the revision binds its key for the same
+  # need, or for a need either side cannot tell; otherwise it is removed.
+  defp removal({_ctx, _sources, built} = reads, ref, kept) do
+    with {:ok, {node, edge, name}} <- removed_place(ref.binding_key),
+         {:ok, identity} <- head_identity(ref) do
+      need = head_need(reads, {node, edge}, identity)
+      decided = Map.get(built.needs, ref.binding_key)
+
+      if MapSet.member?(kept, ref.binding_key) and
+           (is_nil(need) or is_nil(decided) or need == decided) do
+        :kept
+      else
+        {:ok,
+         %{"binding_key" => ref.binding_key, "node" => node, "edge" => edge, "need" => need}
+         |> Prima.MapUtil.put_present("connection", name)
+         |> Map.merge(removed_entry(reads, identity, edge))}
+      end
+    end
+  end
+
+  # A head row's key spells where it sat; one that does not is a row the
+  # preview cannot name, and nothing is granted over it.
+  defp removed_place(key) do
+    case Prima.Authority.Blob.parse_binding_key(key) do
+      {:ok, place} -> {:ok, place}
+      :error -> {:error, {:preview_unrepresentable, :removed}}
+    end
+  end
+
+  defp head_identity(%{vault_entry_id: id}) when is_binary(id), do: {:ok, {:own, id}}
+  defp head_identity(%{instance_entry_id: id}) when is_binary(id), do: {:ok, {:instance, id}}
+  defp head_identity(%{via_label: label}) when is_binary(label), do: {:ok, {:label, label}}
+  defp head_identity(_ref), do: {:error, {:preview_unrepresentable, :removed}}
+
+  # The need a head binding was bound for, as the sheet and the command
+  # line tell it, or nil. On the app's own calls: the one need whose
+  # candidates hold its entry, else the one need there is (the `@ingress`
+  # slot of a manifest declaring none). On a dependency's edge: the need
+  # the edge names, the dependency's one credential need, or the one of
+  # its several whose candidates hold the entry; a lender's label names
+  # none of several.
+  defp head_need({ctx, sources, built}, {node, "@ingress"}, identity)
+       when node == built.source_ref do
+    case identity do
+      {:label, _label} ->
+        nil
+
+      {_source, id} ->
+        needs =
+          case built.declared do
+            nil -> [{Prima.Authority.Blob.ingress_key(), nil}]
+            declared -> Enum.map(declared, &{&1.name, &1})
+          end
+
+        told(ctx, sources, needs, Plan.node_facts(node, built.graph, built.rows), id)
+    end
+  end
+
+  defp head_need({ctx, sources, built}, {_node, edge}, identity) do
+    with {:ok, dep} <- edge_dep(edge),
+         {:ok, _row, manifest} <- node_row_manifest(built.rows, dep),
+         [_ | _] = credential <- credential_needs(manifest) do
+      case {String.split(edge, "|", parts: 2), credential, identity} do
+        {[_dep, named], _credential, _identity} ->
+          if Enum.any?(credential, &(&1.name == named)), do: named
+
+        {_bare, [only], _identity} ->
+          only.name
+
+        {_bare, _several, {:label, _label}} ->
+          nil
+
+        {_bare, several, {_source, id}} ->
+          needs = Enum.map(several, &{&1.name, &1})
+          told(ctx, sources, needs, Plan.node_facts(dep, built.graph, built.rows), id)
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  defp edge_dep(edge) do
+    case Prima.Authority.Blob.edge_target(edge) do
+      {:ok, dep} -> {:ok, dep}
+      :ingress -> :error
+    end
+  end
+
+  defp credential_needs(manifest) do
+    for need <- Prima.Manifest.Needs.from_manifest(manifest) || [],
+        need.kind in ~w(api_key oauth bundle),
+        do: need
+  end
+
+  # The one need whose candidates hold the entry, else the only need.
+  defp told(ctx, sources, needs, facts, id) do
+    holding =
+      for {name, declared} <- needs,
+          candidate <- Plan.need_choice(ctx, sources, declared, facts).candidates,
+          Map.get(candidate, :entry_id) == id or Map.get(candidate, :instance_entry_id) == id,
+          uniq: true,
+          do: name
+
+    case {holding, needs} do
+      {[one], _needs} -> one
+      {_none_or_several, [{only, _declared}]} -> only
+      _unknown -> nil
+    end
+  end
+
+  # What a removed binding bound, as its row names it, with the entry's
+  # name and source where they can be read: the athanor's entry by its
+  # row whatever its status, an instance entry while it is offered to the
+  # person, a lender's entry while the lending profile binds one.
+  defp removed_entry({ctx, _sources, _built}, {:own, id}, _edge),
+    do:
+      Prima.MapUtil.put_present(%{"entry_id" => id, "source" => "own"}, "name", own_name(ctx, id))
+
+  defp removed_entry({_ctx, sources, _built}, {:instance, id}, _edge) do
+    Prima.MapUtil.put_present(
+      %{"instance_entry_id" => id, "source" => "instance"},
+      "name",
+      offered_name(sources, id)
+    )
+  end
+
+  defp removed_entry({ctx, sources, _built}, {:label, label}, edge) do
+    with {:ok, dep} <- edge_dep(edge),
+         {:ok, profiles} <- Arca.ConsentStorage.profiles(Context.actor(ctx), dep),
+         %{} = profile <- Enum.find(profiles, &(&1.label == label and &1.kind == :owner)),
+         {:ok, bound} <- lender_binding(ctx, profile) do
+      {source, name} =
+        if bound.scope == "instance",
+          do: {"instance", offered_name(sources, bound.entry_id)},
+          else: {"own", own_name(ctx, bound.entry_id)}
+
+      Prima.MapUtil.put_present(%{"via" => label, "source" => source}, "name", name)
+    else
+      # The lender is gone: its entry's name and source cannot be read.
+      _ -> %{"via" => label}
+    end
+  end
+
+  defp own_name(ctx, id) do
+    case Arca.VaultStorage.get(Context.actor(ctx), id) do
+      {:ok, %{name: name}} -> if Prima.ConsentPreview.Row.text?(name), do: name
+      _unreadable -> nil
+    end
+  end
+
+  defp offered_name(sources, id) do
+    case Enum.find(sources.offered, &(&1.id == id)) do
+      %{name: name} -> if Prima.ConsentPreview.Row.text?(name), do: name
+      nil -> nil
+    end
+  end
+
+  # The need each binding of the revision is decided for, by its key: the
+  # source's bindings and the entries chosen on a dependency's edge, and a
+  # lender's selection where the dependency has one credential need. A
+  # public twin's bindings are its owner's, decided for no need here.
+  defp decided_needs(_source_ref, _bindings, _selections, published) when is_map(published),
+    do: %{}
+
+  defp decided_needs(source_ref, bindings, selections, nil) do
+    ingress = Prima.Authority.Blob.ingress_key()
+
+    for(
+      binding <- bindings,
+      into: %{},
+      do: {Prima.Authority.Blob.binding_key(source_ref, ingress, binding.name), binding.need}
+    )
+    |> Map.merge(
+      for selection <- selections,
+          need = selection_need(selection),
+          is_binary(need),
+          into: %{} do
+        {Prima.Authority.Blob.binding_key(
+           selection.from,
+           selection.dep,
+           Map.get(selection, :name)
+         ), need}
+      end
+    )
+  end
+
+  defp selection_need(%{kind: :entry, need: need}), do: need
+  defp selection_need(%{kind: :via, declared_need: %{name: name}}), do: name
+  defp selection_need(_selection), do: nil
 
   # ---------------------------------------------------------------------------
   # The commit-order checks
@@ -2390,7 +2667,8 @@ defmodule Sanctum.Consent.Commit do
       "v" => Prima.ConsentPreview.version(),
       "rows" => rows,
       "origins" => Prima.Origin.to_wire_list(prep.origins),
-      "commit_digest" => prep.commit_digest
+      "commit_digest" => prep.commit_digest,
+      "removed" => prep.removed
     }
 
     case Prima.ConsentPreview.decode(document) do

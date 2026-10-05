@@ -446,6 +446,79 @@ defmodule Sanctum.Consent.CommitDigestTest do
     end
   end
 
+  describe "removed bindings" do
+    @default_removed %{
+      "binding_key" => "#{@node}|@ingress|default",
+      "node" => @node,
+      "edge" => "@ingress",
+      "need" => "api_key",
+      "entry_id" => "vlt_a",
+      "name" => "key a",
+      "source" => "own"
+    }
+
+    @work_removed %{
+      "binding_key" => "#{@node}|@ingress|name:Work",
+      "node" => @node,
+      "edge" => "@ingress",
+      "need" => nil,
+      "connection" => "Work",
+      "entry_id" => "vlt_c",
+      "source" => "own"
+    }
+
+    test "a revision that removes nothing hashes as one that never named removals" do
+      assert digest!(Map.put(@base, :removed, [])) == digest!(@base)
+
+      {:ok, canonical} = CommitDigest.normalize(Map.put(@base, :removed, []))
+      refute Map.has_key?(canonical, "removed")
+    end
+
+    test "a removal changes the digest, and each of its values does" do
+      removed = digest!(Map.put(@base, :removed, [@default_removed]))
+      refute removed == digest!(@base)
+
+      for {field, value} <- [
+            {"need", "other_key"},
+            {"need", nil},
+            {"name", "key a, renamed"},
+            {"entry_id", "vlt_other"}
+          ] do
+        changed = Map.put(@default_removed, field, value)
+
+        refute digest!(Map.put(@base, :removed, [changed])) == removed,
+               "#{field} #{inspect(value)} did not move the digest"
+      end
+    end
+
+    test "removals are a sorted list: order does not change the digest; a null need is left out" do
+      sorted = digest!(Map.put(@base, :removed, [@default_removed, @work_removed]))
+      assert digest!(Map.put(@base, :removed, [@work_removed, @default_removed])) == sorted
+
+      {:ok, canonical} =
+        CommitDigest.normalize(Map.put(@base, :removed, [@work_removed, @default_removed]))
+
+      assert [%{"need" => "api_key"}, work] = canonical["removed"]
+      refute Map.has_key?(work, "need")
+      assert work["connection"] == "Work"
+    end
+
+    test "a removal the preview could not carry is refused" do
+      for removed <- [
+            %{},
+            [@default_removed, @default_removed],
+            [Map.delete(@default_removed, "need")],
+            [Map.put(@default_removed, "source", "provided")],
+            [Map.put(@default_removed, "via", "work")],
+            [Map.put(@default_removed, "binding_key", "#{@node}|@ingress|name:Home")]
+          ] do
+        assert {:error, {:invalid_commit, :removed, _why}} =
+                 CommitDigest.compute(Map.put(@base, :removed, removed)),
+               inspect(removed)
+      end
+    end
+  end
+
   describe "normalize/1" do
     test "embeds the shape digest as a string rather than re-expanding it" do
       {:ok, canonical} = CommitDigest.normalize(Map.put(@base, :bindings, [@binding]))

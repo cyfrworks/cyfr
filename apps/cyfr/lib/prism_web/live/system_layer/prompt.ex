@@ -22,7 +22,8 @@ defmodule PrismWeb.SystemLayer.Prompt do
       `profile.plan` answers it (`plan_token`, `expected_consent_revision`,
       the needs and the vault entries that can meet them, its rows), the
       `preview` of the decisions — a `Prima.ConsentPreview` (`v`, `rows`,
-      `origins`, `commit_digest`) with the `proof` a commit presents, or
+      `origins`, `commit_digest`, and `removed`, the head's bindings the
+      grant would remove) with the `proof` a commit presents, or
       `nil` for a plan whose closure is `unresolved`, which has nothing to
       preview or commit — the `decisions` payload (`%{"ref" => ref,
       "bindings" => [...]}`, with the `selections`, `origins`, `subset` and
@@ -418,12 +419,23 @@ defmodule PrismWeb.SystemLayer.Prompt do
   defp plan?(_plan), do: false
 
   # The preview a grant prompt opens with: a `Prima.ConsentPreview`, held
-  # to its typed rows, with the proof the commit presents beside it. A
-  # plan whose closure is unresolved has none, and offers nothing to
-  # commit.
+  # to its typed rows and the head's bindings it removes, with the proof
+  # the commit presents beside it. A preview that does not say what it
+  # removes is refused, never read as removing nothing. A plan whose
+  # closure is unresolved has none, and offers nothing to commit.
   defp preview?(nil, %{unresolved: %{}}), do: true
 
-  defp preview?(%{v: v, rows: rows, origins: origins, commit_digest: digest, proof: proof}, _plan)
+  defp preview?(
+         %{
+           v: v,
+           rows: rows,
+           origins: origins,
+           commit_digest: digest,
+           removed: removed,
+           proof: proof
+         },
+         _plan
+       )
        when is_binary(proof) and proof != "" do
     match?(
       {:ok, %Prima.ConsentPreview{}},
@@ -431,7 +443,8 @@ defmodule PrismWeb.SystemLayer.Prompt do
         "v" => v,
         "rows" => rows,
         "origins" => origins,
-        "commit_digest" => digest
+        "commit_digest" => digest,
+        "removed" => removed
       })
     )
   end

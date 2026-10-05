@@ -185,7 +185,8 @@ defmodule Sanctum.Consent.CommitTest do
       "v" => preview.v,
       "rows" => preview.rows,
       "origins" => preview.origins,
-      "commit_digest" => preview.commit_digest
+      "commit_digest" => preview.commit_digest,
+      "removed" => preview.removed
     }
   end
 
@@ -297,7 +298,7 @@ defmodule Sanctum.Consent.CommitTest do
       refute Map.has_key?(preview, :summary)
 
       assert Map.keys(preview) |> Enum.sort() ==
-               [:commit_digest, :expected_consent_revision, :origins, :proof, :rows, :v]
+               [:commit_digest, :expected_consent_revision, :origins, :proof, :removed, :rows, :v]
 
       assert is_binary(preview.proof)
       assert preview.expected_consent_revision == 0
@@ -1270,6 +1271,249 @@ defmodule Sanctum.Consent.CommitTest do
                  commit_digest: preview.commit_digest,
                  expected_consent_revision: plan.expected_consent_revision
                })
+    end
+  end
+
+  # An app declaring two needs of its own: `api_key`, an openai.com key,
+  # and `other_key`, the same need again (`identical`) or an anthropic.com
+  # key, so that each head binding's entry tells which need it was for.
+  defp two_own_needs!(ctx, name, identical?) do
+    other =
+      if identical?,
+        do: keyed_manifest()["needs"]["api_key"],
+        else: %{
+          "type" => "api_key:anthropic.com",
+          "reason" => "to call the other model",
+          "fields" => ["ANTHROPIC_API_KEY"],
+          "attach" => @attach
+        }
+
+    publish!(ctx, name, "1.0.0", put_in(keyed_manifest(), ["needs", "other_key"], other))
+    "reagent:local.#{name}"
+  end
+
+  defp anthropic_key!(ctx) do
+    entry!(
+      ctx,
+      %{"ANTHROPIC_API_KEY" => "sk-ant-#{System.unique_integer([:positive])}"},
+      %{provider_hint: "anthropic.com", disclose: false}
+    )
+  end
+
+  # A commit of `decisions` on a fresh plan, presenting `digest` with the
+  # proof of the preview just taken.
+  defp commit_presenting(ctx, ref, decisions, digest) do
+    {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Commit.preview(ctx, Map.put(decisions, :ref, ref))
+
+    Commit.commit(ctx, %{
+      decisions: Map.put(decisions, :ref, ref),
+      plan_token: plan.plan_token,
+      proof: preview.proof,
+      commit_digest: digest,
+      expected_consent_revision: plan.expected_consent_revision
+    })
+  end
+
+  describe "the app's own calls carry one need's credentials" do
+    test "one grant binding two of the app's needs is refused, naming them and the remedy",
+         %{ctx: ctx} do
+      ref = two_own_needs!(ctx, "commit-probe-both", false)
+      [a, c] = [key!(ctx), key!(ctx)]
+      [d, b] = [anthropic_key!(ctx), anthropic_key!(ctx)]
+
+      both = [
+        %{need: "api_key", entry_id: a.id},
+        %{need: "api_key", entry_id: c.id, name: "Work"},
+        %{need: "other_key", entry_id: d.id},
+        %{need: "other_key", entry_id: b.id, name: "Work"}
+      ]
+
+      sentence =
+        "The app's own calls carry one need's credentials: bind api_key or other_key, not both"
+
+      assert {:error, {:invalid_argument, ^sentence} = reason} =
+               Commit.preview(ctx, %{ref: ref, bindings: both})
+
+      assert PrismWeb.Ops.error_message(reason) == sentence
+
+      # Three needs: bind one of them.
+      three =
+        keyed_manifest()
+        |> put_in(["needs", "other_key"], keyed_manifest()["needs"]["api_key"])
+        |> put_in(["needs", "third_key"], keyed_manifest()["needs"]["api_key"])
+
+      publish!(ctx, "commit-probe-three", "1.0.0", three)
+
+      assert {:error,
+              {:invalid_argument,
+               "The app's own calls carry one need's credentials: " <>
+                 "bind one of api_key, other_key or third_key"}} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.commit-probe-three",
+                 bindings: [
+                   %{need: "third_key", entry_id: a.id},
+                   %{need: "api_key", entry_id: c.id},
+                   %{need: "other_key", entry_id: a.id, name: "Work"}
+                 ]
+               })
+    end
+
+    test "a grant for another need lists the bindings it removes, and the digest covers them",
+         %{ctx: ctx} do
+      ref = two_own_needs!(ctx, "commit-probe-other", false)
+      [a, c] = [key!(ctx), key!(ctx)]
+      [d, b] = [anthropic_key!(ctx), anthropic_key!(ctx)]
+
+      first = %{
+        bindings: [
+          %{need: "api_key", entry_id: a.id},
+          %{need: "api_key", entry_id: c.id, name: "Work"}
+        ]
+      }
+
+      second = %{
+        bindings: [
+          %{need: "other_key", entry_id: d.id},
+          %{need: "other_key", entry_id: b.id, name: "Work"}
+        ]
+      }
+
+      # What the second grant previews with no head to remove from.
+      {:ok, unheaded} = Commit.preview(ctx, Map.put(second, :ref, ref))
+      assert unheaded.removed == []
+
+      {:ok, %{profile_id: profile}} = walk!(ctx, ref, first)
+      {:ok, preview} = Commit.preview(ctx, Map.put(second, :ref, ref))
+
+      assert preview.removed == [
+               %{
+                 "binding_key" => "#{ref}|@ingress|default",
+                 "node" => ref,
+                 "edge" => "@ingress",
+                 "need" => "api_key",
+                 "entry_id" => a.id,
+                 "name" => a.name,
+                 "source" => "own"
+               },
+               %{
+                 "binding_key" => "#{ref}|@ingress|name:Work",
+                 "node" => ref,
+                 "edge" => "@ingress",
+                 "need" => "api_key",
+                 "connection" => "Work",
+                 "entry_id" => c.id,
+                 "name" => c.name,
+                 "source" => "own"
+               }
+             ]
+
+      assert {:ok, decoded} = ConsentPreview.decode(document(preview))
+      assert ConsentPreview.encode(decoded)["removed"] == preview.removed
+
+      # The digest covers the removals: the second grant's digest taken
+      # without them is refused, and nothing is written.
+      refute preview.commit_digest == unheaded.commit_digest
+
+      assert {:error, {:consent_conflict, %{cause: :digest_changed}}} =
+               commit_presenting(ctx, ref, second, unheaded.commit_digest)
+
+      assert head!(ctx, profile).revision == 1
+
+      assert {:ok, %{revision: 2}} = walk!(ctx, ref, second)
+
+      assert Map.new(rows_by_key(ctx, profile), fn {key, row} -> {key, row.vault_entry_id} end) ==
+               %{"#{ref}|@ingress|default" => d.id, "#{ref}|@ingress|name:Work" => b.id}
+    end
+
+    test "needs that cannot be told apart are compared by key: a key set again is a changed " <>
+           "row, a key left out is removed with no need",
+         %{ctx: ctx} do
+      ref = two_own_needs!(ctx, "commit-probe-same", true)
+      [a, c, p, d, b] = for _ <- 1..5, do: key!(ctx)
+
+      first = %{
+        bindings: [
+          %{need: "api_key", entry_id: a.id},
+          %{need: "api_key", entry_id: c.id, name: "Work"},
+          %{need: "api_key", entry_id: p.id, name: "Personal"}
+        ]
+      }
+
+      second = %{
+        bindings: [
+          %{need: "other_key", entry_id: d.id},
+          %{need: "other_key", entry_id: b.id, name: "Work"}
+        ]
+      }
+
+      {:ok, unheaded} = Commit.preview(ctx, Map.put(second, :ref, ref))
+      {:ok, %{profile_id: profile}} = walk!(ctx, ref, first)
+      {:ok, preview} = Commit.preview(ctx, Map.put(second, :ref, ref))
+
+      # The default and Work are set again: their rows carry the new
+      # entries, and neither is listed as removed.
+      rows =
+        for %{"kind" => "credential", "values" => values} <- preview.rows,
+            into: %{},
+            do: {values["binding_key"], values["name"]}
+
+      assert rows == %{"#{ref}|@ingress|default" => d.name, "#{ref}|@ingress|name:Work" => b.name}
+
+      # Personal is left out: removed by its key, its need not told.
+      assert preview.removed == [
+               %{
+                 "binding_key" => "#{ref}|@ingress|name:Personal",
+                 "node" => ref,
+                 "edge" => "@ingress",
+                 "need" => nil,
+                 "connection" => "Personal",
+                 "entry_id" => p.id,
+                 "name" => p.name,
+                 "source" => "own"
+               }
+             ]
+
+      refute preview.commit_digest == unheaded.commit_digest
+
+      assert {:error, {:consent_conflict, %{cause: :digest_changed}}} =
+               commit_presenting(ctx, ref, second, unheaded.commit_digest)
+
+      assert {:ok, %{revision: 2}} = walk!(ctx, ref, second)
+
+      assert Map.new(rows_by_key(ctx, profile), fn {key, row} -> {key, row.vault_entry_id} end) ==
+               %{"#{ref}|@ingress|default" => d.id, "#{ref}|@ingress|name:Work" => b.id}
+    end
+
+    test "a same-need re-grant that removes nothing names no removal, and hashes as with none",
+         %{ctx: ctx} do
+      ref = two_own_needs!(ctx, "commit-probe-again", false)
+      [a, a2, c] = [key!(ctx), key!(ctx), key!(ctx)]
+
+      first = [
+        %{need: "api_key", entry_id: a.id},
+        %{need: "api_key", entry_id: c.id, name: "Work"}
+      ]
+
+      # The default's entry changes under the same key and need.
+      again = %{bindings: [%{need: "api_key", entry_id: a2.id} | tl(first)]}
+
+      {:ok, unheaded} = Commit.preview(ctx, Map.put(again, :ref, ref))
+      {:ok, _} = walk!(ctx, ref, %{bindings: first})
+      {:ok, preview} = Commit.preview(ctx, Map.put(again, :ref, ref))
+
+      assert preview.removed == []
+      assert preview.commit_digest == unheaded.commit_digest
+
+      assert [a2.name] ==
+               for(
+                 %{"kind" => "credential", "values" => %{"binding_key" => key} = values} <-
+                   preview.rows,
+                 key == "#{ref}|@ingress|default",
+                 do: values["name"]
+               )
+
+      assert {:ok, %{revision: 2}} = walk!(ctx, ref, again)
     end
   end
 

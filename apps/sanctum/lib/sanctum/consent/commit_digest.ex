@@ -64,6 +64,19 @@ defmodule Sanctum.Consent.CommitDigest do
   commits differing only by `renew`, or by a selection's name, differ in
   digest.
 
+  ## Removed bindings
+
+  `removed`, optional, is each binding of the profile's head the
+  revision drops, as the preview carries it (`Prima.ConsentPreview`'s
+  "Removed bindings"), sorted by `binding_key`. A `need` the preview
+  carries as null is left out of its item, since the canonical form
+  admits no null (`Prima.JCS`) and every item the preview carries names
+  its need, so an absent need is a null one and nothing else. The list is
+  left out of the canonical map when empty, so a revision that removes
+  nothing hashes as it did before removals were covered. The head itself
+  is pinned apart, by the expected revision the proof binds; this binds
+  what the person was shown the revision drops.
+
   Explanatory text never enters the digest: a need's reason is prose, so
   rewording it invalidates no consent.
   """
@@ -129,7 +142,8 @@ defmodule Sanctum.Consent.CommitDigest do
           optional(:selections) => [selection()],
           optional(:tool_servers) => [tool_server_grant()],
           optional(:override) => boolean(),
-          optional(:subset) => subset()
+          optional(:subset) => subset(),
+          optional(:removed) => [Prima.ConsentPreview.removed()]
         }
 
   @type error :: {:invalid_commit, atom(), String.t()} | {:invalid_digest_input, JCS.error()}
@@ -174,7 +188,7 @@ defmodule Sanctum.Consent.CommitDigest do
            Normalize.only_keys(
              commit,
              ~w(shape_digest blob_digest label kind invoke_mode origins bindings selections
-                tool_servers override subset)a,
+                tool_servers override subset removed)a,
              tag
            ),
          {:ok, shape_digest} <- Normalize.required_string(commit, :shape_digest, tag),
@@ -189,7 +203,8 @@ defmodule Sanctum.Consent.CommitDigest do
          {:ok, selections} <- selections(commit),
          {:ok, tool_servers} <- tool_servers(commit),
          {:ok, override} <- override(commit),
-         {:ok, subset} <- Normalize.subset(commit, :subset, tag) do
+         {:ok, subset} <- Normalize.subset(commit, :subset, tag),
+         {:ok, removed} <- removed(commit) do
       {:ok,
        %{
          "shape_digest" => shape_digest,
@@ -203,7 +218,34 @@ defmodule Sanctum.Consent.CommitDigest do
          "tool_servers" => tool_servers,
          "override" => override,
          "subset" => subset
-       }}
+       }
+       |> then(&if removed == [], do: &1, else: Map.put(&1, "removed", removed))}
+    end
+  end
+
+  # The bindings the revision drops, held to the preview's own shape and
+  # sorted by key, a need that cannot be told left out; none at all is
+  # absent from the digest.
+  defp removed(commit) do
+    case Map.get(commit, :removed, []) do
+      items when is_list(items) ->
+        sorted =
+          Enum.sort_by(items, fn
+            %{"binding_key" => key} -> key
+            _other -> nil
+          end)
+
+        case Prima.ConsentPreview.check_removed(sorted) do
+          {:ok, removed} ->
+            {:ok, Enum.map(removed, &Map.reject(&1, fn {_field, value} -> is_nil(value) end))}
+
+          {:error, _reason} ->
+            {:error,
+             {:invalid_commit, :removed, "each is one binding of the head, each key once"}}
+        end
+
+      _other ->
+        {:error, {:invalid_commit, :removed, "must be a list"}}
     end
   end
 

@@ -104,7 +104,8 @@ defmodule Sanctum.Consent.BlobBuilderTest do
         "v" => preview.v,
         "rows" => preview.rows,
         "origins" => preview.origins,
-        "commit_digest" => preview.commit_digest
+        "commit_digest" => preview.commit_digest,
+        "removed" => preview.removed
       })
 
     Map.new(decoded.rows, &{{&1.kind, &1.node}, &1})

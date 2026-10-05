@@ -156,6 +156,53 @@ func TestRenderPreview_SaysWhereACredentialGoesAndForHowLong(t *testing.T) {
 	}
 }
 
+// Each binding of the head the grant removes is a line of its own, before
+// the person is asked to confirm: the need it was bound for (or that it
+// cannot be told, and on a dependency's edge, which), its account or the
+// default, and its entry by name, else by its id or its lender's label.
+func TestRenderPreview_ListsWhatTheGrantRemoves(t *testing.T) {
+	v := loadPreviewVectors(t)
+	removed := asList(v.Preview["removed"])
+	if len(removed) == 0 {
+		t.Fatalf("the vectors' preview removes nothing")
+	}
+	var out bytes.Buffer
+	renderPreview(&out, v.Preview)
+	text := out.String()
+
+	want := []string{
+		"What this grant removes",
+		"    Removes api_key default: weather-old\n",
+		"    Removes api_key account 'Work': weather-work\n",
+		"    Removes a binding of reagent:local.geo from reagent:local.weather account 'Old geo': ine_old_geo\n",
+		"    Removes a binding of reagent:local.maps from reagent:local.weather default: " +
+			"the key its 'old-maps' profile lent\n",
+	}
+	for _, line := range want {
+		if !strings.Contains(text, line) {
+			t.Errorf("missing %q in\n%s", line, text)
+		}
+	}
+	if got := strings.Count(text, "    Removes "); got != len(removed) {
+		t.Errorf("%d removal lines, want one per removal (%d):\n%s", got, len(removed), text)
+	}
+	if strings.Index(text, "What this grant removes") > strings.Index(text, "Admits runs started:") {
+		t.Errorf("the removals are not listed with what is approved:\n%s", text)
+	}
+
+	// A preview that removes nothing lists nothing.
+	empty := map[string]any{}
+	for key, value := range v.Preview {
+		empty[key] = value
+	}
+	empty["removed"] = []any{}
+	out.Reset()
+	renderPreview(&out, empty)
+	if strings.Contains(out.String(), "What this grant removes") {
+		t.Errorf("a preview removing nothing lists removals:\n%s", out.String())
+	}
+}
+
 // One entry lent on two edges, and one stream under two subjects, are two
 // lines each, never folded into one.
 func TestRenderPreview_KeepsRowsApartByEdgeAndSubject(t *testing.T) {
@@ -1296,6 +1343,88 @@ func TestProfileGrant_AHeadBindingWhoseNeedCannotBeToldIsLeftUnbound(t *testing.
 	}
 	if !strings.Contains(out, "--selection reagent:local.db=vlt_gone") {
 		t.Errorf("the unbound edge is not said:\n%s", out)
+	}
+}
+
+// A flag naming another need than the head's own-call need replaces every
+// binding the app's own calls held, since they carry one need's
+// credentials: the grant says so, naming the need, its default and each
+// account, and the preview's removals are printed, all before the person
+// is asked to confirm.
+func TestProfileGrant_AGrantForAnotherNeedSaysWhatItReplacesAndRemoves(t *testing.T) {
+	plan := withHeads(planWith(list(
+		need("api_key", "api_key", true, "vlt_a", false, "vlt_a", "vlt_c"),
+		need("other_key", "api_key", false, "", false, "vlt_d", "vlt_b"),
+	), `[]`, `[]`), list(
+		headJSON(regrantApp+"|@ingress|default", "vlt_a", "standing", ""),
+		headJSON(regrantApp+"|@ingress|name:Work", "vlt_c", "standing", ""),
+	))
+
+	removedItem := func(slot, id, name string) map[string]any {
+		item := map[string]any{"binding_key": regrantApp + "|@ingress|" + slot, "node": regrantApp,
+			"edge": "@ingress", "need": "api_key", "entry_id": id, "name": name, "source": "own"}
+		if account, ok := strings.CutPrefix(slot, "name:"); ok {
+			item["connection"] = account
+		}
+		return item
+	}
+	removed, _ := json.Marshal([]any{
+		removedItem("default", "vlt_a", "key a"),
+		removedItem("name:Work", "vlt_c", "key c"),
+	})
+	preview := strings.Replace(previewAnswer, `"rows":[]`, `"rows":[],"removed":`+string(removed), 1)
+
+	srv := newCLIServer(t, "profile.commit", plan, preview, commitAnswer)
+	out := runGrant(t, srv, "--entry", "other_key=vlt_d", "--entry", "other_key|Work=vlt_b")
+
+	sent, _ := sentDecisions(t, srv, 1)
+	wantBindings := []map[string]any{
+		{"need": "other_key", "entry_id": "vlt_d", "lifetime": map[string]any{"kind": "standing"}},
+		{"need": "other_key", "entry_id": "vlt_b", "name": "Work",
+			"lifetime": map[string]any{"kind": "standing"}},
+	}
+	if got := asMaps(t, sent["bindings"]); !reflect.DeepEqual(got, wantBindings) {
+		t.Errorf("bindings sent %v\nwant %v\n%s", got, wantBindings, out)
+	}
+
+	note := "This grant replaces the app's bindings of api_key: its default and the account " +
+		"'Work'; its own calls carry one need's credentials."
+	lines := []string{
+		note,
+		"You are approving:",
+		"Removes api_key default: key a",
+		"Removes api_key account 'Work': key c",
+		"Granted.",
+	}
+	at := -1
+	for _, line := range lines {
+		i := strings.Index(out, line)
+		if i < 0 {
+			t.Fatalf("missing %q in\n%s", line, out)
+		}
+		if i < at {
+			t.Errorf("%q is not after what comes before it:\n%s", line, out)
+		}
+		at = i
+	}
+}
+
+// The note names the default when it is held, and each account.
+func TestReplacedNote_NamesTheDefaultAndEachAccount(t *testing.T) {
+	cases := []struct {
+		held []headBinding
+		want string
+	}{
+		{[]headBinding{{}}, "its default"},
+		{[]headBinding{{}, {name: "A"}, {name: "B"}}, "its default, the account 'A' and the account 'B'"},
+		{[]headBinding{{name: "A"}}, "the account 'A'"},
+	}
+	for _, c := range cases {
+		want := "This grant replaces the app's bindings of api_key: " + c.want +
+			"; its own calls carry one need's credentials."
+		if got := replacedNote("api_key", c.held); got != want {
+			t.Errorf("got %q\nwant %q", got, want)
+		}
 	}
 }
 

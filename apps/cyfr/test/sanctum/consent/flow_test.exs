@@ -966,7 +966,9 @@ defmodule Sanctum.Consent.FlowTest do
 
       assert why =~ "Two bindings for api_key name no account"
 
-      # Bindings of two needs have one edge to ride: unrepresentable.
+      # Bindings of two needs have one edge to ride: refused in words that
+      # name both needs and say to bind one, never an unclassified reason
+      # the person reads as an outcome that could not be confirmed.
       publish!(ctx, "flow-needs-pair", "1.0.0", %{
         manifest:
           Jason.encode!(%{
@@ -980,14 +982,19 @@ defmodule Sanctum.Consent.FlowTest do
           })
       })
 
-      assert {:error, :multiple_source_bindings_unrepresentable} =
+      sentence =
+        "The app's own calls carry one need's credentials: bind api_key or other_key, not both"
+
+      assert {:error, {:invalid_argument, ^sentence} = reason} =
                Commit.preview(ctx, %{
                  ref: "reagent:local.flow-needs-pair",
                  bindings: [
-                   %{need: "api_key", entry_id: a.id},
-                   %{need: "other_key", entry_id: b.id}
+                   %{need: "other_key", entry_id: b.id},
+                   %{need: "api_key", entry_id: a.id}
                  ]
                })
+
+      assert PrismWeb.Ops.error_message(reason) == sentence
     end
 
     test "a second implicit binding is refused too, with no needs block", %{ctx: ctx} do

@@ -9,7 +9,9 @@ defmodule Prima.ConsentPreviewTest do
   an origin outside the enum and every other malformed row are refused. A
   credential row is one binding: its source, destination, disclosure,
   suggestion, choice, account, key and lifetime travel with it, and a row
-  missing its source, its key or its lifetime is refused.
+  missing its source, its key or its lifetime is refused. A preview names
+  the head's bindings it removes, each as the head's row holds it, an
+  empty list when it removes none and a refusal when it says nothing.
   """
 
   use ExUnit.Case, async: true
@@ -48,7 +50,47 @@ defmodule Prima.ConsentPreviewTest do
     for %Row{kind: kind, narrowed: true} <- rows,
         do: assert(kind in ConsentPreview.narrowable_kinds())
 
-    assert ConsentPreview.new(rows, origins, decoded.commit_digest) == {:ok, decoded}
+    assert ConsentPreview.new(rows, origins, decoded.commit_digest, preview["removed"]) ==
+             {:ok, decoded}
+  end
+
+  test "the preview names each binding of the head it removes, as the head's row holds it" do
+    preview = vectors()["preview"]
+    assert {:ok, decoded} = ConsentPreview.decode(preview)
+    removed = ConsentPreview.encode(decoded)["removed"]
+    assert [_ | _] = removed
+    assert removed == preview["removed"]
+
+    assert removed |> Enum.map(& &1["binding_key"]) ==
+             Enum.sort(Enum.map(removed, & &1["binding_key"]))
+
+    for item <- removed do
+      assert item["binding_key"] ==
+               Prima.Authority.Blob.binding_key(item["node"], item["edge"], item["connection"])
+
+      assert Enum.count(~w(entry_id instance_entry_id via), &Map.has_key?(item, &1)) == 1
+    end
+
+    # A need that cannot be told is null, never absent; an entry that
+    # cannot be read names neither its name nor its source.
+    assert Enum.any?(removed, &(Map.has_key?(&1, "need") and is_nil(&1["need"])))
+    assert [%{"via" => "old-maps"} = gone] = Enum.reject(removed, &Map.has_key?(&1, "source"))
+    refute Map.has_key?(gone, "name")
+    assert Enum.any?(removed, &(Map.has_key?(&1, "source") and not Map.has_key?(&1, "name")))
+  end
+
+  test "a preview that removes nothing names an empty list, and one that says nothing is refused" do
+    preview = Map.put(vectors()["preview"], "removed", [])
+    assert {:ok, decoded} = ConsentPreview.decode(preview)
+    assert ConsentPreview.encode(decoded)["removed"] == []
+
+    assert ConsentPreview.decode(Map.delete(preview, "removed")) ==
+             {:error, {:missing_field, "removed"}}
+
+    for refused <- [nil, %{}, [nil], ["x"]] do
+      assert ConsentPreview.check_removed(refused) == {:error, {:invalid_field, "removed"}},
+             inspect(refused)
+    end
   end
 
   test "a credential is one row per binding, and a stream one per subject" do

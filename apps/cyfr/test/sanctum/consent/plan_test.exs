@@ -104,7 +104,8 @@ defmodule Sanctum.Consent.PlanTest do
         "v" => ConsentPreview.version(),
         "rows" => rows,
         "origins" => ["interactive"],
-        "commit_digest" => @placeholder_digest
+        "commit_digest" => @placeholder_digest,
+        "removed" => []
       })
 
     preview.rows

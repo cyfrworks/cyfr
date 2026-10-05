@@ -12,7 +12,12 @@ defmodule PrismWeb.ConsentSheetComponent do
   tincture's frame, streams, cards and system actions included, and never
   a sentence the home wrote. Before a preview is read it draws the plan's
   rows, the ask. A plan whose closure is unresolved is drawn as that,
-  naming what is missing, with no rows and nothing to commit.
+  naming what is missing, with no rows and nothing to commit. Beneath the
+  rows, before the person confirms, it lists each binding of the
+  profile's head the preview says the grant removes: the need it was
+  bound for ("a binding of this app's calls" where that cannot be told),
+  its account or "default", and its entry's name, else its id or the
+  label of the profile that lent it.
 
   ## Credentials
 
@@ -2131,6 +2136,23 @@ defmodule PrismWeb.ConsentSheetComponent do
             />
           </div>
 
+          <div
+            :if={@approving? and removed(@preview) != []}
+            class="consent-sheet__removed"
+            data-test="grant-removed"
+          >
+            <h5 class="text-xs font-semibold uppercase tracking-wider text-gray-400">
+              What this grant removes
+            </h5>
+            <p
+              :for={item <- removed(@preview)}
+              class="consent-sheet__removal"
+              data-binding={item["binding_key"]}
+            >
+              {removal_line(item)}
+            </p>
+          </div>
+
           <p :if={@approving?} class="consent-sheet__admits" data-test="grant-admits">
             Admits runs started: {Enum.map_join(@preview.origins, ", ", &origin_label/1)}.
           </p>
@@ -2937,6 +2959,33 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp approving?(%{rows: rows}) when is_list(rows), do: true
   defp approving?(_preview), do: false
+
+  # The bindings of the profile's head the previewed grant removes.
+  defp removed(preview), do: List.wrap(field(preview, :removed))
+
+  # One removed binding in one line: the need it was bound for (on a
+  # dependency's edge, of which dependency and from which node), its
+  # account or the default, and its entry by name, else by its id or the
+  # label of the profile that lent it.
+  defp removal_line(item) do
+    "Removes #{removed_need(item)} #{removed_slot(item)}: #{removed_entry(item)}"
+  end
+
+  defp removed_need(%{"edge" => "@ingress", "need" => need}),
+    do: need || "a binding of this app's calls"
+
+  defp removed_need(%{"edge" => edge, "node" => node, "need" => need}) do
+    [dep | _need] = String.split(edge, "|", parts: 2)
+    "#{need || "a binding"} of #{dep} from #{node}"
+  end
+
+  defp removed_slot(%{"connection" => name}) when is_binary(name), do: "account '#{name}'"
+  defp removed_slot(_item), do: "default"
+
+  defp removed_entry(%{"name" => name}) when is_binary(name), do: name
+  defp removed_entry(%{"entry_id" => id}), do: id
+  defp removed_entry(%{"instance_entry_id" => id}), do: id
+  defp removed_entry(%{"via" => label}), do: "the key its '#{label}' profile lent"
 
   # Each value the ask names, and each the grant holds, with whether the
   # grant holds it.

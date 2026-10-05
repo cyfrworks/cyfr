@@ -35,8 +35,8 @@ defmodule Sanctum.Consent do
                  the ask as preview rows, the default origins
 
       preview  {plan_token, decisions}
-               → the structured preview (rows, origins, commit digest)
-                 and the proof
+               → the structured preview (rows, origins, the head's
+                 bindings it removes, commit digest) and the proof
 
       commit   {plan_token, decisions, commit_digest, expected_revision, proof}
                → verify the proof binds THIS commit digest, recompute the
@@ -124,11 +124,14 @@ defmodule Sanctum.Consent do
   What `preview` answers: a `Prima.ConsentPreview` document, its fields
   beside the envelope a commit presents.
 
-    * `v`, `rows`, `origins`, `commit_digest` — the document: its version,
-      its typed rows each in the row's JSON form
+    * `v`, `rows`, `origins`, `commit_digest`, `removed` — the document:
+      its version, its typed rows each in the row's JSON form
       (`Prima.ConsentPreview.Row`), the origins the grant would admit as
-      their wire spellings, and the commit digest binding them.
-      `Prima.ConsentPreview.decode/1` reads these four back.
+      their wire spellings, the commit digest binding them, and the
+      bindings of the profile's head the revision would remove, each in
+      its JSON form (`Prima.ConsentPreview`'s "Removed bindings"), empty
+      when it removes none. `Prima.ConsentPreview.decode/1` reads these
+      five back.
     * `proof` and `expected_consent_revision` — what the commit presents
       with the digest.
   """
@@ -137,6 +140,7 @@ defmodule Sanctum.Consent do
           rows: [%{required(String.t()) => term()}],
           origins: [String.t(), ...],
           commit_digest: String.t(),
+          removed: [Prima.ConsentPreview.removed()],
           proof: String.t(),
           expected_consent_revision: non_neg_integer()
         }

@@ -759,6 +759,34 @@ func headsOnEdge(heads []headBinding, row depRow) []headBinding {
 	return on
 }
 
+// replacedNote says that a grant for another need replaces the app's
+// bindings of need held: its default, when held, and each account by
+// name. The app's own calls carry one need's credentials.
+func replacedNote(need string, held []headBinding) string {
+	var parts []string
+	for _, head := range held {
+		if head.name == "" {
+			parts = append(parts, "its default")
+		}
+	}
+	for _, head := range held {
+		if head.name != "" {
+			parts = append(parts, fmt.Sprintf("the account '%s'", head.name))
+		}
+	}
+	return fmt.Sprintf("This grant replaces the app's bindings of %s: %s; its own calls carry "+
+		"one need's credentials.", need, joinAnd(parts))
+}
+
+// joinAnd joins parts as a sentence lists them: "a", "a and b",
+// "a, b and c".
+func joinAnd(parts []string) string {
+	if len(parts) <= 1 {
+		return strings.Join(parts, "")
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
+}
+
 // headNeed is the need a head binding's entry is for: the one whose
 // candidates hold it, or the only need there is; none when it cannot be
 // told, or when the binding names a lender, which no need of the app's own
@@ -914,7 +942,7 @@ func sourceBindings(plan map[string]any, flags []string, chooser grantChooser) (
 	// A re-grant reopens on what the head binds on the app's own calls, its
 	// entry and lifetime, never wider, in each slot no flag names: no
 	// suggestion is added beside it. A flag naming another need than the
-	// head's replaces it whole.
+	// head's replaces it whole, and says so.
 	var held []headBinding
 	for _, head := range readHeads(plan) {
 		if head.node == str(plan["source_ref"]) && head.edge == "@ingress" {
@@ -923,6 +951,7 @@ func sourceBindings(plan map[string]any, flags []string, chooser grantChooser) (
 	}
 	for _, head := range held {
 		if need := headNeed(needs, head.id); flagNeed != "" && need != "" && need != flagNeed {
+			chooser.note(replacedNote(need, held))
 			held = nil
 			break
 		}
@@ -1435,8 +1464,9 @@ var kindHeadings = map[string]string{
 
 // renderPreview draws a Prima.ConsentPreview's typed rows in the terminal,
 // grouped by kind in its own words, every value each row carries shown,
-// and the origins the grant admits. A kind it does not know is still
-// drawn, with its values as the home sent them: no row is hidden.
+// each binding of the head the grant removes, and the origins the grant
+// admits. A kind it does not know is still drawn, with its values as the
+// home sent them: no row is hidden.
 func renderPreview(w io.Writer, preview map[string]any) {
 	fmt.Fprintln(w, "You are approving:")
 
@@ -1475,6 +1505,15 @@ func renderPreview(w io.Writer, preview map[string]any) {
 					indent = "      "
 				}
 				fmt.Fprintf(w, "%s%s\n", indent, line)
+			}
+		}
+	}
+
+	if removed := asList(preview["removed"]); len(removed) > 0 {
+		fmt.Fprintln(w, "\n  What this grant removes")
+		for _, raw := range removed {
+			if item, ok := raw.(map[string]any); ok {
+				fmt.Fprintf(w, "    %s\n", removalLine(item))
 			}
 		}
 	}
@@ -1579,6 +1618,45 @@ func describeRow(row map[string]any) []string {
 		raw, _ := json.Marshal(values)
 		return []string{fmt.Sprintf("%s %s: %s", str(row["kind"]), node, raw)}
 	}
+}
+
+// removalLine is one binding of the head the grant removes: the need it
+// was bound for (on a dependency's edge, of which dependency and from
+// which node), its account or the default, and its entry by name, else by
+// its id or the label of the profile that lent it.
+func removalLine(item map[string]any) string {
+	need := str(item["need"])
+	var what string
+	if edge := str(item["edge"]); edge == "@ingress" {
+		what = need
+		if what == "" {
+			what = "a binding of this app's calls"
+		}
+	} else {
+		dep, _, _ := strings.Cut(edge, "|")
+		if need == "" {
+			need = "a binding"
+		}
+		what = fmt.Sprintf("%s of %s from %s", need, dep, str(item["node"]))
+	}
+
+	slot := "default"
+	if connection := str(item["connection"]); connection != "" {
+		slot = fmt.Sprintf("account '%s'", connection)
+	}
+
+	var entry string
+	switch {
+	case str(item["name"]) != "":
+		entry = str(item["name"])
+	case str(item["entry_id"]) != "":
+		entry = str(item["entry_id"])
+	case str(item["instance_entry_id"]) != "":
+		entry = str(item["instance_entry_id"])
+	default:
+		entry = fmt.Sprintf("the key its '%s' profile lent", str(item["via"]))
+	}
+	return fmt.Sprintf("Removes %s %s: %s", what, slot, entry)
 }
 
 // credentialSentence is one binding in one sentence: the app or the

@@ -386,6 +386,7 @@ defmodule PrismWeb.SystemLayerTest do
             }
           ],
       origins: ["interactive"],
+      removed: [],
       proof: "not-a-proof",
       commit_digest: "sha256:" <> String.duplicate("0", 64)
     }

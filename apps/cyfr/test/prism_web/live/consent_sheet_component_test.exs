@@ -110,6 +110,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
           }
         ],
         origins: ["interactive"],
+        removed: [],
         proof: "p",
         commit_digest: "d"
       },
@@ -527,7 +528,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
   # ---------------------------------------------------------------------------
 
   defp keyed_preview(rows),
-    do: %{v: 1, rows: rows, origins: ["interactive"], proof: "p", commit_digest: "d"}
+    do: %{v: 1, rows: rows, origins: ["interactive"], removed: [], proof: "p", commit_digest: "d"}
 
   defp credential_row(ref, lifetime) do
     %{
@@ -1021,7 +1022,14 @@ defmodule PrismWeb.ConsentSheetComponentTest do
           dependency_needs: [],
           rows: rows
         },
-        preview: %{v: 1, rows: rows, origins: ["interactive"], proof: "p", commit_digest: "d"}
+        preview: %{
+          v: 1,
+          rows: rows,
+          origins: ["interactive"],
+          removed: [],
+          proof: "p",
+          commit_digest: "d"
+        }
       )
 
     narrowings =
@@ -1204,6 +1212,99 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         refute Map.has_key?(decisions(view), "subset")
       end
     end
+  end
+
+  test "a grant for another need of the app's own calls lists the default and the account it " <>
+         "removes, before the person confirms" do
+    ref = "tincture:local.sheet-other-need"
+    standing = %{"kind" => "standing", "until" => nil}
+
+    row = fn name, slot ->
+      put_in(credential_row(ref, standing), ["values", "name"], name)
+      |> put_in(["values", "suggested"], false)
+      |> put_in(["values", "binding_key"], "#{ref}|@ingress|#{slot}")
+      |> then(fn row ->
+        if slot == "default",
+          do: row,
+          else: put_in(row, ["values", "connection"], String.trim_leading(slot, "name:"))
+      end)
+    end
+
+    removed = fn slot, id, name ->
+      %{
+        "binding_key" => "#{ref}|@ingress|#{slot}",
+        "node" => ref,
+        "edge" => "@ingress",
+        "need" => "api_key",
+        "entry_id" => id,
+        "name" => name,
+        "source" => "own"
+      }
+      |> then(fn item ->
+        if slot == "default",
+          do: item,
+          else: Map.put(item, "connection", String.trim_leading(slot, "name:"))
+      end)
+    end
+
+    plan = %{
+      source_ref: ref,
+      candidates: [],
+      dependency_needs: [],
+      needs: [
+        key_need("api_key", "to reach the service", [own("vlt_a", "Key a"), own("vlt_c", "Key c")]),
+        key_need("other_key", "to reach the other service", [
+          own("vlt_d", "Key d"),
+          own("vlt_b", "Key b")
+        ])
+      ],
+      head_bindings: [
+        %{binding_key: "#{ref}|@ingress|default", entry_id: "vlt_a", lifetime: standing},
+        %{binding_key: "#{ref}|@ingress|name:Work", entry_id: "vlt_c", lifetime: standing}
+      ]
+    }
+
+    preview =
+      keyed_preview([row.("Key d", "default"), row.("Key b", "name:Work")])
+      |> Map.put(:removed, [
+        removed.("default", "vlt_a", "Key a"),
+        removed.("name:Work", "vlt_c", "Key c")
+      ])
+
+    html =
+      sheet(plan,
+        preview: preview,
+        decisions: %{
+          "bindings" => [
+            %{"need" => "other_key", "entry_id" => "vlt_d"},
+            %{"need" => "other_key", "entry_id" => "vlt_b", "name" => "Work"}
+          ]
+        }
+      )
+
+    removals = fn html ->
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-test="grant-removed"] [data-binding]))
+      |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+    end
+
+    assert removals.(html) == [
+             "Removes api_key default: Key a",
+             "Removes api_key account 'Work': Key c"
+           ]
+
+    # Its need not told, a removed binding of the app's own calls says so;
+    # its entry not read, it is named by its id.
+    untold = removed.("name:Personal", "vlt_p", nil) |> Map.put("need", nil) |> Map.delete("name")
+
+    assert removals.(sheet(plan, preview: Map.put(preview, :removed, [untold]))) == [
+             "Removes a binding of this app's calls account 'Personal': vlt_p"
+           ]
+
+    # A preview that removes nothing lists nothing.
+    refute sheet(plan, preview: keyed_preview([row.("Key d", "default")])) =~
+             ~s(data-test="grant-removed")
   end
 
   test "no page draws the sheet but the system layer" do

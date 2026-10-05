@@ -10,8 +10,10 @@ defmodule Prima.ConsentPreview do
   `tests/fixtures/consent_preview.json` holds its vectors.
 
   The document is `{"v": 1, "rows": [...], "origins": [...],
-  "commit_digest": "sha256:..."}`: `origins` a non-empty list of
-  `Prima.Origin` spellings, answered in the enum's order. Each row
+  "commit_digest": "sha256:...", "removed": [...]}`: `origins` a non-empty
+  list of `Prima.Origin` spellings, answered in the enum's order, and
+  `removed` the bindings the profile's head holds that the revision
+  removes (below). Each row
   (`Prima.ConsentPreview.Row`) is `{"kind", "node", "values", "narrowed"}`:
   the resource kind, the consent graph node (the component) it belongs to,
   its values, and whether the person's decision narrowed the ask. The kinds
@@ -58,6 +60,22 @@ defmodule Prima.ConsentPreview do
   which is the whole ask. Lists of names are sets: no name twice, and at
   most 256. A kind outside these ten is refused, and so is a field a kind
   does not carry.
+
+  ## Removed bindings
+
+  `removed` lists each binding of the profile's head that the revision
+  drops, and is empty when there is none: a binding whose key the
+  revision no longer binds, or binds for another need. Each item is one
+  binding as the head's row holds it: its `binding_key`, the `node` and
+  `edge` it sits on (spelled as a credential row's) and, for a named
+  account, its `connection`, the key naming exactly these
+  (`Prima.Authority.Blob.binding_key/3`); `need`, the need it was bound
+  for, null when that cannot be told; exactly one of `entry_id`,
+  `instance_entry_id` and `via` (the label of the profile that lent it);
+  and the entry's `name` and `source` (`own` or `instance`), each absent
+  when the entry cannot be read. Items are sorted by `binding_key`, each
+  key once. Anything else is `{:invalid_field, "removed"}`
+  (`check_removed/1`).
   """
 
   alias Prima.ConsentPreview.Row
@@ -91,7 +109,15 @@ defmodule Prima.ConsentPreview do
           | :cards
           | :system_actions
 
-  @type t :: %__MODULE__{rows: [Row.t()], origins: [Origin.t(), ...], commit_digest: String.t()}
+  @typedoc "A removed binding in its JSON form (`check_removed/1`)."
+  @type removed :: %{required(String.t()) => String.t() | nil}
+
+  @type t :: %__MODULE__{
+          rows: [Row.t()],
+          origins: [Origin.t(), ...],
+          commit_digest: String.t(),
+          removed: [removed()]
+        }
 
   @type reason ::
           Encoding.reason()
@@ -103,8 +129,8 @@ defmodule Prima.ConsentPreview do
           | :duplicate_origin
           | {:unknown_origin, term()}
 
-  @enforce_keys [:rows, :origins, :commit_digest]
-  defstruct [:rows, :origins, :commit_digest]
+  @enforce_keys [:rows, :origins, :commit_digest, :removed]
+  defstruct [:rows, :origins, :commit_digest, :removed]
 
   @doc "The document's version."
   @spec version() :: pos_integer()
@@ -121,27 +147,48 @@ defmodule Prima.ConsentPreview do
   @doc "Read a preview from its JSON map."
   @spec decode(term()) :: {:ok, t()} | {:error, reason()}
   def decode(map) when is_map(map) and not is_struct(map) do
-    with :ok <- Encoding.fields(map, ~w(v rows origins commit_digest), []),
+    with :ok <- Encoding.fields(map, ~w(v rows origins commit_digest removed), []),
          :ok <- version(map["v"]),
          {:ok, rows} <- rows(map["rows"]),
          {:ok, origins} <- Origin.parse_list(map["origins"]),
-         {:ok, digest} <- Encoding.check(map, "commit_digest", &Encoding.digest?/1) do
-      {:ok, %__MODULE__{rows: rows, origins: origins, commit_digest: digest}}
+         {:ok, digest} <- Encoding.check(map, "commit_digest", &Encoding.digest?/1),
+         {:ok, removed} <- check_removed(map["removed"]) do
+      {:ok, %__MODULE__{rows: rows, origins: origins, commit_digest: digest, removed: removed}}
     end
   end
 
   def decode(_value), do: {:error, {:invalid_field, "preview"}}
 
-  @doc "A preview from its rows, admitted origins and commit digest, held to the same shape."
-  @spec new([Row.t()], [Origin.t()], String.t()) :: {:ok, t()} | {:error, reason()}
-  def new(rows, origins, commit_digest) when is_list(rows) and is_list(origins) do
+  @doc """
+  A preview from its rows, admitted origins, commit digest and removed
+  bindings, held to the same shape.
+  """
+  @spec new([Row.t()], [Origin.t()], String.t(), [removed()]) :: {:ok, t()} | {:error, reason()}
+  def new(rows, origins, commit_digest, removed)
+      when is_list(rows) and is_list(origins) and is_list(removed) do
     decode(%{
       "v" => @version,
       "rows" => Enum.map(rows, &Row.encode/1),
       "origins" => Enum.map(origins, &to_string/1),
-      "commit_digest" => commit_digest
+      "commit_digest" => commit_digest,
+      "removed" => removed
     })
   end
+
+  @doc """
+  A preview's `removed` list held to its shape ("Removed bindings" above):
+  each item one binding of the head, the list sorted by `binding_key`
+  with no key twice. Answers the list as given, or
+  `{:error, {:invalid_field, "removed"}}`.
+  """
+  @spec check_removed(term()) :: {:ok, [removed()]} | {:error, reason()}
+  def check_removed(items) when is_list(items) do
+    if Enum.all?(items, &removed_item?/1) and ascending?(Enum.map(items, & &1["binding_key"])),
+      do: {:ok, items},
+      else: {:error, {:invalid_field, "removed"}}
+  end
+
+  def check_removed(_items), do: {:error, {:invalid_field, "removed"}}
 
   @doc "The JSON map of a preview."
   @spec encode(t()) :: map()
@@ -150,8 +197,43 @@ defmodule Prima.ConsentPreview do
       "v" => @version,
       "rows" => Enum.map(preview.rows, &Row.encode/1),
       "origins" => Origin.to_wire_list(preview.origins),
-      "commit_digest" => preview.commit_digest
+      "commit_digest" => preview.commit_digest,
+      "removed" => preview.removed
     }
+  end
+
+  @removed_fields ~w(binding_key node edge need)
+  @removed_optional ~w(connection entry_id instance_entry_id via name source)
+  @removed_identities ~w(entry_id instance_entry_id via)
+  @removed_sources ~w(own instance)
+
+  # One binding of the head: its key spells its node, its edge (in a
+  # credential row's grammar) and its slot; its need is a name or null;
+  # what it bound is named by exactly one of an entry, an instance entry
+  # and a lender's label; the entry's name and source are there only when
+  # the entry was read.
+  defp removed_item?(item) when is_map(item) and not is_struct(item) do
+    Encoding.fields(item, @removed_fields, @removed_optional) == :ok and
+      Row.text?(item["binding_key"]) and Row.text?(item["node"]) and Row.edge?(item["edge"]) and
+      (is_nil(item["need"]) or Row.text?(item["need"])) and
+      present?(item, "connection", &Prima.Authority.Blob.valid_account_name?/1) and
+      item["binding_key"] ==
+        Prima.Authority.Blob.binding_key(item["node"], item["edge"], item["connection"]) and
+      Enum.count(@removed_identities, &Map.has_key?(item, &1)) == 1 and
+      Enum.all?(["name" | @removed_identities], &present?(item, &1, fn v -> Row.text?(v) end)) and
+      present?(item, "source", &(&1 in @removed_sources))
+  end
+
+  defp removed_item?(_item), do: false
+
+  # A field the item may leave out, held to `valid?` when it is there.
+  defp present?(item, field, valid?), do: not Map.has_key?(item, field) or valid?.(item[field])
+
+  # Sorted, and no key twice.
+  defp ascending?(keys) do
+    keys
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.all?(fn [a, b] -> a < b end)
   end
 
   defp version(@version), do: :ok
@@ -424,7 +506,10 @@ defmodule Prima.ConsentPreview.Row do
 
   defp utc?(_value), do: false
 
-  defp text?(value), do: Encoding.text?(value, @max_text)
+  @doc false
+  # A row's text value; a removed binding's text fields are held to it too.
+  @spec text?(term()) :: boolean()
+  def text?(value), do: Encoding.text?(value, @max_text)
 
   defp set?(values) do
     is_list(values) and length(values) <= @max_set and Enum.all?(values, &text?/1) and
@@ -438,11 +523,14 @@ defmodule Prima.ConsentPreview.Row do
   defp tools?([@wildcard]), do: true
   defp tools?(values), do: set?(values) and @wildcard not in values
 
+  @doc false
   # The edge a credential rides, spelled as the blob keys it: the ingress
-  # literal, or a name-level ref with an optional named need.
-  defp edge?("@ingress"), do: true
+  # literal, or a name-level ref with an optional named need. A removed
+  # binding's edge is held to it too.
+  @spec edge?(term()) :: boolean()
+  def edge?("@ingress"), do: true
 
-  defp edge?(edge) when is_binary(edge) do
+  def edge?(edge) when is_binary(edge) do
     text?(edge) and
       case String.split(edge, "|", parts: 2) do
         [ref] -> name_level?(ref)
@@ -450,7 +538,7 @@ defmodule Prima.ConsentPreview.Row do
       end
   end
 
-  defp edge?(_edge), do: false
+  def edge?(_edge), do: false
 
   defp name_level?(ref),
     do: match?({:ok, %Prima.ComponentRef{version: nil}}, Prima.ComponentRef.parse(ref))

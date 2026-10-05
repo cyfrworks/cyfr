@@ -38,8 +38,9 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   every value is found in each output, in the row drawn for it. The
   admitted origins are the preview's top-level list, not a row, and
   `Prima.ConsentPreview.kinds/0` omits them, so each output is held to
-  them explicitly. The command line's rendering is held to the same
-  vectors by `apps/codex/cmd/profile_test.go`.
+  them explicitly, as it is to the head's bindings the preview removes,
+  each a line of its own. The command line's rendering is held to the
+  same vectors by `apps/codex/cmd/profile_test.go`.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -68,6 +69,18 @@ defmodule Cyfr.ConsentPreviewRenderTest do
       "https://geo.maps.example, paths /geocode. The component reads the value itself."
   ]
 
+  # The vectors' removals, each as its line: the need it was bound for (or
+  # that it cannot be told, and on a dependency's edge, which), its
+  # account or the default, and its entry by name, else id or lender.
+  @removals [
+    "Removes api_key default: weather-old",
+    "Removes api_key account 'Work': weather-work",
+    "Removes a binding of reagent:local.geo from reagent:local.weather account 'Old geo': " <>
+      "ine_old_geo",
+    "Removes a binding of reagent:local.maps from reagent:local.weather default: " <>
+      "the key its 'old-maps' profile lent"
+  ]
+
   defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
 
   # The preview as `profile.preview` answers it: the document beside the
@@ -81,6 +94,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
       rows: document["rows"],
       origins: document["origins"],
       commit_digest: document["commit_digest"],
+      removed: document["removed"],
       proof: "not-a-proof"
     }
   end
@@ -142,6 +156,19 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     for origin <- Prima.Origin.spellings() -- preview.origins do
       refute admits =~ "(#{origin})"
     end
+
+    # The head's bindings the grant removes, which are no row: each a line
+    # of its own, keyed by its binding, in the preview's order.
+    removals =
+      doc
+      |> LazyHTML.query(~s([data-test="grant-removed"] [data-binding]))
+      |> Enum.map(fn element ->
+        {LazyHTML.attribute(element, "data-binding"),
+         element |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()}
+      end)
+
+    assert removals ==
+             Enum.zip(Enum.map(preview.removed, &[&1["binding_key"]]), @removals)
 
     # Each credential reads as one sentence, the whole of it in its row.
     sentences =
