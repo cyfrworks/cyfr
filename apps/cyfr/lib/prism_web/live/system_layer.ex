@@ -53,8 +53,9 @@ defmodule PrismWeb.SystemLayer do
       plan and preview the prompt arrived with (`grant_prompt/4`, which
       opens it with the plan's suggestions bound for the required needs)
       and draws the preview's typed rows itself: the vault entry each need
-      of the app and of its dependencies is bound to and how long each
-      binding lives, the narrowing and the origins the person chooses,
+      of the app and of its dependencies is bound to, the named accounts
+      beside each edge's default, and how long each binding lives, the
+      narrowing and the origins the person chooses,
       each previewed again after each choice, the warnings and what
       changed. It hands the layer the walk as it stands. Confirming asks
       the sheet for its walk at that moment, after every choice that came
@@ -249,6 +250,14 @@ defmodule PrismWeb.SystemLayer do
   sentence for the refusal (`suggestion_refused`), which the sheet shows
   until the person's next choice previews. `opts[:label]` names the
   profile label the grant is for (the `"default"` profile when absent).
+  `opts[:account]` names the account the grant is opened for, `%{name,
+  dep, from, need}` (`dep` nil for the app's own calls, `from` nil for the
+  grant's source, `need` nil for the edge's one credential need; an absent
+  key is nil), carried on the subject as `account`: the grant opens with
+  that account's row (`PrismWeb.ConsentSheetComponent.open_account/3`), a
+  dependency's default a profile lends switched first to the entry it
+  lends, so the preview is of that default; an account the plan has no
+  edge for opens the grant without it, saying why.
   The sheet the prompt shows takes the walk on from there. A plan whose
   closure is unresolved opens with no preview, naming what is missing,
   and offers nothing to commit. `{:error, reason}` when the plan or the
@@ -262,12 +271,14 @@ defmodule PrismWeb.SystemLayer do
         ) :: {:ok, Prompt.t()} | {:error, term()}
   def grant_prompt(ctx_or_socket, id, ref, opts \\ []) when is_binary(id) and is_binary(ref) do
     label = Keyword.get(opts, :label)
+    account = account_of(Keyword.get(opts, :account))
     plan_args = Prima.MapUtil.put_present(%{"ref" => ref}, "label", label)
 
     with %Context{athanor_id: athanor_id} when is_binary(athanor_id) <-
            context_of(ctx_or_socket),
          {:ok, plan} <- Ops.call_tool(ctx_or_socket, "profile/plan", plan_args),
-         {:ok, decisions, preview, refused} <- first_walk(ctx_or_socket, ref, label, plan) do
+         {:ok, decisions, preview, refused} <-
+           first_walk(ctx_or_socket, {ref, label, account}, plan) do
       {:ok,
        %{
          id: id,
@@ -283,6 +294,7 @@ defmodule PrismWeb.SystemLayer do
            }
            |> Prima.MapUtil.put_present(:session_expires_at, session_end(ctx_or_socket))
            |> Prima.MapUtil.put_present(:suggestion_refused, refused)
+           |> Prima.MapUtil.put_present(:account, account)
        }}
     else
       {:error, reason} -> {:error, reason}
@@ -290,17 +302,25 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
+  # The account a grant is opened for with each of its places named, an
+  # absent one nil; the prompt holds it to its shape (`Prompt`).
+  defp account_of(nil), do: nil
+
+  defp account_of(%{} = account),
+    do: Map.merge(%{name: nil, dep: nil, from: nil, need: nil}, account)
+
   # The decisions the grant opens with, their preview, and why the
   # suggestions were not bound, if they were not: the plan's suggestions
   # bound for the required needs, under the origins the head admits
-  # (`interactive` alone on a first grant); with nothing bound when the
-  # home refuses to preview the suggestions, so the person chooses, and
-  # the home's sentence for that refusal, which the sheet shows.
-  defp first_walk(_ctx_or_socket, ref, label, %{unresolved: %{}} = plan),
+  # (`interactive` alone on a first grant), and the account it is opened
+  # for beside its edge's default; with nothing bound when the home
+  # refuses to preview the suggestions, so the person chooses, and the
+  # home's sentence for that refusal, which the sheet shows.
+  defp first_walk(_ctx_or_socket, {ref, label, _account}, %{unresolved: %{}} = plan),
     do: {:ok, first_decisions(ref, label, plan, %{}), nil, nil}
 
-  defp first_walk(ctx_or_socket, ref, label, plan) do
-    suggested = PrismWeb.ConsentSheetComponent.initial_choices(plan)
+  defp first_walk(ctx_or_socket, {ref, label, account}, plan) do
+    suggested = with_account(plan, PrismWeb.ConsentSheetComponent.initial_choices(plan), account)
     decisions = first_decisions(ref, label, plan, suggested)
 
     case first_preview(ctx_or_socket, decisions) do
@@ -317,6 +337,20 @@ defmodule PrismWeb.SystemLayer do
         {:error, reason}
     end
   end
+
+  # The choices with the account placed, a lent default switched to the
+  # entry its profile lends; an account the plan has no edge for leaves
+  # them as they are, and the sheet says why.
+  defp with_account(_plan, choices, nil), do: choices
+
+  defp with_account(plan, choices, %{name: name} = account) when is_binary(name) do
+    case PrismWeb.ConsentSheetComponent.open_account(plan, choices, account) do
+      {:ok, placed} -> placed
+      {:error, _sentence} -> choices
+    end
+  end
+
+  defp with_account(_plan, choices, _malformed), do: choices
 
   defp first_decisions(ref, label, plan, choices) do
     PrismWeb.ConsentSheetComponent.decisions(

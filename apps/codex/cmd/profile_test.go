@@ -999,44 +999,267 @@ func TestCollectDecisions_AsksHowLongAPassedUntilLivesNow(t *testing.T) {
 	}
 }
 
-// Any --entry replaces every binding of the app's own calls the head
-// holds, as it replaces the suggestions, and a --selection that
-// dependency's edge; an edge no flag names still reopens on the head.
-func TestProfileGrant_FlagsReplaceTheHeadsBindings(t *testing.T) {
+// A flag names its slot alone: the need's or the dependency's default, or
+// one named account. The head's other bindings carry; a flag naming a need
+// other than the head's own-call need replaces every binding of the app's
+// own calls, since that edge carries one need's credentials; and an edge
+// no flag names reopens on the head.
+func TestProfileGrant_AFlagReplacesTheHeadBindingOfItsSlotAlone(t *testing.T) {
 	ahead := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339)
 	plan := withHeads(planWith(
-		list(need("api_key", "api_key", true, "vlt_s", false, "vlt_s", "vlt_h")),
+		list(
+			need("api_key", "api_key", true, "vlt_s", false, "vlt_s", "vlt_h"),
+			need("other", "api_key", false, "", false, "vlt_o"),
+		),
 		list(depJSON("reagent:local.db", workLender, need("db", "api_key", true, "vlt_db", false, "vlt_db", "vlt_x"))),
 		`[]`),
 		list(
 			headJSON(regrantApp+"|@ingress|default", "vlt_h", "once", ""),
 			headJSON(regrantApp+"|@ingress|name:later", "vlt_h", "until", ahead),
-			headJSON(regrantApp+"|reagent:local.db|default", "work", "standing", ""),
+			headJSON(regrantApp+"|reagent:local.db|default", "vlt_db", "standing", ""),
+			headJSON(regrantApp+"|reagent:local.db|name:Work", "vlt_x", "once", ""),
+		))
+
+	once := map[string]any{"kind": "once"}
+	standing := map[string]any{"kind": "standing"}
+	headDefault := map[string]any{"need": "api_key", "entry_id": "vlt_h", "lifetime": once}
+	headLater := map[string]any{"need": "api_key", "entry_id": "vlt_h", "name": "later",
+		"lifetime": map[string]any{"kind": "until", "until": ahead}}
+	edgeDefault := map[string]any{"dep": "reagent:local.db", "from": regrantApp, "entry_id": "vlt_db",
+		"lifetime": standing}
+	edgeWork := map[string]any{"dep": "reagent:local.db", "from": regrantApp, "entry_id": "vlt_x",
+		"name": "Work", "lifetime": once}
+
+	cases := []struct {
+		name       string
+		args       []string
+		bindings   []map[string]any
+		selections []map[string]any
+	}{
+		{"the default of the app's own calls", []string{"--entry", "api_key=vlt_s"},
+			[]map[string]any{{"need": "api_key", "entry_id": "vlt_s", "lifetime": standing}, headLater},
+			[]map[string]any{edgeDefault, edgeWork}},
+		{"a named account of the app's own calls", []string{"--entry", "api_key|later=vlt_s:once"},
+			[]map[string]any{{"need": "api_key", "entry_id": "vlt_s", "name": "later", "lifetime": once}, headDefault},
+			[]map[string]any{edgeDefault, edgeWork}},
+		{"another need of the app's own calls", []string{"--entry", "other=vlt_o"},
+			[]map[string]any{{"need": "other", "entry_id": "vlt_o", "lifetime": standing}},
+			[]map[string]any{edgeDefault, edgeWork}},
+		{"a dependency's named account", []string{"--selection", "reagent:local.db|work=vlt_db:once"},
+			[]map[string]any{headDefault, headLater},
+			[]map[string]any{{"dep": "reagent:local.db", "from": regrantApp, "entry_id": "vlt_db",
+				"name": "work", "lifetime": once}, edgeDefault}},
+		{"a dependency's default", []string{"--selection", "reagent:local.db=vlt_x:once"},
+			[]map[string]any{headDefault, headLater},
+			[]map[string]any{{"dep": "reagent:local.db", "from": regrantApp, "entry_id": "vlt_x",
+				"lifetime": once}, edgeWork}},
+	}
+	for _, c := range cases {
+		srv := newCLIServer(t, "profile.commit", plan, previewAnswer, commitAnswer)
+		out := runGrant(t, srv, c.args...)
+		preview, commit := sentDecisions(t, srv, 1)
+		if !reflect.DeepEqual(preview, commit) {
+			t.Errorf("%s: the commit's decisions %v are not the preview's %v", c.name, commit, preview)
+		}
+		if got := asMaps(t, preview["bindings"]); !reflect.DeepEqual(got, c.bindings) {
+			t.Errorf("%s: bindings sent %v\nwant %v\n%s", c.name, got, c.bindings, out)
+		}
+		if got := asMaps(t, preview["selections"]); !reflect.DeepEqual(got, c.selections) {
+			t.Errorf("%s: selections sent %v\nwant %v\n%s", c.name, got, c.selections, out)
+		}
+	}
+}
+
+// A value splits at its last =: what follows is the id and its lifetime,
+// what precedes the need or the dependency, and after its first | the
+// account it names, which may hold = and :. A slot no flag names takes
+// what it takes with no flags, so a named account on a first grant binds
+// the suggested default beside it.
+func TestProfileGrant_AFlagNamesAnAccountAfterItsNeedOrDependency(t *testing.T) {
+	plan := planWith(
+		list(need("api_key", "api_key", true, "vlt_s", false, "vlt_s", "vlt_abc")),
+		list(depJSON("reagent:local.db", `[]`, need("db", "api_key", true, "vlt_db", false, "vlt_db", "vlt_def"))),
+		`[]`)
+
+	srv := newCLIServer(t, "profile.commit", plan, previewAnswer, commitAnswer)
+	out := runGrant(t, srv, "--entry", "api_key|a=b:c=vlt_abc:1h",
+		"--selection", "reagent:local.db|Supabase 2=vlt_def")
+	preview, commit := sentDecisions(t, srv, 1)
+	if !reflect.DeepEqual(preview, commit) {
+		t.Errorf("the commit's decisions %v are not the preview's %v", commit, preview)
+	}
+
+	bindings := asMaps(t, preview["bindings"])
+	if len(bindings) != 2 {
+		t.Fatalf("want the named account and the suggested default, got %v\n%s", bindings, out)
+	}
+	named := bindings[0]
+	lifetime, _ := named["lifetime"].(map[string]any)
+	until, err := time.Parse(time.RFC3339, str(lifetime["until"]))
+	if named["need"] != "api_key" || named["name"] != "a=b:c" || named["entry_id"] != "vlt_abc" ||
+		lifetime["kind"] != "until" || err != nil || time.Until(until) > time.Hour ||
+		time.Until(until) < 55*time.Minute {
+		t.Errorf("--entry 'api_key|a=b:c=vlt_abc:1h' sent %v", named)
+	}
+	if want := (map[string]any{"need": "api_key", "entry_id": "vlt_s",
+		"lifetime": map[string]any{"kind": "standing"}}); !reflect.DeepEqual(bindings[1], want) {
+		t.Errorf("the default beside it: sent %v, want the suggestion %v", bindings[1], want)
+	}
+
+	if got, want := asMaps(t, preview["selections"]), []map[string]any{
+		{"dep": "reagent:local.db", "from": regrantApp, "entry_id": "vlt_def", "name": "Supabase 2",
+			"lifetime": map[string]any{"kind": "standing"}},
+		{"dep": "reagent:local.db", "from": regrantApp, "entry_id": "vlt_db",
+			"lifetime": map[string]any{"kind": "standing"}},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("selections sent %v\nwant %v", got, want)
+	}
+}
+
+// Where no default can be found for a named account's need, the account
+// is sent alone and the home refuses it, naming the need: the command
+// line binds no default nobody chose.
+func TestProfileGrant_ANamedFlagWithNoDefaultToFindIsSentAlone(t *testing.T) {
+	plan := planWith(list(need("api_key", "api_key", true, "", false)), `[]`, `[]`)
+	srv := newCLIServer(t, "profile.commit", plan, previewAnswer, commitAnswer)
+	runGrant(t, srv, "--entry", "api_key|Work=vlt_x")
+	preview, _ := sentDecisions(t, srv, 1)
+	if got, want := asMaps(t, preview["bindings"]), []map[string]any{
+		{"need": "api_key", "entry_id": "vlt_x", "name": "Work", "lifetime": map[string]any{"kind": "standing"}},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sent %v, want the named account alone %v", got, want)
+	}
+}
+
+// A named account names an entry, never a lender's label, under a name the
+// binding key can carry; each refusal names the flag, before any call.
+func TestProfileGrant_ANamedFlagNamesAnEntryUnderAValidName(t *testing.T) {
+	cases := []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"--selection", "reagent:local.db|Work=work"},
+			[]string{"--selection", "the account Work by a profile's label", "names an entry"}},
+		{[]string{"--entry", "api_key|=vlt_x"}, []string{"--entry", "1 to 128 bytes"}},
+		{[]string{"--entry", "api_key|a|b=vlt_x"}, []string{"--entry", `"a|b"`, "1 to 128 bytes"}},
+		{[]string{"--selection", "reagent:local.db|" + strings.Repeat("x", 129) + "=vlt_x"},
+			[]string{"--selection", "1 to 128 bytes"}},
+		{[]string{"--entry", "api_key|tab\there=vlt_x"}, []string{"--entry", "control character"}},
+	}
+	for _, c := range cases {
+		srv := newCLIServer(t, "profile.commit", planWith(`[]`, `[]`, `[]`), previewAnswer, commitAnswer)
+		out, err := tryGrant(t, srv, c.args...)
+		if err == nil {
+			t.Errorf("%v was accepted:\n%s", c.args, out)
+			continue
+		}
+		for _, want := range c.want {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%v: refusal %q does not say %q", c.args, err, want)
+			}
+		}
+		if srv.count() != 0 {
+			t.Errorf("%v: refused after %d calls", c.args, srv.count())
+		}
+	}
+}
+
+// A named account whose until has passed is no decision the command line
+// makes alone: without a terminal it is refused before any preview,
+// naming the account and the flag that grants it again.
+func TestProfileGrant_ANamedAccountsPassedUntilNamesTheAccountAndItsFlag(t *testing.T) {
+	passed := time.Now().Add(-time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339)
+
+	plan := withHeads(planWith(
+		list(need("api_key", "api_key", true, "vlt_h", false, "vlt_h", "vlt_w")), `[]`, `[]`),
+		list(
+			headJSON(regrantApp+"|@ingress|default", "vlt_h", "standing", ""),
+			headJSON(regrantApp+"|@ingress|name:Work", "vlt_w", "until", passed),
 		))
 
 	srv := newCLIServer(t, "profile.commit", plan, previewAnswer, commitAnswer)
-	runGrant(t, srv, "--entry", "api_key=vlt_s", "--selection", "reagent:local.db=vlt_x:once")
-	preview, _ := sentDecisions(t, srv, 1)
-	if got, want := asMaps(t, preview["bindings"]), []map[string]any{
-		{"need": "api_key", "entry_id": "vlt_s", "lifetime": map[string]any{"kind": "standing"}},
-	}; !reflect.DeepEqual(got, want) {
-		t.Errorf("--entry sent %v, want %v", got, want)
+	_, err := tryGrant(t, srv)
+	if err == nil || !strings.Contains(err.Error(), "need api_key's account 'Work' was granted until "+passed) ||
+		!strings.Contains(err.Error(), "--entry 'api_key|Work=<id>:<lifetime>'") {
+		t.Fatalf("want a refusal naming the account and its flag, got %v", err)
 	}
-	if got, want := asMaps(t, preview["selections"]), []map[string]any{
-		{"dep": "reagent:local.db", "from": regrantApp, "entry_id": "vlt_x",
-			"lifetime": map[string]any{"kind": "once"}},
-	}; !reflect.DeepEqual(got, want) {
-		t.Errorf("--selection sent %v, want %v", got, want)
+	if srv.count() != 1 {
+		t.Errorf("a refused re-grant previewed: %d calls", srv.count())
 	}
 
+	// Its flag grants it again; the default carries.
 	srv = newCLIServer(t, "profile.commit", plan, previewAnswer, commitAnswer)
-	runGrant(t, srv, "--entry", "api_key=vlt_s")
-	preview, _ = sentDecisions(t, srv, 1)
-	if got, want := asMaps(t, preview["selections"]), []map[string]any{
-		{"dep": "reagent:local.db", "from": regrantApp, "label": "work",
-			"lifetime": map[string]any{"kind": "standing"}},
+	runGrant(t, srv, "--entry", "api_key|Work=vlt_w:once")
+	preview, _ := sentDecisions(t, srv, 1)
+	if got, want := asMaps(t, preview["bindings"]), []map[string]any{
+		{"need": "api_key", "entry_id": "vlt_w", "name": "Work", "lifetime": map[string]any{"kind": "once"}},
+		{"need": "api_key", "entry_id": "vlt_h", "lifetime": map[string]any{"kind": "standing"}},
 	}; !reflect.DeepEqual(got, want) {
-		t.Errorf("the edge no flag names sent %v, want the head's %v", got, want)
+		t.Errorf("sent %v\nwant %v", got, want)
+	}
+
+	// A dependency's named account.
+	plan = withHeads(planWith(`[]`, list(
+		depJSON("reagent:local.db", `[]`, need("db", "api_key", true, "vlt_db", false, "vlt_db", "vlt_dw"))), `[]`),
+		list(
+			headJSON(regrantApp+"|reagent:local.db|default", "vlt_db", "standing", ""),
+			headJSON(regrantApp+"|reagent:local.db|name:Work", "vlt_dw", "until", passed),
+		))
+
+	srv = newCLIServer(t, "profile.commit", plan, previewAnswer, commitAnswer)
+	_, err = tryGrant(t, srv)
+	if err == nil || !strings.Contains(err.Error(), "reagent:local.db's account 'Work' was granted until "+passed) ||
+		!strings.Contains(err.Error(), "--selection 'reagent:local.db|Work=<id>:<lifetime>'") {
+		t.Errorf("want a refusal naming the dependency's account and its flag, got %v", err)
+	}
+	if srv.count() != 1 {
+		t.Errorf("a refused re-grant previewed: %d calls", srv.count())
+	}
+}
+
+// An interactive re-grant asks how long a named account whose until has
+// passed lives now, naming the account, and binds its entry so beside the
+// default it carries.
+func TestCollectDecisions_AsksHowLongANamedAccountsPassedUntilLivesNow(t *testing.T) {
+	now := time.Date(2026, 10, 4, 13, 0, 0, 0, time.UTC)
+	var plan map[string]any
+	raw := withHeads(planWith(`[]`, list(
+		depJSON("reagent:local.db", `[]`, need("db", "api_key", true, "vlt_db", false, "vlt_db", "vlt_dw"))), `[]`),
+		list(
+			headJSON(regrantApp+"|reagent:local.db|default", "vlt_db", "standing", ""),
+			headJSON(regrantApp+"|reagent:local.db|name:Work", "vlt_dw", "until", "2026-10-04T12:00:00Z"),
+		))
+	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
+		t.Fatal(err)
+	}
+
+	var asked []string
+	chooser := grantChooser{
+		interactive: true,
+		now:         now,
+		note:        func(string) {},
+		ask: func(title string, options []prompt.Option) (string, error) {
+			asked = append(asked, title)
+			return "1h", nil
+		},
+	}
+	decided, err := collectDecisions(plan, grantFlags{}, chooser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 ||
+		!strings.Contains(asked[0], "reagent:local.db's account 'Work' was granted until 2026-10-04T12:00:00Z") {
+		t.Errorf("asked %v", asked)
+	}
+	sent, _ := json.Marshal(decided.selections)
+	want := `[{"dep":"reagent:local.db","from":"` + regrantApp + `","entry_id":"vlt_db","lifetime":{"kind":"standing"}},` +
+		`{"dep":"reagent:local.db","from":"` + regrantApp + `","entry_id":"vlt_dw","name":"Work",` +
+		`"lifetime":{"kind":"until","until":"2026-10-04T14:00:00Z"}}]`
+	var got, expect any
+	_ = json.Unmarshal(sent, &got)
+	_ = json.Unmarshal([]byte(want), &expect)
+	if !reflect.DeepEqual(got, expect) {
+		t.Errorf("selected %s, want %s", sent, want)
 	}
 }
 

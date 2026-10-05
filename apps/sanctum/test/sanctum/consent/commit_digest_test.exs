@@ -212,6 +212,43 @@ defmodule Sanctum.Consent.CommitDigestTest do
                  Map.put(@base, :selections, [Map.put(@selection, :entry_id, "vault-1")])
                )
     end
+
+    test "a selection's account name changes the digest, and an edge takes its default and " <>
+           "each name once" do
+      default =
+        @selection |> Map.delete(:label) |> Map.merge(%{entry_id: "vault-1", need: "api_key"})
+
+      named =
+        Map.merge(default, %{entry_id: "vault-2", binding_digest: "sha256:sel-2", name: "Work"})
+
+      decided = Map.put(@base, :selections, [default, named])
+
+      # A commit differing from its preview only by a selection's name is
+      # another digest, so its proof does not cover it.
+      assert digest!(decided) !=
+               digest!(Map.put(@base, :selections, [default, %{named | name: "Home"}]))
+
+      # Two selections of one edge differing only by their names are two
+      # slots, in any order.
+      second = %{named | name: "Home"}
+
+      assert digest!(Map.put(@base, :selections, [default, named, second])) ==
+               digest!(Map.put(@base, :selections, [second, default, named]))
+
+      # A name repeated on one edge, compared case-folded, is one slot
+      # twice, as is a second default.
+      for twice <- [%{named | name: "work"}, Map.delete(named, :name)] do
+        assert {:error, {:invalid_commit, :selections, message}} =
+                 CommitDigest.compute(Map.put(@base, :selections, [default, named, twice])),
+               "#{inspect(twice)} was accepted"
+
+        assert message =~ "exactly once"
+      end
+
+      # The name is one the selection names, never an empty one.
+      assert {:error, {:invalid_commit, :name, _}} =
+               CommitDigest.compute(Map.put(@base, :selections, [default, %{named | name: ""}]))
+    end
   end
 
   describe "containment invariants" do

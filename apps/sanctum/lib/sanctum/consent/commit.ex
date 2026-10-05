@@ -48,9 +48,17 @@ defmodule Sanctum.Consent.Commit do
   an instance entry (`entry_id`, `instance_entry_id`) chosen for one of
   the dependency's credential needs (`need`, required when it declares
   several), checked as a binding of that need against the dependency. A
-  dependency edge holds one credential: a need the calling node's
+  dependency edge holds one need's credentials: a need the calling node's
   `provides` covers takes no selection, and an edge two needs would fill
   is refused.
+
+  An edge's selections are one default, which names no account, and any
+  number of named accounts beside it (`name`), each an entry chosen here
+  for the default's need and checked as the default is, with its own
+  lifetime and `renew`, riding the edge's `named` map. A named account
+  names an entry, never a lender's label, and sits beside a default entry
+  chosen here, never beside a key a profile lends; a name a person would
+  read as another (differing only in case) is that name again.
 
   ## What a decision may name beyond bindings
 
@@ -345,12 +353,12 @@ defmodule Sanctum.Consent.Commit do
   defp put_differing(record, kind, value), do: Map.put(record, kind, value)
 
   # The selections the head carries, re-decided as they stand: the same
-  # lender, or the same entry for the same need, the same fields, the
-  # digest pinned again from the live entry, and the lifetime its row
-  # holds, renewing nothing — so a consumed `once` carries and nothing
-  # widens, and an `until` that has passed refuses the grant as a commit
-  # would. An entry on an edge into the source is the source's own
-  # binding riding it, never a selection.
+  # lender, or the same entry for the same need under the same account
+  # name, the same fields, the digest pinned again from the live entry,
+  # and the lifetime its row holds, renewing nothing — so a consumed
+  # `once` carries and nothing widens, and an `until` that has passed
+  # refuses the grant as a commit would. An entry on an edge into the
+  # source is the source's own binding riding it, never a selection.
   defp head_selections(head, source_ref) do
     rows = Map.new(head.vault_refs, &{&1.binding_key, &1})
 
@@ -358,8 +366,8 @@ defmodule Sanctum.Consent.Commit do
       for {from, node} <- nodes,
           {edge_key, %{"vault" => vault}} <- node["edges"] || %{},
           {:ok, dep} <- [Prima.Authority.Blob.edge_target(edge_key)],
-          selection <- head_selection(vault, from, dep, source_ref) do
-        key = Prima.Authority.Blob.binding_key(from, edge_key, nil)
+          {slot, selection} <- head_selection(vault, from, dep, source_ref) do
+        key = Prima.Authority.Blob.binding_key(from, edge_key, slot)
         Map.put(selection, :lifetime, row_lifetime(Map.get(rows, key)))
       end
     else
@@ -370,29 +378,37 @@ defmodule Sanctum.Consent.Commit do
   # A selection that named no fields lends the lender's again.
   defp head_selection(%{"via" => %{"label" => label}} = vault, from, dep, _source_ref) do
     [
-      Prima.MapUtil.put_present(
-        %{from: from, dep: dep, label: label},
-        :fields,
-        get_in(vault, ["projection", "fields"])
-      )
+      {nil,
+       Prima.MapUtil.put_present(
+         %{from: from, dep: dep, label: label},
+         :fields,
+         get_in(vault, ["projection", "fields"])
+       )}
     ]
   end
 
   # An entry bound on a dependency's edge, for the need of the
-  # dependency's whose attach rule it carries.
-  defp head_selection(%{"entry_id" => id} = vault, from, dep, source_ref)
+  # dependency's whose attach rule it carries, and each account named
+  # beside it.
+  defp head_selection(%{"entry_id" => _} = vault, from, dep, source_ref)
        when dep != source_ref do
-    entry_key = if vault["scope"] == "instance", do: :instance_entry_id, else: :entry_id
+    named = vault |> Map.get("named", %{}) |> Enum.sort()
 
-    [
-      %{from: from, dep: dep}
-      |> Map.put(entry_key, id)
-      |> Prima.MapUtil.put_present(:fields, get_in(vault, ["projection", "fields"]))
-      |> Map.put(:head_attach, Map.get(vault, "attach"))
-    ]
+    [{nil, head_entry_selection(vault, from, dep)}] ++
+      for {name, bound} <- named,
+          do: {name, Map.put(head_entry_selection(bound, from, dep), :name, name)}
   end
 
   defp head_selection(_bound_source_or_provided, _from, _dep, _source_ref), do: []
+
+  defp head_entry_selection(%{"entry_id" => id} = bound, from, dep) do
+    entry_key = if bound["scope"] == "instance", do: :instance_entry_id, else: :entry_id
+
+    %{from: from, dep: dep}
+    |> Map.put(entry_key, id)
+    |> Prima.MapUtil.put_present(:fields, get_in(bound, ["projection", "fields"]))
+    |> Map.put(:head_attach, Map.get(bound, "attach"))
+  end
 
   defp row_lifetime(%{lifetime_kind: "until", expires_at: %DateTime{} = at}),
     do: %{kind: "until", until: DateTime.to_iso8601(at)}
@@ -778,8 +794,9 @@ defmodule Sanctum.Consent.Commit do
   # rather than lending a differently shaped credential; or with an entry
   # chosen here for one of the dependency's credential needs, bound on
   # the edge itself and held to that need as a binding of the source is.
-  # Each carries its lifetime and `renew`. Answers the selections and the
-  # entries they bind, by id, for the preview.
+  # Each carries its lifetime and `renew`, and an entry chosen here may
+  # ride beside the edge's default under an account name. Answers the
+  # selections and the entries they bind, by id, for the preview.
   defp resolve_selections(ctx, decisions, place, provided) do
     decisions
     |> Map.get(:selections, [])
@@ -790,20 +807,26 @@ defmodule Sanctum.Consent.Commit do
       end
     end)
     |> case do
-      {:ok, selections, entries} -> {:ok, Enum.reverse(selections), entries}
-      error -> error
+      {:ok, selections, entries} ->
+        selections = Enum.reverse(selections)
+        with :ok <- check_selection_slots(selections), do: {:ok, selections, entries}
+
+      error ->
+        error
     end
   end
 
   defp resolve_selection(ctx, raw, place, provided) do
     with {:ok, from, dep} <- selection_target(raw, place),
          subject = "The selection of #{dep}",
+         {:ok, name} <- selection_name(raw, dep),
          {:ok, lifetime} <- decided_lifetime(raw, subject, place.now),
          {:ok, renew} <- decided_renew(raw, subject),
          {:ok, lent} <- selection_lent(raw, dep) do
       case lent do
         {:label, label} ->
-          with :ok <- no_need(raw, dep, label),
+          with :ok <- named_by_entry(name, dep),
+               :ok <- no_need(raw, dep, label),
                :ok <-
                  not_provided(Map.get(provided, {from, dep}), dep, nil, "its #{label} profile"),
                {:ok, selection} <- lender_selection(ctx, raw, {from, dep, place}, label) do
@@ -811,14 +834,105 @@ defmodule Sanctum.Consent.Commit do
           end
 
         {source, id} ->
-          entry_selection(
-            ctx,
-            raw,
-            {from, dep, place},
-            {source, id},
-            %{lifetime: lifetime, renew: renew, provided: Map.get(provided, {from, dep})}
-          )
+          with {:ok, selection, entries} <-
+                 entry_selection(
+                   ctx,
+                   raw,
+                   {from, dep, place},
+                   {source, id},
+                   %{lifetime: lifetime, renew: renew, provided: Map.get(provided, {from, dep})}
+                 ) do
+            {:ok, Prima.MapUtil.put_present(selection, :name, name), entries}
+          end
       end
+    end
+  end
+
+  # The account a selection rides under beside its edge's default: absent
+  # for the default itself.
+  defp selection_name(raw, dep) do
+    case Map.get(raw, :name) do
+      nil ->
+        {:ok, nil}
+
+      name ->
+        if Prima.Authority.Blob.valid_account_name?(name),
+          do: {:ok, name},
+          else:
+            {:error,
+             {:invalid_argument,
+              "The selection of #{dep} names an account that is not 1 to 128 bytes of text " <>
+                "without a | or a control character"}}
+    end
+  end
+
+  # The blob holds named accounts beside a bound entry alone, so an account
+  # names the entry it binds; a label, or nothing at all, lends.
+  defp named_by_entry(nil, _dep), do: :ok
+
+  defp named_by_entry(name, dep),
+    do:
+      {:error,
+       {:invalid_argument,
+        "The selection of #{dep} names the account #{name} by a profile's label; a named " <>
+          "account names an entry"}}
+
+  # A dependency's edge takes one default, which names no account, and any
+  # number of named accounts beside it, each under a name of its own; all
+  # of them fill the default's need, since an edge carries one need's
+  # credentials, and the default is an entry chosen here, since the blob
+  # holds named accounts beside a bound entry alone. A second default is
+  # the commit digest's refusal: the edge is selected twice.
+  defp check_selection_slots(selections) do
+    selections
+    |> Enum.group_by(&{&1.from, &1.dep})
+    |> Enum.sort()
+    |> Enum.find_value(:ok, fn {{_from, dep}, on_edge} ->
+      case edge_slots(dep, on_edge) do
+        :ok -> nil
+        refusal -> refusal
+      end
+    end)
+  end
+
+  defp edge_slots(dep, on_edge) do
+    {unnamed, named} = Enum.split_with(on_edge, &is_nil(Map.get(&1, :name)))
+    folded = Enum.map(named, &String.downcase(&1.name))
+
+    cond do
+      named == [] or length(unnamed) > 1 ->
+        :ok
+
+      unnamed == [] ->
+        {:error,
+         {:invalid_argument,
+          "The selections of #{dep} name accounts beside no default; one selection of #{dep} " <>
+            "names no account"}}
+
+      match?([%{kind: :via}], unnamed) ->
+        [%{label: label}] = unnamed
+
+        {:error,
+         {:invalid_argument,
+          "The selections of #{dep} name accounts beside a key its #{label} profile lends; a " <>
+            "named account sits beside a default entry chosen here"}}
+
+      length(Enum.uniq(folded)) != length(folded) ->
+        repeated =
+          Enum.find(named, fn s -> Enum.count(folded, &(&1 == String.downcase(s.name))) > 1 end)
+
+        {:error,
+         {:invalid_argument,
+          "The selections of #{dep} name the account #{repeated.name} twice; each names its own"}}
+
+      other = Enum.find(named, &(&1.need != hd(unnamed).need)) ->
+        {:error,
+         {:invalid_argument,
+          "The selections of #{dep} name accounts for #{other.need} beside a default for " <>
+            "#{hd(unnamed).need}; an edge carries one need's credentials"}}
+
+      true ->
+        :ok
     end
   end
 
@@ -1863,8 +1977,9 @@ defmodule Sanctum.Consent.Commit do
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  # A label selection names its label, an entry selection the entry and
-  # the need it is chosen for; both their projection and lifetime.
+  # A label selection names its label, an entry selection the entry, the
+  # need it is chosen for and the account it rides under, if any; both
+  # their projection and lifetime.
   defp digest_selection(%{kind: :via} = selection) do
     selection
     |> Map.take([:from, :dep, :label, :binding_digest, :fields, :renew])
@@ -1876,6 +1991,7 @@ defmodule Sanctum.Consent.Commit do
     |> Map.take([:from, :dep, :need, :binding_digest, :fields, :renew])
     |> Map.put(entry_key(selection), selection.entry_id)
     |> Map.put(:lifetime, digest_lifetime(Map.get(selection, :lifetime)))
+    |> Prima.MapUtil.put_present(:name, Map.get(selection, :name))
   end
 
   defp entry_key(%{scope: "instance"}), do: :instance_entry_id
@@ -2015,10 +2131,13 @@ defmodule Sanctum.Consent.Commit do
     # "@ingress" for no-needs manifests, the declared need for manifests
     # with one: the default as the edge's vault, each named account in its
     # `named` map. resolve_bindings already refused a second need. A
-    # selected dependency's edge carries the selection, and an edge whose
-    # need the calling node provides carries that configuration.
+    # selected dependency's edge carries the selection, each account named
+    # beside it in its `named` map, and an edge whose need the calling node
+    # provides carries that configuration.
     source_vault = source_resource(prep.bindings)
-    selections = Map.new(prep.selections, &{{&1.from, &1.dep}, &1})
+    {defaults, named} = Enum.split_with(prep.selections, &is_nil(Map.get(&1, :name)))
+    selections = Map.new(defaults, &{{&1.from, &1.dep}, &1})
+    named = Enum.group_by(named, &{&1.from, &1.dep})
 
     vault_fn = fn node_key, _row, _manifest ->
       if node_key == prep.source_ref, do: source_vault
@@ -2027,7 +2146,7 @@ defmodule Sanctum.Consent.Commit do
     edge_vault_fn = fn from, dep, _row, _manifest, _provided ->
       case Map.fetch(selections, {from, dep}) do
         {:ok, selection} ->
-          selection_resource(selection)
+          selection_resource(selection, Map.get(named, {from, dep}, []))
 
         :error ->
           case Map.fetch(prep.provided, {from, dep}) do
@@ -2105,7 +2224,10 @@ defmodule Sanctum.Consent.Commit do
     BlobBuilder.vault_resource(Map.put(default, :named, Enum.sort_by(named, & &1.name)))
   end
 
-  defp selection_resource(%{kind: :via} = selection) do
+  # A lender's label lends alone: an account named beside it is refused by
+  # the slot check, or rides an edge selected twice, which the commit
+  # digest refuses before anything is written.
+  defp selection_resource(%{kind: :via} = selection, _named) do
     BlobBuilder.vault_resource(%{
       via: selection.label,
       binding_digest: selection.binding_digest,
@@ -2115,7 +2237,10 @@ defmodule Sanctum.Consent.Commit do
     })
   end
 
-  defp selection_resource(%{kind: :entry} = selection), do: BlobBuilder.vault_resource(selection)
+  # An entry chosen here, each account named beside it in the edge's
+  # `named` map; its place gives each its key (`BlobBuilder.encode/1`).
+  defp selection_resource(%{kind: :entry} = selection, named),
+    do: BlobBuilder.vault_resource(Map.put(selection, :named, Enum.sort_by(named, & &1.name)))
 
   defp persist(ctx, prep, blob_json, refs, activation_json, granted_via) do
     profile_id = prep.profile_id || Prima.UUID7.generate_id("prof")
@@ -2461,7 +2586,11 @@ defmodule Sanctum.Consent.Commit do
           binding -> {:ok, decision_of(binding, {:source, target})}
         end
 
-      selection = Enum.find(prep.selections, &(&1.from == from and &1.dep == target)) ->
+      selection =
+          Enum.find(
+            prep.selections,
+            &(&1.from == from and &1.dep == target and Map.get(&1, :name) == slot)
+          ) ->
         {:ok, decision_of(selection, {:dep, target})}
 
       is_map(prep.publish_nodes) ->

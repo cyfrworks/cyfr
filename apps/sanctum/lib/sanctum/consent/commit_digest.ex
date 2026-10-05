@@ -57,9 +57,12 @@ defmodule Sanctum.Consent.CommitDigest do
   `until` instant of an `until` binding) and `renew`, whether the person
   renews a consumed `once`. A need may be bound once per name. A
   selection names exactly one of the lender's `label`, an entry or an
-  instance entry, the dependency's `need` an entry is chosen for, and its
-  own lifetime and `renew`. Each is a decision, so two commits differing
-  only by `renew` differ in digest.
+  instance entry, the dependency's `need` an entry is chosen for, the
+  account `name` an entry rides under beside the edge's default (absent
+  for the default), and its own lifetime and `renew`. An edge is selected
+  once per name, a name compared case-folded. Each is a decision, so two
+  commits differing only by `renew`, or by a selection's name, differ in
+  digest.
 
   Explanatory text never enters the digest: a need's reason is prose, so
   rewording it invalidates no consent.
@@ -98,6 +101,7 @@ defmodule Sanctum.Consent.CommitDigest do
           optional(:entry_id) => String.t(),
           optional(:instance_entry_id) => String.t(),
           optional(:need) => String.t(),
+          optional(:name) => String.t() | nil,
           required(:binding_digest) => String.t(),
           optional(:fields) => [String.t()],
           optional(:lifetime) => lifetime(),
@@ -319,9 +323,10 @@ defmodule Sanctum.Consent.CommitDigest do
     end
   end
 
-  # One edge, one selected profile: the digest covers which labelled
-  # profile of which dependency lends its entry to which lender, at which
-  # binding digest, narrowed to which fields.
+  # One edge, one selection per account: the digest covers which labelled
+  # profile of which dependency lends its entry to which lender, or which
+  # entry the edge binds under which name, at which binding digest,
+  # narrowed to which fields.
   defp selections(commit) do
     tag = :invalid_commit
 
@@ -350,14 +355,15 @@ defmodule Sanctum.Consent.CommitDigest do
     with :ok <-
            Normalize.only_keys(
              selection,
-             ~w(from dep label entry_id instance_entry_id need binding_digest fields lifetime
-                renew)a,
+             ~w(from dep label entry_id instance_entry_id need name binding_digest fields
+                lifetime renew)a,
              tag
            ),
          {:ok, from} <- Normalize.required_string(selection, :from, tag),
          {:ok, dep} <- Normalize.required_string(selection, :dep, tag),
          {:ok, lent} <- one_entry(selection, [:label, :entry_id, :instance_entry_id], :selections),
          {:ok, need} <- Normalize.optional_string(selection, :need, tag),
+         {:ok, name} <- Normalize.optional_string(selection, :name, tag),
          {:ok, binding_digest} <- Normalize.required_string(selection, :binding_digest, tag),
          {:ok, fields} <- Normalize.string_set(selection, :fields, tag),
          {:ok, lifetime} <- lifetime(selection),
@@ -371,7 +377,8 @@ defmodule Sanctum.Consent.CommitDigest do
          "lifetime" => lifetime,
          "renew" => renew
        })
-       |> Normalize.put_optional("need", need)}
+       |> Normalize.put_optional("need", need)
+       |> Normalize.put_optional("name", name)}
     end
   end
 
@@ -379,16 +386,25 @@ defmodule Sanctum.Consent.CommitDigest do
     {:error, {:invalid_commit, :selections, "each selection must be a map"}}
   end
 
+  # One edge, one credential per account: the default (no name) and each
+  # named account once, a name a person would read as another (differing
+  # only in case) counted as that name again. Two selections in one slot
+  # would make the digest depend on list order and leave the blob to pick.
   defp ensure_one_selection_per_edge(selections) do
-    sorted = Enum.sort_by(selections, &{&1["from"], &1["dep"]})
-    edges = Enum.map(sorted, &{&1["from"], &1["dep"]})
+    sorted = Enum.sort_by(selections, &{&1["from"], &1["dep"], &1["name"] || ""})
+    slots = Enum.map(sorted, &{&1["from"], &1["dep"], folded(&1["name"])})
 
-    if length(Enum.uniq(edges)) == length(edges) do
+    if length(Enum.uniq(slots)) == length(slots) do
       {:ok, sorted}
     else
-      {:error, {:invalid_commit, :selections, "each from/dep edge may be selected exactly once"}}
+      {:error,
+       {:invalid_commit, :selections,
+        "each from/dep edge may be selected exactly once per account name"}}
     end
   end
+
+  defp folded(nil), do: nil
+  defp folded(name), do: String.downcase(name)
 
   # One need, one credential per name: the default (no name) and each
   # named account once. Two bindings in one slot would make the digest

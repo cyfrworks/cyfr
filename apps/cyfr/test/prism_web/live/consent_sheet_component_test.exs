@@ -874,6 +874,122 @@ defmodule PrismWeb.ConsentSheetComponentTest do
            ]
   end
 
+  test "a named head binding reopens as its own row, its name fixed and its entry pressed, on " <>
+         "the app's own calls and on a dependency's edge; one whose until has passed is no " <>
+         "decision until its lifetime is chosen" do
+    dep = "catalyst:local.sheet-named-db"
+    now = DateTime.utc_now()
+    ahead = now |> DateTime.add(2 * 3600) |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    passed = now |> DateTime.add(-3600) |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    head = fn key, id, lifetime, consumed ->
+      %{binding_key: key, entry_id: id, lifetime: lifetime, consumed: consumed}
+    end
+
+    plan = %{
+      source_ref: @regrant,
+      candidates: [],
+      needs: [
+        key_need(
+          "api_key",
+          "to reach the service",
+          [own("vlt_h", "Held key"), own("vlt_w", "Work key")],
+          suggested: %{entry_id: "vlt_h"}
+        )
+      ],
+      dependency_needs: [
+        %{
+          from: @regrant,
+          dep: dep,
+          candidates: [],
+          needs: [
+            key_need(
+              "db",
+              "to reach the database",
+              [own("vlt_db", "DB key"), own("vlt_dw", "DW key")],
+              suggested: %{entry_id: "vlt_db"}
+            )
+          ]
+        }
+      ],
+      head_bindings: [
+        head.("#{@regrant}|@ingress|default", "vlt_h", %{kind: "standing", until: nil}, false),
+        head.("#{@regrant}|@ingress|name:Work", "vlt_w", %{kind: "once", until: nil}, true),
+        head.("#{@regrant}|#{dep}|default", "vlt_db", %{kind: "standing", until: nil}, false),
+        head.("#{@regrant}|#{dep}|name:Later", "vlt_dw", %{kind: "until", until: ahead}, false),
+        head.("#{@regrant}|#{dep}|name:Gone", "vlt_dw", %{kind: "until", until: passed}, false)
+      ]
+    }
+
+    choices = PrismWeb.ConsentSheetComponent.initial_choices(plan)
+
+    decisions =
+      PrismWeb.ConsentSheetComponent.decisions(@regrant, nil, ["interactive"], %{}, choices)
+
+    assert decisions["bindings"] == [
+             %{"need" => "api_key", "entry_id" => "vlt_h", "lifetime" => %{"kind" => "standing"}},
+             %{
+               "need" => "api_key",
+               "entry_id" => "vlt_w",
+               "name" => "Work",
+               "lifetime" => %{"kind" => "once"}
+             }
+           ]
+
+    # Gone's time has passed: it is no decision until a lifetime is chosen.
+    assert decisions["selections"] == [
+             %{
+               "dep" => dep,
+               "from" => @regrant,
+               "entry_id" => "vlt_db",
+               "lifetime" => %{"kind" => "standing"}
+             },
+             %{
+               "dep" => dep,
+               "from" => @regrant,
+               "entry_id" => "vlt_dw",
+               "name" => "Later",
+               "lifetime" => %{"kind" => "until", "until" => ahead}
+             }
+           ]
+
+    html = sheet(plan, decisions: Map.take(decisions, ["bindings", "selections"]))
+
+    row = fn edge, name ->
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(
+        ~s([data-test="grant-account"][data-edge="#{edge}"][data-account="#{name}"])
+      )
+      |> LazyHTML.to_html()
+    end
+
+    work = row.("@ingress", "Work")
+    assert work =~ ~s(data-test="grant-account-name")
+    refute work =~ ~s(name="name")
+    assert pressed(work, ~s([data-test="grant-account-pick"])) == ["vlt_w"]
+    assert pressed(work, ~s([data-lifetime])) == ["once"]
+    assert work =~ ~s(data-test="grant-renew")
+
+    later = row.(dep, "Later")
+    assert pressed(later, ~s([data-test="grant-account-pick"])) == ["vlt_dw"]
+    assert pressed(later, ~s([data-lifetime])) == ["kept"]
+
+    gone = row.(dep, "Gone")
+    assert pressed(gone, ~s([data-test="grant-account-pick"])) == ["vlt_dw"]
+    assert pressed(gone, ~s([data-lifetime])) == []
+    assert gone =~ "The time this was granted until has passed"
+
+    # Each edge whose default is an entry offers another account.
+    adds =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-test="grant-add-account"]))
+      |> Enum.flat_map(&LazyHTML.attribute(&1, "data-edge"))
+
+    assert Enum.sort(adds) == Enum.sort(["@ingress", dep])
+  end
+
   test "a catalyst asking for other methods offers GET and HEAD only, named by its methods; " <>
          "no control reads \"read only\"" do
     ask = fn node, methods ->

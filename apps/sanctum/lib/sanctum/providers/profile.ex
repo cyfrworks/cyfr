@@ -120,6 +120,11 @@ defmodule Sanctum.Providers.Profile do
                        "The dependency's credential need the entry is for; required when it " <>
                          "declares several, never with a label"
                    ),
+                   Arg.new("name", :string,
+                     description:
+                       "The account name of a named selection beside the edge's default " <>
+                         "entry; it names an entry, never a label; absent for the default"
+                   ),
                    Arg.new("from", :string),
                    Arg.new("fields", {:array, Arg.new(nil, :string)}),
                    lifetime_arg,
@@ -870,7 +875,8 @@ defmodule Sanctum.Providers.Profile do
 
   # A selection names a dependency edge of the closure and what fills it:
   # one of its profiles by label (the default one when it names nothing),
-  # or an entry or instance entry for one of its needs. `from` defaults to
+  # or an entry or instance entry for one of its needs, under an account
+  # name beside the edge's default when it names one. `from` defaults to
   # the source at commit. The fields, when given, narrow what is lent.
   defp decode_selections(list) when is_list(list) do
     decoded =
@@ -880,6 +886,7 @@ defmodule Sanctum.Providers.Profile do
         |> Prima.MapUtil.put_present(:entry_id, selection["entry_id"])
         |> Prima.MapUtil.put_present(:instance_entry_id, selection["instance_entry_id"])
         |> Prima.MapUtil.put_present(:need, selection["need"])
+        |> Prima.MapUtil.put_present(:name, selection["name"])
         |> Prima.MapUtil.put_present(:from, selection["from"])
         |> Prima.MapUtil.put_present(:fields, selection["fields"])
         |> Prima.MapUtil.put_present(:lifetime, decode_lifetime(selection["lifetime"]))

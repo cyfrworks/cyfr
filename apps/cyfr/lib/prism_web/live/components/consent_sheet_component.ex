@@ -48,15 +48,42 @@ defmodule PrismWeb.ConsentSheetComponent do
   whose `until` has passed opens with no lifetime pressed and says why;
   it is no decision until the person chooses one.
 
+  ## Named accounts
+
+  An edge whose default is an entry, the app's own calls or a
+  dependency's, may bind further accounts beside it, each under a name of
+  its own: "Add another account" adds a row with a name to give (an
+  account name, distinct from the edge's others, compared case-folded),
+  the need's candidates with none pressed, and the five lifetimes,
+  standing pressed. A dependency's default a profile lends is first
+  switched to the entry that profile lends, pressed, and the row says it
+  is now chosen here; where the dependency's need for that entry cannot
+  be told, no account is added and the row says why. Each account the
+  head binds reopens as its own row, its name fixed, its entry pressed and
+  its lifetime as a re-grant's is: a `once` stays `once`, an `until` still
+  ahead keeps its time, and one that has passed opens with nothing
+  pressed. "Remove" drops a row. A row whose name is missing, invalid or
+  taken, or with no entry or no lifetime pressed, is no decision, so the
+  grant is narrower than the head, never wider.
+
+  A grant opened for an account (the walk's `account`, which
+  `PrismWeb.SystemLayer.grant_prompt/4` places) opens with that account's
+  row: as held when the head already binds the name, else a new row of
+  that fixed name beside the default as the grant otherwise opens it. An
+  account whose edge or need the plan does not have opens the grant
+  without it, saying why.
+
   ## The decisions
 
   The person's choices are submitted exactly, never as a category
   (`decisions/5`):
 
     * `bindings` — the entry each need of the app is bound to, with its
-      lifetime and `renew`;
+      lifetime and `renew`, and each named account of the app's own calls
+      under its `name`;
     * `selections` — the entry, or the lending profile's label, each
-      dependency's edge takes, with its lifetime and `renew`;
+      dependency's edge takes, with its lifetime and `renew`, and each
+      named account of the edge under its `name`;
     * narrowing, per node, for each kind its enforcement point can check:
       the egress domains, methods, schemes and private ranges and the
       storage actions as exact values, the storage paths through a picker
@@ -121,23 +148,42 @@ defmodule PrismWeb.ConsentSheetComponent do
   @spans %{"5m" => 300, "1h" => 3600}
   @read_methods ~w(GET HEAD)
 
-  @typedoc "A credential slot: one of the app's bindings, or a dependency's edge."
+  @typedoc "An edge a credential rides: the app's own calls for a need, or a dependency's edge."
+  @type edge :: {:need, String.t()} | {:dep, String.t(), String.t()}
+
+  @typedoc """
+  A credential slot: the default of one of the app's needs, the default
+  of a dependency's edge, or a named account on an edge, told apart from
+  the edge's other accounts by its row's reference (`"name:<name>"` for an
+  account the walk already held, `"row:<n>"` for one added here, whose
+  name the person may still change).
+  """
   @type slot ::
-          {:need, String.t(), String.t() | nil} | {:dep, String.t(), String.t()}
+          {:need, String.t(), String.t() | nil}
+          | {:dep, String.t(), String.t()}
+          | {:account, edge(), String.t()}
 
   @typedoc """
   What a slot is bound to: an entry of the athanor (`"own"`), an instance
   entry (`"instance"`) or a lending profile's label (`"label"`); the
   dependency's need it is for, where it must be named; its lifetime as
-  the wire spells it, the person's choice that made it, and `renew`.
+  the wire spells it, the person's choice that made it, and `renew`. A
+  named account also carries its `name`, whether that name is `fixed`,
+  and the order it was added in (`seq`); its entry may not be chosen yet.
+  A default switched from a lending profile names that profile
+  (`lent_by`).
   """
   @type choice :: %{
-          source: String.t(),
-          id: String.t(),
-          need: String.t() | nil,
-          lifetime: map() | nil,
-          choice: String.t() | nil,
-          renew: boolean()
+          required(:source) => String.t() | nil,
+          required(:id) => String.t() | nil,
+          required(:need) => String.t() | nil,
+          required(:lifetime) => map() | nil,
+          required(:choice) => String.t() | nil,
+          required(:renew) => boolean(),
+          optional(:name) => String.t(),
+          optional(:fixed) => boolean(),
+          optional(:seq) => non_neg_integer(),
+          optional(:lent_by) => String.t()
         }
 
   @impl true
@@ -155,6 +201,7 @@ defmodule PrismWeb.ConsentSheetComponent do
        error: nil,
        previewed: nil,
        refusal: nil,
+       account_refusal: nil,
        layer: nil,
        session_end: nil,
        started: false
@@ -224,35 +271,74 @@ defmodule PrismWeb.ConsentSheetComponent do
   # was previewed with, and the session's end.
   defp from_walk(socket, plan, walk) do
     decisions = Map.get(walk, :decisions) || %{}
+    held = Map.get(walk, :held)
+    choices = held_choices(choices_of(decisions, plan), held, plan)
+
+    # The account a grant was opened for is placed once, on the walk the
+    # grant opens with; a walk drawn again holds the sheet's own rows.
+    {choices, account_refusal} =
+      if is_map(held), do: {choices, nil}, else: walk_account(plan, choices, walk)
 
     socket
     |> assign(
       plan: plan,
       preview: Map.get(walk, :preview),
-      choices: held_choices(choices_of(decisions, plan), Map.get(walk, :held), plan),
+      choices: choices,
       origins: origins_of(decisions["origins"], plan),
       subset: subset_of(decisions["subset"]),
       label: label_of(decisions["label"]) || socket.assigns.label,
       session_end: session_end_of(Map.get(walk, :session_expires_at)),
       refusal: suggestion_refusal(Map.get(walk, :suggestion_refused)),
+      account_refusal: account_refusal,
       error: nil
     )
     |> previewed()
+  end
+
+  # The walk's account placed among its choices. The grant previewed its
+  # default already switched from a lending profile, where it was one: that
+  # default is marked as switched, as the person's own adding marks it.
+  defp walk_account(plan, choices, %{account: %{name: _} = account}) do
+    case open_account(plan, choices, account) do
+      {:ok, placed} ->
+        {mark_switched(placed, plan, account), nil}
+
+      {:error, sentence} ->
+        {choices, %{at: :account, message: sentence}}
+    end
+  end
+
+  defp walk_account(_plan, choices, _walk), do: {choices, nil}
+
+  defp mark_switched(choices, plan, account) do
+    with {:ok, initial} <- open_account(plan, initial_choices(plan), account),
+         {slot, %{lent_by: label} = switched} <-
+           Enum.find(initial, fn {_slot, choice} -> Map.has_key?(choice, :lent_by) end),
+         %{source: source, id: id} = held when source == switched.source and id == switched.id <-
+           Map.get(choices, slot) do
+      Map.put(choices, slot, Map.put(held, :lent_by, label))
+    else
+      _not_switched -> choices
+    end
   end
 
   # The choices a walk's decisions hold, as the sheet held them when it
   # last handed the walk on (`held`): a sheet drawn again, as after a
   # credential entry, starts from them, so the lifetime the person pressed
   # for a binding the decisions hold unchanged stays pressed, an until
-  # included, and a binding whose lifetime is yet to be chosen, which no
-  # decision carries, is still offered. A walk the grant opens with holds
+  # included, a binding whose lifetime is yet to be chosen, which no
+  # decision carries, is still offered, and every named account's row is
+  # the sheet's own, complete or not. A walk the grant opens with holds
   # none: its only such bindings are the head's whose time has passed.
   defp held_choices(decided, held, plan) do
-    held = if is_map(held), do: held, else: pending(initial_choices(plan))
+    {base, decided} =
+      if is_map(held),
+        do: {held, Map.reject(decided, fn {slot, _choice} -> account_slot?(slot) end)},
+        else: {pending(initial_choices(plan)), decided}
 
     named =
       Map.new(decided, fn {slot, choice} ->
-        case Map.get(held, slot) do
+        case Map.get(base, slot) do
           %{source: source, id: id, lifetime: lifetime, choice: name}
           when source == choice.source and id == choice.id and lifetime == choice.lifetime ->
             {slot, %{choice | choice: name}}
@@ -262,7 +348,9 @@ defmodule PrismWeb.ConsentSheetComponent do
         end
       end)
 
-    Map.merge(pending(held), named)
+    accounts = if is_map(held), do: Map.filter(held, &account_slot?(elem(&1, 0))), else: %{}
+
+    base |> pending() |> Map.merge(named) |> Map.merge(accounts)
   end
 
   defp pending(choices),
@@ -309,7 +397,8 @@ defmodule PrismWeb.ConsentSheetComponent do
   @doc """
   The choices a grant opens with, by slot. A re-grant never opens wider
   than its head: an edge the head binds (`head_bindings`) reopens on what
-  the head bound there, with its lifetime — a `once` stays `once`, an
+  the head bound there, each named account on its own row under its
+  fixed name, with its lifetime — a `once` stays `once`, an
   `until` still ahead keeps its time, and one that has passed reopens
   with no lifetime (`lifetime: nil`), which no decision carries until the
   person chooses one. A head binding whose need cannot be told (its entry
@@ -384,12 +473,26 @@ defmodule PrismWeb.ConsentSheetComponent do
           into: %{} do
         {lifetime, choice} = head_lifetime(field(head, :lifetime), now)
 
-        {slot,
-         %{source: source, id: id, need: need, lifetime: lifetime, choice: choice, renew: false}}
+        held = %{
+          source: source,
+          id: id,
+          need: need,
+          lifetime: lifetime,
+          choice: choice,
+          renew: false
+        }
+
+        case slot do
+          {:account, _edge, "name:" <> name} -> {slot, fixed_account(held, name)}
+          _default -> {slot, held}
+        end
       end
 
     {held, held_edges}
   end
+
+  # A named account the walk already holds: its name is fixed.
+  defp fixed_account(choice, name), do: Map.merge(choice, %{name: name, fixed: true, seq: 0})
 
   # What a head binding binds, as its `consent_vault_refs` row holds it.
   defp head_identity(head) do
@@ -419,24 +522,30 @@ defmodule PrismWeb.ConsentSheetComponent do
     needs = List.wrap(field(plan, :needs))
 
     case {Enum.filter(needs, &holds?(&1, id)), needs} do
-      {[need], _needs} -> {{:need, field(need, :need), name}, nil}
-      {_none_or_several, [only]} -> {{:need, field(only, :need), name}, nil}
+      {[need], _needs} -> {named_slot({:need, field(need, :need)}, name), nil}
+      {_none_or_several, [only]} -> {named_slot({:need, field(only, :need)}, name), nil}
       _unknown -> nil
     end
   end
 
-  defp head_slot(plan, _source_ref, {node, edge, nil}, identity) when edge != "@ingress" do
+  defp head_slot(plan, _source_ref, {node, edge, name}, {source, _id} = identity)
+       when edge != "@ingress" and (is_nil(name) or source != "label") do
     with dep when is_binary(dep) <- edge_dep(edge),
          %{} = row <- dep_row(plan, node, dep),
          false <- provided_edge?(row),
          {:ok, need} <- edge_need(row_needs(row), edge, identity) do
-      {{:dep, node, dep}, need}
+      {named_slot({:dep, node, dep}, name), need}
     else
       _elsewhere -> nil
     end
   end
 
   defp head_slot(_plan, _source_ref, _key, _identity), do: nil
+
+  # The slot of an edge's default (no name), or of the account it names.
+  defp named_slot({:need, need}, nil), do: {:need, need, nil}
+  defp named_slot({:dep, node, dep}, nil), do: {:dep, node, dep}
+  defp named_slot(edge, name), do: {:account, edge, "name:" <> name}
 
   # The dependency's need a head binding on its edge is for: none to name
   # where the dependency declares one need or a profile lends; else the
@@ -488,24 +597,96 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   @doc """
   The decisions payload of a walk: the ref, the app's bindings and the
-  dependencies' selections with their entries, lifetimes and `renew`, the
+  dependencies' selections with their entries, lifetimes and `renew`, each
+  edge's default first and then its named accounts under their names, the
   origins, and the label and narrowing when there are any, as
   `profile.preview` and `profile.commit` take them.
   """
   @spec decisions(String.t(), String.t() | nil, [String.t()], map(), %{slot() => choice()}) ::
           map()
   def decisions(ref, label, origins, subset, choices) do
-    # A binding whose lifetime the person has yet to choose is no decision.
+    # A binding whose lifetime the person has yet to choose is no decision,
+    # nor an account with no entry chosen or no name it can carry.
     sorted =
-      choices |> Enum.filter(fn {_slot, choice} -> is_map(choice.lifetime) end) |> Enum.sort()
+      choices
+      |> Enum.filter(fn {slot, choice} -> decided?(slot, choice, choices) end)
+      |> Enum.sort()
 
-    bindings = for {{:need, need, name}, choice} <- sorted, do: binding(need, name, choice)
-    selections = for {{:dep, from, dep}, choice} <- sorted, do: selection(from, dep, choice)
+    accounts =
+      Enum.sort_by(for({{:account, _, _}, _} = held <- sorted, do: held), &account_order/1)
+
+    bindings =
+      for({{:need, need, name}, choice} <- sorted, do: binding(need, name, choice)) ++
+        for {{:account, {:need, need}, _ref}, choice} <- accounts,
+            do: binding(need, choice.name, choice)
+
+    selections =
+      for({{:dep, from, dep}, choice} <- sorted, do: selection(from, dep, choice)) ++
+        for {{:account, {:dep, from, dep}, _ref}, choice} <- accounts,
+            do: Map.put(selection(from, dep, choice), "name", choice.name)
 
     %{"ref" => ref, "bindings" => bindings, "origins" => origins}
     |> then(&if selections == [], do: &1, else: Map.put(&1, "selections", selections))
     |> Prima.MapUtil.put_present("label", label)
     |> then(&if subset == %{}, do: &1, else: Map.put(&1, "subset", subset))
+  end
+
+  # Whether a choice is sent: a binding with a lifetime, and an account
+  # with its entry, its lifetime and a name it can carry.
+  defp decided?({:account, _edge, _ref} = slot, choice, choices) do
+    is_map(choice.lifetime) and choice.source in ["own", "instance"] and is_binary(choice.id) and
+      is_nil(account_problem(slot, choices))
+  end
+
+  defp decided?(_slot, choice, _choices), do: is_map(choice.lifetime)
+
+  # The order accounts are sent in: by edge, then by name.
+  defp account_order({{:account, edge, _ref}, choice}), do: {edge, choice.name}
+
+  # The order an edge's accounts are drawn and judged in: those the walk
+  # held first, then each as it was added.
+  defp row_order({{:account, _edge, ref}, choice}),
+    do: {if(Map.get(choice, :fixed), do: 0, else: 1), Map.get(choice, :seq, 0), ref}
+
+  defp account_slot?({:account, _edge, _ref}), do: true
+  defp account_slot?(_slot), do: false
+
+  # The accounts on `edge`, in their rows' order.
+  defp accounts_on(choices, edge) do
+    choices
+    |> Enum.filter(&match?({{:account, ^edge, _ref}, _choice}, &1))
+    |> Enum.sort_by(&row_order/1)
+  end
+
+  # Why an account's name keeps its row out of the grant, or nil: a name
+  # to give, one the binding key can carry, and one no earlier row of its
+  # edge holds, compared case-folded as the home compares them.
+  defp account_problem({:account, edge, _ref} = slot, choices) do
+    name = Map.fetch!(choices, slot).name
+
+    cond do
+      name == "" ->
+        "Name this account to grant it."
+
+      not Prima.Authority.Blob.valid_account_name?(name) ->
+        "An account's name is 1 to 128 bytes of text without a | or a control character."
+
+      earlier = earlier_namesake(slot, name, accounts_on(choices, edge)) ->
+        "Another account on this edge is named #{earlier}; each names its own."
+
+      true ->
+        nil
+    end
+  end
+
+  defp earlier_namesake(slot, name, rows) do
+    folded = String.downcase(name)
+
+    rows
+    |> Enum.take_while(fn {other, _choice} -> other != slot end)
+    |> Enum.find_value(fn {_other, choice} ->
+      if String.downcase(choice.name) == folded, do: choice.name
+    end)
   end
 
   @doc """
@@ -514,14 +695,14 @@ defmodule PrismWeb.ConsentSheetComponent do
   (`return: %{from, dep, need}`), bound there standing: the need's
   default binding, the app's bindings of any other need dropped (the
   app's own calls carry one need's credentials), or the dependency's
-  edge.
+  edge's default, its named accounts kept.
   """
   @spec bind_entered(map(), map(), String.t()) :: map()
   def bind_entered(%{} = decisions, %{dep: dep, from: from} = return, entry_id) do
     kept =
       decisions
       |> Map.get("selections", [])
-      |> Enum.reject(&(&1["dep"] == dep and (&1["from"] || from) == from))
+      |> Enum.reject(&(&1["dep"] == dep and (&1["from"] || from) == from and is_nil(&1["name"])))
 
     selection =
       selection(from, dep, %{
@@ -594,7 +775,8 @@ defmodule PrismWeb.ConsentSheetComponent do
     }
   end
 
-  # The choices a walk's decisions hold, by slot.
+  # The choices a walk's decisions hold, by slot, each named account on
+  # its own row under its fixed name.
   defp choices_of(decisions, plan) do
     source_ref = field(plan, :source_ref)
 
@@ -602,13 +784,23 @@ defmodule PrismWeb.ConsentSheetComponent do
       for %{"need" => need} = item <- List.wrap(decisions["bindings"]),
           {source, id} <- [held_id(item)],
           into: %{},
-          do: {{:need, need, item["name"]}, held_choice(item, source, id, nil)}
+          do: held_slot({:need, need}, item, held_choice(item, source, id, nil))
 
     for %{"dep" => dep} = item <- List.wrap(decisions["selections"]),
         {source, id} <- [held_id(item) || {"label", "default"}],
         into: bindings,
-        do: {{:dep, item["from"] || source_ref, dep}, held_choice(item, source, id, item["need"])}
+        do:
+          held_slot(
+            {:dep, item["from"] || source_ref, dep},
+            item,
+            held_choice(item, source, id, item["need"])
+          )
   end
+
+  defp held_slot(edge, %{"name" => name}, choice) when is_binary(name),
+    do: {named_slot(edge, name), fixed_account(choice, name)}
+
+  defp held_slot(edge, _item, choice), do: {named_slot(edge, nil), choice}
 
   defp held_id(%{"entry_id" => id}) when is_binary(id), do: {"own", id}
   defp held_id(%{"instance_entry_id" => id}) when is_binary(id), do: {"instance", id}
@@ -643,6 +835,12 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp slot_token({:need, need, name}), do: Jason.encode!(["need", need, name])
   defp slot_token({:dep, from, dep}), do: Jason.encode!(["dep", from, dep])
 
+  defp slot_token({:account, {:need, need}, ref}),
+    do: Jason.encode!(["account", "need", need, nil, ref])
+
+  defp slot_token({:account, {:dep, from, dep}, ref}),
+    do: Jason.encode!(["account", "dep", from, dep, ref])
+
   defp slot_of(token) when is_binary(token) do
     case Jason.decode(token) do
       {:ok, ["need", need, name]} when is_binary(need) and (is_binary(name) or is_nil(name)) ->
@@ -650,6 +848,13 @@ defmodule PrismWeb.ConsentSheetComponent do
 
       {:ok, ["dep", from, dep]} when is_binary(from) and is_binary(dep) ->
         {:ok, {:dep, from, dep}}
+
+      {:ok, ["account", "need", need, nil, ref]} when is_binary(need) and is_binary(ref) ->
+        {:ok, {:account, {:need, need}, ref}}
+
+      {:ok, ["account", "dep", from, dep, ref]}
+      when is_binary(from) and is_binary(dep) and is_binary(ref) ->
+        {:ok, {:account, {:dep, from, dep}, ref}}
 
       _other ->
         :error
@@ -768,6 +973,87 @@ defmodule PrismWeb.ConsentSheetComponent do
          |> walk_again({:lifetime, slot})}
       else
         _not_held -> {:noreply, socket}
+      end
+    end)
+  end
+
+  # "Add another account" beside an edge's default: a row of its own, with
+  # a name to give, no entry pressed and standing pressed, which is no
+  # decision until it is whole. A default a profile lends is first
+  # switched to the entry that profile lends; where that cannot be done
+  # the row says why and nothing is added.
+  def handle_event("add_account", %{"slot" => token}, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      with {:ok, slot} <- slot_of(token),
+           {:ok, edge} <- default_edge(slot) do
+        case account_default(socket.assigns.plan, socket.assigns.choices, edge) do
+          {:ok, choices, need} ->
+            ref = "row:" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
+            seq = System.unique_integer([:positive, :monotonic])
+            account = Map.merge(new_choice(nil, nil, need), %{name: "", fixed: false, seq: seq})
+
+            {:noreply,
+             socket
+             |> assign(:choices, Map.put(choices, {:account, edge, ref}, account))
+             |> walk_again({:add_account, edge})}
+
+          {:error, sentence} ->
+            {:noreply, refuse(socket, {:add_account, edge}, sentence)}
+        end
+      else
+        _not_an_edge -> {:noreply, socket}
+      end
+    end)
+  end
+
+  # The name an added account rides under, as the person types it; the
+  # name of an account the walk already held is fixed.
+  def handle_event("name_account", %{"slot" => token, "name" => name}, socket)
+      when is_binary(name) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      with {:ok, {:account, _edge, _ref} = slot} <- slot_of(token),
+           %{fixed: false} = held <- Map.get(socket.assigns.choices, slot) do
+        {:noreply,
+         socket
+         |> assign(:choices, Map.put(socket.assigns.choices, slot, %{held | name: name}))
+         |> walk_again({:lifetime, slot})}
+      else
+        _not_named_here -> {:noreply, socket}
+      end
+    end)
+  end
+
+  # The entry an account binds: one of its need's candidates.
+  def handle_event("pick_account", %{"slot" => token} = params, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      with {:ok, {:account, _edge, _ref} = slot} <- slot_of(token),
+           %{} = held <- Map.get(socket.assigns.choices, slot),
+           {:ok, source, id} when source in ["own", "instance"] <- picked(params),
+           true <- {source, id} in candidate_picks(account_need(socket.assigns.plan, slot, held)) do
+        {:noreply,
+         socket
+         |> assign(
+           :choices,
+           Map.put(socket.assigns.choices, slot, %{held | source: source, id: id, renew: false})
+         )
+         |> walk_again({:lifetime, slot})}
+      else
+        _not_offered -> {:noreply, socket}
+      end
+    end)
+  end
+
+  def handle_event("remove_account", %{"slot" => token}, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case slot_of(token) do
+        {:ok, {:account, edge, _ref} = slot} ->
+          {:noreply,
+           socket
+           |> assign(:choices, Map.delete(socket.assigns.choices, slot))
+           |> walk_again({:add_account, edge})}
+
+        _other ->
+          {:noreply, socket}
       end
     end)
   end
@@ -953,6 +1239,226 @@ defmodule PrismWeb.ConsentSheetComponent do
         {:noreply, socket |> assign(picker: nil, subset: subset) |> walk_again({"storage", node})}
       else
         {:noreply, socket}
+      end
+    end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Named accounts
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  `choices` with the named account `account` placed
+  (`%{name, dep, from, need}`, as `PrismWeb.SystemLayer.grant_prompt/4`
+  passes it: `dep` nil for the app's own calls, `from` nil for the
+  grant's source, `need` nil for the edge's one credential need): as held
+  when its edge already holds an account of that name, compared
+  case-folded; otherwise a new row of that fixed name, no entry pressed
+  and standing pressed, beside the edge's default as the grant otherwise
+  opens it, a default a profile lends first switched to the entry it
+  lends. `{:error, sentence}` when the plan has no edge or need for it,
+  or the lent default cannot be switched.
+  """
+  @spec open_account(map(), %{slot() => choice()}, map()) ::
+          {:ok, %{slot() => choice()}} | {:error, String.t()}
+  def open_account(plan, choices, %{name: name} = account) when is_binary(name) do
+    with {:ok, edge, need} <- account_edge(plan, account),
+         {:ok, choices, _default_need} <- account_default(plan, choices, edge) do
+      folded = String.downcase(name)
+
+      if Enum.any?(accounts_on(choices, edge), &(String.downcase(elem(&1, 1).name) == folded)),
+        do: {:ok, choices},
+        else:
+          {:ok,
+           Map.put(
+             choices,
+             named_slot(edge, name),
+             fixed_account(new_choice(nil, nil, need), name)
+           )}
+    end
+  end
+
+  # The edge and need a named account sits on, as the plan has them.
+  defp account_edge(plan, %{name: name, dep: nil} = account) do
+    source = field(plan, :source_ref)
+    needs = plan |> field(:needs) |> List.wrap() |> Enum.filter(&declared?/1)
+
+    case {Map.get(account, :need), needs} do
+      {nil, [one]} ->
+        {:ok, {:need, field(one, :need)}, nil}
+
+      {nil, []} ->
+        no_place(name, "#{source}'s own calls take no credential")
+
+      {nil, _several} ->
+        no_place(
+          name,
+          "#{source}'s own calls declare several credential needs, and it names none of them"
+        )
+
+      {need, needs} ->
+        if Enum.any?(needs, &(field(&1, :need) == need)),
+          do: {:ok, {:need, need}, nil},
+          else: no_place(name, "#{source} declares no credential need #{need}")
+    end
+  end
+
+  defp account_edge(plan, %{name: name, dep: dep} = account) when is_binary(dep) do
+    from = Map.get(account, :from) || field(plan, :source_ref)
+
+    case dep_row(plan, from, dep) do
+      nil ->
+        no_place(name, "#{dep} is no dependency #{from} calls in this grant")
+
+      row ->
+        needs = row_needs(row)
+        need = Map.get(account, :need)
+
+        cond do
+          provided_edge?(row) ->
+            no_place(name, "this app provides #{dep}'s credential")
+
+          is_binary(need) and not Enum.any?(needs, &(field(&1, :need) == need)) ->
+            no_place(name, "#{dep} declares no credential need #{need}")
+
+          is_binary(need) ->
+            {:ok, {:dep, from, dep}, if(length(needs) > 1, do: need)}
+
+          length(needs) == 1 ->
+            {:ok, {:dep, from, dep}, nil}
+
+          true ->
+            no_place(name, "#{dep} declares several credential needs, and it names none of them")
+        end
+    end
+  end
+
+  defp account_edge(_plan, %{name: name}), do: no_place(name, "it names no edge of this grant")
+
+  defp no_place(name, why),
+    do: {:error, "The account #{name} is not added to this grant: #{why}."}
+
+  # The default an account sits beside: the app's need's, as it stands; a
+  # dependency's, which a profile lending its key is first switched to the
+  # entry that profile lends, since an account sits beside an entry
+  # chosen here. Answers the choices and the default's need.
+  defp account_default(_plan, choices, {:need, _need}), do: {:ok, choices, nil}
+
+  defp account_default(plan, choices, {:dep, from, dep}) do
+    slot = {:dep, from, dep}
+
+    case Map.get(choices, slot) do
+      %{source: "label", id: label} = default ->
+        with {:ok, source, id, need} <- switch_lent(dep_row(plan, from, dep), dep, label) do
+          switched =
+            %{default | source: source, id: id, need: need, renew: false}
+            |> Map.put(:lent_by, label)
+
+          {:ok, Map.put(choices, slot, switched), need}
+        end
+
+      %{need: need} ->
+        {:ok, choices, need}
+
+      nil ->
+        {:ok, choices, nil}
+    end
+  end
+
+  # The entry the `label` profile lends, as the plan's lender candidate
+  # names it, and the dependency's need it fills: none to name where the
+  # dependency declares one need, else the one need whose candidates hold
+  # it.
+  defp switch_lent(row, dep, label) do
+    lender =
+      row |> field(:candidates) |> List.wrap() |> Enum.find(&(field(&1, :label) == label))
+
+    with %{} <- lender,
+         id when is_binary(id) <- field(lender, :entry_id),
+         source when source in ["own", "instance"] <- field(lender, :source) do
+      case {row_needs(row), Enum.filter(row_needs(row), &holds?(&1, id))} do
+        {[_one], _holding} ->
+          {:ok, source, id, nil}
+
+        {_several, [need]} ->
+          {:ok, source, id, field(need, :need)}
+
+        _cannot_tell ->
+          {:error,
+           "No account is added: none of #{dep}'s needs can be told for the key its #{label} " <>
+             "profile lends, which an account would sit beside."}
+      end
+    else
+      _unread ->
+        {:error,
+         "No account is added: the key #{dep}'s #{label} profile lends cannot be read here, and " <>
+           "an account sits beside a key chosen here."}
+    end
+  end
+
+  # The edge a default's slot sits on.
+  defp default_edge({:need, need, nil}), do: {:ok, {:need, need}}
+  defp default_edge({:dep, from, dep}), do: {:ok, {:dep, from, dep}}
+  defp default_edge(_slot), do: :error
+
+  # The need an account's entry meets: the app's need its edge names, or
+  # the dependency's, the one it names where there are several.
+  defp account_need(plan, {:account, {:need, need}, _ref}, _held),
+    do: slot_need(plan, {:need, need, nil}, need)
+
+  defp account_need(plan, {:account, {:dep, from, dep}, _ref}, held) do
+    with %{} = row <- dep_row(plan, from, dep) do
+      case row_needs(row) do
+        [one] -> one
+        needs -> Enum.find(needs, &(field(&1, :need) == held.need))
+      end
+    end
+  end
+
+  defp candidate_picks(nil), do: []
+
+  defp candidate_picks(need),
+    do: need |> candidates_of() |> Enum.map(&candidate_pick/1) |> Enum.reject(&is_nil/1)
+
+  # The accounts a need's row draws, each with what its row shows: its
+  # control's token, the entry pressed, why it is no decision yet, and
+  # whether the head's `once` of it was used.
+  defp account_rows(plan, choices, edge, keep) do
+    for {slot, choice} <- accounts_on(choices, edge), keep.(choice) do
+      %{
+        slot: slot,
+        token: slot_token(slot),
+        choice: choice,
+        pick: if(is_binary(choice.id), do: {choice.source, choice.id}),
+        why: account_problem(slot, choices),
+        renewable?: plan |> account_head(edge, choice.name) |> once_used?()
+      }
+    end
+  end
+
+  # The accounts a dependency's need draws: all of the edge's when the
+  # dependency declares one need; else those for this need, and the first
+  # need draws any that names none.
+  defp dep_accounts(plan, choices, row, need, index) do
+    several? = length(row_needs(row)) > 1
+
+    account_rows(plan, choices, {:dep, row.from, row.dep}, fn choice ->
+      not several? or choice.need == field(need, :need) or (is_nil(choice.need) and index == 0)
+    end)
+  end
+
+  # The head's binding of the account `name` on `edge`.
+  defp account_head(plan, edge, name) do
+    source_ref = field(plan, :source_ref)
+
+    plan
+    |> field(:head_bindings)
+    |> List.wrap()
+    |> Enum.find(fn head ->
+      case {edge, Prima.Authority.Blob.parse_binding_key(field(head, :binding_key))} do
+        {{:need, _need}, {:ok, {^source_ref, "@ingress", ^name}}} -> true
+        {{:dep, from, dep}, {:ok, {node, key, ^name}}} -> node == from and edge_dep(key) == dep
+        _other -> false
       end
     end)
   end
@@ -1517,6 +2023,7 @@ defmodule PrismWeb.ConsentSheetComponent do
         <section class="consent-sheet__needs space-y-2" data-test="grant-needs">
           <h4 class="font-medium">Vault entries</h4>
           <.refusal refusal={@refusal} at={:suggestion} />
+          <.refusal refusal={@account_refusal} at={:account} />
           <p :if={asks_no_credentials?(@plan)} class="consent-sheet__empty">
             This app asks for no credentials.
           </p>
@@ -1531,6 +2038,9 @@ defmodule PrismWeb.ConsentSheetComponent do
             opened={MapSet.member?(@opened, {:need, need.need, nil})}
             several={false}
             lenders={[]}
+            edge={{:need, need.need}}
+            edge_label="@ingress"
+            accounts={account_rows(@plan, @choices, {:need, need.need}, fn _ -> true end)}
             plan={@plan}
             myself={@myself}
             athanor_route={assigns[:athanor_route]}
@@ -1556,6 +2066,9 @@ defmodule PrismWeb.ConsentSheetComponent do
               opened={MapSet.member?(@opened, {:dep, row.from, row.dep})}
               several={length(row.needs) > 1}
               lenders={if index == 0, do: List.wrap(row[:candidates]), else: []}
+              edge={{:dep, row.from, row.dep}}
+              edge_label={row.dep}
+              accounts={dep_accounts(@plan, @choices, row, need, index)}
               plan={@plan}
               myself={@myself}
               athanor_route={assigns[:athanor_route]}
@@ -1678,6 +2191,9 @@ defmodule PrismWeb.ConsentSheetComponent do
   attr :opened, :boolean, default: false
   attr :several, :boolean, default: false
   attr :lenders, :list, default: []
+  attr :edge, :any, required: true
+  attr :edge_label, :string, required: true
+  attr :accounts, :list, default: []
   attr :plan, :map, required: true
   attr :myself, :any, required: true
   attr :athanor_route, :any, default: nil
@@ -1688,7 +2204,9 @@ defmodule PrismWeb.ConsentSheetComponent do
   # One credential need and what can meet it. The chosen entry is the
   # pressed choice; the others open on "Change", or unasked where the plan
   # says a choice is required. A need the publisher's configuration fills
-  # takes no choice at all.
+  # takes no choice at all. Beneath it, each named account of its edge, and
+  # "Add another account" where its default is an entry, or a key a
+  # profile lends, which adding one switches to that entry.
   defp need(assigns) do
     need = assigns.need
     candidates = candidates_of(need)
@@ -1696,6 +2214,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     suggestion = suggested_pick(need)
     lender = chosen_lender(assigns.choice)
     open? = assigns.opened or (field(need, :choice_required) == true and is_nil(assigns.choice))
+    provided? = field(need, :source) == "provided"
 
     shown =
       cond do
@@ -1715,7 +2234,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
     assigns =
       assign(assigns,
-        provided?: field(need, :source) == "provided",
+        provided?: provided?,
         candidates: candidates,
         shown: shown,
         lenders_shown: lenders_shown,
@@ -1724,7 +2243,11 @@ defmodule PrismWeb.ConsentSheetComponent do
         changeable?: not open? and options > length(shown) + length(lenders_shown),
         nothing?: candidates == [] and assigns.lenders == [],
         token: slot_token(assigns.slot_key),
-        events: slot_events(assigns.slot_key)
+        events: slot_events(assigns.slot_key),
+        addable?:
+          not provided? and declared?(need) and
+            (chosen != nil or (lender != nil and assigns.lenders != [])),
+        lent_by: if(chosen != nil, do: lent_by(assigns.choice))
       )
 
     ~H"""
@@ -1879,9 +2402,125 @@ defmodule PrismWeb.ConsentSheetComponent do
       </div>
 
       <.refusal refusal={@refusal} at={slot_refusal(@slot_key)} />
+
+      <p :if={@lent_by} class="consent-sheet__note" data-test="grant-lent-switched">
+        The default is now chosen here, not lent by {@lent_by}.
+      </p>
+
+      <div
+        :for={account <- @accounts}
+        class="consent-sheet__account space-y-1"
+        data-test="grant-account"
+        data-edge={@edge_label}
+        data-account={account.choice.name}
+      >
+        <span :if={account.choice.fixed} class="font-medium" data-test="grant-account-name">
+          {account.choice.name}
+        </span>
+        <form
+          :if={!account.choice.fixed}
+          phx-change="name_account"
+          phx-submit="name_account"
+          phx-target={@myself}
+          class="consent-sheet__account-name"
+        >
+          <input type="hidden" name="slot" value={account.token} />
+          <label class="text-xs">
+            Account name
+            <input
+              type="text"
+              name="name"
+              value={account.choice.name}
+              phx-debounce="300"
+              data-test="grant-account-name"
+              class="bg-transparent"
+            />
+          </label>
+        </form>
+        <p :if={account.why} class="consent-sheet__why" data-test="grant-account-why">
+          {account.why}
+        </p>
+
+        <div class="consent-sheet__choices flex flex-wrap gap-2">
+          <button
+            :for={candidate <- @candidates}
+            type="button"
+            phx-click="pick_account"
+            phx-target={@myself}
+            phx-value-slot={account.token}
+            {pick_values(candidate)}
+            aria-pressed={to_string(candidate_pick(candidate) == account.pick)}
+            data-test="grant-account-pick"
+            class={choice_class(candidate_pick(candidate) == account.pick)}
+          >
+            {candidate.name}
+            <span class="consent-sheet__fields">{candidate_words(candidate)}</span>
+          </button>
+        </div>
+
+        <div
+          class="consent-sheet__lifetime flex flex-wrap items-center gap-2"
+          data-test="grant-account-lifetime"
+        >
+          <span :if={is_nil(account.choice.lifetime)} class="text-xs text-gray-400">
+            The time this was granted until has passed. Choose how long it lives:
+          </span>
+          <span :if={is_map(account.choice.lifetime)} class="text-xs text-gray-400">
+            How long it lives:
+          </span>
+          <.lifetime_buttons
+            choice={account.choice}
+            token={account.token}
+            session_end={@session_end}
+            now={@now}
+            myself={@myself}
+          />
+          <button
+            :if={account.renewable?}
+            type="button"
+            phx-click="renew"
+            phx-target={@myself}
+            phx-value-slot={account.token}
+            aria-pressed={to_string(account.choice.renew)}
+            data-test="grant-renew"
+            class={choice_class(account.choice.renew)}
+          >
+            Grant once again
+          </button>
+        </div>
+
+        <button
+          type="button"
+          phx-click="remove_account"
+          phx-target={@myself}
+          phx-value-slot={account.token}
+          data-test="grant-account-remove"
+          class="consent-sheet__choice"
+        >
+          Remove
+        </button>
+        <.refusal refusal={@refusal} at={{:lifetime, account.slot}} />
+      </div>
+
+      <button
+        :if={@addable?}
+        type="button"
+        phx-click="add_account"
+        phx-target={@myself}
+        phx-value-slot={@token}
+        data-test="grant-add-account"
+        data-edge={@edge_label}
+        class="consent-sheet__choice"
+      >
+        Add another account
+      </button>
+      <.refusal refusal={@refusal} at={{:add_account, @edge}} />
     </div>
     """
   end
+
+  defp lent_by(%{lent_by: label}) when is_binary(label), do: label
+  defp lent_by(_choice), do: nil
 
   defp slot_events({:need, _need, _name}),
     do: %{pick: "pick_entry", clear: "clear_entry", values: %{}}
@@ -2230,15 +2869,19 @@ defmodule PrismWeb.ConsentSheetComponent do
     """
   end
 
-  # The slot a previewed credential row binds: the app's binding of that
-  # account on its own calls, or the dependency's edge it rides.
+  # The slot a previewed credential row binds: the default of the app's own
+  # calls, or of the dependency's edge it rides. A named account's row is
+  # chosen on its own row among the needs, so its preview row offers no
+  # second control.
+  defp row_slot(%{"kind" => "credential", "values" => %{"connection" => name}}, _choices)
+       when is_binary(name),
+       do: nil
+
   defp row_slot(%{"kind" => "credential", "node" => node, "values" => values}, choices) do
     case values["edge"] do
       "@ingress" ->
-        name = values["connection"]
-
         Enum.find_value(choices, fn
-          {{:need, _need, ^name} = slot, _choice} -> slot
+          {{:need, _need, nil} = slot, _choice} -> slot
           _other -> nil
         end)
 

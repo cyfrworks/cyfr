@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/ops"
@@ -23,13 +24,15 @@ import (
 
 func init() {
 	profileGrantCmd.Flags().StringSlice("entry", nil,
-		"Bind a need of the app: need=id[:lifetime] (repeatable). An id beginning ine_ is an "+
-			"instance entry, any other an entry of the athanor; the lifetime is standing (the "+
-			"default), 5m, 1h, session or once")
+		"Bind a need of the app: need[|account]=id[:lifetime] (repeatable). An id beginning "+
+			"ine_ is an instance entry, any other an entry of the athanor; |account names an "+
+			"account beside the need's default; the lifetime is standing (the default), 5m, 1h, "+
+			"session or once")
 	profileGrantCmd.Flags().StringSlice("selection", nil,
-		"Fill a dependency's credential: dep=id[:lifetime] (repeatable). An id beginning vlt_ "+
-			"or ine_ names an entry, anything else the label of the dependency's profile that "+
-			"lends its key; the lifetime is as --entry's")
+		"Fill a dependency's credential: dep[|account]=id[:lifetime] (repeatable). An id "+
+			"beginning vlt_ or ine_ names an entry, anything else the label of the dependency's "+
+			"profile that lends its key; |account names an account beside the edge's default, "+
+			"which names an entry; the lifetime is as --entry's")
 	profileGrantCmd.Flags().Bool("get-head-only", false,
 		"Narrow each catalyst whose network ask names other methods to its GET and HEAD")
 	profileGrantCmd.Flags().StringSlice("origin", nil,
@@ -128,9 +131,11 @@ var profileGrantCmd = &cobra.Command{
 		"when named. Where several entries can meet a required need and none is suggested, " +
 		"an interactive grant asks and a non-interactive one is refused until the need is " +
 		"named. A binding stands until revoked unless its flag names 5m, 1h, " +
-		sessionLifetimeHelp + " or once (one run). A re-grant keeps each binding the grant " +
-		"holds, its entry and its lifetime, unless a flag names another; one whose time " +
-		"has passed is asked for again, and refused without a terminal until a flag names it.\n\n" +
+		sessionLifetimeHelp + " or once (one run). A flag naming need|account or " +
+		"dep|account binds a named account beside that edge's default, an entry, and names " +
+		"that account's slot alone. A re-grant keeps each binding the grant holds, its entry " +
+		"and its lifetime, unless a flag names its slot; one whose time has passed is asked " +
+		"for again, and refused without a terminal until a flag names it.\n\n" +
 		"The grant admits the runs --origin names. With no --origin, a first grant " +
 		"admits interactive alone and a re-grant keeps the origins the grant " +
 		"already admits, so an agent, a script, a schedule or a webhook runs the " +
@@ -139,11 +144,22 @@ var profileGrantCmd = &cobra.Command{
   cyfr profile grant f:local.daily-report --entry @ingress=vlt_abc123
   cyfr profile grant c:local.model --entry api_key=ine_abc123:1h
   cyfr profile grant f:local.report --selection reagent:local.db=vlt_def456:once
+  cyfr profile grant f:local.report --selection 'reagent:local.db|Supabase 2=vlt_def789'
   cyfr profile grant f:local.daily-report --origin interactive --origin schedule`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 		ref := args[0]
+
+		entries, _ := cmd.Flags().GetStringSlice("entry")
+		selections, _ := cmd.Flags().GetStringSlice("selection")
+		getHeadOnly, _ := cmd.Flags().GetBool("get-head-only")
+
+		// A flag the walk could never send is refused before anything is
+		// asked of the home.
+		if err := checkSlotFlags(entries, selections); err != nil {
+			return err
+		}
 
 		plan, err := client.CallTool(cmd.Context(), ops.Profile, ops.ProfilePlanArgs{Ref: ref})
 		if err != nil {
@@ -166,10 +182,6 @@ var profileGrantCmd = &cobra.Command{
 		if !flagJSON {
 			renderPlanNeeds(os.Stdout, plan)
 		}
-
-		entries, _ := cmd.Flags().GetStringSlice("entry")
-		selections, _ := cmd.Flags().GetStringSlice("selection")
-		getHeadOnly, _ := cmd.Flags().GetBool("get-head-only")
 
 		// The session's end is read once, and only when a binding asks to
 		// live as long as the session.
@@ -352,6 +364,84 @@ func sessionEndOf(who map[string]any) (time.Time, bool, error) {
 		return time.Time{}, false, fmt.Errorf("the home answered an unreadable session end %q", raw)
 	}
 	return end, true, nil
+}
+
+// slotFlag is one --entry or --selection: the need or the dependency it
+// names, the account it names beside that edge's default ("" for the
+// default itself), the id or label it binds and the lifetime choice.
+type slotFlag struct {
+	target  string
+	account string
+	value   string
+	choice  string
+}
+
+// parseSlotFlag reads target[|account]=value[:lifetime]. The value is what
+// follows the last =, so an account name may hold = and :; the account is
+// what follows the target's first |, which no account name holds. A named
+// account names an entry, never a lender's label.
+func parseSlotFlag(flag, pair string) (slotFlag, error) {
+	what := "need"
+	if flag == "--selection" {
+		what = "dep"
+	}
+	at := strings.LastIndex(pair, "=")
+	if at < 0 {
+		return slotFlag{}, fmt.Errorf("%s expects %s[|account]=id[:lifetime], got %q", flag, what, pair)
+	}
+	target, account, named := strings.Cut(pair[:at], "|")
+	if target == "" || pair[at+1:] == "" {
+		return slotFlag{}, fmt.Errorf("%s expects %s[|account]=id[:lifetime], got %q", flag, what, pair)
+	}
+	if named && !validAccountName(account) {
+		return slotFlag{}, fmt.Errorf("%s %q names the account %q, which is not 1 to 128 bytes of "+
+			"text without a | or a control character", flag, pair, account)
+	}
+	value, choice, err := splitLifetime(flag, pair[at+1:])
+	if err != nil {
+		return slotFlag{}, err
+	}
+	if named && flag == "--selection" && selectionChoice(value).label {
+		return slotFlag{}, fmt.Errorf("%s %q names the account %s by a profile's label; a named "+
+			"account names an entry, an id beginning vlt_ or ine_", flag, pair, account)
+	}
+	return slotFlag{target: target, account: account, value: value, choice: choice}, nil
+}
+
+// checkSlotFlags refuses any --entry or --selection the walk could never
+// send, before anything is asked of the home.
+func checkSlotFlags(entries, selections []string) error {
+	for _, pair := range entries {
+		if _, err := parseSlotFlag("--entry", pair); err != nil {
+			return err
+		}
+	}
+	for _, pair := range selections {
+		if _, err := parseSlotFlag("--selection", pair); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validAccountName is the home's account-name rule: 1 to 128 bytes of
+// text, no | (which a binding key reserves) and no control character.
+func validAccountName(name string) bool {
+	if len(name) < 1 || len(name) > 128 || !utf8.ValidString(name) || strings.Contains(name, "|") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// slotKey names one slot of an edge: its default ("" account), or an
+// account compared case-folded, as the home compares account names.
+func slotKey(target, account string) string {
+	return target + "\x00" + strings.ToLower(account)
 }
 
 // splitLifetime reads value[:lifetime]: the value, and the lifetime it
@@ -646,15 +736,27 @@ func parseBindingKey(key string) (node, edge, name string, ok bool) {
 	return "", "", "", false
 }
 
-// headOnEdge is the head's binding of a dependency edge.
+// headOnEdge is the head's binding of a dependency edge's default.
 func headOnEdge(heads []headBinding, row depRow) (headBinding, bool) {
-	for _, head := range heads {
-		dep, _, _ := strings.Cut(head.edge, "|")
-		if head.node == row.from && dep == row.dep && head.name == "" {
+	for _, head := range headsOnEdge(heads, row) {
+		if head.name == "" {
 			return head, true
 		}
 	}
 	return headBinding{}, false
+}
+
+// headsOnEdge are the head's bindings of a dependency edge: its default
+// and each account named beside it.
+func headsOnEdge(heads []headBinding, row depRow) []headBinding {
+	var on []headBinding
+	for _, head := range heads {
+		dep, _, _ := strings.Cut(head.edge, "|")
+		if head.node == row.from && dep == row.dep {
+			on = append(on, head)
+		}
+	}
+	return on
 }
 
 // headNeed is the need a head binding's entry is for: the one whose
@@ -736,14 +838,17 @@ func headLifetime(head headBinding, chooser grantChooser, what, flag string) (st
 }
 
 // collectDecisions decides each credential the grant binds and the
-// narrowing it asks for. What a flag names is sent as named: any --entry
-// replaces every binding of the app's own calls, and a --selection that
-// dependency's edge. An edge the profile's head binds and no flag names
-// reopens on what the head binds there, its entry and lifetime, never
-// wider; a binding whose need cannot be told is left unbound and said.
-// Any other edge no flag names takes the plan's suggestion for its first
-// required declared need that has one, since the app's own edge carries
-// one need's credentials and a dependency's edge one credential; an
+// narrowing it asks for. What a flag names is sent as named, and a flag
+// names its slot alone: an edge's default (a flag naming no account) or
+// one named account. A slot no flag names takes what it takes with no
+// flags: the profile's head binding there, its entry and lifetime, never
+// wider, else the plan's suggestion. An edge the head binds anything on
+// takes no suggestion, and a binding whose need cannot be told is left
+// unbound and said. A flag naming a need of the app other than the one the
+// head binds replaces every binding of the app's own calls, since that
+// edge carries one need's credentials. A suggestion is the plan's for the
+// need a flag names, or else for the first required declared need that
+// has one, since a dependency's edge, too, carries one credential; an
 // optional need and the undeclared slot of a manifest declaring no needs
 // are bound only when named or chosen. Where a required need has several
 // candidates and no suggestion, an interactive grant asks and any other is
@@ -772,22 +877,30 @@ func collectDecisions(plan map[string]any, flags grantFlags, chooser grantChoose
 func sourceBindings(plan map[string]any, flags []string, chooser grantChooser) ([]ops.ProfilePreviewArgsDecisionsBindingsItem, error) {
 	bindings := []ops.ProfilePreviewArgsDecisionsBindingsItem{}
 
+	named := map[string]bool{}
+	flagNeeds := map[string]bool{}
+	flagNeed := ""
 	for _, pair := range flags {
-		need, value, ok := strings.Cut(pair, "=")
-		if !ok || need == "" || value == "" {
-			return nil, fmt.Errorf("--entry expects need=id[:lifetime], got %q", pair)
-		}
-		id, choice, err := splitLifetime("--entry", value)
+		f, err := parseSlotFlag("--entry", pair)
 		if err != nil {
 			return nil, err
 		}
-		kind, until, err := lifetimeOf(choice, chooser)
+		kind, until, err := lifetimeOf(f.choice, chooser)
 		if err != nil {
 			return nil, err
 		}
-		bindings = append(bindings, bindingItem(need, entryChoice(id), kind, until))
+		item := bindingItem(f.target, entryChoice(f.value), kind, until)
+		if f.account != "" {
+			item.Name = ops.Value(f.account)
+		}
+		bindings = append(bindings, item)
+		named[slotKey(f.target, f.account)] = true
+		flagNeeds[f.target] = true
+		flagNeed = f.target
 	}
-	if len(flags) > 0 {
+	// Flags naming two needs fill one edge twice, which the home refuses:
+	// nothing is added beside them.
+	if len(flagNeeds) > 1 {
 		return bindings, nil
 	}
 
@@ -799,11 +912,19 @@ func sourceBindings(plan map[string]any, flags []string, chooser grantChooser) (
 	}
 
 	// A re-grant reopens on what the head binds on the app's own calls, its
-	// entry and lifetime, never wider: no suggestion is added beside it.
+	// entry and lifetime, never wider, in each slot no flag names: no
+	// suggestion is added beside it. A flag naming another need than the
+	// head's replaces it whole.
 	var held []headBinding
 	for _, head := range readHeads(plan) {
 		if head.node == str(plan["source_ref"]) && head.edge == "@ingress" {
 			held = append(held, head)
+		}
+	}
+	for _, head := range held {
+		if need := headNeed(needs, head.id); flagNeed != "" && need != "" && need != flagNeed {
+			held = nil
+			break
 		}
 	}
 	if len(held) > 0 {
@@ -815,12 +936,15 @@ func sourceBindings(plan map[string]any, flags []string, chooser grantChooser) (
 					head.id.value, head.id.value))
 				continue
 			}
-			what := fmt.Sprintf("need %s", need)
+			if named[slotKey(need, head.name)] {
+				continue
+			}
+			what, flag := fmt.Sprintf("need %s", need), fmt.Sprintf("--entry %s=<id>:<lifetime>", need)
 			if head.name != "" {
 				what = fmt.Sprintf("need %s's account '%s'", need, head.name)
+				flag = fmt.Sprintf("--entry '%s|%s=<id>:<lifetime>'", need, head.name)
 			}
-			kind, until, err := headLifetime(head, chooser, what,
-				fmt.Sprintf("--entry %s=<id>:<lifetime>", need))
+			kind, until, err := headLifetime(head, chooser, what, flag)
 			if err != nil {
 				return nil, err
 			}
@@ -829,6 +953,28 @@ func sourceBindings(plan map[string]any, flags []string, chooser grantChooser) (
 				item.Name = ops.Value(head.name)
 			}
 			bindings = append(bindings, item)
+		}
+		return bindings, nil
+	}
+
+	// The default of the need the flags name, unless a flag names it: its
+	// suggestion, as with no flags.
+	if flagNeed != "" {
+		if named[slotKey(flagNeed, "")] {
+			return bindings, nil
+		}
+		for _, need := range needs {
+			if need.name != flagNeed {
+				continue
+			}
+			chosen, err := chooseFor(need, nil, chooser,
+				fmt.Sprintf("--entry %s=<id>", need.name), fmt.Sprintf("need %s", need.name))
+			if err != nil {
+				return nil, err
+			}
+			if chosen != nil {
+				bindings = append(bindings, bindingItem(need.name, *chosen, "standing", ""))
+			}
 		}
 		return bindings, nil
 	}
@@ -923,25 +1069,21 @@ func dependencySelections(plan map[string]any, flags []string, chooser grantChoo
 	named := map[string]bool{}
 
 	for _, pair := range flags {
-		dep, value, ok := strings.Cut(pair, "=")
-		if !ok || dep == "" || value == "" {
-			return nil, fmt.Errorf("--selection expects dep=id[:lifetime], got %q", pair)
-		}
-		raw, choice, err := splitLifetime("--selection", value)
+		f, err := parseSlotFlag("--selection", pair)
 		if err != nil {
 			return nil, err
 		}
-		kind, until, err := lifetimeOf(choice, chooser)
+		kind, until, err := lifetimeOf(f.choice, chooser)
 		if err != nil {
 			return nil, err
 		}
-		id := selectionChoice(raw)
-		named[dep] = true
+		id := selectionChoice(f.value)
+		named[slotKey(f.target, f.account)] = true
 
 		// Every node of the closure that calls the dependency takes it.
 		matched := false
 		for _, row := range rows {
-			if row.dep != dep {
+			if row.dep != f.target {
 				continue
 			}
 			matched = true
@@ -949,67 +1091,110 @@ func dependencySelections(plan map[string]any, flags []string, chooser grantChoo
 			if err != nil {
 				return nil, err
 			}
-			selections = append(selections, selectionItem(row, need, id, kind, until))
+			selections = append(selections, accountItem(selectionItem(row, need, id, kind, until), f.account))
 		}
 		if !matched {
-			selections = append(selections, selectionItem(depRow{dep: dep}, "", id, kind, until))
+			selections = append(selections,
+				accountItem(selectionItem(depRow{dep: f.target}, "", id, kind, until), f.account))
 		}
 	}
 
 	heads := readHeads(plan)
 	for _, row := range rows {
-		if named[row.dep] || row.provided() {
+		if row.provided() {
 			continue
 		}
 
-		// The edge the head fills reopens on what it holds there, never
-		// wider: no suggestion takes the place of a binding left unbound.
-		if head, ok := headOnEdge(heads, row); ok {
+		if !named[slotKey(row.dep, "")] {
+			chosen, err := edgeDefault(row, heads, chooser)
+			if err != nil {
+				return nil, err
+			}
+			selections = append(selections, chosen...)
+		}
+
+		// Each account the head names on the edge, in the slot no flag
+		// names, reopens on what the head binds, never wider.
+		for _, head := range headsOnEdge(heads, row) {
+			if head.name == "" || named[slotKey(row.dep, head.name)] {
+				continue
+			}
 			need, told := edgeNeed(row, head)
 			if !told {
-				chooser.note(fmt.Sprintf("The grant's binding of %s for %s is left unbound: no "+
-					"need of %s can be told for it. Name it with --selection %s=%s to bind it.",
-					head.id.value, row.dep, row.dep, row.dep, head.id.value))
+				chooser.note(fmt.Sprintf("The grant's account '%s' of %s is left unbound: no need "+
+					"of %s can be told for it. Name it with --selection '%s|%s=%s' to bind it.",
+					head.name, row.dep, row.dep, row.dep, head.name, head.id.value))
 				continue
 			}
-			what := fmt.Sprintf("%s's credential", row.dep)
-			if need != "" {
-				what = fmt.Sprintf("%s's need %s", row.dep, need)
-			}
-			kind, until, err := headLifetime(head, chooser, what,
-				fmt.Sprintf("--selection %s=<id>:<lifetime>", row.dep))
+			kind, until, err := headLifetime(head, chooser,
+				fmt.Sprintf("%s's account '%s'", row.dep, head.name),
+				fmt.Sprintf("--selection '%s|%s=<id>:<lifetime>'", row.dep, head.name))
 			if err != nil {
 				return nil, err
 			}
-			selections = append(selections, selectionItem(row, need, head.id, kind, until))
-			continue
-		}
-
-		for i, need := range row.needs {
-			chosen, err := chooseFor(need, row.lenders, chooser,
-				fmt.Sprintf("--selection %s=<id>", row.dep), fmt.Sprintf("%s's need %s", row.dep, need.name))
-			if err != nil {
-				return nil, err
-			}
-			if chosen == nil {
-				continue
-			}
-			name := ""
-			if len(row.needs) > 1 {
-				name = need.name
-			}
-			selections = append(selections, selectionItem(row, name, *chosen, "standing", ""))
-			for _, rest := range row.needs[i+1:] {
-				if rest.required {
-					chooser.note(fmt.Sprintf("%s's need %s is left unbound: its edge carries one "+
-						"credential, %s's. Name it with --selection to fill it instead.",
-						row.dep, rest.name, need.name))
-				}
-			}
-			break
+			selections = append(selections, accountItem(selectionItem(row, need, head.id, kind, until), head.name))
 		}
 	}
 	return selections, nil
+}
+
+// accountItem is a selection riding under the account name it names, if
+// any, beside its edge's default.
+func accountItem(item ops.ProfilePreviewArgsDecisionsSelectionsItem, account string) ops.ProfilePreviewArgsDecisionsSelectionsItem {
+	if account != "" {
+		item.Name = ops.Value(account)
+	}
+	return item
+}
+
+// edgeDefault is the default of a dependency's edge no flag names: what the
+// head binds there, never wider, with no suggestion in the place of a
+// binding left unbound; else the plan's suggestion for its first required
+// need that has one, since the edge carries one credential.
+func edgeDefault(row depRow, heads []headBinding, chooser grantChooser) ([]ops.ProfilePreviewArgsDecisionsSelectionsItem, error) {
+	if head, ok := headOnEdge(heads, row); ok {
+		need, told := edgeNeed(row, head)
+		if !told {
+			chooser.note(fmt.Sprintf("The grant's binding of %s for %s is left unbound: no "+
+				"need of %s can be told for it. Name it with --selection %s=%s to bind it.",
+				head.id.value, row.dep, row.dep, row.dep, head.id.value))
+			return nil, nil
+		}
+		what := fmt.Sprintf("%s's credential", row.dep)
+		if need != "" {
+			what = fmt.Sprintf("%s's need %s", row.dep, need)
+		}
+		kind, until, err := headLifetime(head, chooser, what,
+			fmt.Sprintf("--selection %s=<id>:<lifetime>", row.dep))
+		if err != nil {
+			return nil, err
+		}
+		return []ops.ProfilePreviewArgsDecisionsSelectionsItem{selectionItem(row, need, head.id, kind, until)}, nil
+	}
+
+	for i, need := range row.needs {
+		chosen, err := chooseFor(need, row.lenders, chooser,
+			fmt.Sprintf("--selection %s=<id>", row.dep), fmt.Sprintf("%s's need %s", row.dep, need.name))
+		if err != nil {
+			return nil, err
+		}
+		if chosen == nil {
+			continue
+		}
+		name := ""
+		if len(row.needs) > 1 {
+			name = need.name
+		}
+		for _, rest := range row.needs[i+1:] {
+			if rest.required {
+				chooser.note(fmt.Sprintf("%s's need %s is left unbound: its edge carries one "+
+					"credential, %s's. Name it with --selection to fill it instead.",
+					row.dep, rest.name, need.name))
+			}
+		}
+		return []ops.ProfilePreviewArgsDecisionsSelectionsItem{selectionItem(row, name, *chosen, "standing", "")}, nil
+	}
+	return nil, nil
 }
 
 // selectedNeed is the need of the dependency an entry selection is for:

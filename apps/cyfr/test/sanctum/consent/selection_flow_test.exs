@@ -819,6 +819,67 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     refute Map.has_key?(vault, :lender)
   end
 
+  test "a dependency's edge binds named accounts beside its default entry, each a row of its " <>
+         "own, and the loaded edge answers a call naming one",
+       %{ctx: ctx} do
+    home = entry!(ctx, "home key", %{"KEY" => "k-home", "ORG" => "o-home"})
+    work = entry!(ctx, "work key", %{"KEY" => "k-work", "ORG" => "o-work"})
+    ref = "reagent:local.sel-source"
+
+    {{:ok, %{profile_id: profile_id}}, preview} =
+      walk!(ctx, ref, %{
+        selections: [
+          %{dep: @dep, entry_id: home.id},
+          %{dep: @dep, entry_id: work.id, name: "Work", lifetime: %{kind: "once"}}
+        ]
+      })
+
+    assert [nil, "Work"] =
+             preview.rows
+             |> Enum.filter(&(&1["kind"] == "credential"))
+             |> Enum.map(& &1["values"]["connection"])
+             |> Enum.sort_by(&to_string/1)
+
+    {home_id, work_id} = {home.id, work.id}
+    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
+
+    assert [
+             %{
+               binding_key: "reagent:local.sel-source|reagent:local.sel-dep|default",
+               vault_entry_id: ^home_id,
+               lifetime_kind: "standing"
+             },
+             %{
+               binding_key: "reagent:local.sel-source|reagent:local.sel-dep|name:Work",
+               vault_entry_id: ^work_id,
+               lifetime_kind: "once"
+             }
+           ] = Enum.sort_by(head.vault_refs, & &1.binding_key)
+
+    # The loaded edge holds the named map beside its default, and a call
+    # naming an account gets that account, naming none the default, and
+    # naming one the edge lacks nothing.
+    {:ok, authority} = Crucible.authority_for(ctx, :default, ref)
+    {:ok, edge} = Blob.lookup_edge(authority.policy, ref, @dep, "")
+
+    assert %{entry_id: ^home_id, named: %{"Work" => %{entry_id: ^work_id}}} = edge.vault
+
+    assert {:ok, %{entry_id: ^work_id, binding_key: work_key}} = Blob.vault_for(edge, "Work")
+    assert work_key == "reagent:local.sel-source|reagent:local.sel-dep|name:Work"
+    assert {:ok, %{entry_id: ^home_id} = default} = Blob.vault_for(edge, nil)
+    refute Map.has_key?(default, :named)
+    assert Blob.vault_for(edge, "Home") == {:error, :connection_not_granted}
+
+    assert {:child, child} =
+             Transition.step(
+               authority,
+               :call,
+               Fixtures.invoke(@dep, need: nil, declared_needs: [], connection: "Work")
+             )
+
+    assert child.resources.vault.entry_id == work_id
+  end
+
   test "two roles on one catalyst carry two keys under one root", %{ctx: ctx} do
     lenders = lenders!(ctx)
     tree!(ctx)

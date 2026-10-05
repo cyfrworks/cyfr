@@ -29,10 +29,13 @@ defmodule PrismWeb.SystemLayer.Prompt do
       `label` it names), committed through `profile.commit`, and optionally
       `session_expires_at`, when the person's session ends (RFC 3339, as
       `session.whoami` answers it), which the sheet's "this session"
-      lifetime is held to, and `suggestion_refused`, the home's sentence
+      lifetime is held to, `suggestion_refused`, the home's sentence
       when it refused to preview the plan's suggestions and the grant
-      opened with nothing bound (`PrismWeb.SystemLayer.grant_prompt/4`
-      builds it);
+      opened with nothing bound, and `account`, the named account the
+      grant opens on: exactly its `name` (an account name,
+      `Prima.Authority.Blob.valid_account_name?/1`) and the `dep`, `from`
+      and `need` it sits on, each nil or a non-empty string
+      (`PrismWeb.SystemLayer.grant_prompt/4` builds it);
     * `:credential_entry` — `name`, the vault entry to create, and
       optionally `field`, the name its one field is stored under
       (`API_KEY` when absent), created through `vault.create` as an `api_key`
@@ -212,14 +215,16 @@ defmodule PrismWeb.SystemLayer.Prompt do
        when is_binary(ref) and ref != "" and is_binary(athanor_id) and athanor_id != "" do
     session_end = Map.get(subject, :session_expires_at)
     refused = Map.get(subject, :suggestion_refused)
+    account = Map.get(subject, :account)
 
     if plan?(plan) and preview?(preview, plan) and decisions?(decisions, ref) and
-         instant?(session_end) and sentence?(refused),
+         instant?(session_end) and sentence?(refused) and account?(account),
        do:
          {:ok,
           %{ref: ref, athanor_id: athanor_id, plan: plan, preview: preview, decisions: decisions}
           |> Prima.MapUtil.put_present(:session_expires_at, session_end)
-          |> Prima.MapUtil.put_present(:suggestion_refused, refused)},
+          |> Prima.MapUtil.put_present(:suggestion_refused, refused)
+          |> Prima.MapUtil.put_present(:account, account)},
        else: {:error, :invalid_prompt}
   end
 
@@ -354,6 +359,20 @@ defmodule PrismWeb.SystemLayer.Prompt do
   defp return?(_return), do: false
 
   defp ref?(ref), do: is_binary(ref) and ref != ""
+
+  # The named account a grant opens on: its name, and where it sits, each
+  # place absent (nil) or named.
+  defp account?(nil), do: true
+
+  defp account?(%{name: name, dep: dep, from: from, need: need} = account)
+       when map_size(account) == 4 do
+    Prima.Authority.Blob.valid_account_name?(name) and Enum.all?([dep, from, need], &place?/1)
+  end
+
+  defp account?(_account), do: false
+
+  defp place?(nil), do: true
+  defp place?(place), do: ref?(place)
 
   defp sentence?(nil), do: true
   defp sentence?(text), do: is_binary(text) and text != ""

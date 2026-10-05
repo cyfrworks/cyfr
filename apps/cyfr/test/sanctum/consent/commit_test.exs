@@ -1818,6 +1818,370 @@ defmodule Sanctum.Consent.CommitTest do
                Enum.filter(preview.rows, &(&1["kind"] == "credential"))
     end
   end
+
+  # ===========================================================================
+  # Named accounts on a dependency's edge
+  # ===========================================================================
+
+  describe "named accounts on a dependency's edge" do
+    @dep_a "reagent:local.commit-dep-a"
+
+    # A source whose dependency declares two credential needs, each
+    # attaching a supabase.co key by its own header.
+    defp two_needs!(ctx) do
+      publish!(ctx, "commit-named-db", "1.0.0", %{
+        "needs" => %{
+          "database" => %{
+            "type" => "api_key:supabase.co",
+            "reason" => "to reach the database",
+            "fields" => ["anon_key"],
+            "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+          },
+          "admin" => %{
+            "type" => "api_key:supabase.co",
+            "reason" => "to administer it",
+            "fields" => ["service_key"],
+            "attach" => %{"in" => "header", "name" => "x-admin", "template" => "{value}"}
+          }
+        }
+      })
+
+      publish!(ctx, "commit-named-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.commit-named-db"}]}
+      })
+
+      {"reagent:local.commit-named-app", "reagent:local.commit-named-db"}
+    end
+
+    defp supabase!(ctx, field),
+      do:
+        entry!(ctx, %{field => "k-#{System.unique_integer([:positive])}"}, %{
+          provider_hint: "supabase.co",
+          disclose: false
+        })
+
+    test "a default entry and named accounts bind one edge, each a row under its own key, " <>
+           "each previewed as its account",
+         %{ctx: ctx} do
+      two = two_deps!(ctx)
+      [default, work, home] = for _ <- 1..3, do: key!(ctx)
+      until = in_hours(1)
+
+      selections = [
+        %{dep: @dep_a, entry_id: default.id},
+        %{dep: @dep_a, entry_id: work.id, name: "Work", lifetime: %{kind: "once"}},
+        %{dep: @dep_a, entry_id: home.id, name: "Home", lifetime: %{kind: "until", until: until}}
+      ]
+
+      {:ok, preview} = Commit.preview(ctx, %{ref: two, selections: selections})
+      credentials = for %{"kind" => "credential", "values" => v} <- preview.rows, do: v
+
+      assert Enum.map(credentials, &{&1["binding_key"], &1["connection"], &1["lifetime"]})
+             |> Enum.sort() == [
+               {"#{two}|#{@dep_a}|default", nil, %{"kind" => "standing", "until" => nil}},
+               {"#{two}|#{@dep_a}|name:Home", "Home", %{"kind" => "until", "until" => until}},
+               {"#{two}|#{@dep_a}|name:Work", "Work", %{"kind" => "once", "until" => nil}}
+             ]
+
+      {:ok, %{profile_id: profile_id}} = walk!(ctx, two, %{selections: selections})
+      rows = rows_by_key(ctx, profile_id)
+
+      assert %{vault_entry_id: default_id, lifetime_kind: "standing"} =
+               rows["#{two}|#{@dep_a}|default"]
+
+      assert %{vault_entry_id: work_id, lifetime_kind: "once"} =
+               rows["#{two}|#{@dep_a}|name:Work"]
+
+      assert %{vault_entry_id: home_id, lifetime_kind: "until"} =
+               rows["#{two}|#{@dep_a}|name:Home"]
+
+      assert {default_id, work_id, home_id} == {default.id, work.id, home.id}
+
+      {:ok, blob} = Prima.Authority.Blob.parse(head!(ctx, profile_id).resolved_policy)
+      {:ok, edge} = Prima.Authority.Blob.lookup_edge(blob, two, @dep_a, "")
+      assert edge.vault.entry_id == default.id
+
+      assert %{"Work" => %{entry_id: ^work_id}, "Home" => %{entry_id: ^home_id}} =
+               edge.vault.named
+
+      assert Prima.Manifest.Needs.attach_to_map(edge.vault.named["Work"].attach) == @attach
+    end
+
+    test "a named selection is refused where it names a label, sits beside no default or a " <>
+           "lent default, repeats a name, or is for another need than the default's",
+         %{ctx: ctx} do
+      two = two_deps!(ctx)
+      [default, work, other] = for _ <- 1..3, do: key!(ctx)
+      refused = fn selections -> Commit.preview(ctx, %{ref: two, selections: selections}) end
+
+      # A named account names an entry; a label, or nothing, lends.
+      for named <- [
+            %{dep: @dep_a, label: "default", name: "Work"},
+            %{dep: @dep_a, name: "Work"}
+          ] do
+        assert {:error, {:invalid_argument, why}} =
+                 refused.([%{dep: @dep_a, entry_id: default.id}, named])
+
+        assert why ==
+                 "The selection of #{@dep_a} names the account Work by a profile's label; a " <>
+                   "named account names an entry"
+      end
+
+      assert {:error, {:invalid_argument, why}} =
+               refused.([%{dep: @dep_a, entry_id: work.id, name: "Work"}])
+
+      assert why ==
+               "The selections of #{@dep_a} name accounts beside no default; one selection of " <>
+                 "#{@dep_a} names no account"
+
+      # The dependency's own profile lends a key; an account beside it is
+      # refused, since a named account sits beside an entry chosen here.
+      {:ok, _lender} = walk!(ctx, @dep_a, %{bindings: [%{need: "api_key", entry_id: other.id}]})
+
+      assert {:error, {:invalid_argument, why}} =
+               refused.([
+                 %{dep: @dep_a, label: "default"},
+                 %{dep: @dep_a, entry_id: work.id, name: "Work"}
+               ])
+
+      assert why ==
+               "The selections of #{@dep_a} name accounts beside a key its default profile " <>
+                 "lends; a named account sits beside a default entry chosen here"
+
+      # One name twice, by case.
+      assert {:error, {:invalid_argument, why}} =
+               refused.([
+                 %{dep: @dep_a, entry_id: default.id},
+                 %{dep: @dep_a, entry_id: work.id, name: "Work"},
+                 %{dep: @dep_a, entry_id: other.id, name: "work"}
+               ])
+
+      assert why =~ "The selections of #{@dep_a} name the account "
+      assert why =~ " twice; each names its own"
+
+      # An account name the binding key cannot carry.
+      assert {:error, {:invalid_argument, why}} =
+               refused.([
+                 %{dep: @dep_a, entry_id: default.id},
+                 %{dep: @dep_a, entry_id: work.id, name: "has|pipe"}
+               ])
+
+      assert why ==
+               "The selection of #{@dep_a} names an account that is not 1 to 128 bytes of text " <>
+                 "without a | or a control character"
+
+      # An edge carries one need's credentials.
+      {app, db} = two_needs!(ctx)
+
+      assert {:error, {:invalid_argument, why}} =
+               Commit.preview(ctx, %{
+                 ref: app,
+                 selections: [
+                   %{dep: db, entry_id: supabase!(ctx, "anon_key").id, need: "database"},
+                   %{
+                     dep: db,
+                     entry_id: supabase!(ctx, "service_key").id,
+                     need: "admin",
+                     name: "Admin"
+                   }
+                 ]
+               })
+
+      assert why ==
+               "The selections of #{db} name accounts for admin beside a default for " <>
+                 "database; an edge carries one need's credentials"
+    end
+
+    test "a named selection is held to its need: a provided need, another provider, an " <>
+           "instance entry not offered",
+         %{ctx: ctx} do
+      publish!(ctx, "commit-named-provided-db", "1.0.0", %{
+        "needs" => %{
+          "database" => %{
+            "type" => "api_key:supabase.co",
+            "reason" => "to reach the database",
+            "fields" => ["anon_key"],
+            "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+          }
+        }
+      })
+
+      db = "reagent:local.commit-named-provided-db"
+
+      publish!(ctx, "commit-named-provided", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => db}]},
+        "provides" => %{
+          db => %{
+            "database" => %{
+              "destination" => %{"hosts" => ["abc.supabase.co"]},
+              "values" => %{"anon_key" => "eyJ-public"}
+            }
+          }
+        }
+      })
+
+      assert {:error, {:invalid_argument, why}} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.commit-named-provided",
+                 selections: [
+                   %{dep: db, entry_id: supabase!(ctx, "anon_key").id, name: "Work"}
+                 ]
+               })
+
+      assert why == "#{db}'s need database is provided by this app; it takes no selection"
+
+      two = two_deps!(ctx)
+      default = %{dep: @dep_a, entry_id: key!(ctx).id}
+
+      accounts = fn preview ->
+        for %{"kind" => "credential", "values" => %{"connection" => account} = values} <-
+              preview.rows,
+            do: {account, values["source"]}
+      end
+
+      assert {:error, {:provider_mismatch, "api_key"}} =
+               Commit.preview(ctx, %{
+                 ref: two,
+                 selections: [
+                   default,
+                   %{
+                     dep: @dep_a,
+                     entry_id: key!(ctx, %{provider_hint: "anthropic.com"}).id,
+                     name: "Work"
+                   }
+                 ]
+               })
+
+      # An entry of the need's provider is taken as the account.
+      {:ok, preview} =
+        Commit.preview(ctx, %{
+          ref: two,
+          selections: [default, %{dep: @dep_a, entry_id: key!(ctx).id, name: "Work"}]
+        })
+
+      assert accounts.(preview) == [{"Work", "own"}]
+
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      person_two = two_deps!(person)
+      person_default = %{dep: @dep_a, entry_id: key!(person).id}
+      listed = instance!(%{audience: "listed"})
+
+      assert {:error, {:not_offered, "api_key"}} =
+               Commit.preview(person, %{
+                 ref: person_two,
+                 selections: [
+                   person_default,
+                   %{dep: @dep_a, instance_entry_id: listed.id, name: "Work"}
+                 ]
+               })
+
+      # One offered to the person is.
+      {:ok, preview} =
+        Commit.preview(person, %{
+          ref: person_two,
+          selections: [
+            person_default,
+            %{dep: @dep_a, instance_entry_id: instance!().id, name: "Work"}
+          ]
+        })
+
+      assert accounts.(preview) == [{"Work", "instance"}]
+    end
+
+    test "a named once is consumed apart from its default, carried across a revision and a " <>
+           "grant, and renewed only when the decision says so",
+         %{ctx: ctx} do
+      two = two_deps!(ctx)
+      [default, work] = [key!(ctx), key!(ctx)]
+      actor = Sanctum.Context.actor(ctx)
+
+      selections = [
+        %{dep: @dep_a, entry_id: default.id},
+        %{dep: @dep_a, entry_id: work.id, name: "Work", lifetime: %{kind: "once"}}
+      ]
+
+      {:ok, %{profile_id: profile}} = walk!(ctx, two, %{selections: selections})
+      first = head!(ctx, profile)
+      work_key = "#{two}|#{@dep_a}|name:Work"
+
+      assert :ok = Arca.ConsentStorage.consume_once(actor, profile, first.id, work_key, "exec_a")
+
+      # A revision that keeps it carries the consumption.
+      {:ok, %{revision: 2}} =
+        walk!(ctx, two, %{selections: selections, origins: [:interactive, :programmatic]})
+
+      assert rows_by_key(ctx, profile)[work_key].consumed_by_root == "exec_a"
+
+      assert {:error, :already_consumed} =
+               Arca.ConsentStorage.consume_once(
+                 actor,
+                 profile,
+                 head!(ctx, profile).id,
+                 work_key,
+                 "exec_b"
+               )
+
+      # So does a grant, which re-issues the head's named selection.
+      assert {:ok, %{revision: 3}} =
+               Commit.grant(ctx, %{
+                 profile_id: profile,
+                 bindings: [],
+                 expected_consent_revision: 2
+               })
+
+      rows = rows_by_key(ctx, profile)
+
+      assert %{lifetime_kind: "once", consumed_by_root: "exec_a", vault_entry_id: id} =
+               rows[work_key]
+
+      assert id == work.id
+      assert %{vault_entry_id: default_id} = rows["#{two}|#{@dep_a}|default"]
+      assert default_id == default.id
+
+      # Renewed, it is consumable again.
+      renewed =
+        Enum.map(selections, fn
+          %{name: "Work"} = selection -> Map.put(selection, :renew, true)
+          selection -> selection
+        end)
+
+      {:ok, %{revision: 4}} = walk!(ctx, two, %{selections: renewed})
+      assert rows_by_key(ctx, profile)[work_key].consumed_by_root == nil
+
+      assert :ok =
+               Arca.ConsentStorage.consume_once(
+                 actor,
+                 profile,
+                 head!(ctx, profile).id,
+                 work_key,
+                 "exec_c"
+               )
+    end
+
+    test "a commit differing from its preview only by a selection's name fails the digest " <>
+           "check",
+         %{ctx: ctx} do
+      two = two_deps!(ctx)
+      [default, work] = [key!(ctx), key!(ctx)]
+      named = %{dep: @dep_a, entry_id: work.id, name: "Work"}
+      previewed = %{ref: two, selections: [%{dep: @dep_a, entry_id: default.id}, named]}
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: two})
+      {:ok, preview} = Commit.preview(ctx, previewed)
+
+      assert {:error, {:consent_conflict, %{cause: :digest_changed}}} =
+               Commit.commit(ctx, %{
+                 decisions: %{
+                   previewed
+                   | selections: [%{dep: @dep_a, entry_id: default.id}, %{named | name: "Home"}]
+                 },
+                 plan_token: plan.plan_token,
+                 proof: preview.proof,
+                 commit_digest: preview.commit_digest,
+                 expected_consent_revision: plan.expected_consent_revision
+               })
+    end
+  end
 end
 
 defmodule Sanctum.Consent.CommitRebindRaceTest do

@@ -1617,6 +1617,431 @@ defmodule PrismWeb.SystemLayerTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Named accounts
+  # ---------------------------------------------------------------------------
+
+  describe "named accounts" do
+    setup :signed_in
+
+    # A dependency whose need attaches a named.test key, an app calling it
+    # with a need of its own of the same provider, an app calling it with
+    # none, and three keys that meet both needs, the first the default.
+    defp named_world(ctx) do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+
+      need = fn required ->
+        %{
+          "api_key" => %{
+            "type" => "api_key:named.test",
+            "reason" => "to reach the named service",
+            "fields" => ["NAMED_KEY"],
+            "required" => required,
+            "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+          }
+        }
+      end
+
+      caps = %{"egress" => %{"domains" => ["api.named.example"]}}
+
+      dep =
+        publish_catalyst!(local, "layer-named-dep-#{n}", %{"needs" => need.(true), "caps" => caps})
+
+      optional_dep =
+        publish_catalyst!(local, "layer-named-optional-#{n}", %{
+          "needs" => need.(false),
+          "caps" => caps
+        })
+
+      app =
+        publish_catalyst!(local, "layer-named-app-#{n}", %{
+          "needs" => need.(true),
+          "caps" => caps,
+          "dependencies" => %{"static" => [%{"ref" => dep}]}
+        })
+
+      caller =
+        publish_catalyst!(local, "layer-named-caller-#{n}", %{
+          "dependencies" => %{"static" => [%{"ref" => dep}, %{"ref" => optional_dep}]}
+        })
+
+      [first, second, third] =
+        for i <- 1..3 do
+          entry!(local, %{
+            name: "named key #{n}-#{i}",
+            provider_hint: "named.test",
+            fields: %{"NAMED_KEY" => "sk-named-#{i}"},
+            destination: %{"hosts" => ["api.named.example"]}
+          })
+        end
+
+      %{
+        local: local,
+        dep: dep,
+        optional_dep: optional_dep,
+        app: app,
+        caller: caller,
+        keys: {first, second, third}
+      }
+    end
+
+    defp decisions_now(view) do
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+      decisions
+    end
+
+    defp account(edge, name \\ nil) do
+      named = if name, do: ~s([data-account="#{name}"]), else: ""
+      ~s([data-test="grant-account"][data-edge="#{edge}"]#{named})
+    end
+
+    # Name the account the row of `edge` now named `current` stands for.
+    defp name_account(view, edge, current, name) do
+      view
+      |> form(account(edge, current) <> ~s( form[phx-change="name_account"]), %{"name" => name})
+      |> render_change()
+
+      render(view)
+    end
+
+    test "an account is added, named and removed on the app's own row and on a dependency's " <>
+           "row; only a complete one is sent, and each is committed under its name",
+         %{view: view, ctx: ctx} do
+      %{local: local, app: app, dep: dep, keys: {first, second, third}} = named_world(ctx)
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-accounts", app)
+      opened = grant.subject.decisions
+      prompt(view, grant)
+
+      # The app's own row: a new account has a name to give, no entry
+      # pressed and standing pressed, and is no decision yet.
+      click(view, ~s([data-test="grant-add-account"][data-edge="@ingress"]))
+      assert has_element?(view, account("@ingress") <> ~s( input[name="name"]))
+
+      refute has_element?(
+               view,
+               account("@ingress") <> ~s( [aria-pressed="true"][data-test="grant-account-pick"])
+             )
+
+      assert has_element?(
+               view,
+               account("@ingress") <> ~s( [data-lifetime="standing"][aria-pressed="true"])
+             )
+
+      assert decisions_now(view) == opened
+
+      # An entry alone is not enough: the account needs its name.
+      click(
+        view,
+        account("@ingress") <>
+          ~s( [data-test="grant-account-pick"][phx-value-entry_id="#{second.id}"])
+      )
+
+      assert decisions_now(view) == opened
+
+      # A name the binding key cannot carry says why and is not sent.
+      name_account(view, "@ingress", "", "has|pipe")
+      assert has_element?(view, account("@ingress") <> ~s( [data-test="grant-account-why"]))
+      assert decisions_now(view) == opened
+
+      name_account(view, "@ingress", "has|pipe", "Work")
+      refute has_element?(view, account("@ingress") <> ~s( [data-test="grant-account-why"]))
+
+      assert %{"need" => "api_key", "entry_id" => id, "name" => "Work"} =
+               Enum.find(decisions_now(view)["bindings"], &(&1["name"] == "Work"))
+
+      assert id == second.id
+
+      # The dependency's row takes its own account, the same name allowed.
+      click(view, ~s([data-test="grant-add-account"][data-edge="#{dep}"]))
+
+      click(
+        view,
+        account(dep) <> ~s( [data-test="grant-account-pick"][phx-value-entry_id="#{third.id}"])
+      )
+
+      name_account(view, dep, "", "Work")
+      click(view, account(dep, "Work") <> ~s( [data-lifetime="once"]))
+
+      assert %{"dep" => ^dep, "from" => ^app, "entry_id" => id, "lifetime" => %{"kind" => "once"}} =
+               Enum.find(decisions_now(view)["selections"], &(&1["name"] == "Work"))
+
+      assert id == third.id
+
+      # A second account of one name on one edge is refused in the row.
+      click(view, ~s([data-test="grant-add-account"][data-edge="#{dep}"]))
+      name_account(view, dep, "", "work")
+
+      assert has_element?(
+               view,
+               account(dep, "work") <> ~s( [data-test="grant-account-why"]),
+               "Another account"
+             )
+
+      click(view, account(dep, "work") <> ~s( [data-test="grant-account-remove"]))
+      refute has_element?(view, account(dep, "work"))
+
+      # Removed, the app's account is no longer sent.
+      click(view, account("@ingress") <> ~s( [data-test="grant-account-remove"]))
+      refute has_element?(view, account("@ingress"))
+      refute Enum.any?(decisions_now(view)["bindings"], &Map.has_key?(&1, "name"))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-accounts") == :confirmed
+
+      {_profile, head} = head_rows(local, app)
+
+      assert %{
+               "#{app}|@ingress|default" => first.id,
+               "#{app}|#{dep}|default" => first.id,
+               "#{app}|#{dep}|name:Work" => third.id
+             } == Map.new(head.vault_refs, &{&1.binding_key, &1.vault_entry_id})
+    end
+
+    test "adding an account beside a lent default first switches the default to the entry " <>
+           "its lender lends",
+         %{view: view, ctx: ctx} do
+      %{local: local, caller: caller, dep: dep, keys: {first, second, _third}} = named_world(ctx)
+
+      {:ok, _} = commit_with!(local, dep, %{bindings: [%{need: "api_key", entry_id: second.id}]})
+      {:ok, _} = commit_with!(local, caller, %{selections: [%{dep: dep, label: "default"}]})
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-lent", caller)
+      assert [%{"label" => "default"}] = grant.subject.decisions["selections"]
+      prompt(view, grant)
+
+      click(view, ~s([data-test="grant-add-account"][data-edge="#{dep}"]))
+
+      assert [%{"dep" => ^dep, "entry_id" => lent}] = decisions_now(view)["selections"]
+      assert lent == second.id
+
+      assert has_element?(
+               view,
+               ~s([data-dep="#{dep}"] [data-test="grant-lent-switched"]),
+               "not lent by default"
+             )
+
+      assert has_element?(view, account(dep))
+
+      click(
+        view,
+        account(dep) <> ~s( [data-test="grant-account-pick"][phx-value-entry_id="#{first.id}"])
+      )
+
+      name_account(view, dep, "", "Home")
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-lent") == :confirmed
+
+      {_profile, head} = head_rows(local, caller)
+
+      assert %{"#{caller}|#{dep}|default" => second.id, "#{caller}|#{dep}|name:Home" => first.id} ==
+               Map.new(head.vault_refs, &{&1.binding_key, &1.vault_entry_id})
+    end
+
+    test "a named head binding reopens on its own row with its lifetime; one whose until has " <>
+           "passed opens unpressed and is granted again by choosing one",
+         %{view: view, ctx: ctx} do
+      %{local: local, caller: caller, dep: dep, keys: {first, second, third}} = named_world(ctx)
+      later = DateTime.utc_now() |> DateTime.add(7200) |> DateTime.truncate(:second)
+      soon = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+      {:ok, _} =
+        commit_with!(local, caller, %{
+          selections: [
+            %{dep: dep, entry_id: first.id},
+            %{
+              dep: dep,
+              entry_id: second.id,
+              name: "Later",
+              lifetime: %{kind: "until", until: DateTime.to_iso8601(later)}
+            },
+            %{
+              dep: dep,
+              entry_id: third.id,
+              name: "Work",
+              lifetime: %{kind: "until", until: DateTime.to_iso8601(soon)}
+            }
+          ]
+        })
+
+      # Work's hour has gone by.
+      {_profile_id, head} = head_rows(local, caller)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.ConsentVaultRef,
+            where:
+              r.athanor_id == ^local.athanor_id and r.consent_id == ^head.id and
+                r.binding_key == ^"#{caller}|#{dep}|name:Work"
+          ),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -60, :second)]
+        )
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-named-head", caller)
+
+      assert Enum.map(grant.subject.decisions["selections"], &{&1["entry_id"], &1["name"]}) ==
+               [{first.id, nil}, {second.id, "Later"}]
+
+      prompt(view, grant)
+
+      # Each account reopens on its own row, its name fixed and its entry
+      # pressed: Later on its own time, Work with nothing pressed, saying why.
+      refute has_element?(view, account(dep, "Later") <> ~s( input[name="name"]))
+
+      assert has_element?(
+               view,
+               account(dep, "Later") <>
+                 ~s( [data-test="grant-account-pick"][aria-pressed="true"][phx-value-entry_id="#{second.id}"])
+             )
+
+      assert has_element?(
+               view,
+               account(dep, "Later") <> ~s( [data-lifetime="kept"][aria-pressed="true"])
+             )
+
+      assert has_element?(view, account(dep, "Work"), "has passed")
+      refute has_element?(view, account(dep, "Work") <> ~s( [data-lifetime][aria-pressed="true"]))
+
+      click(view, account(dep, "Work") <> ~s( [data-lifetime="1h"]))
+
+      assert %{"entry_id" => id, "lifetime" => %{"kind" => "until", "until" => until}} =
+               Enum.find(decisions_now(view)["selections"], &(&1["name"] == "Work"))
+
+      assert id == third.id
+      {:ok, at, 0} = DateTime.from_iso8601(until)
+      assert_in_delta DateTime.diff(at, DateTime.utc_now()), 3600, 60
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-named-head") == :confirmed
+
+      {_profile, head} = head_rows(local, caller)
+      rows = Map.new(head.vault_refs, &{&1.binding_key, &1})
+
+      assert %{lifetime_kind: "until", expires_at: expires_at} =
+               rows["#{caller}|#{dep}|name:Work"]
+
+      assert DateTime.compare(DateTime.truncate(expires_at, :second), at) == :eq
+      assert %{lifetime_kind: "until"} = rows["#{caller}|#{dep}|name:Later"]
+    end
+
+    test "a grant asked for an account opens on that account's row: beside a default, a lent " <>
+           "default and none, and on the app's own calls",
+         %{view: view, ctx: ctx} do
+      %{local: local, app: app, caller: caller, dep: dep, optional_dep: optional, keys: keys} =
+        named_world(ctx)
+
+      {first, second, _third} = keys
+
+      # Beside a default: the grant opens as it would, with a new row of
+      # that name, no entry pressed, standing pressed.
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ask-default", caller,
+          account: %{name: "Work", dep: dep}
+        )
+
+      assert grant.subject.account == %{name: "Work", dep: dep, from: nil, need: nil}
+      assert [%{"dep" => ^dep, "entry_id" => default}] = grant.subject.decisions["selections"]
+      assert default == first.id
+
+      prompt(view, grant)
+      assert has_element?(view, account(dep, "Work"))
+      refute has_element?(view, account(dep, "Work") <> ~s( input[name="name"]))
+
+      refute has_element?(
+               view,
+               account(dep, "Work") <> ~s( [data-test="grant-account-pick"][aria-pressed="true"])
+             )
+
+      assert has_element?(
+               view,
+               account(dep, "Work") <> ~s( [data-lifetime="standing"][aria-pressed="true"])
+             )
+
+      click(
+        view,
+        account(dep, "Work") <>
+          ~s( [data-test="grant-account-pick"][phx-value-entry_id="#{second.id}"])
+      )
+
+      assert %{"entry_id" => id} =
+               Enum.find(decisions_now(view)["selections"], &(&1["name"] == "Work"))
+
+      assert id == second.id
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("g-ask-default") == :dismissed
+
+      # With no default: an optional need binds none, and the account's row
+      # is offered beside it.
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ask-none", caller,
+          account: %{name: "Work", dep: optional}
+        )
+
+      refute Enum.any?(grant.subject.decisions["selections"], &(&1["dep"] == optional))
+      prompt(view, grant)
+      assert has_element?(view, account(optional, "Work"))
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("g-ask-none") == :dismissed
+
+      # The app's own calls, its one credential need.
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ask-own", app,
+          account: %{name: "Work"}
+        )
+
+      prompt(view, grant)
+      assert has_element?(view, account("@ingress", "Work"))
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("g-ask-own") == :dismissed
+
+      # An account the plan has no edge for: the grant opens without it,
+      # and says why.
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ask-nowhere", caller,
+          account: %{name: "Work", dep: "catalyst:local.nowhere"}
+        )
+
+      prompt(view, grant)
+      refute has_element?(view, ~s([data-test="grant-account"][data-account="Work"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-needs"] [data-test="grant-refusal"]),
+               "catalyst:local.nowhere"
+             )
+
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("g-ask-nowhere") == :dismissed
+
+      # Beside a lent default: the default is switched to the lender's entry
+      # before the grant is previewed, and the row says so.
+      {:ok, _} = commit_with!(local, dep, %{bindings: [%{need: "api_key", entry_id: second.id}]})
+      {:ok, _} = commit_with!(local, caller, %{selections: [%{dep: dep, label: "default"}]})
+
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ask-lent", caller,
+          account: %{name: "Work", dep: dep}
+        )
+
+      assert [%{"dep" => ^dep, "entry_id" => lent}] = grant.subject.decisions["selections"]
+      assert lent == second.id
+
+      assert [%{"values" => %{"source" => "own"}}] =
+               Enum.filter(credential_rows(grant.subject.preview), &(&1["values"]["edge"] == dep))
+
+      prompt(view, grant)
+      assert has_element?(view, account(dep, "Work"))
+
+      assert has_element?(
+               view,
+               ~s([data-dep="#{dep}"] [data-test="grant-lent-switched"]),
+               "not lent by default"
+             )
+    end
+  end
+
   describe "the person's exact choices" do
     setup [:signed_in, :asking_more]
 
@@ -2002,6 +2427,34 @@ defmodule PrismWeb.SystemLayerTest do
 
       for {id, bad} <- malformed do
         html = prompt(view, bad)
+        assert outcome(id) == {:refused, :invalid_prompt}, id
+        assert html =~ ~s(data-open="false")
+      end
+    end
+
+    test "a grant's account names exactly its name, dependency, caller and need, and is kept " <>
+           "on the subject; anything else is refused",
+         %{view: view, ctx: ctx} do
+      account = %{name: "Work", dep: "catalyst:local.db", from: nil, need: nil}
+      prompt(view, put_in(grant(ctx, "acct"), [:subject, :account], account))
+      assert open_prompt(view) == "acct"
+      assert %{current: %{subject: %{account: ^account}}} = layer_assigns(view)
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("acct") == :dismissed
+
+      malformed = [
+        {"a1", Map.delete(account, :from)},
+        {"a2", Map.put(account, :entry_id, "vlt_x")},
+        {"a3", %{account | name: "has|pipe"}},
+        {"a4", %{account | name: ""}},
+        {"a5", %{account | dep: ""}},
+        {"a6", %{account | need: 7}},
+        {"a7", %{account | from: ""}},
+        {"a8", "Work"}
+      ]
+
+      for {id, bad} <- malformed do
+        html = prompt(view, put_in(grant(ctx, id), [:subject, :account], bad))
         assert outcome(id) == {:refused, :invalid_prompt}, id
         assert html =~ ~s(data-open="false")
       end

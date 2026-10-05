@@ -3372,7 +3372,9 @@ type ProfileCommitArgsDecisionsSelectionsItem struct {
 	// An instance entry offered to you, bound on the edge
 	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
 	// The dependency's credential need the entry is for; required when it declares several, never with a label
-	Need   Field[string]   `json:"need,omitzero"`
+	Need Field[string] `json:"need,omitzero"`
+	// The account name of a named selection beside the edge's default entry; it names an entry, never a label; absent for the default
+	Name   Field[string]   `json:"name,omitzero"`
 	From   Field[string]   `json:"from,omitzero"`
 	Fields Field[[]string] `json:"fields,omitzero"`
 	// How long the binding lives; standing when absent
@@ -3731,7 +3733,9 @@ type ProfilePreviewArgsDecisionsSelectionsItem struct {
 	// An instance entry offered to you, bound on the edge
 	InstanceEntryId Field[string] `json:"instance_entry_id,omitzero"`
 	// The dependency's credential need the entry is for; required when it declares several, never with a label
-	Need   Field[string]   `json:"need,omitzero"`
+	Need Field[string] `json:"need,omitzero"`
+	// The account name of a named selection beside the edge's default entry; it names an entry, never a label; absent for the default
+	Name   Field[string]   `json:"name,omitzero"`
 	From   Field[string]   `json:"from,omitzero"`
 	Fields Field[[]string] `json:"fields,omitzero"`
 	// How long the binding lives; standing when absent

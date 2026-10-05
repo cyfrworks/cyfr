@@ -321,6 +321,142 @@ defmodule Sanctum.ProviderVaultProfileTest do
     assert why =~ "api_key"
   end
 
+  test "the profile tool decodes a selection's account name, refuses one the binding key " <>
+         "cannot carry, and publish refuses an edge carrying named accounts",
+       %{ctx: ctx} do
+    keyed =
+      Jason.encode!(%{
+        "name" => "mcp-named-dep",
+        "version" => "1.0.0",
+        "type" => "reagent",
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:openai.com",
+            "reason" => "to call the model",
+            "fields" => ["OPENAI_API_KEY"],
+            "attach" => %{
+              "in" => "header",
+              "name" => "Authorization",
+              "template" => "Bearer {value}"
+            }
+          }
+        }
+      })
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: "mcp-named-dep",
+        version: "1.0.0",
+        type: "reagent",
+        manifest: keyed
+      })
+
+    dep = "reagent:local.mcp-named-dep"
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: "mcp-named-app",
+        version: "1.0.0",
+        type: "reagent",
+        manifest:
+          Jason.encode!(%{
+            "name" => "mcp-named-app",
+            "version" => "1.0.0",
+            "type" => "reagent",
+            "dependencies" => %{"static" => [%{"ref" => dep}]}
+          })
+      })
+
+    ref = "reagent:local.mcp-named-app"
+
+    [default, work] =
+      for name <- ["named-default", "named-work"] do
+        {:ok, %{entry: entry}} =
+          Sanctum.TestContext.confirming(
+            ctx,
+            &Sanctum.Provider.handle("vault", &1, %{
+              "action" => "create",
+              "name" => name,
+              "kind" => "api_key",
+              "provider_hint" => "openai.com",
+              "fields" => %{"OPENAI_API_KEY" => "sk-#{name}"},
+              "destination" => %{"hosts" => ["api.openai.com"]}
+            })
+          )
+
+        entry
+      end
+
+    decisions = fn name ->
+      %{
+        "ref" => ref,
+        "selections" => [
+          %{"dep" => dep, "entry_id" => default.id},
+          %{
+            "dep" => dep,
+            "entry_id" => work.id,
+            "name" => name,
+            "lifetime" => %{"kind" => "once"}
+          }
+        ]
+      }
+    end
+
+    {:ok, plan} = Sanctum.Provider.handle("profile", ctx, %{"action" => "plan", "ref" => ref})
+
+    {:ok, preview} =
+      Sanctum.Provider.handle("profile", ctx, %{
+        "action" => "preview",
+        "decisions" => decisions.("Work")
+      })
+
+    assert [%{"values" => %{"connection" => "Work", "lifetime" => %{"kind" => "once"}}}] =
+             Enum.filter(
+               preview.rows,
+               &(&1["kind"] == "credential" and &1["values"]["connection"])
+             )
+
+    assert {:error, why} =
+             Sanctum.Provider.handle("profile", ctx, %{
+               "action" => "preview",
+               "decisions" => decisions.("has|pipe")
+             })
+
+    assert why ==
+             "The selection of #{dep} names an account that is not 1 to 128 bytes of text " <>
+               "without a | or a control character"
+
+    {:ok, %{status: "committed", profile_id: profile_id}} =
+      Sanctum.Provider.handle("profile", ctx, %{
+        "action" => "commit",
+        "decisions" => decisions.("Work"),
+        "plan_token" => plan.plan_token,
+        "proof" => preview.proof,
+        "commit_digest" => preview.commit_digest,
+        "expected_consent_revision" => plan.expected_consent_revision
+      })
+
+    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
+
+    assert Enum.sort(Enum.map(head.vault_refs, & &1.binding_key)) == [
+             "#{ref}|#{dep}|default",
+             "#{ref}|#{dep}|name:Work"
+           ]
+
+    # A public profile's callers are anonymous: an edge it keeps may not
+    # carry named accounts, and the publish says so.
+    assert {:error, why} =
+             Sanctum.Provider.handle("profile", ctx, %{
+               "action" => "publish",
+               "profile_id" => profile_id,
+               "need_ids" => [dep]
+             })
+
+    assert why ==
+             "The public profile cannot keep #{dep}: it binds named accounts beside its " <>
+               "default, which a public profile cannot carry"
+  end
+
   # The entry a commit binds, revoked once the commit has read it and
   # before its revision locks it: run at the commit's first read of an
   # athanor's entry, once, on the connection the read has just released.
