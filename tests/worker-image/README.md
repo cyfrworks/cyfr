@@ -51,11 +51,16 @@ everything it saw to an event and its output. The control plane attaches
 a canary value as CYFR does and masks it out of the answer. While the
 attempt's close is held, the observer reads the runner's process memory
 (`/proc/PID/mem`, every readable mapping), the worker service's, and the
-runner's tmpfs home; the attempt is then killed so the service reports the
+runner's tmpfs home, recursively: every entry's name, every symlink's target
+and every regular file's contents; the attempt is then killed so the service reports the
 runner's exit. The canary must be in none of these, nor in the container's
 log, the exit report, the attach answer, the event, the output or anything
 sent to the control plane, and must be in the upstream's log.
 
 Its positive control plants another canary in a disclosed field on
 another athanor's runner, which its guest reads and writes out, and the
-same dump must find it, so a clean dump reads what it claims to.
+same dump must find it, so a clean dump reads what it claims to. Before
+that runner's home is read, values are planted in it as a directory's
+name, a file's contents inside it, a file's name and a symlink's target,
+and the home dump must find each. The control's verdicts are given before
+the canary's.

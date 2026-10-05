@@ -21,7 +21,9 @@ uid's memory or home) reads
 
 - the runner's process memory: every readable mapping of /proc/PID/mem;
 - the worker service's process memory, the same way;
-- every file under the runner's tmpfs home;
+- every entry under the runner's tmpfs home, recursively: its name (a
+  file's, a directory's or a symlink's), a symlink's target and a regular
+  file's contents;
 
 and then the attempt is killed, so the service reports the runner's exit.
 The canary appears in none of these, nor in the container's log (the
@@ -34,7 +36,11 @@ A positive control runs the same guest on another athanor, with another
 canary value planted in a disclosed field, which its runner is handed at
 attach and its guest reads and writes out: the same dump of that runner's
 memory finds it, as do the attach answer, the event and the output, so a
-clean dump is one that reads what it claims to.
+clean dump is one that reads what it claims to. Before its home is read,
+values are planted there as a directory's name, a file's contents inside
+it, a file's name and a symlink's target, and the same home dump finds
+each. The control's verdicts are given before the canary's, so a clean
+home is reported only beside a home check shown to find what is there.
 
 Usage: tests/worker-image/canary.py IMAGE
 """
@@ -90,13 +96,27 @@ done < /proc/$pid/maps
 echo "regions=$regions bytes=$bytes" >&2
 """
 
-# Every file under the home $1, written to stdout; on stderr, their count
-# and the count of every entry the home holds, or that there is no such
-# home.
+# Every entry under the home $1, recursively, written to stdout: each
+# entry's path, which names every file, directory and symlink; each
+# symlink's target; and each regular file's contents. A symlink is read,
+# never followed. On stderr, the counts of regular files, symlinks and
+# entries, or that there is no such home.
 DUMP_HOME = r"""
 [ -d "$1" ] || { echo "no home $1" >&2; exit 3; }
+find "$1" -mindepth 1 2>/dev/null
+find "$1" -type l -exec readlink {} \; 2>/dev/null
 find "$1" -type f -exec cat {} + 2>/dev/null
-echo "files=$(find "$1" -type f | wc -l) entries=$(find "$1" | wc -l)" >&2
+echo "files=$(find "$1" -type f | wc -l) links=$(find "$1" -type l | wc -l) entries=$(find "$1" -mindepth 1 | wc -l)" >&2
+"""
+
+# The positive control's plants in the home $1: a directory named $2
+# holding a file whose contents are $3, a file named $4, and a symlink
+# whose target is $5. HOME_UNPLANT takes them out again.
+HOME_PLANT = r"""
+mkdir "$1/$2" && printf %s "$3" > "$1/$2/contents" && : > "$1/$4" && ln -s "$5" "$1/canary-plant-link"
+"""
+HOME_UNPLANT = r"""
+rm -rf "$1/$2" "$1/$4" "$1/canary-plant-link"
 """
 
 
@@ -206,11 +226,11 @@ def recorded_attach(plane, execution_id):
     plane.script("attach", answer, execution_id)
 
 
-def run_guest(stack, plane, reflector, athanor, attached_value, disclosed_value=None):
+def run_guest(stack, plane, reflector, athanor, attached_value, disclosed_value=None, plants=None):
     """Runs the canary guest for `athanor`, the connection attaching `attached_value` and, for the positive
-    control, FIELD disclosed as `disclosed_value`. While its close is held, its runner's memory, the service's
-    memory and its runner's home are read for every value named; then the attempt is killed and its runner's
-    exit reported. Answers what the case reads."""
+    control, FIELD disclosed as `disclosed_value` and `plants` (`plant_values/0`) planted in its runner's home.
+    While its close is held, its runner's memory, the service's memory and its runner's home are read for every
+    value named; then the attempt is killed and its runner's exit reported. Answers what the case reads."""
     marker = "canary-body-" + secrets.token_hex(8)
     request = {"connection": CONNECTION, "method": "POST", "url": f"http://{HOST}:{reflector.port}/reflect",
                "headers": {"content-type": "text/plain"}, "body": marker}
@@ -221,7 +241,8 @@ def run_guest(stack, plane, reflector, athanor, attached_value, disclosed_value=
     execution_id = attempt["execution_id"]
     recorded_attach(plane, execution_id)
     release = memory.held(plane, "complete", execution_id)
-    needles = [value.encode() for value in (attached_value, disclosed_value) if value] + [marker.encode()]
+    planted = list((plants or {}).values())
+    needles = [value.encode() for value in (attached_value, disclosed_value, *planted) if value] + [marker.encode()]
     try:
         expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"{athanor}: the canary guest starts")
         runner = memory.attached_runner(stack, plane, attempt)
@@ -229,7 +250,13 @@ def run_guest(stack, plane, reflector, athanor, attached_value, disclosed_value=
         service_pid = stack.service_beam_pid()
         runner_memory = scan(stack, DUMP_MEMORY, runner["pid"], needles)
         service_memory = scan(stack, DUMP_MEMORY, service_pid, needles)
-        home = scan(stack, DUMP_HOME, runner["home"], needles)
+        if plants:
+            plant(stack, HOME_PLANT, runner["home"], plants)
+        try:
+            home = scan(stack, DUMP_HOME, runner["home"], needles)
+        finally:
+            if plants:
+                plant(stack, HOME_UNPLANT, runner["home"], plants)
         expect(stack.kill(execution_id)[1] == {"v": 1, "ok": True},
                f"{athanor}: with every dump read, the attempt is killed while its close is held")
         exits = runners.exit_reports(plane, attempt, 15)
@@ -253,6 +280,18 @@ def run_guest(stack, plane, reflector, athanor, attached_value, disclosed_value=
     }
 
 
+def plant_values():
+    """The values the positive control plants in its runner's home, by what holds each."""
+    return {kind: f"sk-home-{kind.replace(' ', '-')}-{secrets.token_hex(12)}"
+            for kind in ("directory name", "file contents", "file name", "symlink target")}
+
+
+def plant(stack, script, home, plants):
+    """`script` (HOME_PLANT or HOME_UNPLANT) run as root in the runner's home with the plants as its arguments."""
+    run("docker", "exec", "--privileged", stack.container, "sh", "-c", script, "sh", str(home),
+        plants["directory name"], plants["file contents"], plants["file name"], plants["symlink target"])
+
+
 def where(value, seen):
     """Every place `value` shows of what a case read."""
     needle = value.encode()
@@ -269,20 +308,26 @@ def where(value, seen):
 
 
 def dumped(label, seen):
-    """The dumps read what they claim: the runner's memory and the service's are whole VMs, the home holds files."""
+    """The dumps read what they claim: the runner's memory and the service's are whole VMs, and the home's entries
+    were walked (that the walk finds what a home holds is the positive control's)."""
     for name in ("runner_memory", "service_memory"):
         _found, total, said = seen[name]
         expect(total >= MIN_DUMP_BYTES and said.startswith("regions="),
                f"{label}: the {name.replace('_', ' ')} dump read {total} bytes ({said})", said)
     _found, total, said = seen["home"]
-    expect(said.startswith("files="), f"{label}: the runner's home dump read {total} bytes of its files ({said})", said)
+    expect(said.startswith("files="),
+           f"{label}: the runner's home dump read {total} bytes of its entries' names, links and files ({said})", said)
 
 
-def test_credential_canary(stack, plane, reflector):
+def run_credential_canary(stack, plane, reflector):
+    """scenario credential_canary's run: the guest with an attached canary. Answers the canary and what was read."""
+    canary = "sk-canary-" + secrets.token_hex(16)
+    return canary, run_guest(stack, plane, reflector, "ath_canary", canary)
+
+
+def check_credential_canary(reflector, canary, seen):
     """scenario credential_canary: an attached canary is in none of the places a runner or the service can
     hold or say it, and in the upstream's log."""
-    canary = "sk-canary-" + secrets.token_hex(16)
-    seen = run_guest(stack, plane, reflector, "ath_canary", canary)
     label = "credential_canary"
     dumped(label, seen)
 
@@ -318,11 +363,18 @@ def test_credential_canary(stack, plane, reflector):
            "control plane", found)
 
 
-def test_positive_control(stack, plane, reflector):
-    """The positive control: a canary planted in a disclosed field is found by the same dump."""
+def run_positive_control(stack, plane, reflector):
+    """The positive control's run: another canary disclosed, and values planted in its runner's home."""
     planted = "sk-planted-" + secrets.token_hex(16)
     attached = "sk-control-attached-" + secrets.token_hex(16)
-    seen = run_guest(stack, plane, reflector, "ath_canary_control", attached, disclosed_value=planted)
+    plants = plant_values()
+    seen = run_guest(stack, plane, reflector, "ath_canary_control", attached, disclosed_value=planted, plants=plants)
+    return planted, plants, seen
+
+
+def check_positive_control(planted, plants, seen):
+    """The positive control: a canary planted in a disclosed field is found by the same dump, and each value
+    planted in the runner's home by the same home dump."""
     label = "positive control"
     dumped(label, seen)
 
@@ -338,6 +390,10 @@ def test_positive_control(stack, plane, reflector):
     expect(count > 0 and {"attach_answer", "events", "output"} <= set(found),
            f"{label}: the dump of its runner's memory finds the planted value, as do the attach answer, the event and "
            "the output: the canary check reads what it claims to", found)
+    home_found, _total, said = seen["home"]
+    for kind, value in plants.items():
+        expect(home_found[value.encode()] > 0,
+               f"{label}: the runner's home dump finds the value planted as a {kind} ({said})")
 
 
 def prerequisites(image):
@@ -359,8 +415,12 @@ def main(image):
     stack = Stack("cyfr-opus-canary", image, plane)
     try:
         stack.up()
-        test_credential_canary(stack, plane, reflector)
-        test_positive_control(stack, plane, reflector)
+        canary, canary_seen = run_credential_canary(stack, plane, reflector)
+        control = run_positive_control(stack, plane, reflector)
+        # The control's verdicts first: the dumps are shown to find what is
+        # there before the canary's clean dumps are believed.
+        check_positive_control(*control)
+        check_credential_canary(reflector, canary, canary_seen)
     finally:
         stack.down()
         reflector.stop()
