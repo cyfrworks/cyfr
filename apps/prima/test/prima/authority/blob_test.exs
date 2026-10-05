@@ -649,14 +649,74 @@ defmodule Prima.Authority.BlobTest do
       assert archive == dest.vault.named["Archive"]
     end
 
+    test "a name in another case is the same account: its binding, under its stored key", %{
+      dest: dest
+    } do
+      for spelled <- ["archive", "ARCHIVE", "aRcHiVe"] do
+        assert {:ok, archive} = Blob.vault_for(dest, spelled)
+        assert archive == dest.vault.named["Archive"]
+        assert {:ok, {_node, _edge, "Archive"}} = Blob.parse_binding_key(archive.binding_key)
+      end
+    end
+
     test "a name the edge does not bind is connection_not_granted", %{dest: dest, public: public} do
-      assert Blob.vault_for(dest, "archive") == {:error, :connection_not_granted}
+      assert Blob.vault_for(dest, "Archives") == {:error, :connection_not_granted}
       assert Blob.vault_for(dest, "default") == {:error, :connection_not_granted}
       assert Blob.vault_for(public, "Archive") == {:error, :connection_not_granted}
       assert Blob.vault_for(%Edge{}, "Archive") == {:error, :connection_not_granted}
       assert Blob.vault_for(nil, "Archive") == {:error, :connection_not_granted}
       assert Blob.vault_for(nil, nil) == {:ok, nil}
       assert Blob.vault_for(%Edge{}, nil) == {:ok, nil}
+    end
+  end
+
+  describe "account names" do
+    @account_names Path.expand("../../../../../tests/fixtures/account_names.json", __DIR__)
+
+    # The rule the command line folds by too (`apps/codex/cmd/profile_test.go`
+    # reads the same vector), on the Unicode tables the vector names.
+    test "fold to the shared vector's keys, and are one account exactly when the keys are" do
+      %{"unicode" => unicode, "keys" => keys, "same" => same, "different" => different} =
+        @account_names |> File.read!() |> Jason.decode!()
+
+      assert keys != [] and same != [] and different != []
+
+      assert String.Unicode.version() |> Tuple.to_list() |> Enum.join(".") == unicode,
+             "the home folds on Unicode #{inspect(String.Unicode.version())}, " <>
+               "the vector on #{unicode}"
+
+      for %{"name" => name, "key" => key} <- keys do
+        assert Blob.account_name_key(name) == key,
+               "#{inspect(name)} folds to #{inspect(Blob.account_name_key(name))}, not #{inspect(key)}"
+      end
+
+      for [a, b] <- same, do: assert(Blob.same_account_name?(a, b), "#{a} and #{b} are one")
+      for [a, b] <- different, do: refute(Blob.same_account_name?(a, b), "#{a} and #{b} are two")
+    end
+
+    test "a blob naming one account twice, in two cases, is refused" do
+      named = %{
+        "Work" => Fixtures.bound_vault(@formula, "@ingress", "vault-2", "sha256:b", name: "Work"),
+        "WORK" => Fixtures.bound_vault(@formula, "@ingress", "vault-3", "sha256:c", name: "WORK")
+      }
+
+      assert {:error, _reason} =
+               Blob.parse(%{
+                 "canonical" => "jcs-1",
+                 "nodes" => %{
+                   @formula => %{
+                     "limits" => limits_map(),
+                     "edges" => %{
+                       "@ingress" => %{
+                         "vault" =>
+                           Fixtures.bound_vault(@formula, "@ingress", "vault-1", "sha256:a",
+                             named: named
+                           )
+                       }
+                     }
+                   }
+                 }
+               })
     end
   end
 

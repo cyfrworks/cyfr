@@ -685,12 +685,10 @@ defmodule PrismWeb.ConsentSheetComponent do
   end
 
   defp earlier_namesake(slot, name, rows) do
-    folded = String.downcase(name)
-
     rows
     |> Enum.take_while(fn {other, _choice} -> other != slot end)
     |> Enum.find_value(fn {_other, choice} ->
-      if String.downcase(choice.name) == folded, do: choice.name
+      if Prima.Authority.Blob.same_account_name?(choice.name, name), do: choice.name
     end)
   end
 
@@ -1269,17 +1267,18 @@ defmodule PrismWeb.ConsentSheetComponent do
   def open_account(plan, choices, %{name: name} = account) when is_binary(name) do
     with {:ok, edge, need} <- account_edge(plan, account),
          {:ok, choices, _default_need} <- account_default(plan, choices, edge) do
-      folded = String.downcase(name)
-
-      if Enum.any?(accounts_on(choices, edge), &(String.downcase(elem(&1, 1).name) == folded)),
-        do: {:ok, choices},
-        else:
-          {:ok,
-           Map.put(
-             choices,
-             named_slot(edge, name),
-             fixed_account(new_choice(nil, nil, need), name)
-           )}
+      if Enum.any?(
+           accounts_on(choices, edge),
+           &Prima.Authority.Blob.same_account_name?(elem(&1, 1).name, name)
+         ),
+         do: {:ok, choices},
+         else:
+           {:ok,
+            Map.put(
+              choices,
+              named_slot(edge, name),
+              fixed_account(new_choice(nil, nil, need), name)
+            )}
     end
   end
 

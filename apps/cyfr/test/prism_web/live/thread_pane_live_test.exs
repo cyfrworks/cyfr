@@ -713,19 +713,31 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     {"catalyst:local.#{name}", "catalyst:local.#{name}:0.1.0"}
   end
 
-  test "a launch's account is asked on the app's own profile, opened on that account, and the " <>
-         "pane then offers the ended turn's message again as a new turn",
-       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+  # The text line of `thread` whose content is `content`: the message a
+  # turn answered.
+  defp line_id!(in_room, thread, content) do
+    rows = Threads.latest_messages(Sanctum.Context.actor(in_room), thread.id, 500)
+    assert %{id: id} = Enum.find(rows, &(&1.kind == "text" and &1.content == content))
+    id
+  end
+
+  # A launch's account the ended turn (its message `message_id`) asked
+  # for, asked in the view's layer on a fresh app's own profile and
+  # granted there. Answers the view and the pane once the pane has heard
+  # its grant.
+  defp grant_launch_account!(conn, room, thread, user, in_room, message_id) do
     {_name_ref, ref} = needy_app!(in_room)
     {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     pane = child!(view, "pane-" <> room.id)
 
+    data = %{ref: ref, user_id: user.user_id, account: %{name: "Supabase 2", need: nil}}
+
     send(pane.pid, %Cyfr.Bus.ThreadEvent{
       athanor_id: thread.athanor_id,
       thread_id: thread.id,
       kind: :consent_required,
-      data: %{ref: ref, user_id: user.user_id, account: %{name: "Supabase 2", need: nil}}
+      data: if(message_id, do: Map.put(data, :message_id, message_id), else: data)
     })
 
     render(pane)
@@ -746,6 +758,25 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       "the pane to hear its grant"
     )
 
+    {view, pane}
+  end
+
+  # Whether the pane asked to cut the thread's turn for a new consent.
+  defp restarts_for_consent do
+    Arca.Repo.all(
+      from(l in Arca.Schemas.McpLog,
+        where: l.tool == "thread" and l.action == "restart_for_consent",
+        select: l.id
+      )
+    )
+  end
+
+  test "a launch's account is asked on the app's own profile, opened on that account, and the " <>
+         "pane then offers the ended turn's message again as a new turn",
+       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+    hello = line_id!(in_room, thread, "hello")
+    {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, hello)
+
     # The turn that asked already ended: nothing is cut, and its message
     # is offered again, to be sent as a new turn.
     assigns = :sys.get_state(pane.pid).socket.assigns
@@ -753,6 +784,72 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     html = render(pane)
     assert html =~ "send that message again, as a new turn"
     assert has_element?(pane, ~s(button[phx-click="restart_send"]))
+    assert restarts_for_consent() == []
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "the retry offered is the ended turn's own message, never a line queued while it ran",
+       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+    hello = line_id!(in_room, thread, "hello")
+
+    {:ok, _} =
+      Threads.append(Sanctum.Context.actor(in_room), thread.id, %{
+        author: user.user_id,
+        content: "and one more thing"
+      })
+
+    {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, hello)
+
+    assert :sys.get_state(pane.pid).socket.assigns.restart_prompt == "hello"
+    assert restarts_for_consent() == []
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "the retry offered is the ended turn's own message, however many rows follow it",
+       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+    hello = line_id!(in_room, thread, "hello")
+
+    for n <- 1..55 do
+      {:ok, _} =
+        Threads.append(Sanctum.Context.actor(in_room), thread.id, %{
+          author: "aqua",
+          content: "reply #{n}"
+        })
+    end
+
+    {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, hello)
+
+    # Nothing is cut: the turn that asked has ended, and no other turn is
+    # the grant's to cut.
+    assert :sys.get_state(pane.pid).socket.assigns.restart_prompt == "hello"
+    assert restarts_for_consent() == []
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "with no message of the turn that asked to offer, the pane cuts nothing and says so",
+       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+    # A line of another thread is no message of this thread's turn.
+    {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(in_room))
+
+    {:ok, foreign} =
+      Threads.append(Sanctum.Context.actor(in_room), elsewhere.id, %{
+        author: user.user_id,
+        content: "a line of another thread"
+      })
+
+    for message_id <- [nil, foreign.id] do
+      {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, message_id)
+      assigns = :sys.get_state(pane.pid).socket.assigns
+
+      assert assigns.restart_prompt == nil
+      assert assigns.grant_retry == nil
+      assert assigns.flash["info"] =~ "The turn that asked has ended"
+      refute has_element?(pane, ~s(button[phx-click="restart_send"]))
+      assert restarts_for_consent() == []
+    end
 
     Cyfr.Test.Sandbox.end_views()
   end

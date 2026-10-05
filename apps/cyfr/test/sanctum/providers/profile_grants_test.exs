@@ -10,6 +10,15 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   refuses outright reaches nothing, every edge counts (a borrowed entry
   among them), at most a thousand heads are read, and a read never
   reaches past the caller's athanor.
+
+  A grant naming one account in two spellings is refused naming both,
+  with nothing written, through `profile.preview` and `profile.grant`
+  alike: the home decides which names are one account, whatever Unicode
+  tables the caller folded names by. The command line sends
+  `profile.plan`, `profile.preview` and `profile.commit`: preview and
+  commit, which carry the bindings, reach the slot check in
+  `Sanctum.Consent.Commit` that `profile.grant` reaches, and the command
+  line meets the refusal first at `profile.preview`.
   """
 
   use ExUnit.Case, async: false
@@ -677,6 +686,141 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
       assert {:ok, %{grants: [%{profile_id: ^profile_id}]}} =
                grants(ctx, %{"path" => "data/reports/q3.md"})
+    end
+  end
+
+  # An app of `ctx`'s athanor whose own calls carry one credential need,
+  # granted through the walk with a default entry: its profile, and that
+  # entry and two more of its provider.
+  defp granted_app!(ctx, name) do
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "reagent",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "fields" => ["KEY"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(manifest)
+      })
+
+    [default, one, other] =
+      for label <- ["default", "one", "other"] do
+        {:ok, view} =
+          Sanctum.TestContext.create_vault(ctx, %{
+            name: "#{name} #{label}",
+            kind: "api_key",
+            provider_hint: "example.com",
+            fields: %{"KEY" => "k-#{name}-#{label}"},
+            destination: %{"hosts" => ["api.example.com"]},
+            disclose: true
+          })
+
+        view
+      end
+
+    ref = "reagent:local." <> name
+    decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: default.id}]}
+    {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Commit.preview(ctx, decisions)
+
+    {:ok, %{profile_id: profile_id}} =
+      Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    %{ref: ref, profile_id: profile_id, default: default, one: one, other: other}
+  end
+
+  # `profile.grant` of `name`'s app, its own calls bound to a default and
+  # to `a` and `b` beside it, refused naming both spellings, with the head
+  # as it was.
+  defp refuses_two_spellings(ctx, name, a, b) do
+    app = granted_app!(ctx, name)
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, head} = Arca.ConsentStorage.head_consent(actor, app.profile_id)
+
+    assert Grimoire.call_external("profile", ctx, %{
+             "action" => "grant",
+             "profile_id" => app.profile_id,
+             "expected_consent_revision" => head.revision,
+             "bindings" => [
+               %{"need" => "api_key", "entry_id" => app.default.id},
+               %{"need" => "api_key", "entry_id" => app.one.id, "name" => a},
+               %{"need" => "api_key", "entry_id" => app.other.id, "name" => b}
+             ]
+           }) ==
+             {:error,
+              "The bindings for api_key name one account twice, as \"#{a}\" and \"#{b}\": " <>
+                "names that differ only in letter case are the same account. Bind it once, " <>
+                "under one of the two."}
+
+    assert {:ok, %{id: id, revision: revision}} =
+             Arca.ConsentStorage.head_consent(actor, app.profile_id)
+
+    assert {id, revision} == {head.id, head.revision}
+  end
+
+  describe "profile.preview naming one account in two spellings" do
+    # Where the command line meets the refusal first: `cyfr profile grant`
+    # sends profile.plan, profile.preview and profile.commit, and preview
+    # and commit, which carry the bindings, reach the slot check in
+    # `Sanctum.Consent.Commit` that profile.grant reaches. A command line
+    # folding on Unicode tables older than the home's sends `Ꟍ Work` and
+    # `ꟍ work` as two accounts.
+    test "is refused naming both, and nothing is written", %{ctx: ctx} do
+      app = granted_app!(ctx, "preview-twice-unicode")
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, head} = Arca.ConsentStorage.head_consent(actor, app.profile_id)
+
+      assert Grimoire.call_external("profile", ctx, %{
+               "action" => "preview",
+               "decisions" => %{
+                 "ref" => app.ref,
+                 "bindings" => [
+                   %{"need" => "api_key", "entry_id" => app.default.id},
+                   %{"need" => "api_key", "entry_id" => app.one.id, "name" => "Ꟍ Work"},
+                   %{"need" => "api_key", "entry_id" => app.other.id, "name" => "ꟍ work"}
+                 ]
+               }
+             }) ==
+               {:error,
+                "The bindings for api_key name one account twice, as \"Ꟍ Work\" and " <>
+                  "\"ꟍ work\": names that differ only in letter case are the same account. " <>
+                  "Bind it once, under one of the two."}
+
+      assert {:ok, %{id: id, revision: revision}} =
+               Arca.ConsentStorage.head_consent(actor, app.profile_id)
+
+      assert {id, revision} == {head.id, head.revision}
+    end
+  end
+
+  describe "profile.grant naming one account in two spellings" do
+    # The same slot check, reached through profile.grant: two accounts to
+    # a command line folding on older tables, one to the home.
+    test "is refused naming both, a letter only newer tables fold included, and the head stands",
+         %{ctx: ctx} do
+      refuses_two_spellings(ctx, "grant-twice-unicode", "Ꟍ Work", "ꟍ work")
+    end
+
+    test "is refused naming both, in ASCII, and the head stands", %{ctx: ctx} do
+      refuses_two_spellings(ctx, "grant-twice-ascii", "Work", "work")
     end
   end
 

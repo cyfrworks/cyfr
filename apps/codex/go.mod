@@ -1,6 +1,6 @@
 module github.com/cyfr/codex
 
-go 1.26.6
+go 1.27.1
 
 require (
 	github.com/charmbracelet/huh v0.8.0

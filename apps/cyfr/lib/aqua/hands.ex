@@ -160,16 +160,17 @@ defmodule Aqua.Hands do
   stored head's ingress binds named accounts beside its default, with
   those names (`Sanctum.Consent.Accounts.list/1`), ordered by
   reference. An app that binds none needs no account and is not listed,
-  and neither is one whose head cannot be read; a store that cannot
-  answer lists none. Names only: never an entry, its id or a value. What
-  the model reads of it is bounded where it is rendered
-  (`Aqua.Loop.Request.tool_definitions/2`).
+  and neither is one whose head cannot be read. A store that cannot
+  answer is nil, never an empty list: the model then reads the declared
+  description, never that no app binds a named account. Names only:
+  never an entry, its id or a value. What the model reads of it is
+  bounded where it is rendered (`Aqua.Loop.Request.tool_definitions/2`).
   """
-  @spec launch_accounts(Sanctum.Context.t()) :: launch_accounts()
+  @spec launch_accounts(Sanctum.Context.t()) :: launch_accounts() | nil
   def launch_accounts(%Sanctum.Context{} = ctx) do
     case Sanctum.Consent.Accounts.list(ctx) do
       {:ok, apps, truncated?} -> %{apps: apps, truncated?: truncated?}
-      {:error, _unreadable} -> %{apps: [], truncated?: false}
+      {:error, _unreadable} -> nil
     end
   end
 

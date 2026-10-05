@@ -2284,8 +2284,10 @@ defmodule Sanctum.Consent.CommitTest do
                  %{dep: @dep_a, entry_id: other.id, name: "work"}
                ])
 
-      assert why =~ "The selections of #{@dep_a} name the account "
-      assert why =~ " twice; each names its own"
+      assert why ==
+               "The selections of #{@dep_a} name one account twice, as \"Work\" and \"work\": " <>
+                 "names that differ only in letter case are the same account. Select it once, " <>
+                 "under one of the two."
 
       # An account name the binding key cannot carry.
       assert {:error, {:invalid_argument, why}} =

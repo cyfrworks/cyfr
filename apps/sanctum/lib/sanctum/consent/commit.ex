@@ -930,7 +930,7 @@ defmodule Sanctum.Consent.Commit do
 
   defp edge_slots(dep, on_edge) do
     {unnamed, named} = Enum.split_with(on_edge, &is_nil(Map.get(&1, :name)))
-    folded = Enum.map(named, &String.downcase(&1.name))
+    repeated = repeated_account(named)
 
     cond do
       named == [] or length(unnamed) > 1 ->
@@ -950,13 +950,8 @@ defmodule Sanctum.Consent.Commit do
           "The selections of #{dep} name accounts beside a key its #{label} profile lends; a " <>
             "named account sits beside a default entry chosen here"}}
 
-      length(Enum.uniq(folded)) != length(folded) ->
-        repeated =
-          Enum.find(named, fn s -> Enum.count(folded, &(&1 == String.downcase(s.name))) > 1 end)
-
-        {:error,
-         {:invalid_argument,
-          "The selections of #{dep} name the account #{repeated.name} twice; each names its own"}}
+      repeated != nil ->
+        {:error, {:invalid_argument, named_twice("The selections of #{dep}", "Select", repeated)}}
 
       other = Enum.find(named, &(&1.need != hd(unnamed).need)) ->
         {:error,
@@ -1610,7 +1605,7 @@ defmodule Sanctum.Consent.Commit do
 
   defp check_binding_slots([%{need: need} | _] = bindings) do
     {unnamed, named} = Enum.split_with(bindings, &is_nil(&1.name))
-    folded = Enum.map(named, &String.downcase(&1.name))
+    repeated = repeated_account(named)
     needs = bindings |> Enum.map(& &1.need) |> Enum.uniq() |> Enum.sort()
 
     cond do
@@ -1631,18 +1626,44 @@ defmodule Sanctum.Consent.Commit do
           "The bindings for #{need} name accounts beside no default; one binding of " <>
             "#{need} names no account"}}
 
-      length(Enum.uniq(folded)) != length(folded) ->
-        repeated =
-          Enum.find(named, fn b -> Enum.count(folded, &(&1 == String.downcase(b.name))) > 1 end)
-
-        {:error,
-         {:invalid_argument,
-          "The bindings for #{need} name the account #{repeated.name} twice; each names its own"}}
+      repeated != nil ->
+        {:error, {:invalid_argument, named_twice("The bindings for #{need}", "Bind", repeated)}}
 
       true ->
         :ok
     end
   end
+
+  # The first two of `named` that name one account, as account names
+  # compare (`Prima.Authority.Blob.same_account_name?/2`): their names as
+  # given, in the order given; nil when each names its own.
+  defp repeated_account(named) do
+    named
+    |> Enum.with_index(1)
+    |> Enum.find_value(fn {one, i} ->
+      named
+      |> Enum.drop(i)
+      |> Enum.find(&Prima.Authority.Blob.same_account_name?(&1.name, one.name))
+      |> case do
+        nil -> nil
+        other -> {one.name, other.name}
+      end
+    end)
+  end
+
+  # A repeated account, as `subject` (the bindings of a need, or the
+  # selections of a dependency) named it. Spelled alike, the name; spelled
+  # two ways, both spellings as given and that they are one account: the
+  # home decides which names are one account, and a command line folding
+  # on other Unicode tables may send two spellings of one as two.
+  defp named_twice(subject, _verb, {name, name}),
+    do: "#{subject} name the account #{name} twice; each names its own"
+
+  defp named_twice(subject, verb, {one, other}),
+    do:
+      "#{subject} name one account twice, as \"#{one}\" and \"#{other}\": names that " <>
+        "differ only in letter case are the same account. #{verb} it once, under one of " <>
+        "the two."
 
   defp bind_one_of([one, other]), do: "bind #{one} or #{other}, not both"
 

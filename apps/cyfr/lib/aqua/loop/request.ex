@@ -161,7 +161,9 @@ defmodule Aqua.Loop.Request do
   tools as `%{name, description, input_schema}`), `:soul?` (whether roles
   may be offered at all), `:accounts` (the apps a launch may name an
   account of, `t:Aqua.Hands.launch_accounts/0`, which the `connection`
-  argument's description lists). Answers the contract's `tools` list.
+  argument's description lists; absent or nil, as when they could not be
+  read, the declared description stands). Answers the contract's `tools`
+  list.
   """
   @spec tool_definitions(map(), keyword()) :: [tool()]
   def tool_definitions(policy, opts \\ []) when is_map(policy) do

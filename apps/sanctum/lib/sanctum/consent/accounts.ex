@@ -31,16 +31,21 @@ defmodule Sanctum.Consent.Accounts do
   is the one resolution of a launch's account: what an assistant's policy
   decides on, what its card binds and what its dispatch checks again.
 
-  Answers the entry's id. A source with no profile to select by default,
-  a selected profile that is not active, a profile with no head, a head
-  with no ingress, and an ingress that binds no account by that name are
-  each `{:error, :connection_not_granted}`: a grant to make. A store that
-  cannot answer, a damaged row, a selection that is ambiguous or names no
-  profile, and a head the loader refuses answer their own refusal, never
-  `connection_not_granted`.
+  The name is matched as account names compare
+  (`Prima.Authority.Blob.same_account_name?/2`), so another case of a
+  bound name resolves. Answers the entry's id and the account's name as
+  the binding stores it, which is the spelling everything recorded and
+  shown of the account carries. A source with no profile to select by
+  default, a selected profile that is not active, a profile with no head,
+  a head with no ingress, and an ingress that binds no account by that
+  name are each `{:error, :connection_not_granted}`: a grant to make. A
+  store that cannot answer, a damaged row, a selection that is ambiguous
+  or names no profile, and a head the loader refuses answer their own
+  refusal, never `connection_not_granted`.
   """
   @spec resolve(Sanctum.Context.t(), RootSelect.selector(), String.t(), String.t()) ::
-          {:ok, String.t()} | {:error, :connection_not_granted | term()}
+          {:ok, %{entry_id: String.t(), name: String.t()}}
+          | {:error, :connection_not_granted | term()}
   def resolve(%Sanctum.Context{} = ctx, selector, source_ref, name)
       when is_binary(source_ref) and is_binary(name) do
     with {:ok, name_ref} <- name_level(source_ref),
@@ -49,8 +54,11 @@ defmodule Sanctum.Consent.Accounts do
          {:ok, consent} <- head(ctx, profile),
          {:ok, blob} <- Sanctum.Consent.Loader.admitted_blob(ctx, profile, consent),
          {:ok, ingress} <- ingress(blob, profile.source_ref) do
-      case Blob.vault_for(ingress, name) do
-        {:ok, %{entry_id: entry_id}} when is_binary(entry_id) -> {:ok, entry_id}
+      with {:ok, %{entry_id: entry_id, binding_key: key}} when is_binary(entry_id) <-
+             Blob.vault_for(ingress, name),
+           {:ok, {_node, _edge, stored}} when is_binary(stored) <- Blob.parse_binding_key(key) do
+        {:ok, %{entry_id: entry_id, name: stored}}
+      else
         _not_bound -> {:error, :connection_not_granted}
       end
     end

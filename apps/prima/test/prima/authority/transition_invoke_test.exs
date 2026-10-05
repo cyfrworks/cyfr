@@ -152,8 +152,19 @@ defmodule Prima.Authority.TransitionInvokeTest do
       assert child.resources.egress.domains == ["prod.supabase.co"]
     end
 
+    test "a call naming a bound account in another letter case gets that binding, under its stored name" do
+      for name <- ["archive", "ARCHIVE"] do
+        {:child, child} = Transition.step(named_root!(), :call, source(connection: name))
+        assert child.resources.vault.entry_id == "vault-archive", name
+
+        assert child.resources.vault.binding_key ==
+                 "#{@formula}|#{@catalyst}|source|name:Archive",
+               name
+      end
+    end
+
     test "a call naming an account the edge lacks is connection_not_granted" do
-      for name <- ["archive", "default", "Other"] do
+      for name <- ["default", "Other"] do
         assert {:deny, :connection_not_granted} =
                  Transition.step(named_root!(), :call, source(connection: name)),
                name

@@ -988,8 +988,8 @@ defmodule Aqua.Loop do
       :ask ->
         ask(state, step, call, [], {runnable, cards, setup})
 
-      {:ask, %{vault_entry: entry_id}} ->
-        ask(state, step, call, [vault_entry: entry_id], {runnable, cards, setup})
+      {:ask, %{vault_entry: _, name: _} = account} ->
+        ask(state, step, call, [account: account], {runnable, cards, setup})
 
       {:deny, message} ->
         close(state, step, call, {:error, {:denied, message}})
@@ -1026,16 +1026,23 @@ defmodule Aqua.Loop do
   end
 
   # The proposal an approved call is held to. A launch's card stored the
-  # entry its account resolved to beside the call; any other call's is the
-  # call alone.
+  # account its call named as the binding stores the name, and the entry
+  # it resolved to, beside the call; any other call's is the call alone.
   defp approved_proposal(%State{} = state, approval, %Call{kind: :launch} = call) do
-    stored =
+    shown =
       case Tape.message(guest(state), approval.message_id) do
-        {:ok, card} -> get_in(Tape.payload(card), ["intent", "proposal", "vault_entry"])
+        {:ok, card} -> get_in(Tape.payload(card), ["intent", "proposal"])
         _ -> nil
       end
 
-    Policy.proposal(call, stored)
+    case shown do
+      %{"vault_entry" => entry_id, "args" => %{"connection" => stored}}
+      when is_binary(entry_id) and is_binary(stored) ->
+        Policy.proposal(call, %{vault_entry: entry_id, name: stored})
+
+      _none ->
+        Policy.proposal(call)
+    end
   end
 
   defp approved_proposal(_state, _approval, %Call{} = call), do: Policy.proposal(call)
@@ -1061,7 +1068,8 @@ defmodule Aqua.Loop do
     announce(state, :consent_required, %{
       ref: app,
       user_id: ctx(state).user_id,
-      account: %{name: account, need: need}
+      account: %{name: account, need: need},
+      message_id: state.turn.message_id
     })
 
     {:halt, {:failed, {:setup_required, setup}}, state}

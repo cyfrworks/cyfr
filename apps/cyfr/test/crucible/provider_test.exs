@@ -265,7 +265,7 @@ defmodule Crucible.ProviderTest do
       end
 
       # A name the ingress does not bind is a grant to make, typed: no row.
-      for name <- ["Home", "work"] do
+      for name <- ["Home", "Works"] do
         assert {:error, :connection_not_granted} = run.(name)
       end
 

@@ -21,16 +21,18 @@ defmodule Aqua.Launch do
   once.
 
   A launch naming an account (`connection`) runs under the account its
-  card showed, or not at all. The card's proposal binds the entry the
-  name resolved to when the card was drawn (`vault_entry`); before
-  anything runs the name is resolved again, as the approver, from the
-  app's stored head (`Sanctum.Consent.Accounts.resolve/4`, the one read
-  the assistant's policy resolves it by), and a
-  different entry, a name the head no longer binds, or an account the
-  card did not show is refused as a stale approval, a conflict that says
-  to ask again. The run itself picks the named binding as its root's
-  vault (`Crucible.run_root/5`); a head that moves between this check and
-  the run's own admission is resolved there again, by name.
+  card showed, or not at all. The card's proposal binds the account as
+  its binding stored the name, and the entry it resolved to when the card
+  was drawn (`vault_entry`); before anything runs the name is resolved
+  again, as the approver, from the app's stored head
+  (`Sanctum.Consent.Accounts.resolve/4`, the one read the assistant's
+  policy resolves it by), and a different entry, a name the head no
+  longer binds or now stores otherwise, or an account the card did not
+  show is refused as a stale approval, a conflict that says to ask again.
+  The run is asked for under the stored name, and itself picks the named
+  binding as its root's vault (`Crucible.run_root/5`); a head that moves
+  between this check and the run's own admission is resolved there
+  again, by name.
   """
 
   alias Aqua.Tape
@@ -107,17 +109,18 @@ defmodule Aqua.Launch do
   end
 
   # The account the card showed is the account the launch runs under: the
-  # name its arguments carry still resolves, as the approver, to the entry
-  # its proposal bound. A launch naming none runs under the default, and
-  # its card bound no entry.
+  # stored name its arguments carry still resolves, as the approver, to the
+  # entry its proposal bound, under that name as the binding stores it. A
+  # launch naming none runs under the default, and its card bound no entry.
   defp account_holds(approver, card, args) do
     shown = get_in(Arca.ThreadStorage.payload(card), ["intent", "proposal", "vault_entry"])
+    stored = args["connection"]
 
     case {shown, launch_account(approver, args)} do
       {nil, {:ok, nil}} -> :ok
-      {entry_id, {:ok, entry_id}} when is_binary(entry_id) -> :ok
+      {entry_id, {:ok, %{entry_id: entry_id, name: ^stored}}} when is_binary(entry_id) -> :ok
       {_shown, {:error, reason}} when reason != :connection_not_granted -> {:error, reason}
-      _another_account_or_none -> stale(args["connection"])
+      _another_account_or_none -> stale(stored)
     end
   end
 

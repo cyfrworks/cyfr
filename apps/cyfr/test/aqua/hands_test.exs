@@ -216,4 +216,23 @@ defmodule Aqua.HandsLaunchAccountsTest do
     refute description =~ "hands-plain"
     for entry <- entries, do: refute(description =~ entry.id)
   end
+
+  @tag :capture_log
+  test "a read that fails keeps the declared description, never that no app binds an account",
+       %{ctx: ctx} do
+    _app = app!(ctx, "hands-unread", ["Work"])
+    Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+    assert Hands.launch_accounts(ctx) == nil
+
+    description =
+      %{"execution.run" => "ask"}
+      |> Aqua.Loop.Request.tool_definitions(accounts: Hands.launch_accounts(ctx))
+      |> Enum.find(&(&1["name"] == "execution"))
+      |> get_in(["parameters", "properties", "connection", "description"])
+
+    refute description =~ "No app binds a named account"
+    refute description =~ "Apps with named accounts"
+    assert description =~ "a run started outside a chain asks its profile's own calls for it"
+  end
 end

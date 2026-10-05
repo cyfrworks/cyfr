@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/cyfr/codex/internal/prompt"
 )
@@ -1511,5 +1512,55 @@ func expected(row map[string]any, field string, value any) []string {
 		return []string{field + ": " + num(typed)}
 	default:
 		return []string{str(typed)}
+	}
+}
+
+// accountNameVectors is tests/fixtures/account_names.json: the Unicode
+// version its keys are folded on, each name's key, and pairs of names that
+// are, or are not, one account.
+type accountNameVectors struct {
+	Unicode string `json:"unicode"`
+	Keys    []struct {
+		Name string `json:"name"`
+		Key  string `json:"key"`
+	} `json:"keys"`
+	Same      [][2]string `json:"same"`
+	Different [][2]string `json:"different"`
+}
+
+// The CLI folds account names as the home does: on the Unicode tables the
+// shared vector names (the toolchain's, which go.mod pins), every key and
+// pair of it, which Prima.Authority.Blob's test reads too, through the slot
+// a flag's account names.
+func TestAccountNameKey_MatchesTheHome(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "account_names.json"))
+	if err != nil {
+		t.Fatalf("read vectors: %v", err)
+	}
+	var v accountNameVectors
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("decode vectors: %v", err)
+	}
+	if len(v.Keys) == 0 || len(v.Same) == 0 || len(v.Different) == 0 {
+		t.Fatalf("the vector holds no cases: %+v", v)
+	}
+	if unicode.Version != v.Unicode {
+		t.Errorf("the CLI folds on Unicode %s, the vector on %s", unicode.Version, v.Unicode)
+	}
+	for _, c := range v.Keys {
+		got := strings.TrimPrefix(slotKey("dep", c.Name), slotKey("dep", ""))
+		if got != c.Key {
+			t.Errorf("the slot of %q keys it %q (%U), want %q (%U)", c.Name, got, []rune(got), c.Key, []rune(c.Key))
+		}
+	}
+	for _, pair := range v.Same {
+		if slotKey("dep", pair[0]) != slotKey("dep", pair[1]) {
+			t.Errorf("%q and %q are one account, but their slots differ", pair[0], pair[1])
+		}
+	}
+	for _, pair := range v.Different {
+		if slotKey("dep", pair[0]) == slotKey("dep", pair[1]) {
+			t.Errorf("%q and %q are two accounts, but share a slot", pair[0], pair[1])
+		}
 	}
 }

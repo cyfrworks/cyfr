@@ -446,14 +446,15 @@ defmodule Sanctum.Consent.CommitDigest do
   end
 
   defp folded(nil), do: nil
-  defp folded(name), do: String.downcase(name)
+  defp folded(name), do: Prima.Authority.Blob.account_name_key(name)
 
   # One need, one credential per name: the default (no name) and each
-  # named account once. Two bindings in one slot would make the digest
-  # depend on list order and leave the loader to pick.
+  # named account once, a name a person would read as another counted as
+  # that name again. Two bindings in one slot would make the digest depend
+  # on list order and leave the loader to pick.
   defp ensure_one_binding_per_need(bindings) do
     sorted = Enum.sort_by(bindings, &{&1["need"], &1["name"] || ""})
-    slots = Enum.map(sorted, &{&1["need"], &1["name"]})
+    slots = Enum.map(sorted, &{&1["need"], folded(&1["name"])})
 
     if length(Enum.uniq(slots)) == length(slots) do
       {:ok, sorted}

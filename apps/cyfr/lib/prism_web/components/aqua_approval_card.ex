@@ -42,8 +42,9 @@ defmodule PrismWeb.AquaApprovalCard do
 
   A launch's card (an `execution.run` of an app) takes no standing
   answer: one approval is for that one launch. When the launch names an
-  account (`connection`), the card says which, and the approval binds
-  that account as the card shows it.
+  account (`connection`), the card says which, spelled as its binding
+  stores the name (the proposal carries that spelling), and the approval
+  binds that account as the card shows it.
 
   Risk visualization derives from the action's `kind` (read/write/execute/
   destructive/external). The colour weight scales with the kind so the common

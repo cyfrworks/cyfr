@@ -774,17 +774,31 @@ defmodule Aqua.ApprovalsTest do
 
       assert {:deny, _} = Policy.decide(named, %{"execution.run" => "deny"}, ctx: ctx)
 
+      # Spelled in another case it is the same account: Work's entry, under
+      # the name its binding stores.
+      lower = launch.(%{"input" => %{}, "connection" => "work"})
+
+      assert {:ask, %{vault_entry: ^work_id, name: "Work"} = same} =
+               Policy.decide(lower, %{"execution.run" => "ask"}, ctx: ctx)
+
       # The card binds the entry the name resolved to, beside the call, and
       # takes no standing answer.
-      card = Policy.card(named, vault_entry: work.id)
+      {:ask, account} = Policy.decide(named, %{"execution.run" => "ask"}, ctx: ctx)
+      card = Policy.card(named, account: account)
       assert card["proposal"]["vault_entry"] == work.id
       assert card["proposal"]["args"]["connection"] == "Work"
       assert card["standing"] == false
       refute Policy.proposal_digest(card) == Policy.proposal_digest(Policy.proposal(named))
 
+      # The card for the call spelled `work` reads and binds Work, the name
+      # its binding stores: the same proposal and digest as Work's own.
+      lower_card = Policy.card(lower, account: same)
+      assert lower_card["proposal"] == card["proposal"]
+      assert Policy.proposal_digest(lower_card) == Policy.proposal_digest(card)
+
       # A name the app's own profile does not bind is setup required, naming
       # the app and the account, before any approval is read.
-      for name <- ["Home", "work"] do
+      for name <- ["Home", "Works"] do
         assert {:setup_required, ^versioned, {nil, ^name}} =
                  Policy.decide(launch.(%{"connection" => name}), %{"execution.run" => "ask"},
                    ctx: ctx

@@ -1426,11 +1426,20 @@ defmodule Aqua.LoopTest do
     assert {:failed, {:setup_required, {^versioned, nil, "Supabase 2"}}} =
              Task.await(run(ctx, first), 60_000)
 
+    # It names the ended turn's own message, the one a retry sends again.
+    first_message = first.message_id
+
     assert_receive %ThreadEvent{
                      kind: :consent_required,
-                     data: %{ref: ^versioned, account: %{name: "Supabase 2", need: nil}}
+                     data: %{
+                       ref: ^versioned,
+                       account: %{name: "Supabase 2", need: nil},
+                       message_id: ^first_message
+                     }
                    },
                    5_000
+
+    assert is_binary(first_message)
 
     {:ok, ended} = Tape.turn(ctx, first.id)
     assert %{status: "failed", error: error} = ended
@@ -1572,5 +1581,38 @@ defmodule Aqua.LoopTest do
     assert {:ok, [_card]} = Tape.pending_approvals(ctx, paused)
     {:ok, steps} = Tape.steps(ctx, paused)
     assert %{dispatch_state: "proposed"} = Enum.find(steps, &(&1.kind == "launch"))
+  end
+
+  test "a launch by an agent whose policy names no execution.run is denied, and opens no card",
+       %{ctx: ctx, thread: thread} do
+    # The soul's own definition stops naming execution.run, and its grant
+    # is walked again for the shape that moved.
+    {:ok, _} =
+      Aqua.AgentConfig.call_aqua(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "tool_policy_patch" => %{"execution.run" => nil}
+      })
+
+    walk!(ctx, %{ref: @soul, selections: [%{dep: "catalyst:local.claude", label: "default"}]})
+
+    turn = accept!(ctx, thread, "@aqua launch the model")
+
+    script!([
+      calls([{"c1", "execution.run", %{"reference" => @model, "input" => %{}}}]),
+      reply("not launched")
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    {:ok, ended} = Tape.turn(ctx, turn.id)
+    assert {:ok, []} = Tape.pending_approvals(ctx, ended)
+    {:ok, steps} = Tape.steps(ctx, ended)
+
+    assert %{dispatch_state: "closed", outcome: "denied", approval_id: nil} =
+             launch = Enum.find(steps, &(&1.kind == "launch"))
+
+    assert {:ok, %{content: said}} = Tape.message(ctx, launch.result_message_id)
+    assert said =~ "execution.run is not in the agent's policy"
+    refute Enum.any?(ScriptedWorker.calls(), &(&1.input == %{}))
   end
 end

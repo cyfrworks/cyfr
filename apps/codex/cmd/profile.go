@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/cyfr/codex/internal/mcp"
@@ -439,9 +440,32 @@ func validAccountName(name string) bool {
 }
 
 // slotKey names one slot of an edge: its default ("" account), or an
-// account compared case-folded, as the home compares account names.
+// account by its key, as the home compares account names.
 func slotKey(target, account string) string {
-	return target + "\x00" + strings.ToLower(account)
+	return target + "\x00" + accountNameKey(account)
+}
+
+// accountNameKey is the form two account names share when they name one
+// account: the home's rule (Prima.Authority.Blob.account_name_key/1),
+// Unicode's full lowercase mapping without context or a language's
+// tailoring. Per rune, every code point maps as unicode.ToLower maps it
+// but U+0130 (İ), whose full mapping is "i" and a combining dot above;
+// tests/fixtures/account_names.json pins the rule on both sides. The tables
+// are the toolchain's (unicode.Version), which go.mod pins to the home's
+// Unicode version. A CLI built on other tables may still send two
+// spellings of one account as two, and the home refuses that grant naming
+// both: the home decides which names are one account.
+func accountNameKey(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		if r == '\u0130' {
+			b.WriteString("i\u0307")
+			continue
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
 }
 
 // splitLifetime reads value[:lifetime]: the value, and the lifetime it

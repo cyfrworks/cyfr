@@ -15,12 +15,14 @@ defmodule Aqua.Loop.Policy do
   external server's tool always asks; a launch asks, whatever the
   agent's own policy or a standing answer says, since `Aqua.Launch` runs
   only a launch a person approved on its card: it is refused when its
-  reference is no component and denied when `execution.run` is, and
-  nothing else. Reads run beside each other; everything else runs alone.
+  reference is no component, and denied when the agent's policy denies
+  `execution.run` or names it not at all. Reads run beside each other;
+  everything else runs alone.
 
   A launch naming an account (`connection`) has it resolved before it
-  asks (`launch_account/2`): the entry the launched app's own profile
-  binds under that name, the one the card binds its approval to. A name
+  asks (`launch_account/2`), as account names compare: the entry the
+  launched app's own profile binds under that name, and the name as the
+  binding stores it, which the card shows and its approval binds. A name
   the profile does not bind ends the call as setup required, before any
   approval is read.
 
@@ -40,9 +42,9 @@ defmodule Aqua.Loop.Policy do
 
   @typedoc """
   A launch's account as its card binds it: the entry the name resolved to
-  (`launch_account/2`).
+  and the name as its binding stores it (`launch_account/2`).
   """
-  @type account :: %{vault_entry: String.t()}
+  @type account :: %{vault_entry: String.t(), name: String.t()}
 
   @typedoc """
   What a call does: run at once; ask, for a launch naming an account with
@@ -105,17 +107,18 @@ defmodule Aqua.Loop.Policy do
 
   # A launch runs only from an approved card, so it asks whatever an
   # authored or standing allow says: an `auto` would reach a dispatch that
-  # refuses it for want of an approval.
+  # refuses it for want of an approval. A policy that denies
+  # `execution.run`, or names it not at all, denies the launch.
   defp decide_open(%Call{kind: :launch, target: reference} = call, policy, opts) do
     cond do
       not component_ref?(reference) ->
         {:refuse, "#{inspect(reference)} is not a component reference"}
 
-      Map.get(policy, key(call)) == "deny" ->
-        deny(call)
+      Map.get(policy, key(call)) in ["auto", "ask"] ->
+        ask_launch(call, Keyword.get(opts, :ctx))
 
       true ->
-        ask_launch(call, Keyword.get(opts, :ctx))
+        deny(call)
     end
   end
 
@@ -205,8 +208,8 @@ defmodule Aqua.Loop.Policy do
       {:ok, nil} ->
         :ask
 
-      {:ok, entry_id} ->
-        {:ask, %{vault_entry: entry_id}}
+      {:ok, %{entry_id: entry_id, name: stored}} ->
+        {:ask, %{vault_entry: entry_id, name: stored}}
 
       {:error, :connection_not_granted} ->
         {:setup_required, call.target, {nil, call.args["connection"]}}
@@ -219,10 +222,11 @@ defmodule Aqua.Loop.Policy do
   end
 
   @doc """
-  The entry a launch's named account resolves to, read under `ctx`: the
-  `connection` an `execution.run` names, resolved on the ingress of the
-  profile the launch roots at (its `profile` argument, else the default
-  owner profile) from that profile's stored head
+  The entry a launch's named account resolves to, read under `ctx`, with
+  the account's name as its binding stores it: the `connection` an
+  `execution.run` names, resolved on the ingress of the profile the
+  launch roots at (its `profile` argument, else the default owner
+  profile) from that profile's stored head, as account names compare
   (`Sanctum.Consent.Accounts.resolve/4`). `{:ok, nil}` for a call that is
   no `execution.run` launch or names no account. A name the profile does
   not bind is `{:error, :connection_not_granted}`; a store that cannot
@@ -234,7 +238,7 @@ defmodule Aqua.Loop.Policy do
   argument.
   """
   @spec launch_account(Call.t(), Sanctum.Context.t() | nil) ::
-          {:ok, String.t() | nil} | {:error, term()}
+          {:ok, %{entry_id: String.t(), name: String.t()} | nil} | {:error, term()}
   def launch_account(
         %Call{kind: :launch, action: "run", target: reference, args: %{"connection" => name}} =
           call,
@@ -293,13 +297,14 @@ defmodule Aqua.Loop.Policy do
   The card a call that asks becomes: today's intent shape, which the
   console card and the wire read — the proposal canonical, the kind and
   the standing from the catalog, never from the model. A launch's card
-  takes no standing answer, and its proposal carries the entry its named
-  account resolved to (`opts[:vault_entry]`, `proposal/2`), so the
-  approval binds the account the card showed.
+  takes no standing answer, and its proposal carries the account its
+  call named as the binding stores it and the entry it resolved to
+  (`opts[:account]`, `proposal/2`), so the approval binds the account the
+  card showed.
   """
   @spec card(Call.t(), keyword()) :: map()
   def card(%Call{} = call, opts \\ []) do
-    proposal = proposal(call, Keyword.get(opts, :vault_entry))
+    proposal = proposal(call, Keyword.get(opts, :account))
 
     %{
       "kind" => "request_approval",
@@ -320,14 +325,32 @@ defmodule Aqua.Loop.Policy do
     do: Grimoire.standing_to_wire(Aqua.Kinds.standing_for(call.tool, call.action || ""))
 
   @doc """
-  The canonical proposal a card shows for `call`, and its digest hashes;
-  with `vault_entry`, the entry a launch's named account resolved to when
-  its card was drawn, beside the call.
+  The canonical proposal a card shows for `call`, and its digest hashes.
+  With `account` (`t:account/0`), what a launch's named account resolved
+  to when its card was drawn: its `connection` spelled as the binding
+  stores the name, when the call names that account in any case
+  (`Prima.Authority.Blob.same_account_name?/2`), and the entry beside
+  the call (`vault_entry`).
   """
-  @spec proposal(Call.t(), String.t() | nil) :: map()
-  def proposal(%Call{} = call, vault_entry \\ nil) do
-    proposal = %{"tool" => call.tool, "action" => call.action, "args" => call.args}
-    if is_binary(vault_entry), do: Map.put(proposal, "vault_entry", vault_entry), else: proposal
+  @spec proposal(Call.t(), account() | nil) :: map()
+  def proposal(call, account \\ nil)
+
+  def proposal(%Call{} = call, nil),
+    do: %{"tool" => call.tool, "action" => call.action, "args" => call.args}
+
+  def proposal(%Call{args: args} = call, %{vault_entry: entry_id, name: stored}) do
+    args =
+      case args["connection"] do
+        named when is_binary(named) ->
+          if Prima.Authority.Blob.same_account_name?(named, stored),
+            do: Map.put(args, "connection", stored),
+            else: args
+
+        _none ->
+          args
+      end
+
+    %{"tool" => call.tool, "action" => call.action, "args" => args, "vault_entry" => entry_id}
   end
 
   @doc "The digest a card is consumed by: the canonical proposal, hashed."

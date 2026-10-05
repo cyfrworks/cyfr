@@ -29,8 +29,10 @@ defmodule PrismWeb.ThreadPaneLive do
   the new consent and the sender re-sends. A grant asked for an account a
   launch named (`account` on the turn's `:consent_required`) opens on that
   account, on the launched app's own profile; the turn that asked has
-  already ended, so once it is granted the pane offers to send that
-  turn's message again, as a new turn.
+  already ended, so once it is granted nothing is cut, and the pane
+  offers to send that turn's own message (`message_id` on the event,
+  read by its id from this thread) again, as a new turn, or says that
+  the turn ended when it has no such message to offer.
 
   In the person's own panel (`PrismWeb.AquaPanelLive`, session `"panel"`)
   the pane sits beside a room: it hears what the host page shows
@@ -505,8 +507,8 @@ defmodule PrismWeb.ThreadPaneLive do
   # The grant this pane asked for, as the host's layer reported it.
   # Granted, the running turn is cut for the new consent and the sender
   # re-sends; granted for a launch's account, whose turn already ended,
-  # the pane offers that turn's message again as a new turn; a refused
-  # commit leaves the prompt open; anything else ended it.
+  # nothing is cut and the pane offers that turn's message again as a new
+  # turn; a refused commit leaves the prompt open; anything else ended it.
   def handle_info({:system_layer, id, outcome}, %{assigns: %{grant_prompt: id}} = socket)
       when is_binary(id) do
     case outcome do
@@ -777,7 +779,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # its app does not bind asks for that account.
   defp handle_thread_event(socket, :consent_required, %{ref: ref, user_id: user_id} = data) do
     if user_id == socket.assigns.context.user_id and is_nil(socket.assigns.grant_prompt),
-      do: ask_grant(socket, ref, Map.get(data, :account)),
+      do: ask_grant(socket, ref, Map.get(data, :account), Map.get(data, :message_id)),
       else: socket
   end
 
@@ -1084,8 +1086,10 @@ defmodule PrismWeb.ThreadPaneLive do
   # The grant for `ref`, read under the pane's context and asked in the
   # system layer of the view that renders the pane: opened on `account`,
   # the account a launch named, on the app's own calls, when the turn
-  # names one. A pane with no host has no layer to ask in, and says so.
-  defp ask_grant(%{parent_pid: host} = socket, ref, account) when is_pid(host) do
+  # names one, remembering the message of the turn that asked
+  # (`message_id`). A pane with no host has no layer to ask in, and says
+  # so.
+  defp ask_grant(%{parent_pid: host} = socket, ref, account, message_id) when is_pid(host) do
     id = "grant-#{socket.id}-#{System.unique_integer([:positive])}"
 
     case PrismWeb.SystemLayer.grant_prompt(socket, id, ref, account_opts(account)) do
@@ -1094,14 +1098,14 @@ defmodule PrismWeb.ThreadPaneLive do
 
         socket
         |> assign(:grant_prompt, id)
-        |> assign(:grant_retry, if(account, do: retry_text(socket)))
+        |> assign(:grant_retry, if(account, do: {:account, message_id}))
 
       {:error, reason} ->
         put_flash(socket, :error, "Cannot ask for this grant: #{error_message(reason)}")
     end
   end
 
-  defp ask_grant(socket, _ref, _account),
+  defp ask_grant(socket, _ref, _account, _message_id),
     do:
       put_flash(
         socket,
@@ -1114,35 +1118,47 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp account_opts(_none), do: []
 
-  # The message the ended turn answered: the person's latest line in the
-  # thread, which a retry sends again as a new turn.
-  defp retry_text(%{assigns: %{thread: %{id: thread_id}, context: ctx}}) do
-    case Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 50) do
-      rows when is_list(rows) ->
-        rows
-        |> Enum.filter(&(&1.author == ctx.user_id and &1.kind == "text"))
-        |> List.last()
-        |> case do
-          %{content: text} when is_binary(text) and text != "" -> text
-          _none -> nil
-        end
+  # The text of the ended turn's own message, read by its id from this
+  # thread: never a scan of the rows around it, which may hold a line
+  # queued while the turn ran, or not reach back to it at all.
+  defp retry_text(%{assigns: %{thread: %{id: thread_id}, context: ctx}}, message_id)
+       when is_binary(message_id) do
+    case Threads.get_message(Sanctum.Context.actor(ctx), message_id) do
+      {:ok, %{thread_id: ^thread_id, kind: "text", content: text}}
+      when is_binary(text) and text != "" ->
+        text
 
-      {:error, _unreadable} ->
+      _none ->
         nil
     end
   end
 
-  defp retry_text(_socket), do: nil
+  defp retry_text(_socket, _message_id), do: nil
 
   # A grant opened for a launch's account offers its turn's message again,
-  # as a new turn: that turn ended, so there is nothing to cut. Any other
-  # grant cuts the running turn for the new consent.
-  defp after_grant(%{assigns: %{grant_retry: text}} = socket) when is_binary(text) do
-    socket
-    |> assign(:grant_retry, nil)
-    |> assign(:restart_prompt, text)
-    |> assign(:restart_note, "The account is granted — send that message again, as a new turn?")
-    |> put_flash(:info, "Granted — re-send to continue.")
+  # as a new turn: that turn ended, so nothing is cut, and with no message
+  # of that turn to offer the pane only says so. Any other grant cuts the
+  # running turn for the new consent.
+  defp after_grant(%{assigns: %{grant_retry: {:account, message_id}}} = socket) do
+    socket = assign(socket, :grant_retry, nil)
+
+    case retry_text(socket, message_id) do
+      text when is_binary(text) ->
+        socket
+        |> assign(:restart_prompt, text)
+        |> assign(
+          :restart_note,
+          "The account is granted — send that message again, as a new turn?"
+        )
+        |> put_flash(:info, "Granted — re-send to continue.")
+
+      nil ->
+        put_flash(
+          socket,
+          :info,
+          "Granted. The turn that asked has ended — send your message again to run it."
+        )
+    end
   end
 
   defp after_grant(socket), do: socket |> assign(:grant_retry, nil) |> restart_for_consent()

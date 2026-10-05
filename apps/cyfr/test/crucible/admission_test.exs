@@ -325,11 +325,18 @@ defmodule Crucible.AdmissionTest do
       assert plain.resources.vault.entry_id == default.id
       assert plain.resources.vault.binding_key == Blob.binding_key(name_ref, "@ingress", nil)
 
-      for name <- ["Home", "work", "default"] do
+      for name <- ["Home", "Works", "default"] do
         assert {:error, :connection_not_granted} =
                  Admission.authority_for(ctx, :default, ref, connection: name),
                "#{inspect(name)} was picked"
       end
+
+      # The account spelled in another case is that account, under the key
+      # its stored name spells: a launch's root naming `work` holds Work.
+      assert {:ok, %Authority{} = spelled} =
+               Admission.authority_for(ctx, :default, ref, connection: "work")
+
+      assert spelled.resources == picked.resources
     end
   end
 
@@ -594,6 +601,188 @@ defmodule Crucible.AdmissionTest do
                )
 
       assert Sanctum.Authority.budget(auth).in_flight == 0
+    end
+  end
+
+  # A formula's child call, made as its runner makes it: the host call
+  # `admit_child` over an attached attempt of the formula, the one entry an
+  # in-chain child call takes.
+  describe "a child call's account, spelled in any case" do
+    @account_root "formula:local.account-root"
+    @account_target "formula:local.account-formula"
+
+    setup %{ctx: ctx} do
+      api = Sanctum.TestContext.local(:api)
+      wasm = File.read!(@math_wasm_path)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(api, wasm, %{
+          name: "account-formula",
+          version: "0.1.0",
+          type: "formula"
+        })
+
+      # A formula calling the one above, released apart from it: the caps
+      # its manifest asks for give it its own release digest, so calling
+      # the other is never a self-call.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(api, wasm, %{
+          name: "account-root",
+          version: "0.1.0",
+          type: "formula",
+          manifest:
+            Jason.encode!(%{
+              "name" => "account-root",
+              "version" => "0.1.0",
+              "type" => "formula",
+              "description" => "calls account-formula",
+              "caps" => %{"tools" => ["execution.run"]}
+            })
+        })
+
+      on_exit(fn ->
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_component_meta(Context.actor(api)))
+        Prima.Slots.forgive_unreaped(Crucible.Slots, api.athanor_id)
+      end)
+
+      Cyfr.Test.Sandbox.stop_work_on_exit()
+      start_supervised!({Cyfr.Test.ScriptedWorker, ref: "reagent:local.unscripted", script: []})
+      {:ok, api: api, ctx: ctx}
+    end
+
+    # A root authority at the root formula, pinned to a live profile's head,
+    # whose edge to the target formula binds a default and, beside it, the
+    # account Work. Both name only scopes, so a child holding either is
+    # claimed without reading an entry.
+    defp work_account_edge!(api) do
+      {pinned, _entry} =
+        Cyfr.Test.AttemptFixtures.vault_authority!(api, %{
+          kind: "api_key",
+          fields: %{"KEY" => "k"}
+        })
+
+      digests =
+        Map.new([@account_root, @account_target], fn node ->
+          {:ok, _ref, _type, component} = Admission.inspect_component(api, node <> ":0.1.0")
+          {node, component["release_digest"]}
+        end)
+
+      bound = fn entry_id, opts ->
+        Prima.Test.AuthorityFixtures.bound_vault(
+          @account_root,
+          @account_target,
+          entry_id,
+          "sha256:bind-" <> entry_id,
+          [projection: %{"scopes" => ["fixture.scope"]}] ++ opts
+        )
+      end
+
+      vault = bound.("vlt_default", named: %{"Work" => bound.("vlt_work", name: "Work")})
+      limits = Prima.Test.AuthorityFixtures.limits_map()
+
+      {:ok, blob} =
+        Blob.parse(%{
+          "canonical" => "jcs-1",
+          "nodes" => %{
+            @account_root => %{
+              "limits" => limits,
+              "edges" => %{"@ingress" => %{}, @account_target => %{"vault" => vault}}
+            },
+            @account_target => %{"limits" => limits, "edges" => %{}}
+          }
+        })
+
+      {:ok, authority} =
+        Authority.root(
+          %{
+            profile_id: pinned.profile_id,
+            consent_id: pinned.consent_id,
+            source_ref: @account_root,
+            kind: :owner,
+            invoke_mode: :open_inert,
+            activation: digests
+          },
+          blob,
+          ceiling: Prima.Test.AuthorityFixtures.ceiling()
+        )
+
+      Cyfr.Test.AttemptFixtures.attached!(
+        ctx: api,
+        authority: authority,
+        component_ref: @account_root <> ":0.1.0",
+        component_type: :formula,
+        worker: Cyfr.Test.ScriptedWorker.endpoint(),
+        reservation: true
+      )
+    end
+
+    defp admit_child(fixture, child_key, connection) do
+      args =
+        %{
+          "reference" => @account_target <> ":0.1.0",
+          "input" => %{},
+          "guest_fn" => "call",
+          "need" => nil,
+          "child_key" => child_key
+        }
+        |> Prima.MapUtil.put_present("connection", connection)
+
+      Cyfr.Test.AttemptFixtures.call(fixture, "admit_child", args)
+    end
+
+    defp admitted_child!(answer) do
+      assert %{"ok" => %{"assignment" => token}} = answer
+      {:ok, admitted} = Prima.Assignment.read(token)
+      {:ok, child} = Authority.from_wire(admitted.authority)
+      {admitted.execution_id, child}
+    end
+
+    defp children_of(fixture) do
+      Arca.Repo.all(
+        Ecto.Query.from(e in Arca.Schemas.Execution,
+          where: e.parent_execution_id == ^fixture.execution_id,
+          select: e.id
+        )
+      )
+    end
+
+    @tag :capture_log
+    test "a child call naming `work` while `Work` is bound holds Work's binding, under its " <>
+           "stored key",
+         %{api: api} do
+      fixture = work_account_edge!(api)
+
+      {_id, child} = admitted_child!(admit_child(fixture, "ck_lower", "work"))
+      assert child.resources.vault.entry_id == "vlt_work"
+
+      assert child.resources.vault.binding_key ==
+               Blob.binding_key(@account_root, @account_target, "Work")
+    end
+
+    @tag :capture_log
+    test "a retry spelled `work` after `Work` was admitted is the same call, and a reused key " <>
+           "naming another account still refuses",
+         %{api: api} do
+      fixture = work_account_edge!(api)
+
+      {id, _child} = admitted_child!(admit_child(fixture, "ck_work", "Work"))
+
+      # One account however it is spelled: the same child under its key.
+      for spelled <- ["work", "WORK", "Work"] do
+        {again, _child} = admitted_child!(admit_child(fixture, "ck_work", spelled))
+        assert again == id, "#{spelled} under the key was another child"
+      end
+
+      # Another account, or none, under the key is refused before anything
+      # of the child is answered.
+      for other <- ["Home", nil] do
+        assert %{"error" => "guest_error", "type" => "invalid_request", "message" => message} =
+                 admit_child(fixture, "ck_work", other)
+
+        assert message =~ "child_key"
+      end
+
+      assert children_of(fixture) == [id]
     end
   end
 

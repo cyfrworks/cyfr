@@ -121,17 +121,34 @@ defmodule Sanctum.Consent.AccountsTest do
       ref = app!(ctx, "acct-one")
       %{accounts: %{"Work" => work, "Home" => home}} = named!(ctx, ref, ["Work", "Home"])
 
-      assert {:ok, work.id} == Accounts.resolve(ctx, :default, ref, "Work")
-      assert {:ok, home.id} == Accounts.resolve(ctx, :default, ref <> ":1.0.0", "Home")
-      assert {:ok, work.id} == Accounts.resolve(ctx, {:label, "default"}, ref, "Work")
+      assert {:ok, %{entry_id: work.id, name: "Work"}} ==
+               Accounts.resolve(ctx, :default, ref, "Work")
+
+      assert {:ok, %{entry_id: home.id, name: "Home"}} ==
+               Accounts.resolve(ctx, :default, ref <> ":1.0.0", "Home")
+
+      assert {:ok, %{entry_id: work.id, name: "Work"}} ==
+               Accounts.resolve(ctx, {:label, "default"}, ref, "Work")
+    end
+
+    test "a name in another case is the same account, answered by the name its binding stores",
+         %{ctx: ctx} do
+      ref = app!(ctx, "acct-case")
+      %{accounts: %{"Work" => work}} = named!(ctx, ref, ["Work"])
+
+      for spelled <- ["work", "WORK", "wOrK"] do
+        assert {:ok, %{entry_id: work.id, name: "Work"}} ==
+                 Accounts.resolve(ctx, :default, ref, spelled),
+               "#{inspect(spelled)} did not resolve to Work"
+      end
     end
 
     test "a name the ingress does not bind, or no account at all, is a grant to make", %{ctx: ctx} do
       ref = app!(ctx, "acct-two")
       %{default: default} = named!(ctx, ref, ["Work"])
 
-      # Names compare exactly, and the default slot is no account's name.
-      for name <- ["Home", "work", "default", default.id] do
+      # The default slot is no account's name, nor is an entry's id.
+      for name <- ["Home", "Works", "default", default.id] do
         assert {:error, :connection_not_granted} =
                  Accounts.resolve(ctx, :default, ref, name),
                "#{inspect(name)} resolved"

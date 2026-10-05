@@ -597,6 +597,33 @@ defmodule Aqua.LaunchTest do
     shown_other = approved_named_launch!(ctx, turn, approver, named, other.id)
     grant!(ctx, app, [%{need: "api_key", entry_id: default.id}])
     stale.(Launch.dispatch(ctx, shown_other))
+
+    # The grant now stores the account under another spelling: the card
+    # showed `Work`, which is not the name its binding stores.
+    grant!(ctx, app, [
+      %{need: "api_key", entry_id: default.id},
+      %{need: "api_key", name: "WORK", entry_id: other.id}
+    ])
+
+    stale.(Launch.dispatch(ctx, approved_named_launch!(ctx, turn, approver, named, other.id)))
+
+    # A launch the model spells in yet another case asks under the stored
+    # name: the card the loop draws for it shows `WORK` and binds its entry,
+    # and that card, approved, launches.
+    {:ok, call} = Aqua.Loop.Binding.resolve("execution.run", %{named | "connection" => "work"})
+
+    assert {:ask, %{vault_entry: entry, name: "WORK"} = account} =
+             Aqua.Loop.Policy.decide(call, %{"execution.run" => "ask"}, ctx: ctx)
+
+    assert entry == other.id
+
+    assert %{
+             "proposal" => %{"args" => %{"connection" => "WORK"} = shown, "vault_entry" => ^entry}
+           } =
+             Aqua.Loop.Policy.card(call, account: account)
+
+    _ = Launch.dispatch(ctx, approved_named_launch!(ctx, turn, approver, shown, entry))
+    assert [_launched] = launched_of(ctx, app)
   end
 
   test "an origin the sender's request names is not the turn's", %{

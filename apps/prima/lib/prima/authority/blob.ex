@@ -404,6 +404,9 @@ defmodule Prima.Authority.Blob do
   its `named` bindings, so a child holds the one binding its call picked.
   A name the edge does not bind — on an edge with no vault, a selection
   or a provided resource too — is `{:error, :connection_not_granted}`.
+  The name is matched as `same_account_name?/2` matches names, so a call
+  spelling a bound account in another case holds that binding, under the
+  key its stored name spells.
   """
   @spec vault_for(Edge.t() | nil, String.t() | nil) ::
           {:ok, Edge.vault() | nil} | {:error, :connection_not_granted}
@@ -411,9 +414,9 @@ defmodule Prima.Authority.Blob do
   def vault_for(%Edge{vault: vault}, nil), do: {:ok, without_named(vault)}
 
   def vault_for(%Edge{vault: %{named: named}}, connection) when is_binary(connection) do
-    case Map.fetch(named, connection) do
-      {:ok, vault} -> {:ok, vault}
-      :error -> {:error, :connection_not_granted}
+    case Enum.find(named, fn {name, _vault} -> same_account_name?(name, connection) end) do
+      {_name, vault} -> {:ok, vault}
+      nil -> {:error, :connection_not_granted}
     end
   end
 
@@ -472,6 +475,29 @@ defmodule Prima.Authority.Blob do
   end
 
   def valid_account_name?(_name), do: false
+
+  @doc """
+  The form two account names share when they name one account: `name`
+  folded by Unicode's full lowercase mapping, without context and in no
+  language's tailoring (`String.downcase/1`'s default), so `İ` folds to
+  `i` and a combining dot, `ẞ` to `ß`, and a final `Σ` to `σ`. This is
+  the one rule account names are compared by, wherever they are: a
+  grant's slots and its digest, the blob's named bindings, a call
+  resolving the account it names, a reused child key, the grant sheet,
+  and the command line's slots (`tests/fixtures/account_names.json` pins
+  it on every side). A key is for comparing; what is recorded and shown
+  is always the name as the binding stores it.
+  """
+  @spec account_name_key(String.t()) :: String.t()
+  def account_name_key(name) when is_binary(name), do: String.downcase(name)
+
+  @doc """
+  Whether `a` and `b` name one account: their keys (`account_name_key/1`)
+  are equal.
+  """
+  @spec same_account_name?(String.t(), String.t()) :: boolean()
+  def same_account_name?(a, b) when is_binary(a) and is_binary(b),
+    do: account_name_key(a) == account_name_key(b)
 
   defp read_slot(@default_slot), do: {:ok, nil}
 
@@ -786,7 +812,7 @@ defmodule Prima.Authority.Blob do
 
   # Two names a person would read as one are one name repeated.
   defp distinct_names(names) do
-    folded = Enum.map(names, &if(is_binary(&1), do: String.downcase(&1), else: &1))
+    folded = Enum.map(names, &if(is_binary(&1), do: account_name_key(&1), else: &1))
 
     if length(Enum.uniq(folded)) == length(folded),
       do: :ok,

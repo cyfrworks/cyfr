@@ -266,10 +266,13 @@ defmodule Crucible do
   binding the child holds (`Prima.Authority.Blob.parse_binding_key/1`: a
   named binding's account, nil for any other), and nil for a self-call,
   which crosses no edge and holds its caller's own binding: a repeat
-  naming another is refused `{:child_key_reused, :connection}` and answers
-  nothing of that child. Two admissions racing under one key are decided
-  by the row's unique index: the loser admits nothing, gives back what it
-  charged and answers the winner's child, under the same rule.
+  naming another account, as account names compare
+  (`Prima.Authority.Blob.same_account_name?/2`), is refused
+  `{:child_key_reused, :connection}` and answers nothing of that child,
+  and one spelling the same account in another case is the same call.
+  Two admissions racing under one key are decided by the row's unique
+  index: the loser admits nothing, gives back what it charged and answers
+  the winner's child, under the same rule.
 
   Other options as `run_child/5`'s host-threaded ones (`:ctx`,
   `:parent_execution_id`, `:root_execution_id`, `:attempt`, `:guest_fn`,
@@ -353,11 +356,21 @@ defmodule Crucible do
     end
   end
 
+  # One account however it is spelled (`Blob.same_account_name?/2`): a
+  # repeat spelling the child's account in another case is the same call,
+  # and a key never stands for two children.
   defp same_connection(caller, child, connection) do
-    if admitted_connection(caller, child) == connection,
+    if same_account?(admitted_connection(caller, child), connection),
       do: :ok,
       else: {:error, {:child_key_reused, :connection}}
   end
+
+  defp same_account?(nil, nil), do: true
+
+  defp same_account?(admitted, named) when is_binary(admitted) and is_binary(named),
+    do: Blob.same_account_name?(admitted, named)
+
+  defp same_account?(_admitted, _named), do: false
 
   # The account `caller` admitted `child` with. A self-call crosses no
   # edge, so it picks no account (`Prima.Authority.Transition` denies one):

@@ -70,6 +70,13 @@ defmodule Aqua.Loop.PolicyTest do
                consented?: consented
              )
 
+    # A policy that names no `execution.run` denies the launch: an agent
+    # launches only what its own policy grants.
+    for policy <- [%{}, Map.delete(@policy, "execution.run")] do
+      assert {:deny, "execution.run is not in the agent's policy"} =
+               Policy.decide(launch, policy, consented?: consented)
+    end
+
     bad = resolve!("execution", %{"action" => "run", "reference" => "not a ref"})
     assert {:refuse, _} = Policy.decide(bad, @policy, [])
   end
