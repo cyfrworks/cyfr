@@ -114,7 +114,7 @@ Owns the operation table, the gate, argument casting, dispatch on the external a
 
 - There is one entry for operations on each plane and one for streams. An operation that is undeclared, unannotated or called on the wrong plane is denied; boot refuses a partial table; every provider module is on the configured roster.
 - **Streams are declared where operations are.** A provider declares the streams it offers beside its operations. The gate admits a stream once, records it once and answers with a bounded grant; the delivery owner above Grimoire keeps enforcing it and closes the stream on a standing change, the grant's deadline, a suspended frame, overflow or failed revalidation. A reconnect is a new admission.
-- Every admission makes one decision record (§6.4), except an admitted call the catalog lists as unrecorded: discovery, the audit's own reads, and the reads the shell makes of the caller's own state on its own initiative. A refusal is always recorded, whatever the action. Ownership is checked downward, through Arca, before dispatch. *Not built yet:* a console call its page's context guard refuses before the gate leaves no decision.
+- Every admission makes one decision record (§6.4), except an admitted call the catalog lists as unrecorded: discovery, the audit's own reads, and the reads the shell makes of the caller's own state on its own initiative. A refusal is always recorded, whatever the action. Ownership is checked downward, through Arca, before dispatch.
 - Grimoire names no surface, no Host module and no bus; the delivery owner resolves a granted topic.
 
 ### Cyfr (Host): the machine
