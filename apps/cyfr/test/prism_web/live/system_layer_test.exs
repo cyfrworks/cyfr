@@ -41,6 +41,50 @@ defmodule PrismWeb.SystemLayerTest.Host do
   def render(assigns), do: PrismWeb.SystemLayerTest.Relay.layer(assigns)
 end
 
+defmodule PrismWeb.SystemLayerTest.Asker do
+  @moduledoc false
+  # A page asking for a sensitive change through its layer, as a console
+  # page does (`PrismWeb.SystemLayer.call/5`): `{:ask, tag, tool, args}`
+  # dispatches it, a confirmed report repeats it through `call/5` with the
+  # same tag, and each answer goes to the test as `{:asker, tag, answer}`.
+  use Phoenix.LiveView
+
+  alias PrismWeb.SystemLayer
+
+  on_mount {CyfrWeb.ContextGuard, :protected}
+
+  @impl true
+  def mount(_params, session, socket), do: {:ok, assign(socket, :test, session["test"])}
+
+  @impl true
+  def handle_info({:ask, tag, tool, args}, socket),
+    do: {:noreply, dispatch(socket, tag, tool, args)}
+
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    case SystemLayer.reported(socket, report) do
+      {:repeat, tag, tool, args, socket} -> {:noreply, dispatch(socket, tag, tool, args)}
+      {:ok, socket} -> {:noreply, socket}
+    end
+  end
+
+  def handle_info(message, socket), do: PrismWeb.SystemLayerTest.Relay.forward(message, socket)
+
+  defp dispatch(socket, tag, tool, args) do
+    {answer, socket} =
+      case SystemLayer.call(socket, tag, tool, args) do
+        {:ok, result, socket} -> {{:ok, result}, socket}
+        {:error, reason, socket} -> {{:error, reason}, socket}
+        {:asked, socket} -> {:asked, socket}
+      end
+
+    send(socket.assigns.test, {:asker, tag, answer})
+    socket
+  end
+
+  @impl true
+  def render(assigns), do: PrismWeb.SystemLayerTest.Relay.layer(assigns)
+end
+
 defmodule PrismWeb.SystemLayerTest.MovingHost do
   @moduledoc false
   # A page that opens another athanor, as the chat page's rail does: its
@@ -2780,6 +2824,437 @@ defmodule PrismWeb.SystemLayerTest do
       assert PrismWeb.SystemLayer.disclose_param(%{"disclose" => "on"})
       refute PrismWeb.SystemLayer.disclose_param(%{"disclose" => "false"})
       refute PrismWeb.SystemLayer.disclose_param(%{})
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A page's repeat the operation refuses
+  # ---------------------------------------------------------------------------
+
+  describe "a page's repeat the operation refuses" do
+    setup :asking_admin
+
+    @withdraw_failed "The approval could not be withdrawn; it ends at its expiry."
+
+    # A platform administrator on a page that asks for changes through its
+    # layer and repeats each once confirmed (`Asker`).
+    defp asking_admin(%{conn: conn}) do
+      user = test_user()
+      {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(user.user_id)
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+
+      {:ok, view, _html} =
+        live_isolated(conn, PrismWeb.SystemLayerTest.Asker,
+          session: %{"athanor_id" => athanor.id, "test" => self()}
+        )
+
+      %{view: view, ctx: %{person_context(user, athanor) | platform_admin: true}, user: user}
+    end
+
+    # An instance entry under the platform's own actor, its creation proven.
+    defp made_entry!(ctx, over) do
+      params =
+        Map.merge(
+          %{
+            name: "refused-repeat-#{System.unique_integer([:positive])}",
+            kind: "api_key",
+            provider_hint: "example.com",
+            fields: %{"API_KEY" => "sk-refused-repeat"},
+            destination: %{
+              "hosts" => ["api.example.com"],
+              "methods" => ["GET"],
+              "paths" => ["/v1/models"]
+            },
+            audience: "everyone"
+          },
+          over
+        )
+
+      confirmed =
+        Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+          operation: "instance_entry.create",
+          arguments: params,
+          resource: params.name
+        })
+
+      {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
+      entry
+    end
+
+    defp open_records(ctx) do
+      {:ok, open} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+      open
+    end
+
+    defp record_state(ctx, ref) do
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      row.state
+    end
+
+    defp page_state(view),
+      do: inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity)
+
+    # The page asks for `args` under `tag`; the change needs a proof, and
+    # the page holds its request once its layer has heard of it.
+    defp asked!(view, ctx, tag, tool, args) do
+      send(view.pid, {:ask, tag, tool, args})
+      assert_receive {:asker, ^tag, :asked}, 2_000
+      assert [%{ref: ref}] = open_records(ctx)
+      wait_until(fn -> page_state(view) =~ "confirmation-" <> ref end, 2_000, "the ask held")
+      render(view)
+      ref
+    end
+
+    # The record proven while the page is held still, `break!` done before
+    # the page hears of the proof and repeats.
+    defp proven_with!(view, ctx, ref, break!) do
+      :sys.suspend(view.pid)
+      Sanctum.TestContext.prove!(ctx, ref)
+      break!.()
+      :sys.resume(view.pid)
+    end
+
+    # A widening of an entry's policy, asked by the page and proven, whose
+    # entry is deleted before the page repeats it: the repeat is refused
+    # before the operation asks for its proof.
+    defp refused_policy_repeat!(view, ctx, also \\ fn -> :ok end) do
+      entry = made_entry!(ctx, %{component_policy: "shipped"})
+      tag = {:policy, entry.id}
+      args = %{"entry_id" => entry.id, "component_policy" => "any"}
+      ref = asked!(view, ctx, tag, "instance_entry/set_component_policy", args)
+
+      proven_with!(view, ctx, ref, fn ->
+        {:ok, _} = Sanctum.InstanceEntries.delete(ctx, entry.id)
+        also.()
+      end)
+
+      # The page's answer is the operation's own, whatever became of the
+      # record: the entry is gone.
+      assert_receive {:asker, ^tag, {:error, :not_found}}, 3_000
+      %{ref: ref, sentence: escaped(PrismWeb.Ops.error_message(:not_found))}
+    end
+
+    defp escaped(text), do: text |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
+
+    # The first message waiting in `pid`'s mailbox that `match` accepts, or
+    # nil: the stream's fact for a record (`fact_for/2`), or the outcome a
+    # release told the layer (`outcome_for/1`).
+    defp queued(pid, match) do
+      {:messages, messages} = Process.info(pid, :messages)
+      Enum.find(messages, match)
+    end
+
+    defp fact_for(ref, kind) do
+      fn
+        {:phoenix, :send_update, {_target, %{fact: %{"ref" => ^ref, "kind" => fact_kind}}}} ->
+          to_string(fact_kind) == kind
+
+        _other ->
+          false
+      end
+    end
+
+    defp outcome_for(ref) do
+      fn
+        {:phoenix, :send_update, {_target, %{outcome: {^ref, _outcome}}}} -> true
+        _other -> false
+      end
+    end
+
+    # The cancel a release makes runs in the page's process, and the
+    # stream's cancelled fact is queued there while it runs. With
+    # `:fact_first` the fact stays ahead of the outcome the release sends
+    # once the cancel answers; with `:outcome_first` it is taken out and
+    # sent again once the outcome is queued or taken. The test is told
+    # `{:ordered, order, ref}` once the order holds: `:telemetry` swallows
+    # a handler's failure, so a bound that ran out shows as the missing
+    # message, never as a pass.
+    defp order_the_release!(view_pid, order) do
+      test_pid = self()
+      handler = "layer-release-order-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :sanctum, :confirmation, :cancelled],
+          fn _event, _measure, %{ref: ref}, _config ->
+            if self() == view_pid do
+              wait_until(
+                fn -> queued(self(), fact_for(ref, "cancelled")) end,
+                2_000,
+                "the cancelled fact queued"
+              )
+
+              case order do
+                :fact_first ->
+                  send(test_pid, {:ordered, order, ref})
+
+                :outcome_first ->
+                  fact = queued(self(), fact_for(ref, "cancelled"))
+
+                  receive do
+                    ^fact -> :ok
+                  after
+                    0 -> raise "the fact left the mailbox"
+                  end
+
+                  spawn(fn ->
+                    wait_until(
+                      fn ->
+                        queued(view_pid, outcome_for(ref)) != nil or
+                          match?({:refused, _}, panel_status(view_pid, ref))
+                      end,
+                      2_000,
+                      "the outcome queued"
+                    )
+
+                    send(view_pid, fact)
+                    send(test_pid, {:ordered, order, ref})
+                  end)
+              end
+            end
+          end,
+          nil
+        )
+
+      handler
+    end
+
+    # The status of the page layer's panel for `ref`, as the layer holds it.
+    defp panel_status(pid, ref) do
+      {by_cid, _ids, _next} = :sys.get_state(pid).components
+
+      Enum.find_value(by_cid, fn {_cid, entry} ->
+        if elem(entry, 0) == PrismWeb.SystemLayer and elem(entry, 1) == "system-layer",
+          do: get_in(elem(entry, 2), [:panels, ref, :status])
+      end)
+    end
+
+    test "the record is cancelled, the prompt shows the refusal, the secret leaves the page, " <>
+           "and the page's answer is the operation's",
+         %{view: view, ctx: ctx} do
+      %{ref: ref, sentence: sentence} = refused_policy_repeat!(view, ctx)
+
+      wait_until(fn -> record_state(ctx, ref) == "cancelled" end, 2_000, "the record cancelled")
+      refute page_state(view) =~ "cnf_", "the page still holds the secret of a refused repeat"
+
+      render(view)
+      html = render(view)
+      assert html =~ "Refused: " <> sentence
+      refute html =~ "could not be withdrawn"
+      refute html =~ "Approved. Completing the change."
+      refute html =~ "Cancelled. Nothing was changed."
+    end
+
+    test "a cancel answered not_pending, the record spent before the refusal, shows the " <>
+           "refusal alone",
+         %{view: view, ctx: ctx} do
+      entry = made_entry!(ctx, %{audience: "listed", members: [ctx.user_id]})
+      typed = "nobody-#{System.unique_integer([:positive])}@example.com"
+      tag = {:audience, entry.id}
+
+      args = %{
+        "entry_id" => entry.id,
+        "audience" => "listed",
+        "members" => [ctx.user_id, typed],
+        "expected" => %{"audience" => "listed", "members" => [ctx.user_id]}
+      }
+
+      ref = asked!(view, ctx, tag, "instance_entry/set_audience", args)
+      Sanctum.TestContext.prove!(ctx, ref)
+
+      # The proof is spent by the widening, which the store then refuses:
+      # no record is left waiting to be withdrawn.
+      assert_receive {:asker, ^tag, {:error, reason}}, 3_000
+      assert record_state(ctx, ref) == "consumed"
+      refute page_state(view) =~ "cnf_"
+
+      render(view)
+      html = render(view)
+      assert html =~ "Refused: " <> escaped(PrismWeb.Ops.error_message(reason))
+      assert html =~ "person_unknown"
+      refute html =~ "could not be withdrawn"
+    end
+
+    test "a cancel that fails otherwise shows the refusal and then that the approval ends at " <>
+           "its expiry; the page's answer is unchanged",
+         %{view: view, ctx: ctx} do
+      %{ref: ref, sentence: sentence} =
+        refused_policy_repeat!(view, ctx, &hide_confirmations!/0)
+
+      wait_until(
+        fn -> render(view) =~ @withdraw_failed end,
+        3_000,
+        "the prompt told the approval's fate"
+      )
+
+      html = render(view)
+      holds = page_state(view) =~ "cnf_"
+      restore_confirmations!()
+
+      refute holds, "the page still holds the secret of a refused repeat"
+      assert html =~ ~r/Refused: #{Regex.escape(sentence)}\.? #{Regex.escape(@withdraw_failed)}/
+      assert record_state(ctx, ref) == "confirmed"
+    end
+
+    for order <- [:fact_first, :outcome_first] do
+      test "the prompt ends on the release's outcome when the record's cancelled fact " <>
+             "arrives #{if order == :fact_first, do: "before", else: "after"} it",
+           %{view: view, ctx: ctx} do
+        order = unquote(order)
+        view_pid = view.pid
+        handler = order_the_release!(view_pid, order)
+        on_exit(fn -> :telemetry.detach(handler) end)
+
+        %{ref: ref, sentence: sentence} = refused_policy_repeat!(view, ctx)
+        assert_receive {:ordered, ^order, ^ref}, 5_000
+        :ok = :telemetry.detach(handler)
+
+        # Both have reached the layer: the fact, which the stream delivers
+        # to the page's process, and the outcome.
+        wait_until(
+          fn ->
+            is_nil(queued(view_pid, fact_for(ref, "cancelled"))) and
+              is_nil(queued(view_pid, outcome_for(ref)))
+          end,
+          2_000,
+          "both delivered"
+        )
+
+        render(view)
+        html = render(view)
+        assert record_state(ctx, ref) == "cancelled"
+        assert html =~ "Refused: " <> sentence
+        refute html =~ "Cancelled. Nothing was changed."
+        assert html =~ ~s(data-status="refused")
+      end
+    end
+
+    # The stream's fact that the record `row` was cancelled, as the layer's
+    # listener hands it to the layer: the payload on the person's topic,
+    # projected to the fields the stream's grant names, under the tag of
+    # the page's own context. Built before it is needed, since the page may
+    # be held still when it is sent.
+    defp cancelled_fact(view, row) do
+      ctx = view_context(view)
+      {:ok, grant} = Grimoire.open_stream(ctx, PrismWeb.SystemLayer.stream(), nil)
+
+      fact =
+        Cyfr.Bus.Confirmation.new(Context.actor(ctx), :cancelled,
+          ref: row.ref,
+          operation: row.operation,
+          expires_at: row.expires_at
+        )
+
+      [
+        id: "system-layer",
+        fact: Prima.StreamGrant.project(grant, Map.from_struct(fact)),
+        tag: CyfrWeb.ContextGuard.capture(ctx)
+      ]
+    end
+
+    defp deliver!(view, update),
+      do: Phoenix.LiveView.send_update(view.pid, PrismWeb.SystemLayer, update)
+
+    defp hide_confirmations!,
+      do:
+        Arca.Repo.query!("ALTER TABLE pending_confirmations RENAME TO pending_confirmations_gone")
+
+    defp restore_confirmations!,
+      do:
+        Arca.Repo.query!("ALTER TABLE pending_confirmations_gone RENAME TO pending_confirmations")
+
+    # A policy widening the page asks for and holds, its entry made first.
+    defp held_widening!(view, ctx) do
+      entry = made_entry!(ctx, %{component_policy: "shipped"})
+      tag = {:policy, entry.id}
+      args = %{"entry_id" => entry.id, "component_policy" => "any"}
+      ref = asked!(view, ctx, tag, "instance_entry/set_component_policy", args)
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      %{entry: entry, tag: tag, ref: ref, row: row}
+    end
+
+    test "a release whose cancel failed never replaces the cancelled fact the prompt already " <>
+           "shows",
+         %{view: view, ctx: ctx} do
+      %{entry: entry, tag: tag, ref: ref, row: row} = held_widening!(view, ctx)
+      cancelled = cancelled_fact(view, row)
+
+      # Held still, the page is proven; the stream's confirmed fact is
+      # queued for it, and then the record's cancelled fact behind it. The
+      # entry goes, so the repeat is refused, and the store's records go,
+      # so the release's cancel fails, and not as `not_pending`.
+      :sys.suspend(view.pid)
+      Sanctum.TestContext.prove!(ctx, ref)
+
+      wait_until(
+        fn -> queued(view.pid, fact_for(ref, "confirmed")) != nil end,
+        2_000,
+        "the confirmed fact queued"
+      )
+
+      {:ok, _} = Sanctum.InstanceEntries.delete(ctx, entry.id)
+      hide_confirmations!()
+      deliver!(view, cancelled)
+      :sys.resume(view.pid)
+
+      # The page repeats once approved; the repeat is refused, and its
+      # release's outcome reaches the prompt after the cancelled fact did.
+      assert_receive {:asker, ^tag, {:error, :not_found}}, 3_000
+
+      wait_until(
+        fn -> is_nil(queued(view.pid, outcome_for(ref))) end,
+        2_000,
+        "the release's outcome taken"
+      )
+
+      render(view)
+      html = render(view)
+      holds = page_state(view) =~ "cnf_"
+      restore_confirmations!()
+
+      refute holds, "the page still holds the secret of a refused repeat"
+      assert html =~ "Cancelled. Nothing was changed."
+      assert html =~ ~s(data-status="cancelled")
+      refute html =~ "could not be withdrawn"
+    end
+
+    test "a record's cancelled fact heard after a release whose cancel failed replaces what " <>
+           "the prompt says",
+         %{view: view, ctx: ctx} do
+      %{entry: entry, tag: tag, ref: ref, row: row} = held_widening!(view, ctx)
+      cancelled = cancelled_fact(view, row)
+
+      proven_with!(view, ctx, ref, fn ->
+        {:ok, _} = Sanctum.InstanceEntries.delete(ctx, entry.id)
+        hide_confirmations!()
+      end)
+
+      # The repeat is refused and its cancel fails: the prompt says the
+      # approval ends at its expiry.
+      assert_receive {:asker, ^tag, {:error, :not_found}}, 3_000
+
+      wait_until(
+        fn -> render(view) =~ @withdraw_failed end,
+        3_000,
+        "the prompt told the approval's fate"
+      )
+
+      # Then the record is cancelled after all, and its fact arrives.
+      deliver!(view, cancelled)
+
+      wait_until(
+        fn -> render(view) =~ "Cancelled. Nothing was changed." end,
+        3_000,
+        "the prompt told the record was cancelled"
+      )
+
+      html = render(view)
+      restore_confirmations!()
+
+      assert html =~ ~s(data-status="cancelled")
+      refute html =~ @withdraw_failed
     end
   end
 

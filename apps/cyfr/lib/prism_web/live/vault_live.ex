@@ -27,7 +27,9 @@ defmodule PrismWeb.VaultLive do
   "Provided by this instance" lists the instance entries offered to the
   person (`instance_entry.offered`): each one's provider, destination and
   component policy, and how many requests the person made through it
-  today, never anyone else's count. "Use by default for <provider>" makes
+  today, never anyone else's count; when that reached the person's own
+  daily cap, it says the limit is reached and resets at midnight UTC,
+  when the day a claim counts on ends. "Use by default for <provider>" makes
   one the athanor's default for its provider (`vault.set_default`), which
   a consent of that provider then suggests in this athanor alone. The
   section reads again on every `Cyfr.Bus.instance_entries/0`
@@ -771,6 +773,9 @@ defmodule PrismWeb.VaultLive do
                 </div>
                 <div class="text-xs text-gray-500" data-test="offered-use">
                   Your use: {used_today(offer.used_today)}
+                  <span :if={offer.cap_reached} data-test="offered-cap-reached">
+                    Your daily limit is reached; it resets at midnight UTC.
+                  </span>
                 </div>
               </div>
               <span

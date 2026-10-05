@@ -49,16 +49,17 @@ defmodule PrismWeb.SettingsLive do
       paths where it declares them. The audience lists people who have
       signed in (`instance_entry.people`, read in id order). A save sends
       only the administrator's own edit of what the form showed: an
-      audience saved is that edit applied to the entry's audience read at
-      submit, and read again when a widening's proof lands, and a cap
-      saved is one changed from the value the form was drawn with, so a
-      change made elsewhere meanwhile stands. A read that fails is shown
-      as such, never as nobody or no use. A change that needs a fresh
-      confirmation (entering a key, widening an audience, a policy from
-      `shipped` to `any`) is asked through the page's system layer and
-      made again once confirmed: an audience as the edit applied to the
-      audience then stored, asked afresh when that is not the change
-      proven. A narrowing needs the session alone.
+      audience saved is that edit applied to the audience the form showed,
+      sent beside it as `expected`, so an audience changed elsewhere since
+      is the owner's conflict, which saves nothing and reloads the card
+      with its sentence; a cap saved is one changed from the value the
+      form was drawn with, so a change made elsewhere meanwhile stands. A
+      read that fails is shown as such, never as nobody or no use. A
+      change that needs a fresh confirmation (entering a key, widening an
+      audience, a policy from `shipped` to `any`) is asked through the
+      page's system layer and made again once confirmed, exactly as
+      confirmed: an audience that moved while the prompt was open is a
+      conflict there too. A narrowing needs the session alone.
     * **Use** (platform admins) — each entry's requests by person and day
       over the last seven days, and its day totals
       (`instance_entry.usage`).
@@ -373,16 +374,15 @@ defmodule PrismWeb.SettingsLive do
 
   # An audience is saved as the administrator's own edit of what the form
   # showed (`audience_edit/1`: the audience chosen, the people added and
-  # removed), never as the whole list the form holds: the people re-read
-  # first, then the edit applied to the entry's audience read afresh
-  # (`save_audience/3`). Someone the form had no checkbox for, added
-  # elsewhere since, is kept; an unedited save changes nothing. With the
-  # people unread no audience is saved, whatever the form sends.
+  # removed) applied to the audience the form showed (`audience_shown/1`),
+  # which is sent beside it as `expected`: the owner saves nothing over an
+  # audience that moved since it was shown. The people are re-read first;
+  # with them unread no audience is saved, whatever the form sends.
   def handle_event("instance_audience", %{"entry_id" => id} = params, socket) do
     socket = load_instance_people(socket)
 
     case socket.assigns.instance_people_error do
-      nil -> save_audience(socket, id, audience_edit(params))
+      nil -> save_audience(socket, id, audience_shown(params), audience_edit(params))
       _unread -> {:noreply, put_flash(socket, :error, "Instance entries: " <> people_unread())}
     end
   end
@@ -468,11 +468,11 @@ defmodule PrismWeb.SettingsLive do
       {:repeat, {:passkey_revoke, id}, _tool, _args, socket} ->
         revoke_passkey(socket, id)
 
-      # The proven widening is made again as the administrator's edit of
-      # the audience as it stands now, not as the list computed before the
-      # prompt: someone listed or removed elsewhere meanwhile stays so.
-      {:repeat, {:instance_audience, id, edit}, _tool, _confirmed, socket} ->
-        save_audience(socket, id, edit)
+      # The proven widening is sent again exactly as confirmed, its
+      # `expected` included: an audience that moved while the prompt was
+      # open is the owner's conflict, never written over.
+      {:repeat, {:instance_audience, _id, _edit} = tag, _tool, args, socket} ->
+        set_audience(socket, tag, args, "Nothing changed.")
 
       {:repeat, {:instance_policy, id}, _tool, args, socket} ->
         set_policy(socket, id, args)
@@ -900,21 +900,14 @@ defmodule PrismWeb.SettingsLive do
       |> load_instance()
       |> put_flash(:error, "Instance entries: #{error_message(reason)}")
 
-  # The entry's audience as stored now, read at submit.
-  defp fresh_audience(socket, id) do
-    case call_tool(socket, "instance_entry/list", %{}) do
-      {:ok, %{entries: entries}} ->
-        case Enum.find(entries, &(&1.id == id)) do
-          %{audience: audience, members: members} ->
-            {:ok, %{audience: audience, members: members}}
-
-          nil ->
-            {:error, :not_found}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+  # The audience the form showed, as the browser last rendered it: the
+  # state the administrator's edit was made against, sent as `expected`.
+  # Its members are de-duplicated and sorted; an everyone audience lists
+  # none.
+  defp audience_shown(params) do
+    audience = params["audience_shown"]
+    shown = members(%{"members" => params["members_shown"]}) |> Enum.uniq() |> Enum.sort()
+    %{audience: audience, members: if(audience == "everyone", do: [], else: shown)}
   end
 
   # The administrator's own edit of what the form showed: the audience
@@ -932,17 +925,15 @@ defmodule PrismWeb.SettingsLive do
     }
   end
 
-  # `edit` applied to the audience as stored now, and the sentence a save
-  # that changes nothing says. Nobody the edit does not name is touched, so
-  # a person the form had no checkbox for stays listed, and one removed
-  # elsewhere is not added back. A removal from a list the audience no
-  # longer has, since it became everyone elsewhere, has no effect, and the
-  # sentence says so.
-  defp edited_audience(fresh, edit) do
-    audience = edit.audience || fresh.audience
+  # `edit` applied to the audience the form showed, and the sentence a
+  # save that changes nothing says. Nobody the edit does not name is
+  # touched. A removal from a list an everyone audience does not have has
+  # no effect, and the sentence says so.
+  defp edited_audience(shown, edit) do
+    audience = edit.audience || shown.audience
 
     members =
-      fresh.members
+      shown.members
       |> MapSet.new()
       |> MapSet.union(MapSet.new(edit.adds))
       |> MapSet.difference(MapSet.new(edit.removes))
@@ -950,7 +941,7 @@ defmodule PrismWeb.SettingsLive do
     members = if audience == "listed", do: Enum.sort(members), else: []
 
     unchanged =
-      if is_nil(edit.audience) and fresh.audience == "everyone" and edit.removes != [],
+      if is_nil(edit.audience) and shown.audience == "everyone" and edit.removes != [],
         do:
           "The audience is everyone now, set elsewhere, so removing someone from its list " <>
             "changes nothing.",
@@ -959,73 +950,34 @@ defmodule PrismWeb.SettingsLive do
     {%{"audience" => audience, "members" => members}, unchanged}
   end
 
-  # Save `edit` against the entry's audience read now. The call is keyed by
-  # the edit itself, so the repeat after a widening's proof applies it again
-  # to a fresh read (`{:repeat, {:instance_audience, id, edit}, …}`): the
-  # same result is made with the proof, and a different one is asked
-  # afresh when it widens, since the proof binds the audience it was given
-  # over, and written when it does not. An edit that leaves the audience as
-  # read sends nothing, a first save and a repeat alike: the owner compares
-  # with a read of its own taken a moment later, so the list read here,
-  # sent back, could write over a change landing between the two reads.
-  # A proof held for the edit never stays behind: it leaves the page by the
-  # one dispatch it binds or is released (`let_go/3`), on an edit that now
-  # changes nothing and on a fresh read that fails. A raise or a navigation
-  # ends the page, and its held secret with it.
-  defp save_audience(socket, id, edit) do
-    tag = {:instance_audience, id, edit}
+  # Save `edit` applied to the audience the form showed, sending that
+  # audience as `expected`. Nothing is read here at submit: the owner
+  # compares `expected` with the stored audience, so a change made
+  # elsewhere since the form was drawn is a conflict, never written over,
+  # and the card reloads and says so. An edit that leaves the audience as
+  # shown sends nothing. The call is keyed by the edit; a widening's
+  # repeat sends the confirmed request unchanged (`handle_info/2`), and the
+  # owner's comparison decides it.
+  defp save_audience(socket, id, expected, edit) do
+    {request, unchanged} = edited_audience(expected, edit)
 
-    case fresh_audience(socket, id) do
-      {:ok, fresh} ->
-        {args, unchanged} = edited_audience(fresh, edit)
+    if request == %{"audience" => expected.audience, "members" => expected.members} do
+      {:noreply, socket |> load_instance() |> put_flash(:info, unchanged)}
+    else
+      args =
+        Map.merge(request, %{
+          "entry_id" => id,
+          "expected" => %{"audience" => expected.audience, "members" => expected.members}
+        })
 
-        if args == %{"audience" => fresh.audience, "members" => Enum.sort(fresh.members)} do
-          case let_go(socket, tag, :nothing_to_change) do
-            {:let_go, socket} ->
-              {:noreply, socket |> load_instance() |> put_flash(:info, unchanged)}
-
-            {:kept_until_expiry, socket} ->
-              {:noreply,
-               socket
-               |> load_instance()
-               |> put_flash(:error, "Instance entries: #{unchanged} #{withdraw_failed()}")}
-          end
-        else
-          set_audience(socket, tag, Map.put(args, "entry_id", id), unchanged)
-        end
-
-      {:error, reason} ->
-        case let_go(socket, tag, reason) do
-          {:let_go, socket} ->
-            {:noreply, instance_refused(socket, reason)}
-
-          {:kept_until_expiry, socket} ->
-            {:noreply,
-             socket
-             |> load_instance()
-             |> put_flash(
-               :error,
-               "Instance entries: #{error_message(reason)} #{withdraw_failed()}"
-             )}
-        end
+      set_audience(socket, {:instance_audience, id, edit}, args, unchanged)
     end
   end
-
-  # A held proof for `tag` let go with no dispatch: its record cancelled and
-  # its prompt told why. A cancel that fails still drops the secret, and the
-  # caller says, in the one message it shows, that the record ends at its
-  # expiry.
-  defp let_go(socket, tag, reason) do
-    case SystemLayer.release(socket, tag, reason) do
-      {:cancel_failed, socket} -> {:kept_until_expiry, socket}
-      {_released_or_none, socket} -> {:let_go, socket}
-    end
-  end
-
-  defp withdraw_failed, do: "The approval could not be withdrawn; it ends when it expires."
 
   # A widening asks for a fresh confirmation through the page's layer and
-  # is made again once confirmed; a narrowing is saved with the session.
+  # is made again once confirmed; a narrowing is saved with the session. A
+  # refusal, a conflict among them, saves nothing: the card reloads and
+  # shows the refusal's sentence.
   defp set_audience(socket, tag, args, unchanged) do
     case SystemLayer.call(socket, tag, "instance_entry/set_audience", args) do
       {:ok, %{changed: changed}, socket} ->
@@ -2339,7 +2291,7 @@ defmodule PrismWeb.SettingsLive do
     ~H"""
     <fieldset class="space-y-1" data-test="instance-people">
       <legend class="text-xs uppercase text-gray-500">Offered to</legend>
-      <%!-- What the form showed: a save sends only what was changed from it. --%>
+      <%!-- What the form showed: a save sends what was changed from it, and this as the audience it expects. --%>
       <input type="hidden" name="audience_shown" value={@audience} />
       <input
         :for={person <- Enum.filter(@people, &(&1.id in @members))}

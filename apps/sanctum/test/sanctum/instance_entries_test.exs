@@ -171,13 +171,16 @@ defmodule Sanctum.InstanceEntriesTest do
     })
   end
 
-  # A proof of an audience widening given over the audience `read`: the
-  # confirmation binds the change and the audience it was decided against.
-  defp audience_proof(admin, change, entry, read, details) do
-    arguments =
-      Map.put(change, :read, %{audience: read.audience, members: Enum.sort(read.members)})
+  # An audience change decided against the audience `seen`, which it names
+  # as `expected`, its members sorted as the confirmation binds them.
+  defp expecting(change, seen),
+    do: Map.put(change, :expected, %{audience: seen.audience, members: Enum.sort(seen.members)})
 
-    sharing(admin, "instance_entry.set_audience", arguments, entry, details)
+  # A proof of an audience widening given over the audience `seen`: the
+  # confirmation binds the change and the audience it was decided against,
+  # its `expected`.
+  defp audience_proof(admin, change, entry, seen, details) do
+    sharing(admin, "instance_entry.set_audience", expecting(change, seen), entry, details)
   end
 
   @policy_widening %{"component_policy" => "shipped → any"}
@@ -676,21 +679,25 @@ defmodule Sanctum.InstanceEntriesTest do
       entry = create!(admin, %{audience: "listed", members: [alice, bob]})
       add = %{entry_id: entry.id, audience: "listed", members: Enum.sort([alice, bob, carol])}
       everyone = %{entry_id: entry.id, audience: "everyone", members: []}
+      shown = %{audience: "listed", members: [bob, alice]}
 
       for widening <- [add, everyone] do
         assert {:error, {:confirmation_required, %{operation: "instance_entry.set_audience"}}} =
-                 InstanceEntries.set_audience(admin, widening)
+                 InstanceEntries.set_audience(admin, expecting(widening, shown))
       end
 
       # Unchanged, in any order: the session, no write, no announcement.
       assert {:ok, :unchanged} =
-               InstanceEntries.set_audience(admin, %{add | members: [bob, alice]})
+               InstanceEntries.set_audience(
+                 admin,
+                 expecting(%{add | members: [bob, alice]}, shown)
+               )
 
       refute_received {:instance_entry, :audience, _}
 
       # Narrowing: the session alone.
       narrow = %{add | members: [alice]}
-      assert {:ok, :changed} = InstanceEntries.set_audience(admin, narrow)
+      assert {:ok, :changed} = InstanceEntries.set_audience(admin, expecting(narrow, shown))
       assert_received {:instance_entry, :audience, %{entry_id: id}}
       assert id == entry.id
 
@@ -707,43 +714,135 @@ defmodule Sanctum.InstanceEntriesTest do
       # A proof for the widening it names lands it; Bob, re-added by it, is
       # offered the entry again.
       readd = %{add | members: Enum.sort([alice, bob])}
+      only_alice = %{audience: "listed", members: [alice]}
 
       confirmed =
-        audience_proof(admin, readd, entry, %{audience: "listed", members: [alice]}, %{
+        audience_proof(admin, readd, entry, only_alice, %{
           "audience" => "listed",
           "people_added" => "1"
         })
 
-      assert {:ok, :changed} = InstanceEntries.set_audience(confirmed, readd)
+      assert {:ok, :changed} =
+               InstanceEntries.set_audience(confirmed, expecting(readd, only_alice))
+
       assert {:ok, [%{id: id}]} = InstanceEntries.offered(person("bob"))
       assert id == entry.id
 
+      both = %{audience: "listed", members: [alice, bob]}
+
       confirmed =
-        audience_proof(admin, everyone, entry, %{audience: "listed", members: [alice, bob]}, %{
+        audience_proof(admin, everyone, entry, both, %{
           "audience" => "everyone"
         })
 
-      assert {:ok, :changed} = InstanceEntries.set_audience(confirmed, everyone)
+      assert {:ok, :changed} = InstanceEntries.set_audience(confirmed, expecting(everyone, both))
       assert {:ok, [%{audience: "everyone", members: []}]} = InstanceEntries.list(admin)
 
       assert {:error, :invalid_audience} =
-               InstanceEntries.set_audience(admin, %{everyone | audience: "anyone"})
+               InstanceEntries.set_audience(
+                 admin,
+                 expecting(%{everyone | audience: "anyone"}, %{audience: "everyone", members: []})
+               )
     end
 
-    test "a proof given over one stored audience is asked afresh over another, and writes nothing",
+    test "a change whose expected audience is not the stored one is a conflict: nothing is " <>
+           "written, announced or asked",
+         %{admin: admin} do
+      [alice, bob, carol] = for name <- ~w(alice bob carol), do: id(name)
+      entry = create!(admin, %{audience: "listed", members: [alice, bob]})
+      stored_audience = %{audience: "listed", members: [bob, alice]}
+
+      for {change, seen} <- [
+            # A narrowing decided against a list that held Carol.
+            {%{audience: "listed", members: [alice]},
+             %{audience: "listed", members: [alice, bob, carol]}},
+            # A widening decided against a list without Bob.
+            {%{audience: "listed", members: [alice, carol]},
+             %{audience: "listed", members: [alice]}},
+            # A change decided against everyone, which the entry is not.
+            {%{audience: "listed", members: [alice]}, %{audience: "everyone", members: []}},
+            # The stored audience itself, sent as the change, over another.
+            {stored_audience, %{audience: "listed", members: [alice]}}
+          ] do
+        assert {:error,
+                {:conflict, "The audience changed since it was shown, so nothing was saved."}} =
+                 InstanceEntries.set_audience(
+                   admin,
+                   expecting(Map.put(change, :entry_id, entry.id), seen)
+                 ),
+               inspect({change, seen})
+      end
+
+      assert {:ok, [%{audience: "listed", members: members}]} = InstanceEntries.list(admin)
+      assert Enum.sort(members) == Enum.sort([alice, bob])
+      refute_received {:instance_entry, :audience, _}
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(admin), admin.user_id)
+
+      # The same change over what is stored, members in any order, is made.
+      assert {:ok, :changed} =
+               InstanceEntries.set_audience(
+                 admin,
+                 expecting(%{entry_id: entry.id, audience: "listed", members: [alice]}, %{
+                   stored_audience
+                   | members: [bob, alice, bob]
+                 })
+               )
+
+      assert {:ok, [%{members: [^alice]}]} = InstanceEntries.list(admin)
+    end
+
+    test "a missing or malformed expected audience is refused before the entry is read",
+         %{admin: admin} do
+      alice = id("alice")
+      entry = create!(admin, %{audience: "listed", members: [alice]})
+      change = %{entry_id: entry.id, audience: "listed", members: []}
+
+      QueryCounter.assert_queries(0, fn ->
+        for expected <- [
+              :absent,
+              nil,
+              "listed",
+              [audience: "listed"],
+              %{members: [alice]},
+              %{audience: "anyone", members: []},
+              %{audience: nil, members: []},
+              %{audience: "listed", members: "#{alice}"},
+              %{audience: "listed", members: [alice, 1]},
+              %{audience: "listed", members: [""]},
+              %{audience: "everyone", members: [alice]},
+              %{audience: "listed", members: [alice], also: true}
+            ] do
+          params = if expected == :absent, do: change, else: Map.put(change, :expected, expected)
+
+          assert {:error, :invalid_expected} = InstanceEntries.set_audience(admin, params),
+                 inspect(expected)
+        end
+      end)
+
+      assert {:ok, [%{members: [^alice]}]} = InstanceEntries.list(admin)
+    end
+
+    test "a widening confirmed over one stored audience is a conflict at its repeat over " <>
+           "another, writing nothing and spending nothing",
          %{admin: admin} do
       [alice, bob, carol] = for name <- ~w(alice bob carol), do: id(name)
       entry = create!(admin, %{audience: "listed", members: [alice]})
-      adding = %{entry_id: entry.id, audience: "listed", members: Enum.sort([alice, bob])}
+      shown = %{audience: "listed", members: [alice]}
+
+      adding =
+        expecting(
+          %{entry_id: entry.id, audience: "listed", members: Enum.sort([alice, bob])},
+          shown
+        )
 
       assert {:error, {:confirmation_required, %{id: secret}}} =
                InstanceEntries.set_audience(admin, adding)
 
       TestContext.prove!(admin, secret)
 
-      # Before the proof's repeat, the stored audience moves: Carol is
-      # listed. The repeat names the same change and adds the same one
-      # person, but over another audience than the proof was given over.
+      # Before the proof's repeat, another administrator lists Carol. The
+      # repeat is the confirmed request itself, its expected audience
+      # included, now another than the one stored.
       :ok =
         Arca.InstanceEntries.set_audience(
           Prima.Actor.system(),
@@ -752,13 +851,20 @@ defmodule Sanctum.InstanceEntriesTest do
           %{audience: "listed", members: Enum.sort([alice, carol])}
         )
 
-      assert {:error, {:confirmation_required, %{id: again}}} =
+      assert {:error,
+              {:conflict, "The audience changed since it was shown, so nothing was saved."}} =
                InstanceEntries.set_audience(%{admin | confirmation_id: secret}, adding)
 
-      refute again == secret
       assert {:ok, [%{members: members}]} = InstanceEntries.list(admin)
       assert members == Enum.sort([alice, carol])
       refute_received {:instance_entry, :audience, _}
+
+      # The conflict came before the confirmation was asked: the proof was
+      # not spent on a change that was not made.
+      {:ok, row} =
+        Arca.PendingConfirmations.get(Context.actor(admin), Prima.Confirmation.ref(secret))
+
+      assert row.state == "confirmed"
     end
 
     test "an audience write racing a change of what it was decided against is refused, not retried",
@@ -791,14 +897,17 @@ defmodule Sanctum.InstanceEntriesTest do
         entry.id
       )
 
+      seen = %{audience: "listed", members: [alice, bob]}
+
       confirmed =
-        audience_proof(admin, widening, entry, %{audience: "listed", members: [alice, bob]}, %{
+        audience_proof(admin, widening, entry, seen, %{
           "audience" => "listed",
           "people_added" => "1"
         })
 
       try do
-        assert {:error, :conflict} = InstanceEntries.set_audience(confirmed, widening)
+        assert {:error, :conflict} =
+                 InstanceEntries.set_audience(confirmed, expecting(widening, seen))
       after
         :telemetry.detach(race_id)
       end
@@ -857,13 +966,16 @@ defmodule Sanctum.InstanceEntriesTest do
       [alice, bob, carol] = for name <- ~w(alice bob carol), do: id(name)
       listed = create!(admin, %{audience: "listed", members: [alice]})
       shipped = create!(admin, %{component_policy: "shipped"})
+      seen = %{audience: "listed", members: [alice]}
 
       for {change, operation, entry, details} <- [
             {&InstanceEntries.set_audience/2,
-             %{entry_id: listed.id, audience: "listed", members: [alice, bob, carol]}, listed,
-             %{"audience" => "listed", "people_added" => "2"}},
+             expecting(
+               %{entry_id: listed.id, audience: "listed", members: [alice, bob, carol]},
+               seen
+             ), listed, %{"audience" => "listed", "people_added" => "2"}},
             {&InstanceEntries.set_audience/2,
-             %{entry_id: listed.id, audience: "everyone", members: []}, listed,
+             expecting(%{entry_id: listed.id, audience: "everyone", members: []}, seen), listed,
              %{"audience" => "everyone"}},
             {&InstanceEntries.set_component_policy/2,
              %{entry_id: shipped.id, component_policy: "any"}, shipped, @policy_widening}
@@ -936,13 +1048,17 @@ defmodule Sanctum.InstanceEntriesTest do
       entry = create!(admin, %{audience: "listed", members: [alice]})
       adding = %{entry_id: entry.id, audience: "listed", members: Enum.sort([alice, bob])}
 
+      seen = %{audience: "listed", members: [alice]}
+
       confirmed =
-        audience_proof(admin, adding, entry, %{audience: "listed", members: [alice]}, %{
+        audience_proof(admin, adding, entry, seen, %{
           "audience" => "listed",
           "people_added" => "1"
         })
 
-      assert {:error, {:person_denied, ^bob}} = InstanceEntries.set_audience(confirmed, adding)
+      assert {:error, {:person_denied, ^bob}} =
+               InstanceEntries.set_audience(confirmed, expecting(adding, seen))
+
       assert {:ok, [%{members: [^alice]}]} = InstanceEntries.list(admin)
       refute_received {:instance_entry, :audience, _}
 
@@ -1202,12 +1318,64 @@ defmodule Sanctum.InstanceEntriesTest do
       refute inspect(offer) =~ @secret
       refute Map.has_key?(offer, :members)
 
-      # The offer is offered/1's, with the person's count beside it.
+      # The offer is offered/1's, with the person's count and whether it
+      # reached their cap beside it.
       {:ok, [plain]} = InstanceEntries.offered(bob)
-      assert Map.delete(offer, :used_today) == plain
+      assert Map.drop(offer, [:used_today, :cap_reached]) == plain
+      refute offer.cap_reached
 
       assert {:error, :anonymous_denied} =
                InstanceEntries.offered_with_use(%{bob | anonymous: true})
+    end
+
+    test "offered with use says whether the person's own count reached their own cap: at " <>
+           "the cap, not below it, and at once for a 0 cap",
+         %{admin: admin} do
+      capped = create!(admin, %{person_daily: 2, total_daily: 100})
+      none = create!(admin, %{person_daily: 0})
+      unset = create!(admin)
+      alice = person("alice")
+      bob = person("bob")
+      models = request("/v1/models", "GET")
+
+      # Each entry's own count today and whether it reached the cap.
+      reached = fn ctx, entry ->
+        {:ok, offers} = InstanceEntries.offered_with_use(ctx)
+        offer = Enum.find(offers, &(&1.id == entry.id))
+        {offer.used_today, offer.cap_reached}
+      end
+
+      # Nothing used: below a cap of 2, and a 0 cap is reached already.
+      assert reached.(alice, capped) == {0, false}
+      assert reached.(alice, none) == {0, true}
+      assert reached.(alice, unset) == {0, false}
+
+      {:ok, _, _} = InstanceEntries.resolve(alice, capped.id, models, @custom)
+      assert reached.(alice, capped) == {1, false}
+
+      {:ok, _, _} = InstanceEntries.resolve(alice, capped.id, models, @custom)
+      assert reached.(alice, capped) == {2, true}
+
+      # The claim refuses exactly where the read says the cap is reached.
+      assert {:error, {:connection_cap, _reset}} =
+               InstanceEntries.resolve(alice, capped.id, models, @custom)
+
+      # Another person's own count is theirs: Bob is below the cap Alice
+      # reached, though the entry's day holds Alice's two.
+      assert reached.(bob, capped) == {0, false}
+
+      # An unset cap is the platform setting's, as the claim resolves it.
+      Sanctum.Test.Settings.put("instance_entry_person_daily", 1)
+
+      try do
+        assert reached.(alice, unset) == {0, false}
+        {:ok, _, _} = InstanceEntries.resolve(alice, unset.id, models, @custom)
+        assert reached.(alice, unset) == {1, true}
+      after
+        Sanctum.Test.Settings.reset("instance_entry_person_daily")
+      end
+
+      assert reached.(alice, unset) == {1, false}
     end
 
     test "a request outside the destination unseals nothing and takes no claim", %{admin: admin} do

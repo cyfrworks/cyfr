@@ -252,8 +252,35 @@ defmodule PrismWeb.SettingsLiveTest do
       end
     end
 
+    # The owner's sentence for an audience that moved since it was shown,
+    # as the page's flash and the layer's prompt each show it.
+    @conflict "The audience changed since it was shown, so nothing was saved."
+    @page_conflict "Instance entries: " <> @conflict
+    @prompt_conflict "Refused: " <> @conflict
+
+    # Every audience the owner writes is told to the test: the store's own
+    # writes announce nothing, so each one is a save that was made.
+    defp watch_audience_writes do
+      test_pid = self()
+      handler = "settings-audience-writes-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :sanctum, :instance_entry, :audience],
+          fn _event, _measure, meta, _config ->
+            send(test_pid, {:audience_written, meta.entry_id})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+    end
+
     # A widening asked for and held, then made elsewhere before the proof:
-    # the proof's repeat finds nothing left to change.
+    # the stored audience is now what the widening asks for, but not the
+    # one it was decided against, so the proof's repeat, the confirmed
+    # request with its `expected` audience, meets the owner's conflict.
     defp moot_repeat!(conn) do
       %{view: view, ctx: ctx} = admin!(conn)
       a = test_user(%{name: "A One"}).user_id
@@ -277,9 +304,11 @@ defmodule PrismWeb.SettingsLiveTest do
                )
 
       send(view.pid, %Cyfr.Bus.InstanceEntryChanged{kind: :audience, entry_id: entry.id})
+      watch_audience_writes()
       prove_asked!(view, ctx, ref)
-      wait_until(fn -> render(view) =~ "Nothing changed." end, 2_000, "the repeat answered")
-      assert saves_admitted() == 0, "the moot repeat sent a save"
+      wait_until(fn -> render(view) =~ @page_conflict end, 2_000, "the repeat answered")
+      assert saves_admitted() == 1, "the repeat was not sent exactly once"
+      refute_received {:audience_written, _}, "the conflicting repeat wrote an audience"
       %{view: view, ctx: ctx, a: a, b: b, entry: entry, form: form, ref: ref}
     end
 
@@ -788,7 +817,8 @@ defmodule PrismWeb.SettingsLiveTest do
     end
 
     test "a person another client listed after the page loaded is never dropped by a save: " <>
-           "the picker reloads, and a save sends only the administrator's own edit",
+           "the picker reloads, an unedited stale form sends nothing, and an edit made on it " <>
+           "is a conflict",
          %{conn: conn} do
       %{view: view, ctx: ctx} = admin!(conn)
       alice = test_user(%{name: "Alice First"})
@@ -801,7 +831,13 @@ defmodule PrismWeb.SettingsLiveTest do
       # them; the announcement reaches this page.
       bob = test_user(%{name: "Bob Later"})
       both = Enum.sort([alice.user_id, bob.user_id])
-      args = %{entry_id: entry.id, audience: "listed", members: both}
+
+      args = %{
+        entry_id: entry.id,
+        audience: "listed",
+        members: both,
+        expected: %{audience: "listed", members: [alice.user_id]}
+      }
 
       assert {:ok, :changed} =
                Sanctum.TestContext.confirming(
@@ -840,33 +876,88 @@ defmodule PrismWeb.SettingsLiveTest do
       assert render(view) =~ "Nothing changed."
       assert Enum.sort(stored(entry.id).members) == both
 
-      # The administrator's own removal of Alice from the stale form takes
-      # Alice out, and Bob stays.
+      # The administrator's own removal of Alice from the stale form was
+      # decided against an audience without Bob: a conflict, nothing saved,
+      # and the card shows the stored audience again.
       view |> element(form) |> render_submit(%{as_drawn | "members" => []})
+      assert render(view) =~ @page_conflict
+      assert Enum.sort(stored(entry.id).members) == both
+
+      # Made on the form as it now shows, the removal takes Alice out, and
+      # Bob stays.
+      view |> element(form) |> render_submit(%{"members" => [bob.user_id]})
       assert stored(entry.id).members == [bob.user_id]
     end
 
+    test "a save decided against an audience that moved since the card showed it is a " <>
+           "conflict: nothing is saved or asked, and the card reloads and says why",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      alice = test_user(%{name: "Alice First"})
+      bob = test_user(%{name: "Bob Unchecked"})
+      carol = test_user(%{name: "Carol Elsewhere"})
+      entry = entry!(ctx, %{audience: "listed", members: Enum.sort([alice.user_id, bob.user_id])})
+      send(view.pid, :load)
+      form = "#instance-audience-#{entry.id}"
+
+      assert has_element?(
+               view,
+               form <> ~s( input[name="members_shown[]"][value="#{bob.user_id}"])
+             )
+
+      watch_audience_writes()
+
+      # Carol is listed at the store; this page has not heard.
+      assert :ok =
+               Arca.InstanceEntries.set_audience(
+                 Prima.Actor.system(),
+                 entry.id,
+                 %{audience: "listed", members: Enum.sort([alice.user_id, bob.user_id])},
+                 %{
+                   audience: "listed",
+                   members: Enum.sort([alice.user_id, bob.user_id, carol.user_id])
+                 }
+               )
+
+      refute has_element?(
+               view,
+               form <> ~s( input[name="members_shown[]"][value="#{carol.user_id}"])
+             )
+
+      # A narrowing, which would need no prompt, decided on the card as it
+      # showed the audience.
+      view |> element(form) |> render_submit(%{"members" => [alice.user_id]})
+
+      assert render(view) =~ @page_conflict
+      assert open_records(ctx) == []
+      refute_received {:audience_written, _}
+
+      assert Enum.sort(stored(entry.id).members) ==
+               Enum.sort([alice.user_id, bob.user_id, carol.user_id])
+
+      # The card reloaded the stored audience: Carol is listed, and checked.
+      assert has_element?(
+               view,
+               form <> ~s( input[name="members[]"][value="#{carol.user_id}"][checked])
+             )
+
+      assert has_element?(view, ~s([data-test="instance-audience"]), "Carol Elsewhere")
+    end
+
     # The page's widening waits on its proof while the audience moves
-    # elsewhere; once the proof lands, the edit is made again over the
-    # audience as it stands. A result other than the one proven is asked
-    # afresh, and its proof makes it.
-    defp prove_widening!(view, ctx, ref, done?) do
+    # elsewhere; once the proof lands, the confirmed request is sent again
+    # with the audience it was decided against, which is no longer the
+    # stored one: the owner's conflict, after which the record is
+    # cancelled, the page holds no secret and nothing more is asked.
+    defp prove_into_conflict!(view, ctx, ref) do
+      watch_audience_writes()
       prove_asked!(view, ctx, ref)
-
-      wait_until(
-        fn -> done?.() or Enum.any?(open_records(ctx), &(&1.ref != ref)) end,
-        2_000,
-        "the repeat answered"
-      )
-
-      case Enum.find(open_records(ctx), &(&1.ref != ref)) do
-        %{ref: again} ->
-          prove_asked!(view, ctx, again)
-          wait_until(done?, 2_000, "the edit made once proven again")
-
-        nil ->
-          :ok
-      end
+      wait_until(fn -> record_state(ctx, ref) == "cancelled" end, 2_000, "the repeat let go")
+      wait_until(fn -> render(view) =~ @page_conflict end, 2_000, "the page told the conflict")
+      refute_received {:audience_written, _}, "the conflicting repeat wrote an audience"
+      assert open_records(ctx) == [], "something was asked afresh"
+      refute state_of(view) =~ "cnf_", "the page still holds the secret of a refused repeat"
+      assert render(view) =~ @prompt_conflict
     end
 
     # A request the page asked for is proven once the page holds it and
@@ -885,7 +976,7 @@ defmodule PrismWeb.SettingsLiveTest do
     end
 
     test "a person another administrator lists while this page's widening waits on its proof " <>
-           "stays listed once the proof lands",
+           "stays listed: the proof's repeat is a conflict, and nothing is written",
          %{conn: conn} do
       %{view: view, ctx: ctx} = admin!(conn)
       %{ctx: other} = admin!(build_conn())
@@ -906,7 +997,13 @@ defmodule PrismWeb.SettingsLiveTest do
       # Before the proof, another administrator lists Carol under their own
       # confirmation, and the announcement reaches this page.
       both = Enum.sort([alice.user_id, carol.user_id])
-      args = %{entry_id: entry.id, audience: "listed", members: both}
+
+      args = %{
+        entry_id: entry.id,
+        audience: "listed",
+        members: both,
+        expected: %{audience: "listed", members: [alice.user_id]}
+      }
 
       assert {:ok, :changed} =
                Sanctum.TestContext.confirming(
@@ -922,11 +1019,10 @@ defmodule PrismWeb.SettingsLiveTest do
         "the listing reached the page"
       )
 
-      prove_widening!(view, ctx, ref, fn -> bob.user_id in stored(entry.id).members end)
+      prove_into_conflict!(view, ctx, ref)
 
-      assert Enum.sort(stored(entry.id).members) ==
-               Enum.sort([alice.user_id, bob.user_id, carol.user_id]),
-             "the proof's repeat dropped Carol, listed by another administrator while it waited"
+      assert Enum.sort(stored(entry.id).members) == both,
+             "the proof's repeat wrote over the audience another administrator set while it waited"
     end
 
     test "the same, the other write made at the store and announced", %{conn: conn} do
@@ -953,15 +1049,15 @@ defmodule PrismWeb.SettingsLiveTest do
       send(view.pid, %Cyfr.Bus.InstanceEntryChanged{kind: :audience, entry_id: entry.id})
       render(view)
 
-      prove_widening!(view, ctx, ref, fn -> bob.user_id in stored(entry.id).members end)
+      prove_into_conflict!(view, ctx, ref)
 
       assert Enum.sort(stored(entry.id).members) ==
-               Enum.sort([alice.user_id, bob.user_id, carol.user_id]),
-             "the proof's repeat dropped Carol, listed at the store while it waited"
+               Enum.sort([alice.user_id, carol.user_id]),
+             "the proof's repeat wrote over the audience set at the store while it waited"
     end
 
     test "a person another administrator removes while this page's widening waits is not put " <>
-           "back by its save",
+           "back: the proof's repeat is a conflict, and nothing is written",
          %{conn: conn} do
       %{view: view, ctx: ctx} = admin!(conn)
       %{ctx: other} = admin!(build_conn())
@@ -982,16 +1078,24 @@ defmodule PrismWeb.SettingsLiveTest do
       assert [%{ref: ref, operation: "instance_entry.set_audience"}] = open_records(ctx)
 
       # Another administrator removes Dave: a narrowing, the session alone.
-      narrowed = %{entry_id: entry.id, audience: "listed", members: [alice.user_id]}
+      narrowed = %{
+        entry_id: entry.id,
+        audience: "listed",
+        members: [alice.user_id],
+        expected: %{audience: "listed", members: Enum.sort([alice.user_id, dave.user_id])}
+      }
+
       assert {:ok, :changed} = Sanctum.InstanceEntries.set_audience(other, narrowed)
 
-      prove_widening!(view, ctx, ref, fn -> bob.user_id in stored(entry.id).members end)
+      prove_into_conflict!(view, ctx, ref)
 
-      assert Enum.sort(stored(entry.id).members) == Enum.sort([alice.user_id, bob.user_id]),
-             "this administrator's save put back Dave, whom another administrator removed"
+      assert stored(entry.id).members == [alice.user_id],
+             "this administrator's save wrote over Dave's removal by another administrator"
     end
 
-    test "a removal the audience's switch to everyone made moot says so", %{conn: conn} do
+    test "a removal from a list the audience left for everyone elsewhere is a conflict and " <>
+           "saves nothing; a removal from an everyone form says it changes nothing",
+         %{conn: conn} do
       %{view: view, ctx: ctx} = admin!(conn)
       alice = test_user(%{name: "Alice First"})
       bob = test_user(%{name: "Bob Unchecked"})
@@ -1011,10 +1115,28 @@ defmodule PrismWeb.SettingsLiveTest do
 
       view |> element(form) |> render_submit(%{"members" => [alice.user_id]})
 
+      assert render(view) =~ @page_conflict
+      assert %{audience: "everyone"} = stored(entry.id)
+      assert has_element?(view, form <> ~s( input[name="audience"][value="everyone"][checked]))
+
+      # A removal sent from a form drawn as everyone has no list to remove
+      # from: nothing is sent, and the sentence says why.
+      watch_saves()
+
+      view
+      |> element(form)
+      |> render_submit(%{
+        "audience" => "everyone",
+        "audience_shown" => "everyone",
+        "members_shown" => [bob.user_id],
+        "members" => []
+      })
+
       assert render(view) =~
                "The audience is everyone now, set elsewhere, so removing someone from its list " <>
                  "changes nothing."
 
+      assert saves_admitted() == 0
       assert %{audience: "everyone"} = stored(entry.id)
     end
 
@@ -1069,26 +1191,42 @@ defmodule PrismWeb.SettingsLiveTest do
       assert stored(entry.id).members == [alice.user_id]
     end
 
-    test "a proven widening the audience already holds lets its proof go: the record is " <>
-           "cancelled, the page keeps no secret and the prompt says nothing was changed",
+    test "a widening whose audience moved while its prompt was open is a conflict at the " <>
+           "repeat: record cancelled, no secret kept, the prompt says so, nothing written, " <>
+           "the next save asked afresh",
          %{conn: conn} do
-      %{view: view, ctx: ctx, ref: ref} = moot_repeat!(conn)
+      %{view: view, ctx: ctx, ref: ref, a: a, b: b, entry: entry, form: form} =
+        moot_repeat!(conn)
 
-      assert record_state(ctx, ref) == "cancelled"
+      wait_until(fn -> record_state(ctx, ref) == "cancelled" end, 2_000, "the record cancelled")
 
       refute state_of(view) =~ "cnf_",
              "the page still holds the secret of a change it will not make"
 
+      # The prompt ends on the refusal, whichever of it and the record's
+      # cancelled fact reached the layer first.
+      render(view)
       html = render(view)
       refute html =~ "Approved. Completing the change."
+      assert html =~ @prompt_conflict
+      refute html =~ "Cancelled. Nothing was changed."
+      refute html =~ "could not be withdrawn"
+      assert html =~ @page_conflict
 
-      # The release's own outcome, or the record's cancelled fact heard after
-      # it: both are true, and whichever lands last is shown.
-      assert html =~ "There was nothing left to change, so the approval was withdrawn." or
-               html =~ "Cancelled. Nothing was changed."
+      # The card shows the audience stored elsewhere; the next save, made on
+      # it, asks afresh under a record of its own and writes nothing yet.
+      assert has_element?(view, form <> ~s( input[name="members_shown[]"][value="#{b}"]))
+      c = test_user(%{name: "C Three"}).user_id
+      send(view.pid, :load)
+      view |> element(form) |> render_submit(%{"members" => [a, b, c]})
+
+      assert [%{ref: again, operation: "instance_entry.set_audience"}] = open_records(ctx)
+      refute again == ref
+      assert Enum.sort(stored(entry.id).members) == Enum.sort([a, b])
+      refute_received {:audience_written, _}
     end
 
-    test "the same edit saved after a released proof is asked afresh, never written on it",
+    test "the same edit saved after a refused repeat is asked afresh, never written on its proof",
          %{conn: conn} do
       %{view: view, ctx: ctx, a: a, b: b, entry: entry, form: form, ref: ref} =
         moot_repeat!(conn)
@@ -1117,7 +1255,7 @@ defmodule PrismWeb.SettingsLiveTest do
       refute b in stored(entry.id).members, "a widening was written with no prompt"
       assert [%{ref: again}] = open_records(ctx)
       refute again == ref
-      assert record_state(ctx, ref) == "cancelled"
+      wait_until(fn -> record_state(ctx, ref) == "cancelled" end, 2_000, "the record cancelled")
     end
 
     defp hide_confirmations!,
@@ -1139,7 +1277,8 @@ defmodule PrismWeb.SettingsLiveTest do
       :sys.resume(view.pid)
     end
 
-    test "a moot repeat whose cancel fails says so on the page and in the prompt",
+    test "a conflicting repeat whose cancel fails shows the conflict on the page, and in the " <>
+           "prompt with the approval's expiry",
          %{conn: conn} do
       %{view: view, ctx: ctx} = admin!(conn)
       a = test_user(%{name: "A One"}).user_id
@@ -1161,10 +1300,11 @@ defmodule PrismWeb.SettingsLiveTest do
                )
 
       send(view.pid, %Cyfr.Bus.InstanceEntryChanged{kind: :audience, entry_id: entry.id})
+      watch_audience_writes()
       proven_with!(view, ctx, ref, &hide_confirmations!/0)
 
       wait_until(
-        fn -> render(view) =~ "it ends when it expires" end,
+        fn -> render(view) =~ "it ends at its expiry" end,
         3_000,
         "the failed cancel said"
       )
@@ -1175,39 +1315,16 @@ defmodule PrismWeb.SettingsLiveTest do
 
       refute holds
 
+      # The page's own answer is the conflict's; the prompt, where the
+      # approval was given, shows the conflict and then the approval's fate.
+      assert html =~ @page_conflict
+
       assert html =~
-               "Nothing changed. The approval could not be withdrawn; it ends when it expires."
+               @prompt_conflict <> " The approval could not be withdrawn; it ends at its expiry."
 
-      assert html =~ "The approval could not be withdrawn; it ends at its expiry."
       refute html =~ "so the approval was withdrawn"
-      assert record_state(ctx, ref) == "confirmed"
-    end
-
-    test "a repeat whose fresh read and cancel both fail says both on the page and in the prompt",
-         %{conn: conn} do
-      %{view: view, ctx: ctx} = admin!(conn)
-      a = test_user(%{name: "A One"}).user_id
-      b = test_user(%{name: "B Two"}).user_id
-      entry = entry!(ctx, %{audience: "listed", members: [a]})
-      send(view.pid, :load)
-      form = "#instance-audience-#{entry.id}"
-
-      view |> element(form) |> render_submit(%{"members" => [a, b]})
-      assert [%{ref: ref}] = open_records(ctx)
-
-      proven_with!(view, ctx, ref, fn ->
-        Arca.Repo.query!("ALTER TABLE instance_entries RENAME TO instance_entries_gone")
-        hide_confirmations!()
-      end)
-
-      wait_until(fn -> not (state_of(view) =~ "cnf_") end, 3_000, "the secret let go")
-      html = render(view)
-      restore_confirmations!()
-      Arca.Repo.query!("ALTER TABLE instance_entries_gone RENAME TO instance_entries")
-
-      assert html =~ "Instance entries:"
-      assert html =~ "The approval could not be withdrawn; it ends when it expires."
-      assert html =~ "The approval could not be withdrawn; it ends at its expiry."
+      refute_received {:audience_written, _}
+      assert Enum.sort(stored(entry.id).members) == Enum.sort([a, b])
       assert record_state(ctx, ref) == "confirmed"
     end
 
@@ -1319,33 +1436,6 @@ defmodule PrismWeb.SettingsLiveTest do
       render(view)
       assert saves_admitted() == 2, "the change was not repeated exactly once"
       refute state_of(view) =~ "cnf_"
-    end
-
-    test "a proven widening whose fresh read fails lets its proof go and says why",
-         %{conn: conn} do
-      %{view: view, ctx: ctx} = admin!(conn)
-      a = test_user(%{name: "A One"}).user_id
-      b = test_user(%{name: "B Two"}).user_id
-      entry = entry!(ctx, %{audience: "listed", members: [a]})
-      send(view.pid, :load)
-      form = "#instance-audience-#{entry.id}"
-      watch_saves()
-
-      view |> element(form) |> render_submit(%{"members" => [a, b]})
-      assert [%{ref: ref}] = open_records(ctx)
-
-      Arca.Repo.query!("ALTER TABLE instance_entries RENAME TO instance_entries_unavailable")
-      prove_asked!(view, ctx, ref)
-
-      wait_until(
-        fn -> record_state(ctx, ref) == "cancelled" end,
-        2_000,
-        "the repeat let its proof go"
-      )
-
-      assert saves_admitted() == 1, "the failed read's repeat sent a save"
-      refute state_of(view) =~ "cnf_"
-      refute render(view) =~ "Approved. Completing the change."
     end
 
     test "a usage read that fails says use could not be read, not that there was none",

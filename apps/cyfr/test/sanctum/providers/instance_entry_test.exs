@@ -181,6 +181,20 @@ defmodule Sanctum.Providers.InstanceEntryTest do
       assert [%{component_policy: "any"}] = entries()
     end
 
+    test "set_audience declares the audience it was decided against, expected, as required" do
+      args = Map.new(operation("set_audience").args, &{&1.name, &1})
+      assert Enum.sort(Map.keys(args)) == ~w(audience entry_id expected members)
+
+      expected = args["expected"]
+      assert expected.required
+      assert {:record, fields} = expected.type
+      fields = Map.new(fields, &{&1.name, &1})
+      assert Enum.sort(Map.keys(fields)) == ~w(audience members)
+      assert {fields["audience"].required, fields["audience"].enum} == {true, ~w(everyone listed)}
+      refute fields["members"].required
+      assert {:array, %Prima.Arg{type: :string}} = fields["members"].type
+    end
+
     test "usage names days within the window the sweep keeps", %{admin: admin} do
       entry = create!(admin)
 
@@ -212,7 +226,12 @@ defmodule Sanctum.Providers.InstanceEntryTest do
           "expected_payload_rev" => 0
         },
         %{"action" => "rebind", "entry_id" => entry.id, "destination" => @destination},
-        %{"action" => "set_audience", "entry_id" => entry.id, "audience" => "listed"},
+        %{
+          "action" => "set_audience",
+          "entry_id" => entry.id,
+          "audience" => "listed",
+          "expected" => %{"audience" => "everyone"}
+        },
         %{
           "action" => "set_component_policy",
           "entry_id" => entry.id,
@@ -254,7 +273,8 @@ defmodule Sanctum.Providers.InstanceEntryTest do
                  "action" => "set_audience",
                  "entry_id" => entry.id,
                  "audience" => "listed",
-                 "members" => [someone_else.user_id]
+                 "members" => [someone_else.user_id],
+                 "expected" => %{"audience" => "everyone", "members" => []}
                })
 
       assert {:ok, %{entries: []}} = call(member, %{"action" => "offered"})
@@ -262,6 +282,99 @@ defmodule Sanctum.Providers.InstanceEntryTest do
   end
 
   describe "the refusals" do
+    test "a set_audience without its expected audience, or with a malformed one, is an " <>
+           "invalid argument before Sanctum is called, and nothing is written",
+         %{admin: admin} do
+      entry = create!(admin, %{"audience" => "listed", "members" => [admin.user_id]})
+
+      change = %{
+        "action" => "set_audience",
+        "entry_id" => entry.id,
+        "audience" => "listed",
+        "members" => []
+      }
+
+      # Each of the five is refused in the handler's own words, whoever
+      # reaches it; the sentence names the rule, never the value given.
+      for {expected, words} <- [
+            {:absent, "expected_required"},
+            {"listed", "is a record of audience and members"},
+            {["listed"], "is a record of audience and members"},
+            {%{"audience" => "anyone", "members" => []}, "is everyone or listed"},
+            {%{"members" => [admin.user_id]}, "is everyone or listed"},
+            {%{"audience" => "listed", "members" => "#{admin.user_id}"}, "list of person ids"},
+            {%{"audience" => "listed", "members" => [admin.user_id, 7]}, "list of person ids"},
+            {%{"audience" => "everyone", "members" => [admin.user_id]}, "lists no members"}
+          ] do
+        args = if expected == :absent, do: change, else: Map.put(change, "expected", expected)
+
+        assert {:error, {:invalid_argument, message}} =
+                 Sanctum.Providers.InstanceEntry.handle(admin, args),
+               inspect(expected)
+
+        assert message =~ words, inspect({expected, message})
+        refute message =~ admin.user_id
+      end
+
+      # Through the gate the declaration refuses what it can name, at
+      # admission; an everyone audience that lists someone is the
+      # handler's.
+      for expected <- [
+            :absent,
+            "listed",
+            %{"audience" => "anyone"},
+            %{"members" => []},
+            %{"audience" => "listed", "members" => [7]},
+            %{"audience" => "listed", "also" => true}
+          ] do
+        args = if expected == :absent, do: change, else: Map.put(change, "expected", expected)
+
+        assert {:error, %Prima.Refusal{stage: :admission, class: :invalid_argument}} =
+                 call(admin, args),
+               inspect(expected)
+      end
+
+      assert {:error, {:invalid_argument, "invalid_expected: " <> _}} =
+               call(
+                 admin,
+                 Map.put(change, "expected", %{"audience" => "everyone", "members" => ["x"]})
+               )
+
+      assert [%{audience: "listed", members: [member]}] = entries()
+      assert member == admin.user_id
+    end
+
+    test "an expected audience that is not the stored one is the owner's conflict, in its " <>
+           "own words, with nothing written",
+         %{admin: admin} do
+      entry = create!(admin, %{"audience" => "listed", "members" => [admin.user_id]})
+
+      assert {:error,
+              {:conflict, "The audience changed since it was shown, so nothing was saved."}} =
+               call(admin, %{
+                 "action" => "set_audience",
+                 "entry_id" => entry.id,
+                 "audience" => "listed",
+                 "members" => [],
+                 "expected" => %{"audience" => "everyone"}
+               })
+
+      assert [%{audience: "listed", members: [member]}] = entries()
+      assert member == admin.user_id
+
+      # As stored, the narrowing is made with the session alone.
+      assert {:ok, %{status: "updated", changed: true}} =
+               call(admin, %{
+                 "action" => "set_audience",
+                 "entry_id" => entry.id,
+                 "audience" => "listed",
+                 "members" => [],
+                 "expected" => %{"audience" => "listed", "members" => [admin.user_id]}
+               })
+
+      assert [%{audience: "listed", members: []}] = entries()
+    end
+
     test "an over-long name or provider is an invalid argument naming the field", %{
       admin: admin
     } do
@@ -301,7 +414,8 @@ defmodule Sanctum.Providers.InstanceEntryTest do
         "action" => "set_audience",
         "entry_id" => entry.id,
         "audience" => "listed",
-        "members" => [admin.user_id, typed]
+        "members" => [admin.user_id, typed],
+        "expected" => %{"audience" => "listed", "members" => [admin.user_id]}
       }
 
       assert {:error, {:invalid_argument, message}} =
@@ -329,7 +443,8 @@ defmodule Sanctum.Providers.InstanceEntryTest do
         "action" => "set_audience",
         "entry_id" => entry.id,
         "audience" => "listed",
-        "members" => [admin.user_id, denied.user_id]
+        "members" => [admin.user_id, denied.user_id],
+        "expected" => %{"audience" => "listed", "members" => [admin.user_id]}
       }
 
       assert {:error, {:invalid_argument, message}} =

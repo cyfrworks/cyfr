@@ -83,6 +83,30 @@ defmodule Sanctum.Providers.InstanceEntry do
         description: "The listed people, by person id; an everyone audience keeps none"
       )
 
+    # The audience the caller saw: a change is decided against it, and one
+    # whose stored audience moved since is a conflict, with nothing saved.
+    expected =
+      Arg.new(
+        "expected",
+        {:record,
+         [
+           Arg.new("audience", :string,
+             required: true,
+             enum: ["everyone", "listed"],
+             description: "The audience as the caller saw it: everyone, or the listed people"
+           ),
+           Arg.new("members", {:array, Arg.new(nil, :string)},
+             description:
+               "The people listed as the caller saw them, by person id, compared as a set; " <>
+                 "none for everyone"
+           )
+         ]},
+        required: true,
+        description:
+          "The audience the change was decided against, as the caller saw it; a stored " <>
+            "audience that differs is a conflict and nothing is saved"
+      )
+
     policy = fn opts ->
       Arg.new(
         "component_policy",
@@ -182,7 +206,7 @@ defmodule Sanctum.Providers.InstanceEntry do
           "instance_entry",
           "set_audience",
           "Set instance entry audience",
-          [entry_id, audience.(), members],
+          [entry_id, audience.(), members, expected],
           [kind: :write] ++ platform
         ),
         Operation.new(
@@ -239,8 +263,9 @@ defmodule Sanctum.Providers.InstanceEntry do
           "instance_entry",
           "offered",
           "Offered instance entries: each active entry offered to you, with its provider, " <>
-            "destination and component policy, and how many requests you made through it " <>
-            "today (used_today); never another person's use",
+            "destination and component policy, how many requests you made through it " <>
+            "today (used_today), and whether that reached your own daily cap (cap_reached, " <>
+            "until midnight UTC); never another person's use",
           [],
           kind: :read,
           planes: [:external]
@@ -314,11 +339,18 @@ defmodule Sanctum.Providers.InstanceEntry do
 
   def handle(%Context{} = ctx, %{"action" => "set_audience", "entry_id" => id} = args)
       when is_binary(id) do
-    params = %{entry_id: id, audience: args["audience"], members: Map.get(args, "members", [])}
+    with {:ok, expected} <- expected(args) do
+      params = %{
+        entry_id: id,
+        audience: args["audience"],
+        members: Map.get(args, "members", []),
+        expected: expected
+      }
 
-    case InstanceEntries.set_audience(ctx, params) do
-      {:ok, changed} -> {:ok, %{status: "updated", entry_id: id, changed: changed == :changed}}
-      {:error, reason} -> {:error, fmt(reason)}
+      case InstanceEntries.set_audience(ctx, params) do
+        {:ok, changed} -> {:ok, %{status: "updated", entry_id: id, changed: changed == :changed}}
+        {:error, reason} -> {:error, fmt(reason)}
+      end
     end
   end
 
@@ -409,6 +441,41 @@ defmodule Sanctum.Providers.InstanceEntry do
 
   # ---------------------------------------------------------------------------
 
+  # The audience a set_audience call was decided against, held to its
+  # shape before Sanctum is called: present, a record, an audience of the
+  # two words, members a list of strings, and none for everyone. The
+  # sentence names the rule, never the value given.
+  defp expected(%{"expected" => %{} = expected}) do
+    audience = expected["audience"]
+    members = Map.get(expected, "members", [])
+
+    cond do
+      audience not in ["everyone", "listed"] ->
+        invalid_expected("expected.audience is everyone or listed")
+
+      not (is_list(members) and Enum.all?(members, &is_binary/1)) ->
+        invalid_expected("expected.members is a list of person ids")
+
+      audience == "everyone" and members != [] ->
+        invalid_expected("an everyone audience lists no members in expected")
+
+      true ->
+        {:ok, %{audience: audience, members: members}}
+    end
+  end
+
+  defp expected(%{"expected" => _not_a_record}),
+    do: invalid_expected("expected is a record of audience and members")
+
+  defp expected(_args),
+    do:
+      {:error,
+       {:invalid_argument,
+        "expected_required: set_audience names the audience it was decided against, " <>
+          "as expected"}}
+
+  defp invalid_expected(rule), do: {:error, {:invalid_argument, "invalid_expected: " <> rule}}
+
   # An argument the caller named, null included: a policy's null is
   # refused rather than read as omitted, and a cap's null takes the
   # platform default rather than keeping the stored value.
@@ -490,6 +557,12 @@ defmodule Sanctum.Providers.InstanceEntry do
 
   defp fmt(:invalid_members),
     do: {:invalid_argument, "invalid_members: members are person ids"}
+
+  defp fmt(:invalid_expected),
+    do:
+      {:invalid_argument,
+       "invalid_expected: expected is the audience the change was decided against, everyone " <>
+         "or listed, with its members as person ids and none for everyone"}
 
   defp fmt(:invalid_caps),
     do:

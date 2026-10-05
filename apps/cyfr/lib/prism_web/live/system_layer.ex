@@ -157,7 +157,8 @@ defmodule PrismWeb.SystemLayer do
   emptied when that prompt ends), and a
   page is told `{:system_layer, id, :confirmed}` and repeats through
   `call/5`. A repeat answered `confirmation_required` with the same secret
-  is still waiting; a `voided`, `expired` or `cancelled` fact for the
+  is still waiting; a repeat refused cancels its record, and the prompt
+  shows the refusal; a `voided`, `expired` or `cancelled` fact for the
   ref ends the wait and says so. Dismissing one's own waiting request
   cancels it.
 
@@ -192,6 +193,18 @@ defmodule PrismWeb.SystemLayer do
   @asks :system_layer_asks
   # Where a view keeps the nested views whose prompts it placed.
   @relays :system_layer_relays
+
+  # A release's outcome that the approval could not be withdrawn: a
+  # release's own (`:withdraw_failed`) or a refused repeat's
+  # (`{:withdraw_failed, reason}`), and that outcome as a prompt is told it.
+  defguardp is_withdraw_failed(reason)
+            when reason == :withdraw_failed or
+                   (is_tuple(reason) and tuple_size(reason) == 2 and
+                      elem(reason, 0) == :withdraw_failed)
+
+  defguardp is_unwithdrawn(outcome)
+            when is_tuple(outcome) and tuple_size(outcome) == 2 and elem(outcome, 0) == :refused and
+                   is_withdraw_failed(elem(outcome, 1))
 
   @doc "The id the layer is mounted under on a page that holds one."
   @spec layer_id() :: String.t()
@@ -474,10 +487,16 @@ defmodule PrismWeb.SystemLayer do
   can ask for).
 
   A change the page already asked for under `tag` and still holds the
-  secret of is dispatched naming it: the repeat. Answers:
+  secret of is dispatched naming it: the repeat. A repeat the operation
+  refuses is released, as `release/3` releases a held ask: its record is
+  cancelled, the prompt shows the refusal, and the secret leaves the
+  page. A cancel answered `not_pending` (the operation consumed the record
+  before it refused, or the record had ended) shows the refusal alone; any
+  other failed cancel adds that the approval could not be withdrawn and
+  ends at its expiry. Answers:
 
     * `{:ok, result, socket}` and `{:error, reason, socket}` — the
-      operation's own answer;
+      operation's own answer, a refused repeat's included;
     * `{:asked, socket}` — the change needs a fresh confirmation: the page
       holds the signal's secret, never rendered, and the layer shows the
       prompt, marked as this client's own. A repeat answered with the same
@@ -523,12 +542,15 @@ defmodule PrismWeb.SystemLayer do
   change it binds is no longer to be made: the record is cancelled
   (`confirmation.cancel`), the prompt shows `reason` as the change's
   outcome, and the secret leaves the page. It is the one way a held ask
-  ends without its dispatch, as `call/5`'s settlement is the way it ends
-  with one, so a held proof never stays behind on a page that sends
-  nothing. Answers `{:released, socket}`; `{:cancel_failed, socket}`
-  when the record could not be cancelled, the secret let go all the same,
-  the prompt told so and the record ending at its expiry; or
-  `{:none, socket}` when nothing is held under `tag`.
+  ends without its dispatch, which `call/5` also takes for a repeat the
+  operation refuses, as `call/5`'s settlement is the way it ends with one,
+  so a held proof never stays behind on a page that sends nothing.
+  Answers `{:released, socket}`; `{:cancel_failed, socket}` when the
+  record could not be cancelled, the secret let go all the same, the
+  prompt told so and the record ending at its expiry; or `{:none, socket}`
+  when nothing is held under `tag`. The prompt ends on the outcome told
+  it, whichever reaches the layer first of it and the record's own
+  `cancelled` fact.
   """
   @spec release(Phoenix.LiveView.Socket.t(), term(), term()) ::
           {:released | :cancel_failed | :none, Phoenix.LiveView.Socket.t()}
@@ -590,7 +612,9 @@ defmodule PrismWeb.SystemLayer do
 
   # A repeat's answer, told to the layer: the same secret is still waiting;
   # another one means the record no longer answers this change, which is
-  # cancelled and asked for again; anything else is the change's outcome.
+  # cancelled and asked for again; a completed change is the outcome; and
+  # a refused one is released, its record cancelled and its refusal the
+  # outcome, so its proof never stays behind confirmed.
   defp settle_held(socket, held, result) do
     prompt_id = Prompt.confirmation_id(held.ref)
 
@@ -608,16 +632,24 @@ defmodule PrismWeb.SystemLayer do
         drop_ask(socket, prompt_id)
 
       {:error, reason} ->
-        outcome(held, {:refused, reason})
-        drop_ask(socket, prompt_id)
+        {_released, socket} =
+          release_held(socket, held, {:refused, reason}, &refused_unwithdrawn(reason, &1))
+
+        socket
     end
   end
 
   # A held ask let go with no dispatch: its record cancelled, then its
-  # prompt told what came of it — `outcome` once the cancel landed, that the
-  # approval could not be withdrawn when it did not — and its secret dropped
-  # either way.
-  defp release_held(socket, held, outcome) do
+  # prompt told what came of it — `outcome` once the cancel landed, and
+  # what `unwithdrawn` makes of the cancel's refusal when it did not
+  # (by default, that the approval could not be withdrawn) — and its
+  # secret dropped either way.
+  defp release_held(
+         socket,
+         held,
+         outcome,
+         unwithdrawn \\ fn _ -> {:refused, :withdraw_failed} end
+       ) do
     socket_after = drop_ask(socket, Prompt.confirmation_id(held.ref))
 
     case Ops.call_tool(socket, "confirmation/cancel", %{"ref" => held.ref}) do
@@ -625,11 +657,19 @@ defmodule PrismWeb.SystemLayer do
         outcome(held, outcome)
         {:released, socket_after}
 
-      {:error, _reason} ->
-        outcome(held, {:refused, :withdraw_failed})
+      {:error, cancel_refused} ->
+        outcome(held, unwithdrawn.(cancel_refused))
         {:cancel_failed, socket_after}
     end
   end
+
+  # A refused repeat whose record could not be cancelled: a record no
+  # longer waiting (the operation consumed it before it refused, or it
+  # had ended) leaves nothing to withdraw, so the refusal is shown alone;
+  # any other failure adds that the approval ends at its expiry.
+  defp refused_unwithdrawn(reason, %Prima.Refusal{reason: :not_pending}), do: {:refused, reason}
+  defp refused_unwithdrawn(reason, :not_pending), do: {:refused, reason}
+  defp refused_unwithdrawn(reason, _cancel_refused), do: {:refused, {:withdraw_failed, reason}}
 
   defp outcome(%{ref: ref, layer: layer}, outcome),
     do: send_update(__MODULE__, id: layer, outcome: {ref, outcome})
@@ -856,6 +896,22 @@ defmodule PrismWeb.SystemLayer do
 
   defp fact(socket, ref, %{own: false}, :confirmed), do: set_status(socket, ref, :confirmed)
 
+  # A page's held ask its release already settled: the prompt keeps the
+  # outcome the release told it when the record's own `cancelled` fact
+  # arrives after it, since both say the same record ended and the outcome
+  # says why. An outcome that the approval could not be withdrawn is the
+  # exception: the fact shows the record was cancelled after all.
+  defp fact(
+         socket,
+         _ref,
+         %{own: true, origin: :page, status: {:refused, reason}} = panel,
+         :cancelled
+       )
+       when not is_withdraw_failed(reason) do
+    report(panel.prompt_id, {:refused, :cancelled})
+    clear_forms(socket, panel)
+  end
+
   defp fact(socket, ref, %{own: true} = panel, kind)
        when kind in [:cancelled, :voided, :expired] do
     socket = set_status(socket, ref, {:ended, kind})
@@ -943,10 +999,17 @@ defmodule PrismWeb.SystemLayer do
 
   defp approve_landed(socket, _ref, false), do: socket
 
-  # A completed change lets go of the form that typed it.
+  # A completed change lets go of the form that typed it. A release's
+  # outcome replaces the record's `cancelled` fact heard before it, so the
+  # prompt ends saying why, whichever arrived first; an outcome that the
+  # approval could not be withdrawn never does, since the fact shows it
+  # was.
   defp on_outcome(socket, ref, outcome) do
     case Map.get(socket.assigns.panels, ref) do
       nil ->
+        socket
+
+      %{status: {:ended, :cancelled}} when is_unwithdrawn(outcome) ->
         socket
 
       panel ->
@@ -2847,11 +2910,16 @@ defmodule PrismWeb.SystemLayer do
   defp status(%{status: {:refused, :asked_again}}),
     do: "The request changed, so it was asked for again. Nothing was changed."
 
-  defp status(%{status: {:refused, :nothing_to_change}}),
-    do: "There was nothing left to change, so the approval was withdrawn. Nothing was changed."
-
   defp status(%{status: {:refused, :withdraw_failed}}),
     do: "The approval could not be withdrawn; it ends at its expiry. Nothing was changed."
+
+  # A refused repeat whose record could not be cancelled: the refusal,
+  # then that its approval ends at its expiry.
+  defp status(%{status: {:refused, {:withdraw_failed, reason}}}),
+    do:
+      "Refused: " <>
+        full_stop(Ops.error_message(reason)) <>
+        " The approval could not be withdrawn; it ends at its expiry."
 
   defp status(%{status: {:refused, :form_unreadable}}),
     do: "The form sent again no longer reads, so the approval was withdrawn. Nothing was changed."
@@ -2863,6 +2931,11 @@ defmodule PrismWeb.SystemLayer do
     do: "This request was withdrawn. Nothing was changed."
 
   defp status(%{status: {:ended, :expired}}), do: "This request expired. Nothing was changed."
+
+  # A sentence ended, so another can follow it.
+  defp full_stop(sentence) do
+    if String.ends_with?(sentence, [".", "!", "?"]), do: sentence, else: sentence <> "."
+  end
 end
 
 defmodule PrismWeb.SystemLayer.Listener do

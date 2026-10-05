@@ -28,10 +28,13 @@ defmodule Sanctum.InstanceEntries do
   entry as read, and the write is a compare-and-set on that read
   (`Arca.InstanceEntries.set_audience/4`, `set_component_policy/4`): a
   stored state that moved in between answers `{:error, :conflict}` with
-  nothing written and is never retried. An audience's confirmation also
-  binds the audience it was decided against, so a proof given over one
-  stored audience is asked afresh over another. A widening is therefore
-  only ever written over the state it was confirmed against. The confirmation's
+  nothing written and is never retried. An audience change names the
+  audience its caller saw (`expected`), compared with the stored one
+  before anything is decided, and an audience that moved is a conflict,
+  with nothing written and no confirmation asked. An audience's
+  confirmation binds `expected`, so a proof given over one stored
+  audience meets a conflict over another, never a write. A widening is
+  therefore only ever written over the state it was confirmed against. The confirmation's
   preview names the widening and no value: the audience it becomes or
   how many people it adds, or the policy it moves from and to. Narrowing
   either, an unchanged setting, a rebind, the caps, a revoke and a delete
@@ -60,7 +63,8 @@ defmodule Sanctum.InstanceEntries do
 
   `offered/1` answers the active entries offered to the context's
   person, metadata only, and `offered_with_use/1` the same with the
-  person's own count of each one's use today and no other person's.
+  person's own count of each one's use today, and whether it reached
+  their own daily cap, and no other person's.
   `binding/2` answers one of them as a consent binds
   it, with the digest it stands at and nothing unsealed or claimed.
   `binding_facts/1` answers an entry's kind, provider, status and digest
@@ -101,6 +105,11 @@ defmodule Sanctum.InstanceEntries do
   @policies ~w(any shipped)
   @audiences ~w(everyone listed)
   @rebind_attempts 3
+
+  # What an audience change meets when the stored audience is not the one
+  # its caller saw: a conflict in its own words, which `Prima.Refusal`
+  # keeps, so the prompt and the page show this sentence.
+  @audience_conflict "The audience changed since it was shown, so nothing was saved."
 
   # The longest name, provider hint or person id a row holds: the columns
   # are 255 characters on PostgreSQL, so a longer one is refused here, on
@@ -148,8 +157,9 @@ defmodule Sanctum.InstanceEntries do
 
   @typedoc """
   An entry offered to a person, as that person's vault page shows it: its
-  offer view and how many times the person used it today
-  (`used_today`), never anyone else's count.
+  offer view, how many times the person used it today (`used_today`),
+  and whether that count reached the person's own daily cap
+  (`cap_reached`), never anyone else's count.
   """
   @type offer_use_view :: %{
           id: String.t(),
@@ -159,8 +169,16 @@ defmodule Sanctum.InstanceEntries do
           oauth_scopes: [String.t()],
           destination: %{String.t() => term()} | nil,
           component_policy: String.t(),
-          used_today: non_neg_integer()
+          used_today: non_neg_integer(),
+          cap_reached: boolean()
         }
+
+  @typedoc """
+  The audience a caller saw and decided a change against: `audience`,
+  `everyone` or `listed`, and the listed `members`, person ids, none for
+  `everyone`. Members compare as a set.
+  """
+  @type expected_audience :: %{audience: String.t(), members: [String.t()]}
 
   @typedoc "A person an administrator may list in an audience: an id and a display name."
   @type person_view :: %{id: String.t(), display_name: String.t()}
@@ -228,8 +246,7 @@ defmodule Sanctum.InstanceEntries do
   """
   @spec offered(Context.t()) :: {:ok, [offer_view()]} | {:error, term()}
   def offered(%Context{} = ctx) do
-    with :ok <- person(ctx),
-         {:ok, entries} <- Store.offered(Context.actor(ctx), []) do
+    with {:ok, entries} <- offered_entries(ctx) do
       {:ok, Enum.map(entries, &offer_view/1)}
     end
   end
@@ -237,17 +254,24 @@ defmodule Sanctum.InstanceEntries do
   @doc """
   `offered/1`, each entry with the context's person's own count of its
   use today (`used_today`, `Arca.InstanceEntryUsage.used_today/3`, on the
-  database's date as a claim counts it): what that person's vault page
-  shows. No other person's count and no entry total is read. A count the
-  store cannot answer is the read's refusal, never a zero.
+  database's date as a claim counts it) and whether that count reached
+  the person's own daily cap (`cap_reached`): what that person's vault
+  page shows. The cap is the one a claim is held to, the entry's
+  `person_daily` or, unset, the platform's `instance_entry_person_daily`,
+  and a cap of `0` reads as reached. No other person's count and no entry
+  total is read. A count or a cap the store cannot answer is the read's
+  refusal, never a zero.
   """
   @spec offered_with_use(Context.t()) :: {:ok, [offer_use_view()]} | {:error, term()}
   def offered_with_use(%Context{} = ctx) do
-    with {:ok, offers} <- offered(ctx) do
-      offers
-      |> Enum.reduce_while({:ok, []}, fn offer, {:ok, acc} ->
-        case Usage.used_today(actor(), offer.id, ctx.user_id) do
-          {:ok, count} -> {:cont, {:ok, [Map.put(offer, :used_today, count) | acc]}}
+    with {:ok, entries} <- offered_entries(ctx) do
+      entries
+      |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
+        with {:ok, count} <- Usage.used_today(actor(), entry.id, ctx.user_id),
+             {:ok, cap} <- cap(entry.person_daily, "instance_entry_person_daily") do
+          used = Map.merge(offer_view(entry), %{used_today: count, cap_reached: count >= cap})
+          {:cont, {:ok, [used | acc]}}
+        else
           {:error, _} = error -> {:halt, error}
         end
       end)
@@ -256,6 +280,10 @@ defmodule Sanctum.InstanceEntries do
         {:error, _} = error -> error
       end
     end
+  end
+
+  defp offered_entries(ctx) do
+    with :ok <- person(ctx), do: Store.offered(Context.actor(ctx), [])
   end
 
   @doc """
@@ -541,32 +569,42 @@ defmodule Sanctum.InstanceEntries do
 
   @doc """
   Set who an entry is offered to (`params`: `:entry_id`, `:audience`
-  `everyone` or `listed`, and for `listed` the `:members`, person ids).
-  Read against the stored audience: a change that makes it `everyone` or
-  adds a person confirms `credential_sharing`; a narrowing needs the
-  session. An unchanged audience writes and announces nothing. The write
-  is conditional on the audience read, and a moved one is
-  `{:error, :conflict}`, never retried.
+  `everyone` or `listed`, for `listed` the `:members`, person ids, and
+  `:expected`, the audience the caller saw, `t:expected_audience/0`).
 
-  The confirmation binds the audience it was decided against (`read`,
-  its `audience` and sorted `members`) beside the change, so a proof
-  given over one stored audience never writes over another: when the
-  stored audience moved between the proof and its repeat, the repeat is
-  asked afresh.
+  `expected` is compared with the stored audience, members as a set,
+  before anything is decided: one that moved is
+  `{:error, {:conflict, "The audience changed since it was shown, so
+  nothing was saved."}}`, with nothing written, no confirmation asked and
+  no retry. A missing or malformed `expected` is
+  `{:error, :invalid_expected}`. Then, against it: a change that makes
+  the audience `everyone` or adds a person confirms `credential_sharing`;
+  a narrowing needs the session; an unchanged audience writes and
+  announces nothing. The write is the store's compare-and-set with
+  `expected` as the audience it was decided against, and a stored
+  audience that moved before it lands is `{:error, :conflict}`, never
+  retried.
+
+  The confirmation binds `expected` (its `audience` and sorted
+  `members`) beside the change, so a proof given over one stored
+  audience never writes over another: when the stored audience moved
+  between the proof and its repeat, the repeat is a conflict.
   """
   @spec set_audience(Context.t(), map()) ::
           {:ok, :changed | :unchanged} | {:error, term()}
   def set_audience(%Context{} = ctx, %{entry_id: id} = params) when is_binary(id) do
     with :ok <- administer(ctx),
          {:ok, audience, members} <- audience_change(params),
-         {:ok, entry, held} <- with_members(id) do
+         {:ok, expected} <- expected_audience(params),
+         {:ok, entry, held} <- with_members(id),
+         :ok <- as_expected(held, expected) do
       requested = %{audience: audience, members: members}
 
       cond do
-        same_audience?(held, requested) ->
+        same_audience?(expected, requested) ->
           {:ok, :unchanged}
 
-        widens?(held, requested) ->
+        widens?(expected, requested) ->
           with :ok <-
                  Authz.confirm(ctx, :credential_sharing, %{
                    operation: "instance_entry.set_audience",
@@ -574,26 +612,55 @@ defmodule Sanctum.InstanceEntries do
                      entry_id: id,
                      audience: audience,
                      members: members,
-                     read: %{audience: held.audience, members: Enum.sort(held.members)}
+                     expected: expected
                    },
                    resource: entry.name,
-                   details: widening(held, requested)
+                   details: widening(expected, requested)
                  }),
-               do: write_audience(ctx, id, held, requested)
+               do: write_audience(ctx, id, expected, requested)
 
         true ->
-          write_audience(ctx, id, held, requested)
+          write_audience(ctx, id, expected, requested)
       end
     end
   end
 
   def set_audience(%Context{}, _params), do: {:error, :entry_required}
 
-  defp write_audience(ctx, id, held, requested) do
-    with :ok <- Store.set_audience(actor(), id, held, requested) do
+  defp write_audience(ctx, id, expected, requested) do
+    with :ok <- Store.set_audience(actor(), id, expected, requested) do
       announce(ctx, :audience, id)
       {:ok, :changed}
     end
+  end
+
+  # The audience the caller saw, in the form the confirmation binds: its
+  # members de-duplicated and sorted, none for `everyone`. Anything else,
+  # its absence included, is refused before the entry is read.
+  defp expected_audience(%{expected: %{audience: audience} = expected})
+       when audience in @audiences do
+    case {Map.keys(expected) -- [:audience, :members], Map.get(expected, :members, [])} do
+      {[], []} ->
+        {:ok, %{audience: audience, members: []}}
+
+      {[], [_ | _] = members} when audience == "listed" ->
+        if Enum.all?(members, &(is_binary(&1) and &1 != "")),
+          do: {:ok, %{audience: audience, members: members |> Enum.uniq() |> Enum.sort()}},
+          else: {:error, :invalid_expected}
+
+      _other ->
+        {:error, :invalid_expected}
+    end
+  end
+
+  defp expected_audience(_params), do: {:error, :invalid_expected}
+
+  # The stored audience is the one the caller saw, members as a set, or
+  # the change is a conflict.
+  defp as_expected(held, expected) do
+    if same_audience?(held, expected),
+      do: :ok,
+      else: {:error, {:conflict, @audience_conflict}}
   end
 
   @doc """
@@ -851,8 +918,8 @@ defmodule Sanctum.InstanceEntries do
   end
 
   # Each cap the entry's own, or unset, its platform setting's default. A
-  # setting the store cannot answer refuses the claim rather than reading
-  # as no cap.
+  # setting the store cannot answer refuses the claim, and the read of
+  # whether a person reached their cap, rather than reading as no cap.
   defp caps(entry) do
     with {:ok, person} <- cap(entry.person_daily, "instance_entry_person_daily"),
          {:ok, total} <- cap(entry.total_daily, "instance_entry_total_daily") do
@@ -870,7 +937,7 @@ defmodule Sanctum.InstanceEntries do
       other ->
         Logger.warning(
           "[Sanctum.InstanceEntries] #{setting} could not be read " <>
-            Prima.LoggerContext.shape(other) <> "; refusing the claim"
+            Prima.LoggerContext.shape(other) <> "; refusing what needs the cap"
         )
 
         {:error, :unavailable}

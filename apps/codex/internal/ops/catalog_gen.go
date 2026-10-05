@@ -1999,6 +1999,8 @@ type InstanceEntrySetAudienceArgs struct {
 	Audience string `json:"audience"`
 	// The listed people, by person id; an everyone audience keeps none
 	Members Field[[]string] `json:"members,omitzero"`
+	// The audience the change was decided against, as the caller saw it; a stored audience that differs is a conflict and nothing is saved
+	Expected InstanceEntrySetAudienceArgsExpected `json:"expected"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2008,6 +2010,24 @@ func (args InstanceEntrySetAudienceArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: InstanceEntrySetAudience, fields: fields(args)})
+}
+
+type InstanceEntrySetAudienceArgsExpected struct {
+	// The audience as the caller saw it: everyone, or the listed people
+	Audience string `json:"audience"`
+	// The people listed as the caller saw them, by person id, compared as a set; none for everyone
+	Members Field[[]string] `json:"members,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *InstanceEntrySetAudienceArgsExpected) UnmarshalJSON(data []byte) error {
+	type fields InstanceEntrySetAudienceArgsExpected
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = InstanceEntrySetAudienceArgsExpected(value)
+	return nil
 }
 
 // InstanceEntrySetCapsArgs carries arguments for instance_entry.set_caps.

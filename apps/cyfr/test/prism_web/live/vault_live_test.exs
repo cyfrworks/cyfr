@@ -260,6 +260,39 @@ defmodule PrismWeb.VaultLiveTest do
       refute html =~ @sealed
       section = view |> element(~s([data-test="instance-offered"])) |> render()
       assert length(Regex.scan(~r/data-test="offered-entry"/, section)) == 1
+      refute has_element?(view, ~s([data-test="offered-cap-reached"]))
+    end
+
+    test "the person's own use says when it reached their daily limit and when that resets: " <>
+           "at the cap, not below it",
+         %{conn: conn} do
+      user = test_user()
+      other = test_user()
+      conn = log_in_user(conn, user)
+      capped = offer!(%{name: "Capped OpenAI", person_daily: 2, total_daily: 100})
+      caps = %{person_daily: 2, total_daily: 100}
+      claim = &Arca.InstanceEntryUsage.claim(Prima.Actor.system(), capped.id, &1, caps)
+      use = offered_row(capped) <> ~s( [data-test="offered-use"])
+      reached = "Your daily limit is reached; it resets at midnight UTC."
+
+      # Below the cap: the count, and no limit.
+      {:ok, _} = claim.(user.user_id)
+      {view, html} = mount_athanor(conn, "/vault")
+      assert has_element?(view, use, "1 request today")
+      refute html =~ reached
+      refute has_element?(view, ~s([data-test="offered-cap-reached"]))
+
+      # At the cap: the limit, and when it resets.
+      {:ok, _} = claim.(user.user_id)
+      {view, _html} = mount_athanor(conn, "/vault")
+      assert has_element?(view, use, "2 requests today")
+      assert has_element?(view, use <> ~s( [data-test="offered-cap-reached"]), reached)
+
+      # Another person's own use is theirs: below the cap the first reached.
+      {:ok, _} = claim.(other.user_id)
+      {other_view, other_html} = build_conn() |> log_in_user(other) |> mount_athanor("/vault")
+      assert has_element?(other_view, use, "1 request today")
+      refute other_html =~ reached
     end
 
     test "use by default makes the entry this athanor's default for its provider, which a " <>
@@ -628,6 +661,17 @@ defmodule PrismWeb.VaultLiveTest do
 
       refute page_state(view) =~ "cnf_",
              "the page still holds the secret of a change it will not make"
+
+      # The prompt ends on the release's outcome, whichever of it and the
+      # record's cancelled fact reached the layer first.
+      render(view)
+      prompt = render(view)
+
+      assert prompt =~
+               "The form sent again no longer reads, so the approval was withdrawn. " <>
+                 "Nothing was changed."
+
+      refute prompt =~ "Cancelled. Nothing was changed."
 
       {:ok, entries} = Sanctum.Vault.list(ctx)
       refute Enum.any?(entries, &(&1.name == typed["name"]))
