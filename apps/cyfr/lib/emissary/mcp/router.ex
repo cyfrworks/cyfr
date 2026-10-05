@@ -375,9 +375,12 @@ defmodule Emissary.MCP.Router do
   # Which refusals are protocol errors rather than a failed tool result:
   # everything the gate refused before the tool ran — the caller's
   # authorization, the arguments, the action — answered by its class; and,
-  # raised or returned by the tool itself, an authorization refusal or a
-  # consent signal, which a client branches on (`-33004`, and the CLI on
-  # `-33001`) where an isError text block gives it nothing to branch on.
+  # raised or returned by the tool itself, an authorization refusal, a
+  # consent read that failed (the consent loader's reasons in
+  # `Sanctum.Unauthorized`: a consent the store could not answer, or one
+  # stored damaged) or a consent signal, which a client branches on
+  # (`-33004`, and the CLI on `-33001`) where an isError text block gives
+  # it nothing to branch on.
   defp protocol_refusal?(%Prima.Refusal{stage: :admission}), do: true
   defp protocol_refusal?(%Prima.Refusal{reason: reason}), do: protocol_refusal?(reason)
 

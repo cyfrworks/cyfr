@@ -87,16 +87,29 @@ var profileListCmd = &cobra.Command{
 				continue
 			}
 
-			rev := "none"
-			if r, ok := p["head_revision"].(float64); ok {
-				rev = fmt.Sprintf("%.0f", r)
-			}
-
-			fmt.Printf("%-38s %-8s %-12s consent rev %s\n",
-				str(p["id"]), str(p["kind"]), str(p["status"]), rev)
+			fmt.Printf("%-38s %-8s %-12s %s\n",
+				str(p["id"]), str(p["kind"]), str(p["status"]), headLine(p))
 		}
 		return nil
 	},
+}
+
+// headLine is how a listed profile's head reads: its revision when the
+// home read it, and otherwise what stands in its place. A head that is
+// damaged, or that the home could not read, is never shown as none, so an
+// outage does not read as a grant to make. A home that answers no
+// head_state (an older one) reads by its revision, as it always did.
+func headLine(p map[string]any) string {
+	switch p["head_state"] {
+	case "damaged":
+		return "consent damaged"
+	case "unavailable":
+		return "consent unavailable — try again"
+	}
+	if r, ok := p["head_revision"].(float64); ok {
+		return fmt.Sprintf("consent rev %.0f", r)
+	}
+	return "consent rev none"
 }
 
 var profileRevokeCmd = &cobra.Command{

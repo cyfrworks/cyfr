@@ -167,9 +167,11 @@ defmodule Aqua.Loop.Clone do
     end
   end
 
-  # The admission's own store outage, the consent loader's (a head or a
-  # lender the store could not answer) and its damage.
+  # The admission's own store outage and its damaged profile row, the
+  # consent loader's (a head or a lender the store could not answer) and
+  # its damage.
   defp unanswered_or_damaged?({:unavailable, _what}), do: true
+  defp unanswered_or_damaged?({:corrupt, {:profile, _profile_id}}), do: true
 
   defp unanswered_or_damaged?({tag, _id})
        when tag in [:head_unavailable, :lender_unavailable, :head_corrupt],

@@ -69,8 +69,13 @@ defmodule Sanctum.Consent.RegistrationBinding do
   def message(:profile_not_for_target), do: "the profile belongs to another component"
   def message({:no_head_consent, _profile_id}), do: "the profile has no live consent"
 
-  def message({:head_corrupt, _profile_id}),
-    do: "the profile's consent is damaged and cannot be used"
+  # Approving the profile again cannot repair a damaged head: the walk
+  # refuses the head it cannot decode. Revoking the profile by its id
+  # takes it off the active profiles, so a new grant takes its place.
+  def message({:head_corrupt, profile_id}),
+    do:
+      "the profile's consent is damaged and cannot be used — " <>
+        "revoke profile #{profile_id} and grant it again"
 
   def message({:head_unavailable, _profile_id}),
     do: "the profile's consent cannot be read right now — try again"

@@ -151,7 +151,8 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
              RegistrationBinding.authorize(ctx, @target, "prof-bind")
 
     assert RegistrationBinding.message(damaged) ==
-             "the profile's consent is damaged and cannot be used"
+             "the profile's consent is damaged and cannot be used — " <>
+               "revoke profile prof-bind and grant it again"
 
     :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-bind", scope: "versionless")
     assert :ok = RegistrationBinding.authorize(ctx, @target, "prof-bind")

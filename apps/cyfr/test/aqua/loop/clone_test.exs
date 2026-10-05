@@ -459,23 +459,7 @@ defmodule Aqua.Loop.CloneTest do
     {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
     profile = soul.profile_id
     {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile)
-
-    parent = %Aqua.Loop.State{
-      spec: %Aqua.Loop.Turn{
-        ctx: ctx,
-        authority: soul,
-        roster: [%{"name" => "planner", "type" => Compendium.agent_role_type()}]
-      }
-    }
-
-    clone = fn ->
-      Clone.run(parent, %{id: "step_clone"}, %Aqua.Loop.Binding.Call{
-        kind: :clone,
-        tool: "planner",
-        target: "planner",
-        args: %{"task" => "plan"}
-      })
-    end
+    clone = fn -> clone_planner(ctx, soul) end
 
     :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile, scope: "sideways")
 
@@ -501,6 +485,43 @@ defmodule Aqua.Loop.CloneTest do
     # Another revision at the head: the pinned consent moved.
     _moved = Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile, head.admitted_origins)
     assert clone.() == {:error, "the soul's consent is no longer in force"}
+  end
+
+  # The pinned profile's own row, stored outside the closed vocabulary, is
+  # damage the admission names, never a consent that moved.
+  test "a clone whose pinned profile row is damaged says so, never that the consent moved",
+       %{ctx: ctx} do
+    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(p in Arca.Schemas.Profile,
+          where: p.athanor_id == ^ctx.athanor_id and p.id == ^soul.profile_id
+        ),
+        set: [kind: "sideways"]
+      )
+
+    assert clone_planner(ctx, soul) ==
+             {:error, "The stored profile is damaged and cannot be used."}
+  end
+
+  # A clone into the planner from a soul turn under `soul`'s authority, as
+  # the clone step records its answer.
+  defp clone_planner(ctx, soul) do
+    parent = %Aqua.Loop.State{
+      spec: %Aqua.Loop.Turn{
+        ctx: ctx,
+        authority: soul,
+        roster: [%{"name" => "planner", "type" => Compendium.agent_role_type()}]
+      }
+    }
+
+    Clone.run(parent, %{id: "step_clone"}, %Aqua.Loop.Binding.Call{
+      kind: :clone,
+      tool: "planner",
+      target: "planner",
+      args: %{"task" => "plan"}
+    })
   end
 
   test "a member's own role, consented through the soul's walk, clones under the soul's consent",
