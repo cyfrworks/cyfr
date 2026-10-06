@@ -124,7 +124,7 @@ def build_canary():
         "docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}cyfr-canary-build-{os.getpid()}",
         "-v", f"{os.path.join(ROOT, 'tests', 'fixtures')}:/src:ro", "-v", f"{out}:/out",
         "-e", "CGO_ENABLED=0", "-e", "GOCACHE=/tmp/go-cache", "-e", "GOFLAGS=-buildvcs=false",
-        "-w", "/src", "golang:1.26.6-alpine", "go", "build", "-o", "/out/canary", "residue-canary.go",
+        "-w", "/src", "golang:1.27.1-alpine", "go", "build", "-o", "/out/canary", "residue-canary.go",
     )
     return out
 

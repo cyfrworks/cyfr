@@ -27,7 +27,7 @@ Prerequisites of the suites that import this module: Docker Engine 28 or
 later on a cgroup v2 host (the service bounds every backend with a cgroup of
 its own, `writable-cgroups=true`), the Compose plugin, the image under test
 built from Dockerfile.locus and named as the suites' one argument, and the
-golang:1.26.6-alpine image for the residue canary. A missing prerequisite
+golang:1.27.1-alpine image for the residue canary. A missing prerequisite
 fails the suite; nothing is skipped.
 """
 
@@ -541,7 +541,7 @@ def build_canary():
         "docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}cyfr-canary-build-{os.getpid()}",
         "-v", f"{os.path.join(ROOT, 'tests', 'fixtures')}:/src:ro", "-v", f"{out}:/out",
         "-e", "CGO_ENABLED=0", "-e", "GOCACHE=/tmp/go-cache", "-e", "GOFLAGS=-buildvcs=false",
-        "-w", "/src", "golang:1.26.6-alpine", "go", "build", "-o", "/out/canary", "residue-canary.go",
+        "-w", "/src", "golang:1.27.1-alpine", "go", "build", "-o", "/out/canary", "residue-canary.go",
     )
     return out
 
