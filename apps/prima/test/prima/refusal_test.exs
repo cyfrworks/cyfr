@@ -373,7 +373,9 @@ defmodule Prima.RefusalTest do
                      "so nothing ran: ask again to approve it as it stands now."
         end)
 
-      assert log == ""
+      # The module runs async, and capture_log takes every process's log
+      # while it runs: only this reason's own warning is this test's.
+      refute log =~ "[Prima.Refusal] unexpected message: :approved_entry_moved"
       assert Refusal.reason?(:approved_entry_moved)
     end
 
