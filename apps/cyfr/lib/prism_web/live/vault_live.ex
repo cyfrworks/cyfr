@@ -13,11 +13,34 @@ defmodule PrismWeb.VaultLive do
   callback completes it server-side and the vault PubSub topic refreshes
   this view when the entry lands.
 
+  An entry the create form makes is for a key one of the athanor's
+  components needs. The form's one required choice lists, each kind and
+  provider pair once and labelled "<provider> (<kind>)", the `api_key`
+  and `bundle` need rows the grant plan answers for each installed
+  component (`profile.plan` on its name-level ref, as the grant prompt
+  asks it): the component's own needs and its dependencies' at the
+  versions it pins, whose providers are the ones "Connect your
+  <provider> account" names on the consent sheet. The choice sets both
+  the entry's kind and its provider (`provider_hint`), so the entry is a
+  candidate for that need; there is no free text, a choice the page did
+  not offer makes nothing, and an OAuth need is met through the OAuth
+  form.
+
+  The needs are read when the form opens, and again on each submit,
+  first and resent, just before `vault.create`: a choice no longer
+  offered makes nothing, lets a held confirmation go, and the form is
+  drawn again with the list as it now reads. A component list that
+  cannot be read is said as such and offers no create, never as no need.
+  A component whose plan is refused is named, with its plan's own
+  sentence, and the rest are listed; a component list the read may have
+  cut short says so and names the CLI for a key it left out. Only a list
+  read whole that names no such need tells the person to install one.
+
   Every new entry names where its material may go — the destination's
   hosts, and optionally its scheme, port, methods and paths — and whether
-  a component may read it. This page is reached with no installed need
-  behind it, so it prefills neither: the person types the destination,
-  and disclosure is off until they turn it on
+  a component may read it. The page reads the needs for the provider
+  choice alone and still prefills neither: the person types the
+  destination, and disclosure is off until they turn it on
   (`PrismWeb.SystemLayer.destination_params/1`). Each entry's row shows
   where it goes and whether components may read it: an attach-only
   entry's value is never handed to a component, and CYFR attaches it to
@@ -51,6 +74,10 @@ defmodule PrismWeb.VaultLive do
   alias PrismWeb.SystemLayer
   require Logger
 
+  @needs_unread "The keys your components need cannot be read right now — try again."
+  @no_longer_needed "That key is no longer needed here — choose again."
+  @unconfirmed "Whether that key is still needed could not be read, so nothing was made."
+
   @impl true
   def mount(_params, _session, socket) do
     # Subscribe once, at mount — handle_params re-fires on every patch,
@@ -72,6 +99,9 @@ defmodule PrismWeb.VaultLive do
       |> assign(:used_by, %{})
       |> assign(:clients, [])
       |> assign(:show_add, nil)
+      |> assign(:key_needs, nil)
+      |> assign(:stale_choice, false)
+      |> assign(:create_redraw, false)
       |> assign(:pending_grant, nil)
       |> assign(:rotating, nil)
       |> assign(:loading, true)
@@ -90,10 +120,15 @@ defmodule PrismWeb.VaultLive do
   # Events — create
   # ---------------------------------------------------------------------------
 
+  # The create form reads the needs it offers each time it opens, so a
+  # component installed since is offered and one removed is not.
   @impl true
   def handle_event("show_add", %{"mode" => mode}, socket) do
+    shown = if socket.assigns.show_add == mode, do: nil, else: mode
+    socket = assign(socket, show_add: shown, stale_choice: false)
+
     {:noreply,
-     assign(socket, :show_add, if(socket.assigns.show_add == mode, do: nil, else: mode))}
+     if(shown == "fields", do: fetch_key_needs(socket), else: assign(socket, :key_needs, nil))}
   end
 
   # The operator's OAuth app for a provider — the client id/secret an
@@ -136,35 +171,53 @@ defmodule PrismWeb.VaultLive do
     end
   end
 
-  def handle_event(
-        "create",
-        %{"name" => name, "kind" => kind, "fields" => fields_text} = params,
-        socket
-      ) do
-    case parse_fields(fields_text) do
-      {:ok, fields} ->
-        args = %{
-          "name" => name,
-          "kind" => kind,
-          "fields" => fields,
-          "destination" => SystemLayer.destination_params(params),
-          "disclose" => SystemLayer.disclose_param(params)
-        }
+  # The entry's kind and provider are the chosen need's. The needs are
+  # read again here, on the first submit and on the one the browser sends
+  # once the change is confirmed, just before `vault.create`: a choice the
+  # page never offered, a kind included, makes nothing, and so does one it
+  # offered that the athanor no longer needs. What still separates this
+  # read from the create is the time between them; no lock spans the two.
+  def handle_event("create", %{"name" => name, "fields" => fields_text} = params, socket) do
+    offered = socket.assigns.key_needs
+    socket = socket |> assign(:stale_choice, false) |> fetch_key_needs()
 
-        case SystemLayer.call(socket, :create, "vault/create", args, form: create_form()) do
-          {:ok, _, socket} ->
-            {:noreply,
-             socket
-             |> fetch_entries()
-             |> assign(:show_add, nil)
-             |> put_flash(:info, "Entry created.")}
+    with {:ok, need} <- chosen_need(offered, socket.assigns.key_needs, params["need"]),
+         {:ok, fields} <- parse_fields(fields_text) do
+      args = %{
+        "name" => name,
+        "kind" => need.kind,
+        "provider_hint" => need.provider,
+        "fields" => fields,
+        "destination" => SystemLayer.destination_params(params),
+        "disclose" => SystemLayer.disclose_param(params)
+      }
 
-          {:asked, socket} ->
-            {:noreply, socket}
+      case SystemLayer.call(socket, :create, "vault/create", args, form: create_form()) do
+        {:ok, _, socket} ->
+          {:noreply,
+           socket
+           |> fetch_entries()
+           |> assign(show_add: nil, key_needs: nil)
+           |> put_flash(:info, "Entry created.")}
 
-          {:error, reason, socket} ->
-            {:noreply, put_flash(socket, :error, "Create failed: #{fmt(reason)}")}
-        end
+        {:asked, socket} ->
+          {:noreply, socket}
+
+        {:error, reason, socket} ->
+          {:noreply, put_flash(socket, :error, "Create failed: #{fmt(reason)}")}
+      end
+    else
+      :no_longer_needed ->
+        {:noreply, stale_choice(socket, :no_longer_needed)}
+
+      :unconfirmed ->
+        {:noreply, stale_choice(socket, :unconfirmed)}
+
+      :unread ->
+        {:noreply, release_create(socket, @needs_unread)}
+
+      :not_offered ->
+        {:noreply, unreadable(socket, :create, "Choose the provider this key is for")}
 
       {:error, number} ->
         {:noreply, unreadable(socket, :create, bad_line(number))}
@@ -324,6 +377,11 @@ defmodule PrismWeb.VaultLive do
     end
   end
 
+  # The create form comes back, drawn from the needs as they now read
+  # (`no_longer_needed/1`).
+  def handle_info(:redraw_create_form, socket),
+    do: {:noreply, assign(socket, :create_redraw, false)}
+
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
@@ -377,6 +435,38 @@ defmodule PrismWeb.VaultLive do
     end
   end
 
+  # A create that is not made because the needs no longer offer its
+  # choice, or no longer read: the proof held for it, if any, is let go
+  # with the sentence the page shows, as `unreadable/3` lets one go.
+  defp release_create(socket, sentence) do
+    case SystemLayer.release(socket, :create, sentence) do
+      {:cancel_failed, socket} ->
+        put_flash(socket, :error, "The approval could not be withdrawn; it ends when it expires.")
+
+      {_released_or_none, socket} ->
+        socket
+    end
+  end
+
+  # A choice the open form offered that the needs as they now read do not
+  # name: no longer needed when they read whole, and not known either way
+  # when a plan was refused or the list was cut, since the need may sit in
+  # what was not read. Nothing is made either way. The create form keeps
+  # what was typed in the browser (`phx-update="ignore"`), its options with
+  # it, so showing the needs as they now read takes the form away for one
+  # render and draws it fresh in the next; what was typed goes with it, as
+  # it goes when a confirmation's prompt ends.
+  defp stale_choice(socket, why) do
+    send(self(), :redraw_create_form)
+
+    socket
+    |> release_create(stale_sentence(why))
+    |> assign(stale_choice: why, create_redraw: true)
+  end
+
+  defp stale_sentence(:no_longer_needed), do: @no_longer_needed
+  defp stale_sentence(:unconfirmed), do: @unconfirmed
+
   # A line that does not read is named by its number, never its content: a
   # value pasted without its FIELD= would otherwise be shown back.
   defp bad_line(number), do: "Each line must be FIELD=value (line #{number} is not)"
@@ -414,6 +504,154 @@ defmodule PrismWeb.VaultLive do
         assign(socket, offered: [], offered_error: message)
     end
   end
+
+  # The kinds of entry the create form makes. An OAuth entry is made by
+  # its own form, through a grant.
+  @form_kinds ~w(api_key bundle)
+
+  # The most component rows one `component.list` answers.
+  @list_limit 1000
+
+  # The needs the create form offers, read where the consent sheet's
+  # "Connect your <provider> account" reads a need's provider: the grant
+  # plan (`profile.plan`) of each installed component, by its name-level
+  # ref as the grant prompt asks it. Its need rows are the component's own
+  # and, under `dependency_needs`, each dependency's at the version the
+  # component pins; each `api_key` and `bundle` row is offered as
+  # `%{kind, provider}`, each pair once.
+  #
+  # `key_needs` is `%{needs, refused, cut}`, or `:unread` when the
+  # component list itself could not be read. A component whose plan is
+  # refused, whatever the refusal, is in `refused` with its plan's own
+  # sentence, so its needs are never left out unsaid; no refusal is read
+  # for its class or its words. `cut` is a list as long as the most one
+  # call answers, which may have left components out.
+  defp fetch_key_needs(socket) do
+    case read_key_needs(socket) do
+      {:ok, read} ->
+        assign(socket, :key_needs, read)
+
+      {:error, message} ->
+        Logger.warning("[VaultLive] the components could not be listed: #{message}")
+        assign(socket, :key_needs, :unread)
+    end
+  end
+
+  defp read_key_needs(socket) do
+    with {:ok, rows} <-
+           fetch_list(socket, "component/list", :components, %{"limit" => @list_limit}),
+         {:ok, refs} <- name_refs(rows) do
+      {needs, refused} = Enum.reduce(refs, {[], []}, &plan_needs(socket, &1, &2))
+
+      {:ok,
+       %{
+         needs: needs |> Enum.uniq() |> Enum.sort_by(&{&1.provider, &1.kind}),
+         refused: Enum.sort_by(refused, & &1.ref),
+         cut: length(rows) >= @list_limit
+       }}
+    end
+  end
+
+  # Each component once, by its name-level ref.
+  defp name_refs(rows) do
+    Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, refs} ->
+      with ref when is_binary(ref) <- row[:component_ref],
+           {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(ref) do
+        {:cont, {:ok, [name_ref | refs]}}
+      else
+        _unnamed -> {:halt, {:error, fmt({:unexpected_shape, row})}}
+      end
+    end)
+    |> case do
+      {:ok, refs} -> {:ok, refs |> Enum.reverse() |> Enum.uniq()}
+      refused -> refused
+    end
+  end
+
+  defp plan_needs(socket, ref, {needs, refused}) do
+    case call_tool(socket, "profile/plan", %{"ref" => ref}) do
+      {:ok, %{} = plan} ->
+        {form_needs(plan) ++ needs, refused}
+
+      {:ok, other} ->
+        {needs, [unread_plan(ref, {:unexpected_shape, other}) | refused]}
+
+      {:error, reason} ->
+        {needs, [unread_plan(ref, reason) | refused]}
+    end
+  end
+
+  defp unread_plan(ref, reason) do
+    sentence = fmt(reason)
+    Logger.warning("[VaultLive] the keys #{ref} needs could not be read: #{sentence}")
+    %{ref: ref, sentence: sentence}
+  end
+
+  # The plan's need rows of the kinds this form makes: the component's own
+  # and its dependencies'. The `@ingress` row of a manifest declaring no
+  # needs names no kind, so it offers nothing.
+  defp form_needs(plan) do
+    own = List.wrap(plan[:needs])
+
+    dependencies =
+      for %{needs: rows} <- List.wrap(plan[:dependency_needs]), row <- rows, do: row
+
+    for %{kind: kind, provider: provider} <- own ++ dependencies,
+        kind in @form_kinds and is_binary(provider) and provider != "",
+        do: %{kind: kind, provider: provider}
+  end
+
+  # The need a submitted value names, in the needs as they now read
+  # (`fresh`); one the open form offered (`offered`) that they no longer
+  # name is no longer needed if they read whole, and unconfirmed if a plan
+  # was refused or the list was cut; any other was never offered.
+  defp chosen_need(offered, fresh, value) when is_binary(value) do
+    case find_need(fresh, value) do
+      %{} = need -> {:ok, need}
+      nil -> unchosen(offered, fresh, value)
+    end
+  end
+
+  defp chosen_need(_offered, _fresh, _value), do: :not_offered
+
+  defp unchosen(_offered, :unread, _value), do: :unread
+
+  defp unchosen(offered, fresh, value) do
+    cond do
+      is_nil(find_need(offered, value)) -> :not_offered
+      refused_of(fresh) != [] or cut?(fresh) -> :unconfirmed
+      true -> :no_longer_needed
+    end
+  end
+
+  defp find_need(%{needs: needs}, value), do: Enum.find(needs, &(need_value(&1) == value))
+  defp find_need(_unread_or_closed, _value), do: nil
+
+  # An option's value: the need's type as a manifest spells it.
+  defp need_value(%{kind: kind, provider: provider}), do: kind <> ":" <> provider
+
+  defp needs_of(%{needs: needs}), do: needs
+  defp needs_of(_unread), do: []
+
+  defp refused_of(%{refused: refused}), do: refused
+  defp refused_of(_unread), do: []
+
+  defp cut?(%{cut: cut}), do: cut
+  defp cut?(_unread), do: false
+
+  # Needs read whole that name none of the kinds this form makes.
+  defp no_need?(%{needs: [], refused: [], cut: false}), do: true
+  defp no_need?(_key_needs), do: false
+
+  # A refused plan's sentence, ended once.
+  defp ended(sentence), do: String.trim_trailing(sentence, ".") <> "."
+
+  # The CLI's create, with the provider it is for: `cyfr call` sends the
+  # operation's arguments as given, and on a terminal waits for the fresh
+  # confirmation the create asks for, given in Prism, then repeats it.
+  defp cli_create, do: ~s(cyfr call vault '{"action":"create",…,"provider_hint":"…"}')
+
+  defp list_limit, do: @list_limit
 
   # Which MCP servers draw on each entry (headers referencing it) —
   # shown on the row, so revoking one is done knowing what it breaks.
@@ -558,19 +796,58 @@ defmodule PrismWeb.VaultLive do
         </div>
       </.card>
       
-    <!-- Add: sealed fields -->
+    <!-- Add: sealed fields, for a key a component here needs -->
       <.card :if={@show_add == "fields"}>
-        <form id={create_form()} phx-update="ignore" phx-submit="create" class="space-y-4">
+        <p
+          :if={not is_map(@key_needs)}
+          role="alert"
+          class="text-sm text-red-400"
+          data-test="create-needs-unread"
+        >
+          The keys your components need cannot be read right now — try again.
+        </p>
+        <p
+          :for={refused <- refused_of(@key_needs)}
+          role="alert"
+          class="text-sm text-red-400"
+          data-test="create-needs-refused"
+          data-ref={refused.ref}
+        >
+          The keys {refused.ref} needs could not be read: {ended(refused.sentence)}
+        </p>
+        <p :if={cut?(@key_needs)} class="text-sm text-amber-400" data-test="create-needs-cut">
+          Only the {list_limit()} newest component versions were read, so a key one of the
+          others needs may be missing here — make it with <code class="font-mono">{cli_create()}</code>.
+        </p>
+        <p :if={no_need?(@key_needs)} class="text-sm text-gray-500" data-test="create-no-need">
+          No component here needs a key yet — install one first.
+        </p>
+        <p :if={@stale_choice} role="alert" class="text-sm text-red-400" data-test="create-stale">
+          {stale_sentence(@stale_choice)}
+        </p>
+        <form
+          :if={needs_of(@key_needs) != [] and not @create_redraw}
+          id={create_form()}
+          phx-update="ignore"
+          phx-submit="create"
+          class="space-y-4"
+        >
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
               <.input name="name" required placeholder="My Supabase" />
             </div>
             <div>
-              <label class="block text-xs text-gray-500 uppercase mb-1">Kind</label>
-              <select name="kind" class="w-full rounded-md border-gray-600 bg-transparent text-sm">
-                <option value="api_key">api_key</option>
-                <option value="bundle">bundle</option>
+              <label class="block text-xs text-gray-500 uppercase mb-1">Provider</label>
+              <select
+                name="need"
+                required
+                class="w-full rounded-md border-gray-600 bg-transparent text-sm"
+              >
+                <option value="">Choose a provider</option>
+                <option :for={need <- needs_of(@key_needs)} value={need_value(need)}>
+                  {need.provider} ({need.kind})
+                </option>
               </select>
             </div>
           </div>
