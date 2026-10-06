@@ -656,7 +656,7 @@ defmodule Compendium.ConsentSetupPlanTest do
 
       # Approving the lender again cannot repair it: the walk reads the
       # head it would revise and refuses the damaged one.
-      assert {:error, {:invalid_stored_value, "sideways"}} = Plan.plan(ctx, %{ref: @dep})
+      assert {:error, {:corrupt, {:profile, ^lender}}} = Plan.plan(ctx, %{ref: @dep})
 
       # The remedy the sentence names: the profile revoked, a new grant
       # lends the key.

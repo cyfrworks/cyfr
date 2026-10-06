@@ -834,6 +834,14 @@ func TestUnresolvedPlan(t *testing.T) {
 		t.Errorf("got %q", missing)
 	}
 
+	// A dependency stored damaged is installed: never told to install it.
+	missing, _ = unresolvedPlan(map[string]any{"unresolved": map[string]any{
+		"reason": "corrupt_manifest", "missing": "reagent:local.damaged",
+	}})
+	if missing != "reagent:local.damaged is stored damaged" {
+		t.Errorf("got %q", missing)
+	}
+
 	missing, _ = unresolvedPlan(map[string]any{"unresolved": map[string]any{"reason": "depth_exceeded"}})
 	if !strings.Contains(missing, "depth_exceeded") {
 		t.Errorf("got %q", missing)

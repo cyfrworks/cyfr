@@ -12,9 +12,12 @@ defmodule PrismWeb.VaultLiveTest do
   a dependency's at the version its dependent pins included, by provider
   and kind, and the entry it makes is a candidate for that need. A choice
   the needs no longer offer when the form is sent makes nothing. A
-  component list that cannot be read, and an athanor whose components
-  name none, offer no create; a component whose plan is refused is named
-  beside the rest, and a list cut short says so.
+  component list, or a component's plan, that cannot be read, and an
+  athanor whose components name none, offer no create; a component whose
+  plan is refused as damage, or for a class the page does not know, is
+  named beside the rest, one removed before its plan is read is left
+  out, a dependency a plan marks unresolved is named with the component
+  that needs it, and a list cut short says so.
 
   Storing client credentials is a sensitive change: the page asks
   through its system layer, and nothing is stored until the person
@@ -552,14 +555,13 @@ defmodule PrismWeb.VaultLiveTest do
       assert render(view) =~ "Entry created."
     end
 
-    test "a component list that cannot be read is said as such, with no create, never as no " <>
-           "need; plans refused all round name every component, with no create",
+    test "a component list, or a component's plan, that cannot be read is said as such, " <>
+           "with no create, never as no need and never component by component",
          %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
       install_openai!()
       install_needs!("vault-form-store", %{"store" => "bundle:supabase.com"})
-      ctx = seated_ctx(user)
       {view, _html} = mount_athanor(conn, "/vault")
 
       # The component list cannot be read.
@@ -569,23 +571,17 @@ defmodule PrismWeb.VaultLiveTest do
       assert_needs_unread(view)
       render_click(view, "show_add", %{"mode" => "fields"})
 
-      # The list reads, and every component's plan is refused: each is
-      # named with its own plan's sentence, and nothing is offered.
-      hide_table!("vault_entries")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      openai = plan_sentence(ctx, "catalyst:local.openai")
-      store = plan_sentence(ctx, "reagent:local.vault-form-store")
-      restore_table!("vault_entries")
+      # The list reads, and the plans meet a store that cannot answer: an
+      # outage, read on its class, leaves the whole list unread.
+      for table <- ~w(vault_entries profiles) do
+        hide_table!(table)
+        render_click(view, "show_add", %{"mode" => "fields"})
+        restore_table!(table)
 
-      assert texts(view, ~s([data-test="create-needs-refused"])) == [
-               "The keys catalyst:local.openai needs could not be read: #{openai}",
-               "The keys reagent:local.vault-form-store needs could not be read: #{store}"
-             ]
-
-      refute render(view) =~ @no_need
-      refute render(view) =~ @needs_unread
-      refute has_element?(view, "#vault-create-form")
-      render_click(view, "show_add", %{"mode" => "fields"})
+        assert_needs_unread(view)
+        refute has_element?(view, ~s([data-test="create-needs-refused"])), table
+        render_click(view, "show_add", %{"mode" => "fields"})
+      end
 
       # Read again once the store answers, the needs are offered.
       render_click(view, "show_add", %{"mode" => "fields"})
@@ -621,8 +617,8 @@ defmodule PrismWeb.VaultLiveTest do
       refute render(view) =~ @needs_unread
     end
 
-    test "a dependency stored damaged is named through its own refused plan, though its " <>
-           "dependent's plan answers without its needs",
+    test "a dependency stored damaged is named through its dependent's unresolved plan and " <>
+           "its own refused one",
          %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
@@ -635,20 +631,24 @@ defmodule PrismWeb.VaultLiveTest do
 
       damage_manifest!("vault-form-dep")
 
-      # The dependent's plan answers, and names none of the damaged
-      # dependency's needs.
+      # The dependent's plan names the damaged dependency unresolved.
       assert {:ok, plan} =
                PrismWeb.Ops.call_tool(ctx, "profile/plan", %{
                  "ref" => "reagent:local.vault-form-app"
                })
 
-      assert plan.dependency_needs == []
+      assert plan.unresolved == %{
+               reason: "corrupt_manifest",
+               missing: "reagent:local.vault-form-dep"
+             }
 
       {view, _html} = mount_athanor(conn, "/vault")
       render_click(view, "show_add", %{"mode" => "fields"})
       dep = plan_sentence(ctx, "reagent:local.vault-form-dep")
 
       assert texts(view, ~s([data-test="create-needs-refused"])) == [
+               "The keys reagent:local.vault-form-app needs could not be read: its dependency " <>
+                 "reagent:local.vault-form-dep is stored damaged.",
                "The keys reagent:local.vault-form-dep needs could not be read: #{dep}"
              ]
 
@@ -657,6 +657,123 @@ defmodule PrismWeb.VaultLiveTest do
       refute has_element?(view, "#vault-create-form")
       refute render(view) =~ @no_need
       refute render(view) =~ @needs_unread
+    end
+
+    # A dependency the plan marks unresolved is named with the component
+    # that needs it: its needs are not among the plan's, and are never left
+    # out unsaid.
+    test "a dependency whose pinned version is not installed is named through its " <>
+           "dependent's unresolved plan",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      register!("reagent", "vault-pin-dep", "2.0.0", needs(%{"key" => "api_key:pin.example"}))
+
+      register!("reagent", "vault-pin-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.vault-pin-dep:1.0.0"}]}
+      })
+
+      {view, _html} = mount_athanor(conn, "/vault")
+      render_click(view, "show_add", %{"mode" => "fields"})
+
+      assert texts(view, ~s([data-test="create-needs-refused"])) == [
+               "The keys reagent:local.vault-pin-app needs could not be read: its dependency " <>
+                 "reagent:local.vault-pin-dep is not installed, or its dependencies cannot be " <>
+                 "read."
+             ]
+
+      assert need_options(view) == [
+               {"", "Choose a provider"},
+               {"api_key:pin.example", "pin.example (api_key)"}
+             ]
+
+      refute render(view) =~ @needs_unread
+    end
+
+    test "an older pinned version stored damaged, its newest whole, is named through its " <>
+           "dependent's unresolved plan",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      register!("reagent", "vault-old-dep", "1.0.0", needs(%{"key" => "api_key:old.example"}))
+      register!("reagent", "vault-old-dep", "2.0.0", needs(%{"key" => "api_key:new.example"}))
+
+      register!("reagent", "vault-old-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.vault-old-dep:1.0.0"}]}
+      })
+
+      Arca.Repo.query!(
+        "UPDATE components SET manifest = '{not json' " <>
+          "WHERE name = 'vault-old-dep' AND version = '1.0.0'"
+      )
+
+      Arca.Cache.delete_match(:_)
+      {view, _html} = mount_athanor(conn, "/vault")
+      render_click(view, "show_add", %{"mode" => "fields"})
+
+      assert texts(view, ~s([data-test="create-needs-refused"])) == [
+               "The keys reagent:local.vault-old-app needs could not be read: its dependency " <>
+                 "reagent:local.vault-old-dep is stored damaged."
+             ]
+
+      # The newest version, whole, is listed on its own plan.
+      assert need_options(view) == [
+               {"", "Choose a provider"},
+               {"api_key:new.example", "new.example (api_key)"}
+             ]
+    end
+
+    # A component the athanor no longer holds by the time its plan is read
+    # needs nothing: it is left out, and nothing is said of it.
+    test "a component removed between the list and its plan is left out, unsaid",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      install_openai!()
+      register!("reagent", "vault-removed", "1.0.0", needs(%{"key" => "api_key:removed.example"}))
+      {view, _html} = mount_athanor(conn, "/vault")
+
+      remove_at_first_plan!("vault-removed")
+      render_click(view, "show_add", %{"mode" => "fields"})
+      assert_received :removed
+
+      refute has_element?(view, ~s([data-test="create-needs-refused"]))
+      refute render(view) =~ @needs_unread
+      assert need_options(view) == [{"", "Choose a provider"}, {@openai, "openai.com (api_key)"}]
+    end
+
+    # A refusal of a class the page does not read for is the interim rule's:
+    # the component named with its plan's own sentence, the rest listed.
+    test "a plan refused for a class the page does not know names its component with the " <>
+           "plan's sentence",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      ctx = seated_ctx(user)
+      install_openai!()
+
+      # An OAuth need naming no scopes, which the grant plan refuses as an
+      # argument the manifest's author must fix.
+      register!("reagent", "vault-unknown", "1.0.0", %{
+        "needs" => %{
+          "drive" => %{"type" => "oauth:google.com", "reason" => "r", "fields" => ["KEY"]}
+        }
+      })
+
+      {:error, reason} =
+        PrismWeb.Ops.call_tool(ctx, "profile/plan", %{"ref" => "reagent:local.vault-unknown"})
+
+      refute Grimoire.Error.classify(reason).class in [:unavailable, :not_found, :corrupt]
+
+      {view, _html} = mount_athanor(conn, "/vault")
+      render_click(view, "show_add", %{"mode" => "fields"})
+      sentence = plan_sentence(ctx, "reagent:local.vault-unknown")
+
+      assert texts(view, ~s([data-test="create-needs-refused"])) == [
+               "The keys reagent:local.vault-unknown needs could not be read: #{sentence}"
+             ]
+
+      assert need_options(view) == [{"", "Choose a provider"}, {@openai, "openai.com (api_key)"}]
     end
 
     test "a dependency's need at the version its dependent pins is offered, beside the need " <>
@@ -861,11 +978,12 @@ defmodule PrismWeb.VaultLiveTest do
     end
 
     # A need missing from the needs as they read at the send is no longer
-    # needed only when they read whole: with a plan refused, or the list
-    # cut, the need may sit in what was not read, so the page says it cannot
-    # tell, and makes nothing either way.
-    test "a choice missing because a plan is refused at the send is not called no longer " <>
-           "needed, and makes nothing",
+    # needed only when they read whole: with a plan that could not be read,
+    # a plan refused, a dependency unresolved, or the list cut, the need may
+    # sit in what was not read, so the page says so, and makes nothing
+    # either way.
+    test "a choice sent while a plan cannot be read is not called no longer needed: the " <>
+           "list is unread, and nothing is made",
          %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
@@ -885,11 +1003,12 @@ defmodule PrismWeb.VaultLiveTest do
       hide_table!("profiles")
       view |> form("#vault-create-form", typed) |> render_submit()
       stale = texts(view, ~s([data-test="create-stale"]))
-      refused = texts(view, refused_line("catalyst:local.openai"))
+      refused = texts(view, ~s([data-test="create-needs-refused"]))
       restore_table!("profiles")
 
-      assert stale == [@unconfirmed]
-      assert [_sentence] = refused
+      assert_needs_unread(view)
+      assert stale == []
+      assert refused == []
       assert open_records(ctx) == []
       assert made(ctx) == []
       # Once the store answers, the grant plan still names the need, with
@@ -897,8 +1016,45 @@ defmodule PrismWeb.VaultLiveTest do
       assert openai_candidates(ctx) == []
     end
 
-    test "a confirmed choice missing because a plan is refused at the resend is not called " <>
-           "no longer needed; nothing is made and its confirmation is let go",
+    test "a choice whose dependency is stored damaged at the send is not called no longer " <>
+           "needed: the dependency is named, and nothing is made",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      ctx = seated_ctx(user)
+      register!("reagent", "vault-send-dep", "1.0.0", needs(%{"key" => "api_key:sent.example"}))
+
+      register!("reagent", "vault-send-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.vault-send-dep:1.0.0"}]}
+      })
+
+      {view, _html} = mount_athanor(conn, "/vault")
+      render_click(view, "show_add", %{"mode" => "fields"})
+      assert {"api_key:sent.example", "sent.example (api_key)"} in need_options(view)
+
+      typed = %{
+        "name" => "damaged-dep-#{System.unique_integer([:positive])}",
+        "need" => "api_key:sent.example",
+        "fields" => "KEY=k",
+        "destination_hosts" => "api.sent.example"
+      }
+
+      damage_manifest!("vault-send-dep")
+      view |> form("#vault-create-form", typed) |> render_submit()
+
+      assert texts(view, ~s([data-test="create-stale"])) == [@unconfirmed]
+
+      assert texts(view, refused_line("reagent:local.vault-send-app")) == [
+               "The keys reagent:local.vault-send-app needs could not be read: its dependency " <>
+                 "reagent:local.vault-send-dep is stored damaged."
+             ]
+
+      assert open_records(ctx) == []
+      assert made(ctx) == []
+    end
+
+    test "a confirmed choice sent again while a plan cannot be read is not called no longer " <>
+           "needed; nothing is made and its confirmation is let go",
          %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
@@ -924,7 +1080,8 @@ defmodule PrismWeb.VaultLiveTest do
       stale = texts(view, ~s([data-test="create-stale"]))
       restore_table!("profiles")
 
-      assert stale == [@unconfirmed]
+      assert_needs_unread(view)
+      assert stale == []
       assert made(ctx) == []
       assert record_state(ctx, ref) == "cancelled"
 
@@ -982,6 +1139,32 @@ defmodule PrismWeb.VaultLiveTest do
     refute render(view) =~ @no_need
     refute has_element?(view, "#vault-create-form")
     refute has_element?(view, "button[type=submit]", "Create entry")
+  end
+
+  # `name`'s row ends, as a removal ends it, once the first grant plan the
+  # page asks is admitted: the component is listed, and gone when its plan
+  # is read. The test hears it.
+  defp remove_at_first_plan!(name) do
+    test = self()
+    handler = "vault-remove-#{System.unique_integer([:positive])}"
+    actor = Sanctum.Context.actor(seed_ctx())
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :grimoire, :decision, :admitted],
+        fn _event, _measurements, meta, _config ->
+          if meta[:tool] == "profile" and meta[:action] == "plan" do
+            :telemetry.detach(handler)
+            Arca.ComponentStorage.delete_component(actor, name, "1.0.0", "local", "reagent")
+            Arca.Cache.delete_match(:_)
+            send(test, :removed)
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
   end
 
   # A store that cannot answer for `table`, in the test's sandbox alone.

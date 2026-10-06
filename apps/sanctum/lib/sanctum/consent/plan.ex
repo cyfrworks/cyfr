@@ -50,9 +50,9 @@ defmodule Sanctum.Consent.Plan do
   ask the narrowing is). With no head, `head_origins` is nil and
   `head_bindings`, `head_narrowing` and `shape_diff` are empty. A plan
   reads the head once, so all it says of the head and the revision it
-  expects are of one read. A head whose policy fails its digest or does
-  not parse refuses the plan `{:corrupt, {:profile, profile_id}}`: its
-  narrowing is unknown.
+  expects are of one read. A head row that does not decode, or whose
+  policy fails its digest or does not parse, refuses the plan
+  `{:corrupt, {:profile, profile_id}}`: its narrowing is unknown.
 
   `candidates` are the athanor's active entries. An OAuth candidate answers
   `narrowable`, whether a token for fewer of its scopes can be dispensed,
@@ -119,6 +119,8 @@ defmodule Sanctum.Consent.Plan do
 
   alias Prima.Authority.RootSelect
   alias Sanctum.Consent.Components
+
+  require Components
 
   alias Sanctum.Consent.Authz
   alias Sanctum.Consent.BlobBuilder
@@ -201,6 +203,23 @@ defmodule Sanctum.Consent.Plan do
   offered to this person or not theirs to use (`:not_offered`,
   `:denied`, `:anonymous_denied`, `:no_person`), or of a component its
   policy does not admit.
+
+  The plan's own reads refuse on their terms, as `Prima.Refusal` rows
+  them, so an outage never reads as an absence: a component the athanor
+  no longer holds is `{:not_found, {:component, source_ref}}`; a store
+  that could not answer is that store unavailable, `{:unavailable,
+  "Components"}` for the component's rows and its closure, `{:unavailable,
+  "Consent profiles"}` for its profiles and head, `{:unavailable,
+  "Vault"}` for the entries and defaults a need is met from, and
+  `{:unavailable, "Instance entries"}` for the entries offered to the
+  person; a source whose stored manifest does not decode is `{:corrupt,
+  {:manifest, source_ref}}`; and a profile's head row that does not
+  decode is `{:corrupt, {:profile, profile_id}}`, as a head whose policy
+  fails its digest or does not parse is. A dependency whose stored
+  manifest does not decode leaves the closure unresolved, `%{reason:
+  "corrupt_manifest", missing: dep_ref}` (`closure_rows/3`), never a plan
+  with that dependency's needs missing; one not installed leaves it
+  unresolved as missing.
   """
   @spec plan(Context.t(), map()) :: {:ok, t()} | {:error, term()}
   def plan(%Context{} = ctx, %{ref: ref} = params) when is_binary(ref) do
@@ -210,19 +229,20 @@ defmodule Sanctum.Consent.Plan do
     with :ok <- Authz.authorize_staging(ctx),
          :ok <- RootSelect.check_label(label),
          {:ok, source_ref} <- name_ref(ref),
-         {:ok, component} <- fetch_component(ctx, source_ref),
-         {:ok, shape_input} <- ShapeDerivation.shape_input(ctx, source_ref),
+         {:ok, component} <- source_component(ctx, source_ref),
+         {:ok, shape_input} <-
+           ctx |> ShapeDerivation.shape_input(source_ref) |> read({:components, source_ref}),
          {:ok, shape_digest} <- ShapeDigest.compute(shape_input),
          {:ok, profile_id, expected_revision, head} <-
-           locate_head(ctx, source_ref, label, kind),
+           ctx |> locate_head(source_ref, label, kind) |> read(:profiles),
          stored = if(head, do: {:ok, head, profile_id}, else: :none),
          manifest = manifest(component, source_ref),
          {:ok, resources, limits} <-
            Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest),
-         {closure, closure_rows} = closure(ctx, component),
+         {:ok, {closure, closure_rows}} <- closure(ctx, component),
          {:ok, rows} <- ask_rows(ctx, closure, closure_rows),
-         {:ok, candidates} <- candidates(ctx),
-         {:ok, sources} <- choice_sources(ctx),
+         {:ok, candidates} <- ctx |> candidates() |> read(:vault),
+         {:ok, sources} <- ctx |> choice_sources() |> read(:vault),
          needs =
            need_rows(
              ctx,
@@ -285,12 +305,23 @@ defmodule Sanctum.Consent.Plan do
           {:ok, nil, 0, nil}
 
         profile ->
-          case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id) do
+          case read_head(ctx, profile.id) do
             {:ok, consent} -> {:ok, profile.id, consent.revision, consent}
             {:error, :no_head} -> {:ok, profile.id, 0, nil}
             {:error, reason} -> {:error, reason}
           end
       end
+    end
+  end
+
+  @doc false
+  # A profile's head as the plan, the preview, the commit and the grant
+  # read it: a row whose stored columns do not decode is the damaged
+  # profile, never an outcome that could not be confirmed.
+  def read_head(ctx, profile_id) do
+    case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id) do
+      {:error, {:invalid_stored_value, _}} -> {:error, {:corrupt, {:profile, profile_id}}}
+      answer -> answer
     end
   end
 
@@ -302,16 +333,59 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
+  # The non-component stores' declared outage terms; component reads use
+  # the component-facts port's classification.
+  @outages [:database_error, :unavailable]
+
   @doc false
+  # The source's newest row, as the plan, the preview, the commit and the
+  # grant read it: a store that could not answer is the components
+  # unavailable, never a component that is not there; any other refusal,
+  # one the athanor does not hold among them, is
+  # `{:component_not_found, reason}`.
   def fetch_component(ctx, source_ref) do
     with {:ok, parsed} <- Prima.ComponentRef.parse(source_ref),
          {:ok, component} <-
            Components.get_latest(ctx, parsed.name, parsed.namespace, parsed.type) do
       {:ok, component}
     else
+      {:error, outage} when Components.is_outage(outage) -> {:error, {:unavailable, "Components"}}
       {:error, reason} -> {:error, {:component_not_found, reason}}
     end
   end
+
+  # The source's row as a plan reads it: a component the athanor does not
+  # hold is not found (`Prima.Refusal`'s row), and the rest as
+  # `fetch_component/2` answers it.
+  defp source_component(ctx, source_ref) do
+    case fetch_component(ctx, source_ref) do
+      {:error, {:component_not_found, :not_found}} ->
+        {:error, {:not_found, {:component, source_ref}}}
+
+      answer ->
+        answer
+    end
+  end
+
+  # A read the plan makes, refused on its terms (`Prima.Refusal`'s rows):
+  # a store that could not answer is that store unavailable, so an outage
+  # never reads as an absence or a sentence; a component the athanor no
+  # longer holds is not found; every other refusal, a damaged manifest's
+  # `{:corrupt, {:manifest, ref}}` among them, is the read's own.
+
+  defp read({:error, :not_found}, {:components, source_ref}),
+    do: {:error, {:not_found, {:component, source_ref}}}
+
+  defp read({:error, outage}, {:components, _source_ref}) when Components.is_outage(outage),
+    do: {:error, {:unavailable, "Components"}}
+
+  defp read({:error, outage}, :profiles) when outage in @outages,
+    do: {:error, {:unavailable, "Consent profiles"}}
+
+  defp read({:error, outage}, :vault) when outage in @outages,
+    do: {:error, {:unavailable, "Vault"}}
+
+  defp read(answer, _store), do: answer
 
   # ---------------------------------------------------------------------------
   # Internal
@@ -462,23 +536,29 @@ defmodule Sanctum.Consent.Plan do
   @doc false
   # Read once per plan or preview: the athanor's active entries, the
   # instance entries offered to the context's person (none for a context
-  # with no person) and the athanor's default per provider.
+  # with no person) and the athanor's default per provider. A store that
+  # could not answer the offered entries is `{:unavailable, "Instance
+  # entries"}`: read as none offered, the walk would offer to connect a
+  # key over entries that exist.
   @spec choice_sources(Context.t()) :: {:ok, choice_sources()} | {:error, term()}
   def choice_sources(ctx) do
     with {:ok, entries} <- Sanctum.Vault.list(ctx),
-         {:ok, defaults} <- Sanctum.Vault.defaults(ctx) do
-      offered =
-        case Sanctum.InstanceEntries.offered(ctx) do
-          {:ok, offered} -> offered
-          {:error, _no_person} -> []
-        end
-
+         {:ok, defaults} <- Sanctum.Vault.defaults(ctx),
+         {:ok, offered} <- offered(ctx) do
       {:ok,
        %{
          own: Enum.filter(entries, &(&1.status == "active")),
          offered: offered,
          defaults: defaults
        }}
+    end
+  end
+
+  defp offered(ctx) do
+    case Sanctum.InstanceEntries.offered(ctx) do
+      {:ok, offered} -> {:ok, offered}
+      {:error, outage} when outage in @outages -> {:error, {:unavailable, "Instance entries"}}
+      {:error, _no_person} -> {:ok, []}
     end
   end
 
@@ -935,7 +1015,8 @@ defmodule Sanctum.Consent.Plan do
   @spec asked_blob(Context.t(), String.t()) :: {:ok, String.t() | nil} | {:error, term()}
   def asked_blob(%Context{} = ctx, source_ref) do
     with {:ok, component} <- fetch_component(ctx, source_ref),
-         do: ask(ctx, source_ref, closure(ctx, component))
+         {:ok, resolved} <- closure(ctx, component),
+         do: ask(ctx, source_ref, resolved)
   end
 
   defp ask(_ctx, _source_ref, {{:unresolved, _}, _rows}), do: {:ok, nil}
@@ -951,7 +1032,16 @@ defmodule Sanctum.Consent.Plan do
   # grant keeps none, nor does a closure that does not resolve, which has
   # no ask to hold the head against and offers nothing to commit.
   defp held_narrowing(:none, _source_ref, _asked), do: {:ok, %{}}
-  defp held_narrowing({:ok, _head, _id}, _source_ref, nil), do: {:ok, %{}}
+
+  # With no ask to hold it against, the head is still read as every head's
+  # bytes are: one that fails its digest or does not parse is the damaged
+  # profile it is, whatever the closure.
+  defp held_narrowing({:ok, head, profile_id}, _source_ref, nil) do
+    case Sanctum.Consent.Loader.head_blob(head) do
+      {:ok, _blob} -> {:ok, %{}}
+      {:error, _damaged} -> {:error, {:corrupt, {:profile, profile_id}}}
+    end
+  end
 
   defp held_narrowing({:ok, head, profile_id}, source_ref, asked),
     do: head_narrowing(profile_id, head, source_ref, asked)
@@ -980,13 +1070,16 @@ defmodule Sanctum.Consent.Plan do
 
   # The activation closure's graph and the rows it resolved, or what keeps
   # it from resolving: the reason's tag and the ref the resolution names
-  # as missing, if any.
+  # as missing, if any. A store that could not answer while the closure
+  # is walked refuses as the components unavailable: read as unresolved,
+  # the walk would say to install components that exist.
   defp closure(ctx, component) do
     with {:ok, %{graph: graph}} <- Components.resolve(ctx, component),
          {:ok, rows} <- closure_rows(ctx, component, graph) do
-      {{:ok, graph}, rows}
+      {:ok, {{:ok, graph}, rows}}
     else
-      {:error, reason} -> {{:unresolved, unresolved_reason(reason)}, %{}}
+      {:error, outage} when Components.is_outage(outage) -> {:error, {:unavailable, "Components"}}
+      {:error, reason} -> {:ok, {{:unresolved, unresolved_reason(reason)}, %{}}}
     end
   end
 
@@ -998,7 +1091,11 @@ defmodule Sanctum.Consent.Plan do
   # consent reads every dependency's manifest at the release that runs. A
   # row the graph does not record at that digest is
   # `{:error, {:activation_moved, node_key}}`: the closure moved under the
-  # read, and the plan or the commit is asked again.
+  # read, and the plan or the commit is asked again. A dependency whose
+  # stored manifest does not decode is `{:error, {:corrupt, {:manifest,
+  # node_key}}}`: read as declaring nothing, its needs would drop out of
+  # the grant and the plan, and a grant would be made without its key.
+  # The source's own manifest is `ShapeDerivation`'s to refuse.
   @spec closure_rows(Context.t(), map(), %{String.t() => String.t()}) ::
           {:ok, %{String.t() => map()}} | {:error, term()}
   def closure_rows(%Context{} = ctx, source_row, graph) when is_map(graph),
@@ -1027,13 +1124,13 @@ defmodule Sanctum.Consent.Plan do
           # not installed is skipped, whether or not another path reaches
           # its node at another release; any other that does not read
           # leaves the closure incomplete.
-          case dependency_row(ctx, dep) do
-            {:ok, dep_row} ->
-              case walk_rows(ctx, dep_row, graph, rows) do
-                {:ok, rows} -> {:cont, {:ok, rows}}
-                {:error, _} = refused -> {:halt, refused}
-              end
-
+          with {:ok, dep_row} <- dependency_row(ctx, dep),
+               :ok <- intact_manifest(dep_row) do
+            case walk_rows(ctx, dep_row, graph, rows) do
+              {:ok, rows} -> {:cont, {:ok, rows}}
+              {:error, _} = refused -> {:halt, refused}
+            end
+          else
             {:error, :not_found} when dep.optional == true ->
               {:cont, {:ok, rows}}
 
@@ -1054,8 +1151,24 @@ defmodule Sanctum.Consent.Plan do
   defp dependency_row(ctx, dep),
     do: Components.get_latest(ctx, dep.dep_name, dep.dep_namespace, dep.dep_type)
 
+  # A dependency's row as the port hands it, its manifest as storage holds
+  # it (`Compendium.ConsentFacts.get_component/5`): one that does not
+  # decode is the damaged row it is.
+  defp intact_manifest(row) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+      {:ok, _manifest} ->
+        :ok
+
+      {:error, :malformed_manifest} ->
+        {:error, {:corrupt, {:manifest, Prima.ComponentRow.node_key(row)}}}
+    end
+  end
+
   defp unresolved_reason({:activation_moved, key}),
     do: %{reason: "activation_moved", missing: key}
+
+  defp unresolved_reason({:corrupt, {:manifest, key}}) when is_binary(key),
+    do: %{reason: "corrupt_manifest", missing: key}
 
   defp unresolved_reason({:incomplete, {tag, missing}}) when is_atom(tag) and is_binary(missing),
     do: %{reason: Atom.to_string(tag), missing: missing}

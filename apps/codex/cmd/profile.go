@@ -1472,6 +1472,8 @@ func unresolvedPlan(plan map[string]any) (string, bool) {
 	switch {
 	case missing != "" && str(unresolved["reason"]) == "missing_release_digest":
 		return missing + " has no release digest; publish it again", true
+	case missing != "" && str(unresolved["reason"]) == "corrupt_manifest":
+		return missing + " is stored damaged", true
 	case missing != "":
 		return missing + " is missing: it is not installed, or its dependencies cannot be read", true
 	default:

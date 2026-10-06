@@ -301,7 +301,7 @@ defmodule Sanctum.Providers.Profile do
         )
       ],
       description:
-        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates: each need, and each need of a dependency, answers its candidates (own or instance entries of its kind and provider), the one it has suggested, whether a choice_required, and its source (own, instance, or provided by the app); preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; list answers each profile's head_state — present, missing, damaged, or unavailable when the store could not answer — beside head_revision, which is set only when the head is present, and lists a profile row that is damaged as status corrupt with head_state damaged, its head not read; grants reads which grants reach a resource, and is refused when a profile a grant borrows a key from cannot be read or is damaged; plan is refused alike when a profile that would lend a dependency its key, or the entry that profile binds, cannot be read, or the profile is damaged. Nothing is granted outside this walk.",
+        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates: each need, and each need of a dependency, answers its candidates (own or instance entries of its kind and provider), the one it has suggested, whether a choice_required, and its source (own, instance, or provided by the app); preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; list answers each profile's head_state — present, missing, damaged, or unavailable when the store could not answer — beside head_revision, which is set only when the head is present, and lists a profile row that is damaged as status corrupt with head_state damaged, its head not read; grants reads which grants reach a resource: it is refused unavailable when the stored heads, or a profile a grant borrows a key from, cannot be read, and corrupt when a head the store returns fails its digest, does not parse or disagrees with its stored references, or when a profile a grant borrows a key from is damaged; a head row that does not decode is not listed by the store, so grants does not read it. plan is refused unavailable when the components, the consent profiles, the vault or the instance entries offered to the person cannot be read, not_found when its component is not installed, and corrupt when its stored manifest is damaged or its profile's head row does not decode, fails its digest or does not parse. plan, preview, commit and grant are refused unavailable when the components, or a profile that would lend a dependency its key, cannot be read (for plan, or the entry that profile binds), and corrupt when that profile is damaged or when the head row of the profile they would revise does not decode; preview, commit and grant are refused corrupt when a dependency's stored manifest is damaged, which plan answers as a closure unresolved with reason corrupt_manifest, so nothing is granted over it. Nothing is granted outside this walk.",
       title: "Profiles & Consent"
     )
   end
@@ -428,7 +428,7 @@ defmodule Sanctum.Providers.Profile do
 
       case Commit.grant(ctx, params) do
         {:ok, result} -> {:ok, Map.put(result, :status, "granted")}
-        {:error, reason} -> {:error, fmt(reason)}
+        {:error, reason} -> {:error, walk_refusal(reason)}
       end
     end
   end
@@ -530,19 +530,24 @@ defmodule Sanctum.Providers.Profile do
   # as the loader carries it (`Sanctum.Consent.Loader.admitted_blob/3`), so
   # no grant shows wider or narrower than it runs: its built blob,
   # narrowing already applied, with every selection the loader resolves
-  # resolved. A head the loader refuses outright (validity, digest, parse,
-  # canonical storage paths, blob/refs equality, binding-digest conflicts)
-  # reaches nothing. A lender the store could not answer, or whose profile
-  # row or head does not decode, or whose head's bytes fail their digest or
-  # do not parse, refuses the whole read with that reason
-  # (`Sanctum.Unauthorized`'s sentence): an answer short of that head's
-  # grants would read as "reaches nothing". The heads themselves come from
+  # resolved. The heads themselves come from
   # `Arca.ConsentStorage.active_heads/2`, never through the loader's head
-  # read, so the loader answers no root head's refusal here. A lender
-  # admits a borrower's load only under an origin
-  # the lender's own revision names, so a head is loaded under each origin
-  # its revision admits and reaches a resource when any of those loads
-  # carries it. Every edge counts:
+  # read: a store that cannot answer them refuses the whole read, and a
+  # head row that does not decode is not among them (`active_heads/2`
+  # drops it). A head the loader cannot trust (its validity, digest,
+  # parse, blob/refs equality or binding digests) refuses the whole read
+  # as that damage, in the loader's one reading of it
+  # (`Sanctum.Consent.Loader.damage_refusal/3`, the damaged head
+  # `{:head_corrupt, profile_id}`); a head asked again under the canonical
+  # spelling of its storage paths reaches nothing. A lender the store
+  # could not answer, or whose profile row or head does not decode, or
+  # whose head's bytes fail their digest or do not parse, refuses the
+  # whole read with that reason (`Sanctum.Unauthorized`'s sentence): an
+  # answer short of that head's grants would read as "reaches nothing". A
+  # lender admits a borrower's load only under an origin the lender's own
+  # revision names, so a head is loaded under each origin its revision
+  # admits and reaches a resource when any of those loads carries it.
+  # Every edge counts:
   #
   # - a domain, as egress pins a host (`Prima.Network.domain_allowed?/2`),
   #   on an edge that also allows a method and a scheme;
@@ -678,7 +683,13 @@ defmodule Sanctum.Providers.Profile do
 
   # The edges of the first load, among the origins the revision admits,
   # that carries the resource; none when no such load does. A lender that
-  # could not be read or does not decode refuses the read.
+  # could not be read or does not decode refuses the read. The app's own
+  # head the loader cannot trust refuses it as that damage, in the
+  # loader's one reading of it (`Loader.damage?/1`, `damage_refusal/3`):
+  # read as reaching nothing, a grant that exists would read as none. Any
+  # other refusal, a revision asked again under the canonical spelling of
+  # its paths or a lender that does not admit the origin, reaches nothing
+  # under that origin.
   defp reaching_edges(ctx, profile, consent, resource) do
     Enum.reduce_while(consent.admitted_origins, {:ok, []}, fn origin, none ->
       case Loader.admitted_blob(%{ctx | origin: origin}, profile, consent) do
@@ -694,10 +705,33 @@ defmodule Sanctum.Providers.Profile do
         {:error, {:lender_corrupt, _target, _profile_id}} = refused ->
           {:halt, refused}
 
-        {:error, _refused} ->
-          {:cont, none}
+        {:error, reason} ->
+          case own_head_refusal(reason, profile) do
+            nil -> {:cont, none}
+            refusal -> {:halt, {:error, refusal}}
+          end
       end
     end)
+  end
+
+  # The app's own head refused: its damage as the loader names it, and,
+  # defensively, an answer the consent vocabulary classes unavailable as
+  # that head unanswered. `admitted_blob/3` reads no store for the app's
+  # own head today (the heads and their references arrive read, and a
+  # store that cannot answer them refuses the whole read first), so no
+  # such answer reaches here; one that did would be an outage, never a
+  # grant reaching nothing.
+  defp own_head_refusal(reason, profile) do
+    cond do
+      Loader.damage?(reason) ->
+        Loader.damage_refusal(reason, profile.id, profile.source_ref)
+
+      Sanctum.Unauthorized.reason?(reason) and Sanctum.Unauthorized.class(reason) == :unavailable ->
+        {:head_unavailable, profile.id}
+
+      true ->
+        nil
+    end
   end
 
   defp loaded_edges(blob, consent, resource) do
@@ -977,19 +1011,34 @@ defmodule Sanctum.Providers.Profile do
 
   # Error rendering
 
-  # A refusal of `plan`, `preview` or `commit`. A lender that could not be
-  # read, or whose profile row or head does not decode, or whose head's
-  # bytes fail their digest or do not parse (`Sanctum.Consent.Plan.plan/2`,
-  # `Sanctum.Consent.Commit.preview/2` and `commit/3`), is answered typed,
-  # as `grants` answers it: the gate classes it `unavailable` or `corrupt`
-  # through `Sanctum.Unauthorized`, whose sentence it reads as, and a
-  # client branches on that class. So is a stored policy of the profile's
-  # own head that cannot be read, whose narrowing a re-grant would keep
-  # (`Sanctum.Consent.Plan.head_narrowing/4`): `Prima.Refusal`'s corrupt
-  # profile. Every other refusal is rendered here.
+  # A refusal of `plan`, `preview`, `commit` or `grant`. A lender that
+  # could not be read, or whose profile row or head does not decode, or
+  # whose head's bytes fail their digest or do not parse
+  # (`Sanctum.Consent.Plan.plan/2`, `Sanctum.Consent.Commit.preview/2`,
+  # `commit/3` and `grant/3`), is answered typed, as `grants` answers it:
+  # the gate classes it `unavailable` or `corrupt` through
+  # `Sanctum.Unauthorized`, whose sentence it reads as, and a client
+  # branches on that class. So, in `Prima.Refusal`'s rows, are the
+  # profile's own head that cannot be trusted, its row not decoding or its
+  # stored policy failing its digest or not parsing, whose narrowing a
+  # re-grant would keep (`Sanctum.Consent.Plan.head_narrowing/4`), the
+  # corrupt profile; a component the athanor no longer holds; a store the
+  # walk could not read (`{:unavailable, store}`: the components at every
+  # verb, as the source's row is read, `Sanctum.Consent.Plan.fetch_component/2`,
+  # and as its closure is resolved and walked, and the plan's other
+  # stores); and a stored manifest that does not decode, the source's or a
+  # dependency's the closure reads (`Sanctum.Consent.Plan.closure_rows/3`).
+  # Every other refusal is rendered here.
   defp walk_refusal({:lender_unavailable, _dep} = unread), do: unread
   defp walk_refusal({:lender_corrupt, _dep, _profile_id} = damaged), do: damaged
   defp walk_refusal({:corrupt, {:profile, _profile_id}} = damaged), do: damaged
+  defp walk_refusal({:not_found, {:component, _ref}} = absent), do: absent
+  defp walk_refusal({:unavailable, store} = unread) when is_binary(store), do: unread
+  defp walk_refusal({:corrupt, {:manifest, _ref}} = damaged), do: damaged
+
+  defp walk_refusal({:activation_unresolvable, {:corrupt, {:manifest, _ref}} = damaged}),
+    do: damaged
+
   defp walk_refusal(reason), do: fmt(reason)
 
   # Preserve typed consent signals for wire and console rendering.

@@ -12,8 +12,9 @@ defmodule PrismWeb.ConsentSheetComponent do
   tincture's frame, streams, cards and system actions included, and never
   a sentence the home wrote. Before a preview is read it draws the plan's
   rows, the ask. A plan whose closure is unresolved is drawn as that,
-  naming what is missing, with no rows and nothing to commit. Beneath the
-  rows, before the person confirms, it lists each binding of the
+  naming what is missing, or the dependency stored damaged, with no rows
+  and nothing to commit. Beneath the rows, before the person confirms,
+  it lists each binding of the
   profile's head the preview says the grant removes: the need it was
   bound for ("a binding of this app's calls" where that cannot be told),
   its account or "default", and its entry's name, else its id or the
@@ -3092,6 +3093,11 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp unresolved_sentence(%{reason: "missing_release_digest", missing: ref}) when is_binary(ref),
     do: "#{ref} has no release digest. Publish it again, then try again."
+
+  # A dependency whose stored manifest does not decode: damage, never a
+  # component to install, and nothing can be granted over it.
+  defp unresolved_sentence(%{reason: "corrupt_manifest", missing: ref}) when is_binary(ref),
+    do: "The dependency #{ref} is stored damaged and cannot be granted."
 
   defp unresolved_sentence(%{reason: reason}),
     do: "Its dependencies cannot be resolved (#{reason}). Try again once they are installed."

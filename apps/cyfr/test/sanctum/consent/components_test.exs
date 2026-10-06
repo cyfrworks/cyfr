@@ -187,7 +187,7 @@ defmodule Sanctum.Consent.ComponentsTest do
              ShapeDerivation.shape_input(ctx, "reagent:local.facts-shape")
 
     without_facts(fn ->
-      assert {:error, :component_facts_unavailable} =
+      assert {:error, {:unavailable, "Components"}} =
                ShapeDerivation.shape_input(ctx, "reagent:local.facts-shape")
     end)
   end

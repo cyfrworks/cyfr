@@ -103,6 +103,7 @@ defmodule Sanctum.Consent.Commit do
   """
 
   require Logger
+  require Sanctum.Consent.Components
 
   alias Sanctum.Consent.Authz
   alias Sanctum.Consent.BlobBuilder
@@ -248,7 +249,7 @@ defmodule Sanctum.Consent.Commit do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, profile} <- Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id),
          :ok <- check_grantable_profile(profile),
-         {:ok, head} <- Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id),
+         {:ok, head} <- Plan.read_head(ctx, profile_id),
          :ok <- check_no_tool_servers(profile_id, head, profile.source_ref),
          decisions = grant_decisions(profile, head, Map.get(params, :bindings, [])),
          {:ok, asked} <- prepare(ctx, decisions),
@@ -1206,7 +1207,7 @@ defmodule Sanctum.Consent.Commit do
   defp resolve_closure_rows(ctx, component, activation) do
     case Plan.closure_rows(ctx, component, activation.graph) do
       {:ok, rows} -> {:ok, rows}
-      {:error, reason} -> {:error, {:activation_unresolvable, reason}}
+      {:error, reason} -> {:error, closure_refusal(reason)}
     end
   end
 
@@ -1493,9 +1494,17 @@ defmodule Sanctum.Consent.Commit do
   defp resolve_activation(ctx, component) do
     case Components.resolve_verified(ctx, component) do
       {:ok, activation} -> {:ok, activation}
-      {:error, reason} -> {:error, {:activation_unresolvable, reason}}
+      {:error, reason} -> {:error, closure_refusal(reason)}
     end
   end
+
+  # What keeps the closure from resolving, as the plan reads it: a store
+  # that could not answer while the closure is resolved or walked is the
+  # components unavailable, never a closure that does not resolve.
+  defp closure_refusal(outage) when Components.is_outage(outage),
+    do: {:unavailable, "Components"}
+
+  defp closure_refusal(reason), do: {:activation_unresolvable, reason}
 
   # Pin by activation digest; retain the version for display.
   defp shape_for_scope(shape_input, :versionless, _component) do

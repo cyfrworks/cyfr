@@ -42,6 +42,15 @@ defmodule Sanctum.Consent.Components do
 
   alias Sanctum.Context
 
+  @doc "Whether a component-facts read could not answer, distinct from absence or damage."
+  defguard is_outage(reason)
+           when reason in [
+                  :database_error,
+                  :unavailable,
+                  :projection_unavailable,
+                  :component_facts_unavailable
+                ]
+
   defmodule NotInstalledError do
     @moduledoc """
     Raised by `Sanctum.Consent.Components.impl!/0` when nothing has

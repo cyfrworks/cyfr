@@ -57,6 +57,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
   alias Sanctum.Consent.ShapeDigest
   alias Prima.ToolPattern
 
+  require Components
+
   @doc """
   The live shape digest for a source ref, or `{:error, reason}` when the
   shape inputs cannot be read — the caller treats that as no live shape,
@@ -209,15 +211,18 @@ defmodule Sanctum.Consent.ShapeDerivation do
   `{:allow_record, …}`. That arm stays live and load-bearing — only the
   DEPENDENCY case moves to `:needs_consent`.
 
-  A closure that cannot be resolved contributes nothing rather than
+  A closure that is incomplete contributes nothing rather than
   failing the shape: the loader has its own `{:incomplete, …}` path for an
   unresolvable world (`setup_required`), and a shape that errored here
   would report the wrong thing. A source whose own manifest does not
   decode is not an unresolvable world but a damaged row: its closure would
   resolve to the source alone, so it is refused as corrupt instead.
+  An outage reading the closure refuses as `{:unavailable, "Components"}`:
+  it establishes no dependency set from which a consent can be derived.
   """
   @spec dependency_releases(Sanctum.Context.t(), map(), String.t()) ::
-          {:ok, [String.t()]} | {:error, {:corrupt, {:manifest, String.t()}}}
+          {:ok, [String.t()]}
+          | {:error, {:corrupt, {:manifest, String.t()}} | {:unavailable, String.t()}}
   def dependency_releases(ctx, row, source_ref) do
     with {:ok, _manifest} <- manifest(row, source_ref) do
       case Components.resolve(ctx, row) do
@@ -227,6 +232,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
            |> Enum.reject(fn {node_key, _digest} -> node_key == source_ref end)
            |> Enum.map(fn {node_key, digest} -> "#{node_key}@#{digest}" end)
            |> Enum.sort()}
+
+        {:error, reason} when Components.is_outage(reason) ->
+          {:error, {:unavailable, "Components"}}
 
         _unresolvable ->
           {:ok, []}
@@ -279,6 +287,12 @@ defmodule Sanctum.Consent.ShapeDerivation do
          {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type),
          {:ok, manifest} <- manifest(row, source_ref) do
       {:ok, row, manifest}
+    else
+      {:error, reason} when Components.is_outage(reason) ->
+        {:error, {:unavailable, "Components"}}
+
+      error ->
+        error
     end
   end
 

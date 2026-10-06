@@ -7,6 +7,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
   require Ecto.Query
 
   alias Sanctum.Consent.Bootstrap
+  alias Sanctum.Consent.Components
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.ShapeDerivation
 
@@ -91,6 +92,39 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
     assert ShapeDerivation.live_digest(ctx, "reagent:local.shape-pin") ==
              {:ok, consent.shape_digest}
+  end
+
+  @tag :shape_outage
+  test "an unreadable dependency closure has no shape, even when the source row was read",
+       %{ctx: ctx} do
+    row = publish!(ctx, "shape-unreadable", "1.0.0")
+    ref = "reagent:local.shape-unreadable"
+    real = Components.impl!()
+    on_exit(fn -> Components.install!(real) end)
+    Components.reset()
+
+    refusal = {:error, {:unavailable, "Components"}}
+    assert ShapeDerivation.dependency_releases(ctx, row, ref) == refusal
+    assert ShapeDerivation.shape_input(ctx, ref) == refusal
+    assert ShapeDerivation.manifest_blocks(ctx, ref) == refusal
+    assert ShapeDerivation.live_digest(ctx, ref) == refusal
+  end
+
+  test "an incomplete closure keeps its empty dependency set and a missing source stays absent",
+       %{ctx: ctx} do
+    row =
+      publish!(ctx, "shape-incomplete", "1.0.0", %{
+        manifest: %{
+          "dependencies" => %{"static" => [%{"ref" => "reagent:local.shape-missing"}]}
+        }
+      })
+
+    assert {:error, {:incomplete, _}} = Components.resolve(ctx, row)
+
+    assert ShapeDerivation.dependency_releases(ctx, row, "reagent:local.shape-incomplete") ==
+             {:ok, []}
+
+    assert ShapeDerivation.shape_input(ctx, "reagent:local.shape-missing") == {:error, :not_found}
   end
 
   test "a new release with an unchanged shape allows and records", %{ctx: ctx} do

@@ -29,12 +29,18 @@ defmodule PrismWeb.VaultLive do
   The needs are read when the form opens, and again on each submit,
   first and resent, just before `vault.create`: a choice no longer
   offered makes nothing, lets a held confirmation go, and the form is
-  drawn again with the list as it now reads. A component list that
-  cannot be read is said as such and offers no create, never as no need.
-  A component whose plan is refused is named, with its plan's own
-  sentence, and the rest are listed; a component list the read may have
-  cut short says so and names the CLI for a key it left out. Only a list
-  read whole that names no such need tells the person to install one.
+  drawn again with the list as it now reads. A component list, or any one
+  component's plan, that cannot be read (the plan's refusal read on its
+  class, `unavailable`) is said as such and offers no create, never as
+  no need. A component whose plan is refused as damage, or for a class
+  the page does not know, is named with its plan's own sentence, and the
+  rest are listed; one the athanor no longer holds by the time its plan
+  is read is left out. A dependency a plan marks unresolved, not installed
+  or stored damaged, is named with the component that needs it, never
+  left out, and a choice it would have offered is never said to be no
+  longer needed. A component list the read may have cut short says so
+  and names the CLI for a key it left out. Only a list read whole that
+  names no such need tells the person to install one.
 
   Every new entry names where its material may go — the destination's
   hosts, and optionally its scheme, port, methods and paths — and whether
@@ -378,7 +384,7 @@ defmodule PrismWeb.VaultLive do
   end
 
   # The create form comes back, drawn from the needs as they now read
-  # (`no_longer_needed/1`).
+  # (`stale_choice/2`).
   def handle_info(:redraw_create_form, socket),
     do: {:noreply, assign(socket, :create_redraw, false)}
 
@@ -521,18 +527,25 @@ defmodule PrismWeb.VaultLive do
   # `%{kind, provider}`, each pair once.
   #
   # `key_needs` is `%{needs, refused, cut}`, or `:unread` when the
-  # component list itself could not be read. A component whose plan is
-  # refused, whatever the refusal, is in `refused` with its plan's own
-  # sentence, so its needs are never left out unsaid; no refusal is read
-  # for its class or its words. `cut` is a list as long as the most one
-  # call answers, which may have left components out.
+  # component list, or any one component's plan, could not be read: an
+  # outage, read on its class (`unavailable`), leaves the list unread
+  # whole, never short of what the unread plan needed. A plan refused as
+  # damage (`corrupt`), or for a class this page does not know, is in
+  # `refused` with its plan's own sentence, so its needs are never left
+  # out unsaid; a component the athanor no longer holds when its plan is
+  # read (`not_found`) is left out, since it no longer needs anything. A
+  # plan whose closure is unresolved, a dependency missing or stored
+  # damaged, keeps its other needs and is in `refused` too, naming that
+  # dependency: its needs are not among the plan's. No refusal is read for
+  # its words. `cut` is a list as long as the most one call answers, which
+  # may have left components out.
   defp fetch_key_needs(socket) do
     case read_key_needs(socket) do
       {:ok, read} ->
         assign(socket, :key_needs, read)
 
       {:error, message} ->
-        Logger.warning("[VaultLive] the components could not be listed: #{message}")
+        Logger.warning("[VaultLive] the keys the components need could not be read: #{message}")
         assign(socket, :key_needs, :unread)
     end
   end
@@ -540,9 +553,8 @@ defmodule PrismWeb.VaultLive do
   defp read_key_needs(socket) do
     with {:ok, rows} <-
            fetch_list(socket, "component/list", :components, %{"limit" => @list_limit}),
-         {:ok, refs} <- name_refs(rows) do
-      {needs, refused} = Enum.reduce(refs, {[], []}, &plan_needs(socket, &1, &2))
-
+         {:ok, refs} <- name_refs(rows),
+         {:ok, needs, refused} <- plans_needs(socket, refs) do
       {:ok,
        %{
          needs: needs |> Enum.uniq() |> Enum.sort_by(&{&1.provider, &1.kind}),
@@ -550,6 +562,17 @@ defmodule PrismWeb.VaultLive do
          cut: length(rows) >= @list_limit
        }}
     end
+  end
+
+  defp plans_needs(socket, refs) do
+    Enum.reduce_while(refs, {:ok, [], []}, fn ref, {:ok, needs, refused} = read ->
+      case plan_needs(socket, ref) do
+        {:needs, own, unresolved} -> {:cont, {:ok, own ++ needs, unresolved ++ refused}}
+        {:refused, entry} -> {:cont, {:ok, needs, [entry | refused]}}
+        :removed -> {:cont, read}
+        {:unread, message} -> {:halt, {:error, message}}
+      end
+    end)
   end
 
   # Each component once, by its name-level ref.
@@ -568,16 +591,22 @@ defmodule PrismWeb.VaultLive do
     end
   end
 
-  defp plan_needs(socket, ref, {needs, refused}) do
+  # One component's plan, read on its refusal's class
+  # (`Grimoire.Error.classify/1`), never its words.
+  defp plan_needs(socket, ref) do
     case call_tool(socket, "profile/plan", %{"ref" => ref}) do
       {:ok, %{} = plan} ->
-        {form_needs(plan) ++ needs, refused}
+        {:needs, form_needs(plan), unresolved_dependency(ref, plan)}
 
       {:ok, other} ->
-        {needs, [unread_plan(ref, {:unexpected_shape, other}) | refused]}
+        {:refused, unread_plan(ref, {:unexpected_shape, other})}
 
       {:error, reason} ->
-        {needs, [unread_plan(ref, reason) | refused]}
+        case Grimoire.Error.classify(reason).class do
+          :unavailable -> {:unread, "#{ref}: #{fmt(reason)}"}
+          :not_found -> :removed
+          _damaged_or_unknown -> {:refused, unread_plan(ref, reason)}
+        end
     end
   end
 
@@ -586,6 +615,31 @@ defmodule PrismWeb.VaultLive do
     Logger.warning("[VaultLive] the keys #{ref} needs could not be read: #{sentence}")
     %{ref: ref, sentence: sentence}
   end
+
+  # A dependency the plan could not resolve (`plan.unresolved`): its needs
+  # are not among the plan's, so the component is named with that
+  # dependency, never left out, and a choice it would have offered is not
+  # read as one no longer needed.
+  defp unresolved_dependency(ref, %{unresolved: %{} = unresolved}) do
+    sentence = unresolved_sentence(unresolved)
+    Logger.warning("[VaultLive] the keys #{ref} needs could not all be read: #{sentence}")
+    [%{ref: ref, sentence: sentence}]
+  end
+
+  defp unresolved_dependency(_ref, _plan), do: []
+
+  defp unresolved_sentence(%{reason: "corrupt_manifest", missing: dep}) when is_binary(dep),
+    do: "its dependency #{dep} is stored damaged"
+
+  defp unresolved_sentence(%{reason: "unresolvable_dependency", missing: dep})
+       when is_binary(dep),
+       do: "its dependency #{dep} is not installed, or its dependencies cannot be read"
+
+  defp unresolved_sentence(%{reason: reason, missing: dep}) when is_binary(dep),
+    do: "its dependency #{dep} cannot be resolved (#{reason})"
+
+  defp unresolved_sentence(%{reason: reason}),
+    do: "its dependencies cannot be resolved (#{reason})"
 
   # The plan's need rows of the kinds this form makes: the component's own
   # and its dependencies'. The `@ingress` row of a manifest declaring no

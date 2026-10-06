@@ -969,6 +969,77 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     end
   end
 
+  describe "a grant over a lender it cannot read" do
+    # The source's revision 1 borrows the dependency's "default" key. An
+    # MCP client sends `profile.grant` to bind the source's own key beside
+    # it, which re-issues the head's selection and so reads the lender as
+    # a commit reads it, answered as `profile.commit` answers it. The
+    # source's grant is compared whole, before and after.
+    setup %{ctx: ctx} do
+      lenders = lenders!(ctx)
+      ref = "reagent:local.sel-source"
+
+      {{:ok, %{profile_id: borrower}}, _} =
+        walk!(ctx, ref, %{selections: [%{dep: @dep, label: "default"}]})
+
+      own = entry!(ctx, "own key", %{"token" => "t"})
+      {:ok, lenders: lenders, lender: lenders.default, borrower: borrower, own: own}
+    end
+
+    defp grant_over_mcp(ctx, borrower, own),
+      do:
+        over_mcp(ctx, %{
+          "action" => "grant",
+          "profile_id" => borrower,
+          "bindings" => [%{"need" => "@ingress", "entry_id" => own.id}],
+          "expected_consent_revision" => 1
+        })
+
+    test "a lender head whose bytes fail their digest is refused as damage; nothing is granted",
+         %{ctx: ctx, lender: lender, borrower: borrower, own: own} do
+      before = grant_state(ctx, borrower)
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
+          blob_digest: "sha256:" <> String.duplicate("0", 64)
+        )
+
+      assert grant_over_mcp(ctx, borrower, own) ==
+               error_response(-33104, damaged_lender(lender))
+
+      assert grant_state(ctx, borrower) == before
+    end
+
+    @tag :capture_log
+    test "a lender head the store cannot answer is refused as an outage; nothing is granted",
+         %{ctx: ctx, lender: lender, borrower: borrower, own: own} do
+      before = grant_state(ctx, borrower)
+      away_after_profile_read!("consents", lender)
+
+      assert grant_over_mcp(ctx, borrower, own) ==
+               error_response(
+                 -33103,
+                 "A profile that lends a key here cannot be read right now — try again."
+               )
+
+      Arca.Repo.query!("ALTER TABLE consents_unavailable RENAME TO consents")
+      assert grant_state(ctx, borrower) == before
+    end
+
+    test "a healthy lender still grants, lending its key beside the source's own",
+         %{ctx: ctx, lenders: lenders, borrower: borrower, own: own} do
+      {head, [{head, 1}]} = grant_state(ctx, borrower)
+      response = grant_over_mcp(ctx, borrower, own)
+
+      refute Map.has_key?(response, "error")
+      refute response["result"]["isError"]
+      assert {new_head, [{^head, 1}, {new_head, 2}]} = grant_state(ctx, borrower)
+
+      home_id = lenders.home_entry.id
+      assert %{entry_id: ^home_id} = edge_vault(ctx, "reagent:local.sel-source")
+    end
+  end
+
   # Revision 2 of `ref`, selecting the dependency's "default" lender,
   # planned and previewed while that lender lends, as the profile tool
   # answers them: the arguments `profile.commit` takes.

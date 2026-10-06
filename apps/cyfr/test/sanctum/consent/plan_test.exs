@@ -759,6 +759,56 @@ defmodule Sanctum.Consent.PlanTest do
     end
   end
 
+  # The installed component facts, answering as they do, except that the
+  # reads named in `{__MODULE__, :unanswered}` answer a store that could
+  # not answer: the closure's resolution the plan reads (`:resolve`), the
+  # verified one the preview, the commit and the grant read
+  # (`:resolve_verified`), and one component's row (`{:get_component,
+  # name}`). A counted read can fail only one reread after earlier facts
+  # succeeded; its atomics counter is shared with MCP's dispatched process.
+  defmodule UnansweredClosure do
+    @moduledoc false
+    @behaviour Sanctum.Consent.Components
+
+    @impl true
+    def resolve(ctx, component),
+      do: answer(:resolve, fn -> real().resolve(ctx, component) end)
+
+    @impl true
+    def resolve_verified(ctx, component),
+      do: answer(:resolve_verified, fn -> real().resolve_verified(ctx, component) end)
+
+    @impl true
+    def get_component(ctx, name, version, publisher, type),
+      do:
+        answer({:get_component, name}, fn ->
+          real().get_component(ctx, name, version, publisher, type)
+        end)
+
+    @impl true
+    def agent_rows(ctx), do: real().agent_rows(ctx)
+
+    @impl true
+    def shipped_nodes(ctx, rows), do: real().shipped_nodes(ctx, rows)
+
+    @impl true
+    def newer_shipped(ctx, row), do: real().newer_shipped(ctx, row)
+
+    defp answer(read, answered) do
+      counted_outage =
+        case :persistent_term.get({__MODULE__, :counted_read}, nil) do
+          {^read, at, counter} -> :atomics.add_get(counter, 1, 1) == at
+          _ -> false
+        end
+
+      if counted_outage or read in :persistent_term.get({__MODULE__, :unanswered}, []),
+        do: {:error, :persistent_term.get({__MODULE__, :reason}, :database_error)},
+        else: answered.()
+    end
+
+    defp real, do: :persistent_term.get({__MODULE__, :real})
+  end
+
   # A provider no shipped preset is, shown to attenuate a refresh
   # (`:sanctum, :scripted_oauth_provider`); its token endpoint answers
   # nothing, since a plan asks it nothing.
@@ -1746,7 +1796,544 @@ defmodule Sanctum.Consent.PlanTest do
     assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
   end
 
+  # `profile` as an MCP client calls it, under a request of its own: the
+  # response the client receives, and the call's one decision as the log
+  # holds it.
+  defp profile_over_mcp(ctx, arguments) do
+    ctx = %{ctx | request_id: Prima.UUID7.request_id()}
+
+    answer =
+      Emissary.MCP.Router.dispatch(ctx, %Prima.MCP.Message{
+        type: :request,
+        id: 1,
+        method: "tools/call",
+        params: %{"name" => "profile", "arguments" => arguments}
+      })
+
+    response =
+      case answer do
+        {:ok, result} -> Prima.MCP.Message.encode_result(1, result)
+        {:error, code, message} -> Prima.MCP.Message.encode_error(1, code, message)
+      end
+
+    {:ok, [decision]} = Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
+    {response, decision}
+  end
+
+  # The sentence of a failed tool result, as a client reads it; any other
+  # answer as it came.
+  defp failed_text(%{
+         "result" => %{"isError" => true, "content" => [%{"type" => "text", "text" => text}]}
+       }),
+       do: text
+
+  defp failed_text(answer), do: answer
+
+  # The component facts with `reads` unanswered (`UnansweredClosure`) until
+  # the installed facts it returns are put back, or the test ends.
+  defp unanswered!(reads, opts \\ []) do
+    real = Sanctum.Consent.Components.impl!()
+    :persistent_term.put({UnansweredClosure, :real}, real)
+    :persistent_term.put({UnansweredClosure, :unanswered}, reads)
+
+    :persistent_term.put(
+      {UnansweredClosure, :reason},
+      Keyword.get(opts, :reason, :database_error)
+    )
+
+    :persistent_term.put({UnansweredClosure, :counted_read}, Keyword.get(opts, :counted_read))
+    Sanctum.Consent.Components.install!(UnansweredClosure)
+
+    on_exit(fn ->
+      Sanctum.Consent.Components.install!(real)
+      :persistent_term.erase({UnansweredClosure, :real})
+      :persistent_term.erase({UnansweredClosure, :unanswered})
+      :persistent_term.erase({UnansweredClosure, :reason})
+      :persistent_term.erase({UnansweredClosure, :counted_read})
+    end)
+
+    real
+  end
+
+  # A walk staged while every store answers, as a client stages one: the
+  # arguments of the commit it would send.
+  defp staged_commit!(ctx, ref) do
+    {:ok, plan} = Sanctum.Providers.Profile.handle(ctx, %{"action" => "plan", "ref" => ref})
+
+    {:ok, preview} =
+      Sanctum.Providers.Profile.handle(ctx, %{
+        "action" => "preview",
+        "decisions" => %{"ref" => ref}
+      })
+
+    %{
+      "action" => "commit",
+      "decisions" => %{"ref" => ref},
+      "plan_token" => plan.plan_token,
+      "proof" => preview.proof,
+      "commit_digest" => preview.commit_digest,
+      "expected_consent_revision" => plan.expected_consent_revision
+    }
+  end
+
+  # A registered component whose stored manifest no longer decodes.
+  defp damage_manifest!(name) do
+    Arca.Repo.query!("UPDATE components SET manifest = '{not json' WHERE name = '#{name}'")
+    Arca.Cache.delete_match(:_)
+  end
+
+  describe "the plan's own refusals" do
+    # Each read the plan makes refuses on its terms, as an MCP client reads
+    # `profile.plan`: the sentence of its class, and that class in the
+    # call's decision. An outage never reads as a component that is not
+    # there, and none of them as an internal error.
+    @refused "reagent:local.plan-refused"
+
+    test "a component the athanor does not hold is not found", %{ctx: ctx} do
+      ref = "reagent:local.plan-never-installed"
+      assert Plan.plan(ctx, %{ref: ref}) == {:error, {:not_found, {:component, ref}}}
+
+      {response, decision} = profile_over_mcp(ctx, %{"action" => "plan", "ref" => ref})
+      assert failed_text(response) == "Component not found: #{ref}"
+      assert %{admission: :admitted, completion: :failed, completion_class: :not_found} = decision
+    end
+
+    @tag :capture_log
+    test "a store the plan reads that cannot answer is that store unavailable", %{ctx: ctx} do
+      publish!(ctx, "plan-refused", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+
+      for {table, store} <- [
+            {"components", "Components"},
+            {"profiles", "Consent profiles"},
+            {"vault_entries", "Vault"},
+            {"vault_defaults", "Vault"}
+          ] do
+        Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+        Arca.Cache.delete_match(:_)
+
+        assert Plan.plan(ctx, %{ref: @refused}) == {:error, {:unavailable, store}}, table
+        {response, decision} = profile_over_mcp(ctx, %{"action" => "plan", "ref" => @refused})
+
+        Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
+        Arca.Cache.delete_match(:_)
+
+        assert failed_text(response) == "#{store} is unavailable — retry shortly", table
+
+        assert %{admission: :admitted, completion: :failed, completion_class: :unavailable} =
+                 decision,
+               table
+      end
+
+      # Whole, the plan answers the need.
+      assert {:ok, %{needs: [%{need: "api_key"}], unresolved: nil}} =
+               Plan.plan(ctx, %{ref: @refused})
+    end
+
+    # Read as none offered, an outage of the instance entries offered to the
+    # person would offer to connect a key over entries that exist.
+    @tag :capture_log
+    test "an outage reading the instance entries offered is that store unavailable, never " <>
+           "nothing offered",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-refused", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+
+      Arca.Repo.query!("ALTER TABLE instance_entries RENAME TO instance_entries_unavailable")
+      answer = Plan.plan(ctx, %{ref: @refused})
+      {response, decision} = profile_over_mcp(ctx, %{"action" => "plan", "ref" => @refused})
+      Arca.Repo.query!("ALTER TABLE instance_entries_unavailable RENAME TO instance_entries")
+
+      assert answer == {:error, {:unavailable, "Instance entries"}}
+      assert failed_text(response) == "Instance entries is unavailable — retry shortly"
+      assert %{completion: :failed, completion_class: :unavailable} = decision
+      assert {:ok, %{needs: [%{need: "api_key"}]}} = Plan.plan(ctx, %{ref: @refused})
+    end
+
+    # The components every verb of the walk reads first
+    # (`Plan.fetch_component/2`): an outage there is the components
+    # unavailable at the preview, the commit and the grant too, never a
+    # component that is not there, and nothing is written.
+    @tag :capture_log
+    test "a components outage refuses preview, commit and grant as the components " <>
+           "unavailable, and nothing is written",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-refused", "1.0.0", %{})
+      commit!(ctx, @refused, %{})
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, @refused)
+
+      # A walk staged while the store answers, for the commit.
+      {:ok, plan} =
+        Sanctum.Providers.Profile.handle(ctx, %{"action" => "plan", "ref" => @refused})
+
+      {:ok, preview} =
+        Sanctum.Providers.Profile.handle(ctx, %{
+          "action" => "preview",
+          "decisions" => %{"ref" => @refused}
+        })
+
+      {:ok, %{revision: revision}} = Sanctum.Consent.head_consent(ctx, profile_id)
+
+      Arca.Repo.query!("ALTER TABLE components RENAME TO components_unavailable")
+      Arca.Cache.delete_match(:_)
+
+      answers = [
+        preview:
+          profile_over_mcp(ctx, %{"action" => "preview", "decisions" => %{"ref" => @refused}}),
+        commit:
+          profile_over_mcp(ctx, %{
+            "action" => "commit",
+            "decisions" => %{"ref" => @refused},
+            "plan_token" => plan.plan_token,
+            "proof" => preview.proof,
+            "commit_digest" => preview.commit_digest,
+            "expected_consent_revision" => plan.expected_consent_revision
+          }),
+        grant:
+          profile_over_mcp(ctx, %{
+            "action" => "grant",
+            "profile_id" => profile_id,
+            "bindings" => [],
+            "expected_consent_revision" => revision
+          })
+      ]
+
+      # What the grant sheet's preview reads, as the console calls it.
+      {:error, sheet} =
+        PrismWeb.Ops.call_tool(ctx, "profile/preview", %{"decisions" => %{"ref" => @refused}})
+
+      Arca.Repo.query!("ALTER TABLE components_unavailable RENAME TO components")
+      Arca.Cache.delete_match(:_)
+
+      for {verb, {response, decision}} <- answers do
+        assert failed_text(response) == "Components is unavailable — retry shortly", "#{verb}"
+
+        assert %{admission: :admitted, completion: :failed, completion_class: :unavailable} =
+                 decision,
+               "#{verb}"
+      end
+
+      assert sheet == {:unavailable, "Components"}
+      assert {:ok, %{revision: ^revision}} = Sanctum.Consent.head_consent(ctx, profile_id)
+
+      # A component never installed keeps its answer at the preview.
+      assert Sanctum.Providers.Profile.handle(ctx, %{
+               "action" => "preview",
+               "decisions" => %{"ref" => "reagent:local.plan-never-installed"}
+             }) == {:error, "component_not_found"}
+    end
+
+    # A closure the store could not answer while it was walked is an
+    # outage, never a closure that does not resolve: read as unresolved,
+    # the sheet would say to install components that exist.
+    @tag :capture_log
+    test "an outage while the closure is walked refuses the plan as the components " <>
+           "unavailable, never unresolved",
+         %{ctx: ctx} do
+      dep = "reagent:local.plan-unanswered-dep"
+      app = "reagent:local.plan-unanswered-app"
+      publish!(ctx, "plan-unanswered-dep", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+
+      publish!(ctx, "plan-unanswered-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      real = unanswered!([:resolve])
+      answer = Plan.plan(ctx, %{ref: app})
+      {response, decision} = profile_over_mcp(ctx, %{"action" => "plan", "ref" => app})
+      Sanctum.Consent.Components.install!(real)
+
+      assert answer == {:error, {:unavailable, "Components"}}
+      assert failed_text(response) == "Components is unavailable — retry shortly"
+      assert %{completion: :failed, completion_class: :unavailable} = decision
+
+      # Answered, the closure resolves, and the dependency's need is named.
+      assert {:ok, %{unresolved: nil, dependency_needs: [%{dep: ^dep}]}} =
+               Plan.plan(ctx, %{ref: app})
+    end
+
+    # The preview, the commit and the grant resolve the closure again, each
+    # for itself (`Sanctum.Consent.Commit`): an outage there is the
+    # components unavailable too, never a closure whose dependencies cannot
+    # be resolved, and nothing is written.
+    @tag :capture_log
+    test "an outage while the preview, the commit or the grant resolves the closure refuses " <>
+           "it as the components unavailable, and nothing is written",
+         %{ctx: ctx} do
+      dep = "reagent:local.plan-verified-dep"
+      app = "reagent:local.plan-verified-app"
+      publish!(ctx, "plan-verified-dep", "1.0.0", %{})
+
+      publish!(ctx, "plan-verified-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      commit!(ctx, app, %{})
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, app)
+      commit_args = staged_commit!(ctx, app)
+      {:ok, %{revision: revision}} = Sanctum.Consent.head_consent(ctx, profile_id)
+
+      real = unanswered!([:resolve_verified])
+
+      answers = [
+        preview: profile_over_mcp(ctx, %{"action" => "preview", "decisions" => %{"ref" => app}}),
+        commit: profile_over_mcp(ctx, commit_args),
+        grant:
+          profile_over_mcp(ctx, %{
+            "action" => "grant",
+            "profile_id" => profile_id,
+            "bindings" => [],
+            "expected_consent_revision" => revision
+          })
+      ]
+
+      # What the grant sheet's preview reads, as the console calls it.
+      {:error, sheet} =
+        PrismWeb.Ops.call_tool(ctx, "profile/preview", %{"decisions" => %{"ref" => app}})
+
+      Sanctum.Consent.Components.install!(real)
+
+      for {verb, {response, decision}} <- answers do
+        assert failed_text(response) == "Components is unavailable — retry shortly", "#{verb}"
+
+        assert %{admission: :admitted, completion: :failed, completion_class: :unavailable} =
+                 decision,
+               "#{verb}"
+      end
+
+      assert sheet == {:unavailable, "Components"}
+      assert {:ok, %{revision: ^revision}} = Sanctum.Consent.head_consent(ctx, profile_id)
+    end
+
+    for shape_read <- [:source, :closure],
+        outage <- [
+          :database_error,
+          :unavailable,
+          :projection_unavailable,
+          :component_facts_unavailable
+        ] do
+      @tag :capture_log
+      @tag :shape_outage
+      @tag shape_read: shape_read, outage: outage
+      test "a #{outage} during the shape's #{shape_read} read refuses every grant verb",
+           %{ctx: ctx, shape_read: shape_read, outage: outage} do
+        app = "reagent:local.plan-shape-outage"
+        publish!(ctx, "plan-shape-outage", "1.0.0", %{})
+        commit!(ctx, app, %{})
+        {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, app)
+        commit_args = staged_commit!(ctx, app)
+        {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+        counter = :atomics.new(1, [])
+
+        {reads, counted_read} =
+          case shape_read do
+            :source -> {[], {{:get_component, "plan-shape-outage"}, 2, counter}}
+            :closure -> {[:resolve], nil}
+          end
+
+        real = unanswered!(reads, reason: outage, counted_read: counted_read)
+
+        for {verb, args} <- [
+              plan: %{"action" => "plan", "ref" => app},
+              preview: %{"action" => "preview", "decisions" => %{"ref" => app}},
+              commit: commit_args,
+              grant: %{
+                "action" => "grant",
+                "profile_id" => profile_id,
+                "bindings" => [],
+                "expected_consent_revision" => head.revision
+              }
+            ] do
+          :atomics.put(counter, 1, 0)
+          {response, decision} = profile_over_mcp(ctx, args)
+
+          assert failed_text(response) == "Components is unavailable — retry shortly", "#{verb}"
+          assert %{completion: :failed, completion_class: :unavailable} = decision, "#{verb}"
+          assert Sanctum.Consent.head_consent(ctx, profile_id) == {:ok, head}, "#{verb}"
+        end
+
+        :atomics.put(counter, 1, 0)
+
+        assert {:error, {:unavailable, "Components"}} =
+                 PrismWeb.Ops.call_tool(ctx, "profile/preview", %{"decisions" => %{"ref" => app}})
+
+        Sanctum.Consent.Components.install!(real)
+        assert Sanctum.Consent.head_consent(ctx, profile_id) == {:ok, head}
+      end
+    end
+
+    # A dependency's row the store cannot answer, the source's own read
+    # whole: the plan, the preview and the commit each walk the closure
+    # through `Plan.closure_rows/3`.
+    @tag :capture_log
+    test "a dependency row the store cannot answer refuses the plan, the preview and the " <>
+           "commit as the components unavailable",
+         %{ctx: ctx} do
+      dep = "reagent:local.plan-row-dep"
+      app = "reagent:local.plan-row-app"
+      publish!(ctx, "plan-row-dep", "1.0.0", %{})
+
+      publish!(ctx, "plan-row-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      commit_args = staged_commit!(ctx, app)
+      real = unanswered!([{:get_component, "plan-row-dep"}])
+
+      answers = [
+        plan: profile_over_mcp(ctx, %{"action" => "plan", "ref" => app}),
+        preview: profile_over_mcp(ctx, %{"action" => "preview", "decisions" => %{"ref" => app}}),
+        commit: profile_over_mcp(ctx, commit_args)
+      ]
+
+      Sanctum.Consent.Components.install!(real)
+
+      for {verb, {response, decision}} <- answers do
+        assert failed_text(response) == "Components is unavailable — retry shortly", "#{verb}"
+        assert %{completion: :failed, completion_class: :unavailable} = decision, "#{verb}"
+      end
+
+      assert {:ok, []} = Sanctum.Consent.profiles(ctx, app)
+    end
+
+    # A head row whose stored columns do not decode is the damaged profile,
+    # as `profile.list` names its head damaged and as a head whose policy
+    # fails its digest is.
+    test "a head row whose stored columns do not decode refuses the plan as the damaged " <>
+           "profile",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-refused", "1.0.0", %{})
+      commit!(ctx, @refused, %{})
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, @refused)
+      :ok = ConsentFixtures.hand_edit_head!(ctx, profile_id, activation: "not json")
+
+      assert Plan.plan(ctx, %{ref: @refused}) == {:error, {:corrupt, {:profile, profile_id}}}
+
+      {response, decision} = profile_over_mcp(ctx, %{"action" => "plan", "ref" => @refused})
+      assert failed_text(response) == "The stored profile is damaged and cannot be used."
+      assert %{completion: :failed, completion_class: :corrupt} = decision
+
+      assert {:ok, %{profiles: [%{head_state: "damaged"}]}} =
+               Sanctum.Providers.Profile.handle(ctx, %{"action" => "list", "ref" => @refused})
+    end
+
+    # The preview and the commit find the profile they would revise
+    # (`Plan.locate_profile/4`), and the grant reads its head
+    # (`Plan.read_head/2`): a head row that does not decode is the damaged
+    # profile at each, and nothing is written over it.
+    test "a head row whose stored columns do not decode refuses the preview, the commit and " <>
+           "the grant as the damaged profile, and nothing is written",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-refused", "1.0.0", %{})
+      commit!(ctx, @refused, %{})
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, @refused)
+      commit_args = staged_commit!(ctx, @refused)
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, %{head_consent_id: head}} = Arca.ProfileStorage.get(actor, profile_id)
+      :ok = ConsentFixtures.hand_edit_head!(ctx, profile_id, activation: "not json")
+
+      answers = [
+        preview:
+          profile_over_mcp(ctx, %{"action" => "preview", "decisions" => %{"ref" => @refused}}),
+        commit: profile_over_mcp(ctx, commit_args),
+        grant:
+          profile_over_mcp(ctx, %{
+            "action" => "grant",
+            "profile_id" => profile_id,
+            "bindings" => [],
+            "expected_consent_revision" => 1
+          })
+      ]
+
+      for {verb, {response, decision}} <- answers do
+        assert failed_text(response) == "The stored profile is damaged and cannot be used.",
+               "#{verb}"
+
+        assert %{completion: :failed, completion_class: :corrupt} = decision, "#{verb}"
+      end
+
+      assert {:ok, %{head_consent_id: ^head}} = Arca.ProfileStorage.get(actor, profile_id)
+    end
+
+    test "a source whose stored manifest does not decode is the damaged manifest",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-refused", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      damage_manifest!("plan-refused")
+
+      assert Plan.plan(ctx, %{ref: @refused}) == {:error, {:corrupt, {:manifest, @refused}}}
+
+      {response, decision} = profile_over_mcp(ctx, %{"action" => "plan", "ref" => @refused})
+      assert failed_text(response) == "The stored manifest is damaged."
+      assert %{admission: :admitted, completion: :failed, completion_class: :corrupt} = decision
+    end
+  end
+
   describe "a closure that cannot be resolved" do
+    # A dependency whose stored manifest does not decode, read as declaring
+    # nothing, would drop its needs out of the plan and the grant: the
+    # closure is unresolved as that damage, and neither a preview nor a
+    # commit is made over it.
+    test "a dependency whose stored manifest is damaged leaves the closure unresolved, and " <>
+           "nothing is previewed or committed over it",
+         %{ctx: ctx} do
+      dep = "reagent:local.plan-damaged-dep"
+      app = "reagent:local.plan-damaged-dep-app"
+      publish!(ctx, "plan-damaged-dep", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+
+      publish!(ctx, "plan-damaged-dep-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      # Whole, the plan names the dependency's need.
+      assert {:ok, %{dependency_needs: [%{dep: ^dep}], unresolved: nil}} =
+               Plan.plan(ctx, %{ref: app})
+
+      # A commit staged while it was whole, as a client stages one.
+      {:ok, staged_plan} =
+        Sanctum.Providers.Profile.handle(ctx, %{"action" => "plan", "ref" => app})
+
+      {:ok, preview} =
+        Sanctum.Providers.Profile.handle(ctx, %{
+          "action" => "preview",
+          "decisions" => %{"ref" => app}
+        })
+
+      damage_manifest!("plan-damaged-dep")
+
+      # Read as declaring nothing, the plan would answer with the
+      # dependency's needs missing and nothing unresolved.
+      {:ok, plan} = Plan.plan(ctx, %{ref: app})
+
+      assert {plan.unresolved, plan.dependency_needs} ==
+               {%{reason: "corrupt_manifest", missing: dep}, []}
+
+      assert plan.rows == []
+
+      {response, _decision} = profile_over_mcp(ctx, %{"action" => "plan", "ref" => app})
+      assert %{"result" => %{"isError" => false, "content" => [%{"text" => text}]}} = response
+
+      assert %{"unresolved" => %{"reason" => "corrupt_manifest", "missing" => ^dep}} =
+               Jason.decode!(text)
+
+      {response, decision} =
+        profile_over_mcp(ctx, %{"action" => "preview", "decisions" => %{"ref" => app}})
+
+      assert failed_text(response) == "The stored manifest is damaged."
+      assert %{completion: :failed, completion_class: :corrupt} = decision
+
+      {response, decision} =
+        profile_over_mcp(ctx, %{
+          "action" => "commit",
+          "decisions" => %{"ref" => app},
+          "plan_token" => staged_plan.plan_token,
+          "proof" => preview.proof,
+          "commit_digest" => preview.commit_digest,
+          "expected_consent_revision" => staged_plan.expected_consent_revision
+        })
+
+      assert failed_text(response) == "The stored manifest is damaged."
+      assert %{completion: :failed, completion_class: :corrupt} = decision
+      assert {:ok, []} = Sanctum.Consent.profiles(ctx, app)
+    end
+
     test "is unresolved, naming what is missing, with no rows and no selection", %{ctx: ctx} do
       publish!(ctx, "plan-orphan", "1.0.0", %{
         "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-absent"}]},
@@ -1778,6 +2365,31 @@ defmodule Sanctum.Consent.PlanTest do
                })
 
       assert message =~ "reagent:local.plan-absent"
+    end
+
+    # With no ask to hold it against, the head is still read as every head's
+    # bytes are: one that fails its digest is the damaged profile, never a
+    # closure merely unresolved over it.
+    test "the head of a closure that does not resolve is still read, and one whose bytes fail " <>
+           "their digest is the damaged profile",
+         %{ctx: ctx} do
+      app = "reagent:local.plan-unheld"
+      absent = "reagent:local.plan-unheld-absent"
+      publish!(ctx, "plan-unheld", "1.0.0", %{})
+      commit!(ctx, app, %{})
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, app)
+
+      # A release that pins a dependency no one installed.
+      publish!(ctx, "plan-unheld", "1.1.0", %{
+        "dependencies" => %{"static" => [%{"ref" => absent}]}
+      })
+
+      assert {:ok, %{unresolved: %{reason: "unresolvable_dependency", missing: ^absent}}} =
+               Plan.plan(ctx, %{ref: app})
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, profile_id, blob_digest: @placeholder_digest)
+
+      assert Plan.plan(ctx, %{ref: app}) == {:error, {:corrupt, {:profile, profile_id}}}
     end
 
     test "a resolved closure is not unresolved", %{ctx: ctx} do
