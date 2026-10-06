@@ -15,7 +15,10 @@ defmodule Compendium.ConsentSetupPlan do
   key, resolved as a run resolves it and its lender's entry held to the
   same check, or reported not ready with the reason it resolves to
   nothing; and an instance entry, read as the person is offered it and
-  held to the digest the person approved.
+  held to the digest the person approved. A bound entry the store could
+  not answer, the athanor's own or an instance entry, is said as one to
+  read again, never as an entry that no longer exists or one the person
+  cannot use.
 
   An attach-only entry bound where the component reads the value itself
   (its edge carries no attach rule: a need of a version published before
@@ -31,6 +34,10 @@ defmodule Compendium.ConsentSetupPlan do
 
   alias Sanctum.Context
   alias Sanctum.VaultReader
+
+  # A bound entry the store could not answer: a retry, never an entry that
+  # no longer exists or one this person cannot use.
+  @entry_unread "the bound vault entry cannot be read right now — try again"
 
   @doc """
   The consent section for a source ref, or `nil` when no profile exists
@@ -268,8 +275,15 @@ defmodule Compendium.ConsentSetupPlan do
   defp check_ref(_ctx, {:instance, id, {:error, {:entry_unavailable, status}}}),
     do: {id, false, "the instance entry is #{status}"}
 
-  defp check_ref(_ctx, {:instance, id, {:error, _refused}}),
-    do: {id, false, "the instance entry cannot be used by you"}
+  defp check_ref(_ctx, {:instance, id, {:error, refused}})
+       when refused in [:denied, :anonymous_denied, :no_person, :component_not_admitted],
+       do: {id, false, "the instance entry cannot be used by you"}
+
+  # Any other refusal is a read that failed (`Sanctum.InstanceEntries.binding/2`
+  # answers the entry and the person in the words above), never an entry
+  # this person cannot use.
+  defp check_ref(_ctx, {:instance, id, {:error, _unread}}),
+    do: {id, false, @entry_unread}
 
   defp check_ref(_ctx, :malformed), do: {nil, false, "the binding names no entry"}
 
@@ -296,6 +310,9 @@ defmodule Compendium.ConsentSetupPlan do
 
       {:error, :not_found} ->
         {entry_id, false, "the bound vault entry no longer exists"}
+
+      {:error, {:unavailable, _what}} ->
+        {entry_id, false, @entry_unread}
     end
   end
 
@@ -342,6 +359,16 @@ defmodule Compendium.ConsentSetupPlan do
 
   defp unresolved(label, {:entry_unavailable, status}),
     do: "the instance entry the #{label} profile lends is #{status}"
+
+  # A lent entry its reader could not read: `Sanctum.InstanceEntries.binding/2`'s
+  # refusals outside its answers about the entry and the person (the
+  # person's standing or the offer the store could not answer), and
+  # `Sanctum.VaultReader.usable/3`'s outage. No other refusal of a
+  # selection is spelled with these terms.
+  defp unresolved(_label, reason) when reason in [:unavailable, :database_error],
+    do: @entry_unread
+
+  defp unresolved(_label, {:unavailable, _what}), do: @entry_unread
 
   defp unresolved(label, _reason), do: "the selection of the #{label} profile resolves to nothing"
 end

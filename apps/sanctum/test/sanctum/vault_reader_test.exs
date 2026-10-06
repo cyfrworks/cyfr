@@ -547,6 +547,29 @@ defmodule Sanctum.VaultReaderTest do
     end
   end
 
+  describe "usable/3" do
+    # A store that cannot answer is not an entry that does not exist: a
+    # consent read through it would tell the person the entry is gone.
+    @tag :capture_log
+    test "a store that cannot answer is unavailable; a row it does not hold is not found",
+         %{ctx: ctx} do
+      {entry, resource} = mint_material_entry(ctx, %{"k" => "v"})
+      usable = fn id -> VaultReader.usable(ctx.athanor_id, id, resource.binding_digest) end
+
+      assert {:ok, %{id: id}} = usable.(entry.id)
+      assert id == entry.id
+      assert usable.("vlt_nonexistent") == {:error, :not_found}
+
+      Arca.Repo.query!("ALTER TABLE vault_entries RENAME TO vault_entries_unavailable")
+
+      assert usable.(entry.id) == {:error, {:unavailable, "Vault"}}
+      assert usable.("vlt_nonexistent") == {:error, {:unavailable, "Vault"}}
+
+      Arca.Repo.query!("ALTER TABLE vault_entries_unavailable RENAME TO vault_entries")
+      assert usable.("vlt_nonexistent") == {:error, :not_found}
+    end
+  end
+
   describe "oauth_token/4 — material" do
     @valid_oauth %{"access_token" => "tok-live", "token_type" => "bearer"}
     @readonly Jason.encode!(["gmail.readonly"])

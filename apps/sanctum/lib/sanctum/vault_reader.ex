@@ -397,12 +397,19 @@ defmodule Sanctum.VaultReader do
   @doc """
   Checks whether an active vault entry’s binding digest matches the
   consent binding, using the same read checks as `load_and_unseal/2`.
+
+  An entry the athanor's store does not hold is `{:error, :not_found}`;
+  one it holds that is not active, or no longer at that digest, is
+  `{:entry_unavailable, name, status}` or `{:binding_mismatch, name}`.
+  A store that could not answer is `{:error, {:unavailable, "Vault"}}`,
+  never an entry that does not exist.
   """
   @spec usable(String.t(), String.t(), String.t()) ::
           {:ok, map()}
           | {:error, :not_found}
           | {:error, {:entry_unavailable, name :: String.t() | nil, status :: String.t()}}
           | {:error, {:binding_mismatch, name :: String.t() | nil}}
+          | {:error, {:unavailable, String.t()}}
   def usable(athanor_id, entry_id, binding_digest) when is_binary(binding_digest) do
     case Arca.VaultStorage.get(tenant_actor(athanor_id), entry_id) do
       {:ok, entry} ->
@@ -417,8 +424,11 @@ defmodule Sanctum.VaultReader do
             {:error, {:binding_mismatch, entry.name}}
         end
 
-      {:error, _} ->
+      {:error, :not_found} ->
         {:error, :not_found}
+
+      {:error, _unanswered} ->
+        {:error, {:unavailable, "Vault"}}
     end
   end
 

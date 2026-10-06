@@ -170,12 +170,24 @@ defmodule Sanctum.Consent.Plan do
 
   A dependency's lenders are read as the loader reads a selection's
   (`Sanctum.Consent.Loader`), keeping a store that cannot answer, a
-  damaged row and an absent one apart: a profile list or a lender's head
-  the store could not answer refuses the plan
-  `{:lender_unavailable, dep}`, and a profile row or a lender's head that
-  does not decode refuses it `{:lender_corrupt, dep, profile_id}`, never a
-  plan with that lender missing. A dependency with no profile, and a
-  profile whose head is absent or binds no usable entry, lends nothing.
+  damaged row and an absent one apart, never a plan with that lender
+  missing:
+
+    * a profile list, a lender's head, or the entry a lender's head binds,
+      that could not be read refuses the plan `{:lender_unavailable, dep}`
+      (for the entry, any refusal of `Sanctum.VaultReader.usable/3` or
+      `Sanctum.InstanceEntries.binding/2` that is not one of the answers
+      below);
+    * a profile row, a lender's head, or a head's policy that does not
+      decode refuses it `{:lender_corrupt, dep, profile_id}`.
+
+  A dependency with no profile lends nothing, and so does a profile whose
+  head is absent, binds no entry on the dependency's ingress, or binds an
+  entry its reader answers is missing (`:not_found`), not usable
+  (`{:entry_unavailable, …}`, `{:binding_mismatch, …}`), rebound, not
+  offered to this person or not theirs to use (`:not_offered`,
+  `:denied`, `:anonymous_denied`, `:no_person`), or of a component its
+  policy does not admit.
   """
   @spec plan(Context.t(), map()) :: {:ok, t()} | {:error, term()}
   def plan(%Context{} = ctx, %{ref: ref} = params) when is_binary(ref) do
@@ -939,13 +951,15 @@ defmodule Sanctum.Consent.Plan do
   end
 
   # Each active owner profile's lending, in profile order, or the first
-  # head that cannot be read.
+  # lender that cannot be read or is damaged.
   defp lenders(ctx, actor, dep, facts, entries) do
     entries
     |> Enum.filter(&match?(%{kind: :owner, status: :active}, &1))
     |> Enum.reduce_while({:ok, []}, fn profile, {:ok, lent} ->
-      case lender_head(actor, dep, profile) do
-        {:ok, head} -> {:cont, {:ok, lent ++ lending(ctx, dep, facts, profile, head)}}
+      with {:ok, head} <- lender_head(actor, dep, profile),
+           {:ok, lends} <- lending(ctx, dep, facts, profile, head) do
+        {:cont, {:ok, lent ++ lends}}
+      else
         :absent -> {:cont, {:ok, lent}}
         {:error, _} = refused -> {:halt, refused}
       end
@@ -965,24 +979,44 @@ defmodule Sanctum.Consent.Plan do
   end
 
   # What a lender's head lends on the dependency's ingress: the entry its
-  # binding names, when this person may use it, or nothing.
+  # binding names, when this person may use it, or nothing. A head whose
+  # policy does not parse is damaged, and a lent entry its reader could
+  # not read is a lender that cannot be read: either refuses the plan,
+  # which would otherwise offer no lender over one that exists. Nothing is
+  # lent only by a head that binds no entry on the ingress, or whose entry
+  # its reader answers is missing, not usable or not this person's.
   defp lending(ctx, dep, facts, profile, head) do
-    with {:ok, blob} <- Prima.Authority.Blob.parse(head.resolved_policy),
-         {:ok, %{vault: %{entry_id: _} = vault}} <- Prima.Authority.Blob.ingress(blob, dep),
-         {:ok, lent} <- lent_entry(ctx, vault, facts) do
-      [
-        %{
-          profile_id: profile.id,
-          label: profile.label,
-          source: lent.source,
-          entry_id: lent.id,
-          entry_name: lent.name,
-          fields: projected(vault.projection, :fields),
-          scopes: projected(vault.projection, :scopes)
-        }
-      ]
+    case Prima.Authority.Blob.parse(head.resolved_policy) do
+      {:ok, blob} -> ingress_lending(ctx, dep, facts, profile, blob)
+      {:error, _undecodable} -> {:error, {:lender_corrupt, dep, profile.id}}
+    end
+  end
+
+  defp ingress_lending(ctx, dep, facts, profile, blob) do
+    with {:ok, %{vault: %{entry_id: _} = vault}} <- Prima.Authority.Blob.ingress(blob, dep) do
+      case lent_entry(ctx, vault, facts) do
+        {:ok, lent} ->
+          {:ok,
+           [
+             %{
+               profile_id: profile.id,
+               label: profile.label,
+               source: lent.source,
+               entry_id: lent.id,
+               entry_name: lent.name,
+               fields: projected(vault.projection, :fields),
+               scopes: projected(vault.projection, :scopes)
+             }
+           ]}
+
+        :absent ->
+          {:ok, []}
+
+        :unread ->
+          {:error, {:lender_unavailable, dep}}
+      end
     else
-      _binds_nothing_usable -> []
+      _no_entry_on_ingress -> {:ok, []}
     end
   end
 
@@ -993,25 +1027,45 @@ defmodule Sanctum.Consent.Plan do
   # digest the lender bound: the athanor's own, or an instance entry as it
   # is offered to the person (`Sanctum.InstanceEntries.binding/2`) whose
   # component policy admits the dependency node, as the commit holds it.
+  # `:absent` is the reader's own answer about the entry (a moved binding
+  # and a component not admitted among them), `:unread` any other refusal.
   defp lent_entry(ctx, %{scope: "instance", entry_id: id, binding_digest: digest}, facts) do
     case Sanctum.InstanceEntries.binding(ctx, id) do
       {:ok, %{binding_digest: ^digest} = view} ->
         if Sanctum.InstanceEntries.admits?(ctx, view, facts),
           do: {:ok, %{source: "instance", id: view.id, name: view.name}},
-          else: {:error, :component_not_admitted}
+          else: :absent
 
       {:ok, _moved} ->
-        {:error, :binding_went_stale}
+        :absent
 
-      {:error, _} = refused ->
-        refused
+      {:error, reason} ->
+        if instance_entry_answer?(reason), do: :absent, else: :unread
     end
   end
 
   defp lent_entry(ctx, %{entry_id: id, binding_digest: digest}, _facts) do
-    with {:ok, entry} <- Sanctum.VaultReader.usable(ctx.athanor_id, id, digest),
-         do: {:ok, %{source: "own", id: entry.id, name: entry.name}}
+    case Sanctum.VaultReader.usable(ctx.athanor_id, id, digest) do
+      {:ok, entry} -> {:ok, %{source: "own", id: entry.id, name: entry.name}}
+      {:error, reason} -> if own_entry_answer?(reason), do: :absent, else: :unread
+    end
   end
+
+  # `Sanctum.VaultReader.usable/3`'s answers about the entry itself: not
+  # held, not active, or no longer at the digest bound.
+  defp own_entry_answer?(:not_found), do: true
+  defp own_entry_answer?({:entry_unavailable, _name, _status}), do: true
+  defp own_entry_answer?({:binding_mismatch, _name}), do: true
+  defp own_entry_answer?(_unread), do: false
+
+  # `Sanctum.InstanceEntries.binding/2`'s answers about the entry and the
+  # person: not offered to them, not theirs to use, or not active.
+  defp instance_entry_answer?(reason)
+       when reason in [:not_offered, :denied, :anonymous_denied, :no_person],
+       do: true
+
+  defp instance_entry_answer?({:entry_unavailable, _status}), do: true
+  defp instance_entry_answer?(_unread), do: false
 
   defp mint_token(ctx, shape_digest, profile_id, expected_revision) do
     bindings =

@@ -1020,6 +1020,42 @@ defmodule Sanctum.Consent.PlanTest do
       on_exit(fn -> :telemetry.detach(handler) end)
     end
 
+    # `table` stops answering once the lender's head is read (its
+    # `consent_vault_refs`, the head's last read), so the entry it binds is
+    # the read refused; every read before it answers.
+    defp away_after_lender_head!(table, head_id) do
+      test = self()
+      handler = "plan-lent-away-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            if self() == test and meta[:source] == "consent_vault_refs" and
+                 head_id in (meta[:params] || []) do
+              :telemetry.detach(handler)
+              Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+    end
+
+    defp head_id!(ctx, profile_id) do
+      {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
+      head.id
+    end
+
+    defp lenders(ctx) do
+      {:ok, %{dependency_needs: [%{dep: @lend_dep, candidates: candidates}]}} =
+        Plan.plan(ctx, %{ref: @lend_app})
+
+      candidates
+    end
+
     test "a dependency with no profile, or a profile with no head, plans with no lenders",
          %{ctx: ctx} do
       lending_closure!(ctx)
@@ -1093,7 +1129,104 @@ defmodule Sanctum.Consent.PlanTest do
       assert {:error, {:lender_corrupt, @lend_dep, ^lender}} = Plan.plan(ctx, %{ref: @lend_app})
       assert_damaged(plan_answer(ctx), lender)
     end
+
+    test "a lender's head whose policy does not parse refuses the plan, naming the profile",
+         %{ctx: ctx} do
+      lending_closure!(ctx)
+      lender = lender!(ctx)
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, lender, resolved_policy: "not a blob")
+
+      assert {:error, {:lender_corrupt, @lend_dep, ^lender}} = Plan.plan(ctx, %{ref: @lend_app})
+      assert_damaged(plan_answer(ctx), lender)
+    end
+
+    @tag :capture_log
+    test "an entry a lender binds that the store cannot answer refuses the plan", %{ctx: ctx} do
+      lending_closure!(ctx)
+      head = head_id!(ctx, lender!(ctx))
+
+      away_after_lender_head!("vault_entries", head)
+      assert {:error, {:lender_unavailable, @lend_dep}} = Plan.plan(ctx, %{ref: @lend_app})
+
+      Arca.Repo.query!("ALTER TABLE vault_entries_unavailable RENAME TO vault_entries")
+      away_after_lender_head!("vault_entries", head)
+      assert_unreadable(plan_answer(ctx))
+    end
+
+    @tag :capture_log
+    test "an instance entry a lender binds that the store cannot answer refuses the plan",
+         %{ctx: ctx} do
+      # An instance entry is bound, and offered, to a person active here.
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      lending_closure!(person)
+      offered = instance!()
+      commit!(person, @lend_dep, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
+      {:ok, [%{id: lender}]} = Sanctum.Consent.profiles(person, @lend_dep)
+
+      assert [%{profile_id: ^lender, source: "instance", entry_id: entry_id}] = lenders(person)
+      assert entry_id == offered.id
+
+      head = head_id!(person, lender)
+      away_after_lender_head!("instance_entries", head)
+
+      assert {:error, {:lender_unavailable, @lend_dep}} =
+               Plan.plan(person, %{ref: @lend_app})
+
+      Arca.Repo.query!("ALTER TABLE instance_entries_unavailable RENAME TO instance_entries")
+      away_after_lender_head!("instance_entries", head)
+      assert_unreadable(plan_answer(person))
+    end
+
+    # The reader's own answers about a lent entry are the entry's state,
+    # not a read that failed: each lends nothing. The lender's profile is
+    # set active again after each move, so its head is read, not skipped.
+    test "a lent entry rebound or revoked lends nothing, its own or an instance entry",
+         %{ctx: ctx} do
+      lending_closure!(ctx)
+      lender = lender!(ctx)
+      [%{entry_id: key}] = lenders(ctx)
+      reactivate = fn -> :ok = Arca.ProfileStorage.set_status(actor(ctx), lender, "active") end
+
+      {:ok, _} = Sanctum.Vault.rebind(ctx, %{id: key, field_names: ["OPENAI_API_KEY", "REGION"]})
+      reactivate.()
+      assert lenders(ctx) == []
+
+      {:ok, _} = Sanctum.Vault.revoke(ctx, key)
+      reactivate.()
+      assert lenders(ctx) == []
+
+      # An instance entry, lent to a person active here.
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      offered = instance!()
+      commit!(person, @lend_dep, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
+      assert [%{source: "instance"}] = lenders(person)
+
+      {:ok, _} =
+        Arca.InstanceEntries.move_binding(
+          Arca.Test.Actor.platform(),
+          offered.id,
+          "sha256:instance",
+          %{
+            destination:
+              ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v2/"],"scheme":"https"}),
+            binding_digest: "sha256:moved"
+          },
+          "needs_consent"
+        )
+
+      reactivate.()
+      assert lenders(person) == []
+
+      {:ok, _} =
+        Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), offered.id, "needs_consent")
+
+      reactivate.()
+      assert lenders(person) == []
+    end
   end
+
+  defp actor(ctx), do: Sanctum.Context.actor(ctx)
 
   # `profile.plan`'s answer over a lender the store could not answer: the
   # typed reason, read in its class's sentence.
