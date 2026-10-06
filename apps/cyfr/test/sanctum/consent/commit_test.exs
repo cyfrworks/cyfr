@@ -195,6 +195,60 @@ defmodule Sanctum.Consent.CommitTest do
     head
   end
 
+  # A head's narrowing of `ref`'s own calls read without the clamp to the
+  # ask, as `Commit.grant/3` read it before the one definition clamped:
+  # every egress and storage field and every limit the head grants
+  # differently from the ask, named as the head grants it.
+  defp unclamped_narrowing(head_policy, asked_policy, ref) do
+    {:ok, %{"nodes" => head}} = Jason.decode(head_policy)
+    {:ok, %{"nodes" => asked}} = Jason.decode(asked_policy)
+    held = Sanctum.Consent.BlobBuilder.node_resources(head, ref, ref)
+    ask = Sanctum.Consent.BlobBuilder.node_resources(asked, ref, ref)
+
+    kinds =
+      for {kind, fields} <- [
+            {"egress", ~w(domains methods schemes private_ips)},
+            {"storage", ~w(paths actions)}
+          ],
+          differing =
+            for(
+              field <- fields,
+              (held[kind][field] || []) != (ask[kind][field] || []),
+              into: %{},
+              do: {field, held[kind][field] || []}
+            ),
+          differing != %{},
+          into: %{},
+          do: {kind, differing}
+
+    limits =
+      for {field, value} <- head[ref]["limits"],
+          value != asked[ref]["limits"][field],
+          into: %{},
+          do: {field, value}
+
+    record = if limits == %{}, do: kinds, else: Map.put(kinds, "limits", limits)
+    %{ref => record}
+  end
+
+  # What the profile's head grants `ref`'s own calls, of every narrowable
+  # kind: its ingress's egress, storage and tools, and its limits.
+  defp granted(ctx, profile_id, ref) do
+    {:ok, blob} = Jason.decode(head!(ctx, profile_id).resolved_policy)
+    ingress = blob["nodes"][ref]["edges"]["@ingress"]
+    limits = blob["nodes"][ref]["limits"]
+
+    %{
+      egress: ingress["egress"],
+      methods: ingress["egress"]["methods"],
+      storage: ingress["storage"],
+      actions: ingress["storage"]["actions"],
+      tools: ingress["tools"],
+      limits: limits,
+      timeout: limits["timeout"]
+    }
+  end
+
   describe "a binding" do
     test "names its scope, its entry's destination, its need's rule and its own key, and its row the rest",
          %{ctx: ctx} do
@@ -622,6 +676,81 @@ defmodule Sanctum.Consent.CommitTest do
       assert head.admitted_origins == [:interactive]
       {:ok, blob} = Jason.decode(head.resolved_policy)
       assert blob["nodes"][ref]["edges"]["@ingress"]["egress"]["domains"] == []
+    end
+
+    # What a re-grant keeps has one definition (`Plan.head_narrowing/4`): the
+    # plan answers it, the grant sheet commits it as its decisions'
+    # `subset`, and `Commit.grant/3` re-issues it. Each path, run over the
+    # same head and the same ask, writes the same grant.
+    test "the plan's head narrowing is what a grant keeps, and what the sheet's commit keeps",
+         %{ctx: ctx} do
+      publish!(ctx, "commit-grant-agree", "1.0.0", %{
+        "caps" => %{
+          "egress" => %{"domains" => ["api.one.example"], "methods" => ["GET", "POST"]},
+          "storage" => %{"paths" => ["data/"], "actions" => ["read", "write"]},
+          "limits" => %{"timeout" => "1m"}
+        }
+      })
+
+      ref = "reagent:local.commit-grant-agree"
+      entry = entry!(ctx)
+      binding = [%{need: "@ingress", entry_id: entry.id}]
+
+      narrowing = %{
+        ref => %{
+          "egress" => %{"methods" => ["GET"]},
+          "storage" => %{"actions" => ["read"]},
+          "limits" => %{"timeout" => "30s"}
+        }
+      }
+
+      {:ok, %{profile_id: profile_id, revision: 1}} = walk!(ctx, ref, %{subset: narrowing})
+
+      # The plan answers the head's narrowing.
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      assert plan.head_narrowing == narrowing
+
+      # The sheet's commit: its first decisions carry the plan's narrowing.
+      {:ok, %{revision: 2}} =
+        walk!(ctx, ref, %{bindings: binding, subset: plan.head_narrowing})
+
+      by_sheet = granted(ctx, profile_id, ref)
+
+      # The simple grant over that head and the same ask.
+      assert {:ok, %{revision: 3}} =
+               Commit.grant(ctx, %{
+                 profile_id: profile_id,
+                 bindings: binding,
+                 expected_consent_revision: 2
+               })
+
+      by_grant = granted(ctx, profile_id, ref)
+
+      assert by_sheet == by_grant
+      assert by_grant.methods == ["GET"] and by_grant.actions == ["read"]
+      assert by_grant.timeout == "30s"
+
+      # Each reads the one narrowing back.
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      assert plan.head_narrowing == narrowing
+
+      narrowed = head!(ctx, profile_id)
+
+      # A sheet given another narrowing than the plan's (none, as it opened
+      # before it read the head's) writes another grant: the check above
+      # tells the two apart.
+      {:ok, %{revision: 4}} = walk!(ctx, ref, %{bindings: binding})
+      refute granted(ctx, profile_id, ref) == by_grant
+
+      # The shape has not moved, so the clamp to the ask is the identity:
+      # the one definition answers the head's narrowing exactly as the
+      # unclamped reading does, the ask being the unnarrowed revision's.
+      asked_policy = head!(ctx, profile_id).resolved_policy
+
+      assert Plan.head_narrowing(profile_id, narrowed, ref, asked_policy) ==
+               {:ok, unclamped_narrowing(narrowed.resolved_policy, asked_policy, ref)}
+
+      assert unclamped_narrowing(narrowed.resolved_policy, asked_policy, ref) == narrowing
     end
 
     test "a head no narrowing touched is re-issued whole", %{ctx: ctx} do

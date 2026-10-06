@@ -38,10 +38,21 @@ defmodule Sanctum.Consent.Plan do
   `label`) from its `consent_vault_refs` row (`consumed` when a root has
   used a `once` binding), so a re-grant reopens on what the head holds,
   never wider, and a surface can offer to grant a consumed `once` binding
-  again; and, when the component's shape moved since the head,
-  `shape_diff`, the head as the person narrowed it against the live ask
-  (`Sanctum.Consent.ShapeDiff`). With no head, `head_origins` is nil and
-  `head_bindings` and `shape_diff` are empty.
+  again; `head_narrowing`, per consent-graph node the narrowing the head
+  holds against the ask as it stands, in the decisions' `subset` shape
+  (`head_narrowing/4`, the one definition `Sanctum.Consent.Commit.grant/3`
+  re-issues too), so a re-grant opens as narrow as its head, and a method
+  newly asked for, or a dependency a release added, opens off; and, when
+  the component's shape moved since the head, `shape_diff`, the head as
+  the person narrowed it against the live ask, every node of the closure,
+  each entry naming its node and whether the head never held it or the
+  ask no longer names it (`Sanctum.Consent.ShapeDiff`, read against the
+  ask the narrowing is). With no head, `head_origins` is nil and
+  `head_bindings`, `head_narrowing` and `shape_diff` are empty. A plan
+  reads the head once, so all it says of the head and the revision it
+  expects are of one read. A head whose policy fails its digest or does
+  not parse refuses the plan `{:corrupt, {:profile, profile_id}}`: its
+  narrowing is unknown.
 
   `candidates` are the athanor's active entries. An OAuth candidate answers
   `narrowable`, whether a token for fewer of its scopes can be dispensed,
@@ -144,7 +155,8 @@ defmodule Sanctum.Consent.Plan do
           origins: [String.t(), ...],
           head_origins: [String.t(), ...] | nil,
           head_bindings: [head_binding()],
-          shape_diff: [map()],
+          head_narrowing: map(),
+          shape_diff: [Sanctum.Consent.ShapeDiff.entry()],
           candidates: [map()],
           tool_server_candidates: [Sanctum.Grimoire.tool_server_candidate()],
           warnings: [String.t()],
@@ -201,7 +213,9 @@ defmodule Sanctum.Consent.Plan do
          {:ok, component} <- fetch_component(ctx, source_ref),
          {:ok, shape_input} <- ShapeDerivation.shape_input(ctx, source_ref),
          {:ok, shape_digest} <- ShapeDigest.compute(shape_input),
-         {:ok, profile_id, expected_revision} <- locate_profile(ctx, source_ref, label, kind),
+         {:ok, profile_id, expected_revision, head} <-
+           locate_head(ctx, source_ref, label, kind),
+         stored = if(head, do: {:ok, head, profile_id}, else: :none),
          manifest = manifest(component, source_ref),
          {:ok, resources, limits} <-
            Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest),
@@ -218,9 +232,11 @@ defmodule Sanctum.Consent.Plan do
            ),
          {:ok, {dependency_needs, provided_notes}} <-
            dependency_needs(ctx, sources, closure, closure_rows),
+         {:ok, asked} <- held_ask(ctx, stored, source_ref, {closure, closure_rows}),
+         {:ok, head_narrowing} <- held_narrowing(stored, source_ref, asked),
          {:ok, plan_token} <-
            mint_token(ctx, shape_digest, profile_id, expected_revision) do
-      head = head_facts(ctx, profile_id, shape_digest, source_ref)
+      head = head_facts(ctx, stored, shape_digest, {source_ref, asked})
 
       {:ok,
        %{
@@ -238,6 +254,7 @@ defmodule Sanctum.Consent.Plan do
          origins: Prima.Origin.to_wire_list(@default_origins),
          head_origins: head.origins,
          head_bindings: head.bindings,
+         head_narrowing: head_narrowing,
          shape_diff: head.shape_diff,
          candidates: candidates,
          tool_server_candidates: Sanctum.Grimoire.tool_server_candidates(ctx),
@@ -254,15 +271,23 @@ defmodule Sanctum.Consent.Plan do
   # revise, and the revision the caller must expect. A needs_consent
   # profile is a first-class target — re-consent is how it unblocks.
   def locate_profile(ctx, source_ref, label, kind) do
+    with {:ok, profile_id, revision, _head} <- locate_head(ctx, source_ref, label, kind),
+         do: {:ok, profile_id, revision}
+  end
+
+  # `locate_profile/4` with the head it read, nil for no profile or no
+  # head: a plan reads the profile's head this once, so what it says of
+  # the head and the revision it expects are of the same read.
+  defp locate_head(ctx, source_ref, label, kind) do
     with {:ok, profiles} <- Arca.ConsentStorage.profiles(Context.actor(ctx), source_ref) do
       case Enum.find(profiles, fn p -> p.label == label and p.kind == kind end) do
         nil ->
-          {:ok, nil, 0}
+          {:ok, nil, 0, nil}
 
         profile ->
           case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id) do
-            {:ok, consent} -> {:ok, profile.id, consent.revision}
-            {:error, :no_head} -> {:ok, profile.id, 0}
+            {:ok, consent} -> {:ok, profile.id, consent.revision, consent}
+            {:error, :no_head} -> {:ok, profile.id, 0, nil}
             {:error, reason} -> {:error, reason}
           end
       end
@@ -643,29 +668,293 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
-  # What the profile's head holds: the origins it admits, and what changed
-  # against it when the shape moved. A head that cannot be read answers as
-  # none, which the commit's own revision check still fences.
-  defp head_facts(_ctx, nil, _shape_digest, _source_ref),
+  # What the profile's head holds: the origins it admits, its bindings,
+  # and what changed against it when the shape moved. A first grant, or a
+  # profile with no head, holds none.
+  defp head_facts(_ctx, :none, _shape_digest, _ask),
     do: %{origins: nil, bindings: [], shape_diff: []}
 
-  defp head_facts(ctx, profile_id, shape_digest, source_ref) do
-    case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id) do
-      {:ok, head} ->
-        %{
-          origins: Prima.Origin.to_wire_list(head.admitted_origins),
-          bindings: Enum.map(head.vault_refs, &head_binding/1),
-          shape_diff:
-            if(head.shape_digest == shape_digest,
-              do: [],
-              else: Sanctum.Consent.ShapeDiff.compute(ctx, source_ref, head.resolved_policy)
-            )
-        }
+  defp head_facts(ctx, {:ok, head, _profile_id}, shape_digest, {source_ref, asked}) do
+    %{
+      origins: Prima.Origin.to_wire_list(head.admitted_origins),
+      bindings: Enum.map(head.vault_refs, &head_binding/1),
+      shape_diff:
+        if(head.shape_digest == shape_digest,
+          do: [],
+          else: Sanctum.Consent.ShapeDiff.compute(ctx, source_ref, head.resolved_policy, asked)
+        )
+    }
+  end
 
-      {:error, _no_head} ->
-        %{origins: nil, bindings: [], shape_diff: []}
+  @doc """
+  The narrowing a stored head holds against the ask as it stands, in the
+  decisions' `subset` shape: per consent-graph node the ask names, every
+  field of a narrowable kind whose grant on the head differs from the
+  ask, named as the head grants it within the ask — the egress domains,
+  methods, schemes and private ranges, the storage paths and actions, the
+  tools, and each limit (a rate limit by the fields that differ). A head
+  no narrowing touched answers `%{}`.
+
+  A narrowing grants part of the ask, so it is the head's grant
+  intersected with what the ask still names, each value read as the
+  commit reads a narrowing (`BlobBuilder.narrow/5`, domains and paths
+  included): what the head granted that the ask no longer names opens as
+  nothing, and a field that, so kept, equals the ask names nothing. Each
+  limit is the narrower of the head's and the ask's: the ask's where it
+  is now lower, and for a rate limit, which bounds a burst and a rate at
+  once, the overlap, the smaller count over the longer window. Where the
+  ask has not moved since the head, everything the head grants lies
+  inside it, so the head's grant is named whole.
+
+  A node the head never held, a dependency a release added, grants none
+  of what it asks: each narrowable field the ask names is named empty, so
+  it is granted only as the person grants it. Its limits, credentials,
+  tool servers and declarations are granted whole, as for any node.
+
+  `head` is the stored head revision, read as every head's bytes are
+  read (`Sanctum.Consent.Loader.head_blob/1`: its policy hashes to its
+  stored digest and parses as a blob), and `asked_blob` the ask's blob,
+  built as a commit builds it (`BlobBuilder.build/5` and
+  `BlobBuilder.encode/1`), as JSON. A head that fails that read leaves its
+  narrowing unknown, so nothing may be re-issued over it:
+  `{:error, {:corrupt, {:profile, profile_id}}}`.
+
+  The one definition of what a re-grant keeps: a plan answers it as
+  `head_narrowing`, which the grant sheet opens on, and
+  `Sanctum.Consent.Commit.grant/3` re-issues it.
+  """
+  @spec head_narrowing(String.t(), map(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, {:corrupt, {:profile, String.t()}}}
+  def head_narrowing(profile_id, head, source_ref, asked_blob) do
+    with {:ok, _blob} <- Sanctum.Consent.Loader.head_blob(head),
+         {:ok, head_nodes} <- decoded_nodes(head.resolved_policy),
+         {:ok, asked_nodes} <- decoded_nodes(asked_blob) do
+      held =
+        for {node_key, head_node} <- head_nodes,
+            Map.has_key?(asked_nodes, node_key),
+            record =
+              node_narrowing(
+                node_key,
+                {BlobBuilder.node_resources(head_nodes, source_ref, node_key),
+                 head_node["limits"]},
+                {BlobBuilder.node_resources(asked_nodes, source_ref, node_key),
+                 asked_nodes[node_key]["limits"]}
+              ),
+            record != %{},
+            into: %{},
+            do: {node_key, record}
+
+      unheld =
+        for {node_key, _asked_node} <- asked_nodes,
+            not Map.has_key?(head_nodes, node_key),
+            record = granting_none(BlobBuilder.node_resources(asked_nodes, source_ref, node_key)),
+            record != %{},
+            into: %{},
+            do: {node_key, record}
+
+      {:ok, Map.merge(held, unheld)}
+    else
+      _unreadable -> {:error, {:corrupt, {:profile, profile_id}}}
     end
   end
+
+  defp decoded_nodes(json) do
+    case Jason.decode(json) do
+      {:ok, %{"nodes" => nodes}} when is_map(nodes) -> {:ok, nodes}
+      _ -> :error
+    end
+  end
+
+  # A node the head never held, one a release added to the closure: it
+  # opens granting none of what it asks, each narrowable field the ask
+  # names set to the empty set, which a narrowing reads as granting none,
+  # so it is granted only as the person ticks it. Its limits bound it as
+  # asked: they grant nothing.
+  defp granting_none(asked) do
+    sets =
+      for {kind, fields} <- [
+            {"egress", ~w(domains methods schemes private_ips)},
+            {"storage", ~w(paths actions)}
+          ],
+          asked_kind = (asked && asked[kind]) || %{},
+          record =
+            for(
+              field <- fields,
+              Map.get(asked_kind, field, []) != [],
+              into: %{},
+              do: {field, []}
+            ),
+          record != %{},
+          into: %{},
+          do: {kind, record}
+
+    if ((asked && asked["tools"]) || []) != [],
+      do: Map.put(sets, "tools", []),
+      else: sets
+  end
+
+  # The head's grant of one node within the ask, kind by kind: a narrowing
+  # grants part of the ask, so what the head grants and the ask no longer
+  # names opens as nothing, and a field that, kept, equals the ask narrows
+  # nothing. Whether a value lies inside the ask is the narrowing's own
+  # reading (`asked?/3`). Where the ask has not moved, everything the head
+  # grants lies inside it, and the head's grant is named whole.
+  defp node_narrowing(node_key, {head, head_limits}, {asked, asked_limits}) do
+    %{}
+    |> put_differing(
+      "egress",
+      fields_differing(node_key, head, asked, "egress", ~w(domains methods schemes private_ips))
+    )
+    |> put_differing(
+      "storage",
+      fields_differing(node_key, head, asked, "storage", ~w(paths actions))
+    )
+    |> put_differing("tools", tools_differing(node_key, head, asked))
+    |> put_differing(
+      "limits",
+      limits_differing(node_key, head_limits || %{}, asked_limits || %{})
+    )
+  end
+
+  defp fields_differing(node_key, head, asked, kind, fields) do
+    head_kind = (head && head[kind]) || %{}
+    asked_kind = (asked && asked[kind]) || %{}
+
+    for field <- fields,
+        kept =
+          Enum.filter(
+            Map.get(head_kind, field, []),
+            &asked?(node_key, {asked, nil}, %{kind => %{field => [&1]}})
+          ),
+        kept != Map.get(asked_kind, field, []),
+        into: %{},
+        do: {field, kept}
+  end
+
+  defp tools_differing(node_key, head, asked) do
+    kept =
+      Enum.filter(
+        (head && head["tools"]) || [],
+        &asked?(node_key, {asked, nil}, %{"tools" => [&1]})
+      )
+
+    if kept != ((asked && asked["tools"]) || []), do: kept
+  end
+
+  # The head's limits that differ from the ask, each the narrower of the
+  # head's and the ask's, taken together as the commit took them when they
+  # all lie inside the ask. A limit is checked field by field
+  # (`Prima.Limits.new/1` holds no field to another), so one the ask does
+  # not hold is above it: the ask's is the narrower, and it names nothing.
+  # A rate limit bounds two things at once, so its narrower is the overlap
+  # (`rate_overlap/2`), never the ask's, which may be faster or allow a
+  # larger burst.
+  defp limits_differing(node_key, head_limits, asked_limits) do
+    differing =
+      for {field, value} <- head_limits,
+          value != asked_limits[field],
+          into: %{},
+          do: {field, value}
+
+    within =
+      if asked?(node_key, {nil, asked_limits}, %{"limits" => differing}),
+        do: differing,
+        else:
+          for(
+            {field, value} <- differing,
+            narrower = narrower_limit(node_key, asked_limits, field, value),
+            narrower != asked_limits[field],
+            into: %{},
+            do: {field, narrower}
+          )
+
+    for {field, value} <- within, into: %{} do
+      case {value, asked_limits[field]} do
+        {%{} = rate, %{} = asked_rate} ->
+          {field, for({k, v} <- rate, v != asked_rate[k], into: %{}, do: {k, v})}
+
+        _differs ->
+          {field, value}
+      end
+    end
+  end
+
+  # The narrower of the head's limit and the ask's: the head's when it lies
+  # inside the ask, else the ask's, or, for a rate limit, the overlap.
+  defp narrower_limit(node_key, asked_limits, field, value) do
+    cond do
+      asked?(node_key, {nil, asked_limits}, %{"limits" => %{field => value}}) -> value
+      field == "rate_limit" -> rate_overlap(value, asked_limits[field])
+      true -> asked_limits[field]
+    end
+  end
+
+  # A rate limit no wider than either: the smaller burst over the longer
+  # window, which allows no larger a burst and no faster a rate than the
+  # head or the ask. Unreadable, the ask's stands, as it would at a run.
+  defp rate_overlap(%{} = head, %{} = asked) do
+    head = Map.merge(asked, head)
+
+    with requests when is_integer(requests) <- min_integer(head["requests"], asked["requests"]),
+         {:ok, head_ms} <- Prima.Limits.parse_duration(head["window"]),
+         {:ok, asked_ms} <- Prima.Limits.parse_duration(asked["window"]) do
+      window = if head_ms >= asked_ms, do: head["window"], else: asked["window"]
+      %{"requests" => requests, "window" => window}
+    else
+      _unreadable -> asked
+    end
+  end
+
+  defp rate_overlap(_head, asked), do: asked
+
+  defp min_integer(a, b) when is_integer(a) and is_integer(b), do: min(a, b)
+  defp min_integer(_a, _b), do: nil
+
+  # Whether a narrowing lies inside the ask, as the commit holds it
+  # (`BlobBuilder.narrow/5`), against the ask alone: an empty ceiling map
+  # bounds nothing, so a ceiling lowered since the head was granted never
+  # drops what the head holds.
+  defp asked?(node_key, {asked, asked_limits}, subset),
+    do: match?({:ok, _, _, _}, BlobBuilder.narrow(node_key, asked, asked_limits, subset, %{}))
+
+  defp put_differing(record, _kind, nil), do: record
+  defp put_differing(record, _kind, empty) when empty == %{}, do: record
+  defp put_differing(record, kind, value), do: Map.put(record, kind, value)
+
+  # The ask a head is held against, built once for what a plan says of the
+  # head: none for a first grant, which holds nothing against it.
+  defp held_ask(_ctx, :none, _source_ref, _closure), do: {:ok, nil}
+  defp held_ask(ctx, {:ok, _head, _id}, source_ref, closure), do: ask(ctx, source_ref, closure)
+
+  @doc false
+  # The ask of `source_ref`'s closure as it resolves now, built as a commit
+  # builds it with nothing narrowed (`BlobBuilder.build/5`,
+  # `BlobBuilder.encode/1`), as JSON: what a head's narrowing and the shape
+  # diff (`Sanctum.Consent.ShapeDiff`) are read against. `{:ok, nil}` for a
+  # closure that does not resolve, which has no ask to hold a head against.
+  @spec asked_blob(Context.t(), String.t()) :: {:ok, String.t() | nil} | {:error, term()}
+  def asked_blob(%Context{} = ctx, source_ref) do
+    with {:ok, component} <- fetch_component(ctx, source_ref),
+         do: ask(ctx, source_ref, closure(ctx, component))
+  end
+
+  defp ask(_ctx, _source_ref, {{:unresolved, _}, _rows}), do: {:ok, nil}
+
+  defp ask(ctx, source_ref, {{:ok, graph}, rows}) do
+    with {:ok, nodes} <-
+           BlobBuilder.build(ctx, graph, source_ref, fn _, _, _ -> nil end, rows: rows),
+         do: BlobBuilder.encode(nodes)
+  end
+
+  # What the head's grant narrows of the ask as it stands
+  # (`head_narrowing/4`): the narrowing a re-grant opens on. A first
+  # grant keeps none, nor does a closure that does not resolve, which has
+  # no ask to hold the head against and offers nothing to commit.
+  defp held_narrowing(:none, _source_ref, _asked), do: {:ok, %{}}
+  defp held_narrowing({:ok, _head, _id}, _source_ref, nil), do: {:ok, %{}}
+
+  defp held_narrowing({:ok, head, profile_id}, source_ref, asked),
+    do: head_narrowing(profile_id, head, source_ref, asked)
 
   # A head row as a re-grant reopens it: its key, what it binds (the
   # athanor's entry, the instance entry or the lending profile's label,

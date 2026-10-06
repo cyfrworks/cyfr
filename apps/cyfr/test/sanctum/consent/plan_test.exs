@@ -23,6 +23,54 @@ defmodule Sanctum.Consent.PlanTest do
   # The plan binds no commit digest; decoding its rows as a preview needs one.
   @placeholder_digest "sha256:" <> String.duplicate("0", 64)
 
+  # The installed catalog, answering as it does, that runs `fun` once at the
+  # `at`th catalog read the caller of `run/3` makes: state moving at a
+  # chosen point inside one call.
+  defmodule RacingGrimoire do
+    @moduledoc false
+    @behaviour Sanctum.Grimoire
+
+    def run(at, fun, call) do
+      Process.put(__MODULE__, {0, at, fun})
+
+      try do
+        answer = call.()
+        {reads, _at, _fun} = Process.get(__MODULE__)
+        {answer, reads}
+      after
+        Process.delete(__MODULE__)
+      end
+    end
+
+    @impl true
+    def tool_actions do
+      case Process.get(__MODULE__) do
+        {reads, at, fun} ->
+          Process.put(__MODULE__, {reads + 1, at, fun})
+          if reads + 1 == at, do: fun.()
+
+        nil ->
+          :ok
+      end
+
+      real().tool_actions()
+    end
+
+    @impl true
+    def action_declaration(name), do: real().action_declaration(name)
+
+    @impl true
+    def providers_loaded, do: real().providers_loaded()
+
+    @impl true
+    def tool_server_candidates(ctx), do: real().tool_server_candidates(ctx)
+
+    @impl true
+    def tool_server_candidate(ctx, name), do: real().tool_server_candidate(ctx, name)
+
+    defp real, do: :persistent_term.get({__MODULE__, :real})
+  end
+
   setup tags do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
@@ -192,6 +240,39 @@ defmodule Sanctum.Consent.PlanTest do
     end
   end
 
+  # `profile.plan` as an MCP client calls it, under a request of its own:
+  # the response the client receives (the router's answer encoded as
+  # `Emissary.Web.MCPController` encodes it).
+  defp plan_over_mcp(ctx, ref) do
+    ctx = %{ctx | request_id: Prima.UUID7.request_id()}
+
+    answer =
+      Emissary.MCP.Router.dispatch(ctx, %Prima.MCP.Message{
+        type: :request,
+        id: 1,
+        method: "tools/call",
+        params: %{"name" => "profile", "arguments" => %{"action" => "plan", "ref" => ref}}
+      })
+
+    case answer do
+      {:ok, result} -> Prima.MCP.Message.encode_result(1, result)
+      {:error, code, message} -> Prima.MCP.Message.encode_error(1, code, message)
+    end
+  end
+
+  # What the head of `ref`'s profile grants `node`: its resources, as the
+  # node's edge in the stored policy grants them, and its limits.
+  defp held(ctx, ref, node) do
+    {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, ref)
+    {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+    %{"nodes" => nodes} = Jason.decode!(head.resolved_policy)
+
+    %{
+      resources: Sanctum.Consent.BlobBuilder.node_resources(nodes, ref, node),
+      limits: get_in(nodes, [node, "limits"])
+    }
+  end
+
   defp commit!(ctx, ref, over) do
     {:ok, plan} = Plan.plan(ctx, %{ref: ref})
     decisions = Map.merge(%{ref: ref}, over)
@@ -213,6 +294,406 @@ defmodule Sanctum.Consent.PlanTest do
       {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-first"})
       assert plan.head_origins == nil
       assert plan.shape_diff == []
+      assert plan.head_narrowing == %{}
+    end
+
+    # What a re-grant keeps (`Plan.head_narrowing/4`): the head's narrowing
+    # against the ask as it stands, which the grant sheet opens on.
+    test "a re-grant answers the narrowing its head holds, and a method newly asked for " <>
+           "falls outside it",
+         %{ctx: ctx} do
+      ref = "reagent:local.plan-narrowed"
+
+      ask = fn methods ->
+        %{"caps" => %{"egress" => %{"domains" => ["api.narrowed.example"], "methods" => methods}}}
+      end
+
+      publish!(ctx, "plan-narrowed", "1.0.0", ask.(["GET", "POST"]))
+      get_only = %{ref => %{"egress" => %{"methods" => ["GET"]}}}
+
+      # A head no narrowing touched holds none.
+      commit!(ctx, ref, %{})
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      assert plan.head_narrowing == %{}
+
+      commit!(ctx, ref, %{subset: get_only})
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      assert plan.head_narrowing == get_only
+
+      # The profile tool carries it, to the console and to a client.
+      assert {:ok, %{head_narrowing: ^get_only}} =
+               Sanctum.Providers.Profile.handle(ctx, %{"action" => "plan", "ref" => ref})
+
+      assert %{"result" => %{"isError" => false, "content" => [%{"text" => text}]}} =
+               plan_over_mcp(ctx, ref)
+
+      assert %{"head_narrowing" => ^get_only} = Jason.decode!(text)
+
+      # A release asking for PUT too: the head never granted it, so it lies
+      # outside the narrowing, which names the methods the head grants.
+      publish!(ctx, "plan-narrowed", "1.1.0", ask.(["GET", "POST", "PUT"]))
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      assert plan.head_narrowing == get_only
+    end
+
+    # A stored policy that does not decode leaves the head's narrowing
+    # unknown: planned as none, a re-grant would open wider than its head.
+    test "a stored policy that cannot be read refuses the plan as the damaged profile it is",
+         %{ctx: ctx} do
+      ref = "reagent:local.plan-unread-policy"
+      publish!(ctx, "plan-unread-policy", "1.0.0", %{})
+      commit!(ctx, ref, %{})
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, ref)
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, profile_id, resolved_policy: "not a blob")
+
+      assert Plan.plan(ctx, %{ref: ref}) == {:error, {:corrupt, {:profile, profile_id}}}
+
+      assert Sanctum.Providers.Profile.handle(ctx, %{"action" => "plan", "ref" => ref}) ==
+               {:error, {:corrupt, {:profile, profile_id}}}
+
+      assert %{
+               "result" => %{
+                 "isError" => true,
+                 "content" => [
+                   %{
+                     "type" => "text",
+                     "text" => "The stored profile is damaged and cannot be used."
+                   }
+                 ]
+               }
+             } = plan_over_mcp(ctx, ref)
+    end
+
+    # A head is read as every head's bytes are (`Loader.head_blob/1`): bytes
+    # that fail their stored digest, though they decode and grant more than
+    # was committed, and a policy that does not parse as a blob, whose
+    # nodes are no nodes, each leave the narrowing unknown.
+    test "a stored policy that fails its digest or does not parse refuses the plan as the " <>
+           "damaged profile it is",
+         %{ctx: ctx} do
+      ref = "reagent:local.plan-damaged-head"
+
+      publish!(ctx, "plan-damaged-head", "1.0.0", %{
+        "caps" => %{
+          "egress" => %{"domains" => ["api.damaged.example"], "methods" => ~w(GET POST)}
+        }
+      })
+
+      commit!(ctx, ref, %{subset: %{ref => %{"egress" => %{"methods" => ["GET"]}}}})
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, ref)
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+
+      widened =
+        String.replace(head.resolved_policy, ~s("methods":["GET"]), ~s("methods":["GET","POST"]))
+
+      assert widened != head.resolved_policy
+      assert {:ok, _} = Jason.decode(widened)
+
+      not_nodes = [
+        Jason.encode!(%{"nodes" => %{ref => "x"}}),
+        Jason.encode!(%{
+          "nodes" => %{
+            ref => %{
+              "limits" => "bad",
+              "edges" => %{"@ingress" => %{"egress" => %{"methods" => "GET"}}}
+            }
+          }
+        })
+      ]
+
+      # The widened bytes under the committed digest; each policy whose
+      # nodes are no nodes under the committed digest and under its own,
+      # so the parse is what refuses it.
+      damaged =
+        [[resolved_policy: widened]] ++
+          for policy <- not_nodes,
+              digest <- [head.blob_digest, Prima.JCS.hash_binary(policy)],
+              do: [resolved_policy: policy, blob_digest: digest]
+
+      for changes <- damaged do
+        :ok = ConsentFixtures.hand_edit_head!(ctx, profile_id, changes)
+
+        assert Plan.plan(ctx, %{ref: ref}) == {:error, {:corrupt, {:profile, profile_id}}},
+               inspect(changes)
+
+        assert Sanctum.Providers.Profile.handle(ctx, %{"action" => "plan", "ref" => ref}) ==
+                 {:error, {:corrupt, {:profile, profile_id}}}
+
+        assert %{
+                 "result" => %{
+                   "isError" => true,
+                   "content" => [
+                     %{
+                       "type" => "text",
+                       "text" => "The stored profile is damaged and cannot be used."
+                     }
+                   ]
+                 }
+               } = plan_over_mcp(ctx, ref)
+      end
+    end
+
+    # A rate limit bounds a burst and a rate at once, so the narrower of the
+    # head's and the ask's is their overlap, the smaller count over the
+    # longer window: never the ask's, which may be faster or burst larger.
+    test "a rate limit re-grants as the overlap of the head's and the ask's, no wider than " <>
+           "either",
+         %{ctx: ctx} do
+      ref = "reagent:local.plan-rate"
+
+      ask = fn rate ->
+        %{
+          "caps" => %{
+            "egress" => %{"domains" => ["api.rate.example"], "methods" => ["GET"]},
+            "limits" => %{"rate_limit" => rate}
+          }
+        }
+      end
+
+      publish!(ctx, "plan-rate", "1.0.0", ask.(%{"requests" => 100, "window" => "1m"}))
+
+      commit!(ctx, ref, %{
+        subset: %{ref => %{"limits" => %{"rate_limit" => %{"requests" => 50}}}}
+      })
+
+      assert held(ctx, ref, ref).limits["rate_limit"] == %{"requests" => 50, "window" => "1m"}
+
+      # A release lowering the burst and shortening the window: 40 per ten
+      # seconds is 240 a minute, faster than the head's 50.
+      publish!(ctx, "plan-rate", "1.1.0", ask.(%{"requests" => 40, "window" => "10s"}))
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+
+      assert plan.head_narrowing == %{
+               ref => %{"limits" => %{"rate_limit" => %{"window" => "1m"}}}
+             }
+
+      commit!(ctx, ref, %{subset: plan.head_narrowing})
+      assert held(ctx, ref, ref).limits["rate_limit"] == %{"requests" => 40, "window" => "1m"}
+
+      # A head faster than a release's ask (50 per ten seconds against 100
+      # a minute) keeps its burst over the ask's window.
+      publish!(ctx, "plan-rate", "1.2.0", ask.(%{"requests" => 100, "window" => "10s"}))
+
+      commit!(ctx, ref, %{
+        subset: %{ref => %{"limits" => %{"rate_limit" => %{"requests" => 50}}}}
+      })
+
+      publish!(ctx, "plan-rate", "1.3.0", ask.(%{"requests" => 100, "window" => "1m"}))
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+
+      assert plan.head_narrowing == %{
+               ref => %{"limits" => %{"rate_limit" => %{"requests" => 50}}}
+             }
+
+      commit!(ctx, ref, %{subset: plan.head_narrowing})
+      assert held(ctx, ref, ref).limits["rate_limit"] == %{"requests" => 50, "window" => "1m"}
+    end
+
+    # A dependency a release adds opens granting none of what it asks and is
+    # listed as new; a value newly asked on a dependency the head holds opens
+    # off and is listed under it; a dependency a release drops is listed as
+    # dropped.
+    test "a dependency added, asking more, or dropped opens no wider and is listed under its node",
+         %{ctx: ctx} do
+      dep = "reagent:local.plan-added-dep"
+      ref = "reagent:local.plan-adding"
+
+      dep_ask = fn methods ->
+        %{
+          "caps" => %{
+            "egress" => %{"domains" => ["api.dep.example"], "methods" => methods},
+            "storage" => %{"paths" => ["data/dep/"], "actions" => ["read", "write"]},
+            "tools" => ["execution.logs"]
+          }
+        }
+      end
+
+      source = %{"egress" => %{"domains" => ["api.source.example"], "methods" => ~w(GET POST)}}
+      get_only = %{"egress" => %{"methods" => ["GET"]}}
+
+      publish!(ctx, "plan-added-dep", "1.0.0", dep_ask.(~w(GET DELETE)))
+      publish!(ctx, "plan-adding", "1.0.0", %{"caps" => source})
+      commit!(ctx, ref, %{subset: %{ref => get_only}})
+
+      publish!(ctx, "plan-adding", "1.1.0", %{
+        "caps" => source,
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+
+      none = %{
+        "egress" => %{"domains" => [], "methods" => [], "schemes" => []},
+        "storage" => %{"paths" => [], "actions" => []},
+        "tools" => []
+      }
+
+      assert plan.head_narrowing == %{ref => get_only, dep => none}
+
+      # Listed after the app's own entries, as new, with all it asks.
+      assert [%{node: ^ref, new: false, dropped: false} | _] = plan.shape_diff
+
+      assert [%{added: ["POST"], removed: []}] =
+               Enum.filter(
+                 plan.shape_diff,
+                 &(&1.node == ref and &1.capability == "egress.methods")
+               )
+
+      listed = Enum.filter(plan.shape_diff, &(&1.node == dep))
+      assert Enum.all?(listed, &(&1.new and not &1.dropped and &1.removed == []))
+
+      assert Map.new(listed, &{&1.capability, &1.added}) == %{
+               "egress.domains" => ["api.dep.example"],
+               "egress.methods" => ["DELETE", "GET"],
+               "egress.schemes" => ["https"],
+               "storage.paths" => ["data/dep/"],
+               "storage.actions" => ["read", "write"],
+               "tools" => ["execution.logs"]
+             }
+
+      # A client reads each entry's node and whether it is new or dropped.
+      assert %{"result" => %{"isError" => false, "content" => [%{"text" => text}]}} =
+               plan_over_mcp(ctx, ref)
+
+      wire = Jason.decode!(text)["shape_diff"]
+      assert length(wire) == length(plan.shape_diff)
+
+      for entry <- wire do
+        assert is_binary(entry["node"]) and is_boolean(entry["new"]) and
+                 is_boolean(entry["dropped"]),
+               inspect(entry)
+      end
+
+      assert %{"node" => ^dep, "new" => true, "dropped" => false, "added" => ["read", "write"]} =
+               Enum.find(wire, &(&1["node"] == dep and &1["capability"] == "storage.actions"))
+
+      # Committed as it opens, the dependency is granted nothing.
+      commit!(ctx, ref, %{subset: plan.head_narrowing})
+      %{resources: granted} = held(ctx, ref, dep)
+      assert granted["egress"]["domains"] == [] and granted["egress"]["methods"] == []
+      assert granted["storage"] == %{"paths" => [], "actions" => []}
+      assert granted["tools"] == []
+
+      # Granted as the person chose: GET on its domain, its files to read.
+      commit!(ctx, ref, %{
+        subset: %{
+          ref => get_only,
+          dep => %{"egress" => %{"methods" => ["GET"]}, "storage" => %{"actions" => ["read"]}}
+        }
+      })
+
+      %{resources: granted} = held(ctx, ref, dep)
+      assert granted["egress"]["domains"] == ["api.dep.example"]
+      assert granted["egress"]["methods"] == ["GET"]
+      assert granted["storage"] == %{"paths" => ["data/dep/"], "actions" => ["read"]}
+
+      # The dependency's release asks for PATCH too: the head never granted
+      # it, so it opens off.
+      publish!(ctx, "plan-added-dep", "1.1.0", dep_ask.(~w(GET DELETE PATCH)))
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+
+      assert plan.head_narrowing == %{
+               ref => get_only,
+               dep => %{
+                 "egress" => %{"methods" => ["GET"]},
+                 "storage" => %{"actions" => ["read"]}
+               }
+             }
+
+      # Listed under the dependency, never as the app's own.
+      assert [%{added: ["DELETE", "PATCH"], removed: [], new: false, dropped: false}] =
+               Enum.filter(
+                 plan.shape_diff,
+                 &(&1.node == dep and &1.capability == "egress.methods")
+               )
+
+      refute Enum.any?(plan.shape_diff, &(&1.node == ref and "PATCH" in &1.added))
+
+      # A release of the app that no longer uses the dependency: what the
+      # head granted it is listed as dropped, and nothing of it is asked.
+      publish!(ctx, "plan-adding", "1.2.0", %{"caps" => source})
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      assert plan.head_narrowing == %{ref => get_only}
+
+      listed = Enum.filter(plan.shape_diff, &(&1.node == dep))
+      assert Enum.all?(listed, &(&1.dropped and not &1.new and &1.added == []))
+
+      assert Map.new(listed, &{&1.capability, &1.removed}) == %{
+               "egress.domains" => ["api.dep.example"],
+               "egress.methods" => ["GET"],
+               "egress.schemes" => ["https"],
+               "storage.paths" => ["data/dep/"],
+               "storage.actions" => ["read"],
+               "tools" => ["execution.logs"]
+             }
+    end
+
+    # A plan reads the head once, so a head damaged at any point of a plan is
+    # answered as that one read found it: the head as read, or the read's
+    # own refusal, never a crash, and never a narrowing of one read with the
+    # revision of another.
+    test "a head damaged at any point of a plan answers as its one read found it",
+         %{ctx: ctx} do
+      ref = "reagent:local.plan-racing"
+
+      publish!(ctx, "plan-racing", "1.0.0", %{
+        "caps" => %{"egress" => %{"domains" => ["api.racing.example"], "methods" => ~w(GET POST)}}
+      })
+
+      get_only = %{ref => %{"egress" => %{"methods" => ["GET"]}}}
+      commit!(ctx, ref, %{subset: get_only})
+      {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, ref)
+      {:ok, %{scope: scope}} = Sanctum.Consent.head_consent(ctx, profile_id)
+
+      real = Sanctum.Grimoire.impl!()
+      :persistent_term.put({RacingGrimoire, :real}, real)
+      Sanctum.Grimoire.install!(RacingGrimoire)
+
+      on_exit(fn ->
+        Sanctum.Grimoire.install!(real)
+        :persistent_term.erase({RacingGrimoire, :real})
+      end)
+
+      damage = fn -> ConsentFixtures.hand_edit_head!(ctx, profile_id, scope: "bogus") end
+
+      restore = fn ->
+        ConsentFixtures.hand_edit_head!(ctx, profile_id, scope: to_string(scope))
+      end
+
+      # The catalog reads one plan makes, each a point the head can move at.
+      {{:ok, whole}, reads} =
+        RacingGrimoire.run(0, fn -> :ok end, fn -> Plan.plan(ctx, %{ref: ref}) end)
+
+      assert whole.head_narrowing == get_only
+      assert reads > 1
+
+      damage.()
+      refused = Plan.plan(ctx, %{ref: ref})
+      assert {:error, _} = refused
+
+      answers =
+        for at <- 1..reads do
+          :ok = restore.()
+
+          {answer, _reads} =
+            RacingGrimoire.run(at, damage, fn -> Plan.plan(ctx, %{ref: ref}) end)
+
+          case answer do
+            {:ok, plan} ->
+              assert plan.head_narrowing == get_only
+              assert plan.expected_consent_revision == whole.expected_consent_revision
+
+            refusal ->
+              assert refusal == refused
+          end
+
+          answer
+        end
+
+      # The head moved before the plan read it and after.
+      assert refused in answers
+      assert Enum.any?(answers, &match?({:ok, _}, &1))
     end
 
     test "a re-grant names the origins the head admits, and what changed against the head " <>

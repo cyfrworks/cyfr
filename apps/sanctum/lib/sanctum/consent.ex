@@ -77,6 +77,11 @@ defmodule Sanctum.Consent do
       restart_required       {profile_id, new_revision, missing}
       confirmation_required  {id, operation, expires_at}
 
+  `consent_required`'s `shape_diff` is what changed since the head, one
+  entry per capability of each node of the closure, each naming its
+  `node` and whether the head never held it (`new`) or the ask no longer
+  names it (`dropped`) (`Sanctum.Consent.ShapeDiff`).
+
   `consent_conflict`'s cause distinguishes a stale plan from a digest that
   changed under the operator from a genuine race — different remedies:
   re-plan, re-preview, or retry. `confirmation_required` is no denial: the
@@ -111,7 +116,7 @@ defmodule Sanctum.Consent do
   @type consent_required :: %{
           profile_id: String.t(),
           current_revision: non_neg_integer(),
-          shape_diff: [String.t()]
+          shape_diff: [Sanctum.Consent.ShapeDiff.entry()]
         }
 
   @type consent_conflict :: %{

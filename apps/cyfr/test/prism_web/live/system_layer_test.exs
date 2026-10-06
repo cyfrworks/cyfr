@@ -2087,6 +2087,1211 @@ defmodule PrismWeb.SystemLayerTest do
     end
   end
 
+  describe "a re-grant's narrowing" do
+    # A re-grant opens on the narrowing its head holds (`profile.plan`'s
+    # `head_narrowing`), never wider: what the head narrowed off opens
+    # off, and so does what the component newly asks for. A first grant
+    # opens on the ask.
+    setup :signed_in
+
+    # A catalyst whose own calls take a key, asking for `methods` on its
+    # one domain, at `version`.
+    defp asking_methods!(local, name, version, methods),
+      do: asking!(local, name, version, ["api.regrant.example"], methods)
+
+    # The same catalyst asking for `methods` on `domains`.
+    defp asking!(local, name, version, domains, methods),
+      do:
+        asking_caps!(local, name, version, %{
+          "egress" => %{"domains" => domains, "methods" => methods}
+        })
+
+    # The same catalyst asking for `caps`, its manifest naming `extra` too.
+    defp asking_caps!(local, name, version, caps, extra \\ %{}) do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: name,
+          version: version,
+          type: "catalyst",
+          description: "A catalyst asking for methods",
+          manifest:
+            Jason.encode!(
+              Map.merge(
+                %{
+                  "needs" => %{
+                    "api_key" => %{
+                      "type" => "api_key:regrant.test",
+                      "reason" => "to reach the regrant service",
+                      "fields" => ["REGRANT_KEY"],
+                      "required" => true,
+                      "attach" => %{
+                        "in" => "header",
+                        "name" => "x-api-key",
+                        "template" => "{value}"
+                      }
+                    }
+                  },
+                  "caps" => caps
+                },
+                extra
+              )
+            )
+        })
+
+      "catalyst:local.#{name}"
+    end
+
+    # What the head of `app`'s profile grants `node`: its resources, as the
+    # node's edge in the stored policy grants them, and its limits.
+    defp held(local, app, node) do
+      {_profile_id, head} = head_rows(local, app)
+      %{"nodes" => nodes} = Jason.decode!(head.resolved_policy)
+
+      %{
+        resources: Sanctum.Consent.BlobBuilder.node_resources(nodes, app, node),
+        limits: get_in(nodes, [node, "limits"])
+      }
+    end
+
+    # The checkbox the sheet draws for one value of `node`'s `field`.
+    defp value_box(node, field, value),
+      do:
+        ~s(input[phx-value-node="#{node}"][phx-value-field="#{field}"][phx-value-choice="#{value}"])
+
+    defp regrant_key!(local, hosts \\ ["api.regrant.example"]) do
+      entry!(local, %{
+        name: "regrant key #{System.unique_integer([:positive])}",
+        provider_hint: "regrant.test",
+        fields: %{"REGRANT_KEY" => "sk-regrant"},
+        destination: %{"hosts" => hosts}
+      })
+    end
+
+    defp egress_domains(%{rows: rows}) do
+      for %{"kind" => "egress", "values" => values} <- rows, do: values["domains"]
+    end
+
+    # The checkbox the sheet draws for one egress method.
+    defp method_box(method),
+      do: ~s(input[phx-value-field="methods"][phx-value-choice="#{method}"])
+
+    defp egress_methods(%{rows: rows}) do
+      for %{"kind" => "egress", "values" => values} <- rows, do: values["methods"]
+    end
+
+    test "a GET-only grant reopened for an account opens at GET only, and committed " <>
+           "unchanged grants GET only",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(
+          local,
+          "layer-regrant-#{System.unique_integer([:positive])}",
+          "0.1.0",
+          ~w(GET POST)
+        )
+
+      key = regrant_key!(local)
+      get_only = %{app => %{"egress" => %{"methods" => ["GET"]}}}
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: get_only
+        })
+
+      {_profile_id, granted} = head_rows(local, app)
+
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-regrant", app,
+          account: %{name: "Work"}
+        )
+
+      assert grant.subject.decisions["subset"] == get_only
+      assert egress_methods(grant.subject.preview) == [["GET"]]
+
+      prompt(view, grant)
+      assert has_element?(view, account("@ingress", "Work"))
+      assert has_element?(view, method_box("GET") <> "[checked]")
+      assert has_element?(view, method_box("POST"))
+      refute has_element?(view, method_box("POST") <> "[checked]")
+
+      # Confirmed as it opened: the head's grant again, whole.
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-regrant") == :confirmed
+
+      {_profile_id, regranted} = head_rows(local, app)
+      assert regranted.revision == 2
+      assert regranted.resolved_policy == granted.resolved_policy
+      {_head, ingress, _limits} = head!(local, app)
+      assert ingress.egress.methods == ["GET"]
+    end
+
+    test "a method newly asked for opens off, is listed as what changed, and is granted " <>
+           "only when the person widens to it",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "layer-new-method-#{System.unique_integer([:positive])}"
+      app = asking_methods!(local, name, "0.1.0", ~w(GET))
+      key = regrant_key!(local)
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      # A release asking for POST too.
+      asking_methods!(local, name, "0.2.0", ~w(GET POST))
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-new-method", app)
+
+      assert grant.subject.decisions["subset"] == %{app => %{"egress" => %{"methods" => ["GET"]}}}
+      assert egress_methods(grant.subject.preview) == [["GET"]]
+
+      prompt(view, grant)
+      assert has_element?(view, method_box("GET") <> "[checked]")
+      refute has_element?(view, method_box("POST") <> "[checked]")
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-delta"] li),
+               "asks for POST, which your grant does not give"
+             )
+
+      # Widened by the person, the narrowing drops and the preview grants it.
+      click(view, method_box("POST"))
+      refute Map.has_key?(decisions_now(view), "subset")
+      assert has_element?(view, method_box("POST") <> "[checked]")
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-new-method") == :confirmed
+      {_head, ingress, _limits} = head!(local, app)
+      assert Enum.sort(ingress.egress.methods) == ["GET", "POST"]
+    end
+
+    # A narrowing grants part of the current ask: a domain the head granted
+    # and the release no longer asks for opens as nothing, never as a
+    # refusal, and the grant is the ask's.
+    test "a release dropping a domain the head granted opens on the ask, and commits it",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "layer-dropped-#{System.unique_integer([:positive])}"
+      both = ["a.regrant.example", "b.regrant.example"]
+      app = asking!(local, name, "0.1.0", both, ~w(GET))
+      key = regrant_key!(local, both)
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      asking!(local, name, "0.2.0", ["a.regrant.example"], ~w(GET))
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-dropped", app)
+
+      assert grant.subject.plan.head_narrowing == %{}
+      refute Map.has_key?(grant.subject.decisions, "subset")
+      assert egress_domains(grant.subject.preview) == [["a.regrant.example"]]
+      refute Map.has_key?(grant.subject, :suggestion_refused)
+
+      prompt(view, grant)
+      refute has_element?(view, ~s([data-test="grant-refusal"]))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-dropped") == :confirmed
+
+      {_head, ingress, _limits} = head!(local, app)
+      assert ingress.egress.domains == ["a.regrant.example"]
+    end
+
+    test "a GET-only head on a release that drops a domain and adds POST opens on the " <>
+           "remaining domain, GET only, with POST off and listed as new",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "layer-changed-#{System.unique_integer([:positive])}"
+      both = ["a.regrant.example", "b.regrant.example"]
+      app = asking!(local, name, "0.1.0", both, ~w(GET))
+      key = regrant_key!(local, both)
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      asking!(local, name, "0.2.0", ["a.regrant.example"], ~w(GET POST))
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-changed", app)
+
+      get_only = %{app => %{"egress" => %{"methods" => ["GET"]}}}
+      assert grant.subject.decisions["subset"] == get_only
+      assert egress_domains(grant.subject.preview) == [["a.regrant.example"]]
+      assert egress_methods(grant.subject.preview) == [["GET"]]
+
+      prompt(view, grant)
+      refute has_element?(view, ~s([data-test="grant-refusal"]))
+      assert has_element?(view, method_box("GET") <> "[checked]")
+      refute has_element?(view, method_box("POST") <> "[checked]")
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-delta"] li),
+               "asks for POST, which your grant does not give"
+             )
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-changed") == :confirmed
+
+      {_head, ingress, _limits} = head!(local, app)
+      assert ingress.egress.domains == ["a.regrant.example"]
+      assert ingress.egress.methods == ["GET"]
+    end
+
+    test "a first grant opens on the methods asked for", %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(
+          local,
+          "layer-first-#{System.unique_integer([:positive])}",
+          "0.1.0",
+          ~w(GET POST)
+        )
+
+      regrant_key!(local)
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-first", app)
+
+      refute Map.has_key?(grant.subject.decisions, "subset")
+      assert [methods] = egress_methods(grant.subject.preview)
+      assert Enum.sort(methods) == ["GET", "POST"]
+
+      prompt(view, grant)
+      assert has_element?(view, method_box("GET") <> "[checked]")
+      assert has_element?(view, method_box("POST") <> "[checked]")
+    end
+
+    test "a rate limit narrowed on the head reopens as its overlap with a release's ask, and " <>
+           "commits no larger a burst and no faster a rate than either",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "layer-rate-#{System.unique_integer([:positive])}"
+
+      caps = fn rate ->
+        %{
+          "egress" => %{"domains" => ["api.regrant.example"], "methods" => ["GET"]},
+          "limits" => %{"rate_limit" => rate}
+        }
+      end
+
+      app = asking_caps!(local, name, "0.1.0", caps.(%{"requests" => 100, "window" => "1m"}))
+      key = regrant_key!(local)
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => %{"limits" => %{"rate_limit" => %{"requests" => 50}}}}
+        })
+
+      # 40 per ten seconds is 240 a minute, faster than the head's 50.
+      asking_caps!(local, name, "0.2.0", caps.(%{"requests" => 40, "window" => "10s"}))
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-rate", app)
+
+      assert grant.subject.decisions["subset"] == %{
+               app => %{"limits" => %{"rate_limit" => %{"window" => "1m"}}}
+             }
+
+      assert for(
+               %{"kind" => "limits", "values" => values} <- grant.subject.preview.rows,
+               do: values["rate_limit"]
+             ) == [%{"requests" => 40, "window" => "1m"}]
+
+      prompt(view, grant)
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-rate") == :confirmed
+
+      assert held(local, app, app).limits["rate_limit"] == %{"requests" => 40, "window" => "1m"}
+    end
+
+    test "a dependency a release adds opens granting none of what it asks, and is granted " <>
+           "only as the person ticks it",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+      dep = "reagent:local.layer-added-dep-#{n}"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: "layer-added-dep-#{n}",
+          version: "0.1.0",
+          type: "reagent",
+          description: "A dependency a release adds",
+          manifest:
+            Jason.encode!(%{
+              "caps" => %{
+                "egress" => %{"domains" => ["api.dep.example"], "methods" => ~w(GET DELETE)}
+              }
+            })
+        })
+
+      name = "layer-adding-#{n}"
+      caps = %{"egress" => %{"domains" => ["api.regrant.example"], "methods" => ~w(GET POST)}}
+      app = asking_caps!(local, name, "0.1.0", caps)
+      key = regrant_key!(local)
+      get_only = %{"egress" => %{"methods" => ["GET"]}}
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => get_only}
+        })
+
+      asking_caps!(local, name, "0.2.0", caps, %{
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      none = %{"egress" => %{"domains" => [], "methods" => [], "schemes" => []}}
+
+      # Opened and confirmed as it opens: the dependency is granted nothing.
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-added", app)
+      assert grant.subject.decisions["subset"] == %{app => get_only, dep => none}
+      prompt(view, grant)
+
+      # Listed after the app's own as a new dependency, with what it asks.
+      assert delta_groups(view) == [
+               {app, "", ["Network methods: asks for POST, which your grant does not give"]},
+               {dep, "New dependency #{dep}",
+                [
+                  "Network domains: asks for api.dep.example, which your grant does not give",
+                  "Network methods: asks for DELETE, GET, which your grant does not give",
+                  "Network schemes: asks for https, which your grant does not give"
+                ]}
+             ]
+
+      for {field, value} <- [
+            {"domains", "api.dep.example"},
+            {"methods", "GET"},
+            {"schemes", "https"}
+          ] do
+        assert has_element?(view, value_box(dep, field, value))
+        refute has_element?(view, value_box(dep, field, value) <> "[checked]")
+      end
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-added") == :confirmed
+
+      %{resources: %{"egress" => egress}} = held(local, app, dep)
+      assert {egress["domains"], egress["methods"], egress["schemes"]} == {[], [], []}
+
+      # Opened again, the person ticks the dependency's domain, GET and
+      # https: that is what it is granted.
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ticked", app)
+      assert grant.subject.decisions["subset"] == %{app => get_only, dep => none}
+      prompt(view, grant)
+
+      click(view, value_box(dep, "domains", "api.dep.example"))
+      click(view, value_box(dep, "methods", "GET"))
+      click(view, value_box(dep, "schemes", "https"))
+      assert decisions_now(view)["subset"] == %{app => get_only, dep => get_only}
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-ticked") == :confirmed
+
+      %{resources: %{"egress" => egress}} = held(local, app, dep)
+      assert {egress["domains"], egress["methods"]} == {["api.dep.example"], ["GET"]}
+
+      # The dependency's release asks for PATCH too: it opens off, and is
+      # listed under the dependency, never as the app's own.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: "layer-added-dep-#{n}",
+          version: "0.2.0",
+          type: "reagent",
+          description: "A dependency a release adds",
+          manifest:
+            Jason.encode!(%{
+              "caps" => %{
+                "egress" => %{"domains" => ["api.dep.example"], "methods" => ~w(GET DELETE PATCH)}
+              }
+            })
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-patch", app)
+      assert grant.subject.decisions["subset"] == %{app => get_only, dep => get_only}
+      prompt(view, grant)
+      refute has_element?(view, value_box(dep, "methods", "PATCH") <> "[checked]")
+
+      assert delta_groups(view) == [
+               {app, "", ["Network methods: asks for POST, which your grant does not give"]},
+               {dep, dep,
+                ["Network methods: asks for DELETE, PATCH, which your grant does not give"]}
+             ]
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-patch") == :confirmed
+
+      # A release of the app that no longer uses the dependency: listed as
+      # no longer used, with what the head granted it.
+      asking_caps!(local, name, "0.3.0", caps)
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-dropped", app)
+      prompt(view, grant)
+
+      assert delta_groups(view) == [
+               {app, "", ["Network methods: asks for POST, which your grant does not give"]},
+               {dep, "No longer used: #{dep}",
+                [
+                  "Network domains: no longer asks for api.dep.example",
+                  "Network methods: no longer asks for GET",
+                  "Network schemes: no longer asks for https"
+                ]}
+             ]
+    end
+
+    # What changed since the grant as the open sheet shows it: each node's
+    # group, its heading and its lines.
+    defp delta_groups(view) do
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-test="grant-delta"] [data-test="grant-delta-node"]))
+      |> Enum.map(fn group ->
+        heading = LazyHTML.query(group, ~s([data-test="grant-delta-heading"]))
+
+        {group |> LazyHTML.attribute("data-node") |> List.first(), squish(LazyHTML.text(heading)),
+         group |> LazyHTML.query("li") |> Enum.map(&squish(LazyHTML.text(&1)))}
+      end)
+    end
+
+    defp squish(text), do: text |> String.split() |> Enum.join(" ")
+
+    # A head is read as every head's bytes are: a policy that does not
+    # decode, one whose bytes fail their stored digest though they decode
+    # and grant more than was committed, and one whose nodes are no nodes
+    # under its own digest each leave the narrowing unknown. The person
+    # reads the refusal where the grant was asked for: on the thread pane
+    # of the turn whose launch named the account.
+    test "a grant whose stored policy cannot be read is refused, and the person reads why",
+         %{view: view, ctx: ctx, conn: conn, user: user} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(
+          local,
+          "layer-damaged-#{System.unique_integer([:positive])}",
+          "0.1.0",
+          ~w(GET POST)
+        )
+
+      key = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      {profile_id, head} = head_rows(local, app)
+
+      widened =
+        String.replace(head.resolved_policy, ~s("methods":["GET"]), ~s("methods":["GET","POST"]))
+
+      assert widened != head.resolved_policy
+      not_nodes = Jason.encode!(%{"nodes" => %{app => "x"}})
+
+      athanor = seated_athanor()
+      conn = log_in_user(conn, user, claim: false, athanor_id: athanor.id)
+      {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(local))
+
+      {:ok, page, _html} =
+        live(
+          conn,
+          PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor), thread.id)
+        )
+
+      settled_render(page)
+      pane = find_live_child(page, "pane-" <> athanor.id)
+
+      refused =
+        "Cannot ask for this grant: The stored profile is damaged and cannot be used."
+
+      for changes <- [
+            [resolved_policy: "not a blob"],
+            [resolved_policy: widened],
+            [resolved_policy: not_nodes, blob_digest: Prima.JCS.hash_binary(not_nodes)]
+          ] do
+        :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(local, profile_id, changes)
+
+        assert PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-damaged", app,
+                 account: %{name: "Work"}
+               ) == {:error, {:corrupt, {:profile, profile_id}}}
+
+        # A launch naming the account asks for it on the pane.
+        render_click(pane, "lv:clear-flash", %{"key" => "error"})
+        refute render(pane) =~ refused
+
+        send(pane.pid, %Cyfr.Bus.ThreadEvent{
+          athanor_id: athanor.id,
+          thread_id: thread.id,
+          kind: :consent_required,
+          data: %{ref: app, user_id: user.user_id, account: %{name: "Work"}}
+        })
+
+        assert render(pane) =~ refused, inspect(changes)
+        refute has_element?(page, ~s(#system-layer-dialog [data-kind="grant"]))
+      end
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # The limits form shows a rate as its count; a re-grant whose rate
+    # opened as the overlap of the head's and the ask's (a longer window
+    # than the ask's) keeps that window when the person lowers another
+    # limit, so the commit is never a faster rate than the head allowed.
+    test "a re-grant whose rate opened as the overlap keeps it when the person lowers the timeout",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "rate-form-#{System.unique_integer([:positive])}"
+
+      caps = fn rate ->
+        %{
+          "egress" => %{"domains" => ["api.regrant.example"], "methods" => ["GET"]},
+          "limits" => %{"rate_limit" => rate, "timeout" => "1m"}
+        }
+      end
+
+      app = asking_caps!(local, name, "0.1.0", caps.(%{"requests" => 100, "window" => "1m"}))
+      key = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => %{"limits" => %{"rate_limit" => %{"requests" => 50}}}}
+        })
+
+      # 40 per ten seconds is 240 a minute; the head allows 50 a minute.
+      asking_caps!(local, name, "0.2.0", caps.(%{"requests" => 40, "window" => "10s"}))
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-rate-form", app)
+      prompt(view, grant)
+
+      view
+      |> form(~s(form[phx-submit="set_limits"]), %{"limits" => %{"timeout" => "30s"}})
+      |> render_submit()
+
+      render(view)
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-rate-form") == :confirmed
+
+      limits = held(local, app, app).limits
+      assert limits["rate_limit"] == %{"requests" => 40, "window" => "1m"}
+      assert limits["timeout"] == "30s"
+    end
+
+    # A release that lands while the sheet is open moves the ask under it:
+    # the commit is refused, the sheet plans again, and it opens again on
+    # the grant as it stands against the new ask, never carrying the old
+    # narrowing onto what the release added.
+    test "a method a release asks for while the sheet is open stays off after the sheet plans again",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "moved-method-#{System.unique_integer([:positive])}"
+      app = asking_methods!(local, name, "0.1.0", ~w(GET POST))
+      key = regrant_key!(local)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-moved-method", app)
+      prompt(view, grant)
+      refute has_element?(view, ~s([data-test="grant-moved"]))
+      asking_methods!(local, name, "0.2.0", ~w(GET POST PATCH))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert {:refused, _} = outcome("g-moved-method")
+      render(view)
+      assert has_element?(view, ~s([data-test="grant-moved"]))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-moved-method") == :confirmed
+      assert Enum.sort(held(local, app, app).resources["egress"]["methods"]) == ~w(GET POST)
+    end
+
+    # A catalyst taking a required key and an optional one the person can
+    # connect from the sheet ("Connect your <provider> account"), asking
+    # for `methods` on both domains.
+    defp connectable!(local, name, version, methods, extra \\ %{}) do
+      attach = fn header -> %{"in" => "header", "name" => header, "template" => "{value}"} end
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: name,
+          version: version,
+          type: "catalyst",
+          description: "a catalyst with a key to connect",
+          manifest:
+            Jason.encode!(
+              Map.merge(
+                %{
+                  "needs" => %{
+                    "api_key" => %{
+                      "type" => "api_key:regrant.test",
+                      "reason" => "to reach the regrant service",
+                      "fields" => ["REGRANT_KEY"],
+                      "required" => true,
+                      "attach" => attach.("x-api-key")
+                    },
+                    "other_key" => %{
+                      "type" => "api_key:other3.test",
+                      "reason" => "to reach the other service",
+                      "fields" => ["OTHER_KEY"],
+                      "required" => false,
+                      "attach" => attach.("x-other-key"),
+                      "hosts" => ["api.other3.example"]
+                    }
+                  },
+                  "caps" => %{
+                    "egress" => %{
+                      "domains" => ["api.regrant.example", "api.other3.example"],
+                      "methods" => methods
+                    }
+                  }
+                },
+                extra
+              )
+            )
+        })
+
+      "catalyst:local.#{name}"
+    end
+
+    # Connects the optional key through the layer's credential prompt;
+    # `meanwhile` runs while that prompt is open, before the sheet's walk
+    # returns with the entry and plans again. Over the same ask and grant
+    # the sheet keeps the entry picked (`:picked`); when `meanwhile` moved
+    # either, it opens again as a prompt opening now would, which picks no
+    # optional need, and says so (`:moved`).
+    defp connect_meanwhile!(view, ctx, meanwhile, expect \\ :picked) do
+      click(view, ~s([data-test="grant-connect"]))
+      id = open_prompt(view)
+      assert "connect-" <> _ = id
+      meanwhile.()
+      name = "Other #{System.unique_integer([:positive])}"
+
+      typed = %{
+        "prompt_id" => id,
+        "name" => name,
+        "secret" => "sk-other",
+        "destination_hosts" => "api.other3.example"
+      }
+
+      view |> form("#system-layer-credential", typed) |> render_submit()
+
+      {:ok, [%{ref: record} | _]} =
+        Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+
+      wait_until(fn -> render(view) =~ ~s(data-ref="#{record}") end, 2_000, "the waiting record")
+      Sanctum.TestContext.prove!(ctx, record)
+      assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
+      view |> form("#system-layer-credential", typed) |> render_submit()
+      assert outcome(id) == :confirmed
+
+      wait_until(
+        fn ->
+          render(view)
+
+          case expect do
+            :picked -> has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]), name)
+            :moved -> has_element?(view, ~s([data-test="grant-moved"]))
+          end
+        end,
+        2_000,
+        "the grant planned again"
+      )
+    end
+
+    # A release that lands while the credential prompt is open is met as
+    # one that lands while the sheet is: the walk that returns with the
+    # entry plans again over the moved ask and opens on the grant as it
+    # stands, so its first confirm grants nothing the release added.
+    test "a method a release asks for while a credential is entered stays off",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "connect-method-#{System.unique_integer([:positive])}"
+      app = connectable!(local, name, "0.1.0", ~w(GET POST))
+      key = regrant_key!(local)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-connect-method", app)
+
+      prompt(view, grant)
+
+      connect_meanwhile!(
+        view,
+        ctx,
+        fn -> connectable!(local, name, "0.2.0", ~w(GET POST PATCH)) end,
+        :moved
+      )
+
+      assert has_element?(view, ~s([data-test="grant-moved"]))
+      refute has_element?(view, method_box("PATCH") <> "[checked]")
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-connect-method") == :confirmed
+      assert Enum.sort(held(local, app, app).resources["egress"]["methods"]) == ~w(GET POST)
+    end
+
+    test "a dependency a release adds while a credential is entered is granted nothing",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+      dep = "reagent:local.connect-dep-#{n}"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: "connect-dep-#{n}",
+          version: "0.1.0",
+          type: "reagent",
+          description: "a dependency a release adds",
+          manifest:
+            Jason.encode!(%{
+              "caps" => %{
+                "egress" => %{"domains" => ["api.dep.example"], "methods" => ~w(GET DELETE)}
+              }
+            })
+        })
+
+      name = "connect-src-#{n}"
+      app = connectable!(local, name, "0.1.0", ~w(GET POST))
+      key = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-connect-dep", app)
+      prompt(view, grant)
+
+      connect_meanwhile!(
+        view,
+        ctx,
+        fn ->
+          connectable!(local, name, "0.2.0", ~w(GET POST), %{
+            "dependencies" => %{"static" => [%{"ref" => dep}]}
+          })
+        end,
+        :moved
+      )
+
+      assert has_element?(view, ~s([data-test="grant-moved"]))
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-connect-dep") == :confirmed
+      %{resources: %{"egress" => egress}} = held(local, app, dep)
+      assert {egress["domains"], egress["methods"]} == {[], []}
+    end
+
+    test "a credential entered over the same ask keeps the person's narrowing",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        connectable!(
+          local,
+          "connect-same-#{System.unique_integer([:positive])}",
+          "0.1.0",
+          ~w(GET POST)
+        )
+
+      key = regrant_key!(local)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-connect-same", app)
+      prompt(view, grant)
+      click(view, ~s([data-test="grant-get-head-only"]))
+      connect_meanwhile!(view, ctx, fn -> :ok end)
+
+      refute has_element?(view, ~s([data-test="grant-moved"]))
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-connect-same") == :confirmed
+      assert held(local, app, app).resources["egress"]["methods"] == ["GET"]
+    end
+
+    test "a dependency a release adds while the sheet is open is granted nothing after the " <>
+           "sheet plans again",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+      dep = "reagent:local.moved-dep-#{n}"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: "moved-dep-#{n}",
+          version: "0.1.0",
+          type: "reagent",
+          description: "a dependency a release adds",
+          manifest:
+            Jason.encode!(%{
+              "caps" => %{
+                "egress" => %{"domains" => ["api.dep.example"], "methods" => ~w(GET DELETE)}
+              }
+            })
+        })
+
+      caps = %{"egress" => %{"domains" => ["api.regrant.example"], "methods" => ~w(GET POST)}}
+      app = asking_caps!(local, "moved-src-#{n}", "0.1.0", caps)
+      key = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-moved-dep", app)
+      prompt(view, grant)
+
+      asking_caps!(local, "moved-src-#{n}", "0.2.0", caps, %{
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert {:refused, _} = outcome("g-moved-dep")
+      render(view)
+      assert has_element?(view, ~s([data-test="grant-moved"]))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-moved-dep") == :confirmed
+      %{resources: %{"egress" => egress}} = held(local, app, dep)
+      assert {egress["domains"], egress["methods"], egress["schemes"]} == {[], [], []}
+      assert held(local, app, app).resources["egress"]["methods"] == ["GET"]
+    end
+  end
+
+  describe "a re-grant planned again over a grant that moved" do
+    # Another client committed while the sheet was open, over the same ask:
+    # the sheet opens again on the grant as it stands, never carrying the
+    # old head's narrowing, origins, accounts or lifetimes over it.
+    setup :signed_in
+
+    defp held_methods(local, app, node),
+      do: Enum.sort(held(local, app, node).resources["egress"]["methods"] || [])
+
+    defp confirm_now(view, id) do
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      answer = outcome(id)
+      render(view)
+      answer
+    end
+
+    test "a refused commit replans over a head narrowed elsewhere, same ask",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(local, "h1-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET POST))
+
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, %{revision: 1}} = commit_with!(local, app, %{bindings: binding})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h1", app)
+      prompt(view, grant)
+
+      # Another client narrows the grant to GET only, over the same ask.
+      {:ok, %{revision: 2}} =
+        commit_with!(local, app, %{
+          bindings: binding,
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      assert {:refused, _} = confirm_now(view, "g-h1")
+      post_on = has_element?(view, method_box("POST") <> "[checked]")
+      second = confirm_now(view, "g-h1")
+      after_methods = held_methods(local, app, app)
+      assert second == :confirmed
+      refute post_on, "the sheet replanned with POST ticked over a GET-only grant"
+      assert after_methods == ["GET"], "committed #{inspect(after_methods)} over a GET-only grant"
+    end
+
+    test "a credential walk replans over a head narrowed elsewhere, same ask",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      app = connectable!(local, "h2-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET POST))
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, %{revision: 1}} = commit_with!(local, app, %{bindings: binding})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h2", app)
+      prompt(view, grant)
+
+      connect_meanwhile!(
+        view,
+        ctx,
+        fn ->
+          {:ok, %{revision: 2}} =
+            commit_with!(local, app, %{
+              bindings: binding,
+              subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+            })
+        end,
+        :moved
+      )
+
+      post_on = has_element?(view, method_box("POST") <> "[checked]")
+      first = confirm_now(view, "g-h2")
+      after_methods = held_methods(local, app, app)
+      assert first == :confirmed
+      refute post_on, "the sheet replanned with POST ticked over a GET-only grant"
+      assert after_methods == ["GET"], "committed #{inspect(after_methods)} over a GET-only grant"
+    end
+
+    test "after a moved reopen, a head narrowed elsewhere is never committed over",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "h3-#{System.unique_integer([:positive])}"
+      app = asking_methods!(local, name, "0.1.0", ~w(GET POST))
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, _} = commit_with!(local, app, %{bindings: binding})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h3", app)
+      prompt(view, grant)
+      asking_methods!(local, name, "0.2.0", ~w(GET POST PATCH))
+      assert {:refused, _} = confirm_now(view, "g-h3")
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: binding,
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      assert {:refused, _} = confirm_now(view, "g-h3")
+      post_on = has_element?(view, method_box("POST") <> "[checked]")
+
+      # The notice is true while it shows: the sheet holds what a prompt
+      # opening now opens on.
+      assert has_element?(view, ~s([data-test="grant-moved"]))
+      {:ok, fresh} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h3-fresh", app)
+      assert decisions_now(view)["subset"] == fresh.subject.decisions["subset"]
+
+      third = confirm_now(view, "g-h3")
+      after_methods = held_methods(local, app, app)
+      assert third == :confirmed
+      refute post_on, "the sheet replanned with POST ticked over a GET-only grant"
+      assert after_methods == ["GET"], "committed #{inspect(after_methods)} over a GET-only grant"
+    end
+
+    test "a first grant's sheet replans over a grant made elsewhere, same ask",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(local, "h4-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET POST))
+
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h4", app)
+      prompt(view, grant)
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{
+          bindings: binding,
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      assert {:refused, _} = confirm_now(view, "g-h4")
+      post_on = has_element?(view, method_box("POST") <> "[checked]")
+      second = confirm_now(view, "g-h4")
+      after_methods = held_methods(local, app, app)
+      assert second == :confirmed
+      refute post_on, "the sheet replanned with POST ticked over a GET-only grant"
+      assert after_methods == ["GET"], "committed #{inspect(after_methods)} over a GET-only grant"
+    end
+
+    test "limits narrowed elsewhere, same ask, after a refused commit",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_caps!(local, "h5-#{System.unique_integer([:positive])}", "0.1.0", %{
+          "egress" => %{"domains" => ["api.regrant.example"], "methods" => ["GET"]},
+          "limits" => %{"rate_limit" => %{"requests" => 100, "window" => "1m"}, "timeout" => "1m"}
+        })
+
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, _} = commit_with!(local, app, %{bindings: binding})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h5", app)
+      prompt(view, grant)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: binding,
+          subset: %{
+            app => %{
+              "limits" => %{
+                "timeout" => "20s",
+                "rate_limit" => %{"requests" => 10, "window" => "1m"}
+              }
+            }
+          }
+        })
+
+      before = held(local, app, app).limits
+      assert {:refused, _} = confirm_now(view, "g-h5")
+      second = confirm_now(view, "g-h5")
+      after_limits = held(local, app, app).limits
+      assert second == :confirmed
+      assert after_limits == before
+      assert after_limits["timeout"] == "20s"
+      assert after_limits["rate_limit"] == %{"requests" => 10, "window" => "1m"}
+    end
+
+    test "origins narrowed elsewhere, same ask, after a refused commit",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      app = asking_methods!(local, "h6-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET))
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+
+      {:ok, _} =
+        commit_with!(local, app, %{bindings: binding, origins: [:interactive, :schedule]})
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h6", app)
+      prompt(view, grant)
+      {:ok, _} = commit_with!(local, app, %{bindings: binding, origins: [:interactive]})
+      assert {:refused, _} = confirm_now(view, "g-h6")
+      second = confirm_now(view, "g-h6")
+      {_p, head} = head_rows(local, app)
+      assert second == :confirmed
+      assert head.admitted_origins == [:interactive]
+    end
+
+    test "a named account removed elsewhere, same ask, after a refused commit",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      app = asking_methods!(local, "h7-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET))
+      key = regrant_key!(local)
+      work = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [
+            %{need: "api_key", entry_id: key.id},
+            %{need: "api_key", entry_id: work.id, name: "Work"}
+          ]
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h7", app)
+      prompt(view, grant)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+      assert {:refused, _} = confirm_now(view, "g-h7")
+      second = confirm_now(view, "g-h7")
+      {_p, head} = head_rows(local, app)
+      bound = Enum.map(head.vault_refs, &{&1.binding_key, &1.vault_entry_id})
+      assert second == :confirmed
+      refute Enum.any?(bound, fn {_k, id} -> id == work.id end)
+    end
+
+    test "a binding's lifetime narrowed elsewhere to once, same ask, after a refused commit",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      app = asking_methods!(local, "h9-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET))
+      key = regrant_key!(local)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h9", app)
+      prompt(view, grant)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id, lifetime: %{kind: "once"}}]
+        })
+
+      assert {:refused, _} = confirm_now(view, "g-h9")
+      second = confirm_now(view, "g-h9")
+      {_p, head} = head_rows(local, app)
+      kinds = Enum.map(head.vault_refs, & &1.lifetime_kind)
+      assert second == :confirmed
+      assert kinds == ["once"]
+    end
+
+    test "a held dependency narrowed elsewhere, same ask, after a refused commit",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+      dep = "reagent:local.h8-dep-#{n}"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: "h8-dep-#{n}",
+          version: "0.1.0",
+          type: "reagent",
+          description: "a held dependency",
+          manifest:
+            Jason.encode!(%{
+              "caps" => %{
+                "egress" => %{"domains" => ["api.dep.example"], "methods" => ~w(GET DELETE)}
+              }
+            })
+        })
+
+      app =
+        asking_caps!(
+          local,
+          "h8-src-#{n}",
+          "0.1.0",
+          %{"egress" => %{"domains" => ["api.regrant.example"], "methods" => ["GET"]}},
+          %{"dependencies" => %{"static" => [%{"ref" => dep}]}}
+        )
+
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, _} = commit_with!(local, app, %{bindings: binding})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h8", app)
+      prompt(view, grant)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: binding,
+          subset: %{dep => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      assert {:refused, _} = confirm_now(view, "g-h8")
+      second = confirm_now(view, "g-h8")
+      after_methods = held_methods(local, app, dep)
+      assert second == :confirmed
+      assert after_methods == ["GET"]
+    end
+
+    @tag :a2g4g
+    test "the limits form keeps the integer limits a re-grant's head narrowed",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_caps!(local, "g1-#{System.unique_integer([:positive])}", "0.1.0", %{
+          "egress" => %{"domains" => ["api.regrant.example"], "methods" => ["GET"]},
+          "limits" => %{"timeout" => "1m", "max_concurrent_tasks" => 10}
+        })
+
+      key = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{
+            app => %{"limits" => %{"max_concurrent_tasks" => 4, "max_memory_bytes" => 33_554_432}}
+          }
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-g1", app)
+      prompt(view, grant)
+
+      view
+      |> form(~s(form[phx-submit="set_limits"]), %{"limits" => %{"timeout" => "30s"}})
+      |> render_submit()
+
+      render(view)
+      first = confirm_now(view, "g-g1")
+      after_limits = held(local, app, app).limits
+      assert first == :confirmed
+      assert after_limits["max_concurrent_tasks"] == 4
+      assert after_limits["max_memory_bytes"] == 33_554_432
+      assert after_limits["timeout"] == "30s"
+    end
+  end
+
   describe "the person's exact choices" do
     setup [:signed_in, :asking_more]
 

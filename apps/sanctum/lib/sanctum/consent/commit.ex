@@ -230,7 +230,8 @@ defmodule Sanctum.Consent.Commit do
   component's shape moved since the head (`:shape_moved` — plan, preview
   and commit again), when the profile is not an active owner profile, or
   when the head grants external tool servers, which a grant does not carry
-  (`:grant_requires_full_commit`).
+  (`:grant_requires_full_commit`), or when the head's policy fails its
+  digest or does not parse (`{:corrupt, {:profile, profile_id}}`).
 
   Params: `:profile_id`, `:bindings` (the commit's binding shape) and
   `:expected_consent_revision`.
@@ -248,7 +249,7 @@ defmodule Sanctum.Consent.Commit do
          {:ok, profile} <- Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id),
          :ok <- check_grantable_profile(profile),
          {:ok, head} <- Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id),
-         :ok <- check_no_tool_servers(head, profile.source_ref),
+         :ok <- check_no_tool_servers(profile_id, head, profile.source_ref),
          decisions = grant_decisions(profile, head, Map.get(params, :bindings, [])),
          {:ok, asked} <- prepare(ctx, decisions),
          :ok <- check_expected_revision(params, asked),
@@ -304,20 +305,18 @@ defmodule Sanctum.Consent.Commit do
     }
   end
 
-  # The head's narrowing, named again: every field of a narrowable kind
-  # whose grant on the head differs from the ask as it stands. A head no
-  # narrowing touched grants the ask, and is re-issued as `asked` was.
+  # The head's narrowing, named again (`Plan.head_narrowing/4`, the one
+  # definition a plan answers too): every field of a narrowable kind whose
+  # grant on the head differs from the ask as it stands. A head no
+  # narrowing touched grants the ask, and is re-issued as `asked` was. A
+  # head whose bytes fail their digest or cannot be read leaves its
+  # narrowing unknown: re-issuing the ask could widen it, so nothing is
+  # granted.
   defp keep_narrowing(ctx, decisions, asked, {profile_id, head}) do
-    with {:ok, head_nodes} <- blob_nodes(head.resolved_policy),
-         {:ok, asked_nodes} <- blob_nodes(asked.blob_json) do
-      case head_narrowing(asked.source_ref, head_nodes, asked_nodes) do
-        subset when subset == %{} -> {:ok, asked}
-        subset -> prepare(ctx, Map.put(decisions, :subset, subset))
-      end
-    else
-      # Unreadable, the head's narrowing is unknown: re-issuing the ask
-      # could widen it, so nothing is granted.
-      :error -> {:error, {:corrupt, {:profile, profile_id}}}
+    case Plan.head_narrowing(profile_id, head, asked.source_ref, asked.blob_json) do
+      {:ok, subset} when subset == %{} -> {:ok, asked}
+      {:ok, subset} -> prepare(ctx, Map.put(decisions, :subset, subset))
+      {:error, _corrupt} = refused -> refused
     end
   end
 
@@ -327,63 +326,6 @@ defmodule Sanctum.Consent.Commit do
       _ -> :error
     end
   end
-
-  defp head_narrowing(source_ref, head_nodes, asked_nodes) do
-    for {node_key, head_node} <- head_nodes,
-        Map.has_key?(asked_nodes, node_key),
-        record =
-          node_narrowing(
-            BlobBuilder.node_resources(head_nodes, source_ref, node_key),
-            BlobBuilder.node_resources(asked_nodes, source_ref, node_key),
-            head_node["limits"],
-            asked_nodes[node_key]["limits"]
-          ),
-        record != %{},
-        into: %{},
-        do: {node_key, record}
-  end
-
-  defp node_narrowing(head, asked, head_limits, asked_limits) do
-    %{}
-    |> put_differing(
-      "egress",
-      fields_differing(head, asked, "egress", ~w(domains methods schemes private_ips))
-    )
-    |> put_differing("storage", fields_differing(head, asked, "storage", ~w(paths actions)))
-    |> put_differing("tools", tools_differing(head, asked))
-    |> put_differing("limits", limits_differing(head_limits || %{}, asked_limits || %{}))
-  end
-
-  defp fields_differing(head, asked, kind, fields) do
-    head_kind = (head && head[kind]) || %{}
-    asked_kind = (asked && asked[kind]) || %{}
-
-    for field <- fields,
-        Map.get(head_kind, field, []) != Map.get(asked_kind, field, []),
-        into: %{},
-        do: {field, Map.get(head_kind, field, [])}
-  end
-
-  defp tools_differing(head, asked) do
-    head_tools = (head && head["tools"]) || []
-    if head_tools != ((asked && asked["tools"]) || []), do: head_tools
-  end
-
-  defp limits_differing(head_limits, asked_limits) do
-    for {field, value} <- head_limits, value != asked_limits[field], into: %{} do
-      case {value, asked_limits[field]} do
-        {%{} = rate, %{} = asked_rate} ->
-          {field, for({k, v} <- rate, v != asked_rate[k], into: %{}, do: {k, v})}
-
-        _differs ->
-          {field, value}
-      end
-    end
-  end
-
-  defp put_differing(record, _kind, nil), do: record
-  defp put_differing(record, _kind, empty) when empty == %{}, do: record
-  defp put_differing(record, kind, value), do: Map.put(record, kind, value)
 
   # The selections the head carries, re-decided as they stand: the same
   # lender, or the same entry for the same need under the same account
@@ -451,16 +393,20 @@ defmodule Sanctum.Consent.Commit do
 
   # A tool-server grant lives on the head's ingress edge and is not a
   # binding; re-issuing the head without it would silently drop it.
-  defp check_no_tool_servers(head, source_ref) do
-    with {:ok, %{"nodes" => nodes}} <- Jason.decode(head.resolved_policy),
-         %{"edges" => edges} <- Map.get(nodes, source_ref, %{}),
-         %{} = ingress <- Map.get(edges, Prima.Authority.Blob.ingress_key(), %{}) do
-      case Map.get(ingress, "tool_servers") do
-        [_ | _] -> {:error, :grant_requires_full_commit}
-        _ -> :ok
-      end
-    else
-      _ -> :ok
+  # The head's policy is read as every head's bytes are
+  # (`Sanctum.Consent.Loader.head_blob/1`): one whose bytes fail their
+  # digest or do not parse is the damaged profile it is, never a grant to
+  # re-issue.
+  defp check_no_tool_servers(profile_id, head, source_ref) do
+    case Sanctum.Consent.Loader.head_blob(head) do
+      {:ok, blob} ->
+        case Prima.Authority.Blob.ingress(blob, source_ref) do
+          {:ok, %{tool_servers: [_ | _]}} -> {:error, :grant_requires_full_commit}
+          _none -> :ok
+        end
+
+      {:error, _damaged} ->
+        {:error, {:corrupt, {:profile, profile_id}}}
     end
   end
 

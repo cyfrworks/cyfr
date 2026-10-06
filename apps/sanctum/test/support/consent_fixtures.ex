@@ -39,7 +39,10 @@ defmodule Sanctum.Test.ConsentFixtures do
   """
   def bindable_profile(%Context{} = ctx, target_ref, opts \\ []) do
     {:ok, name_ref} = Prima.ComponentRef.to_name_ref(target_ref)
-    policy = "{}"
+    # The smallest policy a head can hold and still be read: a blob that
+    # parses and grants nothing. A head whose bytes are no blob is a damaged
+    # head, which the loader and the grant plan refuse as such.
+    policy = ~s({"canonical":"jcs-1","nodes":{}})
     origins = Keyword.get(opts, :origins, [:interactive])
 
     case {opts[:profile_id], existing_owner(ctx, name_ref)} do

@@ -983,9 +983,13 @@ defmodule Sanctum.Providers.Profile do
   # `Sanctum.Consent.Commit.preview/2` and `commit/3`), is answered typed,
   # as `grants` answers it: the gate classes it `unavailable` or `corrupt`
   # through `Sanctum.Unauthorized`, whose sentence it reads as, and a
-  # client branches on that class. Every other refusal is rendered here.
+  # client branches on that class. So is a stored policy of the profile's
+  # own head that cannot be read, whose narrowing a re-grant would keep
+  # (`Sanctum.Consent.Plan.head_narrowing/4`): `Prima.Refusal`'s corrupt
+  # profile. Every other refusal is rendered here.
   defp walk_refusal({:lender_unavailable, _dep} = unread), do: unread
   defp walk_refusal({:lender_corrupt, _dep, _profile_id} = damaged), do: damaged
+  defp walk_refusal({:corrupt, {:profile, _profile_id}} = damaged), do: damaged
   defp walk_refusal(reason), do: fmt(reason)
 
   # Preserve typed consent signals for wire and console rendering.

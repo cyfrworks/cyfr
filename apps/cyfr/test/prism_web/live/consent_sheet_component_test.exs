@@ -1083,10 +1083,13 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         rows: [],
         shape_diff: [
           %{
+            node: "tincture:local.sheet-delta",
             capability: "egress.domains",
             change: :changed,
             added: ["b.example"],
-            removed: ["old.example"]
+            removed: ["old.example"],
+            new: false,
+            dropped: false
           }
         ]
       },
@@ -1106,6 +1109,74 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     assert html =~ "no longer asks for old.example"
     refute html =~ "now wants"
   end
+
+  test "what changed is grouped by node: the app's own first, then each dependency under its " <>
+         "ref, a new one as a new dependency and a dropped one as no longer used" do
+    app = "reagent:local.sheet-delta-app"
+    held = "reagent:local.sheet-delta-held"
+    added = "reagent:local.sheet-delta-added"
+    gone = "reagent:local.sheet-delta-gone"
+
+    entry = fn node, capability, {added_values, removed_values}, how ->
+      %{
+        node: node,
+        capability: capability,
+        change: :changed,
+        added: added_values,
+        removed: removed_values,
+        new: how == :new,
+        dropped: how == :dropped
+      }
+    end
+
+    walk = %{
+      ref: app,
+      plan: %{
+        plan_token: "not-read",
+        expected_consent_revision: 1,
+        source_ref: app,
+        needs: [],
+        candidates: [],
+        rows: [],
+        # As `ShapeDiff` orders them, the app's own first; the sheet keeps
+        # its own order regardless.
+        shape_diff: [
+          entry.(added, "egress.domains", {["api.added.example"], []}, :new),
+          entry.(added, "egress.methods", {["GET"], []}, :new),
+          entry.(app, "egress.methods", {["POST"], []}, :held),
+          entry.(gone, "storage.paths", {[], ["data/gone/"]}, :dropped),
+          entry.(held, "egress.methods", {["PATCH"], []}, :held)
+        ]
+      },
+      preview: %{v: 1, rows: [], origins: ["interactive"], proof: "p", commit_digest: "d"},
+      decisions: %{"ref" => app, "bindings" => []}
+    }
+
+    groups =
+      PrismWeb.ConsentSheetComponent
+      |> render_component(id: "consent-sheet", ref: app, walk: walk, context: oidc_ctx())
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-test="grant-delta"] [data-test="grant-delta-node"]))
+      |> Enum.map(fn group ->
+        heading = LazyHTML.query(group, ~s([data-test="grant-delta-heading"]))
+
+        {LazyHTML.attribute(group, "data-node"), heading |> LazyHTML.text() |> String.trim(),
+         group |> LazyHTML.query("li") |> Enum.map(&squish(LazyHTML.text(&1)))}
+      end)
+
+    assert groups == [
+             {[app], "", ["Network methods: asks for POST, which your grant does not give"]},
+             {[added], "New dependency #{added}",
+              [
+                "Network domains: asks for api.added.example, which your grant does not give",
+                "Network methods: asks for GET, which your grant does not give"
+              ]},
+             {[gone], "No longer used: #{gone}", ["Files paths: no longer asks for data/gone/"]},
+             {[held], held, ["Network methods: asks for PATCH, which your grant does not give"]}
+           ]
+  end
+
+  defp squish(text), do: text |> String.split() |> Enum.join(" ")
 
   test "every verb of the walk is a registered profile action" do
     {:ok, tool} = Grimoire.get_tool("profile")

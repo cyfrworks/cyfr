@@ -8,11 +8,20 @@ defmodule Sanctum.Consent.ShapeDiff do
   so the delta sheet can show a difference instead of a whole sheet.
 
   Granted capabilities come from the head consent's blob (the source
-  node's `@ingress` edge — what the operator actually approved, after any
-  narrowing they chose), live ones from the component's ask today. Each
-  entry names a capability with `added`, the values the live ask names
-  that the head does not grant, and `removed`, the values the head grants
-  that the ask no longer covers: a storage path the ask still admits
+  node's `@ingress` edge, and for a dependency an edge into it — what the
+  operator actually approved, after any narrowing they chose), live ones
+  from the component's ask today. Every node of the closure is compared,
+  each entry naming its `node`: the source's ref for the app's own, a
+  dependency's ref for that dependency's. A dependency the head never held
+  is one entry per field it asks for, `new: true`, `added` holding all it
+  asks and `removed` empty; one a release dropped is one entry per field
+  the head granted it, `dropped: true`, `removed` holding that grant and
+  `added` empty: nothing about it is granted any more. Every other entry
+  carries `new: false` and `dropped: false`.
+
+  Each entry names a capability with `added`, the values the live ask
+  names that the head does not grant, and `removed`, the values the head
+  grants that the ask no longer covers: a storage path the ask still admits
   (`Prima.ComponentPath.path_granted?/2`), such as a sub-folder the person
   picked inside a folder still asked for, or a host a still-asked domain
   pattern admits (`Prima.Network.domain_allowed?/2`), is not among them.
@@ -30,34 +39,132 @@ defmodule Sanctum.Consent.ShapeDiff do
   (`destination <scheme>://<hosts><paths>`) and value names (`value
   <name>`) the live block and the head's edge hold, never a value, and
   `need` names the need the live block provides for that dependency when
-  it names exactly one (the head's blob names none).
+  it names exactly one (the head's blob names none). It is the app's own
+  configuration, read from the app's manifest and the app's edges, so its
+  `node` is the source's.
+
+  The app's own entries come first, then each dependency's by its ref.
 
   Explains the loader's decision without changing it. A derivation failure
-  returns an empty diff.
+  returns an empty diff; a closure that cannot be resolved compares the
+  source alone.
   """
 
   alias Prima.Authority.Blob
+  alias Sanctum.Consent.BlobBuilder
 
   require Logger
 
   @egress ~w(domains methods schemes private_ips)
   @storage ~w(paths actions)
 
-  @doc """
-  Compare a head consent's granted shape against live capabilities.
-  Returns a list of maps, or `[]` when either side cannot be derived.
+  # The side of a node the head never held, or the ask no longer names.
+  @none %{"tools" => [], "egress" => %{}, "storage" => %{}}
+
+  @typedoc """
+  One capability of one node that changed since the head: `node` the
+  node's ref; `capability` `"tools"`, `"egress.<field>"`,
+  `"storage.<field>"`, `"policy.<mode>"` or `"provided.<dep>"`; `change`
+  `:widened`, `:narrowed` or `:changed`; `added` and `removed` the values;
+  `new` a dependency the head never held, `dropped` one the ask no longer
+  names; and, on a `provided.<dep>` entry, `need`.
   """
-  @spec compute(Sanctum.Context.t(), String.t(), String.t()) :: [map()]
+  @type entry :: %{
+          required(:node) => String.t(),
+          required(:capability) => String.t(),
+          required(:change) => :widened | :narrowed | :changed,
+          required(:added) => [String.t()],
+          required(:removed) => [String.t()],
+          required(:new) => boolean(),
+          required(:dropped) => boolean(),
+          optional(:need) => String.t() | nil
+        }
+
+  @doc """
+  Compare a head consent's granted shape against live capabilities, every
+  node of the source's closure as it resolves now. Returns the entries, or
+  `[]` when either side cannot be derived.
+  """
+  @spec compute(Sanctum.Context.t(), String.t(), String.t()) :: [entry()]
   def compute(ctx, source_ref, resolved_policy) do
+    asked =
+      case Sanctum.Consent.Plan.asked_blob(ctx, source_ref) do
+        {:ok, asked} -> asked
+        {:error, _underivable} -> nil
+      end
+
+    compute(ctx, source_ref, resolved_policy, asked)
+  end
+
+  @doc false
+  # `compute/3` against the ask a plan has already built for the closure
+  # (`Sanctum.Consent.Plan.asked_blob/2`'s, as JSON), so the closure is
+  # resolved once; nil, for a closure that does not resolve, compares the
+  # source alone.
+  @spec compute(Sanctum.Context.t(), String.t(), String.t(), String.t() | nil) :: [entry()]
+  def compute(ctx, source_ref, resolved_policy, asked) do
     with {:ok, blob} <- Blob.parse(resolved_policy),
          {:ok, edge} <- Blob.ingress(blob, source_ref),
          {:ok, component} <- Sanctum.Consent.Plan.fetch_component(ctx, source_ref),
          manifest = manifest(component, source_ref),
          {:ok, live} <- live_caps(ctx, source_ref, manifest) do
-      diff_caps(flatten_edge(edge), live) ++ diff_provided(blob, source_ref, manifest)
+      own =
+        Enum.map(
+          diff_caps(flatten_edge(edge), live) ++ diff_provided(blob, source_ref, manifest),
+          &on_node(&1, source_ref, :held)
+        )
+
+      own ++ diff_dependencies(resolved_policy, source_ref, asked)
     else
       _ -> []
     end
+  end
+
+  # Every node of the closure but the source, held against asked: what
+  # the edges into it grant on the head and on the ask. A node only the
+  # ask names is new, one only the head names dropped.
+  defp diff_dependencies(_resolved_policy, _source_ref, nil), do: []
+
+  defp diff_dependencies(resolved_policy, source_ref, asked) do
+    with {:ok, %{"nodes" => held}} when is_map(held) <- Jason.decode(resolved_policy),
+         {:ok, %{"nodes" => asking}} when is_map(asking) <- Jason.decode(asked) do
+      (Map.keys(held) ++ Map.keys(asking))
+      |> Enum.uniq()
+      |> Enum.reject(&(&1 == source_ref))
+      |> Enum.sort()
+      |> Enum.flat_map(fn node ->
+        case {Map.has_key?(held, node), Map.has_key?(asking, node)} do
+          {false, true} ->
+            tagged(diff_caps(@none, node_caps(asking, source_ref, node)), node, :new)
+
+          {true, false} ->
+            tagged(diff_caps(node_caps(held, source_ref, node), @none), node, :dropped)
+
+          {true, true} ->
+            granted = node_caps(held, source_ref, node)
+            tagged(diff_caps(granted, node_caps(asking, source_ref, node)), node, :held)
+        end
+      end)
+    else
+      _underivable -> []
+    end
+  end
+
+  defp tagged(entries, node, how), do: Enum.map(entries, &on_node(&1, node, how))
+
+  defp on_node(entry, node, how),
+    do: Map.merge(entry, %{node: node, new: how == :new, dropped: how == :dropped})
+
+  # What the edges into `node` grant in `nodes`, in `diff_caps/2`'s shape;
+  # nothing for a node no edge reaches.
+  defp node_caps(nodes, source_ref, node) do
+    resources = BlobBuilder.node_resources(nodes, source_ref, node) || %{}
+
+    %{
+      "tools" => resources["tools"] || [],
+      "egress" => Map.take(resources["egress"] || %{}, @egress),
+      "storage" => Map.take(resources["storage"] || %{}, @storage)
+    }
   end
 
   defp live_caps(ctx, source_ref, manifest) do

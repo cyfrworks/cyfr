@@ -106,7 +106,11 @@ defmodule PrismWeb.ConsentSheetComponent do
   What changed since the head (the plan's `shape_diff`) is worded against
   the head as the person narrowed it: what the component asks for that
   the grant does not give, and what it no longer asks for. The person's
-  own narrowing never reads as the component widening.
+  own narrowing never reads as the component widening. It is grouped by
+  node, the app's own first: each dependency under its ref, one the head
+  never held as "New dependency <ref>" with what it asks, and one the
+  release dropped as "No longer used: <ref>" with what the head granted
+  it.
 
   It starts from the walk the prompt arrived with (`walk`: the plan as
   `profile.plan` answers it, its preview and the decisions, and the
@@ -124,8 +128,10 @@ defmodule PrismWeb.ConsentSheetComponent do
   asks the sheet (`confirm: prompt_id`), and the sheet hands it the walk
   as it stands then, after every choice that came before the confirm, as
   `commit:`: that is the walk the layer commits. Told to plan again
-  (`replan: true`), after a commit that consumed the plan's token, it
-  plans and previews the same choices again.
+  (`replan: true`), after a commit that consumed the plan's token or a
+  credential entered from it, it plans again: over the same ask it
+  previews the same choices again, and over an ask that moved it opens
+  again on the grant as it stands and says so (`reopen_if_moved/3`).
   """
 
   use PrismWeb, :live_component
@@ -209,7 +215,8 @@ defmodule PrismWeb.ConsentSheetComponent do
        account_refusal: nil,
        layer: nil,
        session_end: nil,
-       started: false
+       started: false,
+       moved: false
      )}
   end
 
@@ -217,7 +224,9 @@ defmodule PrismWeb.ConsentSheetComponent do
   def update(%{replan: true}, socket) do
     {:noreply, socket} =
       CyfrWeb.ContextGuard.guard(socket, fn socket ->
-        {:noreply, socket |> assign(plan: nil, preview: nil) |> load_plan() |> tell_layer()}
+        was = socket.assigns.plan
+
+        {:noreply, socket |> assign(plan: nil, preview: nil) |> load_plan(was) |> tell_layer()}
       end)
 
     {:ok, socket}
@@ -250,7 +259,7 @@ defmodule PrismWeb.ConsentSheetComponent do
         if Map.get(walk, :replan) == true do
           {:noreply, socket} =
             CyfrWeb.ContextGuard.guard(socket, fn socket ->
-              {:noreply, socket |> load_plan() |> tell_layer()}
+              {:noreply, socket |> load_plan(plan) |> tell_layer()}
             end)
 
           {:ok, socket}
@@ -1183,8 +1192,10 @@ defmodule PrismWeb.ConsentSheetComponent do
   def handle_event("set_limits", %{"node" => node, "limits" => limits}, socket)
       when is_map(limits) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      current = get_in(socket.assigns.subset, [node, "limits"]) || %{}
+
       with %{} = asked <- asked_limits(socket.assigns.plan, node),
-           {:ok, record} <- lowered(limits, asked) do
+           {:ok, record} <- lowered(limits, asked, current) do
         subset = put_record(socket.assigns.subset, node, "limits", record)
         {:noreply, socket |> assign(:subset, subset) |> walk_again({"limits", node})}
       else
@@ -1707,25 +1718,32 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   # The limits the person lowered, each at most its ask; a field left at
   # its ask, or blank, is not sent.
-  defp lowered(limits, asked) do
+  # The node's limits as they stand (`current`, the narrowing the walk
+  # holds, a re-grant's head narrowing among it) changed only by what the
+  # form sent: a field lowered below the ask is narrowed to it, one sent at
+  # the ask is the ask again, and one left empty or not on the form keeps
+  # what it held. A narrowing the form cannot show, such as a rate's
+  # window longer than the ask's, is never dropped by lowering another.
+  defp lowered(limits, asked, current) do
     limits
     |> Enum.sort()
-    |> Enum.reduce_while({:ok, %{}}, fn {field, raw}, {:ok, acc} ->
-      case lower(field, String.trim(to_string(raw)), asked) do
-        :keep -> {:cont, {:ok, acc}}
+    |> Enum.reduce_while({:ok, current}, fn {field, raw}, {:ok, acc} ->
+      case lower(field, String.trim(to_string(raw)), asked, acc) do
+        :unchanged -> {:cont, {:ok, acc}}
+        {:ask, key} -> {:cont, {:ok, Map.delete(acc, key)}}
         {:ok, {key, value}} -> {:cont, {:ok, Map.put(acc, key, value)}}
         {:error, _sentence} = error -> {:halt, error}
       end
     end)
   end
 
-  defp lower(_field, "", _asked), do: :keep
+  defp lower(_field, "", _asked, _current), do: :unchanged
 
-  defp lower(field, raw, asked) when field in @integer_limits do
+  defp lower(field, raw, asked, _current) when field in @integer_limits do
     with {value, ""} <- Integer.parse(raw),
          ask when is_integer(ask) <- asked[field] do
       cond do
-        value == ask -> :keep
+        value == ask -> {:ask, field}
         value > ask or value < 0 -> {:error, "#{limit_label(field)} can be at most #{ask}."}
         true -> {:ok, {field, value}}
       end
@@ -1734,12 +1752,12 @@ defmodule PrismWeb.ConsentSheetComponent do
     end
   end
 
-  defp lower(field, raw, asked) when field in @duration_limits do
+  defp lower(field, raw, asked, _current) when field in @duration_limits do
     with {:ok, ms} <- Prima.Limits.parse_duration(raw),
          ask when is_binary(ask) <- asked[field],
          {:ok, ask_ms} <- Prima.Limits.parse_duration(ask) do
       cond do
-        ms == ask_ms -> :keep
+        ms == ask_ms -> {:ask, field}
         ms > ask_ms -> {:error, "#{limit_label(field)} can be at most #{ask}."}
         true -> {:ok, {field, raw}}
       end
@@ -1748,13 +1766,20 @@ defmodule PrismWeb.ConsentSheetComponent do
     end
   end
 
-  defp lower("rate_requests", raw, %{"rate_limit" => %{"requests" => ask} = rate}) do
-    case Integer.parse(raw) do
-      {^ask, ""} ->
-        :keep
+  # The count the form shows is lowered in the window the node holds now:
+  # the ask's, or a longer one a re-grant's head narrowing kept (the
+  # overlap of the head's rate and the ask's). The rate is the ask again
+  # only when both its count and its window are the ask's.
+  defp lower("rate_requests", raw, %{"rate_limit" => %{"requests" => ask} = asked}, current) do
+    ask_window = asked["window"]
+    window = get_in(current, ["rate_limit", "window"]) || ask_window
 
-      {value, ""} when value >= 0 and value < ask ->
-        {:ok, {"rate_limit", %{rate | "requests" => value}}}
+    case Integer.parse(raw) do
+      {^ask, ""} when window == ask_window ->
+        {:ask, "rate_limit"}
+
+      {value, ""} when value >= 0 and value <= ask ->
+        {:ok, {"rate_limit", %{"requests" => value, "window" => window}}}
 
       {_value, ""} ->
         {:error, "The rate can be at most #{ask} requests."}
@@ -1764,7 +1789,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     end
   end
 
-  defp lower(_field, _raw, _asked), do: :keep
+  defp lower(_field, _raw, _asked, _current), do: :unchanged
 
   defp inside?(path, asked), do: Prima.ComponentPath.path_granted?(path, asked)
 
@@ -1772,13 +1797,15 @@ defmodule PrismWeb.ConsentSheetComponent do
   # The walk
   # ---------------------------------------------------------------------------
 
-  defp load_plan(socket) do
+  defp load_plan(socket, was \\ nil) do
     args =
       %{"ref" => socket.assigns.ref}
       |> Prima.MapUtil.put_present("label", socket.assigns.label)
 
     case Ops.call_tool(socket, "profile/plan", args) do
       {:ok, plan} ->
+        socket = reopen_if_moved(socket, was, plan)
+
         socket
         |> assign(plan: plan, error: nil)
         |> assign(:origins, socket.assigns.origins || origins_of(nil, plan))
@@ -1788,6 +1815,44 @@ defmodule PrismWeb.ConsentSheetComponent do
         assign(socket, plan: nil, preview: nil, error: Ops.error_message(reason))
     end
   end
+
+  # A plan made again while the sheet is open answers for the grant and the
+  # ask as they stand now. When either moved since the plan the sheet held
+  # (`was`) — a release landed (another shape), or another client committed
+  # (another head revision, which a refused commit's `stale_plan` names) —
+  # nothing the sheet holds was chosen against them: not its narrowing, its
+  # origins, its accounts nor its lifetimes. So it opens again exactly as a
+  # prompt opening now would (`head_narrowing`, `head_origins`, the plan's
+  # own choices), never carrying the old head's grant over the new one, and
+  # says so. Only a plan made again over the same ask and the same head
+  # keeps what the person chose.
+  #
+  # Both ways a sheet plans again pass the plan it held (`was`): a refused
+  # commit (`update/2`'s `replan`) and a walk returned with a credential
+  # entered (`replan` on the walk). The notice is true only of the reopen
+  # it names, so a plan made again over what the sheet holds clears it, and
+  # the walk last previewed goes with a reopen, never to be put back.
+  defp reopen_if_moved(socket, was, plan) when is_map(was) do
+    if shape_of(was) != shape_of(plan) or head_of(was) != head_of(plan) do
+      assign(socket,
+        subset: subset_of(plan[:head_narrowing]),
+        origins: origins_of(nil, plan),
+        choices: initial_choices(plan),
+        moved: true,
+        previewed: nil,
+        refusal: nil,
+        account_refusal: nil
+      )
+    else
+      assign(socket, :moved, false)
+    end
+  end
+
+  defp reopen_if_moved(socket, _first_plan, _plan), do: socket
+
+  defp head_of(plan), do: plan[:expected_consent_revision]
+
+  defp shape_of(plan), do: plan[:shape_digest]
 
   # A plan whose closure is unresolved has nothing to preview: the preview
   # and the commit refuse it, and the sheet names what is missing instead.
@@ -2005,23 +2070,37 @@ defmodule PrismWeb.ConsentSheetComponent do
           </p>
         </section>
 
+        <p :if={@moved} role="alert" class="text-sm text-amber-400" data-test="grant-moved">
+          This app or its grant changed while this was open, so it opens again on the grant as
+          it stands now — review it before you confirm.
+        </p>
+
         <section
           :if={(@plan[:shape_diff] || []) != []}
           class="consent-sheet__delta"
           data-test="grant-delta"
         >
           <h4 class="font-medium">What changed since your grant</h4>
-          <ul>
-            <li :for={entry <- @plan.shape_diff}>
-              <strong>{capability_label(entry.capability)}</strong>
-              <span :if={entry.added != []}>
-                asks for {Enum.join(entry.added, ", ")}, which your grant does not give
-              </span>
-              <span :if={entry.removed != []}>
-                no longer asks for {Enum.join(entry.removed, ", ")}
-              </span>
-            </li>
-          </ul>
+          <div
+            :for={group <- delta_groups(@plan, @plan[:source_ref] || @ref)}
+            data-test="grant-delta-node"
+            data-node={group.node}
+          >
+            <h5 :if={group.heading} class="font-medium" data-test="grant-delta-heading">
+              {group.heading}
+            </h5>
+            <ul>
+              <li :for={entry <- group.entries}>
+                <strong>{capability_label(entry.capability)}</strong>
+                <span :if={entry.added != []}>
+                  asks for {Enum.join(entry.added, ", ")}, which your grant does not give
+                </span>
+                <span :if={entry.removed != []}>
+                  no longer asks for {Enum.join(entry.removed, ", ")}
+                </span>
+              </li>
+            </ul>
+          </div>
         </section>
 
         <section class="consent-sheet__needs space-y-2" data-test="grant-needs">
@@ -3205,6 +3284,33 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp origin_label("schedule"), do: "on a schedule (schedule)"
   defp origin_label("webhook"), do: "from webhooks (webhook)"
   defp origin_label(origin), do: origin
+
+  # What changed since the head, by node: the app's own first, unheaded,
+  # then each dependency under its ref, a new one as a new dependency and
+  # one the release dropped as no longer used.
+  defp delta_groups(plan, app) do
+    {own, others} =
+      (plan[:shape_diff] || [])
+      |> Enum.group_by(&(&1[:node] || app))
+      |> Map.split([app])
+
+    own_group =
+      for {node, entries} <- own, do: %{node: node, heading: nil, entries: entries}
+
+    other_groups =
+      for {node, entries} <- Enum.sort(others),
+          do: %{node: node, heading: delta_heading(node, entries), entries: entries}
+
+    own_group ++ other_groups
+  end
+
+  defp delta_heading(node, entries) do
+    cond do
+      Enum.any?(entries, & &1[:new]) -> "New dependency #{node}"
+      Enum.any?(entries, & &1[:dropped]) -> "No longer used: #{node}"
+      true -> node
+    end
+  end
 
   defp capability_label("tools"), do: "Tools:"
   defp capability_label("egress." <> field), do: "Network #{field}:"

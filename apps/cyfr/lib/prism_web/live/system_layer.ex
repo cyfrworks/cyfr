@@ -255,7 +255,10 @@ defmodule PrismWeb.SystemLayer do
   the head binds with its lifetime, never wider, and elsewhere the plan's
   suggestions bound for the required needs of the app and of each
   dependency) under the origins
-  the head admits (`interactive` alone on a first grant), when the
+  the head admits (`interactive` alone on a first grant) and the
+  narrowing it holds (`head_narrowing`: a method the head narrowed off,
+  or one newly asked for, opens off; a first grant opens on the ask),
+  when the
   person's session ends (`session.whoami`'s `session_expires_at`, which
   a "this session" lifetime is held to), and the athanor they were read
   in. A suggestion the home refuses to preview opens the grant with
@@ -365,15 +368,22 @@ defmodule PrismWeb.SystemLayer do
 
   defp with_account(_plan, choices, _malformed), do: choices
 
+  # A re-grant opens on the narrowing its head holds against the ask
+  # (`profile.plan`'s `head_narrowing`), never wider: a method the grant
+  # narrowed off opens off, and so does one newly asked for, which the
+  # grant never covered. A first grant has none, and opens on the ask.
   defp first_decisions(ref, label, plan, choices) do
     PrismWeb.ConsentSheetComponent.decisions(
       ref,
       label,
       plan[:head_origins] || ["interactive"],
-      %{},
+      head_narrowing(plan),
       choices
     )
   end
+
+  defp head_narrowing(%{head_narrowing: %{} = narrowing}), do: narrowing
+  defp head_narrowing(_first_grant), do: %{}
 
   defp first_preview(ctx_or_socket, decisions),
     do: Ops.call_tool(ctx_or_socket, "profile/preview", %{"decisions" => decisions})
@@ -1781,8 +1791,9 @@ defmodule PrismWeb.SystemLayer do
   end
 
   # A refused commit consumed the walk's plan token whatever it answered:
-  # the sheet plans the same choices again, and the person may try again
-  # once it has.
+  # the sheet plans again (the same choices over the same ask, or the grant
+  # as it stands over an ask that moved), and the person may try again once
+  # it has.
   defp dispatched(socket, %{kind: :grant} = prompt, {:error, reason}) do
     send_update(PrismWeb.ConsentSheetComponent,
       id: sheet_id(socket.assigns.id, prompt.id),
