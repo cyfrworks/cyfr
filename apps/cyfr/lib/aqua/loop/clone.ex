@@ -158,10 +158,15 @@ defmodule Aqua.Loop.Clone do
   @doc false
   # The clone's answer to the pinned profile's reload, `result` being
   # `Crucible.authority_for/3`'s: its head must still be the pinned
-  # consent. A consent the store could not answer, or one stored outside
-  # the closed vocabulary, is no moved consent: it answers as itself, in
-  # its own sentence. Any other refusal means the pinned consent no longer
-  # stands.
+  # consent. A consent the store could not answer, or one stored damaged,
+  # is no moved consent: it answers as itself, in its own sentence. A
+  # damaged head (`head_corrupt`) is any the loader cannot trust: stored
+  # outside the closed vocabulary, absent under an active profile, its
+  # bytes failing their digest or not parsing, its revision, bindings or
+  # stored references disagreeing, or its grant holding no node or ingress
+  # of its own; a running release that does not re-derive from its row is
+  # the damaged component graph. Any other refusal means the pinned
+  # consent no longer stands.
   @spec intact_answer({:ok, term()} | {:error, term()}, String.t()) :: :ok | {:error, term()}
   def intact_answer({:ok, %Authority{consent_id: consent_id}}, consent_id), do: :ok
   def intact_answer({:ok, _moved}, _consent_id), do: {:error, :consent_moved}
@@ -174,8 +179,9 @@ defmodule Aqua.Loop.Clone do
 
   @doc false
   # The admission's own store outage, its damaged profile row and a
-  # component graph stored damaged; the consent loader's (a head or a
-  # lender the store could not answer) and its damage.
+  # component graph stored damaged (rows that do not hash, or a release
+  # that does not re-derive from its row); the consent loader's (a head or
+  # a lender the store could not answer) and its damage.
   @spec unanswered_or_damaged?(term()) :: boolean()
   def unanswered_or_damaged?({:unavailable, _what}), do: true
   def unanswered_or_damaged?({:corrupt, {:profile, _profile_id}}), do: true

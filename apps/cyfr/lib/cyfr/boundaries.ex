@@ -1315,7 +1315,14 @@ defmodule Cyfr.Boundaries do
       authorize_staging: 1
     ],
     "Sanctum.Consent.Components" => [install!: 1],
-    "Sanctum.Consent.Loader" => [load_root: 3, pinned_intact?: 2],
+    # Admission reads the loader's own-head damage through its one
+    # definition, the family and the refusal each member answers.
+    "Sanctum.Consent.Loader" => [
+      damage?: 1,
+      damage_refusal: 3,
+      load_root: 3,
+      pinned_intact?: 2
+    ],
     "Sanctum.Consent.Proof" => [store: 0],
     "Sanctum.Consent.RegistrationBinding" => [authorize: 3, message: 1],
     "Sanctum.Consent.ShapeDerivation" => [expand_tools: 1, live_digest: 2, manifest_blocks: 2],

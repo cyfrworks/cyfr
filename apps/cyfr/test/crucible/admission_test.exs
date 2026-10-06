@@ -1016,45 +1016,65 @@ defmodule Crucible.AdmissionTest do
   end
 
   describe "the root's own grant read damaged" do
-    # Admission cannot read `Aqua`, so its reading of the loader's damage
-    # (`Crucible.Admission.root_refusal/2`) is held to the consent
-    # status's here, over every member the loader declares
-    # (`Sanctum.Consent.Loader.load_error/0`): a member the status reads
-    # as damage that admission leaves as it stands, or one admission
-    # relabels that the status does not read as damage, fails this.
-    test "is typed damage for exactly the loader's answers the consent status reads as damage" do
+    @own_root "reagent:local.own-root:1.0.0"
+
+    # What a reader of an app's own head answers for its damage, which the
+    # router answers typed, in class `corrupt`: the damaged head and the
+    # damaged profile, naming the root's own profile, and the damaged
+    # component graph, naming the root.
+    @damage_answers [
+      {:head_corrupt, "prof_own"},
+      {:corrupt, {:profile, "prof_own"}},
+      {:corrupt, {:component_graph, @own_root}}
+    ]
+
+    # Neither Sanctum nor admission can read `Aqua`, so the loader's one
+    # definition of an app's own-head damage
+    # (`Sanctum.Consent.Loader.damage?/1`) is held to the consent status's
+    # reading here, over every member the loader declares
+    # (`Sanctum.Consent.Loader.load_error/0`). Every member the status
+    # reads as damage is in the family or is damage the loader typed
+    # already (`head_corrupt`, `lender_corrupt`), and the family names no
+    # member the status does not read as damage. Admission answers the
+    # family in the loader's one reading of it, and every other member as
+    # the loader gave it.
+    test "is the loader's one family, exactly the answers the consent status reads as damage" do
       members = declared(Sanctum.Consent.Loader, :load_error)
       assert members != []
 
       # Each member is named in a failure by its type, as the loader spells it.
       for member <- members do
         reason = instance(member)
-        answer = Admission.root_refusal("prof_own", reason)
+        named = spelled(member)
+        status_damage? = Aqua.ConsentStatus.classify_refusal(reason) == {:error, :corrupt}
+        damage? = Sanctum.Consent.Loader.damage?(reason)
+        answer = Admission.root_refusal(reason, "prof_own", @own_root)
 
-        case Aqua.ConsentStatus.classify_refusal(reason) do
-          {:error, :corrupt} ->
-            assert {spelled(member), typed_damage?(reason, answer)} == {spelled(member), true}
+        if typed_damage?(reason) do
+          assert {named, status_damage?, damage?} == {named, true, false}
+        else
+          assert {named, damage?} == {named, status_damage?}
+        end
 
-          _not_damage ->
-            assert {spelled(member), answer == reason} == {spelled(member), true}
+        if damage? do
+          assert {named, answer} ==
+                   {named, Sanctum.Consent.Loader.damage_refusal(reason, "prof_own", @own_root)}
+
+          assert {named, answer in @damage_answers} == {named, true}
+
+          assert {named, Aqua.ConsentStatus.classify_refusal(answer)} ==
+                   {named, {:error, :corrupt}}
+        else
+          assert {named, answer} == {named, reason}
         end
       end
     end
   end
 
-  # What admission answers for damage, the router answers typed: the damaged
-  # head and the damaged profile, naming the root's own profile, and the
-  # loader's own typed damage, of the head or a lender, as the loader named
-  # it.
-  defp typed_damage?({:head_corrupt, _profile_id} = reason, answer), do: answer == reason
-
-  defp typed_damage?({:lender_corrupt, _target, _profile_id} = reason, answer),
-    do: answer == reason
-
-  defp typed_damage?({:invalid_profile, _what}, answer),
-    do: answer == {:corrupt, {:profile, "prof_own"}}
-
-  defp typed_damage?(_reason, answer), do: answer == {:head_corrupt, "prof_own"}
+  # The loader's own damage, of the head or a lender, typed as it named it.
+  defp typed_damage?({:head_corrupt, _profile_id}), do: true
+  defp typed_damage?({:lender_corrupt, _target, _profile_id}), do: true
+  defp typed_damage?(_reason), do: false
 
   # The members of `module`'s type `name`, a union flattened through the
   # types it names, each with the module whose type spells it.

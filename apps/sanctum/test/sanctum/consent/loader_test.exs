@@ -599,4 +599,89 @@ defmodule Sanctum.Consent.LoaderTest do
       end
     end
   end
+
+  describe "an app's own head read damaged, in its one reading" do
+    @own "prof-own"
+    @source "reagent:local.own:1.0.0"
+
+    # Every member of the family, with what a reader of the app's own head
+    # answers for it: the damaged profile, the damaged component graph (a
+    # release no grant repairs) and otherwise the damaged head. Several of
+    # them reach no reader but the run's root (`load_root/3` alone runs the
+    # profile, activation and root checks), so the reading is pinned here
+    # for each.
+    @damaged [
+      {{:invalid_profile, :status}, {:corrupt, {:profile, @own}}},
+      {{:invalid_profile, :public_requires_edge_only}, {:corrupt, {:profile, @own}}},
+      {{:integrity_alarm, ["formula:local.a"]}, {:corrupt, {:component_graph, @source}}},
+      {{:invalid_consent, :scope}, {:head_corrupt, @own}},
+      {{:invalid_consent, :pinned_version}, {:head_corrupt, @own}},
+      {{:invalid_consent, :activation}, {:head_corrupt, @own}},
+      {{:invalid_consent, :blob_digest}, {:head_corrupt, @own}},
+      {{:invalid_blob, {:invalid_json, :eof}}, {:head_corrupt, @own}},
+      {{:blob_digest_mismatch, "sha256:stored"}, {:head_corrupt, @own}},
+      {{:blob_refs_mismatch, %{blob_only: [], refs_only: []}}, {:head_corrupt, @own}},
+      {{:inconsistent_binding_digest, "vault-x"}, {:head_corrupt, @own}},
+      {{:no_head_consent, @own}, {:head_corrupt, @own}},
+      {{:unknown_source_node, "reagent:local.own"}, {:head_corrupt, @own}},
+      {{:missing_ingress, "reagent:local.own"}, {:head_corrupt, @own}}
+    ]
+
+    test "each member is damage, answered as what the person can repair" do
+      for {reason, refusal} <- @damaged do
+        assert {reason, Loader.damage?(reason)} == {reason, true}
+        assert {reason, Loader.damage_refusal(reason, @own, @source)} == {reason, refusal}
+      end
+    end
+
+    # An outage is retried, a lender's refusal names the lender, a head
+    # already read damaged is typed, and a consent to give again, a setup
+    # to make or a profile that no longer roots is no damage at all.
+    test "an outage, a lender's refusal, a typed damaged head and every other answer are not" do
+      for reason <- [
+            {:head_unavailable, @own},
+            {:lender_unavailable, "catalyst:local.lender"},
+            {:lender_corrupt, "catalyst:local.lender", "prof-lender"},
+            {:head_corrupt, @own},
+            {:profile_unavailable, :revoked},
+            {:consent_required, %{profile_id: @own, current_revision: 1, shape_diff: []}},
+            {:setup_required, %{profile_id: @own}},
+            :connection_not_granted,
+            :unavailable,
+            {:corrupt, {:profile, @own}}
+          ] do
+        refute Loader.damage?(reason), "#{inspect(reason)} read as damage"
+
+        assert_raise FunctionClauseError, fn -> Loader.damage_refusal(reason, @own, @source) end
+      end
+    end
+
+    # The stored states themselves: what the loader answers for a head
+    # whose bytes fail their digest, and for a release that does not
+    # re-derive, reads as the damaged head and the damaged component graph.
+    @tag :capture_log
+    test "the loader's own answers for a damaged head and a tampered release read so",
+         %{ctx: ctx} do
+      profile = profile_summary()
+      honest = consent()
+
+      seed(ctx, profile, %{honest | blob_digest: "sha256:not-these-bytes"})
+      assert {:error, reason} = Loader.load_root(ctx, profile, live: live_for(honest.activation))
+      assert Loader.damage?(reason)
+      assert Loader.damage_refusal(reason, profile.id, @source) == {:head_corrupt, profile.id}
+
+      seed(ctx, profile, honest)
+      {:ok, %{nodes: nodes} = live} = live_for(honest.activation)
+
+      tampered = put_in(nodes, [Fixtures.catalyst_ref(), :integrity], :mismatch)
+
+      assert {:error, {:integrity_alarm, _} = alarm} =
+               Loader.load_root(ctx, profile, live: {:ok, %{live | nodes: tampered}})
+
+      assert Loader.damage?(alarm)
+
+      assert Loader.damage_refusal(alarm, profile.id, @source) ==
+               {:corrupt, {:component_graph, @source}}
+    end
+  end
 end

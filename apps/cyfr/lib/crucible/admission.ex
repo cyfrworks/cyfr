@@ -107,16 +107,19 @@ defmodule Crucible.Admission do
   `{:error, {:corrupt, {:component_graph, ref}}}`, `ref` the root's own
   component ref: an outage and damage, never a setup to make.
 
-  The selected profile's own stored grant that the loader cannot trust is
-  damage in admission's typed reasons, never the loader's own term: a
-  profile and head that cannot root an authority (the loader's
-  `{:invalid_profile, _}`) is `{:error, {:corrupt, {:profile, id}}}`, and
-  an active profile with no head, or a head whose bytes fail their digest
-  or do not parse, whose revision, bindings or stored references do not
-  agree, whose grant holds no node or ingress of its own, or whose running
-  release does not re-derive from its row, is
-  `{:error, {:head_corrupt, id}}`, `id` the profile's. A lender's refusals
-  and every other answer of the loader stand as the loader gave them.
+  The selected profile's own stored grant, or the release it runs, that
+  the loader cannot trust (`Sanctum.Consent.Loader.damage?/1`) is damage
+  in the loader's one reading of it
+  (`Sanctum.Consent.Loader.damage_refusal/3`), never the loader's own
+  term: a profile and head that cannot root an authority is
+  `{:error, {:corrupt, {:profile, id}}}`; a running release that does not
+  re-derive from its row is `{:error, {:corrupt, {:component_graph,
+  ref}}}`, `ref` the root's own component ref; and an active profile with
+  no head, or a head whose bytes fail their digest or do not parse, whose
+  revision, bindings or stored references do not agree, or whose grant
+  holds no node or ingress of its own, is `{:error, {:head_corrupt, id}}`,
+  `id` the profile's. A lender's refusals and every other answer of the
+  loader stand as the loader gave them.
   """
   @spec authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
           {:ok, Authority.t()} | {:error, term()}
@@ -1075,44 +1078,29 @@ defmodule Crucible.Admission do
           Keyword.take(opts, [:ceiling, :live_shape_digest, :budget_id, :connection])
       )
       |> case do
-        {:error, reason} -> {:error, root_refusal(profile.id, reason)}
-        loaded -> loaded
+        {:error, reason} ->
+          {:error, root_refusal(reason, profile.id, component["component_ref"])}
+
+        loaded ->
+          loaded
       end
     end
   end
 
-  # The loader's answers for the selected profile's own stored grant that
-  # it cannot trust (`Sanctum.Consent.Loader.load_error/0`): exactly those
-  # `Aqua.ConsentStatus.classify_refusal/1` classes damage, beside
-  # `head_corrupt` and `lender_corrupt`, which are typed already. This
-  # module cannot read `Aqua`, so a test holds the two equal over the
-  # loader's declared vocabulary.
-  @own_damage [
-    :invalid_profile,
-    :invalid_consent,
-    :invalid_blob,
-    :blob_digest_mismatch,
-    :blob_refs_mismatch,
-    :inconsistent_binding_digest,
-    :integrity_alarm,
-    :no_head_consent,
-    :unknown_source_node,
-    :missing_ingress
-  ]
-
   @doc false
   # The root load's answer for the loader's refusal `reason` of the profile
-  # `profile_id`: its own grant read damaged is a reason the router answers
-  # typed, in class `corrupt` and its own sentence (`Prima.Refusal`'s
-  # damaged profile, `Sanctum.Unauthorized`'s damaged head), never as an
+  # `profile_id`, rooting the component `source_ref`: its own grant, or the
+  # release it runs, read damaged (`Sanctum.Consent.Loader.damage?/1`) is
+  # the loader's one reading of that damage
+  # (`Sanctum.Consent.Loader.damage_refusal/3`), a reason the router
+  # answers typed, in class `corrupt` and its own sentence, never as an
   # outcome that could not be confirmed. Any other reason stands.
-  @spec root_refusal(String.t(), term()) :: term()
-  def root_refusal(profile_id, {:invalid_profile, _what}), do: {:corrupt, {:profile, profile_id}}
-
-  def root_refusal(profile_id, {damage, _detail}) when damage in @own_damage,
-    do: {:head_corrupt, profile_id}
-
-  def root_refusal(_profile_id, reason), do: reason
+  @spec root_refusal(term(), String.t(), String.t()) :: term()
+  def root_refusal(reason, profile_id, source_ref) do
+    if Sanctum.Consent.Loader.damage?(reason),
+      do: Sanctum.Consent.Loader.damage_refusal(reason, profile_id, source_ref),
+      else: reason
+  end
 
   # The component graph the loader judges the consent against, or why it
   # cannot be judged, decided before the loader is asked. A graph the

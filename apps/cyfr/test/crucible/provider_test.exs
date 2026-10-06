@@ -499,11 +499,13 @@ defmodule Crucible.ProviderTest do
       damaged_head!(ctx, root, "prof-twice-root")
     end
 
+    # A release row that does not re-derive is the component's damage, which
+    # no grant repairs: never the damaged head, whose sentence says to
+    # revoke and grant again.
     @tag :capture_log
-    test "a release whose stored digest does not re-derive from its row is a damaged head",
+    test "a release whose stored digest does not re-derive from its row is a damaged " <>
+           "component graph, never a damaged consent",
          %{ctx: ctx, ref: ref} do
-      profile_id = own_profile_id(ctx)
-
       {1, _} =
         Arca.Repo.update_all(
           from(c in Arca.Schemas.Component,
@@ -514,7 +516,23 @@ defmodule Crucible.ProviderTest do
 
       assert {:error, {:integrity_alarm, [_tampered]}} = own_load(ctx, ref)
 
-      damaged_head!(ctx, ref, profile_id)
+      failed_tool!(
+        ctx,
+        fn -> over_mcp(ctx, %{"reference" => ref, "input" => %{}}) end,
+        "The component graph this run needs is stored damaged and cannot be used.",
+        "corrupt"
+      )
+
+      # The reason names the run's own root, as admission holds it.
+      before = started(ctx)
+
+      assert Provider.handle("execution", ctx, %{
+               "action" => "run",
+               "reference" => ref,
+               "input" => %{}
+             }) == {:error, {:corrupt, {:component_graph, ref}}}
+
+      assert started(ctx) == before
     end
 
     test "a head whose grant holds no node for the run's own component is a damaged head",

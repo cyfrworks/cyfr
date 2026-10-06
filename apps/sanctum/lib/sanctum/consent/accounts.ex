@@ -36,12 +36,20 @@ defmodule Sanctum.Consent.Accounts do
   bound name resolves. Answers the entry's id and the account's name as
   the binding stores it, which is the spelling everything recorded and
   shown of the account carries. A source with no profile to select by
-  default, a selected profile that is not active, a profile with no head,
-  a head with no ingress, and an ingress that binds no account by that
-  name are each `{:error, :connection_not_granted}`: a grant to make. A
-  store that cannot answer, a damaged row, a selection that is ambiguous
-  or names no profile, and a head the loader refuses answer their own
-  refusal, never `connection_not_granted`.
+  default, a selected profile that is not active, and an ingress that
+  binds no account by that name are each
+  `{:error, :connection_not_granted}`: a grant to make.
+
+  The selected profile's own head reads as a run's root reads it: one the
+  store could not answer is `{:error, {:head_unavailable, profile_id}}`,
+  and an active profile with no head, a head stored outside the closed
+  vocabulary, and a head the loader cannot trust, its grant holding no
+  ingress for the source included, are damage in the loader's one reading
+  of it (`Sanctum.Consent.Loader.damage_refusal/3`), here
+  `{:error, {:head_corrupt, profile_id}}`, never a grant to make. A store
+  that cannot answer the profiles, a damaged profile row, a selection
+  that is ambiguous or names no profile, and a lender's refusal answer
+  their own refusal, never `connection_not_granted`.
   """
   @spec resolve(Sanctum.Context.t(), RootSelect.selector(), String.t(), String.t()) ::
           {:ok, %{entry_id: String.t(), name: String.t()}}
@@ -50,8 +58,19 @@ defmodule Sanctum.Consent.Accounts do
       when is_binary(source_ref) and is_binary(name) do
     with {:ok, name_ref} <- name_level(source_ref),
          {:ok, entries} <- Sanctum.Consent.profiles(ctx, name_ref),
-         {:ok, profile} <- select_profile(entries, selector),
-         {:ok, consent} <- head(ctx, profile),
+         {:ok, profile} <- select_profile(entries, selector) do
+      case bound_account(ctx, profile, name) do
+        {:error, reason} -> {:error, own_refusal(reason, profile, source_ref)}
+        {:ok, _account} = resolved -> resolved
+      end
+    end
+  end
+
+  # The account `name` on the profile's own ingress, its head read as the
+  # loader reads a root's: each answer the loader's own term for the
+  # stored state it meets.
+  defp bound_account(ctx, profile, name) do
+    with {:ok, consent} <- head(ctx, profile),
          {:ok, blob} <- Sanctum.Consent.Loader.admitted_blob(ctx, profile, consent),
          {:ok, ingress} <- ingress(blob, profile.source_ref) do
       with {:ok, %{entry_id: entry_id, binding_key: key}} when is_binary(entry_id) <-
@@ -62,6 +81,15 @@ defmodule Sanctum.Consent.Accounts do
         _not_bound -> {:error, :connection_not_granted}
       end
     end
+  end
+
+  # The app's own head read damaged is the loader's one reading of that
+  # damage, so a launch names it as the run's root would: the same stored
+  # state reads the same wherever an app's own head is read.
+  defp own_refusal(reason, profile, source_ref) do
+    if Sanctum.Consent.Loader.damage?(reason),
+      do: Sanctum.Consent.Loader.damage_refusal(reason, profile.id, source_ref),
+      else: reason
   end
 
   @doc """
@@ -159,18 +187,27 @@ defmodule Sanctum.Consent.Accounts do
     end
   end
 
+  # The selected profile is active, so a head it does not have is a head
+  # it lost, read as the loader reads it (`{:no_head_consent, id}`), never
+  # a grant to make; one stored outside the closed vocabulary, or that the
+  # store could not answer, is the loader's damaged or unanswered head.
   defp head(ctx, profile) do
     case Sanctum.Consent.head_consent(ctx, profile.id) do
       {:ok, consent} -> {:ok, consent}
-      {:error, :not_found} -> {:error, :connection_not_granted}
-      {:error, _unreadable} = refused -> refused
+      {:error, :not_found} -> {:error, {:no_head_consent, profile.id}}
+      {:error, :corrupt} -> {:error, {:head_corrupt, profile.id}}
+      {:error, :unavailable} -> {:error, {:head_unavailable, profile.id}}
+      {:error, :no_athanor} = refused -> refused
     end
   end
 
+  # A grant holding no ingress for its own source, its node absent or
+  # without one, is the loader's `missing_ingress`: damage, since every
+  # grant a commit writes holds its source's ingress.
   defp ingress(blob, source_ref) do
     case Blob.ingress(blob, source_ref) do
       {:ok, ingress} -> {:ok, ingress}
-      {:error, :missing_ingress} -> {:error, :connection_not_granted}
+      {:error, :missing_ingress} -> {:error, {:missing_ingress, source_ref}}
     end
   end
 end

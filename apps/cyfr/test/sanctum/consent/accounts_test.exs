@@ -194,6 +194,117 @@ defmodule Sanctum.Consent.AccountsTest do
       assert {:error, {:corrupt, {:profile, ^profile_id}}} =
                Accounts.resolve(ctx, {:label, "other"}, ref, "Work")
     end
+
+    # The app's own head reads as a run's root reads it: the same stored
+    # state answers the same refusal here as at admission, the loader's one
+    # reading of it (`Sanctum.Consent.Loader.damage_refusal/3`), and never
+    # a grant to make over a profile that exists.
+    test "a head stored damaged, in each way a run's root reads it so, is the damaged head",
+         %{ctx: ctx} do
+      ref = app!(ctx, "acct-damaged")
+      %{profile_id: profile_id} = named!(ctx, ref, ["Work"])
+
+      for changes <- [
+            # stored outside the closed vocabulary
+            [scope: "sideways"],
+            # bytes that fail their digest
+            [blob_digest: "sha256:" <> String.duplicate("0", 64)],
+            # bytes that do not parse, under their own digest
+            [resolved_policy: "not a blob", blob_digest: Prima.JCS.hash_binary("not a blob")],
+            # a revision pinning a version its scope does not
+            [pinned_version: "0.1.0"]
+          ] do
+        stored = stored_head(ctx, profile_id, Keyword.keys(changes))
+        :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile_id, changes)
+
+        assert {changes, Accounts.resolve(ctx, :default, ref, "Work")} ==
+                 {changes, {:error, {:head_corrupt, profile_id}}}
+
+        :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile_id, stored)
+        assert {:ok, %{name: "Work"}} = Accounts.resolve(ctx, :default, ref, "Work")
+      end
+    end
+
+    test "an active profile with no head is the damaged head, never a grant to make",
+         %{ctx: ctx} do
+      ref = app!(ctx, "acct-headless")
+      %{profile_id: profile_id} = named!(ctx, ref, ["Work"])
+      set_profile!(ctx, profile_id, head_consent_id: nil)
+
+      assert Accounts.resolve(ctx, :default, ref, "Work") ==
+               {:error, {:head_corrupt, profile_id}}
+    end
+
+    # Every grant a commit writes holds its source's ingress, so a head
+    # whose grant holds none is damage, as the loader's `missing_ingress`.
+    test "a head whose grant holds no ingress for the app is the damaged head, never a grant " <>
+           "to make",
+         %{ctx: ctx} do
+      ref = app!(ctx, "acct-no-ingress")
+      %{profile_id: profile_id} = named!(ctx, ref, ["Work"])
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+
+      # The ingress goes with the rows of what it bound, so the head's own
+      # checks still pass and only the ingress is missing.
+      Arca.Repo.delete_all(
+        from(r in Arca.Schemas.ConsentVaultRef,
+          where: r.athanor_id == ^ctx.athanor_id and r.consent_id == ^head.id
+        )
+      )
+
+      policy =
+        head.resolved_policy
+        |> Jason.decode!()
+        |> update_in(["nodes", ref, "edges"], &Map.delete(&1, "@ingress"))
+        |> Jason.encode!()
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile_id,
+          resolved_policy: policy,
+          blob_digest: Prima.JCS.hash_binary(policy)
+        )
+
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+      assert {:ok, _blob} = Sanctum.Consent.Loader.admitted_blob(ctx, %{id: profile_id}, head)
+
+      assert Accounts.resolve(ctx, :default, ref, "Work") ==
+               {:error, {:head_corrupt, profile_id}}
+    end
+
+    @tag :capture_log
+    test "a head the store cannot answer is the unanswered head, never damage or a grant to make",
+         %{ctx: ctx} do
+      ref = app!(ctx, "acct-unanswered")
+      %{profile_id: profile_id} = named!(ctx, ref, ["Work"])
+
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+      answer = Accounts.resolve(ctx, :default, ref, "Work")
+      Arca.Repo.query!("ALTER TABLE consents_unavailable RENAME TO consents")
+
+      assert answer == {:error, {:head_unavailable, profile_id}}
+    end
+  end
+
+  # The columns `keys` of the profile's head row, as stored.
+  defp stored_head(ctx, profile_id, keys) do
+    {:ok, profile} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
+
+    Arca.Repo.one!(
+      from(c in Arca.Schemas.Consent,
+        where: c.athanor_id == ^ctx.athanor_id and c.id == ^profile.head_consent_id,
+        select: map(c, ^keys)
+      )
+    )
+    |> Map.to_list()
+  end
+
+  # A profile row written as no writer of the table would.
+  defp set_profile!(ctx, id, changes) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(p in Arca.Schemas.Profile, where: p.athanor_id == ^ctx.athanor_id and p.id == ^id),
+        set: changes
+      )
   end
 
   describe "list/1" do
@@ -229,9 +340,9 @@ defmodule Sanctum.Consent.AccountsTest do
 
       assert {:ok, [{^good, ["Work"]}], false} = Accounts.list(ctx)
 
-      # The damaged app's account is a refusal of its own, never a grant to make.
-      assert {:error, {:blob_digest_mismatch, _}} =
-               Accounts.resolve(ctx, :default, bad, "Work")
+      # The damaged app's account is the damaged head, never a grant to make.
+      assert Accounts.resolve(ctx, :default, bad, "Work") ==
+               {:error, {:head_corrupt, bad_profile}}
     end
   end
 end

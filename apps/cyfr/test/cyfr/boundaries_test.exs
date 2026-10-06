@@ -1611,7 +1611,8 @@ defmodule Cyfr.BoundariesTest do
 
     # The accounts read is read-only by construction: every module it calls,
     # outside the contracts and the language's own runtime, is one of the
-    # reads it is documented to make. A write added there fails here.
+    # reads it is documented to make, or the loader's one reading of a
+    # damaged head. A write added there fails here.
     test "the assistant's accounts read calls only reads of the consent plane" do
       beam =
         :sanctum
@@ -1631,6 +1632,8 @@ defmodule Cyfr.BoundariesTest do
       assert Enum.sort(calls) == [
                "Arca.ConsentStorage.active_heads/2",
                "Sanctum.Consent.Loader.admitted_blob/3",
+               "Sanctum.Consent.Loader.damage?/1",
+               "Sanctum.Consent.Loader.damage_refusal/3",
                "Sanctum.Consent.head_consent/2",
                "Sanctum.Consent.profiles/2",
                "Sanctum.Context.actor/1"

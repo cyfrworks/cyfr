@@ -85,6 +85,73 @@ defmodule Sanctum.Consent.Loader do
   @typedoc "What run_root stamps on the execution row."
   @type stamp :: %{activation_digest: String.t(), activation_graph: %{String.t() => String.t()}}
 
+  @typedoc """
+  A refusal a reader of an app's own head answers for its damage
+  (`damage_refusal/3`): the damaged head or profile, both naming the
+  profile, or the damaged component graph, naming the source.
+  """
+  @type damage_refusal ::
+          {:head_corrupt, String.t()}
+          | {:corrupt, {:profile, String.t()}}
+          | {:corrupt, {:component_graph, String.t()}}
+
+  # The answers of `load_error/0` that say an app's own stored grant, or
+  # the release it runs, cannot be trusted: the one family every reader
+  # of an app's own head maps through `damage_refusal/3`. A lender's
+  # damage (`lender_corrupt`) and a head already read as damaged
+  # (`head_corrupt`) are typed already, and an outage is no damage.
+  @damage [
+    :invalid_profile,
+    :invalid_consent,
+    :invalid_blob,
+    :blob_digest_mismatch,
+    :blob_refs_mismatch,
+    :inconsistent_binding_digest,
+    :integrity_alarm,
+    :no_head_consent,
+    :unknown_source_node,
+    :missing_ingress
+  ]
+
+  @doc """
+  Whether `reason`, an answer of `load_root/3` or `admitted_blob/3`, says
+  the app's own stored grant, or the release it runs, cannot be trusted:
+  a profile and head that cannot root an authority, an active profile with
+  no head, a head whose revision is invalid, whose bytes fail their digest
+  or do not parse, whose bindings or stored references disagree, or whose
+  grant holds no node or ingress for the source, and a running release
+  that does not re-derive from its row. A lender's refusals, a head
+  already answered `head_corrupt`, an outage and every other answer are
+  not.
+  """
+  @spec damage?(term()) :: boolean()
+  def damage?({tag, _detail}) when tag in @damage, do: true
+  def damage?(_reason), do: false
+
+  @doc """
+  The refusal a reader of the app's own head answers for `reason`, one
+  `damage?/1` holds, of the profile `profile_id` of the source
+  `source_ref`: what the person can repair, in its own sentence. A
+  profile and head that cannot root an authority is the damaged profile,
+  `{:corrupt, {:profile, profile_id}}`; a running release that does not
+  re-derive from its row is the damaged component graph,
+  `{:corrupt, {:component_graph, source_ref}}`, which no grant repairs;
+  and every other member is the damaged head, `{:head_corrupt,
+  profile_id}`, which a fresh grant rebuilds from the current graph.
+  """
+  @spec damage_refusal(load_error(), String.t(), String.t()) :: damage_refusal()
+  def damage_refusal({:invalid_profile, _what}, profile_id, _source_ref)
+      when is_binary(profile_id),
+      do: {:corrupt, {:profile, profile_id}}
+
+  def damage_refusal({:integrity_alarm, _nodes}, _profile_id, source_ref)
+      when is_binary(source_ref),
+      do: {:corrupt, {:component_graph, source_ref}}
+
+  def damage_refusal({tag, _detail}, profile_id, _source_ref)
+      when tag in @damage and is_binary(profile_id),
+      do: {:head_corrupt, profile_id}
+
   @doc """
   Load the head consent of `profile` and build the root Authority.
 

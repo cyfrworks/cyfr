@@ -487,6 +487,30 @@ defmodule Aqua.Loop.CloneTest do
     assert clone.() == {:error, "the soul's consent is no longer in force"}
   end
 
+  # The pinned head whose stored bytes no longer match their digest is a
+  # damaged head, as admission names it, never a consent that moved: a
+  # fresh grant is what repairs it, and the clone says so.
+  @tag :capture_log
+  test "a clone whose pinned head fails its digest says the consent is damaged, never that " <>
+         "it moved",
+       %{ctx: ctx} do
+    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
+    profile = soul.profile_id
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile,
+        blob_digest: "sha256:" <> String.duplicate("0", 64)
+      )
+
+    assert {:error, {:head_corrupt, ^profile}} =
+             Crucible.authority_for(ctx, {:id, profile}, @soul)
+
+    assert clone_planner(ctx, soul) ==
+             {:error,
+              "This app's consent is damaged and cannot be used — " <>
+                "revoke profile #{profile} and grant it again."}
+  end
+
   # The pinned profile's own row, stored outside the closed vocabulary, is
   # damage the admission names, never a consent that moved.
   test "a clone whose pinned profile row is damaged says so, never that the consent moved",
@@ -520,10 +544,13 @@ defmodule Aqua.Loop.CloneTest do
              {:error, @damaged_graph}
   end
 
+  # A pinned profile revoked since the turn began is what admission answers
+  # for a selection by its id (`{:profile_unavailable, :revoked}`): the
+  # consent no longer stands, which no outage or damage is.
   test "a refusal that means the pinned consent no longer stands still answers consent_moved" do
-    refute Clone.unanswered_or_damaged?({:no_head_consent, "prof_pinned"})
+    refute Clone.unanswered_or_damaged?({:profile_unavailable, :revoked})
 
-    assert Clone.intact_answer({:error, {:no_head_consent, "prof_pinned"}}, "cons_pinned") ==
+    assert Clone.intact_answer({:error, {:profile_unavailable, :revoked}}, "cons_pinned") ==
              {:error, :consent_moved}
 
     assert Clone.intact_answer({:ok, %Prima.Authority{consent_id: "cons_other"}}, "cons_pinned") ==

@@ -1521,6 +1521,114 @@ defmodule Aqua.LoopTest do
     assert %{dispatch_state: "closed", outcome: "ok"} = Enum.find(steps, &(&1.kind == "launch"))
   end
 
+  # The account a card bound is read again before the launch runs. A head
+  # stored damaged since the card was drawn closes the launch's step in the
+  # damaged head's sentence, never a stale approval and never an outcome
+  # that could not be confirmed: the thread's row the pane draws, and what
+  # an MCP client reads of the thread (`thread.messages`, since no tool
+  # dispatches a launch), carry it. Nothing of the app starts.
+  test "a launch whose app's own head is stored damaged after its card was drawn says so in " <>
+         "the thread, and starts nothing",
+       %{ctx: ctx, thread: thread} do
+    %{ref: app, profile_id: profile_id, default: default} = launchable_app!(ctx)
+    work = disclosed_entry!(ctx, "#{app} work")
+
+    walk!(ctx, %{
+      ref: app,
+      bindings: [
+        %{need: "api_key", entry_id: default.id},
+        %{need: "api_key", name: "Work", entry_id: work.id}
+      ]
+    })
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, app],
+       script: [
+         calls([
+           {"c1", "execution.run",
+            %{"reference" => app <> ":1.0.0", "input" => %{}, "connection" => "Work"}}
+         ]),
+         reply("not launched")
+       ]}
+    )
+
+    turn = accept!(ctx, thread, "@aqua run it as Work")
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile_id,
+        blob_digest: "sha256:" <> String.duplicate("0", 64)
+      )
+
+    assert {:ok, %{decision: "approved", resolution_kind: "launch"}} =
+             Approvals.resolve(approver!(ctx), approval.id, %{decision: :approved})
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :completed =
+                 Task.await(
+                   Task.async(fn ->
+                     Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
+                   end),
+                   60_000
+                 )
+      end)
+
+    sentence =
+      "This app's consent is damaged and cannot be used — revoke profile #{profile_id} " <>
+        "and grant it again."
+
+    # Nothing of the app started: no run of it, and no row.
+    refute Enum.any?(ScriptedWorker.calls(), &(&1.input == %{}))
+
+    assert Arca.Repo.all(
+             from(e in Arca.Schemas.Execution,
+               where: e.athanor_id == ^ctx.athanor_id and like(e.reference, ^"#{app}%"),
+               select: e.id
+             )
+           ) == []
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert %{dispatch_state: "closed", outcome: "error", result_message_id: result} =
+             Enum.find(steps, &(&1.kind == "launch"))
+
+    # The thread's row the pane draws, and what an MCP client reads of the
+    # same row, say the damaged head in the same words.
+    assert {:ok, %{kind: "tool_result", content: shown}} = Tape.message(ctx, result)
+
+    assert %{"kind" => "tool_result", "content" => read} =
+             mcp_thread_messages(ctx, thread) |> Enum.find(&(&1["id"] == result))
+
+    assert {shown, read} == {sentence, sentence}
+
+    # Nothing read the refusal as a reason the refusal table does not know.
+    refute log =~ "Prima.Refusal"
+  end
+
+  # What an MCP client reads of `thread` (`thread.messages`, through the
+  # router as the transport dispatches it): its rows, decoded from the
+  # tool result's one text block.
+  defp mcp_thread_messages(ctx, thread) do
+    message = %Prima.MCP.Message{
+      type: :request,
+      id: 1,
+      method: "tools/call",
+      params: %{
+        "name" => "thread",
+        "arguments" => %{"action" => "messages", "thread" => thread.id}
+      }
+    }
+
+    assert {:ok, %{"isError" => false, "content" => [%{"type" => "text", "text" => text}]}} =
+             Emissary.MCP.Router.dispatch(ctx, message)
+
+    Jason.decode!(text)["messages"]
+  end
+
   test "a launch the soul's own policy runs at once still asks, and never answers not approved",
        %{ctx: ctx, thread: thread} do
     # The soul's own definition says execution.run runs at once, and its

@@ -878,6 +878,93 @@ defmodule Aqua.LaunchTest do
     assert [_launched] = launched_of(ctx, app)
   end
 
+  # ---------------------------------------------------------------------------
+  # The app's own head read damaged
+  # ---------------------------------------------------------------------------
+
+  @zero_digest "sha256:" <> String.duplicate("0", 64)
+
+  defp own_profile_id(ctx, app) do
+    {:ok, [%{id: id}]} = Sanctum.Consent.profiles(ctx, app)
+    id
+  end
+
+  defp damaged_head_sentence(profile_id),
+    do:
+      "This app's consent is damaged and cannot be used — revoke profile #{profile_id} " <>
+        "and grant it again."
+
+  defp set_profile!(ctx, id, changes) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(p in Arca.Schemas.Profile, where: p.athanor_id == ^ctx.athanor_id and p.id == ^id),
+        set: changes
+      )
+  end
+
+  # The account is read again, as the approver, before anything runs: a
+  # head stored damaged since the card was drawn is that damage, in its
+  # own class and sentence, never a stale approval to ask again and never
+  # an outcome that could not be confirmed. Nothing reaches the gate.
+  test "a launch naming an account over the app's own head stored damaged is refused as the " <>
+         "damaged head, with nothing started",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    %{app: app, step: step} = approved_work_launch!(ctx, thread, pins, approver)
+    profile_id = own_profile_id(ctx, app)
+    :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile_id, blob_digest: @zero_digest)
+    attempts = attempts_of(ctx)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert Launch.dispatch(ctx, step) == {:error, {:head_corrupt, profile_id}}
+      end)
+
+    assert launched_of(ctx, app) == []
+    assert attempts_of(ctx) == attempts
+
+    assert Arca.Repo.all(
+             from(d in Arca.Schemas.DecisionLog,
+               where:
+                 d.athanor_id == ^ctx.athanor_id and d.tool == "execution" and d.action == "run",
+               select: d.admission
+             )
+           ) == []
+
+    refute log =~ "Prima.Refusal"
+
+    assert %Prima.Refusal{class: :corrupt, message: message} =
+             Grimoire.Error.classify({:head_corrupt, profile_id})
+
+    assert message == damaged_head_sentence(profile_id)
+  end
+
+  # A card is drawn only over a head that reads: one stored damaged, or an
+  # active profile that lost its head, refuses the call in the damaged
+  # head's sentence, never a setup to make over a profile that exists.
+  test "a launch naming an account over the app's own head stored damaged, or lost, opens no " <>
+         "card and refuses as the damaged head",
+       %{ctx: ctx} do
+    policy = %{"execution.run" => "ask"}
+
+    for damage <- [
+          &Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, &1, blob_digest: @zero_digest),
+          &set_profile!(ctx, &1, head_consent_id: nil)
+        ] do
+      %{app: app, args: args} = work_app!(ctx)
+      profile_id = own_profile_id(ctx, app)
+      {:ok, call} = Aqua.Loop.Binding.resolve("execution.run", args)
+
+      assert {:ask, %{name: "Work"}} = Aqua.Loop.Policy.decide(call, policy, ctx: ctx)
+
+      damage.(profile_id)
+
+      assert Aqua.Loop.Policy.decide(call, policy, ctx: ctx) ==
+               {:refuse,
+                "the account \"Work\" of #{call.target} could not be read: " <>
+                  damaged_head_sentence(profile_id)}
+    end
+  end
+
   test "an origin the sender's request names is not the turn's", %{
     ctx: ctx,
     thread: thread
