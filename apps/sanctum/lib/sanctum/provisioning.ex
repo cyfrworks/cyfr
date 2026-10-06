@@ -864,22 +864,29 @@ defmodule Sanctum.Provisioning do
   Record where a fill stopped. The claim settles `failed` first, and the
   row records the failure only once that landed: an attempt whose claim a
   successor took leaves the successor's record alone.
+
+  The `bootstrap` step's list of sources that did not mint
+  (`bootstrap_consents/2`'s `{:unminted, refs}`) is recorded and logged
+  as each source and why, `"<ref>: <sentence>"` joined by `"; "`: the
+  sentence is `Prima.Refusal`'s for a reason it knows, and the term as it
+  reads otherwise. Every other step and detail is recorded as the term
+  reads. The answer carries the term either way.
   """
   @spec record_failure(claim(), Sanctum.Tenancy.Athanors.athanor(), atom(), term()) ::
           {:error, term()}
   def record_failure(claim, athanor, step, detail) do
-    case settle(athanor.id, claim, "failed", "#{step}: #{inspect(detail)}") do
+    said = failure_detail(step, detail)
+
+    case settle(athanor.id, claim, "failed", "#{step}: #{said}") do
       :ok ->
-        Logger.warning(
-          "[Provisioning] #{athanor.id} not provisioned at #{step}: #{inspect(detail)}"
-        )
+        Logger.warning("[Provisioning] #{athanor.id} not provisioned at #{step}: #{said}")
 
         :telemetry.execute([:cyfr, :sanctum, :provisioning, :failed], %{count: 1}, %{
           athanor_id: athanor.id,
           step: step
         })
 
-        Athanors.record_provisioning_failure(athanor, step, inspect(detail))
+        Athanors.record_provisioning_failure(athanor, step, said)
 
         {:error, {:provisioning_failed, step, detail}}
 
@@ -890,12 +897,28 @@ defmodule Sanctum.Provisioning do
         # The claim could not be read, so whether this attempt still holds
         # it is unknown: the row is left as it is.
         Logger.error(
-          "[Provisioning] #{athanor.id} not provisioned at #{step} (#{inspect(detail)}), " <>
+          "[Provisioning] #{athanor.id} not provisioned at #{step} (#{said}), " <>
             "and the failure not recorded: #{inspect(reason)}"
         )
 
         {:error, {:provisioning_failed, step, detail}}
     end
+  end
+
+  # What a failure says on the row, in the claim and in the log: a person
+  # reads the row (the chat's provisioning note, the athanor tool), so a
+  # consent mint that skipped sources names each with the refusal's own
+  # sentence rather than the term.
+  defp failure_detail(:bootstrap, [_ | _] = skipped) do
+    if Enum.all?(skipped, &match?({ref, _reason} when is_binary(ref), &1)),
+      do: Enum.map_join(skipped, "; ", fn {ref, reason} -> "#{ref}: #{sentence(reason)}" end),
+      else: inspect(skipped)
+  end
+
+  defp failure_detail(_step, detail), do: inspect(detail)
+
+  defp sentence(reason) do
+    if Prima.Refusal.reason?(reason), do: Prima.Refusal.message(reason), else: inspect(reason)
   end
 
   # ---- contexts --------------------------------------------------------------

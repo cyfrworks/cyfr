@@ -60,6 +60,23 @@ defmodule Sanctum.Consent.Bootstrap do
   lacked, so an athanor provisioned before an instance entry appeared
   meets it as the suggestion at its next grant.
 
+  The first mint is the only one that binds an instance entry, and a
+  revision keeps only what its head bound, so an instance store that
+  cannot answer is never read as nothing to bind. An outage of the
+  instance entries — reading the entries offered,
+  or the binding of the entry a mint chose or a person's revision keeps
+  (`Sanctum.InstanceEntries.binding/2`) — skips the source,
+  `{:unavailable, "Instance entries"}`, with any head kept, and a later
+  run mints or revises it whole. A catalyst whose stored manifest does
+  not decode is skipped `{:corrupt, {:manifest, ref}}`, as its shape
+  derivation refuses it. A revision whose head policy does not parse,
+  or a revision with no person whose ingress names an instance binding
+  no ref row holds, is skipped `{:corrupt, {:profile, profile_id}}`, its
+  head kept. The reads' other refusals offer nothing: a context with no
+  person to read the offer as, as `Sanctum.Consent.Plan` reads the same
+  call, or an entry no longer offered or not active, or a person denied,
+  and the catalyst is minted, or revised, without a binding.
+
   A machine-minted revision admits the `interactive` and `programmatic`
   origins: the seed is the operator's own first-party install, run from
   its screens and from its command line and agents alike. A schedule or a
@@ -87,6 +104,7 @@ defmodule Sanctum.Consent.Bootstrap do
 
   require Logger
 
+  alias Prima.Authority.Blob
   alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.CommitDigest
   alias Sanctum.Consent.Components
@@ -111,6 +129,10 @@ defmodule Sanctum.Consent.Bootstrap do
 
   # The origins a machine-minted revision admits.
   @seeded_origins [:interactive, :programmatic]
+
+  # The stores' declared outage terms, as `Sanctum.Consent.Plan` reads
+  # them: a store that could not answer.
+  @outages [:database_error, :unavailable]
 
   @doc """
   Bootstrap every executable local component in the caller's athanor.
@@ -270,8 +292,10 @@ defmodule Sanctum.Consent.Bootstrap do
       {:claimed, profile} ->
         case Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id) do
           {:ok, %{granted_via: "bootstrap"} = head, refs} ->
-            vouched = vouched_by(head, shipped_nodes)
-            revise_bootstrap(held, component, source_ref, profile, {head, refs}, vouched)
+            with {:ok, blob} <- head_blob(profile.id, head) do
+              vouched = vouched_by(head, blob, shipped_nodes)
+              revise_bootstrap(held, component, source_ref, profile, {head, refs}, vouched)
+            end
 
           {:ok, _person_head, _refs} ->
             {:skip, :already_bootstrapped}
@@ -304,7 +328,7 @@ defmodule Sanctum.Consent.Bootstrap do
   # offered for its need, when there is exactly one (the moduledoc).
   defp mint({ctx, claim}, component, source_ref, vouched) do
     with {:ok, activation} <- resolve_activation(ctx, component),
-         binding = first_sign_in_binding(ctx, component, source_ref, activation.graph),
+         {:ok, binding} <- first_sign_in_binding(ctx, component, source_ref, activation.graph),
          {:ok, nodes} <-
            BlobBuilder.build(ctx, activation.graph, source_ref, source_vault(source_ref, binding),
              source_row: component,
@@ -337,8 +361,10 @@ defmodule Sanctum.Consent.Bootstrap do
 
   # The one need of a shipped catalyst an instance entry can meet — it
   # attaches, and the component never reads it — or nil when it has none
-  # or several.
-  defp instance_need(component) do
+  # or several. A stored manifest that does not decode declares no need
+  # this walk can read: the source is skipped as damaged, as its shape
+  # derivation refuses it, never bound or minted as one with no need.
+  defp instance_need(component, source_ref) do
     with "catalyst" <- to_string(component.component_type),
          {:ok, manifest} <- Prima.Manifest.decode_strict(Map.get(component, :manifest)),
          needs when is_list(needs) <- Prima.Manifest.Needs.from_manifest(manifest),
@@ -349,7 +375,8 @@ defmodule Sanctum.Consent.Bootstrap do
            end) do
       need
     else
-      _ -> nil
+      {:error, :malformed_manifest} -> {:skip, {:corrupt, {:manifest, source_ref}}}
+      _none_or_several -> nil
     end
   end
 
@@ -357,30 +384,72 @@ defmodule Sanctum.Consent.Bootstrap do
   # exactly one active entry offered to the walk's person of the need's
   # kind and provider, holding its scopes as a consent holds them, whose
   # component policy admits the shipped catalyst at its release digest.
+  # `{:ok, nil}` when nothing is offered: no person, no such entry,
+  # several, or a chosen entry the binding read answers is not usable.
+  # A read the store could not answer, or a manifest that does not
+  # decode, skips the source instead, since this mint is the only one
+  # that binds.
   defp first_sign_in_binding(ctx, component, source_ref, graph) do
     with true <- person?(ctx),
-         %{} = need <- instance_need(component),
-         {:ok, offered} <- Sanctum.InstanceEntries.offered(ctx),
+         %{} = need <- instance_need(component, source_ref),
+         {:ok, offered} <- offered(ctx, source_ref),
          facts = Sanctum.Consent.Plan.node_facts(source_ref, graph, %{source_ref => component}),
          [entry] <-
            Enum.filter(offered, fn entry ->
              entry.kind == need.kind and entry.provider_hint == need.qualifier and
                scopes_held?(entry, need) and Sanctum.InstanceEntries.admits?(ctx, entry, facts)
            end),
-         {:ok, view} <- Sanctum.InstanceEntries.binding(ctx, entry.id) do
-      instance_binding(view, need)
+         {:ok, view} <- entry_binding(ctx, entry.id, source_ref) do
+      {:ok, instance_binding(view, need)}
     else
-      {:error, reason} ->
+      {:skip, _unread_or_damaged} = skip ->
+        skip
+
+      {:refused, reason} ->
         Logger.warning(
           "[Sanctum.Consent.Bootstrap] no instance entry bound for #{source_ref}: " <>
             "#{inspect(reason)}"
         )
 
-        nil
+        {:ok, nil}
 
-      _none_or_several ->
-        nil
+      _nothing_offered ->
+        {:ok, nil}
     end
+  end
+
+  # The entries offered to the walk's person, read as
+  # `Sanctum.Consent.Plan` reads the same call: an outage is the read
+  # unanswered, never an empty offer; any other refusal says the context
+  # has no person to offer anything to, and nothing is offered.
+  defp offered(ctx, source_ref) do
+    case Sanctum.InstanceEntries.offered(ctx) do
+      {:ok, offered} -> {:ok, offered}
+      {:error, outage} when outage in @outages -> unanswered(source_ref, outage)
+      {:error, _no_person} -> {:ok, []}
+    end
+  end
+
+  # The entry `entry_id` as the person's consent binds it, for a first
+  # mint's chosen entry and for the entry a revision under a person keeps.
+  # An outage of the store is the read unanswered; any other refusal (the
+  # entry no longer offered or not active, the person denied or
+  # anonymous) offers nothing usable.
+  defp entry_binding(ctx, entry_id, source_ref) do
+    case Sanctum.InstanceEntries.binding(ctx, entry_id) do
+      {:ok, view} -> {:ok, view}
+      {:error, outage} when outage in @outages -> unanswered(source_ref, outage)
+      {:error, reason} -> {:refused, reason}
+    end
+  end
+
+  defp unanswered(source_ref, reason) do
+    Logger.warning(
+      "[Sanctum.Consent.Bootstrap] #{source_ref} skipped: Instance entries could not " <>
+        "answer (#{inspect(reason)}); a later run tries again"
+    )
+
+    {:skip, {:unavailable, "Instance entries"}}
   end
 
   # An OAuth need is met by an entry authorized for exactly its scopes:
@@ -417,18 +486,21 @@ defmodule Sanctum.Consent.Bootstrap do
   # digest, for the need that admits it now; with no person, the head's
   # binding carried as the head holds it. Nothing otherwise, and never a
   # binding the head lacked.
-  defp kept_binding(ctx, {head, refs}, component, source_ref, graph) do
+  defp kept_binding(ctx, {profile, head, refs}, component, source_ref, graph) do
     if person?(ctx),
-      do: {:ok, offered_binding(ctx, head, component, source_ref, graph)},
-      else: carried_binding(head, refs, component, source_ref)
+      do: offered_binding(ctx, head, component, source_ref, graph),
+      else: carried_binding({profile.id, head, refs}, component, source_ref)
   end
 
+  # Under a person, a binding read the store could not answer keeps the
+  # head as it is, the source skipped, rather than revising it without the
+  # entry it bound.
   defp offered_binding(ctx, head, component, source_ref, graph) do
     with {:ok, blob} <- Prima.Authority.Blob.parse(head.resolved_policy),
          {:ok, %{vault: %{scope: "instance", entry_id: id, binding_digest: digest}}} <-
            Prima.Authority.Blob.ingress(blob, source_ref),
-         %{} = need <- instance_need(component),
-         {:ok, view} <- Sanctum.InstanceEntries.binding(ctx, id),
+         %{} = need <- instance_need(component, source_ref),
+         {:ok, view} <- entry_binding(ctx, id, source_ref),
          true <- is_binary(view.binding_digest) and view.binding_digest == digest,
          true <- view.kind == need.kind and view.provider_hint == need.qualifier,
          true <- scopes_held?(view, need),
@@ -438,9 +510,10 @@ defmodule Sanctum.Consent.Bootstrap do
              view,
              Sanctum.Consent.Plan.node_facts(source_ref, graph, %{source_ref => component})
            ) do
-      instance_binding(view, need)
+      {:ok, instance_binding(view, need)}
     else
-      _ -> nil
+      {:skip, _unread_or_damaged} = skip -> skip
+      _ -> {:ok, nil}
     end
   end
 
@@ -459,14 +532,16 @@ defmodule Sanctum.Consent.Bootstrap do
   # none. A revoke landing after the facts are read meets the revision's
   # storage lock, which the walk reports as the source's skip, and
   # `Sanctum.Attach` holds each request to the audience, the policy and
-  # the caps.
-  defp carried_binding(head, refs, component, source_ref) do
-    with {:ok, blob} <- Prima.Authority.Blob.parse(head.resolved_policy),
+  # the caps. A head the revision cannot read whole — a policy that does
+  # not parse, or an ingress binding no ref row holds — is the profile
+  # damaged: the source is skipped with the head kept, never revised as
+  # a head that bound nothing.
+  defp carried_binding({profile_id, head, refs}, component, source_ref) do
+    with {:ok, blob} <- head_blob(profile_id, head),
          {:ok, %{vault: %{scope: "instance", entry_id: id, binding_key: key} = vault}} <-
            Prima.Authority.Blob.ingress(blob, source_ref),
-         %{} = row <-
-           Enum.find(refs, &(&1.binding_key == key and &1.instance_entry_id == id)),
-         %{} = need <- instance_need(component),
+         {:ok, row} <- carried_row(profile_id, refs, key, id),
+         %{} = need <- instance_need(component, source_ref),
          {:ok, facts} <- entry_facts(id),
          true <- still_holds?(facts, need, vault.binding_digest) do
       {:ok,
@@ -483,8 +558,23 @@ defmodule Sanctum.Consent.Bootstrap do
          renew: false
        }}
     else
+      {:skip, _damaged} = skip -> skip
       {:unanswered, reason} -> {:error, reason}
       _ -> {:ok, nil}
+    end
+  end
+
+  defp head_blob(profile_id, head) do
+    case Blob.parse(head.resolved_policy) do
+      {:ok, blob} -> {:ok, blob}
+      {:error, _unparsed} -> {:skip, {:corrupt, {:profile, profile_id}}}
+    end
+  end
+
+  defp carried_row(profile_id, refs, key, entry_id) do
+    case Enum.find(refs, &(&1.binding_key == key and &1.instance_entry_id == entry_id)) do
+      %{} = row -> {:ok, row}
+      nil -> {:skip, {:corrupt, {:profile, profile_id}}}
     end
   end
 
@@ -504,7 +594,7 @@ defmodule Sanctum.Consent.Bootstrap do
 
   # What a bootstrap-only head vouches for beside the seed: the nodes its
   # activation names, at those digests, and the ones its blob selects.
-  defp vouched_by(head, shipped_nodes) do
+  defp vouched_by(head, blob, shipped_nodes) do
     named =
       case Jason.decode(head.activation || "") do
         {:ok, %{} = graph} -> graph
@@ -512,17 +602,11 @@ defmodule Sanctum.Consent.Bootstrap do
       end
 
     selected =
-      case Jason.decode(head.resolved_policy || "") do
-        {:ok, %{"nodes" => nodes}} when is_map(nodes) ->
-          for {from, node} <- nodes,
-              {key, %{"vault" => %{"via" => _}}} <- node["edges"] || %{},
-              {:ok, dep} <- [Prima.Authority.Blob.edge_target(key)],
-              into: MapSet.new(),
-              do: {from, dep}
-
-        _ ->
-          MapSet.new()
-      end
+      for {from, %Blob.Node{edges: edges}} <- blob.nodes,
+          {key, %Blob.Edge{vault: %{via: _}}} <- edges,
+          {:ok, dep} <- [Blob.edge_target(key)],
+          into: MapSet.new(),
+          do: {from, dep}
 
     %{shipped: shipped_nodes, named: named, selected: selected}
   end
@@ -592,7 +676,7 @@ defmodule Sanctum.Consent.Bootstrap do
   defp revise_bootstrap({ctx, claim}, component, source_ref, profile, {head, refs}, vouched) do
     with {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, binding} <-
-           kept_binding(ctx, {head, refs}, component, source_ref, activation.graph),
+           kept_binding(ctx, {profile, head, refs}, component, source_ref, activation.graph),
          {:ok, nodes} <-
            BlobBuilder.build(ctx, activation.graph, source_ref, source_vault(source_ref, binding),
              source_row: component,

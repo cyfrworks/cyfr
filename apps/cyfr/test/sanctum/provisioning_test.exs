@@ -9,6 +9,8 @@ defmodule Sanctum.ProvisioningTest do
   """
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog, only: [with_log: 1]
+
   alias Arca.ProvisioningClaims, as: Claims
   alias Compendium.Provisioning, as: Filler
   alias Sanctum.Provisioning
@@ -70,6 +72,7 @@ defmodule Sanctum.ProvisioningTest do
         "caps" => %{"egress" => %{"domains" => []}}
       }
       |> maybe_deps(Keyword.get(opts, :deps))
+      |> maybe_needs(Keyword.get(opts, :needs))
 
     File.write!(Path.join(src, "cyfr-manifest.json"), Jason.encode!(manifest))
     :ok
@@ -77,6 +80,9 @@ defmodule Sanctum.ProvisioningTest do
 
   defp maybe_deps(manifest, nil), do: manifest
   defp maybe_deps(manifest, deps), do: Map.put(manifest, "dependencies", %{"static" => deps})
+
+  defp maybe_needs(manifest, nil), do: manifest
+  defp maybe_needs(manifest, needs), do: Map.put(manifest, "needs", needs)
 
   defp person(n) do
     {:ok, user} =
@@ -474,6 +480,198 @@ defmodule Sanctum.ProvisioningTest do
 
     assert {:error, {:provisioning_failed, :seed, :bundle_missing}} =
              Provisioning.provision(group, nil)
+  end
+
+  describe "an instance entry offered at a person's first sign-in" do
+    @foo "catalyst:local.foo"
+    @unanswered "#{@foo}: Instance entries is unavailable — retry shortly"
+
+    # The bundled catalyst's one need attaches an openai.com key, which an
+    # instance entry can meet.
+    @needs %{
+      "api_key" => %{
+        "type" => "api_key:openai.com",
+        "reason" => "to call the model",
+        "fields" => ["OPENAI_API_KEY"],
+        "attach" => %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
+      }
+    }
+
+    # The one entry the instance offers everyone for that need, admitting
+    # only shipped code.
+    defp offer! do
+      {:ok, entry} =
+        Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
+          name: "company-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          field_names: ~s(["OPENAI_API_KEY"]),
+          destination:
+            ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+          sealed_payload: "sealed",
+          binding_digest: "sha256:company-#{System.unique_integer([:positive])}",
+          audience: "everyone",
+          created_by: "usr_admin",
+          component_policy: "shipped"
+        })
+
+      entry
+    end
+
+    defp away!(table),
+      do: Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+
+    defp back!(table),
+      do: Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
+
+    # The catalyst's head consent and its binding rows, as stored.
+    defp foo_head(athanor_id) do
+      actor = Prima.Actor.in_athanor(athanor_id)
+      {:ok, [profile]} = Arca.ProfileStorage.list_for_source(actor, @foo)
+      {:ok, head, refs} = Arca.ConsentStorage.get_head(actor, profile.id)
+      {head, refs}
+    end
+
+    # The first mint is the only one that binds the instance entry: a fill
+    # that minted without it over an outage would leave the person to
+    # connect a key over an entry that exists.
+    @tag :capture_log
+    test "a first sign-in that cannot read the entries offered fails at bootstrap, saying " <>
+           "which source and why, and the next sign-in fills the athanor with the entry bound",
+         %{bundle_dir: bundle_dir} do
+      write_bundle!(bundle_dir, needs: @needs)
+      entry = offer!()
+      user = person(System.unique_integer([:positive]))
+
+      away!("instance_entries")
+      {first, log} = with_log(fn -> Provisioning.after_sign_in(user.id) end)
+      back!("instance_entries")
+
+      # The athanor is minted and its fill stopped at the consent mint,
+      # with nothing minted for the catalyst; the row, the claim and the
+      # log name the source and the refusal's own sentence.
+      assert {:ok, %{id: athanor_id}} = first
+      {:ok, failed} = Athanors.get(athanor_id)
+      refute failed.provisioned_at
+
+      assert Map.delete(Athanors.provisioning_failure(failed), :at) ==
+               %{step: "bootstrap", detail: @unanswered}
+
+      assert {:ok, %{entry_kind: "sign_in", outcome: "failed", outcome_detail: detail}} =
+               Claims.current(%Prima.Actor{athanor_id: athanor_id})
+
+      assert detail == "bootstrap: " <> @unanswered
+      assert log =~ "#{athanor_id} not provisioned at bootstrap: #{@unanswered}"
+
+      assert {:ok, []} =
+               Arca.ProfileStorage.list_for_source(Prima.Actor.in_athanor(athanor_id), @foo)
+
+      # The next sign-in tries the fill again at once, and with the store
+      # answering the catalyst is minted bound to the entry.
+      assert {:ok, %{id: ^athanor_id}} = Provisioning.after_sign_in(user.id)
+      {:ok, filled} = Athanors.get(athanor_id)
+      assert %DateTime{} = filled.provisioned_at
+      refute Athanors.provisioning_failure(filled)
+
+      {head, refs} = foo_head(athanor_id)
+      assert {head.revision, head.granted_via, head.granted_by} == {1, "bootstrap", user.id}
+
+      assert refs == [
+               %{
+                 consent_id: head.id,
+                 athanor_id: athanor_id,
+                 binding_key: "#{@foo}|@ingress|default",
+                 scope: "instance",
+                 vault_entry_id: nil,
+                 instance_entry_id: entry.id,
+                 via_label: nil,
+                 binding_digest: entry.binding_digest,
+                 lifetime_kind: "standing",
+                 expires_at: nil,
+                 consumed_by_root: nil
+               }
+             ]
+    end
+
+    # A boot's sync has no person and carries the head's binding as the
+    # head holds it; a store that cannot answer for the entry decides
+    # nothing, and a sync is a heal, so nothing is recorded on the row.
+    @tag :capture_log
+    test "a boot's sync over a filled athanor that cannot read the entry its catalyst binds " <>
+           "changes nothing, and says the next sync tries again",
+         %{bundle_dir: bundle_dir} do
+      write_bundle!(bundle_dir, needs: @needs)
+      entry = offer!()
+      user = person(System.unique_integer([:positive]))
+      assert {:ok, %{id: athanor_id}} = Provisioning.after_sign_in(user.id)
+      {:ok, %{provisioned_at: %DateTime{} = filled_at}} = Athanors.get(athanor_id)
+      {_head, [%{instance_entry_id: bound}]} = held = foo_head(athanor_id)
+      assert bound == entry.id
+
+      away!("instance_entries")
+      {synced, log} = with_log(fn -> Filler.sync_seeds() end)
+      back!("instance_entries")
+
+      assert synced == :ok
+
+      assert log =~
+               ~s([Provisioning] #{athanor_id}: baseline consents not minted for ["#{@foo}"]; ) <>
+                 "the next sync tries again"
+
+      assert foo_head(athanor_id) == held
+      {:ok, after_sync} = Athanors.get(athanor_id)
+      assert after_sync.provisioned_at == filled_at
+      refute Athanors.provisioning_failure(after_sync)
+    end
+  end
+
+  # What a person reads on the row — the chat's provisioning note, the
+  # athanor tool — names each source the consent mint skipped with its
+  # refusal's own sentence, and the claim says the same; a reason the
+  # refusal table does not know, and every other detail, reads as before.
+  @tag :capture_log
+  test "a consent mint's skipped sources are recorded each with its refusal's sentence" do
+    n = System.unique_integer([:positive])
+    {:ok, group} = Athanors.create_group("github|https://github.com|recorded-#{n}", "Rec #{n}")
+    actor = %Prima.Actor{athanor_id: group.id}
+
+    skipped = [
+      {"catalyst:local.a", {:corrupt, {:manifest, "catalyst:local.a"}}},
+      {"catalyst:local.b", {:corrupt, {:profile, "prof_b"}}},
+      {"catalyst:local.c", {:unavailable, "Instance entries"}},
+      {"reagent:local.d", :shape_moved}
+    ]
+
+    detail =
+      "catalyst:local.a: The stored manifest is damaged.; " <>
+        "catalyst:local.b: The stored profile is damaged and cannot be used.; " <>
+        "catalyst:local.c: Instance entries is unavailable — retry shortly; " <>
+        "reagent:local.d: :shape_moved"
+
+    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_recorded", "provision", 60_000, :none)
+
+    assert Provisioning.record_failure(claim, group, :bootstrap, skipped) ==
+             {:error, {:provisioning_failed, :bootstrap, skipped}}
+
+    {:ok, failed} = Athanors.get(group.id)
+
+    assert Map.delete(Athanors.provisioning_failure(failed), :at) ==
+             %{step: "bootstrap", detail: detail}
+
+    assert {:ok, %{outcome: "failed", outcome_detail: settled}} = Claims.current(actor)
+    assert settled == "bootstrap: " <> detail
+
+    # The walk's own refusal at the same step is recorded as its term.
+    {:ok, again} = Claims.claim(actor, "boot_elsewhere/own_again", "provision", 60_000, :none)
+    unreadable = {:component_facts, :component_facts_unavailable}
+
+    assert Provisioning.record_failure(again, group, :bootstrap, unreadable) ==
+             {:error, {:provisioning_failed, :bootstrap, unreadable}}
+
+    {:ok, refused} = Athanors.get(group.id)
+
+    assert Map.delete(Athanors.provisioning_failure(refused), :at) ==
+             %{step: "bootstrap", detail: inspect(unreadable)}
   end
 
   describe "an attempt whose claim a later attempt took" do
