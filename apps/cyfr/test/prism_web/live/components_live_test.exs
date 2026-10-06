@@ -8,7 +8,10 @@ defmodule PrismWeb.ComponentsLiveTest do
   restores the shipped bytes over an edit; a newer shipped version is
   offered as Update and pulled in beside the copy. A consent whose head
   or profile row is damaged, or that the store cannot answer, is said as
-  such and never offered a grant over a consent that exists.
+  such and never offered a grant over a consent that exists. A setup plan
+  the call is refused is said in the refusal's sentence, on the expand and
+  on the refresh after a grant, in place of the plan, its badge and the
+  grant.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -369,6 +372,109 @@ defmodule PrismWeb.ComponentsLiveTest do
 
       Cyfr.Test.Sandbox.end_views()
     end
+  end
+
+  describe "a setup plan the call is refused" do
+    # A refused `setup_plan` call is said in its own sentence where the
+    # plan, its badge and the grant would be, on the expand and on the
+    # refresh after a grant alike: never as a component with no plan, and
+    # never as the plan read before the grant.
+
+    @tag :capture_log
+    test "on expand, the refusal is said in place of the plan, its badge and the grant",
+         %{conn: conn, ctx: ctx} do
+      seed_headless_profile!(ctx)
+      {view, _html} = mount_athanor(conn, "/components")
+      refuse_next_setup_plan!(view)
+      render_click(view, "toggle_expand", %{"ref" => @ref})
+
+      # The expand's other read answered: the row is open on its versions.
+      assert render(view) =~ "Reset reagent:local.shelf-tool:1.0.0 to the shipped version?"
+      assert_plan_refused(view)
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    @tag :capture_log
+    test "on the refresh after a grant, the refusal is said in place of the plan read before it",
+         %{conn: conn, ctx: ctx} do
+      seed_headless_profile!(ctx)
+      {view, html} = expanded_html(conn)
+
+      assert html =~ "Needs grant"
+      refute has_element?(view, ~s([data-test="setup-plan-refused"]))
+
+      view |> element("button[phx-click=open_consent]", "Grant access") |> render_click()
+      refuse_next_setup_plan!(view)
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+      Prima.Test.Wait.wait_until(
+        fn -> :sys.get_state(view.pid).socket.assigns.grant_prompt == nil end,
+        5_000,
+        "the grant"
+      )
+
+      # The grant was made; the plan that said it was needed is gone.
+      assert {:ok, %{revision: 1}} = Sanctum.Consent.head_consent(ctx, @profile)
+      assert_plan_refused(view)
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # What the person reads where the consent section's plan would be: the
+  # refusal's sentence, and neither a badge, a grant nor the sentence for
+  # a component with no plan.
+  defp assert_plan_refused(view) do
+    assert has_element?(
+             view,
+             ~s([data-test="setup-plan-refused"]),
+             "Failed to resolve component reagent:local.shelf-tool:1.0.0: " <>
+               "The store could not answer — retry shortly"
+           )
+
+    html = render(view)
+    refute html =~ "Needs grant"
+    refute html =~ ~r/>\s*Ready\s*</
+    refute html =~ "No setup plan available for this component."
+    refute has_element?(view, "button[phx-click=open_consent]", "Grant access")
+  end
+
+  # The next `setup_plan` call `view` makes is refused as a store that
+  # cannot answer refuses it: once the gate has admitted that call, and
+  # before its handler reads the component, the registry's table is
+  # renamed in the test's sandbox. The view's reads before it, the
+  # expand's inspect among them, answer as they would.
+  defp refuse_next_setup_plan!(view) do
+    pid = view.pid
+    handler = "components-live-refused-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :grimoire, :decision, :admitted],
+        fn _event, _measurements, meta, _config ->
+          if self() == pid and meta[:tool] == "component" and meta[:action] == "setup_plan" do
+            :telemetry.detach(handler)
+            Arca.Repo.query!("ALTER TABLE components RENAME TO components_unavailable")
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  # The shelf tool's owner profile with no head: a grant to make.
+  defp seed_headless_profile!(ctx) do
+    :ok =
+      ConsentFixtures.seed_profile!(ctx, %{
+        id: @profile,
+        source_ref: @ref,
+        kind: :owner,
+        label: "default",
+        status: :active
+      })
   end
 
   # The shelf tool's owner profile with a head, as a commit leaves it.

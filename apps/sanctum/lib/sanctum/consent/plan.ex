@@ -165,7 +165,18 @@ defmodule Sanctum.Consent.Plan do
   @spec default_origins() :: [Prima.Origin.t(), ...]
   def default_origins, do: @default_origins
 
-  @doc "Stage a consent: facts, candidates, and the plan token."
+  @doc """
+  Stage a consent: facts, candidates, and the plan token.
+
+  A dependency's lenders are read as the loader reads a selection's
+  (`Sanctum.Consent.Loader`), keeping a store that cannot answer, a
+  damaged row and an absent one apart: a profile list or a lender's head
+  the store could not answer refuses the plan
+  `{:lender_unavailable, dep}`, and a profile row or a lender's head that
+  does not decode refuses it `{:lender_corrupt, dep, profile_id}`, never a
+  plan with that lender missing. A dependency with no profile, and a
+  profile whose head is absent or binds no usable entry, lends nothing.
+  """
   @spec plan(Context.t(), map()) :: {:ok, t()} | {:error, term()}
   def plan(%Context{} = ctx, %{ref: ref} = params) when is_binary(ref) do
     label = Map.get(params, :label, "default")
@@ -192,7 +203,7 @@ defmodule Sanctum.Consent.Plan do
              {component, manifest},
              node_facts(source_ref, closure, closure_rows)
            ),
-         {dependency_needs, provided_notes} =
+         {:ok, {dependency_needs, provided_notes}} <-
            dependency_needs(ctx, sources, closure, closure_rows),
          {:ok, plan_token} <-
            mint_token(ctx, shape_digest, profile_id, expected_revision) do
@@ -781,8 +792,8 @@ defmodule Sanctum.Consent.Plan do
   # the configuration the calling node provides for it. Beside them, what
   # each node's `provides` cannot provide. A closure that cannot be
   # resolved offers none; the commit refuses a selection it cannot place
-  # anyway.
-  defp dependency_needs(_ctx, _sources, {:unresolved, _unresolved}, _rows), do: {[], []}
+  # anyway. A lender that cannot be read refuses the whole (`plan/2`).
+  defp dependency_needs(_ctx, _sources, {:unresolved, _unresolved}, _rows), do: {:ok, {[], []}}
 
   defp dependency_needs(ctx, sources, {:ok, graph}, rows) do
     graph
@@ -794,14 +805,17 @@ defmodule Sanctum.Consent.Plan do
           manifest
           |> BlobBuilder.dep_edges(graph, from)
           |> Enum.sort()
-          |> Enum.map(&dependency_rows(ctx, sources, {from, manifest, graph, rows}, &1))
+          |> Enum.map(&{from, manifest, &1})
 
         _ ->
           []
       end
     end)
-    |> Enum.reduce({[], []}, fn {rows, notes}, {all_rows, all_notes} ->
-      {all_rows ++ rows, all_notes ++ notes}
+    |> Enum.reduce_while({:ok, {[], []}}, fn {from, manifest, dep}, {:ok, {all, notes}} ->
+      case dependency_rows(ctx, sources, {from, manifest, graph, rows}, dep) do
+        {:ok, {dep_rows, dep_notes}} -> {:cont, {:ok, {all ++ dep_rows, notes ++ dep_notes}}}
+        {:error, _} = refused -> {:halt, refused}
+      end
     end)
   end
 
@@ -852,32 +866,35 @@ defmodule Sanctum.Consent.Plan do
 
       case Enum.filter(needs || [], &credential?/1) do
         [] ->
-          {[], notes}
+          {:ok, {[], notes}}
 
         credential_needs ->
-          {[
-             %{
-               from: from,
-               dep: dep,
-               needs:
-                 Enum.map(credential_needs, fn need ->
-                   %{
-                     need: need.name,
-                     type: "#{need.kind}:#{need.qualifier}",
-                     reason: need.reason,
-                     required: need.required,
-                     fields: need.fields
-                   }
-                   |> Map.merge(prefill(need))
-                   |> Map.merge(dependency_choice(ctx, sources, need, facts, covered))
-                   |> put_newer_shipped(need, newer)
-                 end),
-               candidates: lender_candidates(ctx, dep, facts)
-             }
-           ], notes}
+          with {:ok, lenders} <- lender_candidates(ctx, dep, facts) do
+            {:ok,
+             {[
+                %{
+                  from: from,
+                  dep: dep,
+                  needs:
+                    Enum.map(credential_needs, fn need ->
+                      %{
+                        need: need.name,
+                        type: "#{need.kind}:#{need.qualifier}",
+                        reason: need.reason,
+                        required: need.required,
+                        fields: need.fields
+                      }
+                      |> Map.merge(prefill(need))
+                      |> Map.merge(dependency_choice(ctx, sources, need, facts, covered))
+                      |> put_newer_shipped(need, newer)
+                    end),
+                  candidates: lenders
+                }
+              ], notes}}
+          end
       end
     else
-      _ -> {[], []}
+      _ -> {:ok, {[], []}}
     end
   end
 
@@ -900,30 +917,72 @@ defmodule Sanctum.Consent.Plan do
   end
 
   # The dependency's active owner profiles whose head binds a usable entry
-  # on its ingress; provided configuration is no entry to lend.
+  # on its ingress; provided configuration is no entry to lend. The
+  # profiles are read as the loader reads a selection's lender: a row
+  # whose kind or status does not decode may be an active owner profile,
+  # so it refuses the plan rather than being skipped, and a store that
+  # cannot answer is not a dependency with no lender. Either would plan a
+  # first grant over profiles that exist as if none lent a key.
   defp lender_candidates(ctx, dep, facts) do
-    case Arca.ConsentStorage.profiles(Context.actor(ctx), dep) do
-      {:ok, profiles} ->
-        for %{kind: :owner, status: :active} = profile <- profiles,
-            {:ok, head} <- [Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)],
-            {:ok, blob} <- [Prima.Authority.Blob.parse(head.resolved_policy)],
-            {:ok, %{vault: %{entry_id: _} = vault}} <- [
-              Prima.Authority.Blob.ingress(blob, dep)
-            ],
-            {:ok, lent} <- [lent_entry(ctx, vault, facts)] do
-          %{
-            profile_id: profile.id,
-            label: profile.label,
-            source: lent.source,
-            entry_id: lent.id,
-            entry_name: lent.name,
-            fields: projected(vault.projection, :fields),
-            scopes: projected(vault.projection, :scopes)
-          }
+    actor = Context.actor(ctx)
+
+    case Arca.ConsentStorage.profile_entries(actor, dep) do
+      {:ok, entries} ->
+        case Enum.find(entries, &(&1.status == :corrupt)) do
+          %{id: id} -> {:error, {:lender_corrupt, dep, id}}
+          nil -> lenders(ctx, actor, dep, facts, entries)
         end
 
-      _ ->
-        []
+      {:error, _unanswered} ->
+        {:error, {:lender_unavailable, dep}}
+    end
+  end
+
+  # Each active owner profile's lending, in profile order, or the first
+  # head that cannot be read.
+  defp lenders(ctx, actor, dep, facts, entries) do
+    entries
+    |> Enum.filter(&match?(%{kind: :owner, status: :active}, &1))
+    |> Enum.reduce_while({:ok, []}, fn profile, {:ok, lent} ->
+      case lender_head(actor, dep, profile) do
+        {:ok, head} -> {:cont, {:ok, lent ++ lending(ctx, dep, facts, profile, head)}}
+        :absent -> {:cont, {:ok, lent}}
+        {:error, _} = refused -> {:halt, refused}
+      end
+    end)
+  end
+
+  # A lender's head as the loader reads it (`fetch_head/2`): absent lends
+  # nothing, one stored outside the closed vocabulary is damaged, and any
+  # other refusal is a store that could not answer.
+  defp lender_head(actor, dep, profile) do
+    case Arca.ConsentStorage.head_consent(actor, profile.id) do
+      {:ok, head} -> {:ok, head}
+      {:error, absent} when absent in [:not_found, :no_head] -> :absent
+      {:error, {:invalid_stored_value, _}} -> {:error, {:lender_corrupt, dep, profile.id}}
+      {:error, _unanswered} -> {:error, {:lender_unavailable, dep}}
+    end
+  end
+
+  # What a lender's head lends on the dependency's ingress: the entry its
+  # binding names, when this person may use it, or nothing.
+  defp lending(ctx, dep, facts, profile, head) do
+    with {:ok, blob} <- Prima.Authority.Blob.parse(head.resolved_policy),
+         {:ok, %{vault: %{entry_id: _} = vault}} <- Prima.Authority.Blob.ingress(blob, dep),
+         {:ok, lent} <- lent_entry(ctx, vault, facts) do
+      [
+        %{
+          profile_id: profile.id,
+          label: profile.label,
+          source: lent.source,
+          entry_id: lent.id,
+          entry_name: lent.name,
+          fields: projected(vault.projection, :fields),
+          scopes: projected(vault.projection, :scopes)
+        }
+      ]
+    else
+      _binds_nothing_usable -> []
     end
   end
 

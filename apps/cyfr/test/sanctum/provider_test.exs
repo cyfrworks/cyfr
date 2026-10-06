@@ -565,6 +565,170 @@ defmodule Sanctum.ProviderTest do
     end
   end
 
+  describe "profile plan over a lender it cannot read" do
+    # The planner refuses a plan over a dependency's lender the store could
+    # not answer, or whose profile row or head does not decode
+    # (`Sanctum.Consent.Plan.plan/2`). `profile.plan` answers each typed,
+    # so an MCP client receives a JSON-RPC error of its class in
+    # `Sanctum.Unauthorized`'s sentence, and the call's decision records
+    # that class, with nothing logged as a reason no table knows.
+    @plan_dep "reagent:local.mcp-plan-dep"
+    @plan_app "reagent:local.mcp-plan-app"
+    @plan_wasm Path.join(__DIR__, "../support/test_wasm/math.wasm")
+
+    setup %{ctx: ctx} do
+      Arca.Cache.init()
+      Cyfr.Test.SeedBundle.isolate!()
+
+      ship_plan_component!(ctx, "mcp-plan-dep", %{
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:openai.com",
+            "reason" => "to call the model with a key",
+            "fields" => ["OPENAI_API_KEY"],
+            "attach" => %{
+              "in" => "header",
+              "name" => "Authorization",
+              "template" => "Bearer {value}"
+            }
+          }
+        }
+      })
+
+      ship_plan_component!(ctx, "mcp-plan-app", %{
+        "dependencies" => %{"static" => [%{"ref" => @plan_dep}]}
+      })
+
+      {:ok, key} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "mcp-plan-key-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          fields: %{"OPENAI_API_KEY" => "sk-plan"},
+          destination: %{"hosts" => ["api.openai.com"]}
+        })
+
+      grant_plan_dep!(ctx, [%{need: "api_key", entry_id: key.id}])
+      {:ok, [%{id: lender}]} = Sanctum.Consent.profiles(ctx, @plan_dep)
+
+      # The lender lends: the plan offers it.
+      assert {:ok, %{dependency_needs: [%{candidates: [%{profile_id: ^lender}]}]}} =
+               Provider.handle("profile", ctx, %{"action" => "plan", "ref" => @plan_app})
+
+      {:ok, lender: lender}
+    end
+
+    @tag :capture_log
+    test "a lender the store cannot answer reaches an MCP client as an unavailable error",
+         %{ctx: ctx} do
+      # The app has no profile of its own, so the lender's is the one head
+      # the plan reads.
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+      {answer, decision, log} = plan_over_mcp(ctx)
+
+      assert answer == %{
+               "jsonrpc" => "2.0",
+               "id" => 1,
+               "error" => %{
+                 "code" => -33103,
+                 "message" =>
+                   "A profile that lends a key here cannot be read right now — try again."
+               }
+             }
+
+      assert %{admission: :admitted, completion: :failed, completion_class: :unavailable} =
+               decision
+
+      refute log =~ "unexpected message"
+    end
+
+    test "a damaged lender reaches an MCP client as a corrupt error", %{
+      ctx: ctx,
+      lender: lender
+    } do
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender, scope: "sideways")
+
+      {answer, decision, log} = plan_over_mcp(ctx)
+
+      assert answer == %{
+               "jsonrpc" => "2.0",
+               "id" => 1,
+               "error" => %{
+                 "code" => -33104,
+                 "message" =>
+                   "A profile that lends a key here is damaged and cannot lend its key — " <>
+                     "revoke profile #{lender} and grant it again."
+               }
+             }
+
+      assert %{admission: :admitted, completion: :failed, completion_class: :corrupt} = decision
+      refute log =~ "unexpected message"
+    end
+  end
+
+  defp ship_plan_component!(ctx, name, manifest) do
+    {:ok, _component} =
+      Arca.Test.UnitFixtures.ship_and_register!(ctx, "reagent", "local", name, "1.0.0",
+        manifest:
+          Map.merge(manifest, %{
+            "name" => name,
+            "type" => "reagent",
+            "version" => "1.0.0",
+            "publisher" => "local"
+          }),
+        wasm: File.read!(@plan_wasm)
+      )
+  end
+
+  defp grant_plan_dep!(ctx, bindings) do
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @plan_dep})
+    decisions = %{ref: @plan_dep, bindings: bindings}
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _committed} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
+  # `profile.plan` of the app as an MCP client calls it, under a request of
+  # its own: the response the client receives (the router's answer encoded
+  # as `Emissary.Web.MCPController` encodes it), the call's one decision,
+  # and the log.
+  defp plan_over_mcp(ctx) do
+    ctx = %{ctx | request_id: Prima.UUID7.request_id()}
+
+    {answer, log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        Emissary.MCP.Router.dispatch(ctx, %Prima.MCP.Message{
+          type: :request,
+          id: 1,
+          method: "tools/call",
+          params: %{
+            "name" => "profile",
+            "arguments" => %{"action" => "plan", "ref" => @plan_app}
+          }
+        })
+      end)
+
+    response =
+      case answer do
+        {:ok, result} -> Prima.MCP.Message.encode_result(1, result)
+        {:error, code, message} -> Prima.MCP.Message.encode_error(1, code, message)
+        {:error, code, message, data} -> Prima.MCP.Message.encode_error(1, code, message, data)
+      end
+
+    assert {:ok, [decision]} =
+             Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
+
+    {response, decision, log}
+  end
+
   describe "tincture_visibility invalid action" do
     test "returns error for unknown action", %{ctx: ctx} do
       {:error, msg} =

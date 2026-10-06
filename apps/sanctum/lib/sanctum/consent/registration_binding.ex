@@ -24,6 +24,7 @@ defmodule Sanctum.Consent.RegistrationBinding do
 
   @type error ::
           {:invalid_target, term()}
+          | {:profiles_unavailable, String.t()}
           | :profile_not_for_target
           | {:profile_corrupt, String.t()}
           | {:no_head_consent, String.t()}
@@ -36,13 +37,17 @@ defmodule Sanctum.Consent.RegistrationBinding do
   The three checks of the module doc, in order, for binding `target_ref`'s
   registration to `profile_id`.
 
-  A profile of the target whose row is stored outside the closed
-  vocabulary is `{:profile_corrupt, profile_id}`, never a profile of
-  another component. The profile's head is read three ways, never one: a
-  profile with no head is `{:no_head_consent, profile_id}`, a head stored
-  outside the closed vocabulary is `{:head_corrupt, profile_id}`, and one
-  the store could not answer is `{:head_unavailable, profile_id}`.
-  `message/1` gives each its own sentence.
+  The target's profile list the store could not answer is
+  `{:profiles_unavailable, name_ref}`, `name_ref` the target's name-level
+  ref, never a profile of another component; a tenant refusal
+  (`:no_athanor`, `:missing_tenant`) keeps its own answer. A profile of
+  the target whose row is stored outside the closed vocabulary is
+  `{:profile_corrupt, profile_id}`, never a profile of another component.
+  The profile's head is read three ways, never one: a profile with no
+  head is `{:no_head_consent, profile_id}`, a head stored outside the
+  closed vocabulary is `{:head_corrupt, profile_id}`, and one the store
+  could not answer is `{:head_unavailable, profile_id}`. `message/1`
+  gives each its own sentence.
   """
   @spec authorize(Context.t(), String.t(), String.t()) :: :ok | {:error, error()}
   def authorize(%Context{} = ctx, target_ref, profile_id)
@@ -50,7 +55,7 @@ defmodule Sanctum.Consent.RegistrationBinding do
     actor = Context.actor(ctx)
 
     with {:ok, name_ref} <- name_level(target_ref),
-         {:ok, candidates} <- Arca.ConsentStorage.profile_entries(actor, name_ref),
+         {:ok, candidates} <- target_profiles(actor, name_ref),
          :ok <- check_profile_for_target(candidates, profile_id),
          {:ok, consent} <- head_consent(actor, profile_id),
          {:ok, _via} <-
@@ -69,6 +74,10 @@ defmodule Sanctum.Consent.RegistrationBinding do
     do: Sanctum.Unauthorized.message({:consent_class_required, refusal})
 
   def message({:invalid_target, _reason}), do: "the target reference is not valid"
+
+  def message({:profiles_unavailable, _name_ref}),
+    do: "the component's profiles cannot be read right now — try again"
+
   def message(:profile_not_for_target), do: "the profile belongs to another component"
 
   def message({:profile_corrupt, profile_id}),
@@ -95,6 +104,18 @@ defmodule Sanctum.Consent.RegistrationBinding do
     case Prima.ComponentRef.to_name_ref(target_ref) do
       {:ok, name_ref} -> {:ok, name_ref}
       {:error, reason} -> {:error, {:invalid_target, reason}}
+    end
+  end
+
+  # The target's profiles as the store answers them. A tenant refusal is
+  # the caller's own; any other is a store that could not answer, which a
+  # registration is told to retry, never that the profile belongs to
+  # another component.
+  defp target_profiles(actor, name_ref) do
+    case Arca.ConsentStorage.profile_entries(actor, name_ref) do
+      {:ok, candidates} -> {:ok, candidates}
+      {:error, tenant} when tenant in [:no_athanor, :missing_tenant] -> {:error, tenant}
+      {:error, _unanswered} -> {:error, {:profiles_unavailable, name_ref}}
     end
   end
 

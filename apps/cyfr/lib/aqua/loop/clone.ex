@@ -147,38 +147,46 @@ defmodule Aqua.Loop.Clone do
   defp roster(%Turn{roster: roster}), do: MapSet.new(roster, & &1["name"])
 
   # A revocation mid-turn lets the in-flight call finish and refuses the
-  # next transition; a clone is one. The pinned profile is loaded again:
-  # its head must still be the pinned consent. A consent the store could
-  # not answer, or one stored outside the closed vocabulary, is no moved
-  # consent: it answers as itself, in its own sentence. Any other refusal
-  # means the pinned consent no longer stands.
+  # next transition; a clone is one. The pinned profile is loaded again
+  # (`intact_answer/2`).
   defp intact(ctx, %Authority{profile_id: profile_id, consent_id: consent_id, source_ref: ref}) do
-    case Crucible.authority_for(ctx, {:id, profile_id}, ref) do
-      {:ok, %Authority{consent_id: ^consent_id}} ->
-        :ok
-
-      {:ok, _moved} ->
-        {:error, :consent_moved}
-
-      {:error, reason} ->
-        if unanswered_or_damaged?(reason),
-          do: {:error, reason},
-          else: {:error, :consent_moved}
-    end
+    ctx
+    |> Crucible.authority_for({:id, profile_id}, ref)
+    |> intact_answer(consent_id)
   end
 
-  # The admission's own store outage and its damaged profile row, the
-  # consent loader's (a head or a lender the store could not answer) and
-  # its damage.
-  defp unanswered_or_damaged?({:unavailable, _what}), do: true
-  defp unanswered_or_damaged?({:corrupt, {:profile, _profile_id}}), do: true
+  @doc false
+  # The clone's answer to the pinned profile's reload, `result` being
+  # `Crucible.authority_for/3`'s: its head must still be the pinned
+  # consent. A consent the store could not answer, or one stored outside
+  # the closed vocabulary, is no moved consent: it answers as itself, in
+  # its own sentence. Any other refusal means the pinned consent no longer
+  # stands.
+  @spec intact_answer({:ok, term()} | {:error, term()}, String.t()) :: :ok | {:error, term()}
+  def intact_answer({:ok, %Authority{consent_id: consent_id}}, consent_id), do: :ok
+  def intact_answer({:ok, _moved}, _consent_id), do: {:error, :consent_moved}
 
-  defp unanswered_or_damaged?({tag, _id})
-       when tag in [:head_unavailable, :lender_unavailable, :head_corrupt],
-       do: true
+  def intact_answer({:error, reason}, _consent_id) do
+    if unanswered_or_damaged?(reason),
+      do: {:error, reason},
+      else: {:error, :consent_moved}
+  end
 
-  defp unanswered_or_damaged?({:lender_corrupt, _target, _profile_id}), do: true
-  defp unanswered_or_damaged?(_no_longer_stands), do: false
+  @doc false
+  # The admission's own store outage, its damaged profile row and a
+  # component graph stored damaged; the consent loader's (a head or a
+  # lender the store could not answer) and its damage.
+  @spec unanswered_or_damaged?(term()) :: boolean()
+  def unanswered_or_damaged?({:unavailable, _what}), do: true
+  def unanswered_or_damaged?({:corrupt, {:profile, _profile_id}}), do: true
+  def unanswered_or_damaged?({:corrupt, {:component_graph, _ref}}), do: true
+
+  def unanswered_or_damaged?({tag, _id})
+      when tag in [:head_unavailable, :lender_unavailable, :head_corrupt],
+      do: true
+
+  def unanswered_or_damaged?({:lender_corrupt, _target, _profile_id}), do: true
+  def unanswered_or_damaged?(_no_longer_stands), do: false
 
   # The spec is built from the pinned row and the release it resolves is
   # pinned on the clone's row; a row that cannot carry a spec is closed

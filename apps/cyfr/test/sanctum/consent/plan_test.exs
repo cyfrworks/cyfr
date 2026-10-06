@@ -11,8 +11,11 @@ defmodule Sanctum.Consent.PlanTest do
 
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Prima.ConsentPreview
   alias Sanctum.Consent.Plan
+  alias Sanctum.Test.ConsentFixtures
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
   @dep "reagent:local.plan-dep"
@@ -957,6 +960,160 @@ defmodule Sanctum.Consent.PlanTest do
       assert [%{candidates: [key_lender]}] = plan.dependency_needs
       assert %{fields: ["OPENAI_API_KEY"], scopes: []} = key_lender
     end
+  end
+
+  describe "a lender that cannot be read" do
+    # A lender the store could not answer, or whose profile row or head
+    # does not decode, refuses the plan with its reason, which
+    # `profile.plan` answers typed and a person reads in
+    # `Sanctum.Unauthorized`'s sentence of its class: a plan without that
+    # lender would tell the person to set up a key over a profile that
+    # lends one. A dependency with no profile, or whose profile has no
+    # head, lends nothing.
+    @lend_dep "reagent:local.plan-lend-read-dep"
+    @lend_app "reagent:local.plan-lend-read-app"
+    @unreadable "A profile that lends a key here cannot be read right now — try again."
+
+    defp lending_closure!(ctx) do
+      publish!(ctx, "plan-lend-read-dep", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+
+      publish!(ctx, "plan-lend-read-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => @lend_dep}]}
+      })
+    end
+
+    # The dependency's one owner profile, its head binding a key.
+    defp lender!(ctx) do
+      key = own!(ctx, "openai.com")
+      commit!(ctx, @lend_dep, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+      {:ok, [%{id: lender}]} = Sanctum.Consent.profiles(ctx, @lend_dep)
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: @lend_app})
+      assert [%{dep: @lend_dep, candidates: [%{profile_id: ^lender}]}] = plan.dependency_needs
+
+      lender
+    end
+
+    defp plan_answer(ctx),
+      do: Sanctum.Providers.Profile.handle(ctx, %{"action" => "plan", "ref" => @lend_app})
+
+    # `table` stops answering once the app's own profile list is read (the
+    # plan's first profile read), so the dependency's is the read refused.
+    defp away_after_app_profiles!(table) do
+      test = self()
+      handler = "plan-lender-away-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            if self() == test and meta[:source] == "profiles" and
+                 @lend_app in (meta[:params] || []) do
+              :telemetry.detach(handler)
+              Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+    end
+
+    test "a dependency with no profile, or a profile with no head, plans with no lenders",
+         %{ctx: ctx} do
+      lending_closure!(ctx)
+
+      assert {:ok, %{dependency_needs: [%{dep: @lend_dep, candidates: []}]}} =
+               Plan.plan(ctx, %{ref: @lend_app})
+
+      :ok =
+        ConsentFixtures.seed_profile!(ctx, %{
+          id: "prof_plan_lend_headless",
+          source_ref: @lend_dep,
+          kind: :owner,
+          label: "default",
+          status: :active
+        })
+
+      assert {:ok, %{dependency_needs: [%{dep: @lend_dep, candidates: []}]}} =
+               Plan.plan(ctx, %{ref: @lend_app})
+    end
+
+    @tag :capture_log
+    test "a dependency's profile list the store cannot answer refuses the plan", %{ctx: ctx} do
+      lending_closure!(ctx)
+      lender!(ctx)
+
+      away_after_app_profiles!("profiles")
+      assert {:error, {:lender_unavailable, @lend_dep}} = Plan.plan(ctx, %{ref: @lend_app})
+
+      Arca.Repo.query!("ALTER TABLE profiles_unavailable RENAME TO profiles")
+      away_after_app_profiles!("profiles")
+      assert_unreadable(plan_answer(ctx))
+    end
+
+    @tag :capture_log
+    test "a lender's head the store cannot answer refuses the plan", %{ctx: ctx} do
+      lending_closure!(ctx)
+      lender!(ctx)
+
+      # The app has no profile of its own, so the lender's is the one head
+      # the plan reads.
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+      assert {:error, {:lender_unavailable, @lend_dep}} = Plan.plan(ctx, %{ref: @lend_app})
+      assert_unreadable(plan_answer(ctx))
+    end
+
+    test "a lender's profile row that does not decode refuses the plan, naming the profile",
+         %{ctx: ctx} do
+      lending_closure!(ctx)
+      lender = lender!(ctx)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(p in Arca.Schemas.Profile,
+            where: p.athanor_id == ^ctx.athanor_id and p.id == ^lender
+          ),
+          set: [kind: "sideways"]
+        )
+
+      assert {:error, {:lender_corrupt, @lend_dep, ^lender}} = Plan.plan(ctx, %{ref: @lend_app})
+      assert_damaged(plan_answer(ctx), lender)
+    end
+
+    test "a lender's head that does not decode refuses the plan, naming the profile",
+         %{ctx: ctx} do
+      lending_closure!(ctx)
+      lender = lender!(ctx)
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, lender, scope: "sideways")
+
+      assert {:error, {:lender_corrupt, @lend_dep, ^lender}} = Plan.plan(ctx, %{ref: @lend_app})
+      assert_damaged(plan_answer(ctx), lender)
+    end
+  end
+
+  # `profile.plan`'s answer over a lender the store could not answer: the
+  # typed reason, read in its class's sentence.
+  defp assert_unreadable(answer) do
+    assert {:error, {:lender_unavailable, @lend_dep} = reason} = answer
+
+    assert %Prima.Refusal{class: :unavailable, message: @unreadable} =
+             Grimoire.Error.classify(reason)
+  end
+
+  # `profile.plan`'s answer over a damaged lender, naming the profile to
+  # revoke.
+  defp assert_damaged(answer, lender) do
+    assert {:error, {:lender_corrupt, @lend_dep, ^lender} = reason} = answer
+
+    damaged =
+      "A profile that lends a key here is damaged and cannot lend its key — " <>
+        "revoke profile #{lender} and grant it again."
+
+    assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
   end
 
   describe "a closure that cannot be resolved" do

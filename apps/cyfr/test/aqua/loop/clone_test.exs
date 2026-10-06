@@ -505,6 +505,34 @@ defmodule Aqua.Loop.CloneTest do
              {:error, "The stored profile is damaged and cannot be used."}
   end
 
+  # A component graph stored damaged is damage the admission names, never
+  # a consent that moved. The clone's mapping is read on its own, with the
+  # reason as its literal, so it holds whichever lands first of it and the
+  # admission that answers it.
+  @damaged_graph {:corrupt, {:component_graph, "reagent:local.x:1.0.0"}}
+
+  test "a component graph stored damaged is damage, not a consent that no longer stands" do
+    assert Clone.unanswered_or_damaged?(@damaged_graph)
+  end
+
+  test "a clone whose component graph is stored damaged answers that refusal, never a moved consent" do
+    assert Clone.intact_answer({:error, @damaged_graph}, "cons_pinned") ==
+             {:error, @damaged_graph}
+  end
+
+  test "a refusal that means the pinned consent no longer stands still answers consent_moved" do
+    refute Clone.unanswered_or_damaged?({:no_head_consent, "prof_pinned"})
+
+    assert Clone.intact_answer({:error, {:no_head_consent, "prof_pinned"}}, "cons_pinned") ==
+             {:error, :consent_moved}
+
+    assert Clone.intact_answer({:ok, %Prima.Authority{consent_id: "cons_other"}}, "cons_pinned") ==
+             {:error, :consent_moved}
+
+    assert Clone.intact_answer({:ok, %Prima.Authority{consent_id: "cons_pinned"}}, "cons_pinned") ==
+             :ok
+  end
+
   # A clone into the planner from a soul turn under `soul`'s authority, as
   # the clone step records its answer.
   defp clone_planner(ctx, soul) do

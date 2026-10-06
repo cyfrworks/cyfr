@@ -195,6 +195,24 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
              "the profile's consent cannot be read right now — try again"
   end
 
+  # A profile list the store cannot answer is not a profile of another
+  # component: the refusal says to try again, and the same list, answered,
+  # still binds.
+  @tag :capture_log
+  test "a profile list the store cannot answer is refused as such, and binds once it answers",
+       %{ctx: ctx} do
+    Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+    assert {:error, {:profiles_unavailable, @target} = unanswered} =
+             RegistrationBinding.authorize(ctx, "#{@target}:1.0.0", "prof-bind")
+
+    assert RegistrationBinding.message(unanswered) ==
+             "the component's profiles cannot be read right now — try again"
+
+    Arca.Repo.query!("ALTER TABLE profiles_unavailable RENAME TO profiles")
+    assert :ok = RegistrationBinding.authorize(ctx, "#{@target}:1.0.0", "prof-bind")
+  end
+
   # Publishing the target is fixture setup, not the thing under test. The
   # shared sandbox lets app-level processes write concurrently, and SQLite
   # answers a concurrent writer with a busy error that the storage layer
@@ -328,6 +346,34 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
         Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), created.schedule_id)
 
       assert schedule.profile_id == "prof-bind"
+    end
+
+    # As the schedule tool and the webhook surface word the binding's
+    # refusal: an outage to retry, never another component's profile.
+    @tag :capture_log
+    test "a profile list the store cannot answer refuses a schedule and a webhook as an outage",
+         %{ctx: ctx} do
+      Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+      refused =
+        "profile binding refused: the component's profiles cannot be read right now — try again"
+
+      assert {:error, {:invalid_argument, ^refused}} =
+               Crucible.Schedules.Provider.handle("schedule", ctx, %{
+                 "action" => "create",
+                 "name" => "unread-sched",
+                 "cron_expression" => "0 * * * *",
+                 "reference" => "#{@target}:1.0.0",
+                 "profile_id" => "prof-bind"
+               })
+
+      assert {:error, ^refused} =
+               Sanctum.Webhook.create(ctx, %{
+                 name: "unread-hook",
+                 replay_protection: "none",
+                 target_ref: "#{@target}:1.0.0",
+                 profile_id: "prof-bind"
+               })
     end
   end
 end

@@ -359,6 +359,11 @@ defmodule Sanctum.Providers.Profile do
     end
   end
 
+  # A lender the plan could not read, or whose profile row or head does
+  # not decode (`Sanctum.Consent.Plan.plan/2`), is answered typed, as
+  # `grants` answers it: the gate classes it `unavailable` or `corrupt`
+  # through `Sanctum.Unauthorized`, whose sentence it reads as, and a
+  # client branches on that class. Every other refusal is rendered here.
   def handle(%Context{} = ctx, %{"action" => "plan", "ref" => ref} = args) do
     with {:ok, kind} <- kind(args) do
       params =
@@ -367,6 +372,8 @@ defmodule Sanctum.Providers.Profile do
 
       case Plan.plan(ctx, params) do
         {:ok, plan} -> {:ok, plan}
+        {:error, {:lender_unavailable, _dep}} = unread -> unread
+        {:error, {:lender_corrupt, _dep, _profile_id}} = damaged -> damaged
         {:error, reason} -> {:error, fmt(reason)}
       end
     end
