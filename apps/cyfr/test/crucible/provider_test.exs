@@ -423,6 +423,152 @@ defmodule Crucible.ProviderTest do
       )
     end
 
+    # The run's own grant, stored in each way the consent loader cannot
+    # trust, is damage in the run's own sentence: each case first pins the
+    # loader's own answer for its damage, then reads what an MCP client
+    # receives for it.
+
+    test "an active profile with no head is a damaged head", %{ctx: ctx, ref: ref} do
+      profile_id = own_profile_id(ctx)
+      set_profile!(ctx, profile_id, head_consent_id: nil)
+
+      assert {:error, {:no_head_consent, ^profile_id}} = own_load(ctx, ref)
+
+      damaged_head!(ctx, ref, profile_id)
+    end
+
+    test "a head whose bytes fail their digest is a damaged head", %{ctx: ctx, ref: ref} do
+      profile_id = own_profile_id(ctx)
+
+      :ok =
+        ConsentFixtures.hand_edit_head!(ctx, profile_id,
+          blob_digest: "sha256:" <> String.duplicate("0", 64)
+        )
+
+      assert {:error, {:blob_digest_mismatch, _}} = own_load(ctx, ref)
+
+      damaged_head!(ctx, ref, profile_id)
+    end
+
+    test "a head whose bytes do not parse is a damaged head", %{ctx: ctx, ref: ref} do
+      profile_id = own_profile_id(ctx)
+
+      :ok =
+        ConsentFixtures.hand_edit_head!(ctx, profile_id,
+          resolved_policy: "not a blob",
+          blob_digest: Prima.JCS.hash_binary("not a blob")
+        )
+
+      assert {:error, {:invalid_blob, _}} = own_load(ctx, ref)
+
+      damaged_head!(ctx, ref, profile_id)
+    end
+
+    test "a head whose revision pins a version its scope does not is a damaged head",
+         %{ctx: ctx, ref: ref} do
+      profile_id = own_profile_id(ctx)
+      :ok = ConsentFixtures.hand_edit_head!(ctx, profile_id, pinned_version: "0.1.0")
+
+      assert {:error, {:invalid_consent, :pinned_version}} = own_load(ctx, ref)
+
+      damaged_head!(ctx, ref, profile_id)
+    end
+
+    test "a head whose stored bindings are not the ones its grant holds is a damaged head",
+         %{ctx: ctx} do
+      root = lending_root!(ctx)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.ConsentVaultRef,
+            where: r.athanor_id == ^ctx.athanor_id and r.consent_id == "consent-lent-root"
+          ),
+          set: [via_label: "elsewhere"]
+        )
+
+      assert {:error, {:blob_refs_mismatch, _}} = own_load(ctx, root)
+
+      damaged_head!(ctx, root, "prof-lent-root")
+    end
+
+    test "a head that binds one entry under two digests is a damaged head", %{ctx: ctx} do
+      root = bound_twice_root!(ctx)
+
+      assert {:error, {:inconsistent_binding_digest, "vault-twice"}} = own_load(ctx, root)
+
+      damaged_head!(ctx, root, "prof-twice-root")
+    end
+
+    @tag :capture_log
+    test "a release whose stored digest does not re-derive from its row is a damaged head",
+         %{ctx: ctx, ref: ref} do
+      profile_id = own_profile_id(ctx)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.Component,
+            where: c.athanor_id == ^ctx.athanor_id and c.name == "test-math"
+          ),
+          set: [release_digest: "sha256:" <> String.duplicate("0", 64)]
+        )
+
+      assert {:error, {:integrity_alarm, [_tampered]}} = own_load(ctx, ref)
+
+      damaged_head!(ctx, ref, profile_id)
+    end
+
+    test "a head whose grant holds no node for the run's own component is a damaged head",
+         %{ctx: ctx, ref: ref} do
+      profile_id = own_profile_id(ctx)
+
+      rewrite_grant!(ctx, profile_id, fn %{"nodes" => nodes} = policy ->
+        {node, others} = Map.pop!(nodes, "reagent:local.test-math")
+        %{policy | "nodes" => Map.put(others, "reagent:local.not-test-math", node)}
+      end)
+
+      assert {:error, {:unknown_source_node, "reagent:local.test-math"}} = own_load(ctx, ref)
+
+      damaged_head!(ctx, ref, profile_id)
+    end
+
+    test "a head whose grant holds no ingress for the run's own component is a damaged head",
+         %{ctx: ctx, ref: ref} do
+      profile_id = own_profile_id(ctx)
+
+      rewrite_grant!(
+        ctx,
+        profile_id,
+        &update_in(&1, ["nodes", "reagent:local.test-math", "edges"], fn edges ->
+          Map.delete(edges, "@ingress")
+        end)
+      )
+
+      assert {:error, {:missing_ingress, "reagent:local.test-math"}} = own_load(ctx, ref)
+
+      damaged_head!(ctx, ref, profile_id)
+    end
+
+    # A public profile row over a head that opens every call inert is no
+    # grant a commit writes: the profile cannot root an authority, which
+    # is the damaged profile admission names, never a damaged head.
+    test "a profile and head that cannot root an authority is a damaged profile",
+         %{ctx: ctx, ref: ref} do
+      profile_id = own_profile_id(ctx)
+      set_profile!(ctx, profile_id, kind: "public")
+
+      assert {:error, {:invalid_profile, :public_requires_edge_only}} =
+               own_load(ctx, ref, {:id, profile_id})
+
+      failed_tool!(
+        ctx,
+        fn ->
+          over_mcp(ctx, %{"reference" => ref, "input" => %{}, "profile" => profile_id})
+        end,
+        "The stored profile is damaged and cannot be used.",
+        "corrupt"
+      )
+    end
+
     test "a component graph the store cannot give right now is unavailable, never a setup to make",
          %{ctx: ctx, ref: ref} do
       # The component's registry row was read within its cache's minutes,
@@ -547,10 +693,63 @@ defmodule Crucible.ProviderTest do
     before = started(ctx)
     {answer, log} = ExUnit.CaptureLog.with_log(call)
 
-    assert answer["error"] == %{"code" => code, "message" => sentence}
+    # Read with the tool result beside it, so a call answered as a failed
+    # tool result shows what it said.
+    assert {answer["error"], answer["result"]["content"]} ==
+             {%{"code" => code, "message" => sentence}, nil}
+
     assert decided(ctx) == [{"admitted", "failed", class}]
     refute log =~ "Prima.Refusal"
     assert started(ctx) == before
+  end
+
+  # An `execution.run` of `ref` answers an MCP client the run's own head
+  # damaged, naming its profile `profile_id` (`rpc_error!/5`).
+  defp damaged_head!(ctx, ref, profile_id) do
+    rpc_error!(
+      ctx,
+      fn -> over_mcp(ctx, %{"reference" => ref, "input" => %{}}) end,
+      -33104,
+      "This app's consent is damaged and cannot be used — revoke profile " <>
+        "#{profile_id} and grant it again.",
+      "corrupt"
+    )
+  end
+
+  # The consent loader's own answer for the root of `ref` under
+  # `selector`, asked with what admission asks it with (the profile, the
+  # verified component graph and the live shape), before admission answers
+  # it.
+  defp own_load(ctx, ref, selector \\ :default) do
+    {:ok, name_ref} = Prima.ComponentRef.to_name_ref(ref)
+    {:ok, candidates} = Sanctum.Consent.profiles(ctx, name_ref)
+    {:ok, profile} = Prima.Authority.RootSelect.select(candidates, selector)
+    {:ok, _ref, _type, component} = Crucible.Admission.inspect_component(ctx, ref)
+
+    shape =
+      case Sanctum.Consent.ShapeDerivation.live_digest(ctx, profile.source_ref) do
+        {:ok, digest} -> digest
+        {:error, _} -> nil
+      end
+
+    Sanctum.Consent.Loader.load_root(ctx, profile,
+      live: Compendium.resolve_verified_activation(ctx, component),
+      live_shape_digest: shape
+    )
+  end
+
+  # The head of `profile_id` with its grant rewritten by `fun` (the stored
+  # policy decoded in, the policy to store out), stored with its own
+  # digest, so the grant's bytes still match it.
+  defp rewrite_grant!(ctx, profile_id, fun) do
+    {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+    policy = head.resolved_policy |> Jason.decode!() |> fun.() |> Jason.encode!()
+
+    :ok =
+      ConsentFixtures.hand_edit_head!(ctx, profile_id,
+        resolved_policy: policy,
+        blob_digest: Prima.JCS.hash_binary(policy)
+      )
   end
 
   # `call` answers an MCP client a failed tool result whose one text block
@@ -722,6 +921,88 @@ defmodule Crucible.ProviderTest do
               binding_digest: nil
             }
           ]
+        }
+      )
+
+    root <> ":0.1.0"
+  end
+
+  # A root of the person's own whose head binds one entry on two edges,
+  # its ingress and its edge to `@lender`, under two binding digests, its
+  # stored bindings the same two. Answers the root's reference.
+  defp bound_twice_root!(ctx) do
+    {:ok, component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+        name: "twice-root",
+        version: "0.1.0",
+        type: "reagent"
+      })
+
+    root = "reagent:local.twice-root"
+    limits = Prima.Test.AuthorityFixtures.limits_map()
+    ingress_key = Prima.Authority.Blob.binding_key(root, "@ingress", nil)
+    edge_key = Prima.Authority.Blob.binding_key(root, @lender, nil)
+
+    vault = fn binding_key, digest ->
+      %{
+        "entry_id" => "vault-twice",
+        "binding_digest" => digest,
+        "scope" => "athanor",
+        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
+        "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+        "projection" => %{"fields" => ["KEY"]},
+        "binding_key" => binding_key
+      }
+    end
+
+    policy =
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          root => %{
+            "limits" => limits,
+            "edges" => %{
+              "@ingress" => %{"vault" => vault.(ingress_key, "sha256:twice-one")},
+              @lender => %{"vault" => vault.(edge_key, "sha256:twice-two")}
+            }
+          },
+          @lender => %{"limits" => limits, "edges" => %{}}
+        }
+      })
+
+    :ok =
+      ConsentFixtures.seed_head!(
+        ctx,
+        %{
+          id: "prof-twice-root",
+          kind: :owner,
+          source_ref: root,
+          label: "default",
+          status: :active
+        },
+        %{
+          id: "consent-twice-root",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: "sha256:shape-twice-root",
+          commit_digest: "sha256:commit-twice-root",
+          resolved_policy: policy,
+          activation: %{root => component.release_digest},
+          admitted_origins: [:interactive, :programmatic],
+          vault_refs:
+            for {key, digest} <- [
+                  {ingress_key, "sha256:twice-one"},
+                  {edge_key, "sha256:twice-two"}
+                ] do
+              %{
+                binding_key: key,
+                scope: "athanor",
+                vault_entry_id: "vault-twice",
+                binding_digest: digest
+              }
+            end
         }
       )
 

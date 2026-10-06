@@ -1185,7 +1185,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           blob_digest: "sha256:" <> String.duplicate("0", 64)
         )
 
-      assert {:error, {:blob_digest_mismatch, _}} = Crucible.authority_for(ctx, :default, soul)
+      assert {:error, {:head_corrupt, ^soul_profile}} =
+               Crucible.authority_for(ctx, :default, soul)
 
       model_consent_reads!(conn, room, @damaged)
     end

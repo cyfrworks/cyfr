@@ -1015,6 +1015,113 @@ defmodule Crucible.AdmissionTest do
     end
   end
 
+  describe "the root's own grant read damaged" do
+    # Admission cannot read `Aqua`, so its reading of the loader's damage
+    # (`Crucible.Admission.root_refusal/2`) is held to the consent
+    # status's here, over every member the loader declares
+    # (`Sanctum.Consent.Loader.load_error/0`): a member the status reads
+    # as damage that admission leaves as it stands, or one admission
+    # relabels that the status does not read as damage, fails this.
+    test "is typed damage for exactly the loader's answers the consent status reads as damage" do
+      members = declared(Sanctum.Consent.Loader, :load_error)
+      assert members != []
+
+      # Each member is named in a failure by its type, as the loader spells it.
+      for member <- members do
+        reason = instance(member)
+        answer = Admission.root_refusal("prof_own", reason)
+
+        case Aqua.ConsentStatus.classify_refusal(reason) do
+          {:error, :corrupt} ->
+            assert {spelled(member), typed_damage?(reason, answer)} == {spelled(member), true}
+
+          _not_damage ->
+            assert {spelled(member), answer == reason} == {spelled(member), true}
+        end
+      end
+    end
+  end
+
+  # What admission answers for damage, the router answers typed: the damaged
+  # head and the damaged profile, naming the root's own profile, and the
+  # loader's own typed damage, of the head or a lender, as the loader named
+  # it.
+  defp typed_damage?({:head_corrupt, _profile_id} = reason, answer), do: answer == reason
+
+  defp typed_damage?({:lender_corrupt, _target, _profile_id} = reason, answer),
+    do: answer == reason
+
+  defp typed_damage?({:invalid_profile, _what}, answer),
+    do: answer == {:corrupt, {:profile, "prof_own"}}
+
+  defp typed_damage?(_reason, answer), do: answer == {:head_corrupt, "prof_own"}
+
+  # The members of `module`'s type `name`, a union flattened through the
+  # types it names, each with the module whose type spells it.
+  defp declared(module, name) do
+    case type_body(module, name) do
+      {:type, _, :union, members} -> Enum.flat_map(members, &flattened(module, &1))
+      member -> flattened(module, member)
+    end
+  end
+
+  defp flattened(_module, {:remote_type, _, [{:atom, _, remote}, {:atom, _, name}, []]}),
+    do: declared(remote, name)
+
+  defp flattened(module, {:user_type, _, name, []}), do: declared(module, name)
+  defp flattened(module, member), do: [{module, member}]
+
+  defp type_body(module, name) do
+    {:ok, types} = Code.Typespec.fetch_types(module)
+
+    case for {kind, {^name, body, []}} <- types, kind in [:type, :typep, :opaque], do: body do
+      [body] -> body
+      _ -> flunk("#{inspect(module)} declares no type #{name}/0")
+    end
+  end
+
+  defp spelled({_module, type}) do
+    {:"::", _, [_name, quoted]} = Code.Typespec.type_to_quoted({:member, type, []})
+    Macro.to_string(quoted)
+  end
+
+  # A value of the member's type: each element built from its own type,
+  # through the types it names.
+  defp instance({module, type}), do: build(module, type)
+
+  defp build(_module, {:atom, _, atom}), do: atom
+  defp build(_module, {:integer, _, integer}), do: integer
+  defp build(module, {:ann_type, _, [_name, type]}), do: build(module, type)
+  defp build(module, {:type, _, :union, [first | _]}), do: build(module, first)
+  defp build(_module, {:type, _, :tuple, :any}), do: {}
+
+  defp build(module, {:type, _, :tuple, elements}),
+    do: elements |> Enum.map(&build(module, &1)) |> List.to_tuple()
+
+  defp build(_module, {:type, _, :list, _}), do: []
+  defp build(module, {:type, _, :nonempty_list, [element]}), do: [build(module, element)]
+  defp build(_module, {:type, _, :map, :any}), do: %{}
+
+  defp build(module, {:type, _, :map, fields}) do
+    for {:type, _, :map_field_exact, [key, value]} <- fields,
+        into: %{},
+        do: {build(module, key), build(module, value)}
+  end
+
+  defp build(_module, {:type, _, :binary, []}), do: "x"
+  defp build(_module, {:type, _, kind, []}) when kind in [:atom, :module, :term, :any], do: :x
+  defp build(_module, {:type, _, :boolean, []}), do: true
+
+  defp build(_module, {:type, _, kind, []})
+       when kind in [:integer, :non_neg_integer, :pos_integer],
+       do: 1
+
+  defp build(_module, {:remote_type, _, [{:atom, _, remote}, {:atom, _, name}, []]}),
+    do: build(remote, type_body(remote, name))
+
+  defp build(module, {:user_type, _, name, []}), do: build(module, type_body(module, name))
+  defp build(module, type), do: flunk("no value of #{inspect(module)}'s #{inspect(type)}")
+
   defp cached?(ctx, reference) do
     case Arca.Cache.get(Arca.Cache.Keys.component_meta(Sanctum.Context.actor(ctx), reference)) do
       {:ok, _} -> {:ok, :cached}

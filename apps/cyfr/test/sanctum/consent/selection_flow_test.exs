@@ -733,15 +733,15 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     end
 
     # The run's own head is no lender: its bytes failing their digest, or
-    # not parsing, keep their own answers.
-    test "the run's own head failing its digest or not parsing keeps its own answer",
+    # not parsing, are its own damaged head, named by its own profile.
+    test "the run's own head failing its digest or not parsing is its own damaged head",
          %{ctx: ctx, ref: ref, borrower: borrower} do
       :ok =
         Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, borrower,
           blob_digest: "sha256:" <> String.duplicate("0", 64)
         )
 
-      assert {:error, {:blob_digest_mismatch, _}} = run(ctx, ref)
+      assert {:error, {:head_corrupt, ^borrower}} = run(ctx, ref)
 
       :ok =
         Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, borrower,
@@ -749,7 +749,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
           blob_digest: Prima.JCS.hash_binary("not a blob")
         )
 
-      assert {:error, {:invalid_blob, _}} = run(ctx, ref)
+      assert {:error, {:head_corrupt, ^borrower}} = run(ctx, ref)
     end
 
     @tag :capture_log
