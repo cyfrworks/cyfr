@@ -168,7 +168,8 @@ defmodule Aqua.ConsentStatus do
   # corrupt rows).
   def classify_refusal({:corrupt, _what}), do: {:error, :corrupt}
   def classify_refusal({damage, _}) when damage in @corrupt, do: {:error, :corrupt}
-  # A lender whose profile row or head does not decode
+  # A lender whose profile row or head does not decode, or whose head's
+  # bytes fail their digest or do not parse
   # (`{:lender_corrupt, target, profile_id}`).
   def classify_refusal({:lender_corrupt, _target, _profile_id}), do: {:error, :corrupt}
   def classify_refusal({outage, _}) when outage in @unanswered, do: {:error, :unavailable}

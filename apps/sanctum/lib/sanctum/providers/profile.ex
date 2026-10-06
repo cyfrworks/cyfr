@@ -359,11 +359,6 @@ defmodule Sanctum.Providers.Profile do
     end
   end
 
-  # A lender the plan could not read, or whose profile row or head does
-  # not decode (`Sanctum.Consent.Plan.plan/2`), is answered typed, as
-  # `grants` answers it: the gate classes it `unavailable` or `corrupt`
-  # through `Sanctum.Unauthorized`, whose sentence it reads as, and a
-  # client branches on that class. Every other refusal is rendered here.
   def handle(%Context{} = ctx, %{"action" => "plan", "ref" => ref} = args) do
     with {:ok, kind} <- kind(args) do
       params =
@@ -372,9 +367,7 @@ defmodule Sanctum.Providers.Profile do
 
       case Plan.plan(ctx, params) do
         {:ok, plan} -> {:ok, plan}
-        {:error, {:lender_unavailable, _dep}} = unread -> unread
-        {:error, {:lender_corrupt, _dep, _profile_id}} = damaged -> damaged
-        {:error, reason} -> {:error, fmt(reason)}
+        {:error, reason} -> {:error, walk_refusal(reason)}
       end
     end
   end
@@ -388,7 +381,7 @@ defmodule Sanctum.Providers.Profile do
     with {:ok, decoded} <- decode_decisions(decisions) do
       case Commit.preview(ctx, decoded) do
         {:ok, preview} -> {:ok, preview}
-        {:error, reason} -> {:error, fmt(reason)}
+        {:error, reason} -> {:error, walk_refusal(reason)}
       end
     end
   end
@@ -411,7 +404,7 @@ defmodule Sanctum.Providers.Profile do
 
       case Commit.commit(ctx, params, key_capability: capability) do
         {:ok, result} -> {:ok, Map.put(result, :status, "committed")}
-        {:error, reason} -> {:error, fmt(reason)}
+        {:error, reason} -> {:error, walk_refusal(reason)}
       end
     end
   end
@@ -540,7 +533,8 @@ defmodule Sanctum.Providers.Profile do
   # resolved. A head the loader refuses outright (validity, digest, parse,
   # canonical storage paths, blob/refs equality, binding-digest conflicts)
   # reaches nothing. A lender the store could not answer, or whose profile
-  # row or head does not decode, refuses the whole read with that reason
+  # row or head does not decode, or whose head's bytes fail their digest or
+  # do not parse, refuses the whole read with that reason
   # (`Sanctum.Unauthorized`'s sentence): an answer short of that head's
   # grants would read as "reaches nothing". The heads themselves come from
   # `Arca.ConsentStorage.active_heads/2`, never through the loader's head
@@ -982,6 +976,17 @@ defmodule Sanctum.Providers.Profile do
   defp key_capability(_ctx), do: {:ok, nil}
 
   # Error rendering
+
+  # A refusal of `plan`, `preview` or `commit`. A lender that could not be
+  # read, or whose profile row or head does not decode, or whose head's
+  # bytes fail their digest or do not parse (`Sanctum.Consent.Plan.plan/2`,
+  # `Sanctum.Consent.Commit.preview/2` and `commit/3`), is answered typed,
+  # as `grants` answers it: the gate classes it `unavailable` or `corrupt`
+  # through `Sanctum.Unauthorized`, whose sentence it reads as, and a
+  # client branches on that class. Every other refusal is rendered here.
+  defp walk_refusal({:lender_unavailable, _dep} = unread), do: unread
+  defp walk_refusal({:lender_corrupt, _dep, _profile_id} = damaged), do: damaged
+  defp walk_refusal(reason), do: fmt(reason)
 
   # Preserve typed consent signals for wire and console rendering.
   defp fmt({tag, payload} = signal) when Prima.Refusal.is_consent_signal(tag, payload),

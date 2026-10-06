@@ -50,7 +50,17 @@ defmodule Sanctum.Consent.Commit do
   several), checked as a binding of that need against the dependency. A
   dependency edge holds one need's credentials: a need the calling node's
   `provides` covers takes no selection, and an edge two needs would fill
-  is refused.
+  is refused. A lending profile is read as the plan reads the
+  dependency's lenders (`Sanctum.Consent.Plan`) and as a run's selection
+  reads it (`Sanctum.Consent.Loader`): a profile row of the dependency
+  that does not decode refuses the selection `{:lender_corrupt, dep,
+  profile_id}`, a profiles store that could not answer
+  `{:lender_unavailable, dep}`, and no active owner profile of the label
+  `{:selection_profile_unavailable, dep, label}`. Its head, likewise, that
+  does not decode, or whose bytes fail their digest or do not parse,
+  refuses `{:lender_corrupt, dep, profile_id}`; one the store could not
+  answer `{:lender_unavailable, dep}`; and one that is missing, or binds
+  no entry on its ingress, `{:selection_unbound, dep, label}`.
 
   An edge's selections are one default, which names no account, and any
   number of named accounts beside it (`name`), each an entry chosen here
@@ -1254,27 +1264,60 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
+  # The dependency's lending profile of `label`, its profiles read as the
+  # plan reads them (`Plan.lender_profiles/2`): a damaged row of the
+  # dependency refuses `{:lender_corrupt, dep, id}`, and a store that
+  # cannot answer `{:lender_unavailable, dep}`, never a profile that does
+  # not exist; no active owner profile of that label is
+  # `{:selection_profile_unavailable, dep, label}`.
   defp lender_profile(ctx, dep, label) when is_binary(label) do
-    with {:ok, profiles} <- Arca.ConsentStorage.profiles(Context.actor(ctx), dep),
-         %{status: :active} = profile <-
-           Enum.find(profiles, &(&1.label == label and &1.kind == :owner)) do
-      {:ok, profile}
-    else
-      _ -> {:error, {:selection_profile_unavailable, dep, label}}
+    with {:ok, profiles} <- Plan.lender_profiles(Context.actor(ctx), dep) do
+      case Enum.find(profiles, &(&1.label == label and &1.kind == :owner)) do
+        %{status: :active} = profile -> {:ok, profile}
+        _absent_or_inactive -> {:error, {:selection_profile_unavailable, dep, label}}
+      end
     end
   end
 
   defp lender_profile(_ctx, dep, label),
     do: {:error, {:selection_profile_unavailable, dep, label}}
 
+  # What the lender's head binds on its own ingress, read as a selection
+  # reads its lender (`Sanctum.Consent.Loader`): a head that does not
+  # decode, or whose bytes fail their digest or do not parse
+  # (`Sanctum.Consent.Loader.head_blob/1`), is a damaged lender, and a
+  # head the store could not answer is a lender that cannot be read; a
+  # selection recorded over either would be a grant made over a lender the
+  # run refuses. A head that is missing, or whose ingress binds no entry,
+  # lends nothing.
   defp lender_binding(ctx, profile) do
-    with {:ok, head} <- Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id),
-         {:ok, blob} <- Prima.Authority.Blob.parse(head.resolved_policy),
-         {:ok, ingress} <- Prima.Authority.Blob.ingress(blob, profile.source_ref),
+    dep = profile.source_ref
+    unbound = {:error, {:selection_unbound, dep, profile.label}}
+
+    case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id) do
+      {:ok, head} ->
+        case Sanctum.Consent.Loader.head_blob(head) do
+          {:ok, blob} -> ingress_binding(blob, dep, unbound)
+          {:error, _damaged} -> {:error, {:lender_corrupt, dep, profile.id}}
+        end
+
+      {:error, absent} when absent in [:not_found, :no_head] ->
+        unbound
+
+      {:error, {:invalid_stored_value, _}} ->
+        {:error, {:lender_corrupt, dep, profile.id}}
+
+      {:error, _unanswered} ->
+        {:error, {:lender_unavailable, dep}}
+    end
+  end
+
+  defp ingress_binding(blob, dep, unbound) do
+    with {:ok, ingress} <- Prima.Authority.Blob.ingress(blob, dep),
          %{entry_id: _} = vault <- ingress.vault do
       {:ok, vault}
     else
-      _ -> {:error, {:selection_unbound, profile.source_ref, profile.label}}
+      _lends_nothing -> unbound
     end
   end
 

@@ -438,10 +438,11 @@ defmodule Sanctum.Consent.Loader do
   end
 
   @doc false
-  # A stored head's blob as a run reads it: its bytes held to their
-  # digest, then parsed (checks 4 and 5 of the order, the validity check
-  # aside). The planner reads a lender's head through it, as a selection
-  # does.
+  # A stored head's blob as a run reads it: its bytes held to the digest
+  # stored beside them, as `admitted_blob/3` holds them, then parsed
+  # (check 5 of the module's order; check 4, the consent's own validity,
+  # is not run here). The planner and the commit read a lender's head
+  # through it, as a selection does.
   @spec head_blob(map()) ::
           {:ok, Blob.t()}
           | {:error,

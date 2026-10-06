@@ -930,20 +930,32 @@ defmodule Sanctum.Consent.Plan do
   end
 
   # The dependency's active owner profiles whose head binds a usable entry
-  # on its ingress; provided configuration is no entry to lend. The
-  # profiles are read as the loader reads a selection's lender: a row
-  # whose kind or status does not decode may be an active owner profile,
-  # so it refuses the plan rather than being skipped, and a store that
-  # cannot answer is not a dependency with no lender. Either would plan a
-  # first grant over profiles that exist as if none lent a key.
+  # on its ingress; provided configuration is no entry to lend.
   defp lender_candidates(ctx, dep, facts) do
     actor = Context.actor(ctx)
 
+    with {:ok, entries} <- lender_profiles(actor, dep),
+         do: lenders(ctx, actor, dep, facts, entries)
+  end
+
+  @doc false
+  # The profiles of a dependency `dep` that may lend it a key, as the plan
+  # and the commit read them (`Sanctum.Consent.Commit`), and as the loader
+  # reads a selection's lender: a row whose kind or status does not decode
+  # may be an active owner profile, so it refuses `{:lender_corrupt, dep,
+  # id}` rather than being skipped, and a store that cannot answer is
+  # `{:lender_unavailable, dep}`, never a dependency with no lender. Either
+  # would offer or grant over profiles that exist as if none lent a key.
+  @spec lender_profiles(Prima.Actor.t(), String.t()) ::
+          {:ok, [Prima.Authority.RootSelect.profile_summary()]}
+          | {:error,
+             {:lender_corrupt, String.t(), String.t()} | {:lender_unavailable, String.t()}}
+  def lender_profiles(%Prima.Actor{} = actor, dep) when is_binary(dep) do
     case Arca.ConsentStorage.profile_entries(actor, dep) do
       {:ok, entries} ->
         case Enum.find(entries, &(&1.status == :corrupt)) do
           %{id: id} -> {:error, {:lender_corrupt, dep, id}}
-          nil -> lenders(ctx, actor, dep, facts, entries)
+          nil -> {:ok, entries}
         end
 
       {:error, _unanswered} ->

@@ -774,6 +774,300 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     end
   end
 
+  describe "a commit over a lender it cannot read" do
+    # The source's revision 1 selects nothing. The person plans and
+    # previews revision 2, selecting the dependency's "default" lender,
+    # and the lender changes before the commit, which an MCP client sends
+    # straight to `profile.commit`. The source's grant is compared whole,
+    # before and after.
+    setup %{ctx: ctx} do
+      lenders = lenders!(ctx)
+      ref = "reagent:local.sel-source"
+      {{:ok, %{profile_id: borrower}}, _} = walk!(ctx, ref, %{})
+      {:ok, lenders: lenders, lender: lenders.default, ref: ref, borrower: borrower}
+    end
+
+    test "a lender head whose bytes fail their digest is refused as damage; nothing is committed",
+         %{ctx: ctx, lender: lender, ref: ref, borrower: borrower} do
+      staged = staged!(ctx, ref)
+      before = grant_state(ctx, borrower)
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
+          blob_digest: "sha256:" <> String.duplicate("0", 64)
+        )
+
+      assert commit_over_mcp(ctx, staged) == error_response(-33104, damaged_lender(lender))
+      assert grant_state(ctx, borrower) == before
+    end
+
+    test "a lender head whose bytes do not parse is refused as damage; nothing is committed",
+         %{ctx: ctx, lender: lender, ref: ref, borrower: borrower} do
+      staged = staged!(ctx, ref)
+      before = grant_state(ctx, borrower)
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
+          resolved_policy: "not a blob",
+          blob_digest: Prima.JCS.hash_binary("not a blob")
+        )
+
+      assert commit_over_mcp(ctx, staged) == error_response(-33104, damaged_lender(lender))
+      assert grant_state(ctx, borrower) == before
+    end
+
+    @tag :capture_log
+    test "a lender head the store cannot answer is refused as an outage; nothing is committed",
+         %{ctx: ctx, lender: lender, ref: ref, borrower: borrower} do
+      staged = staged!(ctx, ref)
+      before = grant_state(ctx, borrower)
+
+      away_after_profile_read!("consents", lender)
+
+      assert commit_over_mcp(ctx, staged) ==
+               error_response(
+                 -33103,
+                 "A profile that lends a key here cannot be read right now — try again."
+               )
+
+      Arca.Repo.query!("ALTER TABLE consents_unavailable RENAME TO consents")
+      assert grant_state(ctx, borrower) == before
+    end
+
+    # A lender that lends nothing, or has no head, is no damage: the
+    # commit still says to connect a key there first.
+    test "a lender that lends nothing, or has no head, still asks to connect a key there",
+         %{ctx: ctx, lender: lender, ref: ref, borrower: borrower} do
+      unbound =
+        "selection_unbound: the 'default' profile of #{@dep} binds no usable entry — " <>
+          "connect a key there first"
+
+      staged = staged!(ctx, ref)
+      before = grant_state(ctx, borrower)
+      {:ok, %{head_consent_id: head}} = Arca.ProfileStorage.get(actor(ctx), lender)
+
+      set_profile!(ctx, lender, head_consent_id: nil)
+
+      assert %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
+               commit_over_mcp(ctx, staged)
+
+      assert text == unbound
+      assert grant_state(ctx, borrower) == before
+
+      # Granted again binding nothing, the lender's head lends nothing. The
+      # refused commit consumed neither the plan token nor the proof, so
+      # the same arguments are sent again.
+      set_profile!(ctx, lender, head_consent_id: head)
+      {{:ok, _}, _} = walk!(ctx, @dep, %{})
+
+      assert %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
+               commit_over_mcp(ctx, staged)
+
+      assert text == unbound
+      assert grant_state(ctx, borrower) == before
+    end
+
+    # The dependency's profiles are read as the plan reads them: a store
+    # that cannot answer, or a damaged row of the dependency, is no
+    # dependency without that lender.
+    @tag :capture_log
+    test "a lender's profiles the store cannot answer are refused as an outage; nothing is " <>
+           "committed",
+         %{ctx: ctx, ref: ref, borrower: borrower} do
+      staged = staged!(ctx, ref)
+      {head, _revisions} = before = grant_state(ctx, borrower)
+
+      # The source's own head, read whole (its `consent_vault_refs`), is
+      # the commit's last read before the lender's profiles.
+      away_after_read!("profiles", "consent_vault_refs", head)
+
+      assert commit_over_mcp(ctx, staged) ==
+               error_response(
+                 -33103,
+                 "A profile that lends a key here cannot be read right now — try again."
+               )
+
+      Arca.Repo.query!("ALTER TABLE profiles_unavailable RENAME TO profiles")
+      assert grant_state(ctx, borrower) == before
+    end
+
+    test "a lender's damaged profile row is refused as damage; nothing is committed",
+         %{ctx: ctx, lender: lender, ref: ref, borrower: borrower} do
+      staged = staged!(ctx, ref)
+      before = grant_state(ctx, borrower)
+
+      set_profile!(ctx, lender, kind: "sideways")
+
+      assert commit_over_mcp(ctx, staged) == error_response(-33104, damaged_lender(lender))
+      assert grant_state(ctx, borrower) == before
+    end
+
+    # A label no active owner profile of the dependency carries is still
+    # no such lender.
+    test "a selection whose label no lender carries keeps its own sentence; nothing is " <>
+           "committed",
+         %{ctx: ctx, lender: lender, ref: ref, borrower: borrower} do
+      staged = staged!(ctx, ref)
+      before = grant_state(ctx, borrower)
+
+      set_profile!(ctx, lender, label: "elsewhere")
+
+      assert %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
+               commit_over_mcp(ctx, staged)
+
+      assert text ==
+               "selection_profile_unavailable: #{@dep} has no active owner profile labelled " <>
+                 ~s("default")
+
+      assert grant_state(ctx, borrower) == before
+    end
+
+    # The preview reads the lender as the commit does, and answers it as
+    # typed: a client branches on the class, never on an internal error.
+    test "a preview over a lender head whose bytes fail their digest is refused as damage",
+         %{ctx: ctx, lender: lender, ref: ref} do
+      staged = staged!(ctx, ref)
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
+          blob_digest: "sha256:" <> String.duplicate("0", 64)
+        )
+
+      assert preview_over_mcp(ctx, staged) == error_response(-33104, damaged_lender(lender))
+    end
+
+    @tag :capture_log
+    test "a preview over a lender head the store cannot answer is refused as an outage",
+         %{ctx: ctx, lender: lender, ref: ref} do
+      staged = staged!(ctx, ref)
+      away_after_profile_read!("consents", lender)
+
+      assert preview_over_mcp(ctx, staged) ==
+               error_response(
+                 -33103,
+                 "A profile that lends a key here cannot be read right now — try again."
+               )
+
+      Arca.Repo.query!("ALTER TABLE consents_unavailable RENAME TO consents")
+    end
+
+    test "a healthy lender still commits, lending its key", %{
+      ctx: ctx,
+      lenders: lenders,
+      ref: ref,
+      borrower: borrower
+    } do
+      {_head, [{_, 1}]} = grant_state(ctx, borrower)
+      response = commit_over_mcp(ctx, staged!(ctx, ref))
+
+      refute Map.has_key?(response, "error")
+      refute response["result"]["isError"]
+      assert {head, [{_, 1}, {head, 2}]} = grant_state(ctx, borrower)
+
+      home_id = lenders.home_entry.id
+      assert %{entry_id: ^home_id} = edge_vault(ctx, ref)
+    end
+  end
+
+  # Revision 2 of `ref`, selecting the dependency's "default" lender,
+  # planned and previewed while that lender lends, as the profile tool
+  # answers them: the arguments `profile.commit` takes.
+  defp staged!(ctx, ref) do
+    {:ok, plan} = Profile.handle(ctx, %{"action" => "plan", "ref" => ref})
+    decisions = %{"ref" => ref, "selections" => [%{"dep" => @dep, "label" => "default"}]}
+    {:ok, preview} = Profile.handle(ctx, %{"action" => "preview", "decisions" => decisions})
+
+    %{
+      "decisions" => decisions,
+      "plan_token" => plan.plan_token,
+      "proof" => preview.proof,
+      "commit_digest" => preview.commit_digest,
+      "expected_consent_revision" => plan.expected_consent_revision
+    }
+  end
+
+  # `profile.commit` and `profile.preview` as an MCP client sends them.
+  defp commit_over_mcp(ctx, staged), do: over_mcp(ctx, Map.put(staged, "action", "commit"))
+
+  defp preview_over_mcp(ctx, staged),
+    do: over_mcp(ctx, %{"action" => "preview", "decisions" => staged["decisions"]})
+
+  # A `profile` call as an MCP client sends it, under a request of its
+  # own: the response the client receives (the router's answer encoded as
+  # `Emissary.Web.MCPController` encodes it).
+  defp over_mcp(ctx, arguments) do
+    ctx = %{ctx | request_id: Prima.UUID7.request_id()}
+
+    answer =
+      Emissary.MCP.Router.dispatch(ctx, %Prima.MCP.Message{
+        type: :request,
+        id: 1,
+        method: "tools/call",
+        params: %{"name" => "profile", "arguments" => arguments}
+      })
+
+    case answer do
+      {:ok, result} -> Prima.MCP.Message.encode_result(1, result)
+      {:error, code, message} -> Prima.MCP.Message.encode_error(1, code, message)
+      {:error, code, message, data} -> Prima.MCP.Message.encode_error(1, code, message, data)
+    end
+  end
+
+  defp error_response(code, message),
+    do: %{"jsonrpc" => "2.0", "id" => 1, "error" => %{"code" => code, "message" => message}}
+
+  defp damaged_lender(lender),
+    do:
+      "A profile that lends a key here is damaged and cannot lend its key — " <>
+        "revoke profile #{lender} and grant it again."
+
+  # The profile's grant as stored: its head, and every revision it holds.
+  defp grant_state(ctx, profile_id) do
+    {:ok, %{head_consent_id: head}} = Arca.ProfileStorage.get(actor(ctx), profile_id)
+
+    revisions =
+      Arca.Repo.all(
+        Ecto.Query.from(c in Arca.Schemas.Consent,
+          where: c.athanor_id == ^ctx.athanor_id and c.profile_id == ^profile_id,
+          order_by: c.revision,
+          select: {c.id, c.revision}
+        )
+      )
+
+    {head, revisions}
+  end
+
+  defp actor(ctx), do: Sanctum.Context.actor(ctx)
+
+  # `table` stops answering once the profile row `profile_id` is read by
+  # its id (the first read of that profile's head), so the head's own
+  # rows are the read refused.
+  defp away_after_profile_read!(table, profile_id),
+    do: away_after_read!(table, "profiles", profile_id)
+
+  # `table` stops answering once a read of `source` names `id` among its
+  # parameters. The router runs a tool's handler in a task of its own, so
+  # the read is told by the row it names, unique to this test, not by the
+  # process making it.
+  defp away_after_read!(table, source, id) do
+    handler = "selection-flow-away-read-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if meta[:source] == source and id in (meta[:params] || []) do
+            :telemetry.detach(handler)
+            Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
   # The authority a run of `ref` is admitted under, as `Crucible` loads it.
   defp run(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
 
