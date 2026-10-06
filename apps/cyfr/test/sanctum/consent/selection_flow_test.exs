@@ -695,6 +695,63 @@ defmodule Sanctum.Consent.SelectionFlowTest do
       end
     end
 
+    # A lender's head whose bytes fail their digest, or do not parse, is
+    # the lender's damage, read in the same sentence.
+    test "a lender whose head's bytes fail their digest or do not parse refuses the run in " <>
+           "its own sentence",
+         %{ctx: ctx, lender: lender, ref: ref} do
+      damaged =
+        "A profile that lends a key here is damaged and cannot lend its key — " <>
+          "revoke profile #{lender} and grant it again."
+
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, lender)
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
+          blob_digest: "sha256:" <> String.duplicate("0", 64)
+        )
+
+      assert {:error, {:lender_corrupt, @dep, ^lender} = reason} = run(ctx, ref)
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
+          resolved_policy: "not a blob",
+          blob_digest: Prima.JCS.hash_binary("not a blob")
+        )
+
+      assert {:error, {:lender_corrupt, @dep, ^lender} = reason} = run(ctx, ref)
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
+          resolved_policy: head.resolved_policy,
+          blob_digest: head.blob_digest
+        )
+
+      assert %{entry_id: _} = edge_vault(ctx, ref)
+    end
+
+    # The run's own head is no lender: its bytes failing their digest, or
+    # not parsing, keep their own answers.
+    test "the run's own head failing its digest or not parsing keeps its own answer",
+         %{ctx: ctx, ref: ref, borrower: borrower} do
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, borrower,
+          blob_digest: "sha256:" <> String.duplicate("0", 64)
+        )
+
+      assert {:error, {:blob_digest_mismatch, _}} = run(ctx, ref)
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, borrower,
+          resolved_policy: "not a blob",
+          blob_digest: Prima.JCS.hash_binary("not a blob")
+        )
+
+      assert {:error, {:invalid_blob, _}} = run(ctx, ref)
+    end
+
     @tag :capture_log
     test "the run's own head, damaged or unanswered, refuses the run in its own sentence",
          %{ctx: ctx, ref: ref, borrower: borrower} do

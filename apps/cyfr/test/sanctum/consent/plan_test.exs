@@ -1130,6 +1130,22 @@ defmodule Sanctum.Consent.PlanTest do
       assert_damaged(plan_answer(ctx), lender)
     end
 
+    # Read as a selection reads its lender: a head whose bytes fail their
+    # digest is damaged, so no sheet offers it to select.
+    test "a lender's head whose bytes fail their digest refuses the plan, naming the profile",
+         %{ctx: ctx} do
+      lending_closure!(ctx)
+      lender = lender!(ctx)
+
+      :ok =
+        ConsentFixtures.hand_edit_head!(ctx, lender,
+          blob_digest: "sha256:" <> String.duplicate("0", 64)
+        )
+
+      assert {:error, {:lender_corrupt, @lend_dep, ^lender}} = Plan.plan(ctx, %{ref: @lend_app})
+      assert_damaged(plan_answer(ctx), lender)
+    end
+
     test "a lender's head whose policy does not parse refuses the plan, naming the profile",
          %{ctx: ctx} do
       lending_closure!(ctx)

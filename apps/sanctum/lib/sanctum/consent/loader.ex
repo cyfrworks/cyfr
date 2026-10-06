@@ -32,8 +32,9 @@ defmodule Sanctum.Consent.Loader do
      target is damaged, its head consent is intact and its ingress binds
      an entry of the pinned digest. A lender the store cannot answer
      (`{:lender_unavailable, target}`), or whose profile row or head does
-     not decode (`{:lender_corrupt, target, profile_id}`), refuses the
-     whole load, and so does a lender's head that does not admit the
+     not decode, or whose head's bytes fail their digest or do not parse
+     (`{:lender_corrupt, target, profile_id}`), refuses the whole load,
+     and so does a lender's head that does not admit the
      context's origin (`consent_required`, naming the lender's profile and
      revision). Otherwise the selection stays, and a run under that edge
      answers setup_required
@@ -108,8 +109,9 @@ defmodule Sanctum.Consent.Loader do
   selection names is read the same way, as `admitted_blob/3` reads it: a
   lender the store could not answer refuses the load
   `{:lender_unavailable, target}`, one whose profile row or head does not
-  decode refuses it `{:lender_corrupt, target, profile_id}`, and an absent
-  one leaves the selection in place.
+  decode, or whose head's bytes fail their digest or do not parse, refuses
+  it `{:lender_corrupt, target, profile_id}`, and an absent one leaves the
+  selection in place.
   """
   @spec load_root(Context.t(), map(), keyword()) ::
           {:ok, Authority.t(), stamp()} | {:error, load_error()}
@@ -143,10 +145,14 @@ defmodule Sanctum.Consent.Loader do
   A lender is read absent, damaged and unanswered apart. A lender the
   store could not answer, its profiles or its head, refuses
   `{:lender_unavailable, target}`; a lender whose profile row or head
-  does not decode refuses `{:lender_corrupt, target, profile_id}`, where a
-  damaged profile row of the target refuses a selection by label, since
-  its label cannot be read. A lender that does not exist, has no head,
-  is not active or lends nothing leaves the selection in place.
+  does not decode, or whose head's bytes fail their digest or do not
+  parse, refuses `{:lender_corrupt, target, profile_id}`, where a damaged
+  profile row of the target refuses a selection by label, since its label
+  cannot be read. A lender that does not exist, has no head, is not
+  active or lends nothing (its head holds no ingress for the target, binds
+  nothing there, no longer binds the digest the selection pinned, or
+  cannot narrow to the selection's projection) leaves the selection in
+  place.
   """
   @spec admitted_blob(Context.t(), map(), map()) :: {:ok, Blob.t()} | {:error, load_error()}
   def admitted_blob(%Context{} = ctx, profile, consent)
@@ -328,7 +334,8 @@ defmodule Sanctum.Consent.Loader do
   # Every selected vault edge is resolved against the profile it names:
   # the edge's target must have an active owner profile of that label,
   # its head consent must be intact (the same digest check this consent
-  # passed), and its ingress must bind an entry whose digest matches the
+  # passed, and a blob that parses; a head that fails either is a damaged
+  # lender), and its ingress must bind an entry whose digest matches the
   # pinned one when the selection pinned it. The bound entry then rides
   # the edge, projected to what both the selection and the ingress allow,
   # under two identities: the borrower's binding key, where the selection
@@ -403,8 +410,7 @@ defmodule Sanctum.Consent.Loader do
     with {:ok, profile} <- selected_profile(actor, target, via.label),
          {:ok, consent} <- lender_head(actor, target, profile),
          :ok <- check_origin(ctx, profile, consent),
-         :ok <- check_blob_digest(consent),
-         {:ok, target_blob} <- parse_blob(consent),
+         {:ok, target_blob} <- lender_blob(consent, target, profile),
          {:ok, ingress} <- ingress_edge(target_blob, target),
          {:ok, bound} <- bound_ingress_vault(ingress),
          :ok <- check_pinned_digest(via, bound),
@@ -418,6 +424,32 @@ defmodule Sanctum.Consent.Loader do
          lender: %{profile_id: profile.id, consent_id: consent.id, binding_key: bound.binding_key}
        })}
     end
+  end
+
+  # A lender's head whose stored bytes fail their digest, or do not parse,
+  # is damaged as one that does not decode is: the lender exists, so a
+  # selection over it is refused as damage, never left as one that lends
+  # nothing. A root's own head keeps its own answers (`admitted_blob/3`).
+  defp lender_blob(consent, target, profile) do
+    case head_blob(consent) do
+      {:ok, blob} -> {:ok, blob}
+      {:error, _damaged} -> {:error, {:lender_corrupt, target, profile.id}}
+    end
+  end
+
+  @doc false
+  # A stored head's blob as a run reads it: its bytes held to their
+  # digest, then parsed (checks 4 and 5 of the order, the validity check
+  # aside). The planner reads a lender's head through it, as a selection
+  # does.
+  @spec head_blob(map()) ::
+          {:ok, Blob.t()}
+          | {:error,
+             {:blob_digest_mismatch, String.t()}
+             | {:invalid_consent, :blob_digest}
+             | {:invalid_blob, Blob.error()}}
+  def head_blob(consent) when is_map(consent) do
+    with :ok <- check_blob_digest(consent), do: parse_blob(consent)
   end
 
   # A lender's head answers as the lender: `head_*` names a root's own
@@ -444,8 +476,9 @@ defmodule Sanctum.Consent.Loader do
       absent, damaged and unanswered apart: no such profile
       (`{:no_such_profile, target, label}`) or a lender with no head
       (`{:no_head_consent, profile_id}`); a lender whose profile row or
-      head does not decode (`{:lender_corrupt, target, profile_id}`, a
-      damaged profile row of the target refusing a selection by label);
+      head does not decode, or whose head's bytes fail their digest or do
+      not parse (`{:lender_corrupt, target, profile_id}`, a damaged
+      profile row of the target refusing a selection by label);
       and a lender the store could not answer, its profiles or its head
       (`{:lender_unavailable, target}`). A lent instance entry is read
       live as an instance row is, so a refusal of the offer or a rebind is

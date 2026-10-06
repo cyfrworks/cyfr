@@ -374,6 +374,120 @@ defmodule PrismWeb.ComponentsLiveTest do
     end
   end
 
+  describe "a component whose lender is damaged" do
+    # A borrower whose dependency's lending profile has a head whose bytes
+    # fail their digest, or do not parse, is not ready; the grant the page
+    # offers to ask is refused in the damage's own sentence, and no grant
+    # sheet opens offering that lender again.
+    @lend_dep "reagent:local.shelf-lend-dep"
+    @borrower "reagent:local.shelf-borrower"
+
+    test "a lender head failing its digest or not parsing is refused in its own sentence, " <>
+           "and no grant sheet offers it",
+         %{conn: conn, ctx: ctx} do
+      person = %{Sanctum.TestContext.local() | athanor_id: ctx.athanor_id}
+
+      ship_component!(ctx, "shelf-lend-dep", %{
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:example.com",
+            "reason" => "to call the example API",
+            "fields" => ["KEY"],
+            "attach" => %{
+              "in" => "header",
+              "name" => "Authorization",
+              "template" => "Bearer {value}"
+            }
+          }
+        }
+      })
+
+      ship_component!(ctx, "shelf-borrower", %{
+        "dependencies" => %{"static" => [%{"ref" => @lend_dep}]}
+      })
+
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(person, %{
+          name: "shelf-lend-key",
+          kind: "api_key",
+          provider_hint: "example.com",
+          fields: %{"KEY" => "k"},
+          destination: %{"hosts" => ["api.example.com"]}
+        })
+
+      walk!(person, %{ref: @lend_dep, bindings: [%{need: "api_key", entry_id: entry.id}]})
+      walk!(person, %{ref: @borrower, selections: [%{dep: @lend_dep, label: "default"}]})
+      {:ok, [%{id: lender}]} = Sanctum.Consent.profiles(person, @lend_dep)
+
+      # Whole, the lender is offered.
+      assert {:ok, %{dependency_needs: [%{candidates: [%{profile_id: ^lender}]}]}} =
+               Sanctum.Consent.Plan.plan(person, %{ref: @borrower})
+
+      refused =
+        "Cannot ask for this grant: A profile that lends a key here is damaged and cannot " <>
+          "lend its key — revoke profile #{lender} and grant it again."
+
+      :ok =
+        ConsentFixtures.hand_edit_head!(person, lender,
+          blob_digest: "sha256:" <> String.duplicate("0", 64)
+        )
+
+      assert_grant_refused(conn, refused)
+
+      :ok =
+        ConsentFixtures.hand_edit_head!(person, lender,
+          resolved_policy: "not a blob",
+          blob_digest: Prima.JCS.hash_binary("not a blob")
+        )
+
+      assert_grant_refused(conn, refused)
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # The borrower expanded: not ready, and the grant it offers to ask is
+  # refused in `refused`, with no grant sheet.
+  defp assert_grant_refused(conn, refused) do
+    {view, _html} = mount_athanor(conn, "/components")
+    render_click(view, "toggle_expand", %{"ref" => @borrower})
+    assert render(view) =~ "Needs grant"
+
+    view |> element("button[phx-click=open_consent]", "Grant access") |> render_click()
+
+    assert render(view) =~ refused
+    refute has_element?(view, ~s(#system-layer-dialog [data-test="grant-sheet"]))
+  end
+
+  defp ship_component!(ctx, name, manifest) do
+    {:ok, _} =
+      Arca.Test.UnitFixtures.ship_and_register!(ctx, "reagent", "local", name, "1.0.0",
+        manifest:
+          Map.merge(manifest, %{
+            "name" => name,
+            "type" => "reagent",
+            "version" => "1.0.0",
+            "publisher" => "local"
+          }),
+        wasm: @valid_wasm
+      )
+  end
+
+  # The consent walk a person makes: plan, preview, commit.
+  defp walk!(ctx, decisions) do
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: decisions.ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _committed} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
   describe "a setup plan the call is refused" do
     # A refused `setup_plan` call is said in its own sentence where the
     # plan, its badge and the grant would be, on the expand and on the

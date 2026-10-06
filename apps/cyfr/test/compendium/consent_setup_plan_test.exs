@@ -666,6 +666,42 @@ defmodule Compendium.ConsentSetupPlanTest do
       assert detail!(ctx, ref) =~ "lent-conn"
     end
 
+    # A lender's head whose bytes fail their digest, or do not parse, is
+    # damage, as one that does not decode is: never a selection that
+    # resolves to nothing, which would send the person to select again.
+    test "a lender whose head's bytes fail their digest or do not parse names the profile " <>
+           "to revoke",
+         %{ctx: ctx, entry: entry} do
+      ref = "reagent:local.plan-loose"
+      seed_selection!(ctx, ref, %{"label" => "default"})
+      lender = lender!(ctx)
+
+      damaged =
+        "the default profile it borrows from is damaged and cannot lend its key — " <>
+          "revoke profile #{lender} and grant it again"
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
+          blob_digest: "sha256:" <> String.duplicate("0", 64)
+        )
+
+      assert detail!(ctx, ref) == damaged
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
+          resolved_policy: "not a blob",
+          blob_digest: Prima.JCS.hash_binary("not a blob")
+        )
+
+      assert detail!(ctx, ref) == damaged
+
+      # The remedy the sentence names: the profile revoked, a new grant
+      # lends the key.
+      revoke!(ctx, lender)
+      walk!(ctx, %{ref: @dep, bindings: [%{need: "api_key", entry_id: entry.id}]})
+      assert detail!(ctx, ref) =~ "lent-conn"
+    end
+
     test "a damaged lending profile row names the profile to revoke, and approving again " <>
            "does not repair it",
          %{ctx: ctx, entry: entry} do

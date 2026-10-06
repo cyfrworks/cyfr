@@ -179,7 +179,8 @@ defmodule Sanctum.Consent.Plan do
       `Sanctum.InstanceEntries.binding/2` that is not one of the answers
       below);
     * a profile row, a lender's head, or a head's policy that does not
-      decode refuses it `{:lender_corrupt, dep, profile_id}`.
+      decode, or whose bytes fail their digest, refuses it
+      `{:lender_corrupt, dep, profile_id}`.
 
   A dependency with no profile lends nothing, and so does a profile whose
   head is absent, binds no entry on the dependency's ingress, or binds an
@@ -980,15 +981,17 @@ defmodule Sanctum.Consent.Plan do
 
   # What a lender's head lends on the dependency's ingress: the entry its
   # binding names, when this person may use it, or nothing. A head whose
-  # policy does not parse is damaged, and a lent entry its reader could
-  # not read is a lender that cannot be read: either refuses the plan,
-  # which would otherwise offer no lender over one that exists. Nothing is
-  # lent only by a head that binds no entry on the ingress, or whose entry
-  # its reader answers is missing, not usable or not this person's.
+  # policy fails its digest or does not parse is damaged, read as a
+  # selection reads its lender (`Sanctum.Consent.Loader.head_blob/1`), and
+  # a lent entry its reader could not read is a lender that cannot be
+  # read: either refuses the plan, which would otherwise offer no lender,
+  # or a damaged one, over one that exists. Nothing is lent only by a head
+  # that binds no entry on the ingress, or whose entry its reader answers
+  # is missing, not usable or not this person's.
   defp lending(ctx, dep, facts, profile, head) do
-    case Prima.Authority.Blob.parse(head.resolved_policy) do
+    case Sanctum.Consent.Loader.head_blob(head) do
       {:ok, blob} -> ingress_lending(ctx, dep, facts, profile, blob)
-      {:error, _undecodable} -> {:error, {:lender_corrupt, dep, profile.id}}
+      {:error, _damaged} -> {:error, {:lender_corrupt, dep, profile.id}}
     end
   end
 

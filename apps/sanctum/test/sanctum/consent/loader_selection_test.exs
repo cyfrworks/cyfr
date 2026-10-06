@@ -5,9 +5,10 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   @moduledoc """
   A selected vault resolves at root load to the entry the named profile
   binds on its own ingress — and only then: an inactive profile, a
-  profile of another source, a moved binding, a projection the ingress
-  cannot satisfy or a tampered target consent leave the selection in
-  place, which no run can unseal. A resolved selection carries both
+  profile of another source, a moved binding or a projection the ingress
+  cannot satisfy leave the selection in place, which no run can unseal,
+  while a lending head whose bytes fail their digest or do not parse is
+  damage, refusing the run. A resolved selection carries both
   identities: the borrower's binding key where the selection sits, and
   the lender's profile, consent and binding key. Read row by row
   (`row_binding/3`), a lending profile or head that is absent, damaged or
@@ -407,7 +408,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
              edge_vault(load!(ctx, profile))
   end
 
-  test "a revoked profile, another source's profile, an unbound ingress and a tampered consent lend nothing",
+  test "a revoked profile, another source's profile and an unbound ingress lend nothing",
        %{ctx: ctx} do
     selection = %{"via" => %{"label" => "default"}}
     profile = put_formula!(ctx, selection)
@@ -428,10 +429,6 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
 
     # The profile is fine but binds nothing yet.
     put_catalyst!(ctx, vault: nil)
-    assert %{via: _} = edge_vault(load!(ctx, profile))
-
-    # The target's consent bytes no longer match their digest.
-    put_catalyst!(ctx, blob_digest: "sha256:tampered")
     assert %{via: _} = edge_vault(load!(ctx, profile))
 
     # And once the profile is whole again, the same consent resolves.
@@ -607,6 +604,24 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
                Loader.row_binding(ctx, consent, row)
     end
 
+    # A lending head whose bytes fail their digest, or do not parse, is the
+    # lender's damage, as a head that does not decode is.
+    test "a lending head whose bytes fail their digest or do not parse is damage",
+         %{ctx: ctx, consent: consent, row: row} do
+      damaged = {:selection, "default", {:error, {:lender_corrupt, @catalyst, "prof-claude"}}}
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-claude", blob_digest: "sha256:tampered")
+      assert Loader.row_binding(ctx, consent, row) == damaged
+
+      :ok =
+        ConsentFixtures.hand_edit_head!(ctx, "prof-claude",
+          resolved_policy: "not a blob",
+          blob_digest: JCS.hash_binary("not a blob")
+        )
+
+      assert Loader.row_binding(ctx, consent, row) == damaged
+    end
+
     test "a damaged profile row of the target refuses the selection, though the lender is whole",
          %{ctx: ctx, consent: consent, row: row} do
       :ok =
@@ -676,13 +691,105 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
       assert %{entry_id: "vault-anthropic"} = edge_vault(load!(ctx, profile))
     end
 
-    # A digest mismatch keeps its own answer: the lender is no damaged row,
-    # and the selection stays.
-    test "a lender whose stored bytes fail their digest leaves the selection", %{ctx: ctx} do
+    # A lender's head whose bytes fail their digest, or do not parse, is a
+    # lender that exists and is damaged, never one that lends nothing: the
+    # run is refused as the other damage is.
+    test "a lender whose head's bytes fail their digest or do not parse refuses the run",
+         %{ctx: ctx, profile: profile} do
+      damaged = {:error, {:lender_corrupt, @catalyst, "prof-claude"}}
+
       put_catalyst!(ctx, blob_digest: "sha256:tampered")
-      profile = put_formula!(ctx, %{"via" => %{"label" => "default"}})
-      assert %{via: %{label: "default"}} = edge_vault(load!(ctx, profile))
+      assert load(ctx, profile) == damaged
+
+      :ok =
+        ConsentFixtures.hand_edit_head!(ctx, "prof-claude",
+          resolved_policy: "not a blob",
+          blob_digest: JCS.hash_binary("not a blob")
+        )
+
+      assert load(ctx, profile) == damaged
+
+      put_catalyst!(ctx)
+      assert %{entry_id: "vault-anthropic"} = edge_vault(load!(ctx, profile))
     end
+
+    # The run's own head keeps its own answers: a root is not a lender.
+    test "the run's own head, damaged, keeps its own answer, never a lender's",
+         %{ctx: ctx, profile: profile} do
+      :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-aqua", scope: "sideways")
+      assert {:error, {:head_corrupt, "prof-aqua"}} = load(ctx, profile)
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-aqua", scope: "versionless")
+      :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-aqua", blob_digest: "sha256:tampered")
+      assert {:error, {:blob_digest_mismatch, "sha256:tampered"}} = load(ctx, profile)
+
+      :ok =
+        ConsentFixtures.hand_edit_head!(ctx, "prof-aqua",
+          resolved_policy: "not a blob",
+          blob_digest: JCS.hash_binary("not a blob")
+        )
+
+      assert {:error, {:invalid_blob, _}} = load(ctx, profile)
+    end
+  end
+
+  # A lender's head that reads and decodes but lends nothing on the
+  # target's ingress keeps the answer that says why, and the run keeps
+  # the selection in place: none of these is damage.
+  test "a lending head that decodes and lends nothing keeps its own answer", %{ctx: ctx} do
+    selection = %{"via" => %{"label" => "default"}}
+
+    row_binding = fn profile ->
+      {:ok, consent} = Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)
+      [row] = consent.vault_refs
+      Loader.row_binding(ctx, consent, row)
+    end
+
+    # No ingress for the target in the lender's head.
+    put_catalyst!(ctx)
+
+    bare =
+      Jason.encode!(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{@catalyst => %{"limits" => Fixtures.limits_map(), "edges" => %{}}}
+      })
+
+    :ok =
+      ConsentFixtures.hand_edit_head!(ctx, "prof-claude",
+        resolved_policy: bare,
+        blob_digest: JCS.hash_binary(bare)
+      )
+
+    profile = put_formula!(ctx, selection)
+
+    assert {:selection, "default", {:error, {:missing_ingress, @catalyst}}} =
+             row_binding.(profile)
+
+    assert %{via: _} = edge_vault(load!(ctx, profile))
+
+    # An ingress that binds nothing.
+    put_catalyst!(ctx, vault: nil)
+    assert {:selection, "default", {:error, :nothing_bound}} = row_binding.(profile)
+    assert %{via: _} = edge_vault(load!(ctx, profile))
+
+    # A digest the selection pinned that the lender no longer binds.
+    put_catalyst!(ctx)
+
+    pinned =
+      put_formula!(ctx, %{"via" => %{"label" => "default", "binding_digest" => "sha256:x"}})
+
+    assert {:selection, "default", {:error, :binding_moved}} = row_binding.(pinned)
+    assert %{via: _} = edge_vault(load!(ctx, pinned))
+
+    # A projection the lender's ingress cannot narrow to.
+    narrow =
+      put_formula!(ctx, %{
+        "via" => %{"label" => "default"},
+        "projection" => %{"fields" => ["SOMETHING_ELSE"]}
+      })
+
+    assert {:selection, "default", {:error, :projection_unsatisfiable}} = row_binding.(narrow)
+    assert %{via: _} = edge_vault(load!(ctx, narrow))
   end
 
   test "a lender whose grant does not admit the run's origin refuses the whole load, naming it",
