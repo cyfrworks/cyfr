@@ -191,8 +191,16 @@ defmodule Locus.DirectLauncher do
     ref = make_ref()
 
     case GenServer.start(Child, {self(), ref, argv, env}) do
-      {:ok, child} -> GenServer.call(child, :handle)
-      {:error, reason} -> {:error, {:spawn_failed, reason}}
+      # The child sent its handle before its start answered, and messages
+      # between two processes arrive in the order they were sent: the
+      # handle is here already, however soon the process ended.
+      {:ok, _child} ->
+        receive do
+          {Child, ^ref, handle} -> {:ok, handle}
+        end
+
+      {:error, reason} ->
+        {:error, {:spawn_failed, reason}}
     end
   end
 
@@ -353,6 +361,11 @@ defmodule Locus.DirectLauncher.Child do
           _ -> nil
         end
 
+      # The handle goes to the owner's mailbox, not to a call of its own: a
+      # process that ends at once stops its child before such a call
+      # arrives. It precedes every event.
+      handle = %{ref: ref, spawn_id: nil, uid: nil, pid: os_pid, server: self()}
+      Kernel.send(owner, {__MODULE__, ref, handle})
       Kernel.send(owner, {DirectLauncher, ref, :attached})
 
       {:ok,
@@ -386,11 +399,6 @@ defmodule Locus.DirectLauncher.Child do
   end
 
   @impl true
-  def handle_call(:handle, _from, state) do
-    {:reply, {:ok, %{ref: state.ref, spawn_id: nil, uid: nil, pid: state.os_pid, server: self()}},
-     state}
-  end
-
   def handle_call({:stdin, _data}, _from, %{exited: true} = state),
     do: {:reply, {:error, :stdin_closed}, state}
 
