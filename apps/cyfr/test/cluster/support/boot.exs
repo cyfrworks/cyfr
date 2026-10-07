@@ -395,15 +395,39 @@ defmodule Cyfr.Cluster.Boot do
   Keep `completion` on this member after it lost its slot, and hold the
   slot again afterwards; the member's claimant rewrites the real standing
   on its next renewal.
+
+  The claimant writes the standing of the slot it holds back on every
+  renew tick (`Arca.ControlPlane.renew/1`), so it is suspended between two
+  ticks for as long as the member stands without its slot, and resumed
+  only once the slot is held again. The standing is read on both sides of
+  the keep, so a keep that wrote is the keeper's doing and never a
+  standing that moved under it. A renew still running after one lease has
+  won nothing, so that is how long the suspend waits for the claimant to
+  finish one, inside the case's own call; a suspend that waited longer
+  still lands once that renew returns, and the resume is queued behind it.
   """
   @spec keep_without_slot(struct()) :: term()
   def keep_without_slot(completion) do
-    Arca.ControlPlane.record(:lost)
-
     try do
-      Aqua.ScheduleNotes.keep(completion)
+      :ok = :sys.suspend(Cyfr.Cell, 15_000)
+
+      try do
+        Arca.ControlPlane.record(:lost)
+        without_slot!("before")
+        answer = Aqua.ScheduleNotes.keep(completion)
+        without_slot!("after")
+        answer
+      after
+        Arca.ControlPlane.record({:held, 5_000})
+      end
     after
-      Arca.ControlPlane.record({:held, 5_000})
+      :sys.resume(Cyfr.Cell)
+    end
+  end
+
+  defp without_slot!(side) do
+    if Arca.ControlPlane.held?() do
+      raise "this member held its slot #{side} the keep, though it was recorded lost"
     end
   end
 

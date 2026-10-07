@@ -304,11 +304,12 @@ defmodule Cyfr.Cluster.HostRoutingTest do
   # lease outlasts the post, and a peer whose lease lapsed would answer
   # `503` rather than the `401` the cases assert. A renew still running
   # after one lease has won nothing, so that is how long the suspend waits
-  # for the claimant to finish one.
+  # for the claimant to finish one. A suspend that waited longer still
+  # lands once that renew returns, so it sits inside the `try` whose
+  # `after` resumes: the resume is queued behind it.
   defp refused_by_peer!(call, generation) do
-    :ok = Cell.call(:b, :sys, :suspend, [Cyfr.Cell, 15_000])
-
     try do
+      :ok = Cell.call(:b, :sys, :suspend, [Cyfr.Cell, 15_000])
       assert {:ok, own} = Cell.call(:b, Arca.ControlPlane, :generation, [])
 
       try do
