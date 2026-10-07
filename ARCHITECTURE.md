@@ -299,7 +299,7 @@ Each control-plane member owns its slot through a database lease, with a generat
 
 ### 6.2 Boot and standing transitions
 
-Security reconciliation of the platform administrators must succeed under the member's live lease before any admission path opens; a failed or stalled reconciliation refuses the boot, and optional seeding is separately best-effort. Deny, allow, archive and reopen commit their session, key, derived-token, tincture-credential and pairing retirement atomically with the transition. Leaving or being removed from one athanor retires that membership, the person's clients and certificates for it and the sessions bound to it in one transition.
+Security reconciliation of the platform administrators must succeed under the member's live lease before any admission path opens; a failed or stalled reconciliation refuses the boot, and optional seeding is separately best-effort. Deny, allow, archive and reopen commit their session, key, derived-token, tincture-credential and pairing retirement atomically with the transition. Leaving or being removed from one athanor retires that membership, the person's clients and certificates for it and the sessions bound to it in one transition. A transition's database deadline is a stated budget, sized for an atomic retirement over every offer the standing holds rather than for an ordinary request.
 
 ### 6.3 Publication
 

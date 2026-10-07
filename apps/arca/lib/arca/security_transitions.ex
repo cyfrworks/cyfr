@@ -85,6 +85,22 @@ defmodule Arca.SecurityTransitions do
   never continues on a partial view. A seat into an athanor the denial
   holds waits for it (`Arca.Members.seat/2` locks the athanor first).
 
+  ## The deadline
+
+  A transition's transaction holds its connection for at most a minute,
+  where the repository's default for one checkout is 15 s. It is one
+  transaction over every row the standing issued, and nothing caps how
+  many file offers one person or athanor holds open, so its deadline is
+  sized for an atomic retirement over every one of them; the default is
+  a budget for an ordinary request. The minute bounds the whole
+  transaction, the statements inside it included, which have no deadline
+  of their own. Past it the connection is closed, the transaction rolls
+  back and the transition answers `:database_error`. A writer waiting
+  behind it, on a row lock it holds on PostgreSQL or on SQLite's one
+  write lock, fails on its own deadline, as it does behind any other
+  transaction. A denial run again after a moved set has a minute of its
+  own.
+
   ## The caller's decision
 
   `verify:` is the caller's policy, asked once every lock is held and
@@ -147,6 +163,9 @@ defmodule Arca.SecurityTransitions do
   alias Arca.SecurityTransitions.Projection
 
   @attempts 3
+  # How long one transaction of a transition may hold its connection
+  # (the moduledoc's "The deadline").
+  @deadline_ms 60_000
   @open_confirmation ~w(pending confirmed)
 
   @typedoc "The caller's policy over the locked rows."
@@ -298,7 +317,8 @@ defmodule Arca.SecurityTransitions do
 
   # A raised database error rolls the transaction back and answers
   # `:database_error`; a set that moved between planning and locking runs
-  # the whole transaction again, `@attempts` times at most.
+  # the whole transaction again, `@attempts` times at most, each within
+  # `@deadline_ms`.
   defp run(tag, body) do
     tag
     |> Arca.Repo.Errors.with_db_rescue(fn -> attempt(body, @attempts) end)
@@ -308,7 +328,7 @@ defmodule Arca.SecurityTransitions do
   defp attempt(_body, 0), do: {:error, :conflict}
 
   defp attempt(body, left) do
-    case Arca.Repo.locking_transaction(body) do
+    case Arca.Repo.locking_transaction(body, timeout: @deadline_ms) do
       {:error, :set_changed} -> attempt(body, left - 1)
       other -> other
     end
