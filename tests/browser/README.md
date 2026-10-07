@@ -161,7 +161,19 @@ own README holds its steps and its record.
 | identity | `tests/identity-proof/` | the homes `a.test`, `b.test`, `c.test`, `c2.test` and `c3.test`, and the directory `dir.test` | Chromium |
 | join | `tests/join-proof/` | the homes `a.test`, `a2.test` and `h.test`, and the directories `dir.test` and `dir2.test` | Chromium; the sign-in at the hub, the carry and a second browser profile in Firefox and WebKit as well |
 | grant | `tests/grant-proof/` | one home, `home.test` | Chromium |
+| instance entries | `tests/instance-entry-proof/` | one home, `home.test`; SQLite release decisions, claims and administrator boundary | Chromium, desktop (1280×900) and 720×720 |
+| approvals | `tests/approval-proof/` | one home, `home.test`; SQLite grant rows, binding lifetimes and named-account prompt | Chromium, desktop (1280×900) and 720×720 |
+| file offers | `tests/file-offer-proof/` | one home, `home.test`; offers, recipient acceptance and actual snapshot readback | Chromium, desktop (1280×900) and 720×720 |
 | canvas | `tests/canvas-proof/` | one cell, `cyfr.test`, and a PostgreSQL cell when `CANVAS_PROOF_PG_URL` names a database | Chromium, Firefox and WebKit; the vault entry's passkey confirmation in Chromium's full build alone |
+
+The three vault proofs retain distinct records under
+`$RUNNER_TEMP/vault-proofs/<proof>/<viewport>` and fail the job when any
+step fails. They start no execution worker or model: instance-entry
+claims count resolver uses, approval use checks admission and binding
+decisions, and the named-account prompt uses the announcement a turn
+would send. File acceptance really copies bytes. Their READMEs name the
+executing evidence separately; none proves the complete shipped model
+artifact → production attachment → local provider composition.
 
 ## The record
 

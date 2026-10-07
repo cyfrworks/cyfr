@@ -977,11 +977,11 @@ jobs:
   # Chromium's virtual authenticator, so its passkey steps run in Chromium
   # alone.
   browser:
-    name: Browser harness (frame facts, the SDK, the multi-home smoke, and the tincture, containment, pairing, identity, join, grant and canvas proofs on Chromium, Firefox and WebKit)
+    name: Browser harness (Chromium, Firefox and WebKit; instance-entry, approval and file-offer proofs on Chromium)
     runs-on: ubuntu-latest
-    # One serial job of ten proofs in three browsers after an image build
-    # and a release build: about an hour on p1's sixteen cores, so a
-    # hang is cut here before the runner's six-hour limit.
+    # Serial browser checks share one release build. The instance-entry,
+    # approval and file-offer proofs run in Chromium at both viewports.
+    # A hang is cut here before the runner's six-hour limit.
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -1051,6 +1051,30 @@ jobs:
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
         run: tests/grant-proof/run.sh
+      - name: The instance-entry proof (Chromium, desktop and 720x720)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: |
+          set -euo pipefail
+          for viewport in desktop 720x720; do
+            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/vault-proofs/instance-entry/$viewport" tests/instance-entry-proof/run.sh
+          done
+      - name: The approval proof (Chromium, desktop and 720x720)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: |
+          set -euo pipefail
+          for viewport in desktop 720x720; do
+            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/vault-proofs/approval/$viewport" tests/approval-proof/run.sh
+          done
+      - name: The file-offer proof (Chromium, desktop and 720x720)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: |
+          set -euo pipefail
+          for viewport in desktop 720x720; do
+            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/vault-proofs/file-offer/$viewport" tests/file-offer-proof/run.sh
+          done
       - name: The canvas proof
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'

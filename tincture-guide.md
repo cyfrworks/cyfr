@@ -62,7 +62,18 @@ A desktop that has not sent `ready` within ten seconds of its handshake, a deskt
 
 ### Secrets
 
-A frame never asks for a secret and never holds one. **`cyfr.credential(name)`** asks the shell to prompt the person for a value to store in the vault as the entry `name`; the shell honours it only for a live, visible frame whose declaration lists `vault.create`, and drops it otherwise. The shell's own prompt asks for the value, the hosts it may be sent to and whether components may read it; nothing is prefilled, and unless the person discloses it the entry is attach-only: its value is never handed to a component, and a component asking for it is refused. The value goes to the vault; the frame is told only that the prompt closed and whether an entry was saved (`{saved: true | false}`), never the value and never why nothing was saved. A frame cannot change or remove a vault entry: renaming, rotating, rebinding, revoking, deleting and OAuth authorization need an interactive session, and are the console's vault page's. The shipped vault tincture lists entries through `vault.status` and adds them through `cyfr.credential`.
+A frame never asks for a secret and never holds one. **`cyfr.credential(name)`** asks the shell to prompt the person for a value to store in the vault as the entry `name`; the shell honours it only for a live, visible frame whose declaration lists `vault.create`, and drops it otherwise. The shell's own prompt asks for the value, the hosts it may be sent to and whether components may read it; nothing is prefilled, and unless the person discloses it the entry is attach-only: CYFR attaches its value to requests bound for its destination, its value is never handed to a component, and a component asking for it is refused. The value goes to the vault; the frame is told only that the prompt closed and whether an entry was saved (`{saved: true | false}`), never the value and never why nothing was saved. A frame cannot change or remove a vault entry: renaming, rotating, rebinding, revoking, deleting and OAuth authorization need an interactive session, and are the console's vault page's. The shipped vault tincture lists entries through `vault.status` and adds them through `cyfr.credential`.
+
+A tincture may satisfy a backing component's need with public configuration
+in its manifest's `provides`: the exact dependency reference from
+`dependencies.static`, then the need name, then a `destination` and
+string `values` map. The dependency must declare a credential need with
+an `attach` rule. Each provided entry's value names and string values
+together span at most 4 KiB; its destination is validated separately.
+The grant preview shows the destination and that the publisher provides
+the values, so it asks for no vault entry for that need. These values
+are public, attached and read alike; changing them or their destination
+asks for consent again. Keep private keys in the vault.
 
 ---
 
