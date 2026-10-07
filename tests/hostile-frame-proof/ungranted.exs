@@ -25,6 +25,8 @@ fn [user_id, name] ->
 
   {:ok, ctx} = Sanctum.Tenancy.resolve_status(%{ctx | namespace: user.namespace}, force: true)
   profile_id = Prima.UUID7.generate_id("prof")
+  # A blocked profile still needs a readable prior head for its re-grant.
+  policy = ~s({"canonical":"jcs-1","nodes":{}})
 
   {:ok, _} =
     Arca.ConsentStorage.mint_profile_with_revision(
@@ -44,8 +46,8 @@ fn [user_id, name] ->
         invoke_mode: "open_inert",
         shape_digest: "sha256:" <> String.duplicate("0", 64),
         commit_digest: "sha256:" <> String.duplicate("0", 64),
-        blob_digest: Prima.JCS.hash_binary("{}"),
-        resolved_policy: "{}",
+        blob_digest: Prima.JCS.hash_binary(policy),
+        resolved_policy: policy,
         activation: Jason.encode!(%{}),
         admitted_origins: [:interactive],
         granted_by: user.id,
