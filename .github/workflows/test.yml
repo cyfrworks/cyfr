@@ -358,8 +358,10 @@ jobs:
             server /data
       - name: Install dependencies
         run: mix deps.get
+      # Forced, as the test job's is: the cache keeps _build across
+      # commits, and incremental state can keep what the tree no longer has.
       - name: Compile with warnings as errors
-        run: mix compile --warnings-as-errors
+        run: mix compile --force --warnings-as-errors
       - name: Wait for MinIO
         run: |
           for i in $(seq 1 30); do
@@ -373,7 +375,15 @@ jobs:
       # members find a schema rather than migrating under each other.
       # --only cluster fails the job if it matches nothing, which is what
       # stops a suite that silently stopped running.
+      # The suite tests the build the forced compile above made. The
+      # runner's own PostgreSQL build, _build/test_pg, is the one the cache
+      # holds, made by whichever run first saved it, and compiled
+      # incrementally over it a module this tree did not change keeps the
+      # types it inferred from what it called back then: the test files
+      # would be type-checked against signatures the tree no longer has.
       - name: Run the two-node suite
+        env:
+          MIX_BUILD_PATH: _build/test
         run: scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors --only cluster apps/cyfr/test/cluster
       - name: MinIO logs
         if: failure()
