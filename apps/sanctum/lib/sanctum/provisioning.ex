@@ -868,9 +868,10 @@ defmodule Sanctum.Provisioning do
   The `bootstrap` step's list of sources that did not mint
   (`bootstrap_consents/2`'s `{:unminted, refs}`) is recorded and logged
   as each source and why, `"<ref>: <sentence>"` joined by `"; "`: the
-  sentence is `Prima.Refusal`'s for a reason it knows, and the term as it
-  reads otherwise. Every other step and detail is recorded as the term
-  reads. The answer carries the term either way.
+  sentence always comes from `Prima.Refusal.message/1`, including its
+  existing internal fallback for an unknown reason. Other bootstrap
+  details and every other step are recorded as the term reads. The
+  answer carries the original term either way.
   """
   @spec record_failure(claim(), Sanctum.Tenancy.Athanors.athanor(), atom(), term()) ::
           {:error, term()}
@@ -917,9 +918,7 @@ defmodule Sanctum.Provisioning do
 
   defp failure_detail(_step, detail), do: inspect(detail)
 
-  defp sentence(reason) do
-    if Prima.Refusal.reason?(reason), do: Prima.Refusal.message(reason), else: inspect(reason)
-  end
+  defp sentence(reason), do: Prima.Refusal.message(reason)
 
   # ---- contexts --------------------------------------------------------------
 

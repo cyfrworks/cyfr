@@ -627,9 +627,10 @@ defmodule Sanctum.ProvisioningTest do
 
   # What a person reads on the row — the chat's provisioning note, the
   # athanor tool — names each source the consent mint skipped with its
-  # refusal's own sentence, and the claim says the same; a reason the
-  # refusal table does not know, and every other detail, reads as before.
+  # refusal table's sentence, including its fallback for an unknown
+  # reason. The claim and the provisioning log say the same.
   @tag :capture_log
+  @tag :bootstrap_refusal_rendering
   test "a consent mint's skipped sources are recorded each with its refusal's sentence" do
     n = System.unique_integer([:positive])
     {:ok, group} = Athanors.create_group("github|https://github.com|recorded-#{n}", "Rec #{n}")
@@ -646,12 +647,14 @@ defmodule Sanctum.ProvisioningTest do
       "catalyst:local.a: The stored manifest is damaged.; " <>
         "catalyst:local.b: The stored profile is damaged and cannot be used.; " <>
         "catalyst:local.c: Instance entries is unavailable — retry shortly; " <>
-        "reagent:local.d: :shape_moved"
+        "reagent:local.d: The outcome could not be confirmed."
 
     {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_recorded", "provision", 60_000, :none)
 
-    assert Provisioning.record_failure(claim, group, :bootstrap, skipped) ==
-             {:error, {:provisioning_failed, :bootstrap, skipped}}
+    {answer, log} =
+      with_log(fn -> Provisioning.record_failure(claim, group, :bootstrap, skipped) end)
+
+    assert answer == {:error, {:provisioning_failed, :bootstrap, skipped}}
 
     {:ok, failed} = Athanors.get(group.id)
 
@@ -660,6 +663,7 @@ defmodule Sanctum.ProvisioningTest do
 
     assert {:ok, %{outcome: "failed", outcome_detail: settled}} = Claims.current(actor)
     assert settled == "bootstrap: " <> detail
+    assert log =~ "[Provisioning] #{group.id} not provisioned at bootstrap: #{detail}"
 
     # The walk's own refusal at the same step is recorded as its term.
     {:ok, again} = Claims.claim(actor, "boot_elsewhere/own_again", "provision", 60_000, :none)
@@ -672,6 +676,84 @@ defmodule Sanctum.ProvisioningTest do
 
     assert Map.delete(Athanors.provisioning_failure(refused), :at) ==
              %{step: "bootstrap", detail: inspect(unreadable)}
+
+    # Empty or malformed bootstrap lists and lists at another step keep
+    # their existing detail format; only skipped source/reason pairs use
+    # the refusal table.
+    for {step, other_detail} <- [
+          {:bootstrap, []},
+          {:bootstrap, [{:not_a_source_ref, :shape_moved}]},
+          {:bootstrap, [{"reagent:local.d", :shape_moved}, :not_a_pair]},
+          {:pull_bundle, skipped}
+        ] do
+      {:ok, other_claim} =
+        Claims.claim(actor, "boot_elsewhere/own_other_detail", "provision", 60_000, :none)
+
+      {other_answer, other_log} =
+        with_log(fn -> Provisioning.record_failure(other_claim, group, step, other_detail) end)
+
+      assert other_answer == {:error, {:provisioning_failed, step, other_detail}}
+      said = inspect(other_detail)
+      {:ok, other_row} = Athanors.get(group.id)
+
+      assert Map.delete(Athanors.provisioning_failure(other_row), :at) ==
+               %{step: to_string(step), detail: said}
+
+      assert {:ok, %{outcome: "failed", outcome_detail: other_settled}} = Claims.current(actor)
+      assert other_settled == "#{step}: #{said}"
+      assert other_log =~ "[Provisioning] #{group.id} not provisioned at #{step}: #{said}"
+    end
+  end
+
+  for {kind, reason} <- [
+        {"atom", :unknown_provisioning_reason},
+        {"structured term",
+         {:unknown_provisioning_reason, %{detail: "UNRENDERED-PROVISIONING-SENTINEL"}}}
+      ] do
+    @tag :capture_log
+    @tag :bootstrap_refusal_rendering
+    @tag unknown_reason: reason
+    test "an unknown #{kind} bootstrap reason uses the table fallback without its raw values",
+         %{unknown_reason: reason} do
+      refute Prima.Refusal.reason?(reason)
+      n = System.unique_integer([:positive])
+
+      {:ok, group} =
+        Athanors.create_group("github|https://github.com|unknown-#{n}", "Unknown #{n}")
+
+      actor = %Prima.Actor{athanor_id: group.id}
+      skipped = [{"reagent:local.unknown", reason}]
+      detail = "reagent:local.unknown: The outcome could not be confirmed."
+
+      {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_unknown", "provision", 60_000, :none)
+
+      {answer, log} =
+        with_log(fn -> Provisioning.record_failure(claim, group, :bootstrap, skipped) end)
+
+      assert answer == {:error, {:provisioning_failed, :bootstrap, skipped}}
+      {:ok, failed} = Athanors.get(group.id)
+
+      assert Map.delete(Athanors.provisioning_failure(failed), :at) ==
+               %{step: "bootstrap", detail: detail}
+
+      assert {:ok, %{outcome: "failed", outcome_detail: settled}} = Claims.current(actor)
+      assert settled == "bootstrap: " <> detail
+
+      # Prima may log a shape-only diagnostic for the unknown reason;
+      # the provisioning failure line carries only the table sentence.
+      [provisioning_line] =
+        log |> String.split("\n") |> Enum.filter(&String.contains?(&1, "[Provisioning]"))
+
+      assert provisioning_line =~
+               "#{group.id} not provisioned at bootstrap: #{detail}"
+
+      for rendering <- [detail, settled, provisioning_line] do
+        refute rendering =~ inspect(reason)
+        refute rendering =~ "UNRENDERED-PROVISIONING-SENTINEL"
+      end
+
+      refute log =~ "UNRENDERED-PROVISIONING-SENTINEL"
+    end
   end
 
   describe "an attempt whose claim a later attempt took" do
