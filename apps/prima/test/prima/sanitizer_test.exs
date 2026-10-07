@@ -15,6 +15,111 @@ defmodule Prima.SanitizerTest do
   alias Prima.Sanitizer
   alias Prima.SanitizerTest.Credentialed
 
+  describe "matching grammar" do
+    test "preserves token, normalized substring, exact and raw-key rules" do
+      sensitive = [
+        "x.auth",
+        "tokenValue",
+        "TOKEN_VALUE",
+        "privateKeyId",
+        "API--KEY",
+        "prefix-api_key-suffix",
+        "confirmationId",
+        "cyfr/confirmationId",
+        "confirmation-id",
+        "INVITATION_URL",
+        "invitationUrl",
+        "FRAG-MENT",
+        "_T",
+        "_SESSION",
+        :confirmation_id,
+        :master_key
+      ]
+
+      readable = [
+        "authentication",
+        "tokenizer",
+        "secretary",
+        "offer_id",
+        "sender_user_id",
+        "recipient_user_id",
+        "filename",
+        "idempotency_key",
+        "partition_key",
+        "connection_state",
+        "field_names",
+        "fragment_id",
+        "invitation_url_label",
+        "confirmation.id",
+        "confirmation id",
+        "private.key",
+        "api key",
+        "session",
+        "t",
+        "session_object",
+        "",
+        :offer_id,
+        :session,
+        nil,
+        42,
+        {"token", "value"}
+      ]
+
+      for key <- sensitive do
+        assert Sanitizer.sensitive_key?(key), "expected sensitive key #{inspect(key)}"
+      end
+
+      for key <- readable do
+        refute Sanitizer.sensitive_key?(key), "expected readable key #{inspect(key)}"
+      end
+    end
+
+    test "redacts through nested credential-bearing terms while preserving identity and values" do
+      data = %{
+        "offer_id" => "ofr_readable",
+        "detail" => [
+          {:error,
+           %{
+             "confirmationId" => "pending-secret",
+             "headers" => [{"x-api-key", "header-secret"}, {"content-type", "application/json"}],
+             "session" => %Credentialed{id: "sess_readable", sanctum_token: "struct-secret"},
+             "calendar" => [
+               ~D[2026-10-07],
+               ~T[08:00:00],
+               ~N[2026-10-07 08:00:00],
+               ~U[2026-10-07 08:00:00Z]
+             ]
+           }},
+          {"_session", "query-secret"},
+          {"field_names", ["password", "token"]}
+        ]
+      }
+
+      assert Sanitizer.sanitize(data) == %{
+               "offer_id" => "ofr_readable",
+               "detail" => [
+                 {:error,
+                  %{
+                    "confirmationId" => "[REDACTED]",
+                    "headers" => [
+                      {"x-api-key", "[REDACTED]"},
+                      {"content-type", "application/json"}
+                    ],
+                    "session" => %Credentialed{id: "sess_readable", sanctum_token: "[REDACTED]"},
+                    "calendar" => [
+                      ~D[2026-10-07],
+                      ~T[08:00:00],
+                      ~N[2026-10-07 08:00:00],
+                      ~U[2026-10-07 08:00:00Z]
+                    ]
+                  }},
+                 {"_session", "[REDACTED]"},
+                 {"field_names", ["password", "token"]}
+               ]
+             }
+    end
+  end
+
   describe "sanitize/1" do
     test "redacts password keys" do
       assert %{"password" => "[REDACTED]", "name" => "test"} ==

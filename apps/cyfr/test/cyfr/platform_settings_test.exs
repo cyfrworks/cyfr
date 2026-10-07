@@ -348,6 +348,8 @@ defmodule Cyfr.PlatformSettingsTest do
 
     test "a store that cannot write refuses the set and leaves the running value", %{ctx: ctx} do
       assert {:ok, %{revision: at}} = Settings.set(ctx, "health_ready_cache_ms", "1000")
+      # Consume the write's local notification before priming the value the outage must preserve.
+      _ = :sys.get_state(Settings)
       assert Store.effective("health_ready_cache_ms") == {:ok, 1000}
 
       Arca.Repo.query!("DROP TABLE platform_settings")

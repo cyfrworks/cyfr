@@ -516,6 +516,83 @@ defmodule Arca.SecurityTransitionsTest do
 
   alias Arca.SecurityTransitions
 
+  @offer_end_events [
+    [:cyfr, :arca, :file_offer, :withdrawn],
+    [:cyfr, :arca, :file_offer, :declined]
+  ]
+
+  defp observe_offer_ends!(athanor_id, offers) do
+    # The fixture's offer IDs include its tenant; file telemetry carries no
+    # separate tenant field. Exact membership excludes every other fixture.
+    config = %{
+      offer_ids: MapSet.new(1..offers, &"ofr_many_#{athanor_id}_#{&1}"),
+      counters: :atomics.new(2, signed: false)
+    }
+
+    counter_id = {__MODULE__, :offer_counts, make_ref()}
+    audit_id = {__MODULE__, :fixture_audit, make_ref()}
+
+    on_exit(fn ->
+      :telemetry.detach(counter_id)
+      :telemetry.detach(audit_id)
+    end)
+
+    if Enum.any?(Application.started_applications(), fn {app, _, _} -> app == :cyfr end) do
+      assert is_pid(Process.whereis(Arca.AuditHandler)), "umbrella audit process must be running"
+
+      for event <- @offer_end_events do
+        assert event in Arca.AuditHandler.events()
+
+        assert Enum.any?(:telemetry.list_handlers(event), fn handler ->
+                 handler.id == "audit-" <> Enum.join(event, "-") and
+                   handler.function == (&Arca.AuditHandler.handle_event/4)
+               end),
+               "umbrella audit callback must be installed for #{inspect(event)}"
+      end
+    else
+      # The Arca island has no Host boot. Compose the same real lower-layer
+      # handler for this fixture alone; never replace a boot-owned callback.
+      assert :ok =
+               :telemetry.attach_many(
+                 audit_id,
+                 @offer_end_events,
+                 &__MODULE__.audit_fixture_offer/4,
+                 config
+               )
+    end
+
+    assert :ok =
+             :telemetry.attach_many(
+               counter_id,
+               @offer_end_events ++ [[:cyfr, :audit, :recorded]],
+               &__MODULE__.count_fixture_offer/4,
+               config
+             )
+
+    config.counters
+  end
+
+  @doc false
+  def audit_fixture_offer(event, measurements, metadata, config) do
+    if MapSet.member?(config.offer_ids, metadata.offer_id) do
+      Arca.AuditHandler.handle_event(event, measurements, metadata, nil)
+    end
+  end
+
+  @doc false
+  def count_fixture_offer([:cyfr, :audit, :recorded], _measurements, %{audited: audited}, config) do
+    if audited.name in @offer_end_events and
+         MapSet.member?(config.offer_ids, audited.metadata.offer_id) do
+      :atomics.add(config.counters, 2, 1)
+    end
+  end
+
+  def count_fixture_offer(_event, _measurements, metadata, config) do
+    if MapSet.member?(config.offer_ids, metadata.offer_id) do
+      :atomics.add(config.counters, 1, 1)
+    end
+  end
+
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     :ok
@@ -685,8 +762,11 @@ defmodule Arca.SecurityTransitionsTest do
       user = person!()
       group = group!()
       offers = open_offers!(group.id, user.id, 32_800)
+      counters = observe_offer_ends!(group.id, offers)
 
       assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert :atomics.get(counters, 1) == 32_800
+      assert :atomics.get(counters, 2) == 32_800
       assert length(change.ended_offer_ids) == offers
       assert open_offer_count(group.id) == 0
     end
@@ -954,10 +1034,13 @@ defmodule Arca.SecurityTransitionsTest do
     test "an archive ends more open offers than one statement can name" do
       group = group!()
       offers = open_offers!(group.id, person!().id, 32_800)
+      counters = observe_offer_ends!(group.id, offers)
 
       assert {:ok, archived} =
                SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
 
+      assert :atomics.get(counters, 1) == 32_800
+      assert :atomics.get(counters, 2) == 32_800
       assert length(archived.ended_offer_ids) == offers
       assert open_offer_count(group.id) == 0
     end

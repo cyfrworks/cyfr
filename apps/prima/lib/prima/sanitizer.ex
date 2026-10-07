@@ -58,6 +58,28 @@ defmodule Prima.Sanitizer do
   # error, and `t` is a short name for anything.
   @exact_raw_sensitive_keys ~w(_t _session)
 
+  @camel_case_boundary ~r/([a-z0-9])([A-Z])/
+  @token_separator ~r/[^a-z0-9]+/
+
+  # Prepare the fixed vocabulary once; runtime work scales with actual keys,
+  # including the metadata of every file transition recorded by the audit trail.
+  @sensitive_matchers Enum.map(@sensitive_keys, fn pattern ->
+                        tokens =
+                          pattern
+                          |> String.replace(@camel_case_boundary, "\\1 \\2")
+                          |> String.downcase()
+                          |> String.split(@token_separator, trim: true)
+
+                        case tokens do
+                          [single] ->
+                            {:token, single}
+
+                          _ ->
+                            {:substring,
+                             String.downcase(pattern) |> String.replace(["-", "_"], "")}
+                        end
+                      end)
+
   @doc """
   The redaction vocabulary as Phoenix's `:filter_parameters` consumes it.
 
@@ -142,19 +164,14 @@ defmodule Prima.Sanitizer do
   @spec sensitive_key?(term()) :: boolean()
   def sensitive_key?(key) when is_binary(key) do
     tokens = tokenize(key)
-    normalized = String.downcase(key) |> String.replace(["-", "_"], "")
+    lowercase = String.downcase(key)
+    normalized = String.replace(lowercase, ["-", "_"], "")
 
-    String.downcase(key) in @exact_raw_sensitive_keys or
+    lowercase in @exact_raw_sensitive_keys or
       normalized in @exact_sensitive_normalized or
-      Enum.any?(@sensitive_keys, fn pattern ->
-        case tokenize(pattern) do
-          [single] ->
-            single in tokens
-
-          _multi_word ->
-            pattern_normalized = String.downcase(pattern) |> String.replace(["-", "_"], "")
-            String.contains?(normalized, pattern_normalized)
-        end
+      Enum.any?(@sensitive_matchers, fn
+        {:token, single} -> single in tokens
+        {:substring, pattern} -> String.contains?(normalized, pattern)
       end)
   end
 
@@ -168,8 +185,8 @@ defmodule Prima.Sanitizer do
   # (`_`, `-`, `.`, space, …) AND camelCase boundaries so `apiKey` → ["api","key"].
   defp tokenize(string) do
     string
-    |> String.replace(~r/([a-z0-9])([A-Z])/, "\\1 \\2")
+    |> String.replace(@camel_case_boundary, "\\1 \\2")
     |> String.downcase()
-    |> String.split(~r/[^a-z0-9]+/, trim: true)
+    |> String.split(@token_separator, trim: true)
   end
 end
