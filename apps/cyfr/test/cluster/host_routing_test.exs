@@ -128,14 +128,14 @@ defmodule Cyfr.Cluster.HostRoutingTest do
     # A freshly formed cell has every member at generation 1, since a
     # slot's generation rises only when that slot is taken over. This
     # database outlives the run, so the two members have drifted apart;
-    # the peer is put back at the issuer's generation for every case
-    # here, which is the state a new deployment starts in. With the
+    # the peer is put back at the issuer's generation for every post at
+    # it here, which is the state a new deployment starts in. With the
     # generations equal there is nothing left between the peer and the
     # rows but the member the call names — and that is the whole of this
     # repair, so a case that let the generations differ would be proving
     # the fence that was already there.
     setup do
-      {:ok, generation: same_generation!()}
+      {:ok, generation: issuer_generation!()}
     end
 
     test "is refused, and the run is still the holding member's to finish", context do
@@ -222,7 +222,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
 
   describe "a member that is gone" do
     test "fails a worker's calls differently from one that refuses, and its run is recovered" do
-      generation = same_generation!()
+      generation = issuer_generation!()
       held = attempt(:a, :orphaned)
 
       # A refusal is an answer: the peer is reached, verifies the call and
@@ -283,34 +283,46 @@ defmodule Cyfr.Cluster.HostRoutingTest do
     :member
   ]
 
-  # The peer put back at the issuer's generation, and put back as it was
-  # when the case ends. A refusal measured while the generations differ
-  # would be the generation's, not the member's.
-  defp same_generation!(issuer \\ :a, peer \\ :b) do
+  # The generation the issuer holds, which every post at the peer is made
+  # under. A refusal measured while the generations differ would be the
+  # generation's, not the member's.
+  defp issuer_generation!(issuer \\ :a) do
     assert {:ok, generation} = Cell.call(issuer, Arca.ControlPlane, :generation, [])
-    was = Cell.call(peer, Arca.ControlPlane, :generation, [])
-    Cell.call(peer, Arca.ControlPlane, :record_generation, [generation])
-
-    on_exit(fn ->
-      case was do
-        {:ok, previous} -> Cell.call(peer, Arca.ControlPlane, :record_generation, [previous])
-        _none -> :ok
-      end
-    end)
-
     generation
   end
 
-  # Post at the peer, with the peer's generation read on both sides of the
-  # post and asserted equal to the issuer's. A call refused while the two
-  # differ was refused by the generation, which fenced it before this
-  # repair; with them equal the only thing left to refuse it is the member
-  # the call names.
+  # Post at the peer with the peer put back at the issuer's generation, its
+  # generation read on both sides of the post and asserted equal to the
+  # issuer's. A call refused while the two differ was refused by the
+  # generation, which fenced it before this repair; with them equal the
+  # only thing left to refuse it is the member the call names.
+  #
+  # The peer's claimant writes the generation of the slot it holds back on
+  # every renew tick (`Arca.ControlPlane.renew/1`), so it is suspended
+  # between two ticks for as long as the peer stands at the issuer's
+  # generation, and the peer's own is put back before it resumes. Its
+  # lease outlasts the post, and a peer whose lease lapsed would answer
+  # `503` rather than the `401` the cases assert. A renew still running
+  # after one lease has won nothing, so that is how long the suspend waits
+  # for the claimant to finish one.
   defp refused_by_peer!(call, generation) do
-    assert {:ok, ^generation} = Cell.call(:b, Arca.ControlPlane, :generation, [])
-    answer = post(call, Cell.member(:b).host_api)
-    assert {:ok, ^generation} = Cell.call(:b, Arca.ControlPlane, :generation, [])
-    answer
+    :ok = Cell.call(:b, :sys, :suspend, [Cyfr.Cell, 15_000])
+
+    try do
+      assert {:ok, own} = Cell.call(:b, Arca.ControlPlane, :generation, [])
+
+      try do
+        Cell.call(:b, Arca.ControlPlane, :record_generation, [generation])
+        assert {:ok, ^generation} = Cell.call(:b, Arca.ControlPlane, :generation, [])
+        answer = post(call, Cell.member(:b).host_api)
+        assert {:ok, ^generation} = Cell.call(:b, Arca.ControlPlane, :generation, [])
+        answer
+      after
+        Cell.call(:b, Arca.ControlPlane, :record_generation, [own])
+      end
+    after
+      Cell.call(:b, :sys, :resume, [Cyfr.Cell])
+    end
   end
 
   # An attempt held open on `id` under `label`, with nothing of an earlier
