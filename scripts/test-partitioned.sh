@@ -179,10 +179,158 @@ for ((i=1; i<=PARTITIONS; i++)); do
   (load_partition_env "$i") || exit 1
 done
 
+# Diagnostic publication is best effort and cannot change the primary result.
+# The private roster is acquired once; partial failed acquisition is discarded.
+warning_roster_state=uninitialized
+report_warning_evidence() {
+  local diagnostic_pid log=$1 roster="$out_dir/warning-source-roster" summary="$out_dir/warning-summary"
+  if [ "$warning_roster_state" = uninitialized ]; then
+    if ! { : >"$roster"; } 2>/dev/null; then
+      warning_roster_state=failed
+    else
+      git -C "$checkout" ls-files 2>/dev/null >"$roster" &
+      diagnostic_pid=$!
+      pids[${#pids[@]}]=$diagnostic_pid
+      if wait "$diagnostic_pid"; then
+        warning_roster_state=available
+      elif { : >"$roster"; } 2>/dev/null; then
+        warning_roster_state=unavailable
+      else
+        warning_roster_state=failed
+      fi
+    fi
+  fi
+  if [ "$warning_roster_state" = failed ]; then
+    echo '    warning evidence: unavailable'
+    return 0
+  fi
+  if [ "$warning_roster_state" = unavailable ]; then
+    echo '    warning evidence: source roster unavailable'
+  fi
+  # ENVIRON preserves literal checkout bytes instead of AWK -v escapes.
+  # Buffer output so a failed projection publishes no partial diagnostic text.
+  { LC_ALL=C CYFR_WARNING_CHECKOUT="$checkout" awk '
+BEGIN { checkout = ENVIRON["CYFR_WARNING_CHECKOUT"] }
+function safe_source(path) {
+  return path != "" && path !~ /^\/|^\.\// &&
+    path !~ /(^|\/)\.\.?($|\/)/ && path !~ /[^A-Za-z0-9_.\/-]/ &&
+    path ~ /\.(ex|exs|erl|hrl)$/
+}
+function spelling(key, canonical) {
+  if (key in mapped) {
+    if (mapped[key] != canonical) ambiguous[key] = 1
+  } else mapped[key] = canonical
+}
+function tracked(path, alias) {
+  if (!safe_source(path) || path in source) return
+  source[path] = 1
+  spelling(path, path)
+  if (path ~ /^apps\/[^/]+\/(lib|test)\//) {
+    alias = path
+    sub(/^apps\/[^/]+\//, "", alias)
+    spelling(alias, path)
+  }
+}
+function normalize(path, prefix) {
+  if (path ~ /^\.\//) path = substr(path, 3)
+  prefix = checkout "/"
+  if (index(path, prefix) == 1) {
+    path = substr(path, length(prefix) + 1)
+    return safe_source(path) && path in source ? path : ""
+  }
+  if (!safe_source(path) || path in ambiguous) return ""
+  return (path in mapped) ? mapped[path] : ""
+}
+function flush(key) {
+  if (!active) return
+  if (emitted < 40) {
+    printf "    warning evidence: log line %d; %s (message omitted)\n", header_line, kind
+    for (j = 1; j <= locations; j++) printf "      location: %s\n", location[j]
+    if (locations == 0) print "      location: unavailable or outside source allowlist"
+    if (location_omitted) printf "      additional locations omitted: %d\n", location_omitted
+    emitted++
+  } else omitted++
+  active = 0
+  locations = 0
+  location_omitted = 0
+  for (key in location) delete location[key]
+  for (key in seen) delete seen[key]
+}
+function add_location(raw, path, rest, n, a, pos) {
+  if (kind == "test-loader file classification") {
+    path = normalize(raw)
+    pos = path
+  } else {
+    n = split(raw, a, ":")
+    if (n < 2 || a[2] !~ /^[1-9][0-9]*$/ || length(a[2]) > 7) return
+    path = normalize(a[1])
+    pos = path ":" a[2]
+    if (a[3] ~ /^[+-]?[0-9]+$/) {
+      if (a[3] !~ /^[1-9][0-9]*$/ || length(a[3]) > 7) return
+      pos = pos ":" a[3]
+    }
+  }
+  if (!path || pos in seen) return
+  seen[pos] = 1
+  if (locations < 4) location[++locations] = pos
+  else location_omitted++
+}
+FILENAME == ARGV[1] { tracked($0); next }
+{
+  raw = $0
+  # Every physical line consumes the window, including rejected input.
+  if (active && ++distance > 32) flush()
+  if (length(raw) > 1024) {
+    oversized++
+    next
+  }
+  # Strip only ANSI SGR color, not arbitrary terminal controls.
+  gsub(/\033\[[0-9;]*m/, "", raw)
+  if (raw ~ /[\001-\010\013-\037\177]/) { controls++; next }
+  if (raw ~ /^ *warning:($| )/) {
+    flush()
+    headers++
+    active = 1
+    header_line = FNR
+    distance = 0
+    kind = "diagnostic header"
+    if (raw == "warning: the following files do not match any of the configured `:test_load_filters` / `:test_ignore_filters`:") kind = "test-loader file classification"
+    next
+  }
+  if (!active) next
+  if (raw ~ /^[ \t]*└─ /) {
+    sub(/^[ \t]*└─ /, "", raw)
+    add_location(raw)
+  } else if (raw ~ /^  [A-Za-z0-9_.\/-]+:[1-9][0-9]*:/) {
+    sub(/^  /, "", raw)
+    add_location(raw)
+  } else if (kind == "test-loader file classification" && raw ~ /^[A-Za-z0-9_.\/-]+\.(exs?|erl|hrl)$/) {
+    add_location(raw)
+  }
+}
+END {
+  flush()
+  printf "    warning evidence summary: headers=%d emitted=%d omitted=%d oversized-lines=%d control-lines=%d\n", headers, emitted, omitted, oversized, controls
+}
+' "$roster" "$log" >"$summary"; } 2>/dev/null &
+  diagnostic_pid=$!
+  pids[${#pids[@]}]=$diagnostic_pid
+  if wait "$diagnostic_pid"; then
+    cat "$summary" 2>/dev/null || echo '    warning evidence: unavailable'
+  else
+    echo '    warning evidence: unavailable'
+  fi
+  return 0
+}
+
 echo "==> compiling once ($ADAPTER, $PARTITIONS partitions, $per schedulers each)"
 (load_partition_env 1 || exit 1; exec mix compile --warnings-as-errors) >"$out_dir/compile.log" 2>&1 &
 pids=($!)
-if ! wait "${pids[0]}"; then echo "compile failed; see $out_dir/compile.log" >&2; exit 1; fi
+if ! wait "${pids[0]}"; then
+  echo "compile failed; see $out_dir/compile.log" >&2
+  report_warning_evidence "$out_dir/compile.log"
+  exit 1
+fi
 stop_children
 
 run_partition() {
@@ -303,6 +451,7 @@ for ((i=1; i<=PARTITIONS; i++)); do
   # progress dot, a result or a routine log line.
   if [ "${exits[$i]}" != 0 ]; then
     printf '    partition exited %s; its account:\n' "${exits[$i]}"
+    report_warning_evidence "$out_dir/p$i.log"
     # The ownership watch's verdict and each new line it kept, wherever
     # they fell in the log.
     grep -nE 'OwnershipError line\(s\) were logged|^-- NEW' "$out_dir/p$i.log" | sed 's/^/    | /' || :

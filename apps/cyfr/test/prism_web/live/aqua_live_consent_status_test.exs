@@ -83,6 +83,9 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
+    # Stop restoration-created work before the base path moves.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     user = test_user()
     conn = log_in_user(conn, user)
     athanor = seated_athanor()
@@ -103,12 +106,19 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
       })
 
     on_exit(fn ->
-      Aqua.AgentConfig.call_aqua(ctx, %{
-        "action" => "update",
-        "name" => "aqua",
-        "catalyst_ref" => was
-      })
+      assert {:ok, _} =
+               Aqua.AgentConfig.call_aqua(ctx, %{
+                 "action" => "update",
+                 "name" => "aqua",
+                 "catalyst_ref" => was
+               })
+
+      assert {:ok, restored} = Aqua.AgentConfig.agent(ctx, "aqua")
+      assert (restored["catalyst_ref"] || "") == was
     end)
+
+    # Stop live readers before restoring the soul they read.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     :ok
   end
@@ -167,5 +177,6 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
     {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
     {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
     assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
+    Cyfr.Test.Sandbox.end_views()
   end
 end
