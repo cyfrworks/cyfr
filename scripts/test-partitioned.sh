@@ -210,7 +210,14 @@ report_warning_evidence() {
   # ENVIRON preserves literal checkout bytes instead of AWK -v escapes.
   # Buffer output so a failed projection publishes no partial diagnostic text.
   { LC_ALL=C CYFR_WARNING_CHECKOUT="$checkout" awk '
-BEGIN { checkout = ENVIRON["CYFR_WARNING_CHECKOUT"] }
+BEGIN {
+  checkout = ENVIRON["CYFR_WARNING_CHECKOUT"]
+  # How many lines below its header a diagnostic names its location. A
+  # type warning prints the inferred type of each value it names first,
+  # a struct one field to a line, so its footer can fall a hundred lines
+  # down.
+  window = 512
+}
 function safe_source(path) {
   return path != "" && path !~ /^\/|^\.\// &&
     path !~ /(^|\/)\.\.?($|\/)/ && path !~ /[^A-Za-z0-9_.\/-]/ &&
@@ -279,22 +286,29 @@ FILENAME == ARGV[1] { tracked($0); next }
 {
   raw = $0
   # Every physical line consumes the window, including rejected input.
-  if (active && ++distance > 32) flush()
-  if (length(raw) > 1024) {
+  if (active && ++distance > window) flush()
+  # ExUnit writes its progress marks (".", "*", "?") to stdout and ends no
+  # line with them, and the compiler writes a diagnostic to stderr, so a
+  # header can follow a run of marks on their line. The run is not counted
+  # against the bound and is read past only to find a header.
+  marks = match(raw, /^[.*?]+/) ? RLENGTH : 0
+  if (length(raw) - marks > 1024) {
     oversized++
     next
   }
   # Strip only ANSI SGR color, not arbitrary terminal controls.
   gsub(/\033\[[0-9;]*m/, "", raw)
   if (raw ~ /[\001-\010\013-\037\177]/) { controls++; next }
-  if (raw ~ /^ *warning:($| )/) {
+  header = raw
+  sub(/^[.*?]+/, "", header)
+  if (header ~ /^ *warning:($| )/) {
     flush()
     headers++
     active = 1
     header_line = FNR
     distance = 0
     kind = "diagnostic header"
-    if (raw == "warning: the following files do not match any of the configured `:test_load_filters` / `:test_ignore_filters`:") kind = "test-loader file classification"
+    if (header == "warning: the following files do not match any of the configured `:test_load_filters` / `:test_ignore_filters`:") kind = "test-loader file classification"
     next
   }
   if (!active) next

@@ -288,7 +288,16 @@ jobs:
           bash tests/test-partitioned-test.sh
           elixir tests/test-partition-env-test.exs
           bash tests/heavy-check-test.sh
+      # The partitions test the build the forced compile above made, on
+      # either adapter. The runner's own PostgreSQL build, _build/test_pg,
+      # is the one the cache holds, made by whichever run first saved it,
+      # and compiled incrementally over it a module this tree did not
+      # change keeps the types it inferred from what it called back then:
+      # the test files would be type-checked against signatures the tree
+      # no longer has.
       - name: Run tests
+        env:
+          MIX_BUILD_PATH: _build/test
         run: scripts/test-partitioned.sh -a "${{ matrix.db }}" -- --warnings-as-errors
 
   cluster:

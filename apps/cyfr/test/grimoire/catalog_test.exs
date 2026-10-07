@@ -57,10 +57,8 @@ defmodule Grimoire.CatalogTest do
   alias Prima.Refusal
   alias Sanctum.Context
 
-  setup do
-    # By hand: `without_connection/1` withdraws every connection, which setup!/1's watch would fail.
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -916,21 +914,15 @@ defmodule Grimoire.CatalogTest do
       ref
     end
 
-    # Run `fun` in a process of its own while no process holds a sandbox
-    # connection — the decision log cannot write — then hand the test its
-    # own again.
-    defp without_connection(fun) do
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
+    # Run `fun` while the decision log's table is gone — the decision log
+    # cannot write, and its writers answer the refusal they handle.
+    defp without_decision_log(fun) do
+      Arca.Repo.query!("ALTER TABLE decision_logs RENAME TO decision_logs_unavailable")
 
       try do
-        Task.async(fn ->
-          Process.delete(:"$callers")
-          fun.()
-        end)
-        |> Task.await()
+        fun.()
       after
-        :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-        Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+        Arca.Repo.query!("ALTER TABLE decision_logs_unavailable RENAME TO decision_logs")
       end
     end
 
@@ -1073,7 +1065,7 @@ defmodule Grimoire.CatalogTest do
         call_id = Prima.UUID7.generate_id("call")
 
         result =
-          without_connection(fn ->
+          without_decision_log(fn ->
             Catalog.call_external(Counting.tool(), ctx, %{"action" => "bump"}, call_id: call_id)
           end)
 

@@ -394,22 +394,55 @@ for adapter in sqlite postgres; do
   lacks 'warning evidence:'
   [ "$(wc -l < "$TRACE/roster-calls")" = "$before" ] || fail 'successful run acquired roster'
 
-  for predecessors in 31 32 33; do
+  # The runner's location window: a location this many lines below its
+  # header is the header's, one further is not.
+  window=512
+  for predecessors in $((window-1)) $window $((window+1)); do
     { header; for ((i=0;i<predecessors;i++)); do printf '\033[2K\n'; done; footer 'test/probe_test.exs:4:5'; } > "$scratch/diagnostic-input"
     report_case "control-window-$((predecessors+1))" "$standalone" 1 test 1
     contains "control-lines=$predecessors"
-    if [ "$predecessors" = 31 ]; then contains 'location: test/probe_test.exs:4:5'; else lacks 'location: test/probe_test.exs'; contains 'location: unavailable or outside source allowlist'; fi
+    if [ "$predecessors" = $((window-1)) ]; then contains 'location: test/probe_test.exs:4:5'; else lacks 'location: test/probe_test.exs'; contains 'location: unavailable or outside source allowlist'; fi
   done
-  for predecessors in 31 32; do
+  for predecessors in $((window-1)) $window; do
     { header; for ((i=0;i<predecessors;i++)); do
         case "$((i%4))" in 0) printf '\033[2K\n' ;; 1) echo ;; 2) printf '%1100s\n' X ;; 3) echo CONTINUATION_PAYLOAD_SENTINEL ;; esac
       done; footer 'test/probe_test.exs:4:5'; } > "$scratch/diagnostic-input"
     report_case "mixed-window-$((predecessors+1))" "$standalone" 1 test 1
-    contains 'oversized-lines=8'
-    contains 'control-lines=8'
-    if [ "$predecessors" = 31 ]; then contains 'location: test/probe_test.exs:4:5'; else lacks 'location: test/probe_test.exs'; fi
+    contains "oversized-lines=$((window/4))"
+    contains "control-lines=$((window/4))"
+    if [ "$predecessors" = $((window-1)) ]; then contains 'location: test/probe_test.exs:4:5'; else lacks 'location: test/probe_test.exs'; fi
   done
-  for predecessors in 0 33; do
+  # A type warning as Elixir 1.20 prints it: the inferred type of each
+  # value it names, one struct field to a line, then its source and its
+  # footer, ninety-odd lines below the header.
+  {
+    printf '     warning: the following pattern will never match: HEADER_PAYLOAD_SENTINEL\n\n'
+    printf '         {:ok, plan} = Probe.plan(ctx, PATTERN_PAYLOAD_SENTINEL)\n\n'
+    printf '     where "ctx" was given the type:\n\n         # type: dynamic(%%{\n'
+    for ((i=0;i<80;i++)); do printf '           field_%d_TYPE_PAYLOAD_SENTINEL: term(),\n' "$i"; done
+    printf '         })\n         # from: test/probe_test.exs:3:7\n         publish!(ctx)\n\n'
+    printf '     type warning found at:\n     │\n   4 │   {:ok, plan} = SOURCE_PAYLOAD_SENTINEL\n     │               ~\n     │\n'
+    footer 'test/probe_test.exs:4:15: ProbeTest."test CONTEXT_PAYLOAD_SENTINEL"/1'
+  } > "$scratch/diagnostic-input"
+  report_case type-warning "$standalone" 1 test 1
+  contains 'headers=1 emitted=1'
+  contains 'location: test/probe_test.exs:4:15'
+  lacks 'location: test/probe_test.exs:3:7'
+  # A header that follows the run's progress marks on their line is a
+  # header, and the location below it is its own, not the one above's.
+  { header; footer 'test/probe_test.exs:4:5'; printf '.*?.'; header; footer 'test/probe_test.exs:9:3'; } > "$scratch/diagnostic-input"
+  report_case progress-header "$standalone" 1 test 1
+  contains 'headers=2 emitted=2'
+  [ "$(grep -c '^      location:' "$account")" = 2 ] || fail 'a header after progress marks lent its location to the one above'
+  grep -A1 'log line 3; diagnostic header' "$account" | grep -qF 'location: test/probe_test.exs:9:3' || fail 'progress-marked header lost its location'
+  { printf '%1100s' '' | tr ' ' .; header; footer 'test/probe_test.exs:4:5'; } > "$scratch/diagnostic-input"
+  report_case progress-header-long "$standalone" 1 test 1
+  contains 'headers=1 emitted=1 omitted=0 oversized-lines=0'
+  contains 'location: test/probe_test.exs:4:5'
+  { echo '..17:00:00 [warning] LOGGER_PAYLOAD_SENTINEL'; echo '..  4 │ warning: SOURCE_PAYLOAD_SENTINEL'; echo '.x warning: TEXT_PAYLOAD_SENTINEL'; } > "$scratch/diagnostic-input"
+  report_case progress-unsupported "$standalone" 1 test 1
+  contains 'headers=0 emitted=0'
+  for predecessors in 0 $((window+1)); do
     { header; for ((i=0;i<predecessors;i++)); do printf '\033[2K\n'; done; header; footer 'test/probe_test.exs:4:5'; } > "$scratch/diagnostic-input"
     report_case "new-header-$predecessors" "$standalone" 1 test 1
     contains 'headers=2 emitted=2'

@@ -16,10 +16,8 @@ defmodule Grimoire.DecisionsTest do
 
   @root Path.expand("../../../..", __DIR__)
 
-  setup do
-    # By hand: `without_connection/1` withdraws every connection, which setup!/1's watch would fail.
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -38,20 +36,16 @@ defmodule Grimoire.DecisionsTest do
     ref
   end
 
-  # Run `fun` in a process of its own while no process holds a sandbox
-  # connection, then hand the test its own again.
-  defp without_connection(fun) do
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
+  # Run `fun` while the decision log's table is gone, which is what a store
+  # that cannot answer is to its writer: the write raises, and the writer
+  # answers the refusal it handles.
+  defp without_decision_log(fun) do
+    Arca.Repo.query!("ALTER TABLE decision_logs RENAME TO decision_logs_unavailable")
 
     try do
-      Task.async(fn ->
-        Process.delete(:"$callers")
-        fun.()
-      end)
-      |> Task.await()
+      fun.()
     after
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+      Arca.Repo.query!("ALTER TABLE decision_logs_unavailable RENAME TO decision_logs")
     end
   end
 
@@ -236,9 +230,7 @@ defmodule Grimoire.DecisionsTest do
       lost = attach([:cyfr, :grimoire, :decision, :lost])
       decision = decision(ctx)
 
-      # The connection is taken away: no process holds one, so the writer
-      # has none to write with.
-      without_connection(fn ->
+      without_decision_log(fn ->
         assert :ok = Decisions.open(ctx, decision, %{input: %{}})
       end)
 
