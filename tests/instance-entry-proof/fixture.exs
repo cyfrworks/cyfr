@@ -66,6 +66,11 @@
 #       the person's context (`Crucible.authority_for/3`'s path), with no
 #       run started: the profile and consent it roots on and the node and
 #       activation digest it verified for the catalyst, or the refusal.
+#       The loader is asked once the person's athanor is filled, as a turn
+#       is admitted only then (`Sanctum.Provisioning.ready/1`): a sign-in
+#       answers before the fill that follows it, and that fill mints the
+#       consent bootstrap before it marks the athanor filled. An athanor
+#       not filled within the bound answers the refusal `not_provisioned`.
 #
 #   claim SESSION_TOKEN ENTRY_ID COUNT URL METHOD
 #       COUNT calls of `Sanctum.InstanceEntries.resolve/4` under the
@@ -138,23 +143,40 @@ fn args ->
     end
   end
 
-  # The root the loader admits for catalyst:local.openai, and the running
-  # node's facts as an attempt holds them: its reference and the digest
-  # the loader verified for it.
+  # The person's athanor ready to run a turn, as a turn's admission asks
+  # before anything reaches the loader (`Sanctum.Provisioning.ready/1`),
+  # bounded as the head's read is: `:filled`, or `:timeout`.
+  filled = fn ctx ->
+    deadline = System.monotonic_time(:millisecond) + 180_000
+
+    Stream.repeatedly(fn ->
+      cond do
+        Sanctum.Provisioning.ready(ctx) == :ok -> :filled
+        System.monotonic_time(:millisecond) > deadline -> :timeout
+        true -> Process.sleep(500)
+      end
+    end)
+    |> Enum.find(&(&1 != :ok))
+  end
+
+  # The root the loader admits for catalyst:local.openai once the athanor
+  # is filled, and the running node's facts as an attempt holds them: its
+  # reference and the digest the loader verified for it.
   admitted = fn ctx ->
-    case Crucible.Admission.authority_and_stamp_for(ctx, :default, openai) do
-      {:ok, %{authority: authority, stamp: stamp}} ->
-        graph = (stamp && stamp.activation_graph) || %{}
+    with :filled <- filled.(ctx),
+         {:ok, %{authority: authority, stamp: stamp}} <-
+           Crucible.Admission.authority_and_stamp_for(ctx, :default, openai) do
+      graph = (stamp && stamp.activation_graph) || %{}
 
-        {node_ref, digest} =
-          Enum.find(graph, {nil, stamp && stamp.activation_digest}, fn {ref, _digest} ->
-            ref == openai or String.starts_with?(ref, openai <> ":")
-          end)
+      {node_ref, digest} =
+        Enum.find(graph, {nil, stamp && stamp.activation_digest}, fn {ref, _digest} ->
+          ref == openai or String.starts_with?(ref, openai <> ":")
+        end)
 
-        {:ok, authority, %{node_ref: node_ref, activation_digest: digest}}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, authority, %{node_ref: node_ref, activation_digest: digest}}
+    else
+      :timeout -> {:error, :not_provisioned}
+      {:error, reason} -> {:error, reason}
     end
   end
 

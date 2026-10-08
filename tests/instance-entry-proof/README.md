@@ -22,10 +22,13 @@ the record.
 
 The harness runs no execution engine and no model, so `run.sh` never starts
 a run: an admission is the loader's answer (`Crucible.authority_for/3`'s
-path), and a claim is `Sanctum.InstanceEntries.resolve/4`'s under the
-member's established context and the admitted root's node facts, never a
-request sent to a provider. Instance-entry claims count resolver uses, not
-dispatched HTTP requests.
+path), asked once the person's athanor is filled, as a turn is admitted
+only then (`Sanctum.Provisioning.ready/1`), since a sign-in answers before
+the fill that mints its consent bootstrap; and a claim is
+`Sanctum.InstanceEntries.resolve/4`'s under the member's established
+context and the admitted root's node facts, never a request sent to a
+provider. Instance-entry claims count resolver uses, not dispatched HTTP
+requests.
 
 `VAULT_PROOF_VIEWPORT` is `desktop` (1280×900, the default) or `720x720`;
 every step runs at either, and the record names the one it ran at.
