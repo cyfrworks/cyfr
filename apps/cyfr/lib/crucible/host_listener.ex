@@ -44,9 +44,10 @@ defmodule Crucible.HostListener do
   Each of those is answered on a connection the listener closes, and the
   body is never read. Then:
 
-    6. the body is at most `Prima.HostAPI.max_body_bytes/0`, else `413`
-       (on a closed connection, since the rest is left unread), and is
-       the one the header named (`Prima.WorkerAuth.verify_body/2`), else
+    6. the body is at most `Prima.HostAPI.max_body_bytes/0`, else `413`,
+       sent before the rest of the body is read, on a connection the
+       listener closes once it has dropped the rest (below), and is the
+       one the header named (`Prima.WorkerAuth.verify_body/2`), else
        `401`;
     7. a host call's body opens as the `:body` of the call the header
        names, under the attempt's seal key derived from the root
@@ -55,6 +56,17 @@ defmodule Crucible.HostListener do
        read before its `op`, and its `op` is the route's callback with
        arguments that are an object, else `400` `malformed`
        (`Prima.WorkerWire.read_request_body/2`).
+
+  A body over the bound is never kept. Its refusal is sent first; then
+  what the client still sends of the body is read and dropped, each read
+  dropped before the next is made, so no more than the bound is held at
+  once, and the connection closes when the body ends. A client that
+  writes its whole body before it reads its answer so reads the refusal,
+  where a connection closed on unread bytes resets under it and loses the
+  answer. Only a caller whose header verified is read so far, and only
+  while the whole body is within the largest a worker service's relay
+  carries for its runner (`Prima.RunnerRelay.max_body_bytes/0`); past
+  that the connection closes with the rest unread.
 
   A host call crosses sealed: its HTTP body is
   `Prima.WorkerAuth.seal_call/5` of the `{"v", "op", "args"}` JSON in the
@@ -99,7 +111,7 @@ defmodule Crucible.HostListener do
 
   require Logger
 
-  alias Prima.{HostAPI, WorkerAuth, WorkerWire}
+  alias Prima.{HostAPI, RunnerRelay, WorkerAuth, WorkerWire}
   alias Crucible.{Host, Keys}
 
   plug(:match)
@@ -162,12 +174,13 @@ defmodule Crucible.HostListener do
       respond(read, callback, fields, call)
     else
       # A refusal after the body was read answers on the conn that read it;
-      # one before it, or with the body read only in part, closes the
-      # connection, so nothing more of the body is read to reuse it.
+      # one before it closes the connection, so nothing more of the body is
+      # read to reuse it. A body over the bound is refused on a closing
+      # connection too, and what remains of it is dropped before it closes.
       {:answered, fields, name} -> answer_unread(close(conn), fields, name)
       {:refused, read, status, name} -> refuse(read, status, name)
       {:refused, status, name} -> refuse(close(conn), status, name)
-      {:refused_unread, read, status, name} -> refuse(close(read), status, name)
+      {:over_bound, read, rest} -> read |> close() |> refuse(413, :lost) |> drop_rest(rest)
     end
   end
 
@@ -312,7 +325,8 @@ defmodule Crucible.HostListener do
 
   # The body is read only after the header verified, and only up to the
   # contract's bound: a declared length over it is refused without a read,
-  # and a longer one as soon as the bound is passed.
+  # and a longer one as soon as the bound is passed. Either is answered
+  # `{:over_bound, conn, rest}`, `rest` the most of it still to drop.
   defp bounded_body(conn) do
     max = HostAPI.max_body_bytes()
 
@@ -320,19 +334,21 @@ defmodule Crucible.HostListener do
          {:ok, body, conn} <- Plug.Conn.read_body(conn, length: max, read_length: max) do
       {:ok, body, conn}
     else
-      {:more, _partial, conn} ->
+      {:more, partial, conn} ->
         Logger.warning("[Crucible.HostListener] refused: the body exceeds #{max} bytes")
-        {:refused_unread, conn, 413, :lost}
+        {:over_bound, conn, RunnerRelay.max_body_bytes() - byte_size(partial)}
 
       {:error, _reason} ->
         Logger.warning("[Crucible.HostListener] refused: the body could not be read")
         {:refused, 400, :lost}
 
-      {:refused, _status, _name} = refused ->
+      {:over_bound, _conn, _rest} = refused ->
         refused
     end
   end
 
+  # A declared length over the bound is refused before any of the body is
+  # read, and one past the most ever dropped has none of it read at all.
   defp declared_length(conn, max) do
     with [length] <- get_req_header(conn, "content-length"),
          {declared, ""} when declared > max <- Integer.parse(length) do
@@ -340,10 +356,35 @@ defmodule Crucible.HostListener do
         "[Crucible.HostListener] refused: the body declares #{declared} bytes, over #{max}"
       )
 
-      {:refused, 413, :lost}
+      {:over_bound, conn, if(declared <= RunnerRelay.max_body_bytes(), do: declared, else: 0)}
     else
       _ -> :ok
     end
+  end
+
+  # What the client still sends of a refused body, read and dropped a read
+  # at a time, at most `rest` bytes of it, until the body ends or the
+  # client stops sending it. The refusal was sent first, and a connection
+  # closed with the rest unread would reset under a client still writing
+  # it before that client read the refusal.
+  defp drop_rest(conn, rest) when rest > 0 do
+    max = HostAPI.max_body_bytes()
+
+    case read_dropped(conn, length: min(rest, max), read_length: max) do
+      {:more, dropped, conn} -> drop_rest(conn, rest - byte_size(dropped))
+      {:ok, _dropped, conn} -> conn
+      {:error, _reason} -> conn
+    end
+  end
+
+  defp drop_rest(conn, _rest), do: conn
+
+  # Bandit raises when a read times out or the client has gone; either way
+  # nothing more of the body arrives.
+  defp read_dropped(conn, opts) do
+    Plug.Conn.read_body(conn, opts)
+  rescue
+    _gone in [Bandit.HTTPError, Bandit.TransportError] -> {:error, :gone}
   end
 
   defp verify_body(read, body_hash, body) do
