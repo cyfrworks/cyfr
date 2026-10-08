@@ -509,6 +509,38 @@ defmodule Crucible.Host.EgressTest do
           do: assert(reasons =~ host)
     end
 
+    test "is led by the purpose it was asked for, an attached request's recorded as its own" do
+      fixture = attached!(["api.example.test"])
+      Resolver.script("api.example.test", :inet, [{203, 0, 113, 10}])
+
+      attached = fn url ->
+        Egress.pin(
+          AttemptFixtures.caller(fixture),
+          %{url: url, purpose: :attached, from: nil},
+          resolver: Resolver
+        )
+      end
+
+      # The control plane's own pin is decided as a guest's fetch is.
+      assert {:ok, %PinnedTarget{ip: "203.0.113.10"}} = attached.("https://api.example.test/")
+      assert {:error, :denied} = attached.("https://other.test/a?token=sk-attached")
+      assert {:error, :denied} = pin(fixture, "https://other.test/b?token=sk-fetched", :fetch)
+
+      assert fixture |> denials() |> Enum.map(& &1.decision_reason) |> Enum.sort() == [
+               "attached: host other.test is not in the egress domains",
+               "fetch: host other.test is not in the egress domains"
+             ]
+
+      # A runner never asks for it.
+      assert %{"v" => 1, "error" => "malformed"} =
+               AttemptFixtures.call(fixture, "egress_pin", %{
+                 "url" => "https://api.example.test/",
+                 "purpose" => "attached"
+               })
+
+      assert length(denials(fixture)) == 2
+    end
+
     test "is lost for an attempt its caller does not hold, with nothing resolved or recorded" do
       fixture = attached!(["*"])
       caller = %{AttemptFixtures.caller(fixture) | runner: "runner_other"}

@@ -605,6 +605,125 @@ defmodule Opus.HttpStreamHandlerTest do
     end
   end
 
+  describe "a request naming a connection" do
+    setup do
+      edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
+      host = ScriptedHost.start!()
+
+      client =
+        host
+        |> ScriptedHost.attempt!(
+          component_ref: "catalyst:local.attached-stream:1.0.0",
+          authority: ScriptedKeeper.authority(edge, EdgeFixtures.limits())
+        )
+        |> ScriptedKeeper.relayed!()
+        |> Map.fetch!(:client)
+
+      {imports, exec_ref} =
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          client,
+          "catalyst:local.attached-stream:1.0.0"
+        )
+
+      on_exit(fn -> HttpStreamHandler.cleanup_registry(exec_ref) end)
+
+      %{"request" => {:fn, request_fn}, "read" => {:fn, read_fn}} =
+        imports["cyfr:http/streaming@0.1.0"]
+
+      request =
+        Jason.encode!(%{
+          "connection" => "api_key",
+          "method" => "POST",
+          "url" => "https://api.openai.com/v1/chat/completions",
+          "headers" => %{"content-type" => "application/json"},
+          "body" => ~s({"stream":true})
+        })
+
+      %{host: host, request_fn: request_fn, read_fn: read_fn, request: request}
+    end
+
+    test "streams CYFR's answer, made for a stream, with no pin asked", %{
+      host: host,
+      request_fn: request_fn,
+      read_fn: read_fn,
+      request: request
+    } do
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, []}, {:chunk, "data: a\n\n"}, {:chunk, "data: b\n\n"}, :end]}
+      )
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      reads = read_until_done(read_fn, handle, 100)
+      assert Enum.map_join(reads, & &1["data"]) == "data: a\n\ndata: b\n\n"
+      assert List.last(reads)["status"] == 200
+
+      assert [%{args: %{"purpose" => "stream", "connection" => "api_key"}}] =
+               ScriptedHost.requests(host, "attached_fetch")
+
+      assert ScriptedHost.requests(host, "egress_pin") == []
+    end
+
+    test "CYFR's refusal is the read's error, its type and sentence as given", %{
+      host: host,
+      request_fn: request_fn,
+      read_fn: read_fn,
+      request: request
+    } do
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:error, {:guest_error, "connection_not_granted", "Grant it first."}}
+      )
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      assert %{"error" => %{"type" => "connection_not_granted", "message" => "Grant it first."}} =
+               poll_for_error(read_fn, handle, 100)
+    end
+
+    test "a frame that does not read hands on nothing from it on", %{
+      host: host,
+      request_fn: request_fn,
+      read_fn: read_fn,
+      request: request
+    } do
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames,
+         [
+           {:head, 200, []},
+           {:chunk, "data: a\n\n"},
+           {:raw, <<9::32, ?c, "forgedxx">>},
+           {:chunk, "data: b\n\n"},
+           :end
+         ]}
+      )
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      {data, error} = read_to_error(read_fn, handle, 100, "")
+      assert error["type"] == "request_failed"
+      refute data =~ "data: b"
+    end
+  end
+
+  # What the reads hand on until the stream's error.
+  defp read_to_error(_read_fn, _handle, 0, _data), do: flunk("stream never surfaced an error")
+
+  defp read_to_error(read_fn, handle, attempts, data) do
+    case read_fn.(handle) |> Jason.decode!() do
+      %{"error" => error} -> {data, error}
+      %{"done" => true} -> flunk("stream completed without an error")
+      %{"data" => more} -> read_to_error(read_fn, handle, attempts - 1, data <> more)
+    end
+  end
+
   defp read_until_done(_read_fn, _handle, 0), do: flunk("stream never completed")
 
   defp read_until_done(read_fn, handle, attempts) do

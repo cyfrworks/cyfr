@@ -36,7 +36,10 @@ defmodule Cyfr.Test.AttemptFixtures do
   - `:authority` — default `Prima.Authority.zero/0`;
   - `:vault` — attributes of a vault entry to create
     (`Sanctum.Vault.create/2`); the authority's edge is bound to it and
-    pinned to an active profile, so attach unseals its fields;
+    pinned to an active profile, so attach unseals its fields. The entry
+    is disclosed, since the attach reads it, and goes to the fixture's
+    destination unless the attributes name `:destination` and
+    `:disclose` of their own;
   - `:component_ref` — default a reference of its own, so no two fixtures
     share a rate bucket;
   - `:component_type` — the row's type (default `:catalyst`);
@@ -353,19 +356,34 @@ defmodule Cyfr.Test.AttemptFixtures do
   @doc """
   `authority` with its edge bound to a new vault entry made from `attrs` in
   `ctx`'s athanor, and pinned to an active profile at its head consent, so
-  an attach unseals the entry. Answers the authority and the entry.
+  an attach unseals the entry. The entry is created disclosed, to the
+  consent fixture's destination (`Sanctum.Test.ConsentFixtures`), unless
+  `attrs` name `:disclose` and `:destination`; the bound resource carries
+  the entry's scope, destination and the binding's key, as a consent's
+  does. The head is a revision written through
+  `Arca.ConsentStorage.insert_revision/4` with the binding's
+  `consent_vault_refs` row at its key, `standing` unless `attrs` name a
+  `:lifetime` (`:once`, or `{:until, %DateTime{}}`), so a use is held to
+  that row as a committed consent's is. Answers the authority and the
+  entry.
   """
   @spec vault_authority!(Sanctum.Context.t(), map(), Authority.t()) ::
           {Authority.t(), Arca.Schemas.VaultEntry.t()}
   def vault_authority!(ctx, attrs, authority \\ Authority.zero()) do
     # The edge names what a consent would: the entry's fields, and for an
     # OAuth entry its scopes (a fixture scope when the attrs name none).
-    # `:projection` in `attrs` replaces it whole.
+    # `:projection` in `attrs` replaces it whole. An OAuth entry names the
+    # provider it dispenses for: `google`, as the fixtures' dispenses ask,
+    # whose preset holds its endpoints, when the attrs name none.
     {explicit, attrs} = Map.pop(attrs, :projection, :derived)
+    {lifetime, attrs} = Map.pop(attrs, :lifetime, :standing)
 
     attrs =
       if Map.get(attrs, :kind) == "oauth",
-        do: Map.put_new(attrs, :oauth_scopes, ["fixture.scope"]),
+        do:
+          attrs
+          |> Map.put_new(:oauth_scopes, ["fixture.scope"])
+          |> Map.put_new(:provider_hint, "google"),
         else: attrs
 
     projection =
@@ -380,7 +398,11 @@ defmodule Cyfr.Test.AttemptFixtures do
           given
       end
 
-    params = Map.put_new(attrs, :name, "attempt-fixture-#{System.unique_integer([:positive])}")
+    params =
+      attrs
+      |> Map.put_new(:name, "attempt-fixture-#{System.unique_integer([:positive])}")
+      |> Map.put_new(:destination, Sanctum.Test.ConsentFixtures.fixture_destination())
+      |> Map.put_new(:disclose, true)
 
     # Entering the credential is a sensitive change, confirmed as its
     # person confirms it (`Sanctum.TestContext.confirmed/3`).
@@ -395,19 +417,40 @@ defmodule Cyfr.Test.AttemptFixtures do
 
     {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
     {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
-    consent_id = Prima.UUID7.generate_id("cons")
+    source = "catalyst:local.attempt-fixture"
+
+    binding_key =
+      Prima.Authority.Blob.binding_key(source, Prima.Authority.Blob.ingress_key(), nil)
 
     {:ok, profile} =
       Arca.ProfileStorage.put(%{
         athanor_id: ctx.athanor_id,
-        source_ref: "catalyst:local.attempt-fixture",
+        source_ref: source,
         kind: "owner",
         label: "fixture-#{System.unique_integer([:positive])}",
-        status: "active",
-        head_consent_id: consent_id
+        status: "active"
       })
 
-    vault = %{entry_id: entry.id, binding_digest: digest, projection: projection}
+    consent_id =
+      head!(ctx, profile.id, source, %{
+        binding_key: binding_key,
+        scope: "athanor",
+        vault_entry_id: entry.id,
+        binding_digest: digest,
+        lifetime: lifetime
+      })
+
+    {:ok, destination} = entry.destination |> Jason.decode!() |> Prima.Destination.from_map()
+
+    vault = %{
+      entry_id: entry.id,
+      binding_digest: digest,
+      scope: "athanor",
+      binding_key: binding_key,
+      destination: destination,
+      attach: nil,
+      projection: projection
+    }
 
     {%{
        authority
@@ -415,5 +458,43 @@ defmodule Cyfr.Test.AttemptFixtures do
          consent_id: consent_id,
          resources: %Edge{vault: vault}
      }, entry}
+  end
+
+  # The profile's first revision, holding the one binding `ref` names with
+  # its lifetime, written as a commit writes one; answers its id.
+  defp head!(ctx, profile_id, source, ref) do
+    policy = "{}"
+    {lifetime, ref} = Map.pop(ref, :lifetime)
+
+    ref =
+      case lifetime do
+        :standing -> Map.put(ref, :lifetime_kind, "standing")
+        :once -> Map.put(ref, :lifetime_kind, "once")
+        {:until, %DateTime{} = at} -> Map.merge(ref, %{lifetime_kind: "until", expires_at: at})
+      end
+
+    {:ok, consent} =
+      Arca.ConsentStorage.insert_revision(
+        %{
+          athanor_id: ctx.athanor_id,
+          profile_id: profile_id,
+          revision: 1,
+          scope: "versionless",
+          pinned_version: "",
+          invoke_mode: "open_inert",
+          shape_digest: "sha256:shape-#{profile_id}",
+          commit_digest: "sha256:commit-#{profile_id}",
+          blob_digest: Prima.JCS.hash_binary(policy),
+          resolved_policy: policy,
+          activation: Jason.encode!(%{source => "sha256:act"}),
+          admitted_origins: [:interactive],
+          granted_by: "system:fixture",
+          granted_via: "bootstrap"
+        },
+        [ref],
+        nil
+      )
+
+    consent.id
   end
 end

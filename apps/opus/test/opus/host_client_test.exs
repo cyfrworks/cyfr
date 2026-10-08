@@ -10,13 +10,19 @@ defmodule Opus.HostClientTest do
   fresh header, as the same body — or ends uncertain; an answer CYFR gave
   is never retried. A client's inspection and the transport's log show
   nothing a call carried.
+
+  An attached request is posted once and its answer handed over as it
+  arrives, unopened: each frame as it completes, nothing more read until
+  the caller takes it, the body bounded by the response size and every
+  wait by the deadline; a refusal is handed over once, as posted and as
+  received.
   """
 
   use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
 
-  alias Prima.{Assignment, PinnedTarget, WorkerWire}
+  alias Prima.{Assignment, AttachedRequest, PinnedTarget, WorkerWire}
   alias Opus.HostClient
   alias Opus.Test.ScriptedHost
 
@@ -62,7 +68,7 @@ defmodule Opus.HostClientTest do
     assert :ok = HostClient.record_denial(client, "invalid_json", "Invalid JSON request")
 
     assert {:error, {:guest_error, "dispatch_error", _}} =
-             HostClient.admit_child(client, "reagent:local.missing:0.1.0", nil, %{}, :call)
+             HostClient.admit_child(client, "reagent:local.missing:0.1.0", nil, %{}, :call, nil)
 
     assert {:error, {:guest_error, "dispatch_error", _}} =
              HostClient.tool_call(client, "tools", %{"action" => "list"}, :call)
@@ -125,7 +131,14 @@ defmodule Opus.HostClientTest do
     ])
 
     assert {:error, {:guest_error, "dispatch_error", "no"}} =
-             HostClient.admit_child(client, "reagent:local.x:0.1.0", "need", %{"a" => 1}, :spawn)
+             HostClient.admit_child(
+               client,
+               "reagent:local.x:0.1.0",
+               "need",
+               %{"a" => 1},
+               :spawn,
+               nil
+             )
 
     assert [first, second] = ScriptedHost.requests(host, "admit_child")
     assert first.body == second.body
@@ -134,9 +147,43 @@ defmodule Opus.HostClientTest do
 
     # A new admission mints a new key.
     ScriptedHost.script(host, "admit_child", {:error, {:guest_error, "dispatch_error", "no"}})
-    HostClient.admit_child(client, "reagent:local.x:0.1.0", "need", %{"a" => 1}, :spawn)
+    HostClient.admit_child(client, "reagent:local.x:0.1.0", "need", %{"a" => 1}, :spawn, nil)
     [_, _, third] = ScriptedHost.requests(host, "admit_child")
     assert third.args["child_key"] != first.args["child_key"]
+  end
+
+  test "a child's connection crosses as the vectors write it, and a retry asks for the same account",
+       %{host: host, client: client} do
+    cases = Map.new(@host_api["connection_cases"], &{&1["name"], &1})
+
+    for name <- ~w(omitted named) do
+      %{"v" => 1, "op" => "admit_child", "args" => args} = Jason.decode!(cases[name]["body"])
+      ScriptedHost.script(host, "admit_child", {:answer, cases["named"]["answer"]})
+
+      assert {:error, {:guest_error, "connection_not_granted", message}} =
+               HostClient.admit_child(
+                 client,
+                 args["reference"],
+                 args["need"],
+                 args["input"],
+                 String.to_existing_atom(args["guest_fn"]),
+                 args["connection"]
+               )
+
+      assert message == Prima.Refusal.message(:connection_not_granted)
+      [sent] = ScriptedHost.requests(host, "admit_child") |> Enum.take(-1)
+      assert Map.delete(sent.args, "child_key") == Map.delete(args, "child_key"), name
+    end
+
+    # A lost answer asks again under the same key for the same account.
+    ScriptedHost.script(host, "admit_child", [:drop, {:answer, cases["reused"]["answer"]}])
+
+    assert {:error, {:guest_error, "invalid_request", _message}} =
+             HostClient.admit_child(client, "reagent:local.x:0.1.0", nil, %{}, :call, "Work")
+
+    [first, second] = ScriptedHost.requests(host, "admit_child") |> Enum.take(-2)
+    assert first.body == second.body
+    assert first.args["connection"] == "Work"
   end
 
   test "a lost answer to a call that is never retried ends uncertain, asked once", %{
@@ -378,7 +425,7 @@ defmodule Opus.HostClientTest do
     end)
 
     assert {:ok, admitted} =
-             HostClient.admit_child(client, child.component_ref, nil, %{"child" => 1}, :call)
+             HostClient.admit_child(client, child.component_ref, nil, %{"child" => 1}, :call, nil)
 
     assert admitted.assignment.execution_id == child.execution_id
     assert admitted.input == %{"child" => 1}
@@ -406,7 +453,8 @@ defmodule Opus.HostClientTest do
        }}
     end)
 
-    assert {:error, :lost} = HostClient.admit_child(client, child.component_ref, nil, %{}, :call)
+    assert {:error, :lost} =
+             HostClient.admit_child(client, child.component_ref, nil, %{}, :call, nil)
 
     assert [%{args: %{"execution_id" => released}}] = ScriptedHost.requests(host, "release_child")
     assert released == child.execution_id
@@ -612,6 +660,316 @@ defmodule Opus.HostClientTest do
     {:ok, key} = Prima.WorkerAuth.worker_key(host.root, service)
     key
   end
+
+  describe "attached_fetch/3" do
+    # An attached request of the attempt, as a runner names one.
+    defp attached(url \\ "https://api.example.com/v1/x") do
+      %AttachedRequest{
+        call_id: AttachedRequest.call_id(:crypto.strong_rand_bytes(16)),
+        connection: "api_key",
+        method: "POST",
+        url: url,
+        headers: [{"content-type", "application/json"}],
+        body: ~s({"q":1}),
+        purpose: :fetch
+      }
+    end
+
+    # A sink that tells the test each event and answers what `answer`
+    # makes of it.
+    defp sink(answer \\ fn _event -> :ok end) do
+      test = self()
+
+      fn event ->
+        send(test, {:event, event})
+        answer.(event)
+      end
+    end
+
+    defp options(sink, opts \\ []) do
+      %{
+        sink: sink,
+        max_response_size: Keyword.get(opts, :max, 1_000_000),
+        deadline: System.system_time(:millisecond) + Keyword.get(opts, :within, 10_000)
+      }
+    end
+
+    defp events do
+      receive do
+        {:event, event} -> [event | events()]
+      after
+        0 -> []
+      end
+    end
+
+    # The frames handed over, read in order under the attempt's seal key.
+    defp read(attempt, request, events) do
+      reader = Prima.WorkerAuth.frame_reader(attempt.keys.seal, request.call_id)
+
+      {read, reader} =
+        Enum.reduce(events, {[], reader}, fn {:frame, frame}, {read, reader} ->
+          {:ok, one, reader} = Prima.WorkerAuth.read_frame(reader, frame)
+          {read ++ [one], reader}
+        end)
+
+      {read, reader.state}
+    end
+
+    test "crosses once as the sealed host call, and its frames are handed over unopened, in order",
+         %{host: host, attempt: attempt, client: client} do
+      request = attached()
+
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames,
+         [
+           {:head, 200, [{"content-type", "text/plain"}]},
+           {:chunk, "hello "},
+           {:chunk, "world"},
+           :end
+         ]}
+      )
+
+      assert :ok = HostClient.attached_fetch(client, request, options(sink()))
+
+      events = events()
+      assert length(events) == 4 and Enum.all?(events, &match?({:frame, _bytes}, &1))
+
+      assert {[
+                %{kind: :head, status: 200, headers: [{"content-type", "text/plain"}]},
+                %{kind: :chunk, body: "hello "},
+                %{kind: :chunk, body: "world"},
+                %{kind: :end}
+              ], :done} = read(attempt, request, events)
+
+      assert [%{args: args, header: header, caller: caller}] =
+               ScriptedHost.requests(host, "attached_fetch")
+
+      assert args == AttachedRequest.to_args(request)
+      assert String.starts_with?(header, "v1 kind=call ")
+      assert caller.runner == client.runner and caller.attempt == attempt.attempt
+    end
+
+    test "a refusal before admission is handed over once, as posted and as received", %{
+      host: host,
+      attempt: attempt,
+      client: client
+    } do
+      request = attached()
+
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:error, {:guest_error, "destination_mismatch", "outside"}}
+      )
+
+      assert :ok = HostClient.attached_fetch(client, request, options(sink()))
+      assert [{:refusal, header, body}] = events()
+      assert [%{header: ^header, caller: caller}] = ScriptedHost.requests(host, "attached_fetch")
+
+      {:ok, json} = Prima.WorkerAuth.open_call(attempt.keys.seal, :answer, caller, body)
+
+      assert {:error, "guest_error",
+              %{"type" => "destination_mismatch", "message" => "outside", "call_id" => call_id}} =
+               json |> Jason.decode!() |> WorkerWire.read_answer()
+
+      assert call_id == request.call_id
+
+      # Unscripted, it is the scripted host's dispatch_error, naming the call too.
+      ScriptedHost.script(host, "attached_fetch", nil)
+      assert :ok = HostClient.attached_fetch(client, request, options(sink()))
+      assert [{:refusal, _header, _body}] = events()
+    end
+
+    test "any other status is lost, and nothing is asked again", %{host: host, client: client} do
+      for answer <- [:drop, {:raw, 401, ~s({"v":1,"error":"lost"})}] do
+        ScriptedHost.script(host, "attached_fetch", answer)
+        assert {:error, "lost"} = HostClient.attached_fetch(client, attached(), options(sink()))
+        assert events() == []
+      end
+
+      assert length(ScriptedHost.requests(host, "attached_fetch")) == 2
+    end
+
+    test "a member that does not hold the attempt refuses it under the member fence: lost", %{
+      host: issuer
+    } do
+      peer = ScriptedHost.start!(root: issuer.root)
+      attempt = ScriptedHost.attempt!(issuer)
+      stale = %{attempt.client | host_url: peer.url}
+
+      assert {:error, "lost"} = HostClient.attached_fetch(stale, attached(), options(sink()))
+      assert events() == []
+      assert [{:refused, "attached_fetch", :member_mismatch}] = ScriptedHost.requests(peer)
+    end
+
+    test "no status reaching the service is uncertain", %{client: client} do
+      unreachable = %{client | host_url: "http://127.0.0.1:9"}
+
+      assert {:error, "uncertain"} =
+               HostClient.attached_fetch(unreachable, attached(), options(sink()))
+
+      # A host that answers nothing before the deadline.
+      {port, _server} = raw_host!(fn socket -> Process.sleep(2_000) && socket end)
+
+      assert {:error, "uncertain"} =
+               HostClient.attached_fetch(
+                 %{client | host_url: "http://127.0.0.1:#{port}"},
+                 attached(),
+                 options(sink(), within: 300)
+               )
+
+      assert events() == []
+    end
+
+    test "the chunks' body bytes are bounded by max_response_size, and a frame past it is never handed over",
+         %{host: host, client: client} do
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, []}, {:chunk, "0123456789"}, {:chunk, "0123456789"}, :end]}
+      )
+
+      assert {:error, "response_too_large"} =
+               HostClient.attached_fetch(client, attached(), options(sink(), max: 15))
+
+      assert [{:frame, <<?h, _::binary>>}, {:frame, <<?c, _::binary>>}] = events()
+    end
+
+    test "a sink that halts stops the answer, and nothing more is handed over", %{
+      host: host,
+      client: client
+    } do
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, []}, {:chunk, "a"}, {:chunk, "b"}, :end]}
+      )
+
+      halting =
+        sink(fn
+          {:frame, <<?c, _::binary>>} -> :halt
+          _head -> :ok
+        end)
+
+      assert :halted = HostClient.attached_fetch(client, attached(), options(halting))
+      assert [{:frame, <<?h, _::binary>>}, {:frame, <<?c, _::binary>>}] = events()
+    end
+
+    test "a length the frames' split refuses, or a body ending inside a frame, is bad_frame", %{
+      client: client
+    } do
+      for body <- [<<65_537::32, ?c, "x">>, <<1::32, ?c>>, <<10::32, ?c, "short">>] do
+        {port, _server} =
+          raw_host!(fn socket ->
+            :gen_tcp.send(socket, frames_head() <> chunked(body) <> "0\r\n\r\n")
+          end)
+
+        assert {:error, "bad_frame"} =
+                 HostClient.attached_fetch(
+                   %{client | host_url: "http://127.0.0.1:#{port}"},
+                   attached(),
+                   options(sink())
+                 ),
+               inspect(body)
+
+        assert events() == []
+      end
+    end
+
+    test "the deadline after the status is a timeout, and a transport failure after it an http_error",
+         %{client: client} do
+      frame = <<6::32, ?c, "abcde">>
+
+      {port, _server} =
+        raw_host!(fn socket ->
+          :gen_tcp.send(socket, frames_head() <> chunked(frame))
+          Process.sleep(2_000)
+        end)
+
+      assert {:error, "timeout"} =
+               HostClient.attached_fetch(
+                 %{client | host_url: "http://127.0.0.1:#{port}"},
+                 attached(),
+                 options(sink(), within: 500)
+               )
+
+      assert [{:frame, <<?c, "abcde">>}] = events()
+
+      {port, _server} =
+        raw_host!(fn socket ->
+          :gen_tcp.send(socket, frames_head() <> chunked(frame))
+          :gen_tcp.close(socket)
+        end)
+
+      assert {:error, "http_error"} =
+               HostClient.attached_fetch(
+                 %{client | host_url: "http://127.0.0.1:#{port}"},
+                 attached(),
+                 options(sink())
+               )
+
+      assert [{:frame, <<?c, "abcde">>}] = events()
+    end
+
+    test "a halted or failed answer closes its connection", %{client: client} do
+      test = self()
+
+      {port, _server} =
+        raw_host!(fn socket ->
+          :gen_tcp.send(socket, frames_head() <> chunked(<<6::32, ?c, "abcde">>))
+          send(test, {:closed?, :gen_tcp.recv(socket, 0, 5_000)})
+        end)
+
+      assert :halted =
+               HostClient.attached_fetch(
+                 %{client | host_url: "http://127.0.0.1:#{port}"},
+                 attached(),
+                 options(sink(fn _ -> :halt end))
+               )
+
+      assert_receive {:closed?, {:error, :closed}}, 5_000
+    end
+  end
+
+  # A host speaking HTTP/1.1 byte for byte: one connection, its request
+  # read whole, then `answer` run on the socket.
+  defp raw_host!(answer) do
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+    {:ok, port} = :inet.port(listen)
+
+    server =
+      spawn_link(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen, 10_000)
+        read_request(socket, "")
+        answer.(socket)
+        Process.sleep(5_000)
+      end)
+
+    on_exit(fn -> :gen_tcp.close(listen) end)
+    {port, server}
+  end
+
+  defp read_request(socket, read) do
+    case :binary.split(read, "\r\n\r\n") do
+      [head, body] ->
+        [_, length] = Regex.run(~r/content-length: (\d+)/i, head)
+        missing = String.to_integer(length) - byte_size(body)
+        if missing > 0, do: {:ok, _rest} = :gen_tcp.recv(socket, missing, 5_000)
+
+      [_partial] ->
+        {:ok, more} = :gen_tcp.recv(socket, 0, 5_000)
+        read_request(socket, read <> more)
+    end
+  end
+
+  defp frames_head do
+    "HTTP/1.1 200 OK\r\ncontent-type: #{WorkerWire.attached_frames_content_type()}\r\n" <>
+      "transfer-encoding: chunked\r\n\r\n"
+  end
+
+  defp chunked(bytes), do: Integer.to_string(byte_size(bytes), 16) <> "\r\n" <> bytes <> "\r\n"
 
   # The answer envelope the client reads is the one `Prima.WorkerWire` builds.
   test "the answers read are the worker protocol's envelopes" do

@@ -188,6 +188,55 @@ defmodule Arca.SecurityTransitions.Fixtures do
     id
   end
 
+  # `rows` open offer rows of `athanor_id` addressed to `recipient`, ten
+  # files an offer, more than SQLite binds in one statement (32766 when
+  # `rows` is past it). Answers the number of offers.
+  def open_offers!(athanor_id, recipient, rows) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    expires = DateTime.add(now, 7 * 86_400, :second)
+
+    for chunk <- Enum.chunk_every(1..div(rows, 10), 100) do
+      Arca.Repo.insert_all(
+        Arca.Schemas.FileOffer,
+        for offer <- chunk, file <- 1..10 do
+          %{
+            id: Prima.UUID7.generate_id("fof"),
+            athanor_id: athanor_id,
+            offer_id: "ofr_many_#{athanor_id}_#{offer}",
+            sender_user_id: "usr_many_sender",
+            recipient_user_id: recipient,
+            filename: "f#{file}.txt",
+            digest: "sha256:many",
+            size: 1,
+            status: "offered",
+            expires_at: expires,
+            inserted_at: now,
+            updated_at: now
+          }
+        end
+      )
+    end
+
+    div(rows, 10)
+  end
+
+  def open_offer_count(athanor_id) do
+    from(o in Arca.Schemas.FileOffer,
+      where: o.athanor_id == ^athanor_id and o.status == "offered"
+    )
+    |> Arca.Repo.aggregate(:count)
+  end
+
+  def offer_statuses(offer_id) do
+    from(o in Arca.Schemas.FileOffer, where: o.offer_id == ^offer_id, select: o.status)
+    |> Arca.Repo.all()
+  end
+
+  # An athanor's stored tree, for a case that wrote bytes into it to
+  # remove after itself.
+  def storage_root(athanor_id),
+    do: Arca.Adapters.Local.build_path(Prima.Actor.in_athanor(athanor_id), [])
+
   def user(id), do: Arca.Repo.get(User, id)
   def athanor(id), do: Arca.Repo.get(Athanor, id)
   def session?(hash), do: Arca.Repo.exists?(where(Session, token_hash: ^hash))
@@ -467,6 +516,83 @@ defmodule Arca.SecurityTransitionsTest do
 
   alias Arca.SecurityTransitions
 
+  @offer_end_events [
+    [:cyfr, :arca, :file_offer, :withdrawn],
+    [:cyfr, :arca, :file_offer, :declined]
+  ]
+
+  defp observe_offer_ends!(athanor_id, offers) do
+    # The fixture's offer IDs include its tenant; file telemetry carries no
+    # separate tenant field. Exact membership excludes every other fixture.
+    config = %{
+      offer_ids: MapSet.new(1..offers, &"ofr_many_#{athanor_id}_#{&1}"),
+      counters: :atomics.new(2, signed: false)
+    }
+
+    counter_id = {__MODULE__, :offer_counts, make_ref()}
+    audit_id = {__MODULE__, :fixture_audit, make_ref()}
+
+    on_exit(fn ->
+      :telemetry.detach(counter_id)
+      :telemetry.detach(audit_id)
+    end)
+
+    if Enum.any?(Application.started_applications(), fn {app, _, _} -> app == :cyfr end) do
+      assert is_pid(Process.whereis(Arca.AuditHandler)), "umbrella audit process must be running"
+
+      for event <- @offer_end_events do
+        assert event in Arca.AuditHandler.events()
+
+        assert Enum.any?(:telemetry.list_handlers(event), fn handler ->
+                 handler.id == "audit-" <> Enum.join(event, "-") and
+                   handler.function == (&Arca.AuditHandler.handle_event/4)
+               end),
+               "umbrella audit callback must be installed for #{inspect(event)}"
+      end
+    else
+      # The Arca island has no Host boot. Compose the same real lower-layer
+      # handler for this fixture alone; never replace a boot-owned callback.
+      assert :ok =
+               :telemetry.attach_many(
+                 audit_id,
+                 @offer_end_events,
+                 &__MODULE__.audit_fixture_offer/4,
+                 config
+               )
+    end
+
+    assert :ok =
+             :telemetry.attach_many(
+               counter_id,
+               @offer_end_events ++ [[:cyfr, :audit, :recorded]],
+               &__MODULE__.count_fixture_offer/4,
+               config
+             )
+
+    config.counters
+  end
+
+  @doc false
+  def audit_fixture_offer(event, measurements, metadata, config) do
+    if MapSet.member?(config.offer_ids, metadata.offer_id) do
+      Arca.AuditHandler.handle_event(event, measurements, metadata, nil)
+    end
+  end
+
+  @doc false
+  def count_fixture_offer([:cyfr, :audit, :recorded], _measurements, %{audited: audited}, config) do
+    if audited.name in @offer_end_events and
+         MapSet.member?(config.offer_ids, audited.metadata.offer_id) do
+      :atomics.add(config.counters, 2, 1)
+    end
+  end
+
+  def count_fixture_offer(_event, _measurements, metadata, config) do
+    if MapSet.member?(config.offer_ids, metadata.offer_id) do
+      :atomics.add(config.counters, 1, 1)
+    end
+  end
+
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     :ok
@@ -527,6 +653,122 @@ defmodule Arca.SecurityTransitionsTest do
       assert invitation_id == invitation.id
       assert change.unfollowed == 1
       assert change.member_user_ids[pair.id] == [peer.id]
+    end
+
+    test "removes the person from every instance audience and ends their offers both ways" do
+      {user, own} = owner!()
+      shared = group!()
+      peer = person!()
+      seat!(shared.id, user.id)
+      seat!(shared.id, peer.id)
+
+      {:ok, listed} =
+        Arca.InstanceEntries.put(
+          server(),
+          %{
+            name: "listed-#{uniq()}",
+            kind: "api_key",
+            provider_hint: "openai.com",
+            destination:
+              ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+            sealed_payload: "sealed",
+            binding_digest: "sha256:i0",
+            audience: "listed",
+            created_by: "usr_admin"
+          },
+          [user.id, peer.id]
+        )
+
+      mine = %Prima.Actor{athanor_id: own.id, user_id: user.id}
+      theirs = %Prima.Actor{athanor_id: shared.id, user_id: peer.id}
+      on_exit(fn -> for a <- [own.id, shared.id], do: File.rm_rf(storage_root(a)) end)
+
+      :ok = Arca.put(mine, ["data", "out.txt"], "from the denied")
+      :ok = Arca.put(theirs, ["data", "in.txt"], "to the denied")
+      {:ok, %{offer_id: sent}} = Arca.FileOffers.offer(mine, peer.id, ["data/out.txt"])
+      {:ok, %{offer_id: incoming}} = Arca.FileOffers.offer(theirs, user.id, ["data/in.txt"])
+
+      test_pid = self()
+      handler = "deny-offers-#{uniq()}"
+
+      :telemetry.attach_many(
+        handler,
+        [[:cyfr, :arca, :file_offer, :withdrawn], [:cyfr, :arca, :file_offer, :declined]],
+        fn event, _m, meta, _c -> send(test_pid, {event, meta.offer_id}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+
+      assert change.instance_audiences_left == 1
+      assert change.ended_offer_ids == Enum.sort([sent, incoming])
+      refute Map.has_key?(change, :ended_offers)
+
+      # The peer stays listed; the denied person is offered nothing.
+      assert {:ok, [%{members: [member]}]} = Arca.InstanceEntries.list(server())
+      assert member == peer.id
+      assert {:ok, []} = Arca.InstanceEntries.offered(mine, [])
+      assert {:ok, [_]} = Arca.InstanceEntries.offered(%Prima.Actor{user_id: peer.id}, [])
+      assert listed.audience == "listed"
+
+      assert {:ok, [%{status: "withdrawn"}]} = Arca.FileOffers.outbox(mine)
+      assert {:ok, [%{status: "declined"}]} = Arca.FileOffers.inbox(mine)
+
+      # Each snapshot is released once the denial commits, and announced.
+      assert {:error, :not_found} = Arca.get(mine, ["payloads", "offers", sent, "out.txt"])
+      assert {:error, :not_found} = Arca.get(theirs, ["payloads", "offers", incoming, "in.txt"])
+      assert_receive {[:cyfr, :arca, :file_offer, :withdrawn], ^sent}
+      assert_receive {[:cyfr, :arca, :file_offer, :declined], ^incoming}
+    end
+
+    test "withdraws the open offers of an athanor it archives, whoever sent them" do
+      user = person!()
+      left = person!()
+      elsewhere = person!()
+      retired = group!()
+      kept = group!()
+      seat!(retired.id, user.id)
+      seat!(retired.id, left.id)
+      seat!(kept.id, left.id)
+      seat!(kept.id, elsewhere.id)
+      on_exit(fn -> for a <- [retired.id, kept.id], do: File.rm_rf(storage_root(a)) end)
+
+      # Sent from the group by a member who has since left it, to someone
+      # the denied person never met: no clause of theirs names it, but the
+      # deny archives the group they were the last member of.
+      from_retired = %Prima.Actor{athanor_id: retired.id, user_id: left.id}
+      :ok = Arca.put(from_retired, ["data", "left.txt"], "left behind")
+
+      {:ok, %{offer_id: stranded}} =
+        Arca.FileOffers.offer(from_retired, elsewhere.id, ["data/left.txt"])
+
+      {:ok, _} =
+        SecurityTransitions.leave_athanor(
+          %Prima.Actor{athanor_id: retired.id, user_id: left.id},
+          left.id,
+          verify: admit()
+        )
+
+      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+
+      assert change.archived_athanor_ids == [retired.id]
+      assert change.ended_offer_ids == [stranded]
+      assert offer_statuses(stranded) == ["withdrawn"]
+    end
+
+    test "ends more open offers than one statement can name" do
+      user = person!()
+      group = group!()
+      offers = open_offers!(group.id, user.id, 32_800)
+      counters = observe_offer_ends!(group.id, offers)
+
+      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      assert :atomics.get(counters, 1) == 32_800
+      assert :atomics.get(counters, 2) == 32_800
+      assert length(change.ended_offer_ids) == offers
+      assert open_offer_count(group.id) == 0
     end
 
     test "a repeated denial moves no generation and still checks what it retires" do
@@ -737,6 +979,70 @@ defmodule Arca.SecurityTransitionsTest do
 
       assert {:ok, %{transitioned: false}} =
                SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+    end
+
+    test "an archive withdraws the file offers its athanor holds open, once it commits" do
+      group = group!()
+      sender = person!()
+      recipient = person!()
+      seat!(group.id, sender.id)
+      seat!(group.id, recipient.id)
+      from_group = %Prima.Actor{athanor_id: group.id, user_id: sender.id}
+      on_exit(fn -> File.rm_rf(storage_root(group.id)) end)
+
+      :ok = Arca.put(from_group, ["data", "open.txt"], "open")
+      :ok = Arca.put(from_group, ["data", "declined.txt"], "declined")
+
+      {:ok, %{offer_id: open}} =
+        Arca.FileOffers.offer(from_group, recipient.id, ["data/open.txt"])
+
+      {:ok, %{offer_id: declined}} =
+        Arca.FileOffers.offer(from_group, recipient.id, ["data/declined.txt"])
+
+      :ok = Arca.FileOffers.decline(%Prima.Actor{user_id: recipient.id}, declined)
+
+      test_pid = self()
+      handler = "archive-offers-#{uniq()}"
+
+      :telemetry.attach(
+        handler,
+        [:cyfr, :arca, :file_offer, :withdrawn],
+        fn _event, _m, meta, _c -> send(test_pid, {:withdrawn, meta.offer_id}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, archived} =
+               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+
+      assert archived.ended_offer_ids == [open]
+      refute Map.has_key?(archived, :ended_offers)
+      assert offer_statuses(open) == ["withdrawn"]
+      assert offer_statuses(declined) == ["declined"]
+      assert {:error, :not_found} = Arca.get(from_group, ["payloads", "offers", open, "open.txt"])
+      assert_receive {:withdrawn, ^open}
+
+      # The recipient can no longer take it, and archiving again ends nothing.
+      assert {:error, {:not_offered, "withdrawn"}} =
+               Arca.FileOffers.decline(%Prima.Actor{user_id: recipient.id}, open)
+
+      assert {:ok, %{ended_offer_ids: []}} =
+               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+    end
+
+    test "an archive ends more open offers than one statement can name" do
+      group = group!()
+      offers = open_offers!(group.id, person!().id, 32_800)
+      counters = observe_offer_ends!(group.id, offers)
+
+      assert {:ok, archived} =
+               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+
+      assert :atomics.get(counters, 1) == 32_800
+      assert :atomics.get(counters, 2) == 32_800
+      assert length(archived.ended_offer_ids) == offers
+      assert open_offer_count(group.id) == 0
     end
 
     test "an injected key UPDATE failure leaves the athanor open and its keys live" do

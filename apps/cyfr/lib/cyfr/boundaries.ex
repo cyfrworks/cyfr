@@ -304,7 +304,7 @@ defmodule Cyfr.Boundaries do
     Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog Arca.DirectoryHeads
     Arca.DeviceCertificates Arca.DeviceCertifications Arca.PairingInvitations Arca.Passkeys
     Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
-    Arca.RequestRateWindows
+    Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage
   )
   @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]
 
@@ -327,8 +327,10 @@ defmodule Cyfr.Boundaries do
           "is filled with on first read has to be there before the turn roots an " <>
           "authority in it. `Sanctum.ExecutionStanding` is `Aqua.Tape`'s check over " <>
           "the grant a turn's root attempt stores, handed to the turn's writes. " <>
-          "`Sanctum.Consent` is `Aqua.ConsentStatus`'s read of what a source " <>
-          "declares, through consent's own derivation; the row below narrows it. " <>
+          "`Sanctum.Consent` is the assistant's two reads of consent: what a source " <>
+          "declares, through consent's own derivation (`Aqua.ConsentStatus`), and which " <>
+          "named accounts an app's own ingress binds (`Sanctum.Consent.Accounts`); the " <>
+          "row below narrows it. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -336,12 +338,15 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Sanctum.Consent",
       depth: 3,
-      allow: ~w(Sanctum.Consent.ShapeDerivation),
+      allow: ~w(Sanctum.Consent.Accounts Sanctum.Consent.ShapeDerivation),
       reason:
         "the assistant reports whether a consent still covers its source and grants " <>
           "nothing: it reads what a source declares through " <>
           "`Sanctum.Consent.ShapeDerivation` and what was consented from the authority " <>
           "a turn would pin, and names nothing of the plane that writes a consent. " <>
+          "It reads which named accounts an app's own ingress binds and which entry a " <>
+          "name resolves to through `Sanctum.Consent.Accounts`, never a value, never a " <>
+          "write. " <>
           "`Sanctum.Consent` is no boundary of its own, and `Sanctum`'s exports, which are " <>
           "global, name more of it than this roster, so no declaration can say it."
     },
@@ -376,10 +381,10 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
-        Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Egress
-        Sanctum.ExecutionStanding Sanctum.Grimoire Sanctum.Network
-        Sanctum.Policy Sanctum.Session
+        Sanctum Sanctum.Atoms Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller
+        Sanctum.Carry Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door
+        Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Grimoire Sanctum.InstanceEntries
+        Sanctum.Network Sanctum.Policy Sanctum.Session
         Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.VaultReader
       ),
@@ -405,6 +410,11 @@ defmodule Cyfr.Boundaries do
           "roots at: its public-profile and private-access policy. " <>
           "`Sanctum.Carry` is `Cyfr.RetentionScheduler`'s periodic sweep of every " <>
           "person's expired sign-in carries (`sweep/1`), which names no store. " <>
+          "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
+          "instance-entry usage days (`sweep_usage/0`), which names no entry and no person. " <>
+          "`Sanctum.Attach` is `Crucible.Host.AttachedFetch`'s one resolution of the value " <>
+          "an attached request carries (`resolve/5`): the vault decides, and the control " <>
+          "plane attaches and performs. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -418,12 +428,19 @@ defmodule Cyfr.Boundaries do
         Sanctum.ExecutionStanding
         Sanctum.Network Sanctum.Recovery Sanctum.Session Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
-        Sanctum.UnauthorizedError Sanctum.Vault.OAuthGrant Sanctum.VaultReader Sanctum.Webhook
+        Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Vault.OAuthGrant Sanctum.VaultReader
+        Sanctum.Webhook
       ),
       reason:
         "the auth fabric's own front door, where a wide roster is the front door doing " <>
           "its job. The MCP transport carries tenancy, reads a server's vault edge, and " <>
           "uses Sanctum.Network/Egress for external servers and the backends service. " <>
+          "`Sanctum.Vault` is the check of a server definition against the entries it " <>
+          "names, metadata only, which the external provider makes before storing one " <>
+          "and the server process and the backends controller make again before " <>
+          "unsealing any: a header's entry's destination covers the server's URL " <>
+          "(`destination_matches?/3`) and a backend env's entry is disclosed " <>
+          "(`disclosed?/2`). " <>
           "An outbound call's row runs under its caller's grant, checked through " <>
           "Sanctum.ExecutionStanding as it is admitted and closed, and the MCP " <>
           "controller answers a `Sanctum.UnauthorizedError` raised in the request " <>
@@ -1024,12 +1041,12 @@ defmodule Cyfr.Boundaries do
           "provider credentials, webhooks, " <>
           "the identities, memberships, athanors and doors that decide standing, a " <>
           "person's identity row, keys, attempts and carries, the directory's logs " <>
-          "and cached heads, passkeys, pending confirmations, the installation claim " <>
-          "and the pre-authentication rate windows " <>
+          "and cached heads, passkeys, pending confirmations, the installation claim, " <>
+          "the pre-authentication rate windows, and the instance's own entries and " <>
+          "their use counts " <>
           "are security rows. A domain or a surface learns about them only " <>
-          "through Sanctum's entries, which scope by the caller's context and keep an " <>
-          "outage, a damaged row and an absent one apart. Arca holds the rows and " <>
-          "Sanctum reads them; no other tree names the stores. " <>
+          "through Sanctum's entries, which scope by the caller's context. Arca holds " <>
+          "the rows and Sanctum reads them; no other tree names the stores. " <>
           "Boundary's exports are global and its membership is by name, so no declaration " <>
           "exports these stores to Sanctum alone."
     },
@@ -1260,6 +1277,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
     "Sanctum.Atoms" => [known_permissions: 0],
+    "Sanctum.Attach" => [resolve: 5],
     "Sanctum.Auth" => [provider: 0],
     "Sanctum.Auth.CyfrDoor" => [
       callback: 2,
@@ -1287,14 +1305,24 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
     "Sanctum.ClientIp" => [from_connect_info: 1, resolve: 1],
-    "Sanctum.Consent" => [head_consent: 2, profiles: 2, revoke_source: 2],
+    "Sanctum.Consent" => [head_consent: 2, profiles: 2, revoke_source: 2, row_binding: 3],
+    # The assistant reads which named accounts an app's own ingress binds
+    # and which entry a name resolves to, never a value, never a write.
+    "Sanctum.Consent.Accounts" => [list: 1, resolve: 4],
     "Sanctum.Consent.Authz" => [
       authorize_interactive: 1,
       authorize_interactive_in_chain: 1,
       authorize_staging: 1
     ],
     "Sanctum.Consent.Components" => [install!: 1],
-    "Sanctum.Consent.Loader" => [load_root: 3, pinned_intact?: 2],
+    # Admission reads the loader's own-head damage through its one
+    # definition, the family and the refusal each member answers.
+    "Sanctum.Consent.Loader" => [
+      damage?: 1,
+      damage_refusal: 3,
+      load_root: 3,
+      pinned_intact?: 2
+    ],
     "Sanctum.Consent.Proof" => [store: 0],
     "Sanctum.Consent.RegistrationBinding" => [authorize: 3, message: 1],
     "Sanctum.Consent.ShapeDerivation" => [expand_tools: 1, live_digest: 2, manifest_blocks: 2],
@@ -1322,6 +1350,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Egress" => [pinned_request: 5],
     "Sanctum.ExecutionStanding" => [capture: 1, retired_attempts: 3, stamp_only: 1, verify: 1],
     "Sanctum.Grimoire" => [install!: 1],
+    "Sanctum.InstanceEntries" => [sweep_usage: 0],
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Notify" => [broadcast: 3],
@@ -1369,7 +1398,12 @@ defmodule Cyfr.Boundaries do
       route_slug: 1,
       settings: 1
     ],
-    "Sanctum.Tenancy.Members" => [list_by_athanor: 1, member?: 2, solo?: 1],
+    "Sanctum.Tenancy.Members" => [
+      list_by_athanor: 1,
+      member?: 2,
+      people_sharing: 1,
+      solo?: 1
+    ],
     "Sanctum.Tenancy.Users" => [
       display_name: 1,
       get: 1,
@@ -1402,12 +1436,14 @@ defmodule Cyfr.Boundaries do
       tool_patterns: 1
     ],
     "Sanctum.Unauthorized" => [class: 1, code_override: 1, message: 1, message: 2, reason?: 1],
+    "Sanctum.Vault" => [destination_matches?: 3, disclosed?: 2],
     "Sanctum.Vault.OAuthGrant" => [complete: 3, redirect_uri: 0],
     "Sanctum.VaultReader" => [
-      fetch: 2,
-      oauth_token: 3,
+      fetch: 3,
+      oauth_token: 4,
       revisions: 2,
-      unseal_by_name: 2,
+      unseal_disclosed: 2,
+      unseal_for: 3,
       usable: 3
     ],
     "Sanctum.Webhook" => [
@@ -1736,6 +1772,11 @@ defmodule Cyfr.Boundaries do
     # scripted directory through paths that pass no options; a caller's
     # options win, and a release never sets it, so it uses the system's.
     directory_client: :seam,
+    # An OAuth provider shown to attenuate a refresh (`Sanctum.Vault.OAuth`):
+    # a suite sets it to script a preset for a hint no shipped preset holds,
+    # and that preset's token endpoint, never replacing a shipped one; a
+    # release never sets it, so only the shipped presets are read.
+    scripted_oauth_provider: :seam,
     # Compiled in by `config/test.exs` alone; with the runtime switch off it
     # lets the sandboxed suite boot omit `Cyfr.Bootstrap`
     # (`Cyfr.Application.bootstrap_skipped?/2`).
@@ -2200,10 +2241,10 @@ defmodule Cyfr.Boundaries do
       path: "Sanctum.VaultReader.tenant_actor/1",
       file: "apps/sanctum/lib/sanctum/vault_reader.ex",
       reason:
-        "private, and inside the layer that owns tenancy: `usable/3` and " <>
-          "`unseal_by_name/2` are reached by host-side callers that hold a resolved " <>
-          "tenant and no context. It names the tenant it was already given and " <>
-          "widens nothing."
+        "private, and inside the layer that owns tenancy: `usable/3`, `unseal_for/3` " <>
+          "and `unseal_disclosed/2` are reached by host-side callers that hold a " <>
+          "resolved tenant and no context. It names the tenant it was already given " <>
+          "and widens nothing."
     }
   ]
 

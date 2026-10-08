@@ -26,6 +26,17 @@ defmodule Opus.Test.ScriptedHost do
   `egress_pin` from a table of addresses the test sets, as CYFR pins a
   guest's URL; with no table, every pin is refused `resolution`.
 
+  `attached_fetch` takes one more answer, `{:frames, frames}`: its answer
+  streamed as CYFR streams an admitted request's, chunked under
+  `Prima.WorkerWire.attached_frames_content_type/0`, each frame written
+  as it is made. A frame is `{:head, status, headers}`, `{:chunk, body}`,
+  `:end` or `{:error, type, message}`, sealed at its place in the list
+  for the request's `call_id` under the caller's seal key with a fresh IV
+  (`Prima.WorkerAuth.seal_frame/7`), or `{:raw, bytes}`, written as given
+  — a frame tampered with. A guest error answering `attached_fetch` names
+  the request's `call_id`, as CYFR's does, and an unscripted one is the
+  `dispatch_error` every call without a script answers.
+
   The default root is the one `test_helper.exs` derives the running worker
   service's key from, so a host started with it verifies that service's
   reports; a host started with another root is a stranger to it.
@@ -429,7 +440,7 @@ defmodule Opus.Test.ScriptedHost do
 
       case scripted do
         :default ->
-          json(conn, 200, ScriptedHost.encode(ScriptedHost.default(op, args, caller)), seal)
+          json(conn, 200, encode(op, args, ScriptedHost.default(op, args, caller)), seal)
 
         :drop ->
           send_resp(conn, 500, "")
@@ -440,9 +451,70 @@ defmodule Opus.Test.ScriptedHost do
         {:raw, status, body} ->
           send_resp(conn, status, body)
 
+        {:frames, frames} when op == "attached_fetch" ->
+          stream_frames(conn, frames, args, seal)
+
         answer ->
-          json(conn, 200, ScriptedHost.encode(answer), seal)
+          json(conn, 200, encode(op, args, answer), seal)
       end
+    end
+
+    # A guest error answering an attached request names its call id.
+    defp encode(
+           "attached_fetch",
+           %{"call_id" => call_id},
+           {:error, {:guest_error, type, message}}
+         ),
+         do:
+           WorkerWire.error(:guest_error, %{
+             "type" => type,
+             "message" => message,
+             "call_id" => call_id
+           })
+
+    defp encode(_op, _args, answer), do: ScriptedHost.encode(answer)
+
+    # An admitted attached request's answer: each frame sealed at its place
+    # for the request's call id and written as one chunk as it is made.
+    defp stream_frames(conn, frames, %{"call_id" => call_id}, {seal_key, _caller}) do
+      conn =
+        conn
+        |> put_resp_content_type(WorkerWire.attached_frames_content_type(), nil)
+        |> send_chunked(200)
+
+      frames
+      |> Enum.with_index()
+      |> Enum.reduce_while(conn, fn {frame, seq}, conn ->
+        case chunk(conn, frame_bytes(seal_key, call_id, seq, frame)) do
+          {:ok, conn} -> {:cont, conn}
+          {:error, _closed} -> {:halt, conn}
+        end
+      end)
+    end
+
+    defp frame_bytes(_seal_key, _call_id, _seq, {:raw, bytes}), do: bytes
+
+    defp frame_bytes(seal_key, call_id, seq, frame) do
+      {kind, plaintext} =
+        case frame do
+          {:head, status, headers} -> {:head, WorkerAuth.head_plaintext(status, headers)}
+          {:chunk, body} -> {:chunk, body}
+          :end -> {:end, ""}
+          {:error, type, message} -> {:error, WorkerAuth.error_plaintext(type, message)}
+        end
+
+      {:ok, bytes} =
+        WorkerAuth.seal_frame(
+          seal_key,
+          :answer,
+          call_id,
+          seq,
+          kind,
+          plaintext,
+          :crypto.strong_rand_bytes(12)
+        )
+
+      bytes
     end
 
     defp json(conn, status, answer, seal),

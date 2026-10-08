@@ -10,8 +10,8 @@ defmodule Sanctum.Tenancy do
   capabilities to their Context. It reads the user's membership rows: an
   athanor row grants that athanor; a platform row makes the caller a
   platform admin (`platform_admin: true`), which is a capability the
-  context carries, never a wider scope — every request works inside one
-  athanor.
+  context carries, never a wider scope and never a seat — every request
+  works inside one athanor, and only one a seat grants.
 
   There is no deployment "mode". A fresh install with no auth configured never
   reaches here (requests run as the unauthenticated public context). With
@@ -73,8 +73,7 @@ defmodule Sanctum.Tenancy do
   @doc """
   The athanors the context may work in — the rows behind the caller's own
   active memberships, and their own athanor. A platform admin sees their
-  own memberships like anyone else; opening another athanor is an explicit,
-  audited act (`Sanctum.Context.focus/2`), not a listing.
+  own memberships like anyone else, and works in no other athanor.
   """
   @spec list_athanors(Context.t()) :: [Sanctum.Tenancy.Athanors.athanor()]
   def list_athanors(%Context{user_id: user_id}) when is_binary(user_id) do
@@ -140,13 +139,12 @@ defmodule Sanctum.Tenancy do
   # Set capability and athanor from an already-loaded membership list;
   # answers the context and the chosen athanor's row.
   defp apply_membership(%Context{} = ctx, memberships, user) do
-    admin? = platform_admin?(memberships)
-    athanor = working_athanor(ctx, memberships, admin?, user)
+    athanor = working_athanor(ctx, memberships, user)
 
     {%{
        ctx
        | scope: :athanor,
-         platform_admin: admin?,
+         platform_admin: platform_admin?(memberships),
          athanor_id: athanor && athanor.id
      }, athanor}
   end
@@ -192,24 +190,18 @@ defmodule Sanctum.Tenancy do
 
   @doc """
   The membership row that authorizes `ctx`'s focus on `athanor`: the
-  person's active seat there, else — for a platform admin — their
-  platform row, else nil. `memberships` are the person's active rows.
+  person's active seat there, else nil. A platform row is never a focus
+  basis, the operator's included: the capability is over the instance,
+  not a seat in any athanor. `memberships` are the person's active rows.
   """
   @spec focus_basis(Context.t(), map() | nil, [map()]) :: String.t() | nil
   def focus_basis(_ctx, nil, _memberships), do: nil
 
-  def focus_basis(%Context{} = ctx, %{id: athanor_id}, memberships) do
-    seat =
-      Enum.find(memberships, fn
-        %{scope: "athanor", status: "active", athanor_id: ^athanor_id} -> true
-        _ -> false
-      end)
-
-    platform =
-      if ctx.platform_admin,
-        do: Enum.find(memberships, &(&1.scope == "platform" and &1.status == "active"))
-
-    case seat || platform do
+  def focus_basis(%Context{}, %{id: athanor_id}, memberships) do
+    case Enum.find(memberships, fn
+           %{scope: "athanor", status: "active", athanor_id: ^athanor_id} -> true
+           _ -> false
+         end) do
       %{id: id} -> id
       nil -> nil
     end
@@ -262,27 +254,16 @@ defmodule Sanctum.Tenancy do
 
   # The candidates in order of preference, then one read for their rows so
   # an archived athanor is skipped: the athanor the context already names
-  # (when a membership still grants it, or the caller is a platform admin who
-  # opened it deliberately), the person's own, and the first a membership
-  # grants.
-  defp working_athanor(%Context{} = ctx, memberships, admin?, user) do
+  # (when a membership still grants it), the person's own, and the first a
+  # membership grants. The capability keeps no athanor: an operator whose
+  # session names one they hold no seat in falls back like anyone else.
+  defp working_athanor(%Context{} = ctx, memberships, user) do
     named? = is_binary(ctx.athanor_id) and ctx.athanor_id != ""
-    granted? = named? and membership_grants?(memberships, ctx.athanor_id)
 
-    # An operator keeps an athanor no membership grants them — that is how
-    # `session.use` and an opened URL stay put across requests. `focus/2`
-    # audits the moment they open one; this audits every request that keeps
-    # it, so the record covers the session and not just its first act.
-    if named? and admin? and not granted? do
-      Sanctum.Telemetry.platform_context_event(%{
-        caller: :session_athanor,
-        user_id: ctx.user_id,
-        athanor_id: ctx.athanor_id,
-        auth_method: ctx.auth_method
-      })
-    end
-
-    current = if named? and (admin? or granted?), do: [ctx.athanor_id], else: []
+    current =
+      if named? and membership_grants?(memberships, ctx.athanor_id),
+        do: [ctx.athanor_id],
+        else: []
 
     personal =
       case user do
@@ -317,9 +298,10 @@ defmodule Sanctum.Tenancy do
   immediately: a denied user is dropped to unauthenticated, a revoked
   platform membership loses the capability, and a session pointing at an
   athanor the user no longer belongs to (or that was archived) is moved to
-  the broadest current membership. A user with no memberships and no own
-  athanor is dropped to an athanor-less context (the tenant gate then
-  rejects tenant-scoped routes).
+  their own athanor, else the first current membership — a platform admin
+  included, whose capability keeps no athanor. A user with no memberships
+  and no own athanor is dropped to an athanor-less context (the tenant
+  gate then rejects tenant-scoped routes).
 
   Cost: one `users` read and one `Members.list_by_user/1` query per restored
   request (both indexed). It trades those for immediate revocation instead

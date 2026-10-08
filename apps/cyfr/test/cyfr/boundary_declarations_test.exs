@@ -96,8 +96,9 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   @export_additions %{
     Arca => [
       {~w(ApiKeyStorage Athanors ConsentProofStorage ConsentStorage Doors FrameCredentials
-          Members PairedClients ProfileStorage ProviderCredentialStorage RegistryTokenStorage
-          SessionStorage ToolGrantStorage Users VaultStorage WebhookStorage),
+          InstanceEntries InstanceEntryUsage Members PairedClients ProfileStorage
+          ProviderCredentialStorage RegistryTokenStorage SessionStorage ToolGrantStorage Users
+          VaultStorage WebhookStorage),
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
       {~w(CarryActions DeviceCertificates DeviceCertifications DirectoryHeads IdentityAttempts
@@ -113,7 +114,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           Overlay PolicyLog ProvisioningClaims RateWindows RecordSink ScheduleOccurrences
           SecurityTransitions ServerMetaStorage Storage StorageProjectionChanges
           StorageProjectionRoots TenantTables ThreadStorage ThreadSubscriptionStorage
-          TurnStorage Usage WebhookDeliveryStorage),
+          TurnStorage Usage VaultDefaults WebhookDeliveryStorage),
        "the storage, lease, claim and cache facades the layers above call downward"},
       {~w(InstallationClaims),
        "the installation mode Sanctum installs and the first-person mint reads"},
@@ -131,7 +132,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           Door Door.Store Egress ExecutionStanding Namespace Network Notify
           Policy.Enforcement Provisioning Session SignIn Tenancy Tenancy.Athanors
           Tenancy.Members Tenancy.Users TinctureAuth ToolServerDigest Unauthorized
-          UnauthorizedError Vault.OAuthGrant VaultReader),
+          UnauthorizedError Vault Vault.OAuthGrant VaultReader),
        "the identity, authority, consent and vault entries the layers above call " <>
          "downward, each rostered for its callers in `Cyfr.Boundaries`' surface rows"},
       {~w(Consent.Components Grimoire Tenancy.Caps),
@@ -143,7 +144,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(Providers.Assertion Providers.Confirmation Providers.Pairing Providers.Passkey
           Providers.Person),
        "the person, pairing, passkey and confirmation operations, declared here and " <>
-         "driven by the host's suites through their handlers"}
+         "driven by the host's suites through their handlers"},
+      {~w(Consent.Accounts),
+       "the assistant's read of which named accounts an app's own ingress binds and " <>
+         "which entry a name resolves to, never a value, never a write"}
     ],
     Grimoire => [
       {~w(Catalog Supervisor), "the composition root loads the table and starts the gate"},

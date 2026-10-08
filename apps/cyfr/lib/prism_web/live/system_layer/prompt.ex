@@ -22,16 +22,43 @@ defmodule PrismWeb.SystemLayer.Prompt do
       `profile.plan` answers it (`plan_token`, `expected_consent_revision`,
       the needs and the vault entries that can meet them, its rows), the
       `preview` of the decisions — a `Prima.ConsentPreview` (`v`, `rows`,
-      `origins`, `commit_digest`) with the `proof` a commit presents, or
+      `origins`, `commit_digest`, and `removed`, the head's bindings the
+      grant would remove) with the `proof` a commit presents, or
       `nil` for a plan whose closure is `unresolved`, which has nothing to
-      preview or commit — and the `decisions` payload (`%{"ref" => ref,
-      "bindings" => [...]}`, with the `origins`, `subset` and `label` it
-      names), committed through `profile.commit`
+      preview or commit — the `decisions` payload (`%{"ref" => ref,
+      "bindings" => [...]}`, with the `selections`, `origins`, `subset` and
+      `label` it names), committed through `profile.commit`, and optionally
+      `session_expires_at`, when the person's session ends (RFC 3339, as
+      `session.whoami` answers it), which the sheet's "this session"
+      lifetime is held to, `suggestion_refused`, the home's sentence
+      when it refused to preview the plan's suggestions and the grant
+      opened with nothing bound, and `account`, the named account the
+      grant opens on: exactly its `name` (an account name,
+      `Prima.Authority.Blob.valid_account_name?/1`) and the `dep`, `from`
+      and `need` it sits on, each nil or a non-empty string
       (`PrismWeb.SystemLayer.grant_prompt/4` builds it);
     * `:credential_entry` — `name`, the vault entry to create, and
       optionally `field`, the name its one field is stored under
       (`API_KEY` when absent), created through `vault.create` as an `api_key`
-      entry;
+      entry with the destination and disclosure the person enters in the
+      prompt's form. A prompt a grant's sheet raises for a need ("Connect
+      your <provider> account") also names the `athanor_id` its grant was
+      planned in, which the entry is made in or not at all, the need's
+      `provider`, the `hosts` and `paths` it declares and whether the
+      component reads the value itself (`disclose_needed`), which the form
+      is prefilled from,
+      and `return`, the grant it goes back to: `%{prompt, need}` for a need
+      of the app, `%{prompt, from, dep, need}` for a dependency's. Any
+      other prompt names none of them, and nothing is prefilled.
+      `target` says where the value goes: `:vault` (the default when
+      absent), the athanor's own vault, as above; or `:instance`, an
+      instance entry the platform administrator's card collected
+      everything else of, so the prompt asks for the value alone. An
+      `:instance` subject names the `operation`, `:create` or `:rotate`,
+      and the card's `arguments` for `instance_entry.create` (no
+      `fields`: the value is the one thing the prompt adds, under `field`)
+      or `instance_entry.rotate` (the `entry_id` and the
+      `expected_payload_rev` the card read), and none of the prefill keys;
     * `:unlock` — optionally `name`, the vault entry it concerns;
     * `:sign_in` — optionally `message`, a sentence saying why;
     * `:safe_mode` — a `Prism.SafeMode` value;
@@ -66,6 +93,13 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   @default_field "API_KEY"
   @field_name ~r/\A[A-Za-z_][A-Za-z0-9_]{0,127}\z/
+  @prefill_keys [:athanor_id, :provider, :hosts, :paths, :disclose_needed, :return]
+  @instance_keys [:target, :operation, :arguments]
+  @instance_operations [:create, :rotate]
+  # What the card collects for an instance entry's creation: everything of
+  # `instance_entry.create` but the value, which the prompt alone takes.
+  @instance_create_args ~w(name kind provider_hint destination audience members
+                           component_policy person_daily total_daily)
 
   @methods ~w(passkey oidc email)
 
@@ -177,23 +211,57 @@ defmodule PrismWeb.SystemLayer.Prompt do
            plan: %{} = plan,
            preview: preview,
            decisions: decisions
-         }
+         } = subject
        )
        when is_binary(ref) and ref != "" and is_binary(athanor_id) and athanor_id != "" do
-    if plan?(plan) and preview?(preview, plan) and decisions?(decisions, ref),
-      do:
-        {:ok,
-         %{ref: ref, athanor_id: athanor_id, plan: plan, preview: preview, decisions: decisions}},
-      else: {:error, :invalid_prompt}
+    session_end = Map.get(subject, :session_expires_at)
+    refused = Map.get(subject, :suggestion_refused)
+    account = Map.get(subject, :account)
+
+    if plan?(plan) and preview?(preview, plan) and decisions?(decisions, ref) and
+         instant?(session_end) and sentence?(refused) and account?(account),
+       do:
+         {:ok,
+          %{ref: ref, athanor_id: athanor_id, plan: plan, preview: preview, decisions: decisions}
+          |> Prima.MapUtil.put_present(:session_expires_at, session_end)
+          |> Prima.MapUtil.put_present(:suggestion_refused, refused)
+          |> Prima.MapUtil.put_present(:account, account)},
+       else: {:error, :invalid_prompt}
+  end
+
+  # An instance entry's value: the card's arguments for the operation it
+  # names, and nothing a grant prefills.
+  defp subject(:credential_entry, %{name: name, target: :instance} = subject)
+       when is_binary(name) and name != "" do
+    field = Map.get(subject, :field, @default_field)
+    operation = Map.get(subject, :operation)
+    arguments = Map.get(subject, :arguments)
+
+    if map_size(Map.drop(subject, [:name, :field | @instance_keys])) == 0 and is_binary(field) and
+         Regex.match?(@field_name, field) and operation in @instance_operations and
+         instance_arguments?(operation, arguments),
+       do:
+         {:ok,
+          %{
+            name: name,
+            field: field,
+            target: :instance,
+            operation: operation,
+            arguments: arguments
+          }},
+       else: {:error, :invalid_prompt}
   end
 
   defp subject(:credential_entry, %{name: name} = subject)
        when is_binary(name) and name != "" do
     field = Map.get(subject, :field, @default_field)
+    prefill = Map.take(subject, @prefill_keys)
+    target = Map.take(subject, [:target])
 
-    if map_size(Map.drop(subject, [:name, :field])) == 0 and is_binary(field) and
-         Regex.match?(@field_name, field),
-       do: {:ok, %{name: name, field: field}},
+    if map_size(Map.drop(subject, [:name, :field, :target | @prefill_keys])) == 0 and
+         is_binary(field) and Regex.match?(@field_name, field) and prefill?(prefill) and
+         target in [%{}, %{target: :vault}],
+       do: {:ok, %{name: name, field: field} |> Map.merge(target) |> Map.merge(prefill)},
        else: {:error, :invalid_prompt}
   end
 
@@ -242,6 +310,78 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   defp subject(_kind, _subject), do: {:error, :invalid_prompt}
 
+  # A creation names only what `instance_entry.create` takes beside the
+  # value; a rotation names the entry and the revision the card read.
+  # Neither carries a value.
+  defp instance_arguments?(:create, %{"name" => name} = arguments) when is_binary(name),
+    do: Enum.all?(Map.keys(arguments), &(&1 in @instance_create_args))
+
+  defp instance_arguments?(:rotate, %{"entry_id" => id, "expected_payload_rev" => rev} = args)
+       when is_binary(id) and id != "" and is_integer(rev) and rev >= 0,
+       do: map_size(args) == 2
+
+  defp instance_arguments?(_operation, _arguments), do: false
+
+  # What a credential entry raised for a need is prefilled from, and the
+  # grant it returns to: all of them or none.
+  defp prefill?(prefill) when map_size(prefill) == 0, do: true
+
+  defp prefill?(%{
+         athanor_id: athanor_id,
+         provider: provider,
+         hosts: hosts,
+         paths: paths,
+         disclose_needed: disclose,
+         return: return
+       })
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(provider) and provider != "" and
+              is_boolean(disclose) do
+    words?(hosts) and words?(paths) and return?(return)
+  end
+
+  defp prefill?(_partial), do: false
+
+  defp words?(list), do: is_list(list) and Enum.all?(list, &(is_binary(&1) and &1 != ""))
+
+  defp return?(%{prompt: prompt, need: need} = return)
+       when is_binary(prompt) and prompt != "" and is_binary(need) and need != "" do
+    case Map.drop(return, [:prompt, :need]) do
+      empty when map_size(empty) == 0 ->
+        true
+
+      %{from: from, dep: dep} = dep_return when map_size(dep_return) == 2 ->
+        ref?(from) and ref?(dep)
+
+      _other ->
+        false
+    end
+  end
+
+  defp return?(_return), do: false
+
+  defp ref?(ref), do: is_binary(ref) and ref != ""
+
+  # The named account a grant opens on: its name, and where it sits, each
+  # place absent (nil) or named.
+  defp account?(nil), do: true
+
+  defp account?(%{name: name, dep: dep, from: from, need: need} = account)
+       when map_size(account) == 4 do
+    Prima.Authority.Blob.valid_account_name?(name) and Enum.all?([dep, from, need], &place?/1)
+  end
+
+  defp account?(_account), do: false
+
+  defp place?(nil), do: true
+  defp place?(place), do: ref?(place)
+
+  defp sentence?(nil), do: true
+  defp sentence?(text), do: is_binary(text) and text != ""
+
+  defp instant?(nil), do: true
+  defp instant?(at) when is_binary(at), do: match?({:ok, _at, _offset}, DateTime.from_iso8601(at))
+  defp instant?(_at), do: false
+
   # A confirmation's fields beyond its ref, operation and expiry: absent,
   # or the shape `confirmation.pending` answers.
   defp optional_field?({_key, nil}), do: true
@@ -279,12 +419,23 @@ defmodule PrismWeb.SystemLayer.Prompt do
   defp plan?(_plan), do: false
 
   # The preview a grant prompt opens with: a `Prima.ConsentPreview`, held
-  # to its typed rows, with the proof the commit presents beside it. A
-  # plan whose closure is unresolved has none, and offers nothing to
-  # commit.
+  # to its typed rows and the head's bindings it removes, with the proof
+  # the commit presents beside it. A preview that does not say what it
+  # removes is refused, never read as removing nothing. A plan whose
+  # closure is unresolved has none, and offers nothing to commit.
   defp preview?(nil, %{unresolved: %{}}), do: true
 
-  defp preview?(%{v: v, rows: rows, origins: origins, commit_digest: digest, proof: proof}, _plan)
+  defp preview?(
+         %{
+           v: v,
+           rows: rows,
+           origins: origins,
+           commit_digest: digest,
+           removed: removed,
+           proof: proof
+         },
+         _plan
+       )
        when is_binary(proof) and proof != "" do
     match?(
       {:ok, %Prima.ConsentPreview{}},
@@ -292,7 +443,8 @@ defmodule PrismWeb.SystemLayer.Prompt do
         "v" => v,
         "rows" => rows,
         "origins" => origins,
-        "commit_digest" => digest
+        "commit_digest" => digest,
+        "removed" => removed
       })
     )
   end

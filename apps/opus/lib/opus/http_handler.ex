@@ -32,6 +32,15 @@ defmodule Opus.HttpHandler do
     came from, and CYFR refuses a hop to another origin; were one pinned,
     it would go without any header that carries a credential
     (`Prima.Network.strip_credentials/1`)
+  - **Attached requests**: a request naming a `connection` carries no
+    credential of its own and asks for no pin. CYFR makes it, attaching
+    the credential its need is bound to, and its answer comes back sealed
+    for the runner alone (`Opus.Relay.Runner.attached_fetch/4`), so no
+    credential enters the runner. CYFR's refusal of one reaches the guest
+    as CYFR's own type and sentence; an answer lost, or one whose effect
+    is unknown, leaves the runner unclean, never reused. A redirect it
+    answers is answered as given, and the guest's next request is another
+    attached request, checked afresh
 
   ## Architecture
 
@@ -251,14 +260,24 @@ defmodule Opus.HttpHandler do
   end
 
   @doc false
-  # Send a validated request through the runner's relay, naming its pin:
-  # its method, its path and query, its headers and its body, a multipart
-  # body encoded here. Answers the relay and the fetch's ref, or a refusal
-  # for a request the relay cannot carry. Shared with
-  # `Opus.HttpStreamHandler`.
+  # Send a validated request through the runner's relay: an attached one
+  # as the request CYFR makes, its answer opened under the attempt's keys;
+  # any other naming its pin, with its method, its path and query, its
+  # headers and its body, a multipart body encoded here. Answers the relay
+  # and the fetch's ref, or a refusal for a request the relay cannot
+  # carry. Shared with `Opus.HttpStreamHandler`.
   @spec relay_fetch(HostClient.t(), map()) ::
           {:ok, GenServer.server(), non_neg_integer()} | {:error, atom()}
   def relay_fetch(%HostClient{relay: nil}, _request), do: {:error, :no_relay}
+
+  def relay_fetch(%HostClient{relay: relay} = host, %{attached: attached}) do
+    keys = %{call: host.call_key, seal: host.seal_key}
+
+    case Opus.Relay.Runner.attached_fetch(relay, host.attempt, attached, keys) do
+      {:ok, ref} -> {:ok, relay, ref}
+      {:error, _reason} -> {:error, :unsendable}
+    end
+  end
 
   def relay_fetch(%HostClient{relay: relay, attempt: attempt}, request) do
     uri = URI.parse(request.url)
@@ -282,8 +301,27 @@ defmodule Opus.HttpHandler do
 
   @doc false
   # The guest error a fetch that ended early answers, by the relay's code.
-  # Shared with `Opus.HttpStreamHandler`.
-  @spec fetch_error(atom() | String.t(), Limits.t()) :: {atom(), String.t()}
+  # CYFR's refusal of an attached request is its own type and sentence, as
+  # given. Shared with `Opus.HttpStreamHandler`.
+  @spec fetch_error(atom() | String.t() | {:guest_error, String.t(), String.t()}, Limits.t()) ::
+          {atom() | String.t(), String.t()}
+  def fetch_error({:guest_error, type, message}, _limits)
+      when is_binary(type) and is_binary(message),
+      do: {type, message}
+
+  # An attached request whose answer was lost, or never reached the
+  # worker service, leaves what CYFR did unknown, as a lost host call
+  # does: the subtree's runner is never reused.
+  def fetch_error(code, limits) when code in ["lost", "uncertain"] do
+    Opus.Subtree.unclean({:attached_fetch, String.to_existing_atom(code)})
+    fetch_error(:http_error, limits)
+  end
+
+  # An attached answer that does not read, or ends before its end, hands
+  # the guest nothing of it.
+  def fetch_error(code, limits) when code in ["bad_frame", "truncated"],
+    do: fetch_error(:http_error, limits)
+
   def fetch_error("timeout", limits),
     do: {:timeout, "HTTP request timed out after #{request_timeout(limits)}ms"}
 
@@ -380,10 +418,13 @@ defmodule Opus.HttpHandler do
     end
   end
 
+  @doc false
   # The request's headers and body as the relay carries them: a multipart
   # request's parts encoded as `multipart/form-data` here, with the
-  # boundary in its content type.
-  defp wire_body(%{multipart: parts} = request) when is_list(parts) do
+  # boundary in its content type. Shared with `Opus.HttpRequestValidation`,
+  # which builds an attached request's body with it.
+  @spec wire_body(map()) :: {[{String.t(), String.t()}], binary()}
+  def wire_body(%{multipart: parts} = request) when is_list(parts) do
     boundary = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
 
     body =
@@ -402,7 +443,7 @@ defmodule Opus.HttpHandler do
     {headers, body}
   end
 
-  defp wire_body(request), do: {request.headers, request.body}
+  def wire_body(request), do: {request.headers, request.body}
 
   defp multipart_part(%{name: name, data: data} = part, boundary) do
     filename = if part.filename, do: ~s(; filename="#{quoted(part.filename)}"), else: ""
@@ -434,7 +475,10 @@ defmodule Opus.HttpHandler do
   defp quoted(text), do: text |> to_string() |> String.replace(~s("), "%22")
 
   # A redirecting answer is the guest's to follow: where it points is the
-  # attempt's next hop from this request's pin.
+  # attempt's next hop from this request's pin. An attached request has no
+  # pin: the guest's next request is another one, checked afresh.
+  defp note_redirect(_host, %{attached: _attached}, _status, _headers), do: :ok
+
   defp note_redirect(host, request, status, headers)
        when status in [301, 302, 303, 307, 308] do
     case Enum.find(headers, fn {name, _value} -> String.downcase(name) == "location" end) do

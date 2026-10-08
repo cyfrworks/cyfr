@@ -666,7 +666,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, :person_athanor} = Members.remove_member(personal, user_id: alice)
   end
 
-  test "an archived athanor refuses every mutation by id, for a member and for an operator; reads and unarchive still work",
+  test "an archived athanor refuses every mutation by id, for a member and for an operator; a member reads and unarchives it, an operator with no seat reads its public facts alone",
        %{alice: alice, bob: bob, ops: ops, ctx: ctx, n: n} do
     a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
     assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Closed #{n}"})
@@ -693,16 +693,43 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     {:ok, unchanged} = Athanors.get(group.id)
     assert unchanged.name == "Closed #{n}"
 
-    # Reads still answer, for the member and for the operator.
-    assert {:ok, %{status: "archived"}} =
+    # Reads still answer the member, whole.
+    assert {:ok, %{status: "archived", member_count: 1}} =
              call(a, "athanor", %{"action" => "get", "athanor" => group.id})
 
     assert {:ok, %{members: [_]}} =
-             call(operator, "member", %{"action" => "list", "athanor" => group.id})
+             call(a, "member", %{"action" => "list", "athanor" => group.id})
 
-    # Restore — by a member, and by an operator who was never a member.
+    # An operator who was never a member reads the archived row's public
+    # facts through the platform scope, and nothing the athanor holds: not
+    # its members, and no reopening it.
+    assert {:ok, facts} = call(operator, "athanor", %{"action" => "get", "athanor" => group.id})
+    assert Map.keys(facts) |> Enum.sort() == [:archived_at, :id, :name, :status]
+
+    assert %{id: id, name: name, status: "archived", archived_at: %DateTime{}} = facts
+    assert {id, name} == {group.id, "Closed #{n}"}
+
+    for {tool, action} <- [{"member", "list"}, {"athanor", "unarchive"}] do
+      assert {:error, msg} = call(operator, tool, %{"action" => action, "athanor" => group.id})
+      assert Error.render(msg) =~ "Not a member", "#{tool}.#{action} admitted a seatless operator"
+    end
+
+    assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
+
+    # A member restores it.
     assert {:ok, %{status: "active"}} =
-             call(operator, "athanor", %{"action" => "unarchive", "athanor" => group.id})
+             call(a, "athanor", %{"action" => "unarchive", "athanor" => group.id})
+
+    # Open again, it is still its members' alone: an operator with no seat
+    # reads nothing of it and cannot archive it.
+    for action <- ["get", "archive"] do
+      assert {:error, msg} =
+               call(operator, "athanor", %{"action" => action, "athanor" => group.id})
+
+      assert Error.render(msg) =~ "Not a member", "athanor.#{action} admitted a seatless operator"
+    end
+
+    assert {:ok, %{status: "active"}} = Athanors.get(group.id)
 
     assert {:ok, %{name: "Reopened"}} =
              call(a, "athanor", %{
@@ -712,7 +739,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
              })
   end
 
-  test "a denied person's own athanor is reopened by allow at the door, not by unarchive",
+  test "a denied person's own athanor is archived by deny at the door and reopened by allow, never by an operator's unarchive",
        %{alice: alice, ops: ops, ctx: ctx, n: n} do
     {:ok, personal} =
       Athanors.create(%{
@@ -723,22 +750,101 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
         created_by: alice
       })
 
+    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: personal.id)
     {:ok, user} = Users.get(alice)
-    {:ok, user} = Users.set_personal_athanor(user, personal.id)
-    {:ok, _} = Users.deny(user)
+    {:ok, _} = Users.set_personal_athanor(user, personal.id)
+
+    # The door verbs are the operator's platform-scope acts: they run under
+    # the server's own transitions and need no seat in the athanor they
+    # close and reopen.
+    operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    email = "alice#{n}@example.com"
+
+    assert {:ok, %{effect: "deny", ejected: 1}} =
+             call(operator, "door", %{"action" => "deny", "value" => email})
+
+    assert {:ok, %{status: "denied"}} = Users.get(alice)
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
-    operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
-
+    # The operator holds no seat in it, so unarchive refuses them as it
+    # refuses any non-member; its public facts are theirs to read.
     assert {:error, msg} =
              call(operator, "athanor", %{"action" => "unarchive", "athanor" => personal.id})
 
-    assert Error.render(msg) =~ "denied at the door"
+    assert Error.render(msg) =~ "Not a member"
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
-    {:ok, user} = Users.get(alice)
-    {:ok, _} = Users.allow(user)
+    assert {:ok, %{id: id, status: "archived"}} =
+             call(operator, "athanor", %{"action" => "get", "athanor" => personal.id})
+
+    assert id == personal.id
+
+    # Allowing her again at the door reopens it and seats her in it.
+    assert {:ok, _} = call(operator, "door", %{"action" => "allow", "value" => email})
+    assert {:ok, %{status: "active"}} = Users.get(alice)
     assert {:ok, %{status: "active"}} = Athanors.get(personal.id)
+    assert Members.member?(alice, personal.id)
+  end
+
+  test "purge and destroy are platform-scope: an operator with no seat reclaims an archived group, and a member who is not an operator is refused at admission",
+       %{alice: alice, ops: ops, ctx: ctx, n: n} do
+    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Reclaim #{n}"})
+    operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    refute Members.member?(ops, group.id)
+
+    # Still open, it is not the operator's to reclaim: purge waits for its
+    # archive.
+    assert {:error, msg} =
+             call(operator, "athanor", %{"action" => "purge", "athanor" => group.id})
+
+    assert Error.render(msg) =~ "archive it first"
+
+    assert {:ok, %{status: "archived"}} =
+             call(a, "athanor", %{"action" => "archive", "athanor" => group.id})
+
+    # A member who is not an operator is refused by the gate, before the
+    # handler runs, for both verbs.
+    for action <- ["purge", "destroy"] do
+      assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
+               call(a, "athanor", %{"action" => action, "athanor" => group.id})
+    end
+
+    # The operator, seated nowhere in it, purges by slug and then destroys
+    # by id: neither focuses the athanor, so no seat is asked for.
+    assert {:ok, %{"purged" => true, id: purged}} =
+             call(operator, "athanor", %{"action" => "purge", "athanor" => group.slug})
+
+    assert purged == group.id
+
+    assert {:ok, %{"destroyed" => true, "rows_deleted" => rows}} =
+             call(operator, "athanor", %{"action" => "destroy", "athanor" => group.id})
+
+    assert rows > 0
+
+    # Only the archived tombstone survives, and nobody sits in it.
+    assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
+    refute Members.member?(alice, group.id)
+
+    # A person's own athanor is not destroyed here, by anyone.
+    {:ok, personal} =
+      Athanors.create(%{
+        kind: "person",
+        name: "Alice",
+        slug: "alice-own-#{n}",
+        owner_user_id: alice,
+        created_by: alice
+      })
+
+    {:ok, user} = Users.get(alice)
+    {:ok, _} = Users.set_personal_athanor(user, personal.id)
+    {:ok, _} = Athanors.archive(personal, force: true)
+
+    assert {:error, msg} =
+             call(operator, "athanor", %{"action" => "destroy", "athanor" => personal.id})
+
+    assert Error.render(msg) =~ "own athanor is not destroyed here"
+    assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
   end
 
   describe "athanor.pair" do
@@ -808,7 +914,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   describe "Sanctum.Providers.Athanor.resolve/3 returns a focused context" do
     # Every downstream act (provisioning above all) must run at
     # `scope: :athanor` with the resolved athanor bound — a platform
-    # admin's wider scope stops at resolve, not in the handler.
+    # context's wider scope stops at resolve, not in the handler, and only
+    # a seat gets it there.
     test "a member's context is rebound to the named athanor",
          %{alice: alice, ctx: ctx, n: n} do
       a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
@@ -822,7 +929,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
       assert focused.scope == :athanor
     end
 
-    test "a platform admin's platform scope narrows to the athanor",
+    test "a platform context narrows to an athanor its person is seated in, and opens no other",
          %{alice: alice, ops: ops, ctx: ctx, n: n} do
       a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
       assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Wide #{n}"})
@@ -834,6 +941,12 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
           auth_method: :oidc,
           platform_admin: true
         )
+
+      # No seat: the platform scope and the capability open nothing.
+      assert {:error, {:invalid_argument, "Not a member of that athanor"}} =
+               Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => group.id})
+
+      {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: group.id)
 
       assert {:ok, athanor, focused} =
                Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => group.id})

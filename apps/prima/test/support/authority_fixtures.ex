@@ -9,8 +9,8 @@ defmodule Prima.Test.AuthorityFixtures do
   Graph:
 
       daily-report ─@ingress→ (tools: storage.read, tool server gh)
-      daily-report ─|source→ supabase (vault-source, egress, storage tools)
-      daily-report ─|dest──→ supabase (vault-dest)
+      daily-report ─|source→ supabase (vault-source, attached, egress, storage tools)
+      daily-report ─|dest──→ supabase (vault-dest, disclose-only)
       daily-report ────────→ ta       (invocation-only, unnamed slot)
       supabase ────────────→ http     (privileged onward edge)
   """
@@ -27,6 +27,37 @@ defmodule Prima.Test.AuthorityFixtures do
   def formula_ref, do: @formula
   def catalyst_ref, do: @catalyst
   def server_digest, do: @server_digest
+
+  @doc "A destination's wire map: `hosts`, over https."
+  def destination_map(hosts \\ ["prod.supabase.co"]), do: %{"hosts" => hosts, "scheme" => "https"}
+
+  @doc "An attach rule's wire map: the bearer header."
+  def attach_map,
+    do: %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
+
+  @doc """
+  A bound vault resource's wire map, sitting on `edge_key` of `node_ref`:
+  an athanor entry with its binding key for that place, the default slot
+  unless `:name` names an account. Options: `:name`, `:scope`,
+  `:destination`, `:attach` (absent: disclose-only), `:projection`,
+  `:lender`, `:named`.
+  """
+  def bound_vault(node_ref, edge_key, entry_id, digest, opts \\ []) do
+    %{
+      "entry_id" => entry_id,
+      "binding_digest" => digest,
+      "scope" => Keyword.get(opts, :scope, "athanor"),
+      "binding_key" => Blob.binding_key(node_ref, edge_key, Keyword.get(opts, :name)),
+      "destination" => Keyword.get(opts, :destination, destination_map())
+    }
+    |> put_present("attach", Keyword.get(opts, :attach))
+    |> put_present("projection", Keyword.get(opts, :projection))
+    |> put_present("lender", Keyword.get(opts, :lender))
+    |> put_present("named", Keyword.get(opts, :named))
+  end
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   def limits_map(overrides \\ %{}) do
     Map.merge(
@@ -61,20 +92,19 @@ defmodule Prima.Test.AuthorityFixtures do
               ]
             },
             "#{@catalyst}|source" => %{
-              "vault" => %{
-                "entry_id" => "vault-source",
-                "binding_digest" => "sha256:bind-source",
-                "projection" => %{"fields" => ["url", "anon_key"]}
-              },
+              "vault" =>
+                bound_vault(@formula, "#{@catalyst}|source", "vault-source", "sha256:bind-source",
+                  attach: attach_map(),
+                  projection: %{"fields" => ["url", "anon_key"]}
+                ),
               "egress" => %{"domains" => ["prod.supabase.co"], "schemes" => ["https"]},
               "tools" => ["storage.read", "storage.write"]
             },
             "#{@catalyst}|dest" => %{
-              "vault" => %{
-                "entry_id" => "vault-dest",
-                "binding_digest" => "sha256:bind-dest",
-                "projection" => %{"fields" => ["url", "service_key"]}
-              }
+              "vault" =>
+                bound_vault(@formula, "#{@catalyst}|dest", "vault-dest", "sha256:bind-dest",
+                  projection: %{"fields" => ["url", "service_key"]}
+                )
             },
             @reagent => %{}
           }
@@ -135,15 +165,22 @@ defmodule Prima.Test.AuthorityFixtures do
     auth
   end
 
-  @doc "An invoke target with resolver-supplied fields defaulted."
+  @doc """
+  An invoke target with resolver-supplied fields defaulted, naming the
+  account `:connection` when given.
+  """
   def invoke(reference, opts \\ []) do
-    {:invoke,
-     %{
-       reference: reference,
-       need: Keyword.get(opts, :need),
-       activation_digest: Keyword.get(opts, :activation_digest),
-       declared_needs: Keyword.get(opts, :declared_needs, [])
-     }}
+    target = %{
+      reference: reference,
+      need: Keyword.get(opts, :need),
+      activation_digest: Keyword.get(opts, :activation_digest),
+      declared_needs: Keyword.get(opts, :declared_needs, [])
+    }
+
+    case Keyword.fetch(opts, :connection) do
+      {:ok, connection} -> {:invoke, Map.put(target, :connection, connection)}
+      :error -> {:invoke, target}
+    end
   end
 
   @doc "The formula's declared needs in the fixture manifest."

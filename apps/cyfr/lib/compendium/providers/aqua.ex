@@ -393,47 +393,52 @@ defmodule Compendium.Providers.Aqua do
       }
     ]
 
-    agent_guides =
-      case AquaAgent.list(ctx) do
-        {:ok, agents, _errors} ->
-          # The detail flag widens the projection of the already-loaded agents.
-          detail? = args["detail"] == true
-          # Disabled roles are out of the closet: the model's roster never
-          # holds them. A page that puts them back asks for them by flag,
-          # in the same read, rather than by a `get` per file.
-          include_disabled? = args["include_disabled"] == true
+    # A list the store could not give, or a soul it could not read, is
+    # refused, a typed refusal as it came and any other answer as the
+    # file's other reads refuse it (`passthrough_or_unavailable/2`):
+    # answering the guides without the agents the store holds would read
+    # as an athanor with no assistant. A role that could not be read stays
+    # out of the closet, as one the soul cannot clone into.
+    with {:ok, agents, errors} <- AquaAgent.list(ctx),
+         :ok <- soul_read(errors) do
+      # The detail flag widens the projection of the already-loaded agents.
+      detail? = args["detail"] == true
+      # Disabled roles are out of the closet: the model's roster never
+      # holds them. A page that puts them back asks for them by flag,
+      # in the same read, rather than by a `get` per file.
+      include_disabled? = args["include_disabled"] == true
 
-          agents
-          |> Enum.reject(&(&1.disabled and not include_disabled?))
-          |> Enum.map(fn agent ->
-            base = %{
-              name: agent.name,
-              title: agent.title,
-              type: AquaAgent.type_of(agent),
-              description: agent.description
-            }
+      agent_guides =
+        agents
+        |> Enum.reject(&(&1.disabled and not include_disabled?))
+        |> Enum.map(fn agent ->
+          base = %{
+            name: agent.name,
+            title: agent.title,
+            type: AquaAgent.type_of(agent),
+            description: agent.description
+          }
 
-            if detail? do
-              Map.merge(base, %{
-                model: agent.model,
-                catalyst_ref: agent.catalyst_ref,
-                tool_policy: agent.tool_policy,
-                content: agent.prompt,
-                disabled: agent.disabled
-              })
-            else
-              base
-            end
-          end)
+          if detail? do
+            Map.merge(base, %{
+              model: agent.model,
+              catalyst_ref: agent.catalyst_ref,
+              tool_policy: agent.tool_policy,
+              content: agent.prompt,
+              disabled: agent.disabled
+            })
+          else
+            base
+          end
+        end)
 
-        _ ->
-          []
-      end
+      # The soul first, then the roles, then the guides.
+      all = agent_guides ++ doc_guides
 
-    # The soul first, then the roles, then the guides.
-    all = agent_guides ++ doc_guides
-
-    {:ok, %{guides: all, count: length(all)}}
+      {:ok, %{guides: all, count: length(all)}}
+    else
+      {:error, reason} -> passthrough_or_unavailable(reason, "aqua.list")
+    end
   end
 
   # --- get ---
@@ -1112,6 +1117,16 @@ defmodule Compendium.Providers.Aqua do
            content,
            "\n"
          ])}
+    end
+  end
+
+  # The soul's own read, out of the list's per-agent errors: a soul whose
+  # file the store could not give, or which does not parse, is refused
+  # with that error.
+  defp soul_read(errors) do
+    case List.keyfind(errors, AquaPath.soul_name(), 0) do
+      {_soul, reason} -> {:error, reason}
+      nil -> :ok
     end
   end
 

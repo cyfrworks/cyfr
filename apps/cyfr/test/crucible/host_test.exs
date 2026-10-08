@@ -21,7 +21,11 @@ defmodule Crucible.HostTest do
   Every call of `tests/fixtures/host_api.json` is sent with its body read
   as the vector writes it, bound to a live attempt, and its answer is
   written as the vector writes answers: the wire's version first, and the
-  vector's answer or one of the refusals it lists.
+  vector's answer or one of the refusals it lists. Its connection cases are
+  sent in order by one formula attempt and answered as the vector answers
+  them: a child naming no account is admitted on its edge's default, one
+  naming an account the edge lacks is refused, and a child key repeated
+  naming another connection than its child's is refused `invalid_request`.
   """
 
   use ExUnit.Case, async: false
@@ -30,6 +34,7 @@ defmodule Crucible.HostTest do
   import ExUnit.CaptureLog
 
   alias Prima.{Assignment, PinnedTarget, WorkerWire}
+  alias Prima.Authority.Blob
   alias Crucible.{Close, Dispatch, Keys}
   alias Cyfr.Test.AttemptFixtures
 
@@ -836,6 +841,144 @@ defmodule Crucible.HostTest do
     end
   end
 
+  describe "an attached request" do
+    @tag :capture_log
+    test "a connection the node's edge does not bind is refused before admission, naming its call id" do
+      [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+      %{"v" => 1, "op" => "attached_fetch", "args" => args} = Jason.decode!(vector["body"])
+      body = :attached_fetch |> WorkerWire.request_body(args) |> Jason.encode!()
+      test_pid = self()
+
+      emit = fn frame ->
+        send(test_pid, {:frame, frame})
+        :ok
+      end
+
+      answer =
+        fixture |> AttemptFixtures.header(body) |> Crucible.Host.call(body) |> Jason.decode!()
+
+      assert answer == %{
+               "v" => 1,
+               "error" => "guest_error",
+               "type" => "connection_not_granted",
+               "message" => Prima.Refusal.message(:connection_not_granted),
+               "call_id" => args["call_id"]
+             }
+
+      # The vector's refusal is the one the host answers, and no attached
+      # request is refused as anything not yet built.
+      [listed] = Enum.filter(vector["refusals"], &(&1["answer"] =~ "connection_not_granted"))
+      assert Jason.decode!(listed["answer"]) == answer
+      refute Enum.any?(vector["refusals"], &(&1["answer"] =~ "attach_unavailable"))
+
+      {:ok, request} = Prima.AttachedRequest.read(args)
+      caller = AttemptFixtures.caller(fixture)
+
+      assert {:error, {:guest_error, "connection_not_granted", _sentence}} =
+               Crucible.Host.attached_fetch(caller, request, emit)
+
+      refute_received {:frame, _}
+      assert row(fixture).status == "running"
+
+      # Each refusal is a recorded denial of the attempt's component, naming
+      # no URL.
+      {:ok, rows} = Arca.PolicyLog.list(athanor_id: fixture.athanor_id, limit: 100)
+      denials = Enum.filter(rows, &(&1.component_ref == fixture.component_ref))
+      assert [_, _] = denials
+
+      for denial <- denials do
+        assert denial.decision == "denied"
+        assert denial.decision_reason =~ "attached: "
+        refute denial.decision_reason =~ args["url"]
+      end
+    end
+
+    @tag :capture_log
+    test "a request-supplied policy or provenance fact does not read, and another member's is lost" do
+      [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+      %{"args" => args} = Jason.decode!(vector["body"])
+
+      # What decides is host state; a request naming a policy, a digest or
+      # a node of its own is no attached request.
+      for {member, value} <- [
+            {"component_policy", "any"},
+            {"activation_digest", "sha256:seed-openai"},
+            {"node_ref", "catalyst:local.openai:1.4.0"}
+          ] do
+        body =
+          :attached_fetch
+          |> WorkerWire.request_body(Map.put(args, member, value))
+          |> Jason.encode!()
+
+        assert %{"error" => "guest_error", "type" => "invalid_request", "call_id" => id} =
+                 fixture
+                 |> AttemptFixtures.header(body)
+                 |> Crucible.Host.call(body)
+                 |> Jason.decode!()
+
+        assert id == args["call_id"]
+      end
+
+      # A control plane that is not the member the call is addressed to
+      # answers it as every host call: lost, with nothing decided.
+      body = :attached_fetch |> WorkerWire.request_body(args) |> Jason.encode!()
+
+      assert %{"v" => 1, "error" => "lost"} =
+               fixture
+               |> AttemptFixtures.header(body, member: "cyfr@10.0.0.9#boot_another")
+               |> Crucible.Host.call(body)
+               |> Jason.decode!()
+
+      {:ok, rows} = Arca.PolicyLog.list(athanor_id: fixture.athanor_id, limit: 100)
+      assert Enum.filter(rows, &(&1.component_ref == fixture.component_ref)) == []
+    end
+
+    @tag :capture_log
+    test "a request carrying a credential header is refused by shape, naming its call id" do
+      [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+      %{"args" => args} = Jason.decode!(vector["body"])
+
+      for {forged, expected} <- [
+            {%{args | "headers" => [["Authorization", "Bearer sk"]]},
+             %{"type" => "credential_header_refused", "call_id" => args["call_id"]}},
+            {%{args | "purpose" => "redirect"},
+             %{"type" => "invalid_request", "call_id" => args["call_id"]}},
+            {%{args | "headers" => [["Host", "evil.example"]]},
+             %{
+               "type" => "invalid_request",
+               "call_id" => args["call_id"],
+               "message" => "An attached request cannot set the Host header."
+             }},
+            {%{args | "headers" => [["X-Forwarded-Host", "evil.example"]]},
+             %{
+               "type" => "invalid_request",
+               "call_id" => args["call_id"],
+               "message" => "An attached request cannot set the X-Forwarded-Host header."
+             }}
+          ] do
+        body = :attached_fetch |> WorkerWire.request_body(forged) |> Jason.encode!()
+
+        answer =
+          fixture |> AttemptFixtures.header(body) |> Crucible.Host.call(body) |> Jason.decode!()
+
+        assert %{"v" => 1, "error" => "guest_error"} = answer
+        assert Map.take(answer, Map.keys(expected)) == expected
+      end
+
+      no_call_id = Map.delete(args, "call_id")
+      body = :attached_fetch |> WorkerWire.request_body(no_call_id) |> Jason.encode!()
+
+      assert %{"v" => 1, "error" => "malformed"} =
+               fixture
+               |> AttemptFixtures.header(body)
+               |> Crucible.Host.call(body)
+               |> Jason.decode!()
+    end
+  end
+
   describe "the vectors of tests/fixtures/host_api.json" do
     @tag :capture_log
     test "every call's body reads, and its answer is written as the vector writes it" do
@@ -862,8 +1005,12 @@ defmodule Crucible.HostTest do
         answer = Jason.decode!(raw)
 
         # The version is the answer's first member, as the vector writes it.
+        # An attached request's success is its frames, never one answer.
         assert String.starts_with?(raw, ~s({"v":1,)), op
-        assert String.starts_with?(vector["answer"], ~s({"v":1,)), op
+
+        if op == "attached_fetch",
+          do: refute(Map.has_key?(vector, "answer")),
+          else: assert(String.starts_with?(vector["answer"], ~s({"v":1,)), op)
 
         listed = for %{"answer" => refused} <- vector["refusals"], do: Jason.decode!(refused)
 
@@ -903,6 +1050,331 @@ defmodule Crucible.HostTest do
       assert {:error, "Execution terminated: runner stopped without cleanup"} =
                Dispatch.await(fixture.pid, fixture.close)
     end
+  end
+
+  describe "the connection cases of tests/fixtures/host_api.json" do
+    setup do
+      ctx = Sanctum.TestContext.local(:api)
+
+      test_path =
+        Path.join(System.tmp_dir!(), "host_connection_#{System.unique_integer([:positive])}")
+
+      previous = Application.get_env(:arca, :base_path)
+      Application.put_env(:arca, :base_path, test_path)
+      Arca.Cache.init()
+
+      # The registry rows this publishes are the sandbox's, but admission
+      # caches what it read of them for the athanor; a later test sending
+      # the vectors' reference must not find this one's.
+      on_exit(fn ->
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_component_meta(Sanctum.Context.actor(ctx)))
+
+        Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
+        File.rm_rf!(test_path)
+
+        if previous,
+          do: Application.put_env(:arca, :base_path, previous),
+          else: Application.delete_env(:arca, :base_path)
+      end)
+
+      wasm = File.read!(Path.expand("../support/test_wasm/math.wasm", __DIR__))
+
+      # The formulas making the calls, and the reagent the vectors name.
+      for {name, type} <- [{"connection-formula", "formula"}, {"vector", "reagent"}] do
+        {:ok, _} =
+          Compendium.Registry.publish_bytes(ctx, wasm, %{name: name, version: "0.1.0", type: type})
+      end
+
+      # A formula calling the one above, released apart from it: the caps
+      # its manifest asks for give it its own release digest, so calling
+      # the other is never a self-call.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, wasm, %{
+          name: "connection-root",
+          version: "0.1.0",
+          type: "formula",
+          manifest:
+            Jason.encode!(%{
+              "name" => "connection-root",
+              "version" => "0.1.0",
+              "type" => "formula",
+              "description" => "calls connection-formula",
+              "caps" => %{"tools" => ["execution.run"]}
+            })
+        })
+
+      Cyfr.Test.Sandbox.stop_work_on_exit()
+      start_supervised!({Cyfr.Test.ScriptedWorker, ref: "reagent:local.unscripted", script: []})
+      {:ok, ctx: ctx}
+    end
+
+    # Each case is sent as the vector writes its args, by a formula whose
+    # edge to the vectors' reagent binds no named account, and answered as
+    # the vector answers it.
+    @tag :capture_log
+    test "the default is admitted, an account the edge lacks is refused, and the key repeated " <>
+           "naming an account is invalid_request",
+         %{ctx: ctx} do
+      formula = "formula:local.connection-formula"
+      target = "reagent:local.vector"
+      limits = Prima.Test.AuthorityFixtures.limits_map()
+
+      {:ok, blob} =
+        Prima.Authority.Blob.parse(%{
+          "canonical" => "jcs-1",
+          "nodes" => %{
+            formula => %{"limits" => limits, "edges" => %{"@ingress" => %{}, target => %{}}},
+            target => %{"limits" => limits, "edges" => %{}}
+          }
+        })
+
+      {:ok, authority} =
+        Prima.Authority.root(
+          %{
+            profile_id: "prof-connection",
+            consent_id: "consent-connection",
+            source_ref: formula,
+            kind: :owner,
+            invoke_mode: :open_inert,
+            activation: %{formula => Prima.Digest.sha256("connection-formula")}
+          },
+          blob,
+          ceiling: Prima.Test.AuthorityFixtures.ceiling()
+        )
+
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: ctx,
+          authority: authority,
+          component_ref: formula <> ":0.1.0",
+          component_type: :formula,
+          worker: Cyfr.Test.ScriptedWorker.endpoint(),
+          reservation: true
+        )
+
+      cases = Map.new(@vectors["connection_cases"], &{&1["name"], &1})
+
+      play = fn name ->
+        %{"v" => 1, "op" => "admit_child", "args" => args} = Jason.decode!(cases[name]["body"])
+        AttemptFixtures.call(fixture, "admit_child", args)
+      end
+
+      assert %{"v" => 1, "ok" => %{"assignment" => token}} = play.("omitted")
+      {:ok, admitted} = Assignment.read(token)
+      {:ok, child} = Prima.Authority.from_wire(admitted.authority)
+      assert child.cursor == {:bound, target}
+
+      for name <- ["named", "reused"] do
+        assert play.(name) == Jason.decode!(cases[name]["answer"]), name
+      end
+
+      # An account the edge lacks is a grant to make, in Prima.Refusal's
+      # own sentence: setup required, never a denial.
+      assert %{
+               "error" => "guest_error",
+               "type" => "connection_not_granted",
+               "message" => message
+             } = play.("named")
+
+      assert message == Prima.Refusal.message(:connection_not_granted)
+
+      assert Prima.Refusal.classify({:guest_error, "connection_not_granted", message}).class ==
+               :setup_required
+
+      # Neither refusal admitted a child, and the key still answers the one
+      # it was admitted for, with the connection it named.
+      assert %{"ok" => %{"assignment" => again}} = play.("omitted")
+      assert {:ok, %{execution_id: id}} = Assignment.read(again)
+      assert id == admitted.execution_id
+      assert [^id] = children_of(fixture)
+    end
+
+    @tag :capture_log
+    test "a child admitted naming an account is answered again under its key naming it, and " <>
+           "refused naming none",
+         %{ctx: ctx} do
+      %{root: root, target: target} = named = named_accounts!(ctx)
+      fixture = connection_formula!(ctx, named.authority, root)
+
+      args = %{
+        "reference" => target <> ":0.1.0",
+        "input" => %{},
+        "guest_fn" => "call",
+        "need" => nil,
+        "child_key" => "ck_named_account",
+        "connection" => "Work"
+      }
+
+      assert %{"ok" => %{"assignment" => token}} =
+               AttemptFixtures.call(fixture, "admit_child", args)
+
+      {:ok, admitted} = Assignment.read(token)
+      {:ok, child} = Prima.Authority.from_wire(admitted.authority)
+      assert child.resources.vault.entry_id == "vlt_work"
+      assert child.resources.vault.binding_key == Blob.binding_key(root, target, "Work")
+
+      # The same account under the key is the same child.
+      assert %{"ok" => %{"assignment" => again}} =
+               AttemptFixtures.call(fixture, "admit_child", args)
+
+      assert {:ok, %{execution_id: id}} = Assignment.read(again)
+      assert id == admitted.execution_id
+
+      # Naming none under it asks for the edge's default, which is not the
+      # account the child holds.
+      assert %{"error" => "guest_error", "type" => "invalid_request", "message" => message} =
+               AttemptFixtures.call(fixture, "admit_child", Map.delete(args, "connection"))
+
+      assert message =~ "child_key"
+      assert [^id] = children_of(fixture)
+    end
+
+    @tag :capture_log
+    test "a self-call names no account, so its retry under its key is answered though its " <>
+           "caller holds a named one",
+         %{ctx: ctx} do
+      %{root: root, target: target} = named = named_accounts!(ctx)
+
+      # The caller is the edge's child holding the account Work.
+      {:child, caller} =
+        Prima.Authority.Transition.step(
+          named.authority,
+          :call,
+          {:invoke,
+           %{
+             reference: target,
+             need: nil,
+             activation_digest: named.digests[target],
+             declared_needs: [],
+             connection: "Work"
+           }}
+        )
+
+      assert caller.resources.vault.binding_key == Blob.binding_key(root, target, "Work")
+      fixture = connection_formula!(ctx, caller, target)
+
+      args = %{
+        "reference" => target <> ":0.1.0",
+        "input" => %{},
+        "guest_fn" => "call",
+        "need" => nil,
+        "child_key" => "ck_self_call"
+      }
+
+      # The self-child holds its caller's own binding, the account Work.
+      assert %{"ok" => %{"assignment" => token}} =
+               AttemptFixtures.call(fixture, "admit_child", args)
+
+      {:ok, admitted} = Assignment.read(token)
+      {:ok, self_child} = Prima.Authority.from_wire(admitted.authority)
+      assert self_child.cursor == caller.cursor
+      assert self_child.resources.vault.binding_key == caller.resources.vault.binding_key
+
+      # A lost answer's retry names nothing, as the call did, and is answered.
+      assert %{"ok" => %{"assignment" => again}} =
+               AttemptFixtures.call(fixture, "admit_child", args)
+
+      assert {:ok, %{execution_id: id}} = Assignment.read(again)
+      assert id == admitted.execution_id
+
+      # A self-call crosses no edge, so naming an account picks none.
+      assert %{"error" => "guest_error", "type" => "connection_not_granted"} =
+               AttemptFixtures.call(
+                 fixture,
+                 "admit_child",
+                 Map.merge(args, %{"child_key" => "ck_self_named", "connection" => "Work"})
+               )
+
+      assert [^id] = children_of(fixture)
+    end
+  end
+
+  # The children of `fixture`'s execution, by id.
+  defp children_of(fixture) do
+    import Ecto.Query, only: [from: 2]
+
+    Arca.Repo.all(
+      from(e in Arca.Schemas.Execution,
+        where: e.parent_execution_id == ^fixture.execution_id,
+        select: e.id
+      )
+    )
+  end
+
+  # A root authority at `formula:local.connection-root`, pinned to a live
+  # profile's head, whose edge to `formula:local.connection-formula` binds
+  # a default and, beside it, the account Work. Both name only scopes, so
+  # a child holding either is claimed without reading an entry.
+  defp named_accounts!(ctx) do
+    root = "formula:local.connection-root"
+    target = "formula:local.connection-formula"
+
+    {pinned, _entry} =
+      AttemptFixtures.vault_authority!(ctx, %{kind: "api_key", fields: %{"KEY" => "k"}})
+
+    digests =
+      Map.new([root, target], fn node ->
+        {:ok, _ref, _type, component} =
+          Crucible.Admission.inspect_component(ctx, node <> ":0.1.0")
+
+        {node, component["release_digest"]}
+      end)
+
+    refute digests[root] == digests[target]
+
+    bound = fn entry_id, opts ->
+      Prima.Test.AuthorityFixtures.bound_vault(
+        root,
+        target,
+        entry_id,
+        "sha256:bind-" <> entry_id,
+        [projection: %{"scopes" => ["fixture.scope"]}] ++ opts
+      )
+    end
+
+    vault = bound.("vlt_default", named: %{"Work" => bound.("vlt_work", name: "Work")})
+    limits = Prima.Test.AuthorityFixtures.limits_map()
+
+    {:ok, blob} =
+      Blob.parse(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          root => %{
+            "limits" => limits,
+            "edges" => %{"@ingress" => %{}, target => %{"vault" => vault}}
+          },
+          target => %{"limits" => limits, "edges" => %{}}
+        }
+      })
+
+    {:ok, authority} =
+      Prima.Authority.root(
+        %{
+          profile_id: pinned.profile_id,
+          consent_id: pinned.consent_id,
+          source_ref: root,
+          kind: :owner,
+          invoke_mode: :open_inert,
+          activation: digests
+        },
+        blob,
+        ceiling: Prima.Test.AuthorityFixtures.ceiling()
+      )
+
+    %{authority: authority, root: root, target: target, digests: digests}
+  end
+
+  # An attached attempt of the formula `node` under `authority`, whose
+  # children are claimed for its runner.
+  defp connection_formula!(ctx, authority, node) do
+    AttemptFixtures.attached!(
+      ctx: ctx,
+      authority: authority,
+      component_ref: node <> ":0.1.0",
+      component_type: :formula,
+      worker: Cyfr.Test.ScriptedWorker.endpoint(),
+      reservation: true
+    )
   end
 
   # A live attempt for the vector of `op`: attached, and holding what the
@@ -973,7 +1445,9 @@ defmodule Crucible.HostTest do
 
   defp expected("fetch_artifact"), do: "not_found"
   defp expected("release_child"), do: "lost"
-  defp expected(op) when op in ~w(oauth_token storage admit_child tool_call), do: "guest_error"
+
+  defp expected(op) when op in ~w(oauth_token storage admit_child tool_call attached_fetch),
+    do: "guest_error"
 
   defp answer_name(%{"ok" => _value}), do: "ok"
   defp answer_name(%{"error" => name}), do: name

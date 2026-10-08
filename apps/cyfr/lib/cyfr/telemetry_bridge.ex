@@ -8,8 +8,9 @@ defmodule Cyfr.TelemetryBridge do
   A foundation below the host emits `:telemetry` and never broadcasts, so
   every announcement the identity domain makes — a tray entry, a session
   minted or revoked, a dropped caller memo, a membership, a vault entry,
-  an archive, the API key and webhook rosters, a pending confirmation —
-  and every lifecycle event the console follows reaches `Cyfr.Bus` here.
+  an instance entry, an archive, the API key and webhook rosters, a
+  pending confirmation — every file offer the storage layer moves, and
+  every lifecycle event the console follows reaches `Cyfr.Bus` here.
   The events it attaches are exactly
   `Cyfr.Telemetry.Catalog.consumed_by(:bridge)`; there is no second list.
 
@@ -42,6 +43,8 @@ defmodule Cyfr.TelemetryBridge do
     Components,
     Confirmation,
     Execution,
+    FileOffer,
+    InstanceEntryChanged,
     Membership,
     Notify,
     PolicyDecision,
@@ -277,6 +280,40 @@ defmodule Cyfr.TelemetryBridge do
     ]
   end
 
+  # The instance's own credentials, on the one global topic: the entry id
+  # and the kind, and nothing else the emitter attached (the acting
+  # person among it).
+  defp messages(
+         [:cyfr, :sanctum, :instance_entry, kind],
+         _measurements,
+         %{entry_id: entry_id, kind: kind}
+       )
+       when is_binary(entry_id) and entry_id != "",
+       do: [{:global, Bus.instance_entries(), InstanceEntryChanged.new(kind, entry_id)}]
+
+  # Sending a copy, on the topic of each person it concerns: an offer's
+  # transitions reach its sender and its recipient, and a receipt that
+  # landed or that the sweep failed its recipient alone, the sender's
+  # offer having been accepted already. The offer, the kind, the sender
+  # and the filename travel, and nothing else the emitter attached.
+  defp messages(
+         [:cyfr, :arca, :file_offer, kind],
+         _measurements,
+         %{
+           offer_id: offer_id,
+           kind: kind,
+           sender_user_id: sender,
+           recipient_user_id: recipient,
+           filename: filename
+         }
+       )
+       when is_binary(offer_id) and offer_id != "" and is_binary(sender) and sender != "" and
+              is_binary(recipient) and recipient != "" and is_binary(filename) and
+              filename != "" do
+    payload = FileOffer.new(kind, offer_id, sender, filename)
+    for user_id <- told(kind, sender, recipient), do: {:global, Bus.file_offers(user_id), payload}
+  end
+
   defp messages([:cyfr, :sanctum, :athanor, :archived], _measurements, %{athanor_id: id})
        when is_binary(id) and id != "",
        do: [{:global, Bus.athanor_archived_global(), AthanorArchived.new(id)}]
@@ -316,6 +353,11 @@ defmodule Cyfr.TelemetryBridge do
       error: classify(meta[:error])
     }
   end
+
+  # Who a file offer's message is for: a receipt, failed or landed, is its
+  # recipient's; every other transition is both people's.
+  defp told(kind, _sender, recipient) when kind in [:failed, :landed], do: [recipient]
+  defp told(_kind, sender, recipient), do: Enum.uniq([recipient, sender])
 
   defp schedule_run(meta) do
     meta

@@ -486,8 +486,8 @@ defmodule Compendium.Providers.SourceTest do
       policy = %{"execution.run" => "auto"}
       consented = fn ref -> String.starts_with?(ref, "catalyst:local.widget") end
 
-      # Consented and untouched, the run goes as a child of the turn.
-      assert :auto = Policy.decide(launch, policy, consented?: consented, touched: MapSet.new())
+      # Every launch asks, consented and untouched included.
+      assert :ask = Policy.decide(launch, policy, consented?: consented, touched: MapSet.new())
 
       for path <- [
             "components//catalysts/local/widget/0.1.0/src/lib.rs",

@@ -305,6 +305,131 @@ defmodule Sanctum.Tenancy.MembersTest do
     end
   end
 
+  describe "people_sharing/1" do
+    test "a seat removed, and a stranger seated, after its first query never reach the answer" do
+      alice = named!("Alice Caller")
+      bob = named!("Bob Stays")
+      carol = named!("Carol Never Shared")
+
+      {:ok, group} =
+        Athanors.create_group(bob.id, "Picker race #{System.unique_integer([:positive])}")
+
+      {:ok, _} = Members.ensure(alice.id, scope: "athanor", athanor_id: group.id)
+      assert Members.shared_athanor?(alice.id, bob.id)
+      refute Members.shared_athanor?(alice.id, carol.id)
+
+      # Alice leaves and Carol sits down right after the first statement
+      # the read issues.
+      after_first_query!(fn ->
+        {Members.remove_member(group, user_id: alice.id),
+         Members.ensure(carol.id, scope: "athanor", athanor_id: group.id)}
+      end)
+
+      assert {:ok, people} = Members.people_sharing(alice.id)
+      assert_received {:changed, {:ok, {:ok, _carol_seat}}}
+
+      # Alice and Carol never sat together, so Carol is never listed to
+      # Alice: the answer is the room as it stood when Alice's seat was read.
+      refute Members.shared_athanor?(alice.id, carol.id)
+      assert Enum.map(people, & &1.user_id) == [bob.id]
+
+      # Read again, the leave holds: Alice sits with nobody.
+      assert {:ok, []} = Members.people_sharing(alice.id)
+    end
+
+    test "is one statement, however many rooms the person sits in" do
+      alice = named!("Alice")
+      bob = named!("Bob")
+      carol = named!("Carol")
+
+      {:ok, first} =
+        Athanors.create_group(bob.id, "One read #{System.unique_integer([:positive])}")
+
+      {:ok, second} =
+        Athanors.create_group(carol.id, "One read #{System.unique_integer([:positive])}")
+
+      for group <- [first, second],
+          do: {:ok, _} = Members.ensure(alice.id, scope: "athanor", athanor_id: group.id)
+
+      assert {{:ok, people}, 1} = counting_queries(fn -> Members.people_sharing(alice.id) end)
+      assert Enum.map(people, & &1.user_id) == [bob.id, carol.id]
+    end
+  end
+
+  # A person this server knows, named `name`.
+  defp named!(name) do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|sharing-#{n}",
+        provider: "github",
+        email: "sharing#{n}@example.com",
+        verified: true,
+        name: name
+      })
+
+    user
+  end
+
+  # Runs `change` once, in this process, right after the first statement
+  # this process issues from now on, and sends its result back as
+  # `{:changed, result}`. The event fires once the statement has answered
+  # and returned its connection, so whatever `change` commits lands after
+  # that statement and before anything issued next.
+  defp after_first_query!(change) do
+    test = self()
+    handler = "after-first-query-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler,
+      [:arca, :repo, :query],
+      fn _event, _measure, _meta, _config ->
+        if self() == test and is_nil(Process.get(handler)) do
+          Process.put(handler, :changed)
+          send(test, {:changed, change.()})
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  # Runs `fun` and answers its result with the number of statements this
+  # process issued while it ran.
+  defp counting_queries(fun) do
+    test = self()
+    ref = make_ref()
+    handler = "counting-queries-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler,
+      [:arca, :repo, :query],
+      fn _event, _measure, _meta, _config ->
+        if self() == test, do: send(test, {ref, :queried})
+      end,
+      nil
+    )
+
+    result =
+      try do
+        fun.()
+      after
+        :telemetry.detach(handler)
+      end
+
+    {result, queried(ref, 0)}
+  end
+
+  defp queried(ref, count) do
+    receive do
+      {^ref, :queried} -> queried(ref, count + 1)
+    after
+      0 -> count
+    end
+  end
+
   defp person(n) do
     {:ok, user} =
       Sanctum.Tenancy.Users.upsert_from_provider(%{

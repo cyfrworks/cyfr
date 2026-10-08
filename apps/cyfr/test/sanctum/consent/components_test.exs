@@ -118,7 +118,36 @@ defmodule Sanctum.Consent.ComponentsTest do
 
       assert {:error, :component_facts_unavailable} =
                Components.get_component(ctx, "facts-shipped", "1.0.0", "local", "reagent")
+
+      assert {:error, :component_facts_unavailable} = Components.newer_shipped(ctx, row)
     end)
+  end
+
+  test "the newer shipped version is the newest the media ships past the row's own", %{ctx: ctx} do
+    row = ship!(ctx, "facts-newer", "reagent")
+
+    # The media ships only the row's own version: nothing newer.
+    assert {:ok, nil} = Components.newer_shipped(ctx, row)
+
+    # The release ships two newer versions the athanor has not pulled:
+    # the newest of them.
+    for version <- ["1.1.0", "1.2.0"] do
+      Arca.Test.UnitFixtures.seed_component!("reagent", "local", "facts-newer", version,
+        wasm: @wasm
+      )
+    end
+
+    assert {:ok, "1.2.0"} = Components.newer_shipped(ctx, row)
+
+    # A component the media does not ship has none.
+    {:ok, own} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: "facts-own",
+        version: "1.0.0",
+        type: "reagent"
+      })
+
+    assert {:ok, nil} = Components.newer_shipped(ctx, own)
   end
 
   test "unreadable facts, an absent component and a denial are three different words", %{ctx: ctx} do
@@ -158,7 +187,7 @@ defmodule Sanctum.Consent.ComponentsTest do
              ShapeDerivation.shape_input(ctx, "reagent:local.facts-shape")
 
     without_facts(fn ->
-      assert {:error, :component_facts_unavailable} =
+      assert {:error, {:unavailable, "Components"}} =
                ShapeDerivation.shape_input(ctx, "reagent:local.facts-shape")
     end)
   end

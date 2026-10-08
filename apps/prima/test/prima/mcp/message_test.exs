@@ -99,6 +99,24 @@ defmodule Prima.MCP.MessageTest do
       assert message =~ "Unsupported jsonrpc version"
     end
 
+    # The version is the peer's: a sentence that read it back would carry
+    # what the peer put there into a log or an answer, and a term with no
+    # string form would raise while building it.
+    test "names an unsupported version by its shape, never its content" do
+      for version <- [
+            "Bearer sk-peer-0123456789",
+            %{"echo" => "Bearer sk-peer-0123456789"},
+            [1],
+            2
+          ] do
+        msg = %{"jsonrpc" => version, "id" => 1, "method" => "test"}
+
+        assert {:error, :invalid_request, message} = Message.decode(msg)
+        assert message =~ "Unsupported jsonrpc version"
+        refute message =~ "sk-peer"
+      end
+    end
+
     test "rejects null request ID" do
       msg = %{"jsonrpc" => "2.0", "id" => nil, "method" => "ping"}
 

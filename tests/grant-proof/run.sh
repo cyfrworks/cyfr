@@ -26,7 +26,19 @@
 # a previous build left (RELEASE_BOOT_SKIP_BUILD=1, which this proof
 # requires): build it as release.sh's `release_build` does, without
 # fetching dependencies.
+# A failed run also leaves prism-grant.png and prism-grant-frames.json: the
+# page, and its last socket frames with every value the proof knows to be
+# secret replaced (redact.mjs).
+# The record, grant-proof.json and grant-proof.md, is written under the
+# same rule.
 set -euo pipefail
+
+# Every argument and environment check runs before WORK is made, so a
+# refused start leaves nothing behind.
+[ "${RELEASE_BOOT_SKIP_BUILD:-}" = 1 ] || {
+  echo "::error::build the release first and run with RELEASE_BOOT_SKIP_BUILD=1 (README.md)" >&2
+  exit 1
+}
 
 ADAPTER=sqlite
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-grant-proof-XXXXXX")"
@@ -50,16 +62,25 @@ stop_proof_container() {
 }
 
 # The scratch directory holds the run's authority key, so it goes even
-# when a stop fails.
+# when a stop fails. `server_stop` ends in `fail`, an `exit`, when a
+# listener outlives its stop, and an exit inside this trap would end it
+# before the removal, so the stop runs in a subshell, whose exit ends only
+# that subshell; the stop's failure still fails the run.
 cleanup() {
+  local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
-  server_stop || :
+  # The questions and answers carry the command line's preview, its proof
+  # among them, and the command line's own errors beside them, so they go
+  # on every exit, a kept or outside PROOF_OUT included; the record stays.
+  rm -f "$OUT"/ask-* "$OUT"/answer-* "$OUT"/cli-*.err
+  ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
     rm -rf "$WORK"
   fi
+  exit "$code"
 }
 trap cleanup EXIT
 
@@ -76,8 +97,6 @@ grant_fixture() {
     | sed -n 's/^GRANT=//p' | tail -1
 }
 
-[ "${RELEASE_BOOT_SKIP_BUILD:-}" = 1 ] ||
-  fail "build the release first and run with RELEASE_BOOT_SKIP_BUILD=1 (README.md)"
 release_build
 
 step "the command line, built from apps/codex"

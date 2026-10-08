@@ -50,23 +50,48 @@ defmodule PrismWeb.SystemLayer do
 
     * a grant — the prompt's body is the consent sheet
       (`PrismWeb.ConsentSheetComponent`), which walks the grant from the
-      plan and preview the prompt arrived with (`grant_prompt/4`) and
-      draws the preview's typed rows itself: the vault entry each need is
-      bound to, the narrowing and the origins the person chooses, each
-      previewed again after each choice, the warnings and what changed.
-      It hands the layer the walk as it stands. Confirming asks the sheet
-      for its walk at that moment, after every choice that came before
-      the confirm, and commits exactly that walk, its decisions, through
-      `profile.commit`. A commit that is refused consumed the plan's
-      token, so the sheet plans again. A plan whose closure is unresolved
-      has no preview and nothing to confirm. A grant is planned in one
-      athanor: a prompt whose athanor is no longer the layer's context's
-      ends dismissed and commits nothing;
+      plan and preview the prompt arrived with (`grant_prompt/4`, which
+      opens it with the plan's suggestions bound for the required needs)
+      and draws the preview's typed rows itself: the vault entry each need
+      of the app and of its dependencies is bound to, the named accounts
+      beside each edge's default, and how long each binding lives, the
+      narrowing and the origins the person chooses,
+      each previewed again after each choice, the warnings and what
+      changed. It hands the layer the walk as it stands. Confirming asks
+      the sheet for its walk at that moment, after every choice that came
+      before the confirm, and commits exactly that walk, its decisions,
+      through `profile.commit`. A commit that is refused consumed the
+      plan's token, so the sheet plans again. A plan whose closure is
+      unresolved has no preview and nothing to confirm. A grant is planned
+      in one athanor: a prompt whose athanor is no longer the layer's
+      context's ends dismissed and commits nothing. The sheet's "Connect
+      your <provider> account" places a credential-entry prompt in front
+      of the grant, which waits first in line and comes back when that
+      prompt ends; an entry made there comes back bound to the need it was
+      made for, and the grant plans again, since its plan was read before
+      the entry existed. That prompt belongs to its grant's athanor: it
+      ends dismissed with its grant, or when the layer's context moves to
+      another athanor, and an entry is never sent for it from elsewhere;
     * a credential entry — `vault.create`, an `api_key` entry under the
       subject's name holding the one value typed, which travels on the
       shell's LiveView socket, is never assigned, rendered or logged, and
       never reaches a frame (its parameter name is on the redaction
-      roster, `Prima.Sanitizer`);
+      roster, `Prima.Sanitizer`). The person also names where the value
+      may go — the destination's hosts, and optionally its scheme, port,
+      methods and paths — and whether the app may read it
+      (`destination_params/1`, `disclose_param/1`). A prompt a grant raised
+      for a need is prefilled from it: the entry's name (the provider,
+      editable, since names are unique in an athanor), the hosts and paths
+      the need declares, and disclosure turned on where the component
+      reads the value itself; its provider is the entry's
+      `provider_hint`. Any other prompt prefills nothing, and disclosure is
+      off until the person turns it on. A value left undisclosed is never
+      handed to the app: CYFR attaches it to the requests bound for the
+      entry's destination. A prompt whose `target` is `:instance` is the
+      platform administrator's card asking for an instance entry's value
+      alone: `instance_entry.create` with the arguments the card
+      collected, or `instance_entry.rotate` of the entry the card names,
+      the one value typed under the subject's field;
     * pairing — `pairing.list` when it opens, `pairing.begin`, whose
       answer's `invitation_url` it draws as a QR code, and `pairing.revoke`;
     * safe mode's default desktop — `layout.edit` at the revision safe mode
@@ -132,7 +157,8 @@ defmodule PrismWeb.SystemLayer do
   emptied when that prompt ends), and a
   page is told `{:system_layer, id, :confirmed}` and repeats through
   `call/5`. A repeat answered `confirmation_required` with the same secret
-  is still waiting; a `voided`, `expired` or `cancelled` fact for the
+  is still waiting; a repeat refused cancels its record, and the prompt
+  shows the refusal; a `voided`, `expired` or `cancelled` fact for the
   ref ends the wait and says so. Dismissing one's own waiting request
   cancels it.
 
@@ -167,6 +193,18 @@ defmodule PrismWeb.SystemLayer do
   @asks :system_layer_asks
   # Where a view keeps the nested views whose prompts it placed.
   @relays :system_layer_relays
+
+  # A release's outcome that the approval could not be withdrawn: a
+  # release's own (`:withdraw_failed`) or a refused repeat's
+  # (`{:withdraw_failed, reason}`), and that outcome as a prompt is told it.
+  defguardp is_withdraw_failed(reason)
+            when reason == :withdraw_failed or
+                   (is_tuple(reason) and tuple_size(reason) == 2 and
+                      elem(reason, 0) == :withdraw_failed)
+
+  defguardp is_unwithdrawn(outcome)
+            when is_tuple(outcome) and tuple_size(outcome) == 2 and elem(outcome, 0) == :refused and
+                   is_withdraw_failed(elem(outcome, 1))
 
   @doc "The id the layer is mounted under on a page that holds one."
   @spec layer_id() :: String.t()
@@ -211,15 +249,35 @@ defmodule PrismWeb.SystemLayer do
   The `:grant` prompt `id` for the component `ref`, read under `ctx` (a
   context, or a socket holding one, as `PrismWeb.Ops.call_tool/3` takes
   it): the consent walk's plan as `profile.plan` answers it, with what its
-  head holds (`head_origins`, and `shape_diff` when the shape moved), its
-  preview with no vault entry bound yet and the origins the head admits
-  (`interactive` alone on a first grant), and the athanor both were read
-  in. `opts[:label]` names the profile label the grant is for (the
-  `"default"` profile when absent). The sheet the prompt shows takes the
-  walk on from there. A plan whose closure is unresolved opens with no
-  preview, naming what is missing, and offers nothing to commit.
-  `{:error, reason}` when either cannot be read, which the asker shows
-  instead of a prompt.
+  head holds (`head_origins`, `head_bindings`, and `shape_diff` when the
+  shape moved), its preview of what the grant opens with
+  (`PrismWeb.ConsentSheetComponent.initial_choices/1`: on a re-grant, what
+  the head binds with its lifetime, never wider, and elsewhere the plan's
+  suggestions bound for the required needs of the app and of each
+  dependency) under the origins
+  the head admits (`interactive` alone on a first grant) and the
+  narrowing it holds (`head_narrowing`: a method the head narrowed off,
+  or one newly asked for, opens off; a first grant opens on the ask),
+  when the
+  person's session ends (`session.whoami`'s `session_expires_at`, which
+  a "this session" lifetime is held to), and the athanor they were read
+  in. A suggestion the home refuses to preview opens the grant with
+  nothing bound, for the person to choose, and carries the home's
+  sentence for the refusal (`suggestion_refused`), which the sheet shows
+  until the person's next choice previews. `opts[:label]` names the
+  profile label the grant is for (the `"default"` profile when absent).
+  `opts[:account]` names the account the grant is opened for, `%{name,
+  dep, from, need}` (`dep` nil for the app's own calls, `from` nil for the
+  grant's source, `need` nil for the edge's one credential need; an absent
+  key is nil), carried on the subject as `account`: the grant opens with
+  that account's row (`PrismWeb.ConsentSheetComponent.open_account/3`), a
+  dependency's default a profile lends switched first to the entry it
+  lends, so the preview is of that default; an account the plan has no
+  edge for opens the grant without it, saying why.
+  The sheet the prompt shows takes the walk on from there. A plan whose
+  closure is unresolved opens with no preview, naming what is missing,
+  and offers nothing to commit. `{:error, reason}` when the plan or the
+  preview cannot be read, which the asker shows instead of a prompt.
   """
   @spec grant_prompt(
           Context.t() | Phoenix.LiveView.Socket.t(),
@@ -229,25 +287,30 @@ defmodule PrismWeb.SystemLayer do
         ) :: {:ok, Prompt.t()} | {:error, term()}
   def grant_prompt(ctx_or_socket, id, ref, opts \\ []) when is_binary(id) and is_binary(ref) do
     label = Keyword.get(opts, :label)
+    account = account_of(Keyword.get(opts, :account))
     plan_args = Prima.MapUtil.put_present(%{"ref" => ref}, "label", label)
 
     with %Context{athanor_id: athanor_id} when is_binary(athanor_id) <-
            context_of(ctx_or_socket),
          {:ok, plan} <- Ops.call_tool(ctx_or_socket, "profile/plan", plan_args),
-         decisions = first_decisions(ref, label, plan),
-         {:ok, preview} <- first_preview(ctx_or_socket, plan, decisions) do
+         {:ok, decisions, preview, refused} <-
+           first_walk(ctx_or_socket, {ref, label, account}, plan) do
       {:ok,
        %{
          id: id,
          kind: :grant,
          action: :grant,
-         subject: %{
-           ref: ref,
-           athanor_id: athanor_id,
-           plan: plan,
-           preview: preview,
-           decisions: decisions
-         }
+         subject:
+           %{
+             ref: ref,
+             athanor_id: athanor_id,
+             plan: plan,
+             preview: preview,
+             decisions: decisions
+           }
+           |> Prima.MapUtil.put_present(:session_expires_at, session_end(ctx_or_socket))
+           |> Prima.MapUtil.put_present(:suggestion_refused, refused)
+           |> Prima.MapUtil.put_present(:account, account)
        }}
     else
       {:error, reason} -> {:error, reason}
@@ -255,17 +318,84 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  # No entry bound yet, the origins the head admits, or `interactive`
-  # alone on a first grant.
-  defp first_decisions(ref, label, plan) do
-    %{"ref" => ref, "bindings" => [], "origins" => plan[:head_origins] || ["interactive"]}
-    |> Prima.MapUtil.put_present("label", label)
+  # The account a grant is opened for with each of its places named, an
+  # absent one nil; the prompt holds it to its shape (`Prompt`).
+  defp account_of(nil), do: nil
+
+  defp account_of(%{} = account),
+    do: Map.merge(%{name: nil, dep: nil, from: nil, need: nil}, account)
+
+  # The decisions the grant opens with, their preview, and why the
+  # suggestions were not bound, if they were not: the plan's suggestions
+  # bound for the required needs, under the origins the head admits
+  # (`interactive` alone on a first grant), and the account it is opened
+  # for beside its edge's default; with nothing bound when the home
+  # refuses to preview the suggestions, so the person chooses, and the
+  # home's sentence for that refusal, which the sheet shows.
+  defp first_walk(_ctx_or_socket, {ref, label, _account}, %{unresolved: %{}} = plan),
+    do: {:ok, first_decisions(ref, label, plan, %{}), nil, nil}
+
+  defp first_walk(ctx_or_socket, {ref, label, account}, plan) do
+    suggested = with_account(plan, PrismWeb.ConsentSheetComponent.initial_choices(plan), account)
+    decisions = first_decisions(ref, label, plan, suggested)
+
+    case first_preview(ctx_or_socket, decisions) do
+      {:ok, preview} ->
+        {:ok, decisions, preview, nil}
+
+      {:error, refused} when suggested != %{} ->
+        bare = first_decisions(ref, label, plan, %{})
+
+        with {:ok, preview} <- first_preview(ctx_or_socket, bare),
+             do: {:ok, bare, preview, Ops.error_message(refused)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
-  defp first_preview(_ctx_or_socket, %{unresolved: %{}}, _decisions), do: {:ok, nil}
+  # The choices with the account placed, a lent default switched to the
+  # entry its profile lends; an account the plan has no edge for leaves
+  # them as they are, and the sheet says why.
+  defp with_account(_plan, choices, nil), do: choices
 
-  defp first_preview(ctx_or_socket, _plan, decisions),
+  defp with_account(plan, choices, %{name: name} = account) when is_binary(name) do
+    case PrismWeb.ConsentSheetComponent.open_account(plan, choices, account) do
+      {:ok, placed} -> placed
+      {:error, _sentence} -> choices
+    end
+  end
+
+  defp with_account(_plan, choices, _malformed), do: choices
+
+  # A re-grant opens on the narrowing its head holds against the ask
+  # (`profile.plan`'s `head_narrowing`), never wider: a method the grant
+  # narrowed off opens off, and so does one newly asked for, which the
+  # grant never covered. A first grant has none, and opens on the ask.
+  defp first_decisions(ref, label, plan, choices) do
+    PrismWeb.ConsentSheetComponent.decisions(
+      ref,
+      label,
+      plan[:head_origins] || ["interactive"],
+      head_narrowing(plan),
+      choices
+    )
+  end
+
+  defp head_narrowing(%{head_narrowing: %{} = narrowing}), do: narrowing
+  defp head_narrowing(_first_grant), do: %{}
+
+  defp first_preview(ctx_or_socket, decisions),
     do: Ops.call_tool(ctx_or_socket, "profile/preview", %{"decisions" => decisions})
+
+  # When the person's session ends, as `session.whoami` answers it: none
+  # for a credential that is no session, or when it cannot be read.
+  defp session_end(ctx_or_socket) do
+    case Ops.call_tool(ctx_or_socket, "session/whoami", %{}) do
+      {:ok, %{session_expires_at: at}} when is_binary(at) -> at
+      _none -> nil
+    end
+  end
 
   @doc """
   Whether the grant a run would start under admits `origin`: the profile
@@ -367,10 +497,16 @@ defmodule PrismWeb.SystemLayer do
   can ask for).
 
   A change the page already asked for under `tag` and still holds the
-  secret of is dispatched naming it: the repeat. Answers:
+  secret of is dispatched naming it: the repeat. A repeat the operation
+  refuses is released, as `release/3` releases a held ask: its record is
+  cancelled, the prompt shows the refusal, and the secret leaves the
+  page. A cancel answered `not_pending` (the operation consumed the record
+  before it refused, or the record had ended) shows the refusal alone; any
+  other failed cancel adds that the approval could not be withdrawn and
+  ends at its expiry. Answers:
 
     * `{:ok, result, socket}` and `{:error, reason, socket}` — the
-      operation's own answer;
+      operation's own answer, a refused repeat's included;
     * `{:asked, socket}` — the change needs a fresh confirmation: the page
       holds the signal's secret, never rendered, and the layer shows the
       prompt, marked as this client's own. A repeat answered with the same
@@ -408,6 +544,30 @@ defmodule PrismWeb.SystemLayer do
 
       {:error, reason} ->
         {:error, reason, socket}
+    end
+  end
+
+  @doc """
+  Let the change a page holds under `tag` go with no dispatch, when the
+  change it binds is no longer to be made: the record is cancelled
+  (`confirmation.cancel`), the prompt shows `reason` as the change's
+  outcome, and the secret leaves the page. It is the one way a held ask
+  ends without its dispatch, which `call/5` also takes for a repeat the
+  operation refuses, as `call/5`'s settlement is the way it ends with one,
+  so a held proof never stays behind on a page that sends nothing.
+  Answers `{:released, socket}`; `{:cancel_failed, socket}` when the
+  record could not be cancelled, the secret let go all the same, the
+  prompt told so and the record ending at its expiry; or `{:none, socket}`
+  when nothing is held under `tag`. The prompt ends on the outcome told
+  it, whichever reaches the layer first of it and the record's own
+  `cancelled` fact.
+  """
+  @spec release(Phoenix.LiveView.Socket.t(), term(), term()) ::
+          {:released | :cancel_failed | :none, Phoenix.LiveView.Socket.t()}
+  def release(socket, tag, reason) do
+    case held_for(socket, tag) do
+      nil -> {:none, socket}
+      held -> release_held(socket, held, {:refused, reason})
     end
   end
 
@@ -462,7 +622,9 @@ defmodule PrismWeb.SystemLayer do
 
   # A repeat's answer, told to the layer: the same secret is still waiting;
   # another one means the record no longer answers this change, which is
-  # cancelled and asked for again; anything else is the change's outcome.
+  # cancelled and asked for again; a completed change is the outcome; and
+  # a refused one is released, its record cancelled and its refusal the
+  # outcome, so its proof never stays behind confirmed.
   defp settle_held(socket, held, result) do
     prompt_id = Prompt.confirmation_id(held.ref)
 
@@ -472,19 +634,52 @@ defmodule PrismWeb.SystemLayer do
         socket
 
       {:error, {:confirmation_required, _another}} ->
-        _ = Ops.call_tool(socket, "confirmation/cancel", %{"ref" => held.ref})
-        outcome(held, {:refused, :asked_again})
-        drop_ask(socket, prompt_id)
+        {_released, socket} = release_held(socket, held, {:refused, :asked_again})
+        socket
 
       {:ok, _value} ->
         outcome(held, :completed)
         drop_ask(socket, prompt_id)
 
       {:error, reason} ->
-        outcome(held, {:refused, reason})
-        drop_ask(socket, prompt_id)
+        {_released, socket} =
+          release_held(socket, held, {:refused, reason}, &refused_unwithdrawn(reason, &1))
+
+        socket
     end
   end
+
+  # A held ask let go with no dispatch: its record cancelled, then its
+  # prompt told what came of it — `outcome` once the cancel landed, and
+  # what `unwithdrawn` makes of the cancel's refusal when it did not
+  # (by default, that the approval could not be withdrawn) — and its
+  # secret dropped either way.
+  defp release_held(
+         socket,
+         held,
+         outcome,
+         unwithdrawn \\ fn _ -> {:refused, :withdraw_failed} end
+       ) do
+    socket_after = drop_ask(socket, Prompt.confirmation_id(held.ref))
+
+    case Ops.call_tool(socket, "confirmation/cancel", %{"ref" => held.ref}) do
+      {:ok, _} ->
+        outcome(held, outcome)
+        {:released, socket_after}
+
+      {:error, cancel_refused} ->
+        outcome(held, unwithdrawn.(cancel_refused))
+        {:cancel_failed, socket_after}
+    end
+  end
+
+  # A refused repeat whose record could not be cancelled: a record no
+  # longer waiting (the operation consumed it before it refused, or it
+  # had ended) leaves nothing to withdraw, so the refusal is shown alone;
+  # any other failure adds that the approval ends at its expiry.
+  defp refused_unwithdrawn(reason, %Prima.Refusal{reason: :not_pending}), do: {:refused, reason}
+  defp refused_unwithdrawn(reason, :not_pending), do: {:refused, reason}
+  defp refused_unwithdrawn(reason, _cancel_refused), do: {:refused, {:withdraw_failed, reason}}
 
   defp outcome(%{ref: ref, layer: layer}, outcome),
     do: send_update(__MODULE__, id: layer, outcome: {ref, outcome})
@@ -550,6 +745,13 @@ defmodule PrismWeb.SystemLayer do
 
   # The grant's walk as the sheet holds it now (`walk/2`).
   def update(%{walk: walk}, socket), do: {:ok, walk(socket, walk)}
+
+  # The sheet's "Connect your <provider> account": a credential entry in
+  # front of the grant that asked for it (`connect/2`).
+  def update(%{connect: request}, socket) do
+    {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, connect(&1, request)})
+    {:ok, socket}
+  end
 
   # The sheet's walk at the moment the person confirmed, which the layer
   # commits (`commit_walk/2`).
@@ -704,6 +906,22 @@ defmodule PrismWeb.SystemLayer do
 
   defp fact(socket, ref, %{own: false}, :confirmed), do: set_status(socket, ref, :confirmed)
 
+  # A page's held ask its release already settled: the prompt keeps the
+  # outcome the release told it when the record's own `cancelled` fact
+  # arrives after it, since both say the same record ended and the outcome
+  # says why. An outcome that the approval could not be withdrawn is the
+  # exception: the fact shows the record was cancelled after all.
+  defp fact(
+         socket,
+         _ref,
+         %{own: true, origin: :page, status: {:refused, reason}} = panel,
+         :cancelled
+       )
+       when not is_withdraw_failed(reason) do
+    report(panel.prompt_id, {:refused, :cancelled})
+    clear_forms(socket, panel)
+  end
+
   defp fact(socket, ref, %{own: true} = panel, kind)
        when kind in [:cancelled, :voided, :expired] do
     socket = set_status(socket, ref, {:ended, kind})
@@ -728,7 +946,13 @@ defmodule PrismWeb.SystemLayer do
   defp fact(socket, _ref, _panel, _kind), do: socket
 
   # A page's own request: its prompt, marked as this client's, or the
-  # prompt the stream opened for it first, marked now.
+  # prompt the stream opened for it first, marked now. A proof can land
+  # before the ask does: the stream's `confirmed` fact then met no panel,
+  # or a panel not yet this client's, and is not delivered again. So a
+  # record that already reads confirmed, by the panel or by the home's own
+  # read, is approved here and reported to the page once, as the fact
+  # would have; a fact arriving after the ask finds it approved and reports
+  # nothing more.
   defp on_ask(socket, %{ref: ref} = ask) do
     case Map.get(socket.assigns.panels, ref) do
       nil ->
@@ -751,6 +975,7 @@ defmodule PrismWeb.SystemLayer do
             })
             |> mark_form(ask.form, prompt.id)
             |> arrive(prompt)
+            |> approve_landed(ref, Map.get(entry, :state) == "confirmed")
 
           {:error, :invalid_prompt} ->
             report(Prompt.confirmation_id(ref), {:refused, :invalid_prompt})
@@ -758,17 +983,43 @@ defmodule PrismWeb.SystemLayer do
         end
 
       panel ->
+        landed = panel.status == :confirmed or Map.get(panel.entry, :state) == "confirmed"
+
         socket
         |> put_panel(ref, %{panel | own: true, origin: :page, form: ask.form, status: :waiting})
         |> mark_form(ask.form, panel.prompt_id)
         |> mark_own(panel.prompt_id)
+        |> approve_landed(ref, landed)
     end
   end
 
-  # A completed change lets go of the form that typed it.
+  # A proof that landed before its ask: approved, and reported to the page
+  # (or its form sent again) as the `confirmed` fact does.
+  defp approve_landed(socket, ref, true) do
+    case Map.get(socket.assigns.panels, ref) do
+      %{own: true, origin: :page} = panel ->
+        socket = set_status(socket, ref, :approved)
+        report(panel.prompt_id, :confirmed)
+        if panel.form, do: push_resubmit(socket, panel.form), else: socket
+
+      _other ->
+        socket
+    end
+  end
+
+  defp approve_landed(socket, _ref, false), do: socket
+
+  # A completed change lets go of the form that typed it. A release's
+  # outcome replaces the record's `cancelled` fact heard before it, so the
+  # prompt ends saying why, whichever arrived first; an outcome that the
+  # approval could not be withdrawn never does, since the fact shows it
+  # was.
   defp on_outcome(socket, ref, outcome) do
     case Map.get(socket.assigns.panels, ref) do
       nil ->
+        socket
+
+      %{status: {:ended, :cancelled}} when is_unwithdrawn(outcome) ->
         socket
 
       panel ->
@@ -1092,7 +1343,7 @@ defmodule PrismWeb.SystemLayer do
   def handle_event("enter_credential", %{"prompt_id" => id} = params, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case open(socket, id, [:credential_entry]) do
-        {:ok, prompt} -> {:noreply, enter_credential(socket, prompt, Map.get(params, "secret"))}
+        {:ok, prompt} -> {:noreply, enter_credential(socket, prompt, params)}
         :none -> {:noreply, socket}
       end
     end)
@@ -1312,24 +1563,206 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  defp enter_credential(socket, %{subject: subject} = prompt, secret) do
-    case present(secret) do
-      :ok ->
-        args = %{
-          "name" => subject.name,
-          "kind" => "api_key",
-          "fields" => %{subject.field => secret}
-        }
+  # An instance entry's value: the operation the card named, with the
+  # card's arguments and the one value typed. The page that asked never
+  # holds the value; the layer hands it to the dispatch alone.
+  defp enter_credential(socket, %{subject: %{target: :instance} = subject} = prompt, params) do
+    secret = Map.get(params, "secret")
+
+    if present(secret) == :blank do
+      assign(socket, :error, "Enter the credential to save it.")
+    else
+      {tool, args} = instance_call(subject, secret)
+
+      case layer_call(socket, prompt, :resubmit, tool, args) do
+        {:asked, socket} -> socket
+        {:done, result, socket} -> dispatched(socket, prompt, result)
+      end
+    end
+  end
+
+  defp enter_credential(socket, %{subject: subject} = prompt, params) do
+    secret = Map.get(params, "secret")
+    destination = destination_params(params)
+    name = entry_name(subject, params)
+
+    cond do
+      not belongs_here?(socket, subject) ->
+        end_grant(socket, prompt)
+
+      present(secret) == :blank ->
+        assign(socket, :error, "Enter the credential to save it.")
+
+      destination["hosts"] == [] ->
+        assign(socket, :error, "Name the host the credential may be sent to.")
+
+      name == :blank ->
+        assign(socket, :error, "Name the entry to save it under.")
+
+      true ->
+        args =
+          %{
+            "name" => name,
+            "kind" => "api_key",
+            "fields" => %{subject.field => secret},
+            "destination" => destination,
+            "disclose" => disclose_param(params)
+          }
+          |> Prima.MapUtil.put_present("provider_hint", subject[:provider])
 
         case layer_call(socket, prompt, :resubmit, "vault/create", args) do
           {:asked, socket} -> socket
-          {:done, result, socket} -> dispatched(socket, prompt, result)
+          {:done, result, socket} -> entered(socket, prompt, result)
         end
-
-      :blank ->
-        assign(socket, :error, "Enter the credential to save it.")
     end
   end
+
+  defp instance_call(%{operation: :create, arguments: arguments, field: field}, secret),
+    do: {"instance_entry/create", Map.put(arguments, "fields", %{field => secret})}
+
+  defp instance_call(%{operation: :rotate, arguments: arguments, field: field}, secret),
+    do: {"instance_entry/rotate", Map.put(arguments, "fields", %{field => secret})}
+
+  # The name an entry is saved under: the subject's, or, for an entry a
+  # grant asked for, the one the person left in the form's name field.
+  defp entry_name(%{return: _return}, params) do
+    case String.trim(to_string(Map.get(params, "name", ""))) do
+      "" -> :blank
+      name -> name
+    end
+  end
+
+  defp entry_name(subject, _params), do: subject.name
+
+  # An entry a grant asked for goes back to that grant, bound to the need
+  # it was made for; the grant plans again before anything is confirmed.
+  defp entered(
+         socket,
+         %{subject: %{return: return} = subject} = prompt,
+         {:ok, %{entry: %{id: id}}}
+       )
+       when is_binary(id) do
+    if belongs_here?(socket, subject),
+      do: socket |> bind_entered(return, id) |> settle(prompt, :confirmed),
+      else: end_grant(socket, prompt)
+  end
+
+  defp entered(socket, prompt, result), do: dispatched(socket, prompt, result)
+
+  defp bind_entered(socket, %{prompt: grant_id} = return, entry_id) do
+    queue =
+      Enum.map(socket.assigns.queue, fn
+        %{id: ^grant_id, kind: :grant, subject: subject} = grant ->
+          decisions =
+            PrismWeb.ConsentSheetComponent.bind_entered(subject.decisions, return, entry_id)
+
+          subject = %{subject | decisions: decisions, preview: nil} |> Map.put(:replan, true)
+          %{grant | subject: subject}
+
+        prompt ->
+          prompt
+      end)
+
+    assign(socket, :queue, queue)
+  end
+
+  # The credential entry the open grant's sheet asked for, for the need
+  # `request` names: shown now, in front of the grant, which waits first
+  # in line and is shown again when the entry's prompt ends. A request for
+  # a grant no longer open is late, and shows nothing.
+  defp connect(socket, %{return: %{prompt: grant_id}} = request) do
+    case socket.assigns.current do
+      %{id: ^grant_id, kind: :grant} = grant ->
+        prompt = %{
+          id: "connect-#{System.unique_integer([:positive])}",
+          kind: :credential_entry,
+          action: :credential_entry,
+          subject: %{
+            name: request.provider,
+            field: request.field,
+            athanor_id: grant.subject.athanor_id,
+            provider: request.provider,
+            hosts: request.hosts,
+            paths: request.paths,
+            disclose_needed: request.disclose_needed,
+            return: request.return
+          }
+        }
+
+        case Prompt.validate(prompt) do
+          {:ok, prompt} ->
+            socket
+            |> assign(current: prompt, queue: [grant | socket.assigns.queue], error: nil)
+            |> mark_shown()
+
+          {:error, :invalid_prompt} ->
+            assign(socket, :error, "This account cannot be entered here.")
+        end
+
+      _gone ->
+        socket
+    end
+  end
+
+  defp connect(socket, _request), do: socket
+
+  @doc """
+  The destination a credential form names (`vault.create`'s
+  `destination`): `hosts` from the `destination_hosts` field (comma,
+  space or line separated, lower-cased), `scheme` from
+  `destination_scheme` (`https` unless `http` is chosen), and `port`,
+  `methods` and `paths` only when their fields name them. It is what the
+  form submitted, prefilled or typed; the vault holds the result to
+  `Prima.Destination`'s grammar.
+  """
+  @spec destination_params(map()) :: %{String.t() => term()}
+  def destination_params(params) when is_map(params) do
+    %{
+      "hosts" =>
+        params |> Map.get("destination_hosts", "") |> words() |> Enum.map(&String.downcase/1),
+      "scheme" => if(Map.get(params, "destination_scheme") == "http", do: "http", else: "https")
+    }
+    |> put_words(
+      "methods",
+      params |> Map.get("destination_methods", "") |> words() |> Enum.map(&String.upcase/1)
+    )
+    |> put_words("paths", params |> Map.get("destination_paths", "") |> words())
+    |> put_port(Map.get(params, "destination_port", ""))
+  end
+
+  @doc """
+  Whether a credential form asks for the value to be disclosed to the
+  app: only an explicit `disclose` checkbox turned on. Absent, the entry
+  is attach-only.
+  """
+  @spec disclose_param(map()) :: boolean()
+  def disclose_param(params) when is_map(params),
+    do: Map.get(params, "disclose") in ["true", "on"]
+
+  defp words(text) when is_binary(text),
+    do: text |> String.split(~r/[\s,]+/, trim: true)
+
+  defp words(_other), do: []
+
+  defp put_words(map, _key, []), do: map
+  defp put_words(map, key, words), do: Map.put(map, key, words)
+
+  # A port the person typed is sent as typed when it is not a number, so
+  # the vault's declaration refuses it rather than this form guessing.
+  defp put_port(map, port) when is_binary(port) do
+    case String.trim(port) do
+      "" ->
+        map
+
+      trimmed ->
+        case Integer.parse(trimmed) do
+          {number, ""} -> Map.put(map, "port", number)
+          _ -> Map.put(map, "port", trimmed)
+        end
+    end
+  end
+
+  defp put_port(map, _port), do: map
 
   defp choose(socket, %{subject: safe_mode} = prompt, offer) do
     case SafeMode.choose(safe_mode, offer) do
@@ -1358,8 +1791,9 @@ defmodule PrismWeb.SystemLayer do
   end
 
   # A refused commit consumed the walk's plan token whatever it answered:
-  # the sheet plans the same choices again, and the person may try again
-  # once it has.
+  # the sheet plans again (the same choices over the same ask, or the grant
+  # as it stands over an ask that moved), and the person may try again once
+  # it has.
   defp dispatched(socket, %{kind: :grant} = prompt, {:error, reason}) do
     send_update(PrismWeb.ConsentSheetComponent,
       id: sheet_id(socket.assigns.id, prompt.id),
@@ -1383,12 +1817,20 @@ defmodule PrismWeb.SystemLayer do
 
   # The sheet's walk, taken into the open grant prompt it was drawn for:
   # the decisions it holds, and the plan and preview of exactly those, the
-  # preview `nil` while the sheet reads one. A walk for a prompt no longer
-  # open is late and is dropped. Reads nothing.
-  defp walk(socket, %{prompt: prompt_id, plan: plan, preview: preview, decisions: decisions}) do
+  # preview `nil` while the sheet reads one, and what the sheet held beside
+  # them (`held`), which a sheet drawn again starts from. A walk for a
+  # prompt no longer open is late and is dropped. Reads nothing.
+  defp walk(
+         socket,
+         %{prompt: prompt_id, plan: plan, preview: preview, decisions: decisions} = walk
+       ) do
     case socket.assigns.current do
       %{id: ^prompt_id, kind: :grant, subject: subject} = prompt ->
-        subject = %{subject | plan: plan || subject.plan, preview: preview, decisions: decisions}
+        subject =
+          %{subject | plan: plan || subject.plan, preview: preview, decisions: decisions}
+          |> Map.drop([:replan, :suggestion_refused])
+          |> Prima.MapUtil.put_present(:held, Map.get(walk, :held))
+
         assign(socket, :current, %{prompt | subject: subject})
 
       _other ->
@@ -1396,25 +1838,63 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  # Every grant prompt planned in another athanor than the context's,
-  # open or waiting, ends unconfirmed.
+  # Every grant prompt planned in another athanor than the context's, and
+  # every credential entry a grant raised there, open or waiting, ends
+  # unconfirmed, as does a credential entry whose grant is gone: a key
+  # typed for one athanor is never stored in another. The layer lets go of
+  # what such an entry held, so a request it was waiting on is never made
+  # again; the request is cancelled where the context reaches it, and a
+  # record left in the athanor it was opened in lapses at its expiry.
   defp end_moved_grants(%{assigns: %{context: %Context{athanor_id: athanor_id}}} = socket) do
-    moved? = &match?(%{kind: :grant, subject: %{athanor_id: id}} when id != athanor_id, &1)
-    {gone, kept} = Enum.split_with(socket.assigns.queue, moved?)
-    Enum.each(gone, &report(&1.id, :dismissed))
-    socket = assign(socket, :queue, kept)
+    socket = end_prompts(socket, &moved?(&1, athanor_id))
 
-    if moved?.(socket.assigns.current),
-      do: end_grant(socket, socket.assigns.current),
-      else: socket
+    grants =
+      for %{kind: :grant, id: id} <- [socket.assigns.current | socket.assigns.queue], do: id
+
+    end_prompts(socket, &orphaned?(&1, grants))
   end
 
   defp end_moved_grants(socket), do: socket
 
+  defp moved?(%{kind: kind, subject: %{athanor_id: id}}, athanor_id)
+       when kind in [:grant, :credential_entry],
+       do: id != athanor_id
+
+  defp moved?(_prompt, _athanor_id), do: false
+
+  defp orphaned?(%{kind: :credential_entry, subject: %{return: %{prompt: grant}}}, grants),
+    do: grant not in grants
+
+  defp orphaned?(_prompt, _grants), do: false
+
+  defp end_prompts(socket, ends?) do
+    {gone, kept} = Enum.split_with(socket.assigns.queue, ends?)
+
+    socket =
+      Enum.reduce(gone, assign(socket, :queue, kept), fn prompt, socket ->
+        report(prompt.id, :dismissed)
+        drop_prompt_asks(socket, prompt.id, cancel: true)
+      end)
+
+    if ends?.(socket.assigns.current),
+      do: end_grant(socket, socket.assigns.current),
+      else: socket
+  end
+
   defp end_grant(socket, prompt) do
     report(prompt.id, :dismissed)
-    advance(socket)
+    socket |> drop_prompt_asks(prompt.id, cancel: true) |> advance()
   end
+
+  # Whether a credential entry a grant raised still belongs to this
+  # layer's context: the athanor its grant was planned in, and its grant
+  # still waiting behind it. An entry no grant raised names neither.
+  defp belongs_here?(socket, %{athanor_id: athanor_id, return: %{prompt: grant}}) do
+    athanor_id == context_athanor(socket) and
+      Enum.any?(socket.assigns.queue, &match?(%{id: ^grant, kind: :grant}, &1))
+  end
+
+  defp belongs_here?(_socket, _subject), do: true
 
   defp context_athanor(%{assigns: %{context: %Context{athanor_id: athanor_id}}}), do: athanor_id
   defp context_athanor(_socket), do: nil
@@ -1878,6 +2358,40 @@ defmodule PrismWeb.SystemLayer do
     """
   end
 
+  # An instance entry's value is all the prompt asks: the card collected
+  # the rest. The form is the browser's, as below.
+  defp body(%{prompt: %{kind: :credential_entry, subject: %{target: :instance}}} = assigns) do
+    ~H"""
+    <div id={"#{@id}-credential-#{@prompt.id}"} phx-update="ignore">
+      <form
+        id={"#{@id}-credential"}
+        phx-submit="enter_credential"
+        phx-target={@myself}
+        class="space-y-2"
+        data-target="instance"
+      >
+        <input type="hidden" name="prompt_id" value={@prompt.id} />
+        <label for={"#{@id}-secret"} class="block text-sm font-medium">
+          {@prompt.subject.field} for the instance entry {@prompt.subject.name}
+        </label>
+        <input
+          id={"#{@id}-secret"}
+          name="secret"
+          type="password"
+          autocomplete="off"
+          required
+          data-test="credential-secret"
+          class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+        />
+        <p class="text-sm text-gray-300" data-test="credential-attach">
+          An instance entry's value is never handed to a component: CYFR attaches it to
+          requests bound for the entry's destination, for the people it is offered to.
+        </p>
+      </form>
+    </div>
+    """
+  end
+
   # The form is the browser's: kept as typed across every update, so the
   # value can be submitted again once its record is confirmed, and gone
   # with the prompt.
@@ -1891,8 +2405,25 @@ defmodule PrismWeb.SystemLayer do
         class="space-y-2"
       >
         <input type="hidden" name="prompt_id" value={@prompt.id} />
+        <div :if={@prompt.subject[:return]} class="space-y-1">
+          <label for={"#{@id}-entry-name"} class="block text-sm font-medium">
+            Save it as
+          </label>
+          <input
+            id={"#{@id}-entry-name"}
+            name="name"
+            type="text"
+            value={@prompt.subject.name}
+            autocomplete="off"
+            required
+            data-test="credential-name"
+            class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+          />
+        </div>
         <label for={"#{@id}-secret"} class="block text-sm font-medium">
-          {@prompt.subject.field} for {@prompt.subject.name}
+          {@prompt.subject.field} for {if @prompt.subject[:return],
+            do: "your #{@prompt.subject.provider} account",
+            else: @prompt.subject.name}
         </label>
         <input
           id={"#{@id}-secret"}
@@ -1903,6 +2434,89 @@ defmodule PrismWeb.SystemLayer do
           data-test="credential-secret"
           class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
         />
+        <fieldset class="space-y-2" data-test="credential-destination">
+          <legend class="text-sm font-medium">Where it may be sent</legend>
+          <label for={"#{@id}-destination-hosts"} class="block text-xs text-gray-400">
+            Hosts (for example api.example.com, or *.example.com)
+          </label>
+          <input
+            id={"#{@id}-destination-hosts"}
+            name="destination_hosts"
+            type="text"
+            value={prefilled(@prompt.subject[:hosts])}
+            autocomplete="off"
+            required
+            data-test="credential-destination-hosts"
+            class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+          />
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label for={"#{@id}-destination-scheme"} class="block text-xs text-gray-400">
+                Scheme
+              </label>
+              <select
+                id={"#{@id}-destination-scheme"}
+                name="destination_scheme"
+                class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 text-sm"
+              >
+                <option value="https">https</option>
+                <option value="http">http</option>
+              </select>
+            </div>
+            <div>
+              <label for={"#{@id}-destination-port"} class="block text-xs text-gray-400">
+                Port (optional)
+              </label>
+              <input
+                id={"#{@id}-destination-port"}
+                name="destination_port"
+                type="text"
+                inputmode="numeric"
+                autocomplete="off"
+                class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm"
+              />
+            </div>
+          </div>
+          <label for={"#{@id}-destination-methods"} class="block text-xs text-gray-400">
+            Methods (optional, for example GET POST)
+          </label>
+          <input
+            id={"#{@id}-destination-methods"}
+            name="destination_methods"
+            type="text"
+            autocomplete="off"
+            class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm"
+          />
+          <label for={"#{@id}-destination-paths"} class="block text-xs text-gray-400">
+            Path prefixes (optional, for example /v1/)
+          </label>
+          <input
+            id={"#{@id}-destination-paths"}
+            name="destination_paths"
+            type="text"
+            value={prefilled(@prompt.subject[:paths])}
+            autocomplete="off"
+            class="w-full rounded-md border border-gray-600 bg-transparent px-2 py-1 font-mono text-sm"
+          />
+        </fieldset>
+        <label class="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            name="disclose"
+            value="true"
+            checked={@prompt.subject[:disclose_needed] == true}
+            data-test="credential-disclose"
+            class="mt-1"
+          />
+          <span>
+            Let the app read the value itself. Left off, the value is never handed to the
+            app: CYFR attaches it to requests bound for the entry's destination, and an app
+            asking for it is refused.
+            <span :if={@prompt.subject[:disclose_needed] == true}>
+              The app asking for this account reads the value itself, so this is on.
+            </span>
+          </span>
+        </label>
       </form>
     </div>
     """
@@ -2153,11 +2767,20 @@ defmodule PrismWeb.SystemLayer do
         data-test="credential-submit"
         class={button_class(true)}
       >
-        {if @may, do: "Save to vault", else: "Request confirmation"}
+        {cond do
+          not @may -> "Request confirmation"
+          @prompt.subject[:target] == :instance -> "Save to this instance"
+          true -> "Save to vault"
+        end}
       </button>
     </div>
     """
   end
+
+  # A list a credential form is prefilled with, as its field spells one;
+  # nothing when there is none, so the field starts empty.
+  defp prefilled([_ | _] = words), do: Enum.join(words, " ")
+  defp prefilled(_none), do: nil
 
   defp button_class(primary?) do
     [
@@ -2173,6 +2796,15 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :grant, subject: %{ref: ref}}), do: "Grant #{ref}"
   defp title(%{kind: :unlock}), do: "Unlock the vault"
   defp title(%{kind: :sign_in}), do: "Sign in"
+
+  defp title(%{kind: :credential_entry, subject: %{target: :instance, operation: :rotate} = s}),
+    do: "Rotate the instance entry #{s.name}"
+
+  defp title(%{kind: :credential_entry, subject: %{target: :instance, name: name}}),
+    do: "Enter the key for the instance entry #{name}"
+
+  defp title(%{kind: :credential_entry, subject: %{return: _return, provider: provider}}),
+    do: "Connect your #{provider} account"
 
   defp title(%{kind: :credential_entry, subject: %{name: name}}),
     do: "Enter a credential for #{name}"
@@ -2197,6 +2829,11 @@ defmodule PrismWeb.SystemLayer do
 
   defp description(%{kind: :sign_in, subject: subject}),
     do: subject[:message] || "Sign in to go on. You leave this page to do it."
+
+  defp description(%{kind: :credential_entry, subject: %{target: :instance}}),
+    do:
+      "The value goes straight to this instance's own entries, sealed at rest. No app " <>
+        "sees it, and it is never shown again."
 
   defp description(%{kind: :credential_entry}),
     do:
@@ -2284,6 +2921,20 @@ defmodule PrismWeb.SystemLayer do
   defp status(%{status: {:refused, :asked_again}}),
     do: "The request changed, so it was asked for again. Nothing was changed."
 
+  defp status(%{status: {:refused, :withdraw_failed}}),
+    do: "The approval could not be withdrawn; it ends at its expiry. Nothing was changed."
+
+  # A refused repeat whose record could not be cancelled: the refusal,
+  # then that its approval ends at its expiry.
+  defp status(%{status: {:refused, {:withdraw_failed, reason}}}),
+    do:
+      "Refused: " <>
+        full_stop(Ops.error_message(reason)) <>
+        " The approval could not be withdrawn; it ends at its expiry."
+
+  defp status(%{status: {:refused, :form_unreadable}}),
+    do: "The form sent again no longer reads, so the approval was withdrawn. Nothing was changed."
+
   defp status(%{status: {:refused, reason}}), do: "Refused: " <> Ops.error_message(reason)
   defp status(%{status: {:ended, :cancelled}}), do: "Cancelled. Nothing was changed."
 
@@ -2291,6 +2942,11 @@ defmodule PrismWeb.SystemLayer do
     do: "This request was withdrawn. Nothing was changed."
 
   defp status(%{status: {:ended, :expired}}), do: "This request expired. Nothing was changed."
+
+  # A sentence ended, so another can follow it.
+  defp full_stop(sentence) do
+    if String.ends_with?(sentence, [".", "!", "?"]), do: sentence, else: sentence <> "."
+  end
 end
 
 defmodule PrismWeb.SystemLayer.Listener do

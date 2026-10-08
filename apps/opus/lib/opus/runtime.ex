@@ -46,6 +46,8 @@ defmodule Opus.Runtime do
 
   require Logger
 
+  alias Prima.Authority.Blob.Edge
+
   # Default memory ceiling for sandboxed execution — the shared 64 MiB
   # bound, read from its owner rather than re-spelled here.
   @default_max_memory_bytes Prima.Limits.default_max_memory_bytes()
@@ -298,7 +300,7 @@ defmodule Opus.Runtime do
        ) do
     vault_imports =
       if component_type == :catalyst do
-        build_vault_imports(preloaded_fields, component_ref, host)
+        build_vault_imports(preloaded_fields, component_ref, host, edge)
       else
         %{}
       end
@@ -422,13 +424,19 @@ defmodule Opus.Runtime do
   defp artifact(fetch) when is_function(fetch, 0), do: fetch.()
 
   # A catalyst's `cyfr:vault/read` import, answered from the fields its
-  # attach was handed (the consented projection, which CYFR audited as it
-  # dispensed them). A read outside them is refused, and reported to CYFR
-  # through the attempt's host client (`record_denial`, `secret_denied`),
-  # which audits it for the attempt the call key names. The name is the
-  # guest's: one the contract bounds out (`Prima.HostAPI.valid_field_name?/1`)
-  # is refused unreported, and logged without the name.
-  defp build_vault_imports(preloaded, component_ref, host) when is_map(preloaded) do
+  # attach was handed: a disclosed entry's consented projection and a
+  # publisher's provided values, which CYFR audited as it dispensed them.
+  # A field of an entry the node's edge binds but CYFR attaches to its
+  # requests and never hands over is refused as such
+  # (`disclosure_refused`); any other read outside them is refused as
+  # outside the projection (`secret_denied`). Either is reported to CYFR
+  # through the attempt's host client (`record_denial`), which audits it
+  # for the attempt the call key names. The name is the guest's: one the
+  # contract bounds out (`Prima.HostAPI.valid_field_name?/1`) is refused
+  # unreported, and logged without the name.
+  defp build_vault_imports(preloaded, component_ref, host, edge) when is_map(preloaded) do
+    attached = attached_fields(edge)
+
     %{
       "cyfr:vault/read@0.1.0" => %{
         "get" =>
@@ -439,23 +447,39 @@ defmodule Opus.Runtime do
                  {:ok, value}
 
                :error ->
-                 report_denied(host, name, component_ref)
-                 {:error, "access-denied: #{name} not granted to #{component_ref}"}
+                 if MapSet.member?(attached, name) do
+                   report_denied(host, name, component_ref, "disclosure_refused")
+
+                   {:error,
+                    "disclosure_refused: #{name} is attached to requests by CYFR and never " <>
+                      "handed to #{component_ref}"}
+                 else
+                   report_denied(host, name, component_ref, "secret_denied")
+                   {:error, "access-denied: #{name} not granted to #{component_ref}"}
+                 end
              end
            end}
       }
     }
   end
 
-  defp report_denied(host, name, component_ref) do
-    if Prima.HostAPI.valid_field_name?(name) do
-      Logger.warning(
-        "[Opus.Runtime] Field '#{name}' is outside the consent's projection for " <>
-          "'#{component_ref}'. Re-grant via the consent walk: " <>
-          "cyfr profile grant #{component_ref}"
-      )
+  # The fields the node's edge projects from the entries it binds: the
+  # default binding's and each named account's. Those the attempt was not
+  # handed are attached by CYFR, never disclosed.
+  defp attached_fields(%Edge{vault: %{entry_id: _entry} = vault}) do
+    named = vault |> Map.get(:named, %{}) |> Map.values()
+    MapSet.new(Enum.flat_map([vault | named], &projected_fields/1))
+  end
 
-      if host, do: _ = Opus.HostClient.record_denial(host, "secret_denied", name)
+  defp attached_fields(_edge), do: MapSet.new()
+
+  defp projected_fields(%{projection: %{fields: fields}}) when is_list(fields), do: fields
+  defp projected_fields(_vault), do: []
+
+  defp report_denied(host, name, component_ref, reason) do
+    if Prima.HostAPI.valid_field_name?(name) do
+      Logger.warning(denied_line(reason, name, component_ref))
+      if host, do: _ = Opus.HostClient.record_denial(host, reason, name)
     else
       Logger.warning(
         "[Opus.Runtime] '#{component_ref}' asked its vault for a name that is no field name"
@@ -464,6 +488,17 @@ defmodule Opus.Runtime do
 
     :ok
   end
+
+  defp denied_line("disclosure_refused", name, component_ref),
+    do:
+      "[Opus.Runtime] Field '#{name}' is attached to requests by CYFR and never handed to " <>
+        "'#{component_ref}'"
+
+  defp denied_line("secret_denied", name, component_ref),
+    do:
+      "[Opus.Runtime] Field '#{name}' is outside the consent's projection for " <>
+        "'#{component_ref}'. Re-grant via the consent walk: " <>
+        "cyfr profile grant #{component_ref}"
 
   # ===========================================================================
   # Private Functions

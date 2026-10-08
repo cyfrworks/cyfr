@@ -35,7 +35,7 @@ defmodule Cyfr.BoundariesTest do
   use ExUnit.Case, async: true
 
   alias Cyfr.Boundaries
-  alias Prima.Test.{CodeLines, SourceTree}
+  alias Prima.Test.{Beams, CodeLines, SourceTree}
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
@@ -117,6 +117,15 @@ defmodule Cyfr.BoundariesTest do
 
   defp lines_read(scanned), do: Enum.sum(for {_path, lines} <- scanned, do: length(lines))
 
+  # The application a module is loaded from, nil for one no loaded
+  # application claims.
+  defp app_of(module) do
+    case :application.get_application(module) do
+      {:ok, app} -> app
+      :undefined -> nil
+    end
+  end
+
   # `.../Elixir.Cyfr.JCS.beam` is the module `Prima.JCS`. An Erlang module's
   # beam carries no prefix and yields its own name, which no layer claims.
   defp module_name(path),
@@ -134,10 +143,8 @@ defmodule Cyfr.BoundariesTest do
   defp compiled_reaches(app) do
     for path <- beams(app),
         caller = module_name(path),
-        production?(path),
-        {:ok, {_mod, [imports: imports]}} <-
-          [:beam_lib.chunks(String.to_charlist(path), [:imports])],
-        {callee, function, arity} <- imports,
+        Beams.production?(path),
+        {callee, function, arity} <- Beams.imports(String.to_charlist(path)),
         callee = inspect(callee),
         callee != caller,
         uniq: true,
@@ -145,79 +152,22 @@ defmodule Cyfr.BoundariesTest do
   end
 
   # Every Sanctum function a beam (a path or a compiled binary) calls or
-  # captures. A call is in the import table; an external capture
-  # (`&Sanctum.Egress.pinned_request/5`) emits no import and is a fun in
-  # the literal table instead, so both are read.
+  # captures, read by `Prima.Test.Beams`.
   defp sanctum_reaches(beam) do
-    for {module, function, arity} <- beam_imports(beam) ++ beam_captures(beam),
+    for {module, function, arity} <- Beams.reaches(beam),
         name = inspect(module),
         name == "Sanctum" or String.starts_with?(name, "Sanctum."),
         uniq: true,
         do: {name, function, arity}
   end
 
-  defp beam_imports(beam) do
-    {:ok, {_mod, [imports: imports]}} = :beam_lib.chunks(beam, [:imports])
-    imports
-  end
-
-  # The literal table is `<<size::32, data>>`, `data` zlib-compressed unless
-  # `size` is 0, and holds a count and then each term length-prefixed.
-  defp beam_captures(beam) do
-    case :beam_lib.chunks(beam, [~c"LitT"]) do
-      {:ok, {_mod, [{~c"LitT", <<size::32, data::binary>>}]}} ->
-        <<count::32, terms::binary>> = if size == 0, do: data, else: :zlib.uncompress(data)
-        terms |> literal_terms(count) |> Enum.flat_map(&external_funs/1)
-
-      _ ->
-        []
-    end
-  end
-
-  defp literal_terms(_binary, 0), do: []
-
-  defp literal_terms(<<size::32, term::binary-size(size), rest::binary>>, count),
-    do: [:erlang.binary_to_term(term) | literal_terms(rest, count - 1)]
-
-  defp external_funs(fun) when is_function(fun) do
-    info = Function.info(fun)
-
-    if info[:type] == :external,
-      do: [{info[:module], info[:name], info[:arity]}],
-      else: []
-  end
-
-  defp external_funs(list) when is_list(list), do: improper_flat_map(list)
-  defp external_funs(tuple) when is_tuple(tuple), do: external_funs(Tuple.to_list(tuple))
-
-  defp external_funs(map) when is_map(map),
-    do: map |> Map.to_list() |> external_funs()
-
-  defp external_funs(_term), do: []
-
-  defp improper_flat_map([head | tail]), do: external_funs(head) ++ improper_flat_map(tail)
-  defp improper_flat_map([]), do: []
-  defp improper_flat_map(tail), do: external_funs(tail)
-
   # The host application's production beams, as the Sanctum roster reads them.
   defp host_sanctum_reaches do
     for path <- beams(:cyfr),
-        production?(path),
+        Beams.production?(path),
         reach <- sanctum_reaches(String.to_charlist(path)),
         uniq: true,
         do: reach
-  end
-
-  # The test build compiles `test/support` into the same ebin. A support
-  # module is not the app, and its reaches are the suite's.
-  defp production?(path) do
-    case :beam_lib.chunks(String.to_charlist(path), [:compile_info]) do
-      {:ok, {_mod, [compile_info: info]}} ->
-        info |> Keyword.get(:source, ~c"") |> to_string() |> String.contains?("/lib/")
-
-      _ ->
-        false
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -613,7 +563,7 @@ defmodule Cyfr.BoundariesTest do
       assert MapSet.member?(below, "Arca.Members")
     end
 
-    test "the security-row roster is exactly the twenty-eight stores, each a module" do
+    test "the security-row roster is exactly the thirty stores, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
@@ -624,7 +574,8 @@ defmodule Cyfr.BoundariesTest do
                  Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog
                  Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
                  Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions
-                 Arca.InstallationClaims Arca.RequestRateWindows
+                 Arca.InstallationClaims Arca.RequestRateWindows Arca.InstanceEntries
+                 Arca.InstanceEntryUsage
                ))
 
       for name <- Boundaries.sanctum_only_storage() do
@@ -776,6 +727,89 @@ defmodule Cyfr.BoundariesTest do
                  "#{module}.#{function}/#{arity} is not exported"
         end
       end
+    end
+
+    # The instance's own credentials are Sanctum's to administer and resolve
+    # through declared operations and its own attach path: the host reaches
+    # them for the retention cycle's usage sweep alone, which names no entry
+    # and no person.
+    test "the host reaches the instance's entries for the usage sweep alone" do
+      assert Boundaries.sanctum_exports()["Sanctum.InstanceEntries"] == [sweep_usage: 0]
+
+      reached =
+        for {"Sanctum.InstanceEntries", function, arity} <- host_sanctum_reaches(),
+            uniq: true,
+            do: {function, arity}
+
+      assert reached == [sweep_usage: 0]
+
+      assert [row] =
+               for(
+                 %{into: "Sanctum", allow: allow} = row <- Boundaries.surfaces(),
+                 "Sanctum.InstanceEntries" in allow,
+                 do: row
+               )
+
+      assert "apps/cyfr/lib/cyfr/**/*.ex" in row.from
+
+      assert row.reason =~
+               "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
+                 "instance-entry usage days (`sweep_usage/0`), which names no entry and no person"
+    end
+
+    # The vault decides the value an attached request carries; the control
+    # plane's transport is its one caller, and reaches nothing else of it.
+    test "the host reaches the attach decision for resolve/5 alone, from the attached request" do
+      assert Boundaries.sanctum_exports()["Sanctum.Attach"] == [resolve: 5]
+
+      reached =
+        for {"Sanctum.Attach", function, arity} <- host_sanctum_reaches(),
+            uniq: true,
+            do: {function, arity}
+
+      assert reached == [resolve: 5]
+
+      assert [row] =
+               for(
+                 %{into: "Sanctum", allow: allow} = row <- Boundaries.surfaces(),
+                 "Sanctum.Attach" in allow,
+                 do: row
+               )
+
+      assert "apps/cyfr/lib/crucible/**/*.ex" in row.from
+      assert row.reason =~ "`Sanctum.Attach` is `Crucible.Host.AttachedFetch`'s one resolution"
+
+      # The reader's seam it shares stays inside Sanctum: the host reads
+      # material by consent through the disclosed dispense alone.
+      assert Boundaries.sanctum_exports()["Sanctum.VaultReader"][:load_and_unseal] == nil
+      assert Boundaries.sanctum_exports()["Sanctum.VaultReader"][:fetch] == 3
+      assert Boundaries.sanctum_exports()["Sanctum.VaultReader"][:oauth_token] == 4
+    end
+
+    # Who a person may send a copy to is the tenancy's answer: the Files
+    # page's picker reads it, and nothing else of the host does.
+    test "the host reads the people a person shares an athanor with from the Files page alone" do
+      assert Boundaries.sanctum_exports()["Sanctum.Tenancy.Members"] ==
+               [list_by_athanor: 1, member?: 2, people_sharing: 1, solo?: 1]
+
+      callers =
+        for path <- beams(:cyfr),
+            Beams.production?(path),
+            {"Sanctum.Tenancy.Members", :people_sharing, 1} in sanctum_reaches(
+              String.to_charlist(path)
+            ),
+            do: Path.basename(path, ".beam")
+
+      assert callers == ["Elixir.PrismWeb.FilesLive"]
+
+      assert [row] =
+               for(
+                 %{into: "Sanctum", from: from} = row <- Boundaries.surfaces(),
+                 "apps/cyfr/lib/prism_web/**/*.ex" in from,
+                 do: row
+               )
+
+      assert "Sanctum.Tenancy" in row.allow
     end
 
     test "a planted call or capture outside the roster is reported, and a dropped one is stale" do
@@ -1540,7 +1574,13 @@ defmodule Cyfr.BoundariesTest do
       end
     end
 
-    test "the assistant reads consent's derivation and nothing of the plane that writes it" do
+    # The assistant reads two things of the consent plane: what a source
+    # declares, through consent's derivation, and which accounts an app's
+    # own profile binds, through its accounts read. The facade itself, the
+    # loader and the plane that writes a consent stay out of reach, and the
+    # row allows those two alone, so a later reach fails rather than rides.
+    test "the assistant reads consent's derivation and its accounts read, and nothing else of " <>
+           "the consent plane" do
       row =
         Enum.find(
           Boundaries.surfaces(),
@@ -1552,14 +1592,52 @@ defmodule Cyfr.BoundariesTest do
          CodeLines.aliases(~S'''
          defmodule Aqua.Planted do
            def declared(ctx, ref), do: Sanctum.Consent.ShapeDerivation.manifest_blocks(ctx, ref)
+           def account(ctx, ref), do: Sanctum.Consent.Accounts.resolve(ctx, :default, ref, "Work")
            def grant(ctx), do: Sanctum.Consent.Commit.commit(ctx, %{})
            def profiles(ctx, ref), do: Sanctum.Consent.profiles(ctx, ref)
+           def head(ctx, p, c), do: Sanctum.Consent.Loader.admitted_blob(ctx, p, c)
          end
          ''')}
       ]
 
       assert Boundaries.surface_violations(row, planted) ==
-               ["Sanctum.Consent", "Sanctum.Consent.Commit"]
+               ["Sanctum.Consent", "Sanctum.Consent.Commit", "Sanctum.Consent.Loader"]
+
+      assert Enum.sort(row.allow) == [
+               "Sanctum.Consent.Accounts",
+               "Sanctum.Consent.ShapeDerivation"
+             ]
+    end
+
+    # The accounts read is read-only by construction: every module it calls,
+    # outside the contracts and the language's own runtime, is one of the
+    # reads it is documented to make, or the loader's one reading of a
+    # damaged head. A write added there fails here.
+    test "the assistant's accounts read calls only reads of the consent plane" do
+      beam =
+        :sanctum
+        |> Application.app_dir("ebin")
+        |> Path.join("Elixir.Sanctum.Consent.Accounts.beam")
+        |> String.to_charlist()
+
+      runtime = [:prima, :elixir, :stdlib, :kernel, :erts]
+
+      calls =
+        for {module, function, arity} <- Beams.reaches(beam),
+            module != Sanctum.Consent.Accounts,
+            app_of(module) not in runtime,
+            uniq: true,
+            do: "#{inspect(module)}.#{function}/#{arity}"
+
+      assert Enum.sort(calls) == [
+               "Arca.ConsentStorage.active_heads/2",
+               "Sanctum.Consent.Loader.admitted_blob/3",
+               "Sanctum.Consent.Loader.damage?/1",
+               "Sanctum.Consent.Loader.damage_refusal/3",
+               "Sanctum.Consent.head_consent/2",
+               "Sanctum.Consent.profiles/2",
+               "Sanctum.Context.actor/1"
+             ]
     end
 
     test "a domain that takes a connection is reported with its file and line" do
@@ -2495,6 +2573,24 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
       [
         "forbidden reference to Emissary.External.Server.State",
         "references from Grimoire to Emissary are not allowed"
+      ]
+    )
+  end
+
+  test "the assistant naming the tool surface", %{copy: copy} do
+    assert_refused(
+      copy,
+      "cyfr",
+      "aqua/boundary_plant.ex",
+      """
+      defmodule Aqua.BoundaryPlant do
+        alias Emissary.MCP.Progress
+        def plant, do: Progress
+      end
+      """,
+      [
+        "forbidden reference to Emissary.MCP.Progress",
+        "references from Aqua to Emissary are not allowed"
       ]
     )
   end

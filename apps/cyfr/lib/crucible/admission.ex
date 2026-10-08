@@ -35,6 +35,7 @@ defmodule Crucible.Admission do
   require Logger
 
   alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Prima.Authority.Blob.Edge
   alias Prima.Authority.RootSelect
   alias Crucible.{Artifacts, Assignments, Attempt, Attestation, Close, Delegation}
@@ -86,6 +87,39 @@ defmodule Crucible.Admission do
     selection ignores authentication entirely and the selector is unused.
   - `:ceiling`, `:live_shape_digest`, `:budget_id` —
     see `Sanctum.Consent.Loader.load_root/3`.
+  - `:connection` — the account the root's own calls name: the root's
+    vault is the named binding its profile's ingress holds under that
+    name, with its own binding key, and a name the ingress does not bind
+    is `{:error, :connection_not_granted}` before anything runs
+    (`Prima.Authority.root/3`). Absent or nil, the ingress's default.
+
+  A context carrying `approved_entry` (`Sanctum.Context`, set by an
+  approved launch alone) roots only where the loaded root's binding names
+  that entry under the name its binding stored. Another entry, another
+  stored name, a vault that binds none, or a name the ingress no longer
+  binds is `{:error, :approved_entry_moved}` before anything runs, in
+  place of `:connection_not_granted`.
+
+  The component graph the consent is judged against is read before the
+  loader is asked (`Compendium.resolve_verified_activation/2`). One that
+  cannot be read right now is `{:error, {:unavailable, "The component
+  graph"}}`, and one whose stored rows do not hash is
+  `{:error, {:corrupt, {:component_graph, ref}}}`, `ref` the root's own
+  component ref: an outage and damage, never a setup to make.
+
+  The selected profile's own stored grant, or the release it runs, that
+  the loader cannot trust (`Sanctum.Consent.Loader.damage?/1`) is damage
+  in the loader's one reading of it
+  (`Sanctum.Consent.Loader.damage_refusal/3`), never the loader's own
+  term: a profile and head that cannot root an authority is
+  `{:error, {:corrupt, {:profile, id}}}`; a running release that does not
+  re-derive from its row is `{:error, {:corrupt, {:component_graph,
+  ref}}}`, `ref` the root's own component ref; and an active profile with
+  no head, or a head whose bytes fail their digest or do not parse, whose
+  revision, bindings or stored references do not agree, or whose grant
+  holds no node or ingress of its own, is `{:error, {:head_corrupt, id}}`,
+  `id` the profile's. A lender's refusals and every other answer of the
+  loader stand as the loader gave them.
   """
   @spec authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
           {:ok, Authority.t()} | {:error, term()}
@@ -151,7 +185,11 @@ defmodule Crucible.Admission do
   authority without executing.
 
   Required option: `:ctx`. `:guest_fn` (`:call`, the default, or `:spawn`)
-  and `:declared_needs` are host-threaded by the formula closure. A
+  and `:declared_needs` are host-threaded by the formula closure.
+  `:connection` is the account the call asks its edge for: the child
+  holds that account's binding, or the edge's default for nil (the
+  default), and an account the edge does not bind is denied
+  `:connection_not_granted` (`Prima.Authority.Transition`). A
   spawn-shaped step charges the root's invoke budget; the caller releases
   it (`Sanctum.Authority.release_invoke/1`). A denial charges nothing.
   """
@@ -177,7 +215,8 @@ defmodule Crucible.Admission do
            # `inspect_component/2` answers string keys; a nil digest drops
            # a bound child to zero authority.
            activation_digest: component && component["release_digest"],
-           declared_needs: Keyword.get(opts, :declared_needs, [])
+           declared_needs: Keyword.get(opts, :declared_needs, []),
+           connection: Keyword.get(opts, :connection)
          }}
 
       decision = %{component: component, reference: reference, need: need}
@@ -270,6 +309,11 @@ defmodule Crucible.Admission do
   to answer with that child (`Arca.Execution.child_by_key/3`). Any other
   later refusal closes the row failed first and answers what
   `Crucible.Close.fail/3` answers.
+
+  The context the run is admitted with, which its row, its close and its
+  attempt carry on, holds no `approved_entry` (`Sanctum.Context`): an
+  approved launch's is compared where its root is loaded
+  (`authority_for/4`) and consumed here.
   """
   @spec admit(Context.t(), String.t(), map(), keyword()) :: {:ok, admitted()} | {:error, term()}
   def admit(%Context{} = ctx, reference, input, opts)
@@ -278,6 +322,11 @@ defmodule Crucible.Admission do
     # here, so a member that holds no slot in the cell admits nothing.
     if Arca.ControlPlane.held?() do
       ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Prima.UUID7.request_id()}
+      # An approved launch's entry was compared where its root was loaded;
+      # the context the run carries on (its row, its close, its attempt and
+      # so its chain, its children and its calls) holds none, so nothing
+      # later in the run compares against it.
+      ctx = %{ctx | approved_entry: nil}
       admit_owned(ctx, reference, input, opts)
     else
       {:error, :control_plane_lost}
@@ -922,10 +971,41 @@ defmodule Crucible.Admission do
          {:ok, candidates} <- decoded(entries, pinned),
          {:ok, profile} <- select.(candidates),
          {:ok, _ref, _type, component} <- inspect_component(ctx, reference),
-         {:ok, authority, stamp} <- load_authority(ctx, profile, component, opts) do
+         {:ok, authority, stamp} <-
+           approved_root(ctx, load_authority(ctx, profile, component, opts)) do
       {:ok, %{authority: authority, stamp: stamp, profile: profile}}
     end
   end
+
+  # An approved launch roots only on the account its card showed (the
+  # context's `approved_entry`, which `Aqua.Launch` alone sets), judged on
+  # the loader's own answer: the same read of the head that picked the
+  # root's named binding, with none between. The root's binding must name
+  # the approved entry under the name its binding stored. Another entry,
+  # another stored name, a vault that binds none, or a name the ingress no
+  # longer binds at all (`:connection_not_granted` from the pick) is the
+  # same stale approval, refused before anything starts.
+  defp approved_root(%Context{approved_entry: nil}, loaded), do: loaded
+
+  defp approved_root(%Context{approved_entry: approved}, {:ok, authority, _stamp} = loaded) do
+    if approved_binding?(authority, approved),
+      do: loaded,
+      else: {:error, :approved_entry_moved}
+  end
+
+  defp approved_root(_ctx, {:error, :connection_not_granted}), do: {:error, :approved_entry_moved}
+  defp approved_root(_ctx, refused), do: refused
+
+  # The binding's key spells the name it was stored under
+  # (`Prima.Authority.Blob.binding_key/3`), compared exactly: a name the
+  # head now stores in another case is another stored name.
+  defp approved_binding?(
+         %Authority{resources: %Edge{vault: %{entry_id: entry, binding_key: key}}},
+         %{entry: entry, name: name}
+       ),
+       do: match?({:ok, {_node, _edge, ^name}}, Blob.parse_binding_key(key))
+
+  defp approved_binding?(_authority, _approved), do: false
 
   defp read_profiles(ctx, name_ref) do
     case Sanctum.Consent.profiles(ctx, name_ref) do
@@ -980,29 +1060,74 @@ defmodule Crucible.Admission do
   defp validate_need(other), do: {:error, {:invalid_need, other}}
 
   defp load_authority(ctx, profile, component, opts) do
-    live =
-      case Compendium.resolve_verified_activation(ctx, component) do
-        {:ok, _} = ok -> ok
-        {:error, {:incomplete, _}} = incomplete -> incomplete
-        {:error, _other} -> {:error, {:incomplete, :invalid_graph}}
+    with {:ok, live} <- live_activation(ctx, component) do
+      # An unchanged live shape permits versionless consent. Derivation failure
+      # leaves the shape unknown and requires fresh consent.
+      opts =
+        Keyword.put_new_lazy(opts, :live_shape_digest, fn ->
+          case Sanctum.Consent.ShapeDerivation.live_digest(ctx, profile.source_ref) do
+            {:ok, digest} -> digest
+            {:error, _} -> nil
+          end
+        end)
+
+      ctx
+      |> Sanctum.Consent.Loader.load_root(
+        profile,
+        [live: live, shape_diff: shape_diff_fn(ctx, profile)] ++
+          Keyword.take(opts, [:ceiling, :live_shape_digest, :budget_id, :connection])
+      )
+      |> case do
+        {:error, reason} ->
+          {:error, root_refusal(reason, profile.id, component["component_ref"])}
+
+        loaded ->
+          loaded
       end
+    end
+  end
 
-    # An unchanged live shape permits versionless consent. Derivation failure
-    # leaves the shape unknown and requires fresh consent.
-    opts =
-      Keyword.put_new_lazy(opts, :live_shape_digest, fn ->
-        case Sanctum.Consent.ShapeDerivation.live_digest(ctx, profile.source_ref) do
-          {:ok, digest} -> digest
-          {:error, _} -> nil
-        end
-      end)
+  @doc false
+  # The root load's answer for the loader's refusal `reason` of the profile
+  # `profile_id`, rooting the component `source_ref`: its own grant, or the
+  # release it runs, read damaged (`Sanctum.Consent.Loader.damage?/1`) is
+  # the loader's one reading of that damage
+  # (`Sanctum.Consent.Loader.damage_refusal/3`), a reason the router
+  # answers typed, in class `corrupt` and its own sentence, never as an
+  # outcome that could not be confirmed. Any other reason stands.
+  @spec root_refusal(term(), String.t(), String.t()) :: term()
+  def root_refusal(reason, profile_id, source_ref) do
+    if Sanctum.Consent.Loader.damage?(reason),
+      do: Sanctum.Consent.Loader.damage_refusal(reason, profile_id, source_ref),
+      else: reason
+  end
 
-    Sanctum.Consent.Loader.load_root(
-      ctx,
-      profile,
-      [live: live, shape_diff: shape_diff_fn(ctx, profile)] ++
-        Keyword.take(opts, [:ceiling, :live_shape_digest, :budget_id])
-    )
+  # The component graph the loader judges the consent against, or why it
+  # cannot be judged, decided before the loader is asked. A graph the
+  # store could not give right now (its projection not caught up, or a
+  # store that did not answer) is an outage, and one whose stored rows do
+  # not hash (a release digest or name that is not text, which only a row
+  # written outside the publish path carries) is damage: neither is a
+  # setup to make. An incomplete graph is the loader's to judge.
+  defp live_activation(ctx, component) do
+    case Compendium.resolve_verified_activation(ctx, component) do
+      {:ok, _} = verified ->
+        {:ok, verified}
+
+      {:error, {:incomplete, _}} = incomplete ->
+        {:ok, incomplete}
+
+      {:error, outage} when outage in [:projection_unavailable, :unavailable, :database_error] ->
+        {:error, {:unavailable, "The component graph"}}
+
+      {:error, {:invalid_graph, _}} ->
+        {:error, {:corrupt, {:component_graph, component["component_ref"]}}}
+
+      # `:no_athanor` among them, which never reaches here: the profile
+      # read before it refuses a context with no athanor.
+      {:error, _other} ->
+        {:ok, {:error, {:incomplete, :invalid_graph}}}
+    end
   end
 
   # Only called when the loader has already decided re-consent is needed,

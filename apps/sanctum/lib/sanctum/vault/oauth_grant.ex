@@ -10,8 +10,14 @@ defmodule Sanctum.Vault.OAuthGrant do
   the entry's material.
 
   Authorization endpoints live on the entry (they are binding fields,
-  covered by the derived binding digest), so what re-auth talks to is
-  exactly what consent bound. Provider client credentials come from
+  covered by the derived binding digest) and are fixed when it is
+  created: a new entry takes its provider's preset
+  (`Sanctum.Vault.OAuth.preset/1`) or, for a provider with none, the
+  endpoints the request names; a re-auth uses the entry's stored
+  endpoints exactly and takes no new ones, and a grant whose target's
+  endpoints are no longer the entry's writes nothing
+  (`:endpoints_immutable`). So what re-auth talks to is exactly what
+  consent bound. Provider client credentials come from
   `Sanctum.ProviderCredentials` by tenant; a component manifest is never
   consulted.
 
@@ -20,9 +26,10 @@ defmodule Sanctum.Vault.OAuthGrant do
 
     * same binding (ordinary re-auth) — material replaced under the
       `payload_rev` CAS; no consent is disturbed; `needs_reauth` clears.
-    * changed binding (scopes or endpoints that differ) — the derived
-      binding digest moves and every profile whose head consent references
-      the entry flips to `needs_consent`.
+    * changed scopes — the scopes move with the bundle granted for them,
+      the only way an entry's scopes change; the derived binding digest
+      moves and every profile whose head consent references the entry
+      flips to `needs_consent`.
 
   `complete/3` runs with no browser Context:
   proof-of-initiation is the single-use 256-bit `state`
@@ -52,30 +59,30 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   @pending_ttl_ms 120_000
 
-  # Endpoint presets for providers this instance has shipped an arc for.
-  # An unknown provider is not an error — the caller supplies endpoints
-  # explicitly and they become the entry's binding fields like any other.
-  @presets %{
-    "google" => %{
-      "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
-      "token_url" => "https://oauth2.googleapis.com/token",
-      "auth_style" => "params",
-      "extra_params" => %{"access_type" => "offline", "prompt" => "consent"}
-    }
-  }
-
   @doc """
   Start a browser authorization for a vault entry.
 
   Two shapes:
 
-    * `%{entry_id: id}` — re-authorize an existing oauth entry. Endpoints,
-      scopes and provider come from the entry's own binding fields.
-    * `%{name: n, provider: p, scopes: [...], endpoints: %{...}?}` — a new
-      entry. `endpoints` may be omitted for a preset provider
-      (#{inspect(Map.keys(@presets))}); otherwise it must carry
-      `authorize_url` + `token_url` (https), optional `auth_style` /
-      `extra_params`.
+    * `%{entry_id: id, scopes: [...]?}` — re-authorize an existing oauth
+      entry. Endpoints and provider come from the entry's own binding
+      fields, and naming `endpoints` beside `entry_id` is refused
+      `:endpoints_immutable`. Scopes are the entry's unless the request
+      names others: re-authorization is the one way an entry's scopes
+      change, and its callback rebinds them with the bundle granted for
+      them. Naming an empty list is refused `:scopes_required`.
+    * `%{name: n, provider: p, scopes: [...], endpoints: %{...}?,
+      destination: %{...}, disclose: boolean?}` — a new entry. A provider
+      with a preset (`Sanctum.Vault.OAuth.preset/1`) takes the preset's
+      endpoints, and naming any beside it is refused
+      `:endpoints_preset_conflict`; any other provider must name them
+      (`:endpoints_required`): `authorize_url` + `token_url` (https),
+      optional `auth_style` / `extra_params`
+      (`Sanctum.Vault.OAuth.validate_endpoints/1`). The new entry's
+      `destination`, where its token may go, is required
+      (`:destination_required`) and held to `Prima.Destination`'s grammar
+      as `Sanctum.Vault.create/2` holds it; it is attach-only unless
+      `disclose` is true. Both are the entry's once the grant completes.
 
   Starting one is a sensitive change (`credential_entry`): the grant it
   completes seals a credential into the vault.
@@ -92,7 +99,7 @@ defmodule Sanctum.Vault.OAuthGrant do
              arguments: params,
              resource: target.name
            }),
-         {:ok, endpoints} <- validate_endpoints(target.endpoints),
+         {:ok, endpoints} <- VaultOAuth.validate_endpoints(target.endpoints),
          {:ok, creds} <- provider_creds(ctx.athanor_id, target.provider) do
       state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
       code_verifier = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
@@ -233,8 +240,16 @@ defmodule Sanctum.Vault.OAuthGrant do
   # Target resolution
   # ---------------------------------------------------------------------------
 
-  defp resolve_target(ctx, %{entry_id: id}) when is_binary(id) do
-    with {:ok, entry} <- Arca.VaultStorage.get(Context.actor(ctx), id) do
+  # An existing entry is re-authorized against exactly the endpoints it
+  # was created with: no preset is merged over them, and a request naming
+  # endpoints of its own is refused rather than silently ignored. It asks
+  # for the scopes the request names, or the entry's own; a grant for other
+  # scopes rebinds them at the callback (`rebind_step/2`). A request naming
+  # no scopes at all is refused, never a rebind of the entry to none.
+  defp resolve_target(ctx, %{entry_id: id} = params) when is_binary(id) do
+    with :ok <- no_new_endpoints(params),
+         :ok <- scopes_named(params),
+         {:ok, entry} <- Arca.VaultStorage.get(Context.actor(ctx), id) do
       cond do
         entry.status == "tombstoned" ->
           {:error, :not_found}
@@ -242,81 +257,81 @@ defmodule Sanctum.Vault.OAuthGrant do
         entry.kind != "oauth" ->
           {:error, {:not_an_oauth_entry, entry.kind}}
 
+        entry.provider_hint == "" ->
+          {:error, :provider_unknown}
+
         true ->
-          endpoints = decode_map(entry.oauth_endpoints)
-
-          provider =
-            case entry.provider_hint do
-              hint when is_binary(hint) and hint != "" -> hint
-              _ -> endpoints["provider"] || ""
-            end
-
-          if provider == "" do
-            {:error, :provider_unknown}
-          else
-            {:ok,
-             %{
-               kind: :existing,
-               entry_id: entry.id,
-               name: entry.name,
-               provider: provider,
-               endpoints: with_preset(provider, endpoints),
-               scopes: decode_list(entry.oauth_scopes)
-             }}
-          end
+          {:ok,
+           %{
+             kind: :existing,
+             entry_id: entry.id,
+             name: entry.name,
+             provider: entry.provider_hint,
+             endpoints: decode_map(entry.oauth_endpoints),
+             scopes: Map.get(params, :scopes) || decode_list(entry.oauth_scopes)
+           }}
       end
     end
   end
 
+  # A new entry's endpoints are its provider's preset, or, for a provider
+  # with none, the ones the request names; never both and never neither.
   defp resolve_target(_ctx, %{name: name, provider: provider} = params)
        when is_binary(name) and name != "" and is_binary(provider) and provider != "" do
-    endpoints = with_preset(provider, Map.get(params, :endpoints) || %{})
-
-    {:ok,
-     %{
-       kind: :new,
-       entry_id: nil,
-       name: name,
-       provider: provider,
-       endpoints: endpoints,
-       scopes: Map.get(params, :scopes, [])
-     }}
+    with {:ok, endpoints} <- new_endpoints(provider, Map.get(params, :endpoints)),
+         {:ok, destination} <- new_destination(params),
+         {:ok, disclose} <- Sanctum.Vault.disclose_param(params) do
+      {:ok,
+       %{
+         kind: :new,
+         entry_id: nil,
+         name: name,
+         provider: provider,
+         endpoints: endpoints,
+         scopes: Map.get(params, :scopes, []),
+         destination: destination,
+         attach_only: not disclose
+       }}
+    end
   end
 
   defp resolve_target(_ctx, _params),
     do: {:error, :target_required}
 
-  defp with_preset(provider, endpoints) do
-    Map.merge(Map.get(@presets, provider, %{}), endpoints || %{})
+  defp no_new_endpoints(params) do
+    if is_nil(Map.get(params, :endpoints)), do: :ok, else: {:error, :endpoints_immutable}
   end
 
-  defp validate_endpoints(%{"authorize_url" => auth, "token_url" => token} = endpoints)
-       when is_binary(auth) and is_binary(token) do
-    cond do
-      not (String.starts_with?(auth, "https://") and String.starts_with?(token, "https://")) ->
-        {:error, :endpoints_must_use_https}
-
-      reserved = reserved_extra_param(endpoints) ->
-        {:error, {:reserved_extra_param, reserved}}
-
-      true ->
-        {:ok, endpoints}
+  # A new entry names where its token may go; nothing is defaulted.
+  defp new_destination(params) do
+    case Map.get(params, :destination) do
+      nil -> {:error, :destination_required}
+      destination -> Sanctum.Vault.destination_text(destination)
     end
   end
 
-  defp validate_endpoints(_), do: {:error, :endpoints_required}
+  # A re-authorization keeps the entry's scopes when it names none and
+  # otherwise names at least one, each a non-empty string.
+  defp scopes_named(params) do
+    case Map.fetch(params, :scopes) do
+      :error -> :ok
+      {:ok, nil} -> :ok
+      {:ok, [_ | _] = scopes} -> if Enum.all?(scopes, &named_scope?/1), do: :ok, else: refused()
+      {:ok, _other} -> refused()
+    end
+  end
 
-  # The authorization parameters this server owns. `extra_params` exists for
-  # provider knobs (`access_type`, `prompt`, `audience`); naming one of these
-  # is either a misunderstanding or an attempt to steer the flow, and both
-  # deserve an answer rather than a silent drop.
-  @reserved_params ~w(client_id redirect_uri response_type scope state
-                      code_challenge code_challenge_method)
+  defp named_scope?(scope), do: is_binary(scope) and String.trim(scope) != ""
+  defp refused, do: {:error, :scopes_required}
 
-  defp reserved_extra_param(endpoints) do
-    case endpoints["extra_params"] do
-      %{} = extra -> Enum.find(@reserved_params, &Map.has_key?(extra, &1))
-      _ -> nil
+  defp new_endpoints(provider, given) do
+    named? = not (is_nil(given) or given == %{})
+
+    case VaultOAuth.preset(provider) do
+      %{endpoints: _} when named? -> {:error, :endpoints_preset_conflict}
+      %{endpoints: endpoints} -> {:ok, endpoints}
+      nil when named? -> VaultOAuth.validate_endpoints(given)
+      nil -> {:error, :endpoints_required}
     end
   end
 
@@ -408,7 +423,9 @@ defmodule Sanctum.Vault.OAuthGrant do
         provider_hint: target.provider,
         field_names: "[]",
         oauth_endpoints: Jason.encode!(target.endpoints),
-        oauth_scopes: Jason.encode!(target.scopes)
+        oauth_scopes: Jason.encode!(target.scopes),
+        destination: target.destination,
+        attach_only: target.attach_only
       }
 
       with {:ok, digest} <- VaultReader.binding_digest(binding),
@@ -431,7 +448,8 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   defp apply_grant(%{target: %{kind: :existing} = target, actor: actor} = pending, bundle, hold) do
     with {:ok, entry} <- Arca.VaultStorage.get(actor, target.entry_id),
-         :ok <- still_living(entry) do
+         :ok <- still_living(entry),
+         :ok <- same_endpoints(entry, target) do
       fields = current_fields(actor, entry)
       aad = CipherAAD.vault_entry(actor.athanor_id, entry.id, entry.provider_hint)
 
@@ -461,7 +479,8 @@ defmodule Sanctum.Vault.OAuthGrant do
         # write: the conflicting writer may have been `vault.revoke` —
         # skipping `still_living/1` here CAS'd fresh live tokens into an
         # entry the owner had just revoked, re-arming it.
-        with :ok <- still_living(entry) do
+        with :ok <- still_living(entry),
+             :ok <- same_endpoints(entry, target) do
           aad = CipherAAD.vault_entry(actor.athanor_id, entry.id, entry.provider_hint)
 
           with {:ok, json} <- Payload.encode_material(current_fields(actor, entry), bundle),
@@ -520,6 +539,15 @@ defmodule Sanctum.Vault.OAuthGrant do
   defp still_living(%{status: "revoked"}), do: {:error, :revoked}
   defp still_living(_), do: :ok
 
+  # The endpoints the grant was started against must still be the entry's:
+  # a grant never moves them, so one whose target names others writes
+  # nothing.
+  defp same_endpoints(entry, target) do
+    if decode_map(entry.oauth_endpoints) == target.endpoints,
+      do: :ok,
+      else: {:error, :endpoints_immutable}
+  end
+
   # Preserve material fields across a re-auth; an unreadable payload
   # converts to empty-fields material.
   defp current_fields(actor, entry) do
@@ -527,30 +555,25 @@ defmodule Sanctum.Vault.OAuthGrant do
 
     with sealed when is_binary(sealed) <- entry.sealed_payload,
          {:ok, plaintext} <- Sanctum.Cipher.decrypt(sealed, aad),
-         {:ok, %{"v" => 2, "fields" => fields}} <- Payload.decode(plaintext) do
+         {:ok, %{"v" => 3, "fields" => fields}} <- Payload.decode(plaintext) do
       fields
     else
       _ -> %{}
     end
   end
 
-  # A grant whose endpoints or scopes differ from the entry's stored
-  # binding fields is a binding change: the binding moves and every profile
-  # referencing the entry is blocked with it, inside the commit's own
-  # transaction. The common re-auth (same binding) is `nil` — nothing to
-  # move, no profile disturbed.
+  # A grant whose scopes differ from the entry's stored ones is a binding
+  # change: the binding moves and every profile referencing the entry is
+  # blocked with it, inside the commit's own transaction. Its endpoints
+  # are the entry's (`same_endpoints/2`) and never move. The common re-auth
+  # (same binding) is `nil` — nothing to move, no profile disturbed.
   defp rebind_step(entry, target) do
-    stored_endpoints = decode_map(entry.oauth_endpoints)
     stored_scopes = decode_list(entry.oauth_scopes)
 
-    if stored_endpoints == target.endpoints and
-         Enum.sort(stored_scopes) == Enum.sort(target.scopes) do
+    if Enum.sort(stored_scopes) == Enum.sort(target.scopes) do
       {:ok, nil}
     else
-      changes = %{
-        oauth_endpoints: Jason.encode!(target.endpoints),
-        oauth_scopes: Jason.encode!(target.scopes)
-      }
+      changes = %{oauth_scopes: Jason.encode!(target.scopes)}
 
       with {:ok, digest} <- VaultReader.binding_digest(Map.merge(entry, changes)) do
         {:ok,

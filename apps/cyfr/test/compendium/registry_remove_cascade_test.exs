@@ -82,7 +82,8 @@ defmodule Compendium.RegistryRemoveCascadeTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "survivor",
         kind: "api_key",
-        fields: %{"k" => "v"}
+        fields: %{"k" => "v"},
+        destination: %{"hosts" => ["api.example.com"]}
       })
 
     {:ok, _} = Compendium.Registry.delete(ctx, "cascade-target", "1.0.0", "local")

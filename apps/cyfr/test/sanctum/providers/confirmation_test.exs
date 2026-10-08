@@ -85,7 +85,12 @@ defmodule Sanctum.Providers.ConfirmationTest do
 
   # A credential entry asked for through the gate, as a page asks for it.
   defp entry(name, secret \\ "sk-confirmation-secret"),
-    do: %{"name" => name, "kind" => "api_key", "fields" => %{"KEY" => secret}}
+    do: %{
+      "name" => name,
+      "kind" => "api_key",
+      "fields" => %{"KEY" => secret},
+      "destination" => %{"hosts" => ["api.example.com"]}
+    }
 
   # The entry asked for with no proof: answers the signal's secret.
   defp asked!(ctx, name \\ "prod-key") do

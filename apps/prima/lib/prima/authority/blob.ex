@@ -22,7 +22,10 @@ defmodule Prima.Authority.Blob do
   """
 
   alias Prima.ComponentRef
+  alias Prima.Destination
   alias Prima.Limits
+  alias Prima.Manifest.Needs
+  alias Prima.Manifest.Provides
 
   defmodule Edge do
     @moduledoc """
@@ -30,26 +33,49 @@ defmodule Prima.Authority.Blob do
     invocation edges are all-empty instances of the same type — an edge that
     authorizes invocation while granting nothing is representable.
 
-    A vault resource is either **bound** — an entry and the binding digest
-    the consent approved — or **selected**: the entry that the edge's
-    target binds on the ingress of its own owner profile of the named
-    label, pinned to a binding digest when the consent pinned one.
-    Loading a consent at root turns a selection into a bound resource when
-    that profile is active and its ingress carries a matching entry, and
-    pins the lender (`profile_id`, `consent_id`) so a later revoke or
-    revision refuses the next unseal; a selection that does not resolve
-    stays a selection, and a run under it answers setup_required.
+    A vault resource is one of three:
+
+      * **bound** — an entry, the binding digest the consent approved, the
+        entry's `scope` (`"athanor"` for an athanor's own entry,
+        `"instance"` for an instance entry), its `destination`
+        (`Prima.Destination`), the need's `attach` rule
+        (`Prima.Manifest.Needs`, nil for a disclose-only need) and the
+        binding's own `binding_key` (`binding_key/3`). Beside it, under
+        `named`, an edge may bind further entries by account name, each
+        its own bound resource with its own key; a call names one
+        (`vault_for/2`) and gets the default otherwise.
+      * **selected** — the entry that the edge's target binds on the
+        ingress of its own owner profile of the named label, pinned to a
+        binding digest when the consent pinned one. Loading a consent at
+        root turns a selection into a bound resource when that profile is
+        active and its ingress carries a matching entry: the bound
+        resource carries the borrower's `binding_key`, where it sits, and
+        pins the `lender` (`profile_id`, `consent_id` and the lender's own
+        `binding_key`), so a later revoke or revision refuses the next
+        unseal and a use answers to both bindings; a selection that does
+        not resolve stays a selection, and a run under it answers
+        setup_required.
+      * **provided** — a publisher's public configuration
+        (`Prima.Manifest.Provides`): its destination, its values and the
+        rule they are attached by.
     """
 
     @type projection :: %{fields: [String.t()], scopes: [String.t()]} | nil
 
-    @type lender :: %{profile_id: String.t(), consent_id: String.t()}
+    @type lender :: %{profile_id: String.t(), consent_id: String.t(), binding_key: String.t()}
+
+    @type attach :: Prima.Manifest.Needs.attach() | nil
 
     @type bound_vault :: %{
             required(:entry_id) => String.t(),
             required(:binding_digest) => String.t(),
+            required(:scope) => String.t(),
+            required(:binding_key) => String.t(),
+            required(:destination) => Prima.Destination.t(),
+            required(:attach) => attach(),
             required(:projection) => projection(),
-            optional(:lender) => lender()
+            optional(:lender) => lender(),
+            optional(:named) => %{optional(String.t()) => bound_vault()}
           }
 
     @type selected_vault :: %{
@@ -57,7 +83,15 @@ defmodule Prima.Authority.Blob do
             projection: projection()
           }
 
-    @type vault :: bound_vault() | selected_vault()
+    @type provided_vault :: %{
+            provided: %{
+              destination: Prima.Destination.t(),
+              values: %{optional(String.t()) => String.t()},
+              attach: Prima.Manifest.Needs.attach()
+            }
+          }
+
+    @type vault :: bound_vault() | selected_vault() | provided_vault()
     @type egress :: %{
             domains: [String.t()],
             methods: [String.t()],
@@ -132,6 +166,10 @@ defmodule Prima.Authority.Blob do
 
   @canonical "jcs-1"
   @ingress_key "@ingress"
+  @scopes ["athanor", "instance"]
+  @default_slot "default"
+  @name_slot "name:"
+  @max_name_bytes 128
 
   @doc """
   Returns the reserved ingress edge-key string used by consent writers
@@ -189,10 +227,15 @@ defmodule Prima.Authority.Blob do
 
   @doc """
   Parse one edge from its map form (the shape `nodes[..].edges[..]` holds).
+
+  An edge read alone has no place in a graph, so its binding keys are held
+  to their grammar but not to a node, an edge or a slot: an Authority's
+  `resources` are the edge its cursor was reached through, and a child's
+  vault is the one binding its call picked, named or not.
   """
   @spec parse_edge(map()) :: {:ok, Edge.t()} | {:error, error()}
   def parse_edge(map) when is_map(map) and not is_struct(map) do
-    parse_edge("<wire>", "<wire>", map)
+    parse_edge(:unplaced, "<wire>", "<wire>", map)
   end
 
   # ============================================================================
@@ -239,23 +282,53 @@ defmodule Prima.Authority.Blob do
   defp put_resource(map, _key, nil), do: map
   defp put_resource(map, key, value), do: Map.put(map, key, value)
 
-  defp vault_to_map(%{entry_id: id, binding_digest: digest, projection: projection} = vault) do
-    %{"entry_id" => id, "binding_digest" => digest}
-    |> put_resource("projection", projection && string_lists_to_map(projection))
+  @doc """
+  One vault resource as the JSON-ready map an edge's `vault` holds, which
+  parsing reads back. A disclose-only binding's nil `attach` is omitted,
+  as every absent value is: the canonical form (`Prima.JCS`) holds no
+  null, and an absent rule reads back as nil.
+  """
+  @spec vault_to_map(Edge.vault()) :: map()
+  def vault_to_map(%{entry_id: id, binding_digest: digest} = vault) do
+    %{
+      "entry_id" => id,
+      "binding_digest" => digest,
+      "scope" => vault.scope,
+      "binding_key" => vault.binding_key,
+      "destination" => Destination.to_map(vault.destination)
+    }
+    |> put_resource("attach", vault.attach && Needs.attach_to_map(vault.attach))
+    |> put_resource("projection", vault.projection && string_lists_to_map(vault.projection))
     |> put_resource("lender", lender_to_map(Map.get(vault, :lender)))
+    |> put_resource("named", named_to_map(Map.get(vault, :named)))
   end
 
-  defp vault_to_map(%{via: %{label: label, binding_digest: digest}, projection: projection}) do
+  def vault_to_map(%{via: %{label: label, binding_digest: digest}, projection: projection}) do
     via = %{"label" => label} |> put_resource("binding_digest", digest)
 
     %{"via" => via}
     |> put_resource("projection", projection && string_lists_to_map(projection))
   end
 
-  defp lender_to_map(%{profile_id: profile_id, consent_id: consent_id}),
-    do: %{"profile_id" => profile_id, "consent_id" => consent_id}
+  def vault_to_map(%{provided: %{destination: destination, values: values, attach: attach}}) do
+    %{
+      "provided" => %{
+        "destination" => Destination.to_map(destination),
+        "values" => values,
+        "attach" => Needs.attach_to_map(attach)
+      }
+    }
+  end
+
+  defp lender_to_map(%{profile_id: profile_id, consent_id: consent_id, binding_key: key}),
+    do: %{"profile_id" => profile_id, "consent_id" => consent_id, "binding_key" => key}
 
   defp lender_to_map(_), do: nil
+
+  defp named_to_map(nil), do: nil
+
+  defp named_to_map(named),
+    do: Map.new(named, fn {name, vault} -> {name, vault_to_map(vault)} end)
 
   # `%{domains: [...], methods: [...]}` → `%{"domains" => [...], ...}`,
   # dropping nil lists (an absent key on the way in).
@@ -316,29 +389,147 @@ defmodule Prima.Authority.Blob do
   def edge_target(key) when is_binary(key), do: {:ok, key |> String.split("|", parts: 2) |> hd()}
 
   @doc """
-  Whether a vault resource is bound to an entry (as opposed to selected
-  from another profile, or absent).
+  Whether a vault resource is bound: to an entry, or to a publisher's
+  provided configuration (as opposed to selected from another profile,
+  or absent).
   """
   @spec bound_vault?(Edge.vault() | nil) :: boolean()
   def bound_vault?(%{entry_id: _}), do: true
+  def bound_vault?(%{provided: _}), do: true
   def bound_vault?(_), do: false
 
   @doc """
-  Entry ids that appear on more than one bound vault with unequal
-  binding digests. Commit and the loader refuse rather than pick.
+  The binding a call through `edge` uses: the named account `connection`
+  names, or the default when it names none. The default comes without
+  its `named` bindings, so a child holds the one binding its call picked.
+  A name the edge does not bind — on an edge with no vault, a selection
+  or a provided resource too — is `{:error, :connection_not_granted}`.
+  The name is matched as `same_account_name?/2` matches names, so a call
+  spelling a bound account in another case holds that binding, under the
+  key its stored name spells.
+  """
+  @spec vault_for(Edge.t() | nil, String.t() | nil) ::
+          {:ok, Edge.vault() | nil} | {:error, :connection_not_granted}
+  def vault_for(nil, nil), do: {:ok, nil}
+  def vault_for(%Edge{vault: vault}, nil), do: {:ok, without_named(vault)}
+
+  def vault_for(%Edge{vault: %{named: named}}, connection) when is_binary(connection) do
+    case Enum.find(named, fn {name, _vault} -> same_account_name?(name, connection) end) do
+      {_name, vault} -> {:ok, vault}
+      nil -> {:error, :connection_not_granted}
+    end
+  end
+
+  def vault_for(_edge, _connection), do: {:error, :connection_not_granted}
+
+  defp without_named(%{named: _} = vault), do: Map.delete(vault, :named)
+  defp without_named(vault), do: vault
+
+  @doc """
+  The key of the binding `slot` names on the edge `edge_key` of the node
+  `node_ref`: `<node>|<edge key>|default` for the unnamed binding (a nil
+  slot) and `<node>|<edge key>|name:<name>` for a named one. The edge key
+  is `edge_key/2`'s, `"@ingress"` for a root's own binding. One binding,
+  one key, so two edges or two names of one entry are two bindings.
+  """
+  @spec binding_key(String.t(), String.t(), String.t() | nil) :: String.t()
+  def binding_key(node_ref, edge_key, nil),
+    do: node_ref <> "|" <> edge_key <> "|" <> @default_slot
+
+  def binding_key(node_ref, edge_key, name) when is_binary(name),
+    do: node_ref <> "|" <> edge_key <> "|" <> @name_slot <> name
+
+  @doc """
+  The node, edge key and slot a binding key spells: the slot is nil for
+  the unnamed binding and the name for a named one. `:error` for a key
+  outside the grammar: a node that is no name-level ref, an edge key
+  `parse/1` would refuse, or a slot that is neither `default` nor
+  `name:` and a valid account name.
+  """
+  @spec parse_binding_key(term()) :: {:ok, {String.t(), String.t(), String.t() | nil}} | :error
+  def parse_binding_key(key) when is_binary(key) do
+    with [node_ref, rest] <- String.split(key, "|", parts: 2),
+         [_ | _] = parts <- String.split(rest, "|"),
+         {slot, edge_parts} = List.pop_at(parts, -1),
+         edge_key = Enum.join(edge_parts, "|"),
+         :ok <- validate_name_level_ref(node_ref, :error),
+         :ok <- validate_edge_key(node_ref, edge_key),
+         {:ok, name} <- read_slot(slot) do
+      {:ok, {node_ref, edge_key, name}}
+    else
+      _ -> :error
+    end
+  end
+
+  def parse_binding_key(_key), do: :error
+
+  @doc """
+  Whether `name` is an account name a named binding may carry: 1 to 128
+  bytes of text, no control character and no `|`, which the binding key
+  reserves.
+  """
+  @spec valid_account_name?(term()) :: boolean()
+  def valid_account_name?(name) when is_binary(name) do
+    byte_size(name) in 1..@max_name_bytes and String.valid?(name) and
+      not String.contains?(name, "|") and not String.match?(name, ~r/[\x00-\x1F\x7F]/)
+  end
+
+  def valid_account_name?(_name), do: false
+
+  @doc """
+  The form two account names share when they name one account: `name`
+  folded by Unicode's full lowercase mapping, without context and in no
+  language's tailoring (`String.downcase/1`'s default), so `İ` folds to
+  `i` and a combining dot, `ẞ` to `ß`, and a final `Σ` to `σ`. This is
+  the one rule account names are compared by, wherever they are: a
+  grant's slots and its digest, the blob's named bindings, a call
+  resolving the account it names, a reused child key, the grant sheet,
+  and the command line's slots (`tests/fixtures/account_names.json` pins
+  it on every side). A key is for comparing; what is recorded and shown
+  is always the name as the binding stores it.
+  """
+  @spec account_name_key(String.t()) :: String.t()
+  def account_name_key(name) when is_binary(name), do: String.downcase(name)
+
+  @doc """
+  Whether `a` and `b` name one account: their keys (`account_name_key/1`)
+  are equal.
+  """
+  @spec same_account_name?(String.t(), String.t()) :: boolean()
+  def same_account_name?(a, b) when is_binary(a) and is_binary(b),
+    do: account_name_key(a) == account_name_key(b)
+
+  defp read_slot(@default_slot), do: {:ok, nil}
+
+  defp read_slot(@name_slot <> name) do
+    if valid_account_name?(name), do: {:ok, name}, else: :error
+  end
+
+  defp read_slot(_slot), do: :error
+
+  @doc """
+  Entry ids that appear on more than one bound vault, named bindings
+  included, with unequal binding digests. Commit and the loader refuse
+  rather than pick.
   """
   @spec entry_digest_conflicts(t()) :: [String.t()]
   def entry_digest_conflicts(%__MODULE__{nodes: nodes}) do
     nodes
     |> Enum.flat_map(fn {_ref, %Node{edges: edges}} ->
-      for {_key, %Edge{vault: %{entry_id: id, binding_digest: digest}}} <- edges,
-          do: {id, digest}
+      Enum.flat_map(edges, fn {_key, %Edge{vault: vault}} -> entry_digests(vault) end)
     end)
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
     |> Enum.filter(fn {_id, digests} -> digests |> Enum.uniq() |> length() > 1 end)
     |> Enum.map(&elem(&1, 0))
     |> Enum.sort()
   end
+
+  defp entry_digests(%{entry_id: id, binding_digest: digest} = vault) do
+    named = vault |> Map.get(:named, %{}) |> Map.values()
+    [{id, digest} | Enum.flat_map(named, &entry_digests/1)]
+  end
+
+  defp entry_digests(_vault), do: []
 
   @doc """
   The blob with every edge rewritten by `fun`, which receives the node
@@ -458,7 +649,7 @@ defmodule Prima.Authority.Blob do
   defp parse_edges(node_ref, edges_raw) do
     Enum.reduce_while(edges_raw, {:ok, %{}}, fn {edge_key, edge_raw}, {:ok, acc} ->
       with :ok <- validate_edge_key(node_ref, edge_key),
-           {:ok, edge} <- parse_edge(node_ref, edge_key, edge_raw) do
+           {:ok, edge} <- parse_edge(:placed, node_ref, edge_key, edge_raw) do
         {:cont, {:ok, Map.put(acc, edge_key, edge)}}
       else
         {:error, _} = err -> {:halt, err}
@@ -499,21 +690,29 @@ defmodule Prima.Authority.Blob do
     "tool_servers" => :tool_servers
   }
 
-  defp parse_edge(node_ref, edge_key, edge_raw) do
+  # `placement` is `:placed` for an edge of a parsed graph, whose node and
+  # edge key a binding key must name, and `:unplaced` for an edge read
+  # alone (`parse_edge/1`).
+  defp parse_edge(placement, node_ref, edge_key, edge_raw) do
     path = "nodes[#{node_ref}].edges[#{edge_key}]"
 
     with {:ok, edge_map} <- as_object(edge_raw, path),
          :ok <- strict_keys(edge_map, Map.keys(@edge_resource_kinds), path),
-         {:ok, resources} <- parse_resources(node_ref, edge_key, edge_map) do
+         {:ok, resources} <- parse_resources(placement, node_ref, edge_key, edge_map) do
       {:ok, struct(Edge, resources)}
     end
   end
 
-  defp parse_resources(node_ref, edge_key, edge_map) do
+  defp parse_resources(placement, node_ref, edge_key, edge_map) do
     Enum.reduce_while(edge_map, {:ok, %{}}, fn {kind_str, raw}, {:ok, acc} ->
       kind = Map.fetch!(@edge_resource_kinds, kind_str)
 
-      case validate_resource(kind, raw) do
+      validated =
+        if kind == :vault,
+          do: validate_vault(raw, place(placement, node_ref, edge_key)),
+          else: validate_resource(kind, raw)
+
+      case validated do
         {:ok, validated} ->
           {:cont, {:ok, Map.put(acc, kind, validated)}}
 
@@ -523,8 +722,15 @@ defmodule Prima.Authority.Blob do
     end)
   end
 
-  defp validate_resource(:vault, %{"via" => via} = raw) when is_map(raw) do
-    with :ok <- keys_or_reason(raw, ["via", "projection"]),
+  defp place(:placed, node_ref, edge_key), do: {node_ref, edge_key}
+  defp place(:unplaced, _node_ref, _edge_key), do: :unplaced
+
+  # A selection binds the lender's entry when it resolves; it names no
+  # account of its own and carries no binding key until the loader
+  # resolves it where it sits.
+  defp validate_vault(%{"via" => via} = raw, _place) do
+    with :ok <- refuse_named(raw, "a selection binds no named accounts"),
+         :ok <- keys_or_reason(raw, ["via", "projection"]),
          {:ok, via_map} <- as_object(via, "via"),
          :ok <- keys_or_reason(via_map, ["label", "binding_digest"]),
          {:ok, label} <- required_string(via_map, "label"),
@@ -534,16 +740,156 @@ defmodule Prima.Authority.Blob do
     end
   end
 
-  defp validate_resource(:vault, raw) when is_map(raw) do
-    with :ok <- keys_or_reason(raw, ["entry_id", "binding_digest", "projection", "lender"]),
+  defp validate_vault(%{"provided" => provided} = raw, _place) do
+    with :ok <- refuse_named(raw, "provided configuration binds no named accounts"),
+         :ok <- keys_or_reason(raw, ["provided"]),
+         {:ok, provided} <- as_reason_object(provided, "provided must be an object"),
+         :ok <- keys_or_reason(provided, ["destination", "values", "attach"]),
+         {:ok, attach} <- required_attach(provided),
+         {:ok, entry} <- read_provided(Map.delete(provided, "attach")) do
+      {:ok, %{provided: Map.put(entry, :attach, attach)}}
+    end
+  end
+
+  defp validate_vault(raw, place) when is_map(raw) and not is_struct(raw) do
+    with {:ok, vault} <- validate_bound(raw, place, nil),
+         {:ok, named} <- validate_named(Map.get(raw, "named"), place) do
+      {:ok, if(named, do: Map.put(vault, :named, named), else: vault)}
+    end
+  end
+
+  defp validate_vault(_raw, _place), do: {:error, "unexpected shape"}
+
+  @bound_keys ~w(entry_id binding_digest scope binding_key destination attach projection)
+
+  # One bound resource: the default (`slot` nil), whose map may also carry
+  # a lender and named bindings, or the named binding `slot`, which carries
+  # neither.
+  defp validate_bound(raw, place, slot) do
+    allowed = if slot, do: @bound_keys, else: @bound_keys ++ ["lender", "named"]
+
+    with :ok <- keys_or_reason(raw, allowed),
          {:ok, entry_id} <- required_string(raw, "entry_id"),
          {:ok, digest} <- required_string(raw, "binding_digest"),
+         {:ok, scope} <- validate_scope(raw["scope"]),
+         {:ok, binding_key} <- validate_binding_key(raw["binding_key"], place, slot),
+         {:ok, destination} <- validate_destination(raw["destination"]),
+         {:ok, attach} <- optional_attach(raw),
          {:ok, projection} <- validate_projection(Map.get(raw, "projection")),
          {:ok, lender} <- validate_lender(Map.get(raw, "lender")) do
-      vault = %{entry_id: entry_id, binding_digest: digest, projection: projection}
+      vault = %{
+        entry_id: entry_id,
+        binding_digest: digest,
+        scope: scope,
+        binding_key: binding_key,
+        destination: destination,
+        attach: attach,
+        projection: projection
+      }
+
       {:ok, if(lender, do: Map.put(vault, :lender, lender), else: vault)}
     end
   end
+
+  defp validate_named(nil, _place), do: {:ok, nil}
+
+  defp validate_named(named, place) when is_map(named) and map_size(named) > 0 do
+    with :ok <- distinct_names(Map.keys(named)) do
+      Enum.reduce_while(named, {:ok, %{}}, fn {name, raw}, {:ok, acc} ->
+        with true <- valid_account_name?(name),
+             {:ok, raw} <- as_reason_object(raw, "a named binding must be an object"),
+             {:ok, vault} <- validate_bound(raw, place, name) do
+          {:cont, {:ok, Map.put(acc, name, vault)}}
+        else
+          false -> {:halt, {:error, "named binding #{inspect(name)} is not an account name"}}
+          {:error, _reason} = error -> {:halt, error}
+        end
+      end)
+    end
+  end
+
+  defp validate_named(_named, _place), do: {:error, "named must be a non-empty object"}
+
+  # Two names a person would read as one are one name repeated.
+  defp distinct_names(names) do
+    folded = Enum.map(names, &if(is_binary(&1), do: account_name_key(&1), else: &1))
+
+    if length(Enum.uniq(folded)) == length(folded),
+      do: :ok,
+      else: {:error, "a named account repeats"}
+  end
+
+  defp refuse_named(raw, reason) do
+    if Map.has_key?(raw, "named"), do: {:error, reason}, else: :ok
+  end
+
+  defp validate_scope(scope) when scope in @scopes, do: {:ok, scope}
+  defp validate_scope(_scope), do: {:error, "scope must be athanor or instance"}
+
+  # Placed, a binding key names the node and edge it sits on and its own
+  # slot: `default` for the unnamed binding, `name:<name>` for a named
+  # one. Unplaced, it is held to the grammar alone.
+  defp validate_binding_key(key, :unplaced, _slot) do
+    case parse_binding_key(key) do
+      {:ok, _parts} -> {:ok, key}
+      :error -> {:error, "binding_key is not a binding key"}
+    end
+  end
+
+  defp validate_binding_key(key, {node_ref, edge_key}, slot) do
+    if key == binding_key(node_ref, edge_key, slot),
+      do: {:ok, key},
+      else: {:error, "binding_key must name this node, edge and slot"}
+  end
+
+  defp validate_destination(raw) do
+    case Destination.from_map(raw) do
+      {:ok, destination} -> {:ok, destination}
+      {:error, {:invalid_destination, reason}} -> {:error, "destination: #{reason_kind(reason)}"}
+    end
+  end
+
+  # A disclose-only binding's rule is nil: written absent, and read back
+  # from an absent or a null member alike.
+  defp optional_attach(raw) do
+    case Map.get(raw, "attach") do
+      nil -> {:ok, nil}
+      rule -> read_attach(rule)
+    end
+  end
+
+  defp required_attach(raw) do
+    case Map.get(raw, "attach") do
+      nil -> {:error, "provided configuration must name its attach rule"}
+      rule -> read_attach(rule)
+    end
+  end
+
+  defp read_attach(rule) do
+    case Needs.read_attach(rule) do
+      {:ok, rule} -> {:ok, rule}
+      {:error, reason} -> {:error, "attach: #{reason_kind(reason)}"}
+    end
+  end
+
+  defp read_provided(raw) do
+    case Provides.read_entry(raw) do
+      {:ok, entry} -> {:ok, entry}
+      {:error, reason} -> {:error, "provided: #{reason_kind(reason)}"}
+    end
+  end
+
+  # What kind of refusal a reader answered, never the value it refused:
+  # the message is rendered, and the value is the stored blob's.
+  defp reason_kind({:invalid_destination, reason}), do: "destination " <> reason_kind(reason)
+  defp reason_kind({kind, _value}) when is_atom(kind), do: Atom.to_string(kind)
+  defp reason_kind(kind) when is_atom(kind), do: Atom.to_string(kind)
+  defp reason_kind(_reason), do: "malformed"
+
+  defp as_reason_object(value, _reason) when is_map(value) and not is_struct(value),
+    do: {:ok, value}
+
+  defp as_reason_object(_value, reason), do: {:error, reason}
 
   defp validate_resource(:egress, raw) when is_map(raw) do
     string_list_resource(raw, [
@@ -584,11 +930,15 @@ defmodule Prima.Authority.Blob do
 
   defp validate_lender(nil), do: {:ok, nil}
 
+  # The lender's binding is in the lender's own graph, so its key is held
+  # to the grammar here and to its place by the lender's revision.
   defp validate_lender(raw) when is_map(raw) do
-    with :ok <- keys_or_reason(raw, ["profile_id", "consent_id"]),
+    with :ok <- keys_or_reason(raw, ["profile_id", "consent_id", "binding_key"]),
          {:ok, profile_id} <- required_string(raw, "profile_id"),
-         {:ok, consent_id} <- required_string(raw, "consent_id") do
-      {:ok, %{profile_id: profile_id, consent_id: consent_id}}
+         {:ok, consent_id} <- required_string(raw, "consent_id"),
+         {:ok, key} <- required_string(raw, "binding_key"),
+         {:ok, key} <- validate_binding_key(key, :unplaced, nil) do
+      {:ok, %{profile_id: profile_id, consent_id: consent_id, binding_key: key}}
     end
   end
 
@@ -660,16 +1010,16 @@ defmodule Prima.Authority.Blob do
   # always land on a node whose limits exist.
   defp check_edge_targets(nodes) do
     Enum.reduce_while(nodes, :ok, fn {node_ref, %Node{edges: edges}}, :ok ->
-      edges
-      |> Map.keys()
-      |> Enum.reject(&(&1 == @ingress_key))
-      |> Enum.find(fn key ->
+      keys = edges |> Map.keys() |> Enum.reject(&(&1 == @ingress_key))
+
+      keys
+      |> Enum.find_index(fn key ->
         [target | _] = String.split(key, "|", parts: 2)
         not Map.has_key?(nodes, target)
       end)
       |> case do
         nil -> {:cont, :ok}
-        key -> {:halt, {:error, {:dangling_edge, node_ref, key}}}
+        index -> {:halt, {:error, {:dangling_edge, node_ref, Enum.at(keys, index)}}}
       end
     end)
   end
@@ -678,17 +1028,28 @@ defmodule Prima.Authority.Blob do
   # Private: strict-shape helpers
   # ============================================================================
 
+  # Both answer the first key outside `allowed` by its index, so a nil key
+  # is unknown, not read as "no unknown key".
   defp strict_keys(map, allowed, path) do
-    case Enum.find(Map.keys(map), &(&1 not in allowed)) do
-      nil -> :ok
-      key -> {:error, {:unknown_field, join_path(path, to_string(key))}}
+    case unknown_key(map, allowed) do
+      :none -> :ok
+      {:unknown, key} -> {:error, {:unknown_field, join_path(path, to_string(key))}}
     end
   end
 
   defp keys_or_reason(map, allowed) do
-    case Enum.find(Map.keys(map), &(&1 not in allowed)) do
-      nil -> :ok
-      key -> {:error, "unknown key \"#{key}\""}
+    case unknown_key(map, allowed) do
+      :none -> :ok
+      {:unknown, key} -> {:error, "unknown key \"#{key}\""}
+    end
+  end
+
+  defp unknown_key(map, allowed) do
+    keys = Map.keys(map)
+
+    case Enum.find_index(keys, &(&1 not in allowed)) do
+      nil -> :none
+      index -> {:unknown, Enum.at(keys, index)}
     end
   end
 

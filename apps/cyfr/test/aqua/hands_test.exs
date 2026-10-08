@@ -92,3 +92,147 @@ defmodule Aqua.HandsTest do
     assert {:error, _} = Hands.child_call("request_setup", "open", %{})
   end
 end
+
+defmodule Aqua.HandsLaunchAccountsTest do
+  # What a turn reads, once, of the accounts its launches may name: each
+  # app whose own default profile binds named accounts, with the names,
+  # never an entry, its id or a value.
+  use ExUnit.Case, async: false
+
+  alias Aqua.Hands
+  alias Sanctum.Consent.{Commit, Plan}
+
+  @wasm File.read!(Path.expand("../support/test_wasm/math.wasm", __DIR__))
+
+  setup tags do
+    Arca.Cache.init()
+    Cyfr.Test.Sandbox.setup!(tags)
+
+    test_path =
+      Path.join(System.tmp_dir!(), "hands_accounts_#{System.unique_integer([:positive])}")
+
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
+
+    on_exit(fn ->
+      File.rm_rf!(test_path)
+
+      if original_base_path,
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
+    end)
+
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
+  end
+
+  defp app!(ctx, name, accounts) do
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "reagent",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "fields" => ["KEY"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(manifest)
+      })
+
+    entry = fn label ->
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "#{name} #{label}",
+          kind: "api_key",
+          provider_hint: "example.com",
+          fields: %{"KEY" => "secret-#{name}-#{label}"},
+          destination: %{"hosts" => ["api.example.com"]},
+          disclose: true
+        })
+
+      view
+    end
+
+    ref = "reagent:local." <> name
+
+    bindings =
+      [%{need: "api_key", entry_id: entry.("default").id}] ++
+        Enum.map(accounts, &%{need: "api_key", name: &1, entry_id: entry.(&1).id})
+
+    decisions = %{ref: ref, bindings: bindings}
+    {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    ref
+  end
+
+  test "each app whose own profile binds named accounts, with the names, by reference", %{
+    ctx: ctx
+  } do
+    mailer = app!(ctx, "hands-mailer", ["Work", "Personal"])
+    db = app!(ctx, "hands-db", ["Supabase 2"])
+    _plain = app!(ctx, "hands-plain", [])
+
+    assert %{apps: apps, truncated?: false} = Hands.launch_accounts(ctx)
+    assert apps == [{db, ["Supabase 2"]}, {mailer, ["Personal", "Work"]}]
+
+    # The names alone: no entry, its id, or what it holds.
+    {:ok, entries} = Sanctum.Vault.list(ctx)
+    assert length(entries) >= 6
+    text = inspect(apps)
+    refute text =~ "secret-"
+
+    for entry <- entries, do: refute(text =~ entry.id)
+
+    # The request the turn sends says the same, the default as what
+    # omitting the account takes.
+    description =
+      %{"execution.run" => "ask"}
+      |> Aqua.Loop.Request.tool_definitions(accounts: Hands.launch_accounts(ctx))
+      |> Enum.find(&(&1["name"] == "execution"))
+      |> get_in(["parameters", "properties", "connection", "description"])
+
+    assert description =~ ~s[#{db} ("Supabase 2")]
+    assert description =~ ~s[#{mailer} ("Personal", "Work")]
+    assert description =~ "omit `connection` for its default account"
+    refute description =~ "hands-plain"
+    for entry <- entries, do: refute(description =~ entry.id)
+  end
+
+  @tag :capture_log
+  test "a read that fails keeps the declared description, never that no app binds an account",
+       %{ctx: ctx} do
+    _app = app!(ctx, "hands-unread", ["Work"])
+    Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+    assert Hands.launch_accounts(ctx) == nil
+
+    description =
+      %{"execution.run" => "ask"}
+      |> Aqua.Loop.Request.tool_definitions(accounts: Hands.launch_accounts(ctx))
+      |> Enum.find(&(&1["name"] == "execution"))
+      |> get_in(["parameters", "properties", "connection", "description"])
+
+    refute description =~ "No app binds a named account"
+    refute description =~ "Apps with named accounts"
+    assert description =~ "a run started outside a chain asks its profile's own calls for it"
+  end
+end

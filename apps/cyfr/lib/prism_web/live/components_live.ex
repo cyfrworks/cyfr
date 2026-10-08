@@ -34,6 +34,8 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:expanded_loading, false)
       |> assign(:expanded_detail, nil)
       |> assign(:expanded_plan, nil)
+      # A refused `setup_plan` call's refusal, said in the plan's place.
+      |> assign(:expanded_plan_refusal, nil)
       # The grant prompt this page asked its system layer for, and the
       # count its prompt ids are numbered by.
       |> assign(:grant_prompt, nil)
@@ -281,6 +283,7 @@ defmodule PrismWeb.ComponentsLive do
          |> assign(:expanded_loading, true)
          |> assign(:expanded_detail, nil)
          |> assign(:expanded_plan, nil)
+         |> assign(:expanded_plan_refusal, nil)
          |> assign(:expanded_versions, group.versions)
          |> assign(:pushing, false)
          |> assign(:progress_log, [])
@@ -415,22 +418,14 @@ defmodule PrismWeb.ComponentsLive do
           nil
       end
 
-    plan =
-      case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => latest_ref}) do
-        {:ok, result} ->
-          result
-
-        other ->
-          Logger.warning("[ComponentsLive] setup_plan failed: #{inspect(other)}")
-          nil
-      end
+    plan = setup_plan(socket, latest_ref)
 
     if socket.assigns.expanded_ref == group.name_ref do
       {:noreply,
        socket
        |> assign(:expanded_loading, false)
        |> assign(:expanded_detail, detail)
-       |> assign(:expanded_plan, plan)}
+       |> assign_plan(plan)}
     else
       {:noreply, socket}
     end
@@ -609,6 +604,7 @@ defmodule PrismWeb.ComponentsLive do
        |> assign(:expanded_loading, true)
        |> assign(:expanded_detail, nil)
        |> assign(:expanded_plan, nil)
+       |> assign(:expanded_plan_refusal, nil)
        |> assign(:expanded_versions, group.versions)
        |> ask_grant(latest_ref)
        |> assign(:loading, false)}
@@ -665,6 +661,7 @@ defmodule PrismWeb.ComponentsLive do
     |> assign(:expanded_loading, false)
     |> assign(:expanded_detail, nil)
     |> assign(:expanded_plan, nil)
+    |> assign(:expanded_plan_refusal, nil)
     |> assign(:expanded_versions, [])
     |> assign(:pushing, false)
     |> assign(:progress_log, [])
@@ -690,39 +687,48 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   # Re-fetch the expanded component's setup plan after a grant so the
-  # needs list and readiness badge reflect the new consent.
+  # needs list and readiness badge reflect the new consent. A refused read
+  # says so in the plan's place, never the plan read before the grant.
   defp refresh_expanded_plan(socket) do
     expanded_ref = socket.assigns.expanded_ref
 
     if expanded_ref do
-      versioned_ref = latest_versioned_ref(socket)
-
-      plan =
-        case call_tool(socket, "component", %{
-               "action" => "setup_plan",
-               "reference" => versioned_ref
-             }) do
-          {:ok, result} ->
-            result
-
-          other ->
-            Logger.warning(
-              "[ComponentsLive] setup_plan refresh after grant failed: #{inspect(other)}"
-            )
-
-            socket.assigns.expanded_plan
-        end
+      socket = assign_plan(socket, setup_plan(socket, latest_versioned_ref(socket)))
 
       readiness =
-        Map.put(socket.assigns.setup_readiness, expanded_ref, plan_field(plan, :ready) == true)
+        Map.put(
+          socket.assigns.setup_readiness,
+          expanded_ref,
+          plan_field(socket.assigns.expanded_plan, :ready) == true
+        )
 
-      socket
-      |> assign(:expanded_plan, plan)
-      |> assign(:setup_readiness, readiness)
+      assign(socket, :setup_readiness, readiness)
     else
       socket
     end
   end
+
+  # The component's setup plan, or the refusal of the call: a plan that
+  # cannot be read is not a component with no plan.
+  defp setup_plan(socket, ref) do
+    case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
+      {:ok, plan} ->
+        {:ok, plan}
+
+      {:error, reason} = refused ->
+        Logger.warning("[ComponentsLive] setup_plan refused for #{ref}: #{inspect(reason)}")
+        refused
+    end
+  end
+
+  # The plan a call answered, or its refusal in place of any plan: the
+  # page shows the refusal's sentence where the plan, its badge and the
+  # grant would be, so no plan read before stands over it.
+  defp assign_plan(socket, {:ok, plan}),
+    do: socket |> assign(:expanded_plan, plan) |> assign(:expanded_plan_refusal, nil)
+
+  defp assign_plan(socket, {:error, reason}),
+    do: socket |> assign(:expanded_plan, nil) |> assign(:expanded_plan_refusal, reason)
 
   defp do_registry_search(socket, query) do
     args = %{"action" => "search", "query" => query, "limit" => 30}
@@ -944,6 +950,17 @@ defmodule PrismWeb.ComponentsLive do
 
   defp plan_field(nil, _key), do: nil
   defp plan_field(plan, key), do: plan[key]
+
+  # The consent section's own sentence when its head is damaged or the
+  # store could not answer it: a grant cannot help there (the walk refuses
+  # a head it cannot decode), so none is offered over a consent that
+  # exists. A head that is missing, or no profile, is a grant to make.
+  defp unreadable_consent(plan) do
+    case plan_field(plan, :consent) do
+      %{head_state: state, reason: reason} when state in ["damaged", "unavailable"] -> reason
+      _ -> nil
+    end
+  end
 
   # --- Display helpers ---
 
@@ -1565,14 +1582,24 @@ defmodule PrismWeb.ComponentsLive do
                                   Ready
                                 </span>
                                 <span
-                                  :if={@expanded_plan && plan_field(@expanded_plan, :ready) != true}
+                                  :if={
+                                    @expanded_plan && plan_field(@expanded_plan, :ready) != true &&
+                                      !unreadable_consent(@expanded_plan)
+                                  }
                                   class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300"
                                 >
                                   Needs grant
                                 </span>
+                                <span
+                                  :if={unreadable_consent(@expanded_plan)}
+                                  data-test="consent-unreadable"
+                                  class="text-xs text-red-300"
+                                >
+                                  {unreadable_consent(@expanded_plan)}
+                                </span>
                               </div>
                               <.button
-                                :if={@expanded_plan}
+                                :if={@expanded_plan && !unreadable_consent(@expanded_plan)}
                                 variant="primary"
                                 class="text-xs px-3 py-1"
                                 phx-click="open_consent"
@@ -1582,8 +1609,20 @@ defmodule PrismWeb.ComponentsLive do
                               </.button>
                             </div>
                             
+    <!-- A plan that could not be read -->
+                            <div
+                              :if={@expanded_plan_refusal}
+                              data-test="setup-plan-refused"
+                              class="text-sm text-red-300 p-4"
+                            >
+                              {error_message(@expanded_plan_refusal)}
+                            </div>
+                            
     <!-- No plan -->
-                            <div :if={!@expanded_plan} class="text-sm text-gray-500 p-4">
+                            <div
+                              :if={!@expanded_plan && !@expanded_plan_refusal}
+                              class="text-sm text-gray-500 p-4"
+                            >
                               No setup plan available for this component.
                             </div>
                             

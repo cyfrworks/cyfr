@@ -37,9 +37,14 @@ defmodule Cyfr.ContextSwapTest do
     "apps/sanctum/lib/sanctum/tenancy.ex" => 1,
     # `resolve/3` narrows through `focus/2`; the one swap left is its
     # open of an ARCHIVED athanor for `get`/`unarchive`, hand-built under
-    # the same two admissions (membership, or the operator's audited open)
-    # because `focus/2` rightly refuses an archived athanor.
-    "apps/sanctum/lib/sanctum/providers/athanor.ex" => 1
+    # the one admission focus grants (a seat) because `focus/2` rightly
+    # refuses an archived athanor.
+    "apps/sanctum/lib/sanctum/providers/athanor.ex" => 1,
+    # Every console refusal the context guard makes is filed under no
+    # tenant: the swap empties the athanor for that audit write alone,
+    # narrows onto no athanor and grants nothing, and the context is never
+    # used to act.
+    "apps/cyfr/lib/prism_web/ops.ex" => 1
   }
 
   @pattern ~r/%\{\s*[\w.]+\s*\|\s*athanor_id:/

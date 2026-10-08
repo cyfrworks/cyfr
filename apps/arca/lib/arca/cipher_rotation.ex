@@ -67,6 +67,14 @@ defmodule Arca.CipherRotation do
       sealed: [:sealed_payload],
       binding: [:athanor_id, :provider_hint]
     },
+    # The instance's own entries carry no athanor: their AAD binds the
+    # entry's id and provider hint alone.
+    instance_entries: %{
+      schema: Arca.Schemas.InstanceEntry,
+      cas: :sealed_payload,
+      sealed: [:sealed_payload],
+      binding: [:provider_hint]
+    },
     registry_tokens: %{
       schema: Arca.Schemas.RegistryToken,
       cas: :credential_ciphertext,

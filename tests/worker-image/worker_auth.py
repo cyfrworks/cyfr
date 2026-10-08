@@ -20,7 +20,10 @@ version, is `unknown_version` once opened and before its `op` is read. A
 guest's outbound target is an `egress_pin` host call answered with a
 `Prima.PinnedTarget` or refused by name (`read_pin_request`, `read_pin`),
 under the egress policy's pure matchers as `Prima.Network` answers them
-(`domain_allowed`, `same_origin`, `credential_header`).
+(`domain_allowed`, `same_origin`, `credential_header`). An attached
+request's answer is a stream of sealed frames (`Prima.WorkerAuth`'s
+`seal_frame/7`, `read_frame/2`): `seal_frame`, `split_frames` and
+`read_frame` spell them, for the runner's `call_id` (`valid_call_id`).
 
 `check_vectors` reproduces every value of `tests/fixtures/worker_auth.json`
 (the primitives) and of the message vectors `host_api.json` and
@@ -49,7 +52,13 @@ ANY_VERSION_TOKEN = re.compile(r"v(0|[1-9][0-9]*)")
 ATTEMPT_FIELDS = ("athanor_id", "execution_id", "attempt", "fence", "generation", "service")
 CALL_FIELDS = ATTEMPT_FIELDS + ("boot", "runner", "member", "ts", "nonce")
 DISPATCH_FIELDS = ("service", "boot", "ts", "nonce")
-INTEGER_FIELDS = {"fence", "generation", "ts"}
+INTEGER_FIELDS = {"fence", "generation", "ts", "seq"}
+FRAME_FIELDS = ("call_id", "seq", "kind")
+FRAME_KIND_BYTES = {"head": ord("h"), "chunk": ord("c"), "end": ord("e"), "error": ord("x")}
+MAX_FRAME_BYTES = 65_536
+MAX_CHUNK_BYTES = 32_768
+MAX_FRAME_MESSAGE_BYTES = 512
+CALL_ID = re.compile(r"[A-Za-z0-9_-]{22}")
 WINDOW_MS = 30_000
 CLAIM_WINDOW_MS = 30_000
 TEXT = re.compile(r"^[\x21-\x7E]{1,256}$")
@@ -498,6 +507,7 @@ def read_pin(wire):
 CREDENTIAL_HEADERS = {"authorization", "cookie", "proxy-authorization", "x-api-key", "x-auth-token",
                       "x-access-token", "x-csrf-token"}
 CREDENTIAL_SUFFIXES = ("-token", "-key", "-secret")
+HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 
 
 def _fold_host(host):
@@ -549,6 +559,40 @@ def credential_header(name):
     """`Prima.Network.credential_header?/1`."""
     name = name.lower()
     return name in CREDENTIAL_HEADERS or name.endswith(CREDENTIAL_SUFFIXES)
+
+
+def attached_header_refusal(name, reserved):
+    """How `Prima.AttachedRequest` refuses a request header beside a named
+    connection: `credential_header_refused` for a name of the credential
+    roster (`Prima.Network.credential_headers/0`), `invalid_request` for
+    one of `reserved`, the headers that route or frame the request or
+    override its method or target (`header_rosters`), in any case; None
+    for the guest's own header, `Idempotency-Key` included."""
+    name = name.lower()
+    if name in CREDENTIAL_HEADERS:
+        return "credential_header_refused"
+    if name in reserved:
+        return "invalid_request"
+    return None
+
+
+def header_rosters(v):
+    """host_api.json's framing_headers and override_headers
+    (`Prima.Network.framing_headers/0` and `override_headers/0`): each a
+    list of distinct lowercase RFC 9110 tokens, the two disjoint and
+    neither naming a credential header. Their union is what an attached
+    request may not set."""
+    framing, override = v["framing_headers"], v["override_headers"]
+    for what, roster in (("framing_headers", framing), ("override_headers", override)):
+        assert roster and len(set(roster)) == len(roster), f"host_api {what}: distinct names"
+        for name in roster:
+            assert isinstance(name, str) and name == name.lower() and HEADER_NAME.fullmatch(name), \
+                f"host_api {what}: {name!r} is a lowercase token"
+    assert not set(framing) & set(override), "host_api: the rosters are disjoint"
+    assert not (set(framing) | set(override)) & CREDENTIAL_HEADERS, "host_api: no roster names a credential header"
+    assert "host" in framing and "x-forwarded-host" in override and "forwarded" in override, \
+        "host_api: the rosters name the Host header and a forwarded origin"
+    return frozenset(framing) | frozenset(override)
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +743,127 @@ def open_call(seal_key, direction, call, sealed):
     return open_sealed(seal_key, f"{PREFIX}/call-{direction}", CALL_FIELDS, call, sealed)
 
 
+# ---------------------------------------------------------------------------
+# Attached answer frames (`Prima.WorkerAuth.seal_frame/7`, `read_frame/2`)
+# ---------------------------------------------------------------------------
+
+
+def valid_call_id(call_id):
+    """Whether `call_id` is 16 bytes as unpadded base64url, spelled exactly
+    as encoding those bytes spells them (`Prima.AttachedRequest`)."""
+    if not isinstance(call_id, str) or not CALL_ID.fullmatch(call_id):
+        return False
+    try:
+        raw = unb64url(call_id)
+    except (ValueError, TypeError):
+        return False
+    return len(raw) == 16 and b64url(raw) == call_id
+
+
+def _frame_message(call_id, seq, kind):
+    return {"call_id": call_id, "seq": seq, "kind": kind}
+
+
+def seal_frame(seal_key, call_id, seq, kind, plaintext, iv=None):
+    """One answer frame as it crosses: a 4-byte big-endian length, the kind
+    byte in clear and the plaintext sealed under the attempt seal key with
+    call_id, seq and kind as additional data; None for a chunk past its
+    bound or a frame past the frame bound."""
+    if kind == "chunk" and len(plaintext) > MAX_CHUNK_BYTES:
+        return None
+    sealed = seal(seal_key, f"{PREFIX}/frame-answer", FRAME_FIELDS, _frame_message(call_id, seq, kind), plaintext, iv)
+    body = bytes([FRAME_KIND_BYTES[kind]]) + sealed.encode()
+    if len(body) > MAX_FRAME_BYTES:
+        return None
+    return len(body).to_bytes(4, "big") + body
+
+
+def open_frame(seal_key, call_id, seq, kind, sealed):
+    """The plaintext of a frame's sealed value read as `kind` at `seq` of
+    the call `call_id`, or None."""
+    return open_sealed(seal_key, f"{PREFIX}/frame-answer", FRAME_FIELDS, _frame_message(call_id, seq, kind), sealed)
+
+
+def split_frames(data):
+    """`(frames, rest, refusal)`: the complete frames of a length-prefixed
+    stream, each its kind byte and sealed value, the bytes after them, and
+    `frame_too_large` or `malformed` for a length past the bound or below
+    two bytes, as soon as the length is in."""
+    frames = []
+    while len(data) >= 4:
+        length = int.from_bytes(data[:4], "big")
+        if length > MAX_FRAME_BYTES:
+            return frames, data, "frame_too_large"
+        if length < 2:
+            return frames, data, "malformed"
+        if len(data) < 4 + length:
+            break
+        frames.append(data[4 : 4 + length])
+        data = data[4 + length :]
+    return frames, data, None
+
+
+def frame_reader(seal_key, call_id):
+    return {"seal_key": seal_key, "call_id": call_id, "seq": 0, "state": "head"}
+
+
+_IN_SEQUENCE = {"head": {"head", "error"}, "body": {"chunk", "end", "error"}, "done": set()}
+
+
+def _read_plaintext(kind, plaintext):
+    if kind == "head":
+        try:
+            head = json.loads(plaintext)
+        except (ValueError, TypeError):
+            return None
+        ok = (
+            isinstance(head, dict) and set(head) == {"status", "headers"}
+            and isinstance(head["status"], int) and not isinstance(head["status"], bool)
+            and 100 <= head["status"] <= 599 and isinstance(head["headers"], list)
+            and all(isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p) for p in head["headers"])
+        )
+        return {"kind": "head", "status": head["status"], "headers": head["headers"]} if ok else None
+    if kind == "chunk":
+        return {"kind": "chunk", "body": plaintext} if len(plaintext) <= MAX_CHUNK_BYTES else "frame_too_large"
+    if kind == "end":
+        return {"kind": "end"} if plaintext == b"" else None
+    try:
+        error = json.loads(plaintext)
+    except (ValueError, TypeError):
+        return None
+    ok = (
+        isinstance(error, dict) and set(error) == {"type", "message"}
+        and isinstance(error["type"], str) and error["type"] != "" and isinstance(error["message"], str)
+        and len(error["message"].encode()) <= MAX_FRAME_MESSAGE_BYTES
+    )
+    return {"kind": "error", "type": error["type"], "message": error["message"]} if ok else None
+
+
+def read_frame(reader, frame):
+    """`(read, refusal)`: one frame (kind byte and sealed value) read as
+    the reader's next, the reader advanced; or the refusal that ends the
+    answer as an error, in `Prima.WorkerAuth.read_frame/2`'s order:
+    malformed, unknown_kind, out_of_sequence, unsealable, then a plaintext
+    its kind does not carry."""
+    if len(frame) < 2:
+        return None, "malformed"
+    kinds = {byte: kind for kind, byte in FRAME_KIND_BYTES.items()}
+    kind = kinds.get(frame[0])
+    if kind is None:
+        return None, "unknown_kind"
+    if kind not in _IN_SEQUENCE[reader["state"]]:
+        return None, "out_of_sequence"
+    plaintext = open_frame(reader["seal_key"], reader["call_id"], reader["seq"], kind, frame[1:].decode("ascii", "replace"))
+    if plaintext is None:
+        return None, "unsealable"
+    read = _read_plaintext(kind, plaintext)
+    if read is None or isinstance(read, str):
+        return None, read or "malformed"
+    reader["seq"] += 1
+    reader["state"] = "body" if kind in ("head", "chunk") else "done"
+    return read, None
+
+
 def seal_attempt_keys(dseal_key, attempt, call_key, seal_key, iv=None):
     named = {name: attempt[name] for name in ATTEMPT_FIELDS}
     sealed = seal(dseal_key, f"{PREFIX}/attempt-keys", ATTEMPT_FIELDS, named, call_key + seal_key, iv)
@@ -837,6 +1002,20 @@ def check_vectors(path):
     assert open_call(skey, "answer", call, sc["answer_sealed"]) == answer, "sealed answer opens"
     assert open_call(skey, "body", call, sc["answer_sealed"]) is None, "a direction opens only its own"
 
+    sf = v["sealed_frames"]
+    assert sf["label"] == f"{PREFIX}/frame-answer" and valid_call_id(sf["call_id"]), "sealed frames: label and call id"
+    reader = frame_reader(skey, sf["call_id"])
+    for frame in sf["frames"]:
+        plaintext = base64.b64decode(frame["plaintext_b64"])
+        framed = seal_frame(skey, sf["call_id"], frame["seq"], frame["kind"], plaintext, bytes.fromhex(frame["iv_hex"]))
+        assert framed is not None and framed.hex() == frame["frame_hex"], f"sealed frame {frame['seq']}"
+        assert framed[5:].decode() == frame["sealed"], f"sealed frame {frame['seq']}: its sealed value"
+        assert open_frame(skey, sf["call_id"], frame["seq"], frame["kind"], frame["sealed"]) == plaintext, f"sealed frame {frame['seq']} opens"
+        assert open_frame(skey, sf["call_id"], frame["seq"] + 1, frame["kind"], frame["sealed"]) is None, "a frame opens only at its place"
+        read, refusal = read_frame(reader, framed[4:])
+        assert refusal is None and read["kind"] == frame["kind"], f"sealed frame {frame['seq']} reads ({refusal})"
+    assert reader["state"] == "done", "sealed frames: the answer ends"
+
     a = v["assignment"]
     wire = json.loads(a["payload"])
     assert wire["member"] == member, "the assignment names its member"
@@ -882,6 +1061,7 @@ def check_host_api(path, primitives):
     for callback, route in v["routes"].items():
         assert route == f"/host/v1/{callback}", f"host_api: {callback}'s route"
     assert "egress_pin" in v["routes"], "host_api: egress_pin is a callback"
+    assert v["retries"]["attached_fetch"] == "never", "host_api: an attached request is never retried"
 
     def reproduce(call, what, callback):
         fields = call["fields"]
@@ -908,10 +1088,21 @@ def check_host_api(path, primitives):
     callbacks = [call["callback"] for call in v["calls"]]
     assert sorted(callbacks) == sorted(c for c in v["routes"] if c != "runner_exited"), "host_api: one call per host callback"
     for call in v["calls"]:
-        reproduce(call, f"host_api {call['callback']}", call["callback"])
+        args = reproduce(call, f"host_api {call['callback']}", call["callback"])
         for refusal in call["refusals"]:
             _check_answer(refusal["answer"], f"host_api {call['callback']} refusal")
             assert read_answer(refusal["answer"])[0] == "error", f"host_api {call['callback']}: a refusal is an error"
+        if call["callback"] == "attached_fetch":
+            check_attached_call(call, args, root, header_rosters(v))
+
+    check_frame_cases(v["frame_cases"], root, v["calls"][0]["fields"])
+
+    for case in v["egress_pin_internal_purposes"]:
+        what = f"host_api egress_pin internal purpose {case['name']}"
+        args = reproduce(case, what, case["callback"])
+        assert args["purpose"] == case["name"] and case["name"] not in PIN_PURPOSES, f"{what}: a purpose no runner asks for"
+        assert read_pin_request(args) is None, f"{what}: the args do not read"
+        assert read_answer(case["answer"])[:2] == ("error", "malformed"), f"{what}: refused malformed"
 
     for case in v["egress_pin_cases"]:
         what = f"host_api egress_pin {case['name']}"
@@ -1006,6 +1197,93 @@ def check_host_api(path, primitives):
     reproduce(first, "host_api retry first", "admit_child")
     reproduce(second, "host_api retry second", "admit_child")
     assert first["body"] == second["body"] and first["fields"]["nonce"] != second["fields"]["nonce"], "host_api retry: one body, fresh nonces"
+
+    # A child's connection crosses as an optional member of its args: absent
+    # for the edge's default, else the account's name. A key names one child
+    # and the connection it was admitted with, so a repeat naming another is
+    # refused invalid_request.
+    cases = {case["name"]: case for case in v["connection_cases"]}
+    assert [case["name"] for case in v["connection_cases"]] == ["omitted", "named", "reused"], "host_api connection: the cases, in order"
+    args = {}
+    for name, case in cases.items():
+        what = f"host_api connection {name}"
+        assert case["callback"] == "admit_child", f"{what}: an admit_child call"
+        args[name] = reproduce(case, what, "admit_child")
+        connection = args[name].get("connection")
+        assert connection is None or (isinstance(connection, str) and connection != ""), f"{what}: absent or an account's name"
+        assert re.fullmatch(r"[A-Za-z0-9_-]{1,128}", args[name]["child_key"]), f"{what}: a child key"
+    assert "connection" not in args["omitted"], "host_api connection omitted: names none"
+    assert read_answer(cases["omitted"]["answer"])[0] == "ok", "host_api connection omitted: admitted"
+    assert args["named"]["connection"] == args["reused"]["connection"] == "Work", "host_api connection: the account"
+    assert args["named"]["child_key"] != args["omitted"]["child_key"], "host_api connection named: a key of its own"
+    assert {k: x for k, x in args["reused"].items() if k != "connection"} == args["omitted"], "host_api connection reused: omitted's call naming an account"
+    named = read_answer(cases["named"]["answer"])
+    assert named[:2] == ("error", "guest_error") and named[2]["type"] == "connection_not_granted", "host_api connection named: refused connection_not_granted"
+    reused = read_answer(cases["reused"]["answer"])
+    assert reused[:2] == ("error", "guest_error") and reused[2]["type"] == "invalid_request", "host_api connection reused: invalid_request"
+    assert v["retries"]["admit_child"] == "keyed", "host_api connection: admit_child is keyed"
+    return True
+
+
+def check_attached_call(call, args, root, reserved):
+    """An attached request carries no single answer: admitted, it is
+    answered with frames. Its refusals are sealed guest errors naming its
+    call id."""
+    what = "host_api attached_fetch"
+    assert "answer" not in call, f"{what}: no single answer"
+    assert valid_call_id(args.get("call_id")), f"{what}: its call id"
+    assert all(attached_header_refusal(name, reserved) is None for name, _value in args["headers"]), f"{what}: no refused header"
+    assert attached_header_refusal("Proxy-Authorization", reserved) == "credential_header_refused", f"{what}: the roster"
+    assert attached_header_refusal("HOST", reserved) == "invalid_request", f"{what}: a framing header"
+    assert attached_header_refusal("X-Forwarded-Host", reserved) == "invalid_request", f"{what}: an override header"
+    assert attached_header_refusal("Idempotency-Key", reserved) is None, f"{what}: no suffix rule"
+    fields = call["fields"]
+    skey = attempt_seal_key(root, fields)
+    for refusal in call["refusals"]:
+        answer = refusal["answer"].encode()
+        sealed = seal_call(skey, "answer", fields, answer, bytes.fromhex(refusal["answer_iv_hex"]))
+        assert sealed == refusal["answer_sealed"], f"{what}: the sealed refusal"
+        assert open_call(skey, "answer", fields, sealed) == answer, f"{what}: the sealed refusal opens"
+        name, fields_ = read_answer(refusal["answer"])[1:]
+        assert name == "guest_error" and fields_["call_id"] == args["call_id"] == refusal["call_id"], f"{what}: a guest error naming its call id"
+        assert set(fields_) == {"type", "message", "call_id"}, f"{what}: type, message and call id"
+
+
+def check_frame_cases(cases, root, fields):
+    """Every frame case: its sealed frames reproduce, and read one frame at a
+    time by a reader for the case's call id, they give the expected frames
+    and end with the expected refusal."""
+    skey = attempt_seal_key(root, fields)
+    assert cases["max_frame_bytes"] == MAX_FRAME_BYTES and cases["max_chunk_bytes"] == MAX_CHUNK_BYTES, "frame_cases: bounds"
+    assert valid_call_id(cases["call_id"]) and valid_call_id(cases["other_call_id"]), "frame_cases: call ids"
+    names = set()
+    for case in cases["cases"]:
+        what = f"host_api frame case {case['name']}"
+        names.add(case["name"])
+        stream = b""
+        for frame in case["frames"]:
+            data = bytes.fromhex(frame["frame_hex"])
+            stream += data
+            sealed_for = frame.get("sealed_for")
+            if sealed_for:
+                framed = seal_frame(skey, sealed_for["call_id"], sealed_for["seq"], sealed_for["kind"],
+                                    base64.b64decode(sealed_for["plaintext_b64"]), bytes.fromhex(sealed_for["iv_hex"]))
+                assert framed == data, f"{what}: a frame reproduces"
+        frames, rest, refusal = split_frames(stream)
+        reader = frame_reader(skey, cases["call_id"])
+        read = []
+        if refusal is None:
+            assert rest == b"", f"{what}: whole frames"
+            for frame in frames:
+                one, refusal = read_frame(reader, frame)
+                if refusal:
+                    break
+                if one["kind"] == "chunk":
+                    one = {"kind": "chunk", "body_b64": base64.b64encode(one["body"]).decode()}
+                read.append(one)
+        assert read == case["expect"]["read"], f"{what}: the frames read"
+        assert refusal == case["expect"]["error"], f"{what}: refused {case['expect']['error']}, not {refusal}"
+    assert {"head_chunk_end", "error_after_head", "out_of_sequence", "another_call", "bad_tag", "oversize"} <= names, "frame_cases: every case"
     return True
 
 

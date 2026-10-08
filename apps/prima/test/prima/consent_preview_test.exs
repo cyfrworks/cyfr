@@ -6,7 +6,12 @@ defmodule Prima.ConsentPreviewTest do
   The consent preview as data (`tests/fixtures/consent_preview.json`): the
   preview holding a row of every kind reads and writes back to itself; a
   row of an unknown kind, a sentence, a narrowed kind that cannot narrow,
-  an origin outside the enum and every other malformed row are refused.
+  an origin outside the enum and every other malformed row are refused. A
+  credential row is one binding: its source, destination, disclosure,
+  suggestion, choice, account, key and lifetime travel with it, and a row
+  missing its source, its key or its lifetime is refused. A preview names
+  the head's bindings it removes, each as the head's row holds it, an
+  empty list when it removes none and a refusal when it says nothing.
   """
 
   use ExUnit.Case, async: true
@@ -45,18 +50,62 @@ defmodule Prima.ConsentPreviewTest do
     for %Row{kind: kind, narrowed: true} <- rows,
         do: assert(kind in ConsentPreview.narrowable_kinds())
 
-    assert ConsentPreview.new(rows, origins, decoded.commit_digest) == {:ok, decoded}
+    assert ConsentPreview.new(rows, origins, decoded.commit_digest, preview["removed"]) ==
+             {:ok, decoded}
   end
 
-  test "a credential is one row per edge it rides, and a stream one per subject" do
+  test "the preview names each binding of the head it removes, as the head's row holds it" do
+    preview = vectors()["preview"]
+    assert {:ok, decoded} = ConsentPreview.decode(preview)
+    removed = ConsentPreview.encode(decoded)["removed"]
+    assert [_ | _] = removed
+    assert removed == preview["removed"]
+
+    assert removed |> Enum.map(& &1["binding_key"]) ==
+             Enum.sort(Enum.map(removed, & &1["binding_key"]))
+
+    for item <- removed do
+      assert item["binding_key"] ==
+               Prima.Authority.Blob.binding_key(item["node"], item["edge"], item["connection"])
+
+      assert Enum.count(~w(entry_id instance_entry_id via), &Map.has_key?(item, &1)) == 1
+    end
+
+    # A need that cannot be told is null, never absent; an entry that
+    # cannot be read names neither its name nor its source.
+    assert Enum.any?(removed, &(Map.has_key?(&1, "need") and is_nil(&1["need"])))
+    assert [%{"via" => "old-maps"} = gone] = Enum.reject(removed, &Map.has_key?(&1, "source"))
+    refute Map.has_key?(gone, "name")
+    assert Enum.any?(removed, &(Map.has_key?(&1, "source") and not Map.has_key?(&1, "name")))
+  end
+
+  test "a preview that removes nothing names an empty list, and one that says nothing is refused" do
+    preview = Map.put(vectors()["preview"], "removed", [])
+    assert {:ok, decoded} = ConsentPreview.decode(preview)
+    assert ConsentPreview.encode(decoded)["removed"] == []
+
+    assert ConsentPreview.decode(Map.delete(preview, "removed")) ==
+             {:error, {:missing_field, "removed"}}
+
+    for refused <- [nil, %{}, [nil], ["x"]] do
+      assert ConsentPreview.check_removed(refused) == {:error, {:invalid_field, "removed"}},
+             inspect(refused)
+    end
+  end
+
+  test "a credential is one row per binding, and a stream one per subject" do
     {:ok, %ConsentPreview{rows: rows}} = ConsentPreview.decode(vectors()["preview"])
 
     weather =
       for %Row{kind: :credential, values: %{"name" => "weather-api"} = values} = row <- rows,
           do: {Row.identity(row), values["edge"]}
 
-    assert [{first, "@ingress"}, {second, "reagent:local.geo"}] = weather
-    refute first == second
+    assert [
+             {{:credential, "reagent:local.weather", "reagent:local.weather|@ingress|default"},
+              "@ingress"},
+             {{:credential, "reagent:local.weather",
+               "reagent:local.weather|reagent:local.geo|name:Geo account"}, "reagent:local.geo"}
+           ] = weather
 
     deltas =
       for %Row{kind: :streams, values: %{"name" => "executions.deltas"}} = row <- rows,
@@ -112,6 +161,40 @@ defmodule Prima.ConsentPreviewTest do
     end
 
     assert ConsentPreview.decode("rows") == {:error, {:invalid_field, "preview"}}
+  end
+
+  test "a credential row names its source, destination, lifetime and the rest" do
+    {:ok, %ConsentPreview{rows: rows}} = ConsentPreview.decode(vectors()["preview"])
+    credentials = for %Row{kind: :credential, values: values} <- rows, do: values
+
+    assert Enum.map(credentials, & &1["source"]) |> Enum.sort() ==
+             Enum.sort(ConsentPreview.Row.sources() ++ ["own"])
+
+    assert Enum.map(credentials, & &1["lifetime"]["kind"]) |> Enum.uniq() |> Enum.sort() ==
+             Enum.sort(ConsentPreview.Row.lifetimes())
+
+    for values <- credentials do
+      assert {:ok, destination} = Prima.Destination.from_map(values["destination"])
+      assert Prima.Destination.to_map(destination) == values["destination"]
+      assert is_boolean(values["disclosed"]) and is_boolean(values["suggested"])
+      assert is_boolean(values["choice_required"])
+    end
+
+    # The provider is absent where the entry names none; the account only on a named binding.
+    assert Enum.any?(credentials, &(not Map.has_key?(&1, "provider")))
+
+    assert [%{"connection" => "Geo account"}] =
+             Enum.filter(credentials, &Map.has_key?(&1, "connection"))
+  end
+
+  test "a credential row missing its source, binding key or lifetime is refused" do
+    {:ok, %ConsentPreview{rows: rows}} = ConsentPreview.decode(vectors()["preview"])
+    [credential | _] = for %Row{kind: :credential} = row <- rows, do: row
+
+    for field <- ["source", "binding_key", "lifetime", "destination", "disclosed"] do
+      row = Row.encode(credential) |> update_in(["values"], &Map.delete(&1, field))
+      assert Row.decode(row) == {:error, {:missing_field, field}}, field
+    end
   end
 
   test "no kind carries a sentence field" do

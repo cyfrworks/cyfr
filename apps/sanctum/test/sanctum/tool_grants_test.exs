@@ -28,6 +28,7 @@ defmodule Sanctum.ToolGrantsTest do
       "notes.keep" => %{kind: :write, standing: :thread, resource: nil},
       "files.write" => %{kind: :write, standing: nil, resource: {"path", :storage_path}},
       "web.fetch" => %{kind: :read, standing: nil, resource: {"domain", :egress_domain}},
+      "execution.run" => %{kind: :execute, standing: nil, resource: {"connection", :vault_entry}},
       "srv:thing.do" => %{kind: :external, standing: nil, resource: nil}
     }
 
@@ -669,6 +670,47 @@ defmodule Sanctum.ToolGrantsTest do
       refute ToolGrants.admits?(ctx, fetch.("example.com"))
       refute ToolGrants.admits?(ctx, fetch.("api.example.org"))
       refute ToolGrants.admits?(ctx, fetch.("*.example.com"))
+    end
+
+    test "an entry constraint covers a call by the entry its account resolved to, never by a name",
+         %{ctx: ctx, thread: thread, a: a} do
+      allow!(
+        ctx,
+        thread,
+        %{
+          lifecycle_kind: "execution",
+          lifecycle_id: a,
+          constraint: %{kind: "vault_entry", patterns: ["vlt_work-1"]}
+        },
+        %{tool: "execution", action: "run"}
+      )
+
+      run = fn over ->
+        call(
+          thread,
+          Map.merge(
+            %{
+              tool: "execution",
+              action: "run",
+              execution_id: a,
+              args: %{"reference" => "catalyst:local.mail:1.0.0", "connection" => "Work"}
+            },
+            over
+          )
+        )
+      end
+
+      assert ToolGrants.admits?(ctx, run.(%{vault_entry: "vlt_work-1"}))
+
+      # Another entry, a longer id, or none resolved asks.
+      refute ToolGrants.admits?(ctx, run.(%{vault_entry: "vlt_home-1"}))
+      refute ToolGrants.admits?(ctx, run.(%{vault_entry: "vlt_work-10"}))
+      refute ToolGrants.admits?(ctx, run.(%{vault_entry: nil}))
+      refute ToolGrants.admits?(ctx, run.(%{}))
+
+      # The argument names an account, never an entry, and is not read: one
+      # spelling the constraint's id covers nothing.
+      refute ToolGrants.admits?(ctx, run.(%{args: %{"connection" => "vlt_work-1"}}))
     end
   end
 end

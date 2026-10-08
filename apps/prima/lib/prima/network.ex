@@ -19,6 +19,18 @@ defmodule Prima.Network do
                          x-access-token x-csrf-token)
   @credential_suffixes ["-token", "-key", "-secret"]
 
+  # Lowercase header names that route or frame a request: only the client
+  # making the request sets them.
+  @framing_headers ~w(host content-length transfer-encoding connection keep-alive te trailer
+                      upgrade proxy-connection expect)
+
+  # Lowercase header names that override a request's method or target, or
+  # claim a forwarded origin: an upstream honouring one answers a request
+  # other than the one a destination admitted.
+  @override_headers ~w(x-http-method-override x-http-method x-method-override x-original-url
+                       x-rewrite-url x-original-host x-host x-forwarded-host x-forwarded-proto
+                       x-forwarded-port x-forwarded-prefix x-forwarded-server forwarded)
+
   @default_ports %{"http" => 80, "https" => 443}
 
   @type pinned :: %{
@@ -216,9 +228,38 @@ defmodule Prima.Network do
   `authorization`, `cookie`, `proxy-authorization`, `x-api-key`,
   `x-auth-token`, `x-access-token` and `x-csrf-token`. Any name ending in
   `-token`, `-key` or `-secret` carries one too (`credential_header?/1`).
+  `strip_credentials/1` drops this roster and those names from a hop to
+  another origin; `Prima.AttachedRequest` refuses this roster alone, in
+  any case, beside a named connection, so the two read one list.
   """
   @spec credential_headers() :: [String.t()]
   def credential_headers, do: @credential_headers
+
+  @doc """
+  The lowercase names of the headers that route or frame a request:
+  `host`, `content-length`, `transfer-encoding`, `connection`,
+  `keep-alive`, `te`, `trailer`, `upgrade`, `proxy-connection` and
+  `expect`. Only the client making a request sets them, so neither a
+  guest's attached request (`Prima.AttachedRequest`) nor an attach rule
+  (`Prima.Manifest.Needs`) names one, and the request goes to the pinned
+  host as it was framed there.
+  """
+  @spec framing_headers() :: [String.t()]
+  def framing_headers, do: @framing_headers
+
+  @doc """
+  The lowercase names of the headers that override a request's method or
+  target, or claim a forwarded origin: `x-http-method-override`,
+  `x-http-method`, `x-method-override`, `x-original-url`, `x-rewrite-url`,
+  `x-original-host`, `x-host`, `x-forwarded-host`, `x-forwarded-proto`,
+  `x-forwarded-port`, `x-forwarded-prefix`, `x-forwarded-server` and
+  `forwarded`. An upstream honouring one would answer another method or
+  path than the destination admitted, so neither a guest's attached
+  request (`Prima.AttachedRequest`) nor an attach rule
+  (`Prima.Manifest.Needs`) names one.
+  """
+  @spec override_headers() :: [String.t()]
+  def override_headers, do: @override_headers
 
   @doc """
   Whether a header `name`, in any case, carries a credential: one of

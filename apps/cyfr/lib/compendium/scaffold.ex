@@ -492,6 +492,10 @@ defmodule Compendium.Scaffold do
                 Ok(v) => v,
                 Err(e) => return serde_json::json!({"error": e.to_string()}).to_string(),
             };
+            // For an authenticated API, declare a need with type api_key:<provider>,
+            // fields, hosts and attach in cyfr-manifest.json, plus matching caps.egress.
+            // Name the need as "connection" on cyfr:http/fetch requests.
+            // CYFR attaches the credential in the control plane; never read or set it here.
             // TODO: Implement catalyst logic
             serde_json::json!({"error": "not implemented"}).to_string()
         }
@@ -554,6 +558,10 @@ defmodule Compendium.Scaffold do
         "reads the manifest but never changes it (storage grants default to none; 'data/' " <>
         "is the component-private scope — grant 'components/' only when the component " <>
         "genuinely manages component trees)",
+      "For an authenticated API, declare a need with type api_key:<provider>, fields, " <>
+        "hosts and attach, plus matching caps.egress; name that need as connection on " <>
+        "cyfr:http/fetch requests. CYFR attaches the credential in the control plane " <>
+        "without handing it to the component",
       "Edit src/src/lib.rs to implement your catalyst logic",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the compiled binary"

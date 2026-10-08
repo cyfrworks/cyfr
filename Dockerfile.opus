@@ -41,7 +41,7 @@
 
 # ---- cyfr-keeper, the process helper: a static Go binary, pinned to the Go
 # release apps/keeper/go.mod names ----
-FROM golang:1.26.6-alpine AS keeper
+FROM golang:1.27.1-alpine AS keeper
 WORKDIR /src
 COPY apps/keeper/go.mod apps/keeper/go.sum ./
 RUN go mod download

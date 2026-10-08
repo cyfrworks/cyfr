@@ -211,5 +211,24 @@ defmodule Arca.AuditHandlerTest do
 
       assert "audit-cyfr-sanctum-platform_context" in ids
     end
+
+    test "a platform-context entry records the construction and names no athanor" do
+      user_id = "svc-audit-#{System.unique_integer([:positive])}"
+      recorded(fn -> Sanctum.Context.internal(user_id: user_id) end)
+
+      assert_receive {:recorded,
+                      %Arca.Audit.Event{
+                        name: [:cyfr, :sanctum, :platform_context],
+                        user_id: ^user_id
+                      } = audited, %{count: 1}}
+
+      # A platform context is built for platform-scope operations: its
+      # entry is the sanctioned construction and who built it, never an
+      # athanor someone opened.
+      assert audited.athanor_id == nil
+      refute Map.has_key?(audited.metadata, :athanor_id)
+      assert audited.metadata.sanctioned == true
+      assert is_binary(audited.metadata.caller)
+    end
   end
 end

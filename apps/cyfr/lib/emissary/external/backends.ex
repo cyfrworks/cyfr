@@ -77,11 +77,14 @@ defmodule Emissary.External.Backends do
       every owner still registered here;
     * `sync` when a server process starts: the row is read again (fenced:
       the same epoch, enabled, stdio, its athanor active), its env templates
-      are resolved through `Sanctum.VaultReader` and sealed for the owner
-      and the service's lifetime (`Prima.LocusBackends.seal/5`). The
-      resolved values live only in the task that sends the message. The
-      service admits the version and answers at once; its backends start
-      on their own time;
+      are resolved through `Sanctum.VaultReader.unseal_disclosed/2` and
+      sealed for the owner and the service's lifetime
+      (`Prima.LocusBackends.seal/5`). Every template is checked from the
+      entries' metadata first, and one naming an attach-only entry
+      refuses the sync `:disclosure_refused` before any entry is unsealed
+      or anything is sent. The resolved values live only in the task that
+      sends the message. The service admits the version and answers at
+      once; its backends start on their own time;
     * `renew` every third of the lease for every live owner whose row
       still passes the fence, asking for the lease again
       (the `locus_backends_lease_ms` platform setting: 30 s unless set),
@@ -262,7 +265,8 @@ defmodule Emissary.External.Backends do
   passed. Refused with a reason when another member of the cell holds the
   backend's claim (`:claimed_elsewhere`) or the claim row cannot be read
   (`:claim_unavailable`), when the row no longer passes the fence, an env
-  template does not resolve, the athanor or the row's creator would hold
+  template does not resolve or names an attach-only entry
+  (`:disclosure_refused`), the athanor or the row's creator would hold
   more than their share of the pool, the pool is full, this member does
   not hold its slot in the cell, or the service cannot be reached.
   """
@@ -1290,7 +1294,49 @@ defmodule Emissary.External.Backends do
     end
   end
 
+  # Every template is checked before any entry is unsealed.
   defp resolve_env(athanor_id, backends) do
+    with :ok <- check_env(athanor_id, backends) do
+      unseal_env(athanor_id, backends)
+    end
+  end
+
+  # From metadata alone (`Sanctum.Vault.disclosed?/2`): a reference this
+  # server does not resolve, or an entry missing, inactive or attach-only,
+  # refuses the sync before any entry is unsealed, so one disclosed entry
+  # beside an attach-only one reaches no environment and records no use.
+  # The answers are the ones the unseal would give.
+  defp check_env(athanor_id, backends) do
+    ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
+
+    Enum.find_value(backends, :ok, fn backend ->
+      Enum.find_value(backend["env"], fn {name, value} ->
+        case VaultRef.classify(value) do
+          {:vault, %{name: entry}} ->
+            cond do
+              Sanctum.Vault.disclosed?(ctx, entry) -> nil
+              active?(athanor_id, entry) -> {:error, :disclosure_refused}
+              true -> {:error, {:env_unresolved, backend["name"], name}}
+            end
+
+          :unresolved ->
+            {:error, {:env_unresolved, backend["name"], name}}
+
+          :literal ->
+            nil
+        end
+      end)
+    end)
+  end
+
+  defp active?(athanor_id, entry) do
+    match?(
+      {:ok, %{^entry => {_rev, _digest}}},
+      Sanctum.VaultReader.revisions(athanor_id, [entry])
+    )
+  end
+
+  defp unseal_env(athanor_id, backends) do
     Enum.reduce_while(backends, {:ok, %{}}, fn backend, {:ok, acc} ->
       case resolve_backend_env(athanor_id, backend) do
         {:ok, env} -> {:cont, {:ok, Map.put(acc, backend["name"], env)}}
@@ -1303,6 +1349,7 @@ defmodule Emissary.External.Backends do
     Enum.reduce_while(backend["env"], {:ok, %{}}, fn {name, value}, {:ok, acc} ->
       case resolve_value(athanor_id, value) do
         {:ok, resolved} -> {:cont, {:ok, Map.put(acc, name, resolved)}}
+        {:error, :disclosure_refused} -> {:halt, {:error, :disclosure_refused}}
         :error -> {:halt, {:error, {:env_unresolved, backend["name"], name}}}
       end
     end)
@@ -1310,13 +1357,18 @@ defmodule Emissary.External.Backends do
 
   # A template resolves to its single-field entry's value after its scheme;
   # a literal (only the names BackendDefinition allows) is itself; a
-  # reference this server does not resolve resolves to nothing.
+  # reference this server does not resolve resolves to nothing. An
+  # environment hands its values to the backend's process, so an
+  # attach-only entry is the reader's refusal, made before it is unsealed.
   defp resolve_value(athanor_id, value) do
     case VaultRef.classify(value) do
       {:vault, %{name: entry} = template} ->
-        case Sanctum.VaultReader.unseal_by_name(athanor_id, entry) do
+        case Sanctum.VaultReader.unseal_disclosed(athanor_id, entry) do
           {:ok, fields} when map_size(fields) == 1 ->
             {:ok, VaultRef.render(template, fields |> Map.values() |> hd())}
+
+          {:error, :disclosure_refused} ->
+            {:error, :disclosure_refused}
 
           _ ->
             :error

@@ -42,6 +42,20 @@ defmodule Prima.HostAPI do
   bounds how long it waits for each answer, and `max_body_bytes/0` and
   `max_answer_bytes/0` bound what crosses in either direction. A retried
   call is a new call with a fresh nonce; only its effect is repeatable.
+
+  ## An attached request's answer
+
+  `c:attached_fetch/3` is answered in one of two ways, either side of its
+  admission boundary: the point where CYFR has pinned the request's URL
+  and resolved the credential it attaches. Before it, a refusal is an
+  ordinary sealed answer, a guest error naming the request's `call_id`.
+  After it, the answer is a stream of sealed frames
+  (`Prima.WorkerAuth.seal_frame/7`): a `head`, zero or more `chunk`s and
+  one `end` or `error`, and any failure from there on is an `error` frame.
+  `request_timeout_ms/1` bounds the wait for the answer's beginning; the
+  stream after it is bounded by the attempt's deadline and the grant's
+  `max_response_size`. Its effect is an upstream request, so it is never
+  retried.
   """
 
   @typedoc """
@@ -70,6 +84,14 @@ defmodule Prima.HostAPI do
   """
   @type child_key :: String.t()
 
+  @typedoc """
+  The account a child asks its edge for: nil for the edge's default
+  binding, or the name of an account the edge binds beside it
+  (`Prima.Authority.Blob.valid_account_name?/1`). It crosses as the
+  `connection` member of an `admit_child` body's args, absent for nil.
+  """
+  @type connection :: String.t() | nil
+
   @child_key ~r/\A[A-Za-z0-9_-]{1,128}\z/
 
   @max_field_name_bytes 256
@@ -89,6 +111,7 @@ defmodule Prima.HostAPI do
     :record_denial,
     :release_child,
     :egress_pin,
+    :attached_fetch,
     :runner_exited
   ]
 
@@ -107,8 +130,11 @@ defmodule Prima.HostAPI do
     record_denial: :never,
     release_child: :idempotent,
     egress_pin: :idempotent,
+    attached_fetch: :never,
     runner_exited: :idempotent
   }
+
+  @field_denials ["secret_denied", "disclosure_refused"]
 
   @doc "The callbacks, as `retry/1` and `request_timeout_ms/1` name them."
   @spec callbacks() :: [atom()]
@@ -124,10 +150,19 @@ defmodule Prima.HostAPI do
   def valid_child_key?(_key), do: false
 
   @doc """
-  Whether `name` is a field name a `c:record_denial/2` of type
-  `secret_denied` may carry: 1 to 256 bytes of UTF-8 without a control
-  character. The name is the guest's, so a runner reports no other, and
-  CYFR records no other.
+  The `c:record_denial/2` types whose message is a vault field name:
+  `secret_denied`, a field outside the consented projection, and
+  `disclosure_refused`, a field of an entry CYFR attaches and never
+  discloses.
+  """
+  @spec field_denials() :: [String.t()]
+  def field_denials, do: @field_denials
+
+  @doc """
+  Whether `name` is a field name a `c:record_denial/2` of a type
+  `field_denials/0` names may carry: 1 to 256 bytes of UTF-8 without a
+  control character. The name is the guest's, so a runner reports no
+  other, and CYFR records no other.
   """
   @spec valid_field_name?(term()) :: boolean()
   def valid_field_name?(name) when is_binary(name) do
@@ -140,7 +175,9 @@ defmodule Prima.HostAPI do
   @doc """
   How long a client waits for `callback`'s answer, in milliseconds, before
   it treats the answer as lost: the host-call header window for every
-  call, so a late answer never verifies as fresh.
+  call, so a late answer never verifies as fresh. For `attached_fetch` it
+  bounds the wait for the answer's beginning, a refusal or the first
+  frame.
   """
   @spec request_timeout_ms(atom()) :: pos_integer()
   def request_timeout_ms(callback) when is_map_key(@retries, callback),
@@ -182,6 +219,23 @@ defmodule Prima.HostAPI do
 
   @typedoc "Vault field values by field name."
   @type secrets :: %{optional(String.t()) => String.t()}
+
+  @typedoc """
+  How an attached request is refused before its admission boundary: a
+  guest error whose type is the reason. That is a credential refusal of
+  `Prima.Refusal.credential_reasons/0`, `invalid_request`, an egress
+  refusal a guest's own fetch would get (`method_blocked`,
+  `scheme_blocked`, `domain_blocked`, `private_ip_blocked`, `dns_error`),
+  `rate_limited`, or `request_too_large` for a request past the grant's
+  `max_request_size`. On the wire it names the request's `call_id`.
+  """
+  @type attached_refusal :: {:guest_error, type :: String.t(), message :: String.t()}
+
+  @typedoc """
+  Writes one sealed answer frame (`Prima.WorkerAuth.seal_frame/7`) of an
+  attached request to its runner, answering `:ok`, or why it could not.
+  """
+  @type emit :: (binary() -> :ok | {:error, term()})
 
   @typedoc """
   One attempt's lease renewal: its new expiry in Unix ms, or its loss. A
@@ -307,6 +361,16 @@ defmodule Prima.HostAPI do
   already admitted under it, with the same assignment and sealed keys; a
   key whose child has already ended is refused `:lost`; a malformed key
   is refused as a guest error.
+
+  `connection` is the account the child asks its edge for
+  (`t:connection/0`): the child holds that account's binding, or the
+  edge's default for nil. An account the edge does not bind is refused as
+  the guest error `connection_not_granted`, setup required, and no default
+  is used in its place; one that is not an account's name is refused
+  `invalid_request`. A key names the connection its child was admitted
+  with, none for a self-call, which crosses no edge, so a repeat under it
+  naming another is refused `invalid_request` before anything is answered
+  from that child.
   """
   @callback admit_child(
               caller(),
@@ -314,7 +378,8 @@ defmodule Prima.HostAPI do
               need :: String.t() | nil,
               input :: map(),
               guest_fn :: :call | :spawn,
-              child_key()
+              child_key(),
+              connection()
             ) :: {:ok, child()} | {:error, refusal() | guest_error()}
 
   @doc """
@@ -330,10 +395,12 @@ defmodule Prima.HostAPI do
   @doc """
   Record a denial the runner made for the caller's component, as `attrs`'
   `type` and `message`: a refusal of the runner's own egress checks, by
-  its WIT error type and sentence, or `secret_denied`, whose message is the
-  vault field name the guest asked for outside its consented projection
-  (`valid_field_name?/1`), which CYFR audits for the caller's attempt. A
-  `secret_denied` naming anything else is `:lost`.
+  its WIT error type and sentence, or a field denial (`field_denials/0`):
+  `secret_denied`, whose message is the vault field name the guest asked
+  for outside its consented projection, or `disclosure_refused`, whose
+  message is the field of an entry CYFR attaches and never discloses
+  (`valid_field_name?/1`), each audited for the caller's attempt. A field
+  denial naming anything else is `:lost`.
   """
   @callback record_denial(caller(), attrs :: map()) :: :ok | {:error, refusal()}
 
@@ -368,6 +435,22 @@ defmodule Prima.HostAPI do
               opts :: [purpose: Prima.PinnedTarget.purpose(), from: String.t()]
             ) ::
               {:ok, Prima.PinnedTarget.t()} | {:error, refusal() | Prima.PinnedTarget.refusal()}
+
+  @doc """
+  Make the caller's guest's request `request` with the credential its
+  connection's need is bound to attached by CYFR, writing the answer's
+  frames with `emit`. CYFR reads the edge the node reached its need
+  through from the authority it holds for the caller's attempt, checks the
+  URL and method against the binding's destination, pins the URL once
+  under that authority, takes the `http:` rate, resolves the credential,
+  applies the need's attach rule and makes the request to exactly the
+  pinned address, masking the attached value out of every frame. A
+  refusal before the request is admitted is `{:error, attached_refusal}`
+  and emits nothing; once admitted the answer is the frames `emit` wrote,
+  a failure among them an `error` frame, and the call answers `:ok`.
+  """
+  @callback attached_fetch(caller(), request :: Prima.AttachedRequest.t(), emit()) ::
+              :ok | {:error, refusal() | attached_refusal()}
 
   @doc """
   Report that the runner `runner` of the reporting worker service exited,

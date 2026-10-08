@@ -30,7 +30,11 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
     {{:tool_auth_required, "vault"}, :unauthenticated},
     {{:malformed_resource, :execution}, :internal},
     {{:consent_class_required, :no_capability}, :forbidden},
-    {{:authorization_required, "grant expired"}, :setup_required}
+    {{:authorization_required, "grant expired"}, :setup_required},
+    {{:head_unavailable, "prof_app"}, :unavailable},
+    {{:head_corrupt, "prof_app"}, :corrupt},
+    {{:lender_unavailable, "reagent:local.dep"}, :unavailable},
+    {{:lender_corrupt, "reagent:local.dep", "prof_lender"}, :corrupt}
   ]
 
   # The one row whose JSON-RPC code is not its class's: a connection to
@@ -50,6 +54,25 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
       assert is_binary(Unauthorized.message(reason, :api_key)),
              "message/2 with a method fails for #{inspect(reason)}"
     end
+  end
+
+  # The consent loader's refusals that reach a surface: an outage is
+  # retryable, damage names the profile to revoke, and neither reads as a
+  # grant to make.
+  test "the consent loader's refusals read whole" do
+    assert Unauthorized.message({:head_unavailable, "prof_app"}) ==
+             "This app's consent cannot be read right now — try again."
+
+    assert Unauthorized.message({:head_corrupt, "prof_app"}) ==
+             "This app's consent is damaged and cannot be used — " <>
+               "revoke profile prof_app and grant it again."
+
+    assert Unauthorized.message({:lender_unavailable, "reagent:local.dep"}) ==
+             "A profile that lends a key here cannot be read right now — try again."
+
+    assert Unauthorized.message({:lender_corrupt, "reagent:local.dep", "prof_lender"}) ==
+             "A profile that lends a key here is damaged and cannot lend its key — " <>
+               "revoke profile prof_lender and grant it again."
   end
 
   test "a consent class refused for want of a sign-in is unauthenticated" do

@@ -28,12 +28,16 @@ defmodule Sanctum.Consent.Loader do
      granted, and the consent is refused
   8. **selections resolved** — an edge whose vault selects a labelled
      profile of its target is rewritten to that profile's own bound entry
-     when the profile is an active owner profile, its head consent is
-     intact and its ingress binds an entry of the pinned digest;
-     otherwise the selection stays, and a run under that edge answers
-     setup_required. A lender's head that does not admit the context's
-     origin refuses the whole load with `consent_required`, naming the
-     lender's profile and revision
+     when the profile is an active owner profile, no profile row of the
+     target is damaged, its head consent is intact and its ingress binds
+     an entry of the pinned digest. A lender the store cannot answer
+     (`{:lender_unavailable, target}`), or whose profile row or head does
+     not decode, or whose head's bytes fail their digest or do not parse
+     (`{:lender_corrupt, target, profile_id}`), refuses the whole load,
+     and so does a lender's head that does not admit the
+     context's origin (`consent_required`, naming the lender's profile and
+     revision). Otherwise the selection stays, and a run under that edge
+     answers setup_required
   9. **binding digest consistency** — the same vault entry on two edges
      with unequal binding digests is refused; the loader never picks
   10. the `Sanctum.Consent.Loader.Decision` table over granted vs
@@ -63,6 +67,10 @@ defmodule Sanctum.Consent.Loader do
           Sanctum.Consent.error()
           | {:profile_unavailable, :needs_consent | :revoked}
           | {:no_head_consent, String.t()}
+          | {:head_corrupt, String.t()}
+          | {:head_unavailable, String.t()}
+          | {:lender_corrupt, String.t(), String.t()}
+          | {:lender_unavailable, String.t()}
           | {:invalid_consent, atom()}
           | {:invalid_blob, Blob.error()}
           | {:blob_digest_mismatch, String.t()}
@@ -72,9 +80,77 @@ defmodule Sanctum.Consent.Loader do
           | {:unknown_source_node, String.t()}
           | {:missing_ingress, String.t()}
           | {:inconsistent_binding_digest, String.t()}
+          | :connection_not_granted
 
   @typedoc "What run_root stamps on the execution row."
   @type stamp :: %{activation_digest: String.t(), activation_graph: %{String.t() => String.t()}}
+
+  @typedoc """
+  A refusal a reader of an app's own head answers for its damage
+  (`damage_refusal/3`): the damaged head or profile, both naming the
+  profile, or the damaged component graph, naming the source.
+  """
+  @type damage_refusal ::
+          {:head_corrupt, String.t()}
+          | {:corrupt, {:profile, String.t()}}
+          | {:corrupt, {:component_graph, String.t()}}
+
+  # The answers of `load_error/0` that say an app's own stored grant, or
+  # the release it runs, cannot be trusted: the one family every reader
+  # of an app's own head maps through `damage_refusal/3`. A lender's
+  # damage (`lender_corrupt`) and a head already read as damaged
+  # (`head_corrupt`) are typed already, and an outage is no damage.
+  @damage [
+    :invalid_profile,
+    :invalid_consent,
+    :invalid_blob,
+    :blob_digest_mismatch,
+    :blob_refs_mismatch,
+    :inconsistent_binding_digest,
+    :integrity_alarm,
+    :no_head_consent,
+    :unknown_source_node,
+    :missing_ingress
+  ]
+
+  @doc """
+  Whether `reason`, an answer of `load_root/3` or `admitted_blob/3`, says
+  the app's own stored grant, or the release it runs, cannot be trusted:
+  a profile and head that cannot root an authority, an active profile with
+  no head, a head whose revision is invalid, whose bytes fail their digest
+  or do not parse, whose bindings or stored references disagree, or whose
+  grant holds no node or ingress for the source, and a running release
+  that does not re-derive from its row. A lender's refusals, a head
+  already answered `head_corrupt`, an outage and every other answer are
+  not.
+  """
+  @spec damage?(term()) :: boolean()
+  def damage?({tag, _detail}) when tag in @damage, do: true
+  def damage?(_reason), do: false
+
+  @doc """
+  The refusal a reader of the app's own head answers for `reason`, one
+  `damage?/1` holds, of the profile `profile_id` of the source
+  `source_ref`: what the person can repair, in its own sentence. A
+  profile and head that cannot root an authority is the damaged profile,
+  `{:corrupt, {:profile, profile_id}}`; a running release that does not
+  re-derive from its row is the damaged component graph,
+  `{:corrupt, {:component_graph, source_ref}}`, which no grant repairs;
+  and every other member is the damaged head, `{:head_corrupt,
+  profile_id}`, which a fresh grant rebuilds from the current graph.
+  """
+  @spec damage_refusal(load_error(), String.t(), String.t()) :: damage_refusal()
+  def damage_refusal({:invalid_profile, _what}, profile_id, _source_ref)
+      when is_binary(profile_id),
+      do: {:corrupt, {:profile, profile_id}}
+
+  def damage_refusal({:integrity_alarm, _nodes}, _profile_id, source_ref)
+      when is_binary(source_ref),
+      do: {:corrupt, {:component_graph, source_ref}}
+
+  def damage_refusal({tag, _detail}, profile_id, _source_ref)
+      when tag in @damage and is_binary(profile_id),
+      do: {:head_corrupt, profile_id}
 
   @doc """
   Load the head consent of `profile` and build the root Authority.
@@ -87,6 +163,22 @@ defmodule Sanctum.Consent.Loader do
   - `:ceiling` — override the platform ceiling (tests only)
   - `:budget_id` — the reservation the authority's budget names (a turn
     resumed or taken over charges the one it was admitted with)
+  - `:connection` — the account the root's own calls name, picked from
+    the ingress by `Prima.Authority.root/3`; a name the ingress does not
+    bind is `{:error, :connection_not_granted}`
+
+  ## A head or a lender it cannot read
+
+  The profile's own head is read three ways, never one: a profile with
+  no head is `{:no_head_consent, profile_id}`, a head stored outside the
+  closed vocabulary is `{:head_corrupt, profile_id}`, and one the store
+  could not answer is `{:head_unavailable, profile_id}`. Each lender a
+  selection names is read the same way, as `admitted_blob/3` reads it: a
+  lender the store could not answer refuses the load
+  `{:lender_unavailable, target}`, one whose profile row or head does not
+  decode, or whose head's bytes fail their digest or do not parse, refuses
+  it `{:lender_corrupt, target, profile_id}`, and an absent one leaves the
+  selection in place.
   """
   @spec load_root(Context.t(), map(), keyword()) ::
           {:ok, Authority.t(), stamp()} | {:error, load_error()}
@@ -116,6 +208,18 @@ defmodule Sanctum.Consent.Loader do
   context's origin still decides each lender's admission (check 8), so the
   same head can carry a borrowed entry under one origin and refuse under
   another.
+
+  A lender is read absent, damaged and unanswered apart. A lender the
+  store could not answer, its profiles or its head, refuses
+  `{:lender_unavailable, target}`; a lender whose profile row or head
+  does not decode, or whose head's bytes fail their digest or do not
+  parse, refuses `{:lender_corrupt, target, profile_id}`, where a damaged
+  profile row of the target refuses a selection by label, since its label
+  cannot be read. A lender that does not exist, has no head, is not
+  active or lends nothing (its head holds no ingress for the target, binds
+  nothing there, no longer binds the digest the selection pinned, or
+  cannot narrow to the selection's projection) leaves the selection in
+  place.
   """
   @spec admitted_blob(Context.t(), map(), map()) :: {:ok, Blob.t()} | {:error, load_error()}
   def admitted_blob(%Context{} = ctx, profile, consent)
@@ -135,10 +239,23 @@ defmodule Sanctum.Consent.Loader do
   defp check_profile_status(%{status: status}), do: {:error, {:profile_unavailable, status}}
   defp check_profile_status(_), do: {:error, {:invalid_profile, :status}}
 
+  # A head that is absent, one stored outside the closed vocabulary and
+  # one the store cannot answer are three answers, never one: a caller
+  # that read an outage or a damaged row as "no grant" would send the
+  # person to grant again over a record that exists.
   defp fetch_head(actor, profile) do
     case Arca.ConsentStorage.head_consent(actor, profile.id) do
-      {:ok, consent} -> {:ok, consent}
-      {:error, _} -> {:error, {:no_head_consent, profile.id}}
+      {:ok, consent} ->
+        {:ok, consent}
+
+      {:error, absent} when absent in [:not_found, :no_head] ->
+        {:error, {:no_head_consent, profile.id}}
+
+      {:error, {:invalid_stored_value, _}} ->
+        {:error, {:head_corrupt, profile.id}}
+
+      {:error, _unanswered} ->
+        {:error, {:head_unavailable, profile.id}}
     end
   end
 
@@ -215,13 +332,15 @@ defmodule Sanctum.Consent.Loader do
   end
 
   # The blob is what runs; the refs are what "which profiles touch this
-  # entry" queries answer from. If they disagree, one of them lies about
-  # the grant, so neither is trusted.
+  # entry" queries answer from, and what a binding's lifetime is kept on.
+  # If they disagree, one of them lies about the grant, so neither is
+  # trusted. Compared per binding: a bound entry by its key, entry and
+  # digest, a selection by its key, label and pinned digest (nil when it
+  # pinned none).
   defp check_blob_refs_equality(blob, consent) do
     blob_refs = blob_vault_refs(blob)
 
-    stored_refs =
-      MapSet.new(consent.vault_refs, fn ref -> {ref.vault_entry_id, ref.binding_digest} end)
+    stored_refs = MapSet.new(consent.vault_refs, &stored_ref/1)
 
     if MapSet.equal?(blob_refs, stored_refs) do
       :ok
@@ -242,14 +361,38 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
+  # Every binding the blob holds, as the tagged identity its row carries
+  # (`Arca.ConsentStorage.row_identity/1`): each bound entry, its named
+  # accounts included, and each selection, keyed where it sits. Provided
+  # configuration names no binding.
   defp blob_vault_refs(%Blob{nodes: nodes}) do
-    for {_ref, node} <- nodes,
-        {_key, edge} <- node.edges,
-        Blob.bound_vault?(edge.vault),
-        into: MapSet.new() do
-      {edge.vault.entry_id, edge.vault.binding_digest}
-    end
+    for {node_ref, node} <- nodes,
+        {edge_key, %Blob.Edge{vault: vault}} <- node.edges,
+        ref <- edge_refs(node_ref, edge_key, vault),
+        into: MapSet.new(),
+        do: ref
   end
+
+  defp edge_refs(_node_ref, _edge_key, %{entry_id: _} = vault) do
+    named = vault |> Map.get(:named, %{}) |> Map.values()
+    for bound <- [vault | named], do: bound_identity(bound)
+  end
+
+  # A selection is resolved within the borrowing consent's own athanor.
+  defp edge_refs(node_ref, edge_key, %{via: via}),
+    do: [
+      {:via, "athanor", Blob.binding_key(node_ref, edge_key, nil), via.label, via.binding_digest}
+    ]
+
+  defp edge_refs(_node_ref, _edge_key, _vault), do: []
+
+  defp bound_identity(%{scope: "instance"} = bound),
+    do: {:instance, "instance", bound.binding_key, bound.entry_id, bound.binding_digest}
+
+  defp bound_identity(bound),
+    do: {:entry, bound.scope, bound.binding_key, bound.entry_id, bound.binding_digest}
+
+  defp stored_ref(ref), do: Arca.ConsentStorage.row_identity(ref)
 
   # ---------------------------------------------------------------------------
   # Selections — a vault borrowed from the target's own profile
@@ -258,9 +401,13 @@ defmodule Sanctum.Consent.Loader do
   # Every selected vault edge is resolved against the profile it names:
   # the edge's target must have an active owner profile of that label,
   # its head consent must be intact (the same digest check this consent
-  # passed), and its ingress must bind an entry whose digest matches the
+  # passed, and a blob that parses; a head that fails either is a damaged
+  # lender), and its ingress must bind an entry whose digest matches the
   # pinned one when the selection pinned it. The bound entry then rides
-  # the edge, projected to what both the selection and the ingress allow.
+  # the edge, projected to what both the selection and the ingress allow,
+  # under two identities: the borrower's binding key, where the selection
+  # sits, and the lender's profile, consent and binding key, so a use
+  # answers to both bindings. The lender's named accounts are not lent.
   # Anything else leaves the selection in place, which no run can unseal.
   #
   # The lender's head must admit the context's origin as the root's must:
@@ -269,7 +416,7 @@ defmodule Sanctum.Consent.Loader do
   defp resolve_selections(%Context{} = ctx, actor, %Blob{nodes: nodes} = blob) do
     nodes
     |> Enum.reduce_while({:ok, %{}}, fn {node_ref, node}, {:ok, resolved} ->
-      case resolve_node(ctx, actor, node) do
+      case resolve_node(ctx, actor, node_ref, node) do
         {:ok, node} -> {:cont, {:ok, Map.put(resolved, node_ref, node)}}
         {:error, _} = refused -> {:halt, refused}
       end
@@ -280,10 +427,10 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  defp resolve_node(ctx, actor, %Blob.Node{edges: edges} = node) do
+  defp resolve_node(ctx, actor, node_ref, %Blob.Node{edges: edges} = node) do
     edges
     |> Enum.reduce_while({:ok, %{}}, fn {key, edge}, {:ok, resolved} ->
-      case resolve_edge(ctx, actor, key, edge) do
+      case resolve_edge(ctx, actor, node_ref, key, edge) do
         {:ok, edge} -> {:cont, {:ok, Map.put(resolved, key, edge)}}
         {:error, _} = refused -> {:halt, refused}
       end
@@ -294,14 +441,25 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  defp resolve_edge(ctx, actor, key, edge) do
+  defp resolve_edge(ctx, actor, node_ref, key, edge) do
     case {edge.vault, Blob.edge_target(key)} do
       {%{via: via, projection: projection}, {:ok, target}} ->
-        case resolve_selection(ctx, actor, target, via, projection) do
+        borrower_key = Blob.binding_key(node_ref, key, nil)
+
+        case resolve_selection(ctx, actor, target, via, projection, borrower_key) do
           {:ok, vault} ->
             {:ok, %{edge | vault: vault}}
 
           {:error, {:consent_required, _}} = refused ->
+            refused
+
+          # A lender that could not be read, or that does not decode, is
+          # no lender that lends nothing: the run is refused as such,
+          # never left to answer setup_required at its first use.
+          {:error, {:lender_unavailable, _target}} = refused ->
+            refused
+
+          {:error, {:lender_corrupt, _target, _profile_id}} = refused ->
             refused
 
           {:error, reason} ->
@@ -315,22 +473,173 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  defp resolve_selection(ctx, actor, target, via, projection) do
+  defp resolve_selection(ctx, actor, target, via, projection, borrower_key) do
     with {:ok, profile} <- selected_profile(actor, target, via.label),
-         {:ok, consent} <- fetch_head(actor, profile),
+         {:ok, consent} <- lender_head(actor, target, profile),
          :ok <- check_origin(ctx, profile, consent),
-         :ok <- check_blob_digest(consent),
-         {:ok, target_blob} <- parse_blob(consent),
+         {:ok, target_blob} <- lender_blob(consent, target, profile),
          {:ok, ingress} <- ingress_edge(target_blob, target),
          {:ok, bound} <- bound_ingress_vault(ingress),
          :ok <- check_pinned_digest(via, bound),
          {:ok, narrowed} <- narrow_projection(projection, bound.projection) do
       {:ok,
-       Map.put(%{bound | projection: narrowed}, :lender, %{
-         profile_id: profile.id,
-         consent_id: consent.id
+       bound
+       |> Map.delete(:named)
+       |> Map.merge(%{
+         projection: narrowed,
+         binding_key: borrower_key,
+         lender: %{profile_id: profile.id, consent_id: consent.id, binding_key: bound.binding_key}
        })}
     end
+  end
+
+  # A lender's head whose stored bytes fail their digest, or do not parse,
+  # is damaged as one that does not decode is: the lender exists, so a
+  # selection over it is refused as damage, never left as one that lends
+  # nothing. A root's own head keeps its own answers (`admitted_blob/3`).
+  defp lender_blob(consent, target, profile) do
+    case head_blob(consent) do
+      {:ok, blob} -> {:ok, blob}
+      {:error, _damaged} -> {:error, {:lender_corrupt, target, profile.id}}
+    end
+  end
+
+  @doc false
+  # A stored head's blob as a run reads it: its bytes held to the digest
+  # stored beside them, as `admitted_blob/3` holds them, then parsed
+  # (check 5 of the module's order; check 4, the consent's own validity,
+  # is not run here). The planner and the commit read a lender's head
+  # through it, as a selection does.
+  @spec head_blob(map()) ::
+          {:ok, Blob.t()}
+          | {:error,
+             {:blob_digest_mismatch, String.t()}
+             | {:invalid_consent, :blob_digest}
+             | {:invalid_blob, Blob.error()}}
+  def head_blob(consent) when is_map(consent) do
+    with :ok <- check_blob_digest(consent), do: parse_blob(consent)
+  end
+
+  # A lender's head answers as the lender: `head_*` names a root's own
+  # head alone, so a lender's head that could not be read or does not
+  # decode is the lender's refusal, and one that is absent stays absent.
+  defp lender_head(actor, target, profile) do
+    case fetch_head(actor, profile) do
+      {:ok, consent} -> {:ok, consent}
+      {:error, {:head_unavailable, _profile_id}} -> {:error, {:lender_unavailable, target}}
+      {:error, {:head_corrupt, profile_id}} -> {:error, {:lender_corrupt, target, profile_id}}
+      {:error, {:no_head_consent, _profile_id}} = absent -> absent
+    end
+  end
+
+  @doc """
+  What one `vault_refs` row of the head revision `consent` binds now,
+  read by its tag (`Arca.ConsentStorage.row_identity/1`):
+
+    * `{:entry, entry_id, binding_digest}` — the athanor's own entry;
+    * `{:selection, label, result}` — a selection (`via`) of the profile
+      `label`, resolved exactly as `load_root/3` resolves it under
+      `ctx`'s origin: `{:ok, vault}`, the lender's bound vault, or
+      `{:error, reason}` when it resolves to nothing. The lender is read
+      absent, damaged and unanswered apart: no such profile
+      (`{:no_such_profile, target, label}`) or a lender with no head
+      (`{:no_head_consent, profile_id}`); a lender whose profile row or
+      head does not decode, or whose head's bytes fail their digest or do
+      not parse (`{:lender_corrupt, target, profile_id}`, a damaged
+      profile row of the target refusing a selection by label);
+      and a lender the store could not answer, its profiles or its head
+      (`{:lender_unavailable, target}`). A lent instance entry is read
+      live as an instance row is, so a refusal of the offer or a rebind is
+      the selection's `{:error, reason}`;
+    * `{:instance, instance_entry_id, result}` — an instance entry, read
+      live as the context's person is offered it
+      (`Sanctum.InstanceEntries.binding/2`): `{:ok, view}` while it stands
+      at the digest the row was approved at, `{:error, :binding_went_stale}`
+      when it was rebound since, and the offer's own refusal otherwise
+      (`:not_offered`, `{:entry_unavailable, status}`, `:denied`,
+      `:anonymous_denied`);
+    * `:malformed` — a row naming none of them.
+
+  The selection is the one the revision's own blob holds at the row's
+  binding key; a blob that fails its digest, does not parse or holds no
+  selection there resolves to `{:error, reason}`. Nothing is raised.
+  """
+  @spec row_binding(Context.t(), map(), map()) ::
+          {:entry, String.t(), String.t()}
+          | {:selection, String.t(), {:ok, map()} | {:error, term()}}
+          | {:instance, String.t(), {:ok, map()} | {:error, term()}}
+          | :malformed
+  def row_binding(%Context{} = ctx, consent, ref) when is_map(consent) and is_map(ref) do
+    case Arca.ConsentStorage.row_identity(ref) do
+      {:entry, _scope, _key, entry_id, digest} ->
+        {:entry, entry_id, digest}
+
+      {:instance, _scope, _key, instance_entry_id, digest} ->
+        {:instance, instance_entry_id, live_instance(ctx, instance_entry_id, digest)}
+
+      {:via, _scope, key, label, _digest} ->
+        {:selection, label, resolve_row_selection(ctx, consent, key)}
+
+      :none ->
+        :malformed
+    end
+  end
+
+  # An instance row's liveness: the entry as the loading context's person
+  # is offered it, at the digest the row names, as an athanor's entry is
+  # held to its row's.
+  defp live_instance(ctx, instance_entry_id, digest) do
+    case Sanctum.InstanceEntries.binding(ctx, instance_entry_id) do
+      {:ok, %{binding_digest: live} = view} when is_binary(live) and is_binary(digest) ->
+        if Plug.Crypto.secure_compare(live, digest),
+          do: {:ok, view},
+          else: {:error, :binding_went_stale}
+
+      {:ok, _undigested} ->
+        {:error, :binding_went_stale}
+
+      {:error, _} = refused ->
+        refused
+    end
+  end
+
+  defp resolve_row_selection(ctx, consent, key) do
+    with :ok <- check_blob_digest(consent),
+         {:ok, %Blob{nodes: nodes}} <- parse_blob(consent),
+         {:ok, edge_key, vault} <- selection_at(nodes, key),
+         {:ok, target} <- Blob.edge_target(edge_key) do
+      ctx
+      |> resolve_selection(Context.actor(ctx), target, vault.via, vault.projection, key)
+      |> live_lent(ctx)
+    else
+      :ingress -> {:error, :selection_missing}
+      {:error, _} = refused -> refused
+    end
+  end
+
+  # A lent instance entry, held as an instance row is: offered to this
+  # person and at the digest the lender bound it at.
+  defp live_lent({:ok, %{scope: "instance", entry_id: id, binding_digest: digest} = vault}, ctx) do
+    case live_instance(ctx, id, digest) do
+      {:ok, _view} -> {:ok, vault}
+      {:error, _} = refused -> refused
+    end
+  end
+
+  defp live_lent(resolved, _ctx), do: resolved
+
+  # The selection the blob holds at `key`: the edge whose place is the
+  # row's.
+  defp selection_at(nodes, key) do
+    Enum.find_value(nodes, {:error, :selection_missing}, fn {node_ref, %Blob.Node{edges: edges}} ->
+      Enum.find_value(edges, fn
+        {edge_key, %Blob.Edge{vault: %{via: _} = vault}} ->
+          if Blob.binding_key(node_ref, edge_key, nil) == key, do: {:ok, edge_key, vault}
+
+        _other ->
+          nil
+      end)
+    end)
   end
 
   @doc """
@@ -392,13 +701,28 @@ defmodule Sanctum.Consent.Loader do
     Enum.uniq(from_resources ++ from_policy)
   end
 
+  # The lending profile, read as admission reads a root's: a row whose
+  # kind or status is outside the closed vocabulary may carry the label
+  # asked for, so it refuses the selection rather than being skipped, and
+  # a store that cannot answer is not a lender that does not exist.
   defp selected_profile(actor, target, label) do
-    with {:ok, profiles} <- Arca.ConsentStorage.profiles(actor, target) do
-      case Enum.find(profiles, &(&1.label == label and &1.kind == :owner)) do
-        %{status: :active} = profile -> {:ok, profile}
-        %{status: status} -> {:error, {:profile_unavailable, status}}
-        nil -> {:error, {:no_such_profile, target, label}}
-      end
+    case Arca.ConsentStorage.profile_entries(actor, target) do
+      {:ok, entries} ->
+        case Enum.find(entries, &(&1.status == :corrupt)) do
+          %{id: id} -> {:error, {:lender_corrupt, target, id}}
+          nil -> labelled_owner(entries, target, label)
+        end
+
+      {:error, _unanswered} ->
+        {:error, {:lender_unavailable, target}}
+    end
+  end
+
+  defp labelled_owner(entries, target, label) do
+    case Enum.find(entries, &(&1.label == label and &1.kind == :owner)) do
+      %{status: :active} = profile -> {:ok, profile}
+      %{status: status} -> {:error, {:profile_unavailable, status}}
+      nil -> {:error, {:no_such_profile, target, label}}
     end
   end
 
@@ -409,9 +733,9 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  defp bound_ingress_vault(%Blob.Edge{vault: vault}) do
-    if Blob.bound_vault?(vault), do: {:ok, vault}, else: {:error, :nothing_bound}
-  end
+  # A lender lends an entry it binds; provided configuration is no entry.
+  defp bound_ingress_vault(%Blob.Edge{vault: %{entry_id: _} = vault}), do: {:ok, vault}
+  defp bound_ingress_vault(_edge), do: {:error, :nothing_bound}
 
   defp check_pinned_digest(%{binding_digest: nil}, _bound), do: :ok
 
@@ -547,7 +871,8 @@ defmodule Sanctum.Consent.Loader do
 
     Authority.root(profile_map, blob,
       ceiling: ceiling,
-      budget_id: Keyword.get(opts, :budget_id)
+      budget_id: Keyword.get(opts, :budget_id),
+      connection: Keyword.get(opts, :connection)
     )
   end
 end

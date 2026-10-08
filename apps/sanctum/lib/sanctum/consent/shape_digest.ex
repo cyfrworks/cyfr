@@ -10,6 +10,13 @@ defmodule Sanctum.Consent.ShapeDigest do
   satisfies which need, what gets projected — is the commit digest's job
   (`Sanctum.Consent.CommitDigest`).
 
+  A need carries how its value is attached (`attach`), where it is sent
+  (`hosts`, `paths`) and whether the component reads it itself
+  (`disclose`), and the shape carries the configuration a publisher
+  provides for its dependencies' needs (`provides`): each only when the
+  manifest declares it, so a shape that declares none hashes as it did
+  before they existed, and a version that changes one asks again.
+
   Separating them is what makes a new release detectable. Under a
   versionless consent, a release whose shape digest is unchanged asks for
   nothing new and runs; a release whose shape changed must be re-consented
@@ -46,6 +53,11 @@ defmodule Sanctum.Consent.ShapeDigest do
           optional(:dependency_releases) => [String.t()],
           optional(:model_target) => String.t(),
           optional(:tincture_digest) => String.t(),
+          optional(:provides) => %{
+            optional(String.t()) => %{
+              optional(String.t()) => %{destination: map(), values: %{String.t() => String.t()}}
+            }
+          },
           optional(:tool_policy) => %{
             optional(:auto) => [String.t()],
             optional(:ask) => [String.t()]
@@ -105,7 +117,7 @@ defmodule Sanctum.Consent.ShapeDigest do
            Normalize.only_keys(
              shape,
              ~w(scope source_ref release_identity needs caps tool_actions slots
-                dependency_releases model_target tool_policy tincture_digest)a,
+                dependency_releases model_target tool_policy tincture_digest provides)a,
              :invalid_shape
            ),
          {:ok, scope} <- Normalize.enum(shape, :scope, [:versionless, :pinned], :invalid_shape),
@@ -119,7 +131,8 @@ defmodule Sanctum.Consent.ShapeDigest do
            Normalize.string_set(shape, :dependency_releases, :invalid_shape),
          {:ok, model_target} <- Normalize.optional_string(shape, :model_target, :invalid_shape),
          {:ok, tool_policy} <- Normalize.tool_policy(shape, :tool_policy, :invalid_shape),
-         {:ok, tincture_digest} <- tincture_digest(shape) do
+         {:ok, tincture_digest} <- tincture_digest(shape),
+         {:ok, provides} <- Normalize.provides(shape, :provides, :invalid_shape) do
       canonical =
         %{
           "scope" => Atom.to_string(scope),
@@ -134,6 +147,7 @@ defmodule Sanctum.Consent.ShapeDigest do
         |> Normalize.put_optional("model_target", model_target)
         |> Normalize.put_optional("tool_policy", tool_policy)
         |> Normalize.put_optional("tincture_digest", tincture_digest)
+        |> Normalize.put_optional("provides", provides)
 
       {:ok, canonical}
     end

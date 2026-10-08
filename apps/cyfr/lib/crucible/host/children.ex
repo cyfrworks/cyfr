@@ -22,31 +22,41 @@ defmodule Crucible.Host.Children do
 
   The body names the child's `child_key`, the key the runner minted for
   it (`t:Prima.HostAPI.child_key/0`); a body without one, or with a
-  malformed one, is refused as a guest error before anything is read. The
-  child's input is checked against the formula's roster
+  malformed one, is refused as a guest error before anything is read, and
+  so is a `connection` that is not an account's name. The body's
+  `connection` names the account the child asks its edge for: the
+  formula's authority is stepped with it, so the child holds that
+  account's binding, or the edge's default when the body names none, and
+  an account the edge does not bind is refused `connection_not_granted`,
+  setup required, with no default in its place. The child's input is
+  checked against the formula's roster
   (`Crucible.Delegation.input/4`), then the child is admitted for the
   calling runner under that key (`Crucible.admit_child/5`): the
   formula's authority is stepped, a spawn's charge is taken, the child's
   limits, rates, policy and attestation are applied, its row is admitted
   under the formula attempt's barrier carrying the key, and its attempt is
-  claimed for the calling runner, its vault edge unsealed and handed to
-  that runner. The child's row names the calling execution as its parent
-  and carries the parent's origin (`Prima.Origin`), read where it is
-  admitted: a child of a scheduled root is `schedule`, whatever the body
-  says. The answer carries the child's signed assignment, its
-  attempt's keys sealed with the calling attempt's seal key
-  (`Prima.WorkerAuth.seal_attempt_keys/3`), the JSON of the input it was
-  admitted with, which its assignment's `input_digest` binds, and its
-  vault fields. The child runs in the calling runner, which closes its
-  attempt; its execution slot, invoke-budget slot and charge row go back
-  at its terminal write.
+  claimed for the calling runner, and what its vault edge discloses is
+  handed to that runner: a disclosed entry's fields or a publisher's
+  provided values, never an attach-only or instance entry's, which CYFR
+  attaches to the child's requests instead. The child's row names the
+  calling execution as its parent and carries the parent's origin
+  (`Prima.Origin`), read where it is admitted: a child of a scheduled root
+  is `schedule`, whatever the body says. The answer carries the child's
+  signed assignment, its attempt's keys sealed with the calling attempt's
+  seal key (`Prima.WorkerAuth.seal_attempt_keys/3`), the JSON of the input
+  it was admitted with, which its assignment's `input_digest` binds, and
+  the vault fields its edge discloses. The child runs in the calling
+  runner, which closes its attempt; its execution slot, invoke-budget slot
+  and charge row go back at its terminal write.
 
   A repeat with the same key — a runner retrying a lost answer
   (`Prima.HostAPI.retry/1`, `:keyed`) — admits nothing and answers the child
   already admitted under it, decided by its row: the same child, its
   assignment signed afresh, its keys and the input it was admitted with. A
-  key whose child has ended is `lost`; a different key admits another
-  child.
+  key names the connection its child was admitted with (none for a
+  self-call, which crosses no edge), so a repeat naming another is refused
+  `invalid_request` before anything is answered from that child. A key
+  whose child has ended is `lost`; a different key admits another child.
 
   ## tool_call
 
@@ -95,7 +105,8 @@ defmodule Crucible.Host.Children do
              need: term(),
              input: map(),
              guest_fn: :call | :spawn,
-             child_key: Prima.HostAPI.child_key()
+             child_key: Prima.HostAPI.child_key(),
+             connection: Prima.HostAPI.connection()
            }}
           | {:tool_call, %{name: String.t(), args: map(), guest_fn: :call | :spawn}}
           | {:release_child, String.t()}
@@ -103,14 +114,16 @@ defmodule Crucible.Host.Children do
   @doc """
   The operation a host call body's `op` and `args` name, `{:error, :lost}`
   for one that is not an operation, or the guest error an `admit_child`
-  without a well-formed `child_key` is refused with.
+  without a well-formed `child_key`, or naming a `connection` that is not
+  an account's name, is refused with.
   """
   @spec operation(String.t(), map()) ::
           {:ok, op()} | {:error, :lost | Prima.HostAPI.guest_error()}
   def operation("admit_child", %{"reference" => reference, "input" => %{} = input} = args)
       when is_binary(reference) do
     with {:ok, guest_fn} <- guest_fn(args),
-         {:ok, child_key} <- child_key(args) do
+         {:ok, child_key} <- child_key(args),
+         {:ok, connection} <- connection(args) do
       {:ok,
        {:admit_child,
         %{
@@ -118,7 +131,8 @@ defmodule Crucible.Host.Children do
           need: Map.get(args, "need"),
           input: input,
           guest_fn: guest_fn,
-          child_key: child_key
+          child_key: child_key,
+          connection: connection
         }}}
     end
   end
@@ -150,6 +164,20 @@ defmodule Crucible.Host.Children do
 
   defp child_key(_args),
     do: {:error, guest_error(:invalid_request, "Invalid child_key: a child needs one")}
+
+  # The account the child asks its edge for: absent or null for the edge's
+  # default, else a name a named binding may carry.
+  defp connection(args) do
+    case Map.get(args, "connection") do
+      nil ->
+        {:ok, nil}
+
+      name ->
+        if Prima.Authority.Blob.valid_account_name?(name),
+          do: {:ok, name},
+          else: {:error, guest_error(:invalid_request, "Invalid connection: not an account name")}
+    end
+  end
 
   @doc """
   Run a decoded operation for `caller`, the verified header of a host call
@@ -263,6 +291,7 @@ defmodule Crucible.Host.Children do
         attempt: caller.attempt,
         guest_fn: child.guest_fn,
         child_key: child.child_key,
+        connection: child.connection,
         declared_needs: chain.declared_needs,
         activation_digest: chain.activation_digest,
         runner: caller.runner,
@@ -313,6 +342,12 @@ defmodule Crucible.Host.Children do
   defp child_refusal({:invoke_denied, {:need, _why} = reason}),
     do: guest_error(:invalid_request, "Invocation denied: " <> deny_message(reason))
 
+  # An account the edge does not bind is a grant to make, not a denial: it
+  # is answered as the credential refusal it is, setup required, in
+  # `Prima.Refusal`'s own sentence.
+  defp child_refusal({:invoke_denied, :connection_not_granted}),
+    do: guest_error(:connection_not_granted, Prima.Refusal.message(:connection_not_granted))
+
   defp child_refusal({:invoke_denied, reason}),
     do: guest_error(:tool_denied, "Invocation denied: " <> deny_message(reason))
 
@@ -324,6 +359,13 @@ defmodule Crucible.Host.Children do
 
   defp child_refusal({:invalid_reference, _reason} = refusal),
     do: guest_error(:invalid_request, render(refusal))
+
+  defp child_refusal({:child_key_reused, :connection}),
+    do:
+      guest_error(
+        :invalid_request,
+        "Invalid child_key: its child was admitted with another connection"
+      )
 
   defp child_refusal({:setup_required, %{node_ref: node_ref}} = reason) do
     {:setup_required, remediation} = Prima.Remediation.analyze(reason)

@@ -39,6 +39,28 @@ defmodule Sanctum.Consent.LoaderTest do
     )
   end
 
+  # A binding row of the fixture graph: the formula's edge into the
+  # catalyst under `need`, at the entry and digest the blob names.
+  defp ref(need, entry_id, digest) do
+    %{
+      binding_key:
+        Prima.Authority.Blob.binding_key(
+          Fixtures.formula_ref(),
+          "#{Fixtures.catalyst_ref()}|#{need}",
+          nil
+        ),
+      scope: "athanor",
+      vault_entry_id: entry_id,
+      binding_digest: digest
+    }
+  end
+
+  defp source_ref, do: ref("source", "vault-source", "sha256:bind-source")
+  defp dest_ref, do: ref("dest", "vault-dest", "sha256:bind-dest")
+
+  defp identity(%{binding_key: key, vault_entry_id: id, binding_digest: digest}),
+    do: {:entry, "athanor", key, id, digest}
+
   defp consent(overrides \\ %{}) do
     {:ok, policy_json} = Jason.encode(Fixtures.graph_map())
 
@@ -54,10 +76,7 @@ defmodule Sanctum.Consent.LoaderTest do
           commit_digest: "sha256:commit-1",
           resolved_policy: policy_json,
           activation: Fixtures.activation(),
-          vault_refs: [
-            %{vault_entry_id: "vault-source", binding_digest: "sha256:bind-source"},
-            %{vault_entry_id: "vault-dest", binding_digest: "sha256:bind-dest"}
-          ]
+          vault_refs: [source_ref(), dest_ref()]
         },
         overrides
       )
@@ -119,6 +138,29 @@ defmodule Sanctum.Consent.LoaderTest do
 
     assert {:error, {:no_head_consent, "prof-1"}} =
              Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
+  end
+
+  # An outage read as "no grant" sends the person to grant again over a
+  # record that exists, so the three are three answers.
+  @tag :capture_log
+  test "a head that is absent, damaged or unanswered is refused three ways", %{ctx: ctx} do
+    profile = profile_summary()
+    live = live_for(Fixtures.activation())
+
+    :ok = ConsentFixtures.seed_profile!(ctx, profile)
+    assert {:error, {:no_head_consent, "prof-1"}} = Loader.load_root(ctx, profile, live: live)
+
+    seed(ctx, profile, consent())
+    :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-1", scope: "sideways")
+    assert {:error, {:head_corrupt, "prof-1"}} = Loader.load_root(ctx, profile, live: live)
+
+    seed(ctx, profile, consent())
+    :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-1", admitted_origins: "not a list")
+    assert {:error, {:head_corrupt, "prof-1"}} = Loader.load_root(ctx, profile, live: live)
+
+    seed(ctx, profile, consent())
+    Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+    assert {:error, {:head_unavailable, "prof-1"}} = Loader.load_root(ctx, profile, live: live)
   end
 
   test "the pinned rule holds in both directions", %{ctx: ctx} do
@@ -200,27 +242,44 @@ defmodule Sanctum.Consent.LoaderTest do
     seed(
       ctx,
       profile,
-      consent(%{
-        vault_refs: [%{vault_entry_id: "vault-source", binding_digest: "sha256:bind-source"}]
-      })
+      consent(%{vault_refs: [source_ref()]})
     )
 
     assert {:error, {:blob_refs_mismatch, %{blob_only: blob_only, refs_only: []}}} =
              Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
 
-    assert blob_only == [{"vault-dest", "sha256:bind-dest"}]
+    assert blob_only == [identity(dest_ref())]
   end
 
   test "a stored ref the blob does not carry fails closed too", %{ctx: ctx} do
     profile = profile_summary()
-    extra = %{vault_entry_id: "vault-ghost", binding_digest: "sha256:bind-ghost"}
+    extra = ref("ghost", "vault-ghost", "sha256:bind-ghost")
     base = consent()
     seed(ctx, profile, %{base | vault_refs: base.vault_refs ++ [extra]})
 
     assert {:error, {:blob_refs_mismatch, %{blob_only: [], refs_only: refs_only}}} =
              Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
 
-    assert refs_only == [{"vault-ghost", "sha256:bind-ghost"}]
+    assert refs_only == [identity(extra)]
+  end
+
+  test "a row naming the blob's entry under another key, or at another digest, fails closed",
+       %{ctx: ctx} do
+    profile = profile_summary()
+
+    # The same entry and digest as the blob's dest binding, keyed as a
+    # named account: the identity is the binding, never the entry alone.
+    moved = %{dest_ref() | binding_key: dest_ref().binding_key <> "x"}
+    seed(ctx, profile, consent(%{vault_refs: [source_ref(), moved]}))
+
+    assert {:error, {:blob_refs_mismatch, %{blob_only: [_], refs_only: [_]}}} =
+             Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
+
+    stale = %{dest_ref() | binding_digest: "sha256:other"}
+    seed(ctx, profile, consent(%{vault_refs: [source_ref(), stale]}))
+
+    assert {:error, {:blob_refs_mismatch, %{blob_only: [_], refs_only: [_]}}} =
+             Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
   end
 
   test "versionless drift with unknown live shape demands fresh consent", %{ctx: ctx} do
@@ -372,6 +431,116 @@ defmodule Sanctum.Consent.LoaderTest do
     end
   end
 
+  describe "an instance entry's row and provided configuration" do
+    @inference ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+
+    defp instance!(over \\ %{}) do
+      {:ok, entry} =
+        Arca.InstanceEntries.put(
+          Arca.Test.Actor.platform(),
+          Map.merge(
+            %{
+              name: "instance-#{System.unique_integer([:positive])}",
+              kind: "api_key",
+              provider_hint: "openai.com",
+              field_names: ~s(["OPENAI_API_KEY"]),
+              destination: @inference,
+              sealed_payload: "sealed",
+              binding_digest: "sha256:instance",
+              audience: "everyone",
+              created_by: "usr_admin"
+            },
+            over
+          )
+        )
+
+      entry
+    end
+
+    defp instance_row(entry, digest) do
+      %{
+        binding_key: Prima.Authority.Blob.binding_key(Fixtures.formula_ref(), "@ingress", nil),
+        scope: "instance",
+        instance_entry_id: entry.id,
+        binding_digest: digest
+      }
+    end
+
+    test "an instance row is read live as the person is offered it, held to its digest", %{
+      ctx: ctx
+    } do
+      {person, _user} =
+        Sanctum.TestContext.person!(%{
+          ctx
+          | user_id: "local|local|loader-person",
+            authenticated: true,
+            auth_method: :oidc
+        })
+
+      entry = instance!()
+
+      assert {:instance, id, {:ok, view}} =
+               Loader.row_binding(person, %{}, instance_row(entry, "sha256:instance"))
+
+      assert id == entry.id and view.binding_digest == "sha256:instance"
+
+      # Rebound since the row was approved.
+      assert {:instance, _, {:error, :binding_went_stale}} =
+               Loader.row_binding(person, %{}, instance_row(entry, "sha256:approved-earlier"))
+
+      # No longer offered, then revoked.
+      listed = instance!(%{audience: "listed"})
+
+      assert {:instance, _, {:error, :not_offered}} =
+               Loader.row_binding(person, %{}, instance_row(listed, "sha256:instance"))
+
+      {:ok, _} =
+        Arca.InstanceEntries.revoke(Arca.Test.Actor.platform(), entry.id, "needs_consent")
+
+      assert {:instance, _, {:error, {:entry_unavailable, "revoked"}}} =
+               Loader.row_binding(person, %{}, instance_row(entry, "sha256:instance"))
+    end
+
+    test "provided configuration names no binding and resolves to itself", %{ctx: ctx} do
+      provided = %{
+        "provided" => %{
+          "destination" => %{"hosts" => ["abc.supabase.co"], "scheme" => "https"},
+          "values" => %{"anon_key" => "eyJ-public"},
+          "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+        }
+      }
+
+      policy =
+        Jason.encode!(%{
+          "canonical" => "jcs-1",
+          "nodes" => %{
+            Fixtures.formula_ref() => %{
+              "limits" => Fixtures.limits_map(),
+              "edges" => %{"@ingress" => %{}, Fixtures.catalyst_ref() => %{"vault" => provided}}
+            },
+            Fixtures.catalyst_ref() => %{"limits" => Fixtures.limits_map(), "edges" => %{}}
+          }
+        })
+
+      profile = profile_summary()
+      seed(ctx, profile, consent(%{resolved_policy: policy, vault_refs: []}))
+
+      {:ok, head} = Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)
+      assert head.vault_refs == []
+      assert {:ok, blob} = Loader.admitted_blob(ctx, profile, head)
+
+      {:ok, edge} =
+        Prima.Authority.Blob.lookup_edge(
+          blob,
+          Fixtures.formula_ref(),
+          Fixtures.catalyst_ref(),
+          ""
+        )
+
+      assert %{provided: %{values: %{"anon_key" => "eyJ-public"}}} = edge.vault
+    end
+  end
+
   describe "admitted_blob/3, the stored head's own checks" do
     defp head!(ctx, profile) do
       {:ok, head} = Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)
@@ -416,9 +585,7 @@ defmodule Sanctum.Consent.LoaderTest do
         consent(%{scope: :pinned, pinned_version: ""}),
         consent(%{resolved_policy: "{not json"}),
         %{honest | blob_digest: "sha256:not-these-bytes"},
-        consent(%{
-          vault_refs: [%{vault_entry_id: "vault-source", binding_digest: "sha256:bind-source"}]
-        }),
+        consent(%{vault_refs: [source_ref()]}),
         with_paths(["data//secrets/"])
       ]
 
@@ -430,6 +597,91 @@ defmodule Sanctum.Consent.LoaderTest do
         assert Loader.load_root(ctx, profile, live: live_for(consent.activation)) ==
                  {:error, refusal}
       end
+    end
+  end
+
+  describe "an app's own head read damaged, in its one reading" do
+    @own "prof-own"
+    @source "reagent:local.own:1.0.0"
+
+    # Every member of the family, with what a reader of the app's own head
+    # answers for it: the damaged profile, the damaged component graph (a
+    # release no grant repairs) and otherwise the damaged head. Several of
+    # them reach no reader but the run's root (`load_root/3` alone runs the
+    # profile, activation and root checks), so the reading is pinned here
+    # for each.
+    @damaged [
+      {{:invalid_profile, :status}, {:corrupt, {:profile, @own}}},
+      {{:invalid_profile, :public_requires_edge_only}, {:corrupt, {:profile, @own}}},
+      {{:integrity_alarm, ["formula:local.a"]}, {:corrupt, {:component_graph, @source}}},
+      {{:invalid_consent, :scope}, {:head_corrupt, @own}},
+      {{:invalid_consent, :pinned_version}, {:head_corrupt, @own}},
+      {{:invalid_consent, :activation}, {:head_corrupt, @own}},
+      {{:invalid_consent, :blob_digest}, {:head_corrupt, @own}},
+      {{:invalid_blob, {:invalid_json, :eof}}, {:head_corrupt, @own}},
+      {{:blob_digest_mismatch, "sha256:stored"}, {:head_corrupt, @own}},
+      {{:blob_refs_mismatch, %{blob_only: [], refs_only: []}}, {:head_corrupt, @own}},
+      {{:inconsistent_binding_digest, "vault-x"}, {:head_corrupt, @own}},
+      {{:no_head_consent, @own}, {:head_corrupt, @own}},
+      {{:unknown_source_node, "reagent:local.own"}, {:head_corrupt, @own}},
+      {{:missing_ingress, "reagent:local.own"}, {:head_corrupt, @own}}
+    ]
+
+    test "each member is damage, answered as what the person can repair" do
+      for {reason, refusal} <- @damaged do
+        assert {reason, Loader.damage?(reason)} == {reason, true}
+        assert {reason, Loader.damage_refusal(reason, @own, @source)} == {reason, refusal}
+      end
+    end
+
+    # An outage is retried, a lender's refusal names the lender, a head
+    # already read damaged is typed, and a consent to give again, a setup
+    # to make or a profile that no longer roots is no damage at all.
+    test "an outage, a lender's refusal, a typed damaged head and every other answer are not" do
+      for reason <- [
+            {:head_unavailable, @own},
+            {:lender_unavailable, "catalyst:local.lender"},
+            {:lender_corrupt, "catalyst:local.lender", "prof-lender"},
+            {:head_corrupt, @own},
+            {:profile_unavailable, :revoked},
+            {:consent_required, %{profile_id: @own, current_revision: 1, shape_diff: []}},
+            {:setup_required, %{profile_id: @own}},
+            :connection_not_granted,
+            :unavailable,
+            {:corrupt, {:profile, @own}}
+          ] do
+        refute Loader.damage?(reason), "#{inspect(reason)} read as damage"
+
+        assert_raise FunctionClauseError, fn -> Loader.damage_refusal(reason, @own, @source) end
+      end
+    end
+
+    # The stored states themselves: what the loader answers for a head
+    # whose bytes fail their digest, and for a release that does not
+    # re-derive, reads as the damaged head and the damaged component graph.
+    @tag :capture_log
+    test "the loader's own answers for a damaged head and a tampered release read so",
+         %{ctx: ctx} do
+      profile = profile_summary()
+      honest = consent()
+
+      seed(ctx, profile, %{honest | blob_digest: "sha256:not-these-bytes"})
+      assert {:error, reason} = Loader.load_root(ctx, profile, live: live_for(honest.activation))
+      assert Loader.damage?(reason)
+      assert Loader.damage_refusal(reason, profile.id, @source) == {:head_corrupt, profile.id}
+
+      seed(ctx, profile, honest)
+      {:ok, %{nodes: nodes} = live} = live_for(honest.activation)
+
+      tampered = put_in(nodes, [Fixtures.catalyst_ref(), :integrity], :mismatch)
+
+      assert {:error, {:integrity_alarm, _} = alarm} =
+               Loader.load_root(ctx, profile, live: {:ok, %{live | nodes: tampered}})
+
+      assert Loader.damage?(alarm)
+
+      assert Loader.damage_refusal(alarm, profile.id, @source) ==
+               {:corrupt, {:component_graph, @source}}
     end
   end
 end

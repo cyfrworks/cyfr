@@ -57,10 +57,8 @@ defmodule Grimoire.CatalogTest do
   alias Prima.Refusal
   alias Sanctum.Context
 
-  setup do
-    # By hand: `without_connection/1` withdraws every connection, which setup!/1's watch would fail.
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -916,21 +914,15 @@ defmodule Grimoire.CatalogTest do
       ref
     end
 
-    # Run `fun` in a process of its own while no process holds a sandbox
-    # connection — the decision log cannot write — then hand the test its
-    # own again.
-    defp without_connection(fun) do
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
+    # Run `fun` while the decision log's table is gone — the decision log
+    # cannot write, and its writers answer the refusal they handle.
+    defp without_decision_log(fun) do
+      Arca.Repo.query!("ALTER TABLE decision_logs RENAME TO decision_logs_unavailable")
 
       try do
-        Task.async(fn ->
-          Process.delete(:"$callers")
-          fun.()
-        end)
-        |> Task.await()
+        fun.()
       after
-        :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-        Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+        Arca.Repo.query!("ALTER TABLE decision_logs_unavailable RENAME TO decision_logs")
       end
     end
 
@@ -1002,6 +994,52 @@ defmodule Grimoire.CatalogTest do
                Arca.Repo.get(Arca.Schemas.McpLog, refused.call_id)
     end
 
+    # The calls the decision list leaves out are left out only when
+    # admitted: a refusal is what an audit exists to see, whatever the call.
+    test "a key's refused read of the caller's offers is one refused decision" do
+      ctx = %{Sanctum.TestContext.local() | request_id: Prima.UUID7.request_id()}
+
+      key = %{
+        ctx
+        | auth_method: :api_key,
+          api_key_type: :application,
+          permissions: MapSet.new([:storage_read, :storage_write])
+      }
+
+      assert {:error, %Refusal{stage: :admission}} =
+               Catalog.call_external("file", key, %{"action" => "offers"})
+
+      assert {:ok, [refused]} =
+               Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
+
+      assert {refused.tool, refused.action, refused.admission} == {"file", "offers", :refused}
+      assert refused.completion == nil
+    end
+
+    test "a refused tools.list is one refused decision" do
+      request_id = Prima.UUID7.request_id()
+      ctx = Context.build(authenticated: false, permissions: [], request_id: request_id)
+
+      assert {:error, %Refusal{stage: :admission}} =
+               Catalog.call_external("tools", ctx, %{"action" => "list"})
+
+      assert {:ok, [refused]} =
+               Arca.DecisionLog.list_global(%Prima.Actor{platform_admin: true},
+                 request_id: request_id
+               )
+
+      assert {refused.tool, refused.action, refused.admission} == {"tools", "list", :refused}
+    end
+
+    test "an admitted read of the caller's own offers leaves no decision" do
+      ctx = %{Sanctum.TestContext.local() | request_id: Prima.UUID7.request_id()}
+
+      assert {:ok, %{inbox: _, outbox: _, receipts: _}} =
+               Catalog.call_external("file", ctx, %{"action" => "offers"})
+
+      assert {:ok, []} = Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
+    end
+
     test "a failure the handler answers is an admitted decision whose completion failed" do
       Catalog.with_providers([Probe.Crashing], fn ->
         ctx = %{Sanctum.TestContext.local() | request_id: Prima.UUID7.request_id()}
@@ -1027,7 +1065,7 @@ defmodule Grimoire.CatalogTest do
         call_id = Prima.UUID7.generate_id("call")
 
         result =
-          without_connection(fn ->
+          without_decision_log(fn ->
             Catalog.call_external(Counting.tool(), ctx, %{"action" => "bump"}, call_id: call_id)
           end)
 

@@ -317,12 +317,20 @@ defmodule Crucible.Provider do
               Arg.new("profile", :string,
                 description:
                   "The owner profile ID or label; omitted selects the default owner profile"
+              ),
+              Arg.new("connection", :string,
+                description:
+                  "The account the run's root or call uses, by the name it was granted under: a formula's child call asks its edge for it, and a run started outside a chain asks its profile's own calls for it. Omitted uses the default account. A name not granted is refused `connection_not_granted`."
               )
             ],
             host: :intercepted,
             kind: :execute,
             planes: [:external],
-            permission: :execute
+            permission: :execute,
+            resource: {"connection", :vault_entry},
+            # A run started outside a chain is an external act: each one is
+            # decided when it is asked, and no standing answer stands for it.
+            standing: false
           ),
           Operation.new(
             "execution",
@@ -554,16 +562,23 @@ defmodule Crucible.Provider do
   # under the turn that claims its root; it is never rooted from here,
   # whatever the caller's grants, so the harness and the console start a
   # turn one way.
+  #
+  # A run started here roots at its profile: a `connection` it names is the
+  # named binding the profile's ingress holds under that name, picked as
+  # the root's vault (`Crucible.run_root/5`), never the default in its
+  # place.
   def handle("execution", %Context{} = ctx, %{"action" => action} = args)
       when action in ["run", "run_stream"] do
     reference = args["reference"] || ""
 
-    if Prima.AgentRef.agent_ref?(reference) do
-      {:error,
-       {:invalid_argument,
-        "#{reference} is an agent: it is addressed in a thread (thread.send), never run"}}
-    else
-      start_root(action, ctx, args)
+    cond do
+      Prima.AgentRef.agent_ref?(reference) ->
+        {:error,
+         {:invalid_argument,
+          "#{reference} is an agent: it is addressed in a thread (thread.send), never run"}}
+
+      true ->
+        start_root(action, ctx, args)
     end
   end
 
@@ -876,6 +891,34 @@ defmodule Crucible.Provider do
     {:error, "profile_unavailable: #{status}"}
   end
 
+  # An account the root's ingress does not bind stays typed: the gate
+  # classes it setup required, in its own sentence (`Prima.Refusal`).
+  defp format_root_result({:error, :connection_not_granted} = refused), do: refused
+
+  # A root whose loaded binding is not the account an approved launch's
+  # card showed (its entry under its stored name, or a name no longer
+  # bound) stays typed: the launch answers it in its own sentence, naming
+  # the account, and the gate classes it a conflict (`Prima.Refusal`).
+  defp format_root_result({:error, :approved_entry_moved} = refused), do: refused
+
+  # A consent the root's load could not read right now, or read damaged,
+  # stays typed, so the caller is answered in its own class (unavailable
+  # or corrupt) and sentence, never as an authority error or a grant to
+  # make: the loader's head and lender refusals (`Sanctum.Unauthorized`),
+  # and admission's own reads of the profile rows and the component graph
+  # (`Prima.Refusal`).
+  defp format_root_result({:error, {:head_unavailable, _profile_id}} = refused), do: refused
+  defp format_root_result({:error, {:head_corrupt, _profile_id}} = refused), do: refused
+  defp format_root_result({:error, {:lender_unavailable, _target}} = refused), do: refused
+
+  defp format_root_result({:error, {:lender_corrupt, _target, _profile_id}} = refused),
+    do: refused
+
+  defp format_root_result({:error, {:unavailable, "Consent profiles"}} = refused), do: refused
+  defp format_root_result({:error, {:corrupt, {:profile, _id}}} = refused), do: refused
+  defp format_root_result({:error, {:unavailable, "The component graph"}} = refused), do: refused
+  defp format_root_result({:error, {:corrupt, {:component_graph, _ref}}} = refused), do: refused
+
   # The chain wraps a ref-grammar refusal (`Prima.ComponentRef`'s crafted
   # prose) — client-safe by construction.
   defp format_root_result({:error, {:invalid_reference, reason}}) when is_binary(reason) do
@@ -922,6 +965,9 @@ defmodule Crucible.Provider do
 
     # Add verify block if specified
     opts = if args["verify"], do: [{:verify, args["verify"]} | opts], else: opts
+
+    # The account the root's own calls name, picked from its ingress
+    opts = if args["connection"], do: [{:connection, args["connection"]} | opts], else: opts
 
     opts
   end

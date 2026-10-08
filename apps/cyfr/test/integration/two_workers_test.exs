@@ -296,7 +296,8 @@ defmodule Cyfr.TwoWorkersTest do
                  "#{@stub}:#{@version}",
                  nil,
                  chat(),
-                 :spawn
+                 :spawn,
+                 nil
                )
 
       assert Wire.seen(wire, WorkerWire.host_route(:admit_child)) == [

@@ -145,6 +145,41 @@ defmodule Arca.ToolGrantStorageTest do
       assert [%{constraint: %{kind: "egress_domain"}}] = listed(row)
     end
 
+    test "a vault_entry constraint's patterns are entry ids, and a deny carries none",
+         %{thread: row} do
+      assert ToolGrantStorage.constraint_errors("vault_entry", ["vlt_x"]) == []
+      assert "vault_entry" in Arca.Schemas.ToolGrant.constraint_kinds()
+
+      for patterns <- [["*"], ["vlt_*"], ["Supabase 1"], ["vlt_a/b"], [""], ["vlt_a", "vlt_a"]] do
+        assert {:error, {:invalid, %{constraint: _}}} =
+                 ToolGrantStorage.put(
+                   Map.put(row, :constraint, %{kind: "vault_entry", patterns: patterns})
+                 )
+      end
+
+      entry_id = "vlt_01a10337-1f70-7297-b4ba-7812de692b02"
+
+      # A standing deny never takes a bound, a vault entry included.
+      assert {:error, {:invalid, %{constraint: _}}} =
+               ToolGrantStorage.put(
+                 Map.merge(row, %{
+                   effect: "deny",
+                   constraint: %{kind: "vault_entry", patterns: [entry_id]}
+                 })
+               )
+
+      assert {:ok, stored} =
+               ToolGrantStorage.put(
+                 Map.put(row, :constraint, %{
+                   kind: :vault_entry,
+                   patterns: [entry_id, "ine_01a10337-0000-7000-8000-000000000000"]
+                 })
+               )
+
+      assert stored.constraint.kind == "vault_entry"
+      assert entry_id in stored.constraint.patterns
+    end
+
     test "an allow past its deadline is not answered; a deny always is", %{thread: row} do
       past = DateTime.add(DateTime.utc_now(), -1, :second)
       {:ok, _} = ToolGrantStorage.put(Map.put(row, :expires_at, past))

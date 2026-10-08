@@ -104,14 +104,150 @@ defmodule Sanctum.Consent.CommitDigestTest do
       assert message =~ "exactly once"
     end
 
-    test "bindings require an entry id and a binding digest" do
-      assert {:error, {:invalid_commit, :entry_id, _}} =
+    test "bindings require exactly one entry and a binding digest" do
+      assert {:error, {:invalid_commit, :bindings, why}} =
                CommitDigest.compute(Map.put(@base, :bindings, [Map.delete(@binding, :entry_id)]))
+
+      assert why =~ "exactly one of entry_id, instance_entry_id"
+
+      both = Map.put(@binding, :instance_entry_id, "ine-1")
+
+      assert {:error, {:invalid_commit, :bindings, _}} =
+               CommitDigest.compute(Map.put(@base, :bindings, [both]))
 
       assert {:error, {:invalid_commit, :binding_digest, _}} =
                CommitDigest.compute(
                  Map.put(@base, :bindings, [Map.delete(@binding, :binding_digest)])
                )
+    end
+  end
+
+  describe "accounts, instance entries and lifetimes" do
+    @standing %{kind: "standing"}
+    @until %{kind: "until", until: "2026-10-04T12:00:00Z"}
+
+    test "the instance id, the account name, the lifetime and renew each change the digest" do
+      base = Map.put(@base, :bindings, [Map.put(@binding, :lifetime, @standing)])
+
+      variants = [
+        [@binding |> Map.delete(:entry_id) |> Map.put(:instance_entry_id, "vault-1")],
+        [Map.put(@binding, :name, "Supabase 1")],
+        [Map.put(@binding, :lifetime, %{kind: "once"})],
+        [Map.put(@binding, :lifetime, @until)],
+        [Map.put(@binding, :lifetime, %{@until | until: "2026-10-04T12:05:00Z"})],
+        [Map.put(@binding, :renew, true)]
+      ]
+
+      for bindings <- variants do
+        assert digest!(base) != digest!(Map.put(@base, :bindings, bindings)),
+               "#{inspect(bindings)} did not affect the digest"
+      end
+
+      # An absent lifetime is a standing one, and an absent renew is false.
+      assert digest!(base) == digest!(Map.put(@base, :bindings, [@binding]))
+
+      assert digest!(base) ==
+               digest!(Map.put(@base, :bindings, [Map.put(@binding, :renew, false)]))
+    end
+
+    test "a need binds its default and each named account once" do
+      named = %{@binding | entry_id: "vault-2", binding_digest: "sha256:bind-2"}
+
+      assert {:ok, _} =
+               CommitDigest.compute(
+                 Map.put(@base, :bindings, [@binding, Map.put(named, :name, "Supabase 2")])
+               )
+
+      assert {:error, {:invalid_commit, :bindings, _}} =
+               CommitDigest.compute(
+                 Map.put(@base, :bindings, [
+                   Map.put(@binding, :name, "Supabase 2"),
+                   Map.put(named, :name, "Supabase 2")
+                 ])
+               )
+    end
+
+    test "a lifetime is standing, until an instant or once, and only until names one" do
+      for lifetime <- [
+            %{kind: "forever"},
+            %{kind: "until"},
+            %{kind: "once", until: "2026-10-04T12:00:00Z"},
+            "standing"
+          ] do
+        assert {:error, {:invalid_commit, :lifetime, _}} =
+                 CommitDigest.compute(
+                   Map.put(@base, :bindings, [Map.put(@binding, :lifetime, lifetime)])
+                 ),
+               "#{inspect(lifetime)} was accepted"
+      end
+
+      assert {:error, {:invalid_commit, :renew, _}} =
+               CommitDigest.compute(Map.put(@base, :bindings, [Map.put(@binding, :renew, "yes")]))
+    end
+
+    test "a selection's entry, need, lifetime and renew each change the digest" do
+      entry =
+        @selection |> Map.delete(:label) |> Map.merge(%{entry_id: "vault-1", need: "api_key"})
+
+      base = Map.put(@base, :selections, [entry])
+
+      variants = [
+        [@selection],
+        [entry |> Map.delete(:entry_id) |> Map.put(:instance_entry_id, "vault-1")],
+        [%{entry | need: "other"}],
+        [Map.put(entry, :lifetime, %{kind: "once"})],
+        [Map.put(entry, :renew, true)],
+        [Map.put(@selection, :lifetime, @until)]
+      ]
+
+      for selections <- variants do
+        assert digest!(base) != digest!(Map.put(@base, :selections, selections)),
+               "#{inspect(selections)} did not affect the digest"
+      end
+
+      # A selection names exactly one of a label, an entry and an
+      # instance entry.
+      assert {:error, {:invalid_commit, :selections, _}} =
+               CommitDigest.compute(
+                 Map.put(@base, :selections, [Map.put(@selection, :entry_id, "vault-1")])
+               )
+    end
+
+    test "a selection's account name changes the digest, and an edge takes its default and " <>
+           "each name once" do
+      default =
+        @selection |> Map.delete(:label) |> Map.merge(%{entry_id: "vault-1", need: "api_key"})
+
+      named =
+        Map.merge(default, %{entry_id: "vault-2", binding_digest: "sha256:sel-2", name: "Work"})
+
+      decided = Map.put(@base, :selections, [default, named])
+
+      # A commit differing from its preview only by a selection's name is
+      # another digest, so its proof does not cover it.
+      assert digest!(decided) !=
+               digest!(Map.put(@base, :selections, [default, %{named | name: "Home"}]))
+
+      # Two selections of one edge differing only by their names are two
+      # slots, in any order.
+      second = %{named | name: "Home"}
+
+      assert digest!(Map.put(@base, :selections, [default, named, second])) ==
+               digest!(Map.put(@base, :selections, [second, default, named]))
+
+      # A name repeated on one edge, compared case-folded, is one slot
+      # twice, as is a second default.
+      for twice <- [%{named | name: "work"}, Map.delete(named, :name)] do
+        assert {:error, {:invalid_commit, :selections, message}} =
+                 CommitDigest.compute(Map.put(@base, :selections, [default, named, twice])),
+               "#{inspect(twice)} was accepted"
+
+        assert message =~ "exactly once"
+      end
+
+      # The name is one the selection names, never an empty one.
+      assert {:error, {:invalid_commit, :name, _}} =
+               CommitDigest.compute(Map.put(@base, :selections, [default, %{named | name: ""}]))
     end
   end
 
@@ -310,12 +446,96 @@ defmodule Sanctum.Consent.CommitDigestTest do
     end
   end
 
+  describe "removed bindings" do
+    @default_removed %{
+      "binding_key" => "#{@node}|@ingress|default",
+      "node" => @node,
+      "edge" => "@ingress",
+      "need" => "api_key",
+      "entry_id" => "vlt_a",
+      "name" => "key a",
+      "source" => "own"
+    }
+
+    @work_removed %{
+      "binding_key" => "#{@node}|@ingress|name:Work",
+      "node" => @node,
+      "edge" => "@ingress",
+      "need" => nil,
+      "connection" => "Work",
+      "entry_id" => "vlt_c",
+      "source" => "own"
+    }
+
+    test "a revision that removes nothing hashes as one that never named removals" do
+      assert digest!(Map.put(@base, :removed, [])) == digest!(@base)
+
+      {:ok, canonical} = CommitDigest.normalize(Map.put(@base, :removed, []))
+      refute Map.has_key?(canonical, "removed")
+    end
+
+    test "a removal changes the digest, and each of its values does" do
+      removed = digest!(Map.put(@base, :removed, [@default_removed]))
+      refute removed == digest!(@base)
+
+      for {field, value} <- [
+            {"need", "other_key"},
+            {"need", nil},
+            {"name", "key a, renamed"},
+            {"entry_id", "vlt_other"}
+          ] do
+        changed = Map.put(@default_removed, field, value)
+
+        refute digest!(Map.put(@base, :removed, [changed])) == removed,
+               "#{field} #{inspect(value)} did not move the digest"
+      end
+    end
+
+    test "removals are a sorted list: order does not change the digest; a null need is left out" do
+      sorted = digest!(Map.put(@base, :removed, [@default_removed, @work_removed]))
+      assert digest!(Map.put(@base, :removed, [@work_removed, @default_removed])) == sorted
+
+      {:ok, canonical} =
+        CommitDigest.normalize(Map.put(@base, :removed, [@work_removed, @default_removed]))
+
+      assert [%{"need" => "api_key"}, work] = canonical["removed"]
+      refute Map.has_key?(work, "need")
+      assert work["connection"] == "Work"
+    end
+
+    test "a removal the preview could not carry is refused" do
+      for removed <- [
+            %{},
+            [@default_removed, @default_removed],
+            [Map.delete(@default_removed, "need")],
+            [Map.put(@default_removed, "source", "provided")],
+            [Map.put(@default_removed, "via", "work")],
+            [Map.put(@default_removed, "binding_key", "#{@node}|@ingress|name:Home")]
+          ] do
+        assert {:error, {:invalid_commit, :removed, _why}} =
+                 CommitDigest.compute(Map.put(@base, :removed, removed)),
+               inspect(removed)
+      end
+    end
+  end
+
   describe "normalize/1" do
     test "embeds the shape digest as a string rather than re-expanding it" do
       {:ok, canonical} = CommitDigest.normalize(Map.put(@base, :bindings, [@binding]))
 
       assert canonical["shape_digest"] == "sha256:shape"
-      assert [%{"need" => "source", "fields" => ["anon_key", "url"]}] = canonical["bindings"]
+
+      assert [
+               %{
+                 "need" => "source",
+                 "entry_id" => "vault-1",
+                 "fields" => ["anon_key", "url"],
+                 "lifetime" => %{"kind" => "standing"},
+                 "renew" => false
+               } = binding
+             ] = canonical["bindings"]
+
+      refute Map.has_key?(binding, "name")
       assert canonical["override"] == false
       assert canonical["origins"] == ["interactive"]
       assert canonical["subset"] == %{}

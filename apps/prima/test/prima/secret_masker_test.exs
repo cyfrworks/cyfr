@@ -9,6 +9,8 @@ defmodule Prima.SecretMaskerTest do
 
   alias Prima.SecretMasker
 
+  doctest Prima.SecretMasker
+
   @redacted "[REDACTED]"
 
   describe "masking" do
@@ -176,6 +178,69 @@ defmodule Prima.SecretMaskerTest do
 
         assert released <> SecretMasker.mask(held, [@secret]) == "before #{@redacted} after"
       end
+    end
+  end
+
+  describe "the forms" do
+    # A header's name cannot be rewritten, only dropped, so a caller that
+    # finds a secret there matches the forms themselves; they must be
+    # exactly the ones masking replaces.
+    test "forms/1 names exactly what mask/2 replaces, longest first" do
+      secret = "Sk-Mixed+Case/9 key"
+      forms = SecretMasker.forms([secret])
+
+      assert secret in forms
+      assert Base.encode64(secret) in forms
+      assert Base.url_encode64(secret) in forms
+      assert Base.encode16(secret, case: :lower) in forms
+      assert Base.encode16(secret, case: :upper) in forms
+      assert URI.encode_www_form(secret) in forms
+      assert forms == Enum.sort_by(forms, &byte_size/1, :desc)
+      assert forms == Enum.uniq(forms)
+
+      for form <- forms, do: assert(SecretMasker.mask(form, [secret]) == @redacted)
+    end
+
+    test "a secret whose length is no multiple of three is masked in its unpadded base64" do
+      # Twenty-nine characters: every padded base64 form ends in "=", which
+      # an echo can leave off.
+      secret = "sk-Attached-MIXED-Canary-4200"
+      unpadded = Base.encode64(secret, padding: false)
+      url_unpadded = Base.url_encode64(secret, padding: false)
+
+      assert unpadded in SecretMasker.forms([secret])
+      assert url_unpadded in SecretMasker.forms([secret])
+
+      assert SecretMasker.mask("token: " <> unpadded <> " end", [secret]) ==
+               "token: #{@redacted} end"
+
+      assert SecretMasker.mask("token: " <> url_unpadded <> " end", [secret]) ==
+               "token: #{@redacted} end"
+
+      assert SecretMasker.mask("t: " <> Base.encode64(secret) <> ".", [secret]) ==
+               "t: #{@redacted}."
+    end
+
+    test "the standard and the url-safe unpadded forms are each masked" do
+      # Fourteen characters whose base64 holds "+" and "/": the two
+      # alphabets' unpadded forms differ, and each is its own form.
+      secret = "sk-~~~???>>>9q"
+      standard = Base.encode64(secret, padding: false)
+      url_safe = Base.url_encode64(secret, padding: false)
+
+      assert standard =~ "+" and standard =~ "/"
+      refute standard == url_safe
+
+      for form <- [standard, url_safe] do
+        assert form in SecretMasker.forms([secret])
+        assert SecretMasker.mask("t: " <> form <> " .", [secret]) == "t: #{@redacted} ."
+      end
+    end
+
+    test "a short secret has its raw form alone, and an unusable value none" do
+      assert SecretMasker.forms(["abc"]) == ["abc"]
+      assert SecretMasker.forms(["", nil, 123]) == []
+      assert SecretMasker.forms(nil) == []
     end
   end
 

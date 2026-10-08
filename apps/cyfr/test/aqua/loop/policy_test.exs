@@ -4,9 +4,9 @@
 defmodule Aqua.Loop.PolicyTest do
   @moduledoc """
   A call runs, asks or is refused by the agent's effective policy; a
-  launch by the launch rule on top, with what this turn wrote to read
-  from durable rows; reads overlap and nothing else does; a card carries
-  the canonical proposal and the catalog's kind and standing.
+  launch always asks, whatever the policy says, since only an approved
+  card launches; reads overlap and nothing else does; a card carries the
+  canonical proposal and the catalog's kind and standing.
   """
 
   use ExUnit.Case, async: true
@@ -48,13 +48,15 @@ defmodule Aqua.Loop.PolicyTest do
     assert :ask = Policy.decide(resolve!("github__search", %{}), @policy, [])
   end
 
-  test "the launch rule: consented and untouched runs as a child, touched or unconsented needs a card" do
+  test "a launch always asks, consented or not, touched or not, unless it is denied or no component" do
     launch =
       resolve!("execution", %{"action" => "run", "reference" => "formula:local.demo:1.0.0"})
 
     consented = fn ref -> String.starts_with?(ref, "formula:local.demo") end
 
-    assert :auto = Policy.decide(launch, @policy, consented?: consented)
+    # Every launch asks, whatever the policy says: only an approved card
+    # launches.
+    assert :ask = Policy.decide(launch, @policy, consented?: consented)
     assert :ask = Policy.decide(launch, @policy, consented?: fn _ -> false end)
 
     assert :ask =
@@ -67,6 +69,13 @@ defmodule Aqua.Loop.PolicyTest do
              Policy.decide(launch, Map.put(@policy, "execution.run", "deny"),
                consented?: consented
              )
+
+    # A policy that names no `execution.run` denies the launch: an agent
+    # launches only what its own policy grants.
+    for policy <- [%{}, Map.delete(@policy, "execution.run")] do
+      assert {:deny, "execution.run is not in the agent's policy"} =
+               Policy.decide(launch, policy, consented?: consented)
+    end
 
     bad = resolve!("execution", %{"action" => "run", "reference" => "not a ref"})
     assert {:refuse, _} = Policy.decide(bad, @policy, [])
@@ -143,8 +152,8 @@ defmodule Aqua.Loop.PolicyTest do
     consented = fn ref -> String.starts_with?(ref, "formula:local.demo") end
 
     # Nothing has closed yet, which is the state every call in one model
-    # response is decided in.
-    assert :auto = Policy.decide(launch, @policy, consented?: consented, touched: MapSet.new())
+    # response is decided in. Every launch asks, whatever the policy says.
+    assert :ask = Policy.decide(launch, @policy, consented?: consented, touched: MapSet.new())
 
     # The same response also proposes writing to it.
     writes =

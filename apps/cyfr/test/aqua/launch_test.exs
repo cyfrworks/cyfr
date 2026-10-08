@@ -268,6 +268,703 @@ defmodule Aqua.LaunchTest do
     assert launched(ctx) == []
   end
 
+  # ---------------------------------------------------------------------------
+  # A launch naming an account
+  # ---------------------------------------------------------------------------
+
+  @probe Path.expand(
+           "../../../opus/test/support/test_wasm/hostile/attached_header_probe.wasm",
+           __DIR__
+         )
+  @math_wasm Path.expand("../support/test_wasm/math.wasm", __DIR__)
+  @default_secret "sk-launch-default-0c1d"
+  @named_secret "sk-launch-supabase2-7e9a"
+  @rule %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+
+  defmodule Upstream do
+    @moduledoc "The loopback upstream: every request is told to the test."
+    @behaviour Plug
+
+    import Plug.Conn
+
+    @impl true
+    def init(opts), do: opts
+
+    @impl true
+    def call(conn, %{parent: parent}) do
+      {:ok, body, conn} = read_body(conn)
+
+      send(parent, {
+        :upstream,
+        %{method: conn.method, path: conn.request_path, headers: conn.req_headers, body: body}
+      })
+
+      send_resp(conn, 200, "hello from upstream")
+    end
+  end
+
+  # The probe of K.K2's attached-request suite, published as an app of the
+  # person's own whose need `api_key` is attached by the rule: it sends its
+  # input as its one request and answers what it got.
+  defp publish_probe!(ctx) do
+    name = "launch-probe-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "catalyst",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:upstream.test",
+          "reason" => "to call the upstream with your key",
+          "fields" => ["KEY"],
+          "attach" => @rule
+        }
+      },
+      "caps" => %{
+        "egress" => %{
+          "domains" => ["127.0.0.1"],
+          "methods" => ["GET"],
+          "schemes" => ["http"],
+          "private_ips" => ["127.0.0.1"]
+        }
+      }
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@probe), %{
+        name: name,
+        version: "1.0.0",
+        type: "catalyst",
+        manifest: Jason.encode!(manifest)
+      })
+
+    "catalyst:local." <> name
+  end
+
+  defp attached_entry!(ctx, port, label, secret) do
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "launch #{label} #{System.unique_integer([:positive])}",
+        kind: "api_key",
+        provider_hint: "upstream.test",
+        fields: %{"KEY" => secret},
+        destination: %{
+          "hosts" => ["127.0.0.1"],
+          "scheme" => "http",
+          "port" => port,
+          "methods" => ["GET"]
+        }
+      })
+
+    entry
+  end
+
+  # An app of the person's own whose need is disclosed to it: a launch that
+  # names an account is refused or admitted before anything of it runs.
+  defp publish_app!(ctx) do
+    name = "launch-app-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "reagent",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "fields" => ["KEY"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm), %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(manifest)
+      })
+
+    "reagent:local." <> name
+  end
+
+  defp disclosed_entry!(ctx, label) do
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "launch #{label} #{System.unique_integer([:positive])}",
+        kind: "api_key",
+        provider_hint: "example.com",
+        fields: %{"KEY" => "k-#{label}"},
+        destination: %{"hosts" => ["api.example.com"]},
+        disclose: true
+      })
+
+    entry
+  end
+
+  # `ref`'s grant on its own calls, through the consent walk.
+  defp grant!(ctx, ref, bindings) do
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    decisions = %{ref: ref, bindings: bindings}
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, %{profile_id: profile_id}} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    profile_id
+  end
+
+  # A launch card for `args`, its proposal binding `vault_entry` when one
+  # is given, as the loop opens it; approved by `approver`. Answers the step.
+  defp approved_named_launch!(ctx, turn, approver, args, vault_entry) do
+    proposal =
+      %{"tool" => "execution", "action" => "run", "args" => args}
+      |> Prima.MapUtil.put_present("vault_entry", vault_entry)
+
+    {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
+
+    {:ok, %{calls: [%{step: step}]}} =
+      Tape.record_response(ctx, turn, model_step, %{
+        text: nil,
+        tool_calls: [
+          %{
+            tool_call_id: "c1",
+            name: "execution.run",
+            tool: "execution",
+            action: "run",
+            arguments: args,
+            kind: "execute",
+            step_kind: "launch"
+          }
+        ]
+      })
+
+    intent = %{
+      "kind" => "request_approval",
+      "title" => "execution.run",
+      "action_kind" => "execute",
+      "standing" => false,
+      "tool_call_id" => "c1",
+      "proposal" => proposal
+    }
+
+    {:ok, %{approval: approval}} =
+      Tape.open_approval(ctx, turn, step, %{
+        proposal_digest: Aqua.Loop.Policy.proposal_digest(proposal),
+        card: %{content: "execution.run?", payload: %{"intent" => intent}},
+        expires_at: nil
+      })
+
+    assert {:ok, %{decision: "approved", resolution_kind: "launch"}} =
+             Approvals.resolve(approver, approval.id, %{decision: :approved})
+
+    {:ok, step} = Tape.step(ctx, step.id)
+    step
+  end
+
+  defp launched_of(ctx, ref) do
+    Arca.Repo.all(
+      from(e in Arca.Schemas.Execution,
+        where: e.athanor_id == ^ctx.athanor_id and like(e.reference, ^"#{ref}%"),
+        select: e.id
+      )
+    )
+  end
+
+  defp upstream! do
+    receive do
+      {:upstream, request} -> request
+    after
+      10_000 -> flunk("the upstream received nothing")
+    end
+  end
+
+  test "a launch naming an account attaches that account's value at the upstream, never the " <>
+         "default's, and consumes its once under its own binding key",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
+    upstream =
+      start_supervised!(
+        {Bandit,
+         plug: {Upstream, %{parent: self()}},
+         scheme: :http,
+         ip: {127, 0, 0, 1},
+         port: 0,
+         startup_log: false}
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(upstream)
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
+
+    probe = publish_probe!(ctx)
+    default = attached_entry!(ctx, port, "default", @default_secret)
+    named = attached_entry!(ctx, port, "supabase 2", @named_secret)
+
+    profile_id =
+      grant!(ctx, probe, [
+        %{need: "api_key", entry_id: default.id},
+        %{need: "api_key", name: "Supabase 2", entry_id: named.id, lifetime: %{kind: "once"}}
+      ])
+
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+
+    args = %{
+      "reference" => probe <> ":1.0.0",
+      "input" => %{
+        "connection" => "api_key",
+        "method" => "GET",
+        "url" => "http://127.0.0.1:#{port}/hello",
+        "headers" => %{"accept" => "text/plain"}
+      },
+      "connection" => "Supabase 2"
+    }
+
+    step = approved_named_launch!(ctx, turn, approver, args, named.id)
+
+    assert {:ok, %{execution_id: execution_id}} = Launch.dispatch(ctx, step)
+    assert is_binary(execution_id)
+
+    # CYFR attached the named account's value to the request the app made,
+    # never the default's.
+    sent = upstream!()
+    assert sent.path == "/hello"
+    assert for({"x-api-key", value} <- sent.headers, do: value) == [@named_secret]
+
+    # The once is consumed by the launch's root under the named binding's
+    # own key; the default's stands untouched.
+    {:ok, name_ref} = Prima.ComponentRef.to_name_ref(probe)
+
+    {:ok, head} =
+      Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
+
+    refs = Map.new(head.vault_refs, &{&1.binding_key, &1})
+
+    assert %{lifetime_kind: "once", consumed_by_root: ^execution_id} =
+             refs[Prima.Authority.Blob.binding_key(name_ref, "@ingress", "Supabase 2")]
+
+    assert %{consumed_by_root: nil} =
+             refs[Prima.Authority.Blob.binding_key(name_ref, "@ingress", nil)]
+  end
+
+  test "an approval binds the account its card showed: another entry, a name gone or an " <>
+         "account the card did not show launches nothing",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    app = publish_app!(ctx)
+    default = disclosed_entry!(ctx, "default")
+    work = disclosed_entry!(ctx, "work")
+    other = disclosed_entry!(ctx, "other")
+
+    grant!(ctx, app, [
+      %{need: "api_key", entry_id: default.id},
+      %{need: "api_key", name: "Work", entry_id: work.id}
+    ])
+
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    named = %{"reference" => app <> ":1.0.0", "input" => %{}, "connection" => "Work"}
+    plain = Map.delete(named, "connection")
+
+    stale = fn result ->
+      assert {:error, {:conflict, sentence}} = result
+      assert sentence =~ "not the one this launch was approved for"
+      assert launched_of(ctx, app) == []
+    end
+
+    # The card showed Work's entry; the grant has since moved Work to another.
+    shown_work = approved_named_launch!(ctx, turn, approver, named, work.id)
+
+    grant!(ctx, app, [
+      %{need: "api_key", entry_id: default.id},
+      %{need: "api_key", name: "Work", entry_id: other.id}
+    ])
+
+    stale.(Launch.dispatch(ctx, shown_work))
+
+    # The card showed an account its proposal bound no entry for, or bound
+    # an entry for a launch naming none.
+    stale.(Launch.dispatch(ctx, approved_named_launch!(ctx, turn, approver, named, nil)))
+    stale.(Launch.dispatch(ctx, approved_named_launch!(ctx, turn, approver, plain, other.id)))
+
+    # The name is gone from the app's grant.
+    shown_other = approved_named_launch!(ctx, turn, approver, named, other.id)
+    grant!(ctx, app, [%{need: "api_key", entry_id: default.id}])
+    stale.(Launch.dispatch(ctx, shown_other))
+
+    # The grant now stores the account under another spelling: the card
+    # showed `Work`, which is not the name its binding stores.
+    grant!(ctx, app, [
+      %{need: "api_key", entry_id: default.id},
+      %{need: "api_key", name: "WORK", entry_id: other.id}
+    ])
+
+    stale.(Launch.dispatch(ctx, approved_named_launch!(ctx, turn, approver, named, other.id)))
+
+    # A launch the model spells in yet another case asks under the stored
+    # name: the card the loop draws for it shows `WORK` and binds its entry,
+    # and that card, approved, launches.
+    {:ok, call} = Aqua.Loop.Binding.resolve("execution.run", %{named | "connection" => "work"})
+
+    assert {:ask, %{vault_entry: entry, name: "WORK"} = account} =
+             Aqua.Loop.Policy.decide(call, %{"execution.run" => "ask"}, ctx: ctx)
+
+    assert entry == other.id
+
+    assert %{
+             "proposal" => %{"args" => %{"connection" => "WORK"} = shown, "vault_entry" => ^entry}
+           } =
+             Aqua.Loop.Policy.card(call, account: account)
+
+    _ = Launch.dispatch(ctx, approved_named_launch!(ctx, turn, approver, shown, entry))
+    assert [_launched] = launched_of(ctx, app)
+  end
+
+  # ---------------------------------------------------------------------------
+  # The entry the card bound, at the run's root
+  # ---------------------------------------------------------------------------
+
+  @stale_work "The account \"Work\" is not the one this launch was approved for, so nothing " <>
+                "ran: ask again to approve the account as it stands now"
+
+  @root_load {Sanctum.Consent.Loader, :load_root, 3}
+  @attempt_open {Crucible.Attempt, :open, 1}
+
+  # An app whose own calls bind a default and `Work`, with a third entry
+  # a later grant can move `Work` to; and a launch of it naming `Work`.
+  defp work_app!(ctx) do
+    app = publish_app!(ctx)
+    default = disclosed_entry!(ctx, "default")
+    work = disclosed_entry!(ctx, "work")
+    other = disclosed_entry!(ctx, "other")
+
+    grant!(ctx, app, [
+      %{need: "api_key", entry_id: default.id},
+      %{need: "api_key", name: "Work", entry_id: work.id}
+    ])
+
+    %{
+      app: app,
+      default: default,
+      work: work,
+      other: other,
+      args: %{"reference" => app <> ":1.0.0", "input" => %{}, "connection" => "Work"}
+    }
+  end
+
+  defp attempts_of(ctx) do
+    Arca.Repo.aggregate(
+      from(a in Arca.Schemas.ExecutionAttempt, where: a.athanor_id == ^ctx.athanor_id),
+      :count
+    )
+  end
+
+  # `fun`'s answer, and the calls this process made to `mfas` while it ran,
+  # in order. A process's call trace is not delivered to itself, so a
+  # collector takes it; every trace message is delivered before the
+  # collector is asked for what it holds.
+  defp traced(mfas, fun) do
+    test = self()
+    collector = spawn_link(fn -> collect(test, []) end)
+
+    on_exit(fn -> for mfa <- mfas, do: :erlang.trace_pattern(mfa, false, [:global]) end)
+
+    # A pattern applies only to a loaded module, so each is loaded first,
+    # and one that matched nothing fails here rather than tracing nothing.
+    for {module, _function, _arity} = mfa <- mfas do
+      Code.ensure_loaded!(module)
+      assert :erlang.trace_pattern(mfa, true, [:global]) == 1
+    end
+
+    :erlang.trace(test, true, [:call, {:tracer, collector}])
+
+    answer =
+      try do
+        fun.()
+      after
+        :erlang.trace(test, false, [:call])
+      end
+
+    delivered = :erlang.trace_delivered(test)
+    assert_receive {:trace_delivered, ^test, ^delivered}, 5_000
+    send(collector, {:done, delivered})
+    assert_receive {:collected, ^delivered, calls}, 5_000
+    {answer, calls}
+  end
+
+  defp collect(test, calls) do
+    receive do
+      {:trace, ^test, :call, call} -> collect(test, [call | calls])
+      {:done, ref} -> send(test, {:collected, ref, Enum.reverse(calls)})
+    end
+  end
+
+  defp args_of(calls, {module, function, _arity}),
+    do: for({^module, ^function, args} <- calls, do: args)
+
+  # A launch of `work_app!/1`'s app naming `Work`, its card approved on
+  # Work's entry: the fixture, with the step the loop hands the dispatcher.
+  defp approved_work_launch!(ctx, thread, pins, approver) do
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
+
+    %{args: args, work: work} = fixture = work_app!(ctx)
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    Map.put(fixture, :step, approved_named_launch!(ctx, turn, approver, args, work.id))
+  end
+
+  # The app's grant becomes `bindings` at the gate's admission of the
+  # dispatched call: past the dispatcher's own check, and before the
+  # provider builds the run's root.
+  defp regrant_at_admission!(ctx, app, bindings) do
+    test = self()
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :grimoire, :decision, :admitted],
+        fn _event, _measurements, %{tool: tool, action: action}, _config ->
+          if self() == test and {tool, action} == {"execution", "run"} and
+               not Process.get(:regranted, false) do
+            Process.put(:regranted, true)
+            grant!(ctx, app, bindings)
+            send(test, :regranted)
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  # The launch `step` is refused in the stale sentence a person reads, with
+  # nothing started: no execution row and no attempt. The gate's trail
+  # records the call as the conflict it is, and nothing reads the refusal
+  # as a reason the refusal table does not know.
+  defp assert_stale_at_root!(ctx, step, app) do
+    attempts = attempts_of(ctx)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert Launch.dispatch(ctx, step) == {:error, {:conflict, @stale_work}}
+      end)
+
+    assert_received :regranted
+
+    assert launched_of(ctx, app) == []
+    assert attempts_of(ctx) == attempts
+
+    assert Arca.Repo.all(
+             from(d in Arca.Schemas.DecisionLog,
+               where:
+                 d.athanor_id == ^ctx.athanor_id and d.tool == "execution" and d.action == "run",
+               select: {d.admission, d.completion, d.completion_class}
+             )
+           ) == [{"admitted", "failed", "conflict"}]
+
+    refute log =~ "Prima.Refusal"
+  end
+
+  test "a head that binds the launch's account to another entry after the dispatcher's check " <>
+         "refuses at the run's root, in the stale sentence, with nothing started",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    %{app: app, default: default, other: other, step: step} =
+      approved_work_launch!(ctx, thread, pins, approver)
+
+    regrant_at_admission!(ctx, app, [
+      %{need: "api_key", entry_id: default.id},
+      %{need: "api_key", name: "Work", entry_id: other.id}
+    ])
+
+    assert_stale_at_root!(ctx, step, app)
+  end
+
+  test "a head that drops the launch's account after the dispatcher's check refuses at the " <>
+         "run's root as the same stale approval, never as an account to grant",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    %{app: app, default: default, step: step} = approved_work_launch!(ctx, thread, pins, approver)
+
+    regrant_at_admission!(ctx, app, [%{need: "api_key", entry_id: default.id}])
+
+    assert_stale_at_root!(ctx, step, app)
+  end
+
+  test "a head that stores the launch's account under another spelling, on the same entry, " <>
+         "after the dispatcher's check refuses at the run's root as stale",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    %{app: app, default: default, work: work, step: step} =
+      approved_work_launch!(ctx, thread, pins, approver)
+
+    regrant_at_admission!(ctx, app, [
+      %{need: "api_key", entry_id: default.id},
+      %{need: "api_key", name: "WORK", entry_id: work.id}
+    ])
+
+    assert_stale_at_root!(ctx, step, app)
+  end
+
+  test "an unchanged account's launch is rooted on the entry its card bound, read with that " <>
+         "entry in hand, and the run carries no expectation past its root's admission",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
+
+    %{app: app, work: work, args: args} = work_app!(ctx)
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    step = approved_named_launch!(ctx, turn, approver, args, work.id)
+
+    {_dispatched, calls} =
+      traced([@root_load, @attempt_open], fn -> Launch.dispatch(ctx, step) end)
+
+    # The root's one load reads the head with the approved account in hand:
+    # the entry the card bound and the name its binding stored.
+    assert [[root_ctx, _profile, _opts]] = args_of(calls, @root_load)
+    assert Map.fetch(root_ctx, :approved_entry) == {:ok, %{entry: work.id, name: "Work"}}
+
+    # The run is admitted under that entry, and the context its attempt
+    # (and so its chain, its children and its calls), its close and its
+    # assignment carry on holds none.
+    assert [execution_id] = launched_of(ctx, app)
+    assert [[opened]] = args_of(calls, @attempt_open)
+    assert opened[:execution_id] == execution_id
+    assert opened[:authority].resources.vault.entry_id == work.id
+    {:ok, name_ref} = Prima.ComponentRef.to_name_ref(app)
+
+    assert opened[:authority].resources.vault.binding_key ==
+             Prima.Authority.Blob.binding_key(name_ref, "@ingress", "Work")
+
+    for carried <- [opened[:ctx], opened[:close].ctx, opened[:assignment].ctx] do
+      assert Map.fetch(carried, :approved_entry) == {:ok, nil}
+    end
+  end
+
+  test "an external execution.run cannot supply the approved entry: an argument naming it is " <>
+         "refused, and the run it starts is rooted with none",
+       %{ctx: ctx} do
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
+
+    %{app: app, other: other, args: args} = work_app!(ctx)
+    run = Map.put(args, "action", "run")
+
+    {refused, calls} =
+      traced([@root_load], fn ->
+        Grimoire.call_external("execution", ctx, Map.put(run, "approved_entry", other.id))
+      end)
+
+    assert {:error,
+            %Prima.Refusal{
+              class: :invalid_argument,
+              stage: :admission,
+              message: "Unknown field: approved_entry"
+            }} = refused
+
+    assert args_of(calls, @root_load) == []
+    assert launched_of(ctx, app) == []
+
+    # Named nowhere, the expectation is absent: the root is loaded with
+    # none, and the run goes ahead under the account the call names.
+    {_ran, calls} = traced([@root_load], fn -> Grimoire.call_external("execution", ctx, run) end)
+
+    assert [[root_ctx, _profile, _opts]] = args_of(calls, @root_load)
+    assert Map.fetch(root_ctx, :approved_entry) == {:ok, nil}
+    assert [_launched] = launched_of(ctx, app)
+  end
+
+  # ---------------------------------------------------------------------------
+  # The app's own head read damaged
+  # ---------------------------------------------------------------------------
+
+  @zero_digest "sha256:" <> String.duplicate("0", 64)
+
+  defp own_profile_id(ctx, app) do
+    {:ok, [%{id: id}]} = Sanctum.Consent.profiles(ctx, app)
+    id
+  end
+
+  defp damaged_head_sentence(profile_id),
+    do:
+      "This app's consent is damaged and cannot be used — revoke profile #{profile_id} " <>
+        "and grant it again."
+
+  defp set_profile!(ctx, id, changes) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(p in Arca.Schemas.Profile, where: p.athanor_id == ^ctx.athanor_id and p.id == ^id),
+        set: changes
+      )
+  end
+
+  # The account is read again, as the approver, before anything runs: a
+  # head stored damaged since the card was drawn is that damage, in its
+  # own class and sentence, never a stale approval to ask again and never
+  # an outcome that could not be confirmed. Nothing reaches the gate.
+  test "a launch naming an account over the app's own head stored damaged is refused as the " <>
+         "damaged head, with nothing started",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    %{app: app, step: step} = approved_work_launch!(ctx, thread, pins, approver)
+    profile_id = own_profile_id(ctx, app)
+    :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile_id, blob_digest: @zero_digest)
+    attempts = attempts_of(ctx)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert Launch.dispatch(ctx, step) == {:error, {:head_corrupt, profile_id}}
+      end)
+
+    assert launched_of(ctx, app) == []
+    assert attempts_of(ctx) == attempts
+
+    assert Arca.Repo.all(
+             from(d in Arca.Schemas.DecisionLog,
+               where:
+                 d.athanor_id == ^ctx.athanor_id and d.tool == "execution" and d.action == "run",
+               select: d.admission
+             )
+           ) == []
+
+    refute log =~ "Prima.Refusal"
+
+    assert %Prima.Refusal{class: :corrupt, message: message} =
+             Grimoire.Error.classify({:head_corrupt, profile_id})
+
+    assert message == damaged_head_sentence(profile_id)
+  end
+
+  # A card is drawn only over a head that reads: one stored damaged, or an
+  # active profile that lost its head, refuses the call in the damaged
+  # head's sentence, never a setup to make over a profile that exists.
+  test "a launch naming an account over the app's own head stored damaged, or lost, opens no " <>
+         "card and refuses as the damaged head",
+       %{ctx: ctx} do
+    policy = %{"execution.run" => "ask"}
+
+    for damage <- [
+          &Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, &1, blob_digest: @zero_digest),
+          &set_profile!(ctx, &1, head_consent_id: nil)
+        ] do
+      %{app: app, args: args} = work_app!(ctx)
+      profile_id = own_profile_id(ctx, app)
+      {:ok, call} = Aqua.Loop.Binding.resolve("execution.run", args)
+
+      assert {:ask, %{name: "Work"}} = Aqua.Loop.Policy.decide(call, policy, ctx: ctx)
+
+      damage.(profile_id)
+
+      assert Aqua.Loop.Policy.decide(call, policy, ctx: ctx) ==
+               {:refuse,
+                "the account \"Work\" of #{call.target} could not be read: " <>
+                  damaged_head_sentence(profile_id)}
+    end
+  end
+
   test "an origin the sender's request names is not the turn's", %{
     ctx: ctx,
     thread: thread

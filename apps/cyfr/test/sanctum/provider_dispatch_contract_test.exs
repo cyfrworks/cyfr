@@ -15,7 +15,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
   alias Sanctum.Provider
 
   @tool_names ~w(session athanor member door oauth key tincture_visibility webhook vault profile
-                  person pairing passkey confirmation)
+                  person pairing passkey confirmation instance_entry)
 
   @action_enums %{
     "session" => [
@@ -49,6 +49,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "vault" => [
       "list",
       "status",
+      "set_default",
       "create",
       "rename",
       "rotate",
@@ -78,7 +79,21 @@ defmodule Sanctum.ProviderDispatchContractTest do
     ],
     "pairing" => ["begin", "complete", "renew", "revoke", "list"],
     "passkey" => ["register", "list", "revoke", "recover_admin"],
-    "confirmation" => ["confirm", "reauth", "pending", "cancel"]
+    "confirmation" => ["confirm", "reauth", "pending", "cancel"],
+    "instance_entry" => [
+      "create",
+      "rotate",
+      "rebind",
+      "set_audience",
+      "set_component_policy",
+      "set_caps",
+      "revoke",
+      "delete",
+      "list",
+      "usage",
+      "offered",
+      "people"
+    ]
   }
 
   @invalid_action_errors %{
@@ -91,17 +106,20 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "tincture_visibility" => "Invalid tincture_visibility action. Use: get",
     "webhook" => "Invalid webhook action. Use: create, list, get, update, revoke, or rotate",
     "vault" =>
-      "Invalid vault action. Use: list, status, create, rename, rotate, rebind, authorize, revoke, or delete",
+      "Invalid vault action. Use: list, status, set_default, create, rename, rotate, rebind, authorize, revoke, or delete",
     "profile" =>
       "Invalid profile action. Use: plan, preview, commit, grant, publish, list, grants, or revoke",
     "person" => "Unknown action: person.___no_such_action___",
     "pairing" => "Unknown action: pairing.___no_such_action___",
     "passkey" => "Unknown action: passkey.___no_such_action___",
-    "confirmation" => "Unknown action: confirmation.___no_such_action___"
+    "confirmation" => "Unknown action: confirmation.___no_such_action___",
+    "instance_entry" =>
+      "Invalid instance_entry action. Use: create, rotate, rebind, set_audience, " <>
+        "set_component_policy, set_caps, revoke, delete, list, usage, offered, or people"
   }
 
   describe "tools/0 — frozen surface" do
-    test "exactly these 14 tools, in order" do
+    test "exactly these 15 tools, in order" do
       assert Enum.map(Provider.tools(), & &1.name) == @tool_names
     end
 

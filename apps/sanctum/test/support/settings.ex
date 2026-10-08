@@ -42,7 +42,9 @@ defmodule Sanctum.Test.Settings do
     "device_cert_seconds" => %{default: 3_600, stale: :refuse},
     "clock_skew_seconds" => %{default: 60, stale: :refuse},
     "confirmation_seconds" => %{default: 300, stale: :refuse},
-    "reauth_seconds" => %{default: 300, stale: :refuse}
+    "reauth_seconds" => %{default: 300, stale: :refuse},
+    "instance_entry_person_daily" => %{default: 1_000, stale: :refuse},
+    "instance_entry_total_daily" => %{default: 2_000, stale: :refuse}
   }
 
   @doc "The declaration of the settings Sanctum reads."

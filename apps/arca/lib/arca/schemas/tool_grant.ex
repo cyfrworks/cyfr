@@ -24,9 +24,9 @@ defmodule Arca.Schemas.ToolGrant do
   An allow may carry bounds: the lifecycle it ends with
   (`lifecycle_kind`, `execution`, `turn` or `schedule`, and
   `lifecycle_id`, that row's id), a deadline (`expires_at`) and a
-  `constraint`, a resource kind (`storage_path` or `egress_domain`) and
-  its patterns, stored as JSON in the one grammar `constraint_errors/2`
-  spells. A deny carries none of the four, so a standing deny never
+  `constraint`, a resource kind (`storage_path`, `egress_domain` or
+  `vault_entry`) and its patterns, stored as JSON in the one grammar
+  `constraint_errors/2` spells. A deny carries none of the four, so a standing deny never
   lapses; one written with any is refused.
   """
 
@@ -42,6 +42,10 @@ defmodule Arca.Schemas.ToolGrant do
   @constraint_kinds Enum.map(Prima.Operation.resource_kinds(), &Atom.to_string/1)
   @bounds [:lifecycle_kind, :lifecycle_id, :expires_at, :constraint]
   @max_patterns 64
+  # An entry's id as the stores mint it: a lowercase prefix, an underscore
+  # and the id itself. No wildcard and no separator, so a pattern names one
+  # entry exactly.
+  @entry_id ~r/\A[a-z][a-z0-9]*_[A-Za-z0-9-]{1,128}\z/
 
   schema "tool_grants" do
     field :athanor_id, :string
@@ -179,8 +183,10 @@ defmodule Arca.Schemas.ToolGrant do
   row may carry, else why not. A kind a constraint may name
   (`constraint_kinds/0`); between one and #{@max_patterns} patterns, none
   twice; each in its kind's grammar — a storage path is a safe relative
-  path, literal or a folder ending in `/`, never a wildcard, and an
-  egress domain a bare domain with an optional `*.` prefix. The write
+  path, literal or a folder ending in `/`, never a wildcard, an egress
+  domain a bare domain with an optional `*.` prefix, and a vault entry
+  an entry's id (`<prefix>_<id>`), compared with the id a call's named
+  account resolves to and never with the name. The write
   holds a row to it, and the rule that decides which answers may stand
   (`Sanctum.ToolGrants.check_standing/2`) asks it before the write.
   """
@@ -216,6 +222,9 @@ defmodule Arca.Schemas.ToolGrant do
 
   defp pattern?("egress_domain", pattern) when is_binary(pattern),
     do: Prima.Manifest.valid_connect_domain?(pattern)
+
+  defp pattern?("vault_entry", pattern) when is_binary(pattern),
+    do: Regex.match?(@entry_id, pattern)
 
   defp pattern?(_kind, _pattern), do: false
 

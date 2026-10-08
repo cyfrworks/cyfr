@@ -110,6 +110,7 @@ defmodule Sanctum.Pairing do
   | `:approval` | the session |
   | `:credential_entry` | a fresh confirmation |
   | `:credential_issuance` | a fresh confirmation |
+  | `:credential_sharing` | a fresh confirmation |
   | `:vault_unlock` | a fresh confirmation |
   | `:home_transfer` | a fresh confirmation |
   | `:pairing_revocation` | a fresh confirmation |
@@ -123,7 +124,11 @@ defmodule Sanctum.Pairing do
   `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
   have no operation until their features land, and stay sensitive.
   `action_for/1` maps each operation that confirms something to its
-  action.
+  action. `credential_sharing` is a widening of who or what may use an
+  instance entry (`instance_entry.set_audience`,
+  `instance_entry.set_component_policy`); whether a request widens is
+  decided from the stored entry by `Sanctum.InstanceEntries`, which asks
+  for the confirmation only then.
 
   `fresh_required?/2` is what the deciding sites ask
   (`Sanctum.Consent.Authz.confirm/3`): the table's answer, so a sensitive
@@ -153,6 +158,7 @@ defmodule Sanctum.Pairing do
     approval: :session,
     credential_entry: :fresh,
     credential_issuance: :fresh,
+    credential_sharing: :fresh,
     vault_unlock: :fresh,
     home_transfer: :fresh,
     pairing_revocation: :fresh,
@@ -171,6 +177,10 @@ defmodule Sanctum.Pairing do
     "vault.rotate" => :credential_entry,
     "vault.authorize" => :credential_entry,
     "oauth.set_client" => :credential_entry,
+    "instance_entry.create" => :credential_entry,
+    "instance_entry.rotate" => :credential_entry,
+    "instance_entry.set_audience" => :credential_sharing,
+    "instance_entry.set_component_policy" => :credential_sharing,
     "key.create" => :credential_issuance,
     "key.rotate" => :credential_issuance,
     "webhook.create" => :credential_issuance,
@@ -203,6 +213,7 @@ defmodule Sanctum.Pairing do
           | :approval
           | :credential_entry
           | :credential_issuance
+          | :credential_sharing
           | :vault_unlock
           | :home_transfer
           | :pairing_revocation
@@ -605,7 +616,8 @@ defmodule Sanctum.Pairing do
 
   # The standing a redemption is held to, over the rows locked for it: the
   # person the invitation names active, the athanor open, and their seat
-  # there (or their platform row) still active.
+  # there still active. A platform row is no seat: an invitation resting on
+  # one, however it was opened, pairs nothing.
   defp redeemable(%{user: user, athanor: athanor, membership: membership}, invitation) do
     if active?(user, invitation.user_id) and match?(%{status: "active"}, athanor) and
          seated?(membership, invitation),
@@ -621,9 +633,6 @@ defmodule Sanctum.Pairing do
          %{user_id: user_id, athanor_id: athanor_id}
        ),
        do: true
-
-  defp seated?(%{status: "active", user_id: user_id, scope: "platform"}, %{user_id: user_id}),
-    do: true
 
   defp seated?(_membership, _invitation), do: false
 

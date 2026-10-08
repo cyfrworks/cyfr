@@ -38,7 +38,23 @@ defmodule Prima.AuthorityTest do
                 %{
                   "@ingress" => %{},
                   "#{@catalyst}|source" => %{
-                    "vault" => %{"entry_id" => "vault-1", "binding_digest" => "sha256:aaa"},
+                    "vault" =>
+                      Prima.Test.AuthorityFixtures.bound_vault(
+                        @formula,
+                        "#{@catalyst}|source",
+                        "vault-1",
+                        "sha256:aaa",
+                        named: %{
+                          "Second" =>
+                            Prima.Test.AuthorityFixtures.bound_vault(
+                              @formula,
+                              "#{@catalyst}|source",
+                              "vault-2",
+                              "sha256:bbb",
+                              name: "Second"
+                            )
+                        }
+                      ),
                     "egress" => %{"domains" => ["prod.supabase.co"]}
                   }
                 }
@@ -112,6 +128,76 @@ defmodule Prima.AuthorityTest do
       assert auth.invoke_mode == :edge_only
     end
 
+    test "a connection picks the ingress's named binding as the root's vault, with its own key" do
+      named = %{
+        "@ingress" => %{
+          "vault" =>
+            Prima.Test.AuthorityFixtures.bound_vault(
+              @formula,
+              "@ingress",
+              "vault-1",
+              "sha256:aaa",
+              named: %{
+                "Second" =>
+                  Prima.Test.AuthorityFixtures.bound_vault(
+                    @formula,
+                    "@ingress",
+                    "vault-2",
+                    "sha256:bbb",
+                    name: "Second"
+                  )
+              }
+            )
+        }
+      }
+
+      {:ok, picked} =
+        Authority.root(profile(), blob(named), ceiling: @ceiling, connection: "Second")
+
+      assert picked.resources.vault.entry_id == "vault-2"
+      assert picked.resources.vault.binding_key == "#{@formula}|@ingress|name:Second"
+      refute Map.has_key?(picked.resources.vault, :named)
+      assert picked.cursor == {:bound, @formula}
+
+      # The picked binding reads back from the wire as the root holds it.
+      assert {:ok, back} = picked |> Authority.to_wire() |> Authority.from_wire()
+      assert back.resources == picked.resources
+
+      # No account: the ingress as it stands, its default with the named
+      # bindings beside it.
+      {:ok, default} = Authority.root(profile(), blob(named), ceiling: @ceiling)
+      assert default.resources.vault.entry_id == "vault-1"
+      assert default.resources.vault.binding_key == "#{@formula}|@ingress|default"
+      assert %{"Second" => %{entry_id: "vault-2"}} = default.resources.vault.named
+
+      assert {:ok, %{resources: resources}} =
+               Authority.root(profile(), blob(named), ceiling: @ceiling, connection: nil)
+
+      assert resources == default.resources
+    end
+
+    test "a connection the ingress does not bind is refused, never the default" do
+      assert {:error, :connection_not_granted} =
+               Authority.root(profile(), blob(), ceiling: @ceiling, connection: "Second")
+
+      bound = %{
+        "@ingress" => %{
+          "vault" =>
+            Prima.Test.AuthorityFixtures.bound_vault(
+              @formula,
+              "@ingress",
+              "vault-1",
+              "sha256:aaa"
+            )
+        }
+      }
+
+      for name <- ["Second", "vault-1", "default"] do
+        assert {:error, :connection_not_granted} =
+                 Authority.root(profile(), blob(bound), ceiling: @ceiling, connection: name)
+      end
+    end
+
     test "rejects malformed profiles" do
       assert {:error, {:invalid_profile, :profile_id}} =
                Authority.root(profile(%{profile_id: ""}), blob(), ceiling: @ceiling)
@@ -169,6 +255,33 @@ defmodule Prima.AuthorityTest do
       assert grandchild.cursor == :unbound
       assert grandchild.chain == [@formula, "formula:evil.corp.tool", "catalyst:local.http"]
       assert grandchild.depth == 2
+    end
+
+    test "a bound child holds the edge's default binding, without its named ones", %{
+      auth: auth
+    } do
+      {:ok, edge} = Blob.lookup_edge(auth.policy, @formula, @catalyst, "source")
+      assert Map.has_key?(edge.vault, :named)
+
+      child = Authority.bound_child(auth, @catalyst, edge)
+      assert child.cursor == {:bound, @catalyst}
+      assert child.resources.vault == Map.delete(edge.vault, :named)
+      assert child.resources.egress == edge.egress
+    end
+
+    test "a bound child that picked a named account holds that binding alone", %{auth: auth} do
+      {:ok, edge} = Blob.lookup_edge(auth.policy, @formula, @catalyst, "source")
+      {:ok, second} = Blob.vault_for(edge, "Second")
+
+      child = Authority.bound_child(auth, @catalyst, edge, second)
+      assert child.resources.vault.entry_id == "vault-2"
+      assert child.resources.vault.binding_key == "#{@formula}|#{@catalyst}|source|name:Second"
+      refute Map.has_key?(child.resources.vault, :named)
+      assert child.depth == 1
+
+      # The picked binding crosses the wire though it sits under another slot.
+      assert {:ok, back} = child |> Authority.to_wire() |> Authority.from_wire()
+      assert back.resources == child.resources
     end
 
     test "self_child preserves cursor and resources", %{auth: auth} do

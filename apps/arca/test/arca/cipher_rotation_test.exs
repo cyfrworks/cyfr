@@ -77,6 +77,30 @@ defmodule Arca.CipherRotationTest do
         name: "entry-#{id}",
         provider_hint: "legacy",
         kind: "bundle",
+        destination: ~s({"hosts":["api.example.com"],"scheme":"https"}),
+        status: if(sealed, do: "active", else: "tombstoned"),
+        payload_rev: 0,
+        sealed_payload: sealed,
+        inserted_at: now(),
+        updated_at: now()
+      }
+    ])
+
+    id
+  end
+
+  defp put_instance(id, sealed) do
+    Arca.Repo.insert_all(Arca.Schemas.InstanceEntry, [
+      %{
+        id: id,
+        name: "instance-#{id}",
+        provider_hint: "openai.com",
+        kind: "api_key",
+        destination:
+          ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+        audience: "everyone",
+        component_policy: "any",
+        created_by: "usr_admin",
         status: if(sealed, do: "active", else: "tombstoned"),
         payload_rev: 0,
         sealed_payload: sealed,
@@ -272,6 +296,7 @@ defmodule Arca.CipherRotationTest do
       assert Enum.sort(Rotation.tables()) ==
                [
                  :identity_attempts,
+                 :instance_entries,
                  :oauth_provider_credentials,
                  :person_identities,
                  :registry_tokens,
@@ -281,6 +306,7 @@ defmodule Arca.CipherRotationTest do
 
       assert Rotation.cas_column(:webhooks) == :secret_encrypted
       assert Rotation.cas_column(:vault_entries) == :sealed_payload
+      assert Rotation.cas_column(:instance_entries) == :sealed_payload
       assert Rotation.cas_column(:registry_tokens) == :credential_ciphertext
       assert Rotation.cas_column(:oauth_provider_credentials) == :payload_ciphertext
       assert Rotation.cas_column(:person_identities) == :live_key_sealed
@@ -316,6 +342,35 @@ defmodule Arca.CipherRotationTest do
 
       assert {:ok, [audited]} = Rotation.ciphertext_page(actor, :vault_entries, nil, 10)
       assert audited.id == live
+    end
+
+    # The instance's own entries carry no athanor: a row answers the
+    # provider hint its AAD binds beside its id, and a tombstoned one,
+    # whose material is erased, is not walked.
+    test "an instance entry's row carries its provider hint, never an athanor", %{actor: actor} do
+      live = put_instance("ine_live", bytes("k1"))
+      put_instance("ine_gone", nil)
+
+      assert {:ok, [row]} = Rotation.page(actor, :instance_entries, nil, 10)
+      assert row.id == live
+      assert row.provider_hint == "openai.com"
+      refute Map.has_key?(row, :athanor_id)
+      assert row.ciphertexts == [{:sealed_payload, bytes("k1")}]
+
+      assert {:ok, :swapped} =
+               Rotation.swap(actor, :instance_entries, live, bytes("k1"), %{
+                 sealed_payload: bytes("k2")
+               })
+
+      assert column("instance_entries", live, :sealed_payload) == bytes("k2")
+      assert column("instance_entries", live, :payload_rev) == 0
+
+      assert {:ok, :stale} =
+               Rotation.swap(actor, :instance_entries, live, bytes("k1"), %{
+                 sealed_payload: bytes("k3")
+               })
+
+      assert column("instance_entries", live, :sealed_payload) == bytes("k2")
     end
 
     test "a row carries its binding columns and its ciphertexts, CAS first", %{actor: actor} do

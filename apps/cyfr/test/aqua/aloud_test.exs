@@ -237,9 +237,12 @@ defmodule Aqua.AloudTest do
     row = said(ctx, private, "for the room")
     admin = %{ctx | platform_admin: true}
 
-    # Focus is the audited open; the copy is a second act and takes no
-    # capability. The admin is a member of the source and the shared room —
-    # those still work — but not of the third athanor.
+    # The capability is no seat: focus refuses an operator in an athanor
+    # they are not in exactly as it refuses anyone, so the copy needs no arm
+    # of its own for them. The admin is a member of the source and the
+    # shared room — those still work — but not of the third athanor.
+    assert {:error, :not_member} = Sanctum.Context.focus(admin, theirs.athanor_id)
+
     assert {:error, :not_a_member} =
              Aloud.post(admin, private.id, [row.id], theirs.athanor_id, theirs.id)
 

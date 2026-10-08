@@ -80,7 +80,10 @@ defmodule Sanctum.ToolGrants do
   @typedoc """
   One call as `admits?/2` judges it: the agent that makes it, its thread,
   its `tool` and `action` with its arguments, and the turn and the root
-  execution it is made in.
+  execution it is made in. `vault_entry` is the id of the entry the
+  account the call names resolves to on the caller's edge, which the
+  caller resolves before it asks; an action whose resource is a vault
+  entry is judged by it alone, never by the name its arguments carry.
   """
   @type call :: %{
           required(:agent_name) => String.t(),
@@ -89,7 +92,8 @@ defmodule Sanctum.ToolGrants do
           required(:action) => String.t(),
           required(:args) => map(),
           optional(:execution_id) => String.t() | nil,
-          optional(:turn_id) => String.t() | nil
+          optional(:turn_id) => String.t() | nil,
+          optional(:vault_entry) => String.t() | nil
         }
 
   # The bounds an allow may carry and a deny never does, as the row names
@@ -216,8 +220,10 @@ defmodule Sanctum.ToolGrants do
   execution was started by, and the call's resource argument lies inside
   its constraint: a path read as the storage door reads it (refused when
   absolute or unsafe, then matched as the call spells it by
-  `Prima.ComponentPath.path_granted?/2`), or a host as the egress policy
-  matches it. An unbounded allow is the policy's to answer, not this.
+  `Prima.ComponentPath.path_granted?/2`), a host as the egress policy
+  matches it, or the entry the call's named account resolved to
+  (`vault_entry`, `t:call/0`) as one of the constraint's ids. An unbounded
+  allow is the policy's to answer, not this.
 
   A store that cannot be read, a call that names no thread or agent, and
   a call whose resource argument is absent or unsafe are all `false`: a
@@ -426,13 +432,23 @@ defmodule Sanctum.ToolGrants do
         true
 
       {%{kind: kind, patterns: patterns}, %{resource: {argument, declared}}} ->
-        args = Map.get(call, :args)
-        value = if is_map(args), do: Map.get(args, argument)
-        kind == Atom.to_string(declared) and inside?(kind, value, patterns)
+        kind == Atom.to_string(declared) and
+          inside?(kind, resource(call, argument, declared), patterns)
 
       _unreadable ->
         false
     end
+  end
+
+  # The resource a call touches. A vault entry is the id the call's named
+  # account resolved to (`vault_entry`): the argument names an account, and
+  # a name is never compared with an entry's id. Any other kind is the
+  # declared argument as the call spells it.
+  defp resource(call, _argument, :vault_entry), do: Map.get(call, :vault_entry)
+
+  defp resource(call, argument, _kind) do
+    args = Map.get(call, :args)
+    if is_map(args), do: Map.get(args, argument)
   end
 
   # A path is read as the storage door reads one (`Crucible.GuestStorage`):
@@ -453,6 +469,10 @@ defmodule Sanctum.ToolGrants do
     not String.starts_with?(value, "*") and Prima.Manifest.valid_connect_domain?(value) and
       Prima.Network.domain_allowed?(value, patterns)
   end
+
+  # An entry's id is one of the constraint's ids exactly: a pattern names
+  # one entry, with no wildcard (`Arca.Schemas.ToolGrant`).
+  defp inside?("vault_entry", value, patterns) when is_binary(value), do: value in patterns
 
   defp inside?(_kind, _value, _patterns), do: false
 

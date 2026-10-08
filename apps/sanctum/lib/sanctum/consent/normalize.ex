@@ -117,9 +117,12 @@ defmodule Sanctum.Consent.Normalize do
   end
 
   @doc false
-  # Declared needs: name + type, both required. The reason text is
-  # deliberately excluded — it is prose shown to the operator, and editing
-  # it must not invalidate a consent.
+  # Declared needs: name + type, both required, with the projection they
+  # read, and, each only when the need declares it, the attach rule, the
+  # hosts and paths it speaks to, and `disclose` when true — so a need that
+  # declares none of them normalizes as it did before they existed. The
+  # reason text is deliberately excluded — it is prose shown to the
+  # operator, and editing it must not invalidate a consent.
   def needs(map, key, tag) do
     case Map.get(map, key, []) do
       list when is_list(list) ->
@@ -141,18 +144,121 @@ defmodule Sanctum.Consent.Normalize do
   end
 
   defp normalize_need(need, _key, tag) when is_map(need) do
-    with :ok <- only_keys(need, ~w(name type fields scopes)a, tag),
+    with :ok <- only_keys(need, ~w(name type fields scopes attach hosts paths disclose)a, tag),
          {:ok, name} <- required_string(need, :name, tag),
          {:ok, type} <- required_string(need, :type, tag),
          {:ok, fields} <- string_set(need, :fields, tag),
-         {:ok, scopes} <- string_set(need, :scopes, tag) do
-      {:ok, %{"name" => name, "type" => type, "fields" => fields, "scopes" => scopes}}
+         {:ok, scopes} <- string_set(need, :scopes, tag),
+         {:ok, attach} <- attach_rule(need, tag),
+         {:ok, hosts} <- declared_set(need, :hosts, tag),
+         {:ok, paths} <- declared_set(need, :paths, tag),
+         {:ok, disclose} <- declared_disclose(need, tag) do
+      {:ok,
+       %{"name" => name, "type" => type, "fields" => fields, "scopes" => scopes}
+       |> put_optional("attach", attach)
+       |> put_optional("hosts", hosts)
+       |> put_optional("paths", paths)
+       |> put_optional("disclose", disclose)}
     end
   end
 
   defp normalize_need(_other, key, tag) do
     {:error, {tag, key, "each need must be a map"}}
   end
+
+  # An attach rule, when the need declares one: where the value goes, its
+  # name and the template it is rendered into, all three named.
+  defp attach_rule(need, tag) do
+    case Map.get(need, :attach) do
+      nil ->
+        {:ok, nil}
+
+      %{} = rule when map_size(rule) == 3 ->
+        rule = Map.new(rule, fn {k, v} -> {to_string(k), v} end)
+
+        if Enum.all?(~w(in name template), &(is_binary(rule[&1]) and rule[&1] != "")),
+          do: {:ok, Map.take(rule, ~w(in name template))},
+          else: {:error, {tag, :attach, "must name in, name and template as strings"}}
+
+      _other ->
+        {:error, {tag, :attach, "must name in, name and template as strings"}}
+    end
+  end
+
+  # A set the need declares, or nil when it declares none: an empty set is
+  # a need that declares nothing, never a distinct input.
+  defp declared_set(need, key, tag) do
+    case string_set(need, key, tag) do
+      {:ok, []} -> {:ok, nil}
+      other -> other
+    end
+  end
+
+  # `disclose` enters only when true: a need that never says it and one
+  # that says false are the same input.
+  defp declared_disclose(need, tag) do
+    case Map.get(need, :disclose) do
+      true -> {:ok, true}
+      value when value in [nil, false] -> {:ok, nil}
+      _other -> {:error, {tag, :disclose, "must be a boolean"}}
+    end
+  end
+
+  @doc false
+  # A publisher's provided configuration: dependency reference to need
+  # name to `%{destination, values}`, the destination a canonical
+  # `Prima.Destination` map and the values a map of strings. nil when the
+  # manifest carries none, so a shape without the block is the input it
+  # was before the block existed.
+  def provides(map, key, tag) do
+    case Map.get(map, key) do
+      nil ->
+        {:ok, nil}
+
+      provides when is_map(provides) and not is_struct(provides) ->
+        provides
+        |> Enum.sort()
+        |> Enum.reduce_while({:ok, %{}}, fn {dep, needs}, {:ok, acc} ->
+          case provided_needs(dep, needs, tag) do
+            {:ok, normalized} -> {:cont, {:ok, Map.put(acc, dep, normalized)}}
+            error -> {:halt, error}
+          end
+        end)
+
+      _other ->
+        {:error, {tag, key, "must be a map from dependency to its provided needs"}}
+    end
+  end
+
+  defp provided_needs(dep, needs, tag) when is_binary(dep) and is_map(needs) and needs != %{} do
+    Enum.reduce_while(Enum.sort(needs), {:ok, %{}}, fn {need, entry}, {:ok, acc} ->
+      case provided_entry(need, entry) do
+        {:ok, normalized} ->
+          {:cont, {:ok, Map.put(acc, need, normalized)}}
+
+        :error ->
+          {:halt, {:error, {tag, :provides, "#{dep} names a provided need off the shape"}}}
+      end
+    end)
+  end
+
+  defp provided_needs(_dep, _needs, tag),
+    do: {:error, {tag, :provides, "each dependency names its provided needs"}}
+
+  defp provided_entry(need, %{} = entry) when is_binary(need) and need != "" do
+    entry = Map.new(entry, fn {k, v} -> {to_string(k), v} end)
+
+    with [] <- Map.keys(entry) -- ["destination", "values"],
+         %{} = destination <- entry["destination"],
+         {:ok, parsed} <- Prima.Destination.from_map(destination),
+         true <- Prima.Manifest.Provides.valid_values?(entry["values"]) do
+      {:ok, %{"destination" => Prima.Destination.to_map(parsed), "values" => entry["values"]}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp provided_entry(_need, _entry), do: :error
 
   @doc false
   # Declared capabilities: string lists (domains, methods, paths…) and the

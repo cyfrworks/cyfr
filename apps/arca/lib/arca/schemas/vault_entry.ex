@@ -9,6 +9,10 @@ defmodule Arca.Schemas.VaultEntry do
   Arca stores bytes, it never sees plaintext. `binding_digest` is a cache:
   every reader derives the digest from the row's binding fields and treats
   the column as advisory, never as an authority.
+
+  `destination` is where the material may go, `Prima.Destination`'s JCS
+  text, required of every entry; `attach_only` holds unless the entry was
+  created to be disclosed. Both are binding fields.
   """
 
   use Ecto.Schema
@@ -26,6 +30,8 @@ defmodule Arca.Schemas.VaultEntry do
     field :binding_digest, :string
     field :oauth_endpoints, :string
     field :oauth_scopes, :string
+    field :destination, :string
+    field :attach_only, :boolean, default: true
     field :status, :string, default: "active"
     field :payload_rev, :integer, default: 0
     field :sealed_payload, :binary

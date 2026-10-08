@@ -7,17 +7,22 @@ A `model/chat@1` catalyst (`cyfr:catalyst` world) whose `chat` plays the
 script its request carries and answers what it was given, so a test drives
 everything the contract lets a model catalyst emit and answer through the
 real engine, the wire and a turn. It holds no test logic: the events, the
-answer, a refusal, a trap and a wait are all the script's. Nothing is
-dialled. It is test support and never seed media;
-`Cyfr.Test.ChatFixture` lays it as `catalyst:local.chat-fixture:0.1.0` with
-an `api_key` need whose field is `FIXTURE_API_KEY`.
+answer, a refusal, a trap, a wait and the one request a step may make are
+all the script's. Nothing is dialled but that request. It is test support
+and never seed media; `Cyfr.Test.ChatFixture` lays it as
+`catalyst:local.chat-fixture:0.1.0` with an `api_key` need whose field is
+`FIXTURE_API_KEY`, in one of two modes the test names: `disclosed`, where
+the need declares no attach rule and the fixture reads the key bound to it,
+or `attach`, where the need attaches the key as `x-api-key` to a loopback
+upstream the helper owns, and the fixture never reads it.
 
 ```jsonc
 {"operation": "describe", "params": {}}              // capabilities
 {"operation": "describe", "params": {"model": "…"}}  // + a 1,000,000-token window
 {"operation": "models",   "params": {}}
-{"operation": "chat",     "params": {…}}             // reads FIXTURE_API_KEY, then
-                                                     // plays the script
+{"operation": "chat",     "params": {…}}             // reads FIXTURE_API_KEY, or makes
+                                                     // the step's attached request,
+                                                     // then plays the script
 ```
 
 ## The script
@@ -37,6 +42,12 @@ JSON, or that has no step `n`, is refused as `invalid_request`.
 ```jsonc
 {"steps": [
   {
+    "attached_request": {           // first, through cyfr:http/fetch, on the
+      "method": "POST",             // connection `api_key` (unless it names
+      "url": "http://127.0.0.1:…/v1/…", // its own); then the step plays on
+      "headers": {"content-type": "application/json"},
+      "body": "…"
+    },
     "emit": [                       // in order, through cyfr:emit/events
       {"type": "text.delta", "text": "Looking."},
       {"type": "tool_call.start", "index": 0, "id": "c1", "name": "notes"},
@@ -51,6 +62,14 @@ JSON, or that has no step `n`, is refused as `invalid_request`.
   }
 ]}
 ```
+
+A step with an `attached_request` plays in attach mode: CYFR attaches the
+key to the request, and the fixture reads no key, so the key words below
+play as nothing in that step. A host refusal of the request (its answer's
+`error`) ends the step as the chat's refusal, `{"status": 502, "error":
+{"type", "message"}}` with the host's type and message, and nothing
+emitted. A step without one reads `FIXTURE_API_KEY` first, as a catalyst
+holding a disclosed key does.
 
 An event is emitted as it stands: the fixture checks nothing about it.
 Three words are the fixture's own, in `emit`, `refuse` and `answer` alike:
@@ -75,7 +94,10 @@ given and what the host replied:
   "emitted": [                      // one per emit item, in order
     {"ok": true, "sequence": "1.1"},
     {"repeat": 3, "accepted": 3, "refused": 0, "first_refusal": null}
-  ]
+  ],
+  "attached": {"status": 200, "headers": {…}, "body": "…"}
+                                    // the attached request's answer, in
+                                    // attach mode alone
 }
 ```
 
@@ -109,7 +131,7 @@ It reads crates.io for the crates `Cargo.lock` names.
 ## Digests
 
 ```
-src/lib.rs        sha256:622c46c9fd609bf92f633bfe6f02d1b783a6808a8d2f5b63962717c9e2da06ea
+src/lib.rs        sha256:eb53e3107d3c78eb3cc2b19cf616bc571f48499425b7dee8aae0a3af66bc52c6
 Cargo.lock        sha256:695ceaa15daafe0e307ee5bb4497e044c8bcae806665f8923f015b8b86c6a1b2
-chat_fixture.wasm sha256:e1dcc9000352beae42ab6600f32628760eb95e5fa472ed8352b6b3553e9a471c
+chat_fixture.wasm sha256:011701be9b46428aa34413becc74e7c736fbe0a9e3b8fe00e8c4a261a210a08d
 ```

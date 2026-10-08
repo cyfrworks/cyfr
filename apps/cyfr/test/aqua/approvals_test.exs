@@ -15,6 +15,7 @@ defmodule Aqua.ApprovalsTest do
   import Ecto.Query, only: [from: 2]
 
   alias Aqua.{Approvals, Launch, Tape}
+  alias Aqua.Loop.{Binding, Policy}
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Bus.ThreadEvent
   alias Sanctum.Consent.{Bootstrap}
@@ -22,6 +23,7 @@ defmodule Aqua.ApprovalsTest do
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
+  @math_wasm Path.expand("../support/test_wasm/math.wasm", __DIR__)
 
   setup tags do
     Arca.Cache.init()
@@ -691,6 +693,206 @@ defmodule Aqua.ApprovalsTest do
     # A person no longer seated launches nothing either.
     {:ok, _} = Users.deny(approver)
     assert {:error, {:approver_unavailable, :denied}} = Launch.dispatch(ctx, step)
+  end
+
+  describe "a launch's approval" do
+    @launch %{
+      tool: "execution",
+      action: "run",
+      args: %{"reference" => "formula:local.nowhere:1.0.0", "input" => %{}}
+    }
+
+    test "takes no standing answer, bounded or not, over the approval operation, and once stands",
+         %{ctx: ctx, thread: thread, pins: pins} do
+      turn = started!(ctx, thread, pins)
+      %{approval: approval} = card!(ctx, turn, @launch, kind: "execute", step_kind: "launch")
+      sentence = Aqua.ToolGrants.refusal_message({:scope_not_permitted, :never_standing})
+      until = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.to_iso8601()
+
+      for scope <- ["thread", "always"],
+          bounds <- [
+            %{},
+            %{"lifecycle" => "turn"},
+            %{"until" => until},
+            %{"constraint" => %{"kind" => "vault_entry", "patterns" => ["vlt_work-1"]}}
+          ] do
+        assert {:error, {:invalid_argument, ^sentence}} =
+                 Aqua.Providers.Approval.handle(
+                   "approval",
+                   ctx,
+                   Map.merge(
+                     %{
+                       "action" => "resolve",
+                       "approval" => approval.id,
+                       "decision" => "approve",
+                       "scope" => scope
+                     },
+                     bounds
+                   )
+                 ),
+               "#{scope} #{inspect(bounds)} stood on a launch"
+
+        assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
+      end
+
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      # One approval for the one launch is unaffected.
+      assert {:ok, %{decision: "approved", resolution_kind: "launch"}} =
+               Aqua.Providers.Approval.handle("approval", ctx, %{
+                 "action" => "resolve",
+                 "approval" => approval.id,
+                 "decision" => "approve",
+                 "scope" => "once"
+               })
+
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+    end
+
+    test "resolves the account a launch names before it asks, and binds its entry in the card",
+         %{ctx: ctx} do
+      %{ref: ref, work: work} = named_app!(ctx)
+      versioned = ref <> ":1.0.0"
+
+      launch = fn args ->
+        {:ok, call} = Binding.resolve("execution.run", Map.put(args, "reference", versioned))
+        call
+      end
+
+      named = launch.(%{"input" => %{}, "connection" => "Work"})
+      work_id = work.id
+
+      # Whatever the agent's own policy says, a launch asks: a launch runs
+      # only from an approved card.
+      for mode <- ["ask", "auto"] do
+        assert {:ask, %{vault_entry: ^work_id}} =
+                 Policy.decide(named, %{"execution.run" => mode}, ctx: ctx)
+
+        assert :ask =
+                 Policy.decide(launch.(%{"input" => %{}}), %{"execution.run" => mode}, ctx: ctx)
+      end
+
+      assert {:deny, _} = Policy.decide(named, %{"execution.run" => "deny"}, ctx: ctx)
+
+      # Spelled in another case it is the same account: Work's entry, under
+      # the name its binding stores.
+      lower = launch.(%{"input" => %{}, "connection" => "work"})
+
+      assert {:ask, %{vault_entry: ^work_id, name: "Work"} = same} =
+               Policy.decide(lower, %{"execution.run" => "ask"}, ctx: ctx)
+
+      # The card binds the entry the name resolved to, beside the call, and
+      # takes no standing answer.
+      {:ask, account} = Policy.decide(named, %{"execution.run" => "ask"}, ctx: ctx)
+      card = Policy.card(named, account: account)
+      assert card["proposal"]["vault_entry"] == work.id
+      assert card["proposal"]["args"]["connection"] == "Work"
+      assert card["standing"] == false
+      refute Policy.proposal_digest(card) == Policy.proposal_digest(Policy.proposal(named))
+
+      # The card for the call spelled `work` reads and binds Work, the name
+      # its binding stores: the same proposal and digest as Work's own.
+      lower_card = Policy.card(lower, account: same)
+      assert lower_card["proposal"] == card["proposal"]
+      assert Policy.proposal_digest(lower_card) == Policy.proposal_digest(card)
+
+      # A name the app's own profile does not bind is setup required, naming
+      # the app and the account, before any approval is read.
+      for name <- ["Home", "Works"] do
+        assert {:setup_required, ^versioned, {nil, ^name}} =
+                 Policy.decide(launch.(%{"connection" => name}), %{"execution.run" => "ask"},
+                   ctx: ctx
+                 )
+      end
+
+      # An app with no grant at all binds no account either.
+      {:ok, ungranted} =
+        Binding.resolve("execution.run", %{
+          "reference" => "formula:local.nowhere:1.0.0",
+          "connection" => "Work"
+        })
+
+      assert {:setup_required, "formula:local.nowhere:1.0.0", {nil, "Work"}} =
+               Policy.decide(ungranted, %{"execution.run" => "ask"}, ctx: ctx)
+
+      # A profile that cannot be told is a refusal, never a setup.
+      assert {:refuse, why} =
+               Policy.decide(
+                 launch.(%{"connection" => "Work", "profile" => "elsewhere"}),
+                 %{"execution.run" => "ask"},
+                 ctx: ctx
+               )
+
+      assert why =~ "could not be read"
+    end
+  end
+
+  # An app of the person's own whose own calls bind a default and the
+  # account "Work" beside it, through the consent walk.
+  defp named_app!(ctx) do
+    name = "named-launch-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "reagent",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "fields" => ["KEY"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm), %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(manifest)
+      })
+
+    entry = fn label ->
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "#{name} #{label}",
+          kind: "api_key",
+          provider_hint: "example.com",
+          fields: %{"KEY" => "k-#{label}"},
+          destination: %{"hosts" => ["api.example.com"]},
+          disclose: true
+        })
+
+      view
+    end
+
+    default = entry.("default")
+    work = entry.("work")
+    ref = "reagent:local." <> name
+
+    decisions = %{
+      ref: ref,
+      bindings: [
+        %{need: "api_key", entry_id: default.id},
+        %{need: "api_key", name: "Work", entry_id: work.id}
+      ]
+    }
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    %{ref: ref, default: default, work: work}
   end
 
   describe "ttl_seconds/1" do

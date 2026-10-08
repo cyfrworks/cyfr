@@ -55,7 +55,13 @@ defmodule Sanctum.Consent.FlowTest do
           %{
             name: "conn-#{System.unique_integer([:positive])}",
             kind: "api_key",
-            fields: %{"url" => "https://db.example", "anon_key" => "anon"}
+            # The provider the cases' declared need names; a slot of a
+            # manifest declaring none names no provider to match.
+            provider_hint: "anthropic.com",
+            fields: %{"url" => "https://db.example", "anon_key" => "anon"},
+            # A case reads what the attach answers, so the entry is disclosed.
+            destination: %{"hosts" => ["db.example"]},
+            disclose: true
           },
           over
         )
@@ -212,11 +218,28 @@ defmodule Sanctum.Consent.FlowTest do
       assert auth.resources.vault.entry_id == entry.id
       assert auth.resources.vault.projection.fields == ["anon_key", "url"]
 
+      # The binding is the athanor's own, keyed where it sits; a manifest
+      # declaring no need is disclose-only, so nothing is attached.
+      assert auth.resources.vault.scope == "athanor"
+      assert auth.resources.vault.binding_key == "reagent:local.flow-happy|@ingress|default"
+      assert auth.resources.vault.attach == nil
+
       {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
 
-      assert consent.vault_refs == [
-               %{vault_entry_id: entry.id, binding_digest: auth.resources.vault.binding_digest}
-             ]
+      entry_id = entry.id
+      digest = auth.resources.vault.binding_digest
+
+      assert [
+               %{
+                 binding_key: "reagent:local.flow-happy|@ingress|default",
+                 scope: "athanor",
+                 vault_entry_id: ^entry_id,
+                 binding_digest: ^digest,
+                 via_label: nil,
+                 instance_entry_id: nil,
+                 lifetime_kind: "standing"
+               }
+             ] = consent.vault_refs
     end
 
     test "a second walk writes a delta revision and advances the head", %{ctx: ctx} do
@@ -305,10 +328,7 @@ defmodule Sanctum.Consent.FlowTest do
       {:ok, preview} = Commit.preview(ctx, decisions)
 
       {:ok, _} =
-        Vault.rebind(ctx, %{
-          id: entry.id,
-          oauth_endpoints: %{"token_url" => "https://elsewhere.example/token"}
-        })
+        Vault.rebind(ctx, %{id: entry.id, field_names: ["anon_key", "region", "url"]})
 
       assert {:error, {:consent_conflict, %{cause: :digest_changed}}} =
                Commit.commit(ctx, %{
@@ -411,7 +431,7 @@ defmodule Sanctum.Consent.FlowTest do
 
       # Rebinding the entry blocks the profile.
       {:ok, %{affected: [^profile_id]}} =
-        Vault.rebind(ctx, %{id: entry.id, oauth_scopes: ["new.scope"]})
+        Vault.rebind(ctx, %{id: entry.id, field_names: ["anon_key", "region", "url"]})
 
       {:ok, blocked} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
       assert blocked.status == "needs_consent"
@@ -875,8 +895,14 @@ defmodule Sanctum.Consent.FlowTest do
       # attach's read answers exactly those fields.
       assert auth.resources.vault.projection.fields == ["anon_key", "url"]
 
+      use = %{
+        root_execution_id: "exec_flow",
+        profile_id: auth.profile_id,
+        consent_id: auth.consent_id
+      }
+
       assert {:ok, %{"url" => "https://db.example", "anon_key" => "anon"}} =
-               Sanctum.VaultReader.fetch(ctx, auth.resources.vault)
+               Sanctum.VaultReader.fetch(ctx, auth.resources.vault, use)
     end
 
     test "the preview names the fields the edge projects", %{ctx: ctx} do
@@ -928,7 +954,8 @@ defmodule Sanctum.Consent.FlowTest do
       a = entry!(ctx)
       b = entry!(ctx)
 
-      assert {:error, :multiple_source_bindings_unrepresentable} =
+      # Two defaults of one need: the second names no account to ride as.
+      assert {:error, {:invalid_argument, why}} =
                Commit.preview(ctx, %{
                  ref: "reagent:local.flow-needs-two",
                  bindings: [
@@ -936,6 +963,38 @@ defmodule Sanctum.Consent.FlowTest do
                    %{need: "api_key", entry_id: b.id}
                  ]
                })
+
+      assert why =~ "Two bindings for api_key name no account"
+
+      # Bindings of two needs have one edge to ride: refused in words that
+      # name both needs and say to bind one, never an unclassified reason
+      # the person reads as an outcome that could not be confirmed.
+      publish!(ctx, "flow-needs-pair", "1.0.0", %{
+        manifest:
+          Jason.encode!(%{
+            "name" => "flow-needs-pair",
+            "version" => "1.0.0",
+            "type" => "reagent",
+            "needs" => %{
+              "api_key" => @needs_manifest["needs"]["api_key"],
+              "other_key" => @needs_manifest["needs"]["api_key"]
+            }
+          })
+      })
+
+      sentence =
+        "The app's own calls carry one need's credentials: bind api_key or other_key, not both"
+
+      assert {:error, {:invalid_argument, ^sentence} = reason} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.flow-needs-pair",
+                 bindings: [
+                   %{need: "other_key", entry_id: b.id},
+                   %{need: "api_key", entry_id: a.id}
+                 ]
+               })
+
+      assert PrismWeb.Ops.error_message(reason) == sentence
     end
 
     test "a second implicit binding is refused too, with no needs block", %{ctx: ctx} do
@@ -948,7 +1007,7 @@ defmodule Sanctum.Consent.FlowTest do
       a = entry!(ctx)
       b = entry!(ctx)
 
-      assert {:error, :multiple_source_bindings_unrepresentable} =
+      assert {:error, {:invalid_argument, why}} =
                Commit.preview(ctx, %{
                  ref: "reagent:local.flow-implicit-two",
                  bindings: [
@@ -956,6 +1015,8 @@ defmodule Sanctum.Consent.FlowTest do
                    %{need: "@ingress", entry_id: b.id}
                  ]
                })
+
+      assert why =~ "Two bindings for @ingress name no account"
 
       # One still binds.
       assert {:ok, preview} =

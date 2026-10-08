@@ -24,18 +24,38 @@ defmodule Sanctum.Consent.RegistrationBinding do
 
   @type error ::
           {:invalid_target, term()}
+          | {:profiles_unavailable, String.t()}
           | :profile_not_for_target
+          | {:profile_corrupt, String.t()}
           | {:no_head_consent, String.t()}
+          | {:head_corrupt, String.t()}
+          | {:head_unavailable, String.t()}
           | {:consent_refused, Authz.refusal()}
           | term()
 
+  @doc """
+  The three checks of the module doc, in order, for binding `target_ref`'s
+  registration to `profile_id`.
+
+  The target's profile list the store could not answer is
+  `{:profiles_unavailable, name_ref}`, `name_ref` the target's name-level
+  ref, never a profile of another component; a tenant refusal
+  (`:no_athanor`, `:missing_tenant`) keeps its own answer. A profile of
+  the target whose row is stored outside the closed vocabulary is
+  `{:profile_corrupt, profile_id}`, never a profile of another component.
+  The profile's head is read three ways, never one: a profile with no
+  head is `{:no_head_consent, profile_id}`, a head stored outside the
+  closed vocabulary is `{:head_corrupt, profile_id}`, and one the store
+  could not answer is `{:head_unavailable, profile_id}`. `message/1`
+  gives each its own sentence.
+  """
   @spec authorize(Context.t(), String.t(), String.t()) :: :ok | {:error, error()}
   def authorize(%Context{} = ctx, target_ref, profile_id)
       when is_binary(target_ref) and is_binary(profile_id) do
     actor = Context.actor(ctx)
 
     with {:ok, name_ref} <- name_level(target_ref),
-         {:ok, candidates} <- Arca.ConsentStorage.profiles(actor, name_ref),
+         {:ok, candidates} <- target_profiles(actor, name_ref),
          :ok <- check_profile_for_target(candidates, profile_id),
          {:ok, consent} <- head_consent(actor, profile_id),
          {:ok, _via} <-
@@ -54,8 +74,30 @@ defmodule Sanctum.Consent.RegistrationBinding do
     do: Sanctum.Unauthorized.message({:consent_class_required, refusal})
 
   def message({:invalid_target, _reason}), do: "the target reference is not valid"
+
+  def message({:profiles_unavailable, _name_ref}),
+    do: "the component's profiles cannot be read right now — try again"
+
   def message(:profile_not_for_target), do: "the profile belongs to another component"
+
+  def message({:profile_corrupt, profile_id}),
+    do:
+      "the profile is damaged and cannot be used — " <>
+        "revoke profile #{profile_id} and grant it again"
+
   def message({:no_head_consent, _profile_id}), do: "the profile has no live consent"
+
+  # Approving the profile again cannot repair a damaged head: the walk
+  # refuses the head it cannot decode. Revoking the profile by its id
+  # takes it off the active profiles, so a new grant takes its place.
+  def message({:head_corrupt, profile_id}),
+    do:
+      "the profile's consent is damaged and cannot be used — " <>
+        "revoke profile #{profile_id} and grant it again"
+
+  def message({:head_unavailable, _profile_id}),
+    do: "the profile's consent cannot be read right now — try again"
+
   def message(reason), do: Prima.Refusal.message(reason)
 
   defp name_level(target_ref) do
@@ -65,18 +107,44 @@ defmodule Sanctum.Consent.RegistrationBinding do
     end
   end
 
-  defp check_profile_for_target(candidates, profile_id) do
-    if Enum.any?(candidates, &(&1.id == profile_id)) do
-      :ok
-    else
-      {:error, :profile_not_for_target}
+  # The target's profiles as the store answers them. A tenant refusal is
+  # the caller's own; any other is a store that could not answer, which a
+  # registration is told to retry, never that the profile belongs to
+  # another component.
+  defp target_profiles(actor, name_ref) do
+    case Arca.ConsentStorage.profile_entries(actor, name_ref) do
+      {:ok, candidates} -> {:ok, candidates}
+      {:error, tenant} when tenant in [:no_athanor, :missing_tenant] -> {:error, tenant}
+      {:error, _unanswered} -> {:error, {:profiles_unavailable, name_ref}}
     end
   end
 
+  # The target's own profiles, a damaged row kept: a profile of this
+  # target whose row does not decode is damaged, not another component's.
+  defp check_profile_for_target(candidates, profile_id) do
+    case Enum.find(candidates, &(&1.id == profile_id)) do
+      %{status: :corrupt} -> {:error, {:profile_corrupt, profile_id}}
+      %{} -> :ok
+      nil -> {:error, :profile_not_for_target}
+    end
+  end
+
+  # Absent, damaged and unanswered apart, as the loader reads a head: a
+  # registration refused over an outage is told to try again, never that
+  # the profile has no consent.
   defp head_consent(actor, profile_id) do
     case Arca.ConsentStorage.head_consent(actor, profile_id) do
-      {:ok, consent} -> {:ok, consent}
-      {:error, _} -> {:error, {:no_head_consent, profile_id}}
+      {:ok, consent} ->
+        {:ok, consent}
+
+      {:error, absent} when absent in [:not_found, :no_head] ->
+        {:error, {:no_head_consent, profile_id}}
+
+      {:error, {:invalid_stored_value, _}} ->
+        {:error, {:head_corrupt, profile_id}}
+
+      {:error, _unanswered} ->
+        {:error, {:head_unavailable, profile_id}}
     end
   end
 

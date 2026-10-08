@@ -70,6 +70,7 @@ defmodule Prima.Authority do
           {:invalid_profile, atom()}
           | {:unknown_source_node, String.t()}
           | {:missing_ingress, String.t()}
+          | :connection_not_granted
 
   @type t :: %__MODULE__{
           profile_id: String.t() | nil,
@@ -169,6 +170,13 @@ defmodule Prima.Authority do
       ceiling in production.
     * `:budget_id` — the id of an existing reservation the root budget
       charges; a fresh id when absent.
+    * `:connection` — the account the root's own calls name, by the name
+      its ingress binds it under: the root's vault is that named binding
+      alone (`Prima.Authority.Blob.vault_for/2`), with its own binding
+      key, and a name the ingress does not bind is
+      `{:error, :connection_not_granted}`, never the default in its
+      place. Absent or nil, the root holds the ingress as it stands, its
+      default with the named bindings beside it.
   """
   @spec root(profile(), Blob.t(), keyword()) :: {:ok, t()} | {:error, root_error()}
   def root(profile, %Blob{} = blob, opts) when is_list(opts) do
@@ -177,7 +185,8 @@ defmodule Prima.Authority do
     with :ok <- validate_profile(profile),
          clamped = Blob.clamp(blob, ceiling),
          {:ok, source_node} <- fetch_source_node(clamped, profile.source_ref),
-         {:ok, ingress_edge} <- fetch_ingress(clamped, profile.source_ref) do
+         {:ok, ingress} <- fetch_ingress(clamped, profile.source_ref),
+         {:ok, ingress_edge} <- root_account(ingress, Keyword.get(opts, :connection)) do
       {:ok,
        %__MODULE__{
          profile_id: profile.profile_id,
@@ -203,14 +212,28 @@ defmodule Prima.Authority do
 
   @doc """
   The Authority a child receives through a consented edge: bound at the
-  target, carrying exactly that edge's resources.
+  target, carrying exactly that edge's resources, its vault the edge's
+  default binding (`Prima.Authority.Blob.vault_for/2` with no account
+  named), without the edge's named bindings.
   """
   @spec bound_child(t(), String.t(), Blob.Edge.t()) :: t()
   def bound_child(%__MODULE__{cursor: {:bound, _}} = auth, dep_ref, %Blob.Edge{} = edge) do
+    {:ok, vault} = Blob.vault_for(edge, nil)
+    bound_child(auth, dep_ref, edge, vault)
+  end
+
+  @doc """
+  The Authority a child receives through a consented edge when its call
+  picked `vault`, the one binding `Prima.Authority.Blob.vault_for/2`
+  answered for the account the call named: the edge's other resources,
+  and that binding alone as its vault.
+  """
+  @spec bound_child(t(), String.t(), Blob.Edge.t(), Blob.Edge.vault() | nil) :: t()
+  def bound_child(%__MODULE__{cursor: {:bound, _}} = auth, dep_ref, %Blob.Edge{} = edge, vault) do
     %{
       auth
       | cursor: {:bound, dep_ref},
-        resources: edge,
+        resources: %{edge | vault: vault},
         chain: auth.chain ++ [dep_ref],
         depth: auth.depth + 1
     }
@@ -421,6 +444,18 @@ defmodule Prima.Authority do
     case Blob.ingress(blob, source_ref) do
       {:ok, edge} -> {:ok, edge}
       {:error, :missing_ingress} -> {:error, {:missing_ingress, source_ref}}
+    end
+  end
+
+  # The ingress a root holds: as it stands for no account, and with the
+  # named binding alone as its vault for one, so the root's attach, its
+  # lifetime and its consumption read that binding's own key.
+  defp root_account(ingress, nil), do: {:ok, ingress}
+
+  defp root_account(%Blob.Edge{} = ingress, connection) do
+    case Blob.vault_for(ingress, connection) do
+      {:ok, vault} -> {:ok, %{ingress | vault: vault}}
+      {:error, :connection_not_granted} = refused -> refused
     end
   end
 

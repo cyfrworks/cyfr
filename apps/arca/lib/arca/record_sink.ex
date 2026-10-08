@@ -251,7 +251,11 @@ defmodule Arca.RecordSink do
     :ok
   end
 
-  # One update per entry however many times it was read in the window.
+  # One update per entry however many times it was read in the window,
+  # in `{athanor_id, id}` order: the batch holds each row it updates to the
+  # end of its transaction, and a consent revision holds the entries it
+  # binds shared in id order (`Arca.ConsentStorage`), so updating them in
+  # arrival order could wait on a revision that waits on this batch.
   defp write_vault_touches([]), do: :ok
 
   defp write_vault_touches(items) do
@@ -260,6 +264,7 @@ defmodule Arca.RecordSink do
     items
     |> Enum.map(fn {:vault_touch, athanor_id, id} -> {athanor_id, id} end)
     |> Enum.uniq()
+    |> Enum.sort()
     |> Enum.each(fn {athanor_id, id} ->
       Arca.Repo.update_all(
         from(v in Arca.Schemas.VaultEntry, where: v.id == ^id and v.athanor_id == ^athanor_id),

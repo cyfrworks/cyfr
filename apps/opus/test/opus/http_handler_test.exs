@@ -904,4 +904,229 @@ defmodule Opus.HttpHandlerTest do
       assert [%{path: "/redirect"}] = context.seen.()
     end
   end
+
+  # ============================================================================
+  # A request naming a connection
+  # ============================================================================
+
+  describe "a request naming a connection" do
+    setup do
+      edge = EdgeFixtures.edge(domains: ["api.test"], methods: ["GET", "POST"])
+      host = ScriptedHost.start!()
+
+      attempt =
+        ScriptedKeeper.relayed!(
+          ScriptedHost.attempt!(host,
+            component_ref: "catalyst:local.attached:1.0.0",
+            authority: ScriptedKeeper.authority(edge, EdgeFixtures.limits())
+          )
+        )
+
+      {:ok, edge: edge, host: host, attempt: attempt}
+    end
+
+    defp attached(attempt, edge, request) do
+      Map.merge(%{"connection" => "api_key", "method" => "GET"}, request)
+      |> Jason.encode!()
+      |> HttpHandler.execute(edge, EdgeFixtures.limits(), attempt.client, attempt.component_ref)
+      |> Jason.decode!()
+    end
+
+    test "is made by CYFR with no pin, its answer read under the attempt's keys", %{
+      edge: edge,
+      host: host,
+      attempt: attempt
+    } do
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames,
+         [
+           {:head, 200, [{"content-type", "text/plain"}]},
+           {:chunk, "hello "},
+           {:chunk, "upstream"},
+           :end
+         ]}
+      )
+
+      assert %{"status" => 200, "headers" => %{"content-type" => "text/plain"}, "body" => body} =
+               attached(attempt, edge, %{
+                 "method" => "POST",
+                 "url" => "https://api.test/v1/x?q=1",
+                 "headers" => %{"content-type" => "application/json"},
+                 "body" => ~s({"a":1}),
+                 "_webhook" => %{"ignored" => true}
+               })
+
+      assert body == "hello upstream"
+
+      assert [%{args: args}] = ScriptedHost.requests(host, "attached_fetch")
+
+      assert %{
+               "connection" => "api_key",
+               "method" => "POST",
+               "url" => "https://api.test/v1/x?q=1",
+               "headers" => [["content-type", "application/json"]],
+               "purpose" => "fetch",
+               "body_encoding" => "base64"
+             } = args
+
+      assert Base.decode64!(args["body"]) == ~s({"a":1})
+      assert Prima.AttachedRequest.valid_call_id?(args["call_id"])
+
+      # No pin was asked and no rate taken: CYFR does both for the request it makes.
+      assert ScriptedHost.requests(host, "egress_pin") == []
+      assert ScriptedHost.requests(host, "take_rate") == []
+    end
+
+    test "CYFR's refusal reaches the guest as its type and sentence, and the runner records nothing",
+         %{edge: edge, host: host, attempt: attempt} do
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:error,
+         {:guest_error, "destination_mismatch",
+          "The request goes outside the destination its credential is bound to."}}
+      )
+
+      assert %{
+               "error" => %{
+                 "type" => "destination_mismatch",
+                 "message" =>
+                   "The request goes outside the destination its credential is bound to."
+               }
+             } = attached(attempt, edge, %{"url" => "https://api.test/elsewhere"})
+
+      assert ScriptedHost.requests(host, "record_denial") == []
+    end
+
+    test "a credential or a header CYFR sets is refused by shape, recorded, and never sent", %{
+      edge: edge,
+      host: host,
+      attempt: attempt
+    } do
+      for header <- ["Authorization", "x-api-key", "COOKIE"] do
+        assert %{"error" => %{"type" => "credential_header_refused", "message" => message}} =
+                 attached(attempt, edge, %{
+                   "url" => "https://api.test/x",
+                   "headers" => %{header => "Bearer guest-supplied"}
+                 })
+
+        assert message == Prima.Refusal.message(:credential_header_refused)
+      end
+
+      assert %{"error" => %{"type" => "invalid_request", "message" => message}} =
+               attached(attempt, edge, %{
+                 "url" => "https://api.test/x",
+                 "headers" => %{"Host" => "other.test"}
+               })
+
+      assert message =~ "Host"
+
+      assert ScriptedHost.requests(host, "attached_fetch") == []
+
+      assert [
+               %{args: %{"type" => "credential_header_refused"}},
+               %{args: %{"type" => "credential_header_refused"}},
+               %{args: %{"type" => "credential_header_refused"}},
+               %{args: %{"type" => "invalid_request"}}
+             ] = ScriptedHost.requests(host, "record_denial")
+    end
+
+    test "the runner's own edge checks run first, each refusal recorded", %{
+      edge: edge,
+      host: host,
+      attempt: attempt
+    } do
+      assert %{"error" => %{"type" => "domain_blocked"}} =
+               attached(attempt, edge, %{"url" => "https://elsewhere.test/x"})
+
+      assert %{"error" => %{"type" => "method_blocked"}} =
+               attached(attempt, edge, %{"method" => "DELETE", "url" => "https://api.test/x"})
+
+      assert %{"error" => %{"type" => "invalid_request"}} =
+               attached(attempt, edge, %{"connection" => 7, "url" => "https://api.test/x"})
+
+      assert %{"error" => %{"type" => "invalid_request", "message" => sentence}} =
+               attached(attempt, edge, %{
+                 "connection" => "Not A Need",
+                 "url" => "https://api.test/x"
+               })
+
+      assert sentence == "The attached request does not read."
+      assert ScriptedHost.requests(host, "attached_fetch") == []
+
+      assert ["domain_blocked", "method_blocked", "invalid_request", "invalid_request"] =
+               for(
+                 %{args: %{"type" => type}} <- ScriptedHost.requests(host, "record_denial"),
+                 do: type
+               )
+    end
+
+    test "a frame that does not read hands the guest nothing of the answer", %{
+      edge: edge,
+      host: host,
+      attempt: attempt
+    } do
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 200, []}, {:chunk, "partial"}, {:raw, <<6::32, ?c, "forge">>}, :end]}
+      )
+
+      assert %{"error" => %{"type" => "http_error"}} =
+               result =
+               attached(attempt, edge, %{"url" => "https://api.test/x"})
+
+      refute inspect(result) =~ "partial"
+      assert ScriptedHost.requests(host, "record_denial") == []
+    end
+
+    test "a lost answer leaves the runner unclean, never reused, and the guest a plain error", %{
+      edge: edge,
+      host: host,
+      attempt: attempt
+    } do
+      # The runner owning this VM's attempts hears the subtree is unclean.
+      test = self()
+
+      owner =
+        spawn_link(fn ->
+          Process.register(self(), Opus.Runner)
+          send(test, :registered)
+
+          receive do
+            {:"$gen_cast", {:unclean, ^test, reason}} -> send(test, {:unclean, reason})
+          end
+        end)
+
+      assert_receive :registered
+      on_exit(fn -> Process.exit(owner, :kill) end)
+
+      ScriptedHost.script(host, "attached_fetch", :drop)
+
+      assert %{"error" => %{"type" => "http_error"}} =
+               attached(attempt, edge, %{"url" => "https://api.test/x"})
+
+      assert_receive {:unclean, {:attached_fetch, :lost}}, 5_000
+      assert [_one] = ScriptedHost.requests(host, "attached_fetch")
+    end
+
+    test "a redirect is answered as given, and no hop is pinned", %{
+      edge: edge,
+      host: host,
+      attempt: attempt
+    } do
+      ScriptedHost.script(
+        host,
+        "attached_fetch",
+        {:frames, [{:head, 302, [{"location", "https://api.test/next"}]}, :end]}
+      )
+
+      assert %{"status" => 302, "headers" => %{"location" => "https://api.test/next"}} =
+               attached(attempt, edge, %{"url" => "https://api.test/x"})
+
+      assert ScriptedHost.requests(host, "egress_pin") == []
+    end
+  end
 end

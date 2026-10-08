@@ -31,6 +31,14 @@ defmodule Emissary.External.Provider do
   refresh, restart, enable, disable, delete — and defines none. No action
   is reachable from a running chain.
 
+  `create` and `update` refuse a definition whose header names no active
+  vault entry with a destination covering the server's URL, or whose
+  backend env names no active disclosed entry, reading the entries'
+  metadata and unsealing nothing; the refusal names the header or the
+  variable, never the entry. A connect holds the entries to the same
+  rules again (`Sanctum.VaultReader.unseal_for/3`, `unseal_disclosed/2`),
+  so a row changed underneath sends nothing outside them.
+
   Every write raises the row's epoch. `update` names the epoch it read and
   is refused when the row has moved on. A write that changes what runs —
   update, delete, disable, restart — stops the server's process, which
@@ -110,7 +118,7 @@ defmodule Emissary.External.Provider do
                  ]}
               )},
              description:
-               "The stdio backends, at most #{BackendDefinition.max_backends()}: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals."
+               "The stdio backends, at most #{BackendDefinition.max_backends()}: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' naming a disclosed entry except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals."
            ),
            Arg.new("console", :boolean,
              description:
@@ -118,7 +126,7 @@ defmodule Emissary.External.Provider do
            ),
            Arg.new("headers", {:map, Arg.new(nil, :string)},
              description:
-               "HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to reference a single-field vault entry."
+               "HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to reference a single-field vault entry whose destination covers this server's URL."
            ),
            Arg.new("timeout_ms", :integer,
              description: "Request timeout in milliseconds (default: 30000)"
@@ -329,7 +337,7 @@ defmodule Emissary.External.Provider do
   # ============================================================================
 
   defp handle_create(ctx, args) do
-    with {:ok, name, attrs} <- server_args(args),
+    with {:ok, name, attrs} <- server_args(ctx, args),
          :ok <- under_server_cap(ctx) do
       case Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), Map.put(attrs, :name, name)) do
         {:ok, server} ->
@@ -351,7 +359,7 @@ defmodule Emissary.External.Provider do
   # The connection config is replaced whole, at the epoch the caller read;
   # whether the server is enabled is kept.
   defp handle_update(ctx, args) do
-    with {:ok, name, attrs} <- server_args(args),
+    with {:ok, name, attrs} <- server_args(ctx, args),
          {:ok, epoch} <- epoch_arg(args) do
       case Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), name, attrs, epoch) do
         {:ok, %{enabled: true} = server} ->
@@ -386,7 +394,7 @@ defmodule Emissary.External.Provider do
   defp epoch_arg(_args),
     do: {:error, {:invalid_argument, "Missing required parameter: epoch (read it with get)"}}
 
-  defp server_args(args) do
+  defp server_args(ctx, args) do
     name = args["name"]
     config = args["config"] || %{}
 
@@ -403,13 +411,13 @@ defmodule Emissary.External.Provider do
 
       true ->
         with :ok <- validate_tool_patterns(config["tool_patterns"]),
-             {:ok, attrs} <- transport_args(config["transport"] || "http", config) do
+             {:ok, attrs} <- transport_args(ctx, config["transport"] || "http", config) do
           {:ok, name, attrs}
         end
     end
   end
 
-  defp transport_args("http", config) do
+  defp transport_args(ctx, "http", config) do
     cond do
       is_nil(config["url"]) or config["url"] == "" ->
         {:error, {:invalid_argument, "Missing required parameter: config.url"}}
@@ -419,6 +427,7 @@ defmodule Emissary.External.Provider do
 
       true ->
         with :ok <- validate_header_credentials(config["headers"]),
+             :ok <- header_destinations(ctx, config["headers"], config["url"]),
              :ok <- validate_create_url(config["url"]) do
           base = %{"headers" => config["headers"] || %{}}
 
@@ -428,7 +437,7 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  defp transport_args("stdio", config) do
+  defp transport_args(ctx, "stdio", config) do
     cond do
       Map.has_key?(config, "url") ->
         {:error,
@@ -440,14 +449,15 @@ defmodule Emissary.External.Provider do
 
       true ->
         with :ok <- stdio_available(),
-             {:ok, backends} <- BackendDefinition.validate(config["backends"]) do
+             {:ok, backends} <- BackendDefinition.validate(config["backends"]),
+             :ok <- env_disclosures(ctx, backends) do
           base = %{"backends" => backends}
           {:ok, %{transport: "stdio", url: nil, config_json: stored_config(base, config)}}
         end
     end
   end
 
-  defp transport_args(_other, _config),
+  defp transport_args(_ctx, _other, _config),
     do: {:error, {:invalid_argument, "Unknown transport — use http or stdio"}}
 
   defp stdio_available do
@@ -509,6 +519,48 @@ defmodule Emissary.External.Provider do
   end
 
   defp validate_header_credentials(_headers), do: :ok
+
+  # A header's entry goes to this server's URL on every connect, so the
+  # definition is refused unless the entry's destination covers it
+  # (`Sanctum.Vault.destination_matches?/3`, metadata only). A missing or
+  # inactive entry is refused alike, and the refusal names the header,
+  # never the entry.
+  defp header_destinations(ctx, headers, url) when is_map(headers) do
+    Enum.find_value(headers, :ok, fn {key, value} ->
+      with {:vault, %{name: entry}} <- VaultRef.classify(value),
+           false <- is_binary(url) and Sanctum.Vault.destination_matches?(ctx, entry, url) do
+        {:error,
+         {:invalid_argument,
+          "Header '#{key}' names no active vault entry whose destination covers " <>
+            "this server's URL"}}
+      else
+        _literal_or_covered -> nil
+      end
+    end)
+  end
+
+  defp header_destinations(_ctx, _headers, _url), do: :ok
+
+  # A backend's environment hands its values to the process it starts, so
+  # an env template names only a disclosed entry
+  # (`Sanctum.Vault.disclosed?/2`, metadata only). A missing or inactive
+  # entry is refused alike, and the refusal names the backend and the
+  # variable, never the entry.
+  defp env_disclosures(ctx, backends) do
+    Enum.find_value(backends, :ok, fn %{"name" => backend, "env" => env} ->
+      Enum.find_value(env, fn {var, value} ->
+        with {:vault, %{name: entry}} <- VaultRef.classify(value),
+             false <- Sanctum.Vault.disclosed?(ctx, entry) do
+          {:error,
+           {:invalid_argument,
+            "Backend '#{backend}' env #{var} names no active disclosed vault entry; " <>
+              "a backend's environment takes only a disclosed entry"}}
+        else
+          _literal_or_disclosed -> nil
+        end
+      end)
+    end)
+  end
 
   defp credential_shaped_header_name?(key) do
     k = key |> to_string() |> String.downcase()

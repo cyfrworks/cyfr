@@ -84,7 +84,14 @@ defmodule Prima.WorkerProtocolTest do
     assert HostAPI.retry(:push_deltas) == :batch
     assert HostAPI.retry(:admit_child) == :keyed
 
-    for effect <- [:tool_call, :storage, :oauth_token, :take_rate, :record_denial] do
+    for effect <- [
+          :tool_call,
+          :storage,
+          :oauth_token,
+          :take_rate,
+          :record_denial,
+          :attached_fetch
+        ] do
       assert HostAPI.retry(effect) == :never
     end
   end
@@ -98,6 +105,11 @@ defmodule Prima.WorkerProtocolTest do
     refute HostAPI.valid_child_key?("ck=")
     refute HostAPI.valid_child_key?(nil)
     refute HostAPI.valid_child_key?(:atom)
+  end
+
+  test "admit_child takes the account its child asks its edge for, after the child's key, at one arity" do
+    arities = for {:admit_child, arity} <- HostAPI.behaviour_info(:callbacks), do: arity
+    assert arities == [7]
   end
 
   test "every worker callback has a retry class and a timeout" do

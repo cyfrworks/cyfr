@@ -22,6 +22,8 @@ defmodule Sanctum.Provider do
   - `pairing` - Paired devices (begin, complete, renew, revoke, list)
   - `passkey` - Passkeys at this home (register, list, revoke, recover_admin)
   - `confirmation` - Pending confirmations of sensitive changes
+  - `instance_entry` - The instance's own credentials, offered to the people on it
+    (platform admins manage them; anyone may list what is offered to them)
 
   ## Resources
 
@@ -94,7 +96,8 @@ defmodule Sanctum.Provider do
       Sanctum.Providers.Person.definition(),
       Sanctum.Providers.Pairing.definition(),
       Sanctum.Providers.Passkey.definition(),
-      Sanctum.Providers.Confirmation.definition()
+      Sanctum.Providers.Confirmation.definition(),
+      Sanctum.Providers.InstanceEntry.definition()
     ]
   end
 
@@ -125,6 +128,7 @@ defmodule Sanctum.Provider do
   def handle("pairing", ctx, args), do: Sanctum.Providers.Pairing.handle(ctx, args)
   def handle("passkey", ctx, args), do: Sanctum.Providers.Passkey.handle(ctx, args)
   def handle("confirmation", ctx, args), do: Sanctum.Providers.Confirmation.handle(ctx, args)
+  def handle("instance_entry", ctx, args), do: Sanctum.Providers.InstanceEntry.handle(ctx, args)
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}

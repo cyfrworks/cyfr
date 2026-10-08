@@ -202,6 +202,81 @@ defmodule Crucible.WorkerWatchTest do
 
   defp seen(watch), do: Map.fetch!(WorkerWatch.seen(watch), @service)
 
+  # The runner's complete of `fixture`'s attempt with `outcome` and the
+  # lapse of its boot, in `order`: each once the other has answered, or
+  # raced. Answers what the complete was answered and what the lapse
+  # lapsed.
+  defp terminal_writers(:lapse_first, fixture, outcome) do
+    assert {:ok, lapsed} = Lapse.boot(@service, "boot_1", [fixture.attempt])
+    {complete(fixture, outcome), lapsed}
+  end
+
+  defp terminal_writers(:complete_first, fixture, outcome) do
+    answered = complete(fixture, outcome)
+    assert {:ok, lapsed} = Lapse.boot(@service, "boot_1", [fixture.attempt])
+    {answered, lapsed}
+  end
+
+  defp terminal_writers(:race, fixture, outcome) do
+    complete = Task.async(fn -> complete(fixture, outcome) end)
+    lapse = Task.async(fn -> Lapse.boot(@service, "boot_1", [fixture.attempt]) end)
+    answered = Task.await(complete, 10_000)
+    assert {:ok, lapsed} = Task.await(lapse, 10_000)
+    {answered, lapsed}
+  end
+
+  defp complete(fixture, outcome),
+    do: AttemptFixtures.call(fixture, "complete", %{"outcome" => outcome})
+
+  # One round of the two terminal writers of a new attempt that holds a
+  # slot: the runner's complete with `round` as its output and the lapse
+  # of its boot, in `order` (`terminal_writers/3`).
+  defp terminal_round!(ctx, order, round) do
+    fixture = attached!(ctx, "boot_1")
+    before = Slots.status(@slots).active
+    :ok = Attempt.take_slot(fixture.pid, :root, 1_000)
+    assert Slots.status(@slots).active == before + 1
+
+    outcome = AttemptFixtures.outcome(fixture, "completed", %{"output" => %{"round" => round}})
+    {answered, lapsed} = terminal_writers(order, fixture, outcome)
+    completed = %{"v" => 1, "ok" => %{"round" => round}}
+    lost = %{"v" => 1, "error" => "lost"}
+
+    # Exactly one writer's row stands. A complete that found the row
+    # lapsed already is answered lost by an attempt that stops; one held
+    # when it was checked, whose write the lapse beat, is answered its
+    # output while the lapsed row stands.
+    case lapsed do
+      [] ->
+        assert order in [:complete_first, :race]
+        assert answered == completed
+        assert %{status: "completed"} = row(fixture)
+        assert %{state: "completed", outcome: "ok"} = attempt_row(fixture)
+
+      [%{attempt: attempt}] ->
+        assert order in [:lapse_first, :race]
+        assert attempt == fixture.attempt
+        assert answered == lost or (order == :race and answered == completed)
+        assert %{status: "failed", error_message: @lapsed} = row(fixture)
+        assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(fixture)
+    end
+
+    # The attempt stops either way and its slot goes back once; a
+    # repeated lapse finds nothing, and takes nothing back.
+    wait_until(fn -> not Process.alive?(fixture.pid) end, @heard_ms)
+    wait_until(fn -> Slots.status(@slots).active == before end, @heard_ms, "the slot given back")
+    assert {:ok, []} = Lapse.boot(@service, "boot_1", [fixture.attempt])
+
+    assert :ok =
+             Attempt.stop_unclosed(fixture.attempt, %{
+               service_id: @service,
+               boot_id: "boot_1",
+               runner: nil
+             })
+
+    assert Slots.status(@slots).active == before
+  end
+
   # Wait for `count` more misses than the watch has now.
   defp misses!(watch, count) do
     misses = seen(watch).misses
@@ -469,60 +544,16 @@ defmodule Crucible.WorkerWatchTest do
   end
 
   describe "two terminal writers for one attempt" do
+    # Each order once on its own, so the answer of a complete the lapse
+    # beat is checked on every run, not only when a race falls that way.
+    test "in either order leave the first one's row, and a complete after the lapse is lost",
+         %{ctx: ctx} do
+      terminal_round!(ctx, :lapse_first, 1)
+      terminal_round!(ctx, :complete_first, 2)
+    end
+
     test "leave one terminal row, and give its capacity back once", %{ctx: ctx} do
-      for round <- 1..3 do
-        fixture = attached!(ctx, "boot_1")
-        before = Slots.status(@slots).active
-        :ok = Attempt.take_slot(fixture.pid, :root, 1_000)
-        assert Slots.status(@slots).active == before + 1
-
-        outcome =
-          AttemptFixtures.outcome(fixture, "completed", %{"output" => %{"round" => round}})
-
-        complete =
-          Task.async(fn -> AttemptFixtures.call(fixture, "complete", %{"outcome" => outcome}) end)
-
-        lapse = Task.async(fn -> Lapse.boot(@service, "boot_1", [fixture.attempt]) end)
-        answered = Task.await(complete, 10_000)
-        assert {:ok, lapsed} = Task.await(lapse, 10_000)
-
-        # Exactly one writer's row stands. A complete that found the row
-        # lapsed already is answered lost by an attempt that stops; one
-        # whose write the lapse beat by less is answered as the row stands.
-        case lapsed do
-          [] ->
-            assert %{"ok" => _output} = answered
-            assert %{status: "completed"} = row(fixture)
-            assert %{state: "completed", outcome: "ok"} = attempt_row(fixture)
-
-          [%{attempt: attempt}] ->
-            assert attempt == fixture.attempt
-            assert match?(%{"ok" => _output}, answered) or answered == %{"error" => "lost"}
-            assert %{status: "failed", error_message: @lapsed} = row(fixture)
-            assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(fixture)
-        end
-
-        # The attempt stops either way and its slot goes back once; a
-        # repeated lapse finds nothing, and takes nothing back.
-        wait_until(fn -> not Process.alive?(fixture.pid) end, @heard_ms)
-
-        wait_until(
-          fn -> Slots.status(@slots).active == before end,
-          @heard_ms,
-          "the slot given back"
-        )
-
-        assert {:ok, []} = Lapse.boot(@service, "boot_1", [fixture.attempt])
-
-        assert :ok =
-                 Attempt.stop_unclosed(fixture.attempt, %{
-                   service_id: @service,
-                   boot_id: "boot_1",
-                   runner: nil
-                 })
-
-        assert Slots.status(@slots).active == before
-      end
+      for round <- 1..3, do: terminal_round!(ctx, :race, round)
     end
   end
 

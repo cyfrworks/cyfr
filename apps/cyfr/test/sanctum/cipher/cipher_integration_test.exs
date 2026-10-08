@@ -139,6 +139,71 @@ defmodule Sanctum.CipherIntegrationTest do
     end
   end
 
+  # ==========================================================================
+  # T-INSTANCE-ENTRY: an instance entry belongs to no athanor, so its AAD
+  # binds the entry's id and provider hint alone. What the instance's
+  # verbs seal opens under that tuple and under nothing else.
+  # ==========================================================================
+
+  describe "T-INSTANCE-ENTRY" do
+    test "an instance entry's material is bound to its id and hint, and to no athanor" do
+      aad = Sanctum.CipherAAD.instance_entry("ine_one", "openai.com")
+      assert aad == %{purpose: :instance_entry, name: "ine_one", sub: "openai.com"}
+
+      {:ok, ct} = Cipher.encrypt(~s({"v":3,"fields":{"API_KEY":"sk-instance"}}), aad)
+      assert {:ok, ~s({"v":3,"fields":{"API_KEY":"sk-instance"}})} = Cipher.decrypt(ct, aad)
+
+      # Another entry's id, another hint, or the same row read as an
+      # athanor's vault entry: each fails closed at the tag check.
+      for other <- [
+            Sanctum.CipherAAD.instance_entry("ine_two", "openai.com"),
+            Sanctum.CipherAAD.instance_entry("ine_one", "anthropic.com"),
+            Sanctum.CipherAAD.vault_entry("ath_a", "ine_one", "openai.com"),
+            Sanctum.CipherAAD.vault_entry("", "ine_one", "openai.com")
+          ] do
+        assert {:error, {:decrypt, :aad_or_key_mismatch}} = Cipher.decrypt(ct, other)
+      end
+    end
+
+    test "an entry created by the administrator's verb opens only as itself", %{ctx: ctx} do
+      {admin, _user} =
+        Sanctum.TestContext.person!(%{Sanctum.TestContext.local() | platform_admin: true})
+
+      params = %{
+        name: "shared-openai",
+        kind: "api_key",
+        provider_hint: "openai.com",
+        fields: %{"API_KEY" => "sk-instance"},
+        destination: %{"hosts" => ["api.openai.com"], "methods" => ["POST"], "paths" => ["/v1/"]},
+        audience: "everyone"
+      }
+
+      confirmed =
+        Sanctum.TestContext.confirmed(admin, :credential_entry, %{
+          operation: "instance_entry.create",
+          arguments: params,
+          resource: "shared-openai"
+        })
+
+      {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
+      {:ok, row} = Arca.InstanceEntries.get(Prima.Actor.system(), entry.id)
+
+      assert {:ok, plaintext} =
+               Cipher.decrypt(
+                 row.sealed_payload,
+                 Sanctum.CipherAAD.instance_entry(entry.id, "openai.com")
+               )
+
+      assert Jason.decode!(plaintext)["fields"] == %{"API_KEY" => "sk-instance"}
+
+      assert {:error, {:decrypt, :aad_or_key_mismatch}} =
+               Cipher.decrypt(
+                 row.sealed_payload,
+                 Sanctum.CipherAAD.vault_entry(ctx.athanor_id, entry.id, "openai.com")
+               )
+    end
+  end
+
   defp person_context(user_id),
     do: Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
 end

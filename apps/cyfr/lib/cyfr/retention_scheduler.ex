@@ -119,6 +119,7 @@ defmodule Cyfr.RetentionScheduler do
     {"carry", "carry action sweep"},
     {"webhooks", "webhook delivery sweep"},
     {"rates", "rate window sweep"},
+    {"instance_usage", "instance entry usage sweep"},
     {"tmp", "stale tmp sweep"},
     {"blobs", "thread blob orphan sweep"}
   ]
@@ -441,6 +442,7 @@ defmodule Cyfr.RetentionScheduler do
   defp step_fun("carry"), do: fn -> sweep_carry_actions(@carry_left, @carry_none) end
   defp step_fun("webhooks"), do: &sweep_webhook_deliveries/0
   defp step_fun("rates"), do: &sweep_rate_windows/0
+  defp step_fun("instance_usage"), do: &sweep_instance_usage/0
   defp step_fun("tmp"), do: &sweep_stale_tmp_files/0
   defp step_fun("blobs"), do: &sweep_thread_blob_orphans/0
 
@@ -458,6 +460,26 @@ defmodule Cyfr.RetentionScheduler do
     case Arca.RateWindows.purge_expired() do
       0 -> :ok
       count -> Logger.info("[RetentionScheduler] Removed #{count} expired rate window(s)")
+    end
+  end
+
+  # The day counts of the instance's own entries past the days their sweep
+  # keeps (`Sanctum.InstanceEntries.sweep_usage/0`): no athanor holds them,
+  # so no athanor's retention reaches them, and the claim each attach
+  # makes writes a row per person and day. Cell-wide, under the cycle's
+  # claim.
+  defp sweep_instance_usage do
+    case Sanctum.InstanceEntries.sweep_usage() do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.info("[RetentionScheduler] Removed #{count} instance entry usage row(s)")
+
+      {:error, reason} ->
+        Logger.warning(
+          "[RetentionScheduler] Instance entry usage sweep failed: #{inspect(reason)}"
+        )
     end
   end
 

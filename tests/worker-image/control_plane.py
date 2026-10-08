@@ -25,9 +25,25 @@ within two windows, and keeps its scheme and host, or it is
 `redirect_credentials`, as CYFR decides it. Every pin answered is kept
 (`pins`).
 
+A guest's request naming a connection is an `attached_fetch` host call,
+made by this plane as CYFR makes it: a connection the attempt was minted
+with (`mint`'s `attached`) has a value, the rule that attaches it and the
+hosts it may go to. A request carrying a credential header, or a header
+that routes, frames or overrides it (the rosters of
+`tests/fixtures/host_api.json`), a connection the attempt does not hold
+and a host outside the connection's are each refused as one sealed
+`guest_error` naming the request's `call_id`. Otherwise the rule is
+applied, the request is made to the local upstream (this machine, at the
+URL's port, the URL's host kept for `Host`), the value is masked out of
+the answer's header values and body, and the answer is streamed back as
+`Prima.WorkerAuth` frames sealed for the call id, chunked under
+`application/vnd.cyfr.frames`, the `end` last. Its record names the
+connection and the URL, never the value.
+
 `mint` makes an attempt as CYFR would — its keys, a signed assignment, the
 keys sealed for the worker service, the artifact the runner fetches by the
-assignment's digest and the vault fields its attach answers — and `start`,
+assignment's digest, the vault fields its attach answers and the
+connections its attached requests may name — and `start`,
 `kill` and `status` post `Prima.WorkerAPI` requests to the service signed
 with its dispatch key. `script` sets what an operation answers for one
 execution or for all: a value the runner reads as `{"v": 1, "ok": value}`, a
@@ -39,13 +55,16 @@ opens it again on the same port.
 """
 
 import base64
+import http.client
 import http.server
 import json
+import os
 import secrets as random
 import socket
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import worker_auth as auth
@@ -63,6 +82,19 @@ ZERO_AUTHORITY = {
     "invoke_mode": "open_inert",
 }
 ACTOR = {"authenticated": True, "user_id": "usr_worker_image_test"}
+FRAMES_CONTENT_TYPE = "application/vnd.cyfr.frames"
+MASK = "[REDACTED]"
+# The headers an attached request may not set beyond the credential roster:
+# those that route or frame it and those that override it, as
+# `tests/fixtures/host_api.json` lists them.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fixtures", "host_api.json")) as _vectors:
+    RESERVED_HEADERS = auth.header_rosters(json.load(_vectors))
+# The sentences CYFR refuses an attached request with (`Prima.Refusal`).
+ATTACHED_REFUSALS = {
+    "credential_header_refused": "A request that names a connection carries no credential header.",
+    "connection_not_granted": "This account is not granted to the component; grant it first.",
+    "destination_mismatch": "The request goes outside the destination its credential is bound to.",
+}
 
 
 class Refused(Exception):
@@ -88,6 +120,7 @@ class ControlPlane:
         self.scripts = {}
         self.artifacts = {}
         self.secrets = {}
+        self.attached = {}
         self.connections = set()
         # What `egress_pin` answers, by (host, execution_id or None): an IP
         # literal, or a refusal name.
@@ -278,7 +311,12 @@ class ControlPlane:
             return self.refuse(handler, 400, refusal)
         entry = {"op": op, "caller": call, "args": args, "execution_id": call["execution_id"], "runner": call["runner"]}
         self.record(entry)
-        answer = self.answer_for(op, args, call, entry)
+        if op == "attached_fetch" and self.scripted(op, entry["execution_id"]) is None:
+            answer = self.attached_fetch(handler, args, call, seal_key, entry)
+            if answer is None:
+                return None
+        else:
+            answer = self.answer_for(op, args, call, entry)
         if answer is DROP:
             entry["answered"] = "dropped"
             handler.send_response(500)
@@ -300,9 +338,12 @@ class ControlPlane:
             entry["answered"] = f"unread: {type(error).__name__}"
         return None
 
-    def answer_for(self, op, args, caller, entry):
+    def scripted(self, op, execution_id):
         with self.lock:
-            scripted = self.scripts.get((op, entry.get("execution_id")), self.scripts.get((op, None)))
+            return self.scripts.get((op, execution_id), self.scripts.get((op, None)))
+
+    def answer_for(self, op, args, caller, entry):
+        scripted = self.scripted(op, entry.get("execution_id"))
         if callable(scripted):
             return scripted(args, caller, entry)
         if scripted is not None:
@@ -363,6 +404,104 @@ class ControlPlane:
             self.pins.append({"purpose": purpose, "url": url, "from": from_, "execution_id": caller["execution_id"], **pin})
         return {"ok": pin}
 
+    # ------------------------------------------------------------------
+    # Attached requests
+    # ------------------------------------------------------------------
+
+    def attached_fetch(self, handler, args, call, seal_key, entry):
+        """An attached request made as CYFR makes it: a refusal before
+        admission is answered (and returned) as one sealed answer naming the
+        call id; an admitted one is answered here as streamed frames, and
+        None is returned."""
+        call_id = args.get("call_id")
+        if not auth.valid_call_id(call_id):
+            return {"error": "malformed"}
+
+        def refused(kind, message=None):
+            entry["refused"] = kind
+            return {"error": "guest_error", "type": kind, "message": message or ATTACHED_REFUSALS[kind], "call_id": call_id}
+
+        for pair in args.get("headers") or []:
+            refusal = auth.attached_header_refusal(pair[0], RESERVED_HEADERS)
+            if refusal == "credential_header_refused":
+                return refused(refusal)
+            if refusal:
+                return refused(refusal, f"An attached request cannot set the {pair[0]} header.")
+        connection = args.get("connection")
+        url = args.get("url")
+        entry["attached"] = {"connection": connection, "url": url}
+        grant = self.attached.get(call["execution_id"], {}).get(connection)
+        if grant is None:
+            return refused("connection_not_granted")
+        parsed = auth.parse_url(url)
+        if parsed is None or parsed[1] not in grant["hosts"]:
+            return refused("destination_mismatch")
+
+        _scheme, host, port = parsed
+        value, rule = grant["value"], grant["attach"]
+        rendered = rule["template"].replace("{value}", value)
+        parts = urllib.parse.urlsplit(url)
+        target = parts.path or "/"
+        query = parts.query
+        headers = [(name, header_value) for name, header_value in args.get("headers") or []]
+        if rule["in"] == "header":
+            headers.append((rule["name"], rendered))
+        else:
+            member = urllib.parse.urlencode({rule["name"]: rendered})
+            query = f"{query}&{member}" if query else member
+        if query:
+            target = f"{target}?{query}"
+        body = base64.b64decode(args["body"]) if args.get("body") else None
+
+        frames = []
+        seq = 0
+
+        def frame(kind, plaintext):
+            nonlocal seq
+            frames.append(auth.seal_frame(seal_key, call_id, seq, kind, plaintext))
+            seq += 1
+
+        try:
+            upstream = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            upstream.putrequest(args["method"], target, skip_host=True, skip_accept_encoding=True)
+            upstream.putheader("Host", f"{host}:{port}")
+            for name, header_value in headers:
+                upstream.putheader(name, header_value)
+            if body is not None:
+                upstream.putheader("Content-Length", str(len(body)))
+            upstream.endheaders(body)
+            response = upstream.getresponse()
+            status, answer_headers, answer_body = response.status, response.getheaders(), response.read()
+            upstream.close()
+        except (OSError, http.client.HTTPException) as error:
+            entry["attached"]["failed"] = type(error).__name__
+            frame("error", json.dumps({"type": "http_error", "message": "The upstream could not be reached."},
+                                      separators=(",", ":")).encode())
+        else:
+            masked = [[name, header_value.replace(value, MASK)] for name, header_value in answer_headers]
+            frame("head", json.dumps({"status": status, "headers": masked}, separators=(",", ":")).encode())
+            answer_body = answer_body.replace(value.encode(), MASK.encode())
+            for start in range(0, len(answer_body), auth.MAX_CHUNK_BYTES):
+                frame("chunk", answer_body[start : start + auth.MAX_CHUNK_BYTES])
+            frame("end", b"")
+            entry["attached"]["status"] = status
+
+        entry["answered"] = "frames"
+        entry["answered_t"] = self.elapsed()
+        try:
+            handler.send_response(200)
+            handler.send_header("content-type", FRAMES_CONTENT_TYPE)
+            handler.send_header("transfer-encoding", "chunked")
+            handler.end_headers()
+            for one in frames:
+                handler.wfile.write(b"%x\r\n" % len(one) + one + b"\r\n")
+                handler.wfile.flush()
+            handler.wfile.write(b"0\r\n\r\n")
+            handler.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError) as error:
+            entry["answered"] = f"unread: {type(error).__name__}"
+        return None
+
     @staticmethod
     def encode(answer):
         """An answer as the wire writes it, `v` first."""
@@ -394,8 +533,10 @@ class ControlPlane:
     # Minting
     # ------------------------------------------------------------------
 
-    def mint(self, boot, component_type, ref, wasm, input_, athanor_id, timeout_ms, intercepted=(), secrets=None, parent=None, lease_ms=LEASE_MS, authority=None):
-        """An attempt on this control plane, as CYFR mints one for the worker service on `boot`, under `authority` (the zero authority when None)."""
+    def mint(self, boot, component_type, ref, wasm, input_, athanor_id, timeout_ms, intercepted=(), secrets=None, parent=None, lease_ms=LEASE_MS, authority=None, attached=None):
+        """An attempt on this control plane, as CYFR mints one for the worker service on `boot`, under `authority` (the zero authority when None).
+        `attached` names the connections its attached requests may make: each a need's name to
+        `{"value", "attach": {"in", "name", "template"}, "hosts": [host]}`."""
         now = auth.now_ms()
         execution_id = auth.new_id("exec")
         attempt_id = auth.new_id("att")
@@ -441,6 +582,8 @@ class ControlPlane:
         self.artifacts[artifact_digest] = wasm
         if secrets:
             self.secrets[execution_id] = dict(secrets)
+        if attached:
+            self.attached[execution_id] = {name: dict(grant) for name, grant in attached.items()}
         return {
             **attempt,
             "boot": boot,

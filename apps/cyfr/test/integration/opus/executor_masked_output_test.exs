@@ -13,16 +13,18 @@ defmodule Opus.ExecutorMaskedOutputTest do
   before it closes the run records none of them.
 
   The guest is the step-stub catalyst (`test_wasm/step_stub/` in the cyfr
-  suite), run in a runner of its own. Its `chat` reads its key, streams
-  "The stub ", "answers ", "at ", "once." and answers their
+  suite), run in a runner of its own. Its `chat` reads no credential: it
+  streams "The stub ", "answers ", "at ", "once." and answers their
   concatenation; an operation it does not know is refused with "the stub
   answers describe, models and chat". Each credential is text the stub
   writes, so what it writes is what must come out masked — the key spans
-  two deltas, and so does the token. The key's vault entry also holds an
-  OAuth bundle whose access token is the token, and the token is
-  dispensed by an `oauth_token` host call on the run's attempt once its
-  runner has attached, before its guest starts, as a guest's `cyfr:oauth`
-  call dispenses one (`Cyfr.Test.TwoServices.arm!/3`). A run is held on
+  two deltas, and so does the token. The key is a field of a disclosed
+  vault entry, handed to the run when its runner attaches, which puts it
+  in the run's masking set. The entry also holds an OAuth bundle whose
+  access token is the token, and the token is dispensed by an
+  `oauth_token` host call on the run's attempt once its runner has
+  attached, before its guest starts, as a guest's `cyfr:oauth` call
+  dispenses one (`Cyfr.Test.TwoServices.arm!/3`). A run is held on
   the suite's wire where a case needs it at a known point. The parent is
   the `nested-probe` formula, whose consent's edge to the stub selects the
   stub's profile, as a shipped formula runs a shipped catalyst.
@@ -275,7 +277,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
       "needs" => %{
         "api_key" => %{
           "type" => "oauth:#{name}",
-          "reason" => "to read a key and a token as a model catalyst does",
+          "reason" => "to be handed a key and a token, as a disclosed need is",
           "required" => true,
           "fields" => [@key_field],
           "scopes" => TwoServices.stub_scopes()

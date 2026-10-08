@@ -745,6 +745,35 @@ defmodule Sanctum.Tenancy.Members do
   def shared_athanor?(_, _), do: false
 
   @doc """
+  The people `user_id` sits with: everyone holding an active seat in an
+  active athanor where `user_id` holds one too, as `%{user_id,
+  display_name, email}`, each once and never `user_id` themself, ordered
+  by name. It is the list a person picks the recipient of a copy from;
+  `shared_athanor?/2` is the same rule asked of one pair, and the offer
+  asks it again. An invitation is not a seat and an archived athanor is
+  not a room. A read the store cannot answer is
+  `{:error, :database_error}`, never a shorter list.
+
+  One statement (`Arca.Members.people_sharing/2`) reads the person's
+  seats and the people seated beside them, so the list is one snapshot of
+  the rooms the person sits in as that statement reads them: a room they
+  have left lists no one, and nobody seated in it since is ever listed to
+  them.
+  """
+  @spec people_sharing(String.t()) ::
+          {:ok, [%{user_id: String.t(), display_name: String.t() | nil, email: String.t() | nil}]}
+          | {:error, :database_error}
+  def people_sharing(user_id) when is_binary(user_id) and user_id != "" do
+    case Arca.Members.people_sharing(server(), user_id) do
+      {:ok, people} ->
+        {:ok, Enum.sort_by(people, &{&1.display_name || &1.email || "", &1.user_id})}
+
+      {:error, _reason} ->
+        {:error, :database_error}
+    end
+  end
+
+  @doc """
   Whether exactly one human is in this athanor.
 
   Returns whether the athanor has a single human member. Used for implicit

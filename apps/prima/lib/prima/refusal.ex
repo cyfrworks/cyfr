@@ -119,7 +119,53 @@ defmodule Prima.Refusal do
     "dispatch_error" => :internal,
     "unknown" => :internal,
     "task_failed" => :internal,
-    "cancel_failed" => :internal
+    "cancel_failed" => :internal,
+    # A credential's refusals, by the reason a host call's guest error
+    # names (`credential_reasons/0`).
+    "destination_mismatch" => :forbidden,
+    "scope_not_attenuable" => :forbidden,
+    "disclosure_refused" => :forbidden,
+    "not_offered" => :forbidden,
+    "component_not_admitted" => :forbidden,
+    "provider_mismatch" => :invalid_argument,
+    "credential_header_refused" => :invalid_argument,
+    "endpoints_immutable" => :invalid_argument,
+    "connection_not_granted" => :setup_required,
+    "connection_cap" => :rate_limited,
+    "grant_expired" => :consent_required,
+    # An attached request's egress refusals, by the type a guest's own
+    # fetch is refused with, and the rate and size it is charged against.
+    "method_blocked" => :forbidden,
+    "scheme_blocked" => :forbidden,
+    "domain_blocked" => :forbidden,
+    "private_ip_blocked" => :forbidden,
+    "dns_error" => :unavailable,
+    "rate_limited" => :rate_limited,
+    "request_too_large" => :invalid_argument
+  }
+
+  # The credential refusals, each with its class and its fixed sentence:
+  # the condition in words, never the entry, its value or its address.
+  @credential %{
+    destination_mismatch:
+      {:forbidden, "The request goes outside the destination its credential is bound to."},
+    scope_not_attenuable:
+      {:forbidden,
+       "This provider cannot narrow the entry's scopes; grant them whole or not at all."},
+    disclosure_refused:
+      {:forbidden, "This credential is attached by CYFR and never disclosed to a component."},
+    not_offered: {:forbidden, "This instance entry is not offered to you."},
+    component_not_admitted:
+      {:forbidden, "This instance entry requires an unmodified shipped component."},
+    provider_mismatch: {:invalid_argument, "The entry is for another provider than this need."},
+    credential_header_refused:
+      {:invalid_argument, "A request that names a connection carries no credential header."},
+    endpoints_immutable:
+      {:invalid_argument, "An OAuth entry's endpoints are fixed when it is created."},
+    connection_not_granted:
+      {:setup_required, "This account is not granted to the component; grant it first."},
+    connection_cap: {:rate_limited, "This instance entry's request cap for today is reached."},
+    grant_expired: {:consent_required, "The grant for this account has expired; grant it again."}
   }
 
   # A turn or a runner refused a transition the caller asked for: the
@@ -197,6 +243,15 @@ defmodule Prima.Refusal do
   @doc "The sixteen refusal classes."
   @spec classes() :: [class()]
   def classes, do: @classes
+
+  @doc """
+  The credential refusals' reasons, each a typed reason of this table and
+  a guest error `type` a host call may answer: where a credential may go,
+  how it is disclosed, which provider and account it is for, and how an
+  instance entry is offered and capped.
+  """
+  @spec credential_reasons() :: [atom()]
+  def credential_reasons, do: @credential |> Map.keys() |> Enum.sort()
 
   @doc """
   The normalized refusal for `reason`. A `%Prima.Refusal{}` classifies as
@@ -312,6 +367,12 @@ defmodule Prima.Refusal do
     do: {:corrupt, "The stored profile is damaged and cannot be used."}
 
   defp row({:corrupt, {:manifest, _ref}}), do: {:corrupt, "The stored manifest is damaged."}
+
+  # A run's component graph whose stored rows do not hash, so the consent
+  # cannot be judged against it. The ref rides in the reason; the sentence
+  # names the damaged thing, never a grant to make.
+  defp row({:corrupt, {:component_graph, _ref}}),
+    do: {:corrupt, "The component graph this run needs is stored damaged and cannot be used."}
 
   defp row({:corrupt, {:settings, :retention}}),
     do: {:corrupt, "The stored retention settings are damaged."}
@@ -439,6 +500,14 @@ defmodule Prima.Refusal do
     do: {Map.get(@guest_error_classes, type, :internal), message}
 
   defp row({:failed, message}) when is_binary(message), do: {:internal, message}
+
+  # A credential's refusals. Two carry a detail beside the reason — the
+  # provider the need asked for, the instant a cap resets — which the
+  # reason keeps and the sentence never names.
+  defp row(reason) when is_map_key(@credential, reason), do: Map.fetch!(@credential, reason)
+
+  defp row({:provider_mismatch, _provider}), do: Map.fetch!(@credential, :provider_mismatch)
+  defp row({:connection_cap, _reset_at}), do: Map.fetch!(@credential, :connection_cap)
 
   # A component whose registry row carries no type: registering it again
   # writes one.
@@ -644,6 +713,17 @@ defmodule Prima.Refusal do
     do: {:conflict, "This attempt no longer owns the execution"}
 
   defp row(:conflict), do: {:conflict, "Another change landed first — read again and retry"}
+
+  # An approved launch whose root, as loaded, does not hold the account the
+  # approval bound (its entry, under the name its binding stored): nothing
+  # ran, and approving it again is what to do. The launch itself answers
+  # in a sentence naming the account; this one is for a surface that
+  # renders the reason without it.
+  defp row(:approved_entry_moved),
+    do:
+      {:conflict,
+       "The account this launch was approved for has changed since it was approved, so nothing " <>
+         "ran: ask again to approve it as it stands now."}
 
   defp row(reason) when reason in @barrier_conflicts,
     do: {:conflict, "The parent execution moved on — the child was not admitted"}

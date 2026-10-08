@@ -41,6 +41,74 @@ defmodule PrismWeb.SystemLayerTest.Host do
   def render(assigns), do: PrismWeb.SystemLayerTest.Relay.layer(assigns)
 end
 
+defmodule PrismWeb.SystemLayerTest.Asker do
+  @moduledoc false
+  # A page asking for a sensitive change through its layer, as a console
+  # page does (`PrismWeb.SystemLayer.call/5`): `{:ask, tag, tool, args}`
+  # dispatches it, a confirmed report repeats it through `call/5` with the
+  # same tag, and each answer goes to the test as `{:asker, tag, answer}`.
+  use Phoenix.LiveView
+
+  alias PrismWeb.SystemLayer
+
+  on_mount {CyfrWeb.ContextGuard, :protected}
+
+  @impl true
+  def mount(_params, session, socket), do: {:ok, assign(socket, :test, session["test"])}
+
+  @impl true
+  def handle_info({:ask, tag, tool, args}, socket),
+    do: {:noreply, dispatch(socket, tag, tool, args)}
+
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    case SystemLayer.reported(socket, report) do
+      {:repeat, tag, tool, args, socket} -> {:noreply, dispatch(socket, tag, tool, args)}
+      {:ok, socket} -> {:noreply, socket}
+    end
+  end
+
+  def handle_info(message, socket), do: PrismWeb.SystemLayerTest.Relay.forward(message, socket)
+
+  defp dispatch(socket, tag, tool, args) do
+    {answer, socket} =
+      case SystemLayer.call(socket, tag, tool, args) do
+        {:ok, result, socket} -> {{:ok, result}, socket}
+        {:error, reason, socket} -> {{:error, reason}, socket}
+        {:asked, socket} -> {:asked, socket}
+      end
+
+    send(socket.assigns.test, {:asker, tag, answer})
+    socket
+  end
+
+  @impl true
+  def render(assigns), do: PrismWeb.SystemLayerTest.Relay.layer(assigns)
+end
+
+defmodule PrismWeb.SystemLayerTest.MovingHost do
+  @moduledoc false
+  # A page that opens another athanor, as the chat page's rail does: its
+  # context moves to the athanor `{:focus, athanor_id}` names, and the
+  # layer it renders is handed the moved context.
+  use Phoenix.LiveView
+
+  on_mount {CyfrWeb.ContextGuard, :protected}
+
+  @impl true
+  def mount(_params, session, socket), do: {:ok, assign(socket, :test, session["test"])}
+
+  @impl true
+  def handle_info({:focus, athanor_id}, socket) do
+    {:ok, moved} = Sanctum.Context.focus(socket.assigns.context, athanor_id)
+    {:noreply, assign(socket, :context, moved)}
+  end
+
+  def handle_info(message, socket), do: PrismWeb.SystemLayerTest.Relay.forward(message, socket)
+
+  @impl true
+  def render(assigns), do: PrismWeb.SystemLayerTest.Relay.layer(assigns)
+end
+
 defmodule PrismWeb.SystemLayerTest.BareHost do
   @moduledoc false
   # A page holding a context it was handed: a client no session backs.
@@ -119,7 +187,7 @@ defmodule PrismWeb.SystemLayerTest do
   import Prima.Test.Wait
 
   alias PrismWeb.SystemLayer.Prompt
-  alias PrismWeb.SystemLayerTest.{BareHost, Host, QuietHost}
+  alias PrismWeb.SystemLayerTest.{BareHost, Host, MovingHost, QuietHost}
   alias Sanctum.Context
   alias Sanctum.TestContext.Authenticator
 
@@ -146,6 +214,24 @@ defmodule PrismWeb.SystemLayerTest do
       )
 
     %{view: view, ctx: ctx, user: user}
+  end
+
+  # A platform administrator's page, the layer the Settings page mounts.
+  defp signed_in_admin(%{conn: conn}) do
+    user = test_user()
+    {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(user.user_id)
+    %{view: view, ctx: ctx} = signed_in(%{conn: conn}, user)
+    %{view: view, ctx: %{ctx | platform_admin: true}, user: user}
+  end
+
+  defp signed_in(%{conn: conn}, user) do
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+
+    {:ok, view, _html} =
+      live_isolated(conn, Host, session: %{"athanor_id" => athanor.id, "test" => self()})
+
+    %{view: view, ctx: person_context(user, athanor)}
   end
 
   # A tincture's context entered onto the guest plane: a client with no
@@ -300,6 +386,7 @@ defmodule PrismWeb.SystemLayerTest do
             }
           ],
       origins: ["interactive"],
+      removed: [],
       proof: "not-a-proof",
       commit_digest: "sha256:" <> String.duplicate("0", 64)
     }
@@ -459,7 +546,11 @@ defmodule PrismWeb.SystemLayerTest do
 
       view
       |> layer()
-      |> render_submit("enter_credential", %{"prompt_id" => "n3", "secret" => "sk-none"})
+      |> render_submit("enter_credential", %{
+        "prompt_id" => "n3",
+        "secret" => "sk-none",
+        "destination_hosts" => "api.example.com"
+      })
 
       assert {:refused, _reason} = outcome("n3")
       refute render(view) =~ "sk-none"
@@ -555,10 +646,15 @@ defmodule PrismWeb.SystemLayerTest do
           })
       })
 
+    # The provider the need names; the component reads its key itself, so
+    # the entry is disclosed.
     params = %{
       name: "layer key #{System.unique_integer([:positive])}",
       kind: "api_key",
-      fields: %{"LAYER_API_KEY" => "sk-layer-not-shown"}
+      provider_hint: "layer.test",
+      fields: %{"LAYER_API_KEY" => "sk-layer-not-shown"},
+      destination: %{"hosts" => ["api.example.com"]},
+      disclose: true
     }
 
     entering =
@@ -640,13 +736,30 @@ defmodule PrismWeb.SystemLayerTest do
   describe "the grant" do
     setup [:signed_in, :needing_key]
 
-    test "its body is the consent sheet: an entry bound to the need is previewed again and committed with it",
+    test "its body is the consent sheet: the suggested entry opens bound, and is committed with it",
          %{view: view, ref: ref, name_ref: name_ref, entry: entry, local: local} do
       {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-bind", ref)
+
+      # The one entry that meets the required need is the plan's
+      # suggestion: the grant opens with it bound, standing, and the
+      # preview is of exactly that.
+      assert grant.subject.decisions["bindings"] == [
+               %{
+                 "need" => "api_key",
+                 "entry_id" => entry.id,
+                 "lifetime" => %{"kind" => "standing"}
+               }
+             ]
+
+      assert [%{"kind" => "credential", "values" => %{"name" => name}}] =
+               Enum.filter(grant.subject.preview.rows, &(&1["kind"] == "credential"))
+
+      assert name == entry.name
+
       html = prompt(view, grant)
 
       # The walk as the prompt arrived with it, drawn in the layer: the
-      # need, the entries that can meet it, nothing bound yet.
+      # need, the entry that meets it, pressed, and nothing to change to.
       assert html =~ ~s(data-kind="grant")
       assert has_element?(view, ~s(#system-layer-dialog [data-test="grant-sheet"]))
 
@@ -656,23 +769,80 @@ defmodule PrismWeb.SystemLayerTest do
                "to call the service with your key"
              )
 
-      assert has_element?(view, ~s([data-test="grant-pick"]), entry.name)
-      refute has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]))
+      assert has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]), entry.name)
+      refute has_element?(view, ~s([data-test="grant-change"]))
       refute html =~ "sk-layer-not-shown"
 
-      # Picked: previewed again, and the layer holds the walk it commits.
-      view
-      |> element(~s([data-test="grant-pick"][phx-value-entry_id="#{entry.id}"]))
-      |> render_click()
+      # The binding in one sentence, and its lifetime, until revoked.
+      assert has_element?(
+               view,
+               ~s([data-row="credential"] .consent-sheet__sentence),
+               "#{name_ref} uses #{entry.name}, an entry of this athanor, for its own calls"
+             )
 
-      render(view)
-      assert has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]), entry.name)
+      assert has_element?(view, ~s([data-lifetime="standing"][aria-pressed="true"]))
+      refute has_element?(view, ~s([data-lifetime="once"][aria-pressed="true"]))
       refute has_element?(view, ~s(button[phx-click="confirm"][disabled]))
 
       view |> element(~s(button[phx-click="confirm"])) |> render_click()
       assert outcome("g-bind") == :confirmed
       assert open_prompt(view) == nil
       assert entry.id in head_refs(local, name_ref)
+    end
+
+    test "a suggestion the home refuses to preview opens the grant with nothing bound, and " <>
+           "the grant says why",
+         %{view: view, ref: ref, entry: entry, local: local} do
+      # The suggested entry is revoked between the plan and the preview:
+      # when the gate admits the preview of the suggestion, in this
+      # process, before its handler reads the entry.
+      test = self()
+      handler = "revoke-before-preview-#{System.unique_integer([:positive])}"
+
+      revoke = fn
+        _event, _measure, %{tool: "profile", action: "preview"}, _config ->
+          if self() == test and Process.get(:revoked) == nil do
+            Process.put(:revoked, Sanctum.Vault.revoke(local, entry.id))
+          end
+
+        _event, _measure, _meta, _config ->
+          :ok
+      end
+
+      :ok = :telemetry.attach(handler, [:cyfr, :grimoire, :decision, :admitted], revoke, nil)
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-refused", ref)
+      :telemetry.detach(handler)
+      assert {:ok, _affected} = Process.get(:revoked)
+
+      # Opened with nothing bound, and the home's sentence for why.
+      assert grant.subject.decisions["bindings"] == []
+      assert refused = grant.subject[:suggestion_refused]
+      assert is_binary(refused) and refused != ""
+      refute refused =~ "sk-layer-not-shown"
+
+      html = prompt(view, grant)
+      assert html =~ ~s(data-prompt-id="g-refused")
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-needs"] [data-test="grant-refusal"][role="alert"]),
+               "The suggested entries were not bound"
+             )
+
+      [shown] =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-test="grant-needs"] [data-test="grant-refusal"]))
+        |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+
+      assert shown ==
+               "The suggested entries were not bound: " <>
+                 (refused |> String.replace(~r/\s+/, " ") |> String.trim())
+
+      refute has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]))
+      refute html =~ "sk-layer-not-shown"
     end
 
     test "a commit the home refuses is planned again, and the next confirmation commits",
@@ -722,7 +892,10 @@ defmodule PrismWeb.SystemLayerTest do
       params = %{
         name: "second key #{System.unique_integer([:positive])}",
         kind: "api_key",
-        fields: %{"LAYER_API_KEY" => "sk-second-not-shown"}
+        provider_hint: "layer.test",
+        fields: %{"LAYER_API_KEY" => "sk-second-not-shown"},
+        destination: %{"hosts" => ["api.example.com"]},
+        disclose: true
       }
 
       entering =
@@ -802,6 +975,2320 @@ defmodule PrismWeb.SystemLayerTest do
       assert outcome("g-elsewhere") == :dismissed
       assert open_prompt(view) == nil
       no_outcome("g-elsewhere")
+    end
+
+    test "a credential entry a grant raised in another athanor sends nothing and ends, as " <>
+           "does one whose grant is gone",
+         %{view: view, ctx: ctx} do
+      connect = fn id, athanor_id, grant_id ->
+        %{
+          id: id,
+          kind: :credential_entry,
+          action: :credential_entry,
+          subject: %{
+            name: "elsewhere.test",
+            field: "API_KEY",
+            athanor_id: athanor_id,
+            provider: "elsewhere.test",
+            hosts: ["api.elsewhere.example"],
+            paths: [],
+            disclose_needed: false,
+            return: %{prompt: grant_id, need: "api_key"}
+          }
+        }
+      end
+
+      typed = fn id ->
+        view
+        |> layer()
+        |> render_submit("enter_credential", %{
+          "prompt_id" => id,
+          "name" => "elsewhere.test",
+          "secret" => "sk-elsewhere",
+          "destination_hosts" => "api.elsewhere.example"
+        })
+      end
+
+      # Raised in another athanor, its grant waiting behind it, submitted
+      # before the layer is next handed its context: the grant is placed
+      # straight in the layer, so the page does not draw it again first.
+      prompt(view, connect.("connect-elsewhere", "ath_elsewhere", "g-here"))
+
+      Phoenix.LiveView.send_update(view.pid, PrismWeb.SystemLayer,
+        id: "system-layer",
+        prompt: grant(ctx, "g-here")
+      )
+
+      render(view)
+
+      assert %{current: %{id: "connect-elsewhere"}, queue: [%{id: "g-here"}]} =
+               layer_assigns(view)
+
+      typed.("connect-elsewhere")
+      assert outcome("connect-elsewhere") == :dismissed
+      assert open_prompt(view) == "g-here"
+
+      # Raised here, for a grant no longer waiting.
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("g-here") == :dismissed
+      prompt(view, connect.("connect-orphan", ctx.athanor_id, "g-gone"))
+      assert open_prompt(view) == "connect-orphan"
+      typed.("connect-orphan")
+      assert outcome("connect-orphan") == :dismissed
+      assert open_prompt(view) == nil
+
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+      {:ok, entries} = Sanctum.Vault.list(ctx)
+      refute Enum.any?(entries, &(&1.provider_hint == "elsewhere.test"))
+    end
+  end
+
+  # A catalyst in the person's athanor with `manifest`, as `ref`.
+  defp publish_catalyst!(local, name, manifest) do
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(local, @wasm, %{
+        name: name,
+        version: "0.1.0",
+        type: "catalyst",
+        description: "A catalyst of the layer's tests",
+        manifest: Jason.encode!(manifest)
+      })
+
+    "catalyst:local.#{name}"
+  end
+
+  defp entry!(local, params) do
+    params =
+      Map.merge(
+        %{name: "layer entry #{System.unique_integer([:positive])}", kind: "api_key"},
+        params
+      )
+
+    entering =
+      Sanctum.TestContext.confirmed(local, :credential_entry, %{
+        operation: "vault.create",
+        arguments: params,
+        resource: params.name
+      })
+
+    {:ok, entry} = Sanctum.Vault.create(entering, params)
+    entry
+  end
+
+  defp head_rows(local, name_ref) do
+    {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(local, name_ref)
+    {:ok, head} = Sanctum.Consent.head_consent(local, profile_id)
+    {profile_id, head}
+  end
+
+  defp credential_rows(%{rows: rows}), do: Enum.filter(rows, &(&1["kind"] == "credential"))
+
+  describe "each credential's lifetime" do
+    setup [:signed_in, :needing_key]
+
+    test "a lifetime chosen is previewed and committed on its binding's row; this session " <>
+           "is the earlier of the session's end and a day on",
+         %{view: view, ref: ref, name_ref: name_ref, local: local} do
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-life", ref)
+
+      # The person's session ends: the walk carries when.
+      assert {:ok, session_end, 0} = DateTime.from_iso8601(grant.subject.session_expires_at)
+      assert DateTime.compare(session_end, DateTime.utc_now()) == :gt
+
+      prompt(view, grant)
+      assert has_element?(view, ~s([data-lifetime="session"]), "This session, until")
+
+      click(view, ~s([data-lifetime="1h"]))
+      %{current: %{subject: %{decisions: decisions, preview: preview}}} = layer_assigns(view)
+
+      assert [%{"lifetime" => %{"kind" => "until", "until" => until}}] = decisions["bindings"]
+      {:ok, at, 0} = DateTime.from_iso8601(until)
+      assert_in_delta DateTime.diff(at, DateTime.utc_now()), 3600, 60
+
+      # The preview is of exactly that until, as the commit will be.
+      assert [%{"values" => %{"lifetime" => %{"kind" => "until", "until" => ^until}}}] =
+               credential_rows(preview)
+
+      assert has_element?(view, ~s([data-lifetime="1h"][aria-pressed="true"]))
+
+      click(view, ~s([data-lifetime="session"]))
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+      assert [%{"lifetime" => %{"kind" => "until", "until" => until}}] = decisions["bindings"]
+      {:ok, at, 0} = DateTime.from_iso8601(until)
+
+      held =
+        Enum.min_by([session_end, DateTime.add(DateTime.utc_now(), 86_400)], &DateTime.to_unix/1)
+
+      assert_in_delta DateTime.diff(at, held), 0, 60
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-life") == :confirmed
+
+      {_profile, head} = head_rows(local, name_ref)
+      assert [%{lifetime_kind: "until", expires_at: expires_at}] = head.vault_refs
+      assert DateTime.compare(DateTime.truncate(expires_at, :second), at) == :eq
+    end
+
+    test "a once the head's root used is offered to be granted once again, which renews it",
+         %{view: view, ref: ref, name_ref: name_ref, entry: entry, local: local} do
+      {:ok, _} =
+        commit_with!(local, name_ref, %{
+          bindings: [%{need: "api_key", entry_id: entry.id, lifetime: %{kind: "once"}}]
+        })
+
+      {profile_id, head} = head_rows(local, name_ref)
+      [%{binding_key: key}] = head.vault_refs
+
+      :ok =
+        Arca.ConsentStorage.consume_once(
+          Context.actor(local),
+          profile_id,
+          head.id,
+          key,
+          "exec_layer_once"
+        )
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-renew", ref)
+      assert [%{binding_key: ^key, consumed: true}] = grant.subject.plan.head_bindings
+
+      # A re-grant opens on what the head binds, never wider: the once
+      # stays once, not the suggestion's standing.
+      assert grant.subject.decisions["bindings"] == [
+               %{"need" => "api_key", "entry_id" => entry.id, "lifetime" => %{"kind" => "once"}}
+             ]
+
+      prompt(view, grant)
+      assert has_element?(view, ~s([data-lifetime="once"][aria-pressed="true"]))
+      assert has_element?(view, ~s([data-test="grant-renew"][aria-pressed="false"]))
+
+      click(view, ~s([data-test="grant-renew"]))
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+
+      assert decisions["bindings"] == [
+               %{
+                 "need" => "api_key",
+                 "entry_id" => entry.id,
+                 "lifetime" => %{"kind" => "once"},
+                 "renew" => true
+               }
+             ]
+
+      assert has_element?(view, ~s([data-test="grant-renew"][aria-pressed="true"]))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-renew") == :confirmed
+
+      {_profile, head} = head_rows(local, name_ref)
+      assert [%{lifetime_kind: "once", consumed_by_root: nil}] = head.vault_refs
+    end
+
+    test "a binding the head granted until a time now passed reopens with no lifetime " <>
+           "chosen, says why, and is bound again only once the person chooses one",
+         %{view: view, ref: ref, name_ref: name_ref, entry: entry, local: local} do
+      ahead = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+      {:ok, _} =
+        commit_with!(local, name_ref, %{
+          bindings: [
+            %{
+              need: "api_key",
+              entry_id: entry.id,
+              lifetime: %{kind: "until", until: DateTime.to_iso8601(ahead)}
+            }
+          ]
+        })
+
+      # The hour has gone by.
+      {_profile_id, head} = head_rows(local, name_ref)
+      passed = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.ConsentVaultRef,
+            where: r.athanor_id == ^local.athanor_id and r.consent_id == ^head.id
+          ),
+          set: [expires_at: passed]
+        )
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-passed", ref)
+      assert grant.subject.decisions["bindings"] == []
+
+      prompt(view, grant)
+      assert has_element?(view, ~s([data-test="grant-lifetime-pending"]), "has passed")
+      refute has_element?(view, ~s([data-lifetime][aria-pressed="true"]))
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+      assert decisions["bindings"] == []
+
+      click(view, ~s([data-test="grant-lifetime-pending"] [data-lifetime="1h"]))
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+
+      assert [%{"entry_id" => bound, "lifetime" => %{"kind" => "until", "until" => until}}] =
+               decisions["bindings"]
+
+      assert bound == entry.id
+      {:ok, at, 0} = DateTime.from_iso8601(until)
+      assert_in_delta DateTime.diff(at, DateTime.utc_now()), 3600, 60
+      refute has_element?(view, ~s([data-test="grant-lifetime-pending"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-lifetime"] [data-lifetime="1h"][aria-pressed="true"])
+             )
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-passed") == :confirmed
+
+      {_profile, head} = head_rows(local, name_ref)
+      assert [%{lifetime_kind: "until", expires_at: expires_at}] = head.vault_refs
+      assert DateTime.compare(DateTime.truncate(expires_at, :second), at) == :eq
+    end
+  end
+
+  describe "each credential's need" do
+    setup :signed_in
+
+    defp local_of(ctx),
+      do: %{Sanctum.TestContext.local() | user_id: ctx.user_id, athanor_id: ctx.athanor_id}
+
+    test "an optional need's suggestion is a click away, never bound unasked",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+
+      name_ref =
+        publish_catalyst!(local, "layer-optional-#{n}", %{
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:optional.test",
+              "reason" => "to call the service, if you like",
+              "fields" => ["OPTIONAL_KEY"],
+              "required" => false
+            }
+          }
+        })
+
+      entry =
+        entry!(local, %{
+          provider_hint: "optional.test",
+          fields: %{"OPTIONAL_KEY" => "sk-optional"},
+          destination: %{"hosts" => ["api.optional.example"]},
+          disclose: true
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-opt", name_ref)
+      assert grant.subject.decisions["bindings"] == []
+
+      prompt(view, grant)
+      assert has_element?(view, ~s([data-test="grant-pick"][aria-pressed="false"]), entry.name)
+
+      click(view, ~s([data-test="grant-pick"][phx-value-entry_id="#{entry.id}"]))
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+      assert [%{"entry_id" => id}] = decisions["bindings"]
+      assert id == entry.id
+    end
+
+    test "a dependency's required need opens on its suggestion, selected with its lifetime",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+
+      dep =
+        publish_catalyst!(local, "layer-dep-#{n}", %{
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:dep.test",
+              "reason" => "to reach the dependency's service",
+              "fields" => ["DEP_KEY"],
+              "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+            }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.dep.example"]}}
+        })
+
+      app =
+        publish_catalyst!(local, "layer-app-#{n}", %{
+          "dependencies" => %{"static" => [%{"ref" => dep}]}
+        })
+
+      entry =
+        entry!(local, %{
+          provider_hint: "dep.test",
+          fields: %{"DEP_KEY" => "sk-dep"},
+          destination: %{"hosts" => ["api.dep.example"]}
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-dep", app)
+
+      assert grant.subject.decisions["selections"] == [
+               %{
+                 "dep" => dep,
+                 "from" => app,
+                 "entry_id" => entry.id,
+                 "lifetime" => %{"kind" => "standing"}
+               }
+             ]
+
+      assert [%{"node" => ^app}] = credential_rows(grant.subject.preview)
+
+      prompt(view, grant)
+
+      assert has_element?(
+               view,
+               ~s([data-dep="#{dep}"] [data-test="grant-pick"][aria-pressed="true"]),
+               entry.name
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-row="credential"] .consent-sheet__sentence),
+               "#{dep} uses #{entry.name}, an entry of this athanor"
+             )
+
+      click(view, ~s([data-row="credential"] [data-lifetime="once"]))
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+      assert [%{"lifetime" => %{"kind" => "once"}}] = decisions["selections"]
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-dep") == :confirmed
+
+      {_profile, head} = head_rows(local, app)
+      assert [%{vault_entry_id: id, lifetime_kind: "once"}] = head.vault_refs
+      assert id == entry.id
+    end
+
+    test "a catalyst asking for other methods is narrowed to its GET and HEAD, and that is " <>
+           "what is granted",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      node =
+        publish_catalyst!(local, "layer-methods-#{System.unique_integer([:positive])}", %{
+          "caps" => %{
+            "egress" => %{"domains" => ["api.methods.example"], "methods" => ["GET", "POST"]}
+          }
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-get", node)
+      prompt(view, grant)
+
+      assert has_element?(view, ~s([data-test="grant-get-head-only"]), "GET only")
+      refute render(view) |> String.downcase() =~ "read only"
+
+      click(view, ~s([data-test="grant-get-head-only"]))
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+      assert decisions["subset"] == %{node => %{"egress" => %{"methods" => ["GET"]}}}
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-get") == :confirmed
+
+      {_head, ingress, _limits} = head!(local, node)
+      assert ingress.egress.methods == ["GET"]
+    end
+
+    test "Connect raises the credential entry in front of the grant, prefilled from the need; " <>
+           "the entry made comes back bound, and is what is granted",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+
+      name_ref =
+        publish_catalyst!(local, "layer-connect-#{n}", %{
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:connect.test",
+              "reason" => "to call the connected service",
+              "fields" => ["CONNECT_KEY"],
+              "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+              "hosts" => ["api.connect.example"],
+              "paths" => ["/v1/"]
+            }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.connect.example"]}}
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-connect", name_ref)
+      assert grant.subject.decisions["bindings"] == []
+      prompt(view, grant)
+
+      click(view, ~s([data-test="grant-connect"]))
+      id = open_prompt(view)
+      assert "connect-" <> _ = id
+      html = render(view)
+      assert html =~ "Connect your connect.test account"
+      assert html =~ "One more prompt is waiting."
+
+      # Prefilled from the need: the name, its hosts and paths; the need
+      # takes an attached key, so disclosure stays off.
+      assert has_element?(view, ~s(input[name="name"][value="connect.test"]))
+      assert has_element?(view, ~s(input[name="destination_hosts"][value="api.connect.example"]))
+      assert has_element?(view, ~s(input[name="destination_paths"][value="/v1/"]))
+      refute has_element?(view, ~s(input[name="disclose"][checked]))
+
+      name = "Connected #{n}"
+
+      typed = %{
+        "prompt_id" => id,
+        "name" => name,
+        "secret" => "sk-connect-#{n}",
+        "destination_hosts" => "api.connect.example",
+        "destination_paths" => "/v1/"
+      }
+
+      view |> form("#system-layer-credential", typed) |> render_submit()
+
+      assert {:ok, [%{ref: record}]} =
+               Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+
+      wait_until(fn -> render(view) =~ ~s(data-ref="#{record}") end, 2_000, "the waiting record")
+      Sanctum.TestContext.prove!(ctx, record)
+      assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
+      view |> form("#system-layer-credential", typed) |> render_submit()
+      assert outcome(id) == :confirmed
+
+      {:ok, entries} = Sanctum.Vault.list(ctx)
+      entry = Enum.find(entries, &(&1.name == name))
+      assert entry.provider_hint == "connect.test"
+
+      assert entry.destination == %{
+               "hosts" => ["api.connect.example"],
+               "paths" => ["/v1/"],
+               "scheme" => "https"
+             }
+
+      assert entry.attach_only == true
+
+      # The grant is back, planned again, with the new entry bound.
+      assert open_prompt(view) == "g-connect"
+
+      wait_until(
+        fn ->
+          render(view)
+          has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]), name)
+        end,
+        2_000,
+        "the grant planned again"
+      )
+
+      %{current: %{subject: %{decisions: decisions, preview: %{}}}} = layer_assigns(view)
+      assert [%{"entry_id" => bound}] = decisions["bindings"]
+      assert bound == entry.id
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-connect") == :confirmed
+      assert entry.id in head_refs(local, name_ref)
+    end
+
+    test "a lifetime the person chose is pressed again when the grant comes back from Connect",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+      attach = %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+
+      dep =
+        publish_catalyst!(local, "layer-back-dep-#{n}", %{
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:back-dep.test",
+              "reason" => "to reach the dependency's service",
+              "fields" => ["DEP_KEY"],
+              "attach" => attach
+            }
+          }
+        })
+
+      app =
+        publish_catalyst!(local, "layer-back-app-#{n}", %{
+          "dependencies" => %{"static" => [%{"ref" => dep}]},
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:back.test",
+              "reason" => "to call the app's service",
+              "fields" => ["APP_KEY"],
+              "attach" => attach
+            }
+          }
+        })
+
+      entry =
+        entry!(local, %{
+          provider_hint: "back.test",
+          fields: %{"APP_KEY" => "sk-back"},
+          destination: %{"hosts" => ["api.back.example"]}
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-back", app)
+      prompt(view, grant)
+      assert has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]), entry.name)
+
+      click(view, ~s([data-row="credential"] [data-lifetime="1h"]))
+      %{current: %{subject: %{decisions: before}}} = layer_assigns(view)
+      assert [%{"lifetime" => %{"kind" => "until", "until" => until}}] = before["bindings"]
+
+      # The dependency's need has nothing to meet it: Connect, then back.
+      click(view, ~s([data-dep="#{dep}"] [data-test="grant-connect"]))
+      id = open_prompt(view)
+      assert "connect-" <> _ = id
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome(id) == :dismissed
+      assert open_prompt(view) == "g-back"
+      render(view)
+
+      # The sheet is drawn again, and presses the lifetime chosen before.
+      assert has_element?(
+               view,
+               ~s([data-row="credential"] [data-lifetime="1h"][aria-pressed="true"])
+             )
+
+      refute has_element?(view, ~s([data-lifetime="standing"][aria-pressed="true"]))
+      %{current: %{subject: %{decisions: after_back}}} = layer_assigns(view)
+      assert [%{"lifetime" => %{"kind" => "until", "until" => ^until}}] = after_back["bindings"]
+    end
+
+    test "a Connect prompt belongs to its grant's athanor: when the page opens another, it " <>
+           "ends with its grant, and no entry is made in either",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      here = seated_athanor()
+
+      {:ok, group} =
+        Sanctum.Tenancy.Athanors.create_group(user.user_id, "Elsewhere #{user.namespace}")
+
+      {:ok, view, _html} =
+        live_isolated(conn, MovingHost, session: %{"athanor_id" => here.id, "test" => self()})
+
+      ctx = person_context(user, here)
+      local = local_of(ctx)
+
+      name_ref =
+        publish_catalyst!(local, "layer-move-#{System.unique_integer([:positive])}", %{
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:move.test",
+              "reason" => "to call the service it moves with",
+              "fields" => ["MOVE_KEY"],
+              "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+              "hosts" => ["api.move.example"]
+            }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.move.example"]}}
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-move", name_ref)
+      prompt(view, grant)
+      click(view, ~s([data-test="grant-connect"]))
+      id = open_prompt(view)
+      assert "connect-" <> _ = id
+      assert has_element?(view, ~s(input[name="destination_hosts"][value="api.move.example"]))
+
+      # The page opens the group.
+      send(view.pid, {:focus, group.id})
+      render(view)
+      render(view)
+
+      # A key typed into the prompt, submitted after the move, is stored
+      # in neither athanor, nor asked to be.
+      view
+      |> layer()
+      |> render_submit("enter_credential", %{
+        "prompt_id" => id,
+        "name" => "move.test",
+        "secret" => "sk-moved",
+        "destination_hosts" => "api.move.example"
+      })
+
+      group_ctx = person_context(user, group)
+
+      for at <- [ctx, group_ctx] do
+        {:ok, entries} = Sanctum.Vault.list(at)
+        refute Enum.any?(entries, &(&1.provider_hint == "move.test"))
+        assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(at), user.user_id)
+      end
+
+      # The grant and the entry it asked for ended with the move.
+      assert outcome("g-move") == :dismissed
+      assert outcome(id) == :dismissed
+      assert open_prompt(view) == nil
+      refute render(view) =~ "Connect your move.test account"
+    end
+
+    test "a need the component reads itself is connected with disclosure on; dismissed, " <>
+           "the grant comes back as it was",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      name_ref =
+        publish_catalyst!(local, "layer-reads-#{System.unique_integer([:positive])}", %{
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:reads.test",
+              "reason" => "to call the service with the key it reads",
+              "fields" => ["READS_KEY", "READS_ORG"]
+            }
+          }
+        })
+
+      # An attach-only entry of the provider, which the need cannot take.
+      _attached =
+        entry!(local, %{
+          provider_hint: "reads.test",
+          fields: %{"READS_KEY" => "sk-attached"},
+          destination: %{"hosts" => ["api.reads.example"]}
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-reads", name_ref)
+      prompt(view, grant)
+      assert has_element?(view, ~s([data-test="grant-why"]), "attach-only")
+
+      click(view, ~s([data-test="grant-connect"]))
+      id = open_prompt(view)
+      assert "connect-" <> _ = id
+
+      # The need names two fields, so the key is stored under the default.
+      assert has_element?(
+               view,
+               ~s(label[for="system-layer-secret"]),
+               "API_KEY for your reads.test"
+             )
+
+      assert has_element?(view, ~s(input[name="disclose"][checked]))
+      refute has_element?(view, ~s(input[name="destination_hosts"][value]))
+
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome(id) == :dismissed
+      assert open_prompt(view) == "g-reads"
+      render(view)
+      assert has_element?(view, ~s([data-test="grant-connect"]))
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Named accounts
+  # ---------------------------------------------------------------------------
+
+  describe "named accounts" do
+    setup :signed_in
+
+    # A dependency whose need attaches a named.test key, an app calling it
+    # with a need of its own of the same provider, an app calling it with
+    # none, and three keys that meet both needs, the first the default.
+    defp named_world(ctx) do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+
+      need = fn required ->
+        %{
+          "api_key" => %{
+            "type" => "api_key:named.test",
+            "reason" => "to reach the named service",
+            "fields" => ["NAMED_KEY"],
+            "required" => required,
+            "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+          }
+        }
+      end
+
+      caps = %{"egress" => %{"domains" => ["api.named.example"]}}
+
+      dep =
+        publish_catalyst!(local, "layer-named-dep-#{n}", %{"needs" => need.(true), "caps" => caps})
+
+      optional_dep =
+        publish_catalyst!(local, "layer-named-optional-#{n}", %{
+          "needs" => need.(false),
+          "caps" => caps
+        })
+
+      app =
+        publish_catalyst!(local, "layer-named-app-#{n}", %{
+          "needs" => need.(true),
+          "caps" => caps,
+          "dependencies" => %{"static" => [%{"ref" => dep}]}
+        })
+
+      caller =
+        publish_catalyst!(local, "layer-named-caller-#{n}", %{
+          "dependencies" => %{"static" => [%{"ref" => dep}, %{"ref" => optional_dep}]}
+        })
+
+      [first, second, third] =
+        for i <- 1..3 do
+          entry!(local, %{
+            name: "named key #{n}-#{i}",
+            provider_hint: "named.test",
+            fields: %{"NAMED_KEY" => "sk-named-#{i}"},
+            destination: %{"hosts" => ["api.named.example"]}
+          })
+        end
+
+      %{
+        local: local,
+        dep: dep,
+        optional_dep: optional_dep,
+        app: app,
+        caller: caller,
+        keys: {first, second, third}
+      }
+    end
+
+    defp decisions_now(view) do
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+      decisions
+    end
+
+    defp account(edge, name \\ nil) do
+      named = if name, do: ~s([data-account="#{name}"]), else: ""
+      ~s([data-test="grant-account"][data-edge="#{edge}"]#{named})
+    end
+
+    # Name the account the row of `edge` now named `current` stands for.
+    defp name_account(view, edge, current, name) do
+      view
+      |> form(account(edge, current) <> ~s( form[phx-change="name_account"]), %{"name" => name})
+      |> render_change()
+
+      render(view)
+    end
+
+    test "an account is added, named and removed on the app's own row and on a dependency's " <>
+           "row; only a complete one is sent, and each is committed under its name",
+         %{view: view, ctx: ctx} do
+      %{local: local, app: app, dep: dep, keys: {first, second, third}} = named_world(ctx)
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-accounts", app)
+      opened = grant.subject.decisions
+      prompt(view, grant)
+
+      # The app's own row: a new account has a name to give, no entry
+      # pressed and standing pressed, and is no decision yet.
+      click(view, ~s([data-test="grant-add-account"][data-edge="@ingress"]))
+      assert has_element?(view, account("@ingress") <> ~s( input[name="name"]))
+
+      refute has_element?(
+               view,
+               account("@ingress") <> ~s( [aria-pressed="true"][data-test="grant-account-pick"])
+             )
+
+      assert has_element?(
+               view,
+               account("@ingress") <> ~s( [data-lifetime="standing"][aria-pressed="true"])
+             )
+
+      assert decisions_now(view) == opened
+
+      # An entry alone is not enough: the account needs its name.
+      click(
+        view,
+        account("@ingress") <>
+          ~s( [data-test="grant-account-pick"][phx-value-entry_id="#{second.id}"])
+      )
+
+      assert decisions_now(view) == opened
+
+      # A name the binding key cannot carry says why and is not sent.
+      name_account(view, "@ingress", "", "has|pipe")
+      assert has_element?(view, account("@ingress") <> ~s( [data-test="grant-account-why"]))
+      assert decisions_now(view) == opened
+
+      name_account(view, "@ingress", "has|pipe", "Work")
+      refute has_element?(view, account("@ingress") <> ~s( [data-test="grant-account-why"]))
+
+      assert %{"need" => "api_key", "entry_id" => id, "name" => "Work"} =
+               Enum.find(decisions_now(view)["bindings"], &(&1["name"] == "Work"))
+
+      assert id == second.id
+
+      # The dependency's row takes its own account, the same name allowed.
+      click(view, ~s([data-test="grant-add-account"][data-edge="#{dep}"]))
+
+      click(
+        view,
+        account(dep) <> ~s( [data-test="grant-account-pick"][phx-value-entry_id="#{third.id}"])
+      )
+
+      name_account(view, dep, "", "Work")
+      click(view, account(dep, "Work") <> ~s( [data-lifetime="once"]))
+
+      assert %{"dep" => ^dep, "from" => ^app, "entry_id" => id, "lifetime" => %{"kind" => "once"}} =
+               Enum.find(decisions_now(view)["selections"], &(&1["name"] == "Work"))
+
+      assert id == third.id
+
+      # A second account of one name on one edge is refused in the row.
+      click(view, ~s([data-test="grant-add-account"][data-edge="#{dep}"]))
+      name_account(view, dep, "", "work")
+
+      assert has_element?(
+               view,
+               account(dep, "work") <> ~s( [data-test="grant-account-why"]),
+               "Another account"
+             )
+
+      click(view, account(dep, "work") <> ~s( [data-test="grant-account-remove"]))
+      refute has_element?(view, account(dep, "work"))
+
+      # Removed, the app's account is no longer sent.
+      click(view, account("@ingress") <> ~s( [data-test="grant-account-remove"]))
+      refute has_element?(view, account("@ingress"))
+      refute Enum.any?(decisions_now(view)["bindings"], &Map.has_key?(&1, "name"))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-accounts") == :confirmed
+
+      {_profile, head} = head_rows(local, app)
+
+      assert %{
+               "#{app}|@ingress|default" => first.id,
+               "#{app}|#{dep}|default" => first.id,
+               "#{app}|#{dep}|name:Work" => third.id
+             } == Map.new(head.vault_refs, &{&1.binding_key, &1.vault_entry_id})
+    end
+
+    test "adding an account beside a lent default first switches the default to the entry " <>
+           "its lender lends",
+         %{view: view, ctx: ctx} do
+      %{local: local, caller: caller, dep: dep, keys: {first, second, _third}} = named_world(ctx)
+
+      {:ok, _} = commit_with!(local, dep, %{bindings: [%{need: "api_key", entry_id: second.id}]})
+      {:ok, _} = commit_with!(local, caller, %{selections: [%{dep: dep, label: "default"}]})
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-lent", caller)
+      assert [%{"label" => "default"}] = grant.subject.decisions["selections"]
+      prompt(view, grant)
+
+      click(view, ~s([data-test="grant-add-account"][data-edge="#{dep}"]))
+
+      assert [%{"dep" => ^dep, "entry_id" => lent}] = decisions_now(view)["selections"]
+      assert lent == second.id
+
+      assert has_element?(
+               view,
+               ~s([data-dep="#{dep}"] [data-test="grant-lent-switched"]),
+               "not lent by default"
+             )
+
+      assert has_element?(view, account(dep))
+
+      click(
+        view,
+        account(dep) <> ~s( [data-test="grant-account-pick"][phx-value-entry_id="#{first.id}"])
+      )
+
+      name_account(view, dep, "", "Home")
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-lent") == :confirmed
+
+      {_profile, head} = head_rows(local, caller)
+
+      assert %{"#{caller}|#{dep}|default" => second.id, "#{caller}|#{dep}|name:Home" => first.id} ==
+               Map.new(head.vault_refs, &{&1.binding_key, &1.vault_entry_id})
+    end
+
+    test "a named head binding reopens on its own row with its lifetime; one whose until has " <>
+           "passed opens unpressed and is granted again by choosing one",
+         %{view: view, ctx: ctx} do
+      %{local: local, caller: caller, dep: dep, keys: {first, second, third}} = named_world(ctx)
+      later = DateTime.utc_now() |> DateTime.add(7200) |> DateTime.truncate(:second)
+      soon = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+      {:ok, _} =
+        commit_with!(local, caller, %{
+          selections: [
+            %{dep: dep, entry_id: first.id},
+            %{
+              dep: dep,
+              entry_id: second.id,
+              name: "Later",
+              lifetime: %{kind: "until", until: DateTime.to_iso8601(later)}
+            },
+            %{
+              dep: dep,
+              entry_id: third.id,
+              name: "Work",
+              lifetime: %{kind: "until", until: DateTime.to_iso8601(soon)}
+            }
+          ]
+        })
+
+      # Work's hour has gone by.
+      {_profile_id, head} = head_rows(local, caller)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.ConsentVaultRef,
+            where:
+              r.athanor_id == ^local.athanor_id and r.consent_id == ^head.id and
+                r.binding_key == ^"#{caller}|#{dep}|name:Work"
+          ),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -60, :second)]
+        )
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-named-head", caller)
+
+      assert Enum.map(grant.subject.decisions["selections"], &{&1["entry_id"], &1["name"]}) ==
+               [{first.id, nil}, {second.id, "Later"}]
+
+      prompt(view, grant)
+
+      # Each account reopens on its own row, its name fixed and its entry
+      # pressed: Later on its own time, Work with nothing pressed, saying why.
+      refute has_element?(view, account(dep, "Later") <> ~s( input[name="name"]))
+
+      assert has_element?(
+               view,
+               account(dep, "Later") <>
+                 ~s( [data-test="grant-account-pick"][aria-pressed="true"][phx-value-entry_id="#{second.id}"])
+             )
+
+      assert has_element?(
+               view,
+               account(dep, "Later") <> ~s( [data-lifetime="kept"][aria-pressed="true"])
+             )
+
+      assert has_element?(view, account(dep, "Work"), "has passed")
+      refute has_element?(view, account(dep, "Work") <> ~s( [data-lifetime][aria-pressed="true"]))
+
+      click(view, account(dep, "Work") <> ~s( [data-lifetime="1h"]))
+
+      assert %{"entry_id" => id, "lifetime" => %{"kind" => "until", "until" => until}} =
+               Enum.find(decisions_now(view)["selections"], &(&1["name"] == "Work"))
+
+      assert id == third.id
+      {:ok, at, 0} = DateTime.from_iso8601(until)
+      assert_in_delta DateTime.diff(at, DateTime.utc_now()), 3600, 60
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-named-head") == :confirmed
+
+      {_profile, head} = head_rows(local, caller)
+      rows = Map.new(head.vault_refs, &{&1.binding_key, &1})
+
+      assert %{lifetime_kind: "until", expires_at: expires_at} =
+               rows["#{caller}|#{dep}|name:Work"]
+
+      assert DateTime.compare(DateTime.truncate(expires_at, :second), at) == :eq
+      assert %{lifetime_kind: "until"} = rows["#{caller}|#{dep}|name:Later"]
+    end
+
+    test "a grant asked for an account opens on that account's row: beside a default, a lent " <>
+           "default and none, and on the app's own calls",
+         %{view: view, ctx: ctx} do
+      %{local: local, app: app, caller: caller, dep: dep, optional_dep: optional, keys: keys} =
+        named_world(ctx)
+
+      {first, second, _third} = keys
+
+      # Beside a default: the grant opens as it would, with a new row of
+      # that name, no entry pressed, standing pressed.
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ask-default", caller,
+          account: %{name: "Work", dep: dep}
+        )
+
+      assert grant.subject.account == %{name: "Work", dep: dep, from: nil, need: nil}
+      assert [%{"dep" => ^dep, "entry_id" => default}] = grant.subject.decisions["selections"]
+      assert default == first.id
+
+      prompt(view, grant)
+      assert has_element?(view, account(dep, "Work"))
+      refute has_element?(view, account(dep, "Work") <> ~s( input[name="name"]))
+
+      refute has_element?(
+               view,
+               account(dep, "Work") <> ~s( [data-test="grant-account-pick"][aria-pressed="true"])
+             )
+
+      assert has_element?(
+               view,
+               account(dep, "Work") <> ~s( [data-lifetime="standing"][aria-pressed="true"])
+             )
+
+      click(
+        view,
+        account(dep, "Work") <>
+          ~s( [data-test="grant-account-pick"][phx-value-entry_id="#{second.id}"])
+      )
+
+      assert %{"entry_id" => id} =
+               Enum.find(decisions_now(view)["selections"], &(&1["name"] == "Work"))
+
+      assert id == second.id
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("g-ask-default") == :dismissed
+
+      # With no default: an optional need binds none, and the account's row
+      # is offered beside it.
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ask-none", caller,
+          account: %{name: "Work", dep: optional}
+        )
+
+      refute Enum.any?(grant.subject.decisions["selections"], &(&1["dep"] == optional))
+      prompt(view, grant)
+      assert has_element?(view, account(optional, "Work"))
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("g-ask-none") == :dismissed
+
+      # The app's own calls, its one credential need.
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ask-own", app,
+          account: %{name: "Work"}
+        )
+
+      prompt(view, grant)
+      assert has_element?(view, account("@ingress", "Work"))
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("g-ask-own") == :dismissed
+
+      # An account the plan has no edge for: the grant opens without it,
+      # and says why.
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ask-nowhere", caller,
+          account: %{name: "Work", dep: "catalyst:local.nowhere"}
+        )
+
+      prompt(view, grant)
+      refute has_element?(view, ~s([data-test="grant-account"][data-account="Work"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-needs"] [data-test="grant-refusal"]),
+               "catalyst:local.nowhere"
+             )
+
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("g-ask-nowhere") == :dismissed
+
+      # Beside a lent default: the default is switched to the lender's entry
+      # before the grant is previewed, and the row says so.
+      {:ok, _} = commit_with!(local, dep, %{bindings: [%{need: "api_key", entry_id: second.id}]})
+      {:ok, _} = commit_with!(local, caller, %{selections: [%{dep: dep, label: "default"}]})
+
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ask-lent", caller,
+          account: %{name: "Work", dep: dep}
+        )
+
+      assert [%{"dep" => ^dep, "entry_id" => lent}] = grant.subject.decisions["selections"]
+      assert lent == second.id
+
+      assert [%{"values" => %{"source" => "own"}}] =
+               Enum.filter(credential_rows(grant.subject.preview), &(&1["values"]["edge"] == dep))
+
+      prompt(view, grant)
+      assert has_element?(view, account(dep, "Work"))
+
+      assert has_element?(
+               view,
+               ~s([data-dep="#{dep}"] [data-test="grant-lent-switched"]),
+               "not lent by default"
+             )
+    end
+  end
+
+  describe "a re-grant's narrowing" do
+    # A re-grant opens on the narrowing its head holds (`profile.plan`'s
+    # `head_narrowing`), never wider: what the head narrowed off opens
+    # off, and so does what the component newly asks for. A first grant
+    # opens on the ask.
+    setup :signed_in
+
+    # A catalyst whose own calls take a key, asking for `methods` on its
+    # one domain, at `version`.
+    defp asking_methods!(local, name, version, methods),
+      do: asking!(local, name, version, ["api.regrant.example"], methods)
+
+    # The same catalyst asking for `methods` on `domains`.
+    defp asking!(local, name, version, domains, methods),
+      do:
+        asking_caps!(local, name, version, %{
+          "egress" => %{"domains" => domains, "methods" => methods}
+        })
+
+    # The same catalyst asking for `caps`, its manifest naming `extra` too.
+    defp asking_caps!(local, name, version, caps, extra \\ %{}) do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: name,
+          version: version,
+          type: "catalyst",
+          description: "A catalyst asking for methods",
+          manifest:
+            Jason.encode!(
+              Map.merge(
+                %{
+                  "needs" => %{
+                    "api_key" => %{
+                      "type" => "api_key:regrant.test",
+                      "reason" => "to reach the regrant service",
+                      "fields" => ["REGRANT_KEY"],
+                      "required" => true,
+                      "attach" => %{
+                        "in" => "header",
+                        "name" => "x-api-key",
+                        "template" => "{value}"
+                      }
+                    }
+                  },
+                  "caps" => caps
+                },
+                extra
+              )
+            )
+        })
+
+      "catalyst:local.#{name}"
+    end
+
+    # What the head of `app`'s profile grants `node`: its resources, as the
+    # node's edge in the stored policy grants them, and its limits.
+    defp held(local, app, node) do
+      {_profile_id, head} = head_rows(local, app)
+      %{"nodes" => nodes} = Jason.decode!(head.resolved_policy)
+
+      %{
+        resources: Sanctum.Consent.BlobBuilder.node_resources(nodes, app, node),
+        limits: get_in(nodes, [node, "limits"])
+      }
+    end
+
+    # The checkbox the sheet draws for one value of `node`'s `field`.
+    defp value_box(node, field, value),
+      do:
+        ~s(input[phx-value-node="#{node}"][phx-value-field="#{field}"][phx-value-choice="#{value}"])
+
+    defp regrant_key!(local, hosts \\ ["api.regrant.example"]) do
+      entry!(local, %{
+        name: "regrant key #{System.unique_integer([:positive])}",
+        provider_hint: "regrant.test",
+        fields: %{"REGRANT_KEY" => "sk-regrant"},
+        destination: %{"hosts" => hosts}
+      })
+    end
+
+    defp egress_domains(%{rows: rows}) do
+      for %{"kind" => "egress", "values" => values} <- rows, do: values["domains"]
+    end
+
+    # The checkbox the sheet draws for one egress method.
+    defp method_box(method),
+      do: ~s(input[phx-value-field="methods"][phx-value-choice="#{method}"])
+
+    defp egress_methods(%{rows: rows}) do
+      for %{"kind" => "egress", "values" => values} <- rows, do: values["methods"]
+    end
+
+    test "a GET-only grant reopened for an account opens at GET only, and committed " <>
+           "unchanged grants GET only",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(
+          local,
+          "layer-regrant-#{System.unique_integer([:positive])}",
+          "0.1.0",
+          ~w(GET POST)
+        )
+
+      key = regrant_key!(local)
+      get_only = %{app => %{"egress" => %{"methods" => ["GET"]}}}
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: get_only
+        })
+
+      {_profile_id, granted} = head_rows(local, app)
+
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-regrant", app,
+          account: %{name: "Work"}
+        )
+
+      assert grant.subject.decisions["subset"] == get_only
+      assert egress_methods(grant.subject.preview) == [["GET"]]
+
+      prompt(view, grant)
+      assert has_element?(view, account("@ingress", "Work"))
+      assert has_element?(view, method_box("GET") <> "[checked]")
+      assert has_element?(view, method_box("POST"))
+      refute has_element?(view, method_box("POST") <> "[checked]")
+
+      # Confirmed as it opened: the head's grant again, whole.
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-regrant") == :confirmed
+
+      {_profile_id, regranted} = head_rows(local, app)
+      assert regranted.revision == 2
+      assert regranted.resolved_policy == granted.resolved_policy
+      {_head, ingress, _limits} = head!(local, app)
+      assert ingress.egress.methods == ["GET"]
+    end
+
+    test "a method newly asked for opens off, is listed as what changed, and is granted " <>
+           "only when the person widens to it",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "layer-new-method-#{System.unique_integer([:positive])}"
+      app = asking_methods!(local, name, "0.1.0", ~w(GET))
+      key = regrant_key!(local)
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      # A release asking for POST too.
+      asking_methods!(local, name, "0.2.0", ~w(GET POST))
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-new-method", app)
+
+      assert grant.subject.decisions["subset"] == %{app => %{"egress" => %{"methods" => ["GET"]}}}
+      assert egress_methods(grant.subject.preview) == [["GET"]]
+
+      prompt(view, grant)
+      assert has_element?(view, method_box("GET") <> "[checked]")
+      refute has_element?(view, method_box("POST") <> "[checked]")
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-delta"] li),
+               "asks for POST, which your grant does not give"
+             )
+
+      # Widened by the person, the narrowing drops and the preview grants it.
+      click(view, method_box("POST"))
+      refute Map.has_key?(decisions_now(view), "subset")
+      assert has_element?(view, method_box("POST") <> "[checked]")
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-new-method") == :confirmed
+      {_head, ingress, _limits} = head!(local, app)
+      assert Enum.sort(ingress.egress.methods) == ["GET", "POST"]
+    end
+
+    # A narrowing grants part of the current ask: a domain the head granted
+    # and the release no longer asks for opens as nothing, never as a
+    # refusal, and the grant is the ask's.
+    test "a release dropping a domain the head granted opens on the ask, and commits it",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "layer-dropped-#{System.unique_integer([:positive])}"
+      both = ["a.regrant.example", "b.regrant.example"]
+      app = asking!(local, name, "0.1.0", both, ~w(GET))
+      key = regrant_key!(local, both)
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      asking!(local, name, "0.2.0", ["a.regrant.example"], ~w(GET))
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-dropped", app)
+
+      assert grant.subject.plan.head_narrowing == %{}
+      refute Map.has_key?(grant.subject.decisions, "subset")
+      assert egress_domains(grant.subject.preview) == [["a.regrant.example"]]
+      refute Map.has_key?(grant.subject, :suggestion_refused)
+
+      prompt(view, grant)
+      refute has_element?(view, ~s([data-test="grant-refusal"]))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-dropped") == :confirmed
+
+      {_head, ingress, _limits} = head!(local, app)
+      assert ingress.egress.domains == ["a.regrant.example"]
+    end
+
+    test "a GET-only head on a release that drops a domain and adds POST opens on the " <>
+           "remaining domain, GET only, with POST off and listed as new",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "layer-changed-#{System.unique_integer([:positive])}"
+      both = ["a.regrant.example", "b.regrant.example"]
+      app = asking!(local, name, "0.1.0", both, ~w(GET))
+      key = regrant_key!(local, both)
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      asking!(local, name, "0.2.0", ["a.regrant.example"], ~w(GET POST))
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-changed", app)
+
+      get_only = %{app => %{"egress" => %{"methods" => ["GET"]}}}
+      assert grant.subject.decisions["subset"] == get_only
+      assert egress_domains(grant.subject.preview) == [["a.regrant.example"]]
+      assert egress_methods(grant.subject.preview) == [["GET"]]
+
+      prompt(view, grant)
+      refute has_element?(view, ~s([data-test="grant-refusal"]))
+      assert has_element?(view, method_box("GET") <> "[checked]")
+      refute has_element?(view, method_box("POST") <> "[checked]")
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-delta"] li),
+               "asks for POST, which your grant does not give"
+             )
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-changed") == :confirmed
+
+      {_head, ingress, _limits} = head!(local, app)
+      assert ingress.egress.domains == ["a.regrant.example"]
+      assert ingress.egress.methods == ["GET"]
+    end
+
+    test "a first grant opens on the methods asked for", %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(
+          local,
+          "layer-first-#{System.unique_integer([:positive])}",
+          "0.1.0",
+          ~w(GET POST)
+        )
+
+      regrant_key!(local)
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-first", app)
+
+      refute Map.has_key?(grant.subject.decisions, "subset")
+      assert [methods] = egress_methods(grant.subject.preview)
+      assert Enum.sort(methods) == ["GET", "POST"]
+
+      prompt(view, grant)
+      assert has_element?(view, method_box("GET") <> "[checked]")
+      assert has_element?(view, method_box("POST") <> "[checked]")
+    end
+
+    test "a rate limit narrowed on the head reopens as its overlap with a release's ask, and " <>
+           "commits no larger a burst and no faster a rate than either",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "layer-rate-#{System.unique_integer([:positive])}"
+
+      caps = fn rate ->
+        %{
+          "egress" => %{"domains" => ["api.regrant.example"], "methods" => ["GET"]},
+          "limits" => %{"rate_limit" => rate}
+        }
+      end
+
+      app = asking_caps!(local, name, "0.1.0", caps.(%{"requests" => 100, "window" => "1m"}))
+      key = regrant_key!(local)
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => %{"limits" => %{"rate_limit" => %{"requests" => 50}}}}
+        })
+
+      # 40 per ten seconds is 240 a minute, faster than the head's 50.
+      asking_caps!(local, name, "0.2.0", caps.(%{"requests" => 40, "window" => "10s"}))
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-rate", app)
+
+      assert grant.subject.decisions["subset"] == %{
+               app => %{"limits" => %{"rate_limit" => %{"window" => "1m"}}}
+             }
+
+      assert for(
+               %{"kind" => "limits", "values" => values} <- grant.subject.preview.rows,
+               do: values["rate_limit"]
+             ) == [%{"requests" => 40, "window" => "1m"}]
+
+      prompt(view, grant)
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-rate") == :confirmed
+
+      assert held(local, app, app).limits["rate_limit"] == %{"requests" => 40, "window" => "1m"}
+    end
+
+    test "a dependency a release adds opens granting none of what it asks, and is granted " <>
+           "only as the person ticks it",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+      dep = "reagent:local.layer-added-dep-#{n}"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: "layer-added-dep-#{n}",
+          version: "0.1.0",
+          type: "reagent",
+          description: "A dependency a release adds",
+          manifest:
+            Jason.encode!(%{
+              "caps" => %{
+                "egress" => %{"domains" => ["api.dep.example"], "methods" => ~w(GET DELETE)}
+              }
+            })
+        })
+
+      name = "layer-adding-#{n}"
+      caps = %{"egress" => %{"domains" => ["api.regrant.example"], "methods" => ~w(GET POST)}}
+      app = asking_caps!(local, name, "0.1.0", caps)
+      key = regrant_key!(local)
+      get_only = %{"egress" => %{"methods" => ["GET"]}}
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => get_only}
+        })
+
+      asking_caps!(local, name, "0.2.0", caps, %{
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      none = %{"egress" => %{"domains" => [], "methods" => [], "schemes" => []}}
+
+      # Opened and confirmed as it opens: the dependency is granted nothing.
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-added", app)
+      assert grant.subject.decisions["subset"] == %{app => get_only, dep => none}
+      prompt(view, grant)
+
+      # Listed after the app's own as a new dependency, with what it asks.
+      assert delta_groups(view) == [
+               {app, "", ["Network methods: asks for POST, which your grant does not give"]},
+               {dep, "New dependency #{dep}",
+                [
+                  "Network domains: asks for api.dep.example, which your grant does not give",
+                  "Network methods: asks for DELETE, GET, which your grant does not give",
+                  "Network schemes: asks for https, which your grant does not give"
+                ]}
+             ]
+
+      for {field, value} <- [
+            {"domains", "api.dep.example"},
+            {"methods", "GET"},
+            {"schemes", "https"}
+          ] do
+        assert has_element?(view, value_box(dep, field, value))
+        refute has_element?(view, value_box(dep, field, value) <> "[checked]")
+      end
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-added") == :confirmed
+
+      %{resources: %{"egress" => egress}} = held(local, app, dep)
+      assert {egress["domains"], egress["methods"], egress["schemes"]} == {[], [], []}
+
+      # Opened again, the person ticks the dependency's domain, GET and
+      # https: that is what it is granted.
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-ticked", app)
+      assert grant.subject.decisions["subset"] == %{app => get_only, dep => none}
+      prompt(view, grant)
+
+      click(view, value_box(dep, "domains", "api.dep.example"))
+      click(view, value_box(dep, "methods", "GET"))
+      click(view, value_box(dep, "schemes", "https"))
+      assert decisions_now(view)["subset"] == %{app => get_only, dep => get_only}
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-ticked") == :confirmed
+
+      %{resources: %{"egress" => egress}} = held(local, app, dep)
+      assert {egress["domains"], egress["methods"]} == {["api.dep.example"], ["GET"]}
+
+      # The dependency's release asks for PATCH too: it opens off, and is
+      # listed under the dependency, never as the app's own.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: "layer-added-dep-#{n}",
+          version: "0.2.0",
+          type: "reagent",
+          description: "A dependency a release adds",
+          manifest:
+            Jason.encode!(%{
+              "caps" => %{
+                "egress" => %{"domains" => ["api.dep.example"], "methods" => ~w(GET DELETE PATCH)}
+              }
+            })
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-patch", app)
+      assert grant.subject.decisions["subset"] == %{app => get_only, dep => get_only}
+      prompt(view, grant)
+      refute has_element?(view, value_box(dep, "methods", "PATCH") <> "[checked]")
+
+      assert delta_groups(view) == [
+               {app, "", ["Network methods: asks for POST, which your grant does not give"]},
+               {dep, dep,
+                ["Network methods: asks for DELETE, PATCH, which your grant does not give"]}
+             ]
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-patch") == :confirmed
+
+      # A release of the app that no longer uses the dependency: listed as
+      # no longer used, with what the head granted it.
+      asking_caps!(local, name, "0.3.0", caps)
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-dropped", app)
+      prompt(view, grant)
+
+      assert delta_groups(view) == [
+               {app, "", ["Network methods: asks for POST, which your grant does not give"]},
+               {dep, "No longer used: #{dep}",
+                [
+                  "Network domains: no longer asks for api.dep.example",
+                  "Network methods: no longer asks for GET",
+                  "Network schemes: no longer asks for https"
+                ]}
+             ]
+    end
+
+    # What changed since the grant as the open sheet shows it: each node's
+    # group, its heading and its lines.
+    defp delta_groups(view) do
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-test="grant-delta"] [data-test="grant-delta-node"]))
+      |> Enum.map(fn group ->
+        heading = LazyHTML.query(group, ~s([data-test="grant-delta-heading"]))
+
+        {group |> LazyHTML.attribute("data-node") |> List.first(), squish(LazyHTML.text(heading)),
+         group |> LazyHTML.query("li") |> Enum.map(&squish(LazyHTML.text(&1)))}
+      end)
+    end
+
+    defp squish(text), do: text |> String.split() |> Enum.join(" ")
+
+    # A head is read as every head's bytes are: a policy that does not
+    # decode, one whose bytes fail their stored digest though they decode
+    # and grant more than was committed, and one whose nodes are no nodes
+    # under its own digest each leave the narrowing unknown. The person
+    # reads the refusal where the grant was asked for: on the thread pane
+    # of the turn whose launch named the account.
+    test "a grant whose stored policy cannot be read is refused, and the person reads why",
+         %{view: view, ctx: ctx, conn: conn, user: user} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(
+          local,
+          "layer-damaged-#{System.unique_integer([:positive])}",
+          "0.1.0",
+          ~w(GET POST)
+        )
+
+      key = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      {profile_id, head} = head_rows(local, app)
+
+      widened =
+        String.replace(head.resolved_policy, ~s("methods":["GET"]), ~s("methods":["GET","POST"]))
+
+      assert widened != head.resolved_policy
+      not_nodes = Jason.encode!(%{"nodes" => %{app => "x"}})
+
+      athanor = seated_athanor()
+      conn = log_in_user(conn, user, claim: false, athanor_id: athanor.id)
+      {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(local))
+
+      {:ok, page, _html} =
+        live(
+          conn,
+          PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor), thread.id)
+        )
+
+      settled_render(page)
+      pane = find_live_child(page, "pane-" <> athanor.id)
+
+      refused =
+        "Cannot ask for this grant: The stored profile is damaged and cannot be used."
+
+      for changes <- [
+            [resolved_policy: "not a blob"],
+            [resolved_policy: widened],
+            [resolved_policy: not_nodes, blob_digest: Prima.JCS.hash_binary(not_nodes)]
+          ] do
+        :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(local, profile_id, changes)
+
+        assert PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-damaged", app,
+                 account: %{name: "Work"}
+               ) == {:error, {:corrupt, {:profile, profile_id}}}
+
+        # A launch naming the account asks for it on the pane.
+        render_click(pane, "lv:clear-flash", %{"key" => "error"})
+        refute render(pane) =~ refused
+
+        send(pane.pid, %Cyfr.Bus.ThreadEvent{
+          athanor_id: athanor.id,
+          thread_id: thread.id,
+          kind: :consent_required,
+          data: %{ref: app, user_id: user.user_id, account: %{name: "Work"}}
+        })
+
+        assert render(pane) =~ refused, inspect(changes)
+        refute has_element?(page, ~s(#system-layer-dialog [data-kind="grant"]))
+      end
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # The limits form shows a rate as its count; a re-grant whose rate
+    # opened as the overlap of the head's and the ask's (a longer window
+    # than the ask's) keeps that window when the person lowers another
+    # limit, so the commit is never a faster rate than the head allowed.
+    test "a re-grant whose rate opened as the overlap keeps it when the person lowers the timeout",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "rate-form-#{System.unique_integer([:positive])}"
+
+      caps = fn rate ->
+        %{
+          "egress" => %{"domains" => ["api.regrant.example"], "methods" => ["GET"]},
+          "limits" => %{"rate_limit" => rate, "timeout" => "1m"}
+        }
+      end
+
+      app = asking_caps!(local, name, "0.1.0", caps.(%{"requests" => 100, "window" => "1m"}))
+      key = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => %{"limits" => %{"rate_limit" => %{"requests" => 50}}}}
+        })
+
+      # 40 per ten seconds is 240 a minute; the head allows 50 a minute.
+      asking_caps!(local, name, "0.2.0", caps.(%{"requests" => 40, "window" => "10s"}))
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-rate-form", app)
+      prompt(view, grant)
+
+      view
+      |> form(~s(form[phx-submit="set_limits"]), %{"limits" => %{"timeout" => "30s"}})
+      |> render_submit()
+
+      render(view)
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-rate-form") == :confirmed
+
+      limits = held(local, app, app).limits
+      assert limits["rate_limit"] == %{"requests" => 40, "window" => "1m"}
+      assert limits["timeout"] == "30s"
+    end
+
+    # A release that lands while the sheet is open moves the ask under it:
+    # the commit is refused, the sheet plans again, and it opens again on
+    # the grant as it stands against the new ask, never carrying the old
+    # narrowing onto what the release added.
+    test "a method a release asks for while the sheet is open stays off after the sheet plans again",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "moved-method-#{System.unique_integer([:positive])}"
+      app = asking_methods!(local, name, "0.1.0", ~w(GET POST))
+      key = regrant_key!(local)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-moved-method", app)
+      prompt(view, grant)
+      refute has_element?(view, ~s([data-test="grant-moved"]))
+      asking_methods!(local, name, "0.2.0", ~w(GET POST PATCH))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert {:refused, _} = outcome("g-moved-method")
+      render(view)
+      assert has_element?(view, ~s([data-test="grant-moved"]))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-moved-method") == :confirmed
+      assert Enum.sort(held(local, app, app).resources["egress"]["methods"]) == ~w(GET POST)
+    end
+
+    # A catalyst taking a required key and an optional one the person can
+    # connect from the sheet ("Connect your <provider> account"), asking
+    # for `methods` on both domains.
+    defp connectable!(local, name, version, methods, extra \\ %{}) do
+      attach = fn header -> %{"in" => "header", "name" => header, "template" => "{value}"} end
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: name,
+          version: version,
+          type: "catalyst",
+          description: "a catalyst with a key to connect",
+          manifest:
+            Jason.encode!(
+              Map.merge(
+                %{
+                  "needs" => %{
+                    "api_key" => %{
+                      "type" => "api_key:regrant.test",
+                      "reason" => "to reach the regrant service",
+                      "fields" => ["REGRANT_KEY"],
+                      "required" => true,
+                      "attach" => attach.("x-api-key")
+                    },
+                    "other_key" => %{
+                      "type" => "api_key:other3.test",
+                      "reason" => "to reach the other service",
+                      "fields" => ["OTHER_KEY"],
+                      "required" => false,
+                      "attach" => attach.("x-other-key"),
+                      "hosts" => ["api.other3.example"]
+                    }
+                  },
+                  "caps" => %{
+                    "egress" => %{
+                      "domains" => ["api.regrant.example", "api.other3.example"],
+                      "methods" => methods
+                    }
+                  }
+                },
+                extra
+              )
+            )
+        })
+
+      "catalyst:local.#{name}"
+    end
+
+    # Connects the optional key through the layer's credential prompt;
+    # `meanwhile` runs while that prompt is open, before the sheet's walk
+    # returns with the entry and plans again. Over the same ask and grant
+    # the sheet keeps the entry picked (`:picked`); when `meanwhile` moved
+    # either, it opens again as a prompt opening now would, which picks no
+    # optional need, and says so (`:moved`).
+    defp connect_meanwhile!(view, ctx, meanwhile, expect \\ :picked) do
+      click(view, ~s([data-test="grant-connect"]))
+      id = open_prompt(view)
+      assert "connect-" <> _ = id
+      meanwhile.()
+      name = "Other #{System.unique_integer([:positive])}"
+
+      typed = %{
+        "prompt_id" => id,
+        "name" => name,
+        "secret" => "sk-other",
+        "destination_hosts" => "api.other3.example"
+      }
+
+      view |> form("#system-layer-credential", typed) |> render_submit()
+
+      {:ok, [%{ref: record} | _]} =
+        Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+
+      wait_until(fn -> render(view) =~ ~s(data-ref="#{record}") end, 2_000, "the waiting record")
+      Sanctum.TestContext.prove!(ctx, record)
+      assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
+      view |> form("#system-layer-credential", typed) |> render_submit()
+      assert outcome(id) == :confirmed
+
+      wait_until(
+        fn ->
+          render(view)
+
+          case expect do
+            :picked -> has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]), name)
+            :moved -> has_element?(view, ~s([data-test="grant-moved"]))
+          end
+        end,
+        2_000,
+        "the grant planned again"
+      )
+    end
+
+    # A release that lands while the credential prompt is open is met as
+    # one that lands while the sheet is: the walk that returns with the
+    # entry plans again over the moved ask and opens on the grant as it
+    # stands, so its first confirm grants nothing the release added.
+    test "a method a release asks for while a credential is entered stays off",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "connect-method-#{System.unique_integer([:positive])}"
+      app = connectable!(local, name, "0.1.0", ~w(GET POST))
+      key = regrant_key!(local)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      {:ok, grant} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-connect-method", app)
+
+      prompt(view, grant)
+
+      connect_meanwhile!(
+        view,
+        ctx,
+        fn -> connectable!(local, name, "0.2.0", ~w(GET POST PATCH)) end,
+        :moved
+      )
+
+      assert has_element?(view, ~s([data-test="grant-moved"]))
+      refute has_element?(view, method_box("PATCH") <> "[checked]")
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-connect-method") == :confirmed
+      assert Enum.sort(held(local, app, app).resources["egress"]["methods"]) == ~w(GET POST)
+    end
+
+    test "a dependency a release adds while a credential is entered is granted nothing",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+      dep = "reagent:local.connect-dep-#{n}"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: "connect-dep-#{n}",
+          version: "0.1.0",
+          type: "reagent",
+          description: "a dependency a release adds",
+          manifest:
+            Jason.encode!(%{
+              "caps" => %{
+                "egress" => %{"domains" => ["api.dep.example"], "methods" => ~w(GET DELETE)}
+              }
+            })
+        })
+
+      name = "connect-src-#{n}"
+      app = connectable!(local, name, "0.1.0", ~w(GET POST))
+      key = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-connect-dep", app)
+      prompt(view, grant)
+
+      connect_meanwhile!(
+        view,
+        ctx,
+        fn ->
+          connectable!(local, name, "0.2.0", ~w(GET POST), %{
+            "dependencies" => %{"static" => [%{"ref" => dep}]}
+          })
+        end,
+        :moved
+      )
+
+      assert has_element?(view, ~s([data-test="grant-moved"]))
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-connect-dep") == :confirmed
+      %{resources: %{"egress" => egress}} = held(local, app, dep)
+      assert {egress["domains"], egress["methods"]} == {[], []}
+    end
+
+    test "a credential entered over the same ask keeps the person's narrowing",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        connectable!(
+          local,
+          "connect-same-#{System.unique_integer([:positive])}",
+          "0.1.0",
+          ~w(GET POST)
+        )
+
+      key = regrant_key!(local)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-connect-same", app)
+      prompt(view, grant)
+      click(view, ~s([data-test="grant-get-head-only"]))
+      connect_meanwhile!(view, ctx, fn -> :ok end)
+
+      refute has_element?(view, ~s([data-test="grant-moved"]))
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-connect-same") == :confirmed
+      assert held(local, app, app).resources["egress"]["methods"] == ["GET"]
+    end
+
+    test "a dependency a release adds while the sheet is open is granted nothing after the " <>
+           "sheet plans again",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+      dep = "reagent:local.moved-dep-#{n}"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: "moved-dep-#{n}",
+          version: "0.1.0",
+          type: "reagent",
+          description: "a dependency a release adds",
+          manifest:
+            Jason.encode!(%{
+              "caps" => %{
+                "egress" => %{"domains" => ["api.dep.example"], "methods" => ~w(GET DELETE)}
+              }
+            })
+        })
+
+      caps = %{"egress" => %{"domains" => ["api.regrant.example"], "methods" => ~w(GET POST)}}
+      app = asking_caps!(local, "moved-src-#{n}", "0.1.0", caps)
+      key = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-moved-dep", app)
+      prompt(view, grant)
+
+      asking_caps!(local, "moved-src-#{n}", "0.2.0", caps, %{
+        "dependencies" => %{"static" => [%{"ref" => dep}]}
+      })
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert {:refused, _} = outcome("g-moved-dep")
+      render(view)
+      assert has_element?(view, ~s([data-test="grant-moved"]))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-moved-dep") == :confirmed
+      %{resources: %{"egress" => egress}} = held(local, app, dep)
+      assert {egress["domains"], egress["methods"], egress["schemes"]} == {[], [], []}
+      assert held(local, app, app).resources["egress"]["methods"] == ["GET"]
+    end
+  end
+
+  describe "a re-grant planned again over a grant that moved" do
+    # Another client committed while the sheet was open, over the same ask:
+    # the sheet opens again on the grant as it stands, never carrying the
+    # old head's narrowing, origins, accounts or lifetimes over it.
+    setup :signed_in
+
+    defp held_methods(local, app, node),
+      do: Enum.sort(held(local, app, node).resources["egress"]["methods"] || [])
+
+    defp confirm_now(view, id) do
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      answer = outcome(id)
+      render(view)
+      answer
+    end
+
+    test "a refused commit replans over a head narrowed elsewhere, same ask",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(local, "h1-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET POST))
+
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, %{revision: 1}} = commit_with!(local, app, %{bindings: binding})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h1", app)
+      prompt(view, grant)
+
+      # Another client narrows the grant to GET only, over the same ask.
+      {:ok, %{revision: 2}} =
+        commit_with!(local, app, %{
+          bindings: binding,
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      assert {:refused, _} = confirm_now(view, "g-h1")
+      post_on = has_element?(view, method_box("POST") <> "[checked]")
+      second = confirm_now(view, "g-h1")
+      after_methods = held_methods(local, app, app)
+      assert second == :confirmed
+      refute post_on, "the sheet replanned with POST ticked over a GET-only grant"
+      assert after_methods == ["GET"], "committed #{inspect(after_methods)} over a GET-only grant"
+    end
+
+    test "a credential walk replans over a head narrowed elsewhere, same ask",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      app = connectable!(local, "h2-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET POST))
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, %{revision: 1}} = commit_with!(local, app, %{bindings: binding})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h2", app)
+      prompt(view, grant)
+
+      connect_meanwhile!(
+        view,
+        ctx,
+        fn ->
+          {:ok, %{revision: 2}} =
+            commit_with!(local, app, %{
+              bindings: binding,
+              subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+            })
+        end,
+        :moved
+      )
+
+      post_on = has_element?(view, method_box("POST") <> "[checked]")
+      first = confirm_now(view, "g-h2")
+      after_methods = held_methods(local, app, app)
+      assert first == :confirmed
+      refute post_on, "the sheet replanned with POST ticked over a GET-only grant"
+      assert after_methods == ["GET"], "committed #{inspect(after_methods)} over a GET-only grant"
+    end
+
+    test "after a moved reopen, a head narrowed elsewhere is never committed over",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      name = "h3-#{System.unique_integer([:positive])}"
+      app = asking_methods!(local, name, "0.1.0", ~w(GET POST))
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, _} = commit_with!(local, app, %{bindings: binding})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h3", app)
+      prompt(view, grant)
+      asking_methods!(local, name, "0.2.0", ~w(GET POST PATCH))
+      assert {:refused, _} = confirm_now(view, "g-h3")
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: binding,
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      assert {:refused, _} = confirm_now(view, "g-h3")
+      post_on = has_element?(view, method_box("POST") <> "[checked]")
+
+      # The notice is true while it shows: the sheet holds what a prompt
+      # opening now opens on.
+      assert has_element?(view, ~s([data-test="grant-moved"]))
+      {:ok, fresh} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h3-fresh", app)
+      assert decisions_now(view)["subset"] == fresh.subject.decisions["subset"]
+
+      third = confirm_now(view, "g-h3")
+      after_methods = held_methods(local, app, app)
+      assert third == :confirmed
+      refute post_on, "the sheet replanned with POST ticked over a GET-only grant"
+      assert after_methods == ["GET"], "committed #{inspect(after_methods)} over a GET-only grant"
+    end
+
+    test "a first grant's sheet replans over a grant made elsewhere, same ask",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(local, "h4-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET POST))
+
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h4", app)
+      prompt(view, grant)
+
+      {:ok, %{revision: 1}} =
+        commit_with!(local, app, %{
+          bindings: binding,
+          subset: %{app => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      assert {:refused, _} = confirm_now(view, "g-h4")
+      post_on = has_element?(view, method_box("POST") <> "[checked]")
+      second = confirm_now(view, "g-h4")
+      after_methods = held_methods(local, app, app)
+      assert second == :confirmed
+      refute post_on, "the sheet replanned with POST ticked over a GET-only grant"
+      assert after_methods == ["GET"], "committed #{inspect(after_methods)} over a GET-only grant"
+    end
+
+    test "limits narrowed elsewhere, same ask, after a refused commit",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_caps!(local, "h5-#{System.unique_integer([:positive])}", "0.1.0", %{
+          "egress" => %{"domains" => ["api.regrant.example"], "methods" => ["GET"]},
+          "limits" => %{"rate_limit" => %{"requests" => 100, "window" => "1m"}, "timeout" => "1m"}
+        })
+
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, _} = commit_with!(local, app, %{bindings: binding})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h5", app)
+      prompt(view, grant)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: binding,
+          subset: %{
+            app => %{
+              "limits" => %{
+                "timeout" => "20s",
+                "rate_limit" => %{"requests" => 10, "window" => "1m"}
+              }
+            }
+          }
+        })
+
+      before = held(local, app, app).limits
+      assert {:refused, _} = confirm_now(view, "g-h5")
+      second = confirm_now(view, "g-h5")
+      after_limits = held(local, app, app).limits
+      assert second == :confirmed
+      assert after_limits == before
+      assert after_limits["timeout"] == "20s"
+      assert after_limits["rate_limit"] == %{"requests" => 10, "window" => "1m"}
+    end
+
+    test "origins narrowed elsewhere, same ask, after a refused commit",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      app = asking_methods!(local, "h6-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET))
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+
+      {:ok, _} =
+        commit_with!(local, app, %{bindings: binding, origins: [:interactive, :schedule]})
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h6", app)
+      prompt(view, grant)
+      {:ok, _} = commit_with!(local, app, %{bindings: binding, origins: [:interactive]})
+      assert {:refused, _} = confirm_now(view, "g-h6")
+      second = confirm_now(view, "g-h6")
+      {_p, head} = head_rows(local, app)
+      assert second == :confirmed
+      assert head.admitted_origins == [:interactive]
+    end
+
+    test "a named account removed elsewhere, same ask, after a refused commit",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      app = asking_methods!(local, "h7-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET))
+      key = regrant_key!(local)
+      work = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [
+            %{need: "api_key", entry_id: key.id},
+            %{need: "api_key", entry_id: work.id, name: "Work"}
+          ]
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h7", app)
+      prompt(view, grant)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+      assert {:refused, _} = confirm_now(view, "g-h7")
+      second = confirm_now(view, "g-h7")
+      {_p, head} = head_rows(local, app)
+      bound = Enum.map(head.vault_refs, &{&1.binding_key, &1.vault_entry_id})
+      assert second == :confirmed
+      refute Enum.any?(bound, fn {_k, id} -> id == work.id end)
+    end
+
+    test "a binding's lifetime narrowed elsewhere to once, same ask, after a refused commit",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      app = asking_methods!(local, "h9-#{System.unique_integer([:positive])}", "0.1.0", ~w(GET))
+      key = regrant_key!(local)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: key.id}]})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h9", app)
+      prompt(view, grant)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id, lifetime: %{kind: "once"}}]
+        })
+
+      assert {:refused, _} = confirm_now(view, "g-h9")
+      second = confirm_now(view, "g-h9")
+      {_p, head} = head_rows(local, app)
+      kinds = Enum.map(head.vault_refs, & &1.lifetime_kind)
+      assert second == :confirmed
+      assert kinds == ["once"]
+    end
+
+    test "a held dependency narrowed elsewhere, same ask, after a refused commit",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+      dep = "reagent:local.h8-dep-#{n}"
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: "h8-dep-#{n}",
+          version: "0.1.0",
+          type: "reagent",
+          description: "a held dependency",
+          manifest:
+            Jason.encode!(%{
+              "caps" => %{
+                "egress" => %{"domains" => ["api.dep.example"], "methods" => ~w(GET DELETE)}
+              }
+            })
+        })
+
+      app =
+        asking_caps!(
+          local,
+          "h8-src-#{n}",
+          "0.1.0",
+          %{"egress" => %{"domains" => ["api.regrant.example"], "methods" => ["GET"]}},
+          %{"dependencies" => %{"static" => [%{"ref" => dep}]}}
+        )
+
+      key = regrant_key!(local)
+      binding = [%{need: "api_key", entry_id: key.id}]
+      {:ok, _} = commit_with!(local, app, %{bindings: binding})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h8", app)
+      prompt(view, grant)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: binding,
+          subset: %{dep => %{"egress" => %{"methods" => ["GET"]}}}
+        })
+
+      assert {:refused, _} = confirm_now(view, "g-h8")
+      second = confirm_now(view, "g-h8")
+      after_methods = held_methods(local, app, dep)
+      assert second == :confirmed
+      assert after_methods == ["GET"]
+    end
+
+    @tag :a2g4g
+    test "the limits form keeps the integer limits a re-grant's head narrowed",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_caps!(local, "g1-#{System.unique_integer([:positive])}", "0.1.0", %{
+          "egress" => %{"domains" => ["api.regrant.example"], "methods" => ["GET"]},
+          "limits" => %{"timeout" => "1m", "max_concurrent_tasks" => 10}
+        })
+
+      key = regrant_key!(local)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [%{need: "api_key", entry_id: key.id}],
+          subset: %{
+            app => %{"limits" => %{"max_concurrent_tasks" => 4, "max_memory_bytes" => 33_554_432}}
+          }
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-g1", app)
+      prompt(view, grant)
+
+      view
+      |> form(~s(form[phx-submit="set_limits"]), %{"limits" => %{"timeout" => "30s"}})
+      |> render_submit()
+
+      render(view)
+      first = confirm_now(view, "g-g1")
+      after_limits = held(local, app, app).limits
+      assert first == :confirmed
+      assert after_limits["max_concurrent_tasks"] == 4
+      assert after_limits["max_memory_bytes"] == 33_554_432
+      assert after_limits["timeout"] == "30s"
     end
   end
 
@@ -1075,7 +3562,8 @@ defmodule PrismWeb.SystemLayerTest do
         PrismWeb.Ops.call_tool(other, "vault/create", %{
           "name" => "quiet-#{System.unique_integer([:positive])}",
           "kind" => "api_key",
-          "fields" => %{"KEY" => "sk-quiet"}
+          "fields" => %{"KEY" => "sk-quiet"},
+          "destination" => %{"hosts" => ["api.example.com"]}
         })
       end
 
@@ -1194,6 +3682,34 @@ defmodule PrismWeb.SystemLayerTest do
       end
     end
 
+    test "a grant's account names exactly its name, dependency, caller and need, and is kept " <>
+           "on the subject; anything else is refused",
+         %{view: view, ctx: ctx} do
+      account = %{name: "Work", dep: "catalyst:local.db", from: nil, need: nil}
+      prompt(view, put_in(grant(ctx, "acct"), [:subject, :account], account))
+      assert open_prompt(view) == "acct"
+      assert %{current: %{subject: %{account: ^account}}} = layer_assigns(view)
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("acct") == :dismissed
+
+      malformed = [
+        {"a1", Map.delete(account, :from)},
+        {"a2", Map.put(account, :entry_id, "vlt_x")},
+        {"a3", %{account | name: "has|pipe"}},
+        {"a4", %{account | name: ""}},
+        {"a5", %{account | dep: ""}},
+        {"a6", %{account | need: 7}},
+        {"a7", %{account | from: ""}},
+        {"a8", "Work"}
+      ]
+
+      for {id, bad} <- malformed do
+        html = prompt(view, put_in(grant(ctx, id), [:subject, :account], bad))
+        assert outcome(id) == {:refused, :invalid_prompt}, id
+        assert html =~ ~s(data-open="false")
+      end
+    end
+
     test "a grant whose closure is unresolved opens naming what is missing, with nothing to confirm",
          %{view: view, ctx: ctx} do
       unresolved =
@@ -1297,6 +3813,13 @@ defmodule PrismWeb.SystemLayerTest do
       assert has_element?(view, ~s(button[type="submit"][form="system-layer-credential"]))
       refute html =~ secret
 
+      # Where the value may go is asked, with nothing prefilled, and the
+      # app reading it is off until the person turns it on.
+      assert has_element?(view, ~s(input[name="destination_hosts"][required]))
+      refute has_element?(view, ~s(input[name="destination_hosts"][value]))
+      assert has_element?(view, ~s(input[type="checkbox"][name="disclose"]))
+      refute has_element?(view, ~s(input[type="checkbox"][name="disclose"][checked]))
+
       previous = Logger.level()
       Logger.configure(level: :debug)
       on_exit(fn -> Logger.configure(level: previous) end)
@@ -1304,7 +3827,10 @@ defmodule PrismWeb.SystemLayerTest do
       {id, log} =
         with_log([level: :debug], fn ->
           view
-          |> form("#system-layer-credential", %{"secret" => secret})
+          |> form("#system-layer-credential", %{
+            "secret" => secret,
+            "destination_hosts" => "API.example.com"
+          })
           |> render_submit()
 
           # The prompt stays, waiting on its record, and reports nothing.
@@ -1361,7 +3887,10 @@ defmodule PrismWeb.SystemLayerTest do
       log =
         capture_log([level: :debug], fn ->
           view
-          |> form("#system-layer-credential", %{"secret" => secret})
+          |> form("#system-layer-credential", %{
+            "secret" => secret,
+            "destination_hosts" => "API.example.com"
+          })
           |> render_submit()
 
           assert outcome("c1") == :confirmed
@@ -1378,7 +3907,12 @@ defmodule PrismWeb.SystemLayerTest do
       refute render(view) =~ secret
 
       {:ok, entries} = Sanctum.Vault.list(ctx)
-      assert Enum.any?(entries, &(&1.name == name and &1.field_names == ["API_KEY"]))
+      assert %{field_names: ["API_KEY"]} = entry = Enum.find(entries, &(&1.name == name))
+
+      # Bound where the person said, and attach-only: they did not let the
+      # app read it.
+      assert entry.destination == %{"hosts" => ["api.example.com"], "scheme" => "https"}
+      assert entry.attach_only == true
 
       # The secret reached no request-log row or decision.
       refute logged() =~ id
@@ -1390,12 +3924,21 @@ defmodule PrismWeb.SystemLayerTest do
       name = "system-layer-early-#{System.unique_integer([:positive])}"
       prompt(view, credential("c3", name))
 
-      view |> form("#system-layer-credential", %{"secret" => "sk-early"}) |> render_submit()
+      submit = fn ->
+        view
+        |> form("#system-layer-credential", %{
+          "secret" => "sk-early",
+          "destination_hosts" => "api.example.com"
+        })
+        |> render_submit()
+      end
+
+      submit.()
       id = held_secret(view)
 
       # Submitted again before anyone proved it: the same record, still
       # waiting, and nothing new opened.
-      view |> form("#system-layer-credential", %{"secret" => "sk-early"}) |> render_submit()
+      submit.()
       assert held_secret(view) == id
       assert render(view) =~ ~s(data-status="waiting")
 
@@ -1405,7 +3948,14 @@ defmodule PrismWeb.SystemLayerTest do
 
     test "a request cancelled from its prompt ends the wait and says so", %{view: view, ctx: ctx} do
       prompt(view, credential("c4", "system-layer-cancel-#{System.unique_integer([:positive])}"))
-      view |> form("#system-layer-credential", %{"secret" => "sk-cancel"}) |> render_submit()
+
+      view
+      |> form("#system-layer-credential", %{
+        "secret" => "sk-cancel",
+        "destination_hosts" => "api.example.com"
+      })
+      |> render_submit()
+
       ref = Prima.Confirmation.ref(held_secret(view))
 
       view |> element(~s([data-test="confirm-cancel"])) |> render_click()
@@ -1430,6 +3980,708 @@ defmodule PrismWeb.SystemLayerTest do
       assert open_prompt(view) == "c2"
       no_outcome("c2")
     end
+
+    test "a value with no host to go to is asked for again and dispatches nothing",
+         %{view: view, ctx: ctx} do
+      name = "no-host-entry-#{System.unique_integer([:positive])}"
+      prompt(view, credential("c5", name))
+
+      html =
+        view
+        |> form("#system-layer-credential", %{
+          "secret" => "sk-nowhere",
+          "destination_hosts" => " "
+        })
+        |> render_submit()
+
+      assert html =~ "Name the host the credential may be sent to."
+      refute html =~ "sk-nowhere"
+      assert open_prompt(view) == "c5"
+      no_outcome("c5")
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+    end
+
+    test "the form's destination is what the person typed, and disclosure only an explicit yes" do
+      assert PrismWeb.SystemLayer.destination_params(%{
+               "destination_hosts" => "API.example.com, *.cdn.example.com\nother.example",
+               "destination_scheme" => "http",
+               "destination_port" => " 8443 ",
+               "destination_methods" => "get post",
+               "destination_paths" => "/v1/ /v2/"
+             }) == %{
+               "hosts" => ["api.example.com", "*.cdn.example.com", "other.example"],
+               "scheme" => "http",
+               "port" => 8443,
+               "methods" => ["GET", "POST"],
+               "paths" => ["/v1/", "/v2/"]
+             }
+
+      # Nothing named is nothing sent, and https unless http is chosen; a
+      # port that is not a number goes as typed, for the vault to refuse.
+      assert PrismWeb.SystemLayer.destination_params(%{}) == %{"hosts" => [], "scheme" => "https"}
+
+      assert %{"port" => "eighty"} =
+               PrismWeb.SystemLayer.destination_params(%{
+                 "destination_hosts" => "api.example.com",
+                 "destination_port" => "eighty"
+               })
+
+      assert PrismWeb.SystemLayer.disclose_param(%{"disclose" => "true"})
+      assert PrismWeb.SystemLayer.disclose_param(%{"disclose" => "on"})
+      refute PrismWeb.SystemLayer.disclose_param(%{"disclose" => "false"})
+      refute PrismWeb.SystemLayer.disclose_param(%{})
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A page's repeat the operation refuses
+  # ---------------------------------------------------------------------------
+
+  describe "a page's repeat the operation refuses" do
+    setup :asking_admin
+
+    @withdraw_failed "The approval could not be withdrawn; it ends at its expiry."
+
+    # A platform administrator on a page that asks for changes through its
+    # layer and repeats each once confirmed (`Asker`).
+    defp asking_admin(%{conn: conn}) do
+      user = test_user()
+      {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(user.user_id)
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+
+      {:ok, view, _html} =
+        live_isolated(conn, PrismWeb.SystemLayerTest.Asker,
+          session: %{"athanor_id" => athanor.id, "test" => self()}
+        )
+
+      %{view: view, ctx: %{person_context(user, athanor) | platform_admin: true}, user: user}
+    end
+
+    # An instance entry under the platform's own actor, its creation proven.
+    defp made_entry!(ctx, over) do
+      params =
+        Map.merge(
+          %{
+            name: "refused-repeat-#{System.unique_integer([:positive])}",
+            kind: "api_key",
+            provider_hint: "example.com",
+            fields: %{"API_KEY" => "sk-refused-repeat"},
+            destination: %{
+              "hosts" => ["api.example.com"],
+              "methods" => ["GET"],
+              "paths" => ["/v1/models"]
+            },
+            audience: "everyone"
+          },
+          over
+        )
+
+      confirmed =
+        Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+          operation: "instance_entry.create",
+          arguments: params,
+          resource: params.name
+        })
+
+      {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
+      entry
+    end
+
+    defp open_records(ctx) do
+      {:ok, open} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+      open
+    end
+
+    defp record_state(ctx, ref) do
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      row.state
+    end
+
+    defp page_state(view),
+      do: inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity)
+
+    # The page asks for `args` under `tag`; the change needs a proof, and
+    # the page holds its request once its layer has heard of it.
+    defp asked!(view, ctx, tag, tool, args) do
+      send(view.pid, {:ask, tag, tool, args})
+      assert_receive {:asker, ^tag, :asked}, 2_000
+      assert [%{ref: ref}] = open_records(ctx)
+      wait_until(fn -> page_state(view) =~ "confirmation-" <> ref end, 2_000, "the ask held")
+      render(view)
+      ref
+    end
+
+    # The record proven while the page is held still, `break!` done before
+    # the page hears of the proof and repeats.
+    defp proven_with!(view, ctx, ref, break!) do
+      :sys.suspend(view.pid)
+      Sanctum.TestContext.prove!(ctx, ref)
+      break!.()
+      :sys.resume(view.pid)
+    end
+
+    # A widening of an entry's policy, asked by the page and proven, whose
+    # entry is deleted before the page repeats it: the repeat is refused
+    # before the operation asks for its proof.
+    defp refused_policy_repeat!(view, ctx, also \\ fn -> :ok end) do
+      entry = made_entry!(ctx, %{component_policy: "shipped"})
+      tag = {:policy, entry.id}
+      args = %{"entry_id" => entry.id, "component_policy" => "any"}
+      ref = asked!(view, ctx, tag, "instance_entry/set_component_policy", args)
+
+      proven_with!(view, ctx, ref, fn ->
+        {:ok, _} = Sanctum.InstanceEntries.delete(ctx, entry.id)
+        also.()
+      end)
+
+      # The page's answer is the operation's own, whatever became of the
+      # record: the entry is gone.
+      assert_receive {:asker, ^tag, {:error, :not_found}}, 3_000
+      %{ref: ref, sentence: escaped(PrismWeb.Ops.error_message(:not_found))}
+    end
+
+    defp escaped(text), do: text |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
+
+    # The first message waiting in `pid`'s mailbox that `match` accepts, or
+    # nil: the stream's fact for a record (`fact_for/2`), or the outcome a
+    # release told the layer (`outcome_for/1`).
+    defp queued(pid, match) do
+      {:messages, messages} = Process.info(pid, :messages)
+      Enum.find(messages, match)
+    end
+
+    defp fact_for(ref, kind) do
+      fn
+        {:phoenix, :send_update, {_target, %{fact: %{"ref" => ^ref, "kind" => fact_kind}}}} ->
+          to_string(fact_kind) == kind
+
+        _other ->
+          false
+      end
+    end
+
+    defp outcome_for(ref) do
+      fn
+        {:phoenix, :send_update, {_target, %{outcome: {^ref, _outcome}}}} -> true
+        _other -> false
+      end
+    end
+
+    # The cancel a release makes runs in the page's process, and the
+    # stream's cancelled fact is queued there while it runs. With
+    # `:fact_first` the fact stays ahead of the outcome the release sends
+    # once the cancel answers; with `:outcome_first` it is taken out and
+    # sent again once the outcome is queued or taken. The test is told
+    # `{:ordered, order, ref}` once the order holds: `:telemetry` swallows
+    # a handler's failure, so a bound that ran out shows as the missing
+    # message, never as a pass.
+    defp order_the_release!(view_pid, order) do
+      test_pid = self()
+      handler = "layer-release-order-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :sanctum, :confirmation, :cancelled],
+          fn _event, _measure, %{ref: ref}, _config ->
+            if self() == view_pid do
+              wait_until(
+                fn -> queued(self(), fact_for(ref, "cancelled")) end,
+                2_000,
+                "the cancelled fact queued"
+              )
+
+              case order do
+                :fact_first ->
+                  send(test_pid, {:ordered, order, ref})
+
+                :outcome_first ->
+                  fact = queued(self(), fact_for(ref, "cancelled"))
+
+                  receive do
+                    ^fact -> :ok
+                  after
+                    0 -> raise "the fact left the mailbox"
+                  end
+
+                  spawn(fn ->
+                    wait_until(
+                      fn ->
+                        queued(view_pid, outcome_for(ref)) != nil or
+                          match?({:refused, _}, panel_status(view_pid, ref))
+                      end,
+                      2_000,
+                      "the outcome queued"
+                    )
+
+                    send(view_pid, fact)
+                    send(test_pid, {:ordered, order, ref})
+                  end)
+              end
+            end
+          end,
+          nil
+        )
+
+      handler
+    end
+
+    # The status of the page layer's panel for `ref`, as the layer holds it.
+    defp panel_status(pid, ref) do
+      {by_cid, _ids, _next} = :sys.get_state(pid).components
+
+      Enum.find_value(by_cid, fn {_cid, entry} ->
+        if elem(entry, 0) == PrismWeb.SystemLayer and elem(entry, 1) == "system-layer",
+          do: get_in(elem(entry, 2), [:panels, ref, :status])
+      end)
+    end
+
+    test "the record is cancelled, the prompt shows the refusal, the secret leaves the page, " <>
+           "and the page's answer is the operation's",
+         %{view: view, ctx: ctx} do
+      %{ref: ref, sentence: sentence} = refused_policy_repeat!(view, ctx)
+
+      wait_until(fn -> record_state(ctx, ref) == "cancelled" end, 2_000, "the record cancelled")
+      refute page_state(view) =~ "cnf_", "the page still holds the secret of a refused repeat"
+
+      render(view)
+      html = render(view)
+      assert html =~ "Refused: " <> sentence
+      refute html =~ "could not be withdrawn"
+      refute html =~ "Approved. Completing the change."
+      refute html =~ "Cancelled. Nothing was changed."
+    end
+
+    test "a cancel answered not_pending, the record spent before the refusal, shows the " <>
+           "refusal alone",
+         %{view: view, ctx: ctx} do
+      entry = made_entry!(ctx, %{audience: "listed", members: [ctx.user_id]})
+      typed = "nobody-#{System.unique_integer([:positive])}@example.com"
+      tag = {:audience, entry.id}
+
+      args = %{
+        "entry_id" => entry.id,
+        "audience" => "listed",
+        "members" => [ctx.user_id, typed],
+        "expected" => %{"audience" => "listed", "members" => [ctx.user_id]}
+      }
+
+      ref = asked!(view, ctx, tag, "instance_entry/set_audience", args)
+      Sanctum.TestContext.prove!(ctx, ref)
+
+      # The proof is spent by the widening, which the store then refuses:
+      # no record is left waiting to be withdrawn.
+      assert_receive {:asker, ^tag, {:error, reason}}, 3_000
+      assert record_state(ctx, ref) == "consumed"
+      refute page_state(view) =~ "cnf_"
+
+      render(view)
+      html = render(view)
+      assert html =~ "Refused: " <> escaped(PrismWeb.Ops.error_message(reason))
+      assert html =~ "person_unknown"
+      refute html =~ "could not be withdrawn"
+    end
+
+    test "a cancel that fails otherwise shows the refusal and then that the approval ends at " <>
+           "its expiry; the page's answer is unchanged",
+         %{view: view, ctx: ctx} do
+      %{ref: ref, sentence: sentence} =
+        refused_policy_repeat!(view, ctx, &hide_confirmations!/0)
+
+      wait_until(
+        fn -> render(view) =~ @withdraw_failed end,
+        3_000,
+        "the prompt told the approval's fate"
+      )
+
+      html = render(view)
+      holds = page_state(view) =~ "cnf_"
+      restore_confirmations!()
+
+      refute holds, "the page still holds the secret of a refused repeat"
+      assert html =~ ~r/Refused: #{Regex.escape(sentence)}\.? #{Regex.escape(@withdraw_failed)}/
+      assert record_state(ctx, ref) == "confirmed"
+    end
+
+    for order <- [:fact_first, :outcome_first] do
+      test "the prompt ends on the release's outcome when the record's cancelled fact " <>
+             "arrives #{if order == :fact_first, do: "before", else: "after"} it",
+           %{view: view, ctx: ctx} do
+        order = unquote(order)
+        view_pid = view.pid
+        handler = order_the_release!(view_pid, order)
+        on_exit(fn -> :telemetry.detach(handler) end)
+
+        %{ref: ref, sentence: sentence} = refused_policy_repeat!(view, ctx)
+        assert_receive {:ordered, ^order, ^ref}, 5_000
+        :ok = :telemetry.detach(handler)
+
+        # Both have reached the layer: the fact, which the stream delivers
+        # to the page's process, and the outcome.
+        wait_until(
+          fn ->
+            is_nil(queued(view_pid, fact_for(ref, "cancelled"))) and
+              is_nil(queued(view_pid, outcome_for(ref)))
+          end,
+          2_000,
+          "both delivered"
+        )
+
+        render(view)
+        html = render(view)
+        assert record_state(ctx, ref) == "cancelled"
+        assert html =~ "Refused: " <> sentence
+        refute html =~ "Cancelled. Nothing was changed."
+        assert html =~ ~s(data-status="refused")
+      end
+    end
+
+    # The stream's fact that the record `row` was cancelled, as the layer's
+    # listener hands it to the layer: the payload on the person's topic,
+    # projected to the fields the stream's grant names, under the tag of
+    # the page's own context. Built before it is needed, since the page may
+    # be held still when it is sent.
+    defp cancelled_fact(view, row) do
+      ctx = view_context(view)
+      {:ok, grant} = Grimoire.open_stream(ctx, PrismWeb.SystemLayer.stream(), nil)
+
+      fact =
+        Cyfr.Bus.Confirmation.new(Context.actor(ctx), :cancelled,
+          ref: row.ref,
+          operation: row.operation,
+          expires_at: row.expires_at
+        )
+
+      [
+        id: "system-layer",
+        fact: Prima.StreamGrant.project(grant, Map.from_struct(fact)),
+        tag: CyfrWeb.ContextGuard.capture(ctx)
+      ]
+    end
+
+    defp deliver!(view, update),
+      do: Phoenix.LiveView.send_update(view.pid, PrismWeb.SystemLayer, update)
+
+    defp hide_confirmations!,
+      do:
+        Arca.Repo.query!("ALTER TABLE pending_confirmations RENAME TO pending_confirmations_gone")
+
+    defp restore_confirmations!,
+      do:
+        Arca.Repo.query!("ALTER TABLE pending_confirmations_gone RENAME TO pending_confirmations")
+
+    # A policy widening the page asks for and holds, its entry made first.
+    defp held_widening!(view, ctx) do
+      entry = made_entry!(ctx, %{component_policy: "shipped"})
+      tag = {:policy, entry.id}
+      args = %{"entry_id" => entry.id, "component_policy" => "any"}
+      ref = asked!(view, ctx, tag, "instance_entry/set_component_policy", args)
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      %{entry: entry, tag: tag, ref: ref, row: row}
+    end
+
+    test "a release whose cancel failed never replaces the cancelled fact the prompt already " <>
+           "shows",
+         %{view: view, ctx: ctx} do
+      %{entry: entry, tag: tag, ref: ref, row: row} = held_widening!(view, ctx)
+      cancelled = cancelled_fact(view, row)
+
+      # Held still, the page is proven; the stream's confirmed fact is
+      # queued for it, and then the record's cancelled fact behind it. The
+      # entry goes, so the repeat is refused, and the store's records go,
+      # so the release's cancel fails, and not as `not_pending`.
+      :sys.suspend(view.pid)
+      Sanctum.TestContext.prove!(ctx, ref)
+
+      wait_until(
+        fn -> queued(view.pid, fact_for(ref, "confirmed")) != nil end,
+        2_000,
+        "the confirmed fact queued"
+      )
+
+      {:ok, _} = Sanctum.InstanceEntries.delete(ctx, entry.id)
+      hide_confirmations!()
+      deliver!(view, cancelled)
+      :sys.resume(view.pid)
+
+      # The page repeats once approved; the repeat is refused, and its
+      # release's outcome reaches the prompt after the cancelled fact did.
+      assert_receive {:asker, ^tag, {:error, :not_found}}, 3_000
+
+      wait_until(
+        fn -> is_nil(queued(view.pid, outcome_for(ref))) end,
+        2_000,
+        "the release's outcome taken"
+      )
+
+      render(view)
+      html = render(view)
+      holds = page_state(view) =~ "cnf_"
+      restore_confirmations!()
+
+      refute holds, "the page still holds the secret of a refused repeat"
+      assert html =~ "Cancelled. Nothing was changed."
+      assert html =~ ~s(data-status="cancelled")
+      refute html =~ "could not be withdrawn"
+    end
+
+    test "a record's cancelled fact heard after a release whose cancel failed replaces what " <>
+           "the prompt says",
+         %{view: view, ctx: ctx} do
+      %{entry: entry, tag: tag, ref: ref, row: row} = held_widening!(view, ctx)
+      cancelled = cancelled_fact(view, row)
+
+      proven_with!(view, ctx, ref, fn ->
+        {:ok, _} = Sanctum.InstanceEntries.delete(ctx, entry.id)
+        hide_confirmations!()
+      end)
+
+      # The repeat is refused and its cancel fails: the prompt says the
+      # approval ends at its expiry.
+      assert_receive {:asker, ^tag, {:error, :not_found}}, 3_000
+
+      wait_until(
+        fn -> render(view) =~ @withdraw_failed end,
+        3_000,
+        "the prompt told the approval's fate"
+      )
+
+      # Then the record is cancelled after all, and its fact arrives.
+      deliver!(view, cancelled)
+
+      wait_until(
+        fn -> render(view) =~ "Cancelled. Nothing was changed." end,
+        3_000,
+        "the prompt told the record was cancelled"
+      )
+
+      html = render(view)
+      restore_confirmations!()
+
+      assert html =~ ~s(data-status="cancelled")
+      refute html =~ @withdraw_failed
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # An instance entry's value
+  # ---------------------------------------------------------------------------
+
+  describe "an instance entry's value" do
+    setup :signed_in_admin
+
+    @instance_destination %{
+      "hosts" => ["api.example.com"],
+      "scheme" => "https",
+      "methods" => ["GET", "POST"],
+      "paths" => ["/v1/chat/completions", "/v1/models"]
+    }
+
+    # What the administrator's card collected for a new entry: everything
+    # but the value.
+    defp instance_arguments(name, over \\ %{}) do
+      Map.merge(
+        %{
+          "name" => name,
+          "kind" => "api_key",
+          "provider_hint" => "example.com",
+          "destination" => @instance_destination,
+          "component_policy" => "shipped",
+          "audience" => "everyone",
+          "members" => []
+        },
+        over
+      )
+    end
+
+    defp instance_value(id, name, operation, arguments, field \\ "API_KEY") do
+      %{
+        id: id,
+        kind: :credential_entry,
+        action: :credential_entry,
+        subject: %{
+          name: name,
+          field: field,
+          target: :instance,
+          operation: operation,
+          arguments: arguments
+        }
+      }
+    end
+
+    defp instance_entry(name) do
+      {:ok, entries} = Arca.InstanceEntries.list(Prima.Actor.system())
+      Enum.find(entries, &(&1.name == name))
+    end
+
+    test "the key goes to instance_entry.create with the card's arguments, once its record " <>
+           "is confirmed, and is held nowhere",
+         %{view: view, ctx: ctx, user: user} do
+      authenticator = Sanctum.TestContext.passkey!(user.user_id)
+      name = "instance-layer-#{System.unique_integer([:positive])}"
+      secret = "sk-instance-layer-#{System.unique_integer([:positive])}-sentinel"
+
+      html = prompt(view, instance_value("ie1", name, :create, instance_arguments(name)))
+
+      # The value alone is asked: the card named where it goes, and an
+      # instance entry is never disclosed.
+      assert has_element?(view, ~s(form#system-layer-credential[data-target="instance"]))
+      assert has_element?(view, ~s(input#system-layer-secret[type="password"][name="secret"]))
+      refute has_element?(view, ~s(input[name="destination_hosts"]))
+      refute has_element?(view, ~s(input[name="disclose"]))
+      assert html =~ "Enter the key for the instance entry #{name}"
+
+      assert has_element?(
+               view,
+               ~s([data-test="credential-attach"]),
+               "CYFR attaches it to requests bound for the entry's destination"
+             )
+
+      assert has_element?(
+               view,
+               ~s(button[form="system-layer-credential"]),
+               "Save to this instance"
+             )
+
+      submit = fn ->
+        view |> form("#system-layer-credential", %{"secret" => secret}) |> render_submit()
+      end
+
+      submit.()
+
+      # Waiting on its record: nothing created, and the value nowhere.
+      no_outcome("ie1")
+      assert render(view) =~ ~s(data-status="waiting")
+      assert instance_entry(name) == nil
+
+      assert {:ok, [%{ref: ref, operation: "instance_entry.create"}]} =
+               Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+
+      refute inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity) =~
+               secret
+
+      prove_here!(view, ref, authenticator)
+      assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
+
+      submit.()
+      assert outcome("ie1") == :confirmed
+      assert open_prompt(view) == nil
+
+      entry = instance_entry(name)
+      assert entry.provider_hint == "example.com"
+      assert entry.component_policy == "shipped"
+      assert entry.audience == "everyone"
+      assert entry.attach_only == true
+      assert Jason.decode!(entry.field_names) == ["API_KEY"]
+      assert Jason.decode!(entry.destination) == @instance_destination
+
+      refute inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity) =~
+               secret
+
+      refute render(view) =~ secret
+      refute logged() =~ secret
+    end
+
+    test "a rotation's key goes to instance_entry.rotate of the entry the card named, " <>
+           "under its own confirmation",
+         %{view: view, ctx: ctx, user: user} do
+      authenticator = Sanctum.TestContext.passkey!(user.user_id)
+      name = "instance-rotate-#{System.unique_integer([:positive])}"
+
+      params = %{
+        name: name,
+        kind: "api_key",
+        provider_hint: "example.com",
+        fields: %{"API_KEY" => "sk-first"},
+        destination: @instance_destination,
+        audience: "everyone"
+      }
+
+      admin =
+        Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+          operation: "instance_entry.create",
+          arguments: params,
+          resource: name
+        })
+
+      {:ok, created} = Sanctum.InstanceEntries.create(admin, params)
+      arguments = %{"entry_id" => created.id, "expected_payload_rev" => created.payload_rev}
+
+      prompt(view, instance_value("ie2", name, :rotate, arguments))
+      assert render(view) =~ "Rotate the instance entry #{name}"
+
+      submit = fn ->
+        view |> form("#system-layer-credential", %{"secret" => "sk-rotated"}) |> render_submit()
+      end
+
+      submit.()
+
+      assert {:ok, [%{ref: ref, operation: "instance_entry.rotate"}]} =
+               Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+
+      assert instance_entry(name).payload_rev == created.payload_rev
+
+      prove_here!(view, ref, authenticator)
+      assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
+      submit.()
+
+      assert outcome("ie2") == :confirmed
+      assert instance_entry(name).payload_rev == created.payload_rev + 1
+    end
+
+    test "an empty key is asked for again and dispatches nothing", %{view: view, ctx: ctx} do
+      name = "instance-empty-#{System.unique_integer([:positive])}"
+      prompt(view, instance_value("ie3", name, :create, instance_arguments(name)))
+
+      html = view |> form("#system-layer-credential", %{"secret" => " "}) |> render_submit()
+
+      assert html =~ "Enter the credential to save it."
+      no_outcome("ie3")
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+    end
+
+    test "a subject that carries a value, names another operation or mixes in a grant's " <>
+           "prefill is no prompt" do
+      valid = instance_value("v", "n", :create, instance_arguments("n"))
+      assert {:ok, %{subject: %{target: :instance, operation: :create}}} = Prompt.validate(valid)
+
+      rotate =
+        instance_value("v", "n", :rotate, %{"entry_id" => "ine_1", "expected_payload_rev" => 0})
+
+      assert {:ok, %{subject: %{operation: :rotate}}} = Prompt.validate(rotate)
+
+      for subject <- [
+            %{
+              valid.subject
+              | arguments: Map.put(instance_arguments("n"), "fields", %{"K" => "v"})
+            },
+            %{valid.subject | arguments: Map.put(instance_arguments("n"), "secret", "v")},
+            %{valid.subject | arguments: Map.delete(instance_arguments("n"), "name")},
+            %{valid.subject | operation: :delete},
+            %{valid.subject | target: :elsewhere},
+            Map.put(valid.subject, :athanor_id, "ath_1"),
+            %{rotate.subject | arguments: %{"entry_id" => "ine_1"}},
+            %{rotate.subject | arguments: %{"entry_id" => "ine_1", "expected_payload_rev" => -1}},
+            Map.delete(valid.subject, :arguments)
+          ] do
+        assert {:error, :invalid_prompt} = Prompt.validate(%{valid | subject: subject}),
+               inspect(subject)
+      end
+
+      # Naming the vault, or nothing, is the vault's prompt as before.
+      vault = %{
+        id: "v",
+        kind: :credential_entry,
+        action: :credential_entry,
+        subject: %{name: "n"}
+      }
+
+      assert {:ok, %{subject: %{name: "n", field: "API_KEY"}}} = Prompt.validate(vault)
+
+      assert {:ok, %{subject: %{target: :vault}}} =
+               Prompt.validate(put_in(vault.subject[:target], :vault))
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1444,7 +4696,13 @@ defmodule PrismWeb.SystemLayerTest do
       authenticator = Sanctum.TestContext.passkey!(user.user_id)
       other = other_session!(ctx)
       name = "asked-elsewhere-#{System.unique_integer([:positive])}"
-      args = %{"name" => name, "kind" => "api_key", "fields" => %{"KEY" => "sk-elsewhere"}}
+
+      args = %{
+        "name" => name,
+        "kind" => "api_key",
+        "fields" => %{"KEY" => "sk-elsewhere"},
+        "destination" => %{"hosts" => ["api.example.com"]}
+      }
 
       # Another session of the person asks; it alone holds the secret.
       assert {:error, {:confirmation_required, %{id: id}}} =
@@ -1487,7 +4745,8 @@ defmodule PrismWeb.SystemLayerTest do
                PrismWeb.Ops.call_tool(other, "vault/create", %{
                  "name" => "ref-alone-#{System.unique_integer([:positive])}",
                  "kind" => "api_key",
-                 "fields" => %{"KEY" => "x"}
+                 "fields" => %{"KEY" => "x"},
+                 "destination" => %{"hosts" => ["api.example.com"]}
                })
 
       ref = Prima.Confirmation.ref(id)
@@ -1523,7 +4782,8 @@ defmodule PrismWeb.SystemLayerTest do
                PrismWeb.Ops.call_tool(other, "vault/create", %{
                  "name" => name,
                  "kind" => "api_key",
-                 "fields" => %{"KEY" => "sk-before"}
+                 "fields" => %{"KEY" => "sk-before"},
+                 "destination" => %{"hosts" => ["api.example.com"]}
                })
 
       {:ok, view, _html} =

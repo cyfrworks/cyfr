@@ -163,6 +163,197 @@ defmodule Sanctum.Consent.ShapeDiffTest do
     refute Enum.any?(covered, &(&1.capability == "egress.domains" and &1.removed != []))
   end
 
+  describe "provided configuration" do
+    @dep "reagent:local.diffed-db"
+
+    defp publish_app!(ctx, version, host, values) do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "diffed-app",
+          version: version,
+          type: "reagent",
+          manifest:
+            Jason.encode!(%{
+              "name" => "diffed-app",
+              "version" => version,
+              "type" => "reagent",
+              "dependencies" => %{"static" => [%{"ref" => @dep}]},
+              "provides" => %{
+                @dep => %{
+                  "database" => %{"destination" => %{"hosts" => [host]}, "values" => values}
+                }
+              }
+            })
+        })
+
+      Arca.Cache.delete_match(:_)
+    end
+
+    setup %{ctx: ctx} do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "diffed-db",
+          version: "1.0.0",
+          type: "reagent",
+          manifest:
+            Jason.encode!(%{
+              "name" => "diffed-db",
+              "version" => "1.0.0",
+              "type" => "reagent",
+              "needs" => %{
+                "database" => %{
+                  "type" => "api_key:supabase.co",
+                  "reason" => "to reach the database",
+                  "fields" => ["anon_key"],
+                  "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+                }
+              }
+            })
+        })
+
+      :ok
+    end
+
+    test "a changed provided address is a new shape, and the diff names the dependency, the " <>
+           "need and what moved, never a value",
+         %{ctx: ctx} do
+      ref = "reagent:local.diffed-app"
+      publish_app!(ctx, "1.0.0", "abc.supabase.co", %{"anon_key" => "eyJ-one"})
+
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+      {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, %{ref: ref})
+
+      {:ok, _} =
+        Sanctum.Consent.Commit.commit(ctx, %{
+          decisions: %{ref: ref},
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+
+      publish_app!(ctx, "1.1.0", "xyz.supabase.co", %{"anon_key" => "eyJ-two", "url" => "u"})
+      {:ok, moved} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+
+      refute moved.shape_digest == plan.shape_digest
+
+      assert [entry] = Enum.filter(moved.shape_diff, &(&1.capability == "provided.#{@dep}"))
+
+      # The app's own configuration, so the app's node.
+      assert entry == %{
+               node: ref,
+               capability: "provided.#{@dep}",
+               change: :changed,
+               need: "database",
+               added: ["destination https://xyz.supabase.co", "value url"],
+               removed: ["destination https://abc.supabase.co"],
+               new: false,
+               dropped: false
+             }
+
+      refute inspect(moved.shape_diff) =~ "eyJ"
+    end
+  end
+
+  describe "every node of the closure" do
+    @lib "reagent:local.diffed-lib"
+    @user "reagent:local.diffed-user"
+
+    defp publish_reagent!(ctx, name, version, manifest) do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: name,
+          version: version,
+          type: "reagent",
+          manifest:
+            Jason.encode!(
+              Map.merge(manifest, %{"name" => name, "version" => version, "type" => "reagent"})
+            )
+        })
+
+      Arca.Cache.delete_match(:_)
+    end
+
+    # A dependency a release adds is listed as new: the plan, the diff an
+    # admission computes (`compute/3`, resolving the closure itself) and the
+    # `consent_required` a run is refused with carry the one list, each
+    # entry naming its node and whether it is new or dropped.
+    test "a dependency a release adds is listed as new, alike by the plan, by compute/3 and " <>
+           "by the consent_required an admission refuses with",
+         %{ctx: ctx} do
+      caps = %{"egress" => %{"domains" => ["api.user.example"], "methods" => ["GET"]}}
+
+      publish_reagent!(ctx, "diffed-lib", "1.0.0", %{
+        "caps" => %{"egress" => %{"domains" => ["api.lib.example"], "methods" => ["GET"]}}
+      })
+
+      publish_reagent!(ctx, "diffed-user", "1.0.0", %{"caps" => caps})
+
+      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @user})
+      {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, %{ref: @user})
+
+      {:ok, %{profile_id: profile_id}} =
+        Sanctum.Consent.Commit.commit(ctx, %{
+          decisions: %{ref: @user},
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+
+      publish_reagent!(ctx, "diffed-user", "1.1.0", %{
+        "caps" => caps,
+        "dependencies" => %{"static" => [%{"ref" => @lib}]}
+      })
+
+      {:ok, moved} = Sanctum.Consent.Plan.plan(ctx, %{ref: @user})
+
+      assert moved.shape_diff == [
+               %{
+                 node: @lib,
+                 capability: "egress.domains",
+                 change: :widened,
+                 added: ["api.lib.example"],
+                 removed: [],
+                 new: true,
+                 dropped: false
+               },
+               %{
+                 node: @lib,
+                 capability: "egress.methods",
+                 change: :widened,
+                 added: ["GET"],
+                 removed: [],
+                 new: true,
+                 dropped: false
+               },
+               %{
+                 node: @lib,
+                 capability: "egress.schemes",
+                 change: :widened,
+                 added: ["https"],
+                 removed: [],
+                 new: true,
+                 dropped: false
+               }
+             ]
+
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+      assert ShapeDiff.compute(ctx, @user, head.resolved_policy) == moved.shape_diff
+
+      # A run the head's origins admit, so what refuses it is the moved shape.
+      assert {:error, {:consent_required, payload}} =
+               Crucible.Admission.authority_for(
+                 %{ctx | origin: :interactive},
+                 :default,
+                 "#{@user}:1.1.0"
+               )
+
+      assert payload.profile_id == profile_id
+      assert payload.shape_diff == moved.shape_diff
+    end
+  end
+
   test "an underivable side yields no diff, never a wrong one", %{ctx: ctx} do
     assert ShapeDiff.compute(ctx, @source, "not a blob") == []
     assert ShapeDiff.compute(ctx, "reagent:local.never-published", blob(%{})) == []

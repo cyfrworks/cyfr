@@ -182,8 +182,13 @@ defmodule Grimoire.VisibilityTest do
   describe "consent-class actions" do
     test "an OIDC session sees the whole vault and profile surface" do
       ctx = ctx_with([], :oidc)
-      assert length(visible_actions("vault", ctx)) == 9
+      assert length(visible_actions("vault", ctx)) == 10
       assert length(visible_actions("profile", ctx)) == 8
+
+      # Moving a provider's default needs the session and nothing more
+      # (`consent: :interactive`, no fresh confirmation): a session sees it,
+      # and an API key, held to the staging arms below, does not.
+      assert "set_default" in visible_actions("vault", ctx)
     end
 
     test "an API key sees only the staging arms and the consent-free status — whatever its permissions" do
@@ -211,7 +216,7 @@ defmodule Grimoire.VisibilityTest do
 
       assert visible_actions("vault", device) == visible_actions("vault", ctx_with([], :oidc))
       assert visible_actions("profile", device) == visible_actions("profile", ctx_with([], :oidc))
-      assert length(visible_actions("vault", device)) == 9
+      assert length(visible_actions("vault", device)) == 10
       assert "commit" in visible_actions("profile", device)
       assert "revoke" in visible_actions("pairing", device)
     end

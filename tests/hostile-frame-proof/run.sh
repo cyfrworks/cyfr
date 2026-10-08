@@ -44,15 +44,22 @@ stop_proof_container() {
   fi
 }
 
+# The scratch directory holds the run's keys, so it goes even when a stop
+# fails. `server_stop` ends in `fail`, an `exit`, when a listener outlives
+# its stop, and an exit inside this trap would end it before the removal,
+# so the stop runs in a subshell, whose exit ends only that subshell; the
+# stop's failure still fails the run.
 cleanup() {
+  local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
-  server_stop
+  ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
     rm -rf "$WORK"
   fi
+  exit "$code"
 }
 trap cleanup EXIT
 
@@ -130,7 +137,7 @@ answer_asks() {
         ;;
       confirmation)
         answer="$(server_fixture "$CELL" console "$other_token" vault/create \
-          "{\"name\":\"asked-over-a-frame-$id\",\"kind\":\"api_key\",\"fields\":{\"API_KEY\":\"not-shown-$id\"}}")"
+          "{\"name\":\"asked-over-a-frame-$id\",\"kind\":\"api_key\",\"fields\":{\"API_KEY\":\"not-shown-$id\"},\"destination\":{\"hosts\":[\"fixture.test\"]}}")"
         printf '%s' "$answer" | grep -q confirmation_required ||
           fail "the second session's change did not wait for a confirmation: $answer"
         answer='{"ok":"asked"}'

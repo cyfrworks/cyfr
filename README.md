@@ -98,7 +98,7 @@ Around the chat:
 
 - **The chat** — one page, `/chat`: a rail of your own thread, your DMs, and the threads of every group you belong to (`/chat?a=<athanor>&c=<thread>` deep-links one). The athanor's **AQUA** page at `/a/<athanor>/aqua` holds the soul, its roles, its scrolls, the pinned page and the notes drawer. What AQUA keeps out of a thread is a note — the `notes` tool's `keep`, `pin`, `list`, `read`, `search` and `forget` — and a schedule with `keep_outcome` in its metadata files each run's output as one.
 - **The switcher** — You, then the groups you belong to (hidden as a list when it is only you), each row badged with what happened there while you were elsewhere. The one create is **New group…**.
-- **The drawer** — off the chat, on every screen size: **AQUA**, **Apps** (tinctures), **Members**, **Vault**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **AQUA** — the grant sheet binds a sealed vault entry to the model's catalyst — no developer view needed.
+- **The drawer** — off the chat, on every screen size: **AQUA**, **Apps** (tinctures), **Files**, **Members**, **Vault**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **AQUA** — the system layer's grant sheet binds an entry to the model's catalyst. The shipped 1.4.0 model catalysts name their connection on each request; CYFR attaches the key in the host, and the catalyst receives no key.
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has a door (an auth provider); operators and private boxes start in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
@@ -157,6 +157,14 @@ your-project/
 > there and managed on their own pages, and the server's own storage
 > (`payloads/`, `staging/`, the seed, the cache) is not a folder at all.
 
+On **Files**, pick files under `data/` and choose **Send a copy** to offer
+a snapshot to someone you share an athanor with. They accept or decline
+it in their **Inbox**, choosing a folder under `data/` in their focused
+athanor (the default is `data/inbox/<sender slug>/`). Later edits do not
+change the offered bytes. Outgoing offers can be withdrawn until accepted;
+acceptance keeps the copy even if the sender later removes theirs. The
+Inbox shows copies still landing and a notice when delivery fails.
+
 > The seed bundle every athanor starts from rides inside the container image
 > (under `CYFR_SEED_PATH`, mounted so `./aqua` replaces its `aqua/` root) and
 > is copied into each athanor when it is provisioned — a scaffolded project
@@ -209,6 +217,17 @@ you are approving, and records it as an immutable consent revision. A grant
 covers every release of that component line by default; grant a specific
 version to pin it. `cyfr profile list <ref>` shows what is granted, and
 `cyfr profile revoke <id>` takes it back, effective on the next run.
+
+The **Vault** page stores each entry with the hosts, scheme, port, methods
+and paths it may be sent to. Entries are attach-only by default; disclose
+one only when a component must read its fields. A provider's default
+suggests a choice on the grant sheet and binds nothing by itself. Each
+binding has its own lifetime: standing, until a time, or once under one
+root run. Platform admins offer attach-only instance entries on **Settings**,
+with an audience, method and path bounds and request caps; members choose
+them through the same grant sheet. Entering or rotating a key, or widening
+who may use an instance entry or its `shipped` policy to `any`, requires
+fresh confirmation.
 
 ## Build Your Own Component
 
@@ -323,7 +342,10 @@ cyfr mcp list
 Header values support vault references (`vault:ENTRY_NAME`, or with a scheme,
 `Bearer vault:ENTRY_NAME`) — the named vault entry's single field is resolved at request
 time, after the scheme when there is one, so credentials stay encrypted at rest and never
-appear in the server config.
+appear in the server config. The entry's destination must cover the server's URL: a
+definition whose header names an entry it does not cover is refused at create, at update
+and again when it connects. A definition names only its own athanor's entries,
+never an instance entry.
 
 ## Deploy to a Server
 
@@ -404,7 +426,7 @@ CYFR reaches an **http** MCP server at its URL. A **stdio** MCP server (anything
 Adding one from Prism:
 
 1. Open **MCP Servers** in the sidebar and click **Add stdio server**.
-2. Give the server a name (e.g. `github`), a backend name, the command (e.g. `npx -y @modelcontextprotocol/server-github`), and its env, one `NAME=value` per line. A credential is always a vault template — `GITHUB_PERSONAL_ACCESS_TOKEN=vault:github-token`, naming a single-field entry on the **Vault** page; only `NODE_ENV`, `LOG_LEVEL`, `TZ`, `LANG`, `LC_ALL`, `NO_COLOR` and `DEBUG` may hold a literal, and a command may never name a vault entry, because every process on the backends service can read command lines.
+2. Give the server a name (e.g. `github`), a backend name, the command (e.g. `npx -y @modelcontextprotocol/server-github`), and its env, one `NAME=value` per line. A credential is always a vault template — `GITHUB_PERSONAL_ACCESS_TOKEN=vault:github-token`, naming a single-field disclosed entry on the **Vault** page (an attach-only entry is refused at create and when the backend starts); only `NODE_ENV`, `LOG_LEVEL`, `TZ`, `LANG`, `LC_ALL`, `NO_COLOR` and `DEBUG` may hold a literal, and a command may never name a vault entry, because every process on the backends service can read command lines.
 3. On first use the backends service starts the backend and its tools surface as `github:github__search_repositories`, … on CYFR's tool list. AQUA uses them like any other external MCP tool. A backend that takes longer than 15 s to start (an `npx -y` download, say) has its tools added to the list once it is ready, without a refresh.
 
 From the CLI or MCP, the same server is `cyfr mcp add github '{"transport":"stdio","backends":[{"name":"github","command":"npx -y @modelcontextprotocol/server-github","env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"vault:github-token"}}]}'`; a server may define up to four backends.

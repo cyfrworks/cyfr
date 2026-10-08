@@ -70,6 +70,19 @@ defmodule Compendium.ConsentFacts do
      end)}
   end
 
+  # The head of the shipped catalog when the release carries a version
+  # strictly newer than the row's (`Compendium.Provenance.annotate/2`'s
+  # `superseded`); a remote row and a name the media does not ship have
+  # none.
+  @impl Sanctum.Consent.Components
+  def newer_shipped(%Context{} = ctx, row) do
+    case Provenance.annotate(ctx, [row]) do
+      {:ok, [%{superseded: true, shipped_versions: [newest | _]}]} -> {:ok, newest}
+      {:ok, [_annotated]} -> {:ok, nil}
+      {:error, _} = error -> error
+    end
+  end
+
   defp agent_type, do: AgentSource.type()
 
   defp shipped_digest(ctx, row, roster) do

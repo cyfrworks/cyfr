@@ -19,7 +19,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 # Each guest and the world it is a component of.
-guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst"
+guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst attached_header_probe:catalyst credential_canary:catalyst"
 
 digest() { shasum -a 256 "$1" | cut -d' ' -f1; }
 
@@ -50,8 +50,8 @@ case "${1:-}" in
     for entry in $guests; do
       name="${entry%%:*}"
       cp "$work/$name.wasm" "$here/$name.wasm"
-      printf '%-17s sha256:%s\n' "$name.wat" "$(digest "$here/$name.wat")"
-      printf '%-17s sha256:%s\n' "$name.wasm" "$(digest "$here/$name.wasm")"
+      printf '%-26s sha256:%s\n' "$name.wat" "$(digest "$here/$name.wat")"
+      printf '%-26s sha256:%s\n' "$name.wasm" "$(digest "$here/$name.wasm")"
     done
     ;;
   *)

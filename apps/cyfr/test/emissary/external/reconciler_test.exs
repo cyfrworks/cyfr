@@ -4,6 +4,10 @@
 defmodule Emissary.External.ReconcilerTest do
   use ExUnit.Case, async: false
 
+  # Where the cases' entries may go: an external server's credential is
+  # resolved by name, and its destination is not what these cases test.
+  @destination %{"hosts" => ["api.example.com"]}
+
   import Ecto.Query, only: [from: 2]
   import ExUnit.CaptureLog
 
@@ -51,7 +55,8 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "gh-header-token",
         kind: "api_key",
-        fields: %{"token" => "ghp_original"}
+        fields: %{"token" => "ghp_original"},
+        destination: @destination
       })
 
     {:ok, _} =
@@ -82,7 +87,8 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "prod-token",
         kind: "api_key",
-        fields: %{"token" => "ghp_prod"}
+        fields: %{"token" => "ghp_prod"},
+        destination: @destination
       })
 
     {:ok, _} =
@@ -107,7 +113,8 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "bearer-token",
         kind: "api_key",
-        fields: %{"token" => "t1"}
+        fields: %{"token" => "t1"},
+        destination: @destination
       })
 
     {:ok, _} =
@@ -133,7 +140,8 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "env-token",
         kind: "api_key",
-        fields: %{"token" => "t1"}
+        fields: %{"token" => "t1"},
+        destination: @destination
       })
 
     {:ok, %{epoch: 1}} =
@@ -197,7 +205,8 @@ defmodule Emissary.External.ReconcilerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "slot-token",
           kind: "api_key",
-          fields: %{"token" => "t1"}
+          fields: %{"token" => "t1"},
+          destination: @destination
         })
 
       {:ok, server} =
@@ -318,7 +327,8 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "unrelated",
         kind: "api_key",
-        fields: %{"k" => "v"}
+        fields: %{"k" => "v"},
+        destination: @destination
       })
 
     {:ok, _} =
@@ -338,28 +348,36 @@ defmodule Emissary.External.ReconcilerTest do
     refute_receive {:reconciled, %{server: "quietsrv"}}, 200
   end
 
+  # Where the servers below post: an entry they name is bound to it.
+  @local_url "https://127.0.0.1:9/mcp"
+  @local_destination %{"hosts" => ["127.0.0.1"], "port" => 9}
+
   test "creating a server with a vault-referencing credential header is accepted", %{ctx: ctx} do
     admin_ctx = %{ctx | permissions: MapSet.new([:*])}
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("vaultref", ctx.athanor_id) end)
 
-    # Unreachable URL: creation should still validate and persist the row.
-    result =
-      Emissary.External.Provider.handle("mcp_servers", admin_ctx, %{
-        "action" => "create",
-        "name" => "vaultref",
-        "config" => %{
-          "url" => "https://127.0.0.1:9/mcp",
-          "headers" => %{"authorization" => "vault:gh-header-token"}
-        }
+    {:ok, _} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "gh-header-token",
+        kind: "api_key",
+        fields: %{"token" => "ghp_header"},
+        destination: @local_destination
       })
 
-    case result do
-      {:ok, _} ->
-        assert {:ok, _} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "vaultref")
+    # Unreachable URL: creation validates and persists the row, and the
+    # connect it then makes is what fails.
+    assert {:ok, %{name: "vaultref"}} =
+             Emissary.External.Provider.handle("mcp_servers", admin_ctx, %{
+               "action" => "create",
+               "name" => "vaultref",
+               "config" => %{
+                 "url" => @local_url,
+                 "headers" => %{"authorization" => "vault:gh-header-token"}
+               }
+             })
 
-      # Creation may fail on the unreachable probe, but never on validation.
-      {:error, message} ->
-        refute message =~ "looks like a credential"
-    end
+    assert {:ok, _} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "vaultref")
+    sync_reconciler()
   end
 
   test "a revoked referenced entry can no longer resolve its header", %{ctx: ctx} do
@@ -367,12 +385,15 @@ defmodule Emissary.External.ReconcilerTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "revoke-me",
         kind: "api_key",
-        fields: %{"token" => "ghp_live"}
+        fields: %{"token" => "ghp_live"},
+        destination: @destination
       })
+
+    url = "https://api.example.com/mcp"
 
     # While active, the header resolves through the host-side unseal path.
     assert {:ok, %{"token" => "ghp_live"}} =
-             Sanctum.VaultReader.unseal_by_name(ctx.athanor_id, "revoke-me")
+             Sanctum.VaultReader.unseal_for(ctx.athanor_id, "revoke-me", url)
 
     {:ok, _} = Vault.revoke(ctx, entry.id)
     # Drain the reconcile the revoke broadcast triggers, so its DB reads aren't
@@ -380,8 +401,55 @@ defmodule Emissary.External.ReconcilerTest do
     sync_reconciler()
 
     # After revocation the same reference fails closed.
-    assert {:error, _} =
-             Sanctum.VaultReader.unseal_by_name(ctx.athanor_id, "revoke-me")
+    assert {:error, {:entry_unavailable, "revoked"}} =
+             Sanctum.VaultReader.unseal_for(ctx.athanor_id, "revoke-me", url)
+  end
+
+  test "an entry rebound elsewhere stops the server that names it, and its next connect is refused",
+       %{ctx: ctx} do
+    admin_ctx = %{ctx | permissions: MapSet.new([:*])}
+    on_exit(fn -> Emissary.External.ServerSupervisor.stop("movedsrv", ctx.athanor_id) end)
+
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "moved-token",
+        kind: "api_key",
+        fields: %{"token" => "ghp_moved"},
+        destination: @local_destination
+      })
+
+    # The URL matches at create: the row is stored and its process started.
+    assert {:ok, %{name: "movedsrv"}} =
+             Emissary.External.Provider.handle("mcp_servers", admin_ctx, %{
+               "action" => "create",
+               "name" => "movedsrv",
+               "config" => %{
+                 "url" => @local_url,
+                 "headers" => %{"authorization" => "vault:moved-token"}
+               }
+             })
+
+    sync_reconciler()
+
+    [{pid, _digest}] =
+      Registry.lookup(Emissary.External.ServerRegistry, {"movedsrv", ctx.athanor_id})
+
+    watched = Process.monitor(pid)
+
+    {:ok, _} = Vault.rebind(ctx, %{id: entry.id, destination: @destination})
+
+    sync_reconciler()
+    assert_receive {:reconciled, %{server: "movedsrv"}}, 2_000
+    assert_receive {:DOWN, ^watched, :process, ^pid, _}, 2_000
+
+    # The next connect reads the entry where it may go now, and refuses
+    # before it is unsealed.
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, %{last_used_at: used}} = Arca.VaultStorage.get(actor, entry.id)
+    {:ok, row} = Arca.McpServerStorage.get(actor, "movedsrv")
+    assert {:error, sentence} = Emissary.External.Servers.ensure_started(row, ctx)
+    assert sentence == Grimoire.render(:destination_mismatch)
+    assert {:ok, %{last_used_at: ^used}} = Arca.VaultStorage.get(actor, entry.id)
   end
 
   describe "the periodic pass" do
@@ -426,7 +494,8 @@ defmodule Emissary.External.ReconcilerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "swept-token",
           kind: "api_key",
-          fields: %{"token" => "v1"}
+          fields: %{"token" => "v1"},
+          destination: @destination
         })
 
       sync_reconciler()
@@ -457,7 +526,8 @@ defmodule Emissary.External.ReconcilerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "rebound-token",
           kind: "api_key",
-          fields: %{"token" => "v1"}
+          fields: %{"token" => "v1"},
+          destination: @destination
         })
 
       sync_reconciler()
@@ -493,7 +563,8 @@ defmodule Emissary.External.ReconcilerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "gone-token",
           kind: "api_key",
-          fields: %{"token" => "v1"}
+          fields: %{"token" => "v1"},
+          destination: @destination
         })
 
       sync_reconciler()
@@ -513,7 +584,8 @@ defmodule Emissary.External.ReconcilerTest do
         Sanctum.TestContext.create_vault(ctx, %{
           name: "idle-token",
           kind: "api_key",
-          fields: %{"token" => "v1"}
+          fields: %{"token" => "v1"},
+          destination: @destination
         })
 
       {:ok, pid} =

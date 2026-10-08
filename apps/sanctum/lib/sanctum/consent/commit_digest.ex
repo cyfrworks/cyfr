@@ -49,6 +49,34 @@ defmodule Sanctum.Consent.CommitDigest do
   and its empty records dropped; a field left out and a field named empty
   stay distinct.
 
+  ## Accounts and lifetimes
+
+  A binding names exactly one of the athanor's entry (`entry_id`) and an
+  instance entry (`instance_entry_id`), the account `name` it is bound
+  under (absent for the need's default), its `lifetime` (`kind`, and the
+  `until` instant of an `until` binding) and `renew`, whether the person
+  renews a consumed `once`. A need may be bound once per name. A
+  selection names exactly one of the lender's `label`, an entry or an
+  instance entry, the dependency's `need` an entry is chosen for, the
+  account `name` an entry rides under beside the edge's default (absent
+  for the default), and its own lifetime and `renew`. An edge is selected
+  once per name, a name compared case-folded. Each is a decision, so two
+  commits differing only by `renew`, or by a selection's name, differ in
+  digest.
+
+  ## Removed bindings
+
+  `removed`, optional, is each binding of the profile's head the
+  revision drops, as the preview carries it (`Prima.ConsentPreview`'s
+  "Removed bindings"), sorted by `binding_key`. A `need` the preview
+  carries as null is left out of its item, since the canonical form
+  admits no null (`Prima.JCS`) and every item the preview carries names
+  its need, so an absent need is a null one and nothing else. The list is
+  left out of the canonical map when empty, so a revision that removes
+  nothing hashes as it did before removals were covered. The head itself
+  is pinned apart, by the expected revision the proof binds; this binds
+  what the person was shown the revision drops.
+
   Explanatory text never enters the digest: a need's reason is prose, so
   rewording it invalidates no consent.
   """
@@ -56,12 +84,21 @@ defmodule Sanctum.Consent.CommitDigest do
   alias Sanctum.Consent.Normalize
   alias Prima.JCS
 
+  @lifetimes ~w(standing until once)
+
+  @typedoc "A lifetime as the digest reads it: its kind and, for `until`, the instant."
+  @type lifetime :: %{required(:kind) => String.t(), optional(:until) => String.t() | nil}
+
   @type binding :: %{
           required(:need) => String.t(),
-          required(:entry_id) => String.t(),
+          optional(:entry_id) => String.t(),
+          optional(:instance_entry_id) => String.t(),
           required(:binding_digest) => String.t(),
+          optional(:name) => String.t() | nil,
           optional(:fields) => [String.t()],
-          optional(:scopes) => [String.t()]
+          optional(:scopes) => [String.t()],
+          optional(:lifetime) => lifetime(),
+          optional(:renew) => boolean()
         }
 
   @type tool_server_grant :: %{
@@ -73,9 +110,15 @@ defmodule Sanctum.Consent.CommitDigest do
   @type selection :: %{
           required(:from) => String.t(),
           required(:dep) => String.t(),
-          required(:label) => String.t(),
+          optional(:label) => String.t(),
+          optional(:entry_id) => String.t(),
+          optional(:instance_entry_id) => String.t(),
+          optional(:need) => String.t(),
+          optional(:name) => String.t() | nil,
           required(:binding_digest) => String.t(),
-          optional(:fields) => [String.t()]
+          optional(:fields) => [String.t()],
+          optional(:lifetime) => lifetime(),
+          optional(:renew) => boolean()
         }
 
   @typedoc """
@@ -99,7 +142,8 @@ defmodule Sanctum.Consent.CommitDigest do
           optional(:selections) => [selection()],
           optional(:tool_servers) => [tool_server_grant()],
           optional(:override) => boolean(),
-          optional(:subset) => subset()
+          optional(:subset) => subset(),
+          optional(:removed) => [Prima.ConsentPreview.removed()]
         }
 
   @type error :: {:invalid_commit, atom(), String.t()} | {:invalid_digest_input, JCS.error()}
@@ -144,7 +188,7 @@ defmodule Sanctum.Consent.CommitDigest do
            Normalize.only_keys(
              commit,
              ~w(shape_digest blob_digest label kind invoke_mode origins bindings selections
-                tool_servers override subset)a,
+                tool_servers override subset removed)a,
              tag
            ),
          {:ok, shape_digest} <- Normalize.required_string(commit, :shape_digest, tag),
@@ -159,7 +203,8 @@ defmodule Sanctum.Consent.CommitDigest do
          {:ok, selections} <- selections(commit),
          {:ok, tool_servers} <- tool_servers(commit),
          {:ok, override} <- override(commit),
-         {:ok, subset} <- Normalize.subset(commit, :subset, tag) do
+         {:ok, subset} <- Normalize.subset(commit, :subset, tag),
+         {:ok, removed} <- removed(commit) do
       {:ok,
        %{
          "shape_digest" => shape_digest,
@@ -173,7 +218,34 @@ defmodule Sanctum.Consent.CommitDigest do
          "tool_servers" => tool_servers,
          "override" => override,
          "subset" => subset
-       }}
+       }
+       |> then(&if removed == [], do: &1, else: Map.put(&1, "removed", removed))}
+    end
+  end
+
+  # The bindings the revision drops, held to the preview's own shape and
+  # sorted by key, a need that cannot be told left out; none at all is
+  # absent from the digest.
+  defp removed(commit) do
+    case Map.get(commit, :removed, []) do
+      items when is_list(items) ->
+        sorted =
+          Enum.sort_by(items, fn
+            %{"binding_key" => key} -> key
+            _other -> nil
+          end)
+
+        case Prima.ConsentPreview.check_removed(sorted) do
+          {:ok, removed} ->
+            {:ok, Enum.map(removed, &Map.reject(&1, fn {_field, value} -> is_nil(value) end))}
+
+          {:error, _reason} ->
+            {:error,
+             {:invalid_commit, :removed, "each is one binding of the head, each key once"}}
+        end
+
+      _other ->
+        {:error, {:invalid_commit, :removed, "must be a list"}}
     end
   end
 
@@ -211,20 +283,30 @@ defmodule Sanctum.Consent.CommitDigest do
   defp normalize_binding(binding) when is_map(binding) do
     tag = :invalid_commit
 
-    with :ok <- Normalize.only_keys(binding, ~w(need entry_id binding_digest fields scopes)a, tag),
+    with :ok <-
+           Normalize.only_keys(
+             binding,
+             ~w(need entry_id instance_entry_id binding_digest fields scopes name lifetime renew)a,
+             tag
+           ),
          {:ok, need} <- Normalize.required_string(binding, :need, tag),
-         {:ok, entry_id} <- Normalize.required_string(binding, :entry_id, tag),
+         {:ok, entry} <- one_entry(binding, [:entry_id, :instance_entry_id], :bindings),
          {:ok, binding_digest} <- Normalize.required_string(binding, :binding_digest, tag),
+         {:ok, name} <- Normalize.optional_string(binding, :name, tag),
          {:ok, fields} <- Normalize.string_set(binding, :fields, tag),
-         {:ok, scopes} <- Normalize.string_set(binding, :scopes, tag) do
+         {:ok, scopes} <- Normalize.string_set(binding, :scopes, tag),
+         {:ok, lifetime} <- lifetime(binding),
+         {:ok, renew} <- renew(binding) do
       {:ok,
-       %{
+       Map.merge(entry, %{
          "need" => need,
-         "entry_id" => entry_id,
          "binding_digest" => binding_digest,
          "fields" => fields,
-         "scopes" => scopes
-       }}
+         "scopes" => scopes,
+         "lifetime" => lifetime,
+         "renew" => renew
+       })
+       |> Normalize.put_optional("name", name)}
     end
   end
 
@@ -232,9 +314,61 @@ defmodule Sanctum.Consent.CommitDigest do
     {:error, {:invalid_commit, :bindings, "each binding must be a map"}}
   end
 
-  # One edge, one selected profile: the digest covers which labelled
-  # profile of which dependency lends its entry to which lender, at which
-  # binding digest, narrowed to which fields.
+  # Exactly one of the keys `allowed` names what the item binds or borrows.
+  defp one_entry(item, allowed, field) do
+    case Enum.filter(allowed, &(Map.get(item, &1) != nil)) do
+      [key] ->
+        case Normalize.required_string(item, key, :invalid_commit) do
+          {:ok, value} -> {:ok, %{Atom.to_string(key) => value}}
+          error -> error
+        end
+
+      _none_or_several ->
+        {:error,
+         {:invalid_commit, field,
+          "each names exactly one of #{Enum.map_join(allowed, ", ", &Atom.to_string/1)}"}}
+    end
+  end
+
+  # A lifetime is its kind and, for `until` alone, the instant; standing
+  # when the decision names none.
+  defp lifetime(item) do
+    case Map.get(item, :lifetime) do
+      nil ->
+        {:ok, %{"kind" => "standing"}}
+
+      %{kind: kind} = lifetime when kind in @lifetimes ->
+        case {kind, Map.get(lifetime, :until)} do
+          {"until", until} when is_binary(until) and until != "" ->
+            {:ok, %{"kind" => kind, "until" => until}}
+
+          {"until", _missing} ->
+            {:error, {:invalid_commit, :lifetime, "an until lifetime names its instant"}}
+
+          {_kind, nil} ->
+            {:ok, %{"kind" => kind}}
+
+          {_kind, _until} ->
+            {:error, {:invalid_commit, :lifetime, "only an until lifetime names an instant"}}
+        end
+
+      _other ->
+        {:error,
+         {:invalid_commit, :lifetime, "must name a kind of #{Enum.join(@lifetimes, ", ")}"}}
+    end
+  end
+
+  defp renew(item) do
+    case Map.get(item, :renew, false) do
+      value when is_boolean(value) -> {:ok, value}
+      _other -> {:error, {:invalid_commit, :renew, "must be a boolean"}}
+    end
+  end
+
+  # One edge, one selection per account: the digest covers which labelled
+  # profile of which dependency lends its entry to which lender, or which
+  # entry the edge binds under which name, at which binding digest,
+  # narrowed to which fields.
   defp selections(commit) do
     tag = :invalid_commit
 
@@ -260,20 +394,33 @@ defmodule Sanctum.Consent.CommitDigest do
   defp normalize_selection(selection) when is_map(selection) do
     tag = :invalid_commit
 
-    with :ok <- Normalize.only_keys(selection, ~w(from dep label binding_digest fields)a, tag),
+    with :ok <-
+           Normalize.only_keys(
+             selection,
+             ~w(from dep label entry_id instance_entry_id need name binding_digest fields
+                lifetime renew)a,
+             tag
+           ),
          {:ok, from} <- Normalize.required_string(selection, :from, tag),
          {:ok, dep} <- Normalize.required_string(selection, :dep, tag),
-         {:ok, label} <- Normalize.required_string(selection, :label, tag),
+         {:ok, lent} <- one_entry(selection, [:label, :entry_id, :instance_entry_id], :selections),
+         {:ok, need} <- Normalize.optional_string(selection, :need, tag),
+         {:ok, name} <- Normalize.optional_string(selection, :name, tag),
          {:ok, binding_digest} <- Normalize.required_string(selection, :binding_digest, tag),
-         {:ok, fields} <- Normalize.string_set(selection, :fields, tag) do
+         {:ok, fields} <- Normalize.string_set(selection, :fields, tag),
+         {:ok, lifetime} <- lifetime(selection),
+         {:ok, renew} <- renew(selection) do
       {:ok,
-       %{
+       Map.merge(lent, %{
          "from" => from,
          "dep" => dep,
-         "label" => label,
          "binding_digest" => binding_digest,
-         "fields" => fields
-       }}
+         "fields" => fields,
+         "lifetime" => lifetime,
+         "renew" => renew
+       })
+       |> Normalize.put_optional("need", need)
+       |> Normalize.put_optional("name", name)}
     end
   end
 
@@ -281,27 +428,38 @@ defmodule Sanctum.Consent.CommitDigest do
     {:error, {:invalid_commit, :selections, "each selection must be a map"}}
   end
 
+  # One edge, one credential per account: the default (no name) and each
+  # named account once, a name a person would read as another (differing
+  # only in case) counted as that name again. Two selections in one slot
+  # would make the digest depend on list order and leave the blob to pick.
   defp ensure_one_selection_per_edge(selections) do
-    sorted = Enum.sort_by(selections, &{&1["from"], &1["dep"]})
-    edges = Enum.map(sorted, &{&1["from"], &1["dep"]})
+    sorted = Enum.sort_by(selections, &{&1["from"], &1["dep"], &1["name"] || ""})
+    slots = Enum.map(sorted, &{&1["from"], &1["dep"], folded(&1["name"])})
 
-    if length(Enum.uniq(edges)) == length(edges) do
+    if length(Enum.uniq(slots)) == length(slots) do
       {:ok, sorted}
     else
-      {:error, {:invalid_commit, :selections, "each from/dep edge may be selected exactly once"}}
+      {:error,
+       {:invalid_commit, :selections,
+        "each from/dep edge may be selected exactly once per account name"}}
     end
   end
 
-  # One need, one credential. Two bindings for the same need would make the
-  # digest depend on list order and leave the loader to pick.
-  defp ensure_one_binding_per_need(bindings) do
-    sorted = Enum.sort_by(bindings, & &1["need"])
-    needs = Enum.map(sorted, & &1["need"])
+  defp folded(nil), do: nil
+  defp folded(name), do: Prima.Authority.Blob.account_name_key(name)
 
-    if length(Enum.uniq(needs)) == length(needs) do
+  # One need, one credential per name: the default (no name) and each
+  # named account once, a name a person would read as another counted as
+  # that name again. Two bindings in one slot would make the digest depend
+  # on list order and leave the loader to pick.
+  defp ensure_one_binding_per_need(bindings) do
+    sorted = Enum.sort_by(bindings, &{&1["need"], &1["name"] || ""})
+    slots = Enum.map(sorted, &{&1["need"], folded(&1["name"])})
+
+    if length(Enum.uniq(slots)) == length(slots) do
       {:ok, sorted}
     else
-      {:error, {:invalid_commit, :bindings, "each need may be bound exactly once"}}
+      {:error, {:invalid_commit, :bindings, "each need may be bound exactly once per name"}}
     end
   end
 

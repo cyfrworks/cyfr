@@ -6,13 +6,27 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   `profile.grants`: the grants of the caller's athanor whose head
   revision reaches one domain, storage path or vault entry, read as each
   enforcement point would admit it, so no grant shows wider or narrower
-  than it runs. Only an active profile's head counts, a head the loader
-  refuses outright reaches nothing, every edge counts (a borrowed entry
-  among them), at most a thousand heads are read, and a read never
-  reaches past the caller's athanor.
+  than it runs. Only an active profile's head counts; a head the loader
+  cannot trust refuses the read as its damaged head, and one it asks to
+  grant again reaches nothing; a lender that cannot be read or does not
+  decode refuses the read, and so does a store that cannot answer the
+  heads; every edge counts (a borrowed entry among them), at most a
+  thousand heads are read, and a read never reaches past the caller's
+  athanor.
+
+  A grant naming one account in two spellings is refused naming both,
+  with nothing written, through `profile.preview` and `profile.grant`
+  alike: the home decides which names are one account, whatever Unicode
+  tables the caller folded names by. The command line sends
+  `profile.plan`, `profile.preview` and `profile.commit`: preview and
+  commit, which carry the bindings, reach the slot check in
+  `Sanctum.Consent.Commit` that `profile.grant` reaches, and the command
+  line meets the refusal first at `profile.preview`.
   """
 
   use ExUnit.Case, async: false
+
+  require Ecto.Query
 
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Loader
@@ -56,6 +70,28 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   defp grants(ctx, args),
     do: Grimoire.call_external("profile", ctx, Map.put(args, "action", "grants"))
 
+  # `profile.grants` as an MCP client sends it, under a request of its
+  # own: the response the client receives.
+  defp grants_over_mcp(ctx, args) do
+    ctx = %{ctx | request_id: Prima.UUID7.request_id()}
+
+    answer =
+      Emissary.MCP.Router.dispatch(ctx, %Prima.MCP.Message{
+        type: :request,
+        id: 1,
+        method: "tools/call",
+        params: %{"name" => "profile", "arguments" => Map.put(args, "action", "grants")}
+      })
+
+    case answer do
+      {:ok, result} -> Prima.MCP.Message.encode_result(1, result)
+      {:error, code, message} -> Prima.MCP.Message.encode_error(1, code, message)
+    end
+  end
+
+  defp error_response(code, message),
+    do: %{"jsonrpc" => "2.0", "id" => 1, "error" => %{"code" => code, "message" => message}}
+
   defp egress(domains, methods \\ ["GET"], schemes \\ ["https"]),
     do: %{
       "egress" => %{
@@ -69,11 +105,16 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   defp storage(paths, actions \\ ["read"]),
     do: %{"storage" => %{"paths" => paths, "actions" => actions}}
 
-  defp vault(entry_id),
+  # `entry_id` bound on `node`'s `edge`: the athanor's own entry, keyed
+  # where it sits.
+  defp vault(entry_id, node, edge),
     do: %{
       "vault" => %{
         "entry_id" => entry_id,
         "binding_digest" => "sha256:binding",
+        "scope" => "athanor",
+        "binding_key" => Prima.Authority.Blob.binding_key(node, edge, nil),
+        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
         "projection" => %{"fields" => ["api_key"], "scopes" => []}
       }
     }
@@ -124,20 +165,83 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
   defp ids(%{grants: grants}), do: Enum.map(grants, & &1.profile_id)
 
+  # The revision's row for `entry` bound on `node`'s `edge`.
+  defp entry_ref(node, edge, entry),
+    do: %{
+      binding_key: Prima.Authority.Blob.binding_key(node, edge, nil),
+      scope: "athanor",
+      vault_entry_id: entry,
+      binding_digest: "sha256:binding"
+    }
+
   # The lender: `@dep`'s own profile, binding `entry` on its ingress.
   defp lender!(ctx, entry, opts \\ []) do
-    ref = %{vault_entry_id: entry, binding_digest: "sha256:binding"}
-    grant!(ctx, "grants-dep", policy(@dep, vault(entry)), [vault_refs: [ref]] ++ opts)
+    ref = entry_ref(@dep, "@ingress", entry)
+
+    grant!(
+      ctx,
+      "grants-dep",
+      policy(@dep, vault(entry, @dep, "@ingress")),
+      [vault_refs: [ref]] ++ opts
+    )
   end
 
   # A borrower: its edge to `@dep` selects `@dep`'s profile through
-  # `selection` (`via`), and grants a domain beside it.
-  defp borrower!(ctx, name, selection, opts \\ []) do
+  # `selection` (`via`), and grants a domain beside it. Its revision's row
+  # for that edge names the label it borrows and the digest it pins.
+  defp borrower!(ctx, name, %{"via" => via} = selection, opts \\ []) do
+    ref = "reagent:local.#{name}"
     edge = Map.put(egress(["borrow.example"]), "vault", selection)
-    grant!(ctx, name, policy("reagent:local.#{name}", %{}, %{"key" => edge}), opts)
+
+    row = %{
+      binding_key: Prima.Authority.Blob.binding_key(ref, borrowed_edge(), nil),
+      scope: "athanor",
+      via_label: via["label"],
+      binding_digest: via["binding_digest"]
+    }
+
+    grant!(ctx, name, policy(ref, %{}, %{"key" => edge}), [vault_refs: [row]] ++ opts)
   end
 
   defp borrowed_edge, do: Prima.Authority.Blob.edge_key(@dep, "key")
+
+  defp set_profile!(ctx, id, changes) do
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(p in Arca.Schemas.Profile,
+          where: p.athanor_id == ^ctx.athanor_id and p.id == ^id
+        ),
+        set: changes
+      )
+  end
+
+  # `table` stops answering once the heads are read whole (their
+  # `consent_vault_refs`, the last read of `Arca.ConsentStorage.active_heads/2`,
+  # which names `consent_id` among the heads it reads), before any head
+  # is loaded.
+  defp away_after_heads!(table, consent_id) do
+    test = self()
+    handler = "profile-grants-away-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if self() == test and meta[:source] == "consent_vault_refs" and
+               Enum.any?(meta[:params] || [], &(&1 == consent_id or names?(&1, consent_id))) do
+            :telemetry.detach(handler)
+            Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  defp names?(ids, consent_id) when is_list(ids), do: consent_id in ids
+  defp names?(_param, _consent_id), do: false
 
   # What `Sanctum.Consent.Loader.load_root/3` carries on the borrower's
   # edge to `@dep` when its profile runs under `origin`.
@@ -303,25 +407,24 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   describe "a vault entry" do
     test "is reached by its id among the revision's vault references", %{ctx: ctx} do
       entry = "vlt_grants_#{System.unique_integer([:positive])}"
-      ref = %{vault_entry_id: entry, binding_digest: "sha256:binding"}
 
       bound =
-        grant!(ctx, "g-bound", policy("reagent:local.g-bound", vault(entry)), vault_refs: [ref])
+        grant!(
+          ctx,
+          "g-bound",
+          policy("reagent:local.g-bound", vault(entry, "reagent:local.g-bound", "@ingress")),
+          vault_refs: [entry_ref("reagent:local.g-bound", "@ingress", entry)]
+        )
 
       lent =
         grant!(
           ctx,
           "g-lent",
-          policy("reagent:local.g-lent", %{}, %{"key" => vault(entry)}),
-          vault_refs: [ref]
+          policy("reagent:local.g-lent", %{}, %{
+            "key" => vault(entry, "reagent:local.g-lent", borrowed_edge())
+          }),
+          vault_refs: [entry_ref("reagent:local.g-lent", borrowed_edge(), entry)]
         )
-
-      # References and blob disagree: the loader refuses such a revision,
-      # so it reaches nothing through the entry.
-      _refs_only =
-        grant!(ctx, "g-refs-only", policy("reagent:local.g-refs-only", %{}), vault_refs: [ref])
-
-      _blob_only = grant!(ctx, "g-blob-only", policy("reagent:local.g-blob-only", vault(entry)))
 
       assert {:ok, answer} = grants(ctx, %{"entry_id" => entry})
       assert answer.resource == %{kind: "entry_id", value: entry}
@@ -348,10 +451,16 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
     test "of another athanor, or of none, is refused as unknown", %{ctx: ctx, theirs: theirs} do
       entry = "vlt_theirs_#{System.unique_integer([:positive])}"
-      ref = %{vault_entry_id: entry, binding_digest: "sha256:binding"}
+      ref = entry_ref("reagent:local.g-theirs-vault", "@ingress", entry)
 
       _theirs =
-        grant!(theirs, "g-theirs-vault", policy("reagent:local.g-theirs-vault", vault(entry)),
+        grant!(
+          theirs,
+          "g-theirs-vault",
+          policy(
+            "reagent:local.g-theirs-vault",
+            vault(entry, "reagent:local.g-theirs-vault", "@ingress")
+          ),
           vault_refs: [ref]
         )
 
@@ -440,6 +549,53 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert ids(answer) == [lender]
     end
 
+    # A lender the read cannot read is no grant that reaches nothing: the
+    # read is refused in a sentence of its own, never answered short. The
+    # store stops answering once the heads are read, so only the lender's
+    # read meets the outage.
+    @tag :capture_log
+    test "a borrower whose lender cannot be read or does not decode refuses the read",
+         %{ctx: ctx} do
+      entry = "vlt_unread_#{System.unique_integer([:positive])}"
+      lender = lender!(ctx, entry)
+      _borrower = borrower!(ctx, "g-unread", %{"via" => %{"label" => "default"}})
+      assert {:ok, %{count: 2}} = grants(ctx, %{"entry_id" => entry})
+
+      for table <- ~w(profiles consents) do
+        away_after_heads!(table, "cons_g-unread")
+
+        assert {:error, {:lender_unavailable, @dep} = reason} =
+                 grants(ctx, %{"entry_id" => entry}),
+               table
+
+        assert %Prima.Refusal{
+                 class: :unavailable,
+                 message: "A profile that lends a key here cannot be read right now — try again."
+               } = Grimoire.Error.classify(reason)
+
+        Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
+      end
+
+      damaged =
+        "A profile that lends a key here is damaged and cannot lend its key — " <>
+          "revoke profile #{lender} and grant it again."
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, lender, scope: "sideways")
+
+      assert {:error, {:lender_corrupt, @dep, ^lender} = reason} =
+               grants(ctx, %{"entry_id" => entry})
+
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      :ok = ConsentFixtures.hand_edit_head!(ctx, lender, scope: "versionless")
+      set_profile!(ctx, lender, kind: "sideways")
+
+      assert {:error, {:lender_corrupt, @dep, ^lender} = reason} =
+               grants(ctx, %{"entry_id" => entry})
+
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+    end
+
     test "a borrower reaches the entry only under an origin its lender admits", %{ctx: ctx} do
       entry = "vlt_origins_#{System.unique_integer([:positive])}"
       lender = lender!(ctx, entry, origins: [:schedule])
@@ -492,21 +648,111 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert {:ok, %{grants: [], count: 0}} = grants(ctx, %{"domain" => "d.example"})
     end
 
-    test "a revision whose policy fails its digest or does not parse reaches nothing",
+    # An app's own head the loader cannot trust refuses the read as its
+    # damaged head, in the loader's one reading of that damage
+    # (`Sanctum.Consent.Loader.damage_refusal/3`), as an MCP client and a
+    # person read it: read as reaching nothing, a grant that exists would
+    # read as none.
+    test "a head whose bytes fail their digest or do not parse refuses the read as its " <>
+           "damaged head, by domain and by entry",
          %{ctx: ctx} do
-      tampered =
-        grant!(ctx, "g-tampered", policy("reagent:local.g-tampered", egress(["e.example"])))
+      entry = "vlt_damaged_#{System.unique_integer([:positive])}"
+      ref = "reagent:local.g-damaged"
 
-      ConsentFixtures.hand_edit_head!(ctx, tampered,
-        resolved_policy: policy("reagent:local.g-tampered", egress(["*"]))
-      )
+      damaged =
+        grant!(
+          ctx,
+          "g-damaged",
+          policy(ref, Map.merge(egress(["e.example"]), vault(entry, ref, "@ingress"))),
+          vault_refs: [entry_ref(ref, "@ingress", entry)]
+        )
 
-      _unparsed = grant!(ctx, "g-unparsed", Jason.encode!(%{"canonical" => "jcs-1"}))
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, damaged)
+      reads = [%{"domain" => "e.example"}, %{"entry_id" => entry}]
 
-      assert {:ok, %{grants: [], count: 0}} = grants(ctx, %{"domain" => "e.example"})
+      for args <- reads do
+        assert {:ok, %{count: 1}} = grants(ctx, args), inspect(args)
+      end
+
+      sentence =
+        "This app's consent is damaged and cannot be used — " <>
+          "revoke profile #{damaged} and grant it again."
+
+      for changes <- [
+            [blob_digest: "sha256:" <> String.duplicate("0", 64)],
+            [
+              resolved_policy: Jason.encode!(%{"canonical" => "jcs-1"}),
+              blob_digest: Prima.JCS.hash_binary(Jason.encode!(%{"canonical" => "jcs-1"}))
+            ]
+          ],
+          args <- reads do
+        :ok = ConsentFixtures.hand_edit_head!(ctx, damaged, changes)
+
+        assert {:error, {:head_corrupt, ^damaged} = reason} = grants(ctx, args), inspect(args)
+
+        assert %Prima.Refusal{class: :corrupt, message: ^sentence} =
+                 Grimoire.Error.classify(reason)
+
+        assert grants_over_mcp(ctx, args) == error_response(-33104, sentence)
+      end
+
+      :ok =
+        ConsentFixtures.hand_edit_head!(ctx, damaged,
+          resolved_policy: head.resolved_policy,
+          blob_digest: head.blob_digest
+        )
+
+      assert {:ok, %{count: 1}} = grants(ctx, %{"entry_id" => entry})
     end
 
-    test "a head the loader refuses outright reaches nothing, through any resource",
+    test "references the blob does not carry, or a revision that does not hold, refuse the " <>
+           "read as its damaged head, through any resource",
+         %{ctx: ctx} do
+      canonical = Map.merge(egress(["refused.example"]), storage(["data/secrets/"]))
+      entry = "vlt_refused_#{System.unique_integer([:positive])}"
+
+      mismatched =
+        grant!(ctx, "g-mismatched", policy("reagent:local.g-mismatched", canonical),
+          vault_refs: [entry_ref("reagent:local.g-mismatched", "@ingress", entry)]
+        )
+
+      reads = [
+        %{"domain" => "refused.example"},
+        %{"path" => "data/secrets/key.txt"},
+        %{"entry_id" => entry}
+      ]
+
+      for args <- reads do
+        assert {:error, {:head_corrupt, ^mismatched}} = grants(ctx, args), inspect(args)
+      end
+
+      # Out of the read once revoked; then a pinned revision that names no
+      # version.
+      set_profile!(ctx, mismatched, status: "revoked")
+      invalid = grant!(ctx, "g-invalid", policy("reagent:local.g-invalid", canonical))
+      ConsentFixtures.hand_edit_head!(ctx, invalid, scope: "pinned")
+
+      for args <- reads do
+        assert {:error, {:head_corrupt, ^invalid}} = grants(ctx, args), inspect(args)
+      end
+
+      # And a blob carrying an entry its references do not name.
+      set_profile!(ctx, invalid, status: "revoked")
+      ref = "reagent:local.g-blob-only"
+
+      blob_only =
+        grant!(
+          ctx,
+          "g-blob-only",
+          policy(ref, Map.merge(canonical, vault(entry, ref, "@ingress")))
+        )
+
+      for args <- reads do
+        assert {:error, {:head_corrupt, ^blob_only}} = grants(ctx, args), inspect(args)
+      end
+    end
+
+    test "a head the loader asks to grant again reaches nothing, through any resource",
          %{ctx: ctx} do
       # A storage path spelled other than the door reaches it: the loader
       # asks for the grant again rather than run it.
@@ -518,27 +764,39 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert {:error, {:consent_required, %{profile_id: ^unusable}}} =
                Loader.load_root(%{ctx | origin: :interactive}, profile)
 
-      # References the blob does not carry, and a pinned revision that names
-      # no version, each over a canonical path: refused by the loader before
-      # any run all the same.
-      canonical = Map.merge(egress(["refused.example"]), storage(["data/secrets/"]))
-      entry = "vlt_refused_#{System.unique_integer([:positive])}"
-
-      _mismatched =
-        grant!(ctx, "g-mismatched", policy("reagent:local.g-mismatched", canonical),
-          vault_refs: [%{vault_entry_id: entry, binding_digest: "sha256:binding"}]
-        )
-
-      invalid = grant!(ctx, "g-invalid", policy("reagent:local.g-invalid", canonical))
-      ConsentFixtures.hand_edit_head!(ctx, invalid, scope: "pinned")
-
-      for args <- [
-            %{"domain" => "refused.example"},
-            %{"path" => "data/secrets/key.txt"},
-            %{"entry_id" => entry}
-          ] do
+      for args <- [%{"domain" => "refused.example"}, %{"path" => "data/secrets/key.txt"}] do
         assert {:ok, %{grants: [], count: 0}} = grants(ctx, args), inspect(args)
       end
+    end
+
+    # The heads arrive read whole (`Arca.ConsentStorage.active_heads/2`),
+    # so a store that cannot answer them refuses the read before any head
+    # is loaded: an outage, never "reaches nothing".
+    @tag :capture_log
+    test "heads the store cannot answer refuse the read as unavailable, by domain and by entry",
+         %{ctx: ctx} do
+      entry = "vlt_unanswered_#{System.unique_integer([:positive])}"
+      ref = "reagent:local.g-unanswered"
+
+      _unanswered =
+        grant!(
+          ctx,
+          "g-unanswered",
+          policy(ref, Map.merge(egress(["u.example"]), vault(entry, ref, "@ingress"))),
+          vault_refs: [entry_ref(ref, "@ingress", entry)]
+        )
+
+      for table <- ~w(consents consent_vault_refs),
+          args <- [%{"domain" => "u.example"}, %{"entry_id" => entry}] do
+        Arca.Repo.query!("ALTER TABLE #{table} RENAME TO #{table}_unavailable")
+        answer = grants(ctx, args)
+        Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
+
+        assert {:error, reason} = answer, "#{table} #{inspect(args)}"
+        assert %Prima.Refusal{class: :unavailable} = Grimoire.Error.classify(reason)
+      end
+
+      assert {:ok, %{count: 1}} = grants(ctx, %{"entry_id" => entry})
     end
 
     test "reads at most a thousand heads, and says when the athanor holds more", %{ctx: ctx} do
@@ -625,6 +883,141 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
       assert {:ok, %{grants: [%{profile_id: ^profile_id}]}} =
                grants(ctx, %{"path" => "data/reports/q3.md"})
+    end
+  end
+
+  # An app of `ctx`'s athanor whose own calls carry one credential need,
+  # granted through the walk with a default entry: its profile, and that
+  # entry and two more of its provider.
+  defp granted_app!(ctx, name) do
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "reagent",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "fields" => ["KEY"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(manifest)
+      })
+
+    [default, one, other] =
+      for label <- ["default", "one", "other"] do
+        {:ok, view} =
+          Sanctum.TestContext.create_vault(ctx, %{
+            name: "#{name} #{label}",
+            kind: "api_key",
+            provider_hint: "example.com",
+            fields: %{"KEY" => "k-#{name}-#{label}"},
+            destination: %{"hosts" => ["api.example.com"]},
+            disclose: true
+          })
+
+        view
+      end
+
+    ref = "reagent:local." <> name
+    decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: default.id}]}
+    {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+    {:ok, preview} = Commit.preview(ctx, decisions)
+
+    {:ok, %{profile_id: profile_id}} =
+      Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    %{ref: ref, profile_id: profile_id, default: default, one: one, other: other}
+  end
+
+  # `profile.grant` of `name`'s app, its own calls bound to a default and
+  # to `a` and `b` beside it, refused naming both spellings, with the head
+  # as it was.
+  defp refuses_two_spellings(ctx, name, a, b) do
+    app = granted_app!(ctx, name)
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, head} = Arca.ConsentStorage.head_consent(actor, app.profile_id)
+
+    assert Grimoire.call_external("profile", ctx, %{
+             "action" => "grant",
+             "profile_id" => app.profile_id,
+             "expected_consent_revision" => head.revision,
+             "bindings" => [
+               %{"need" => "api_key", "entry_id" => app.default.id},
+               %{"need" => "api_key", "entry_id" => app.one.id, "name" => a},
+               %{"need" => "api_key", "entry_id" => app.other.id, "name" => b}
+             ]
+           }) ==
+             {:error,
+              "The bindings for api_key name one account twice, as \"#{a}\" and \"#{b}\": " <>
+                "names that differ only in letter case are the same account. Bind it once, " <>
+                "under one of the two."}
+
+    assert {:ok, %{id: id, revision: revision}} =
+             Arca.ConsentStorage.head_consent(actor, app.profile_id)
+
+    assert {id, revision} == {head.id, head.revision}
+  end
+
+  describe "profile.preview naming one account in two spellings" do
+    # Where the command line meets the refusal first: `cyfr profile grant`
+    # sends profile.plan, profile.preview and profile.commit, and preview
+    # and commit, which carry the bindings, reach the slot check in
+    # `Sanctum.Consent.Commit` that profile.grant reaches. A command line
+    # folding on Unicode tables older than the home's sends `Ꟍ Work` and
+    # `ꟍ work` as two accounts.
+    test "is refused naming both, and nothing is written", %{ctx: ctx} do
+      app = granted_app!(ctx, "preview-twice-unicode")
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, head} = Arca.ConsentStorage.head_consent(actor, app.profile_id)
+
+      assert Grimoire.call_external("profile", ctx, %{
+               "action" => "preview",
+               "decisions" => %{
+                 "ref" => app.ref,
+                 "bindings" => [
+                   %{"need" => "api_key", "entry_id" => app.default.id},
+                   %{"need" => "api_key", "entry_id" => app.one.id, "name" => "Ꟍ Work"},
+                   %{"need" => "api_key", "entry_id" => app.other.id, "name" => "ꟍ work"}
+                 ]
+               }
+             }) ==
+               {:error,
+                "The bindings for api_key name one account twice, as \"Ꟍ Work\" and " <>
+                  "\"ꟍ work\": names that differ only in letter case are the same account. " <>
+                  "Bind it once, under one of the two."}
+
+      assert {:ok, %{id: id, revision: revision}} =
+               Arca.ConsentStorage.head_consent(actor, app.profile_id)
+
+      assert {id, revision} == {head.id, head.revision}
+    end
+  end
+
+  describe "profile.grant naming one account in two spellings" do
+    # The same slot check, reached through profile.grant: two accounts to
+    # a command line folding on older tables, one to the home.
+    test "is refused naming both, a letter only newer tables fold included, and the head stands",
+         %{ctx: ctx} do
+      refuses_two_spellings(ctx, "grant-twice-unicode", "Ꟍ Work", "ꟍ work")
+    end
+
+    test "is refused naming both, in ASCII, and the head stands", %{ctx: ctx} do
+      refuses_two_spellings(ctx, "grant-twice-ascii", "Work", "work")
     end
   end
 

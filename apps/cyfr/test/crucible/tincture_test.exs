@@ -307,7 +307,10 @@ defmodule Crucible.TinctureTest do
           end
         end)
 
-      :erlang.trace_pattern({Crucible, :run_root_edge, 5}, true, [:global])
+      # A pattern applies only to a loaded module, so it is loaded first, and
+      # a pattern that matched nothing fails here rather than tracing nothing.
+      Code.ensure_loaded!(Crucible)
+      assert :erlang.trace_pattern({Crucible, :run_root_edge, 5}, true, [:global]) == 1
       on_exit(fn -> :erlang.trace_pattern({Crucible, :run_root_edge, 5}, false, [:global]) end)
       :erlang.trace(self(), true, [:call, {:tracer, collector}])
 

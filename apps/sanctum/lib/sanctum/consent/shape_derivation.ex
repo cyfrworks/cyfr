@@ -34,6 +34,13 @@ defmodule Sanctum.Consent.ShapeDerivation do
   asks again; one that declares none carries no digest, and its shape is
   what it was before tinctures declared anything.
 
+  A credential need's attach rule, its `hosts` and `paths` and a true
+  `disclose` join its need row, and a manifest's `provides` block (each
+  entry's destination canonical) joins the shape, each only where the
+  manifest declares it: a version that attaches where its predecessor
+  disclosed, or provides another address, asks again, and a manifest that
+  declares none keeps the digest it had.
+
   A vault need names what its projection reads: every derived `api_key`
   or `bundle` need row carries a non-empty `fields` list and every
   `oauth` need row a non-empty `scopes` list, which the consent writes as
@@ -49,6 +56,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
   alias Sanctum.Consent.Components
   alias Sanctum.Consent.ShapeDigest
   alias Prima.ToolPattern
+
+  require Components
 
   @doc """
   The live shape digest for a source ref, or `{:error, reason}` when the
@@ -115,7 +124,30 @@ defmodule Sanctum.Consent.ShapeDerivation do
        }
        |> Prima.MapUtil.put_present(:model_target, model_target(manifest))
        |> Prima.MapUtil.put_present(:tool_policy, tool_policy(manifest))
-       |> Prima.MapUtil.put_present(:tincture_digest, tincture_digest)}
+       |> Prima.MapUtil.put_present(:tincture_digest, tincture_digest)
+       |> Prima.MapUtil.put_present(:provides, provides(manifest))}
+    end
+  end
+
+  # The publisher's provided configuration, each entry's destination in
+  # its canonical form: nil for a manifest without the block, so its shape
+  # is the one it had before the block existed.
+  defp provides(manifest) do
+    case Prima.Manifest.Provides.from_manifest(manifest) do
+      provides when is_map(provides) and provides != %{} ->
+        Map.new(provides, fn {dep, needs} ->
+          {dep,
+           Map.new(needs, fn {need, entry} ->
+             {need,
+              %{
+                "destination" => Prima.Destination.to_map(entry.destination),
+                "values" => entry.values
+              }}
+           end)}
+        end)
+
+      _none ->
+        nil
     end
   end
 
@@ -179,15 +211,18 @@ defmodule Sanctum.Consent.ShapeDerivation do
   `{:allow_record, …}`. That arm stays live and load-bearing — only the
   DEPENDENCY case moves to `:needs_consent`.
 
-  A closure that cannot be resolved contributes nothing rather than
+  A closure that is incomplete contributes nothing rather than
   failing the shape: the loader has its own `{:incomplete, …}` path for an
   unresolvable world (`setup_required`), and a shape that errored here
   would report the wrong thing. A source whose own manifest does not
   decode is not an unresolvable world but a damaged row: its closure would
   resolve to the source alone, so it is refused as corrupt instead.
+  An outage reading the closure refuses as `{:unavailable, "Components"}`:
+  it establishes no dependency set from which a consent can be derived.
   """
   @spec dependency_releases(Sanctum.Context.t(), map(), String.t()) ::
-          {:ok, [String.t()]} | {:error, {:corrupt, {:manifest, String.t()}}}
+          {:ok, [String.t()]}
+          | {:error, {:corrupt, {:manifest, String.t()}} | {:unavailable, String.t()}}
   def dependency_releases(ctx, row, source_ref) do
     with {:ok, _manifest} <- manifest(row, source_ref) do
       case Components.resolve(ctx, row) do
@@ -197,6 +232,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
            |> Enum.reject(fn {node_key, _digest} -> node_key == source_ref end)
            |> Enum.map(fn {node_key, digest} -> "#{node_key}@#{digest}" end)
            |> Enum.sort()}
+
+        {:error, reason} when Components.is_outage(reason) ->
+          {:error, {:unavailable, "Components"}}
 
         _unresolvable ->
           {:ok, []}
@@ -249,6 +287,12 @@ defmodule Sanctum.Consent.ShapeDerivation do
          {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type),
          {:ok, manifest} <- manifest(row, source_ref) do
       {:ok, row, manifest}
+    else
+      {:error, reason} when Components.is_outage(reason) ->
+        {:error, {:unavailable, "Components"}}
+
+      error ->
+        error
     end
   end
 
@@ -288,8 +332,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
     end)
   end
 
-  # The digest's need rows: name/type/fields/scopes — the reason is prose
-  # and required-ness surfaces on the sheet, neither is shape.
+  # The digest's need rows: name/type/fields/scopes, and the attach rule,
+  # hosts, paths and a true `disclose` where the need declares them — the
+  # reason is prose and required-ness surfaces on the sheet, neither is
+  # shape. A need that declares none of the four is the row it was before
+  # they existed.
   defp digest_needs(needs) do
     Enum.map(needs, fn need ->
       %{
@@ -298,8 +345,15 @@ defmodule Sanctum.Consent.ShapeDerivation do
         fields: need.fields,
         scopes: need.scopes
       }
+      |> Prima.MapUtil.put_present(:attach, need.attach && Needs.attach_to_map(need.attach))
+      |> Prima.MapUtil.put_present(:hosts, non_empty(need.hosts))
+      |> Prima.MapUtil.put_present(:paths, non_empty(need.paths))
+      |> Prima.MapUtil.put_present(:disclose, if(need.disclose == true, do: true))
     end)
   end
+
+  defp non_empty([]), do: nil
+  defp non_empty(list), do: list
 
   defp digest_caps(caps) do
     %{}

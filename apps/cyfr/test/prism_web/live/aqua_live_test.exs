@@ -1,6 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# A store that cannot give the AQUA roles listing; every other read is the
+# local adapter's.
+defmodule PrismWeb.AquaLiveTest.UnreadableRoles do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  @roles Compendium.AquaPath.roles_root()
+
+  def list_typed(_actor, @roles), do: {:error, :eacces}
+  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
+end
+
+# A store that answers, and holds no soul and no role.
+defmodule PrismWeb.AquaLiveTest.EmptyAqua do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  @roles Compendium.AquaPath.roles_root()
+  @soul Compendium.AquaPath.soul_file()
+
+  def list_typed(_actor, @roles), do: {:ok, []}
+  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
+
+  def get(_actor, @soul), do: {:error, :not_found}
+  def get(actor, path), do: Arca.Adapters.Local.get(actor, path)
+end
+
 defmodule PrismWeb.AquaLiveTest do
   # The AQUA page shows the tree of the athanor in focus — a person's own
   # on their page, the group's on the group's — and every write lands
@@ -30,6 +57,18 @@ defmodule PrismWeb.AquaLiveTest do
   end
 
   defp get_agent(ctx, name), do: AgentConfig.call_aqua(ctx, %{"action" => "get", "name" => name})
+
+  # The storage adapter for the rest of the test.
+  defp storage!(adapter) do
+    original = Application.get_env(:arca, :storage_adapter)
+    Application.put_env(:arca, :storage_adapter, adapter)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:arca, :storage_adapter, original),
+        else: Application.delete_env(:arca, :storage_adapter)
+    end)
+  end
 
   test "a group's page shows the group's tree alone, and a person's page edits their own",
        %{conn: conn} do
@@ -511,6 +550,36 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "form[phx-submit=editor_create_role]")
     end
 
+    # A store that cannot give the agents: the page says so in place of the
+    # cards, the new-role form and the missing soul's note, and offers no
+    # model to install or connect. One that answers with no agents is an
+    # athanor with no soul, as before.
+    @tag :capture_log
+    test "an agents list that cannot be read says so, and offers nothing to create or connect",
+         %{conn: conn} do
+      storage!(PrismWeb.AquaLiveTest.UnreadableRoles)
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert has_element?(
+               view,
+               ~s([data-test="agents-unavailable"]),
+               "The agents cannot be read right now — try again."
+             )
+
+      refute render(view) =~ "No soul here"
+      refute has_element?(view, "form[phx-submit=editor_create_role]")
+      refute has_element?(view, "button[phx-click=install_catalyst]")
+      refute has_element?(view, "button[phx-click=open_consent]")
+    end
+
+    test "a store that answers with no agents still says no soul is here", %{conn: conn} do
+      storage!(PrismWeb.AquaLiveTest.EmptyAqua)
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      assert render(view) =~ "No soul here"
+      refute has_element?(view, ~s([data-test="agents-unavailable"]))
+    end
+
     test "a catalyst the athanor does not hold is offered an Install, which refuses without a registry",
          %{conn: conn, ctx: ctx} do
       # The soul names a model catalyst nothing here holds: the page says so
@@ -621,6 +690,86 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, ~s(#system-layer-dialog [data-test="grant-needs"]))
     end
 
+    # The model's consent exists but is damaged, or the store cannot answer
+    # it: connecting a key cannot repair it, so none is offered, and the
+    # page says which.
+    @tag :capture_log
+    test "a model whose consent is damaged or unreadable says so, and offers no Connect",
+         %{conn: conn, ctx: ctx} do
+      ref = "catalyst:local.brokenmodel"
+      profile = "prof_brokenmodel"
+      :ok = soul_names_catalyst!(ctx, ref)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "brokenmodel",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A model catalyst",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "api_key" => %{
+                  "type" => "api_key:brokenmodel.test",
+                  "reason" => "to call the model with your key",
+                  "fields" => ["BROKENMODEL_API_KEY"],
+                  "required" => true
+                }
+              }
+            })
+        })
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          ctx,
+          %{id: profile, source_ref: ref, kind: :owner, label: "default", status: :active},
+          %{
+            id: "cons_brokenmodel",
+            revision: 1,
+            scope: :versionless,
+            shape_digest: "sha256:shape",
+            commit_digest: "sha256:commit",
+            resolved_policy: "{}",
+            activation: %{ref => "sha256:act"},
+            vault_refs: []
+          }
+        )
+
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile, scope: "sideways")
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+      settled_render(view)
+
+      assert has_element?(
+               view,
+               "span",
+               "A consent this model runs under is damaged and cannot be used — " <>
+                 "revoke the damaged profile and grant it again."
+             )
+
+      refute render(view) =~ "the model has no key yet"
+      refute has_element?(view, "button[phx-click=open_consent]", "Connect a model")
+
+      # The store stops answering: the panel reads the model again.
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile, scope: "versionless")
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+      Phoenix.LiveView.send_update(view.pid, PrismWeb.AquaLive.AgentsComponent,
+        id: "aqua-agents",
+        load: true
+      )
+
+      assert has_element?(
+               view,
+               "span",
+               "A consent this model runs under cannot be read right now — try again."
+             )
+
+      refute has_element?(view, "button[phx-click=open_consent]", "Connect a model")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
     test "connecting a model binds the key in the system layer, and the page says it is connected",
          %{conn: conn, ctx: ctx} do
       ref = "catalyst:local.keyed"
@@ -645,7 +794,16 @@ defmodule PrismWeb.AquaLiveTest do
             })
         })
 
-      params = %{name: "keyed key", kind: "api_key", fields: %{"KEYED_API_KEY" => "sk-keyed"}}
+      # The provider the need names; the model reads its key itself, so
+      # the entry is disclosed.
+      params = %{
+        name: "keyed key",
+        kind: "api_key",
+        provider_hint: "keyed.test",
+        fields: %{"KEYED_API_KEY" => "sk-keyed"},
+        destination: %{"hosts" => ["api.keyed.example"]},
+        disclose: true
+      }
 
       entering =
         Sanctum.TestContext.confirmed(ctx, :credential_entry, %{

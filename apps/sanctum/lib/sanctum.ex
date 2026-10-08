@@ -34,6 +34,7 @@ defmodule Sanctum do
     exports: [
       ApiKey,
       Atoms,
+      Attach,
       Auth,
       Auth.CyfrDoor,
       Auth.DeviceFlow,
@@ -50,6 +51,7 @@ defmodule Sanctum do
       Cipher.Rotation,
       ClientIp,
       Consent,
+      Consent.Accounts,
       Consent.Authz,
       Consent.Components,
       Consent.Loader,
@@ -67,6 +69,7 @@ defmodule Sanctum do
       ExecutionStanding,
       Grimoire,
       IdentityFreshness,
+      InstanceEntries,
       Namespace,
       Network,
       Notify,
@@ -95,6 +98,7 @@ defmodule Sanctum do
       ToolServerDigest,
       Unauthorized,
       UnauthorizedError,
+      Vault,
       Vault.OAuthGrant,
       VaultReader,
       Webhook

@@ -29,6 +29,7 @@ defmodule Prima.RefusalTest do
     {{:corrupt, {:digest, "The artifact"}}, :corrupt},
     {{:corrupt, {:profile, "prof_1"}}, :corrupt},
     {{:corrupt, {:manifest, "c:local.x:1.0.0"}}, :corrupt},
+    {{:corrupt, {:component_graph, "c:local.x:1.0.0"}}, :corrupt},
     {{:corrupt, {:artifact, "sha256:ab12"}}, :corrupt},
     {{:component_type_mismatch, :formula, :reagent}, :invalid_argument},
     {:invalid_component_type, :invalid_argument},
@@ -152,6 +153,7 @@ defmodule Prima.RefusalTest do
     {:attempt_not_owner, :conflict},
     {:slot_not_held, :not_owner},
     {:conflict, :conflict},
+    {:approved_entry_moved, :conflict},
     {:hold_expired, :conflict},
     {:step_superseded, :conflict},
     {:parent_ended, :conflict},
@@ -213,6 +215,20 @@ defmodule Prima.RefusalTest do
     {:too_many_attachments, :invalid_argument},
     {:attachment_too_large, :invalid_argument},
     {:storage_error, :internal},
+    {:destination_mismatch, :forbidden},
+    {:scope_not_attenuable, :forbidden},
+    {:disclosure_refused, :forbidden},
+    {:not_offered, :forbidden},
+    {:component_not_admitted, :forbidden},
+    {:provider_mismatch, :invalid_argument},
+    {{:provider_mismatch, "openai.com"}, :invalid_argument},
+    {:credential_header_refused, :invalid_argument},
+    {:endpoints_immutable, :invalid_argument},
+    {:connection_not_granted, :setup_required},
+    {{:invoke_denied, :connection_not_granted}, :forbidden},
+    {:connection_cap, :rate_limited},
+    {{:connection_cap, ~U[2026-10-05 00:00:00Z]}, :rate_limited},
+    {:grant_expired, :consent_required},
     {"No provider found for scheme ftp", :internal}
   ]
 
@@ -235,7 +251,25 @@ defmodule Prima.RefusalTest do
     "dispatch_error" => :internal,
     "unknown" => :internal,
     "task_failed" => :internal,
-    "cancel_failed" => :internal
+    "cancel_failed" => :internal,
+    "destination_mismatch" => :forbidden,
+    "scope_not_attenuable" => :forbidden,
+    "disclosure_refused" => :forbidden,
+    "not_offered" => :forbidden,
+    "component_not_admitted" => :forbidden,
+    "provider_mismatch" => :invalid_argument,
+    "credential_header_refused" => :invalid_argument,
+    "endpoints_immutable" => :invalid_argument,
+    "connection_not_granted" => :setup_required,
+    "connection_cap" => :rate_limited,
+    "grant_expired" => :consent_required,
+    "method_blocked" => :forbidden,
+    "scheme_blocked" => :forbidden,
+    "domain_blocked" => :forbidden,
+    "private_ip_blocked" => :forbidden,
+    "dns_error" => :unavailable,
+    "rate_limited" => :rate_limited,
+    "request_too_large" => :invalid_argument
   }
 
   describe "the table" do
@@ -283,6 +317,67 @@ defmodule Prima.RefusalTest do
       end
 
       assert %Refusal{class: :internal} = Refusal.classify({:guest_error, "novel", "said"})
+
+      # Attaching is built: no reason or guest type stands in for it.
+      refute Refusal.reason?(:attach_unavailable)
+
+      assert %Refusal{class: :internal} =
+               Refusal.classify({:guest_error, "attach_unavailable", "said"})
+    end
+
+    test "the credential refusals are reasons under the closed classes, in fixed words" do
+      assert Refusal.credential_reasons() ==
+               Enum.sort(~w(destination_mismatch provider_mismatch connection_not_granted
+                            credential_header_refused connection_cap scope_not_attenuable
+                            endpoints_immutable grant_expired disclosure_refused not_offered
+                            component_not_admitted)a)
+
+      assert length(Refusal.classes()) == 16
+
+      for reason <- Refusal.credential_reasons() do
+        refusal = Refusal.classify(reason)
+        assert refusal.class in Refusal.classes(), inspect(reason)
+
+        # The guest error of the same name reads as the same refusal.
+        assert Refusal.classify({:guest_error, Atom.to_string(reason), refusal.message}) ==
+                 %Refusal{
+                   class: refusal.class,
+                   reason: {:guest_error, Atom.to_string(reason), refusal.message},
+                   message: refusal.message
+                 }
+      end
+
+      assert Refusal.message(:component_not_admitted) ==
+               "This instance entry requires an unmodified shipped component."
+
+      # A detail beside the reason stays out of the sentence.
+      assert Refusal.message({:provider_mismatch, "openai.com"}) ==
+               Refusal.message(:provider_mismatch)
+
+      refute Refusal.message({:provider_mismatch, "openai.com"}) =~ "openai"
+
+      assert Refusal.message({:connection_cap, ~U[2026-10-05 00:00:00Z]}) ==
+               Refusal.message(:connection_cap)
+
+      assert Refusal.message({:connection_cap, "anything"}) == Refusal.message(:connection_cap)
+    end
+
+    test "a launch whose approved entry moved is a conflict that says to ask again, never " <>
+           "an unexpected reason" do
+      log =
+        capture_log(fn ->
+          assert %Refusal{class: :conflict, reason: :approved_entry_moved, message: message} =
+                   Refusal.classify(:approved_entry_moved)
+
+          assert message ==
+                   "The account this launch was approved for has changed since it was approved, " <>
+                     "so nothing ran: ask again to approve it as it stands now."
+        end)
+
+      # The module runs async, and capture_log takes every process's log
+      # while it runs: only this reason's own warning is this test's.
+      refute log =~ "[Prima.Refusal] unexpected message: :approved_entry_moved"
+      assert Refusal.reason?(:approved_entry_moved)
     end
 
     test "the corrupt registry credential says what to do" do
@@ -310,6 +405,16 @@ defmodule Prima.RefusalTest do
 
       assert Refusal.message({:corrupt, {:settings, :retention}}) ==
                "The stored retention settings are damaged."
+    end
+
+    test "a run's damaged component graph is damage, named without its ref or a grant to make" do
+      assert %Refusal{class: :corrupt, message: message} =
+               Refusal.classify({:corrupt, {:component_graph, "reagent:local.secret-name:1.0.0"}})
+
+      assert message ==
+               "The component graph this run needs is stored damaged and cannot be used."
+
+      assert Refusal.reason?({:corrupt, {:component_graph, "reagent:local.x:1.0.0"}})
     end
 
     test "admission's refusals read as their rows" do

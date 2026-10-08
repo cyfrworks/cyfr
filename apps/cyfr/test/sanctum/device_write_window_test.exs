@@ -57,6 +57,9 @@ defmodule Sanctum.DeviceWriteWindowTest do
   @source "198.51.100.11"
   @provider "google"
   @scopes ["https://www.googleapis.com/auth/gmail.readonly"]
+  # Where the grants' entries may go, as `Prima.Destination`'s canonical
+  # text; no case reads a token, so they stay attach-only.
+  @destination ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"})
   @hub "https://hub.example"
 
   setup_all do
@@ -361,7 +364,9 @@ defmodule Sanctum.DeviceWriteWindowTest do
       name: name,
       provider: @provider,
       endpoints: endpoints(bypass),
-      scopes: @scopes
+      scopes: @scopes,
+      destination: @destination,
+      attach_only: true
     }
   end
 
@@ -375,7 +380,8 @@ defmodule Sanctum.DeviceWriteWindowTest do
         provider_hint: @provider,
         oauth_endpoints: Jason.encode!(endpoints(bypass)),
         oauth_scopes: Jason.encode!(@scopes),
-        sealed_payload: "sealed-v1"
+        sealed_payload: "sealed-v1",
+        destination: @destination
       })
 
     target = %{

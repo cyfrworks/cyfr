@@ -44,7 +44,30 @@ defmodule Arca.VaultStorage do
   the invalidation of every profile that depended on it.
   `commit_payload/3` is a material write with the status flip and the
   binding move that belong to it, which is the shape of an operator
-  rotation and of an OAuth grant commit alike.
+  rotation and of an OAuth grant commit alike. `put/3` inserts an entry
+  and, when the athanor names no default for its provider yet, makes it
+  that provider's default (`Arca.VaultDefaults`) in the same transaction;
+  `tombstone/2` erases the material and removes any default naming the
+  entry in one.
+
+  ## Where the material may go
+
+  Every entry names its `destination`, `Prima.Destination`'s JCS text,
+  and whether it is `attach_only`; `put/3` refuses an entry without a
+  destination, or with one that is not a destination's canonical text,
+  and `move_binding/5` holds a moved destination to the same rule. An
+  OAuth entry's endpoints are fixed when it is created: a binding move
+  naming them is refused `:endpoints_immutable`.
+
+  ## A delete or revoke is never written back
+
+  A payload write (`rotate_payload/4`, `commit_payload/3`) lands only on an
+  `active` row at the revision the caller read. So an OAuth refresh whose
+  provider call was in flight when the entry was deleted or revoked never
+  writes sealed material back into it: the compare-and-set updates
+  nothing, the row is read once, and a row that is no longer active
+  answers `{:error, {:entry_unavailable, status}}` (a row still active at
+  another revision answers `{:error, :payload_conflict}`).
 
   The decisions those transactions carry out — which digest, which status,
   which ciphertext, which word a blocked profile takes — are all made by
@@ -73,6 +96,8 @@ defmodule Arca.VaultStorage do
           binding_digest: String.t() | nil,
           oauth_endpoints: String.t() | nil,
           oauth_scopes: String.t() | nil,
+          destination: String.t(),
+          attach_only: boolean(),
           status: String.t(),
           payload_rev: non_neg_integer(),
           sealed_payload: binary() | nil,
@@ -98,7 +123,9 @@ defmodule Arca.VaultStorage do
 
   @type refusal :: {:error, :no_athanor | :database_error}
 
-  @binding_keys [:field_names, :oauth_endpoints, :oauth_scopes, :binding_digest]
+  # What a binding move may write. `oauth_endpoints` is not among them: an
+  # OAuth entry's endpoints are fixed when it is created.
+  @binding_keys [:field_names, :oauth_scopes, :destination, :attach_only, :binding_digest]
 
   # A tenant this module will act for. Written once so no head can drift
   # into accepting `""`, which reads as a tenant, filters as a tenant and
@@ -113,13 +140,24 @@ defmodule Arca.VaultStorage do
   override — a caller that thought it was choosing the tenant must find
   out here rather than write someone else's row.
 
+  `attrs` must carry the entry's `destination`, `Prima.Destination`'s
+  canonical JCS text: one absent is `{:error, :destination_required}` and
+  one that is not a destination's canonical text
+  `{:error, {:invalid_destination, reason}}`, before anything is written.
+  `attach_only` defaults to true. When the athanor names no default for
+  the entry's provider (`provider_hint`, never the empty one), the entry
+  becomes it in the same transaction.
+
   `opts` may name the issuance the entry is written under (`lock:` and
   `verify:`, `Arca.SecurityTransitions.Issuance.held/2`): the row is then
   inserted in that transaction, once the caller's standing rows are
   locked and its policy agrees, and a refusal writes nothing.
   """
   @spec put(Prima.Actor.t(), map(), keyword()) ::
-          {:ok, entry()} | {:error, :name_taken} | refusal() | {:error, term()}
+          {:ok, entry()}
+          | {:error, :name_taken | :destination_required | {:invalid_destination, term()}}
+          | refusal()
+          | {:error, term()}
   def put(actor, attrs, opts \\ [])
 
   def put(%Prima.Actor{athanor_id: athanor_id} = actor, attrs, opts)
@@ -130,15 +168,19 @@ defmodule Arca.VaultStorage do
               "drop :athanor_id from the attributes"
     end
 
-    Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.put", fn ->
-      Arca.SecurityTransitions.Issuance.held(opts, fn -> insert(actor, attrs) end)
-    end)
+    with :ok <- destination_attr(attrs) do
+      Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.put", fn ->
+        Arca.SecurityTransitions.Issuance.held(opts, fn ->
+          transact(fn -> insert(actor, attrs) end)
+        end)
+      end)
+    end
   end
 
   def put(%Prima.Actor{}, attrs, opts) when is_map(attrs) and is_list(opts),
     do: {:error, :no_athanor}
 
-  defp insert(%Prima.Actor{athanor_id: athanor_id}, attrs) do
+  defp insert(%Prima.Actor{athanor_id: athanor_id} = actor, attrs) do
     row =
       attrs
       |> Map.put(:athanor_id, athanor_id)
@@ -165,11 +207,45 @@ defmodule Arca.VaultStorage do
     )
     |> Arca.Repo.insert()
     |> case do
-      {:ok, inserted} -> {:ok, view(inserted)}
+      {:ok, inserted} ->
+        :ok = Arca.VaultDefaults.put_new!(actor, inserted.provider_hint, inserted.id)
+        {:ok, view(inserted)}
+
       # The changeset never leaves: a caller below the security boundary
       # answering with an Ecto struct would put the sealed payload into
       # every inspect of the refusal.
-      {:error, %Ecto.Changeset{}} -> {:error, :name_taken}
+      {:error, %Ecto.Changeset{}} ->
+        {:error, :name_taken}
+    end
+  end
+
+  # A row's destination is a destination's canonical text, never absent
+  # and never a near spelling: the binding digest covers these bytes.
+  defp destination_attr(attrs) do
+    case Map.get(attrs, :destination, Map.get(attrs, "destination")) do
+      nil -> {:error, :destination_required}
+      text -> canonical_destination(text)
+    end
+  end
+
+  defp canonical_destination(text) when is_binary(text) do
+    with {:ok, map} <- decode_destination(text),
+         {:ok, destination} <- Prima.Destination.from_map(map) do
+      if Prima.Destination.canonical(destination) == text,
+        do: :ok,
+        else: {:error, {:invalid_destination, :not_canonical}}
+    else
+      {:error, {:invalid_destination, reason}} -> {:error, {:invalid_destination, reason}}
+      {:error, reason} -> {:error, {:invalid_destination, reason}}
+    end
+  end
+
+  defp canonical_destination(_other), do: {:error, {:invalid_destination, :not_text}}
+
+  defp decode_destination(text) do
+    case Jason.decode(text) do
+      {:ok, %{} = map} -> {:ok, map}
+      _ -> {:error, :not_json}
     end
   end
 
@@ -247,14 +323,38 @@ defmodule Arca.VaultStorage do
       when is_binary(id) and is_binary(name) and name != "",
       do: {:error, :no_athanor}
 
-  @doc "Set the entry's status."
+  @doc """
+  Set the entry's status, as a transition from the statuses that may reach
+  it: `revoked` from `active`, `needs_reauth` or `revoked`; `needs_reauth`
+  and `active` from `active` or `needs_reauth`. A `tombstoned` or
+  `revoked` row never comes back through here: the write is conditional on
+  the row's current status, and a row in any other status is refused
+  `{:error, {:entry_unavailable, status}}` with nothing written. Any other
+  target status is `{:error, {:invalid_status, status}}`; a tombstone is
+  `tombstone/2`.
+  """
   @spec set_status(Prima.Actor.t(), String.t(), String.t()) ::
-          :ok | {:error, :not_found} | refusal()
+          :ok
+          | {:error, :not_found | {:entry_unavailable, String.t()} | {:invalid_status, term()}}
+          | refusal()
   def set_status(%Prima.Actor{athanor_id: athanor_id}, id, status)
       when resolved(athanor_id) and is_binary(id) and is_binary(status) do
-    Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.set_status", fn ->
-      write(athanor_id, id, status: status, updated_at: now())
-    end)
+    case Arca.StatusTransitions.from(status) do
+      {:ok, from} ->
+        Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.set_status", fn ->
+          query =
+            from(v in VaultEntry, where: v.id == ^id and v.status in ^from)
+            |> Arca.QueryHelpers.where_athanor(athanor_id)
+
+          case Arca.Repo.update_all(query, set: [status: status, updated_at: now()]) do
+            {1, _} -> :ok
+            {0, _} -> refused_status(athanor_id, id)
+          end
+        end)
+
+      :error ->
+        {:error, {:invalid_status, status}}
+    end
   end
 
   def set_status(%Prima.Actor{}, id, status)
@@ -262,15 +362,21 @@ defmodule Arca.VaultStorage do
       do: {:error, :no_athanor}
 
   @doc """
-  Tombstone an entry: status flip and material erasure in one update.
+  Tombstone an entry: status flip and material erasure in one update,
+  with every default naming the entry removed in the same transaction.
   The partial unique index ignores tombstoned rows, so the name is
   immediately reusable.
   """
   @spec tombstone(Prima.Actor.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
-  def tombstone(%Prima.Actor{athanor_id: athanor_id}, id)
+  def tombstone(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when resolved(athanor_id) and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.tombstone", fn ->
-      write(athanor_id, id, status: "tombstoned", sealed_payload: nil, updated_at: now())
+      transact(fn ->
+        with :ok <-
+               write(athanor_id, id, status: "tombstoned", sealed_payload: nil, updated_at: now()) do
+          Arca.VaultDefaults.drop_entry!(actor, id)
+        end
+      end)
     end)
   end
 
@@ -280,32 +386,41 @@ defmodule Arca.VaultStorage do
   Move a living entry's binding from the digest it was read at, and block
   every profile that depended on it, as ONE transaction.
 
-  `changes` carries the binding columns (`field_names`, `oauth_endpoints`,
-  `oauth_scopes`) and the recomputed `binding_digest`; `provider_hint` is
-  absent by design — it sits in the AEAD AAD and is immutable per row. The
-  write lands only while the row's `binding_digest` still reads
-  `from_digest`, and every profile whose head consent references the entry
-  takes `blocked_status` with it, so no consent is ever left covering a
-  binding it did not approve.
+  `changes` carries the binding columns (`field_names`, `oauth_scopes`,
+  `destination`, `attach_only`) and the recomputed `binding_digest`;
+  `provider_hint` is absent by design — it sits in the AEAD AAD and is
+  immutable per row — and so are the OAuth endpoints, fixed when the entry
+  was created: `changes` naming `oauth_endpoints` is refused
+  `{:error, :endpoints_immutable}` and a `destination` that is not a
+  destination's canonical text `{:error, {:invalid_destination, reason}}`,
+  each before anything is written. The write lands only while the row's
+  `binding_digest` still reads `from_digest`, and every profile whose
+  head consent references the entry takes `blocked_status` with it, so no
+  consent is ever left covering a binding it did not approve. A profile
+  already revoked is not blocked: it stays revoked.
 
   `{:error, :binding_moved}` when another change landed first or the entry
   is gone; the caller re-reads and recomputes. The answer on success is
   the profiles blocked.
   """
   @spec move_binding(Prima.Actor.t(), String.t(), String.t() | nil, map(), String.t()) ::
-          {:ok, [String.t()]} | {:error, :binding_moved} | refusal()
+          {:ok, [String.t()]}
+          | {:error, :binding_moved | :endpoints_immutable | {:invalid_destination, term()}}
+          | refusal()
   def move_binding(%Prima.Actor{athanor_id: athanor_id}, id, from_digest, changes, blocked_status)
       when resolved(athanor_id) and is_binary(id) and is_map(changes) and
              (is_binary(from_digest) or is_nil(from_digest)) and is_binary(blocked_status) do
-    Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.move_binding", fn ->
-      transact(fn ->
-        rebind(athanor_id, id, %{
-          from_digest: from_digest,
-          changes: changes,
-          blocked_status: blocked_status
-        })
+    with :ok <- movable(changes) do
+      Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.move_binding", fn ->
+        transact(fn ->
+          rebind(athanor_id, id, %{
+            from_digest: from_digest,
+            changes: changes,
+            blocked_status: blocked_status
+          })
+        end)
       end)
-    end)
+    end
   end
 
   def move_binding(%Prima.Actor{}, id, from_digest, changes, blocked_status)
@@ -314,9 +429,12 @@ defmodule Arca.VaultStorage do
       do: {:error, :no_athanor}
 
   @doc """
-  Replace the sealed payload iff `payload_rev` still equals `expected_rev`
-  (compare-and-swap). The winning writer bumps the revision; a loser gets
-  `{:error, :payload_conflict}` and must re-read.
+  Replace the sealed payload iff the row is `active` and `payload_rev`
+  still equals `expected_rev` (compare-and-swap). The winning writer bumps
+  the revision; a loser gets `{:error, :payload_conflict}` and must
+  re-read, and a row no longer active (deleted or revoked while the
+  caller held its read) `{:error, {:entry_unavailable, status}}`, with
+  nothing written.
 
   This is the bare compare-and-set, for the OAuth refresh write-back,
   which holds no other write and must hold no transaction across the
@@ -324,7 +442,7 @@ defmodule Arca.VaultStorage do
   binding move with it goes through `commit_payload/3`.
   """
   @spec rotate_payload(Prima.Actor.t(), String.t(), non_neg_integer(), binary()) ::
-          :ok | {:error, :payload_conflict} | refusal()
+          :ok | {:error, :payload_conflict | {:entry_unavailable, String.t()}} | refusal()
   def rotate_payload(%Prima.Actor{athanor_id: athanor_id}, id, expected_rev, sealed)
       when resolved(athanor_id) and is_binary(id) and is_integer(expected_rev) and
              expected_rev >= 0 and is_binary(sealed) do
@@ -351,10 +469,20 @@ defmodule Arca.VaultStorage do
   `plan`:
 
     * `:expected_rev` — the `payload_rev` the caller read; the write lands
-      only while the row still reads it.
+      only while the row still reads it, and only on a row that is
+      `active` once the status flip below has run.
     * `:sealed_payload` — the ciphertext to store.
-    * `:status` — a status to set with the write, or `nil`.
+    * `:status` — `"active"`, to reactivate an entry the caller read at
+      `needs_reauth`, or `nil`. It is written only as `needs_reauth` →
+      `active`, and an `active` row stays as it is; any other status is
+      refused `{:error, {:invalid_status, status}}` before anything is
+      written.
     * `:rebind` — `nil`, or `move_binding/5`'s three arguments as a map.
+
+  A row that is `tombstoned` or `revoked` is refused
+  `{:error, {:entry_unavailable, status}}` before anything is written: a
+  delete or a revoke that landed between the caller's read and this
+  commit is never undone, and no material is written into it.
 
   The payload compare-and-set goes LAST. Inside one transaction the order
   of the writes is invisible to every other reader; what it decides is
@@ -369,7 +497,13 @@ defmodule Arca.VaultStorage do
   """
   @spec commit_payload(Prima.Actor.t(), String.t(), payload_plan(), keyword()) ::
           {:ok, %{payload_rev: non_neg_integer(), affected: [String.t()]}}
-          | {:error, :payload_conflict | :binding_moved}
+          | {:error,
+             :payload_conflict
+             | :binding_moved
+             | :endpoints_immutable
+             | {:entry_unavailable, String.t()}
+             | {:invalid_status, String.t()}
+             | {:invalid_destination, term()}}
           | refusal()
           | {:error, term()}
   def commit_payload(actor, id, plan, opts \\ [])
@@ -390,20 +524,24 @@ defmodule Arca.VaultStorage do
              (is_binary(status) or is_nil(status)) and (is_map(rebind) or is_nil(rebind)) and
              is_list(opts) do
     commit = fn ->
-      with :ok <- maybe_status(athanor_id, id, status),
+      with :ok <- still_living(athanor_id, id),
+           :ok <- maybe_status(athanor_id, id, status),
            {:ok, affected} <- maybe_rebind(athanor_id, id, rebind),
            :ok <- cas_payload(athanor_id, id, expected_rev, sealed) do
         {:ok, %{payload_rev: expected_rev + 1, affected: affected}}
       end
     end
 
-    Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.commit_payload", fn ->
-      # Under an issuance its transaction is the one the writes share;
-      # without one they take their own.
-      if held?(opts),
-        do: Arca.SecurityTransitions.Issuance.held(opts, commit),
-        else: transact(commit)
-    end)
+    with :ok <- plan_status(status),
+         :ok <- movable_plan(rebind) do
+      Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.commit_payload", fn ->
+        # Under an issuance its transaction is the one the writes share;
+        # without one they take their own.
+        if held?(opts),
+          do: Arca.SecurityTransitions.Issuance.held(opts, commit),
+          else: transact(commit)
+      end)
+    end
   end
 
   def commit_payload(
@@ -451,6 +589,8 @@ defmodule Arca.VaultStorage do
       binding_digest: row.binding_digest,
       oauth_endpoints: row.oauth_endpoints,
       oauth_scopes: row.oauth_scopes,
+      destination: row.destination,
+      attach_only: row.attach_only,
       status: row.status,
       payload_rev: row.payload_rev,
       sealed_payload: row.sealed_payload,
@@ -478,14 +618,67 @@ defmodule Arca.VaultStorage do
 
   defp held?(opts), do: Keyword.has_key?(opts, :lock) or Keyword.has_key?(opts, :verify)
 
+  # A plan's status only reactivates an entry.
+  defp plan_status(nil), do: :ok
+  defp plan_status("active"), do: :ok
+  defp plan_status(status), do: {:error, {:invalid_status, status}}
+
+  # A delete or a revoke that landed after the caller's read is never
+  # undone: such a row is refused before anything is written. An absent
+  # row is left to the writes below, which say so in their own words.
+  defp still_living(athanor_id, id) do
+    case current_status(athanor_id, id) do
+      status when status in ["tombstoned", "revoked"] -> {:error, {:entry_unavailable, status}}
+      _living_or_absent -> :ok
+    end
+  end
+
+  # `needs_reauth` → `active`, by a conditional write: an `active` row
+  # stays as it is, and a row that left both since the read above is
+  # refused rather than flipped back.
   defp maybe_status(_athanor_id, _id, nil), do: :ok
 
-  defp maybe_status(athanor_id, id, status) when is_binary(status),
-    do: write(athanor_id, id, status: status, updated_at: now())
+  defp maybe_status(athanor_id, id, "active") do
+    query =
+      from(v in VaultEntry, where: v.id == ^id and v.status == "needs_reauth")
+      |> Arca.QueryHelpers.where_athanor(athanor_id)
+
+    case Arca.Repo.update_all(query, set: [status: "active", updated_at: now()]) do
+      {1, _} ->
+        :ok
+
+      {0, _} ->
+        case current_status(athanor_id, id) do
+          "active" -> :ok
+          nil -> {:error, :not_found}
+          status -> {:error, {:entry_unavailable, status}}
+        end
+    end
+  end
+
+  defp current_status(athanor_id, id) do
+    from(v in VaultEntry, where: v.id == ^id, select: v.status)
+    |> Arca.QueryHelpers.where_athanor(athanor_id)
+    |> Arca.Repo.one()
+  end
 
   defp maybe_rebind(_athanor_id, _id, nil), do: {:ok, []}
 
   defp maybe_rebind(athanor_id, id, %{} = rebind), do: rebind(athanor_id, id, rebind)
+
+  # What a binding move may not carry, refused before any write: the OAuth
+  # endpoints, fixed at creation, and a destination that is not a
+  # destination's canonical text.
+  defp movable(changes) do
+    cond do
+      Map.has_key?(changes, :oauth_endpoints) -> {:error, :endpoints_immutable}
+      Map.has_key?(changes, :destination) -> canonical_destination(changes.destination)
+      true -> :ok
+    end
+  end
+
+  defp movable_plan(nil), do: :ok
+  defp movable_plan(%{changes: changes}) when is_map(changes), do: movable(changes)
 
   # The compare-and-set and the invalidation it implies. Callers reach it
   # through `move_binding/5` or `commit_payload/3`, both of which are
@@ -496,14 +689,32 @@ defmodule Arca.VaultStorage do
          blocked_status: blocked_status
        }) do
     with :ok <- cas_binding(athanor_id, id, from_digest, changes),
-         {:ok, affected} <-
+         {:ok, heads} <-
            Arca.ConsentStorage.head_profiles_referencing(
              Prima.Actor.in_athanor(athanor_id),
              id
            ),
+         affected = unrevoked(athanor_id, heads),
          :ok <- block_profiles(athanor_id, affected, blocked_status) do
-      {:ok, Enum.sort(affected)}
+      {:ok, affected}
     end
+  end
+
+  # The profiles not revoked, read under a lock, so a revoke that commits
+  # before the block is seen and one that starts after it waits. A revoked
+  # profile stays revoked and nothing runs through it; a status write
+  # would revive it beside the live profile of its identity.
+  defp unrevoked(_athanor_id, []), do: []
+
+  defp unrevoked(athanor_id, profile_ids) do
+    from(p in Arca.Schemas.Profile,
+      where: p.id in ^profile_ids and p.status != "revoked",
+      select: p.id
+    )
+    |> Arca.QueryHelpers.where_athanor(athanor_id)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.all()
+    |> Enum.sort()
   end
 
   defp block_profiles(athanor_id, profile_ids, blocked_status) do
@@ -541,16 +752,43 @@ defmodule Arca.VaultStorage do
     end
   end
 
+  # Material lands only on an active row at the revision the caller read.
+  # When nothing lands the row is read once to say why: one no longer
+  # active (a delete or revoke that won the race) is unavailable, any
+  # other moved on.
   defp cas_payload(athanor_id, id, expected_rev, sealed) do
     query =
-      from(v in VaultEntry, where: v.id == ^id and v.payload_rev == ^expected_rev)
+      from(v in VaultEntry,
+        where: v.id == ^id and v.payload_rev == ^expected_rev and v.status == "active"
+      )
       |> Arca.QueryHelpers.where_athanor(athanor_id)
 
     case Arca.Repo.update_all(query,
            set: [sealed_payload: sealed, payload_rev: expected_rev + 1, updated_at: now()]
          ) do
       {1, _} -> :ok
-      {0, _} -> {:error, :payload_conflict}
+      {0, _} -> payload_refusal(athanor_id, id)
+    end
+  end
+
+  defp payload_refusal(athanor_id, id) do
+    case current_status(athanor_id, id) do
+      nil -> {:error, :payload_conflict}
+      "active" -> {:error, :payload_conflict}
+      status -> {:error, {:entry_unavailable, status}}
+    end
+  end
+
+  # Why a conditional status write landed nowhere: the row is absent, or
+  # its status may not reach the one asked for.
+  defp refused_status(athanor_id, id) do
+    query =
+      from(v in VaultEntry, where: v.id == ^id, select: v.status)
+      |> Arca.QueryHelpers.where_athanor(athanor_id)
+
+    case Arca.Repo.one(query) do
+      nil -> {:error, :not_found}
+      current -> {:error, {:entry_unavailable, current}}
     end
   end
 

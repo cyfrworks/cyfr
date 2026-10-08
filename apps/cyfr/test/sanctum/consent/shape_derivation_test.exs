@@ -7,6 +7,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
   require Ecto.Query
 
   alias Sanctum.Consent.Bootstrap
+  alias Sanctum.Consent.Components
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.ShapeDerivation
 
@@ -91,6 +92,39 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
     assert ShapeDerivation.live_digest(ctx, "reagent:local.shape-pin") ==
              {:ok, consent.shape_digest}
+  end
+
+  @tag :shape_outage
+  test "an unreadable dependency closure has no shape, even when the source row was read",
+       %{ctx: ctx} do
+    row = publish!(ctx, "shape-unreadable", "1.0.0")
+    ref = "reagent:local.shape-unreadable"
+    real = Components.impl!()
+    on_exit(fn -> Components.install!(real) end)
+    Components.reset()
+
+    refusal = {:error, {:unavailable, "Components"}}
+    assert ShapeDerivation.dependency_releases(ctx, row, ref) == refusal
+    assert ShapeDerivation.shape_input(ctx, ref) == refusal
+    assert ShapeDerivation.manifest_blocks(ctx, ref) == refusal
+    assert ShapeDerivation.live_digest(ctx, ref) == refusal
+  end
+
+  test "an incomplete closure keeps its empty dependency set and a missing source stays absent",
+       %{ctx: ctx} do
+    row =
+      publish!(ctx, "shape-incomplete", "1.0.0", %{
+        manifest: %{
+          "dependencies" => %{"static" => [%{"ref" => "reagent:local.shape-missing"}]}
+        }
+      })
+
+    assert {:error, {:incomplete, _}} = Components.resolve(ctx, row)
+
+    assert ShapeDerivation.dependency_releases(ctx, row, "reagent:local.shape-incomplete") ==
+             {:ok, []}
+
+    assert ShapeDerivation.shape_input(ctx, "reagent:local.shape-missing") == {:error, :not_found}
   end
 
   test "a new release with an unchanged shape allows and records", %{ctx: ctx} do
@@ -347,6 +381,101 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       {:ok, after_digest} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-prose")
 
       assert before_digest == after_digest
+    end
+
+    # A manifest declaring none of a need's attach rule, hosts, paths or
+    # disclosure, and no provides block: its digest is the one it had
+    # before they joined the shape.
+    @pinned_manifest %{
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:anthropic.com",
+          "reason" => "to call the API with your key",
+          "fields" => ["ANTHROPIC_API_KEY"]
+        }
+      },
+      "caps" => %{
+        "egress" => %{"domains" => ["api.anthropic.com"]},
+        "limits" => %{"timeout" => "2m"}
+      }
+    }
+
+    test "a manifest that declares none of what attaching added keeps its digest", %{ctx: ctx} do
+      publish!(ctx, "shape-pinned", "1.0.0", %{manifest: Jason.encode!(@pinned_manifest)})
+
+      assert {:ok, "sha256:4668715d2bcc22e11bd84c9c6d59b45f0577e11e2815b870abe96f6a2abd365e"} =
+               ShapeDerivation.live_digest(ctx, "reagent:local.shape-pinned")
+    end
+
+    test "a need's attach rule, hosts, paths and disclosure, and the provides block, each " <>
+           "move the digest",
+         %{ctx: ctx} do
+      publish!(ctx, "shape-attach-dep", "1.0.0", %{
+        manifest: %{
+          "needs" => %{
+            "database" => %{
+              "type" => "api_key:supabase.co",
+              "reason" => "to reach the database",
+              "fields" => ["anon_key"],
+              "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+            }
+          }
+        }
+      })
+
+      with_dep =
+        Map.put(@pinned_manifest, "dependencies", %{
+          "static" => [%{"ref" => "reagent:local.shape-attach-dep"}]
+        })
+
+      need = ["needs", "api_key"]
+
+      versions = [
+        with_dep,
+        put_in(with_dep, need ++ ["attach"], %{
+          "in" => "header",
+          "name" => "x-api-key",
+          "template" => "{value}"
+        }),
+        put_in(with_dep, need ++ ["hosts"], ["api.anthropic.com"]),
+        put_in(with_dep, need ++ ["paths"], ["/v1/"]),
+        put_in(with_dep, need ++ ["disclose"], true),
+        Map.put(with_dep, "provides", %{
+          "reagent:local.shape-attach-dep" => %{
+            "database" => %{
+              "destination" => %{"hosts" => ["abc.supabase.co"]},
+              "values" => %{"anon_key" => "eyJ-public"}
+            }
+          }
+        }),
+        Map.put(with_dep, "provides", %{
+          "reagent:local.shape-attach-dep" => %{
+            "database" => %{
+              "destination" => %{"hosts" => ["xyz.supabase.co"]},
+              "values" => %{"anon_key" => "eyJ-public"}
+            }
+          }
+        })
+      ]
+
+      digests =
+        for {manifest, index} <- Enum.with_index(versions) do
+          publish!(ctx, "shape-attach", "1.0.#{index}", %{manifest: manifest})
+          Arca.Cache.delete_match(:_)
+          {:ok, digest} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-attach")
+          digest
+        end
+
+      assert length(Enum.uniq(digests)) == length(versions)
+
+      # A false disclosure declares nothing: the digest of the version
+      # before it.
+      publish!(ctx, "shape-attach", "1.1.0", %{
+        manifest: put_in(with_dep, need ++ ["disclose"], false)
+      })
+
+      Arca.Cache.delete_match(:_)
+      assert {:ok, hd(digests)} == ShapeDerivation.live_digest(ctx, "reagent:local.shape-attach")
     end
 
     test "a caps edit moves the digest; bootstrap and live agree", %{ctx: ctx} do

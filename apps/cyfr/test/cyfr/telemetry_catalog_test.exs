@@ -76,6 +76,45 @@ defmodule Cyfr.TelemetryCatalogTest do
     end
   end
 
+  # The instance's own credentials are audited at each durable change, and
+  # the bridge carries each to the pages that show them: one event per
+  # kind of `Cyfr.Bus.InstanceEntryChanged`, consumed by both.
+  test "every instance entry change is audited and bridged, one event per kind" do
+    kinds = Cyfr.Bus.InstanceEntryChanged.kinds()
+
+    assert Enum.sort(kinds) ==
+             Enum.sort(~w(created rotated rebound audience policy caps revoked deleted)a)
+
+    events = for kind <- kinds, do: [:cyfr, :sanctum, :instance_entry, kind]
+
+    assert Enum.filter(Catalog.events(), &match?([:cyfr, :sanctum, :instance_entry | _], &1)) ==
+             Enum.sort(events)
+
+    for event <- events do
+      assert Catalog.all()[event].consumers == [:audit, :bridge], inspect(event)
+      assert event in Catalog.consumed_by(:audit)
+      assert event in Catalog.consumed_by(:bridge)
+    end
+  end
+
+  # Sending a copy is audited at each durable transition, a receipt that
+  # lands or that the sweep fails among them, and the bridge carries each
+  # to the people it concerns on their own topics.
+  test "every file offer transition, landed receipt and failed receipt is audited and bridged" do
+    events =
+      for kind <- ~w(offered accepted declined withdrawn expired failed landed)a,
+          do: [:cyfr, :arca, :file_offer, kind]
+
+    assert Enum.filter(Catalog.events(), &match?([:cyfr, :arca, :file_offer | _], &1)) ==
+             Enum.sort(events)
+
+    for event <- events do
+      assert Catalog.all()[event].consumers == [:audit, :bridge], inspect(event)
+      assert event in Catalog.consumed_by(:audit)
+      assert event in Catalog.consumed_by(:bridge)
+    end
+  end
+
   test "the telemetry bridge attaches exactly the catalog's :bridge roster" do
     assert Cyfr.TelemetryBridge.events() == Catalog.consumed_by(:bridge)
 

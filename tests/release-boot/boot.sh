@@ -86,11 +86,20 @@ pg_fresh_database() {
   CREATED_DATABASES+=("$name")
 }
 
+# The scratch directory holds the cells' keys and databases, and the
+# PostgreSQL databases the run created sit beside the one CYFR_DATABASE_URL
+# names, so both go even when a stop fails. `server_stop` ends in `fail`,
+# an `exit`, when a listener outlives its stop, and an exit inside this
+# trap would end it before the removals, so the stop runs in a subshell,
+# whose exit ends only that subshell; the stop's failure still fails the
+# run. A server that outlived its stop still holds its database, so the
+# drop is forced: it ends that server's sessions, which only this run has.
 cleanup() {
-  server_stop || true
+  local code=$?
+  ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" != 1 ]; then
     for name in ${CREATED_DATABASES[@]+"${CREATED_DATABASES[@]}"}; do
-      pg psql -q "$CYFR_DATABASE_URL" -c "DROP DATABASE IF EXISTS \"$name\"" >/dev/null 2>&1 || true
+      pg psql -q "$CYFR_DATABASE_URL" -c "DROP DATABASE IF EXISTS \"$name\" WITH (FORCE)" >/dev/null 2>&1 || true
     done
   fi
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
@@ -98,6 +107,7 @@ cleanup() {
   else
     rm -rf "$WORK"
   fi
+  exit "$code"
 }
 trap cleanup EXIT
 

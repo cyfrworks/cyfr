@@ -299,6 +299,247 @@ defmodule Crucible.AdmissionTest do
       assert stamp.activation_graph == %{@root_node => root.release_digest}
       assert is_binary(stamp.activation_digest)
     end
+
+    test "a connection roots under the named binding its ingress holds, with its own key, and " <>
+           "a name the ingress lacks is refused with no default in its place",
+         %{ctx: ctx} do
+      person = Sanctum.TestContext.local(:prism)
+      %{ref: ref, default: default, work: work} = named_app!(person)
+      {:ok, name_ref} = Prima.ComponentRef.to_name_ref(ref)
+
+      assert {:ok, %Authority{} = picked} =
+               Admission.authority_for(ctx, :default, ref, connection: "Work")
+
+      assert picked.resources.vault.entry_id == work.id
+      assert picked.resources.vault.binding_key == Blob.binding_key(name_ref, "@ingress", "Work")
+      refute Map.has_key?(picked.resources.vault, :named)
+
+      # A run's root is loaded the same way, the pick included.
+      assert {:ok, %{authority: rooted}} =
+               Admission.authority_and_stamp_for(ctx, :default, ref, connection: "Work")
+
+      assert rooted.resources == picked.resources
+
+      # No account: the ingress's default, as before.
+      assert {:ok, %Authority{} = plain} = Admission.authority_for(ctx, :default, ref)
+      assert plain.resources.vault.entry_id == default.id
+      assert plain.resources.vault.binding_key == Blob.binding_key(name_ref, "@ingress", nil)
+
+      for name <- ["Home", "Works", "default"] do
+        assert {:error, :connection_not_granted} =
+                 Admission.authority_for(ctx, :default, ref, connection: name),
+               "#{inspect(name)} was picked"
+      end
+
+      # The account spelled in another case is that account, under the key
+      # its stored name spells: a launch's root naming `work` holds Work.
+      assert {:ok, %Authority{} = spelled} =
+               Admission.authority_for(ctx, :default, ref, connection: "work")
+
+      assert spelled.resources == picked.resources
+    end
+  end
+
+  # An app of the person's own whose own calls bind a default and the
+  # account "Work" beside it, through the consent walk.
+  defp named_app!(person) do
+    name = "named-root-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "reagent",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "fields" => ["KEY"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(person, File.read!(@math_wasm_path), %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(manifest)
+      })
+
+    entry = fn label ->
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(person, %{
+          name: "#{name} #{label}",
+          kind: "api_key",
+          provider_hint: "example.com",
+          fields: %{"KEY" => "k-#{label}"},
+          destination: %{"hosts" => ["api.example.com"]},
+          disclose: true
+        })
+
+      view
+    end
+
+    default = entry.("default")
+    work = entry.("work")
+    ref = "reagent:local." <> name
+
+    decisions = %{
+      ref: ref,
+      bindings: [
+        %{need: "api_key", entry_id: default.id},
+        %{need: "api_key", name: "Work", entry_id: work.id}
+      ]
+    }
+
+    {:ok, plan} = Sanctum.Consent.Plan.plan(person, %{ref: ref})
+    {:ok, preview} = Sanctum.Consent.Commit.preview(person, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(person, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    %{ref: ref, default: default, work: work}
+  end
+
+  describe "an approved launch's entry" do
+    @root_load {Sanctum.Consent.Loader, :load_root, 3}
+    @attempt_open {Crucible.Attempt, :open, 1}
+
+    # A context as `Aqua.Launch` hands it to the run it dispatches: the
+    # entry its card bound and the name the binding stored it under.
+    defp expecting(ctx, entry_id, name),
+      do: Map.put(ctx, :approved_entry, %{entry: entry_id, name: name})
+
+    # `fun`'s answer, and the calls this process made to `mfas` while it
+    # ran, in order. A process's call trace is not delivered to itself, so
+    # a collector takes it; every trace message is delivered before the
+    # collector is asked for what it holds.
+    defp traced(mfas, fun) do
+      test = self()
+      collector = spawn_link(fn -> collect(test, []) end)
+
+      on_exit(fn -> for mfa <- mfas, do: :erlang.trace_pattern(mfa, false, [:global]) end)
+
+      # A pattern applies only to a loaded module, so each is loaded first,
+      # and one that matched nothing fails here rather than tracing nothing.
+      for {module, _function, _arity} = mfa <- mfas do
+        Code.ensure_loaded!(module)
+        assert :erlang.trace_pattern(mfa, true, [:global]) == 1
+      end
+
+      :erlang.trace(test, true, [:call, {:tracer, collector}])
+
+      answer =
+        try do
+          fun.()
+        after
+          :erlang.trace(test, false, [:call])
+        end
+
+      delivered = :erlang.trace_delivered(test)
+      assert_receive {:trace_delivered, ^test, ^delivered}, 5_000
+      send(collector, {:done, delivered})
+      assert_receive {:collected, ^delivered, calls}, 5_000
+      {answer, calls}
+    end
+
+    defp collect(test, calls) do
+      receive do
+        {:trace, ^test, :call, call} -> collect(test, [call | calls])
+        {:done, ref} -> send(test, {:collected, ref, Enum.reverse(calls)})
+      end
+    end
+
+    defp args_of(calls, {module, function, _arity}),
+      do: for({^module, ^function, args} <- calls, do: args)
+
+    test "roots only where the loaded root's binding names the entry under its stored name: " <>
+           "another entry, another stored name, a name no longer bound, or none refuses",
+         %{ctx: ctx, root: root} do
+      person = Sanctum.TestContext.local(:prism)
+      %{ref: ref, default: default, work: work} = named_app!(person)
+
+      assert {:ok, %{authority: rooted}} =
+               Admission.authority_and_stamp_for(expecting(ctx, work.id, "Work"), :default, ref,
+                 connection: "Work"
+               )
+
+      assert rooted.resources.vault.entry_id == work.id
+
+      # The name resolves, on the one read that picks it, to another entry
+      # than the one approved.
+      assert {:error, :approved_entry_moved} =
+               Admission.authority_and_stamp_for(
+                 expecting(ctx, default.id, "Work"),
+                 :default,
+                 ref,
+                 connection: "Work"
+               )
+
+      # The entry approved, under a name its binding does not store: `work`
+      # picks the binding stored as `Work`, which is another stored name.
+      assert {:error, :approved_entry_moved} =
+               Admission.authority_for(expecting(ctx, work.id, "work"), :default, ref,
+                 connection: "work"
+               )
+
+      # A name the ingress no longer binds: for an approved launch the same
+      # stale approval, and an account to grant for anyone else.
+      assert {:error, :approved_entry_moved} =
+               Admission.authority_for(expecting(ctx, work.id, "Home"), :default, ref,
+                 connection: "Home"
+               )
+
+      assert {:error, :connection_not_granted} =
+               Admission.authority_for(ctx, :default, ref, connection: "Home")
+
+      # No account named: the root holds the default, not the approved one.
+      assert {:error, :approved_entry_moved} =
+               Admission.authority_for(expecting(ctx, work.id, "Work"), :default, ref)
+
+      # A root whose own calls bind no entry at all.
+      seed(ctx, profile_summary(), consent(root))
+      assert {:ok, %Authority{}} = Admission.authority_for(ctx, :default, @root_node)
+
+      assert {:error, :approved_entry_moved} =
+               Admission.authority_for(expecting(ctx, work.id, "Work"), :default, @root_node)
+    end
+
+    test "does not outlive the root's admission: the run carries none on" do
+      Cyfr.Test.Sandbox.stop_work_on_exit()
+      person = Sanctum.TestContext.local(:prism)
+      on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, person.athanor_id) end)
+
+      %{ref: ref, work: work} = named_app!(person)
+
+      {_ran, calls} =
+        traced([@root_load, @attempt_open], fn ->
+          Crucible.run_root(expecting(person, work.id, "Work"), :default, ref <> ":1.0.0", %{},
+            connection: "Work"
+          )
+        end)
+
+      # The root is loaded, and compared, with the account in hand ...
+      assert [[root_ctx, _profile, _opts]] = args_of(calls, @root_load)
+      assert Map.get(root_ctx, :approved_entry) == %{entry: work.id, name: "Work"}
+
+      # ... and the run is admitted under it, every context it carries on
+      # holding none: its attempt's (which its chain, its children and its
+      # in-chain calls are given), its close's and its assignment's.
+      assert [[opened]] = args_of(calls, @attempt_open)
+      assert opened[:authority].resources.vault.entry_id == work.id
+
+      for carried <- [opened[:ctx], opened[:close].ctx, opened[:assignment].ctx] do
+        assert Map.get(carried, :approved_entry) == nil
+      end
+    end
   end
 
   describe "root_edge/4" do
@@ -404,6 +645,65 @@ defmodule Crucible.AdmissionTest do
                Admission.step_invoke(auth, "#{@target_node}:0.1.0", "a|b", child_opts(ctx))
     end
 
+    test "a call's connection picks the account its edge binds by that name, and one the edge " <>
+           "lacks is denied with no default in its place",
+         %{ctx: ctx} do
+      bound = fn entry_id, opts ->
+        Prima.Test.AuthorityFixtures.bound_vault(
+          @root_node,
+          @target_node,
+          entry_id,
+          "sha256:bind-" <> entry_id,
+          [projection: %{"fields" => ["KEY"]}] ++ opts
+        )
+      end
+
+      work = bound.("vlt_work", name: "Work")
+
+      named =
+        authority_with_edges(%{
+          @target_node => %{"vault" => bound.("vlt_default", named: %{"Work" => work})}
+        })
+
+      only_default =
+        authority_with_edges(%{@target_node => %{"vault" => bound.("vlt_default", [])}})
+
+      ref = "#{@target_node}:0.1.0"
+
+      assert {:ok, %{bound?: true, authority: child}} =
+               Admission.step_invoke(named, ref, nil, child_opts(ctx, connection: "Work"))
+
+      assert %{entry_id: "vlt_work", binding_key: work_key} = child.resources.vault
+      assert work_key == Blob.binding_key(@root_node, @target_node, "Work")
+
+      for auth <- [named, only_default] do
+        assert {:ok, %{authority: default}} =
+                 Admission.step_invoke(auth, ref, nil, child_opts(ctx))
+
+        assert default.resources.vault.entry_id == "vlt_default"
+
+        assert {:ok, %{authority: default}} =
+                 Admission.step_invoke(auth, ref, nil, child_opts(ctx, connection: nil))
+
+        assert default.resources.vault.entry_id == "vlt_default"
+      end
+
+      assert {:error, {:invoke_denied, :connection_not_granted}} =
+               Admission.step_invoke(named, ref, nil, child_opts(ctx, connection: "Home"))
+
+      assert {:error, {:invoke_denied, :connection_not_granted}} =
+               Admission.step_invoke(only_default, ref, nil, child_opts(ctx, connection: "Work"))
+
+      # A target no edge binds has no account to pick.
+      assert {:error, {:invoke_denied, :connection_not_granted}} =
+               Admission.step_invoke(
+                 authority_with_edges(%{}),
+                 ref,
+                 nil,
+                 child_opts(ctx, connection: "Work")
+               )
+    end
+
     test "a spawn charges the root budget and a denied spawn does not", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
       assert Sanctum.Authority.budget(auth).in_flight == 0
@@ -435,6 +735,188 @@ defmodule Crucible.AdmissionTest do
                )
 
       assert Sanctum.Authority.budget(auth).in_flight == 0
+    end
+  end
+
+  # A formula's child call, made as its runner makes it: the host call
+  # `admit_child` over an attached attempt of the formula, the one entry an
+  # in-chain child call takes.
+  describe "a child call's account, spelled in any case" do
+    @account_root "formula:local.account-root"
+    @account_target "formula:local.account-formula"
+
+    setup %{ctx: ctx} do
+      api = Sanctum.TestContext.local(:api)
+      wasm = File.read!(@math_wasm_path)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(api, wasm, %{
+          name: "account-formula",
+          version: "0.1.0",
+          type: "formula"
+        })
+
+      # A formula calling the one above, released apart from it: the caps
+      # its manifest asks for give it its own release digest, so calling
+      # the other is never a self-call.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(api, wasm, %{
+          name: "account-root",
+          version: "0.1.0",
+          type: "formula",
+          manifest:
+            Jason.encode!(%{
+              "name" => "account-root",
+              "version" => "0.1.0",
+              "type" => "formula",
+              "description" => "calls account-formula",
+              "caps" => %{"tools" => ["execution.run"]}
+            })
+        })
+
+      on_exit(fn ->
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_component_meta(Context.actor(api)))
+        Prima.Slots.forgive_unreaped(Crucible.Slots, api.athanor_id)
+      end)
+
+      Cyfr.Test.Sandbox.stop_work_on_exit()
+      start_supervised!({Cyfr.Test.ScriptedWorker, ref: "reagent:local.unscripted", script: []})
+      {:ok, api: api, ctx: ctx}
+    end
+
+    # A root authority at the root formula, pinned to a live profile's head,
+    # whose edge to the target formula binds a default and, beside it, the
+    # account Work. Both name only scopes, so a child holding either is
+    # claimed without reading an entry.
+    defp work_account_edge!(api) do
+      {pinned, _entry} =
+        Cyfr.Test.AttemptFixtures.vault_authority!(api, %{
+          kind: "api_key",
+          fields: %{"KEY" => "k"}
+        })
+
+      digests =
+        Map.new([@account_root, @account_target], fn node ->
+          {:ok, _ref, _type, component} = Admission.inspect_component(api, node <> ":0.1.0")
+          {node, component["release_digest"]}
+        end)
+
+      bound = fn entry_id, opts ->
+        Prima.Test.AuthorityFixtures.bound_vault(
+          @account_root,
+          @account_target,
+          entry_id,
+          "sha256:bind-" <> entry_id,
+          [projection: %{"scopes" => ["fixture.scope"]}] ++ opts
+        )
+      end
+
+      vault = bound.("vlt_default", named: %{"Work" => bound.("vlt_work", name: "Work")})
+      limits = Prima.Test.AuthorityFixtures.limits_map()
+
+      {:ok, blob} =
+        Blob.parse(%{
+          "canonical" => "jcs-1",
+          "nodes" => %{
+            @account_root => %{
+              "limits" => limits,
+              "edges" => %{"@ingress" => %{}, @account_target => %{"vault" => vault}}
+            },
+            @account_target => %{"limits" => limits, "edges" => %{}}
+          }
+        })
+
+      {:ok, authority} =
+        Authority.root(
+          %{
+            profile_id: pinned.profile_id,
+            consent_id: pinned.consent_id,
+            source_ref: @account_root,
+            kind: :owner,
+            invoke_mode: :open_inert,
+            activation: digests
+          },
+          blob,
+          ceiling: Prima.Test.AuthorityFixtures.ceiling()
+        )
+
+      Cyfr.Test.AttemptFixtures.attached!(
+        ctx: api,
+        authority: authority,
+        component_ref: @account_root <> ":0.1.0",
+        component_type: :formula,
+        worker: Cyfr.Test.ScriptedWorker.endpoint(),
+        reservation: true
+      )
+    end
+
+    defp admit_child(fixture, child_key, connection) do
+      args =
+        %{
+          "reference" => @account_target <> ":0.1.0",
+          "input" => %{},
+          "guest_fn" => "call",
+          "need" => nil,
+          "child_key" => child_key
+        }
+        |> Prima.MapUtil.put_present("connection", connection)
+
+      Cyfr.Test.AttemptFixtures.call(fixture, "admit_child", args)
+    end
+
+    defp admitted_child!(answer) do
+      assert %{"ok" => %{"assignment" => token}} = answer
+      {:ok, admitted} = Prima.Assignment.read(token)
+      {:ok, child} = Authority.from_wire(admitted.authority)
+      {admitted.execution_id, child}
+    end
+
+    defp children_of(fixture) do
+      Arca.Repo.all(
+        Ecto.Query.from(e in Arca.Schemas.Execution,
+          where: e.parent_execution_id == ^fixture.execution_id,
+          select: e.id
+        )
+      )
+    end
+
+    @tag :capture_log
+    test "a child call naming `work` while `Work` is bound holds Work's binding, under its " <>
+           "stored key",
+         %{api: api} do
+      fixture = work_account_edge!(api)
+
+      {_id, child} = admitted_child!(admit_child(fixture, "ck_lower", "work"))
+      assert child.resources.vault.entry_id == "vlt_work"
+
+      assert child.resources.vault.binding_key ==
+               Blob.binding_key(@account_root, @account_target, "Work")
+    end
+
+    @tag :capture_log
+    test "a retry spelled `work` after `Work` was admitted is the same call, and a reused key " <>
+           "naming another account still refuses",
+         %{api: api} do
+      fixture = work_account_edge!(api)
+
+      {id, _child} = admitted_child!(admit_child(fixture, "ck_work", "Work"))
+
+      # One account however it is spelled: the same child under its key.
+      for spelled <- ["work", "WORK", "Work"] do
+        {again, _child} = admitted_child!(admit_child(fixture, "ck_work", spelled))
+        assert again == id, "#{spelled} under the key was another child"
+      end
+
+      # Another account, or none, under the key is refused before anything
+      # of the child is answered.
+      for other <- ["Home", nil] do
+        assert %{"error" => "guest_error", "type" => "invalid_request", "message" => message} =
+                 admit_child(fixture, "ck_work", other)
+
+        assert message =~ "child_key"
+      end
+
+      assert children_of(fixture) == [id]
     end
   end
 
@@ -532,6 +1014,133 @@ defmodule Crucible.AdmissionTest do
       refute refusal == :control_plane_lost
     end
   end
+
+  describe "the root's own grant read damaged" do
+    @own_root "reagent:local.own-root:1.0.0"
+
+    # What a reader of an app's own head answers for its damage, which the
+    # router answers typed, in class `corrupt`: the damaged head and the
+    # damaged profile, naming the root's own profile, and the damaged
+    # component graph, naming the root.
+    @damage_answers [
+      {:head_corrupt, "prof_own"},
+      {:corrupt, {:profile, "prof_own"}},
+      {:corrupt, {:component_graph, @own_root}}
+    ]
+
+    # Neither Sanctum nor admission can read `Aqua`, so the loader's one
+    # definition of an app's own-head damage
+    # (`Sanctum.Consent.Loader.damage?/1`) is held to the consent status's
+    # reading here, over every member the loader declares
+    # (`Sanctum.Consent.Loader.load_error/0`). Every member the status
+    # reads as damage is in the family or is damage the loader typed
+    # already (`head_corrupt`, `lender_corrupt`), and the family names no
+    # member the status does not read as damage. Admission answers the
+    # family in the loader's one reading of it, and every other member as
+    # the loader gave it.
+    test "is the loader's one family, exactly the answers the consent status reads as damage" do
+      members = declared(Sanctum.Consent.Loader, :load_error)
+      assert members != []
+
+      # Each member is named in a failure by its type, as the loader spells it.
+      for member <- members do
+        reason = instance(member)
+        named = spelled(member)
+        status_damage? = Aqua.ConsentStatus.classify_refusal(reason) == {:error, :corrupt}
+        damage? = Sanctum.Consent.Loader.damage?(reason)
+        answer = Admission.root_refusal(reason, "prof_own", @own_root)
+
+        if typed_damage?(reason) do
+          assert {named, status_damage?, damage?} == {named, true, false}
+        else
+          assert {named, damage?} == {named, status_damage?}
+        end
+
+        if damage? do
+          assert {named, answer} ==
+                   {named, Sanctum.Consent.Loader.damage_refusal(reason, "prof_own", @own_root)}
+
+          assert {named, answer in @damage_answers} == {named, true}
+
+          assert {named, Aqua.ConsentStatus.classify_refusal(answer)} ==
+                   {named, {:error, :corrupt}}
+        else
+          assert {named, answer} == {named, reason}
+        end
+      end
+    end
+  end
+
+  # The loader's own damage, of the head or a lender, typed as it named it.
+  defp typed_damage?({:head_corrupt, _profile_id}), do: true
+  defp typed_damage?({:lender_corrupt, _target, _profile_id}), do: true
+  defp typed_damage?(_reason), do: false
+
+  # The members of `module`'s type `name`, a union flattened through the
+  # types it names, each with the module whose type spells it.
+  defp declared(module, name) do
+    case type_body(module, name) do
+      {:type, _, :union, members} -> Enum.flat_map(members, &flattened(module, &1))
+      member -> flattened(module, member)
+    end
+  end
+
+  defp flattened(_module, {:remote_type, _, [{:atom, _, remote}, {:atom, _, name}, []]}),
+    do: declared(remote, name)
+
+  defp flattened(module, {:user_type, _, name, []}), do: declared(module, name)
+  defp flattened(module, member), do: [{module, member}]
+
+  defp type_body(module, name) do
+    {:ok, types} = Code.Typespec.fetch_types(module)
+
+    case for {kind, {^name, body, []}} <- types, kind in [:type, :typep, :opaque], do: body do
+      [body] -> body
+      _ -> flunk("#{inspect(module)} declares no type #{name}/0")
+    end
+  end
+
+  defp spelled({_module, type}) do
+    {:"::", _, [_name, quoted]} = Code.Typespec.type_to_quoted({:member, type, []})
+    Macro.to_string(quoted)
+  end
+
+  # A value of the member's type: each element built from its own type,
+  # through the types it names.
+  defp instance({module, type}), do: build(module, type)
+
+  defp build(_module, {:atom, _, atom}), do: atom
+  defp build(_module, {:integer, _, integer}), do: integer
+  defp build(module, {:ann_type, _, [_name, type]}), do: build(module, type)
+  defp build(module, {:type, _, :union, [first | _]}), do: build(module, first)
+  defp build(_module, {:type, _, :tuple, :any}), do: {}
+
+  defp build(module, {:type, _, :tuple, elements}),
+    do: elements |> Enum.map(&build(module, &1)) |> List.to_tuple()
+
+  defp build(_module, {:type, _, :list, _}), do: []
+  defp build(module, {:type, _, :nonempty_list, [element]}), do: [build(module, element)]
+  defp build(_module, {:type, _, :map, :any}), do: %{}
+
+  defp build(module, {:type, _, :map, fields}) do
+    for {:type, _, :map_field_exact, [key, value]} <- fields,
+        into: %{},
+        do: {build(module, key), build(module, value)}
+  end
+
+  defp build(_module, {:type, _, :binary, []}), do: "x"
+  defp build(_module, {:type, _, kind, []}) when kind in [:atom, :module, :term, :any], do: :x
+  defp build(_module, {:type, _, :boolean, []}), do: true
+
+  defp build(_module, {:type, _, kind, []})
+       when kind in [:integer, :non_neg_integer, :pos_integer],
+       do: 1
+
+  defp build(_module, {:remote_type, _, [{:atom, _, remote}, {:atom, _, name}, []]}),
+    do: build(remote, type_body(remote, name))
+
+  defp build(module, {:user_type, _, name, []}), do: build(module, type_body(module, name))
+  defp build(module, type), do: flunk("no value of #{inspect(module)}'s #{inspect(type)}")
 
   defp cached?(ctx, reference) do
     case Arca.Cache.get(Arca.Cache.Keys.component_meta(Sanctum.Context.actor(ctx), reference)) do

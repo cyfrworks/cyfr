@@ -29,6 +29,7 @@
 // Usage: node proof.mjs HOMES_FILE SEGMENT COOKIE OUT_DIR
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { pageTokens, recordText, redact, redactFrames } from "./redact.mjs";
 import { join } from "node:path";
 import { launchBrowser, readHomes, signedIn, sleep, startProxy, waitFor } from "../browser/lib.mjs";
 
@@ -153,7 +154,11 @@ async function main() {
     const narrowed = await sheet(page);
     if (!hostNarrowed || !narrowedShown) {
       await page.screenshot({ path: join(outDir, "prism-grant.png"), fullPage: true });
-      writeFileSync(join(outDir, "prism-grant-frames.json"), JSON.stringify(frames.slice(-40), null, 1));
+      // The page's last frames, with every value the proof knows to be
+      // secret replaced before it is written (redact.mjs).
+      const known = [cookie, ...(await pageTokens(page))];
+      writeFileSync(join(outDir, "prism-grant-frames.json"),
+        JSON.stringify(redactFrames(frames.slice(-40), known), null, 1));
       row("prism_grant", false, "the sheet never showed the narrowed preview",
         { first, narrowed, host_narrowed: hostNarrowed, host_sent: hostEvent });
       return;
@@ -186,10 +191,14 @@ async function main() {
     const subset = { egress: { domains: [KEPT] }, storage: { paths: [PICKED] } };
     const decisions = { ref: REF, subset: { [REF]: subset }, origins: ["interactive"] };
     const cli = await ask({ op: "cli_preview", decisions });
-    record.cli_digest = { decisions, cli, head_digest: head.commit_digest };
+    // The preview's answer carries its single-use proof, so the record keeps
+    // only the commit digest it compares, or, for an error, the error and the
+    // answer's key names, never its values.
+    const cliShown = cli.commit_digest || { error: cli.error ?? null, keys: Object.keys(cli).sort() };
+    record.cli_digest = { decisions, cli: cliShown, head_digest: head.commit_digest };
     row("cli_digest", cli.commit_digest && cli.commit_digest === head.commit_digest,
       "the command line's preview of the same decisions answers the head's commit digest",
-      { cli: cli.commit_digest || cli, head: head.commit_digest });
+      { cli: cliShown, head: head.commit_digest });
 
     // -----------------------------------------------------------------------
     // background
@@ -239,10 +248,10 @@ async function main() {
   } finally {
     await browser.close();
     await proxy.close();
-    writeFileSync(join(outDir, "grant-proof.json"), JSON.stringify({ rows, record }, null, 2));
+    writeFileSync(join(outDir, "grant-proof.json"), recordText({ rows, record }, [cookie]));
     const table = ["| Step | Held | What |", "|---|---|---|",
       ...rows.map((r) => `| \`${r.step}\` | ${r.held ? "held" : "FAILED"} | ${r.what} |`)].join("\n");
-    writeFileSync(join(outDir, "grant-proof.md"), table + "\n");
+    writeFileSync(join(outDir, "grant-proof.md"), redact(table, [cookie]) + "\n");
     console.log(table);
   }
 }

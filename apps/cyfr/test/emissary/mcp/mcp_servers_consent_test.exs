@@ -32,11 +32,20 @@ defmodule Emissary.MCP.McpServersConsentTest do
     }
   end
 
-  defp http_config(entry) do
-    %{
-      "url" => "https://localhost:99999/mcp",
-      "headers" => %{"Authorization" => "Bearer vault:#{entry}"}
-    }
+  defp http_config(entry, url \\ "https://127.0.0.1:9/mcp") do
+    %{"url" => url, "headers" => %{"Authorization" => "Bearer vault:#{entry}"}}
+  end
+
+  # An entry a definition at `http_config/1`'s URL may name: its
+  # destination covers that URL.
+  defp entry!(ctx, name) do
+    {:ok, _} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: name,
+        kind: "api_key",
+        fields: %{"token" => "t-" <> name},
+        destination: %{"hosts" => ["127.0.0.1"], "port" => 9}
+      })
   end
 
   defp stdio_config(entry) do
@@ -81,6 +90,8 @@ defmodule Emissary.MCP.McpServersConsentTest do
   test "an admin API key cannot define or change a server, whatever its permissions", %{
     ctx: ctx
   } do
+    entry!(ctx, "saved-token")
+
     {:ok, _saved} =
       Grimoire.call_external("mcp_servers", ctx, %{
         "action" => "create",
@@ -162,6 +173,9 @@ defmodule Emissary.MCP.McpServersConsentTest do
   end
 
   test "a signed-in person defines and changes a server", %{ctx: ctx} do
+    entry!(ctx, "gh-token")
+    entry!(ctx, "gh-token-2")
+
     assert {:ok, %{name: "wired", epoch: 1}} =
              Grimoire.call_external("mcp_servers", ctx, %{
                "action" => "create",
@@ -181,6 +195,30 @@ defmodule Emissary.MCP.McpServersConsentTest do
              Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "wired")
 
     assert config =~ "vault:gh-token-2"
+  end
+
+  test "a signed-in person's definition is refused where its header's entry may not go, " <>
+         "naming the header and never the entry",
+       %{ctx: ctx} do
+    entry!(ctx, "gh-token")
+
+    for config <- [
+          http_config("gh-token", "https://evil.example/mcp"),
+          http_config("absent-token")
+        ] do
+      assert {:error, {:invalid_argument, message}} =
+               Grimoire.call_external("mcp_servers", ctx, %{
+                 "action" => "create",
+                 "name" => "wired",
+                 "config" => config
+               })
+
+      assert message ==
+               "Header 'Authorization' names no active vault entry whose destination covers " <>
+                 "this server's URL"
+    end
+
+    assert {:error, :not_found} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "wired")
   end
 
   test "a running chain reaches no mcp_servers action", %{ctx: ctx} do

@@ -540,6 +540,204 @@ defmodule Prima.WorkerAuthTest do
     end
   end
 
+  describe "sealed answer frames" do
+    @call_id "AAECAwQFBgcICQoLDA0ODw"
+    @other_call_id "ICEiIyQlJicoKSorLC0uLw"
+
+    defp frame!(seal, seq, kind, plaintext, call_id \\ @call_id) do
+      iv = :binary.copy(<<seq>>, 12)
+      {:ok, frame} = WorkerAuth.seal_frame(seal, :answer, call_id, seq, kind, plaintext, iv)
+      frame
+    end
+
+    defp body(<<_length::32, frame::binary>>), do: frame
+
+    test "the vectors' frames reproduce, each a length, a kind byte and a sealed value" do
+      %{"call_id" => call_id, "label" => label, "frames" => frames} = @vectors["sealed_frames"]
+      seal = unhex(@vectors["keys"]["attempt_seal_hex"])
+      assert label == "cyfr-opus/v1/frame-answer"
+
+      reader =
+        Enum.reduce(frames, WorkerAuth.frame_reader(seal, call_id), fn frame, reader ->
+          kind = String.to_existing_atom(frame["kind"])
+          plaintext = Base.decode64!(frame["plaintext_b64"])
+          bytes = unhex(frame["frame_hex"])
+
+          assert {:ok, ^bytes} =
+                   WorkerAuth.seal_frame(
+                     seal,
+                     :answer,
+                     call_id,
+                     frame["seq"],
+                     kind,
+                     plaintext,
+                     unhex(frame["iv_hex"])
+                   )
+
+          <<length::32, byte, sealed::binary>> = bytes
+          assert length == byte_size(bytes) - 4 and sealed == frame["sealed"]
+          assert byte == %{head: ?h, chunk: ?c, end: ?e, error: ?x}[kind]
+
+          assert {:ok, ^plaintext} =
+                   WorkerAuth.open_frame(seal, :answer, call_id, frame["seq"], kind, sealed)
+
+          assert {:ok, _read, reader} = WorkerAuth.read_frame(reader, body(bytes))
+          reader
+        end)
+
+      assert reader.state == :done
+    end
+
+    test "open only as the call, place and kind they were sealed for" do
+      %{seal: seal, call: call_key} = keys!(@attempt)
+      <<_length::32, ?h, sealed::binary>> = frame!(seal, 0, :head, "{}")
+
+      assert {:ok, "{}"} = WorkerAuth.open_frame(seal, :answer, @call_id, 0, :head, sealed)
+
+      for {call_id, seq, kind, key} <- [
+            {@other_call_id, 0, :head, seal},
+            {@call_id, 1, :head, seal},
+            {@call_id, 0, :error, seal},
+            {@call_id, 0, :head, call_key}
+          ] do
+        assert {:error, :unsealable} =
+                 WorkerAuth.open_frame(key, :answer, call_id, seq, kind, sealed)
+      end
+
+      # A frame is not a sealed host call answer, nor one a frame.
+      {:ok, answer} = WorkerAuth.seal_call(seal, :answer, call(), "{}")
+
+      assert {:error, :unsealable} =
+               WorkerAuth.open_frame(seal, :answer, @call_id, 0, :head, answer)
+
+      assert {:error, :unsealable} = WorkerAuth.open_call(seal, :answer, call(), sealed)
+    end
+
+    test "read in order: a head or an error first, chunks, then one end or error, then nothing" do
+      %{seal: seal} = keys!(@attempt)
+      head = WorkerAuth.head_plaintext(200, [{"content-type", "text/plain"}])
+      reader = WorkerAuth.frame_reader(seal, @call_id)
+
+      stream =
+        frame!(seal, 0, :head, head) <>
+          frame!(seal, 1, :chunk, "hello ") <>
+          frame!(seal, 2, :chunk, "world") <> frame!(seal, 3, :end, "")
+
+      assert {:ok, frames, "", %{state: :done}} = WorkerAuth.read_frames(reader, stream)
+
+      assert frames == [
+               %{kind: :head, status: 200, headers: [{"content-type", "text/plain"}]},
+               %{kind: :chunk, body: "hello "},
+               %{kind: :chunk, body: "world"},
+               %{kind: :end}
+             ]
+
+      # A stream split anywhere waits for the rest of its frame.
+      <<first::binary-size(9), rest::binary>> = stream
+      assert {:ok, [], ^first, ^reader} = WorkerAuth.read_frames(reader, first)
+      assert {:ok, ^frames, "", _reader} = WorkerAuth.read_frames(reader, first <> rest)
+
+      error = WorkerAuth.error_plaintext("timeout", "The upstream did not answer in time.")
+
+      for {name, frames, refusal} <- [
+            {"chunk first", [frame!(seal, 0, :chunk, "x")], :out_of_sequence},
+            {"end first", [frame!(seal, 0, :end, "")], :out_of_sequence},
+            {"two heads", [frame!(seal, 0, :head, head), frame!(seal, 1, :head, head)],
+             :out_of_sequence},
+            {"after an error", [frame!(seal, 0, :error, error), frame!(seal, 1, :head, head)],
+             :out_of_sequence},
+            {"a skipped seq", [frame!(seal, 0, :head, head), frame!(seal, 2, :chunk, "x")],
+             :unsealable},
+            {"another call", [frame!(seal, 0, :head, head, @other_call_id)], :unsealable},
+            {"a head that is no head", [frame!(seal, 0, :head, ~s({"status":200}))], :malformed},
+            {"a status out of range", [frame!(seal, 0, :head, ~s({"status":99,"headers":[]}))],
+             :malformed},
+            {"an end with a body", [frame!(seal, 0, :head, head), frame!(seal, 1, :end, "x")],
+             :malformed},
+            {"an error that is no error", [frame!(seal, 0, :error, "boom")], :malformed}
+          ] do
+        assert {:error, ^refusal} = WorkerAuth.read_frames(reader, Enum.join(frames)), name
+      end
+    end
+
+    test "are bounded: a chunk's body, a frame and an error's sentence" do
+      %{seal: seal} = keys!(@attempt)
+      max_chunk = WorkerAuth.max_chunk_bytes()
+      assert WorkerAuth.max_frame_bytes() == 65_536 and max_chunk == 32_768
+
+      chunk = String.duplicate("a", max_chunk)
+      framed = frame!(seal, 1, :chunk, chunk)
+      assert byte_size(framed) - 4 <= WorkerAuth.max_frame_bytes()
+
+      assert {:error, :frame_too_large} =
+               WorkerAuth.seal_frame(
+                 seal,
+                 :answer,
+                 @call_id,
+                 1,
+                 :chunk,
+                 chunk <> "a",
+                 :binary.copy(<<1>>, 12)
+               )
+
+      # A frame whose length is past the bound is refused as soon as the length is in.
+      assert {:error, :frame_too_large} =
+               WorkerAuth.read_frames(WorkerAuth.frame_reader(seal, @call_id), <<65_537::32>>)
+
+      assert {:error, :frame_too_large} = WorkerAuth.split_frames(<<65_537::32, "h">>)
+      assert {:error, :malformed} = WorkerAuth.split_frames(<<1::32, "h">>)
+
+      assert_raise FunctionClauseError, fn ->
+        WorkerAuth.error_plaintext("timeout", String.duplicate("e", 513))
+      end
+
+      assert WorkerAuth.frame_kinds() == [:head, :chunk, :end, :error]
+    end
+
+    test "a chunk's body bytes read from its sealed value's length, unopened; no other kind carries any" do
+      %{seal: seal} = keys!(@attempt)
+
+      for size <-
+            Enum.uniq([0, 1, 2, 3, 4, 5, 31, 32, 33, 1000] ++ Enum.to_list(32_760..32_768)) do
+        chunk = :crypto.strong_rand_bytes(size)
+
+        assert WorkerAuth.frame_body_bytes(body(frame!(seal, 1, :chunk, chunk))) == size,
+               "a chunk of #{size} bytes"
+      end
+
+      max = WorkerAuth.max_chunk_bytes()
+      full = body(frame!(seal, 1, :chunk, String.duplicate("a", max)))
+      assert WorkerAuth.frame_body_bytes(full) == max
+
+      head = WorkerAuth.head_plaintext(200, [{"content-type", "text/plain"}])
+      error = WorkerAuth.error_plaintext("timeout", "The upstream did not answer in time.")
+
+      for {kind, plaintext} <- [{:head, head}, {:end, ""}, {:error, error}] do
+        assert WorkerAuth.frame_body_bytes(body(frame!(seal, 0, kind, plaintext))) == 0,
+               "a #{kind} frame"
+      end
+
+      # A value no seal produces carries nothing: one past a whole base64
+      # quantum, or shorter than an IV and a tag.
+      <<?c, sealed::binary>> = body(frame!(seal, 1, :chunk, "abc"))
+      assert rem(byte_size(sealed <> "AAA"), 4) == 1
+      assert WorkerAuth.frame_body_bytes(<<?c, sealed::binary, "AAA">>) == 0
+      assert WorkerAuth.frame_body_bytes(<<?c, binary_part(sealed, 0, 36)::binary>>) == 0
+      assert WorkerAuth.frame_body_bytes("c") == 0
+    end
+
+    test "a kind byte is bound and known" do
+      %{seal: seal} = keys!(@attempt)
+      <<length::32, ?h, sealed::binary>> = frame!(seal, 0, :head, "{}")
+      reader = WorkerAuth.frame_reader(seal, @call_id)
+
+      assert {:error, :unsealable} = WorkerAuth.read_frame(reader, <<?x, sealed::binary>>)
+      assert {:error, :unknown_kind} = WorkerAuth.read_frame(reader, <<?z, sealed::binary>>)
+      assert {:error, :malformed} = WorkerAuth.read_frame(reader, "h")
+      assert length == 1 + byte_size(sealed)
+    end
+  end
+
   describe "WorkerAPI requests and reports" do
     @dispatch %{service: @service, boot: @boot, ts: @now, nonce: "n_1"}
 

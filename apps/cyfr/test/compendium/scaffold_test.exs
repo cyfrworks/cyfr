@@ -182,6 +182,8 @@ defmodule Compendium.ScaffoldTest do
       assert manifest["version"] == "0.1.0"
       assert manifest["publisher"] == "local"
       assert is_map(manifest["caps"]["egress"])
+      assert manifest["caps"]["egress"]["domains"] == []
+      refute Map.has_key?(manifest, "needs")
       refute Map.has_key?(manifest, "setup")
       refute Map.has_key?(manifest, "wasi")
 
@@ -189,6 +191,39 @@ defmodule Compendium.ScaffoldTest do
       {:ok, lib_rs} = File.read(Path.join([base, "src", "src", "lib.rs"]))
       assert lib_rs =~ "cyfr::catalyst::run::Guest"
       assert lib_rs =~ "fn run"
+      refute lib_rs =~ "vault::read"
+      refute lib_rs =~ "Authorization"
+
+      guidance = [
+        {lib_rs,
+         [
+           "api_key:<provider>",
+           "fields",
+           "hosts",
+           "attach",
+           "connection",
+           "cyfr:http/fetch",
+           "control plane"
+         ]},
+        {Enum.join(result.next_steps, "\n"),
+         [
+           "api_key:<provider>",
+           "fields",
+           "hosts",
+           "attach",
+           "connection",
+           "cyfr:http/fetch",
+           "control plane"
+         ]}
+      ]
+
+      missing =
+        for {{text, terms}, output} <- Enum.zip(guidance, [:source, :next_steps]),
+            term <- terms,
+            not String.contains?(text, term),
+            do: {output, term}
+
+      assert missing == [], "the catalyst's public scaffold lacks attachment guidance"
 
       # Verify Cargo.toml is for catalyst
       {:ok, cargo} = File.read(Path.join([base, "src", "Cargo.toml"]))

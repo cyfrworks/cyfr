@@ -5,13 +5,19 @@ defmodule Crucible.StepSpansTest do
   @moduledoc """
   A turn's model step emits each step span once — admission, first delta,
   completion and the whole `run_child` — carrying the four identifiers
-  and no payload; a clock marks only what happened, once; and
-  `mix cyfr.bench.step` runs its steps to a printed table.
+  and no payload, whichever way its request travels; a clock marks only
+  what happened, once; and `mix cyfr.bench.step` runs its steps to a
+  printed table. Each of the bench's steps makes exactly one request to
+  its upstream, with the key attached in `attached` mode and without it in
+  `pinned`; the stub makes it for the bench's line, whole or after a
+  display name, and for no other chat; and the upstream is stopped however
+  a run ends.
   """
 
   use ExUnit.Case, async: false
 
   alias Crucible.StepSpans
+  alias Cyfr.Test.StepBench
 
   @metadata_keys [:athanor_id, :component, :execution_id, :root_execution_id]
 
@@ -36,44 +42,135 @@ defmodule Crucible.StepSpansTest do
     :ok
   end
 
-  test "a model step emits each span once, with the call's identifiers and no payload" do
-    Mix.Tasks.Cyfr.Bench.Step.run(["--steps", "1", "--warmup", "0"])
+  for mode <- ["attached", "pinned"] do
+    test "a model step whose request is #{mode} emits each span once, with the call's identifiers and no payload" do
+      Mix.Tasks.Cyfr.Bench.Step.run(["--mode", unquote(mode), "--steps", "1", "--warmup", "0"])
 
-    # The chat step names its child; the catalyst's `describe` does not.
-    step =
-      for event <- StepSpans.events() do
-        assert_receive {:span, ^event, measurements, %{execution_id: id} = metadata}
-                       when is_binary(id)
+      # The chat step names its child; the catalyst's `describe` does not.
+      step =
+        for event <- StepSpans.events() do
+          assert_receive {:span, ^event, measurements, %{execution_id: id} = metadata}
+                         when is_binary(id)
 
-        {event, measurements, metadata}
+          {event, measurements, metadata}
+        end
+
+      refute Enum.any?(drain(), fn {_event, _m, metadata} -> is_binary(metadata.execution_id) end)
+
+      [%{execution_id: execution_id, root_execution_id: root_execution_id} | _] =
+        Enum.map(step, &elem(&1, 2))
+
+      for {_event, measurements, metadata} <- step do
+        assert %{duration: duration} = measurements
+        assert map_size(measurements) == 1 and is_integer(duration) and duration >= 0
+
+        assert metadata |> Map.keys() |> Enum.sort() == @metadata_keys
+
+        assert %{
+                 execution_id: ^execution_id,
+                 root_execution_id: ^root_execution_id,
+                 athanor_id: "ath_test",
+                 component: "catalyst:local.step-stub" <> _
+               } = metadata
+
+        assert "exec_" <> _ = execution_id
+        assert "exec_" <> _ = root_execution_id
+        refute execution_id == root_execution_id
+
+        # The request, the streamed text, the answer and the key never ride.
+        for payload <- ["bench_fetch", "one-byte", "The stub", "answers", "sk-step-stub"],
+            do: refute(inspect(metadata) =~ payload)
       end
 
-    refute Enum.any?(drain(), fn {_event, _m, metadata} -> is_binary(metadata.execution_id) end)
+      assert_received {:mix_shell, :info, [table]}
 
-    [%{execution_id: execution_id, root_execution_id: root_execution_id} | _] =
-      Enum.map(step, &elem(&1, 2))
+      assert table =~
+               "1 model steps on catalyst:local.step-stub after 0 warmup, mode #{unquote(mode)}"
 
-    for {_event, measurements, metadata} <- step do
-      assert %{duration: duration} = measurements
-      assert map_size(measurements) == 1 and is_integer(duration) and duration >= 0
-
-      assert metadata |> Map.keys() |> Enum.sort() == @metadata_keys
-
-      assert %{
-               execution_id: ^execution_id,
-               root_execution_id: ^root_execution_id,
-               athanor_id: "ath_test",
-               component: "catalyst:local.step-stub" <> _
-             } = metadata
-
-      assert "exec_" <> _ = execution_id
-      assert "exec_" <> _ = root_execution_id
-      refute execution_id == root_execution_id
-
-      # The request, the streamed text, the answer and the key never ride.
-      for payload <- ["hello", "The stub", "answers", "sk-step-stub"],
-          do: refute(inspect(metadata) =~ payload)
+      assert table =~ "upstream: 1 one-byte fetches"
     end
+  end
+
+  test "each step makes one request to the upstream, with the key attached only when attached" do
+    for {mode, attached} <- [attached: 3, pinned: 0] do
+      report = StepBench.run(steps: 2, warmup: 1, mode: mode)
+
+      assert %{mode: ^mode, fetches: 3, attached_fetches: ^attached} = report, inspect(mode)
+      assert report.steps == 2 and report.warmup == 1
+      refute Process.alive?(report.upstream), "the #{mode} run left its upstream running"
+    end
+  end
+
+  # The turn loop sends the bench's line after the person's display name in
+  # the bench's athanor, where several people talk; a line sent whole is the
+  # other form the stub reads. Each chat runs in the bench's athanor, on the
+  # real host path, and the upstream counts what reached it.
+  test "a chat makes the bench's request for its line, whole or after a display name, and for nothing else" do
+    test = self()
+
+    probe = fn %{ctx: ctx, request: request, fetches: fetches} ->
+      line = Jason.encode!(%{"bench_fetch" => request})
+
+      inputs = [
+        whole: chat([line]),
+        named: chat(["local|local|testns: " <> line]),
+        person: chat(["hello"]),
+        named_person: chat(["local|local|testns: hello"]),
+        not_last: chat([line, "hello"]),
+        no_messages: %{"operation" => "chat", "params" => %{}}
+      ]
+
+      made =
+        for {form, input} <- inputs do
+          before = fetches.()
+
+          assert {:ok, %{output: %{"status" => 200}}} =
+                   Crucible.run_root(ctx, :default, "catalyst:local.step-stub", input)
+
+          {form, fetches.() - before}
+        end
+
+      send(test, {:made, made})
+    end
+
+    StepBench.run(steps: 1, warmup: 0, mode: :pinned, on_step: probe)
+
+    assert_received {:made, made}
+
+    assert made == [whole: 1, named: 1, person: 0, named_person: 0, not_last: 0, no_messages: 0]
+  end
+
+  test "the upstream is stopped and the athanor's environment restored when a run fails or times out" do
+    test = self()
+    base_path = Application.get_env(:arca, :base_path)
+    seed_path = Application.get_env(:arca, :seed_path)
+
+    failing = fn %{upstream: server} ->
+      send(test, {:upstream, server})
+      raise "a step failed"
+    end
+
+    assert_raise RuntimeError, "a step failed", fn ->
+      StepBench.run(steps: 3, warmup: 0, mode: :attached, on_step: failing)
+    end
+
+    assert_received {:upstream, server}
+    refute Process.alive?(server), "a failed run left its upstream running"
+
+    # A turn that outlives its wait exits the bench (`Task.await/2`).
+    timing_out = fn %{upstream: server} ->
+      send(test, {:upstream, server})
+      exit({:timeout, {Task, :await, [:turn, 60_000]}})
+    end
+
+    assert {:timeout, _} =
+             catch_exit(StepBench.run(steps: 3, warmup: 0, mode: :pinned, on_step: timing_out))
+
+    assert_received {:upstream, server}
+    refute Process.alive?(server), "a run that timed out left its upstream running"
+
+    assert Application.get_env(:arca, :base_path) == base_path
+    assert Application.get_env(:arca, :seed_path) == seed_path
   end
 
   test "a clock emits admission, first delta and completion once, and only after the guest starts" do
@@ -120,16 +217,32 @@ defmodule Crucible.StepSpansTest do
     end
   end
 
-  test "mix cyfr.bench.step prints each measure's percentiles and the adapters in use" do
+  test "mix cyfr.bench.step prints each measure's percentiles, the commit, the mode and the adapters in use" do
     Mix.Tasks.Cyfr.Bench.Step.run(["--steps", "3", "--warmup", "1"])
 
     assert_received {:mix_shell, :info, [table]}
-    assert table =~ "3 model steps on catalyst:local.step-stub after 1 warmup"
+    assert table =~ "3 model steps on catalyst:local.step-stub after 1 warmup, mode attached"
+    assert table =~ ~r/^commit: [0-9a-f]{40}( with uncommitted changes)?$/m
     assert table =~ "database: #{inspect(Cyfr.RuntimeConfig.repo_adapter())}"
     assert table =~ "storage: #{inspect(Arca.Storage.configured_adapter())}"
+    assert table =~ "upstream: 4 one-byte fetches, 4 with the key attached"
 
     for measure <- ["admission", "first delta", "time to first delta", "completion", "total"],
         do: assert(table =~ ~r/^#{measure} .*\d+\.\d\s+\d+\.\d\s+\d+\.\d$/m)
+  end
+
+  test "mix cyfr.bench.step refuses a mode it does not know" do
+    assert_raise Mix.Error, ~r/--mode is attached or pinned/, fn ->
+      Mix.Tasks.Cyfr.Bench.Step.run(["--mode", "direct", "--steps", "1", "--warmup", "0"])
+    end
+  end
+
+  defp chat(lines) do
+    messages =
+      for text <- lines,
+          do: %{"role" => "user", "content" => [%{"type" => "text", "text" => text}]}
+
+    %{"operation" => "chat", "params" => %{"messages" => messages}}
   end
 
   defp drain do

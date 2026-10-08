@@ -7,40 +7,53 @@ defmodule Sanctum.Consent do
 
   This module holds the **contract** — the protocol shape, the error
   payloads, and the types every participant agrees on. The verbs live
-  beside it:
+  beside it, `plan` in `Sanctum.Consent.Plan` and `preview`, `commit` and
+  `grant` in `Sanctum.Consent.Commit`, and rest on these:
 
   | Module | Role |
   |---|---|
   | `Sanctum.Consent.ShapeDigest` | what the operator was shown, before any choice |
   | `Sanctum.Consent.CommitDigest` | the shape plus every decision made on it |
   | `Sanctum.Consent.Proof` | single-use authorization bound to one commit |
-  | `Sanctum.Consent.Authz` | who may consent at all |
+  | `Sanctum.Consent.Authz` | who may consent at all, and whether a sensitive change is confirmed |
 
   ## Reading consent from above
 
-  Consent rows are security rows: a domain or a surface learns about
-  them only through `profiles/2`, `head_consent/2` and `revoke_source/2`
-  here. Each scopes by the tenant of the caller's context, and each keeps
-  an unreadable store, a damaged row and an absent one apart — a caller
-  that cannot tell them apart would read an outage as "not granted".
+  Consent rows are security rows, read only inside Sanctum: Arca's
+  consent stores are Sanctum's alone. A domain or a surface reads consent
+  state through Sanctum's exported entries, among them `profiles/2`,
+  `head_consent/2` and `row_binding/3` here, `Sanctum.Consent.Accounts`
+  and `Sanctum.Consent.Loader`, each scoped by the tenant of the caller's
+  context.
 
   ## The protocol
 
   Three steps, because the authorization must bind the *exact* thing the
   operator saw — not a plan that could still change underneath it:
 
-      plan     {ref, label?, kind?, scope?}
-               → shape digest, expected revision, candidates, defaults,
-                 the ask as preview rows, the default origins
+      plan     {ref, label?, kind?}
+               → plan token, shape digest, expected revision, candidates,
+                 defaults, the ask as preview rows, the default origins
 
-      preview  {plan_token, decisions}
-               → the structured preview (rows, origins, commit digest)
-                 and the proof
+      preview  {decisions}
+               → the structured preview (rows, origins, the head's
+                 bindings it removes, commit digest) and the proof
 
-      commit   {plan_token, decisions, commit_digest, expected_revision, proof}
-               → verify the proof binds THIS commit digest, recompute the
-                 live shape digest, re-verify vault binding liveness, CAS on
-                 the head revision, then insert with its admitted origins
+      commit   {decisions, plan_token, proof, commit_digest,
+                expected_consent_revision}
+               → authorize the caller, recompute the live shape, check
+                 the expected revision, consume the plan token, check the
+                 presented commit digest against the recomputed one,
+                 consume the proof bound to it, then in one transaction
+                 insert the revision with its admitted origins, write its
+                 rows, re-verify vault binding liveness and compare-and-set
+                 the head
+
+  Beside the three steps, `grant` (`profile.grant`) writes a revision of
+  an existing owner profile whose shape has not moved, binding an entry
+  to a need, with no plan, preview or proof: it re-issues the head's
+  scope, invoke mode, origins and narrowing under the same revision
+  compare-and-set (`Sanctum.Consent.Commit.grant/3`).
 
   `preview` exists so a proof can bind the exact commit digest that was
   rendered. Without it, a choice made after approval — a different vault
@@ -64,6 +77,11 @@ defmodule Sanctum.Consent do
       restart_required       {profile_id, new_revision, missing}
       confirmation_required  {id, operation, expires_at}
 
+  `consent_required`'s `shape_diff` is what changed since the head, one
+  entry per capability of each node of the closure, each naming its
+  `node` and whether the head never held it (`new`) or the ask no longer
+  names it (`dropped`) (`Sanctum.Consent.ShapeDiff`).
+
   `consent_conflict`'s cause distinguishes a stale plan from a digest that
   changed under the operator from a genuine race — different remedies:
   re-plan, re-preview, or retry. `confirmation_required` is no denial: the
@@ -77,10 +95,12 @@ defmodule Sanctum.Consent do
 
   @typedoc """
   How a consent revision was granted. `:bootstrap` marks machine-minted
-  revisions — connections bind through the walk, so these carry no vault
-  resource and no human granted them. Recording them as `:interactive`
-  would render a false audit line ("you, interactive") into every
-  enforcement display forever.
+  revisions — connections bind through the walk, so these carry no entry
+  of the athanor's, and the one binding one may carry is the instance
+  entry a newly provisioned athanor's person is offered alone
+  (`Sanctum.Consent.Bootstrap`); no human granted them. Recording them as
+  `:interactive` would render a false audit line ("you, interactive")
+  into every enforcement display forever.
   """
   @type granted_via :: :interactive | :scoped_key | :bootstrap
 
@@ -96,7 +116,7 @@ defmodule Sanctum.Consent do
   @type consent_required :: %{
           profile_id: String.t(),
           current_revision: non_neg_integer(),
-          shape_diff: [String.t()]
+          shape_diff: [Sanctum.Consent.ShapeDiff.entry()]
         }
 
   @type consent_conflict :: %{
@@ -121,11 +141,14 @@ defmodule Sanctum.Consent do
   What `preview` answers: a `Prima.ConsentPreview` document, its fields
   beside the envelope a commit presents.
 
-    * `v`, `rows`, `origins`, `commit_digest` — the document: its version,
-      its typed rows each in the row's JSON form
+    * `v`, `rows`, `origins`, `commit_digest`, `removed` — the document:
+      its version, its typed rows each in the row's JSON form
       (`Prima.ConsentPreview.Row`), the origins the grant would admit as
-      their wire spellings, and the commit digest binding them.
-      `Prima.ConsentPreview.decode/1` reads these four back.
+      their wire spellings, the commit digest binding them, and the
+      bindings of the profile's head the revision would remove, each in
+      its JSON form (`Prima.ConsentPreview`'s "Removed bindings"), empty
+      when it removes none. `Prima.ConsentPreview.decode/1` reads these
+      five back.
     * `proof` and `expected_consent_revision` — what the commit presents
       with the digest.
   """
@@ -134,6 +157,7 @@ defmodule Sanctum.Consent do
           rows: [%{required(String.t()) => term()}],
           origins: [String.t(), ...],
           commit_digest: String.t(),
+          removed: [Prima.ConsentPreview.removed()],
           proof: String.t(),
           expected_consent_revision: non_neg_integer()
         }
@@ -204,6 +228,23 @@ defmodule Sanctum.Consent do
       {:error, _unreadable} -> {:error, :unavailable}
     end
   end
+
+  @doc """
+  What one vault row of the head revision `consent` (from
+  `head_consent/2`) binds now, read by its tag: the athanor's own entry,
+  a selection of another profile's key resolved as a run resolves it
+  under the context's origin, an instance entry read live as the
+  context's person is offered it and held to the row's digest, or a row
+  naming none (`Sanctum.Consent.Loader.row_binding/3`). Nothing is
+  raised.
+  """
+  @spec row_binding(Sanctum.Context.t(), map(), map()) ::
+          {:entry, String.t(), String.t()}
+          | {:selection, String.t(), {:ok, map()} | {:error, term()}}
+          | {:instance, String.t(), {:ok, map()} | {:error, term()}}
+          | :malformed
+  def row_binding(%Sanctum.Context{} = ctx, consent, ref) when is_map(consent) and is_map(ref),
+    do: Sanctum.Consent.Loader.row_binding(ctx, consent, ref)
 
   @doc """
   Revoke every profile of a name-level `source_ref` in the caller's

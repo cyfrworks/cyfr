@@ -17,9 +17,12 @@ defmodule Opus.FormulaHandler do
   grants anything. An action the assignment names as intercepted
   (`Prima.Assignment`'s `intercepted`) is a child the host runs:
   `execution.run` and `execution.run_stream` are admitted by CYFR
-  (`Opus.HostClient.admit_child/5`) and run in a runner of the formula's
+  (`Opus.HostClient.admit_child/6`) and run in a runner of the formula's
   own runner group (`Opus.Subtree.start_child/2`). Every other action
-  is a catalog tool call (`Opus.HostClient.tool_call/4`).
+  is a catalog tool call (`Opus.HostClient.tool_call/4`). A called, spawned
+  or streamed child's request may name `connection`, the account it asks
+  its edge for, which CYFR holds it to; it names none for the edge's
+  default.
 
   ## Concurrency Model — Unbundled Promise Pattern
 
@@ -327,10 +330,10 @@ defmodule Opus.FormulaHandler do
 
   defp dispatch_child_call(name, args, host, start_time) do
     result =
-      with {:ok, reference, need, input} <- child_request(name, args) do
+      with {:ok, request} <- child_request(name, args) do
         case child_runner(name) do
-          {:ok, :call} -> run_child(host, reference, need, input)
-          {:ok, :stream} -> stream_child(host, reference, need, input)
+          {:ok, :call} -> run_child(host, request)
+          {:ok, :stream} -> stream_child(host, request)
           :error -> {:refused, encode_error(:invalid_request, "#{name} has no host dispatch")}
         end
       end
@@ -349,13 +352,27 @@ defmodule Opus.FormulaHandler do
   # Guest-supplied lineage keys never reach CYFR: the child's parent and
   # root are the formula attempt's, and its input is only what the
   # request's own "input" carried — or, for a delegate of the same formula,
-  # what CYFR's copy of the parent's roster holds for it.
+  # what CYFR's copy of the parent's roster holds for it. The account a
+  # request names (`connection`) is CYFR's to hold the child to; only its
+  # shape is read here.
   defp child_request(name, args) do
-    case {Map.get(args, "reference"), Map.get(args, "input") || %{}} do
-      {reference, %{} = input} when is_binary(reference) and reference != "" ->
-        {:ok, reference, Map.get(args, "need"), input}
+    case {Map.get(args, "reference"), Map.get(args, "input") || %{}, Map.get(args, "connection")} do
+      {reference, _input, connection}
+      when is_binary(reference) and reference != "" and not is_nil(connection) and
+             not is_binary(connection) ->
+        {:refused,
+         encode_error(:invalid_request, "#{name} requires 'connection' to be an account's name")}
 
-      {reference, _input} when is_binary(reference) and reference != "" ->
+      {reference, %{} = input, connection} when is_binary(reference) and reference != "" ->
+        {:ok,
+         %{
+           reference: reference,
+           need: Map.get(args, "need"),
+           connection: connection,
+           input: input
+         }}
+
+      {reference, _input, _connection} when is_binary(reference) and reference != "" ->
         {:refused, encode_error(:invalid_request, "#{name} requires 'input' to be an object")}
 
       _ ->
@@ -363,8 +380,19 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  defp run_child(host, reference, need, input) do
-    case HostClient.admit_child(host, reference, need, input, :call) do
+  defp admit(host, request, guest_fn) do
+    HostClient.admit_child(
+      host,
+      request.reference,
+      request.need,
+      request.input,
+      guest_fn,
+      request.connection
+    )
+  end
+
+  defp run_child(host, request) do
+    case admit(host, request, :call) do
       {:ok, child} -> child |> await_child() |> answered()
       {:error, refusal} -> {:refused, encode_refusal(refusal)}
     end
@@ -372,8 +400,8 @@ defmodule Opus.FormulaHandler do
 
   # A streamed child runs in a runner nothing waits for, and is answered
   # with its id and its event stream's URL at once.
-  defp stream_child(host, reference, need, input) do
-    case HostClient.admit_child(host, reference, need, input, :spawn) do
+  defp stream_child(host, request) do
+    case admit(host, request, :spawn) do
       {:ok, child} ->
         case Subtree.start_child(child, nil) do
           {:ok, _runner} ->
@@ -499,9 +527,9 @@ defmodule Opus.FormulaHandler do
   # child always gets its task. Only the guest spawns, one host call at a
   # time, so the room cannot shrink between the check and the spawn.
   defp spawn_child_async(name, args, host, tracker) do
-    with {:ok, reference, need, input} <- child_request(name, args),
+    with {:ok, request} <- child_request(name, args),
          :ok <- tracker_room(tracker),
-         {:ok, child} <- admit_spawned(host, reference, need, input) do
+         {:ok, child} <- admit_spawned(host, request) do
       spawn_child_task(child, host, tracker)
     else
       {:refused, response} -> response
@@ -514,8 +542,8 @@ defmodule Opus.FormulaHandler do
       else: {:refused, encode_error(:resource_limit, "Maximum concurrent tasks exceeded")}
   end
 
-  defp admit_spawned(host, reference, need, input) do
-    case HostClient.admit_child(host, reference, need, input, :spawn) do
+  defp admit_spawned(host, request) do
+    case admit(host, request, :spawn) do
       {:ok, child} -> {:ok, child}
       {:error, refusal} -> {:refused, encode_refusal(refusal)}
     end

@@ -113,6 +113,15 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
     test "vault references and innocuous literals are accepted; secret: refs are not" do
       ctx = Sanctum.TestContext.local()
 
+      # The entry the header names, bound to where the server is.
+      {:ok, _} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "my-token",
+          kind: "api_key",
+          fields: %{"token" => "t-my-token"},
+          destination: %{"hosts" => ["example.com"]}
+        })
+
       assert {:ok, _} =
                Emissary.External.Provider.handle(
                  "mcp_servers",

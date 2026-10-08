@@ -776,4 +776,173 @@ defmodule Crucible.Schedules.SchedulerTest do
 
     assert Process.alive?(pid)
   end
+
+  defmodule Upstream do
+    @moduledoc false
+    # A loopback upstream that tells the test what it was sent.
+    @behaviour Plug
+
+    @impl true
+    def init(test), do: test
+
+    @impl true
+    def call(conn, test) do
+      send(test, {:upstream, %{path: conn.request_path, headers: conn.req_headers}})
+      Plug.Conn.send_resp(conn, 200, "scheduled upstream")
+    end
+  end
+
+  @attached_probe Path.expand(
+                    "../../../../opus/test/support/test_wasm/hostile/attached_header_probe.wasm",
+                    __DIR__
+                  )
+  @attached_secret "sk-scheduled-e7-canary-41d9b0"
+
+  describe "a scheduled attached request" do
+    # The probe of Opus's hostile guests that sends its input as its one
+    # request, published as a component of the person's own whose need
+    # `api_key` CYFR attaches by header, its entry bound until `until` under
+    # a consent that admits scheduled runs. Answers its reference and the
+    # profile schedules name.
+    defp attached_probe!(ctx, port, until) do
+      walk = Sanctum.TestContext.via(ctx, :prism)
+      name = "scheduled-probe-#{System.unique_integer([:positive])}"
+
+      manifest = %{
+        "name" => name,
+        "version" => "1.0.0",
+        "type" => "catalyst",
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:upstream.test",
+            "reason" => "to call the upstream with your key",
+            "fields" => ["KEY"],
+            "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+          }
+        },
+        "caps" => %{
+          "egress" => %{
+            "domains" => ["127.0.0.1"],
+            "methods" => ["GET"],
+            "schemes" => ["http"],
+            "private_ips" => ["127.0.0.1"]
+          }
+        }
+      }
+
+      {:ok, _component} =
+        Compendium.Registry.publish_bytes(walk, File.read!(@attached_probe), %{
+          name: name,
+          version: "1.0.0",
+          type: "catalyst",
+          manifest: Jason.encode!(manifest)
+        })
+
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(walk, %{
+          name: "#{name} key",
+          kind: "api_key",
+          provider_hint: "upstream.test",
+          fields: %{"KEY" => @attached_secret},
+          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => port}
+        })
+
+      ref = "catalyst:local." <> name
+
+      decisions = %{
+        ref: ref,
+        bindings: [
+          %{
+            need: "api_key",
+            entry_id: entry.id,
+            lifetime: %{kind: "until", until: DateTime.to_iso8601(until)}
+          }
+        ],
+        origins: [:interactive, :schedule]
+      }
+
+      {:ok, plan} = Sanctum.Consent.Plan.plan(walk, %{ref: ref})
+      {:ok, preview} = Sanctum.Consent.Commit.preview(walk, decisions)
+
+      {:ok, %{profile_id: profile_id}} =
+        Sanctum.Consent.Commit.commit(walk, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+
+      {ref <> ":1.0.0", profile_id}
+    end
+
+    # What the guest of `execution_id` answered as its runner closed it.
+    defp scheduled_answer(execution_id) do
+      [%{args: %{"outcome" => %{"output" => output}}}] =
+        Cyfr.Test.TwoServices.calls(:complete, execution_id)
+
+      output
+    end
+
+    test "a scheduled attached request succeeds before expiry and is refused after it", %{
+      ctx: ctx
+    } do
+      upstream =
+        start_supervised!(
+          {Bandit, plug: {Upstream, self()}, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(upstream)
+      Cyfr.Test.TwoServices.watch!()
+
+      until = DateTime.utc_now() |> DateTime.add(8, :second) |> DateTime.truncate(:second)
+      {reference, profile_id} = attached_probe!(ctx, port, until)
+
+      input = %{
+        "connection" => "api_key",
+        "method" => "GET",
+        "url" => "http://127.0.0.1:#{port}/scheduled"
+      }
+
+      schedule =
+        due!(
+          create_schedule(ctx, %{
+            reference: reference,
+            resolved_reference: reference,
+            profile_id: profile_id,
+            input: Jason.encode!(input)
+          })
+        )
+
+      pid = scheduler!()
+
+      # Before the instant: the fire runs the probe in a runner, and CYFR
+      # attaches the key to its request.
+      wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end, 30_000)
+      assert [%{execution_id: first}] = occurrences(ctx, schedule)
+      assert %{"status" => 200, "body" => "scheduled upstream"} = scheduled_answer(first)
+      assert_receive {:upstream, sent}, 5_000
+      assert sent.path == "/scheduled" and {"x-api-key", @attached_secret} in sent.headers
+
+      wait_until(
+        fn -> DateTime.compare(DateTime.utc_now(), until) == :gt end,
+        15_000,
+        "the binding's instant to pass"
+      )
+
+      # After it: the next fire is admitted and its request refused before
+      # any upstream request.
+      _ = due!(schedule)
+      send(pid, {:fire, schedule.id})
+
+      wait_until(fn -> Enum.any?(occurrences(ctx, schedule), &(&1.state == "failed")) end, 30_000)
+      [%{execution_id: second}] = Enum.filter(occurrences(ctx, schedule), &(&1.state == "failed"))
+
+      assert %{"error" => %{"type" => "grant_expired", "message" => message}} =
+               scheduled_answer(second)
+
+      assert message == Prima.Refusal.message(:grant_expired)
+      refute_received {:upstream, _sent}
+    end
+  end
 end

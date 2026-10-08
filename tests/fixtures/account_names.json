@@ -1,0 +1,34 @@
+{
+  "comment": "The vectors pinning how account names compare: Prima.Authority.Blob.account_name_key/1 and same_account_name?/2 in the home, accountNameKey and slotKey in the CLI (apps/codex/cmd/profile.go). The rule is Unicode's full lowercase mapping, without context and in no language's tailoring, as Elixir's String.downcase/1 maps by default, on the Unicode version `unicode` names: both sides assert their tables are that version, and apps/codex/go.mod pins the Go toolchain whose tables it is. Each key is a name's folded form; two names are one account exactly when their keys are equal. The non-ASCII cases are the ones a simple per-rune mapping, a final-sigma rule or an older table would get wrong: U+0130 folds to i and a combining dot above (U+0307), U+1E9E to U+00DF, a final U+03A3 to U+03C3, never U+03C2, and U+A7CB, U+A7CC, U+10D50 and U+16EA0, added after Unicode 15.0, fold only on newer tables.",
+  "unicode": "17.0.0",
+  "keys": [
+    {"name": "Work", "key": "work"},
+    {"name": "WORK", "key": "work"},
+    {"name": "Supabase 2", "key": "supabase 2"},
+    {"name": "İstanbul", "key": "i̇stanbul"},
+    {"name": "İ", "key": "i̇"},
+    {"name": "ẞeta", "key": "ßeta"},
+    {"name": "ΟΔΟΣ", "key": "οδοσ"},
+    {"name": "Σ", "key": "σ"},
+    {"name": "Ɤ", "key": "ɤ"},
+    {"name": "Ꟍ", "key": "ꟍ"},
+    {"name": "𐵐", "key": "𐵰"},
+    {"name": "𖺠", "key": "𖺻"},
+    {"name": "Ꟍ Work", "key": "ꟍ work"}
+  ],
+  "same": [
+    ["Work", "work"],
+    ["Work", "WORK"],
+    ["Supabase 2", "SUPABASE 2"],
+    ["İstanbul", "i̇stanbul"],
+    ["ẞeta", "ßETA"],
+    ["ΟΔΟΣ", "οδοσ"],
+    ["Ꟍ Work", "ꟍ work"]
+  ],
+  "different": [
+    ["Work", "Home"],
+    ["İstanbul", "istanbul"],
+    ["ẞeta", "sseta"],
+    ["ΟΔΟΣ", "οδος"]
+  ]
+}

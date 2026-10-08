@@ -10,8 +10,10 @@ defmodule Opus.BootstrapFirstRunTest do
 
   Shipped `model/chat@1` catalysts come from the seed tree, so AQUA and
   list-models bootstrap with their whole closure present, and a
-  catalyst's need reads not-ready until a key is bound through the walk.
-  The full first run over the bundle is `Sanctum.Provisioning`'s closure
+  catalyst's need reads not-ready until a key is bound through the walk:
+  CYFR attaches a shipped catalyst's key, so an attach-only entry meets
+  it, while a need the component reads itself takes a disclosed one. The
+  full first run over the bundle is `Sanctum.Provisioning`'s closure
   test.
   """
 
@@ -59,6 +61,22 @@ defmodule Opus.BootstrapFirstRunTest do
     end
   end
 
+  # Bind `entry_id` to `ref`'s `api_key` need through the walk.
+  defp bind!(ctx, ref, entry_id) do
+    {:ok, walk_plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: entry_id}]}
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: walk_plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: walk_plan.expected_consent_revision
+      })
+  end
+
   test "the tracked bundle registers, bootstraps and loads from its caps blocks", %{ctx: ctx} do
     models = SeedBundle.model_chat_units(@seed_root)
     files = SeedBundle.local_unit!(@seed_root, "catalysts", "files")
@@ -76,6 +94,30 @@ defmodule Opus.BootstrapFirstRunTest do
     assert http.ref in minted
     assert list_models.ref in minted
     for ref <- model_refs, do: assert(ref in minted, "#{ref} not minted")
+
+    # Each model catalyst's need reads not ready until an entry is bound,
+    # and an attach-only entry, which the catalyst is never handed, meets
+    # it: CYFR attaches the key.
+    for ref <- model_refs do
+      {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
+      refute plan.ready, ref
+      assert Enum.any?(plan.consent.needs, &(&1[:need] == "api_key" and not &1.satisfied)), ref
+    end
+
+    claude = Enum.find(models, &(&1.name == "claude"))
+    [need] = Prima.Manifest.Needs.from_manifest(claude.manifest)
+
+    {:ok, attached} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "Attached Anthropic",
+        kind: "api_key",
+        provider_hint: need.qualifier,
+        fields: %{"ANTHROPIC_API_KEY" => "sk-first-run-attached"},
+        destination: %{"hosts" => need.hosts}
+      })
+
+    bind!(ctx, claude.ref, attached.id)
+    assert {:ok, %{ready: true}} = Compendium.Component.setup_plan(ctx, claude.ref)
 
     # list-models invokes the providers its manifest names, and those
     # units ship: its activation is itself plus those declared refs.
@@ -170,21 +212,15 @@ defmodule Opus.BootstrapFirstRunTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: "My Anthropic",
         kind: "api_key",
-        fields: %{"ANTHROPIC_API_KEY" => "sk-first-run"}
+        # The provider the catalyst's need names.
+        provider_hint: "anthropic.com",
+        fields: %{"ANTHROPIC_API_KEY" => "sk-first-run"},
+        # The case reads the key back, so the entry is disclosed.
+        destination: %{"hosts" => ["api.anthropic.com"]},
+        disclose: true
       })
 
-    {:ok, walk_plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: "catalyst:local.llm"})
-    decisions = %{ref: "catalyst:local.llm", bindings: [%{need: "api_key", entry_id: entry.id}]}
-    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
-
-    {:ok, _} =
-      Sanctum.Consent.Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: walk_plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: walk_plan.expected_consent_revision
-      })
+    bind!(ctx, "catalyst:local.llm", entry.id)
 
     {:ok, plan} = Compendium.Component.setup_plan(ctx, "catalyst:local.llm")
     assert plan.ready
@@ -199,7 +235,13 @@ defmodule Opus.BootstrapFirstRunTest do
     assert {:ok, auth, _} =
              Loader.load_root(ctx, profile, live: {:ok, live})
 
-    assert {:ok, secrets} = Sanctum.VaultReader.fetch(ctx, auth.resources.vault)
+    use = %{
+      root_execution_id: "exec_first_run",
+      profile_id: auth.profile_id,
+      consent_id: auth.consent_id
+    }
+
+    assert {:ok, secrets} = Sanctum.VaultReader.fetch(ctx, auth.resources.vault, use)
     assert secrets == %{"ANTHROPIC_API_KEY" => "sk-first-run"}
   end
 end

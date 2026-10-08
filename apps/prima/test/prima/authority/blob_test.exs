@@ -3,9 +3,12 @@
 defmodule Prima.Authority.BlobTest do
   use ExUnit.Case, async: true
 
+  alias Prima.Authority
   alias Prima.Authority.Blob
   alias Prima.Authority.Blob.Edge
+  alias Prima.Destination
   alias Prima.Limits
+  alias Prima.Test.AuthorityFixtures, as: Fixtures
 
   @formula "formula:local.daily-report"
   @catalyst "catalyst:supabase.com.database"
@@ -35,11 +38,11 @@ defmodule Prima.Authority.BlobTest do
           "edges" => %{
             "@ingress" => %{},
             "#{@catalyst}|source" => %{
-              "vault" => %{
-                "entry_id" => "vault-1",
-                "binding_digest" => "sha256:aaa",
-                "projection" => %{"fields" => ["url", "anon_key"]}
-              },
+              "vault" =>
+                Fixtures.bound_vault(@formula, "#{@catalyst}|source", "vault-1", "sha256:aaa",
+                  attach: Fixtures.attach_map(),
+                  projection: %{"fields" => ["url", "anon_key"]}
+                ),
               "egress" => %{
                 "domains" => ["prod.supabase.co"],
                 "methods" => ["GET", "POST"],
@@ -57,11 +60,10 @@ defmodule Prima.Authority.BlobTest do
               ]
             },
             "#{@catalyst}|dest" => %{
-              "vault" => %{
-                "entry_id" => "vault-2",
-                "binding_digest" => "sha256:bbb",
-                "projection" => %{"fields" => ["url", "service_key"]}
-              }
+              "vault" =>
+                Fixtures.bound_vault(@formula, "#{@catalyst}|dest", "vault-2", "sha256:bbb",
+                  projection: %{"fields" => ["url", "service_key"]}
+                )
             }
           }
         },
@@ -105,6 +107,11 @@ defmodule Prima.Authority.BlobTest do
                vault: %{
                  entry_id: "vault-1",
                  binding_digest: "sha256:aaa",
+                 scope: "athanor",
+                 binding_key:
+                   "formula:local.daily-report|catalyst:supabase.com.database|source|default",
+                 destination: %Destination{hosts: ["prod.supabase.co"], scheme: "https"},
+                 attach: %{in: "header", name: "Authorization", template: "Bearer {value}"},
                  projection: %{fields: ["url", "anon_key"], scopes: []}
                },
                egress: %{domains: ["prod.supabase.co"], methods: ["GET", "POST"]},
@@ -122,6 +129,8 @@ defmodule Prima.Authority.BlobTest do
 
       {:ok, dest} = Blob.lookup_edge(blob, @formula, @catalyst, "dest")
       assert dest.vault.entry_id == "vault-2"
+      # A disclose-only need's binding attaches nothing.
+      assert dest.vault.attach == nil
       assert dest.egress == nil
       assert dest.tools == []
     end
@@ -147,12 +156,26 @@ defmodule Prima.Authority.BlobTest do
         golden()
         |> put_in(
           ["nodes", @formula, "edges", "#{@catalyst}|dest", "vault"],
-          %{
-            "entry_id" => "vault-1",
-            "binding_digest" => "sha256:other",
-            "projection" => %{"fields" => ["url"]}
-          }
+          Fixtures.bound_vault(@formula, "#{@catalyst}|dest", "vault-1", "sha256:other",
+            projection: %{"fields" => ["url"]}
+          )
         )
+        |> parse!()
+
+      assert Blob.entry_digest_conflicts(conflicted) == ["vault-1"]
+    end
+
+    test "a named binding's entry counts as the default's does" do
+      named =
+        Fixtures.bound_vault(@formula, "#{@catalyst}|dest", "vault-1", "sha256:other",
+          name: "Second"
+        )
+
+      conflicted =
+        golden()
+        |> put_in(["nodes", @formula, "edges", "#{@catalyst}|dest", "vault", "named"], %{
+          "Second" => named
+        })
         |> parse!()
 
       assert Blob.entry_digest_conflicts(conflicted) == ["vault-1"]
@@ -238,6 +261,13 @@ defmodule Prima.Authority.BlobTest do
 
       assert {:error, {:unsupported_canonical, nil}} =
                golden() |> Map.delete("canonical") |> Blob.parse()
+    end
+
+    test "a key that is no string is unknown, at the top and on a node" do
+      assert {:error, {:unknown_field, _}} = golden() |> Map.put(nil, 1) |> Blob.parse()
+
+      assert {:error, {:unknown_field, "nodes[" <> _}} =
+               golden() |> put_in(["nodes", @catalyst, nil], 1) |> Blob.parse()
     end
 
     test "unknown fields at every level" do
@@ -349,6 +379,387 @@ defmodule Prima.Authority.BlobTest do
                  %{"tool_patterns" => ["a.*"]}
                ])
                |> Blob.parse()
+    end
+  end
+
+  # ============================================================================
+  # Bindings: scope, destination, attach, named, selected, provided
+  # ============================================================================
+
+  @golden_path Path.expand(
+                 "../../support/fixtures/authority/resolved_policy_golden.json",
+                 __DIR__
+               )
+
+  @dest_key "#{@catalyst}|dest"
+
+  defp vault_path(edge_key), do: ["nodes", @formula, "edges", edge_key, "vault"]
+
+  defp with_vault(edge_key, vault), do: put_in(golden(), vault_path(edge_key), vault)
+
+  defp named(name, entry_id \\ "vault-named", opts \\ []) do
+    Fixtures.bound_vault(@formula, @dest_key, entry_id, "sha256:named", [name: name] ++ opts)
+  end
+
+  defp dest_vault(opts \\ []),
+    do: Fixtures.bound_vault(@formula, @dest_key, "vault-2", "sha256:bbb", opts)
+
+  defp refused?(map), do: match?({:error, {:invalid_resource, _, _, :vault, _}}, Blob.parse(map))
+
+  describe "bindings" do
+    test "a vault key that is no string is refused" do
+      refute refused?(with_vault(@dest_key, dest_vault()))
+      assert refused?(with_vault(@dest_key, Map.put(dest_vault(), nil, 1)))
+    end
+
+    test "the golden blob holds a bound, a named, a resolved and a provided edge, and round-trips" do
+      blob = @golden_path |> File.read!() |> Blob.parse() |> elem(1)
+
+      {:ok, source} = Blob.lookup_edge(blob, @formula, @catalyst, "source")
+      assert source.vault.scope == "athanor"
+      assert source.vault.attach == %{in: "header", name: "apikey", template: "{value}"}
+      assert source.vault.destination.paths == ["/rest/v1"]
+
+      {:ok, dest} = Blob.lookup_edge(blob, @formula, @catalyst, "dest")
+      assert dest.vault.attach == nil
+
+      assert %{"Archive" => %{scope: "instance", entry_id: "vault-entry-archive"}} =
+               dest.vault.named
+
+      {:ok, lent} = Blob.lookup_edge(blob, @formula, @catalyst, "lent")
+
+      assert lent.vault.lender == %{
+               profile_id: "prof-supabase",
+               consent_id: "consent-supabase-3",
+               binding_key: "#{@catalyst}|@ingress|default"
+             }
+
+      assert lent.vault.binding_key == "#{@formula}|#{@catalyst}|lent|default"
+
+      {:ok, public} = Blob.lookup_edge(blob, @formula, @catalyst, "public")
+
+      assert %{provided: %{values: %{"anon_key" => "public-anon-key"}, attach: %{}}} =
+               public.vault
+
+      assert Blob.bound_vault?(public.vault)
+
+      assert Blob.parse(Blob.to_map(blob)) == {:ok, blob}
+
+      # Both identities of the resolved selection cross the wire and back.
+      {:ok, root} =
+        Authority.root(
+          %{
+            profile_id: "prof-daily-report",
+            consent_id: "consent-rev-2",
+            source_ref: @formula,
+            kind: :owner,
+            invoke_mode: :open_inert,
+            activation: %{}
+          },
+          blob,
+          ceiling: Fixtures.ceiling()
+        )
+
+      child = Authority.bound_child(root, @catalyst, lent)
+
+      assert {:ok, back} =
+               child
+               |> Authority.to_wire()
+               |> Jason.encode!()
+               |> Jason.decode!()
+               |> Authority.from_wire()
+
+      assert back.resources.vault == lent.vault
+      assert back.policy == root.policy
+    end
+
+    test "a disclose-only binding writes no rule and reads an absent or a null one as none" do
+      blob = parse!(golden())
+      {:ok, dest} = Blob.lookup_edge(blob, @formula, @catalyst, "dest")
+      refute Map.has_key?(Blob.vault_to_map(dest.vault), "attach")
+      assert {:ok, _canonical} = Prima.JCS.encode(Blob.to_map(blob))
+
+      nulled = with_vault(@dest_key, Map.put(dest_vault(), "attach", nil))
+      assert {:ok, blob} = Blob.parse(nulled)
+      assert {:ok, %{vault: %{attach: nil}}} = Blob.lookup_edge(blob, @formula, @catalyst, "dest")
+    end
+
+    test "a bound vault names its scope, destination and binding key" do
+      for field <- ["scope", "binding_key", "destination"] do
+        assert refused?(with_vault(@dest_key, Map.delete(dest_vault(), field))), field
+      end
+
+      assert refused?(with_vault(@dest_key, dest_vault(scope: "athanors")))
+      assert refused?(with_vault(@dest_key, dest_vault(destination: %{"hosts" => ["*"]})))
+      assert refused?(with_vault(@dest_key, dest_vault(destination: %{"hosts" => []})))
+
+      assert refused?(
+               with_vault(
+                 @dest_key,
+                 dest_vault(attach: %{"in" => "body", "name" => "k", "template" => "{value}"})
+               )
+             )
+
+      assert refused?(
+               with_vault(
+                 @dest_key,
+                 dest_vault(attach: %{"in" => "header", "name" => "k", "template" => "none"})
+               )
+             )
+    end
+
+    test "a binding key names the node and edge it sits on and its own slot" do
+      elsewhere = %{
+        dest_vault()
+        | "binding_key" => Blob.binding_key(@formula, "#{@catalyst}|source", nil)
+      }
+
+      assert refused?(with_vault(@dest_key, elsewhere))
+
+      other_node = %{dest_vault() | "binding_key" => Blob.binding_key(@catalyst, @dest_key, nil)}
+      assert refused?(with_vault(@dest_key, other_node))
+
+      # `name:` on the unnamed binding, and `default` on a named one.
+      assert refused?(with_vault(@dest_key, dest_vault(name: "Archive")))
+
+      default_slot = %{
+        named("Archive")
+        | "binding_key" => Blob.binding_key(@formula, @dest_key, nil)
+      }
+
+      assert refused?(with_vault(@dest_key, dest_vault(named: %{"Archive" => default_slot})))
+
+      other_name = %{
+        named("Archive")
+        | "binding_key" => Blob.binding_key(@formula, @dest_key, "Other")
+      }
+
+      assert refused?(with_vault(@dest_key, dest_vault(named: %{"Archive" => other_name})))
+
+      # An account named "default" is a named slot, never the unnamed one.
+      assert {:ok, blob} =
+               Blob.parse(
+                 with_vault(@dest_key, dest_vault(named: %{"default" => named("default")}))
+               )
+
+      {:ok, edge} = Blob.lookup_edge(blob, @formula, @catalyst, "dest")
+      assert edge.vault.named["default"].binding_key == "#{@formula}|#{@dest_key}|name:default"
+      assert edge.vault.binding_key == "#{@formula}|#{@dest_key}|default"
+    end
+
+    test "named bindings: none on a selection, no empty, repeated or reserved name, no nesting" do
+      via = %{"via" => %{"label" => "default"}, "named" => %{"A" => named("A")}}
+      assert refused?(with_vault(@dest_key, via))
+
+      assert refused?(with_vault(@dest_key, dest_vault(named: %{})))
+      assert refused?(with_vault(@dest_key, dest_vault(named: %{"" => named("")})))
+      assert refused?(with_vault(@dest_key, dest_vault(named: %{"a|b" => named("a|b")})))
+
+      # Two names a person reads as one are one name repeated.
+      repeated = %{
+        "Supabase" => named("Supabase"),
+        "supabase" => named("supabase", "vault-other")
+      }
+
+      assert refused?(with_vault(@dest_key, dest_vault(named: repeated)))
+
+      nested = Map.put(named("A"), "named", %{"B" => named("B")})
+      assert refused?(with_vault(@dest_key, dest_vault(named: %{"A" => nested})))
+
+      lent =
+        Map.put(named("A"), "lender", %{
+          "profile_id" => "p",
+          "consent_id" => "c",
+          "binding_key" => "#{@catalyst}|@ingress|default"
+        })
+
+      assert refused?(with_vault(@dest_key, dest_vault(named: %{"A" => lent})))
+    end
+
+    test "a lender names its profile, consent and binding key" do
+      lender = %{
+        "profile_id" => "p",
+        "consent_id" => "c",
+        "binding_key" => "#{@catalyst}|@ingress|default"
+      }
+
+      assert {:ok, _blob} = Blob.parse(with_vault(@dest_key, dest_vault(lender: lender)))
+
+      for field <- Map.keys(lender) do
+        assert refused?(with_vault(@dest_key, dest_vault(lender: Map.delete(lender, field)))),
+               field
+      end
+
+      assert refused?(
+               with_vault(@dest_key, dest_vault(lender: %{lender | "binding_key" => "not a key"}))
+             )
+    end
+
+    test "provided configuration names its destination, values and attach rule" do
+      provided = %{
+        "destination" => Fixtures.destination_map(),
+        "values" => %{"anon_key" => "public"},
+        "attach" => Fixtures.attach_map()
+      }
+
+      assert {:ok, blob} = Blob.parse(with_vault(@dest_key, %{"provided" => provided}))
+      {:ok, edge} = Blob.lookup_edge(blob, @formula, @catalyst, "dest")
+      assert %{provided: %{values: %{"anon_key" => "public"}}} = edge.vault
+      assert Blob.edge_to_map(edge)["vault"] == %{"provided" => provided}
+
+      assert refused?(with_vault(@dest_key, %{"provided" => Map.delete(provided, "attach")}))
+      assert refused?(with_vault(@dest_key, %{"provided" => Map.put(provided, "attach", nil)}))
+      assert refused?(with_vault(@dest_key, %{"provided" => Map.delete(provided, "values")}))
+
+      too_large = %{provided | "values" => %{"k" => String.duplicate("v", 4096)}}
+      assert refused?(with_vault(@dest_key, %{"provided" => too_large}))
+
+      assert refused?(
+               with_vault(@dest_key, %{"provided" => provided, "named" => %{"A" => named("A")}})
+             )
+    end
+
+    test "bound_vault? is true for an entry and for provided configuration" do
+      blob = @golden_path |> File.read!() |> Blob.parse() |> elem(1)
+
+      for need <- ["source", "dest", "lent", "public"] do
+        {:ok, edge} = Blob.lookup_edge(blob, @formula, @catalyst, need)
+        assert Blob.bound_vault?(edge.vault), need
+      end
+
+      refute Blob.bound_vault?(%{via: %{label: "x", binding_digest: nil}, projection: nil})
+      refute Blob.bound_vault?(nil)
+    end
+  end
+
+  describe "vault_for/2" do
+    setup do
+      blob = @golden_path |> File.read!() |> Blob.parse() |> elem(1)
+      {:ok, dest} = Blob.lookup_edge(blob, @formula, @catalyst, "dest")
+      {:ok, public} = Blob.lookup_edge(blob, @formula, @catalyst, "public")
+      %{dest: dest, public: public}
+    end
+
+    test "picks the default without its named bindings, or the named account", %{dest: dest} do
+      assert {:ok, default} = Blob.vault_for(dest, nil)
+      assert default == Map.delete(dest.vault, :named)
+      assert default.entry_id == "vault-entry-warehouse"
+
+      assert {:ok, archive} = Blob.vault_for(dest, "Archive")
+      assert archive == dest.vault.named["Archive"]
+    end
+
+    test "a name in another case is the same account: its binding, under its stored key", %{
+      dest: dest
+    } do
+      for spelled <- ["archive", "ARCHIVE", "aRcHiVe"] do
+        assert {:ok, archive} = Blob.vault_for(dest, spelled)
+        assert archive == dest.vault.named["Archive"]
+        assert {:ok, {_node, _edge, "Archive"}} = Blob.parse_binding_key(archive.binding_key)
+      end
+    end
+
+    test "a name the edge does not bind is connection_not_granted", %{dest: dest, public: public} do
+      assert Blob.vault_for(dest, "Archives") == {:error, :connection_not_granted}
+      assert Blob.vault_for(dest, "default") == {:error, :connection_not_granted}
+      assert Blob.vault_for(public, "Archive") == {:error, :connection_not_granted}
+      assert Blob.vault_for(%Edge{}, "Archive") == {:error, :connection_not_granted}
+      assert Blob.vault_for(nil, "Archive") == {:error, :connection_not_granted}
+      assert Blob.vault_for(nil, nil) == {:ok, nil}
+      assert Blob.vault_for(%Edge{}, nil) == {:ok, nil}
+    end
+  end
+
+  describe "account names" do
+    @account_names Path.expand("../../../../../tests/fixtures/account_names.json", __DIR__)
+
+    # The rule the command line folds by too (`apps/codex/cmd/profile_test.go`
+    # reads the same vector), on the Unicode tables the vector names.
+    test "fold to the shared vector's keys, and are one account exactly when the keys are" do
+      %{"unicode" => unicode, "keys" => keys, "same" => same, "different" => different} =
+        @account_names |> File.read!() |> Jason.decode!()
+
+      assert keys != [] and same != [] and different != []
+
+      assert String.Unicode.version() |> Tuple.to_list() |> Enum.join(".") == unicode,
+             "the home folds on Unicode #{inspect(String.Unicode.version())}, " <>
+               "the vector on #{unicode}"
+
+      for %{"name" => name, "key" => key} <- keys do
+        assert Blob.account_name_key(name) == key,
+               "#{inspect(name)} folds to #{inspect(Blob.account_name_key(name))}, not #{inspect(key)}"
+      end
+
+      for [a, b] <- same, do: assert(Blob.same_account_name?(a, b), "#{a} and #{b} are one")
+      for [a, b] <- different, do: refute(Blob.same_account_name?(a, b), "#{a} and #{b} are two")
+    end
+
+    test "a blob naming one account twice, in two cases, is refused" do
+      named = %{
+        "Work" => Fixtures.bound_vault(@formula, "@ingress", "vault-2", "sha256:b", name: "Work"),
+        "WORK" => Fixtures.bound_vault(@formula, "@ingress", "vault-3", "sha256:c", name: "WORK")
+      }
+
+      assert {:error, _reason} =
+               Blob.parse(%{
+                 "canonical" => "jcs-1",
+                 "nodes" => %{
+                   @formula => %{
+                     "limits" => limits_map(),
+                     "edges" => %{
+                       "@ingress" => %{
+                         "vault" =>
+                           Fixtures.bound_vault(@formula, "@ingress", "vault-1", "sha256:a",
+                             named: named
+                           )
+                       }
+                     }
+                   }
+                 }
+               })
+    end
+  end
+
+  describe "binding keys" do
+    test "spell the node, the edge key and the slot, and parse back" do
+      for {node, edge, slot} <- [
+            {@formula, "@ingress", nil},
+            {@formula, @catalyst, nil},
+            {@formula, @dest_key, "Supabase 1"},
+            {@formula, @dest_key, "default"}
+          ] do
+        key = Blob.binding_key(node, edge, slot)
+        assert Blob.parse_binding_key(key) == {:ok, {node, edge, slot}}, key
+      end
+
+      assert Blob.binding_key(@formula, "@ingress", nil) == "#{@formula}|@ingress|default"
+    end
+
+    test "outside the grammar are refused" do
+      for bad <- [
+            "",
+            @formula,
+            "#{@formula}|@ingress",
+            "#{@formula}|@ingress|",
+            "#{@formula}|@ingress|named",
+            "#{@formula}|@ingress|name:",
+            "#{@formula}|@bogus|default",
+            "#{@formula}||default",
+            "#{@formula}:1.0.0|@ingress|default",
+            "not a ref|@ingress|default",
+            nil
+          ] do
+        assert Blob.parse_binding_key(bad) == :error, inspect(bad)
+      end
+    end
+
+    test "an edge read alone holds its key to the grammar, not to a place" do
+      picked = Map.put(named("Archive"), "attach", Fixtures.attach_map())
+      assert {:ok, %Edge{vault: %{binding_key: key}}} = Blob.parse_edge(%{"vault" => picked})
+      assert key == "#{@formula}|#{@dest_key}|name:Archive"
+
+      assert {:error, {:invalid_resource, _, _, :vault, _}} =
+               Blob.parse_edge(%{"vault" => %{picked | "binding_key" => "nonsense"}})
     end
   end
 

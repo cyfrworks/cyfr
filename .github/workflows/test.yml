@@ -288,7 +288,16 @@ jobs:
           bash tests/test-partitioned-test.sh
           elixir tests/test-partition-env-test.exs
           bash tests/heavy-check-test.sh
+      # The partitions test the build the forced compile above made, on
+      # either adapter. The runner's own PostgreSQL build, _build/test_pg,
+      # is the one the cache holds, made by whichever run first saved it,
+      # and compiled incrementally over it a module this tree did not
+      # change keeps the types it inferred from what it called back then:
+      # the test files would be type-checked against signatures the tree
+      # no longer has.
       - name: Run tests
+        env:
+          MIX_BUILD_PATH: _build/test
         run: scripts/test-partitioned.sh -a "${{ matrix.db }}" -- --warnings-as-errors
 
   cluster:
@@ -349,8 +358,10 @@ jobs:
             server /data
       - name: Install dependencies
         run: mix deps.get
+      # Forced, as the test job's is: the cache keeps _build across
+      # commits, and incremental state can keep what the tree no longer has.
       - name: Compile with warnings as errors
-        run: mix compile --warnings-as-errors
+        run: mix compile --force --warnings-as-errors
       - name: Wait for MinIO
         run: |
           for i in $(seq 1 30); do
@@ -364,7 +375,15 @@ jobs:
       # members find a schema rather than migrating under each other.
       # --only cluster fails the job if it matches nothing, which is what
       # stops a suite that silently stopped running.
+      # The suite tests the build the forced compile above made. The
+      # runner's own PostgreSQL build, _build/test_pg, is the one the cache
+      # holds, made by whichever run first saved it, and compiled
+      # incrementally over it a module this tree did not change keeps the
+      # types it inferred from what it called back then: the test files
+      # would be type-checked against signatures the tree no longer has.
       - name: Run the two-node suite
+        env:
+          MIX_BUILD_PATH: _build/test
         run: scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors --only cluster apps/cyfr/test/cluster
       - name: MinIO logs
         if: failure()
@@ -774,6 +793,16 @@ jobs:
       # homes, groups, memory and CPU show it.
       - name: Runner kills, memory bound, settlement and cleanup
         run: python3 tests/worker-image/runners.py cyfr-opus:smoke
+      # The credential canary (tests/worker-image/canary.py): a hostile
+      # catalyst names its connection on a request to an upstream that
+      # reflects it, and the scripted control plane attaches a canary value;
+      # with the attempt's close held, the runner's and the service's process
+      # memory, the runner's home, the container's log, the exit report, the
+      # attach answer, the event and the output hold no trace of it while
+      # the upstream's log does. A positive control plants another canary in
+      # a disclosed field and the same dump finds it.
+      - name: The credential canary
+        run: python3 tests/worker-image/canary.py cyfr-opus:smoke
 
       # The same scan docker.yml runs before publishing the worker image.
       - name: Scan the image
@@ -967,11 +996,11 @@ jobs:
   # Chromium's virtual authenticator, so its passkey steps run in Chromium
   # alone.
   browser:
-    name: Browser harness (frame facts, the SDK, the multi-home smoke, and the tincture, containment, pairing, identity, join, grant and canvas proofs on Chromium, Firefox and WebKit)
+    name: Browser harness (Chromium, Firefox and WebKit; instance-entry, approval and file-offer proofs on Chromium)
     runs-on: ubuntu-latest
-    # One serial job of ten proofs in three browsers after an image build
-    # and a release build: about an hour on p1's sixteen cores, so a
-    # hang is cut here before the runner's six-hour limit.
+    # Serial browser checks share one release build. The instance-entry,
+    # approval and file-offer proofs run in Chromium at both viewports.
+    # A hang is cut here before the runner's six-hour limit.
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -1041,6 +1070,30 @@ jobs:
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
         run: tests/grant-proof/run.sh
+      - name: The instance-entry proof (Chromium, desktop and 720x720)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: |
+          set -euo pipefail
+          for viewport in desktop 720x720; do
+            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/vault-proofs/instance-entry/$viewport" tests/instance-entry-proof/run.sh
+          done
+      - name: The approval proof (Chromium, desktop and 720x720)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: |
+          set -euo pipefail
+          for viewport in desktop 720x720; do
+            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/vault-proofs/approval/$viewport" tests/approval-proof/run.sh
+          done
+      - name: The file-offer proof (Chromium, desktop and 720x720)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: |
+          set -euo pipefail
+          for viewport in desktop 720x720; do
+            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/vault-proofs/file-offer/$viewport" tests/file-offer-proof/run.sh
+          done
       - name: The canvas proof
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'

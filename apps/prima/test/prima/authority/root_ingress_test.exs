@@ -21,11 +21,11 @@ defmodule Prima.Authority.RootIngressTest do
             "limits" => Fixtures.limits_map(%{"timeout" => "30s"}),
             "edges" => %{
               "@ingress" => %{
-                "vault" => %{
-                  "entry_id" => "vault-direct",
-                  "binding_digest" => "sha256:bind",
-                  "projection" => %{"fields" => ["url", "anon_key"]}
-                },
+                "vault" =>
+                  Fixtures.bound_vault(@catalyst, "@ingress", "vault-direct", "sha256:bind",
+                    attach: Fixtures.attach_map(),
+                    projection: %{"fields" => ["url", "anon_key"]}
+                  ),
                 "egress" => %{"domains" => ["prod.supabase.co"]},
                 "tools" => ["storage.read"]
               }
@@ -52,6 +52,7 @@ defmodule Prima.Authority.RootIngressTest do
     assert auth.cursor == {:bound, @catalyst}
     assert auth.resources == ingress_edge
     assert auth.resources.vault.entry_id == "vault-direct"
+    assert auth.resources.vault.binding_key == "#{@catalyst}|@ingress|default"
     assert auth.resources.egress.domains == ["prod.supabase.co"]
     assert Authority.limits(auth).timeout == "30s"
 

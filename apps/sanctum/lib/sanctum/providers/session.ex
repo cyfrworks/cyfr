@@ -128,7 +128,8 @@ defmodule Sanctum.Providers.Session do
        email: derive_email(ctx),
        provider: derive_provider(ctx),
        athanor_id: ctx.athanor_id,
-       platform_admin: ctx.platform_admin
+       platform_admin: ctx.platform_admin,
+       session_expires_at: session_expires_at(ctx)
      }}
   end
 
@@ -374,6 +375,19 @@ defmodule Sanctum.Providers.Session do
     do: provider
 
   defp derive_provider(_), do: nil
+
+  # When the caller's session ends unless activity extends it, RFC 3339:
+  # what a consent's "this session" lifetime is held to. A caller whose
+  # credential is no session (an API key) has none, and neither does one
+  # whose session row cannot be read now.
+  defp session_expires_at(%Context{session_token_hash: hash}) when is_binary(hash) do
+    case Sanctum.Session.expires_at_by_hash(hash) do
+      {:ok, %DateTime{} = at} -> DateTime.to_iso8601(at)
+      {:error, _unread} -> nil
+    end
+  end
+
+  defp session_expires_at(_ctx), do: nil
 
   # ============================================================================
   # Auth-provider-gated helpers (shared across session handlers)

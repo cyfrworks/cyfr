@@ -104,7 +104,12 @@ defmodule Aqua.Loop.CloneTest do
       Sanctum.TestContext.create_vault(ctx, %{
         name: Keyword.fetch!(opts, :name),
         kind: "api_key",
-        fields: %{"ANTHROPIC_API_KEY" => Keyword.fetch!(opts, :key)}
+        # The provider the model's need names.
+        provider_hint: "anthropic.com",
+        fields: %{"ANTHROPIC_API_KEY" => Keyword.fetch!(opts, :key)},
+        # The run reads the key itself, so the entry is disclosed.
+        destination: %{"hosts" => ["api.anthropic.com"]},
+        disclose: true
       })
 
     label = Keyword.get(opts, :label, "default")
@@ -442,6 +447,136 @@ defmodule Aqua.Loop.CloneTest do
     assert {:ok, %{content: content}} = Tape.message(ctx, refused.result_message_id)
     assert content =~ "consent"
     assert [%{agent: "web"}] = clones_of(turn)
+  end
+
+  # The pinned consent is loaded again at each clone. A consent the store
+  # could not answer, or one stored damaged, is said as such; only a
+  # consent that no longer stands is a moved one. Each answer is the text
+  # the clone step records.
+  @tag :capture_log
+  test "a clone whose pinned consent cannot be read, or is damaged, says so; a moved one does not",
+       %{ctx: ctx} do
+    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
+    profile = soul.profile_id
+    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile)
+    clone = fn -> clone_planner(ctx, soul) end
+
+    :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile, scope: "sideways")
+
+    assert clone.() ==
+             {:error,
+              "This app's consent is damaged and cannot be used — " <>
+                "revoke profile #{profile} and grant it again."}
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile,
+        scope: Atom.to_string(head.scope)
+      )
+
+    Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+    assert clone.() == {:error, "This app's consent cannot be read right now — try again."}
+    Arca.Repo.query!("ALTER TABLE consents_unavailable RENAME TO consents")
+
+    # The admission's own outage, before the consent is read.
+    Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+    assert clone.() == {:error, "Consent profiles is unavailable — retry shortly"}
+    Arca.Repo.query!("ALTER TABLE profiles_unavailable RENAME TO profiles")
+
+    # Another revision at the head: the pinned consent moved.
+    _moved = Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile, head.admitted_origins)
+    assert clone.() == {:error, "the soul's consent is no longer in force"}
+  end
+
+  # The pinned head whose stored bytes no longer match their digest is a
+  # damaged head, as admission names it, never a consent that moved: a
+  # fresh grant is what repairs it, and the clone says so.
+  @tag :capture_log
+  test "a clone whose pinned head fails its digest says the consent is damaged, never that " <>
+         "it moved",
+       %{ctx: ctx} do
+    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
+    profile = soul.profile_id
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile,
+        blob_digest: "sha256:" <> String.duplicate("0", 64)
+      )
+
+    assert {:error, {:head_corrupt, ^profile}} =
+             Crucible.authority_for(ctx, {:id, profile}, @soul)
+
+    assert clone_planner(ctx, soul) ==
+             {:error,
+              "This app's consent is damaged and cannot be used — " <>
+                "revoke profile #{profile} and grant it again."}
+  end
+
+  # The pinned profile's own row, stored outside the closed vocabulary, is
+  # damage the admission names, never a consent that moved.
+  test "a clone whose pinned profile row is damaged says so, never that the consent moved",
+       %{ctx: ctx} do
+    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(p in Arca.Schemas.Profile,
+          where: p.athanor_id == ^ctx.athanor_id and p.id == ^soul.profile_id
+        ),
+        set: [kind: "sideways"]
+      )
+
+    assert clone_planner(ctx, soul) ==
+             {:error, "The stored profile is damaged and cannot be used."}
+  end
+
+  # A component graph stored damaged is damage the admission names, never
+  # a consent that moved. The clone's mapping is read on its own, with the
+  # reason as its literal, so it holds whichever lands first of it and the
+  # admission that answers it.
+  @damaged_graph {:corrupt, {:component_graph, "reagent:local.x:1.0.0"}}
+
+  test "a component graph stored damaged is damage, not a consent that no longer stands" do
+    assert Clone.unanswered_or_damaged?(@damaged_graph)
+  end
+
+  test "a clone whose component graph is stored damaged answers that refusal, never a moved consent" do
+    assert Clone.intact_answer({:error, @damaged_graph}, "cons_pinned") ==
+             {:error, @damaged_graph}
+  end
+
+  # A pinned profile revoked since the turn began is what admission answers
+  # for a selection by its id (`{:profile_unavailable, :revoked}`): the
+  # consent no longer stands, which no outage or damage is.
+  test "a refusal that means the pinned consent no longer stands still answers consent_moved" do
+    refute Clone.unanswered_or_damaged?({:profile_unavailable, :revoked})
+
+    assert Clone.intact_answer({:error, {:profile_unavailable, :revoked}}, "cons_pinned") ==
+             {:error, :consent_moved}
+
+    assert Clone.intact_answer({:ok, %Prima.Authority{consent_id: "cons_other"}}, "cons_pinned") ==
+             {:error, :consent_moved}
+
+    assert Clone.intact_answer({:ok, %Prima.Authority{consent_id: "cons_pinned"}}, "cons_pinned") ==
+             :ok
+  end
+
+  # A clone into the planner from a soul turn under `soul`'s authority, as
+  # the clone step records its answer.
+  defp clone_planner(ctx, soul) do
+    parent = %Aqua.Loop.State{
+      spec: %Aqua.Loop.Turn{
+        ctx: ctx,
+        authority: soul,
+        roster: [%{"name" => "planner", "type" => Compendium.agent_role_type()}]
+      }
+    }
+
+    Clone.run(parent, %{id: "step_clone"}, %Aqua.Loop.Binding.Call{
+      kind: :clone,
+      tool: "planner",
+      target: "planner",
+      args: %{"task" => "plan"}
+    })
   end
 
   test "a member's own role, consented through the soul's walk, clones under the soul's consent",

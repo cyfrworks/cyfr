@@ -28,6 +28,29 @@ defmodule Sanctum.Providers.Profile do
     # Dispatch applies the coarse consent class; the domain applies
     # the exact one (commit's digest-pinned key-capability arm lives
     # in Sanctum.Consent.Commit and stays there).
+    lifetime_arg =
+      Arg.new(
+        "lifetime",
+        {:record,
+         [
+           Arg.new("kind", :string,
+             required: true,
+             enum: ["standing", "until", "once"],
+             description: "standing until revoked, until a time, or once (one root run)"
+           ),
+           Arg.new("until", :string,
+             description:
+               "until only: an RFC 3339 instant in UTC, after now and at most 24 hours away"
+           )
+         ]},
+        description: "How long the binding lives; standing when absent"
+      )
+
+    renew_arg =
+      Arg.new("renew", :boolean,
+        description: "true makes a consumed once binding consumable again; false by default"
+      )
+
     bindings_arg =
       Arg.new(
         "bindings",
@@ -37,13 +60,29 @@ defmodule Sanctum.Providers.Profile do
            {:record,
             [
               Arg.new("need", :string),
-              Arg.new("entry_id", :string, required: true),
+              Arg.new("entry_id", :string,
+                description:
+                  "An entry of the athanor (vlt_…); exactly one of entry_id and instance_entry_id"
+              ),
+              Arg.new("instance_entry_id", :string,
+                description:
+                  "An instance entry offered to you (ine_…); exactly one of entry_id and " <>
+                    "instance_entry_id"
+              ),
+              Arg.new("name", :string,
+                description:
+                  "The account name of a named binding beside the need's default; absent " <>
+                    "for the default"
+              ),
+              lifetime_arg,
+              renew_arg,
               Arg.new("fields", {:array, Arg.new(nil, :string)}),
               Arg.new("scopes", {:array, Arg.new(nil, :string)})
             ]}
          )},
         description:
-          "grant only: the credentials to bind, [{need:'@ingress', entry_id, fields, scopes}]"
+          "The credentials to bind, one need's: [{need:'@ingress', entry_id | " <>
+            "instance_entry_id, name, lifetime, renew, fields, scopes}]"
       )
 
     decisions_arg =
@@ -65,9 +104,31 @@ defmodule Sanctum.Providers.Profile do
                 {:record,
                  [
                    Arg.new("dep", :string, required: true),
-                   Arg.new("label", :string),
+                   Arg.new("label", :string,
+                     description:
+                       "The dependency's profile that lends its key; at most one of label, " <>
+                         "entry_id and instance_entry_id, label 'default' when none"
+                   ),
+                   Arg.new("entry_id", :string,
+                     description: "An entry of the athanor bound on the dependency's edge"
+                   ),
+                   Arg.new("instance_entry_id", :string,
+                     description: "An instance entry offered to you, bound on the edge"
+                   ),
+                   Arg.new("need", :string,
+                     description:
+                       "The dependency's credential need the entry is for; required when it " <>
+                         "declares several, never with a label"
+                   ),
+                   Arg.new("name", :string,
+                     description:
+                       "The account name of a named selection beside the edge's default " <>
+                         "entry; it names an entry, never a label; absent for the default"
+                   ),
                    Arg.new("from", :string),
-                   Arg.new("fields", {:array, Arg.new(nil, :string)})
+                   Arg.new("fields", {:array, Arg.new(nil, :string)}),
+                   lifetime_arg,
+                   renew_arg
                  ]}
               )}
            ),
@@ -98,7 +159,9 @@ defmodule Sanctum.Providers.Profile do
          ]},
         required: true,
         description:
-          "The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id, fields, scopes}], override"
+          "The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', " <>
+            "entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}], selections, " <>
+            "override"
       )
 
     Operation.tool(
@@ -238,7 +301,7 @@ defmodule Sanctum.Providers.Profile do
         )
       ],
       description:
-        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates, preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; grants reads which grants reach a resource. Nothing is granted outside this walk.",
+        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates: each need, and each need of a dependency, answers its candidates (own or instance entries of its kind and provider), the one it has suggested, whether a choice_required, and its source (own, instance, or provided by the app); preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; list answers each profile's head_state — present, missing, damaged, or unavailable when the store could not answer — beside head_revision, which is set only when the head is present, and lists a profile row that is damaged as status corrupt with head_state damaged, its head not read; grants reads which grants reach a resource: it is refused unavailable when the stored heads, or a profile a grant borrows a key from, cannot be read, and corrupt when a head the store returns fails its digest, does not parse or disagrees with its stored references, or when a profile a grant borrows a key from is damaged; a head row that does not decode is not listed by the store, so grants does not read it. plan is refused unavailable when the components, the consent profiles, the vault or the instance entries offered to the person cannot be read, not_found when its component is not installed, and corrupt when its stored manifest is damaged or its profile's head row does not decode, fails its digest or does not parse. plan, preview, commit and grant are refused unavailable when the components, or a profile that would lend a dependency its key, cannot be read (for plan, or the entry that profile binds), and corrupt when that profile is damaged or when the head row of the profile they would revise does not decode; preview, commit and grant are refused corrupt when a dependency's stored manifest is damaged, which plan answers as a closure unresolved with reason corrupt_manifest, so nothing is granted over it. Nothing is granted outside this walk.",
       title: "Profiles & Consent"
     )
   end
@@ -304,7 +367,7 @@ defmodule Sanctum.Providers.Profile do
 
       case Plan.plan(ctx, params) do
         {:ok, plan} -> {:ok, plan}
-        {:error, reason} -> {:error, fmt(reason)}
+        {:error, reason} -> {:error, walk_refusal(reason)}
       end
     end
   end
@@ -318,7 +381,7 @@ defmodule Sanctum.Providers.Profile do
     with {:ok, decoded} <- decode_decisions(decisions) do
       case Commit.preview(ctx, decoded) do
         {:ok, preview} -> {:ok, preview}
-        {:error, reason} -> {:error, fmt(reason)}
+        {:error, reason} -> {:error, walk_refusal(reason)}
       end
     end
   end
@@ -341,7 +404,7 @@ defmodule Sanctum.Providers.Profile do
 
       case Commit.commit(ctx, params, key_capability: capability) do
         {:ok, result} -> {:ok, Map.put(result, :status, "committed")}
-        {:error, reason} -> {:error, fmt(reason)}
+        {:error, reason} -> {:error, walk_refusal(reason)}
       end
     end
   end
@@ -353,6 +416,8 @@ defmodule Sanctum.Providers.Profile do
 
   # The simple grant: a credential bound to an existing owner consent
   # whose shape has not moved, with the revision as the compare-and-set.
+  # No preview stands before it, so it answers the head's bindings it
+  # removed (`removed`, as a preview of it lists them) beside the revision.
   def handle(%Context{} = ctx, %{"action" => "grant", "profile_id" => profile_id} = args) do
     with {:ok, bindings} <- decode_bindings(Map.get(args, "bindings", [])) do
       params = %{
@@ -363,7 +428,7 @@ defmodule Sanctum.Providers.Profile do
 
       case Commit.grant(ctx, params) do
         {:ok, result} -> {:ok, Map.put(result, :status, "granted")}
-        {:error, reason} -> {:error, fmt(reason)}
+        {:error, reason} -> {:error, walk_refusal(reason)}
       end
     end
   end
@@ -396,19 +461,8 @@ defmodule Sanctum.Providers.Profile do
     # callers of the handler.
     with :ok <- Sanctum.Consent.Authz.authorize_staging(ctx),
          {:ok, source_ref} <- Plan.name_ref(ref),
-         {:ok, profiles} <- Arca.ConsentStorage.profiles(Context.actor(ctx), source_ref) do
-      enriched =
-        Enum.map(profiles, fn profile ->
-          revision =
-            case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id) do
-              {:ok, consent} -> consent.revision
-              _ -> nil
-            end
-
-          Map.put(profile, :head_revision, revision)
-        end)
-
-      {:ok, %{profiles: enriched}}
+         {:ok, entries} <- Arca.ConsentStorage.profile_entries(Context.actor(ctx), source_ref) do
+      {:ok, %{profiles: Enum.map(entries, &listed_profile(ctx, &1))}}
     else
       {:error, reason} -> {:error, fmt(reason)}
     end
@@ -444,6 +498,30 @@ defmodule Sanctum.Providers.Profile do
     {:error, Prima.Provider.invalid_action("profile", action_enum())}
   end
 
+  # A profile as `list` answers it. A row whose kind or status is outside
+  # the closed vocabulary is listed, never dropped, as damaged: its head is
+  # not read, since nothing it holds can be trusted.
+  defp listed_profile(_ctx, %{id: id, status: :corrupt}),
+    do: %{id: id, status: :corrupt, head_state: "damaged", head_revision: nil}
+
+  defp listed_profile(ctx, profile) do
+    {state, revision} = head_state(ctx, profile.id)
+    Map.merge(profile, %{head_state: state, head_revision: revision})
+  end
+
+  # A profile's head as `list` answers it, read three ways, never one: a
+  # head absent, one stored outside the closed vocabulary and one the
+  # store could not answer each say so, so an outage never reads as "no
+  # consent". The revision is the head's only when it was read.
+  defp head_state(ctx, profile_id) do
+    case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id) do
+      {:ok, consent} -> {"present", consent.revision}
+      {:error, absent} when absent in [:not_found, :no_head] -> {"missing", nil}
+      {:error, {:invalid_stored_value, _value}} -> {"damaged", nil}
+      {:error, _unanswered} -> {"unavailable", nil}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # The grant read — which grants reach one resource
   # ---------------------------------------------------------------------------
@@ -452,12 +530,24 @@ defmodule Sanctum.Providers.Profile do
   # as the loader carries it (`Sanctum.Consent.Loader.admitted_blob/3`), so
   # no grant shows wider or narrower than it runs: its built blob,
   # narrowing already applied, with every selection the loader resolves
-  # resolved. A head the loader refuses outright (validity, digest, parse,
-  # canonical storage paths, blob/refs equality, binding-digest conflicts)
-  # reaches nothing. A lender admits a borrower's load only under an origin
-  # the lender's own revision names, so a head is loaded under each origin
-  # its revision admits and reaches a resource when any of those loads
-  # carries it. Every edge counts:
+  # resolved. The heads themselves come from
+  # `Arca.ConsentStorage.active_heads/2`, never through the loader's head
+  # read: a store that cannot answer them refuses the whole read, and a
+  # head row that does not decode is not among them (`active_heads/2`
+  # drops it). A head the loader cannot trust (its validity, digest,
+  # parse, blob/refs equality or binding digests) refuses the whole read
+  # as that damage, in the loader's one reading of it
+  # (`Sanctum.Consent.Loader.damage_refusal/3`, the damaged head
+  # `{:head_corrupt, profile_id}`); a head asked again under the canonical
+  # spelling of its storage paths reaches nothing. A lender the store
+  # could not answer, or whose profile row or head does not decode, or
+  # whose head's bytes fail their digest or do not parse, refuses the
+  # whole read with that reason (`Sanctum.Unauthorized`'s sentence): an
+  # answer short of that head's grants would read as "reaches nothing". A
+  # lender admits a borrower's load only under an origin the lender's own
+  # revision names, so a head is loaded under each origin its revision
+  # admits and reaches a resource when any of those loads carries it.
+  # Every edge counts:
   #
   # - a domain, as egress pins a host (`Prima.Network.domain_allowed?/2`),
   #   on an edge that also allows a method and a scheme;
@@ -476,9 +566,8 @@ defmodule Sanctum.Providers.Profile do
 
   defp grants_reaching(ctx, args) do
     with {:ok, resource} <- grants_resource(args),
-         {:ok, heads, truncated?} <- grant_heads(ctx, resource) do
-      grants = Enum.flat_map(heads, &reaching_grant(ctx, &1, resource))
-
+         {:ok, heads, truncated?} <- grant_heads(ctx, resource),
+         {:ok, grants} <- reaching_grants(ctx, heads, resource) do
       {:ok,
        %{
          resource: resource_answer(resource),
@@ -551,42 +640,98 @@ defmodule Sanctum.Providers.Profile do
     end
   end
 
+  # Each head's grant in head order, or the first refusal a head's load
+  # answers that is no grant reaching nothing.
+  defp reaching_grants(ctx, heads, resource) do
+    heads
+    |> Enum.reduce_while({:ok, []}, fn head, {:ok, reached} ->
+      case reaching_grant(ctx, head, resource) do
+        {:ok, grants} -> {:cont, {:ok, [grants | reached]}}
+        {:error, _} = refused -> {:halt, refused}
+      end
+    end)
+    |> case do
+      {:ok, reached} -> {:ok, reached |> Enum.reverse() |> Enum.concat()}
+      {:error, _} = refused -> refused
+    end
+  end
+
   defp reaching_grant(ctx, %{profile: profile, consent: consent}, resource) do
     case reaching_edges(ctx, profile, consent, resource) do
-      [] ->
-        []
+      {:ok, []} ->
+        {:ok, []}
 
-      edges ->
-        [
-          %{
-            profile_id: profile.id,
-            source_ref: profile.source_ref,
-            kind: Atom.to_string(profile.kind),
-            label: profile.label,
-            consent_id: consent.id,
-            revision: consent.revision,
-            admitted_origins: Prima.Origin.to_wire_list(consent.admitted_origins),
-            edges: edges
-          }
-        ]
+      {:ok, edges} ->
+        {:ok,
+         [
+           %{
+             profile_id: profile.id,
+             source_ref: profile.source_ref,
+             kind: Atom.to_string(profile.kind),
+             label: profile.label,
+             consent_id: consent.id,
+             revision: consent.revision,
+             admitted_origins: Prima.Origin.to_wire_list(consent.admitted_origins),
+             edges: edges
+           }
+         ]}
+
+      {:error, _} = refused ->
+        refused
     end
   end
 
   # The edges of the first load, among the origins the revision admits,
-  # that carries the resource; none when no such load does.
+  # that carries the resource; none when no such load does. A lender that
+  # could not be read or does not decode refuses the read. The app's own
+  # head the loader cannot trust refuses it as that damage, in the
+  # loader's one reading of it (`Loader.damage?/1`, `damage_refusal/3`):
+  # read as reaching nothing, a grant that exists would read as none. Any
+  # other refusal, a revision asked again under the canonical spelling of
+  # its paths or a lender that does not admit the origin, reaches nothing
+  # under that origin.
   defp reaching_edges(ctx, profile, consent, resource) do
-    Enum.find_value(consent.admitted_origins, [], fn origin ->
+    Enum.reduce_while(consent.admitted_origins, {:ok, []}, fn origin, none ->
       case Loader.admitted_blob(%{ctx | origin: origin}, profile, consent) do
         {:ok, blob} ->
           case loaded_edges(blob, consent, resource) do
-            [] -> nil
-            edges -> edges
+            [] -> {:cont, none}
+            edges -> {:halt, {:ok, edges}}
           end
 
-        {:error, _refused} ->
-          nil
+        {:error, {:lender_unavailable, _target}} = refused ->
+          {:halt, refused}
+
+        {:error, {:lender_corrupt, _target, _profile_id}} = refused ->
+          {:halt, refused}
+
+        {:error, reason} ->
+          case own_head_refusal(reason, profile) do
+            nil -> {:cont, none}
+            refusal -> {:halt, {:error, refusal}}
+          end
       end
     end)
+  end
+
+  # The app's own head refused: its damage as the loader names it, and,
+  # defensively, an answer the consent vocabulary classes unavailable as
+  # that head unanswered. `admitted_blob/3` reads no store for the app's
+  # own head today (the heads and their references arrive read, and a
+  # store that cannot answer them refuses the whole read first), so no
+  # such answer reaches here; one that did would be an outage, never a
+  # grant reaching nothing.
+  defp own_head_refusal(reason, profile) do
+    cond do
+      Loader.damage?(reason) ->
+        Loader.damage_refusal(reason, profile.id, profile.source_ref)
+
+      Sanctum.Unauthorized.reason?(reason) and Sanctum.Unauthorized.class(reason) == :unavailable ->
+        {:head_unavailable, profile.id}
+
+      true ->
+        nil
+    end
   end
 
   defp loaded_edges(blob, consent, resource) do
@@ -774,10 +919,12 @@ defmodule Sanctum.Providers.Profile do
   defp decode_bindings(list) when is_list(list) do
     decoded =
       Enum.map(list, fn binding ->
-        %{
-          need: Map.get(binding, "need", Prima.Authority.Blob.ingress_key()),
-          entry_id: binding["entry_id"]
-        }
+        %{need: Map.get(binding, "need", Prima.Authority.Blob.ingress_key())}
+        |> Prima.MapUtil.put_present(:entry_id, binding["entry_id"])
+        |> Prima.MapUtil.put_present(:instance_entry_id, binding["instance_entry_id"])
+        |> Prima.MapUtil.put_present(:name, binding["name"])
+        |> Prima.MapUtil.put_present(:lifetime, decode_lifetime(binding["lifetime"]))
+        |> put_given(:renew, binding, "renew")
         |> Prima.MapUtil.put_present(:fields, binding["fields"])
         |> Prima.MapUtil.put_present(:scopes, binding["scopes"])
       end)
@@ -787,16 +934,45 @@ defmodule Sanctum.Providers.Profile do
 
   defp decode_bindings(_), do: {:error, "bindings must be a list"}
 
-  # A selection names a dependency edge of the closure and one of its
-  # profiles by label (the default one when unnamed); `from` defaults to
-  # the source at commit. The fields, when given, narrow what that
-  # profile's entry lends.
+  # A lifetime record in the commit's vocabulary; a member it does not
+  # name stays as it came, so the commit refuses it rather than reading
+  # less than was sent.
+  defp decode_lifetime(%{} = lifetime) do
+    Map.new(lifetime, fn
+      {"kind", kind} -> {:kind, kind}
+      {"until", until} -> {:until, until}
+      {other, value} -> {other, value}
+    end)
+  end
+
+  defp decode_lifetime(other), do: other
+
+  # A member the caller sent, false included, reaches the commit.
+  defp put_given(decoded, key, raw, wire_key) do
+    case Map.fetch(raw, wire_key) do
+      {:ok, value} -> Map.put(decoded, key, value)
+      :error -> decoded
+    end
+  end
+
+  # A selection names a dependency edge of the closure and what fills it:
+  # one of its profiles by label (the default one when it names nothing),
+  # or an entry or instance entry for one of its needs, under an account
+  # name beside the edge's default when it names one. `from` defaults to
+  # the source at commit. The fields, when given, narrow what is lent.
   defp decode_selections(list) when is_list(list) do
     decoded =
       Enum.map(list, fn selection ->
-        %{dep: selection["dep"], label: selection["label"] || "default"}
+        %{dep: selection["dep"]}
+        |> Prima.MapUtil.put_present(:label, selection["label"])
+        |> Prima.MapUtil.put_present(:entry_id, selection["entry_id"])
+        |> Prima.MapUtil.put_present(:instance_entry_id, selection["instance_entry_id"])
+        |> Prima.MapUtil.put_present(:need, selection["need"])
+        |> Prima.MapUtil.put_present(:name, selection["name"])
         |> Prima.MapUtil.put_present(:from, selection["from"])
         |> Prima.MapUtil.put_present(:fields, selection["fields"])
+        |> Prima.MapUtil.put_present(:lifetime, decode_lifetime(selection["lifetime"]))
+        |> put_given(:renew, selection, "renew")
       end)
 
     {:ok, decoded}
@@ -834,6 +1010,36 @@ defmodule Sanctum.Providers.Profile do
   defp key_capability(_ctx), do: {:ok, nil}
 
   # Error rendering
+
+  # A refusal of `plan`, `preview`, `commit` or `grant`. A lender that
+  # could not be read, or whose profile row or head does not decode, or
+  # whose head's bytes fail their digest or do not parse
+  # (`Sanctum.Consent.Plan.plan/2`, `Sanctum.Consent.Commit.preview/2`,
+  # `commit/3` and `grant/3`), is answered typed, as `grants` answers it:
+  # the gate classes it `unavailable` or `corrupt` through
+  # `Sanctum.Unauthorized`, whose sentence it reads as, and a client
+  # branches on that class. So, in `Prima.Refusal`'s rows, are the
+  # profile's own head that cannot be trusted, its row not decoding or its
+  # stored policy failing its digest or not parsing, whose narrowing a
+  # re-grant would keep (`Sanctum.Consent.Plan.head_narrowing/4`), the
+  # corrupt profile; a component the athanor no longer holds; a store the
+  # walk could not read (`{:unavailable, store}`: the components at every
+  # verb, as the source's row is read, `Sanctum.Consent.Plan.fetch_component/2`,
+  # and as its closure is resolved and walked, and the plan's other
+  # stores); and a stored manifest that does not decode, the source's or a
+  # dependency's the closure reads (`Sanctum.Consent.Plan.closure_rows/3`).
+  # Every other refusal is rendered here.
+  defp walk_refusal({:lender_unavailable, _dep} = unread), do: unread
+  defp walk_refusal({:lender_corrupt, _dep, _profile_id} = damaged), do: damaged
+  defp walk_refusal({:corrupt, {:profile, _profile_id}} = damaged), do: damaged
+  defp walk_refusal({:not_found, {:component, _ref}} = absent), do: absent
+  defp walk_refusal({:unavailable, store} = unread) when is_binary(store), do: unread
+  defp walk_refusal({:corrupt, {:manifest, _ref}} = damaged), do: damaged
+
+  defp walk_refusal({:activation_unresolvable, {:corrupt, {:manifest, _ref}} = damaged}),
+    do: damaged
+
+  defp walk_refusal(reason), do: fmt(reason)
 
   # Preserve typed consent signals for wire and console rendering.
   defp fmt({tag, payload} = signal) when Prima.Refusal.is_consent_signal(tag, payload),
@@ -883,6 +1089,28 @@ defmodule Sanctum.Providers.Profile do
   defp fmt({:entry_unavailable, id, status}),
     do: "entry_unavailable: #{id} is #{inspect(status)}"
 
+  # The revision's own lock found an entry it binds changed since it was
+  # read (`Arca.ConsentStorage`): which one, the store does not say.
+  defp fmt({:entry_unavailable, status}) when is_binary(status),
+    do: "entry_unavailable: an entry this consent binds is now #{inspect(status)}"
+
+  # A binding's refusals name the need and never the entry's material.
+  defp fmt({:provider_mismatch, need}) when is_binary(need),
+    do: "provider_mismatch: #{inspect(need)} takes an entry of its own kind and provider"
+
+  defp fmt({:disclosure_refused, need}) when is_binary(need),
+    do:
+      "disclosure_refused: the component reads #{inspect(need)} itself, so it takes a " <>
+        "disclosed entry of the athanor"
+
+  defp fmt({:component_not_admitted, need}) when is_binary(need),
+    do:
+      "component_not_admitted: the instance entry for #{inspect(need)} admits no such " <>
+        "component under its component policy"
+
+  defp fmt({:not_offered, need}) when is_binary(need),
+    do: "not_offered: the instance entry for #{inspect(need)} is not offered to you"
+
   defp fmt(:shape_moved),
     do:
       "shape_moved: the component's shape changed since this revision — plan, preview and commit again"
@@ -909,6 +1137,9 @@ defmodule Sanctum.Providers.Profile do
        do:
          "activation_unresolvable: #{ref} has no release digest — publish it again, " <>
            "then plan again"
+
+  defp fmt({:activation_unresolvable, {:activation_moved, ref}}) when is_binary(ref),
+    do: "activation_unresolvable: #{ref} changed while this grant was read — plan again"
 
   defp fmt({:activation_unresolvable, _reason}),
     do:

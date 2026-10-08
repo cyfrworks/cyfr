@@ -14,6 +14,10 @@ defmodule Prima.NetworkTest do
 
   alias Prima.{Network, PinnedTarget}
 
+  @host_api Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+  @external_resource @host_api
+  @vectors @host_api |> File.read!() |> Jason.decode!()
+
   defp pinned(url, ip, family) do
     {:ok, uri} = Network.parse_url(url)
 
@@ -54,6 +58,60 @@ defmodule Prima.NetworkTest do
       assert opts[:url] == connect_url
       assert opts[:connect_options][:hostname] == uri.host
       assert opts[:redirect] == false and opts[:retry] == false
+    end
+  end
+
+  test "the credential roster a hop strips is what an attached request refuses, and no more" do
+    request = %{
+      "call_id" => "AAECAwQFBgcICQoLDA0ODw",
+      "connection" => "api_key",
+      "method" => "GET",
+      "url" => "https://api.example.test/v1",
+      "purpose" => "fetch"
+    }
+
+    roster =
+      Network.credential_headers() ++ Enum.map(Network.credential_headers(), &String.upcase/1)
+
+    for name <- roster do
+      assert Network.strip_credentials([{name, "v"}, {"accept", "*/*"}]) == [{"accept", "*/*"}],
+             name
+
+      assert Prima.AttachedRequest.read(Map.put(request, "headers", [[name, "v"]])) ==
+               {:error, :credential_header_refused},
+             name
+    end
+
+    # A name that only ends like a credential leaves with no hop to another
+    # origin, and is the guest's own on an attached request.
+    for name <- ["X-Session-Token", "X-Signing-Key", "X-Client-Secret", "Idempotency-Key"] do
+      assert Network.strip_credentials([{name, "v"}]) == [], name
+
+      assert {:ok, _request} =
+               Prima.AttachedRequest.read(Map.put(request, "headers", [[name, "v"]]))
+    end
+
+    assert {:ok, _request} =
+             Prima.AttachedRequest.read(Map.put(request, "headers", [["accept", "*/*"]]))
+  end
+
+  test "the framing and override rosters are tests/fixtures/host_api.json's, and each is refused" do
+    assert @vectors["framing_headers"] == Network.framing_headers()
+    assert @vectors["override_headers"] == Network.override_headers()
+
+    request = %{
+      "call_id" => "AAECAwQFBgcICQoLDA0ODw",
+      "connection" => "api_key",
+      "method" => "GET",
+      "url" => "https://api.example.test/v1",
+      "purpose" => "fetch"
+    }
+
+    for name <- @vectors["framing_headers"] ++ @vectors["override_headers"],
+        spelled <- [name, String.upcase(name)] do
+      assert Prima.AttachedRequest.read(Map.put(request, "headers", [[spelled, "v"]])) ==
+               {:error, {:invalid_request, spelled}},
+             spelled
     end
   end
 

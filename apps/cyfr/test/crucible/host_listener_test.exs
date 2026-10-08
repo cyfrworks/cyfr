@@ -43,14 +43,14 @@ defmodule Crucible.HostListenerTest do
   end
 
   # One request to `path` on the listener at `url`, with the auth headers
-  # given (none, one or several) and `body`, answered as its status and
-  # decoded JSON.
+  # given (none, one or several), any other `:headers` and `body`, answered
+  # as its status and decoded JSON.
   defp post(url, path, headers, body, opts \\ []) do
     response =
       Req.request!(
         url: url <> path,
         method: Keyword.get(opts, :method, :post),
-        headers: Enum.map(headers, &{@auth, &1}),
+        headers: Enum.map(headers, &{@auth, &1}) ++ Keyword.get(opts, :headers, []),
         body: body,
         retry: false,
         decode_body: false
@@ -171,6 +171,23 @@ defmodule Crucible.HostListenerTest do
 
   defp now, do: System.system_time(:millisecond)
 
+  # A ref the test process is sent `{ref, :sent}` under each time a
+  # listener connection has written a `413`, as the server's own telemetry
+  # reports the bytes it sent.
+  defp refusals_sent do
+    ref = make_ref()
+    handler = {__MODULE__, ref}
+    send_event = [:thousand_island, :connection, :send]
+    :ok = :telemetry.attach(handler, send_event, &__MODULE__.refusal_sent/4, {self(), ref})
+    on_exit(fn -> :telemetry.detach(handler) end)
+    ref
+  end
+
+  @doc false
+  def refusal_sent(_event, %{data: data}, _metadata, {test, ref}) do
+    if match?("HTTP/1.1 413 " <> _, IO.iodata_to_binary(data)), do: send(test, {ref, :sent})
+  end
+
   describe "a call that passes" do
     test "reaches Host, which answers as it does in process", %{url: url} do
       fixture =
@@ -227,6 +244,31 @@ defmodule Crucible.HostListenerTest do
 
       assert claimed_by(fixture) == nil
       assert {200, %{"ok" => _}} = attach(url, fixture)
+    end
+
+    # An admitted attached request's frames stream as a chunked answer
+    # (`Crucible.Host.AttachedFetchTest`, against a loopback upstream);
+    # one refused before its admission is an ordinary sealed answer.
+    @tag :capture_log
+    test "an attached request refused before admission is one sealed answer naming its call id",
+         %{url: url} do
+      [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "attached_fetch"))
+      %{"args" => args} = Jason.decode!(vector["body"])
+
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      assert {200, answer} = call(url, fixture, "attached_fetch", args)
+
+      assert answer == %{
+               "v" => 1,
+               "error" => "guest_error",
+               "type" => "connection_not_granted",
+               "message" => Prima.Refusal.message(:connection_not_granted),
+               "call_id" => args["call_id"]
+             }
+
+      assert row(fixture).status == "running"
     end
 
     test "a report lapses the reporting service's attempts", %{url: url} do
@@ -610,20 +652,53 @@ defmodule Crucible.HostListenerTest do
           rem(byte_size(body), 65_536)
         )
 
-      # The listener answers and closes with the rest unread, so a client
-      # still sending may find the connection closed before it reads the
-      # answer. Either way nothing of the call is taken.
-      streamed =
-        try do
-          post(url, path, [header], Stream.concat(chunks, [rest]))
-        rescue
-          error in Req.TransportError -> {:closed, error.reason}
-        end
+      assert {413, %{"error" => "lost"}} =
+               post(url, path, [header], Stream.concat(chunks, [rest]))
 
-      case streamed do
-        {413, %{"error" => "lost"}} -> :ok
-        {:closed, reason} when reason in [:closed, :econnreset, :epipe] -> :ok
-        other -> flunk("the streamed body was not refused: #{inspect(other)}")
+      assert live_events() == []
+      assert Process.alive?(fixture.pid)
+    end
+
+    @tag :capture_log
+    test "a client still writing a body over the bound when it is refused reads the refusal",
+         %{url: url} do
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      :ok = Crucible.Events.subscribe(fixture.execution_id, fixture.ctx)
+      max = Prima.HostAPI.max_body_bytes()
+      text = String.duplicate("x", max)
+      refusals = refusals_sent()
+      path = WorkerWire.host_route(:push_deltas)
+
+      json =
+        AttemptFixtures.body("push_deltas", %{
+          "deltas" => [
+            AttemptFixtures.delta(fixture, Jason.encode!(%{"type" => "note", "text" => text}))
+          ]
+        })
+
+      # Each body is written whole before its answer is read, as
+      # `Opus.HostClient` writes one, and its rest only once the listener
+      # has sent its refusal: by the declared length, after a first part of
+      # the body none of which is read, and as the body streams past the
+      # bound, after a first part that passes it.
+      for {declared?, at} <- [{true, 65_536}, {false, max + 65_536}] do
+        fields = fields(fixture, [])
+        {:ok, body} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
+        {:ok, header} = WorkerAuth.host_call_header(fixture.call_key, fields, body)
+        <<first::binary-size(^at), later::binary>> = body
+
+        later =
+          Stream.flat_map([later], fn later ->
+            assert_receive {^refusals, :sent}, 10_000
+            [later]
+          end)
+
+        headers = if declared?, do: [{"content-length", "#{byte_size(body)}"}], else: []
+
+        assert {413, %{"error" => "lost"}} =
+                 post(url, path, [header], Stream.concat([first], later), headers: headers)
       end
 
       assert live_events() == []

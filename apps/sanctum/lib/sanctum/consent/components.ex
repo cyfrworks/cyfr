@@ -8,8 +8,8 @@ defmodule Sanctum.Consent.Components do
   A consent governs the shape of what a component may do, so deciding one
   means reading what the athanor actually holds: the activation a ref
   resolves to, the verified graph and its digest, the registry row a ref
-  names, the athanor's enabled agents, and what the install media ships at
-  a row's path. None of that is identity's to know, and all of it
+  names, the athanor's enabled agents, what the install media ships at
+  a row's path, and the newer version it ships of a row's component. None of that is identity's to know, and all of it
   lives in the component domain — so the contract is written here, in the
   domain that depends on it, and the component domain implements it
   (`Compendium.ConsentFacts`).
@@ -41,6 +41,15 @@ defmodule Sanctum.Consent.Components do
   """
 
   alias Sanctum.Context
+
+  @doc "Whether a component-facts read could not answer, distinct from absence or damage."
+  defguard is_outage(reason)
+           when reason in [
+                  :database_error,
+                  :unavailable,
+                  :projection_unavailable,
+                  :component_facts_unavailable
+                ]
 
   defmodule NotInstalledError do
     @moduledoc """
@@ -106,6 +115,14 @@ defmodule Sanctum.Consent.Components do
   domain's own layout, which consent must not learn.
   """
   @callback shipped_nodes(Context.t(), [map()]) :: {:ok, %{String.t() => String.t()}}
+
+  @doc """
+  The newest version the install media ships of `row`'s component, when
+  it is strictly newer than the row's own; nil when the media ships none
+  newer, or none at all. What a consent offers as the update when a
+  component's need is one an older version reads itself.
+  """
+  @callback newer_shipped(Context.t(), map()) :: {:ok, String.t() | nil} | {:error, term()}
 
   @doc """
   Install the port's implementation. Called once by `Cyfr.Application` at
@@ -193,6 +210,11 @@ defmodule Sanctum.Consent.Components do
           {:ok, %{String.t() => String.t()}} | {:error, term()}
   def shipped_nodes(%Context{} = ctx, rows) when is_list(rows),
     do: call(& &1.shipped_nodes(ctx, rows))
+
+  @doc "The newest shipped version of `row`'s component when newer than its own, else nil."
+  @spec newer_shipped(Context.t(), map()) :: {:ok, String.t() | nil} | {:error, term()}
+  def newer_shipped(%Context{} = ctx, row) when is_map(row),
+    do: call(& &1.newer_shipped(ctx, row))
 
   # An uninstalled port is an unreadable athanor, not an empty one: every
   # caller refuses on this word, and none of them may mistake it for

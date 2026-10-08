@@ -4,6 +4,8 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
   # Binding a webhook or schedule requires consent authority and a profile matching its target.
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Consent.RegistrationBinding
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
@@ -53,7 +55,86 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
     assert :ok = RegistrationBinding.authorize(ctx, "#{@target}:1.0.0", "prof-bind")
   end
 
+  # A binding's lifetime and a run's origin are separate facts: a
+  # schedule binds to any profile under the same rule, whatever lifetime
+  # the bindings it will use carry. Where the binding is used, its
+  # lifetime is checked at each fire (`Sanctum.Attach`, the disclosed
+  # dispense), so the fire after it expires is refused there, never here.
+  test "a schedule binds to a profile whose binding lives until a time; the row carries " <>
+         "its expiry, and the binding rule is unchanged",
+       %{ctx: ctx} do
+    expires = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
+    key = "#{@target}|@ingress|default"
+
+    :ok =
+      ConsentFixtures.seed_head!(
+        ctx,
+        %{
+          id: "prof-until",
+          kind: :owner,
+          source_ref: @target,
+          label: "until",
+          status: :active
+        },
+        %{
+          id: "consent-until",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: "sha256:shape-until",
+          commit_digest: "sha256:commit-until",
+          resolved_policy: "{}",
+          activation: %{@target => "sha256:act"},
+          vault_refs: [
+            %{
+              binding_key: key,
+              scope: "athanor",
+              vault_entry_id: "vlt_until",
+              binding_digest: "sha256:until",
+              lifetime_kind: "until",
+              expires_at: expires
+            }
+          ]
+        }
+      )
+
+    assert :ok = RegistrationBinding.authorize(ctx, "#{@target}:1.0.0", "prof-until")
+
+    {:ok, head} = Arca.ConsentStorage.head_consent(Context.actor(ctx), "prof-until")
+
+    assert [%{binding_key: ^key, lifetime_kind: "until", expires_at: at}] = head.vault_refs
+    assert DateTime.compare(at, expires) == :eq
+  end
+
   test "a profile cannot be aimed at another component's registration", %{ctx: ctx} do
+    assert {:error, :profile_not_for_target = reason} =
+             RegistrationBinding.authorize(ctx, "reagent:local.other:1.0.0", "prof-bind")
+
+    assert RegistrationBinding.message(reason) == "the profile belongs to another component"
+  end
+
+  # A profile of the target whose row is stored outside the closed
+  # vocabulary is damaged, never another component's.
+  test "a damaged profile row is refused as damaged, never as another component's",
+       %{ctx: ctx} do
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(p in Arca.Schemas.Profile,
+          where: p.athanor_id == ^ctx.athanor_id and p.id == "prof-bind"
+        ),
+        set: [kind: "sideways"]
+      )
+
+    assert {:error, {:profile_corrupt, "prof-bind"} = damaged} =
+             RegistrationBinding.authorize(ctx, @target, "prof-bind")
+
+    assert RegistrationBinding.message(damaged) ==
+             "the profile is damaged and cannot be used — " <>
+               "revoke profile prof-bind and grant it again"
+
+    # The same damaged row named for another component's registration is
+    # no profile of that component.
     assert {:error, :profile_not_for_target} =
              RegistrationBinding.authorize(ctx, "reagent:local.other:1.0.0", "prof-bind")
   end
@@ -82,8 +163,54 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
         status: :active
       })
 
-    assert {:error, {:no_head_consent, "prof-headless"}} =
+    assert {:error, {:no_head_consent, "prof-headless"} = reason} =
              RegistrationBinding.authorize(ctx, @target, "prof-headless")
+
+    assert RegistrationBinding.message(reason) == "the profile has no live consent"
+  end
+
+  # A head stored outside the closed vocabulary, or one the store cannot
+  # answer, is not a profile with no consent: each refusal says which.
+  @tag :capture_log
+  test "a damaged head and an unanswered one are refused apart from an absent one",
+       %{ctx: ctx} do
+    :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-bind", scope: "sideways")
+
+    assert {:error, {:head_corrupt, "prof-bind"} = damaged} =
+             RegistrationBinding.authorize(ctx, @target, "prof-bind")
+
+    assert RegistrationBinding.message(damaged) ==
+             "the profile's consent is damaged and cannot be used — " <>
+               "revoke profile prof-bind and grant it again"
+
+    :ok = ConsentFixtures.hand_edit_head!(ctx, "prof-bind", scope: "versionless")
+    assert :ok = RegistrationBinding.authorize(ctx, @target, "prof-bind")
+
+    Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+    assert {:error, {:head_unavailable, "prof-bind"} = unanswered} =
+             RegistrationBinding.authorize(ctx, @target, "prof-bind")
+
+    assert RegistrationBinding.message(unanswered) ==
+             "the profile's consent cannot be read right now — try again"
+  end
+
+  # A profile list the store cannot answer is not a profile of another
+  # component: the refusal says to try again, and the same list, answered,
+  # still binds.
+  @tag :capture_log
+  test "a profile list the store cannot answer is refused as such, and binds once it answers",
+       %{ctx: ctx} do
+    Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+    assert {:error, {:profiles_unavailable, @target} = unanswered} =
+             RegistrationBinding.authorize(ctx, "#{@target}:1.0.0", "prof-bind")
+
+    assert RegistrationBinding.message(unanswered) ==
+             "the component's profiles cannot be read right now — try again"
+
+    Arca.Repo.query!("ALTER TABLE profiles_unavailable RENAME TO profiles")
+    assert :ok = RegistrationBinding.authorize(ctx, "#{@target}:1.0.0", "prof-bind")
   end
 
   # Publishing the target is fixture setup, not the thing under test. The
@@ -219,6 +346,34 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
         Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), created.schedule_id)
 
       assert schedule.profile_id == "prof-bind"
+    end
+
+    # As the schedule tool and the webhook surface word the binding's
+    # refusal: an outage to retry, never another component's profile.
+    @tag :capture_log
+    test "a profile list the store cannot answer refuses a schedule and a webhook as an outage",
+         %{ctx: ctx} do
+      Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+      refused =
+        "profile binding refused: the component's profiles cannot be read right now — try again"
+
+      assert {:error, {:invalid_argument, ^refused}} =
+               Crucible.Schedules.Provider.handle("schedule", ctx, %{
+                 "action" => "create",
+                 "name" => "unread-sched",
+                 "cron_expression" => "0 * * * *",
+                 "reference" => "#{@target}:1.0.0",
+                 "profile_id" => "prof-bind"
+               })
+
+      assert {:error, ^refused} =
+               Sanctum.Webhook.create(ctx, %{
+                 name: "unread-hook",
+                 replay_protection: "none",
+                 target_ref: "#{@target}:1.0.0",
+                 profile_id: "prof-bind"
+               })
     end
   end
 end

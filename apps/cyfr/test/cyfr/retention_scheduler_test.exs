@@ -126,6 +126,58 @@ defmodule Cyfr.RetentionSchedulerTest do
       assert "rates" in summary.steps
       assert rows(bucket) == 0
     end
+
+    # The instance's own entries are no athanor's, so no athanor's retention
+    # reaches their day counts: the cycle's own step does, after the rate
+    # windows, keeping the days the usage read can still ask for.
+    test "the cycle sweeps instance entry usage days past the kept window", %{key: key} do
+      platform = Prima.Actor.system()
+
+      {:ok, entry} =
+        Arca.InstanceEntries.put(platform, %{
+          name: "retention-usage-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          destination:
+            ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+          sealed_payload: "sealed",
+          binding_digest: "sha256:i0",
+          audience: "everyone",
+          created_by: "usr_admin"
+        })
+
+      today = DateTime.to_date(Arca.ServerMetaStorage.now!())
+      kept = Arca.InstanceEntryUsage.kept_days()
+
+      {2, _} =
+        Arca.Repo.insert_all(
+          Arca.Schemas.InstanceEntryUsage,
+          for {who, days_ago} <- [{"usr_old", kept + 1}, {"usr_kept", kept}] do
+            %{
+              instance_entry_id: entry.id,
+              user_id: who,
+              day: Date.add(today, -days_ago),
+              count: 1,
+              updated_at: DateTime.utc_now()
+            }
+          end
+        )
+
+      assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+
+      assert ["rates", "instance_usage"] =
+               Enum.filter(summary.steps, &(&1 in ["rates", "instance_usage"]))
+
+      left =
+        Arca.Repo.all(
+          from(u in Arca.Schemas.InstanceEntryUsage,
+            where: u.instance_entry_id == ^entry.id,
+            select: u.user_id
+          )
+        )
+
+      assert left == ["usr_kept"]
+    end
   end
 
   describe "the host's decisions" do

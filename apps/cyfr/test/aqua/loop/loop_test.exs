@@ -1305,4 +1305,422 @@ defmodule Aqua.LoopTest do
     {:ok, %{root_execution_id: root}} = Tape.turn(ctx, turn.id)
     root
   end
+
+  # ---------------------------------------------------------------------------
+  # Launches
+  # ---------------------------------------------------------------------------
+
+  @math_wasm Path.expand("../../support/test_wasm/math.wasm", __DIR__)
+
+  # An app of the person's own whose own calls carry one credential need,
+  # disclosed to it, granted with a default entry alone.
+  defp launchable_app!(ctx) do
+    name = "named-app-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "1.0.0",
+      "type" => "reagent",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "fields" => ["KEY"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm), %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest: Jason.encode!(manifest)
+      })
+
+    ref = "reagent:local." <> name
+    default = disclosed_entry!(ctx, "#{name} default")
+    profile_id = walk!(ctx, %{ref: ref, bindings: [%{need: "api_key", entry_id: default.id}]})
+    %{ref: ref, profile_id: profile_id, default: default}
+  end
+
+  defp disclosed_entry!(ctx, name) do
+    {:ok, view} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: name,
+        kind: "api_key",
+        provider_hint: "example.com",
+        fields: %{"KEY" => "k-#{name}"},
+        destination: %{"hosts" => ["api.example.com"]},
+        disclose: true
+      })
+
+    view
+  end
+
+  # A grant through the consent walk, as a person makes it.
+  defp walk!(ctx, decisions) do
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, Map.take(decisions, [:ref, :label]))
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, %{profile_id: profile_id}} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    profile_id
+  end
+
+  # A seated member other than the sender, whose approval a launch runs as.
+  defp approver!(ctx) do
+    n = System.unique_integer([:positive])
+
+    {:ok, approver} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|launch-approver#{n}",
+        provider: "github",
+        email: "launch-approver#{n}@example.com",
+        verified: true,
+        name: "Approver"
+      })
+
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure(approver.id, scope: "athanor", athanor_id: ctx.athanor_id)
+
+    %{ctx | user_id: approver.id}
+  end
+
+  defp pins(turn),
+    do: Map.take(turn, [:profile_id, :consent_id, :agent_capability_digest, :root_execution_id])
+
+  test "a named-account grant leaves the running turn pinned and only a new turn uses it", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    %{ref: app, default: default} = launchable_app!(ctx)
+    versioned = app <> ":1.0.0"
+    {:ok, app_name} = Prima.ComponentRef.to_name_ref(app)
+
+    launch = fn id ->
+      calls([
+        {id, "execution.run",
+         %{"reference" => versioned, "input" => %{}, "connection" => "Supabase 2"}}
+      ])
+    end
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, app],
+       script: [launch.("c1"), launch.("c2"), %{"answered" => true}, reply("launched")]}
+    )
+
+    # The app's profile binds no "Supabase 2": the launch ends its turn as
+    # setup required, naming the app and the account, never an entry.
+    first = accept!(ctx, thread, "@aqua run it as Supabase 2")
+
+    assert {:failed, {:setup_required, {^versioned, nil, "Supabase 2"}}} =
+             Task.await(run(ctx, first), 60_000)
+
+    # It names the ended turn's own message, the one a retry sends again.
+    first_message = first.message_id
+
+    assert_receive %ThreadEvent{
+                     kind: :consent_required,
+                     data: %{
+                       ref: ^versioned,
+                       account: %{name: "Supabase 2", need: nil},
+                       message_id: ^first_message
+                     }
+                   },
+                   5_000
+
+    assert is_binary(first_message)
+
+    {:ok, ended} = Tape.turn(ctx, first.id)
+    assert %{status: "failed", error: error} = ended
+    assert error =~ "Supabase 2" and error =~ app
+
+    {:ok, steps} = Tape.steps(ctx, ended)
+
+    assert %{dispatch_state: "closed", outcome: "denied", error: said} =
+             Enum.find(steps, &(&1.kind == "launch"))
+
+    assert said =~ "Supabase 2"
+    refute said =~ default.id
+    refute Enum.any?(ScriptedWorker.calls(), &(&1.input == %{}))
+
+    pinned = pins(ended)
+    {:ok, soul_before} = Crucible.authority_for(ctx, {:id, ended.profile_id}, @soul)
+
+    # The person grants "Supabase 2" on the app's own profile.
+    supabase = disclosed_entry!(ctx, "#{app} supabase 2")
+
+    walk!(ctx, %{
+      ref: app,
+      bindings: [
+        %{need: "api_key", entry_id: default.id},
+        %{need: "api_key", name: "Supabase 2", entry_id: supabase.id}
+      ]
+    })
+
+    # The ended turn's pinned authority is what it was: the grant is the
+    # app's, never the turn's.
+    {:ok, after_grant} = Tape.turn(ctx, first.id)
+    assert pins(after_grant) == pinned
+    assert after_grant.status == "failed"
+    {:ok, soul_after} = Crucible.authority_for(ctx, {:id, ended.profile_id}, @soul)
+    assert soul_before.consent_id == ended.consent_id
+    assert soul_after.consent_id == ended.consent_id
+    assert soul_after.resources == soul_before.resources
+
+    # The retry is a new turn: its launch asks, its card binding the entry
+    # "Supabase 2" resolves to now.
+    second = accept!(ctx, thread, "@aqua run it as Supabase 2 again")
+    refute second.id == first.id
+    assert {:paused, :approval} = Task.await(run(ctx, second), 60_000)
+
+    {:ok, paused} = Tape.turn(ctx, second.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    {:ok, card} = Tape.message(ctx, approval.message_id)
+
+    assert %{
+             "standing" => false,
+             "proposal" => %{
+               "args" => %{"connection" => "Supabase 2"},
+               "vault_entry" => vault_entry
+             }
+           } = Tape.payload(card)["intent"]
+
+    assert vault_entry == supabase.id
+
+    assert {:ok, %{decision: "approved", resolution_kind: "launch"}} =
+             Approvals.resolve(approver!(ctx), approval.id, %{decision: :approved})
+
+    assert :completed =
+             Task.await(
+               Task.async(fn ->
+                 Aqua.Loop.run_nested(ctx: ctx, turn_id: second.id, mode: :resume)
+               end),
+               60_000
+             )
+
+    # The new turn's launch rooted the app under the named binding, by its
+    # own key.
+    assert [%{authority: launched}] = Enum.filter(ScriptedWorker.calls(), &(&1.input == %{}))
+    assert launched.resources.vault.entry_id == supabase.id
+
+    assert launched.resources.vault.binding_key ==
+             Prima.Authority.Blob.binding_key(app_name, "@ingress", "Supabase 2")
+
+    {:ok, steps} = Tape.steps(ctx, second)
+    assert %{dispatch_state: "closed", outcome: "ok"} = Enum.find(steps, &(&1.kind == "launch"))
+  end
+
+  # The account a card bound is read again before the launch runs. A head
+  # stored damaged since the card was drawn closes the launch's step in the
+  # damaged head's sentence, never a stale approval and never an outcome
+  # that could not be confirmed: the thread's row the pane draws, and what
+  # an MCP client reads of the thread (`thread.messages`, since no tool
+  # dispatches a launch), carry it. Nothing of the app starts.
+  test "a launch whose app's own head is stored damaged after its card was drawn says so in " <>
+         "the thread, and starts nothing",
+       %{ctx: ctx, thread: thread} do
+    %{ref: app, profile_id: profile_id, default: default} = launchable_app!(ctx)
+    work = disclosed_entry!(ctx, "#{app} work")
+
+    walk!(ctx, %{
+      ref: app,
+      bindings: [
+        %{need: "api_key", entry_id: default.id},
+        %{need: "api_key", name: "Work", entry_id: work.id}
+      ]
+    })
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, app],
+       script: [
+         calls([
+           {"c1", "execution.run",
+            %{"reference" => app <> ":1.0.0", "input" => %{}, "connection" => "Work"}}
+         ]),
+         reply("not launched")
+       ]}
+    )
+
+    turn = accept!(ctx, thread, "@aqua run it as Work")
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile_id,
+        blob_digest: "sha256:" <> String.duplicate("0", 64)
+      )
+
+    assert {:ok, %{decision: "approved", resolution_kind: "launch"}} =
+             Approvals.resolve(approver!(ctx), approval.id, %{decision: :approved})
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :completed =
+                 Task.await(
+                   Task.async(fn ->
+                     Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume)
+                   end),
+                   60_000
+                 )
+      end)
+
+    sentence =
+      "This app's consent is damaged and cannot be used — revoke profile #{profile_id} " <>
+        "and grant it again."
+
+    # Nothing of the app started: no run of it, and no row.
+    refute Enum.any?(ScriptedWorker.calls(), &(&1.input == %{}))
+
+    assert Arca.Repo.all(
+             from(e in Arca.Schemas.Execution,
+               where: e.athanor_id == ^ctx.athanor_id and like(e.reference, ^"#{app}%"),
+               select: e.id
+             )
+           ) == []
+
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert %{dispatch_state: "closed", outcome: "error", result_message_id: result} =
+             Enum.find(steps, &(&1.kind == "launch"))
+
+    # The thread's row the pane draws, and what an MCP client reads of the
+    # same row, say the damaged head in the same words.
+    assert {:ok, %{kind: "tool_result", content: shown}} = Tape.message(ctx, result)
+
+    assert %{"kind" => "tool_result", "content" => read} =
+             mcp_thread_messages(ctx, thread) |> Enum.find(&(&1["id"] == result))
+
+    assert {shown, read} == {sentence, sentence}
+
+    # Nothing read the refusal as a reason the refusal table does not know.
+    refute log =~ "Prima.Refusal"
+  end
+
+  # What an MCP client reads of `thread` (`thread.messages`, through the
+  # router as the transport dispatches it): its rows, decoded from the
+  # tool result's one text block.
+  defp mcp_thread_messages(ctx, thread) do
+    message = %Prima.MCP.Message{
+      type: :request,
+      id: 1,
+      method: "tools/call",
+      params: %{
+        "name" => "thread",
+        "arguments" => %{"action" => "messages", "thread" => thread.id}
+      }
+    }
+
+    assert {:ok, %{"isError" => false, "content" => [%{"type" => "text", "text" => text}]}} =
+             Emissary.MCP.Router.dispatch(ctx, message)
+
+    Jason.decode!(text)["messages"]
+  end
+
+  test "a launch the soul's own policy runs at once still asks, and never answers not approved",
+       %{ctx: ctx, thread: thread} do
+    # The soul's own definition says execution.run runs at once, and its
+    # grant is walked again for the shape that moved.
+    {:ok, _} =
+      Aqua.AgentConfig.call_aqua(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "tool_policy_patch" => %{"execution.run" => "auto"}
+      })
+
+    walk!(ctx, %{ref: @soul, selections: [%{dep: "catalyst:local.claude", label: "default"}]})
+
+    turn = accept!(ctx, thread, "@aqua launch the model")
+
+    # The model's catalyst is on the soul's own edge: consented and untouched.
+    script!([
+      calls([{"c1", "execution.run", %{"reference" => @model, "input" => %{}}}]),
+      reply("done")
+    ])
+
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    {:ok, steps} = Tape.steps(ctx, paused)
+
+    assert %{dispatch_state: "proposed", approval_id: approval_id} =
+             Enum.find(steps, &(&1.kind == "launch"))
+
+    assert approval_id == approval.id
+  end
+
+  test "a standing allow on execution.run stored for the thread still asks before a launch",
+       %{ctx: ctx, thread: thread} do
+    # A row written past the rule that now refuses it, as one written
+    # before execution.run declared it takes no standing answer.
+    {:ok, _} =
+      Arca.ToolGrantStorage.put(%{
+        athanor_id: ctx.athanor_id,
+        scope: "thread",
+        effect: "allow",
+        thread_id: thread.id,
+        agent_name: "aqua",
+        tool: "execution",
+        action: "run",
+        granted_by: ctx.user_id
+      })
+
+    turn = accept!(ctx, thread, "@aqua launch the model")
+
+    script!([
+      calls([{"c1", "execution.run", %{"reference" => @model, "input" => %{}}}]),
+      reply("done")
+    ])
+
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    assert {:ok, [_card]} = Tape.pending_approvals(ctx, paused)
+    {:ok, steps} = Tape.steps(ctx, paused)
+    assert %{dispatch_state: "proposed"} = Enum.find(steps, &(&1.kind == "launch"))
+  end
+
+  test "a launch by an agent whose policy names no execution.run is denied, and opens no card",
+       %{ctx: ctx, thread: thread} do
+    # The soul's own definition stops naming execution.run, and its grant
+    # is walked again for the shape that moved.
+    {:ok, _} =
+      Aqua.AgentConfig.call_aqua(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "tool_policy_patch" => %{"execution.run" => nil}
+      })
+
+    walk!(ctx, %{ref: @soul, selections: [%{dep: "catalyst:local.claude", label: "default"}]})
+
+    turn = accept!(ctx, thread, "@aqua launch the model")
+
+    script!([
+      calls([{"c1", "execution.run", %{"reference" => @model, "input" => %{}}}]),
+      reply("not launched")
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    {:ok, ended} = Tape.turn(ctx, turn.id)
+    assert {:ok, []} = Tape.pending_approvals(ctx, ended)
+    {:ok, steps} = Tape.steps(ctx, ended)
+
+    assert %{dispatch_state: "closed", outcome: "denied", approval_id: nil} =
+             launch = Enum.find(steps, &(&1.kind == "launch"))
+
+    assert {:ok, %{content: said}} = Tape.message(ctx, launch.result_message_id)
+    assert said =~ "execution.run is not in the agent's policy"
+    refute Enum.any?(ScriptedWorker.calls(), &(&1.input == %{}))
+  end
 end

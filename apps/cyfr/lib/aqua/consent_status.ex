@@ -53,8 +53,9 @@ defmodule Aqua.ConsentStatus do
   @type refusal :: :unavailable | :corrupt | :forbidden
 
   # What the consent loader answers for a stored profile, consent or blob
-  # it cannot trust, and for a release that does not re-derive from its
-  # row: damage, not an outage and not an absence.
+  # it cannot trust, for an active profile with no head, and for a release
+  # that does not re-derive from its row: damage, not an outage and not an
+  # absence.
   @corrupt [
     :invalid_profile,
     :invalid_consent,
@@ -64,9 +65,14 @@ defmodule Aqua.ConsentStatus do
     :inconsistent_binding_digest,
     :integrity_alarm,
     :no_head_consent,
+    :head_corrupt,
     :unknown_source_node,
     :missing_ingress
   ]
+
+  # What the consent loader answers for a root's head, or a lender, the
+  # store could not answer: an outage.
+  @unanswered [:head_unavailable, :lender_unavailable]
 
   @doc """
   The state of the source `ref`'s consent (`t:state/0`), or why it could
@@ -87,7 +93,7 @@ defmodule Aqua.ConsentStatus do
         actions -> {:ok, {:drifted, actions}}
       end
     else
-      {:error, reason} -> classify(reason)
+      {:error, reason} -> classify_refusal(reason)
     end
   end
 
@@ -133,22 +139,39 @@ defmodule Aqua.ConsentStatus do
   defp consented(%{resources: %{tools: tools}}) when is_list(tools), do: tools
   defp consented(_authority), do: []
 
-  # Each answer a source's row or its authority can give, read as a state
-  # or a refusal. Anything not named here is a store that did not answer.
-  defp classify({:consent_required, _}), do: {:ok, :stale}
+  @doc """
+  How a refusal of a source's row, or of the authority a turn would pin
+  (`Crucible.authority_for/3`), reads: as a state of the consent
+  (`:stale` when it no longer answers for the source, `:absent` when
+  there is no one consent to judge), or as why it could not be read
+  (`t:refusal/0`). Damage is `:corrupt`: a stored profile, consent or
+  row that does not decode, a lender that does not, a stored grant that
+  fails the loader's integrity checks, or an active profile with no head.
+  Any answer not named here, an untyped one included, is a store that did
+  not answer (`:unavailable`).
+  """
+  @spec classify_refusal(term()) :: {:ok, :stale | :absent} | {:error, refusal()}
+  def classify_refusal({:consent_required, _}), do: {:ok, :stale}
 
-  defp classify(absent) when absent in [:not_found, :no_profile, :no_public_profile],
+  def classify_refusal(absent) when absent in [:not_found, :no_profile, :no_public_profile],
     do: {:ok, :absent}
 
-  defp classify({absent, _})
-       when absent in [:not_found, :profile_unavailable, :ambiguous, :setup_required],
-       do: {:ok, :absent}
+  def classify_refusal({absent, _})
+      when absent in [:not_found, :profile_unavailable, :ambiguous, :setup_required],
+      do: {:ok, :absent}
 
-  defp classify(tenant) when tenant in [:no_athanor, :missing_tenant], do: {:error, :forbidden}
-  defp classify(:corrupt), do: {:error, :corrupt}
+  def classify_refusal(tenant) when tenant in [:no_athanor, :missing_tenant],
+    do: {:error, :forbidden}
+
+  def classify_refusal(:corrupt), do: {:error, :corrupt}
   # Admission's damaged profile row or stored manifest (`Prima.Refusal`'s
   # corrupt rows).
-  defp classify({:corrupt, _what}), do: {:error, :corrupt}
-  defp classify({damage, _}) when damage in @corrupt, do: {:error, :corrupt}
-  defp classify(_unreadable), do: {:error, :unavailable}
+  def classify_refusal({:corrupt, _what}), do: {:error, :corrupt}
+  def classify_refusal({damage, _}) when damage in @corrupt, do: {:error, :corrupt}
+  # A lender whose profile row or head does not decode, or whose head's
+  # bytes fail their digest or do not parse
+  # (`{:lender_corrupt, target, profile_id}`).
+  def classify_refusal({:lender_corrupt, _target, _profile_id}), do: {:error, :corrupt}
+  def classify_refusal({outage, _}) when outage in @unanswered, do: {:error, :unavailable}
+  def classify_refusal(_unreadable), do: {:error, :unavailable}
 end

@@ -804,7 +804,7 @@ defmodule Aqua.Notes do
   defp guest_may_cross(_ctx), do: :ok
 
   # "Mine" is the person's own athanor, reached through `Context.focus/2` —
-  # the audited narrowing entry, not a raw struct update: focus checks
+  # the narrowing entry, not a raw struct update: focus checks
   # membership (production seats the owner in their personal athanor at
   # mint, `Sanctum.Provisioning.ensure_personal_athanor/1`) and refuses an
   # archived athanor, both of which a bare `%{ctx | athanor_id: id}` would

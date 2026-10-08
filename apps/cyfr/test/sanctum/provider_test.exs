@@ -4,6 +4,8 @@
 defmodule Sanctum.ProviderTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Context
   alias Sanctum.Provider
 
@@ -31,9 +33,9 @@ defmodule Sanctum.ProviderTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 14 action-based tools" do
+    test "returns 15 action-based tools" do
       tools = Provider.tools()
-      assert length(tools) == 14
+      assert length(tools) == 15
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
@@ -50,6 +52,8 @@ defmodule Sanctum.ProviderTest do
       assert "oauth" in tool_names
       assert "tincture_visibility" in tool_names
       assert "webhook" in tool_names
+      # The instance's own credentials, beside the athanor's vault.
+      assert "instance_entry" in tool_names
     end
 
     test "each tool has required schema fields" do
@@ -184,6 +188,44 @@ defmodule Sanctum.ProviderTest do
 
       {:ok, result} = Provider.handle("session", ctx, %{"action" => "whoami"})
       assert result.email == nil
+    end
+
+    test "whoami names when the calling session ends: its row's expiry, as RFC 3339",
+         %{ctx: ctx} do
+      ctx = Sanctum.TestContext.issuer!(ctx)
+      {:ok, session} = Sanctum.Session.create(ctx)
+      hash = Sanctum.Session.token_hash(session.token)
+      session_ctx = %{ctx | session_token_hash: hash}
+
+      {:ok, result} = Provider.handle("session", session_ctx, %{"action" => "whoami"})
+      {:ok, expires_at} = Sanctum.Session.expires_at_by_hash(hash)
+
+      assert {:ok, answered, 0} = DateTime.from_iso8601(result.session_expires_at)
+      assert DateTime.compare(answered, expires_at) == :eq
+      assert DateTime.compare(answered, DateTime.utc_now()) == :gt
+
+      # A session that ended answers none, as a key does.
+      :ok = Sanctum.Session.destroy(session.token)
+      {:ok, ended} = Provider.handle("session", session_ctx, %{"action" => "whoami"})
+      assert ended.session_expires_at == nil
+      assert Sanctum.Session.expires_at_by_hash(hash) == {:error, :invalid_session}
+    end
+
+    test "whoami names no session end for a caller an API key authenticated" do
+      ctx =
+        Context.build(
+          user_id: "usr_keyed",
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :api_key,
+          namespace: "testns",
+          authenticated: true
+        )
+
+      assert ctx.session_token_hash == nil
+      {:ok, result} = Provider.handle("session", ctx, %{"action" => "whoami"})
+      assert Map.has_key?(result, :session_expires_at)
+      assert result.session_expires_at == nil
     end
 
     test "login returns redirect info", %{ctx: ctx} do
@@ -401,6 +443,92 @@ defmodule Sanctum.ProviderTest do
       assert result.public == false
     end
 
+    # A profile row whose kind is outside the closed vocabulary may be the
+    # public one, so the tincture's visibility cannot be read: it is
+    # refused in its own sentence, never told to publish over a record
+    # that exists.
+    test "a tincture whose one profile row is damaged is refused, never told it has no profile",
+         %{ctx: ctx} do
+      {:ok, _} =
+        Arca.ProfileStorage.put(%{
+          id: "prof_vis_dmg",
+          athanor_id: ctx.athanor_id,
+          source_ref: "tincture:local.vis-dmg",
+          kind: "owner",
+          label: "default",
+          status: "active"
+        })
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(p in Arca.Schemas.Profile,
+            where: p.athanor_id == ^ctx.athanor_id and p.id == "prof_vis_dmg"
+          ),
+          set: [kind: "sideways"]
+        )
+
+      args = %{"action" => "get", "publisher" => "local", "name" => "vis-dmg"}
+
+      assert Provider.handle("tincture_visibility", ctx, args) ==
+               {:error, {:corrupt, {:profile, "prof_vis_dmg"}}}
+
+      # As an MCP client receives it: a failed tool result carrying the
+      # sentence whole.
+      assert Emissary.MCP.Router.dispatch(ctx, %Prima.MCP.Message{
+               type: :request,
+               id: 1,
+               method: "tools/call",
+               params: %{"name" => "tincture_visibility", "arguments" => args}
+             }) ==
+               {:ok,
+                %{
+                  "content" => [
+                    %{
+                      "type" => "text",
+                      "text" => "The stored profile is damaged and cannot be used."
+                    }
+                  ],
+                  "isError" => true
+                }}
+    end
+
+    # "No profiles" tells a person to publish one; a store that could not
+    # answer says nothing of the tincture's profiles, so it is refused.
+    @tag :capture_log
+    test "an outage is refused in its own sentence, never read as a tincture with no profile",
+         %{ctx: ctx} do
+      get = fn name ->
+        Provider.handle("tincture_visibility", ctx, %{
+          "action" => "get",
+          "publisher" => "local",
+          "name" => name
+        })
+      end
+
+      assert {:ok, %{public: false, note: "No profiles — publish with profile.publish"}} =
+               get.("vis-none")
+
+      {:ok, _} =
+        Arca.ProfileStorage.put(%{
+          id: "prof_vis_owner_#{System.unique_integer([:positive])}",
+          athanor_id: ctx.athanor_id,
+          source_ref: "tincture:local.vis-owner",
+          kind: "owner",
+          label: "default",
+          status: "active"
+        })
+
+      # A tincture with a profile but no public one is private, and is not
+      # told it has none.
+      assert {:ok, %{public: false} = private} = get.("vis-owner")
+      refute Map.has_key?(private, :note)
+
+      Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+      assert {:error, {:unavailable, "Consent profiles"} = reason} = get.("vis-none")
+      assert Grimoire.Error.render(reason) == "Consent profiles is unavailable — retry shortly"
+    end
+
     test "reports public when an active public profile exists", %{ctx: ctx} do
       on_exit(fn ->
         nil
@@ -435,6 +563,170 @@ defmodule Sanctum.ProviderTest do
       segment = Sanctum.Tenancy.Athanors.route_slug(athanor)
       assert result.url == Prima.TinctureUrl.path(segment, "local", "vis-test")
     end
+  end
+
+  describe "profile plan over a lender it cannot read" do
+    # The planner refuses a plan over a dependency's lender the store could
+    # not answer, or whose profile row or head does not decode
+    # (`Sanctum.Consent.Plan.plan/2`). `profile.plan` answers each typed,
+    # so an MCP client receives a JSON-RPC error of its class in
+    # `Sanctum.Unauthorized`'s sentence, and the call's decision records
+    # that class, with nothing logged as a reason no table knows.
+    @plan_dep "reagent:local.mcp-plan-dep"
+    @plan_app "reagent:local.mcp-plan-app"
+    @plan_wasm Path.join(__DIR__, "../support/test_wasm/math.wasm")
+
+    setup %{ctx: ctx} do
+      Arca.Cache.init()
+      Cyfr.Test.SeedBundle.isolate!()
+
+      ship_plan_component!(ctx, "mcp-plan-dep", %{
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:openai.com",
+            "reason" => "to call the model with a key",
+            "fields" => ["OPENAI_API_KEY"],
+            "attach" => %{
+              "in" => "header",
+              "name" => "Authorization",
+              "template" => "Bearer {value}"
+            }
+          }
+        }
+      })
+
+      ship_plan_component!(ctx, "mcp-plan-app", %{
+        "dependencies" => %{"static" => [%{"ref" => @plan_dep}]}
+      })
+
+      {:ok, key} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "mcp-plan-key-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          fields: %{"OPENAI_API_KEY" => "sk-plan"},
+          destination: %{"hosts" => ["api.openai.com"]}
+        })
+
+      grant_plan_dep!(ctx, [%{need: "api_key", entry_id: key.id}])
+      {:ok, [%{id: lender}]} = Sanctum.Consent.profiles(ctx, @plan_dep)
+
+      # The lender lends: the plan offers it.
+      assert {:ok, %{dependency_needs: [%{candidates: [%{profile_id: ^lender}]}]}} =
+               Provider.handle("profile", ctx, %{"action" => "plan", "ref" => @plan_app})
+
+      {:ok, lender: lender}
+    end
+
+    @tag :capture_log
+    test "a lender the store cannot answer reaches an MCP client as an unavailable error",
+         %{ctx: ctx} do
+      # The app has no profile of its own, so the lender's is the one head
+      # the plan reads.
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+      {answer, decision, log} = plan_over_mcp(ctx)
+
+      assert answer == %{
+               "jsonrpc" => "2.0",
+               "id" => 1,
+               "error" => %{
+                 "code" => -33103,
+                 "message" =>
+                   "A profile that lends a key here cannot be read right now — try again."
+               }
+             }
+
+      assert %{admission: :admitted, completion: :failed, completion_class: :unavailable} =
+               decision
+
+      refute log =~ "unexpected message"
+    end
+
+    test "a damaged lender reaches an MCP client as a corrupt error", %{
+      ctx: ctx,
+      lender: lender
+    } do
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender, scope: "sideways")
+
+      {answer, decision, log} = plan_over_mcp(ctx)
+
+      assert answer == %{
+               "jsonrpc" => "2.0",
+               "id" => 1,
+               "error" => %{
+                 "code" => -33104,
+                 "message" =>
+                   "A profile that lends a key here is damaged and cannot lend its key — " <>
+                     "revoke profile #{lender} and grant it again."
+               }
+             }
+
+      assert %{admission: :admitted, completion: :failed, completion_class: :corrupt} = decision
+      refute log =~ "unexpected message"
+    end
+  end
+
+  defp ship_plan_component!(ctx, name, manifest) do
+    {:ok, _component} =
+      Arca.Test.UnitFixtures.ship_and_register!(ctx, "reagent", "local", name, "1.0.0",
+        manifest:
+          Map.merge(manifest, %{
+            "name" => name,
+            "type" => "reagent",
+            "version" => "1.0.0",
+            "publisher" => "local"
+          }),
+        wasm: File.read!(@plan_wasm)
+      )
+  end
+
+  defp grant_plan_dep!(ctx, bindings) do
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: @plan_dep})
+    decisions = %{ref: @plan_dep, bindings: bindings}
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _committed} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
+  # `profile.plan` of the app as an MCP client calls it, under a request of
+  # its own: the response the client receives (the router's answer encoded
+  # as `Emissary.Web.MCPController` encodes it), the call's one decision,
+  # and the log.
+  defp plan_over_mcp(ctx) do
+    ctx = %{ctx | request_id: Prima.UUID7.request_id()}
+
+    {answer, log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        Emissary.MCP.Router.dispatch(ctx, %Prima.MCP.Message{
+          type: :request,
+          id: 1,
+          method: "tools/call",
+          params: %{
+            "name" => "profile",
+            "arguments" => %{"action" => "plan", "ref" => @plan_app}
+          }
+        })
+      end)
+
+    response =
+      case answer do
+        {:ok, result} -> Prima.MCP.Message.encode_result(1, result)
+        {:error, code, message} -> Prima.MCP.Message.encode_error(1, code, message)
+        {:error, code, message, data} -> Prima.MCP.Message.encode_error(1, code, message, data)
+      end
+
+    assert {:ok, [decision]} =
+             Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
+
+    {response, decision, log}
   end
 
   describe "tincture_visibility invalid action" do

@@ -4,13 +4,14 @@
 defmodule Sanctum.ContextFocusTest do
   @moduledoc """
   Focus narrows everyone, admins included: a request context works inside
-  one athanor, and being a platform admin is a capability that admits the
-  operator verbs and an audited open — never a wider tenant scope.
+  one athanor, and only one its person holds a seat in. Being a platform
+  admin is a capability over the instance that admits the platform-scope
+  operations — never a seat, and never a wider tenant scope.
   """
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -118,37 +119,119 @@ defmodule Sanctum.ContextFocusTest do
     assert {:error, :not_found} = Context.refocus(c, nil)
   end
 
-  test "a platform admin may open any athanor — audited, still :athanor scope",
-       %{b: b, ops: ops, ctx: ctx} do
+  test "a platform administrator without a seat cannot focus an athanor",
+       %{a: a, b: b, alice: alice, ops: ops, ctx: ctx} do
+    {:ok, personal} =
+      Athanors.create(%{
+        kind: "person",
+        name: "Alice",
+        slug: "alice-#{System.unique_integer([:positive])}",
+        owner_user_id: alice,
+        created_by: alice
+      })
+
+    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: personal.id)
+
     handler = "focus-test-#{System.unique_integer([:positive])}"
     parent = self()
 
+    # This case's own process alone: another module's internal contexts
+    # are built beside it.
     :telemetry.attach(
       handler,
       [:cyfr, :sanctum, :platform_context],
-      fn _e, _m, meta, _c -> send(parent, {:audit, meta}) end,
+      fn _e, _m, meta, _c -> if self() == parent, do: send(parent, {:audit, meta}) end,
       nil
     )
 
     on_exit(fn -> :telemetry.detach(handler) end)
 
-    assert {:ok, focused} = Context.focus(ctx.(ops, nil, true), b)
-    assert focused.athanor_id == b.id
-    assert focused.scope == :athanor
-    assert focused.platform_admin
-    assert_receive {:audit, %{caller: :focus, athanor_id: bid}}
-    assert bid == b.id
+    admin = ctx.(ops, nil, true)
+    assert admin.platform_admin
 
-    # The actor an Arca facade receives carries neither authority: the
-    # capability admits the operator verbs, and the rows it then reads are
-    # the focused athanor's.
-    assert Context.actor(focused).scope == :athanor
-    refute Context.actor(focused).system
+    # A group, another person's own athanor: the capability is no seat in
+    # either, so focus refuses the operator exactly as it refuses anyone.
+    for athanor <- [a, b, personal] do
+      assert {:error, :not_member} = Context.focus(admin, athanor)
+      assert {:error, :not_member} = Context.focus(admin, athanor.id)
+      assert {:error, :not_member} = Context.refocus(admin, athanor.id)
+    end
+
+    # Refused, and audited by nothing: no open is recorded, because none
+    # happened.
+    refute_received {:audit, _}
+
+    # A platform context of the same person is no way round it either.
+    platform =
+      Sanctum.TestContext.platform(
+        user_id: ops,
+        permissions: [:*],
+        auth_method: :oidc,
+        platform_admin: true
+      )
+
+    assert_received {:audit, %{sanctioned: true, user_id: ^ops}}
+    assert {:error, :not_member} = Context.focus(platform, b)
+    refute_received {:audit, _}
   end
 
-  test "an admin focused on A cannot read B's records — no scope bypass",
+  test "an administrator who left a group cannot focus it, and their session falls back to their own athanor",
+       %{a: a, ctx: ctx} do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Users.upsert_from_provider(%{
+        id: "github|https://github.com|ops-own-#{n}",
+        provider: "github",
+        email: "ops-own#{n}@example.com",
+        verified: true
+      })
+
+    {:ok, own} =
+      Athanors.create(%{
+        kind: "person",
+        name: "Ops",
+        slug: "ops-own-#{n}",
+        owner_user_id: user.id,
+        created_by: user.id
+      })
+
+    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: own.id)
+    {:ok, _} = Users.set_personal_athanor(user, own.id)
+    {:ok, _} = Members.ensure_platform(user.id)
+    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: a.id)
+
+    admin = ctx.(user.id, nil, true)
+    assert {:ok, %{athanor_id: focused}} = Context.focus(admin, a)
+    assert focused == a.id
+
+    # They leave; alice stays, so the group stays open.
+    :ok = Members.remove_member(a, user_id: user.id)
+    assert {:ok, %{status: "active"}} = Athanors.get(a.id)
+
+    assert {:error, :not_member} = Context.focus(admin, a)
+
+    # A session still naming the group is moved on its next revalidation to
+    # their own athanor: the capability stays, and keeps them in no other.
+    {:ok, revalidated} = Sanctum.Tenancy.revalidate(ctx.(user.id, a.id, true))
+    assert revalidated.athanor_id == own.id
+    assert revalidated.platform_admin
+    assert revalidated.scope == :athanor
+  end
+
+  test "a member focused on A cannot read B's records, operator or not — no scope bypass",
        %{a: a, b: b, ops: ops, ctx: ctx} do
+    # The operator holds a seat in A: a member like any other, whose
+    # capability widens nothing.
+    {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: a.id)
     {:ok, focused} = Context.focus(ctx.(ops, nil, true), a)
+    assert focused.platform_admin
+
+    # The actor an Arca facade receives carries neither authority: the rows
+    # it reads are the focused athanor's.
+    assert Context.actor(focused).scope == :athanor
+    refute Context.actor(focused).system
+
     assert :ok = Context.authorize(focused, :read, {:tenant, %{athanor_id: a.id}})
     assert {:error, _} = Context.authorize(focused, :read, {:tenant, %{athanor_id: b.id}})
     assert {:error, _} = Sanctum.TenantPolicy.verify(focused, %{athanor_id: b.id})
@@ -162,8 +245,9 @@ defmodule Sanctum.ContextFocusTest do
     assert inspect(query) =~ "athanor_id"
   end
 
-  test "an admin focused on A cannot reach B's execution or files through the tools either",
+  test "a member focused on A cannot reach B's execution or files through the tools either, operator or not",
        %{a: a, b: b, ops: ops, ctx: ctx} do
+    {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: a.id)
     {:ok, focused} = Context.focus(ctx.(ops, nil, true), a)
     b_exec = "exec_b_#{System.unique_integer([:positive])}"
 

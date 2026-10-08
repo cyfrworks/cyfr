@@ -3,13 +3,15 @@
 //
 // chat-fixture: a `model/chat@1` catalyst whose `chat` plays the script its
 // request carries and answers what it was given. It decides nothing: the
-// events, the answer, a refusal, a trap and a wait are all the script's.
-// Nothing is dialled. See ../README.md for the script and the rebuild.
+// events, the answer, a refusal, a trap, a wait and the one request a step
+// may make on its connection are all the script's. See ../README.md for the
+// script and the rebuild.
 
 #[allow(warnings)]
 mod bindings;
 
 use bindings::cyfr::emit::events;
+use bindings::cyfr::http::fetch;
 use bindings::cyfr::vault::read;
 use bindings::exports::cyfr::catalyst::run::Guest;
 
@@ -17,6 +19,9 @@ use serde_json::{json, Map, Value};
 
 const CONTRACT: &str = "model/chat@1";
 const KEY_FIELD: &str = "FIXTURE_API_KEY";
+// The need a step's attached request names: CYFR attaches the key bound to
+// it, and the fixture never holds that key.
+const CONNECTION: &str = "api_key";
 const CONTEXT_WINDOW: u64 = 1_000_000;
 const MAX_OUTPUT_TOKENS: u64 = 4096;
 const FENCE_OPEN: &str = "```chat-fixture";
@@ -63,14 +68,24 @@ fn describe(params: &Value) -> String {
 }
 
 fn chat(params: Value) -> String {
-    let key = match read::get(KEY_FIELD) {
-        Ok(key) => key,
-        Err(e) => return refuse(500, "secret_denied", &format!("Failed to read {KEY_FIELD}: {e}")),
-    };
-
     let (index, step) = match step(&params) {
         Ok(found) => found,
         Err(message) => return refuse(400, "invalid_request", &message),
+    };
+
+    // A step that names an attached request plays in attach mode: the
+    // request goes out on the connection first, CYFR attaches the key, and
+    // the fixture reads no key at all, so its key words play as nothing. A
+    // step without one reads the bound key, as a disclosed key is read.
+    let (key, prelude) = match step.get("attached_request") {
+        Some(request) => match attached(request) {
+            Ok(answer) => (String::new(), Some(answer)),
+            Err(refusal) => return refusal,
+        },
+        None => match read::get(KEY_FIELD) {
+            Ok(key) => (key, None),
+            Err(e) => return refuse(500, "secret_denied", &format!("Failed to read {KEY_FIELD}: {e}")),
+        },
     };
 
     let mut emitted = Vec::new();
@@ -96,12 +111,41 @@ fn chat(params: Value) -> String {
         _ => Map::new(),
     };
 
-    data.insert(
-        "fixture".to_string(),
-        json!({"step": index, "received": params, "emitted": emitted}),
-    );
+    let mut report = json!({"step": index, "received": params, "emitted": emitted});
 
+    if let Some(answer) = prelude {
+        report["attached"] = answer;
+    }
+
+    data.insert("fixture".to_string(), report);
     ok(Value::Object(data))
+}
+
+// A step's attached request, made with `cyfr:http/fetch` on the connection
+// (a script that names its own `connection` keeps it), and the host's answer
+// as it came. A host refusal ends the step as the chat's refusal, with the
+// host's type and message, and nothing emitted.
+fn attached(request: &Value) -> Result<Value, String> {
+    let mut request = request.clone();
+
+    match request.as_object_mut() {
+        Some(fields) => {
+            fields.entry("connection").or_insert_with(|| json!(CONNECTION));
+        }
+        None => return Err(refuse(400, "invalid_request", "the attached request is not an object")),
+    }
+
+    let answer = fetch::request(&request.to_string());
+    let answer: Value = serde_json::from_str(&answer).unwrap_or(Value::String(answer));
+
+    match answer.get("error") {
+        Some(error) => {
+            let kind = error.get("type").and_then(Value::as_str).unwrap_or("http_error");
+            let message = error.get("message").and_then(Value::as_str).unwrap_or("the request failed");
+            Err(refuse(502, kind, message))
+        }
+        None => Ok(answer),
+    }
 }
 
 // The step this call plays: the script is the last fenced block of the last

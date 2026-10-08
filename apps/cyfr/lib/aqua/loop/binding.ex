@@ -16,7 +16,8 @@ defmodule Aqua.Loop.Binding do
   catalyst is the hand it aliases, an `execution.run` of an agent is
   refused (a role is cloned, never launched), and any other
   `execution.run` is a launch the loop hands to `Aqua.Launch` after a
-  card.
+  card, its arguments as the model wrote them, the account it names
+  (`connection`) among them.
 
   `dispatch/2` runs a hand, a catalog call or an external call under the
   turn's authority from a worker of the loop's, with the turn root as

@@ -26,7 +26,13 @@ defmodule PrismWeb.ThreadPaneLive do
   system layer, under its own context in the same athanor, and hands the
   outcome back as `{:system_layer, id, outcome}`
   (`PrismWeb.SystemLayer.relay/4`). Granted, the running turn is cut for
-  the new consent and the sender re-sends.
+  the new consent and the sender re-sends. A grant asked for an account a
+  launch named (`account` on the turn's `:consent_required`) opens on that
+  account, on the launched app's own profile; the turn that asked has
+  already ended, so once it is granted nothing is cut, and the pane
+  offers to send that turn's own message (`message_id` on the event,
+  read by its id from this thread) again, as a new turn, or says that
+  the turn ended when it has no such message to offer.
 
   In the person's own panel (`PrismWeb.AquaPanelLive`, session `"panel"`)
   the pane sits beside a room: it hears what the host page shows
@@ -114,7 +120,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:members, member_labels(ctx))
       |> assign(:roster, roster)
       |> assign(:preparing?, preparing?)
-      |> assign(:model_ready, model_ready(ctx, roster))
+      |> assign(:model_ready, model_ready(ctx, if(connected?(socket), do: agents(ctx), else: [])))
       |> assign(:solo_human, Sanctum.Tenancy.Members.solo?(ctx.athanor_id))
       |> assign(:own?, Users.own_athanor?(ctx.user_id, ctx.athanor_id))
       |> assign(:links, [])
@@ -243,7 +249,9 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:grants, MapSet.new())
     |> assign(:announcement, "")
     |> assign(:grant_prompt, nil)
+    |> assign(:grant_retry, nil)
     |> assign(:restart_prompt, nil)
+    |> assign(:restart_note, nil)
     |> assign(:cancel_requested, false)
   end
 
@@ -498,19 +506,20 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The grant this pane asked for, as the host's layer reported it.
   # Granted, the running turn is cut for the new consent and the sender
-  # re-sends; a refused commit leaves the prompt open; anything else
-  # ended it.
+  # re-sends; granted for a launch's account, whose turn already ended,
+  # nothing is cut and the pane offers that turn's message again as a new
+  # turn; a refused commit leaves the prompt open; anything else ended it.
   def handle_info({:system_layer, id, outcome}, %{assigns: %{grant_prompt: id}} = socket)
       when is_binary(id) do
     case outcome do
       :confirmed ->
-        {:noreply, socket |> assign(:grant_prompt, nil) |> restart_for_consent()}
+        {:noreply, socket |> assign(:grant_prompt, nil) |> after_grant()}
 
       {:refused, reason} when reason != :invalid_prompt ->
         {:noreply, socket}
 
       _ended ->
-        {:noreply, assign(socket, :grant_prompt, nil)}
+        {:noreply, socket |> assign(:grant_prompt, nil) |> assign(:grant_retry, nil)}
     end
   end
 
@@ -555,7 +564,7 @@ defmodule PrismWeb.ThreadPaneLive do
             socket
             |> assign(:preparing?, false)
             |> assign(:roster, roster)
-            |> assign(:model_ready, model_ready(ctx, roster))
+            |> assign(:model_ready, model_ready(ctx, agents(ctx)))
             |> load_models()
 
           # The send held for the fill goes now, once; a refusal holds it
@@ -766,10 +775,11 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # One grant asked at a time: the turn says it again while the prompt is
-  # open, and the open prompt already asks it.
-  defp handle_thread_event(socket, :consent_required, %{ref: ref, user_id: user_id}) do
+  # open, and the open prompt already asks it. A launch naming an account
+  # its app does not bind asks for that account.
+  defp handle_thread_event(socket, :consent_required, %{ref: ref, user_id: user_id} = data) do
     if user_id == socket.assigns.context.user_id and is_nil(socket.assigns.grant_prompt),
-      do: ask_grant(socket, ref),
+      do: ask_grant(socket, ref, Map.get(data, :account), Map.get(data, :message_id)),
       else: socket
   end
 
@@ -777,6 +787,7 @@ defmodule PrismWeb.ThreadPaneLive do
     if user_id == socket.assigns.context.user_id do
       socket
       |> assign(:restart_prompt, text)
+      |> assign(:restart_note, nil)
       |> put_flash(:info, "Approved — re-send to continue.")
     else
       socket
@@ -1073,28 +1084,84 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # The grant for `ref`, read under the pane's context and asked in the
-  # system layer of the view that renders the pane. A pane with no host
-  # has no layer to ask in, and says so.
-  defp ask_grant(%{parent_pid: host} = socket, ref) when is_pid(host) do
+  # system layer of the view that renders the pane: opened on `account`,
+  # the account a launch named, on the app's own calls, when the turn
+  # names one, remembering the message of the turn that asked
+  # (`message_id`). A pane with no host has no layer to ask in, and says
+  # so.
+  defp ask_grant(%{parent_pid: host} = socket, ref, account, message_id) when is_pid(host) do
     id = "grant-#{socket.id}-#{System.unique_integer([:positive])}"
 
-    case PrismWeb.SystemLayer.grant_prompt(socket, id, ref) do
+    case PrismWeb.SystemLayer.grant_prompt(socket, id, ref, account_opts(account)) do
       {:ok, prompt} ->
         tell_host(socket, {:grant, self(), prompt})
-        assign(socket, :grant_prompt, id)
+
+        socket
+        |> assign(:grant_prompt, id)
+        |> assign(:grant_retry, if(account, do: {:account, message_id}))
 
       {:error, reason} ->
         put_flash(socket, :error, "Cannot ask for this grant: #{error_message(reason)}")
     end
   end
 
-  defp ask_grant(socket, _ref),
+  defp ask_grant(socket, _ref, _account, _message_id),
     do:
       put_flash(
         socket,
         :error,
         "This turn needs a grant. Open the thread in the chat to give it."
       )
+
+  defp account_opts(%{name: name} = account) when is_binary(name),
+    do: [account: %{name: name, dep: nil, need: Map.get(account, :need)}]
+
+  defp account_opts(_none), do: []
+
+  # The text of the ended turn's own message, read by its id from this
+  # thread: never a scan of the rows around it, which may hold a line
+  # queued while the turn ran, or not reach back to it at all.
+  defp retry_text(%{assigns: %{thread: %{id: thread_id}, context: ctx}}, message_id)
+       when is_binary(message_id) do
+    case Threads.get_message(Sanctum.Context.actor(ctx), message_id) do
+      {:ok, %{thread_id: ^thread_id, kind: "text", content: text}}
+      when is_binary(text) and text != "" ->
+        text
+
+      _none ->
+        nil
+    end
+  end
+
+  defp retry_text(_socket, _message_id), do: nil
+
+  # A grant opened for a launch's account offers its turn's message again,
+  # as a new turn: that turn ended, so nothing is cut, and with no message
+  # of that turn to offer the pane only says so. Any other grant cuts the
+  # running turn for the new consent.
+  defp after_grant(%{assigns: %{grant_retry: {:account, message_id}}} = socket) do
+    socket = assign(socket, :grant_retry, nil)
+
+    case retry_text(socket, message_id) do
+      text when is_binary(text) ->
+        socket
+        |> assign(:restart_prompt, text)
+        |> assign(
+          :restart_note,
+          "The account is granted — send that message again, as a new turn?"
+        )
+        |> put_flash(:info, "Granted — re-send to continue.")
+
+      nil ->
+        put_flash(
+          socket,
+          :info,
+          "Granted. The turn that asked has ended — send your message again to run it."
+        )
+    end
+  end
+
+  defp after_grant(socket), do: socket |> assign(:grant_retry, nil) |> restart_for_consent()
 
   defp restart_for_consent(socket) do
     case socket.assigns.thread do
@@ -1117,17 +1184,55 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # Whether this athanor's AQUA can answer at all: a soul, and a model
   # with a key behind it. A fresh furnace has neither, and the chat is
-  # where someone finds that out — not the drawer.
-  defp model_ready(ctx, roster) do
-    case Aqua.model_status(ctx, roster) do
+  # where someone finds that out — not the drawer. A model whose consent
+  # exists but is damaged, or could not be read, is said as such: no model
+  # is offered to connect over a consent that exists.
+  # An agents list that could not be read is not a room with no model.
+  defp model_ready(_ctx, :unread), do: :agents_unavailable
+
+  defp model_ready(ctx, agents) do
+    case Aqua.model_status(ctx, agents) do
       empty when map_size(empty) == 0 -> :no_model
-      statuses -> if Enum.any?(statuses, &match?({_, {:ready, _}}, &1)), do: :ready, else: :no_key
+      statuses -> unready_model(Map.values(statuses))
+    end
+  end
+
+  # The athanor's agents with their type and model, read through the
+  # `aqua` tool's list with detail, as the AQUA page's agents panel reads
+  # them: the roster names who can be addressed and carries neither, so a
+  # model's status read from it would always be none. An in-process
+  # answer is atom-keyed and a wire one string-keyed; each agent is read
+  # by string key. A list that cannot be read is `:unread`, never no
+  # agents.
+  defp agents(ctx) do
+    case PrismWeb.Ops.call_tool(ctx, "aqua", %{"action" => "list", "detail" => true}) do
+      {:ok, %{} = listed} -> listed |> guides() |> Enum.map(&string_keyed/1)
+      _unread -> :unread
+    end
+  end
+
+  defp guides(%{"guides" => guides}) when is_list(guides), do: guides
+  defp guides(%{guides: guides}) when is_list(guides), do: guides
+  defp guides(_listed), do: []
+
+  defp string_keyed(%{} = agent),
+    do: Map.new(agent, fn {key, value} -> {to_string(key), value} end)
+
+  defp string_keyed(_agent), do: %{}
+
+  defp unready_model(statuses) do
+    cond do
+      Enum.any?(statuses, &match?({:ready, _}, &1)) -> :ready
+      Enum.any?(statuses, &match?({:consent_damaged, _}, &1)) -> :consent_damaged
+      Enum.any?(statuses, &match?({:consent_unavailable, _}, &1)) -> :consent_unavailable
+      Enum.any?(statuses, &match?({:model_unavailable, _}, &1)) -> :model_unavailable
+      true -> :no_key
     end
   end
 
   # What to call the athanor in its own chat: the person's own is "your
-  # AQUA" — theirs, not any person-kind athanor an operator opened — a DM
-  # or a group goes by its label.
+  # AQUA" — the one their row names as theirs, not any person-kind
+  # athanor — a DM or a group goes by its label.
   defp athanor_label(%{} = athanor, ctx) do
     if PrismWeb.Athanors.own?(athanor, ctx),
       do: "your AQUA",
@@ -1416,21 +1521,44 @@ defmodule PrismWeb.ThreadPaneLive do
             <span>{athanor_label(@athanor, @context)} is still being prepared.</span>
             <span class="text-gray-600">Its agents and components are being installed.</span>
           <% else %>
-            <%= if @model_ready in [:no_model, :no_key] do %>
-              <span>{athanor_label(@athanor, @context)} has no model yet.</span>
-              <%!-- From the panel a navigate would leave the room being read. --%>
-              <.link
-                :if={not @panel?}
-                navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
-                class="inline-flex min-h-6 items-center text-blue-400 hover:text-blue-300"
-              >
-                Connect a model
-              </.link>
-              <span :if={@panel?} class="text-gray-500">Connect one on your AQUA page.</span>
-            <% else %>
-              <span>
-                Ask {assistant_label(current_assistant(@assistant, @roster))} anything.
-              </span>
+            <%= cond do %>
+              <% @model_ready in [:no_model, :no_key] -> %>
+                <span>{athanor_label(@athanor, @context)} has no model yet.</span>
+                <%!-- From the panel a navigate would leave the room being read. --%>
+                <.link
+                  :if={not @panel?}
+                  navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
+                  class="inline-flex min-h-6 items-center text-blue-400 hover:text-blue-300"
+                >
+                  Connect a model
+                </.link>
+                <span :if={@panel?} class="text-gray-500">Connect one on your AQUA page.</span>
+              <% @model_ready == :consent_damaged -> %>
+                <%!-- A consent that exists but is damaged, or could not be read,
+                     is no model to connect: it is said as such. --%>
+                <span data-test="model-consent">
+                  A consent this model runs under is damaged and cannot be used — revoke the damaged profile and grant it again.
+                </span>
+              <% @model_ready == :consent_unavailable -> %>
+                <span data-test="model-consent">
+                  A consent this model runs under cannot be read right now — try again.
+                </span>
+              <% @model_ready == :agents_unavailable -> %>
+                <%!-- Whether the room has agents, or a model, could not be
+                     read: nothing is offered but to try again. --%>
+                <span data-test="agents-unavailable">
+                  The agents cannot be read right now — try again.
+                </span>
+              <% @model_ready == :model_unavailable -> %>
+                <%!-- Whether the model is installed could not be read: nothing
+                     is offered but to try again. --%>
+                <span data-test="model-unavailable">
+                  This model cannot be read right now — try again.
+                </span>
+              <% true -> %>
+                <span>
+                  Ask {assistant_label(current_assistant(@assistant, @roster))} anything.
+                </span>
             <% end %>
           <% end %>
         </div>
@@ -1599,7 +1727,9 @@ defmodule PrismWeb.ThreadPaneLive do
         :if={@restart_prompt}
         class="flex items-center gap-2 border-t border-blue-900/60 bg-blue-900/10 px-3 py-2 text-xs text-blue-200"
       >
-        <span class="truncate">The turn was cut for the new consent — send it again?</span>
+        <span class="truncate">
+          {@restart_note || "The turn was cut for the new consent — send it again?"}
+        </span>
         <button
           type="button"
           phx-click="restart_send"
@@ -1842,8 +1972,8 @@ defmodule PrismWeb.ThreadPaneLive do
       else: label
   end
 
-  # A member from the labels read at mount; anyone since gone (or an
-  # operator reading a room they hold no seat in) by the same rule.
+  # A member from the labels read at mount; anyone since gone by the same
+  # rule.
   defp label_for(members, user_id, ctx) when is_binary(user_id) do
     Map.get(members, user_id) || PrismWeb.People.label(user_id, ctx)
   end

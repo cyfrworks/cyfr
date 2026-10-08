@@ -38,9 +38,18 @@ defmodule Prima.Authority.TransitionTotalityTest do
 
     authorities = %{bound: Fixtures.root!(), unbound: Authority.zero()}
 
+    # An invoke naming an account is the same target tag: the relation
+    # decides it in the same cells.
+    named =
+      Fixtures.invoke("catalyst:supabase.com.database",
+        need: "source",
+        declared_needs: ["source", "dest"],
+        connection: "Archive"
+      )
+
     for {cursor, auth} <- authorities,
         fun <- Transition.guest_functions(),
-        {tag, target} <- representatives do
+        {tag, target} <- Map.to_list(representatives) ++ [{:invoke, named}] do
       outcome = Transition.step(auth, fun, target)
 
       assert valid_outcome?(outcome),
@@ -83,6 +92,7 @@ defmodule Prima.Authority.TransitionTotalityTest do
   defp valid_outcome?({:deny, :tool_not_granted}), do: true
   defp valid_outcome?({:deny, :tool_server_not_granted}), do: true
   defp valid_outcome?({:deny, :unbound_control_plane}), do: true
+  defp valid_outcome?({:deny, :connection_not_granted}), do: true
   defp valid_outcome?({:allow_tool, {:tools, action}}), do: is_binary(action)
   defp valid_outcome?({:allow_tool, {:tool_server, digest}}), do: is_binary(digest)
 

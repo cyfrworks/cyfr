@@ -10,13 +10,16 @@ defmodule Cyfr.EgressInventoryTest do
   live, so each site must be a classified, deliberate act: the control
   plane's pinned transport, the auth domain's token POST, the object
   store, the IdP sliver, or the two guest egress handlers.
-  A new `Req`/`Finch`/`httpc` call fails here until someone classifies
-  it — the fail-closed direction.
+  A new `Req`/`Finch`/`Mint`/`httpc` call fails here until someone
+  classifies it — the fail-closed direction.
 
   The pure `Prima.Network` policy validates a supplied address and constructs
   pinned options. Sanctum owns DNS resolution; Sanctum.Egress sends
   control-plane requests, and Opus owns the guest HTTP handlers, which
   connect to the address the control plane pinned and resolve nothing.
+  A guest's request that names a connection is the one guest request the
+  control plane makes itself (`Crucible.Host.AttachedFetch`), to the
+  address it pinned for it and resolving nothing more.
 
   Resolving an outbound name is inventoried beside sending to it: every
   site that resolves a host (`getaddr`) or pins a URL through the control
@@ -49,6 +52,13 @@ defmodule Cyfr.EgressInventoryTest do
     # rate taken, the answer bounded while it streams and sent on under the
     # runner's credit.
     "apps/opus/lib/opus/relay.ex" => :guest_fetch,
+    # A guest's attached request (`attached_fetch`), made by the control
+    # plane itself because it carries a credential no runner or worker
+    # service holds: the connection granted, the destination and the
+    # grant's egress checked, the one pin CYFR took for it connected to on
+    # a connection of the request's own, never pooled, no redirect
+    # followed, the answer bounded and masked as it streams.
+    "apps/cyfr/lib/crucible/host/attached_fetch.ex" => :attached_fetch,
     # The worker wire, CYFR's side: `Prima.WorkerAPI` requests to the
     # operator-configured worker services (CYFR_OPUS_WORKERS), signed with each
     # service's dispatch key, bounded answers (`Prima.WorkerWire`).
@@ -73,6 +83,7 @@ defmodule Cyfr.EgressInventoryTest do
     "Req.post!(",
     "Finch.build(",
     "Finch.request(",
+    "Mint.HTTP.connect(",
     ":httpc."
   ]
 

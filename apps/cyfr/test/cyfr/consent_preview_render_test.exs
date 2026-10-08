@@ -38,8 +38,9 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   every value is found in each output, in the row drawn for it. The
   admitted origins are the preview's top-level list, not a row, and
   `Prima.ConsentPreview.kinds/0` omits them, so each output is held to
-  them explicitly. The command line's rendering is held to the same
-  vectors by `apps/codex/cmd/profile_test.go`.
+  them explicitly, as it is to the head's bindings the preview removes,
+  each a line of its own. The command line's rendering is held to the
+  same vectors by `apps/codex/cmd/profile_test.go`.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -49,6 +50,36 @@ defmodule Cyfr.ConsentPreviewRenderTest do
 
   @vectors Path.expand("../../../../tests/fixtures/consent_preview.json", __DIR__)
   @ref "tincture:local.dashboard"
+
+  # The vectors' four credentials, each as its row's sentence.
+  @sentences [
+    "reagent:local.weather uses weather-api, an entry of this athanor, for its own calls: " <>
+      "a weather.example account, sent only to https://api.weather.example. " <>
+      "CYFR attaches the value and the component never holds it.",
+    "reagent:local.maps will use maps, an entry of this athanor, through its 'shared-maps' " <>
+      "profile, from reagent:local.weather for its tiles need: sent only to " <>
+      "https://tiles.maps.example, methods GET, paths /v1/tiles. " <>
+      "The component reads the value itself.",
+    "reagent:local.geo uses weather-api, provided by this instance, from reagent:local.weather, " <>
+      "as the account 'Geo account': a weather.example account, sent only to " <>
+      "https://*.weather.example port 8443, methods GET, POST, paths /v2. " <>
+      "CYFR attaches the value and the component never holds it.",
+    "reagent:local.maps uses maps public key, provided by local, the app's public " <>
+      "configuration, from reagent:local.weather for its geocode need: sent only to " <>
+      "https://geo.maps.example, paths /geocode. The component reads the value itself."
+  ]
+
+  # The vectors' removals, each as its line: the need it was bound for (or
+  # that it cannot be told, and on a dependency's edge, which), its
+  # account or the default, and its entry by name, else id or lender.
+  @removals [
+    "Removes api_key default: weather-old",
+    "Removes api_key account 'Work': weather-work",
+    "Removes a binding of reagent:local.geo from reagent:local.weather account 'Old geo': " <>
+      "ine_old_geo",
+    "Removes a binding of reagent:local.maps from reagent:local.weather default: " <>
+      "the key its 'old-maps' profile lent"
+  ]
 
   defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
 
@@ -63,6 +94,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
       rows: document["rows"],
       origins: document["origins"],
       commit_digest: document["commit_digest"],
+      removed: document["removed"],
       proof: "not-a-proof"
     }
   end
@@ -124,16 +156,61 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     for origin <- Prima.Origin.spellings() -- preview.origins do
       refute admits =~ "(#{origin})"
     end
+
+    # The head's bindings the grant removes, which are no row: each a line
+    # of its own, keyed by its binding, in the preview's order.
+    removals =
+      doc
+      |> LazyHTML.query(~s([data-test="grant-removed"] [data-binding]))
+      |> Enum.map(fn element ->
+        {LazyHTML.attribute(element, "data-binding"),
+         element |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()}
+      end)
+
+    assert removals ==
+             Enum.zip(Enum.map(preview.removed, &[&1["binding_key"]]), @removals)
+
+    # Each credential reads as one sentence, the whole of it in its row.
+    sentences =
+      doc
+      |> LazyHTML.query(~s([data-row="credential"] .consent-sheet__sentence))
+      |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+
+    for sentence <- @sentences, do: assert(sentence in sentences, "missing: #{sentence}")
+
+    # An attach-only credential's sentence says CYFR attaches the value and
+    # the component never holds it; a disclosed one's never says so.
+    attached = "CYFR attaches the value and the component never holds it."
+    credentials = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+
+    for {row, sentence} <- Enum.zip(credentials, sentences) do
+      if row["values"]["disclosed"] == true,
+        do: refute(sentence =~ attached, "a disclosed row says #{attached}: #{sentence}"),
+        else: assert(sentence =~ attached, "an attach-only row does not say it: #{sentence}")
+    end
+
+    assert Enum.any?(credentials, &(&1["values"]["disclosed"] != true))
+
+    # No control claims more than its methods, and no row says the
+    # component never holds a value without saying CYFR attaches it.
+    text = html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.downcase()
+
+    for claim <- ["read only", "read-only", "attached by cyfr"] do
+      refute text =~ claim, "the rendering says #{claim}"
+    end
+
+    refute text =~ "the component never holds the value"
   end
 
   # How a value reads in a row: as the row holds it, or in the renderer's
-  # words where it names a relation rather than a resource.
-  defp expected(row, "edge", "@ingress"), do: ["#{row["node"]}'s own calls"]
+  # words where it names a relation rather than a resource. A credential
+  # is one sentence naming the app or the dependency that uses it.
+  defp expected(row, "edge", "@ingress"), do: ["#{row["node"]} uses", "for its own calls"]
 
-  defp expected(_row, "edge", edge) do
+  defp expected(row, "edge", edge) do
     case String.split(edge, "|", parts: 2) do
-      [dep, need] -> ["to #{dep} for its #{need} need"]
-      [dep] -> ["to #{dep}"]
+      [dep, need] -> ["#{dep} ", "from #{row["node"]} for its #{need} need"]
+      [dep] -> ["#{dep} ", "from #{row["node"]}"]
     end
   end
 
@@ -145,6 +222,40 @@ defmodule Cyfr.ConsentPreviewRenderTest do
 
   defp expected(_row, "rate_limit", %{"requests" => requests, "window" => window}),
     do: ["#{requests} per #{window}"]
+
+  # A credential binding's values, in the renderer's words: whose entry,
+  # where it goes, whether the component holds it, how long it stands.
+  defp expected(_row, "destination", destination) do
+    port = if destination["port"], do: ["port #{destination["port"]}"], else: []
+
+    ["#{destination["scheme"]}://"] ++
+      destination["hosts"] ++
+      Map.get(destination, "methods", []) ++ Map.get(destination, "paths", []) ++ port
+  end
+
+  defp expected(_row, "lifetime", %{"kind" => "standing"}), do: ["until revoked"]
+  defp expected(_row, "lifetime", %{"kind" => "until", "until" => until}), do: ["until #{until}"]
+  defp expected(_row, "lifetime", %{"kind" => "once"}), do: ["one run"]
+  defp expected(_row, "source", "own"), do: ["an entry of this athanor"]
+  defp expected(_row, "source", "instance"), do: ["provided by this instance"]
+
+  defp expected(row, "source", "provided") do
+    {:ok, %{namespace: publisher}} = Prima.ComponentRef.parse(row["node"])
+    ["provided by #{publisher}, the app's public configuration"]
+  end
+
+  defp expected(_row, "label", label), do: ["through its '#{label}' profile"]
+  defp expected(_row, "provider", provider), do: ["a #{provider} account"]
+  defp expected(_row, "disclosed", true), do: ["The component reads the value itself."]
+
+  defp expected(_row, "disclosed", false),
+    do: ["CYFR attaches the value and the component never holds it."]
+
+  defp expected(_row, "suggested", true), do: ["Suggested"]
+  defp expected(_row, "choice_required", true), do: ["Choose which entry to use"]
+  defp expected(_row, field, false) when field in ["suggested", "choice_required"], do: []
+  defp expected(_row, "connection", connection), do: ["as the account '#{connection}'"]
+  defp expected(_row, "binding_key", key), do: ["Binding: #{key}"]
 
   defp expected(_row, _field, values) when is_list(values), do: values
   defp expected(_row, _field, value), do: [to_string(value)]

@@ -29,13 +29,20 @@ source "$ROOT/tests/browser/harness.sh"
 HERE="$ROOT/tests/tincture-proof"
 OUT="${PROOF_OUT:-$WORK/out}"
 
+# The scratch directory holds the run's keys, so it goes even when a stop
+# fails. `server_stop` ends in `fail`, an `exit`, when a listener outlives
+# its stop, and an exit inside this trap would end it before the removal,
+# so the stop runs in a subshell, whose exit ends only that subshell; the
+# stop's failure still fails the run.
 cleanup() {
-  server_stop
+  local code=$?
+  ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
     rm -rf "$WORK"
   fi
+  exit "$code"
 }
 trap cleanup EXIT
 

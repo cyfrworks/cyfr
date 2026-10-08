@@ -62,7 +62,7 @@ Session tokens are for human developers using the CLI. The `cyfr login` command 
 4. CLI polls until authorization completes, then stores the session ID in `~/.cyfr/config.json`
 5. Registry credentials are stored server-side during the device flow
 
-Sessions expire after 30 days (720 hours) of inactivity (configurable via `CYFR_SESSION_TTL_HOURS`; set it to `0` to never expire).
+Sessions expire after 30 days (720 hours) of inactivity (configurable via `CYFR_SESSION_TTL_HOURS`; set it to `0` to never expire). `session.whoami` answers when the caller's session ends, `session_expires_at` (RFC 3339), or `null` for a caller authenticated by an API key.
 
 ```bash
 cyfr login              # Interactive OAuth device flow (GitHub)
@@ -833,7 +833,7 @@ cyfr log get <call_id>                     # Full details for a specific log ent
 cyfr log correlate <request_id>            # Find related log entries and decisions
 ```
 
-Every call the server admitted or refused is also recorded once as an admission decision under its call ID, with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_grimoire_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via the `decision` tool or `cyfr decision` CLI commands; a platform admin reads every athanor's decisions and the host's own with `--global`:
+Every call the server admitted or refused is also recorded once as an admission decision under its call ID — all but discovery (`tools.list`, `system.status`), the audit's own reads (every `decision`, `mcp_log` and `record` action) and the reads the shell makes of the caller's own state on its own initiative (`file.offers`), which are not recorded when admitted; a refusal of any call is recorded — with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_grimoire_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via the `decision` tool or `cyfr decision` CLI commands; a platform admin reads every athanor's decisions and the host's own with `--global`:
 
 ```bash
 cyfr decision list --admission refused     # Recent refusals
@@ -860,7 +860,7 @@ cyfr new catalyst supabase --version 0.2.0
 cyfr profile grant c:local.supabase
 ```
 
-Create the vault entry first (console Vault page, or `vault.create` with fields `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`). If you own the Supabase project, you can skip the vault entry entirely and pass the URL and anon key as call arguments — the sealed path is for values that must not appear in logs.
+Create the vault entry first (console Vault page, or `vault.create` with fields `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`, a `destination` naming your project's host, and `disclose: true`, since the catalyst reads the fields itself). If you own the Supabase project, you can skip the vault entry entirely and pass the URL and anon key as call arguments — the sealed path is for values that must not appear in logs.
 
 **Input/output contract:**
 
@@ -937,6 +937,20 @@ CYFR has two kinds of storage — don't confuse them:
 
 Your application data stays in the external database. Tinctures invoke backend components via `cyfr.invoke()` — the component fetches from your real data source and returns results. If you stop using CYFR tomorrow, your data is still in your database where it always was. CYFR governs *access* to your data, it doesn't *store* your data.
 
+### Sending a copy of a file (`file` tool)
+
+Beside `list`, `read`, `write` and `delete`, the `file` tool sends a person a copy of files under `data/`. The copy is taken when the offer is made, so later edits do not follow it. It lands only in the recipient's own tree, and only once they accept it; neither person sees the other's tree. `offer`, `offers`, `accept` and `decline` need an interactive session — no API key reaches them; a key with `storage_write` may `withdraw` an offer sent from its athanor.
+
+| Action | Key args | What it does |
+|--------|----------|--------------|
+| `offer` | `paths` (one to ten files under `data/`), `to` (a person id, `usr_…`) | Copy the files and offer them to a person you share an athanor with — never yourself. The copy counts against your storage until the offer ends. Answers the `offer_id` and its `expires_at` (after `file_offer_days`, a retention setting, 7 by default) |
+| `offers` | — | `inbox` (offers sent to you, with `sender` and `folder`, the folder `accept` lands them in when you name none), `outbox` (offers you sent from this athanor, with `recipient`), each file with its `status`, `filename`, `size` and `expires_at`; and `receipts`, the files you accepted here that have not landed yet (`status` `received`) or never will (`failed`) |
+| `accept` | `offer_id`, optional `folder` (under `data/`) | Take the copy into your focused athanor, where you must hold a seat. It needs twice the files' size free until they land. Answers the `folder` they land in: `<folder>/<offer_id>/`, under `data/inbox/<sender>/` by default (the sender's namespace, or their person id), with `-2` and onward when that folder already holds files — nothing of yours is overwritten |
+| `decline` | `offer_id` | Refuse an offer sent to you |
+| `withdraw` | `offer_id` | Take back an offer you sent, while it is not yet accepted. An accepted copy is the recipient's |
+
+An offer ends once: accepted, declined, withdrawn or expired, whichever lands first. Asking again after it ended answers a conflict naming how it ended. A file the sweep has not yet landed — the recipient's storage was full, or the server stopped part-way — stays in `receipts` and lands on a later retention sweep. One for which nothing was written within `file_receipt_days` (a retention setting, 7 by default) is `failed`: its copy is released, the recipient is told, and the sender must offer it again. A `failed` file stays in `receipts` for another `file_receipt_days`, then leaves.
+
 ---
 
 ## Granting Components: Vault Entries & Consent
@@ -951,19 +965,64 @@ A vault entry holds credential material — sealed at rest, never returned by an
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
-| `list` | — | Enumerate entries (names + status, never material) |
+| `list` | — | Enumerate entries (names, status, destination and disclosure, never material) and the athanor's default per provider |
 | `status` | — | Each living entry's name, kind, status, created and updated times and whether a consent binds it — never material or a field; on both planes, under no consent class, so a tincture that declares it and an in-chain call may read it |
-| `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields` | Mint an entry with sealed material |
+| `set_default` | `provider_hint`, and exactly one of `entry_id` and `instance_entry_id` | Make an active entry of that provider, or an instance entry offered to you, the athanor's default for it — the one a consent suggests when several entries of the provider meet a need. It binds nothing, and moving it moves no consent; the first entry of a provider is its default until you move it |
+| `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields`, `destination` (+ `disclose`) | Mint an entry with sealed material, bound to where it may go |
 | `rename` | `id`, `name` | Relabel an entry — a label is unique among the athanor's living entries |
 | `rotate` | `id`, `fields`, `expected_payload_rev` | Replace material, same field schema — CAS-guarded, **no re-consent needed** |
-| `rebind` | `id` + binding fields (`field_names`, `oauth_endpoints`, `oauth_scopes`) | Change what the credential *talks to* — dependent consents stop being ready until re-approved |
-| `authorize` | `id` (re-auth) or `name` + `provider_hint` (+ `oauth_scopes`) | Start a browser OAuth grant; the callback completes it into the entry |
+| `rebind` | `id` + binding fields (`field_names`, `destination`, `disclose`) | Change what the credential *talks to* — dependent consents stop being ready until re-approved. Scopes change only by re-authorizing; endpoints never change |
+| `authorize` | `id` (re-auth, + `oauth_scopes`) or `name` + `provider_hint` + `destination` (+ `oauth_scopes`, `oauth_endpoints`, `disclose`) | Start a browser OAuth grant; the callback completes it into the entry |
 | `revoke` | `id` | Kill the material; dependent profiles report not-ready |
 | `delete` | `id` | Remove the entry |
 
+**Every entry names its destination.** `destination` is required at `create` and at a new entry's `authorize`, and there is no default: `hosts` (exact names, or `*.` and a name), and optionally `scheme` (`https` unless `http` is stated), `port`, `methods` and `paths` (prefixes beginning with `/`). An entry is attach-only unless `disclose` is `true`: its value is never handed to a component. CYFR attaches it, by the need's attach rule, to a request the component makes naming the need as its `connection` and bound for the entry's destination, and a component asking for the value itself (`cyfr:vault/read`, `cyfr:oauth/token`) is refused `disclosure_refused`. Set `disclose: true` only for a component that must read the values itself. Both are binding fields, so moving either is a `rebind`. An external MCP server definition is refused, at create, at update and again when it connects, when a header names an entry whose destination does not cover its URL, or when a stdio backend's environment names an attach-only entry; nothing is unsealed first.
+
+```json
+{
+  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": {
+    "name": "vault",
+    "arguments": {
+      "action": "create",
+      "name": "stripe-live",
+      "kind": "api_key",
+      "fields": {"STRIPE_API_KEY": "sk-live-..."},
+      "destination": {"hosts": ["api.stripe.com"]}
+    }
+  }
+}
+```
+
 Vault mutations require an interactive session — components, tincture frames and guest-plane callers can never reach these verbs; `list` needs a surface that could finish a consent walk. A tincture never takes a secret itself: `cyfr.credential(name)` has the shell prompt the person, and the shell's prompt makes the `create`.
 
-**OAuth is entry-keyed, not component-keyed.** Provider endpoints live on the vault entry (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The component only declares a need of type `oauth:<provider>` with the scopes it requires; at runtime it calls `get_access_token("<provider>")` and receives short-lived, auto-refreshed tokens.
+Entering or rotating the material (`create`, `rotate`) also requires fresh
+`credential_entry` confirmation for that exact change. A grant that binds
+an existing entry and a provider default change need only the session;
+neither enters material nor grants an unbound component access.
+
+**OAuth is entry-keyed, not component-keyed.** Provider endpoints live on the vault entry (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The component declares a need of type `oauth:<provider>` with the scopes it requires. With `attach`, it names the connection on its request and CYFR attaches the token; a need that reads `get_access_token("<provider>")` requires an explicitly disclosed entry and receives short-lived, auto-refreshed tokens. The endpoints are immutable after creation. A projection narrower than the entry's scopes is refused unless the provider's preset declares a verified attenuating refresh; no shipped preset declares one.
+
+### Instance entries (`instance_entry` tool)
+
+An instance entry is a credential the platform admin enters once for the whole instance and offers to the people on it, owned by no athanor. It is always attach-only, and its destination names its `methods` and `paths` as well as its hosts. It is an API key or a bundle of fields: `kind` admits `api_key` and `bundle` alone, and an OAuth account is entered in an athanor's own vault, since nothing can yet dispense an instance entry's token. Every action but `offered` is a platform admin's, from an interactive session; `offered` is any signed-in person's read of what they may use and their own use of it today.
+
+| Action | Key args | What it does |
+|--------|----------|--------------|
+| `create` | `name`, `kind` (`api_key` \| `bundle`), `fields`, `destination` (with `methods` and `paths`), `audience` (`everyone` \| `listed`, + `members`), optional `component_policy` (`any` \| `shipped`, `any` when omitted), `person_daily`, `total_daily` | Seal the material and offer it — needs a fresh confirmation |
+| `rotate` | `entry_id`, `fields`, `expected_payload_rev` | Replace material, same field schema, CAS-guarded — needs a fresh confirmation |
+| `rebind` | `entry_id`, `destination` | Move where it may go — every profile that binds it, in every athanor, stops being ready until re-approved |
+| `set_audience` | `entry_id`, `audience`, `members`, `expected` (`audience`, `members`: the audience you saw) | Who it is offered to — widening (to `everyone`, or adding a person) needs a fresh confirmation; narrowing the session alone. `expected` is required and compared with the stored audience, members as a set, before anything else: a stored audience that differs is a conflict ("The audience changed since it was shown, so nothing was saved."), with nothing saved and no confirmation asked, and a confirmed widening repeated over an audience that moved meets the same conflict. `members` are person ids (`people`): one that names no one who has signed in, a typed email among them, is refused `person_unknown`, and a denied person `person_denied` |
+| `set_component_policy` | `entry_id`, `component_policy` | `shipped` admits only an unmodified shipped component; `shipped` to `any` needs a fresh confirmation, `any` to `shipped` the session alone |
+| `set_caps` | `entry_id`, `person_daily`, `total_daily` | The day's request caps, at least one named; `null` takes the platform default, `0` admits no use, an omitted cap keeps its value |
+| `revoke` | `entry_id` | Refuse its next use; every profile that binds it stops being ready |
+| `delete` | `entry_id` | Erase the material; every profile that binds it stops being ready |
+| `list` | — | Every living entry with its audience, policy and caps, never material |
+| `usage` | `entry_id`, `days` (1–35) | Requests by person and day, and the day totals |
+| `offered` | — | The active entries offered to you: provider, destination and component policy, `used_today`, the requests you made through each today (never another person's), and `cap_reached`, whether that reached your own daily cap (the entry's `person_daily`, or the platform's `instance_entry_person_daily`; a `0` cap is reached), which resets at midnight UTC |
+| `people` | — | Everyone who has signed in to this instance and stands active, each as an `id` and a `display_name`: the people an audience may list. Someone who has not signed in yet has no id here and cannot be listed |
+
+A change that widens is decided against what is stored, and written only while it still is: an audience or a policy that moved in between answers a conflict with nothing written; read it again and ask anew. Use is counted in requests at each attach, under the entry's own caps or, when unset, the `instance_entry_person_daily` and `instance_entry_total_daily` platform settings; a request past a cap is refused until the next UTC day.
 
 ### The consent walk (`profile` tool)
 
@@ -980,19 +1039,27 @@ commit   {decisions, plan_token, proof,
           expected_consent_revision}      → an immutable consent revision
 ```
 
-`preview` exists so the approval proof binds the exact commit digest that was rendered — a decision changed after approval cannot ride on the old approval. `commit` CAS-checks the head revision, so concurrent grants conflict instead of clobbering. Decisions carry the bindings (`[{need, entry_id, fields, scopes}]`), the scope (`versionless` covers every release of the line — the default; `pinned` names one), a `subset` that narrows the ask per node and resource kind (exact domains, methods, schemes, private ranges, storage paths and actions, tools, and limits under the ask and the ceiling; a superset is refused), and the `origins` the grant admits.
+`preview` exists so the approval proof binds the exact commit digest that was rendered — a decision changed after approval cannot ride on the old approval. `commit` CAS-checks the head revision, so concurrent grants conflict instead of clobbering. Decisions carry the bindings (`[{need, entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}]`), the selections that fill a dependency's need (`[{dep, from, label | entry_id | instance_entry_id, need, name, fields, lifetime, renew}]`), the scope (`versionless` covers every release of the line — the default; `pinned` names one), a `subset` that narrows the ask per node and resource kind (exact domains, methods, schemes, private ranges, storage paths and actions, tools, and limits under the ask and the ceiling; a superset is refused), and the `origins` the grant admits.
 
-**The preview is typed rows.** It answers `v`, `rows`, `origins` and `commit_digest` (the `Prima.ConsentPreview` document, whose shape `tests/fixtures/consent_preview.json` pins), beside the `proof` and `expected_consent_revision` a commit presents. Each row is one resource an edge of the grant gives — a credential and its projection, egress, storage, tools, tool servers, limits, and for a tincture its frame capabilities, placement, background permission, streams, cards and system actions — with the node it belongs to and whether a decision narrowed it. Render the rows yourself; there is no prose summary. Explanatory text, such as a need's reason, is shown but not bound, so rewording it invalidates no grant.
+**Each need's choice.** In the plan, every need and every need of a dependency lists its `candidates`: your active entries and the instance entries offered to you of the need's kind whose provider is the need's (`api_key:openai.com` is met by an `api_key` entry of `openai.com` and nothing else), each with its `source` (`own` or `instance`), destination and whether it is disclosed. A need the component reads itself — one that declares no `attach` rule, or `disclose: true` — is met by a disclosed entry of yours alone, never by an instance entry, and the plan names the newer shipped version (`newer_shipped`) where an update would attach it instead. An instance entry is a candidate only where its component policy admits the component. `suggested` is the athanor's default of the provider when it is a candidate (`vault/set_default`), else the only candidate, else the one instance entry offered when you hold none of the provider; `choice_required` is true only when several match and none is suggested, and only then is the person asked. A dependency's need the app's own `provides` covers answers `source: "provided"` with its destination and no candidates. Each declared need, the app's and a dependency's, also names its `kind` and `provider`, `disclose_only` (it declares no `attach` rule), `disclose` (it declares `disclose: true`), and the `hosts` and `paths` it declares (`null` where it declares none), which a surface prefills a new entry from. A dependency's lending profiles (its row's `candidates`) each name the `fields` and the OAuth `scopes` their binding lends (`[]` for none). A plan for a profile with a head names `head_bindings`: each binding's `binding_key`, what it binds (its `entry_id`, `instance_entry_id` or a lending profile's `label`), its `lifetime` and whether a root has `consumed` it, so a consumed `once` binding can be granted again with `renew`. `head_narrowing` names the head's narrowing per node in the decisions' `subset` shape, clamped to the current ask. A re-grant opens from that narrowing: a method newly asked for, or a newly added dependency, opens off. When the shape moved, `shape_diff` compares every node of the narrowed head with the current ask; each difference names its component (`node`) and marks a new or dropped dependency (`new`, `dropped`).
+
+**Binding.** A binding names exactly one of `entry_id` and `instance_entry_id`; an entry of another provider is refused `provider_mismatch`, an attach-only entry bound where the component reads the value `disclosure_refused`, an instance entry not offered to you `not_offered`, and one whose policy does not admit the component `component_not_admitted`, each naming the need. A grant's bindings fill one need: one names no `name` and is the default, and each other names its account (`name`) and rides beside it, so a call can name one. Each binding, and each selection, carries its `lifetime` — `{"kind": "standing"}` (the default), `{"kind": "until", "until": "<RFC 3339 UTC, at most 24 hours ahead>"}` or `{"kind": "once"}` (one root run) — and `renew: true` makes a consumed `once` binding usable again; both are part of what the commit digest binds. A selection names a lender profile by `label`, or binds an entry to the dependency's edge directly (`entry_id` or `instance_entry_id`, with `need` when the dependency declares several); a need the app provides takes no selection. A dependency's edge may bind named accounts as the app's own calls do: one selection of the edge names no `name` and is its default, an entry chosen here, and each other names its account (`name`, 1 to 128 bytes of text without a `|` or a control character) and an entry (never a `label`) for the default's need, checked as the default is and with a lifetime of its own, so a call through that edge can name one. A name used twice on one edge, compared case-folded, accounts beside no default or beside a key a lending profile lends, and accounts for another need than the default's are each refused as `invalid_argument`, naming the dependency; `profile/grant` re-issues the head's named accounts as they stand, and `publish` refuses an edge it would keep that carries them. On the command line, `--entry 'api_key|Work=vlt_abc:1h'` and `--selection 'reagent:local.db|Work=vlt_def'` name an account after the need or dependency: the value splits at its last `=`, and what precedes it at its first `|`. A flag names its slot alone, the default or one account, and a slot no flag names takes what it would take with no flags: the grant's own binding, else the plan's suggestion for a required need.
+
+**Naming an account on a call.** A formula's child call, spawn or stream names the account it asks its dependency's edge for as `connection`, beside `reference` and `input`: `{"tool": "execution", "action": "run", "args": {"reference": "c:local.mailer:1.0.0", "input": {...}, "connection": "Work"}}`. The child holds that account's binding where it would hold the edge's default, and a call naming none holds the default. Names compare case-folded, as a grant compares them, so a call naming `work` holds the account bound as `Work`. The home decides which names are one account, by its own Unicode tables: a command line built on other tables may send two spellings of one account in a grant, and the home then refuses that grant as `invalid_argument`, naming both spellings. An account the edge does not bind is refused `connection_not_granted`, a grant to make, and no default is used in its place. A run started outside a chain (`execution.run` over MCP, the API or the command line) names the account its own calls use the same way: its root holds the binding its profile binds under that name for the app's own calls, in place of the default, and that binding's lifetime is the one checked and, for `once`, consumed. A name the profile does not bind is refused `connection_not_granted` before anything runs, never run under the default. `execution.run_stream` declares no `connection`, and one naming it is refused as an unknown argument.
+
+**An assistant's launch.** An `execution.run` an agent proposes for a component is a launch. It is denied when the agent's own policy denies `execution.run` or does not name it, and otherwise it always asks the person on a card, even where that policy runs it at once: `execution.run` takes no standing answer, bounded or not, so one approval is for one launch. A launch naming an account (`connection`) has it resolved on the app's own profile before it asks: the card names the account as its binding stores the name, whatever case the launch spelled it in, and the approval binds that name and the entry it resolved to. Before the launch runs, the name is resolved again. A damaged or lost head refuses the launch as damage, with its human-readable refusal sentence, never as a stale approval or setup to make. A store that cannot answer refuses as unavailable. An account on a readable head that now resolves to another entry or another stored name, or is no longer bound, refuses as a stale approval with nothing run, to be asked again. A name the app's profile does not bind ends the turn as setup required, naming the account: the person grants it on the app's own profile, and the retry is a new turn.
+
+**The preview is typed rows.** It answers `v`, `rows`, `origins`, `removed` and `commit_digest` (the `Prima.ConsentPreview` document, whose shape `tests/fixtures/consent_preview.json` pins), beside the `proof` and `expected_consent_revision` a commit presents. `removed` lists every binding of the profile's head the revision drops, empty when it drops none: a binding whose key the revision no longer binds, or binds for another need, as a grant for another need of the app's own calls drops its default and its accounts. Each item names its `binding_key`, the `node` and `edge` it sits on, its `connection` for a named account, the `need` it was bound for (`null` when that cannot be told), exactly one of `entry_id`, `instance_entry_id` or `via` (the lending profile's label), and the entry's `name` and `source` when the entry can be read; items are sorted by `binding_key`, and the commit digest covers them, so a commit whose preview did not show a removal is refused. Each row is one resource an edge of the grant gives — a credential and its projection, egress, storage, tools, tool servers, limits, and for a tincture its frame capabilities, placement, background permission, streams, cards and system actions — with the node it belongs to and whether a decision narrowed it. Render the rows yourself; there is no prose summary. Explanatory text, such as a need's reason, is shown but not bound, so rewording it invalidates no grant.
 
 **Origins.** Every run carries the origin of the path that admitted it, whatever credential it holds: `interactive` for Prism under a session or a paired device (a tincture's frame and a public tincture's page included), `programmatic` for the HTTP API and MCP, `schedule` for a schedule's fire, `webhook` for a webhook delivery. A child runs under its root's origin. A grant admits the origins its decisions name, and `interactive` alone when they name none; a run under an origin the grant does not name is refused with `consent_required`, so a script, an API key or a schedule runs a component only under a grant that names its origin. `cyfr profile grant <ref> --origin programmatic` names one at grant time; a re-grant keeps the origins the grant had unless `--origin` names others.
 
 | Action | Key args | Returns |
 |--------|----------|---------|
-| `plan` | `ref` | needs, caps ask, candidate vault entries, `plan_token` |
-| `preview` | `decisions` | `v`, `rows`, `origins`, `commit_digest`, `proof`, `expected_consent_revision` |
+| `plan` | `ref` | needs and dependency needs, each with its `kind`, `provider`, `disclose_only`, `disclose`, `hosts`, `paths`, `candidates`, `suggested`, `choice_required` and `source`; the head's `head_bindings` and `head_narrowing` (its narrowing clamped to the current ask), and `shape_diff` when the shape moved; caps ask, candidate vault entries, `plan_token` |
+| `preview` | `decisions` | `v`, `rows`, `origins`, `removed`, `commit_digest`, `proof`, `expected_consent_revision` |
 | `commit` | `decisions`, `plan_token`, `proof`, `commit_digest`, `expected_consent_revision` | the new consent revision |
-| `grant` | `profile_id`, `bindings`, `expected_consent_revision` | the new consent revision — binds vault entries to needs on an active owner profile whose component has not changed shape, CAS-checked like `commit`; a moved shape needs the walk again |
-| `publish` | `profile_id`, `need_ids`, `durable_storage` | a `plan_token` for `preview` and `commit` — stages a public profile from an owner profile, keeping credentials only for `need_ids` |
+| `grant` | `profile_id`, `bindings`, `expected_consent_revision` | the new consent revision and `removed` — binds vault entries to needs on an active owner profile whose component has not changed shape, CAS-checked like `commit`; a moved shape needs the walk again. The grant's full decisions are the bindings it names with the head's dependency selections, origins and narrowing, which it re-issues, so `removed` lists what the whole revision drops, as `preview` lists it for those decisions, and never a dependency's binding the grant carries |
+| `publish` | `profile_id`, `need_ids`, `durable_storage` | a `plan_token` for `preview` and `commit` — stages a public profile from an owner profile, keeping credentials only for `need_ids`, and only a standing binding of your own entry: a binding that lives `until` a time or `once`, named accounts and an instance entry are refused |
 | `list` | `ref` | profiles + head revisions |
 | `grants` | one of `domain`, `path`, `entry_id` | the athanor's active grants whose resources reach that egress domain, storage path or vault entry, read as the enforcement point admits them: wildcard domains included, a path by prefix, an entry by the revision's vault references, and a narrowed grant only as far as it was narrowed |
 | `revoke` | `profile_id` | revoked — effective on the next run |
@@ -1010,7 +1077,7 @@ Five typed errors cross every surface (MCP, HTTP, CLI, consoles) with normative 
 | Error | Payload | Meaning / next step |
 |-------|---------|---------------------|
 | `setup_required` | `{profile_id, node_ref, need, reason}` | Names the unbound need — grant a vault entry for it (`profile.plan` / `cyfr profile grant <ref>`) |
-| `consent_required` | `{profile_id, current_revision, shape_diff}` | The grant does not cover this run: the component's ask changed since approval (the shape diff shows exactly what), the grant does not admit the run's origin, or it names a storage path spelled other than the storage door reaches it. Review and grant again |
+| `consent_required` | `{profile_id, current_revision, shape_diff}` | The grant does not cover this run: the component's ask changed since approval (the shape diff shows each component's changes, naming its `node` and marking new or dropped dependencies with `new` or `dropped`), the grant does not admit the run's origin, or it names a storage path spelled other than the storage door reaches it. Review and grant again |
 | `consent_conflict` | `{expected_revision, actual_revision, cause}` | `stale_plan` → re-run plan; `digest_changed` → re-run preview; `race` → retry commit |
 | `restart_required` | `{profile_id, new_revision, missing}` | A new revision landed under a running execution — restart to pick it up |
 | `confirmation_required` | `{id, operation, expires_at}` | A sensitive change needs the person's fresh confirmation before `expires_at`; nothing was changed, and it is no denial. `id` is the asking client's own secret for this one request: keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation/pending` lists the pending confirmation by its ref, derived one way from `id`, never by `id` itself, and names the client that asked. Over MCP the asking client then repeats the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to `id`, which no request log records; a repeat before the proof answers the same `id` and opens nothing, and a repeat after it completes the change once. The CLI repeats for you on a terminal: it shows the ref and repeats each time you press Enter. A plain HTTP endpoint carries no repeat |
@@ -1087,9 +1154,13 @@ Postgres / a custom registry. There is no separate "edition" or "mode".
 Once authentication is configured, two lists do two jobs. `CYFR_PLATFORM_ADMIN_EMAILS`
 names the server's operators (platform admins): always let in, minted their
 own athanor past the server caps, and able to run the operator verbs
-(`door.*`, `execution.force_release`)
-— but working inside one athanor at a time like everyone else; there is no
-cross-athanor reach. The **server allowlist** (the door — `cyfr admin allow
+(`door.*`, `instance_entry.*` but `offered`, `execution.force_release`,
+`athanor.purge`, `athanor.destroy`).
+The capability is over the instance, not a seat: an operator works inside one
+athanor at a time like everyone else, and only in one they are a member of.
+They enter no other athanor — opening one they hold no seat in is refused like
+anyone's, and a session that names one they have left falls back to their own
+— and there is no cross-athanor reach. The **server allowlist** (the door — `cyfr admin allow
 <email|user_id|identifier|*>`, `cyfr admin deny …`, or the Settings page) is who else may
 sign in at all: a match on first sign-in lets them in, no match is a 403, and
 `*` lets in anyone the configured provider authenticates. Groups never open the
@@ -1097,15 +1168,27 @@ door: adding an unknown email to a group leaves an invitation that activates on
 that person's first admitted sign-in and, when the door would refuse them, a
 request for the operator.
 
+On **Settings**, the operator offers instance entries to everyone or listed people, with request caps per person and in total. Creation defaults to `component_policy: any`; the optional `shipped` policy admits only an unmodified shipped component. Both require destination methods and path prefixes. Entering or rotating the material needs fresh confirmation; widening the audience or changing `shipped` to `any` needs fresh `credential_sharing` confirmation. Members grant an offered entry through the same consent walk as their own entries; no policy bypasses consent, egress or caps, discloses the key, or lets an MCP definition name it.
+
 ### Reclaiming an archived athanor's storage
 
 Archiving an athanor revokes its keys and cancels its running work but
 deliberately leaves its storage tree (`data/athanors/<id>/`) in place, so
-`athanor.unarchive` reopens the furnace intact. When the bytes should
-actually be reclaimed, a platform admin runs `athanor.purge` (the `athanor`
-tool) against the archived athanor: it deletes the whole tree — blobs only,
-rows remain — and is final. A purged athanor that is later unarchived comes
-back with empty storage.
+`athanor.unarchive` reopens the furnace intact; a member unarchives a group,
+and allowing a denied person at the door reopens their own athanor. When the
+bytes should actually be reclaimed, a platform admin runs `athanor.purge`
+(the `athanor` tool) naming the archived athanor: it deletes the whole tree —
+blobs only, rows remain — and is final. `athanor.destroy` deletes the rows
+too, leaving only the archived tombstone, and refuses a person's own athanor.
+Both are platform-scope operations: they need no seat in the athanor, never
+read the one in focus, and open nothing in it. An operator with no seat may
+read an archived athanor's public facts with `athanor.get` (its id, name,
+status and when it was archived) and nothing it holds; `athanor.unarchive`
+and every other verb refuse them like any non-member. A purged athanor that
+is later unarchived comes back with empty storage. A group whose members were
+all denied keeps no member to unarchive it — allowing them again at the door
+reopens only their own athanors — so it can be purged or destroyed, and
+reopened by no one.
 
 With no auth configured, the deployment runs without sign-in: requests reach the
 public read-only surface as an unauthenticated context, and tenant-scoped
@@ -1204,6 +1287,8 @@ restarts. With the URL or the key unset CYFR refuses stdio servers; with a
 malformed value it refuses to boot. Stdio servers are not available in a
 cell. `.env.locus.example` documents the service's own `LOCUS_BACKENDS_*`
 side.
+
+A backend's environment may name only a single-field disclosed entry of its own athanor (`NAME=vault:entry`). An attach-only entry is refused when the definition is made and when the backend starts; instance entries are never available to definitions. Material is resolved in the host and sent sealed to the backends service for that server's environment, never in the command line.
 
 ### Running a worker outside Compose
 

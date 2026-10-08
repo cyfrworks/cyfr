@@ -556,6 +556,13 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       actor = Sanctum.Context.actor(source)
       :ok = Cyfr.Bus.broadcast(actor, topic(source), Cyfr.Bus.McpServers.new(actor, :changed))
 
+      # A stream re-establishes its caller before delivering once its
+      # context is past the freshness bound, so a frame suspended before
+      # the event is delivered takes the event with it. The suspension
+      # waits until the stream has taken the event and is waiting for the
+      # next.
+      wait_until(fn -> delivered?(stream.pid, Cyfr.Bus.McpServers) end, @stream_ms)
+
       suspended_at = System.monotonic_time(:millisecond)
       {:ok, _} = TinctureAuth.suspend_frame(source, frame.id)
       conn = Task.await(stream, 10_000)

@@ -511,6 +511,96 @@ defmodule Compendium.RegistryTest do
     end
   end
 
+  describe "a published app's provides block" do
+    @attach %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+    @provided %{
+      "destination" => %{"hosts" => ["abc.supabase.co"]},
+      "values" => %{"anon_key" => "eyJ-public"}
+    }
+
+    defp publish_db!(ctx) do
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "db",
+          version: "1.0.0",
+          type: "reagent",
+          manifest:
+            Jason.encode!(%{
+              "name" => "db",
+              "version" => "1.0.0",
+              "type" => "reagent",
+              "needs" => %{
+                "database" => %{
+                  "type" => "api_key:supabase.co",
+                  "reason" => "to reach the database",
+                  "fields" => ["anon_key"],
+                  "attach" => @attach
+                },
+                "signing" => %{
+                  "type" => "api_key:supabase.co",
+                  "reason" => "to sign",
+                  "fields" => ["secret"]
+                }
+              }
+            })
+        })
+    end
+
+    defp publish_app(ctx, name, provides) do
+      Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: name,
+        version: "1.0.0",
+        type: "reagent",
+        manifest:
+          Jason.encode!(%{
+            "name" => name,
+            "version" => "1.0.0",
+            "type" => "reagent",
+            "dependencies" => %{"static" => [%{"ref" => "reagent:local.db"}]},
+            "provides" => %{"reagent:local.db" => provides}
+          })
+      })
+    end
+
+    test "names a need the installed dependency declares with an attach rule, or is refused",
+         %{ctx: ctx} do
+      publish_db!(ctx)
+
+      assert {:ok, component} = publish_app(ctx, "app-ok", %{"database" => @provided})
+      refute Map.has_key?(component, :warnings)
+
+      assert {:error, {:provides, {:undeclared, "reagent:local.db", "absent"}}} =
+               publish_app(ctx, "app-absent", %{"absent" => @provided})
+
+      assert {:error, {:provides, {:no_attach, "reagent:local.db", "signing"}}} =
+               publish_app(ctx, "app-signing", %{"signing" => @provided})
+
+      assert {:error, :not_found} = Registry.get(ctx, "app-absent", "1.0.0")
+    end
+
+    test "a dependency that does not resolve at publish is not checked, and the publish says so",
+         %{ctx: ctx} do
+      assert {:ok, %{warnings: [warning]}} =
+               publish_app(ctx, "app-early", %{"absent" => @provided})
+
+      assert warning =~ "reagent:local.db"
+      assert warning =~ "not checked"
+    end
+
+    test "a value that reads like a key is published with a warning, and refuses nothing",
+         %{ctx: ctx} do
+      publish_db!(ctx)
+
+      key_like = Map.put(@provided, "values", %{"anon_key" => "eyJ", "private_key" => "-----"})
+
+      assert {:ok, %{warnings: [warning]}} =
+               publish_app(ctx, "app-keyed", %{"database" => key_like})
+
+      assert warning =~ "private_key"
+      refute warning =~ "-----"
+    end
+  end
+
   describe "publish_bytes/3 source field" do
     test "published components have source: published", %{ctx: ctx} do
       {:ok, component} =

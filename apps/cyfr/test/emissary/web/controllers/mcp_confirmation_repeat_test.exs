@@ -166,7 +166,8 @@ defmodule Emissary.Web.MCPConfirmationRepeatTest do
       "action" => "create",
       "name" => name,
       "kind" => "api_key",
-      "fields" => %{"KEY" => "sk-repeat-secret"}
+      "fields" => %{"KEY" => "sk-repeat-secret"},
+      "destination" => %{"hosts" => ["api.example.com"]}
     }
 
   # The signal as the wire carries it: its secret and its expiry.

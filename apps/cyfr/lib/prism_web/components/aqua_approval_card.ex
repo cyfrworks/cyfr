@@ -40,6 +40,12 @@ defmodule PrismWeb.AquaApprovalCard do
   `standing: :thread`. The refusal the runner would post is the
   backstop for a race, not the outcome of a visible button.
 
+  A launch's card (an `execution.run` of an app) takes no standing
+  answer: one approval is for that one launch. When the launch names an
+  account (`connection`), the card says which, spelled as its binding
+  stores the name (the proposal carries that spelling), and the approval
+  binds that account as the card shows it.
+
   Risk visualization derives from the action's `kind` (read/write/execute/
   destructive/external). The colour weight scales with the kind so the common
   case (`:write`) stays calm and the loud styling is reserved for the loud
@@ -99,6 +105,14 @@ defmodule PrismWeb.AquaApprovalCard do
 
       <div class="text-gray-300 text-[13px] mb-2 whitespace-pre-wrap">
         {@payload[:summary] || @payload["summary"]}
+      </div>
+
+      <div
+        :if={account(@proposal)}
+        class="text-[12px] text-gray-400 mb-2"
+        data-test="approval-account"
+      >
+        as the account <span class="font-medium text-gray-100">{account(@proposal)}</span>
       </div>
 
       <%= if @proposal do %>
@@ -418,6 +432,21 @@ defmodule PrismWeb.AquaApprovalCard do
     do: Map.put(choice, :constraint, limit)
 
   defp limited(choice, _assigns), do: choice
+
+  # The account a launch names, which the approval binds: the
+  # `connection` of an `execution.run`, nil for any other call or none.
+  defp account(%{} = proposal) do
+    tool = proposal[:tool] || proposal["tool"]
+    action = proposal[:action] || proposal["action"]
+    args = proposal[:args] || proposal["args"] || %{}
+
+    case {tool, action, args["connection"]} do
+      {"execution", "run", name} when is_binary(name) and name != "" -> name
+      _none -> nil
+    end
+  end
+
+  defp account(_proposal), do: nil
 
   # The bounds a decided card's standing answer carries, as its resolution
   # records them.

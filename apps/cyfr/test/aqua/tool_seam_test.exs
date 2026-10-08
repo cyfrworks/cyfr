@@ -3,40 +3,113 @@
 
 defmodule Aqua.ToolSeamTest do
   @moduledoc """
-  `Aqua.Ops` is the assistant plane's seam onto the MCP tool
-  surface — the same contract `PrismWeb.ToolSeamTest` pins for the
-  console.
+  `Aqua.Ops` is the assistant's one door onto the gate's dispatch — the
+  same contract `PrismWeb.ToolSeamTest` pins for the console.
 
-  Checks that assistant-domain MCP dependencies use Aqua.Ops. The
-  assistant owns its providers (`Aqua.Providers.*`), which the operation
-  table calls into; they live under `lib/aqua` like the rest of the
-  domain, so the scan holds them too, and nothing there but the seam
-  names `Emissary.MCP.`.
+  The assistant reads the operation table wherever it needs to
+  (`Aqua.Kinds`, `Aqua.Hands`, the loop's policy); what it does not do is
+  dispatch past the seam. `Grimoire.call_external` and
+  `Grimoire.call_in_chain`, and the `Grimoire.Catalog` functions they
+  delegate to, are called or captured by `Aqua.Ops` alone. The compiled
+  beams are the reader (`Prima.Test.Beams`), so a call through an alias
+  or an import and a capture are seen and a name inside a string is not,
+  and a planted module shows each spelling reported.
 
-  Outside its scope, deliberately: `Aqua.Intents`' read of the console
-  route table, rostered in `Cyfr.Boundaries`. The assistant's live
-  events go through the host's bus (`Cyfr.Bus`), which is not the tool
-  surface.
+  The assistant naming the transport (`Emissary`) is the Boundary
+  compiler's refusal, shown failing in `Cyfr.BoundariesTest.CompilerPlants`.
   """
 
   use ExUnit.Case, async: true
 
-  @seam "apps/cyfr/lib/aqua/ops.ex"
+  alias Prima.Test.Beams
 
-  defp root, do: Path.expand("../../../..", __DIR__)
+  @seam Aqua.Ops
+  @gate [Grimoire, Grimoire.Catalog]
+  @dispatch [:call_external, :call_in_chain]
 
-  test "the assistant reaches the tool surface only through its seam" do
+  test "the assistant dispatches through the gate only at its seam" do
+    beams = assistant_beams()
+    assert beams != [], "no assistant beam was read"
+
     offenders =
-      for path <- Prima.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/aqua/**/*.ex")),
-          rel = Path.relative_to(path, root()),
-          rel != @seam,
-          {line, n} <- path |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.code_lines(),
-          String.contains?(line, "Emissary.MCP."),
-          do: "#{rel}:#{n}: #{String.trim(line)}"
+      for {module, beam} <- beams,
+          module != @seam,
+          {callee, function, arity} <- dispatches(beam),
+          do: "#{inspect(module)} reaches #{inspect(callee)}.#{function}/#{arity}"
 
     assert offenders == [],
-           "aqua reaches Emissary.MCP past its seam — go through Aqua.Ops " <>
-             "(or grow the helper), never the registry directly:\n" <>
-             Enum.join(offenders, "\n")
+           "the assistant dispatches past its seam — go through #{inspect(@seam)} " <>
+             "(or grow it), never the gate directly:\n" <> Enum.join(offenders, "\n")
+
+    # The seam itself makes the reach, so the scan is reading dispatch and
+    # not passing on an empty read.
+    seam = Enum.find_value(beams, fn {module, beam} -> module == @seam and beam end)
+    assert seam, "#{inspect(@seam)} has no beam"
+    assert dispatches(seam) != [], "#{inspect(@seam)} dispatches nothing: the reader sees no call"
+  end
+
+  test "a planted call, alias, import or capture is reported and a string is not" do
+    compiled =
+      Code.compile_string(~S'''
+      defmodule Aqua.PlantedDirect do
+        def plant(ctx, args), do: Grimoire.call_external("t", ctx, args)
+      end
+
+      defmodule Aqua.PlantedAlias do
+        alias Grimoire, as: Gate
+        def plant(ctx, args, authority), do: Gate.call_in_chain("t", ctx, args, authority)
+      end
+
+      defmodule Aqua.PlantedImport do
+        import Grimoire, only: [call_external: 4]
+        def plant(ctx, args), do: call_external("t", ctx, args, [])
+      end
+
+      defmodule Aqua.PlantedCapture do
+        def plant, do: &Grimoire.Catalog.call_external/3
+      end
+
+      defmodule Aqua.PlantedString do
+        def plant, do: "Grimoire.call_external(\"t\", ctx, args)"
+      end
+      ''')
+
+    for {module, _beam} <- compiled do
+      :code.purge(module)
+      :code.delete(module)
+    end
+
+    reported = for {module, beam} <- compiled, into: %{}, do: {module, dispatches(beam)}
+
+    assert reported == %{
+             Aqua.PlantedDirect => [{Grimoire, :call_external, 3}],
+             Aqua.PlantedAlias => [{Grimoire, :call_in_chain, 4}],
+             Aqua.PlantedImport => [{Grimoire, :call_external, 4}],
+             Aqua.PlantedCapture => [{Grimoire.Catalog, :call_external, 3}],
+             Aqua.PlantedString => []
+           }
+  end
+
+  # Every production beam of the assistant, `Aqua` and `Aqua.*`, as
+  # `{module, path}`; test support compiled into the same ebin is left out.
+  defp assistant_beams do
+    for path <-
+          :cyfr
+          |> Application.app_dir("ebin")
+          |> Path.join("Elixir.Aqua*.beam")
+          |> Path.wildcard(),
+        name = path |> Path.basename(".beam") |> String.replace_prefix("Elixir.", ""),
+        name == "Aqua" or String.starts_with?(name, "Aqua."),
+        Beams.production?(path),
+        do: {Module.concat([name]), String.to_charlist(path)}
+  end
+
+  # The gate dispatch `beam` calls or captures.
+  defp dispatches(beam) do
+    for {module, function, arity} <- Beams.reaches(beam),
+        module in @gate,
+        function in @dispatch,
+        uniq: true,
+        do: {module, function, arity}
   end
 end

@@ -85,9 +85,18 @@ defmodule Arca.RetentionTest do
       assert keys == Enum.uniq(keys)
     end
 
-    test "the frame credentials are the last of sixteen kinds, in days, a week by default" do
-      assert length(Retention.kinds()) == 16
-      assert List.last(Retention.kinds()) == Retention.FrameCredentials
+    test "the file receipts are the last of eighteen kinds, after the offers and the frames" do
+      assert length(Retention.kinds()) == 18
+      assert List.last(Retention.kinds()) == Retention.FileReceipts
+
+      assert Enum.take(Retention.kinds(), -3) ==
+               [Retention.FrameCredentials, Retention.FileOffers, Retention.FileReceipts]
+
+      for kind <- [Retention.FileOffers, Retention.FileReceipts] do
+        assert kind.unit() == :days
+        assert kind.default() == 7
+      end
+
       assert Retention.FrameCredentials.key() == "frame_credential_days"
       assert Retention.FrameCredentials.unit() == :days
       assert Retention.FrameCredentials.default() == 7

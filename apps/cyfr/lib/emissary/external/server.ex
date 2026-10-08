@@ -17,6 +17,14 @@ defmodule Emissary.External.Server do
   handshake for third-party servers still on the older revision (see
   `connect/1`).
 
+  A connect checks every `vault:` header template against this server's
+  URL from the entries' metadata (`Sanctum.Vault.destination_matches?/3`)
+  before it unseals any (`Sanctum.VaultReader.unseal_for/3`): an entry
+  whose destination does not admit a `POST` there fails the connect
+  `destination_mismatch` with nothing unsealed or sent. A failed connect
+  answers its caller with the sentence it keeps as its status error, the
+  injected credentials masked out of it.
+
   ## Stdio transport
 
   A stdio server's backends run on the backends service Locus serves.
@@ -142,7 +150,9 @@ defmodule Emissary.External.Server do
 
   @doc """
   Get cached tool definitions from the external server.
-  Triggers initialization if not yet connected.
+  Triggers initialization if not yet connected. A connect that fails
+  answers `{:error, sentence}`: the sentence the process keeps as its
+  status error, with the credentials it injected masked out.
   """
   @spec get_tools(String.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def get_tools(name, athanor_id) do
@@ -181,7 +191,8 @@ defmodule Emissary.External.Server do
   end
 
   @doc """
-  Reinitialize the connection (e.g., after config change).
+  Reinitialize the connection (e.g., after config change). A connect that
+  fails answers as `get_tools/2` does: the masked sentence.
   """
   @spec reinitialize(String.t(), String.t()) :: {:ok, atom()} | {:error, term()}
   def reinitialize(name, athanor_id) do
@@ -406,11 +417,13 @@ defmodule Emissary.External.Server do
                    dispatch_upstream_call(snapshot, body, tool_name)
                  rescue
                    e ->
-                     # The exception's message can carry the upstream URL or
-                     # a transport internal; the caller (a guest or the
-                     # console) gets the tool's name only, the log the rest.
+                     # The exception can carry the upstream URL, a transport
+                     # internal or what the upstream answered; the caller (a
+                     # guest or the console) gets the tool's name only, the
+                     # log the rest, the injected values masked.
                      Logger.warning(
-                       "[Emissary.External.Server] call to #{tool_name} raised: #{Exception.message(e)}"
+                       "[Emissary.External.Server] call to #{tool_name} raised: " <>
+                         log_reason(e, snapshot)
                      )
 
                      {:error, "External call failed for #{tool_name}"}
@@ -683,7 +696,9 @@ defmodule Emissary.External.Server do
 
   @impl true
   def terminate(reason, state) do
-    Logger.info("[Emissary.External.Server] #{state.name} shutting down: #{inspect(reason)}")
+    Logger.info(
+      "[Emissary.External.Server] #{state.name} shutting down: #{log_reason(reason, state)}"
+    )
 
     for {task_pid, {task_ref, from, caller_ref}} <- state.in_flight do
       Process.demonitor(task_ref, [:flush])
@@ -769,7 +784,7 @@ defmodule Emissary.External.Server do
     # requires a resolved binary per key, found none, and masked nothing — so
     # on a first connect, an upstream that echoed the Authorization header
     # into its error body carried it out whole through `state.error`.
-    case resolve_headers(state.raw_headers, state.athanor_id) do
+    case resolve_headers(state.raw_headers, {state.athanor_id, state.url}) do
       {:error, reason} ->
         fail_initialize(state, reason)
 
@@ -786,7 +801,7 @@ defmodule Emissary.External.Server do
             | timeout_ms: call_timeout,
               status: :ready,
               tools: tools,
-              server_info: server_info,
+              server_info: mask_credentials(server_info, state),
               error: nil
           }
 
@@ -868,17 +883,20 @@ defmodule Emissary.External.Server do
   # `state.error` surfaces to callers and the status view — the same egress
   # rule as results: a sentence, never a term's spelling, with the
   # credentials this plane injected masked out of it before a transport
-  # exception that echoed them can carry one out. The log gets the masked
-  # term; the credential is never the diagnostic part.
+  # exception that echoed them can carry one out. The caller is answered
+  # with that same masked sentence and never the reason itself, which can
+  # be an upstream's own error message quoting a header it was sent. The
+  # log gets the masked term (`log_reason/2`); the credential is never the
+  # diagnostic part.
   defp fail_initialize(state, reason) do
     state = %{state | status: :error, error: mask_credentials(failure_sentence(reason), state)}
 
     Logger.error(
       "[Emissary.External.Server] Failed to initialize #{state.name}: " <>
-        mask_credentials(inspect(reason), state)
+        log_reason(reason, state)
     )
 
-    {:error, reason, state}
+    {:error, state.error, state}
   end
 
   defp failure_sentence(reason) when is_binary(reason), do: reason
@@ -918,7 +936,7 @@ defmodule Emissary.External.Server do
     with {:ok, init_result, state} <- send_initialize(state),
          :ok <- send_initialized_notification(state),
          {:ok, tools, state} <- send_tools_list(state) do
-      {:ok, tools, init_result["serverInfo"], state}
+      {:ok, tools, server_info(init_result), state}
     else
       # A legacy peer has no fall-forward; a second `:legacy` here would mean the
       # handshake itself was refused, which is a failure rather than an era.
@@ -964,13 +982,17 @@ defmodule Emissary.External.Server do
 
     body = Message.encode_request(request_id, "tools/list", %{})
 
+    # The listing is the upstream's words as much as a result is, and is
+    # stored, answered and drawn: it is masked as a tool call's result is.
     case http_post(state, body) do
-      {:ok, %Message{type: :response, result: %{"tools" => tools}}} ->
-        {:ok, tools, state}
-
       {:ok, %Message{type: :response, result: result}} ->
-        # Some servers return tools at top level
-        {:ok, Map.get(result, "tools", []), state}
+        case listed_tools(result) do
+          {:ok, tools} ->
+            {:ok, mask_credentials(tools, state), state}
+
+          :error ->
+            {:error, {:failed, "#{state.name} answered tools/list without a list of tools"}}
+        end
 
       {:ok, %Message{type: :error, error: error}} ->
         {:error, upstream_message(error)}
@@ -985,6 +1007,19 @@ defmodule Emissary.External.Server do
         {:error, reason}
     end
   end
+
+  # A listing is a list of tool objects, at `tools` or, for some servers,
+  # with no `tools` key at all; anything else is no listing.
+  defp listed_tools(%{"tools" => tools}) when is_list(tools),
+    do: if(Enum.all?(tools, &is_map/1), do: {:ok, tools}, else: :error)
+
+  defp listed_tools(result) when is_map(result) and not is_map_key(result, "tools"),
+    do: {:ok, []}
+
+  defp listed_tools(_result), do: :error
+
+  defp server_info(%{"serverInfo" => info}) when is_map(info), do: info
+  defp server_info(_init_result), do: nil
 
   # ============================================================================
   # HTTP Transport
@@ -1091,7 +1126,8 @@ defmodule Emissary.External.Server do
       # server is not known from here.
       {:error, reason} ->
         Logger.debug(
-          "[Emissary.External.Server] request to #{state.name} failed: #{inspect(reason)}"
+          "[Emissary.External.Server] request to #{state.name} failed: " <>
+            log_reason(reason, state)
         )
 
         {:error, {:uncertain, "Request failed"}}
@@ -1324,18 +1360,67 @@ defmodule Emissary.External.Server do
   # ============================================================================
 
   @doc false
-  def resolve_headers(headers, athanor_id) when is_map(headers) do
+  # `target` is the athanor the server belongs to and the URL it posts
+  # to: a header's entry is read only for a URL its destination admits.
+  # Every header is checked before any entry is unsealed.
+  def resolve_headers(headers, {_athanor_id, _url} = target) when is_map(headers) do
+    with :ok <- check_headers(headers, target) do
+      unseal_headers(headers, target)
+    end
+  end
+
+  def resolve_headers(_headers, _target), do: {:ok, %{}}
+
+  # From metadata alone (`Sanctum.Vault.destination_matches?/3`): a
+  # reference this server does not resolve, or an entry missing, inactive
+  # or bound elsewhere, refuses the whole set before any entry is
+  # unsealed, so one covered header beside one that is not sends nothing
+  # and records no use. The answers are the ones the unseal would give.
+  defp check_headers(headers, {athanor_id, url}) do
+    ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
+
+    Enum.find_value(headers, :ok, fn {key, value} ->
+      case Prima.VaultRef.classify(value) do
+        {:vault, %{name: name}} ->
+          cond do
+            not is_binary(url) -> {:error, :destination_mismatch}
+            Sanctum.Vault.destination_matches?(ctx, name, url) -> nil
+            active?(athanor_id, name) -> {:error, :destination_mismatch}
+            true -> unresolved(key)
+          end
+
+        :unresolved ->
+          unresolved(key)
+
+        :literal ->
+          nil
+      end
+    end)
+  end
+
+  defp active?(athanor_id, name) do
+    match?({:ok, %{^name => {_rev, _digest}}}, Sanctum.VaultReader.revisions(athanor_id, [name]))
+  end
+
+  # Report only the header name (caller-supplied config), never the
+  # referenced secret name or the underlying error — that would let a
+  # caller enumerate which secrets exist.
+  defp unresolved(key), do: {:error, "Failed to resolve header '#{key}'"}
+
+  defp unseal_headers(headers, target) do
     resolved =
       Enum.reduce_while(headers, {:ok, %{}}, fn {key, value}, {:ok, acc} ->
-        case resolve_value(value, athanor_id) do
+        case resolve_value(value, target) do
           {:ok, resolved_value} ->
             {:cont, {:ok, Map.put(acc, key, resolved_value)}}
 
-          # Report only the header name (caller-supplied config), never the
-          # referenced secret name or the underlying error — that would let a
-          # caller enumerate which secrets exist.
+          # An entry rebound since the check: the reader refuses it
+          # unsealed, in the check's own words.
+          {:error, :destination_mismatch} ->
+            {:halt, {:error, :destination_mismatch}}
+
           {:error, _reason} ->
-            {:halt, {:error, "Failed to resolve header '#{key}'"}}
+            {:halt, unresolved(key)}
         end
       end)
 
@@ -1345,23 +1430,25 @@ defmodule Emissary.External.Server do
     end
   end
 
-  def resolve_headers(_headers, _athanor_id), do: {:ok, %{}}
-
   # A vault-backed header (`Prima.VaultRef.template/1`) resolves the
   # entry's single material field. Deliberately single-field — a header
   # carries one value, and picking silently from a bundle would smuggle the
   # wrong credential into the wrong header. Errors stay opaque outward, like
   # secrets.
-  defp resolve_value(value, athanor_id) when is_binary(value) do
+  defp resolve_value(value, target) when is_binary(value) do
     case Prima.VaultRef.classify(value) do
-      {:vault, template} -> resolve_template(template, athanor_id)
+      {:vault, template} -> resolve_template(template, target)
       :unresolved -> {:error, :unresolved_ref}
       :literal -> {:ok, value}
     end
   end
 
-  defp resolve_template(%{name: entry_name} = template, athanor_id) do
-    case Sanctum.VaultReader.unseal_by_name(athanor_id, entry_name) do
+  # A server without a URL posts nowhere, so no destination covers it.
+  defp resolve_template(_template, {_athanor_id, url}) when not is_binary(url),
+    do: {:error, :destination_mismatch}
+
+  defp resolve_template(%{name: entry_name} = template, {athanor_id, url}) do
+    case Sanctum.VaultReader.unseal_for(athanor_id, entry_name, url) do
       {:ok, fields} ->
         case Map.values(fields) do
           [value] ->
@@ -1375,6 +1462,9 @@ defmodule Emissary.External.Server do
 
             {:error, :vault_ref_ambiguous}
         end
+
+      {:error, :destination_mismatch} ->
+        {:error, :destination_mismatch}
 
       {:error, _} ->
         Logger.debug(
@@ -1448,6 +1538,37 @@ defmodule Emissary.External.Server do
   end
 
   defp mask_values(term, _values), do: term
+
+  # A reason as the log prints it. The injected values are masked in the
+  # term's own binaries, wherever it holds them, before `inspect/1` renders
+  # it in any form (escaped, or as bytes when a binary is not printable)
+  # and cuts it to its usual bounds; the printed line is masked once more
+  # for a value the term held as a charlist.
+  defp log_reason(reason, state) do
+    values = sensitive_header_values(state)
+
+    reason
+    |> mask_term(values)
+    |> inspect()
+    |> mask_values(values)
+  end
+
+  defp mask_term(term, []), do: term
+  defp mask_term(term, values) when is_binary(term), do: mask_values(term, values)
+  # A struct keeps its type, so its own `Inspect` (the server state's
+  # hides its headers and grant) still decides what is printed.
+  defp mask_term(%_{} = struct, values),
+    do: Map.merge(struct, struct |> Map.from_struct() |> mask_term(values))
+
+  defp mask_term(term, values) when is_map(term),
+    do: Map.new(term, fn {k, v} -> {mask_term(k, values), mask_term(v, values)} end)
+
+  defp mask_term([head | tail], values), do: [mask_term(head, values) | mask_term(tail, values)]
+
+  defp mask_term(term, values) when is_tuple(term),
+    do: term |> Tuple.to_list() |> mask_term(values) |> List.to_tuple()
+
+  defp mask_term(term, _values), do: term
 
   # ============================================================================
   # Helpers

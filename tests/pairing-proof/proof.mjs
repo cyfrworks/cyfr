@@ -290,7 +290,8 @@ async function openDevices(desk) {
 }
 
 // A vault entry asked for on the desktop's vault page: the form typed, and
-// the page's own request waiting on its confirmation.
+// the page's own request waiting on its confirmation. Returns the provider
+// it chose.
 async function askForEntry(desk, name, value) {
   if (!desk.url().startsWith(vault)) {
     await desk.goto(vault);
@@ -301,10 +302,27 @@ async function askForEntry(desk, name, value) {
     await desk.locator('button[phx-click="show_add"][phx-value-mode="fields"]').click();
   }
   const form = desk.locator("#vault-create-form");
+  // Every entry meets a need of the athanor's components, chosen by
+  // provider; the browser sends no form without one. The proof's entry is
+  // for no provider in particular, so it takes the first the form offers.
+  const need = form.locator('select[name="need"] option:not([value=""])').first();
+  const provider = (await need.textContent({ timeout: 30_000 })).trim();
+  await form.locator('select[name="need"]').selectOption(await need.getAttribute("value"));
   await form.locator('input[name="name"]').fill(name);
   await form.locator('textarea[name="fields"]').fill(`API_KEY=${value}`);
+  // Every entry names the hosts it may go to; nothing prefills them.
+  await form.locator('input[name="destination_hosts"]').fill("fixture.test");
   await form.locator('button[type="submit"]').click();
-  await desk.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"] [data-status="waiting"]`, { timeout: 30_000 });
+  try {
+    await desk.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"] [data-status="waiting"]`, { timeout: 30_000 });
+  } catch (error) {
+    // A form the browser would not send asks nothing: name what it refused.
+    const refused = await form.evaluate((f) => [...f.elements]
+      .filter((e) => e.willValidate && !e.validity.valid).map((e) => `${e.name}: ${e.validationMessage}`)).catch(() => []);
+    throw new Error(`the desktop's request for ${name} is not waiting on its confirmation: ${refused.length
+      ? `the browser did not send the form (${refused.join("; ")})` : `desktop ${JSON.stringify(await layerText(desk))}`}`);
+  }
+  return provider;
 }
 
 // The glass's prompt for the one record it shows that `skip` does not
@@ -420,13 +438,13 @@ async function glass(phone, link, authenticator) {
 
 async function confirmEntry(desk, phone) {
   const name = "pairing-entry-1";
-  await askForEntry(desk, name, "sk-pairing-1-not-shown");
+  const provider = await askForEntry(desk, name, "sk-pairing-1-not-shown");
   const shown = await glassPrompt(phone);
   await glassButton(phone, shown.ref, "glass-passkey").click();
   const outcome = await glassOutcome(phone, shown.ref);
   const completed = await waitFor(async () => (await vaultNames()).includes(name), { timeoutMs: 30_000, stepMs: 1_000, what: name }).catch(() => false);
   record.confirm = {
-    ref: shown.ref, preview: shown.preview, asker: shown.asker,
+    provider, ref: shown.ref, preview: shown.preview, asker: shown.asker,
     secret_shown: shown.text.includes("sk-pairing-1"), outcome, completed,
   };
   return [row("confirm", /vault\.create/.test(shown.preview) && shown.preview.includes(name) &&

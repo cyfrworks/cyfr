@@ -32,12 +32,30 @@ defmodule Opus.HttpRequestValidation do
   sends through the relay its own way (buffered fetch vs. polling
   stream). Handlers own the relay's fetch, response handling, and
   telemetry; every pre-flight decision of the runner's lives here.
+
+  ## A request naming a connection
+
+  A request whose JSON names a `connection` (the need it is made on) is
+  attached: CYFR makes it, with the credential that need is bound to
+  attached, so the guest's request carries none of its own. It runs the
+  same checks up to the request's size (the envelope bound, the parse,
+  the method, scheme and domain against the edge, a multipart body
+  encoded as it is sent, a base64 body decoded, the size), then is built
+  as a `Prima.AttachedRequest` and read back as CYFR reads it, so the
+  runner refuses exactly what CYFR refuses: a credential header
+  (`credential_header_refused`), a header that routes, frames or
+  overrides the request (`invalid_request`, naming it), or anything else
+  that does not read. It asks for no pin and keeps its headers as the
+  guest wrote them; the validated request carries `:attached`, the
+  request to send, and no `:pinned`.
   """
 
   require Logger
 
   alias Opus.EdgeGuard
   alias Opus.HostClient
+  alias Opus.HttpHandler
+  alias Prima.AttachedRequest
   alias Prima.Authority.Blob.Edge
   alias Prima.Limits
 
@@ -52,17 +70,19 @@ defmodule Opus.HttpRequestValidation do
   }
 
   @type validated_request :: %{
-          method: String.t(),
-          method_atom: atom(),
-          url: String.t(),
-          hostname: String.t(),
-          headers: [{String.t(), String.t()}],
-          body: binary(),
-          body_encoding: String.t() | nil,
-          response_encoding: String.t() | nil,
-          multipart: list() | nil,
-          ip: String.t(),
-          pinned: Opus.Egress.pinned()
+          required(:method) => String.t(),
+          required(:url) => String.t(),
+          required(:hostname) => String.t(),
+          required(:headers) => [{String.t(), String.t()}],
+          required(:body) => binary(),
+          required(:body_encoding) => String.t() | nil,
+          required(:response_encoding) => String.t() | nil,
+          required(:multipart) => list() | nil,
+          required(:connection) => String.t() | nil,
+          optional(:method_atom) => atom(),
+          optional(:ip) => String.t(),
+          optional(:pinned) => Opus.Egress.pinned(),
+          optional(:attached) => AttachedRequest.t()
         }
 
   @doc """
@@ -71,7 +91,8 @@ defmodule Opus.HttpRequestValidation do
 
   Returns `{:ok, validated_request}` with `:ip` (the pinned address),
   `:pinned` (the pin) and `:method_atom` (the Req method) added, and the guest's
-  credentials dropped from a cross-origin redirect hop's headers;
+  credentials dropped from a cross-origin redirect hop's headers, or, for
+  a request naming a connection, with `:attached` added and no pin;
   `{:error, type, message}` for a refusal the caller records; or
   `{:refused, type, message}` for a refusal of CYFR's, which CYFR has
   already recorded.
@@ -80,8 +101,8 @@ defmodule Opus.HttpRequestValidation do
 
     * `:allow_multipart` — `false` rejects requests carrying a `multipart`
       field (the streaming transport cannot send one). Defaults to `true`.
-    * `:purpose` — what the pin is asked for: `:fetch` (default) or
-      `:stream`.
+    * `:purpose` — what the pin is asked for, or the attached request is
+      made for: `:fetch` (default) or `:stream`.
   """
   @spec validate(String.t(), Edge.t() | nil, Limits.t(), HostClient.t(), String.t(), keyword()) ::
           {:ok, validated_request()}
@@ -95,6 +116,8 @@ defmodule Opus.HttpRequestValidation do
         _component_ref,
         opts \\ []
       ) do
+    purpose = Keyword.get(opts, :purpose, :fetch)
+
     with :ok <- envelope_bound(limits, json_request),
          {:ok, request} <- parse_request(json_request),
          :ok <- validate_method(edge, request.method),
@@ -102,8 +125,13 @@ defmodule Opus.HttpRequestValidation do
          :ok <- validate_domain(edge, request.url),
          :ok <- check_multipart_allowed(request, Keyword.get(opts, :allow_multipart, true)),
          {:ok, request} <- decode_request_body(request),
-         :ok <- EdgeGuard.check_request_size(limits, request),
-         {:ok, pinned} <- pin_url(host, request.url, Keyword.get(opts, :purpose, :fetch)),
+         :ok <- EdgeGuard.check_request_size(limits, request) do
+      if request.connection, do: attached(request, purpose), else: pinned(request, host, purpose)
+    end
+  end
+
+  defp pinned(request, host, purpose) do
+    with {:ok, pinned} <- pin_url(host, request.url, purpose),
          {:ok, method_atom} <- validated_method_atom(request.method) do
       {:ok,
        request
@@ -111,6 +139,38 @@ defmodule Opus.HttpRequestValidation do
        |> Map.put(:pinned, pinned)
        |> Map.put(:method_atom, method_atom)
        |> hop_headers(pinned)}
+    end
+  end
+
+  # The request CYFR makes for a connection: built from the members the
+  # guest wrote, its body as it is sent, written as the host call writes
+  # it and read back as CYFR reads it, so the runner refuses what CYFR
+  # would. No pin is asked: CYFR pins the request it makes.
+  defp attached(request, purpose) do
+    {headers, body} = HttpHandler.wire_body(request)
+
+    built = %AttachedRequest{
+      call_id: AttachedRequest.call_id(:crypto.strong_rand_bytes(16)),
+      connection: request.connection,
+      method: request.method,
+      url: request.url,
+      headers: headers,
+      body: body,
+      purpose: purpose
+    }
+
+    case built |> AttachedRequest.to_args() |> AttachedRequest.read() do
+      {:ok, attached} ->
+        {:ok, Map.put(request, :attached, attached)}
+
+      {:error, :credential_header_refused} ->
+        {:error, :credential_header_refused, Prima.Refusal.message(:credential_header_refused)}
+
+      {:error, {:invalid_request, header}} ->
+        {:error, :invalid_request, "An attached request cannot set the #{header} header."}
+
+      {:error, _unread} ->
+        {:error, :invalid_request, "The attached request does not read."}
     end
   end
 
@@ -189,7 +249,8 @@ defmodule Opus.HttpRequestValidation do
             {:error, :invalid_request, "Request cannot have both 'body' and 'multipart'"}
 
           true ->
-            with {:ok, headers} <- parse_headers(req["headers"]) do
+            with {:ok, headers} <- parse_headers(req["headers"]),
+                 {:ok, connection} <- parse_connection(req) do
               {:ok,
                %{
                  method: String.upcase(method),
@@ -199,7 +260,8 @@ defmodule Opus.HttpRequestValidation do
                  body: body,
                  body_encoding: req["body_encoding"],
                  response_encoding: req["response_encoding"],
-                 multipart: multipart
+                 multipart: multipart,
+                 connection: connection
                }}
             end
         end
@@ -211,6 +273,16 @@ defmodule Opus.HttpRequestValidation do
         {:error, :invalid_json, "Invalid JSON request"}
     end
   end
+
+  # The need a request is made on, when it names one: a string, whose
+  # grammar `Prima.AttachedRequest` holds it to.
+  defp parse_connection(%{"connection" => connection}) when is_binary(connection),
+    do: {:ok, connection}
+
+  defp parse_connection(%{"connection" => _other}),
+    do: {:error, :invalid_request, "Invalid connection: the name of a need, as a string"}
+
+  defp parse_connection(_request), do: {:ok, nil}
 
   # Headers are an object of names to values or an array of `[name, value]`
   # pairs, each read into a `{name, value}` pair, the one shape every later

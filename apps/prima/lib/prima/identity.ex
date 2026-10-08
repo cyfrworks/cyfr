@@ -220,12 +220,20 @@ defmodule Prima.Identity.Encoding do
   @spec fields(map(), [String.t()], [String.t()]) :: :ok | {:error, reason()}
   def fields(map, required, optional) do
     allowed = required ++ optional
+    keys = map |> Map.keys() |> Enum.sort()
 
-    with nil <- map |> Map.keys() |> Enum.sort() |> Enum.find(&(&1 not in allowed)),
-         nil <- Enum.find(required, &(not Map.has_key?(map, &1))) do
-      :ok
-    else
-      field -> if field in required, do: missing(field), else: unknown(field)
+    # The unknown key is found by its index, never by its value: a nil key
+    # is unknown, not read as "no unknown key". `required` holds strings,
+    # so its search can answer the missing field itself.
+    case Enum.find_index(keys, &(&1 not in allowed)) do
+      nil ->
+        case Enum.find(required, &(not Map.has_key?(map, &1))) do
+          nil -> :ok
+          field -> missing(field)
+        end
+
+      index ->
+        unknown(Enum.at(keys, index))
     end
   end
 

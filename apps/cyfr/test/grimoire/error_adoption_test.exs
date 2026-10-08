@@ -51,6 +51,12 @@ defmodule Grimoire.ErrorAdoptionTest do
   # module path => string-returning `{:error, "…"}` sites remaining.
   # Ordered by size, which is also the order worth converting them in.
   @worklist %{
+    # A malformed blob's `{:invalid_resource, node, edge, kind, message}`
+    # says what is wrong with the stored resource, and nothing branches on
+    # the sentence; a vault binding's scope, binding key, destination,
+    # attach rule, named accounts, provided configuration and lender each
+    # say theirs.
+    "apps/prima/lib/prima/authority/blob.ex" => 22,
     "apps/prima/lib/prima/component_ref.ex" => 20,
     "apps/cyfr/lib/emissary/external/server.ex" => 19,
     # The concurrency argument's own refusal is a sentence about the value
@@ -63,7 +69,6 @@ defmodule Grimoire.ErrorAdoptionTest do
     # this vocabulary's.
     "apps/cyfr/lib/compendium/oci/client.ex" => 12,
     "apps/cyfr/lib/grimoire/provider.ex" => 12,
-    "apps/prima/lib/prima/authority/blob.ex" => 11,
     "apps/sanctum/lib/sanctum/providers/key.ex" => 11,
     # What is wrong with a cron expression, said in the expression's own
     # terms.

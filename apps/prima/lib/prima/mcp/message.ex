@@ -263,8 +263,11 @@ defmodule Prima.MCP.Message do
     end
   end
 
+  # The version is the peer's to spell, and a sentence that read it back
+  # would carry whatever the peer put there: it is named by its shape.
   defp decode_single(%{"jsonrpc" => version}) do
-    {:error, :invalid_request, "Unsupported jsonrpc version: #{version}"}
+    {:error, :invalid_request,
+     "Unsupported jsonrpc version (#{Prima.LoggerContext.shape(version)})"}
   end
 
   defp decode_single(_) do

@@ -11,6 +11,11 @@ defmodule Sanctum.Unauthorized do
   code at every surface; `message/2` is the sentence a person reads. This
   vocabulary classifies its own reasons — `Grimoire.Error.classify/1`
   tries it before `Prima.Refusal`'s table, which does not know it.
+
+  It also carries the consent loader's refusals that reach a surface
+  (`Sanctum.Consent.Loader`): an app's own head, or a profile it borrows
+  a key from, that the store could not answer (class `unavailable`) or
+  that is stored outside the closed vocabulary (class `corrupt`).
   """
 
   @type reason ::
@@ -28,6 +33,10 @@ defmodule Sanctum.Unauthorized do
           | {:malformed_resource, :execution | :tenant}
           | {:consent_class_required, term()}
           | {:authorization_required, String.t()}
+          | {:head_unavailable, String.t()}
+          | {:head_corrupt, String.t()}
+          | {:lender_unavailable, String.t()}
+          | {:lender_corrupt, String.t(), String.t()}
 
   @doc """
   Whether a term is a refusal from this vocabulary. Dispatchers use it to
@@ -55,6 +64,14 @@ defmodule Sanctum.Unauthorized do
   def reason?({:malformed_resource, tag}) when tag in [:execution, :tenant], do: true
   def reason?({:consent_class_required, _refusal}), do: true
   def reason?({:authorization_required, detail}) when is_binary(detail), do: true
+  def reason?({:head_unavailable, profile_id}) when is_binary(profile_id), do: true
+  def reason?({:head_corrupt, profile_id}) when is_binary(profile_id), do: true
+  def reason?({:lender_unavailable, target}) when is_binary(target), do: true
+
+  def reason?({:lender_corrupt, target, profile_id})
+      when is_binary(target) and is_binary(profile_id),
+      do: true
+
   def reason?(_), do: false
 
   @doc "The refusal class a reason belongs to (`Prima.Refusal.classes/0`)."
@@ -67,6 +84,13 @@ defmodule Sanctum.Unauthorized do
   # caller: retryable, never a denial.
   def class({:consent_class_required, :unavailable}), do: :unavailable
   def class({:authorization_required, _detail}), do: :setup_required
+
+  # A consent the store could not answer is retryable; one stored outside
+  # the closed vocabulary is damage, never "not granted".
+  def class({:head_unavailable, _profile_id}), do: :unavailable
+  def class({:lender_unavailable, _target}), do: :unavailable
+  def class({:head_corrupt, _profile_id}), do: :corrupt
+  def class({:lender_corrupt, _target, _profile_id}), do: :corrupt
 
   # A record or resource that cannot be attributed is a fault of the
   # caller's code, not something the person can change.
@@ -162,4 +186,24 @@ defmodule Sanctum.Unauthorized do
   def message({:authorization_required, detail}, _) do
     "Unauthorized: this connection must be re-authorized (#{detail})"
   end
+
+  # A damaged consent is not repaired by approving it again: the walk
+  # refuses the head it cannot decode and never sees a profile row it
+  # cannot decode. Revoking the profile by its id takes it off the active
+  # profiles, so a new grant takes its place.
+  def message({:head_unavailable, _profile_id}, _),
+    do: "This app's consent cannot be read right now — try again."
+
+  def message({:head_corrupt, profile_id}, _),
+    do:
+      "This app's consent is damaged and cannot be used — " <>
+        "revoke profile #{profile_id} and grant it again."
+
+  def message({:lender_unavailable, _target}, _),
+    do: "A profile that lends a key here cannot be read right now — try again."
+
+  def message({:lender_corrupt, _target, profile_id}, _),
+    do:
+      "A profile that lends a key here is damaged and cannot lend its key — " <>
+        "revoke profile #{profile_id} and grant it again."
 end

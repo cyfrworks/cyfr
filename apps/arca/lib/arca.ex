@@ -155,6 +155,8 @@ defmodule Arca do
       IdentityAttempts,
       IdentityLog,
       InstallationClaims,
+      InstanceEntries,
+      InstanceEntryUsage,
       JobClaims,
       Layouts,
       McpLog,
@@ -195,6 +197,7 @@ defmodule Arca do
       TurnStorage,
       Usage,
       Users,
+      VaultDefaults,
       VaultStorage,
       WebhookDeliveryStorage,
       WebhookStorage
@@ -332,6 +335,29 @@ defmodule Arca do
         # this gate does sees the one shape every other write answers.
         case adapter(p).put_if_match(actor, p, content, precondition) do
           {:ok, _next_precondition} -> :ok
+          {:error, _} = error -> error
+        end
+      end)
+
+  @doc """
+  Create the object at `path` only when nothing is there
+  (`c:Arca.Storage.put_if_none_match/3`: `If-None-Match: *` on an object
+  store, an exclusive create locally) — `put/4` for a writer that must
+  never overwrite.
+
+  The same gate `put/4` passes: path authorization, the storage cap
+  (`cap:`, `:checked` by default) and usage accounting. `{:error,
+  :exists}` when an object is already at `path`, which is left as it was;
+  an adapter that cannot tell whether its request landed answers
+  `{:error, :unknown}`, and a caller reads the path to find out.
+  """
+  @spec put_if_none_match(Prima.Actor.t(), Arca.Storage.path(), binary(), keyword()) ::
+          :ok | {:error, :exists | :unknown | term()}
+  def put_if_none_match(%Prima.Actor{} = actor, path, content, opts \\ []),
+    do:
+      mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
+        case adapter(p).put_if_none_match(actor, p, content) do
+          {:ok, _precondition} -> :ok
           {:error, _} = error -> error
         end
       end)

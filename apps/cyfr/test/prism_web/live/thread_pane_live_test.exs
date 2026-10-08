@@ -1,6 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# A store that cannot give the AQUA roles listing; every other read is the
+# local adapter's.
+defmodule PrismWeb.ThreadPaneLiveTest.UnreadableRoles do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  @roles Compendium.AquaPath.roles_root()
+
+  def list_typed(_actor, @roles), do: {:error, :eacces}
+  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
+end
+
+# A store that answers, and holds no soul and no role.
+defmodule PrismWeb.ThreadPaneLiveTest.EmptyAqua do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  @roles Compendium.AquaPath.roles_root()
+  @soul Compendium.AquaPath.soul_file()
+
+  def list_typed(_actor, @roles), do: {:ok, []}
+  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
+
+  def get(_actor, @soul), do: {:error, :not_found}
+  def get(actor, path), do: Arca.Adapters.Local.get(actor, path)
+end
+
 defmodule PrismWeb.ThreadPaneLiveTest do
   # The pane on its own: what it says when the session is gone, that a
   # refusal reaches the person as a sentence, that what it pushes names
@@ -670,6 +697,683 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert {:ok, [_profile | _]} = Sanctum.Consent.profiles(in_room, name_ref)
 
     Cyfr.Test.Sandbox.end_views()
+  end
+
+  # An app in `ctx`'s athanor whose own calls carry one credential need,
+  # with an entry of its provider in the vault for the grant to suggest.
+  defp needy_app!(ctx) do
+    name = "pane-account-#{System.unique_integer([:positive])}"
+
+    manifest = %{
+      "name" => name,
+      "version" => "0.1.0",
+      "type" => "catalyst",
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API",
+          "required" => true,
+          "fields" => ["KEY"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+    }
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: name,
+        version: "0.1.0",
+        type: "catalyst",
+        manifest: Jason.encode!(manifest)
+      })
+
+    {:ok, _entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "#{name} key",
+        kind: "api_key",
+        provider_hint: "example.com",
+        fields: %{"KEY" => "k"},
+        destination: %{"hosts" => ["api.example.com"]},
+        disclose: true
+      })
+
+    {"catalyst:local.#{name}", "catalyst:local.#{name}:0.1.0"}
+  end
+
+  # The text line of `thread` whose content is `content`: the message a
+  # turn answered.
+  defp line_id!(in_room, thread, content) do
+    rows = Threads.latest_messages(Sanctum.Context.actor(in_room), thread.id, 500)
+    assert %{id: id} = Enum.find(rows, &(&1.kind == "text" and &1.content == content))
+    id
+  end
+
+  # A launch's account the ended turn (its message `message_id`) asked
+  # for, asked in the view's layer on a fresh app's own profile and
+  # granted there. Answers the view and the pane once the pane has heard
+  # its grant.
+  defp grant_launch_account!(conn, room, thread, user, in_room, message_id) do
+    {_name_ref, ref} = needy_app!(in_room)
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+    settled_render(view)
+    pane = child!(view, "pane-" <> room.id)
+
+    data = %{ref: ref, user_id: user.user_id, account: %{name: "Supabase 2", need: nil}}
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :consent_required,
+      data: if(message_id, do: Map.put(data, :message_id, message_id), else: data)
+    })
+
+    render(pane)
+    render(view)
+    assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+    # The prompt is for the app's own calls, opened on the account the
+    # launch named.
+    assert %{grant_prompt: prompt_id} = :sys.get_state(pane.pid).socket.assigns
+    assert is_binary(prompt_id)
+    assert render(view) =~ "Supabase 2"
+
+    view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+    Prima.Test.Wait.wait_until(
+      fn -> :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil end,
+      5_000,
+      "the pane to hear its grant"
+    )
+
+    {view, pane}
+  end
+
+  # Whether the pane asked to cut the thread's turn for a new consent.
+  defp restarts_for_consent do
+    Arca.Repo.all(
+      from(l in Arca.Schemas.McpLog,
+        where: l.tool == "thread" and l.action == "restart_for_consent",
+        select: l.id
+      )
+    )
+  end
+
+  test "a launch's account is asked on the app's own profile, opened on that account, and the " <>
+         "pane then offers the ended turn's message again as a new turn",
+       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+    hello = line_id!(in_room, thread, "hello")
+    {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, hello)
+
+    # The turn that asked already ended: nothing is cut, and its message
+    # is offered again, to be sent as a new turn.
+    assigns = :sys.get_state(pane.pid).socket.assigns
+    assert assigns.restart_prompt == "hello"
+    html = render(pane)
+    assert html =~ "send that message again, as a new turn"
+    assert has_element?(pane, ~s(button[phx-click="restart_send"]))
+    assert restarts_for_consent() == []
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "the retry offered is the ended turn's own message, never a line queued while it ran",
+       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+    hello = line_id!(in_room, thread, "hello")
+
+    {:ok, _} =
+      Threads.append(Sanctum.Context.actor(in_room), thread.id, %{
+        author: user.user_id,
+        content: "and one more thing"
+      })
+
+    {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, hello)
+
+    assert :sys.get_state(pane.pid).socket.assigns.restart_prompt == "hello"
+    assert restarts_for_consent() == []
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "the retry offered is the ended turn's own message, however many rows follow it",
+       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+    hello = line_id!(in_room, thread, "hello")
+
+    for n <- 1..55 do
+      {:ok, _} =
+        Threads.append(Sanctum.Context.actor(in_room), thread.id, %{
+          author: "aqua",
+          content: "reply #{n}"
+        })
+    end
+
+    {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, hello)
+
+    # Nothing is cut: the turn that asked has ended, and no other turn is
+    # the grant's to cut.
+    assert :sys.get_state(pane.pid).socket.assigns.restart_prompt == "hello"
+    assert restarts_for_consent() == []
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "with no message of the turn that asked to offer, the pane cuts nothing and says so",
+       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+    # A line of another thread is no message of this thread's turn.
+    {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(in_room))
+
+    {:ok, foreign} =
+      Threads.append(Sanctum.Context.actor(in_room), elsewhere.id, %{
+        author: user.user_id,
+        content: "a line of another thread"
+      })
+
+    for message_id <- [nil, foreign.id] do
+      {_view, pane} = grant_launch_account!(conn, room, thread, user, in_room, message_id)
+      assigns = :sys.get_state(pane.pid).socket.assigns
+
+      assert assigns.restart_prompt == nil
+      assert assigns.grant_retry == nil
+      assert assigns.flash["info"] =~ "The turn that asked has ended"
+      refute has_element?(pane, ~s(button[phx-click="restart_send"]))
+      assert restarts_for_consent() == []
+    end
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a launch's card names the account it binds and takes no standing answer", %{
+    conn: conn,
+    room: room,
+    in_room: in_room,
+    thread: thread
+  } do
+    proposal = %{
+      "tool" => "execution",
+      "action" => "run",
+      "args" => %{
+        "reference" => "reagent:local.mailer:1.0.0",
+        "input" => %{},
+        "connection" => "Work"
+      },
+      "vault_entry" => "vlt_work-1"
+    }
+
+    card = card!(in_room, thread, proposal, %{"action_kind" => "execute", "standing" => false})
+    pane = room_pane(conn, room, thread)
+    card_dom = ~s([id$="-card-#{card.id}"])
+
+    assert has_element?(pane, ~s(#{card_dom} [data-test="approval-account"]), "Work")
+    refute has_element?(pane, ~s(#{card_dom} [data-test="approval-standing"]))
+    refute render(pane) =~ "vlt_work-1"
+    assert has_element?(pane, ~s(#{card_dom} button[phx-value-scope="once"]))
+
+    # A launch that names no account says none.
+    {:ok, other} = Threads.create(Sanctum.Context.actor(in_room))
+
+    unnamed = %{
+      "tool" => "execution",
+      "action" => "run",
+      "args" => %{"reference" => "reagent:local.mailer:1.0.0", "input" => %{}}
+    }
+
+    plain =
+      card!(in_room, other, unnamed, %{"action_kind" => "execute", "standing" => false})
+
+    other_pane = room_pane(conn, room, other)
+    refute has_element?(other_pane, ~s([id$="-card-#{plain.id}"] [data-test="approval-account"]))
+  end
+
+  # The pane on the room with no thread open: its empty state.
+  defp empty_pane(conn, room) do
+    {:ok, pane, _} =
+      live_isolated(conn, PrismWeb.ThreadPaneLive, session: %{"athanor_id" => room.id})
+
+    pane
+  end
+
+  describe "the chat's empty state over the model's consent" do
+    # The room is ready, and its soul's model is installed with an owner
+    # profile whose head exists: the empty state reads the model through
+    # `Aqua.model_status/2`.
+    setup %{room: room, in_room: in_room} do
+      {:ok, _} = Athanors.mark_provisioned(room)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(in_room, @wasm, %{
+          name: "claude",
+          version: "0.1.0",
+          type: "catalyst",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "api_key" => %{
+                  "type" => "api_key:anthropic.com",
+                  "reason" => "to call the model with your key",
+                  "fields" => ["ANTHROPIC_API_KEY"],
+                  "required" => true
+                }
+              }
+            })
+        })
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          in_room,
+          %{
+            id: "prof_room_claude",
+            source_ref: "catalyst:local.claude",
+            kind: :owner,
+            label: "default",
+            status: :active
+          },
+          %{
+            id: "cons_room_claude",
+            revision: 1,
+            scope: :versionless,
+            shape_digest: "sha256:shape",
+            commit_digest: "sha256:commit",
+            resolved_policy: "{}",
+            activation: %{"catalyst:local.claude" => "sha256:act"},
+            vault_refs: []
+          }
+        )
+
+      :ok
+    end
+
+    test "a consent that exists but is damaged is said as such, never as no model",
+         %{conn: conn, room: room, in_room: in_room} do
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(in_room, "prof_room_claude",
+          scope: "sideways"
+        )
+
+      pane = empty_pane(conn, room)
+
+      assert has_element?(
+               pane,
+               ~s([data-test="model-consent"]),
+               "A consent this model runs under is damaged and cannot be used — " <>
+                 "revoke the damaged profile and grant it again."
+             )
+
+      refute render(pane) =~ "has no model yet"
+      refute has_element?(pane, "a", "Connect a model")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    @tag :capture_log
+    test "a consent the store cannot answer is said as such, never as no model",
+         %{conn: conn, room: room} do
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+      pane = empty_pane(conn, room)
+
+      assert has_element?(
+               pane,
+               ~s([data-test="model-consent"]),
+               "A consent this model runs under cannot be read right now — try again."
+             )
+
+      refute render(pane) =~ "has no model yet"
+      refute has_element?(pane, "a", "Connect a model")
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a model whose head binds no key is still one to connect", %{conn: conn, room: room} do
+      pane = empty_pane(conn, room)
+
+      assert render(pane) =~ "has no model yet"
+      assert has_element?(pane, "a", "Connect a model")
+      refute has_element?(pane, ~s([data-test="model-consent"]))
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # The room as a fill leaves it, its soul's model connected
+  # (`ready_athanor!/2`): what the server ships, the components the soul
+  # depends on among them (the suite's own seed tree ships the AQUA
+  # template alone), the soul's consent selecting its model's default
+  # profile, and a key bound to that profile. The seed path it moves is
+  # restored only once the work the test's views started has stopped.
+  defp connected_room!(room, user) do
+    {:ok, _} = Athanors.mark_provisioned(room)
+    ctx = ready_athanor!(room.id, user.user_id)
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    ctx
+  end
+
+  # The pane read its model's status from the roster, which names no model,
+  # so its empty state offered a model to connect over one connected. It
+  # reads the agents with their model now.
+  test "a connected model reads ready, and the empty state offers no model to connect",
+       %{room: room, user: user, conn: conn} do
+    connected_room!(room, user)
+    pane = empty_pane(conn, room)
+
+    assert render(pane) =~ "anything."
+    refute render(pane) =~ "has no model yet"
+    refute has_element?(pane, "a", "Connect a model")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  @damaged "A consent this model runs under is damaged and cannot be used — " <>
+             "revoke the damaged profile and grant it again."
+  @unanswered "A consent this model runs under cannot be read right now — try again."
+
+  # What the pane's empty state and the AQUA page's agents panel each say
+  # of the room's model: `sentence`, with no model to connect and no key
+  # to change over a consent that exists.
+  defp model_consent_reads!(conn, room, sentence) do
+    pane = empty_pane(conn, room)
+    assert has_element?(pane, ~s([data-test="model-consent"]), sentence)
+    refute render(pane) =~ "has no model yet"
+    refute render(pane) =~ "anything."
+    refute has_element?(pane, "a", "Connect a model")
+
+    {panel, _html} = mount_athanor(conn, "/aqua", room)
+    assert has_element?(panel, "#aqua-card-aqua span", sentence)
+    refute render(panel) =~ "Model connected"
+    refute render(panel) =~ "the model has no key yet"
+    refute has_element?(panel, "button[phx-click=open_consent]", "Connect a model")
+    refute has_element?(panel, "button[phx-click=open_consent]", "Change the key")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  # A store that stops answering one profile's head, and only it: each
+  # read of the head's row finds the table of its vault references gone,
+  # and the read that fails there puts the table back, so every other read
+  # answers.
+  defp head_outage!(ctx, profile_id) do
+    {:ok, %{head_consent_id: head_id}} =
+      Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
+
+    away = :atomics.new(1, [])
+    handler = "pane-head-outage-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          cond do
+            meta[:source] == "consents" and head_id in List.wrap(meta[:params]) and
+                :atomics.compare_exchange(away, 1, 0, 1) == :ok ->
+              Arca.Repo.query!("ALTER TABLE consent_vault_refs RENAME TO consent_vault_refs_away")
+
+            meta[:source] == "consent_vault_refs" and match?({:error, _}, meta[:result]) and
+                :atomics.compare_exchange(away, 1, 1, 0) == :ok ->
+              Arca.Repo.query!("ALTER TABLE consent_vault_refs_away RENAME TO consent_vault_refs")
+
+            true ->
+              :ok
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  describe "a connected model whose assistant cannot load its consent" do
+    # The soul's model reads ready on its own setup plan; what stands in
+    # the way is the assistant's own load, as a turn makes it. A load
+    # refused for damage, or because the store could not answer, is said
+    # as such by the pane and by the agents panel alike, never as a model
+    # to connect, and a launch is refused for the same reason.
+    setup %{room: room, user: user} do
+      ctx = connected_room!(room, user)
+      soul = Prima.AgentRef.soul_ref()
+      {:ok, %{profile_id: soul_profile}} = Crucible.authority_for(ctx, :default, soul)
+      {:ok, ctx: ctx, soul: soul, soul_profile: soul_profile}
+    end
+
+    test "the assistant's own head damaged reads damaged",
+         %{conn: conn, room: room, ctx: ctx, soul: soul, soul_profile: soul_profile} do
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, soul_profile, scope: "sideways")
+
+      assert {:error, {:head_corrupt, ^soul_profile}} =
+               Crucible.authority_for(ctx, :default, soul)
+
+      model_consent_reads!(conn, room, @damaged)
+    end
+
+    test "a damaged second profile row of the model's catalyst reads damaged",
+         %{conn: conn, room: room, ctx: ctx, soul: soul} do
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_profile!(ctx, %{
+          id: "prof_claude_twin",
+          source_ref: "catalyst:local.claude",
+          kind: :owner,
+          label: "twin",
+          status: :active
+        })
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(p in Arca.Schemas.Profile,
+            where: p.athanor_id == ^ctx.athanor_id and p.id == "prof_claude_twin"
+          ),
+          set: [kind: "sideways"]
+        )
+
+      assert {:error, {:lender_corrupt, "catalyst:local.claude", "prof_claude_twin"}} =
+               Crucible.authority_for(ctx, :default, soul)
+
+      model_consent_reads!(conn, room, @damaged)
+    end
+
+    @tag :capture_log
+    test "an outage of the assistant's own head reads unanswered",
+         %{conn: conn, room: room, ctx: ctx, soul: soul, soul_profile: soul_profile} do
+      head_outage!(ctx, soul_profile)
+
+      assert {:error, {:head_unavailable, ^soul_profile}} =
+               Crucible.authority_for(ctx, :default, soul)
+
+      model_consent_reads!(conn, room, @unanswered)
+    end
+
+    test "a blob digest mismatch on the assistant's own head reads damaged",
+         %{conn: conn, room: room, ctx: ctx, soul: soul, soul_profile: soul_profile} do
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, soul_profile,
+          blob_digest: "sha256:" <> String.duplicate("0", 64)
+        )
+
+      assert {:error, {:head_corrupt, ^soul_profile}} =
+               Crucible.authority_for(ctx, :default, soul)
+
+      model_consent_reads!(conn, room, @damaged)
+    end
+  end
+
+  @model_unread "This model cannot be read right now — try again."
+
+  # The pane's empty state over a model that could not be read: it says
+  # so, and offers nothing but to try again.
+  defp pane_reads_unread!(conn, room) do
+    pane = empty_pane(conn, room)
+    assert has_element?(pane, ~s([data-test="model-unavailable"]), @model_unread)
+    refute render(pane) =~ "has no model yet"
+    refute render(pane) =~ "anything."
+    refute render(pane) =~ "Connect one on your AQUA page."
+    refute has_element?(pane, "a", "Connect a model")
+  end
+
+  # The AQUA page's agents panel over the same: no model to install, no
+  # key to connect or change.
+  defp panel_reads_unread!(conn, room) do
+    {panel, _html} = mount_athanor(conn, "/aqua", room)
+    assert has_element?(panel, "#aqua-card-aqua span", @model_unread)
+    refute render(panel) =~ "not installed here yet"
+    refute has_element?(panel, "button[phx-click=install_catalyst]")
+    refute has_element?(panel, "button[phx-click=open_consent]")
+  end
+
+  # Runs `inject` each time the gate admits a `component.setup_plan`
+  # call: after the catalyst listing has read and resolved the model, and
+  # before the plan's own read.
+  defp on_setup_plan!(inject) do
+    handler = "pane-setup-plan-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :grimoire, :decision, :admitted],
+        fn _event, _measurements, meta, _config ->
+          if meta[:tool] == "component" and meta[:action] == "setup_plan", do: inject.()
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  describe "a model whose catalysts or setup cannot be read" do
+    # The room is connected (`ready_athanor!/2`). A store that cannot give
+    # the athanor's catalysts, or the model's setup plan, leaves whether
+    # the model is installed unknown: it is said as such, never as a model
+    # to install or to connect. The outage is the component index left
+    # behind by an edit (`Arca.StorageProjectionChanges.begin_edit/3`), as
+    # `Aqua.ModelsTest` leaves it.
+    setup %{room: room, user: user} do
+      ctx = connected_room!(room, user)
+      {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
+    end
+
+    @tag :capture_log
+    test "a catalyst listing that cannot be read reads unread, never a model to install",
+         %{conn: conn, room: room, ctx: ctx, actor: actor} do
+      {:ok, _pending} =
+        Arca.StorageProjectionChanges.begin_edit(
+          actor,
+          "components",
+          "catalysts/local/claude/0.0.0"
+        )
+
+      assert {:error, :catalyst_lookup_failed} = Aqua.AgentConfig.catalyst_listing(ctx)
+
+      pane_reads_unread!(conn, room)
+      panel_reads_unread!(conn, room)
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    @tag :capture_log
+    test "a setup plan the store cannot answer reads unread, never a model to install",
+         %{conn: conn, room: room, actor: actor} do
+      test = self()
+      unit = "catalysts/local/claude/0.0.0"
+
+      on_setup_plan!(fn ->
+        {:ok, generation} = Arca.StorageProjectionChanges.begin_edit(actor, "components", unit)
+        send(test, {:index_behind, generation})
+      end)
+
+      pane_reads_unread!(conn, room)
+      assert_received {:index_behind, generation}
+
+      # The panel's own listing reads; its setup plan meets the outage again.
+      {:ok, _} = Arca.StorageProjectionChanges.finish_edit(actor, "components", unit, generation)
+      panel_reads_unread!(conn, room)
+      assert_received {:index_behind, _again}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a setup plan that finds no such component still reads missing, with Install",
+         %{conn: conn, room: room, ctx: ctx} do
+      test = self()
+      athanor_id = ctx.athanor_id
+
+      named = fn name, to ->
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.Component,
+            where:
+              c.athanor_id == ^athanor_id and c.component_type == "catalyst" and c.name == ^name
+          ),
+          set: [name: to]
+        )
+      end
+
+      on_setup_plan!(fn -> send(test, {:gone, named.("claude", "claude-gone")}) end)
+
+      pane = empty_pane(conn, room)
+      assert_received {:gone, {n, _}} when n > 0
+      assert render(pane) =~ "has no model yet"
+      assert has_element?(pane, "a", "Connect a model")
+      refute has_element?(pane, ~s([data-test="model-unavailable"]))
+
+      # The panel's own listing names the model; its setup plan finds none.
+      {^n, _} = named.("claude-gone", "claude")
+      {panel, _html} = mount_athanor(conn, "/aqua", room)
+      assert_received {:gone, {^n, _}}
+      assert render(panel) =~ "not installed here yet"
+      assert has_element?(panel, "button[phx-click=install_catalyst]", "Install")
+      refute render(panel) =~ @model_unread
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  # The storage adapter for the rest of the test.
+  defp storage!(adapter) do
+    original = Application.get_env(:arca, :storage_adapter)
+    Application.put_env(:arca, :storage_adapter, adapter)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:arca, :storage_adapter, original),
+        else: Application.delete_env(:arca, :storage_adapter)
+    end)
+  end
+
+  describe "an agents list that cannot be read" do
+    # A store that cannot give the room's agents leaves whether it has a
+    # model unknown: the pane says so and offers nothing but to try again.
+    # A store that answers with no agents is a room with no model, which
+    # is one to connect.
+    setup %{room: room} do
+      {:ok, _} = Athanors.mark_provisioned(room)
+      :ok
+    end
+
+    @tag :capture_log
+    test "reads unread, never no model, with no link", %{conn: conn, room: room} do
+      storage!(PrismWeb.ThreadPaneLiveTest.UnreadableRoles)
+      pane = empty_pane(conn, room)
+
+      assert has_element?(
+               pane,
+               ~s([data-test="agents-unavailable"]),
+               "The agents cannot be read right now — try again."
+             )
+
+      refute render(pane) =~ "has no model yet"
+      refute render(pane) =~ "Connect one on your AQUA page."
+      refute has_element?(pane, ~s([id$="-thread"] > div.justify-center a))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a store that answers with no agents still offers a model to connect",
+         %{conn: conn, room: room, in_room: in_room} do
+      storage!(PrismWeb.ThreadPaneLiveTest.EmptyAqua)
+
+      # The room's list reads, and holds the guides alone: no soul, no role.
+      assert {:ok, %{guides: guides}} =
+               Aqua.Ops.call_tool("aqua", in_room, %{"action" => "list", "detail" => true})
+
+      assert Enum.all?(guides, &(&1.type == "doc"))
+
+      pane = empty_pane(conn, room)
+
+      assert render(pane) =~ "has no model yet"
+      assert has_element?(pane, "a", "Connect a model")
+      refute has_element?(pane, ~s([data-test="agents-unavailable"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
   end
 
   test "a pane with no view around it has no layer to ask in, and says so", %{

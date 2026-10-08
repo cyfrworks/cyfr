@@ -52,3 +52,131 @@ defmodule PrismWeb.AquaLiveConsentStatusTest do
     refute html =~ "Consent status unavailable"
   end
 end
+
+defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
+  @moduledoc """
+  The consent the AQUA page asks for (`open_consent`, which its
+  re-consent rows and its "Connect a model" both send) opens on the plan's
+  suggestion: the model's one key is bound before the person does
+  anything, and that is what the grant commits.
+  """
+
+  use PrismWeb.ConnCase, async: false
+
+  # Minimal valid WASM with a `run` export.
+  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+          <<0x03, 0x02, 0x01, 0x00>> <>
+          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+
+  setup %{conn: conn} do
+    test_path = Path.join(System.tmp_dir!(), "aqua_consent_#{:rand.uniform(1_000_000)}")
+    original = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
+
+    on_exit(fn ->
+      File.rm_rf(test_path)
+
+      if original,
+        do: Application.put_env(:arca, :base_path, original),
+        else: Application.delete_env(:arca, :base_path)
+    end)
+
+    # Stop restoration-created work before the base path moves.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+    {:ok, conn: conn, ctx: ctx}
+  end
+
+  # Point the soul at `ref`, and put it back afterwards.
+  defp soul_names_catalyst!(ctx, ref) do
+    {:ok, soul} = Aqua.AgentConfig.agent(ctx, "aqua")
+    was = soul["catalyst_ref"] || ""
+
+    {:ok, _} =
+      Aqua.AgentConfig.call_aqua(ctx, %{
+        "action" => "update",
+        "name" => "aqua",
+        "catalyst_ref" => ref
+      })
+
+    on_exit(fn ->
+      assert {:ok, _} =
+               Aqua.AgentConfig.call_aqua(ctx, %{
+                 "action" => "update",
+                 "name" => "aqua",
+                 "catalyst_ref" => was
+               })
+
+      assert {:ok, restored} = Aqua.AgentConfig.agent(ctx, "aqua")
+      assert (restored["catalyst_ref"] || "") == was
+    end)
+
+    # Stop live readers before restoring the soul they read.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
+    :ok
+  end
+
+  test "the page's consent opens with the model's key bound, and grants it",
+       %{conn: conn, ctx: ctx} do
+    ref = "catalyst:local.status-keyed"
+    :ok = soul_names_catalyst!(ctx, ref)
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: "status-keyed",
+        version: "0.1.0",
+        type: "catalyst",
+        description: "A model catalyst",
+        manifest:
+          Jason.encode!(%{
+            "needs" => %{
+              "api_key" => %{
+                "type" => "api_key:status.test",
+                "reason" => "to call the model with your key",
+                "fields" => ["STATUS_API_KEY"],
+                "required" => true
+              }
+            }
+          })
+      })
+
+    # The model reads its key itself, so the entry is disclosed.
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "status key",
+        kind: "api_key",
+        provider_hint: "status.test",
+        fields: %{"STATUS_API_KEY" => "sk-status"},
+        destination: %{"hosts" => ["api.status.example"]},
+        disclose: true
+      })
+
+    {view, _html} = mount_athanor(conn, "/aqua")
+
+    view
+    |> element("button[phx-click=open_consent]", "Connect a model")
+    |> render_click()
+
+    # Nothing picked: the plan's suggestion is already the binding.
+    assert has_element?(
+             view,
+             ~s(#system-layer-dialog [data-test="grant-pick"][aria-pressed="true"]),
+             entry.name
+           )
+
+    view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+    Prima.Test.Wait.wait_until(fn -> render(view) =~ "Model connected." end, 5_000, "the grant")
+
+    {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
+    {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+    assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
+    Cyfr.Test.Sandbox.end_views()
+  end
+end

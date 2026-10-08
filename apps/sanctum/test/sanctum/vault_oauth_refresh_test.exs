@@ -4,6 +4,10 @@
 defmodule Sanctum.VaultOAuthRefreshTest do
   use ExUnit.Case, async: false
 
+  # What a dispense is made for, as an attempt names it. These resources
+  # carry no binding key, so no binding lifetime is read for them.
+  @dispense %{root_execution_id: "exec_reader_test", profile_id: nil, consent_id: nil}
+
   alias Sanctum.CipherAAD
   alias Sanctum.OAuth.RefreshLock
   alias Sanctum.Vault.Payload
@@ -41,6 +45,9 @@ defmodule Sanctum.VaultOAuthRefreshTest do
         kind: "oauth",
         oauth_endpoints: Map.get(over, :endpoints, ~s({"token_url":"https://127.0.0.1:1/tok"})),
         oauth_scopes: Jason.encode!(@scopes),
+        # Its token is dispensed to the cases here, so the entry is disclosed.
+        destination: ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"}),
+        attach_only: false,
         sealed_payload: sealed
       })
 
@@ -107,7 +114,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
       # The reader sees the expired bundle, follows on the same key, and
       # rechecks the row the leader wrote — no provider POST happens.
-      assert {:ok, "tok-refreshed"} = VaultReader.oauth_token(ctx, resource, "google")
+      assert {:ok, "tok-refreshed"} = VaultReader.oauth_token(ctx, resource, "google", @dispense)
       assert {:ok, "tok-refreshed"} = Task.await(leader, 5_000)
       assert :counters.get(counter, 1) == 0
     end
@@ -121,7 +128,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       reseal_valid(ctx, entry, "tok-already-fresh")
 
       assert {:ok, "tok-already-fresh"} =
-               Sanctum.Vault.OAuth.dispense(actor(ctx), entry, @expired, "google")
+               Sanctum.Vault.OAuth.dispense(actor(ctx), entry, @expired, "google", @scopes)
 
       assert :counters.get(counter, 1) == 0
     end
@@ -137,7 +144,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       # nothing anywhere parsed `"authorization_required: …"`, so the type was
       # encoded where no consumer could branch on it.
       assert {:error, {:authorization_required, detail} = reason} =
-               VaultReader.oauth_token(ctx, resource, "google")
+               VaultReader.oauth_token(ctx, resource, "google", @dispense)
 
       assert is_binary(detail)
       assert Sanctum.Unauthorized.reason?(reason)
@@ -152,7 +159,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
         mint_oauth_entry(ctx, @expired, %{endpoints: ~s({"token_url":"http://127.0.0.1:1/t"})})
 
       assert {:error, "token_url must use https://"} =
-               VaultReader.oauth_token(ctx, resource, "google")
+               VaultReader.oauth_token(ctx, resource, "google", @dispense)
     end
 
     test "an unreachable provider surfaces as a refresh failure after one attempt",
@@ -170,7 +177,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       :ok = Sanctum.ProviderCredentials.put(entering, "google", "cid", "csec")
 
       assert {:error, {:authorization_required, detail}} =
-               VaultReader.oauth_token(ctx, resource, "google")
+               VaultReader.oauth_token(ctx, resource, "google", @dispense)
 
       assert detail =~ "refresh failed"
 

@@ -63,8 +63,8 @@ defmodule Cyfr.Test.TwoServices do
   def stub, do: @stub
 
   @doc """
-  The scopes the step stub's OAuth need declares and `arm!/3` authorizes
-  its entry for; a catalyst armed through `arm!/4` declares the same.
+  The scopes the step stub's OAuth need declares and `arm!/2` authorizes
+  its entry for; a catalyst armed through `arm!/3` declares the same.
   """
   @spec stub_scopes() :: [String.t()]
   def stub_scopes, do: @stub_scopes
@@ -102,6 +102,13 @@ defmodule Cyfr.Test.TwoServices do
     body and answer opened under the attempt's seal key (the worker root
     derives it); a runner's exit report is read plain; anything else has
     no fields.
+
+    An answer of `Prima.WorkerWire.attached_frames_content_type/0` (an
+    attached request's sealed frames) is streamed through as it arrives,
+    each piece sent on as it comes and the content type kept, so a guest
+    reads its answer while the control plane is still writing it; such a
+    call is recorded with no opened answer. Every other answer is read
+    whole and forwarded.
 
     A wire a test starts (`start!/1`) records every request; the suite's
     (`serve!/2`) records only while a test watches it (`watch/1`), and
@@ -252,16 +259,26 @@ defmodule Cyfr.Test.TwoServices do
               planned -> planned
             end
 
-          answer = if action == :drop, do: :dropped, else: forward(conn, target, route, body)
+          answer =
+            if action == :drop,
+              do: :dropped,
+              else: forward(conn, target, route, body, action == :forward)
+
           call = %{call | action: action, answer: answered(call, answer)}
-          if match?(%Req.Response{}, answer), do: hooks(agent, call)
+
+          if match?(%Req.Response{}, answer) or match?({:streamed, _}, answer),
+            do: hooks(agent, call)
+
           record(agent, route, call)
           {action, answer}
         else
-          {:forward, forward(conn, target, route, body)}
+          {:forward, forward(conn, target, route, body, true)}
         end
 
       case {action, answer} do
+        {:forward, {:streamed, conn}} ->
+          conn
+
         {:forward, %Req.Response{status: status, body: answer}} ->
           conn |> put_resp_content_type("application/json") |> send_resp(status, answer)
 
@@ -347,19 +364,75 @@ defmodule Cyfr.Test.TwoServices do
       end)
     end
 
-    defp forward(conn, target, route, body) do
+    # The listener's answer: read whole, or, for an answer of sealed frames
+    # the wire is to pass on, streamed to the client piece by piece as it
+    # arrives (`{:streamed, conn}`).
+    defp forward(conn, target, route, body, stream?) do
       headers =
         for {name, value} <- conn.req_headers,
             name in [WorkerWire.auth_header(), "content-type"],
             do: {name, value}
 
-      Req.post!(target <> route,
-        headers: headers,
-        body: body,
-        retry: false,
-        decode_body: false,
-        receive_timeout: 60_000
-      )
+      Process.delete({__MODULE__, :streamed})
+
+      into = fn {:data, data}, {req, resp} ->
+        cond do
+          not (stream? and frames?(resp)) -> {:cont, {req, %{resp | body: resp.body <> data}}}
+          stream_piece(conn, data) == :ok -> {:cont, {req, resp}}
+          true -> {:halt, {req, resp}}
+        end
+      end
+
+      response =
+        Req.post!(target <> route,
+          headers: headers,
+          body: body,
+          retry: false,
+          decode_body: false,
+          compressed: false,
+          receive_timeout: 60_000,
+          into: into
+        )
+
+      case Process.delete({__MODULE__, :streamed}) do
+        %Plug.Conn{} = streamed ->
+          {:streamed, streamed}
+
+        nil when stream? ->
+          # An answer of frames with no body is a stream with no piece.
+          if frames?(response), do: {:streamed, start_stream(conn)}, else: response
+
+        nil ->
+          response
+      end
+    end
+
+    defp frames?(%Req.Response{} = response) do
+      response
+      |> Req.Response.get_header("content-type")
+      |> Enum.any?(&(&1 == WorkerWire.attached_frames_content_type()))
+    end
+
+    # One piece of a streamed answer sent on, the stream opened with the
+    # first. A client that is gone stops the answer: the rest is not read.
+    defp stream_piece(conn, data) do
+      streaming = Process.get({__MODULE__, :streamed}) || start_stream(conn)
+
+      case chunk(streaming, data) do
+        {:ok, streaming} ->
+          Process.put({__MODULE__, :streamed}, streaming)
+          :ok
+
+        {:error, _closed} ->
+          Process.put({__MODULE__, :streamed}, streaming)
+          :closed
+      end
+    end
+
+    defp start_stream(conn) do
+      conn
+      |> put_resp_content_type(WorkerWire.attached_frames_content_type(), nil)
+      |> send_chunked(200)
     end
 
     # ---------------------------------------------------------------------------
@@ -404,6 +477,7 @@ defmodule Cyfr.Test.TwoServices do
 
     defp answered(%{fields: nil}, _answer), do: nil
     defp answered(_call, :dropped), do: nil
+    defp answered(_call, {:streamed, _conn}), do: nil
 
     defp answered(%{callback: :runner_exited}, %Req.Response{status: 200, body: body}),
       do: decoded(body)
@@ -486,21 +560,39 @@ defmodule Cyfr.Test.TwoServices do
   token is dispensed under the scopes — and dispense `token` to every run
   of the stub once its runner has attached, before the attach is answered
   and its guest runs, as a guest's `cyfr:oauth` call dispenses one
-  (`dispense_after_attach!/3`).
+  (`dispense_after_attach!/4`).
   Answers both, the credentials to look for.
   """
   @spec arm!(Sanctum.Context.t(), key: String.t(), token: String.t()) :: [String.t()]
   def arm!(ctx, key: key, token: token), do: arm!(ctx, @stub, key: key, token: token)
 
-  @doc "`arm!/2` for the catalyst `ref`, whose need is the step stub's."
+  @doc """
+  `arm!/2` for the catalyst `ref`, whose `api_key` need reads the step
+  stub's field and scopes for the provider it names.
+  """
   @spec arm!(Sanctum.Context.t(), String.t(), key: String.t(), token: String.t()) :: [String.t()]
   def arm!(ctx, ref, key: key, token: token) do
+    # The entry names the provider `ref`'s need names, the one its token is
+    # dispensed for (`dispense/5`): `step-stub` for the stub, the brief's
+    # own for the brief. None has a preset, so the entry names its
+    # endpoints, ones nothing answers: the token it holds never expires.
+    # The run is handed the key and dispensed the token, which puts both in
+    # its masking set, so the entry is disclosed, to the stub's own host.
+    provider = need_provider!(ctx, ref)
+
     params = %{
       name: "#{ref} key",
       kind: "oauth",
+      provider_hint: provider,
       fields: %{@key_field => key},
       oauth: %{"access_token" => token},
-      oauth_scopes: @stub_scopes
+      oauth_scopes: @stub_scopes,
+      oauth_endpoints: %{
+        "authorize_url" => "https://idp.step-stub.example/authorize",
+        "token_url" => "https://idp.step-stub.example/token"
+      },
+      destination: %{"hosts" => ["step-stub.example"], "scheme" => "https"},
+      disclose: true
     }
 
     # Entering the key is a sensitive change, confirmed as its person
@@ -527,8 +619,21 @@ defmodule Cyfr.Test.TwoServices do
         expected_consent_revision: plan.expected_consent_revision
       })
 
-    dispense_after_attach!(ctx, ref, token)
+    dispense_after_attach!(ctx, ref, token, provider)
     [key, token]
+  end
+
+  # The provider `ref`'s credential need is for: the qualifier of its
+  # type, read from the component's manifest as a consent reads it.
+  defp need_provider!(ctx, ref) do
+    {:ok, cref} = Prima.ComponentRef.parse(ref)
+    {:ok, row} = Sanctum.Consent.Components.get_latest(ctx, cref.name, cref.namespace, cref.type)
+    {:ok, manifest} = Prima.Manifest.decode_strict(Map.get(row, :manifest))
+
+    %{qualifier: qualifier} =
+      Enum.find(Prima.Manifest.Needs.from_manifest(manifest), &(&1.name == "api_key"))
+
+    qualifier
   end
 
   @doc """
@@ -537,33 +642,33 @@ defmodule Cyfr.Test.TwoServices do
   answered, or, for a child a formula's runner is handed at its admission,
   when that admission is answered; in either case before the answer
   reaches the runner, so the token is in the run's masking set before its
-  guest starts.
+  guest starts. `provider` is the one the entry and its need name.
   """
-  @spec dispense_after_attach!(Sanctum.Context.t(), String.t(), String.t()) :: :ok
-  def dispense_after_attach!(ctx, ref, token) do
+  @spec dispense_after_attach!(Sanctum.Context.t(), String.t(), String.t(), String.t()) :: :ok
+  def dispense_after_attach!(ctx, ref, token, provider) do
     wire = watch!()
 
     Wire.after_answer(wire, fn
       %{callback: :attach, fields: %{execution_id: id}, answer: %{"ok" => _secrets}} ->
-        dispense(ctx, ref, id, token)
+        dispense(ctx, ref, id, token, provider)
 
       %{callback: :admit_child, answer: %{"ok" => %{"assignment" => assignment}}} ->
         {:ok, %{execution_id: id}} = Prima.Assignment.read(assignment)
-        dispense(ctx, ref, id, token)
+        dispense(ctx, ref, id, token, provider)
 
       _call ->
         :ok
     end)
   end
 
-  defp dispense(ctx, ref, id, token) do
+  defp dispense(ctx, ref, id, token, provider) do
     case Arca.Repo.get(Arca.Schemas.Execution, id) do
       %{reference: reference} ->
         if String.starts_with?(reference, ref <> ":") do
           attempt = AttemptFixtures.current!(ctx.athanor_id, id)
 
           %{"ok" => ^token} =
-            AttemptFixtures.call(attempt, "oauth_token", %{"provider" => "stub"})
+            AttemptFixtures.call(attempt, "oauth_token", %{"provider" => provider})
         end
 
         :ok

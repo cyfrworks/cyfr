@@ -1111,14 +1111,16 @@ defmodule Sanctum.DeviceCertsTest do
 
     test "an OAuth grant a device started is refused at its recheck once the device is revoked",
          %{session_ctx: session_ctx} do
+      # A provider with no preset names its endpoints, here a token URL
+      # nothing answers.
       entering =
         Sanctum.TestContext.confirmed(session_ctx, :credential_entry, %{
           operation: "oauth.set_client",
-          arguments: %{provider: "google", client_id: "cid", client_secret: "csec"},
-          resource: "google"
+          arguments: %{provider: "acme-mail", client_id: "cid", client_secret: "csec"},
+          resource: "acme-mail"
         })
 
-      :ok = Sanctum.ProviderCredentials.put(entering, "google", "cid", "csec")
+      :ok = Sanctum.ProviderCredentials.put(entering, "acme-mail", "cid", "csec")
 
       # Starting a grant enters a credential: each under the confirmation
       # the device's person proved.
@@ -1127,12 +1129,13 @@ defmodule Sanctum.DeviceCertsTest do
 
         params = %{
           name: name,
-          provider: "google",
+          provider: "acme-mail",
           scopes: ["mail"],
           endpoints: %{
-            "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
+            "authorize_url" => "https://acme-mail.example/authorize",
             "token_url" => "https://127.0.0.1:9/token"
-          }
+          },
+          destination: %{"hosts" => ["mail.acme-mail.example"]}
         }
 
         confirmed =

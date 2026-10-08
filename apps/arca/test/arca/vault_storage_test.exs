@@ -9,6 +9,10 @@ defmodule Arca.VaultStorageTest do
 
   @blocked "needs_consent"
 
+  # Where an entry's material may go, as the canonical text a row holds.
+  @destination ~s({"hosts":["api.example.com"],"scheme":"https"})
+  @moved ~s({"hosts":["api.example.com"],"paths":["/v1/"],"scheme":"https"})
+
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
 
@@ -23,7 +27,8 @@ defmodule Arca.VaultStorageTest do
         %{
           name: "entry-#{System.unique_integer([:positive])}",
           kind: "api_key",
-          sealed_payload: "sealed-bytes"
+          sealed_payload: "sealed-bytes",
+          destination: @destination
         },
         over
       )
@@ -33,14 +38,19 @@ defmodule Arca.VaultStorageTest do
   end
 
   # A profile whose head consent references `entry_id` — the dependent a
-  # binding move has to block.
-  defp dependent_profile!(actor, entry_id) do
+  # binding move has to block. `source_ref` names the component it
+  # consents for, a fresh one by default. A revision binds an entry only
+  # while it is active, so an entry at `needs_reauth` is bound first and
+  # then falls to `needs_reauth`, the order production reaches that state.
+  defp dependent_profile!(actor, entry_id, source_ref \\ nil) do
     athanor = actor.athanor_id
+    reauth? = status_of(actor, entry_id).status == "needs_reauth"
+    if reauth?, do: :ok = VaultStorage.set_status(actor, entry_id, "active")
 
     {:ok, profile} =
       Arca.ProfileStorage.put(%{
         athanor_id: athanor,
-        source_ref: "formula:local.consumer-#{System.unique_integer([:positive])}",
+        source_ref: source_ref || "formula:local.consumer-#{System.unique_integer([:positive])}",
         kind: "owner",
         label: "default",
         status: "active"
@@ -64,10 +74,18 @@ defmodule Arca.VaultStorageTest do
           granted_by: "test",
           granted_via: "bootstrap"
         },
-        [%{vault_entry_id: entry_id, binding_digest: "sha256:d0"}],
+        [
+          %{
+            binding_key: "formula:local.consumer|@ingress|default",
+            scope: "athanor",
+            vault_entry_id: entry_id,
+            binding_digest: "sha256:d0"
+          }
+        ],
         nil
       )
 
+    if reauth?, do: :ok = VaultStorage.set_status(actor, entry_id, "needs_reauth")
     profile
   end
 
@@ -232,7 +250,7 @@ defmodule Arca.VaultStorageTest do
                  @blocked
                )
 
-      plan = %{expected_rev: 0, sealed_payload: "sealed-x", status: "revoked", rebind: nil}
+      plan = %{expected_rev: 0, sealed_payload: "sealed-x", status: "active", rebind: nil}
 
       assert VaultStorage.commit_payload(other, entry.id, plan) ==
                VaultStorage.commit_payload(other, "vlt_nonexistent", plan)
@@ -265,7 +283,71 @@ defmodule Arca.VaultStorageTest do
       _entry = put!(actor, %{name: "taken"})
 
       assert {:error, :name_taken} =
-               VaultStorage.put(actor, %{name: "taken", kind: "api_key"})
+               VaultStorage.put(actor, %{
+                 name: "taken",
+                 kind: "api_key",
+                 destination: @destination
+               })
+    end
+
+    test "an entry written without a destination is refused before anything is written",
+         %{actor: actor} do
+      QueryCounter.assert_queries(0, fn ->
+        assert {:error, :destination_required} =
+                 VaultStorage.put(actor, %{name: "nowhere", kind: "api_key"})
+
+        assert {:error, :destination_required} =
+                 VaultStorage.put(actor, %{name: "nowhere", kind: "api_key", destination: nil})
+
+        # A near spelling of a destination is not one: the binding digest
+        # covers the canonical bytes.
+        assert {:error, {:invalid_destination, :not_canonical}} =
+                 VaultStorage.put(actor, %{
+                   name: "nowhere",
+                   kind: "api_key",
+                   destination: ~s({"scheme":"https","hosts":["API.example.com"]})
+                 })
+
+        assert {:error, {:invalid_destination, _}} =
+                 VaultStorage.put(actor, %{
+                   name: "nowhere",
+                   kind: "api_key",
+                   destination: ~s({"hosts":["*"]})
+                 })
+      end)
+
+      assert {:error, :not_found} = VaultStorage.get_by_name(actor, "nowhere")
+    end
+
+    test "the destination and disclosure are answered by get and list, attach-only by default",
+         %{actor: actor} do
+      attached = put!(actor)
+      disclosed = put!(actor, %{attach_only: false})
+
+      assert attached.destination == @destination
+      assert attached.attach_only == true
+
+      {:ok, fetched} = VaultStorage.get(actor, disclosed.id)
+      assert fetched.destination == @destination
+      assert fetched.attach_only == false
+
+      {:ok, rows} = VaultStorage.list(actor)
+      listed = Map.new(rows, &{&1.id, {&1.destination, &1.attach_only}})
+      assert listed[attached.id] == {@destination, true}
+      assert listed[disclosed.id] == {@destination, false}
+    end
+
+    test "an athanor's first entry of a provider becomes its default, and a second leaves it",
+         %{actor: actor} do
+      first = put!(actor, %{provider_hint: "openai.com"})
+      _second = put!(actor, %{provider_hint: "openai.com"})
+      _unnamed = put!(actor, %{provider_hint: ""})
+
+      assert {:ok, %{vault_entry_id: id, instance_entry_id: nil}} =
+               Arca.VaultDefaults.get(actor, "openai.com")
+
+      assert id == first.id
+      assert {:ok, [%{provider_hint: "openai.com"}]} = Arca.VaultDefaults.list(actor)
     end
   end
 
@@ -307,11 +389,26 @@ defmodule Arca.VaultStorageTest do
       assert row.sealed_payload == nil
     end
 
+    test "removes the default naming the entry in the same transaction", %{actor: actor} do
+      entry = put!(actor, %{provider_hint: "anthropic.com"})
+      assert {:ok, %{vault_entry_id: id}} = Arca.VaultDefaults.get(actor, "anthropic.com")
+      assert id == entry.id
+
+      assert :ok = VaultStorage.tombstone(actor, entry.id)
+      assert {:error, :not_found} = Arca.VaultDefaults.get(actor, "anthropic.com")
+    end
+
     test "frees the living-name slot", %{actor: actor} do
       entry = put!(actor, %{name: "unique-name"})
       :ok = VaultStorage.tombstone(actor, entry.id)
 
-      assert {:ok, _} = VaultStorage.put(actor, %{name: "unique-name", kind: "api_key"})
+      assert {:ok, _} =
+               VaultStorage.put(actor, %{
+                 name: "unique-name",
+                 kind: "api_key",
+                 destination: @destination
+               })
+
       assert {:error, :not_found} = VaultStorage.get_by_name(actor, "missing")
     end
   end
@@ -383,12 +480,143 @@ defmodule Arca.VaultStorageTest do
       assert profile_status(actor, profile.id) == "active"
     end
 
+    test "the destination and the disclosure move as binding columns", %{actor: actor} do
+      entry = put!(actor, %{binding_digest: "sha256:d0"})
+      profile = dependent_profile!(actor, entry.id)
+
+      assert {:ok, [_]} =
+               VaultStorage.move_binding(
+                 actor,
+                 entry.id,
+                 "sha256:d0",
+                 %{destination: @moved, attach_only: false, binding_digest: "sha256:d1"},
+                 @blocked
+               )
+
+      row = status_of(actor, entry.id)
+      assert row.destination == @moved
+      assert row.attach_only == false
+      assert row.binding_digest == "sha256:d1"
+      assert profile_status(actor, profile.id) == @blocked
+    end
+
+    test "a move naming the OAuth endpoints, or a destination off the grammar, writes nothing",
+         %{actor: actor} do
+      entry = put!(actor, %{binding_digest: "sha256:d0", oauth_endpoints: ~s({"a":"b"})})
+      profile = dependent_profile!(actor, entry.id)
+
+      QueryCounter.assert_queries(0, fn ->
+        assert {:error, :endpoints_immutable} =
+                 VaultStorage.move_binding(
+                   actor,
+                   entry.id,
+                   "sha256:d0",
+                   %{oauth_endpoints: ~s({"token_url":"https://elsewhere.test/t"})},
+                   @blocked
+                 )
+
+        assert {:error, :endpoints_immutable} =
+                 VaultStorage.commit_payload(actor, entry.id, %{
+                   expected_rev: 0,
+                   sealed_payload: "sealed-next",
+                   status: nil,
+                   rebind: %{
+                     from_digest: "sha256:d0",
+                     changes: %{oauth_endpoints: ~s({"a":"c"}), binding_digest: "sha256:d1"},
+                     blocked_status: @blocked
+                   }
+                 })
+
+        assert {:error, {:invalid_destination, _}} =
+                 VaultStorage.move_binding(
+                   actor,
+                   entry.id,
+                   "sha256:d0",
+                   %{destination: ~s({"hosts":[]}), binding_digest: "sha256:d1"},
+                   @blocked
+                 )
+      end)
+
+      row = status_of(actor, entry.id)
+      assert row.oauth_endpoints == ~s({"a":"b"})
+      assert row.binding_digest == "sha256:d0"
+      assert row.payload_rev == 0
+      assert profile_status(actor, profile.id) == "active"
+    end
+
+    # A revoked profile is not blocked: blocking it would revive it beside
+    # the live profile of the same component, label and kind, which the
+    # active-identity index refuses, and the whole rebind would roll back.
+    # It stays revoked, and nothing runs through it.
+    test "a revoked profile beside a live one of its identity stays revoked; the live one is blocked",
+         %{actor: actor} do
+      entry = put!(actor, %{binding_digest: "sha256:d0"})
+      source = "formula:local.shared-#{System.unique_integer([:positive])}"
+      old = dependent_profile!(actor, entry.id, source)
+      :ok = Arca.ProfileStorage.set_status(actor, old.id, "revoked")
+      live = dependent_profile!(actor, entry.id, source)
+
+      assert {:ok, [affected]} =
+               VaultStorage.move_binding(
+                 actor,
+                 entry.id,
+                 "sha256:d0",
+                 %{destination: @moved, binding_digest: "sha256:d1"},
+                 @blocked
+               )
+
+      assert affected == live.id
+      assert profile_status(actor, live.id) == @blocked
+      assert profile_status(actor, old.id) == "revoked"
+
+      row = status_of(actor, entry.id)
+      assert {row.destination, row.binding_digest} == {@moved, "sha256:d1"}
+    end
+
     test "a tombstoned entry has no binding to move", %{actor: actor} do
       entry = put!(actor, %{binding_digest: "sha256:d0"})
       :ok = VaultStorage.tombstone(actor, entry.id)
 
       assert {:error, :binding_moved} =
                VaultStorage.move_binding(actor, entry.id, "sha256:d0", %{}, @blocked)
+    end
+  end
+
+  describe "set_status/3 — a status write never undoes a delete or a revoke" do
+    test "a tombstoned or revoked entry is never marked again", %{actor: actor} do
+      for {ended, targets} <- [
+            {"tombstoned", ~w(active needs_reauth revoked)},
+            {"revoked", ~w(active needs_reauth)}
+          ],
+          target <- targets do
+        entry = put!(actor)
+
+        :ok =
+          if ended == "tombstoned",
+            do: VaultStorage.tombstone(actor, entry.id),
+            else: VaultStorage.set_status(actor, entry.id, "revoked")
+
+        assert {:error, {:entry_unavailable, ^ended}} =
+                 VaultStorage.set_status(actor, entry.id, target)
+
+        assert status_of(actor, entry.id).status == ended
+      end
+    end
+
+    test "the transitions it admits, a status it does not know and a missing row",
+         %{actor: actor} do
+      entry = put!(actor)
+      assert :ok = VaultStorage.set_status(actor, entry.id, "needs_reauth")
+      assert :ok = VaultStorage.set_status(actor, entry.id, "active")
+      assert :ok = VaultStorage.set_status(actor, entry.id, "revoked")
+      assert :ok = VaultStorage.set_status(actor, entry.id, "revoked")
+
+      for status <- ["tombstoned", "whatever"] do
+        assert {:error, {:invalid_status, ^status}} =
+                 VaultStorage.set_status(actor, put!(actor).id, status)
+      end
+
+      assert {:error, :not_found} = VaultStorage.set_status(actor, "vlt_missing", "revoked")
     end
   end
 
@@ -417,6 +645,73 @@ defmodule Arca.VaultStorageTest do
       assert row.status == "active"
       assert row.binding_digest == "sha256:d1"
       assert profile_status(actor, profile.id) == @blocked
+    end
+
+    # A rotate or a grant read the entry at `needs_reauth`, and the owner
+    # deleted or revoked it before the commit: the reactivation does not
+    # undo that, no binding moves and no material lands.
+    test "a reactivation never undoes a delete or a revoke that landed after the read",
+         %{actor: actor} do
+      for {ended, material} <- [{"tombstoned", nil}, {"revoked", "sealed-bytes"}] do
+        entry = put!(actor, %{status: "needs_reauth", binding_digest: "sha256:d0"})
+        profile = dependent_profile!(actor, entry.id)
+
+        :ok =
+          if ended == "tombstoned",
+            do: VaultStorage.tombstone(actor, entry.id),
+            else: VaultStorage.set_status(actor, entry.id, "revoked")
+
+        moves = %{
+          from_digest: "sha256:d0",
+          changes: %{oauth_scopes: ~s(["b"]), binding_digest: "sha256:d1"},
+          blocked_status: @blocked
+        }
+
+        for rebind <- [nil, moves] do
+          assert {:error, {:entry_unavailable, ^ended}} =
+                   VaultStorage.commit_payload(actor, entry.id, %{
+                     expected_rev: 0,
+                     sealed_payload: "sealed-late",
+                     status: "active",
+                     rebind: rebind
+                   })
+        end
+
+        row = status_of(actor, entry.id)
+        assert row.status == ended
+        assert row.sealed_payload == material
+        assert row.payload_rev == 0
+        assert row.binding_digest == "sha256:d0"
+        assert profile_status(actor, profile.id) == "active"
+      end
+    end
+
+    test "a plan's status only reactivates: an active row stays active, any other is refused",
+         %{actor: actor} do
+      entry = put!(actor)
+
+      assert {:ok, %{payload_rev: 1}} =
+               VaultStorage.commit_payload(actor, entry.id, %{
+                 expected_rev: 0,
+                 sealed_payload: "sealed-next",
+                 status: "active",
+                 rebind: nil
+               })
+
+      for status <- ["needs_reauth", "revoked", "tombstoned"] do
+        assert {:error, {:invalid_status, ^status}} =
+                 VaultStorage.commit_payload(actor, entry.id, %{
+                   expected_rev: 1,
+                   sealed_payload: "sealed-other",
+                   status: status,
+                   rebind: nil
+                 })
+      end
+
+      row = status_of(actor, entry.id)
+      assert row.status == "active"
+      assert row.sealed_payload == "sealed-next"
+      assert row.payload_rev == 1
     end
 
     test "with no rebind it is a plain rotate that still carries its status flip",
@@ -532,6 +827,40 @@ defmodule Arca.VaultStorageTest do
       row = status_of(actor, entry.id)
       assert row.payload_rev == 1
       assert row.sealed_payload == "sealed-a"
+    end
+
+    # A refresh read the entry at revision 0 and is waiting on its provider
+    # when the owner deletes the entry: its write-back lands on nothing.
+    test "a write-back after tombstone/2 leaves sealed_payload nil", %{actor: actor} do
+      entry = put!(actor)
+      :ok = VaultStorage.tombstone(actor, entry.id)
+
+      assert {:error, {:entry_unavailable, "tombstoned"}} =
+               VaultStorage.rotate_payload(actor, entry.id, 0, "sealed-late")
+
+      row = status_of(actor, entry.id)
+      assert row.sealed_payload == nil
+      assert row.payload_rev == 0
+    end
+
+    test "a write-back after a revoke writes nothing either", %{actor: actor} do
+      entry = put!(actor)
+      :ok = VaultStorage.set_status(actor, entry.id, "revoked")
+
+      assert {:error, {:entry_unavailable, "revoked"}} =
+               VaultStorage.rotate_payload(actor, entry.id, 0, "sealed-late")
+
+      assert {:error, {:entry_unavailable, "revoked"}} =
+               VaultStorage.commit_payload(actor, entry.id, %{
+                 expected_rev: 0,
+                 sealed_payload: "sealed-late",
+                 status: nil,
+                 rebind: nil
+               })
+
+      row = status_of(actor, entry.id)
+      assert row.sealed_payload == "sealed-bytes"
+      assert row.payload_rev == 0
     end
   end
 end

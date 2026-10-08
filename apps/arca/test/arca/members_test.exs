@@ -118,6 +118,7 @@ defmodule Arca.MembersTest do
       assert {:error, :cross_tenant} = Members.list_platform(member)
       assert {:error, :cross_tenant} = Members.list_active_for_user(member, "usr_1")
       assert {:error, :cross_tenant} = Members.shared_athanor?(member, "usr_1", "usr_2")
+      assert {:error, :cross_tenant} = Members.people_sharing(member, "usr_1")
 
       assert {:error, :cross_tenant} =
                Members.activate_invited(member, "usr_1", "a@example.com", DateTime.utc_now())
@@ -306,6 +307,182 @@ defmodule Arca.MembersTest do
         Arca.SecurityTransitions.archive_athanor(server(), athanor.id, verify: fn _ -> :ok end)
 
       assert {:ok, false} = Members.shared_athanor?(server(), alice, bob)
+    end
+  end
+
+  describe "people_sharing/2" do
+    test "lists everyone seated with the caller as their users rows name them, and never the caller" do
+      athanor = group!()
+      alice = person!()
+      bob = person!(%{display_name: "Bob"})
+      carol = person!()
+      for user <- [alice, bob, carol], do: sit!(athanor, user)
+
+      assert {:ok, people} = Members.people_sharing(server(), alice.id)
+
+      assert Enum.sort_by(people, & &1.user_id) ==
+               Enum.sort_by(
+                 [
+                   %{user_id: bob.id, display_name: "Bob", email: bob.email},
+                   %{user_id: carol.id, display_name: nil, email: carol.email}
+                 ],
+                 & &1.user_id
+               )
+
+      # Alone in a room, the caller sits with nobody.
+      lonely = person!()
+      sit!(group!(), lonely)
+      assert {:ok, []} = Members.people_sharing(server(), lonely.id)
+    end
+
+    test "a person in two of the caller's athanors is listed once" do
+      a = group!()
+      b = group!()
+      alice = person!()
+      bob = person!()
+      for athanor <- [a, b], user <- [alice, bob], do: sit!(athanor, user)
+
+      assert {:ok, [%{user_id: bob_id}]} = Members.people_sharing(server(), alice.id)
+      assert bob_id == bob.id
+    end
+
+    test "a person is listed once, by their users row, however their seats differ" do
+      a = group!()
+      b = group!()
+      alice = person!()
+      bob = person!(%{display_name: "Bob"})
+      for athanor <- [a, b], do: sit!(athanor, alice)
+
+      # The schema lets an active seat carry an email and a person
+      # identifier of its own, a writer and its times, and Bob's two seats
+      # differ in every one of them.
+      early = ~U[2026-01-01 00:00:00.000000Z]
+      late = ~U[2026-06-01 00:00:00.000000Z]
+
+      row!(a, bob,
+        email: "bob-seat-a-#{uniq()}@example.com",
+        person_identifier: "per_" <> Prima.Digest.sha256_hex("bob-a-#{uniq()}"),
+        added_by: alice.id,
+        created_at: early,
+        updated_at: early
+      )
+
+      row!(b, bob,
+        email: "bob-seat-b-#{uniq()}@example.com",
+        person_identifier: "per_" <> Prima.Digest.sha256_hex("bob-b-#{uniq()}"),
+        added_by: "system",
+        created_at: late,
+        updated_at: late
+      )
+
+      assert {:ok, [bob_row]} = Members.people_sharing(server(), alice.id)
+      assert bob_row == %{user_id: bob.id, display_name: "Bob", email: bob.email}
+    end
+
+    test "an archived athanor is no room, from either side" do
+      archived = group!()
+      kept = group!()
+      alice = person!()
+      bob = person!()
+      carol = person!()
+      for user <- [alice, bob], do: sit!(archived, user)
+      for user <- [alice, carol], do: sit!(kept, user)
+
+      {:ok, _} =
+        Arca.SecurityTransitions.archive_athanor(server(), archived.id, verify: fn _ -> :ok end)
+
+      assert {:ok, [%{user_id: carol_id}]} = Members.people_sharing(server(), alice.id)
+      assert carol_id == carol.id
+      assert {:ok, []} = Members.people_sharing(server(), bob.id)
+    end
+
+    test "an invitation is no seat, the caller's or anyone else's" do
+      mine = group!()
+      theirs = group!()
+      alice = person!()
+      invitee = person!()
+      dave = person!()
+      sit!(mine, alice)
+      sit!(theirs, dave)
+
+      # A person invited into the caller's athanor is not seated there yet.
+      {:ok, _} =
+        Members.seat(in_athanor(mine.id), %{
+          email: invitee.email,
+          status: "invited",
+          added_by: "x"
+        })
+
+      # The caller invited into another athanor sits with nobody there.
+      {:ok, _} =
+        Members.seat(in_athanor(theirs.id), %{
+          email: alice.email,
+          status: "invited",
+          added_by: "x"
+        })
+
+      assert {:ok, []} = Members.people_sharing(server(), alice.id)
+      assert {:ok, []} = Members.people_sharing(server(), dave.id)
+    end
+
+    test "a row that is not active seats no one, even one naming its person" do
+      mine = group!()
+      theirs = group!()
+      alice = person!()
+      bob = person!()
+      dave = person!()
+      sit!(mine, alice)
+      sit!(theirs, dave)
+
+      # An invited row naming a person rather than an address, on either
+      # side: only the status says it is no seat.
+      row!(mine, bob, status: "invited")
+      row!(theirs, alice, status: "invited")
+
+      assert {:ok, []} = Members.people_sharing(server(), alice.id)
+      assert {:ok, []} = Members.people_sharing(server(), bob.id)
+      assert {:ok, []} = Members.people_sharing(server(), dave.id)
+    end
+
+    test "a platform grant is no shared room, even one naming an athanor" do
+      room = group!()
+      other = group!()
+      alice = person!()
+      bob = person!()
+      dave = person!()
+      sit!(room, alice)
+      sit!(other, dave)
+
+      # Both hold the operator grant, which names no athanor.
+      for user <- [alice, bob] do
+        {:ok, _} = Members.grant_platform(server(), %{user_id: user.id, added_by: "x"})
+      end
+
+      # A platform row naming an athanor, on either side: only the scope
+      # says it is no seat.
+      row!(room, bob, scope: "platform")
+      row!(other, alice, scope: "platform")
+
+      assert {:ok, []} = Members.people_sharing(server(), alice.id)
+      assert {:ok, []} = Members.people_sharing(server(), bob.id)
+    end
+
+    test "an actor other than the platform's is refused before any query" do
+      watch_queries!()
+
+      # The server narrowed to one athanor, and the person asking as themself.
+      for actor <- [
+            in_athanor("ath_somewhere"),
+            %Prima.Actor{athanor_id: "ath_somewhere", scope: :athanor, user_id: "usr_1"}
+          ] do
+        assert {:error, :cross_tenant} = Members.people_sharing(actor, "usr_1")
+      end
+
+      refute_received :queried
+
+      # The probe is live: the platform's actor does query.
+      assert {:ok, []} = Members.people_sharing(server(), "usr_nobody")
+      assert_received :queried
     end
   end
 
@@ -672,6 +849,38 @@ defmodule Arca.MembersTest do
     with {:ok, ids} <- Members.active_user_ids(in_athanor(athanor_id)) do
       {:ok, user_id in ids}
     end
+  end
+
+  defp sit!(athanor, user) do
+    {:ok, _} = Members.seat(in_athanor(athanor.id), %{user_id: user.id, added_by: "x"})
+    :ok
+  end
+
+  # A membership row of `user` in `athanor`, an active seat unless
+  # `overrides` say otherwise, written as a row: past the changeset, which
+  # would clear what an active seat, an invitation or a platform row may
+  # not carry, but within what the schema admits.
+  defp row!(athanor, user, overrides) do
+    now = DateTime.utc_now()
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.Membership, [
+        Map.merge(
+          %{
+            id: Prima.UUID7.generate_id("mem"),
+            athanor_id: athanor.id,
+            user_id: user.id,
+            scope: "athanor",
+            status: "active",
+            added_by: "x",
+            created_at: now,
+            updated_at: now
+          },
+          Map.new(overrides)
+        )
+      ])
+
+    :ok
   end
 end
 

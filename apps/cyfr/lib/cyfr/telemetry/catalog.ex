@@ -93,7 +93,15 @@ defmodule Cyfr.Telemetry.Catalog do
           "since an unreachable directory raises it on every paused request"
     },
     [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap] => %{consumers: [:audit]},
-    [:cyfr, :sanctum, :platform_context] => %{consumers: [:audit]},
+    [:cyfr, :sanctum, :platform_context] => %{
+      consumers: [:audit],
+      note:
+        "a platform-scope context was built, sanctioned or refused, for a platform-scope " <>
+          "operation: a person's platform capability never enters an athanor, and an " <>
+          "internal system context that works in an athanor is built for its task or " <>
+          "narrowed by Context.refocus/2 (auth_method :system); safe to audit, since " <>
+          "the audit handler builds no context and the emit cannot recurse"
+    },
     [:cyfr, :sanctum, :notify] => %{
       consumers: [:bridge],
       note: "the tray fan-in: what an athanor's members, or the operator, see happened"
@@ -194,13 +202,16 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:audit],
       note:
         "a vault field of the consented projection handed to a runner at the attach that " <>
-          "claimed its attempt, by name, once per field and attempt"
+          "claimed its attempt, by name, once per field and attempt; or a field CYFR " <>
+          "attached to a request bound for its destination, by name, connection and " <>
+          "scheme://host:port, once per attached request"
     },
     [:cyfr, :opus, :secret, :denied] => %{
       consumers: [:audit],
       note:
-        "a runner reported its guest refused a vault field outside its projection, by the " <>
-          "name the guest asked for, attributed to the attempt whose call key signed the report"
+        "a runner reported its guest refused a vault field outside its projection, or an " <>
+          "attach-only field it may not read (reason disclosure_refused), by the name the " <>
+          "guest asked for, attributed to the attempt whose call key signed the report"
     },
 
     # ——— key rotation ———
@@ -249,6 +260,31 @@ defmodule Cyfr.Telemetry.Catalog do
           "bytes the change names are served yet. The component domain's reconciler " <>
           "re-derives its projection of the root from it; a lost one costs a read's barrier"
     },
+    # ——— send a copy: one per file of an offer, after each durable
+    # transition (`Arca.FileOffers`), and one per receipt that lands or
+    # that the receipts sweep fails, with the offer id, the kind, the
+    # sender's and recipient's ids and the filename, never content. The
+    # bridge carries each to `Cyfr.Bus.file_offers/1` of the people it
+    # concerns ———
+    [:cyfr, :arca, :file_offer, :offered] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :arca, :file_offer, :accepted] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :arca, :file_offer, :declined] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :arca, :file_offer, :withdrawn] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :arca, :file_offer, :expired] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :arca, :file_offer, :failed] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :arca, :file_offer, :landed] => %{consumers: [:audit, :bridge]},
+    # ——— the instance's own credentials: one per durable change
+    # (`Sanctum.InstanceEntries`), with the entry id, the kind and the
+    # acting person, never a name, a field or a value. The bridge carries
+    # the entry id and the kind to `Cyfr.Bus.instance_entries/0` ———
+    [:cyfr, :sanctum, :instance_entry, :created] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :rotated] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :rebound] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :audience] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :policy] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :caps] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :revoked] => %{consumers: [:audit, :bridge]},
+    [:cyfr, :sanctum, :instance_entry, :deleted] => %{consumers: [:audit, :bridge]},
     [:cyfr, :storage_gc, :sweep] => %{
       consumers: [:operator],
       note:

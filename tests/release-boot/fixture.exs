@@ -36,11 +36,14 @@
 #   vault SESSION_TOKEN NAME FIELD VALUE
 #       An `api_key` entry NAME holding FIELD = VALUE in the athanor the
 #       session is focused on, its row written sealed as `Sanctum.Vault`
-#       writes one (the same payload, AAD, cipher and binding digest).
-#       Entering a credential is a sensitive change a person confirms with
-#       a fresh proof, which these proofs cannot give outside a browser, so
-#       a proof that needs entries but is not about entering them seeds
-#       them here. Answers the entry's id and name.
+#       writes one (the same payload, AAD, cipher and binding digest),
+#       bound to the destination `fixture.test` and disclosed: a proof
+#       hands its value to a backend's environment
+#       (`tests/locus-backends-image/e2e.py`). Entering a credential is a
+#       sensitive change a person confirms with a fresh proof, which these
+#       proofs cannot give outside a browser, so a proof that needs entries
+#       but is not about entering them seeds them here. Answers the entry's
+#       id and name.
 #
 # A step that does not answer `{:ok, _}` raises, and the rpc exits non-zero
 # naming it.
@@ -148,11 +151,17 @@ fn args ->
       aad = Sanctum.CipherAAD.vault_entry(Sanctum.Context.athanor!(ctx), id, "")
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
+      # Every entry names where it may go. A proof hands this one's value
+      # to a backend's environment, a disclosure, so it is disclosed.
+      {:ok, destination} = Sanctum.Vault.destination_text(%{"hosts" => ["fixture.test"]})
+
       binding = %{
         provider_hint: "",
         field_names: Jason.encode!([field]),
         oauth_endpoints: nil,
-        oauth_scopes: nil
+        oauth_scopes: nil,
+        destination: destination,
+        attach_only: false
       }
 
       {:ok, digest} = Sanctum.VaultReader.binding_digest(binding)

@@ -321,6 +321,13 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
   end
 
   describe "the self-description" do
+    # The read itself takes no stored data, but each call through the gate
+    # is recorded, and its decision-log writer writes under the sandbox.
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
     test "an anonymous caller is told its own empty identity, with no stored data read" do
       test = self()
       handler = "resource-admission-queries-#{System.unique_integer([:positive])}"

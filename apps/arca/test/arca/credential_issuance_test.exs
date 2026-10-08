@@ -45,6 +45,9 @@ defmodule Arca.CredentialIssuanceTest do
   alias Arca.SecurityTransitions.Issuance
   alias Ecto.Adapters.SQL.Sandbox
 
+  # Where a vault entry written here may go, as the canonical text a row holds.
+  @destination ~s({"hosts":["api.example.com"],"scheme":"https"})
+
   @slot_keys [
     {Arca.ControlPlane, :standing},
     {Arca.ControlPlane, :generation},
@@ -605,8 +608,11 @@ defmodule Arca.CredentialIssuanceTest do
     actor = Prima.Actor.in_athanor(athanor_id)
     name = "glass-entry-#{System.unique_integer([:positive])}"
 
-    {&Arca.VaultStorage.put(actor, %{name: name, kind: "api_key", sealed_payload: "sealed"}, &1),
-     fn -> match?({:ok, _}, Arca.VaultStorage.get_by_name(actor, name)) end}
+    {&Arca.VaultStorage.put(
+       actor,
+       %{name: name, kind: "api_key", sealed_payload: "sealed", destination: @destination},
+       &1
+     ), fn -> match?({:ok, _}, Arca.VaultStorage.get_by_name(actor, name)) end}
   end
 
   defp other_write(:vault_commit, _user_id, athanor_id, _seat_id) do
@@ -614,7 +620,12 @@ defmodule Arca.CredentialIssuanceTest do
     name = "glass-entry-#{System.unique_integer([:positive])}"
 
     {:ok, entry} =
-      Arca.VaultStorage.put(actor, %{name: name, kind: "api_key", sealed_payload: "v1"})
+      Arca.VaultStorage.put(actor, %{
+        name: name,
+        kind: "api_key",
+        sealed_payload: "v1",
+        destination: @destination
+      })
 
     plan = %{expected_rev: entry.payload_rev, sealed_payload: "v2", status: nil, rebind: nil}
 
@@ -844,8 +855,8 @@ end
 defmodule Arca.CredentialIssuanceSandboxTest do
   @moduledoc """
   The issuance transaction on one connection: the policy sees the locked
-  rows (nil where there is none), and a refusal from it or from the write
-  leaves nothing behind. A paired device's source is locked in the
+  rows (nil where there is none), the membership as it is stored, and a
+  refusal from it or from the write leaves nothing behind. A paired device's source is locked in the
   standing order and handed to the policy narrowed.
   """
 
@@ -887,6 +898,49 @@ defmodule Arca.CredentialIssuanceSandboxTest do
     assert source == %{kind: :api_key, row: nil}
     assert %DateTime{} = now
     assert {:error, :not_found} = Arca.SessionStorage.get_session(hash)
+  end
+
+  test "the membership reaches the policy as stored: a platform row carries its scope and no athanor" do
+    %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} = standing!()
+
+    {:ok, platform} =
+      Arca.Members.grant_platform(Prima.Actor.system(), %{user_id: user_id, added_by: "x"})
+
+    test = self()
+
+    # The caller names the athanor and a membership id; the row is read by
+    # that id as it is stored, whatever the caller took it for, so a policy
+    # can tell the person's seat there from a platform row that seats
+    # nobody in any athanor.
+    for {membership_id, scope, row_athanor} <- [
+          {platform.id, "platform", nil},
+          {seat_id, "athanor", athanor_id}
+        ] do
+      assert {:error, :refused} =
+               Issuance.run(
+                 %{
+                   user_id: user_id,
+                   athanor_id: athanor_id,
+                   membership_id: membership_id,
+                   source: nil
+                 },
+                 fn rows ->
+                   send(test, {:rows, rows})
+                   {:error, :refused}
+                 end,
+                 fn _rows -> {:ok, :written} end
+               )
+
+      assert_received {:rows, %{membership: membership, athanor: %{id: ^athanor_id}}}
+
+      assert Map.take(membership, [:id, :user_id, :scope, :athanor_id, :status]) == %{
+               id: membership_id,
+               user_id: user_id,
+               scope: scope,
+               athanor_id: row_athanor,
+               status: "active"
+             }
+    end
   end
 
   test "a refused write rolls the transaction back" do

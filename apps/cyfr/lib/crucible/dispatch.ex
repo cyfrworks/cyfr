@@ -80,7 +80,10 @@ defmodule Crucible.Dispatch do
 
   @typedoc """
   A run claimed for a runner that already runs: its signed assignment, its
-  attempt's keys and the fields its vault edge projects.
+  attempt's keys and what its vault edge discloses (`secrets`): a disclosed
+  entry's projected fields or a publisher's provided values, and never an
+  attach-only or instance entry's, which CYFR attaches to the run's
+  requests instead.
   """
   @type claimed :: %{
           assignment: Prima.Assignment.token(),
@@ -132,8 +135,9 @@ defmodule Crucible.Dispatch do
   In order: the run is admitted with the calling process as its waiter;
   its attempt takes a `:child` execution slot, waiting as `run/4` does; its
   assignment is signed; the attempt row is claimed for the runner
-  (`Arca.ExecutionAttempts.claim/5`, under the run's grant) and the run's vault edge is unsealed
-  (`Crucible.Attempt.attach/2`); and the attempt is handed to the
+  (`Arca.ExecutionAttempts.claim/5`, under the run's grant) and what the
+  run's vault edge discloses is unsealed (`Crucible.Attempt.attach/2`);
+  and the attempt is handed to the
   runner (`Crucible.Attempt.hand_over/1`). Answers
   `{:ok, claimed}` (`t:claimed/0`), or, when any step refuses, the refusal
   the run was closed with: `{:error, reason}` as `Crucible.Close`
