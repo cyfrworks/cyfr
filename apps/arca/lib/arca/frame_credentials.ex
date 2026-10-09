@@ -36,7 +36,8 @@ defmodule Arca.FrameCredentials do
   that lost its slot may still close what it opened.
 
   Every function takes the actor first. An athanor actor reads and writes
-  its own athanor's rows; `revoke_for_source/2` and `revoke_for_user/2`
+  its own athanor's rows, and `get_by_frame_id/2` reads only its own
+  person's among them; `revoke_for_source/2` and `revoke_for_user/2`
   also take the platform system actor, for a retirement that crosses
   athanors. Rows are answered as plain maps (`Arca.Data`).
   """
@@ -130,6 +131,34 @@ defmodule Arca.FrameCredentials do
   end
 
   def get(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+
+  @doc """
+  The row of the frame `frame_id` in the actor's athanor, when it is the
+  actor's person's, whatever its state, purpose or deadline: what it
+  opens is the caller's to judge. Another person's row, another athanor's
+  and an actor that names no person are each `:not_found`.
+  """
+  @spec get_by_frame_id(Prima.Actor.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :no_athanor | :database_error}
+  def get_by_frame_id(%Prima.Actor{athanor_id: athanor_id, user_id: user_id} = actor, frame_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(frame_id) do
+    if is_binary(user_id) and user_id != "" do
+      Arca.Repo.Errors.with_db_rescue("Arca.FrameCredentials.get_by_frame_id", fn ->
+        case FrameCredential
+             |> QueryHelpers.where_tenant(actor)
+             |> where([f], f.frame_id == ^frame_id and f.user_id == ^user_id)
+             |> Arca.Repo.one() do
+          nil -> {:error, :not_found}
+          row -> {:ok, row}
+        end
+      end)
+      |> Arca.Data.project()
+    else
+      {:error, :not_found}
+    end
+  end
+
+  def get_by_frame_id(%Prima.Actor{}, _frame_id), do: {:error, :no_athanor}
 
   @doc """
   Suspend an active row: the frame's bearer opens nothing until it is

@@ -266,6 +266,59 @@ defmodule CyfrWeb.RouterTest do
       end
     end
 
+    test "a canvas's page and data route are the canvas wire's paths, and nothing else is routed under them" do
+      router = Boundaries.router()
+      credential = "c4nv4sR0uteCredential0123456789"
+      frame = "frm_router_canvas"
+
+      page =
+        Phoenix.Router.route_info(
+          router,
+          "GET",
+          Prima.CanvasWire.page_path(credential, frame),
+          "example.com"
+        )
+
+      assert %{route: "/_c/v1/:credential/:frame_id", pipe_through: [:tincture_asset]} = page
+      assert page.path_params == %{"credential" => credential, "frame_id" => frame}
+
+      for verb <- ["POST", "OPTIONS"] do
+        data =
+          Phoenix.Router.route_info(
+            router,
+            verb,
+            Prima.CanvasWire.stream_path(frame),
+            "example.com"
+          )
+
+        assert %{route: "/_f/v1/o/:frame_id/stream", pipe_through: [:tincture_data]} = data
+        assert data.path_params == %{"frame_id" => frame}
+      end
+
+      # The page's dispatch, like a served file's, logs no parameters: they
+      # carry the credential.
+      for path <- ["/_c/v1/:credential/:frame_id", "/_s/*path"] do
+        assert [%{metadata: %{log: false}}] =
+                 Enum.filter(Boundaries.routes(), &(&1.path == path)),
+               path
+      end
+
+      # A canvas path has no invoke or action route, and a page path no
+      # other shape.
+      for {verb, path} <- [
+            {"POST", Prima.CanvasWire.data_path(frame) <> "invoke"},
+            {"POST", Prima.CanvasWire.data_path(frame) <> "action"},
+            {"GET", Prima.CanvasWire.stream_path(frame)},
+            {"POST", Prima.CanvasWire.stream_path(frame) <> "/more"},
+            {"GET", Prima.CanvasWire.page_prefix() <> credential},
+            {"GET", Prima.CanvasWire.page_path(credential, frame) <> "/more"},
+            {"POST", Prima.CanvasWire.page_path(credential, frame)}
+          ] do
+        assert Phoenix.Router.route_info(router, verb, path, "example.com") == :error,
+               "#{verb} #{path} is routed"
+      end
+    end
+
     test "every tincture pipeline scrubs the credential before it rate-limits" do
       tinctures =
         for {provider, section} <- sections(),

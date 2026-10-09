@@ -81,6 +81,15 @@
       },
       routes: [
         %{
+          verb: "GET",
+          path: "/_c/v1/:credential/:frame_id",
+          plug: "Emissary.Web.CanvasController",
+          plug_opts: ":show",
+          auth: "tincture_handler_auth",
+          live_view: nil,
+          pipe_through: ["tincture_asset"]
+        },
+        %{
           verb: "OPTIONS",
           path: "/_f/v1/action",
           plug: "Emissary.Web.TinctureDataController",
@@ -112,6 +121,24 @@
           path: "/_f/v1/invoke",
           plug: "Emissary.Web.TinctureDataController",
           plug_opts: ":invoke",
+          auth: "frame_credential",
+          live_view: nil,
+          pipe_through: ["tincture_data"]
+        },
+        %{
+          verb: "OPTIONS",
+          path: "/_f/v1/o/:frame_id/stream",
+          plug: "Emissary.Web.TinctureDataController",
+          plug_opts: ":canvas_stream",
+          auth: "frame_credential",
+          live_view: nil,
+          pipe_through: ["tincture_data"]
+        },
+        %{
+          verb: "POST",
+          path: "/_f/v1/o/:frame_id/stream",
+          plug: "Emissary.Web.TinctureDataController",
+          plug_opts: ":canvas_stream",
           auth: "frame_credential",
           live_view: nil,
           pipe_through: ["tincture_data"]

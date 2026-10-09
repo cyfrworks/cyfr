@@ -660,7 +660,9 @@ defmodule Cyfr.Boundaries do
       allow: ~w(Crucible),
       reason:
         "Emissary follows executions, serves webhooks, keeps an outbound call's " <>
-          "lease and reports health through the execution domain's root facade. " <>
+          "lease, reports health and reads an athanor's feeds for a canvas's " <>
+          "validation answers (`Crucible.feeds/1`) through the execution domain's " <>
+          "root facade. " <>
           "Boundary's exports are global, and `Crucible` exports `Host.Children`, `Keys`, " <>
           "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
           "lists it, so no declaration can say it."
@@ -693,10 +695,11 @@ defmodule Cyfr.Boundaries do
         "Emissary reaches the component domain's root facade alone: tinctures' files " <>
           "and data routes are its adapters, and they read a tincture's entry and " <>
           "declaration, what it invokes, the version an asset credential names, the " <>
-          "served types and a document's policy and sandbox through it " <>
-          "(`Compendium.tincture_asset_rules/0`, " <>
+          "served types, a document's policy and sandbox and a canvas page's policy " <>
+          "through it (`Compendium.tincture_asset_rules/0`, " <>
           "`Compendium.inspect_component/2`, `Compendium.tincture_csp/2`, " <>
-          "`Compendium.tincture_sandbox_tokens/1`). Every component operation MCP serves " <>
+          "`Compendium.tincture_sandbox_tokens/1`, " <>
+          "`Compendium.tincture_canvas_page_csp/1`). Every component operation MCP serves " <>
           "is a gate operation, reached through the operation table. " <>
           "Boundary's exports are global, and `Compendium` exports its two paths, " <>
           "`ConsentFacts`, `Providers.Component` and `Supervisor` beside its root to every " <>
@@ -1422,6 +1425,7 @@ defmodule Cyfr.Boundaries do
       consume_validation: 3,
       mint_asset_credential: 2,
       mint_frame_credential: 5,
+      page_frame: 2,
       resume_frame: 2,
       revoke_frame: 2,
       suspend_frame: 2,
@@ -1528,11 +1532,14 @@ defmodule Cyfr.Boundaries do
     tincture_handler_auth: %{
       admits: :credential,
       why:
-        "resolved in the tincture controller: a public tincture's address admits " <>
-          "anyone to its files; a private tincture version's files (`/_s/`) admit the " <>
-          "asset credential in their path, verified on every request " <>
-          "(`Sanctum.TinctureAuth.verify_asset_credential/2`) and redacted from the " <>
-          "request path by `CyfrWeb.Plugs.ScrubTinctureCredentials`. No " <>
+        "resolved in the tincture controllers: a public tincture's address admits " <>
+          "anyone to its files; a private tincture version's files (`/_s/`) and a " <>
+          "canvas's host page (`/_c/v1/`) admit the asset credential in their path, " <>
+          "verified on every request (`Sanctum.TinctureAuth.verify_asset_credential/2`) " <>
+          "and redacted from the request path by " <>
+          "`CyfrWeb.Plugs.ScrubTinctureCredentials`; the page also holds the path's " <>
+          "frame id to a standing frame of that credential's person and version " <>
+          "(`Sanctum.TinctureAuth.page_frame/2`). No " <>
           "session cookie: a tincture page is embeddable cross-origin, and an ambient " <>
           "cookie credential on a cross-origin surface is the CSRF food the design refuses"
     },
@@ -1542,7 +1549,10 @@ defmodule Cyfr.Boundaries do
         "the tincture data routes: a frame's per-open credential as a bearer, established " <>
           "at every request (`Sanctum.Caller.establish({:frame_credential, bearer}, …)`) " <>
           "and held to the tincture version and grant it names, or a public tincture's " <>
-          "page naming a tincture whose public profile admits it. No session cookie and " <>
+          "page naming a tincture whose public profile admits it. A canvas reads on its " <>
+          "own open's path alone (`/_f/v1/o/<frame>/stream`), whose frame id the bearer " <>
+          "must name before anything else of it is read, and takes no public page there. " <>
+          "No session cookie and " <>
           "no CSRF token: the bearer is the only credential, and the `null` origin of a " <>
           "sandboxed frame is answered on these routes alone"
     },
@@ -2105,8 +2115,10 @@ defmodule Cyfr.Boundaries do
     %{module: CyfrWeb.Plugs.TinctureRateLimit, site: :call, plane: :external, origin: :none},
     # The tincture data routes: a request with no frame credential and no
     # public tincture, a credential that no longer stands, an undeclared
-    # operation or stream, and the per-frame limits. A frame's call is an
-    # interactive admission.
+    # operation or stream, a canvas off its own path or a frame on another's,
+    # and the per-frame limits. A frame's call is an interactive admission.
+    # A canvas's host page is no entry: its pipeline mints no call identity,
+    # as the served files' does not.
     %{
       module: Emissary.Web.TinctureDataController,
       site: :invoke,
@@ -2122,6 +2134,12 @@ defmodule Cyfr.Boundaries do
     %{
       module: Emissary.Web.TinctureDataController,
       site: :stream,
+      plane: :external,
+      origin: :interactive
+    },
+    %{
+      module: Emissary.Web.TinctureDataController,
+      site: :canvas_stream,
       plane: :external,
       origin: :interactive
     },

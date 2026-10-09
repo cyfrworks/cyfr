@@ -10,7 +10,8 @@ defmodule Arca.FrameCredentialsTest do
   `revoked` terminal, and a validation row never suspended or resumed;
   a validation row consumed once, by its own person, before its deadline,
   for its own digest and under ownership, and nothing else consumed;
-  read and written only in the actor's own athanor; revoked by source and
+  read and written only in the actor's own athanor, and read by frame id
+  only as its own person's; revoked by source and
   by person, across athanors only for the platform's own actor; and swept
   by retention only once revoked and aged.
   """
@@ -231,6 +232,48 @@ defmodule Arca.FrameCredentialsTest do
       assert {:error, :validation} = FrameCredentials.suspend(actor, row.id)
       assert {:error, :validation} = FrameCredentials.resume(actor, row.id)
       assert FrameCredentials.get(actor, row.id) == {:ok, revoked}
+    end
+  end
+
+  describe "get_by_frame_id/2" do
+    test "reads the person's row by its frame id, whatever its state or purpose", %{
+      actor: actor
+    } do
+      live = mint!(actor)
+      validation = mint!(actor, %{purpose: "validation"})
+
+      assert FrameCredentials.get_by_frame_id(person(actor), live.frame_id) == {:ok, live}
+
+      assert FrameCredentials.get_by_frame_id(person(actor), validation.frame_id) ==
+               {:ok, validation}
+
+      {:ok, suspended} = FrameCredentials.suspend(actor, live.id)
+      assert FrameCredentials.get_by_frame_id(person(actor), live.frame_id) == {:ok, suspended}
+
+      {:ok, revoked} = FrameCredentials.revoke(actor, live.id)
+      assert FrameCredentials.get_by_frame_id(person(actor), live.frame_id) == {:ok, revoked}
+    end
+
+    test "another person's frame and another athanor's are not found", %{actor: actor} do
+      row = mint!(actor)
+      elsewhere = Prima.Actor.in_athanor("ath_frc_other_#{System.unique_integer([:positive])}")
+
+      # Another person of the same athanor, the same person in another
+      # athanor, and an actor that names no person.
+      for stranger <- [person(actor, "usr_other"), person(elsewhere), actor] do
+        assert {:error, :not_found} = FrameCredentials.get_by_frame_id(stranger, row.frame_id)
+      end
+
+      # The same frame id minted in another athanor for the same person
+      # reads as that athanor's row alone.
+      {:ok, theirs} = FrameCredentials.mint(elsewhere, attrs(%{frame_id: row.frame_id}))
+      assert FrameCredentials.get_by_frame_id(person(actor), row.frame_id) == {:ok, row}
+      assert FrameCredentials.get_by_frame_id(person(elsewhere), row.frame_id) == {:ok, theirs}
+
+      assert {:error, :not_found} = FrameCredentials.get_by_frame_id(person(actor), "frm_absent")
+
+      assert {:error, :no_athanor} =
+               FrameCredentials.get_by_frame_id(Prima.Actor.system(), row.frame_id)
     end
   end
 

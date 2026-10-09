@@ -54,7 +54,8 @@ defmodule Prima.CanvasWire do
 
   ## Paths
 
-    * `page_path/2` — `/_c/v1/<asset credential>/<frame id>`, the host page;
+    * `page_path/2` — `/_c/v1/<asset credential>/<frame id>`, the host page,
+      under `page_prefix/0`;
     * `data_path/1` — `/_f/v1/o/<frame id>/`, the prefix a canvas's policy
       names in `connect-src`;
     * `stream_path/1` — `data_path/1` and `stream`, a canvas's one data
@@ -121,6 +122,14 @@ defmodule Prima.CanvasWire do
   def frame_id?(id), do: TinctureWire.frame_id?(id)
 
   # ---- paths -----------------------------------------------------------------
+
+  @doc """
+  The prefix every host page's path begins with, `/_c/v1/`: the segment
+  after it is the asset credential, which a log or a telemetry span must
+  never carry (`CyfrWeb.Plugs.ScrubTinctureCredentials`).
+  """
+  @spec page_prefix() :: String.t()
+  def page_prefix, do: @page_prefix
 
   @doc """
   The host page of a canvas open: `/_c/v1/<credential>/<frame id>`. A

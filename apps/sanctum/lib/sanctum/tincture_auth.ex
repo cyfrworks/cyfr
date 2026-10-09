@@ -18,7 +18,10 @@ defmodule Sanctum.TinctureAuth do
   one version digest and one window under one source, and held to that
   source's rows at every fetch (`mint_asset_credential/3`,
   `verify_asset_credential/2`). The window is the platform setting
-  `asset_credential_window_s`, capped by the source's remaining life.
+  `asset_credential_window_s`, capped by the source's remaining life. A
+  canvas's host page is served under the same credential, for the frame
+  its path names, read under that credential's authority and held to its
+  version (`page_frame/2`).
 
   A frame the shell opens holds a **frame credential**: a bearer naming
   one row of `Arca.FrameCredentials`, which is its standing on every
@@ -678,6 +681,66 @@ defmodule Sanctum.TinctureAuth do
         {:error, _reason} = refusal -> refusal
       end
     end
+  end
+
+  @doc """
+  The frame `frame_id` a canvas's host page names, read under the
+  authority of the page's asset credential (`verify_asset_credential/2`):
+  the row of that frame id in the authority's athanor, of the authority's
+  person. It answers the tincture version the frame opened and its digest
+  only while the row stands, active or suspended with its deadline after
+  the store's clock, and only for a row minted for the version the asset
+  credential opens, so a page is served for its own open alone.
+
+  Every other row, and no row, is `:not_found`; a store that cannot
+  answer is `:unavailable`. Nothing is written.
+  """
+  @spec page_frame(asset_authority(), String.t()) ::
+          {:ok, %{reference: tincture_version(), version_digest: String.t()}}
+          | {:error, :not_found | :unavailable}
+  def page_frame(
+        %{user_id: user_id, athanor_id: athanor_id, version_digest: digest},
+        frame_id
+      )
+      when is_binary(user_id) and user_id != "" and is_binary(athanor_id) and athanor_id != "" and
+             is_binary(digest) and is_binary(frame_id) do
+    actor =
+      Context.build(user_id: user_id, athanor_id: athanor_id, scope: :athanor)
+      |> Context.actor()
+
+    with {:ok, row} <- stored(Arca.FrameCredentials.get_by_frame_id(actor, frame_id)),
+         {:ok, now} <- store_clock() do
+      if standing_page_frame?(row, digest, now),
+        do:
+          {:ok,
+           %{
+             reference: %{publisher: row.publisher, name: row.name, version: row.version},
+             version_digest: row.version_digest
+           }},
+        else: {:error, :not_found}
+    else
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, _absent} -> {:error, :not_found}
+    end
+  end
+
+  def page_frame(_authority, _frame_id), do: {:error, :not_found}
+
+  defp standing_page_frame?(
+         %{state: state, version_digest: digest, deadline: deadline},
+         digest,
+         now
+       )
+       when state in ["active", "suspended"],
+       do: DateTime.compare(deadline, now) == :gt
+
+  defp standing_page_frame?(_row, _digest, _now), do: false
+
+  # The database's clock, which judges every frame credential's deadline.
+  defp store_clock do
+    {:ok, Arca.ServerMetaStorage.now!()}
+  rescue
+    _unreadable -> {:error, :unavailable}
   end
 
   defp frame_id(id),

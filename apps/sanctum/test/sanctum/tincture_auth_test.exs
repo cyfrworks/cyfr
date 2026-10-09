@@ -402,6 +402,102 @@ defmodule Sanctum.TinctureAuthTest do
     end
   end
 
+  describe "the page's frame" do
+    setup do
+      Arca.Cache.init()
+      settings!(3_600, 900)
+      user = frame_person!()
+      {_session, ctx} = session_ctx!(user)
+      {:ok, %{credential: credential}} = TinctureAuth.mint_asset_credential(ctx, @digest)
+      {:ok, authority} = TinctureAuth.verify_asset_credential(credential, client_ip: "127.0.0.1")
+      {:ok, user: user, source: ctx, authority: authority}
+    end
+
+    defp page_frame_id, do: "frm_#{System.unique_integer([:positive])}_page"
+
+    defp opened!(ctx, mint \\ :mint_frame_credential, digest \\ @digest) do
+      frame = page_frame_id()
+      {:ok, %{id: id}} = apply(TinctureAuth, mint, [ctx, @tincture, digest, 0, frame])
+      {frame, id}
+    end
+
+    test "answers the version a standing frame of the credential's person and version opened",
+         %{source: ctx, authority: authority} do
+      opened = {:ok, %{reference: @tincture, version_digest: @digest}}
+
+      {live, live_id} = opened!(ctx)
+      assert TinctureAuth.page_frame(authority, live) == opened
+
+      # Suspended is still the open's: its page is shown again when it is.
+      {:ok, _} = TinctureAuth.suspend_frame(ctx, live_id)
+      assert TinctureAuth.page_frame(authority, live) == opened
+
+      # A validation trial's frame is a page's too.
+      {trial, _id} = opened!(ctx, :mint_validation_credential)
+      assert TinctureAuth.page_frame(authority, trial) == opened
+    end
+
+    test "a revoked, expired, absent or other version's frame is not found",
+         %{source: ctx, authority: authority} do
+      {revoked, revoked_id} = opened!(ctx)
+      {:ok, _} = TinctureAuth.revoke_frame(ctx, revoked_id)
+
+      {expired, expired_id} = opened!(ctx)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(f in Arca.Schemas.FrameCredential, where: f.id == ^expired_id),
+          set: [deadline: DateTime.add(DateTime.utc_now(), -1, :second)]
+        )
+
+      {another_version, _id} = opened!(ctx, :mint_frame_credential, @other_digest)
+
+      for frame <- [revoked, expired, another_version, page_frame_id()] do
+        assert {:error, :not_found} = TinctureAuth.page_frame(authority, frame), frame
+      end
+    end
+
+    test "another person's frame and another athanor's are not found", %{
+      source: ctx,
+      authority: authority
+    } do
+      {:ok, other} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: "github|https://github.com|page-other",
+          provider: "github",
+          email: "page-other@example.com",
+          verified: true
+        })
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(other.id, scope: "athanor", athanor_id: "ath_acme")
+
+      {_session, theirs} = session_ctx!(other)
+      {their_frame, _id} = opened!(theirs)
+
+      # The person's own row of the same version, in another athanor.
+      elsewhere = page_frame_id()
+
+      {:ok, _row} =
+        Arca.FrameCredentials.mint(Prima.Actor.in_athanor("ath_page_other"), %{
+          user_id: ctx.user_id,
+          publisher: @tincture.publisher,
+          name: @tincture.name,
+          version: @tincture.version,
+          version_digest: @digest,
+          grant_revision: 0,
+          frame_id: elsewhere,
+          source_kind: "session",
+          source_id: ctx.credential_binding.source_id,
+          deadline: DateTime.add(DateTime.utc_now(), 600, :second)
+        })
+
+      for frame <- [their_frame, elsewhere] do
+        assert {:error, :not_found} = TinctureAuth.page_frame(authority, frame), frame
+      end
+    end
+  end
+
   defp framed_context(frame) do
     Context.build(
       user_id: "usr_framed",

@@ -11,6 +11,13 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   under its public profile only; the per-frame invocation rate and
   open-stream count; and the stream answered as the wire's event stream,
   closed within the revalidation bound once its frame stops standing.
+
+  A canvas's own data path (`/_f/v1/o/<frame id>/stream`): only the bearer
+  of the frame the path names, refused before its version, grant or charge
+  is read otherwise; only a canvas; no public page; and a canvas refused
+  on the shared routes. A validation trial is answered there from
+  fixtures, a feed's from the binding the athanor holds, and admits
+  nothing.
   """
 
   # Mints and suspends frame credentials, writes platform settings and
@@ -20,8 +27,98 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
+  alias Prima.Canvas.Shape
   alias Prima.TinctureWire
   alias Sanctum.TinctureAuth
+
+  # A provider whose one stream a canvas may read: it declares a shape.
+  defmodule ShapedProbe do
+    @moduledoc false
+    @behaviour Prima.Provider
+
+    @impl true
+    def service, do: "shaped-probe"
+
+    @impl true
+    def tools, do: []
+
+    @impl true
+    def handle(_tool, _ctx, _args), do: {:error, :unreachable}
+
+    @impl true
+    def streams do
+      {:ok, shape} =
+        Prima.Canvas.Shape.validate(%{
+          "type" => "object",
+          "fields" => %{
+            "kind" => %{"type" => "enum", "values" => ["changed", "removed"]},
+            "count" => %{"type" => "integer"},
+            "at" => %{"type" => "time"}
+          },
+          "required" => ["kind"]
+        })
+
+      [
+        %Prima.Provider.Stream{
+          name: "probe.shaped",
+          topic: :mcp_servers,
+          projection: ["at", "count", "kind"],
+          deadline_bound: 60,
+          shape: shape
+        }
+      ]
+    end
+  end
+
+  # A provider of a feed's results as a canvas reads them: a filtering
+  # stream whose subject is a feed's name.
+  defmodule FeedProbe do
+    @moduledoc false
+    @behaviour Prima.Provider
+
+    @impl true
+    def service, do: "feed-probe"
+
+    @impl true
+    def tools, do: []
+
+    @impl true
+    def handle(_tool, _ctx, _args), do: {:error, :unreachable}
+
+    @impl true
+    def streams do
+      text = %{"type" => "string"}
+
+      {:ok, shape} =
+        Prima.Canvas.Shape.validate(%{
+          "type" => "object",
+          "fields" => %{
+            "binding" => text,
+            "feed" => text,
+            "revision" => %{"type" => "integer"},
+            "at" => %{"type" => "time"},
+            "result" => %{"type" => "json"},
+            "label" => text,
+            "actions" => %{
+              "type" => "list",
+              "of" => %{"type" => "object", "fields" => %{"name" => text, "label" => text}}
+            }
+          }
+        })
+
+      [
+        %Prima.Provider.Stream{
+          name: "feed.results",
+          topic: :mcp_servers,
+          projection: ~w(actions at binding feed label result revision),
+          subject: ~S"\A[a-z0-9][a-z0-9-]{0,47}\z",
+          filter: "feed",
+          deadline_bound: 60,
+          shape: shape
+        }
+      ]
+    end
+  end
 
   @version "1.0.0"
 
@@ -51,15 +148,34 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   # actions and streams) and `deps` (its static dependencies). Answers
   # its release digest.
   defp tincture!(ctx, name, block, deps) do
-    manifest = %{
+    put_version!(ctx, name, %{
       "name" => name,
       "type" => "tincture",
       "version" => @version,
       "publisher" => "local",
       "tincture" => Map.merge(%{"entry" => "index.html"}, block),
       "dependencies" => %{"static" => deps}
-    }
+    })
+  end
 
+  # A canvas version in the source's athanor declaring `streams`, put as
+  # any version's row is: a canvas declaring a stream no provider declares
+  # yet is refused at publish, not at this row. Answers its release digest.
+  defp canvas!(ctx, name, streams) do
+    put_version!(ctx, name, %{
+      "name" => name,
+      "type" => "tincture",
+      "version" => @version,
+      "publisher" => "local",
+      "tincture" => %{
+        "frame" => %{"placement" => "canvas"},
+        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "streams" => streams
+      }
+    })
+  end
+
+  defp put_version!(ctx, name, manifest) do
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -113,14 +229,16 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     ctx
   end
 
-  # The frame the shell would open for `name`: its credential and row id.
+  # The frame the shell would open for `name`: its credential, row id and
+  # frame id.
   defp frame!(source, name, digest, revision \\ 0) do
     reference = %{publisher: "local", name: name, version: @version}
+    frame = frame_id()
 
     {:ok, %{credential: bearer, id: id}} =
-      TinctureAuth.mint_frame_credential(source, reference, digest, revision, frame_id())
+      TinctureAuth.mint_frame_credential(source, reference, digest, revision, frame)
 
-    %{bearer: bearer, id: id}
+    %{bearer: bearer, id: id, frame_id: frame}
   end
 
   defp data(kind, body, opts \\ []) do
@@ -136,7 +254,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
         bearer -> put_req_header(conn, "authorization", TinctureWire.bearer(bearer))
       end
 
-    post(conn, TinctureWire.route(kind), Jason.encode!(body))
+    post(conn, Keyword.get(opts, :path, TinctureWire.route(kind)), Jason.encode!(body))
   end
 
   defp action(bearer, operation, opts \\ []) do
@@ -680,6 +798,422 @@ defmodule Emissary.Web.TinctureDataControllerTest do
         {:ok, _} = TinctureAuth.revoke_frame(source, id)
         assert Task.await(stream, 10_000).status == 200
       end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A canvas
+  # ---------------------------------------------------------------------------
+
+  # A request on the canvas data path of the open `frame_id` names.
+  defp canvas_stream(frame_id, stream, subject, opts \\ []) do
+    body = TinctureWire.request(:stream_open, %{stream: stream, subject: subject})
+    data(:stream_open, body, Keyword.put(opts, :path, Prima.CanvasWire.stream_path(frame_id)))
+  end
+
+  # The hidden trial the shell opens a canvas version in: its credential,
+  # row id and frame id.
+  defp validation!(source, name, digest) do
+    reference = %{publisher: "local", name: name, version: @version}
+    frame = frame_id()
+
+    {:ok, %{credential: bearer, id: id}} =
+      TinctureAuth.mint_validation_credential(source, reference, digest, 0, frame)
+
+    %{bearer: bearer, id: id, frame_id: frame}
+  end
+
+  # Every stream decision the gate recorded: an open admitted or refused.
+  defp stream_decisions,
+    do: Arca.Repo.all(from(d in Arca.Schemas.DecisionLog, where: like(d.tool, "stream:%")))
+
+  # The probes a canvas's streams need here, planted for `fun` beside the
+  # configured providers. The feeds' results stand in for their provider's
+  # declaration only while that provider does not exist; once it does,
+  # nothing is planted for them, and the table must name the stream as the
+  # canvas declares it.
+  defp with_streams(fun) do
+    feed_provider? = Code.ensure_loaded?(Crucible.Providers.Feed)
+    planted = if feed_provider?, do: [ShapedProbe], else: [ShapedProbe, FeedProbe]
+
+    Grimoire.Catalog.with_providers(planted, fn ->
+      if feed_provider?,
+        do:
+          assert(
+            {:ok, _declared} = Prima.Provider.fetch_stream(Grimoire.streams(), "feed.results")
+          )
+
+      fun.()
+    end)
+  end
+
+  defp feed_binding(name) do
+    {:ok, binding} =
+      Prima.Feed.Binding.validate(%{
+        "name" => name,
+        "label" => "Feed #{name}",
+        "reference" => "catalyst:local.markets",
+        "operation" => "quote",
+        "args" => %{"symbol" => String.upcase(name)},
+        "interval_minutes" => 5,
+        "result_shape" => %{
+          "type" => "object",
+          "fields" => %{
+            "price" => %{"type" => "number"},
+            "at" => %{"type" => "time"},
+            "tags" => %{"type" => "list", "of" => %{"type" => "string", "max" => 16}}
+          },
+          "required" => ["price"]
+        },
+        "actions" => [%{"name" => "refresh", "label" => "Refresh", "kind" => "refresh"}]
+      })
+
+    binding
+  end
+
+  describe "a canvas path" do
+    setup %{source: source} do
+      digest = canvas!(source, "home-canvas", [%{"name" => "mcp_servers.changes"}])
+      {:ok, digest: digest, mine: frame!(source, "home-canvas", digest)}
+    end
+
+    test "a canvas path refuses another frame's bearer before any charge or grant", %{
+      source: source,
+      digest: digest,
+      mine: mine
+    } do
+      Cyfr.Test.Settings.put("frame_invocation_max", 1)
+      Cyfr.Test.Settings.put("frame_invocation_window_ms", 60_000)
+
+      # Another open of the same canvas, and a frame of a tincture that is
+      # not a canvas: neither bearer opens this open's path.
+      other = frame!(source, "home-canvas", digest)
+      plain = frame!(source, "plain-dash", declared!(source, "plain-dash"))
+
+      for bearer <- [other.bearer, plain.bearer, other.bearer] do
+        conn = canvas_stream(mine.frame_id, "mcp_servers.changes", nil, bearer: bearer)
+        assert conn.status == 403
+
+        assert %{class: "forbidden", stage: "admission", message: message} =
+                 refused(conn, :stream_open)
+
+        assert message =~ "(frame_path_mismatch)"
+        refute message =~ mine.frame_id
+        refute message =~ other.frame_id
+      end
+
+      # No authority was derived: each refusal is recorded under no person,
+      # and nothing reached the gate.
+      assert [_, _, _] = refusals = decisions("tincture")
+
+      assert Enum.all?(
+               refusals,
+               &(&1.action == "canvas_stream" and &1.admission == "refused" and
+                   is_nil(&1.user_id))
+             )
+
+      assert stream_decisions() == []
+
+      # Nothing was charged: the other open's one request in the window is
+      # still its own, and is spent on its own path, where the charge then
+      # holds.
+      undeclared =
+        canvas_stream(other.frame_id, "executions.deltas", "exec_1", bearer: other.bearer)
+
+      assert undeclared.status == 403
+      assert %{message: message} = refused(undeclared, :stream_open)
+      assert message =~ "does not declare that stream"
+
+      over = canvas_stream(other.frame_id, "executions.deltas", "exec_1", bearer: other.bearer)
+      assert over.status == 429
+
+      # Before the grant: with the canvas's version moved, the bearer of this
+      # open is refused on another open's path for the path, its version
+      # unread, and on its own path for the version.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.Component, where: c.name == "home-canvas"),
+          set: [release_digest: "sha256:" <> String.duplicate("f", 64)]
+        )
+
+      elsewhere = canvas_stream(other.frame_id, "mcp_servers.changes", nil, bearer: mine.bearer)
+      assert %{message: message} = refused(elsewhere, :stream_open)
+      assert message =~ "(frame_path_mismatch)"
+
+      own = canvas_stream(mine.frame_id, "mcp_servers.changes", nil, bearer: mine.bearer)
+      assert own.status == 403
+      assert %{message: message} = refused(own, :stream_open)
+      assert message =~ "changed since its frame opened"
+    end
+
+    test "a canvas path refuses a non-canvas frame", %{source: source} do
+      plain = frame!(source, "plain-path", declared!(source, "plain-path"))
+
+      conn = canvas_stream(plain.frame_id, "mcp_servers.changes", nil, bearer: plain.bearer)
+      assert conn.status == 403
+      assert %{class: "forbidden", message: message} = refused(conn, :stream_open)
+      assert message =~ "(not_a_canvas)"
+
+      # Its own frame, refused for where it asked: recorded as its person's,
+      # and nothing opened.
+      assert [row] = decisions("tincture")
+
+      assert {row.action, row.admission, row.user_id} ==
+               {"canvas_stream", "refused", source.user_id}
+
+      assert stream_decisions() == []
+    end
+
+    test "takes no public page's request", %{mine: mine} do
+      public = %{athanor: "test", publisher: "local", name: "home-canvas"}
+      path = Prima.CanvasWire.stream_path(mine.frame_id)
+
+      body =
+        TinctureWire.request(:stream_open, %{
+          stream: "mcp_servers.changes",
+          subject: nil,
+          public: public
+        })
+
+      none = data(:stream_open, body, path: path)
+      assert none.status == 401
+      assert %{class: "unauthenticated"} = refused(none, :stream_open)
+
+      both = data(:stream_open, body, path: path, bearer: mine.bearer)
+      assert both.status == 400
+      assert %{class: "invalid_argument"} = refused(both, :stream_open)
+
+      bare = canvas_stream(mine.frame_id, "mcp_servers.changes", nil)
+      assert bare.status == 401
+      assert stream_decisions() == []
+    end
+
+    test "a live canvas frame's stream is opened through the gate on its own path", %{
+      source: source,
+      mine: mine
+    } do
+      stream =
+        Task.async(fn ->
+          canvas_stream(mine.frame_id, "mcp_servers.changes", nil, bearer: mine.bearer)
+        end)
+
+      wait_until(fn -> subscribed?(source) end, @stream_ms)
+      {:ok, _} = TinctureAuth.revoke_frame(source, mine.id)
+      conn = Task.await(stream, 10_000)
+
+      assert conn.status == 200
+      assert get_resp_header(conn, "content-type") == [TinctureWire.stream_content_type()]
+      assert [%{event: "refusal"}] = TinctureWire.decode_stream(conn.resp_body)
+      refute subscribed?(source)
+
+      assert [%{admission: "admitted"}] =
+               Enum.filter(stream_decisions(), &(&1.tool == "stream:mcp_servers.changes"))
+    end
+
+    test "the shared routes refuse a canvas credential", %{
+      source: source,
+      digest: digest,
+      mine: mine
+    } do
+      Cyfr.Test.Settings.put("frame_invocation_max", 1)
+      Cyfr.Test.Settings.put("frame_invocation_window_ms", 60_000)
+      trial = validation!(source, "home-canvas", digest)
+
+      requests = [
+        invoke:
+          TinctureWire.request(:invoke, %{
+            ref: "reagent:local.echo:1.0.0",
+            operation: "run",
+            args: %{}
+          }),
+        action: TinctureWire.request(:action, %{operation: "system.status", args: %{}}),
+        stream_open:
+          TinctureWire.request(:stream_open, %{stream: "mcp_servers.changes", subject: nil})
+      ]
+
+      for frame <- [mine, trial], {kind, body} <- requests do
+        conn = data(kind, body, bearer: frame.bearer)
+        assert conn.status == 403
+        assert %{class: "forbidden", stage: "admission", message: message} = refused(conn, kind)
+        assert message =~ "(canvas_path_required)"
+      end
+
+      # Nothing ran and nothing opened: every decision is this route's
+      # refusal, recorded as the frame's person's.
+      assert [_, _, _, _, _, _] = refusals = decisions("tincture")
+      assert Enum.all?(refusals, &(&1.admission == "refused" and &1.user_id == source.user_id))
+      assert decisions("system") == []
+      assert stream_decisions() == []
+
+      # The refusals came before the charge: the open's one request in the
+      # window is spent on its own path.
+      undeclared =
+        canvas_stream(mine.frame_id, "executions.deltas", "exec_1", bearer: mine.bearer)
+
+      assert undeclared.status == 403
+      over = canvas_stream(mine.frame_id, "executions.deltas", "exec_1", bearer: mine.bearer)
+      assert over.status == 429
+    end
+
+    test "a canvas path has no invoke or action route", %{mine: mine} do
+      requests = [
+        {"invoke",
+         TinctureWire.request(:invoke, %{
+           ref: "reagent:local.echo:1.0.0",
+           operation: "run",
+           args: %{}
+         })},
+        {"action", TinctureWire.request(:action, %{operation: "system.status", args: %{}})}
+      ]
+
+      for {route, body} <- requests do
+        path = Prima.CanvasWire.data_path(mine.frame_id) <> route
+        conn = data(:action, body, bearer: mine.bearer, path: path)
+        assert conn.status == 404, path
+        refute Map.has_key?(conn.private, :phoenix_action)
+      end
+
+      # The router answered: no route reached a controller, and nothing was
+      # decided or run.
+      assert decisions("tincture") == []
+      assert decisions("system") == []
+      assert mcp_rows("tincture") == []
+    end
+  end
+
+  describe "a canvas's validation trial" do
+    test "a validation credential is answered from fixtures without an admission", %{
+      source: source
+    } do
+      with_streams(fn ->
+        digest =
+          canvas!(source, "trial-canvas", [
+            %{"name" => "probe.shaped"},
+            %{"name" => "mcp_servers.changes"}
+          ])
+
+        trial = validation!(source, "trial-canvas", digest)
+        Cyfr.Test.Settings.put("frame_invocation_max", 3)
+        Cyfr.Test.Settings.put("frame_invocation_window_ms", 60_000)
+        Cyfr.Test.Settings.put("frame_stream_max_concurrent", 1)
+
+        # The trial's one open-stream slot is taken here, under the data
+        # routes' slot tag, so an open that claimed one would be refused for
+        # it: an answer proves no slot was claimed.
+        {:ok, trial_ctx} =
+          Sanctum.Caller.establish({:frame_credential, trial.bearer}, client_ip: "127.0.0.1")
+
+        assert trial_ctx.frame.mode == :validation
+        :ok = CyfrWeb.SSE.claim_slot(:frame_stream, trial_ctx, :frame_stream_max_concurrent)
+        {:ok, %{shape: shape}} = Prima.Provider.fetch_stream(Grimoire.streams(), "probe.shaped")
+
+        shaped = canvas_stream(trial.frame_id, "probe.shaped", nil, bearer: trial.bearer)
+        assert shaped.status == 200
+        assert get_resp_header(shaped, "content-type") == [TinctureWire.stream_content_type()]
+
+        # One event, its data the fixture of the stream's shape, then the end.
+        assert [%{id: nil, event: "probe.shaped", data: data}] =
+                 TinctureWire.decode_stream(shaped.resp_body)
+
+        assert data == Shape.fixture(shape)
+        assert Shape.check(shape, data) == :ok
+
+        # A stream that declares no shape is answered with no event, and ends.
+        shapeless =
+          canvas_stream(trial.frame_id, "mcp_servers.changes", nil, bearer: trial.bearer)
+
+        assert shapeless.status == 200
+        assert TinctureWire.decode_stream(shapeless.resp_body) == []
+
+        # Charged as any request is: the third is the window's last.
+        assert canvas_stream(trial.frame_id, "probe.shaped", nil, bearer: trial.bearer).status ==
+                 200
+
+        over = canvas_stream(trial.frame_id, "probe.shaped", nil, bearer: trial.bearer)
+        assert over.status == 429
+
+        # Nothing was admitted: the gate decided nothing, opened no stream,
+        # and no request of the trial was recorded as admitted.
+        assert stream_decisions() == []
+
+        refute Arca.Repo.exists?(
+                 from(d in Arca.Schemas.DecisionLog, where: d.admission == "admitted")
+               )
+
+        CyfrWeb.SSE.release_slot(:frame_stream, trial_ctx)
+      end)
+    end
+
+    test "a feed fixture follows the binding's result shape", %{source: source} do
+      with_streams(fn ->
+        digest =
+          canvas!(source, "feed-canvas", [
+            %{"name" => "feed.results", "subject" => "btc"},
+            %{"name" => "feed.results", "subject" => "eth"}
+          ])
+
+        trial = validation!(source, "feed-canvas", digest)
+        binding = feed_binding("btc")
+
+        {:ok, feed} =
+          Arca.CronSchedule.create_feed(Sanctum.Context.actor(source), %{
+            binding: binding,
+            resolved_reference: "catalyst:local.markets:1.0.0",
+            profile_id: "prof_canvas_feed",
+            cap: Crucible.Feeds.max_per_athanor()
+          })
+
+        bound = canvas_stream(trial.frame_id, "feed.results", "btc", bearer: trial.bearer)
+        assert bound.status == 200
+
+        assert [%{id: nil, event: "feed.results", data: data}] =
+                 TinctureWire.decode_stream(bound.resp_body)
+
+        # The binding's envelope at its first revision and the epoch, its
+        # result the fixture of the binding's result shape.
+        result = Shape.fixture(binding.result_shape)
+        envelope = Prima.Feed.envelope(feed.id, binding, 0, ~U[1970-01-01 00:00:00Z], result)
+        assert data == Jason.decode!(Jason.encode!(envelope))
+
+        assert %{"binding" => id, "feed" => "btc", "revision" => 0} = data
+        assert data["at"] == "1970-01-01T00:00:00Z"
+        assert id == feed.id
+        assert Shape.check(binding.result_shape, data["result"]) == :ok
+        refute Enum.any?(~w(operation args reference), &Map.has_key?(data, &1))
+
+        # A name the canvas declares and the athanor does not bind: no event.
+        unbound = canvas_stream(trial.frame_id, "feed.results", "eth", bearer: trial.bearer)
+        assert unbound.status == 200
+        assert TinctureWire.decode_stream(unbound.resp_body) == []
+
+        # A name the canvas does not declare is refused by its declaration.
+        undeclared = canvas_stream(trial.frame_id, "feed.results", "doge", bearer: trial.bearer)
+        assert undeclared.status == 403
+
+        assert stream_decisions() == []
+      end)
+    end
+
+    test "a feeds read that cannot answer is refused unavailable before the stream opens", %{
+      source: source
+    } do
+      with_streams(fn ->
+        digest =
+          canvas!(source, "outage-canvas", [%{"name" => "feed.results", "subject" => "btc"}])
+
+        trial = validation!(source, "outage-canvas", digest)
+
+        # The feeds' table fails, and the test's transaction gives it back:
+        # nothing is read after the request.
+        Arca.Repo.query!("ALTER TABLE cron_schedules RENAME TO cron_schedules_unavailable")
+        conn = canvas_stream(trial.frame_id, "feed.results", "btc", bearer: trial.bearer)
+
+        # The wire's refusal, not an event stream that says nothing.
+        assert conn.status == 503
+        refute get_resp_header(conn, "content-type") == [TinctureWire.stream_content_type()]
+
+        assert %{class: "unavailable", stage: "admission"} = refused(conn, :stream_open)
+      end)
     end
   end
 end

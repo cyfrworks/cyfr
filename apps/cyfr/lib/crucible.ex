@@ -32,6 +32,9 @@ defmodule Crucible do
   row; the child's attempt takes both over and gives them back at its
   terminal write or when it stops, and a child refused before its attempt
   opens gives them back at once.
+
+  An athanor's feeds, the operations its scheduler runs for a canvas to
+  read, are read through `feeds/1`.
   """
 
   use Boundary,
@@ -545,6 +548,15 @@ defmodule Crucible do
   @doc "An execution record of the context's athanor by id."
   @spec get(Context.t(), String.t()) :: {:ok, Record.t()} | {:error, term()}
   defdelegate get(ctx, execution_id), to: Record
+
+  @doc """
+  The context's athanor's live feeds, by name, each with its binding id,
+  its binding (its result shape and actions among it) and its latest
+  accepted result (`Crucible.Feeds.list/1`).
+  """
+  @spec feeds(Context.t()) ::
+          {:ok, [Crucible.Feeds.feed()]} | {:error, :no_athanor | :database_error}
+  defdelegate feeds(ctx), to: Crucible.Feeds, as: :list
 
   @doc """
   The execution records of the context's athanor. Options: `:limit`

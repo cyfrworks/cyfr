@@ -6,8 +6,9 @@ defmodule Prima.CanvasWireTest do
   The canvas wire against `tests/fixtures/canvas_wire.json`: the version
   and each direction's verbs are the module's, every valid message decodes
   to its direction's verb and encodes back to itself, every refused message
-  is refused, and the path builders answer the fixture's paths and raise
-  on a credential or frame id outside its grammar. Beside them, the bounds
+  is refused, and the path builders answer the fixture's paths, the host
+  page's under its prefix, and raise on a credential or frame id outside
+  its grammar. Beside them, the bounds
   the fixture would spell at length, a boot's streams held to the tincture
   wire's stream-name grammar, and refusals that name no key or value the
   message carries, whatever term it is.
@@ -115,6 +116,10 @@ defmodule Prima.CanvasWireTest do
 
       for row <- valid do
         assert CanvasWire.page_path(row["credential"], row["frame"]) == row["page_path"]
+
+        assert CanvasWire.page_path(row["credential"], row["frame"]) ==
+                 CanvasWire.page_prefix() <> row["credential"] <> "/" <> row["frame"]
+
         assert CanvasWire.data_path(row["frame"]) == row["data_path"]
         assert CanvasWire.stream_path(row["frame"]) == row["stream_path"]
         assert row["stream_path"] == row["data_path"] <> "stream"

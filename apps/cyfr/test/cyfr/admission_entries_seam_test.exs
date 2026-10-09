@@ -80,6 +80,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.TinctureDataController, :invoke} => :tincture_data_invoke_no_frame,
     {Emissary.Web.TinctureDataController, :system_action} => :tincture_data_action_no_frame,
     {Emissary.Web.TinctureDataController, :stream} => :tincture_data_stream_no_frame,
+    {Emissary.Web.TinctureDataController, :canvas_stream} => :tincture_data_canvas_no_frame,
     {Emissary.Web.WebhookController, :invoke} => :webhook_archived_athanor,
     {CyfrWeb.Plugs.VerifyWebhookSignature, :call} => :webhook_unsigned,
     {CyfrWeb.Plugs.WebhookIdempotency, :call} => :webhook_missing_idempotency_key,
@@ -334,12 +335,12 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
   # A data request with no frame credential and no public tincture: the
   # wire's own refusal, whose class the row carries.
-  defp tincture_data_no_frame(conn, kind, fields) do
+  defp tincture_data_no_frame(conn, kind, fields, path \\ nil) do
     conn =
       conn
       |> put_req_header("content-type", "application/json")
       |> put_req_header("origin", "null")
-      |> post(Prima.TinctureWire.route(kind), Prima.TinctureWire.request(kind, fields))
+      |> post(path || Prima.TinctureWire.route(kind), Prima.TinctureWire.request(kind, fields))
 
     assert conn.status == 401
 
@@ -357,6 +358,16 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
   def tincture_data_stream_no_frame(conn, _ctx),
     do: tincture_data_no_frame(conn, :stream_open, %{stream: "mcp_servers.changes", subject: nil})
+
+  # A canvas's own data path, asked with no bearer.
+  def tincture_data_canvas_no_frame(conn, _ctx) do
+    tincture_data_no_frame(
+      conn,
+      :stream_open,
+      %{stream: "mcp_servers.changes", subject: nil},
+      Prima.CanvasWire.stream_path("frm_seam_" <> unique("canvas"))
+    )
+  end
 
   def tincture_rate_limited(conn, _ctx) do
     Application.put_env(:cyfr, :tincture_rate_limit_max, 1)

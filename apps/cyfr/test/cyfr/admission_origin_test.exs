@@ -87,6 +87,7 @@ defmodule Cyfr.AdmissionOriginTest do
     {Emissary.Web.TinctureDataController, :invoke} => :frame_invoke,
     {Emissary.Web.TinctureDataController, :system_action} => :frame_action,
     {Emissary.Web.TinctureDataController, :stream} => :frame_stream,
+    {Emissary.Web.TinctureDataController, :canvas_stream} => :frame_canvas_stream,
     {Emissary.Web.WebhookController, :invoke} => :webhook_delivery,
     {Crucible.Schedules.Scheduler, :handle_info} => :schedule_fire,
     {Crucible.Host.Children, :call} => :host_tool_call,
@@ -272,6 +273,30 @@ defmodule Cyfr.AdmissionOriginTest do
 
   def frame_stream(_conn) do
     frame_calls(:stream_open, %{stream: "executions.deltas", subject: "exec_1"})
+  end
+
+  # A canvas frame on its own data path, asking for a stream its canvas
+  # does not declare: refused after its caller is established. A canvas
+  # path takes no public page, so there is no page's variant.
+  def frame_canvas_stream(_conn) do
+    source = frame_source!()
+    name = "origin-canvas-#{System.unique_integer([:positive])}"
+    frame = frame!(source, name, canvas!(source, name))
+    path = Prima.CanvasWire.stream_path(frame.frame_id)
+
+    request =
+      TinctureWire.request(:stream_open, %{stream: "executions.deltas", subject: "exec_1"})
+
+    framed = data(:stream_open, request, bearer: frame.bearer, path: path)
+
+    # A body naming an origin is refused unread: no context is built.
+    named = Map.put(request, "origin", "programmatic")
+    unread = data(:stream_open, named, bearer: frame.bearer, path: path)
+    assert unread.status == 400
+    refute Map.has_key?(unread.assigns, :context)
+
+    assert framed.status == 403
+    [framed.assigns.context.origin]
   end
 
   def webhook_delivery(conn) do
@@ -767,15 +792,36 @@ defmodule Cyfr.AdmissionOriginTest do
   # A tincture version in the source's athanor declaring `block` and the
   # static dependencies `deps`. Answers its reference.
   defp tincture!(ctx, name, block, deps) do
-    manifest = %{
+    put_version!(ctx, name, %{
       "name" => name,
       "type" => "tincture",
       "version" => "1.0.0",
       "publisher" => "local",
       "tincture" => Map.merge(%{"entry" => "index.html"}, block),
       "dependencies" => %{"static" => deps}
-    }
+    })
+  end
 
+  # A canvas version in the source's athanor declaring one stream. Answers
+  # its release digest.
+  defp canvas!(ctx, name) do
+    put_version!(ctx, name, %{
+      "name" => name,
+      "type" => "tincture",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "tincture" => %{
+        "frame" => %{"placement" => "canvas"},
+        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "streams" => [%{"name" => "mcp_servers.changes"}]
+      }
+    })
+
+    digest_of(name)
+  end
+
+  # A version's row, as the registry records it. Answers its reference.
+  defp put_version!(ctx, name, manifest) do
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -894,7 +940,8 @@ defmodule Cyfr.AdmissionOriginTest do
     )
   end
 
-  # The frame the shell would open for `name`: its credential and row id.
+  # The frame the shell would open for `name`: its credential, row id and
+  # frame id.
   defp frame!(source, name, digest, revision \\ 0) do
     reference = %{publisher: "local", name: name, version: "1.0.0"}
     frame_id = "frm_origin_#{System.unique_integer([:positive])}"
@@ -902,9 +949,10 @@ defmodule Cyfr.AdmissionOriginTest do
     {:ok, %{credential: bearer, id: id}} =
       TinctureAuth.mint_frame_credential(source, reference, digest, revision, frame_id)
 
-    %{bearer: bearer, id: id}
+    %{bearer: bearer, id: id, frame_id: frame_id}
   end
 
+  # A data request, at the kind's shared route or at `path:`.
   defp data(kind, body, opts \\ []) do
     conn =
       build_conn()
@@ -917,7 +965,7 @@ defmodule Cyfr.AdmissionOriginTest do
         bearer -> put_req_header(conn, "authorization", TinctureWire.bearer(bearer))
       end
 
-    post(conn, TinctureWire.route(kind), Jason.encode!(body))
+    post(conn, Keyword.get(opts, :path, TinctureWire.route(kind)), Jason.encode!(body))
   end
 
   defp action(bearer, operation) do

@@ -828,6 +828,21 @@ defmodule Cyfr.BoundariesTest do
                  "`Compendium.Canvas`)"
     end
 
+    # A canvas's host page reads the frame its path names under its asset
+    # credential's authority; nothing else of the host reads a frame by its
+    # frame id.
+    test "the host reads a page's frame from the canvas page alone" do
+      assert Boundaries.sanctum_exports()["Sanctum.TinctureAuth"][:page_frame] == 2
+
+      callers =
+        for path <- beams(:cyfr),
+            Beams.production?(path),
+            {"Sanctum.TinctureAuth", :page_frame, 2} in sanctum_reaches(String.to_charlist(path)),
+            do: Path.basename(path, ".beam")
+
+      assert callers == ["Elixir.Emissary.Web.CanvasController"]
+    end
+
     # Who a person may send a copy to is the tenancy's answer: the Files
     # page's picker reads it, and nothing else of the host does.
     test "the host reads the people a person shares an athanor with from the Files page alone" do
@@ -944,6 +959,36 @@ defmodule Cyfr.BoundariesTest do
              A route anyone can reach is named one by one, so widening the tier
              of a posture cannot quietly open every route that declares it.
              """
+    end
+
+    test "a canvas's page and data route admit a credential, and only the data route is an entry" do
+      postures =
+        for route <- Boundaries.routes(),
+            route.path in ["/_c/v1/:credential/:frame_id", "/_f/v1/o/:frame_id/stream"],
+            do: {route.verb, route.path, route.metadata[:auth]}
+
+      assert Enum.sort(postures) == [
+               {:get, "/_c/v1/:credential/:frame_id", :tincture_handler_auth},
+               {:options, "/_f/v1/o/:frame_id/stream", :frame_credential},
+               {:post, "/_f/v1/o/:frame_id/stream", :frame_credential}
+             ]
+
+      # Each posture's sentence names the canvas path it now covers.
+      assert Boundaries.route_postures().tincture_handler_auth.why =~ "`/_c/v1/`"
+      assert Boundaries.route_postures().frame_credential.why =~ "`/_f/v1/o/<frame>/stream`"
+
+      assert %{plane: :external, origin: :interactive} =
+               Enum.find(
+                 Boundaries.admission_entries(),
+                 &(&1.module == Emissary.Web.TinctureDataController and &1.site == :canvas_stream)
+               )
+
+      # The page's pipeline mints no call identity, as the served files'
+      # does not: it decides nothing the decision log records.
+      refute Enum.any?(
+               Boundaries.admission_entries(),
+               &(&1.module == Emissary.Web.CanvasController)
+             )
     end
   end
 

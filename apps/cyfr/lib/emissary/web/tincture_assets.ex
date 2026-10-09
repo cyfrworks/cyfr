@@ -143,9 +143,14 @@ defmodule Emissary.Web.TinctureAssets do
     end
   end
 
-  # The endpoint's origin as the policy names it: `scheme://host[:port]`,
-  # the port only when it is not the scheme's own.
-  defp endpoint_origin do
+  @doc """
+  The endpoint's origin as a tincture document's policy names it, from the
+  deployment's origin (`Sanctum.origin/0`): `scheme://host[:port]`, an IPv6
+  host in brackets, the port only when it is not the scheme's own. A
+  canvas's host page names it too (`Emissary.Web.CanvasController`).
+  """
+  @spec endpoint_origin() :: String.t()
+  def endpoint_origin do
     %URI{scheme: scheme, host: host, port: port} = URI.parse(Sanctum.origin())
     host = if String.contains?(host, ":"), do: "[#{host}]", else: host
 

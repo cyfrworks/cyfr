@@ -5,9 +5,10 @@ defmodule Emissary.Web.TinctureDataController do
   @moduledoc """
   The tincture data routes, `Prima.TinctureWire`'s endpoint side:
 
-      POST /_f/v1/invoke  — run a component the tincture declares
-      POST /_f/v1/action  — run a system action the tincture declares
-      POST /_f/v1/stream  — open a stream the tincture declares
+      POST /_f/v1/invoke             — run a component the tincture declares
+      POST /_f/v1/action             — run a system action the tincture declares
+      POST /_f/v1/stream             — open a stream the tincture declares
+      POST /_f/v1/o/:frame_id/stream — open a stream a canvas declares
 
   ## Who is asking
 
@@ -53,10 +54,34 @@ defmodule Emissary.Web.TinctureDataController do
   frame's context; a stream is opened through the gate's one stream entry
   (`Grimoire.open_stream/3`) and delivered by `CyfrWeb.SSE.deliver/4`.
 
+  ## A canvas
+
+  A canvas (a tincture whose placement is `canvas`) reads its streams on
+  its own open's data path alone (`Prima.CanvasWire.stream_path/1`), and
+  no route there invokes or acts. On that path the bearer is established
+  first and refused `forbidden` (`frame_path_mismatch`) unless it is the
+  credential of the frame the path names, before its version or grant is
+  read, any charge is made or anything is reached; a frame that is not a
+  canvas's is refused there `forbidden` (`not_a_canvas`). The shared
+  routes refuse a canvas frame's credential `forbidden`
+  (`canvas_path_required`), so a canvas invokes no component and runs no
+  operation, whatever its declaration names. A canvas path takes no
+  public page's request: without a bearer it is `no_frame`.
+
+  A canvas version's validation trial (a frame whose mode is
+  `:validation`) is answered on its path from fixtures and admits
+  nothing: no gate, no subscription and no open-stream slot. The stream
+  it names is answered once and ended: for a feed's results, the envelope
+  of the feed the athanor binds under that name (`Crucible.feeds/1`), its
+  result the fixture of the binding's result shape, and no event for a
+  name the athanor does not bind; for another stream, the fixture of the
+  stream's shape (`Prima.Canvas.Shape.fixture/1`), and no event for a
+  stream that declares none. It is charged as any request is.
+
   ## Limits
 
   Each frame credential holds two limits: an invocation rate, charged on
-  every request to any of the three routes (`frame_invocation_max` per
+  every request to any of these routes (`frame_invocation_max` per
   `frame_invocation_window_ms`), and a count of concurrently open streams
   (`frame_stream_max_concurrent`), released when a stream closes. A
   public page is charged the same rate per address and tincture. Each is
@@ -78,17 +103,36 @@ defmodule Emissary.Web.TinctureDataController do
 
   @slot_tag :frame_stream
 
+  # The placement a canvas declares, and the stream a canvas reads a
+  # feed's results on, by the feed's name as its subject.
+  @canvas "canvas"
+  @feed_stream "feed.results"
+
+  # A validation answer's feed envelope is the binding's first revision at
+  # the epoch: a fixture, never a result the feed produced.
+  @fixture_revision 0
+  @fixture_at DateTime.from_unix!(0)
+
   @doc "Run a component the tincture declares."
   @spec invoke(Plug.Conn.t(), map()) :: Plug.Conn.t()
-  def invoke(conn, _params), do: handle(conn, :invoke)
+  def invoke(conn, _params), do: handle(conn, :invoke, :shared)
 
   @doc "Run a system action the tincture declares."
   @spec system_action(Plug.Conn.t(), map()) :: Plug.Conn.t()
-  def system_action(conn, _params), do: handle(conn, :action)
+  def system_action(conn, _params), do: handle(conn, :action, :shared)
 
   @doc "Open a stream the tincture declares and deliver it."
   @spec stream(Plug.Conn.t(), map()) :: Plug.Conn.t()
-  def stream(conn, _params), do: handle(conn, :stream_open)
+  def stream(conn, _params), do: handle(conn, :stream_open, :shared)
+
+  @doc """
+  Open a stream a canvas declares, on the data path of the open the path's
+  `frame_id` names, and deliver it; a validation trial's is answered from
+  fixtures.
+  """
+  @spec canvas_stream(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def canvas_stream(conn, %{"frame_id" => frame_id}),
+    do: handle(conn, :stream_open, {:canvas, frame_id})
 
   # ---------------------------------------------------------------------------
   # The wire's refusal, as a renderer
@@ -151,22 +195,26 @@ defmodule Emissary.Web.TinctureDataController do
   # Admission
   # ---------------------------------------------------------------------------
 
-  defp handle(conn, kind) do
-    case admit(conn, kind) do
-      {:ok, conn, request, caller} -> dispatch(conn, kind, request, caller)
+  # `path` is the route's: `:shared`, one of the three every frame shares,
+  # or `{:canvas, frame_id}`, a canvas open's own data path.
+  defp handle(conn, kind, path) do
+    case admit(conn, kind, path) do
+      {:ok, conn, request, caller} -> dispatch(conn, kind, request, caller, path)
       {:error, conn, refusal} -> refuse(conn, refusal)
     end
   end
 
-  # In order: the body, who is asking, the charge, then the grant. The
-  # charge follows the caller, so a frame's undeclared attempts count
-  # against it too.
-  defp admit(conn, kind) do
+  # In order: the body, who is asking (on a canvas path, whether it is the
+  # frame the path names, before anything else of it is read), where it
+  # may ask, the charge, then the grant. The charge follows the caller, so
+  # a frame's undeclared attempts count against it too.
+  defp admit(conn, kind, path) do
     with {:ok, request} <- decode(conn, kind),
-         {:ok, caller} <- caller(conn, request) do
+         {:ok, caller} <- caller(conn, request, path) do
       conn = assign(conn, :context, caller.ctx)
 
-      with :ok <- charge(caller),
+      with :ok <- placed(caller, path),
+           :ok <- charge(caller),
            :ok <- granted(kind, request, caller) do
         {:ok, conn, request, caller}
       else
@@ -184,15 +232,17 @@ defmodule Emissary.Web.TinctureDataController do
     end
   end
 
-  defp caller(conn, request) do
+  # A canvas path takes a frame's bearer alone: a request without one is
+  # no frame, whatever its body names.
+  defp caller(conn, request, path) do
     case {bearer(conn), Map.get(request, :public)} do
       {{:ok, bearer}, nil} ->
-        frame_caller(conn, bearer)
+        frame_caller(conn, bearer, path)
 
-      {:none, %{} = public} ->
+      {:none, %{} = public} when path == :shared ->
         public_caller(conn, public)
 
-      {:none, nil} ->
+      {:none, _public} ->
         {:error, no_frame()}
 
       {:invalid, _public} ->
@@ -223,12 +273,14 @@ defmodule Emissary.Web.TinctureDataController do
     end
   end
 
-  # A frame: its credential, the version it opened and the grant it was
-  # opened under, each read again now.
-  defp frame_caller(conn, bearer) do
+  # A frame: its credential, the frame its path names when the route names
+  # one, the version it opened and the grant it was opened under, each read
+  # again now.
+  defp frame_caller(conn, bearer, path) do
     client_ip = Sanctum.ClientIp.resolve(conn)
 
     with {:ok, ctx} <- establish(bearer, client_ip),
+         :ok <- on_path(ctx, path),
          {:ok, grant} <- frame_grant(ctx) do
       {:ok,
        Map.merge(grant, %{
@@ -248,6 +300,12 @@ defmodule Emissary.Web.TinctureDataController do
       {:error, reason} -> {:error, credential_refusal(reason)}
     end
   end
+
+  # A canvas path is its own open's: a bearer of any other frame derives
+  # nothing on it, its version and grant unread.
+  defp on_path(%Context{frame: %{frame_id: frame_id}}, {:canvas, frame_id}), do: :ok
+  defp on_path(%Context{}, {:canvas, _another}), do: {:error, frame_path_mismatch()}
+  defp on_path(%Context{}, :shared), do: :ok
 
   # The frame admission path's origin. It records how the call was
   # admitted, not that a person is watching: a hidden frame's credential
@@ -354,6 +412,21 @@ defmodule Emissary.Web.TinctureDataController do
 
   defp decode_manifest(_manifest), do: %{}
 
+  # Where a frame may ask: a canvas on its own data path alone, and on that
+  # path only a canvas. A public page's request reaches no canvas path.
+  defp placed(%{route: :protected, declaration: declaration}, :shared) do
+    if canvas?(declaration), do: {:error, canvas_path_required()}, else: :ok
+  end
+
+  defp placed(%{route: :public}, :shared), do: :ok
+
+  defp placed(%{declaration: declaration}, {:canvas, _frame_id}) do
+    if canvas?(declaration), do: :ok, else: {:error, not_a_canvas()}
+  end
+
+  defp canvas?(%{frame: %{placement: @canvas}}), do: true
+  defp canvas?(_declaration), do: false
+
   # The invocation rate, charged per request, per frame credential (per
   # address and tincture for a public page). Both settings serve a stale
   # value, so a store outage answers the last one read.
@@ -408,6 +481,19 @@ defmodule Emissary.Web.TinctureDataController do
   # ---------------------------------------------------------------------------
   # Dispatch
   # ---------------------------------------------------------------------------
+
+  # A canvas's validation trial is answered on its own path and admits
+  # nothing; every other request is dispatched as its kind asks.
+  defp dispatch(
+         conn,
+         :stream_open,
+         request,
+         %{ctx: %Context{frame: %{mode: :validation}}} = caller,
+         {:canvas, _frame_id}
+       ),
+       do: validation_answer(conn, request, caller)
+
+  defp dispatch(conn, kind, request, caller, _path), do: dispatch(conn, kind, request, caller)
 
   defp dispatch(conn, :invoke, request, caller) do
     %{publisher: publisher, name: name} = caller.tincture
@@ -486,6 +572,57 @@ defmodule Emissary.Web.TinctureDataController do
   defp release(%Context{frame: %{}} = ctx), do: CyfrWeb.SSE.release_slot(@slot_tag, ctx)
   defp release(%Context{}), do: :ok
 
+  # The stream a validation trial names, answered once from its fixtures
+  # and ended: a `text/event-stream` of at most one event, under no grant,
+  # with no subscription and no slot. A feed's bindings the store cannot
+  # read are refused before the stream opens.
+  defp validation_answer(conn, %{stream: name, subject: subject}, caller) do
+    case fixtures(caller.ctx, name, subject) do
+      {:ok, events} -> conn |> CyfrWeb.SSE.open() |> write_events(name, events)
+      {:error, refusal} -> refuse(conn, refusal)
+    end
+  end
+
+  # A feed's results: the envelope of the feed the athanor binds under the
+  # subject's name, its result the fixture of the binding's result shape;
+  # none for a name the athanor does not bind.
+  defp fixtures(ctx, @feed_stream, subject) do
+    case Crucible.feeds(ctx) do
+      {:ok, feeds} ->
+        {:ok,
+         for %{binding_id: id, binding: %{name: ^subject} = binding} <- feeds do
+           result = Prima.Canvas.Shape.fixture(binding.result_shape)
+           Prima.Feed.envelope(id, binding, @fixture_revision, @fixture_at, result)
+         end}
+
+      {:error, _unanswered} ->
+        {:error, Prima.Refusal.classify(:unavailable)}
+    end
+  end
+
+  # Another stream: the fixture of its shape, and none for a stream that
+  # declares no shape.
+  defp fixtures(_ctx, name, _subject) do
+    case Prima.Provider.fetch_stream(Grimoire.streams(), name) do
+      {:ok, %Prima.Provider.Stream{shape: %{} = shape}} ->
+        {:ok, [Prima.Canvas.Shape.fixture(shape)]}
+
+      _shapeless ->
+        {:ok, []}
+    end
+  end
+
+  # No event carries an id: a fixture has no place in its topic's
+  # sequence.
+  defp write_events(conn, name, events) do
+    Enum.reduce_while(events, conn, fn data, conn ->
+      case chunk(conn, TinctureWire.stream_event(nil, name, data)) do
+        {:ok, conn} -> {:cont, conn}
+        {:error, _closed} -> {:halt, conn}
+      end
+    end)
+  end
+
   # The stream's caller established again, as a request would be: the
   # credential, the version and the grant.
   defp revalidate(%{route: :protected, bearer: bearer, client_ip: client_ip}) do
@@ -510,6 +647,30 @@ defmodule Emissary.Web.TinctureDataController do
       message: "This request carries no frame credential and names no public tincture"
     }
   end
+
+  # The canvas refusals: each sentence names its code, and no credential or
+  # frame id.
+  defp frame_path_mismatch,
+    do:
+      undeclared_refusal(
+        :frame_path_mismatch,
+        "This frame credential opens only its own frame's data path (frame_path_mismatch)"
+      )
+
+  defp not_a_canvas,
+    do:
+      undeclared_refusal(
+        :not_a_canvas,
+        "Only a canvas reads its streams on a canvas data path (not_a_canvas)"
+      )
+
+  defp canvas_path_required,
+    do:
+      undeclared_refusal(
+        :canvas_path_required,
+        "A canvas reads its streams on its own data path alone, and invokes or runs " <>
+          "nothing (canvas_path_required)"
+      )
 
   defp frame_moved do
     %Prima.Refusal{

@@ -21,6 +21,7 @@ defmodule Crucible.FacadeTest do
     claim_turn_root: 2,
     claim_turn_root: 3,
     events_since: 3,
+    feeds: 1,
     get: 2,
     invoke_tincture: 3,
     list: 1,
