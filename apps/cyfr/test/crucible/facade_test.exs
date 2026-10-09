@@ -59,12 +59,28 @@ defmodule Crucible.FacadeTest do
                tick_ms: 60_000
              )
 
+    # The keeper takes hold of its holder from its own process: the stop
+    # waits for that hold, so it lands after it and never races it.
+    Prima.Test.Wait.wait_until(fn -> keeper in holds(holder) end)
+
     ref = Process.monitor(keeper)
     assert :ok = Crucible.stop_lease_watch(keeper)
     assert_receive {:DOWN, ^ref, :process, ^keeper, :killed}
+
+    # Once the hold is gone the holder has taken the keeper's exit; a holder
+    # that exit reached is gone with it.
+    Prima.Test.Wait.wait_until(fn -> keeper not in holds(holder) end)
     assert Process.alive?(holder)
     assert :ok = Crucible.stop_lease_watch(nil)
 
     send(holder, :release)
+  end
+
+  # The processes linked to or monitoring `pid`; none once it is gone.
+  defp holds(pid) do
+    case Process.info(pid, [:links, :monitored_by]) do
+      [links: links, monitored_by: monitors] -> links ++ monitors
+      nil -> []
+    end
   end
 end

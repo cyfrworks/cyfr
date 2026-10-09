@@ -5,7 +5,7 @@ defmodule Crucible.LeaseWatch do
   @moduledoc """
   The lease keeper of an execution held outside the engine — a turn root
   (`Crucible.TurnRoot`) or an outbound tool call in flight: a
-  process linked to the holder that renews the attempt's lease every tick
+  process that watches the holder, renews the attempt's lease every tick
   and exits the holder when the lease is lost.
 
   A caller blocked in a call cannot service a timer of its own, so the
@@ -15,6 +15,14 @@ defmodule Crucible.LeaseWatch do
   (`{:lease_lost, execution_id}`); a store that cannot answer, a renewal
   that raises included, is tolerated only inside the lease the attempt
   last held.
+
+  The keeper is linked to the process that starts it, the holder on every
+  path that holds a lease, so a crash of either takes the other down at
+  once, and it monitors the holder, so a holder that ends without stopping
+  it, normally or as a process other than its starter, ends it too. It
+  makes no link once it runs: `stop/1` drops the caller's link before it
+  kills the keeper, and a link made after that would carry the kill to the
+  holder.
 
   A holder that moves the attempt out of `running` suspends its keeper
   first (`suspend/1`), so no renewal races the move, and then stops it
@@ -29,7 +37,8 @@ defmodule Crucible.LeaseWatch do
   @tick_ms 60_000
 
   @doc """
-  Start a keeper for `attempt` of `execution_id`, linked to `holder`.
+  Start a keeper for `attempt` of `execution_id`, linked to the calling
+  process and watching `holder`.
   `opts`: `:tick_ms` (the renewal period), `:until` (the lease the
   attempt holds now).
   """
@@ -45,11 +54,7 @@ defmodule Crucible.LeaseWatch do
 
     until = Keyword.get(opts, :until) || initial_until(execution_id)
 
-    pid =
-      spawn_link(fn ->
-        Process.link(holder)
-        loop(watch, until)
-      end)
+    pid = spawn_link(fn -> loop(Map.put(watch, :down, Process.monitor(holder)), until) end)
 
     {:ok, pid}
   end
@@ -79,7 +84,7 @@ defmodule Crucible.LeaseWatch do
     :ok
   end
 
-  @doc "Stop a keeper without touching its holder."
+  @doc "Stop a keeper, from the process that started it, without touching its holder."
   @spec stop(pid() | nil) :: :ok
   def stop(nil), do: :ok
 
@@ -111,11 +116,19 @@ defmodule Crucible.LeaseWatch do
       DateTime.add(DateTime.utc_now(), Arca.ExecutionAttempts.lease_seconds(), :second)
   end
 
-  defp loop(watch, until) do
+  # A holder that ends ends its keeper, suspended or not.
+  defp loop(%{down: down} = watch, until) do
     receive do
       {:suspend, from, ref} ->
         send(from, {ref, :suspended})
-        receive do: (:resume -> loop(watch, until))
+
+        receive do
+          :resume -> loop(watch, until)
+          {:DOWN, ^down, :process, _, _} -> :ok
+        end
+
+      {:DOWN, ^down, :process, _, _} ->
+        :ok
     after
       watch.tick -> renew(watch, until)
     end
