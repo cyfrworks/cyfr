@@ -99,7 +99,7 @@ defmodule Prima.LocusBackends do
   alias Prima.MCP.Protocol, as: MCPProtocol
 
   @version 1
-  @domain MacEnvelope.domain(:locus)
+  @domain MacEnvelope.domain()
   @service MacEnvelope.service(:backends)
   @label MacEnvelope.label(:backends)
   @auth_header MacEnvelope.auth_header()

@@ -6,7 +6,8 @@ defmodule Prima.MacEnvelopeTest do
   The shared construction: a header parses back to the fields it was built
   from, and parsing refuses anything but exactly one well-formed header of
   the envelope's kind; a MAC verifies only under the same key, fields and
-  body; a sealed value opens only under the same key, label and fields.
+  body; a sealed value opens only under the same key, label and fields. The
+  island signs under one domain, each service under its label within it.
   """
   use ExUnit.Case, async: true
 
@@ -327,6 +328,19 @@ defmodule Prima.MacEnvelopeTest do
 
       assert {:error, {:invalid_field, :who}} =
                MacEnvelope.open(@key, @label, @fields, message, "anything")
+    end
+  end
+
+  describe "names" do
+    test "the island signs under one domain, and each service's label is the domain and its name" do
+      assert MacEnvelope.domain() == "cyfr-locus/v1"
+
+      for {service, name} <- [builds: "builds", backends: "backends", runtime: "runtime"] do
+        assert MacEnvelope.service(service) == name
+
+        assert MacEnvelope.label(service) ==
+                 MacEnvelope.domain() <> "/" <> MacEnvelope.service(service)
+      end
     end
   end
 end

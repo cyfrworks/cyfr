@@ -116,7 +116,7 @@ defmodule Prima.BuilderProtocol do
   alias Prima.MacEnvelope
 
   @version 1
-  @domain MacEnvelope.domain(:locus)
+  @domain MacEnvelope.domain()
   @service MacEnvelope.service(:builds)
   @label MacEnvelope.label(:builds)
   @auth_header MacEnvelope.auth_header()

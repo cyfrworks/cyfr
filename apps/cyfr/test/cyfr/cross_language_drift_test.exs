@@ -347,11 +347,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
           {"locus_backends.json", :backends, Prima.LocusBackends}
         ] do
       wire = fixture!(file)
-      assert wire["domain"] == MacEnvelope.domain(:locus), file
+      assert wire["domain"] == MacEnvelope.domain(), file
       assert wire["service"] == MacEnvelope.service(service), file
       assert wire["label"] == MacEnvelope.label(service), file
       assert wire["auth_header"] == MacEnvelope.auth_header(), file
-      assert protocol.domain() == MacEnvelope.domain(:locus)
+      assert protocol.domain() == MacEnvelope.domain()
       assert protocol.service() == MacEnvelope.service(service)
       assert protocol.auth_header() == MacEnvelope.auth_header()
     end

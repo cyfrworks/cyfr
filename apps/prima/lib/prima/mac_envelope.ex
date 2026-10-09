@@ -45,7 +45,7 @@ defmodule Prima.MacEnvelope do
 
   Every protocol built on the envelope signs under one spelling of each
   name, held here and nowhere else: the MAC domain of the island
-  (`domain/1`), each service's name within it (`service/1`) and the label
+  (`domain/0`), each service's name within it (`service/1`) and the label
   its keys derive over (`label/1`), and the HTTP header a signature travels
   in (`auth_header/0`). `Prima.BuilderProtocol`, `Prima.LocusBackends`,
   `Prima.WorkerAuth` and `Prima.WorkerWire` read them; the vector files
@@ -68,10 +68,7 @@ defmodule Prima.MacEnvelope do
           body_hash_in_header: boolean()
         }
 
-  @typedoc "The island whose protocols sign under a MAC domain of their own."
-  @type island :: :locus
-
-  @typedoc "A service signing under its island's domain."
+  @typedoc "A service signing under the island's domain."
   @type service :: :builds | :backends | :runtime
 
   @typedoc "A message's fields by name: strings and non-negative integers."
@@ -88,32 +85,24 @@ defmodule Prima.MacEnvelope do
   @max_integer 9_007_199_254_740_991
   @body_hash ~r/\A[0-9a-f]{64}\z/
 
-  # A domain names an island and the version of its protocols, so no key or
-  # header signed under it verifies under another; a service's label,
-  # `<domain>/<service>`, keeps each service's keys apart within its island.
-  @domains %{locus: "cyfr-locus/v1"}
-  @services %{
-    builds: {:locus, "builds"},
-    backends: {:locus, "backends"},
-    runtime: {:locus, "runtime"}
-  }
+  # The domain names the island and the version of its protocols, so no key
+  # or header signed under it verifies under another version; a service's
+  # label, `<domain>/<service>`, keeps each service's keys apart within it.
+  @domain "cyfr-locus/v1"
+  @services %{builds: "builds", backends: "backends", runtime: "runtime"}
   @auth_header "x-cyfr-auth"
 
-  @doc "The MAC domain `island`'s protocols sign under."
-  @spec domain(island()) :: String.t()
-  def domain(island) when is_map_key(@domains, island), do: Map.fetch!(@domains, island)
+  @doc "The MAC domain the island's protocols sign under."
+  @spec domain() :: String.t()
+  def domain, do: @domain
 
-  @doc "The name of `service` within its island's domain."
+  @doc "The name of `service` within the island's domain."
   @spec service(service()) :: String.t()
-  def service(service) when is_map_key(@services, service),
-    do: @services |> Map.fetch!(service) |> elem(1)
+  def service(service) when is_map_key(@services, service), do: Map.fetch!(@services, service)
 
-  @doc "The label `service`'s keys derive over: its island's domain and its name, `<domain>/<service>`."
+  @doc "The label `service`'s keys derive over: the island's domain and its name, `<domain>/<service>`."
   @spec label(service()) :: String.t()
-  def label(service) when is_map_key(@services, service) do
-    {island, name} = Map.fetch!(@services, service)
-    domain(island) <> "/" <> name
-  end
+  def label(service) when is_map_key(@services, service), do: domain() <> "/" <> service(service)
 
   @doc "The HTTP header a signature travels in on every wire of the island, lowercase."
   @spec auth_header() :: String.t()
