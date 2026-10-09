@@ -9,7 +9,11 @@ defmodule Compendium.Tincture.RulesTest do
   `tests/browser/README.md` records, the templates and the lockfile rule,
   and the declaration grammar — a capability the rules do not list, a card
   naming an action the declaration lacks and a stream no provider declares
-  each refused. The facade answers what the module answers.
+  each refused. A canvas is held tighter: its policy names only its open's
+  two paths, its sandbox is scripts alone, each declaration it may not
+  make is refused with its own sentence, and it reads only streams that
+  declare a shape, each feed by its name. The facade answers what the
+  module answers.
   """
 
   use ExUnit.Case, async: true
@@ -161,6 +165,22 @@ defmodule Compendium.Tincture.RulesTest do
       end
 
       assert_raise ArgumentError, fn -> Rules.csp(%{}, %{endpoint: @endpoint, nonce: "x'; y"}) end
+    end
+
+    # The canvas policy is its own function; every other tincture's page is
+    # served under exactly the header it was before the canvas existed.
+    test "a tincture that is no canvas keeps its policy byte for byte" do
+      assert Rules.csp(manifest(%{"connect" => ["api.example.com"]}), %{
+               endpoint: @endpoint,
+               nonce: @nonce
+             }) ==
+               "default-src 'self'; " <>
+                 "script-src 'self' 'nonce-#{@nonce}' 'wasm-unsafe-eval'; " <>
+                 "worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; " <>
+                 "img-src 'self' https://cyfr.test data: blob:; font-src 'self' https://cyfr.test; " <>
+                 "media-src 'self' https://cyfr.test blob:; " <>
+                 "connect-src https://cyfr.test https://api.example.com; object-src 'none'; " <>
+                 "base-uri 'self'; frame-ancestors https://cyfr.test; form-action 'none'"
     end
 
     test "honours every frame fact the browser record holds" do
@@ -439,6 +459,383 @@ defmodule Compendium.Tincture.RulesTest do
       assert Rules.check_streams(none, [held]) == :ok
       assert {:error, {:invalid_tincture, _}} = Rules.check_streams(decl, [held])
       assert {:error, {:invalid_tincture, _}} = Rules.check_streams(literal, [held])
+    end
+  end
+
+  describe "a canvas's policy" do
+    @shell "https://shell.test"
+    @credential "assetcred_0123456789abcdef"
+    @frame "frm_canvas_0001"
+
+    defp canvas_opts(overrides \\ %{}) do
+      Map.merge(
+        %{
+          endpoint: @endpoint,
+          shell: @shell,
+          asset_credential: @credential,
+          frame_id: @frame,
+          nonce: @nonce
+        },
+        overrides
+      )
+    end
+
+    test "the canvas policy names only the open's paths" do
+      files = "https://cyfr.test/_s/#{@credential}/"
+      data = "https://cyfr.test/_f/v1/o/#{@frame}/"
+
+      policy = Rules.canvas_page_csp(canvas_opts())
+
+      assert policy ==
+               "default-src 'none'; script-src 'nonce-#{@nonce}' #{files}; " <>
+                 "style-src 'nonce-#{@nonce}'; worker-src blob: #{files}; " <>
+                 "img-src #{files} data: blob:; connect-src #{data}; font-src 'none'; " <>
+                 "media-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; " <>
+                 "form-action 'none'; frame-ancestors #{@shell}; sandbox allow-scripts"
+
+      assert files == @endpoint <> "/" <> Prima.TinctureUrl.asset_prefix() <> "/#{@credential}/"
+      assert data == @endpoint <> Prima.CanvasWire.data_path(@frame)
+      assert Compendium.tincture_canvas_page_csp(canvas_opts()) == policy
+    end
+
+    test "weakens nothing: no 'self', no unsafe source, and no host source but the open's two paths" do
+      policy = Rules.canvas_page_csp(canvas_opts())
+      d = directives(policy)
+
+      refute policy =~ "'self'"
+      refute policy =~ "unsafe-inline"
+      refute policy =~ "unsafe-eval"
+      refute policy =~ "wasm-unsafe-eval"
+      refute String.ends_with?(policy, "; ")
+
+      allowed = [
+        "https://cyfr.test/_s/#{@credential}/",
+        "https://cyfr.test/_f/v1/o/#{@frame}/",
+        @shell
+      ]
+
+      hosts =
+        for {_directive, sources} <- d,
+            source <- sources,
+            String.contains?(source, "://"),
+            uniq: true,
+            do: source
+
+      assert Enum.sort(hosts) == Enum.sort(allowed)
+
+      # The open's own data path is the only connection; the shell alone
+      # may frame it; the sandbox is the canvas's tokens.
+      assert d["connect-src"] == ["https://cyfr.test/_f/v1/o/#{@frame}/"]
+      assert d["frame-ancestors"] == [@shell]
+      assert d["sandbox"] == Rules.canvas_sandbox_tokens()
+      assert d["default-src"] == ["'none'"]
+
+      # Another open's policy names another data path and another prefix.
+      other = directives(Rules.canvas_page_csp(canvas_opts(%{frame_id: "frm_canvas_0002"})))
+      refute other["connect-src"] == d["connect-src"]
+    end
+
+    test "a value outside its grammar raises, and the sentence names no value" do
+      canary = "CANARYcredential0123456789"
+
+      for {key, bad} <- [
+            endpoint: "https://cyfr.test/#{canary}",
+            shell: "#{canary}; script-src *",
+            asset_credential: canary <> "/..",
+            asset_credential: "." <> canary,
+            frame_id: canary <> "/x",
+            frame_id: "short",
+            nonce: canary <> "'; y"
+          ] do
+        error =
+          assert_raise ArgumentError, fn -> Rules.canvas_page_csp(canvas_opts(%{key => bad})) end
+
+        refute Exception.message(error) =~ canary
+        refute Exception.message(error) =~ "CANARY"
+      end
+
+      error =
+        assert_raise ArgumentError, fn ->
+          Rules.canvas_page_csp(Map.delete(canvas_opts(%{asset_credential: canary}), :nonce))
+        end
+
+      refute Exception.message(error) =~ canary
+    end
+
+    test "a canvas's sandbox is scripts alone, never with the same origin" do
+      assert Rules.canvas_sandbox_tokens() == ["allow-scripts"]
+      assert Compendium.tincture_canvas_sandbox_tokens() == ["allow-scripts"]
+
+      for token <- Rules.canvas_sandbox_tokens(),
+          do: refute(token in Rules.forbidden_sandbox_tokens())
+    end
+  end
+
+  describe "a canvas" do
+    defp canvas(tincture \\ %{}, extra \\ %{}) do
+      %{
+        "type" => "tincture",
+        "tincture" =>
+          Map.merge(
+            %{
+              "frame" => %{"placement" => "canvas"},
+              "canvas" => %{"module" => "canvas.js", "toolkit" => 1}
+            },
+            tincture
+          )
+      }
+      |> Map.merge(extra)
+    end
+
+    defp canvas_refused(manifest, sentence) do
+      assert Rules.validate_declaration(manifest) ==
+               {:error, {:invalid_tincture, "tincture.frame.placement canvas: " <> sentence}}
+
+      assert Compendium.tincture_declaration(manifest) == Rules.validate_declaration(manifest)
+    end
+
+    defp object_shape(fields) do
+      {:ok, shape} =
+        Prima.Canvas.Shape.validate(%{
+          "type" => "object",
+          "fields" => Map.new(fields, &{&1, %{"type" => "json"}})
+        })
+
+      shape
+    end
+
+    defp canvas_table do
+      [
+        %Prima.Provider.Stream{
+          name: "runs.changes",
+          topic: :executions,
+          projection: ["kind", "execution_id"],
+          deadline_bound: 600,
+          shape: object_shape(["kind", "execution_id"])
+        },
+        %Prima.Provider.Stream{
+          name: "feed.results",
+          topic: :feeds,
+          projection: ["feed", "result"],
+          subject: ~S"\A[a-z0-9][a-z0-9-]{0,47}\z",
+          deadline_bound: 600,
+          shape: object_shape(["feed", "result"]),
+          filter: "feed"
+        },
+        @deltas
+      ]
+    end
+
+    defp streams_of(entries) do
+      {:ok, declaration} =
+        Rules.validate_declaration(canvas(%{"streams" => entries}))
+
+      declaration
+    end
+
+    test "a canvas that keeps the rules is answered as the struct" do
+      assert {:ok, %Tincture{} = decl} =
+               Rules.validate_declaration(
+                 canvas(%{"streams" => [%{"name" => "feed.results", "subject" => "btc"}]})
+               )
+
+      assert decl.frame.placement == "canvas"
+      assert decl.canvas == %Tincture.Canvas{module: "canvas.js", toolkit: 1}
+      assert "canvas" in Rules.placements()
+      assert Rules.toolkit_majors() == [1]
+      assert Compendium.tincture_toolkit_majors() == [1]
+
+      for module <- ~w(canvas.js lib/canvas.mjs a-b/c_d.js) do
+        assert {:ok, _} =
+                 Rules.validate_declaration(
+                   canvas(%{"canvas" => %{"module" => module, "toolkit" => 1}})
+                 )
+      end
+    end
+
+    test "each declaration a canvas may not make is refused with its own sentence" do
+      refusals = [
+        {canvas(%{"connect" => ["api.example.com"]}),
+         "a canvas declares no tincture.connect origin"},
+        {canvas(%{}, %{"caps" => %{"egress" => %{"domains" => ["api.example.com"]}}}),
+         "a canvas declares no caps.egress"},
+        {canvas(%{}, %{"dependencies" => %{"static" => ["reagent:local.runs"]}}),
+         "a canvas declares no component dependency, static or dynamic"},
+        {canvas(%{}, %{"dependencies" => %{"dynamic" => %{"discover" => true}}}),
+         "a canvas declares no component dependency, static or dynamic"},
+        {canvas(%{"build" => %{"tool" => "vite"}}), "a canvas declares no tincture.build"},
+        {canvas(%{"frame" => %{"placement" => "canvas", "capabilities" => ["fullscreen"]}}),
+         "a canvas declares no frame capability"},
+        {canvas(%{"actions" => ["execution.list"]}), "a canvas declares no system action"},
+        {canvas(%{"cards" => [%{"name" => "runs", "title" => "Runs"}]}),
+         "a canvas declares no card"},
+        {canvas() |> update_in(["tincture"], &Map.delete(&1, "canvas")),
+         "a canvas declares tincture.canvas, its module and its toolkit"}
+      ]
+
+      for {manifest, sentence} <- refusals, do: canvas_refused(manifest, sentence)
+
+      # Each says which: no two kinds of refusal share a sentence.
+      sentences = refusals |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
+      assert length(sentences) == length(refusals) - 1
+
+      # Declared as empty, each is no declaration at all.
+      assert {:ok, _} =
+               Rules.validate_declaration(
+                 canvas(%{"connect" => [], "actions" => [], "cards" => []}, %{
+                   "dependencies" => %{"static" => []}
+                 })
+               )
+    end
+
+    test "a canvas declaring background is refused" do
+      canvas_refused(
+        canvas(%{"frame" => %{"placement" => "canvas", "background" => true}}),
+        "a canvas does not run in the background; it runs only while shown"
+      )
+
+      assert {:ok, %Tincture{frame: %{background: false}}} =
+               Rules.validate_declaration(
+                 canvas(%{"frame" => %{"placement" => "canvas", "background" => false}})
+               )
+    end
+
+    test "a canvas declaring tincture.entry is refused: its entry is its module" do
+      for entry <- ["index.html", "canvas.js", ""] do
+        canvas_refused(
+          canvas(%{"entry" => entry}),
+          "a canvas's entry is its module, so it declares no tincture.entry"
+        )
+      end
+    end
+
+    test "a module outside the version, with a scheme or of another type, and toolkit 2, are refused" do
+      module =
+        "tincture.canvas.module is a relative path with no .. and no scheme, ending .js or .mjs"
+
+      for bad <- [
+            "../canvas.js",
+            "lib/../../canvas.js",
+            "/canvas.js",
+            "https://cdn.example/canvas.js",
+            "//cdn.example/canvas.js",
+            "data:text/javascript,alert(1)",
+            "javascript:void(0).js",
+            "lib//canvas.js",
+            "canvas.html",
+            "canvas.ts",
+            "canvas.JS",
+            "canvas",
+            "",
+            "lib\\canvas.js"
+          ] do
+        canvas_refused(canvas(%{"canvas" => %{"module" => bad, "toolkit" => 1}}), module)
+      end
+
+      for toolkit <- [0, 2, -1] do
+        canvas_refused(
+          canvas(%{"canvas" => %{"module" => "canvas.js", "toolkit" => toolkit}}),
+          "tincture.canvas.toolkit is one of 1"
+        )
+      end
+    end
+
+    test "a canvas block on a placement other than canvas is refused" do
+      for frame <- [%{"placement" => "float"}, %{"placement" => "desktop"}, %{}] do
+        manifest = canvas(%{"frame" => frame})
+
+        assert Rules.validate_declaration(manifest) ==
+                 {:error,
+                  {:invalid_tincture,
+                   "tincture.canvas is declared only by a canvas (tincture.frame.placement canvas)"}}
+      end
+    end
+
+    test "a canvas reads only streams that declare a shape, each feed by its name, once" do
+      table = canvas_table()
+
+      ok =
+        streams_of([%{"name" => "runs.changes"}, %{"name" => "feed.results", "subject" => "btc"}])
+
+      assert Rules.check_canvas_streams(ok, table) == :ok
+      assert Rules.check_streams(ok, table) == :ok
+      assert Compendium.tincture_check_canvas_streams(ok, table) == :ok
+
+      two_feeds =
+        streams_of([
+          %{"name" => "feed.results", "subject" => "btc"},
+          %{"name" => "feed.results", "subject" => "eth"}
+        ])
+
+      assert Rules.check_canvas_streams(two_feeds, table) == :ok
+
+      for {entries, sentence} <- [
+            {[%{"name" => "executions.deltas", "subject" => "*"}],
+             "tincture.streams names executions.deltas, which a canvas cannot read: " <>
+               "the stream declares no shape"},
+            {[%{"name" => "builds.progress"}],
+             "tincture.streams names builds.progress, which no provider declares"},
+            {[%{"name" => "feed.results"}],
+             "tincture.streams feed.results: a canvas names the feed it reads as the subject"},
+            {[%{"name" => "feed.results", "subject" => "*"}],
+             "tincture.streams feed.results: a canvas names each feed it reads, never \"*\" for any"},
+            {[%{"name" => "feed.results", "subject" => "BTC:usd"}],
+             "tincture.streams feed.results: the subject must be a feed's name"},
+            {[
+               %{"name" => "feed.results", "subject" => "btc"},
+               %{"name" => "feed.results", "subject" => "btc"}
+             ], "tincture.streams declares a stream twice"},
+            {[%{"name" => "runs.changes"}, %{"name" => "runs.changes"}],
+             "tincture.streams declares a stream twice"}
+          ] do
+        assert Rules.check_canvas_streams(streams_of(entries), table) ==
+                 {:error, {:invalid_tincture, "tincture.frame.placement canvas: " <> sentence}}
+      end
+    end
+
+    test "a canvas's files hold its module and no page, as typed refusals" do
+      {:ok, declaration} = Rules.validate_declaration(canvas())
+
+      assert Rules.check_canvas_files(declaration, ["canvas.js", "data.json"]) == :ok
+
+      for paths <- [["other.js"], []] do
+        assert Rules.check_canvas_files(declaration, paths) ==
+                 {:error,
+                  {:invalid_tincture,
+                   "the canvas's module canvas.js is not among the version's files"}}
+      end
+
+      for page <- ["index.html", "nested/page.htm", "src/preview.HTML"] do
+        assert Rules.check_canvas_files(declaration, ["canvas.js", page]) ==
+                 {:error,
+                  {:invalid_tincture,
+                   "#{page} is a page, and a canvas holds none: its host page is CYFR's"}}
+      end
+
+      # Another placement's files are no canvas's to hold.
+      {:ok, float} =
+        Rules.validate_declaration(%{"tincture" => %{"frame" => %{"placement" => "float"}}})
+
+      assert Rules.check_canvas_files(float, ["index.html"]) == :ok
+
+      assert Compendium.tincture_check_canvas_files(declaration, ["index.html"]) ==
+               Rules.check_canvas_files(declaration, ["index.html"])
+    end
+
+    test "a canvas's module is read from its block, and a canvas naming none is refused" do
+      assert Rules.canvas_module(canvas()) == {:ok, "canvas.js"}
+
+      for block <- [nil, "canvas.js", %{"toolkit" => 1}, %{"module" => ""}, %{"module" => 7}] do
+        manifest = put_in(canvas(), ["tincture", "canvas"], block)
+
+        assert Rules.canvas_module(manifest) ==
+                 {:error,
+                  {:invalid_tincture, "a canvas's entry is its module, and it names none"}}
+
+        assert Compendium.tincture_canvas_module(manifest) == Rules.canvas_module(manifest)
+      end
+
+      assert {:error, {:invalid_tincture, _}} = Rules.canvas_module(%{})
     end
   end
 

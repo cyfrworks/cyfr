@@ -143,7 +143,8 @@ outside it is refused.
 | Block | Keys |
 |---|---|
 | `frame` | `background`, `capabilities`, `placement` |
-| `frame.placement` | one of `float`, `desktop` |
+| `frame.placement` | one of `float`, `desktop`, `canvas` |
+| `canvas` | `module`, `toolkit` |
 | `cards[]` | `buttons`, `image`, `list`, `name`, `number`, `source`, `stream`, `title` |
 | `cards[].buttons[]` | `action`, `args`, `label` |
 | `streams[]` | `name`, `subject` |

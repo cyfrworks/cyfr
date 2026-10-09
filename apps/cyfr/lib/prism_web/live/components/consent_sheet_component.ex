@@ -2900,7 +2900,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     <div class="consent-sheet__row" data-row="frame" data-node={@row["node"]}>
       <.node_line row={@row} />
       <div>May use: {list_label(@row["values"]["capabilities"], "no extra capability")}</div>
-      <div>Placed: {@row["values"]["placement"] || "where the shell places it"}</div>
+      <div>{placement_label(@row["values"]["placement"])}</div>
       <div>
         {if @row["values"]["background"],
           do: "Keeps running in the background when hidden",
@@ -3246,6 +3246,11 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp subject_label("*"), do: "— any subject"
   defp subject_label(subject) when is_binary(subject), do: "— for #{subject}"
   defp subject_label(_none), do: "— its own"
+
+  # A canvas is read by what it reads: its streams are the rows below.
+  defp placement_label("canvas"), do: "Can be a canvas, which reads the streams listed here"
+  defp placement_label(placement) when is_binary(placement), do: "Placed: #{placement}"
+  defp placement_label(_none), do: "Placed: where the shell places it"
 
   defp field_label("egress", "domains"), do: "Talks to"
   defp field_label("egress", "methods"), do: "Methods"

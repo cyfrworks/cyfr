@@ -16,6 +16,7 @@ const (
 	Aqua               = "aqua"
 	Athanor            = "athanor"
 	Build              = "build"
+	Canvas             = "canvas"
 	Card               = "card"
 	Component          = "component"
 	Confirmation       = "confirmation"
@@ -85,6 +86,11 @@ const (
 	BuildStatus                     = "status"
 	BuildToolchains                 = "toolchains"
 	BuildValidate                   = "validate"
+	CanvasActivate                  = "activate"
+	CanvasCatalog                   = "catalog"
+	CanvasRestore                   = "restore"
+	CanvasVersions                  = "versions"
+	CanvasWrite                     = "write"
 	CardPress                       = "press"
 	CardRefresh                     = "refresh"
 	ComponentCategories             = "categories"
@@ -313,6 +319,7 @@ var Actions = map[string][]string{
 	"aqua":                {"create", "delete", "get", "list", "reset", "skill_create", "skill_delete", "skill_get", "skill_list", "skill_reset", "skill_update", "status", "update"},
 	"athanor":             {"archive", "create", "destroy", "get", "list", "pair", "provision", "purge", "rename", "settings", "unarchive"},
 	"build":               {"compile", "status", "toolchains", "validate"},
+	"canvas":              {"activate", "catalog", "restore", "versions", "write"},
 	"card":                {"press", "refresh"},
 	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
 	"confirmation":        {"cancel", "confirm", "pending", "reauth"},
@@ -872,6 +879,89 @@ func (args BuildValidateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: BuildValidate, fields: fields(args)})
+}
+
+// CanvasActivateArgs carries arguments for canvas.activate.
+type CanvasActivateArgs struct {
+	// activate: the canvas's name
+	Canvas string `json:"canvas"`
+	// activate: the version the glass trialled
+	Version string `json:"version"`
+	// activate: the id of the frame the version was trialled in
+	Frame string `json:"frame"`
+	// activate: what the trial answered; only a tree activates
+	Outcome string `json:"outcome"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args CanvasActivateArgs) MarshalJSON() ([]byte, error) {
+	type fields CanvasActivateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: CanvasActivate, fields: fields(args)})
+}
+
+// CanvasCatalogArgs carries arguments for canvas.catalog.
+type CanvasCatalogArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args CanvasCatalogArgs) MarshalJSON() ([]byte, error) {
+	type fields CanvasCatalogArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: CanvasCatalog, fields: fields(args)})
+}
+
+// CanvasRestoreArgs carries arguments for canvas.restore.
+type CanvasRestoreArgs struct {
+	// restore: the canvas's name
+	Canvas string `json:"canvas"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args CanvasRestoreArgs) MarshalJSON() ([]byte, error) {
+	type fields CanvasRestoreArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: CanvasRestore, fields: fields(args)})
+}
+
+// CanvasVersionsArgs carries arguments for canvas.versions.
+type CanvasVersionsArgs struct {
+	// versions: the canvas's name
+	Canvas string `json:"canvas"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args CanvasVersionsArgs) MarshalJSON() ([]byte, error) {
+	type fields CanvasVersionsArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: CanvasVersions, fields: fields(args)})
+}
+
+// CanvasWriteArgs carries arguments for canvas.write.
+type CanvasWriteArgs struct {
+	// write: the canvas's name, a component name; a new name is a new canvas
+	Name string `json:"name"`
+	// write: the canvas's module, the JavaScript the toolkit runs (at most 262144 bytes)
+	Module string `json:"module"`
+	// write: the streams the canvas reads, [{name, subject}], from catalog's streams; a feed's results name the feed as the subject
+	Streams any `json:"streams"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args CanvasWriteArgs) MarshalJSON() ([]byte, error) {
+	type fields CanvasWriteArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: CanvasWrite, fields: fields(args)})
 }
 
 // CardPressArgs carries arguments for card.press.

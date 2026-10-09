@@ -11,14 +11,15 @@ defmodule Prima.Manifest do
   representations (nil, JSON string, map) into a map. `validate/2` holds a
   decoded manifest to the schema; the `needs`, `caps` and `provides`
   blocks are `Prima.Manifest.Needs`, `Prima.Manifest.Caps` and
-  `Prima.Manifest.Provides`, and the tincture's
-  frame, cards, streams and actions `Prima.Manifest.Tincture`. Which storage paths a
+  `Prima.Manifest.Provides`, the tincture's frame, canvas, cards,
+  streams and actions `Prima.Manifest.Tincture`, and the operations'
+  result shapes `Prima.Manifest.Results`. Which storage paths a
   guest may name is the storage boundary's fact, so the validator takes
   that predicate as an argument (`Arca.Storage.valid_guest_path?/1` at
   every caller) and restates nothing about the layout.
   """
 
-  alias Prima.Manifest.{Caps, Needs, Provides, Tincture}
+  alias Prima.Manifest.{Caps, Needs, Provides, Results, Tincture}
 
   # The closed top-level key roster — every field a manifest may carry,
   # which is also the roster component-guide.md documents. Identity fields
@@ -30,6 +31,7 @@ defmodule Prima.Manifest do
     needs caps dependencies tincture
     schema examples defaults forked_from
     contracts agent provides
+    results
   )
 
   # A contract is `<family>/<name>@<major>`: the operations a component
@@ -72,7 +74,10 @@ defmodule Prima.Manifest do
 
       * unknown top-level keys;
       * malformed `needs` or `caps` blocks;
-      * malformed `tincture`, `contracts` or `agent` blocks;
+      * a malformed `tincture` block;
+      * a malformed `results` block (`Prima.Manifest.Results.validate/1`),
+        which any component type may carry;
+      * malformed `contracts` or `agent` blocks;
       * a malformed `dependencies` block, which feeds activation-graph and
         release-digest validation;
       * a malformed `provides` block, or one naming a dependency
@@ -90,6 +95,7 @@ defmodule Prima.Manifest do
          :ok <- Needs.validate(manifest),
          :ok <- Caps.validate(manifest, storage_path_ok?),
          :ok <- validate_tincture_block(manifest),
+         :ok <- validate_results_block(manifest),
          :ok <- validate_contracts_block(manifest),
          :ok <- validate_agent_block(manifest),
          :ok <- validate_dependencies_block(manifest),
@@ -173,6 +179,17 @@ defmodule Prima.Manifest do
             "Known keys: #{Enum.join(@known_keys, ", ")}"}}
     end
   end
+
+  # The shape of what each operation answers. Any component type may
+  # declare it; a feed's binding is what reads it.
+  defp validate_results_block(%{"results" => block}) do
+    case Results.validate(block) do
+      {:ok, _shapes} -> :ok
+      {:error, {:invalid_results, _sentence}} = refusal -> refusal
+    end
+  end
+
+  defp validate_results_block(_manifest), do: :ok
 
   defp validate_contracts_block(%{"contracts" => list}) when is_list(list) do
     case Enum.reject(list, &(is_binary(&1) and Regex.match?(@contract_pattern, &1))) do

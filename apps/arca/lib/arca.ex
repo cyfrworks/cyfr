@@ -128,6 +128,7 @@ defmodule Arca do
       BuildRecords,
       Cache,
       Cache.Keys,
+      CanvasVersions,
       CarryActions,
       CipherRotation,
       ComponentStorage,

@@ -10,7 +10,9 @@ defmodule Compendium do
 
   The functions below are the domain's door for callers outside it: the
   tincture rules (`Compendium.Tincture` and the frame's,
-  `Compendium.Tincture.Rules`); component inspection,
+  `Compendium.Tincture.Rules`) and the grant revision a frame opens
+  under; a canvas's versions and what a canvas may read
+  (`Compendium.Canvas`); component inspection,
   resolution, activation and blobs for the execution domain; the
   component facts the assistant reads — its model catalysts, its agents,
   skills and agent sources and the athanor's own formulas — with the path
@@ -143,6 +145,108 @@ defmodule Compendium do
   @spec tincture_check_streams(Prima.Manifest.Tincture.t(), [Prima.Provider.Stream.t()]) ::
           :ok | {:error, Rules.refusal()}
   defdelegate tincture_check_streams(declaration, streams), to: Rules, as: :check_streams
+
+  @doc """
+  Whether every stream a canvas's declaration opens is one a canvas may
+  read (`Compendium.Tincture.Rules.check_canvas_streams/2`).
+  """
+  @spec tincture_check_canvas_streams(Prima.Manifest.Tincture.t(), [Prima.Provider.Stream.t()]) ::
+          :ok | {:error, Rules.refusal()}
+  defdelegate tincture_check_canvas_streams(declaration, streams),
+    to: Rules,
+    as: :check_canvas_streams
+
+  @doc """
+  Whether a canvas version's files hold its module and no page of its own
+  (`Compendium.Tincture.Rules.check_canvas_files/2`).
+  """
+  @spec tincture_check_canvas_files(Prima.Manifest.Tincture.t(), [String.t()]) ::
+          :ok | {:error, Rules.refusal()}
+  defdelegate tincture_check_canvas_files(declaration, paths),
+    to: Rules,
+    as: :check_canvas_files
+
+  @doc """
+  The module a canvas's manifest names, which is its entry
+  (`Compendium.Tincture.Rules.canvas_module/1`).
+  """
+  @spec tincture_canvas_module(term()) :: {:ok, String.t()} | {:error, Rules.refusal()}
+  defdelegate tincture_canvas_module(manifest), to: Rules, as: :canvas_module
+
+  @doc "The toolkit majors a canvas may name (`Compendium.Tincture.Rules.toolkit_majors/0`)."
+  @spec tincture_toolkit_majors() :: [pos_integer()]
+  defdelegate tincture_toolkit_majors(), to: Rules, as: :toolkit_majors
+
+  @doc "A canvas's one Content Security Policy (`Compendium.Tincture.Rules.canvas_page_csp/1`)."
+  @spec tincture_canvas_page_csp(Rules.canvas_csp_opts()) :: String.t()
+  defdelegate tincture_canvas_page_csp(opts), to: Rules, as: :canvas_page_csp
+
+  @doc "A canvas frame's `sandbox` tokens (`Compendium.Tincture.Rules.canvas_sandbox_tokens/0`)."
+  @spec tincture_canvas_sandbox_tokens() :: [String.t()]
+  defdelegate tincture_canvas_sandbox_tokens(), to: Rules, as: :canvas_sandbox_tokens
+
+  @doc """
+  The grant revision a tincture's frame opens under: the head revision of
+  the tincture's one active owner profile, the consent the shell's
+  invocations root on, or 0 while the tincture holds none. `reference` is
+  the tincture's name-level reference (`tincture:<publisher>.<name>`), the
+  source its profiles are keyed by.
+
+  `{:error, :ungranted}` while that owner profile waits for the person to
+  consent again, so nothing opens or activates under it, and
+  `{:error, :unavailable}` when consent cannot be read.
+  """
+  @spec tincture_grant_revision(Context.t(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :ungranted | :unavailable}
+  def tincture_grant_revision(%Context{} = ctx, reference) when is_binary(reference) do
+    case Sanctum.Consent.profiles(ctx, reference) do
+      {:ok, entries} ->
+        case Prima.Authority.RootSelect.select(entries, :default) do
+          {:ok, %{id: profile_id}} -> head_revision(ctx, profile_id)
+          {:error, {:profile_unavailable, :needs_consent}} -> {:error, :ungranted}
+          {:error, _no_active_owner} -> {:ok, 0}
+        end
+
+      {:error, _unreadable} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp head_revision(ctx, profile_id) do
+    case Sanctum.Consent.head_consent(ctx, profile_id) do
+      {:ok, %{revision: revision}} -> {:ok, revision}
+      {:error, :not_found} -> {:ok, 0}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Canvases (`Compendium.Canvas`)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  A canvas's versions document and its revision, read under the caller's
+  context (`Compendium.Canvas.versions/2`): which version a glass opens,
+  which one is kept and which validation last failed. Refusals are the
+  `canvas` tool's.
+  """
+  @spec canvas_versions(Context.t(), String.t()) ::
+          {:ok,
+           %{
+             canvas: String.t(),
+             document: Arca.CanvasVersions.document(),
+             revision: non_neg_integer()
+           }}
+          | {:error, term()}
+  defdelegate canvas_versions(ctx, name), to: Compendium.Canvas, as: :versions
+
+  @doc """
+  What a canvas may read: the toolkit majors and every canvas-readable
+  stream with its subject grammar, shape, filter and whether it refreshes
+  (`Compendium.Canvas.catalog/1`).
+  """
+  @spec canvas_catalog(Context.t()) :: {:ok, Compendium.Canvas.catalog()}
+  defdelegate canvas_catalog(ctx), to: Compendium.Canvas, as: :catalog
 
   # ---------------------------------------------------------------------------
   # The layout (`Compendium.Providers.Layout`)

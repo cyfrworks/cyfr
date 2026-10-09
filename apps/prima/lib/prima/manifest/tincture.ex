@@ -4,13 +4,17 @@
 defmodule Prima.Manifest.Tincture do
   @moduledoc """
   What a tincture declares about its frame, beside its entry and its
-  `connect` origins: four blocks of the manifest's `tincture` object, and
+  `connect` origins: five blocks of the manifest's `tincture` object, and
   their digest.
 
     * `frame` — `capabilities` (names; which names exist, and what each
       opens, are `Compendium.Tincture.Rules`'), `placement` (a name, or
       absent for the shell's default) and `background` (a boolean,
       default false).
+    * `canvas` — a canvas's `module` (a path) and the `toolkit` major it
+      is drawn by (an integer), exactly those two. Which paths and majors
+      it may name, and that it is declared exactly when the placement is
+      `canvas`, are the rules'.
     * `cards` — each a `name`, a `title`, the projection fields its
       `number` and short `list` show, an `image` (a path inside the
       version), its `buttons` (a `label`, the system `action` it invokes
@@ -33,9 +37,10 @@ defmodule Prima.Manifest.Tincture do
   domain's (`Compendium.Tincture.Rules.validate_declaration/1`), which
   answers this struct.
 
-  `digest/1` is taken over the canonical JSON of the four blocks
-  (`Prima.JCS`): sets sorted and deduplicated, absent fields omitted,
-  cards in their declared order, each with its source. The consent shape
+  `digest/1` is taken over the canonical JSON of the blocks
+  (`Prima.JCS`): sets sorted and deduplicated, absent fields omitted (the
+  `canvas` block among them, written only by a canvas), cards in their
+  declared order, each with its source. The consent shape
   carries it as `tincture_digest` (`Sanctum.Consent.ShapeDerivation`), and
   a stream grant binds to it, so a version that declares more, or a card
   that runs something else, asks again.
@@ -49,6 +54,12 @@ defmodule Prima.Manifest.Tincture do
             background: boolean()
           }
     defstruct capabilities: [], placement: nil, background: false
+  end
+
+  defmodule Canvas do
+    @moduledoc "A canvas's block: the module the toolkit runs and the toolkit major that draws it."
+    @type t :: %__MODULE__{module: String.t(), toolkit: integer()}
+    defstruct [:module, :toolkit]
   end
 
   defmodule Button do
@@ -107,6 +118,7 @@ defmodule Prima.Manifest.Tincture do
 
   @type t :: %__MODULE__{
           frame: Frame.t(),
+          canvas: Canvas.t() | nil,
           cards: [Card.t()],
           streams: [Stream.t()],
           actions: [String.t()]
@@ -114,13 +126,14 @@ defmodule Prima.Manifest.Tincture do
 
   # `struct/1` rather than `%Frame{}`: the nested module is defined as this
   # body runs, after the struct literal would have been expanded.
-  defstruct frame: struct(Frame), cards: [], streams: [], actions: []
+  defstruct frame: struct(Frame), canvas: nil, cards: [], streams: [], actions: []
 
   @typedoc "A refusal in `Prima.Manifest`'s block vocabulary: the tag and a sentence."
   @type error :: {:invalid_tincture, String.t()}
 
-  @blocks ~w(frame cards streams actions)
+  @blocks ~w(frame canvas cards streams actions)
   @frame_keys ~w(capabilities placement background)
+  @canvas_keys ~w(module toolkit)
   @card_keys ~w(name title number list image buttons stream source)
   @source_keys ~w(component operation args)
   @button_keys ~w(label action args)
@@ -142,7 +155,7 @@ defmodule Prima.Manifest.Tincture do
   @stream_name ~r/\A[a-z][a-z0-9_]{0,62}(\.[a-z][a-z0-9_]{0,62})+\z/
   @subject ~r/\A[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}\z/
 
-  @doc "The four `tincture` keys this module reads."
+  @doc "The `tincture` keys this module reads."
   @spec blocks() :: [String.t()]
   def blocks, do: @blocks
 
@@ -163,8 +176,8 @@ defmodule Prima.Manifest.Tincture do
   def literal_subject?(subject), do: is_binary(subject) and Regex.match?(@subject, subject)
 
   @doc """
-  Whether the manifest's `tincture` object declares any of the four
-  blocks. A tincture that declares none has no digest in its consent shape.
+  Whether the manifest's `tincture` object declares any of the blocks. A
+  tincture that declares none has no digest in its consent shape.
   """
   @spec declared?(term()) :: boolean()
   def declared?(%{"tincture" => %{} = tincture}),
@@ -173,17 +186,25 @@ defmodule Prima.Manifest.Tincture do
   def declared?(_manifest), do: false
 
   @doc """
-  The four blocks of a decoded manifest, held to their shapes. A manifest
-  with no `tincture` object, or one declaring none of them, answers the
-  empty declaration. The first shape that is wrong is the refusal.
+  The blocks of a decoded manifest, held to their shapes. A manifest with
+  no `tincture` object, or one declaring none of them, answers the empty
+  declaration. The first shape that is wrong is the refusal.
   """
   @spec from_manifest(term()) :: {:ok, t()} | {:error, error()}
   def from_manifest(%{"tincture" => %{} = tincture}) do
     with {:ok, frame} <- frame(Map.get(tincture, "frame")),
+         {:ok, canvas} <- canvas(Map.get(tincture, "canvas")),
          {:ok, actions} <- actions(Map.get(tincture, "actions")),
          {:ok, streams} <- streams(Map.get(tincture, "streams")),
          {:ok, cards} <- cards(Map.get(tincture, "cards")) do
-      {:ok, %__MODULE__{frame: frame, cards: cards, streams: streams, actions: actions}}
+      {:ok,
+       %__MODULE__{
+         frame: frame,
+         canvas: canvas,
+         cards: cards,
+         streams: streams,
+         actions: actions
+       }}
     end
   end
 
@@ -191,7 +212,9 @@ defmodule Prima.Manifest.Tincture do
 
   @doc """
   The canonical JSON-shaped map `digest/1` hashes: string keys, sets
-  sorted and deduplicated, absent optional fields omitted.
+  sorted and deduplicated, absent optional fields omitted. `"canvas"` is
+  written only when the block is declared, so the canonical form of a
+  tincture that is no canvas is what it was before the block existed.
   """
   @spec canonical(t()) :: map()
   def canonical(%__MODULE__{} = declaration) do
@@ -210,6 +233,7 @@ defmodule Prima.Manifest.Tincture do
         |> Enum.sort_by(&{&1["name"], &1["subject"] || ""}),
       "actions" => declaration.actions |> Enum.uniq() |> Enum.sort()
     }
+    |> put_present("canvas", canonical_canvas(declaration.canvas))
   end
 
   @doc "The declaration's digest: `sha256:` over the JCS encoding of `canonical/1`."
@@ -232,6 +256,11 @@ defmodule Prima.Manifest.Tincture do
     |> put_present("stream", card.stream)
     |> put_present("source", canonical_source(card.source))
   end
+
+  defp canonical_canvas(nil), do: nil
+
+  defp canonical_canvas(%Canvas{module: module, toolkit: toolkit}),
+    do: %{"module" => module, "toolkit" => toolkit}
 
   defp canonical_source(nil), do: nil
 
@@ -272,6 +301,31 @@ defmodule Prima.Manifest.Tincture do
   end
 
   defp frame(_other), do: refuse("tincture.frame must be an object")
+
+  # ---- canvas ----------------------------------------------------------------
+
+  defp canvas(nil), do: {:ok, nil}
+
+  defp canvas(%{} = canvas) do
+    module = Map.get(canvas, "module")
+    toolkit = Map.get(canvas, "toolkit")
+
+    cond do
+      (extra = extra_keys(canvas, @canvas_keys)) != [] ->
+        refuse("tincture.canvas declares unknown key(s): #{Enum.join(extra, ", ")}")
+
+      not is_binary(module) ->
+        refuse("tincture.canvas.module must be a string, got #{show(module)}")
+
+      not is_integer(toolkit) ->
+        refuse("tincture.canvas.toolkit must be an integer, got #{show(toolkit)}")
+
+      true ->
+        {:ok, %Canvas{module: module, toolkit: toolkit}}
+    end
+  end
+
+  defp canvas(_other), do: refuse("tincture.canvas must be an object of module and toolkit")
 
   # ---- actions ---------------------------------------------------------------
 

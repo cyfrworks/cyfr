@@ -8,6 +8,7 @@
 # in the same change.
 %{
   "Arca" => [
+    "Arca.CanvasVersions",
     "Arca.FencedPublication",
     "Arca.FencedPublication.Change",
     "Arca.Files",

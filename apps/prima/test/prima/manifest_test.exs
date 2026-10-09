@@ -186,13 +186,57 @@ defmodule Prima.ManifestTest do
 
       assert :ok = Manifest.validate(caps, fn _path -> true end)
     end
+
+    test "a results block is read on any component type, and refused as its owner spells it" do
+      results = %{
+        "quote" => %{
+          "type" => "object",
+          "fields" => %{"price" => %{"type" => "number"}, "symbol" => %{"type" => "string"}}
+        }
+      }
+
+      for type <- ~w(catalyst formula reagent tincture) do
+        assert :ok = validate(%{"type" => type, "results" => results})
+      end
+
+      assert :ok = validate(%{"results" => %{}})
+
+      # Whatever the block's owner refuses is the manifest's refusal, its
+      # sentence as the owner wrote it.
+      for block <- ["quote", [], %{"quote" => %{"type" => "nope"}}, %{"" => %{"type" => "json"}}] do
+        assert {:error, {:invalid_manifest, [{:invalid_results, sentence}]}} =
+                 validate(%{"results" => block})
+
+        assert {:error, {:invalid_results, ^sentence}} = Prima.Manifest.Results.validate(block)
+      end
+
+      assert {:error, {:invalid_manifest, [{:invalid_results, sentence}]}} =
+               validate(%{"results" => %{"quote" => %{"type" => "nope"}}})
+
+      assert sentence =~ "results.quote"
+
+      # In the refusal order, after the tincture block and before contracts.
+      assert {:error, {:invalid_manifest, [{:invalid_tincture, _}]}} =
+               validate(%{"tincture" => "nope", "results" => "nope"})
+
+      assert {:error, {:invalid_manifest, [{:invalid_results, _}]}} =
+               validate(%{"results" => "nope", "contracts" => "nope"})
+    end
   end
 
   describe "known_keys/0 and contracts/1" do
     test "the roster names every block the validator reads" do
-      for key <- ~w(needs caps dependencies tincture contracts agent provides name type version) do
+      for key <-
+            ~w(needs caps dependencies tincture contracts agent provides results name type version) do
         assert key in Manifest.known_keys()
       end
+    end
+
+    # The guide's field table documents every key of the roster, this one
+    # among them (`Cyfr.DocsDriftTest`, outside this application).
+    test "results is a key of the roster, so a manifest carrying it is no unknown key" do
+      assert "results" in Manifest.known_keys()
+      assert :ok = validate(%{"results" => %{}})
     end
 
     test "contracts are family/name@major names; a malformed block declares none" do

@@ -421,6 +421,34 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
+  # What a feed accepts is the envelope's data, held to the operation's
+  # result shape: a component author writes an operation's answer against
+  # this row, so the row itself says it.
+  test "component-guide's results row says a result shape describes the envelope's data" do
+    source = File.read!(Path.join(@repo_root, "component-guide.md"))
+
+    [_, section] =
+      Regex.run(~r/^### Field Reference\n(.*?)(?=^#)/ms, source) ||
+        flunk("component-guide.md has no ### Field Reference section")
+
+    assert [row] =
+             for(
+               line <- String.split(section, "\n"),
+               String.starts_with?(line, "| `results` |"),
+               do: line
+             ),
+           "component-guide.md's field table has no single `results` row"
+
+    assert row =~ "| `results` | object | Optional |"
+    assert row =~ ~s(`results[operation]` describes the `data` of the operation's)
+    assert row =~ ~s(`{"status", "data"}` envelope)
+    assert row =~ "a feed accepts only a 2xx envelope whose data matches"
+
+    assert row =~
+             "An error envelope, a non-2xx status or an output that is not an envelope is " <>
+               "refused, for catalysts and formulas alike"
+  end
+
   # ==========================================================================
   # integration-guide's two reference tables
   #
@@ -1343,6 +1371,10 @@ defmodule Cyfr.DocsDriftTest do
     assert_action_table("### The consent walk (`profile` tool)", "profile")
   end
 
+  test "the guide's canvas table is the canvas tool's operations" do
+    assert_action_table("### Canvases (`canvas` tool)", "canvas")
+  end
+
   # ==========================================================================
   # integration-guide's typed-errors table and the paragraph under it
   #
@@ -1599,6 +1631,7 @@ defmodule Cyfr.DocsDriftTest do
       "|---|---|",
       "| `frame` | #{list.(keys.(%Prima.Manifest.Tincture.Frame{}))} |",
       "| `frame.placement` | one of #{list.(Compendium.tincture_placements())} |",
+      "| `canvas` | #{list.(keys.(%Prima.Manifest.Tincture.Canvas{}))} |",
       "| `cards[]` | #{list.(keys.(%Prima.Manifest.Tincture.Card{name: "", title: ""}))} |",
       "| `cards[].buttons[]` | #{list.(keys.(%Prima.Manifest.Tincture.Button{label: "", action: ""}))} |",
       "| `streams[]` | #{list.(keys.(%Prima.Manifest.Tincture.Stream{name: ""}))} |",

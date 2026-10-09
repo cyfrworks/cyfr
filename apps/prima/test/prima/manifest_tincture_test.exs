@@ -3,7 +3,7 @@
 
 defmodule Prima.ManifestTinctureTest do
   @moduledoc """
-  The frame, cards, streams and actions blocks: their shapes, read into
+  The frame, canvas, cards, streams and actions blocks: their shapes, read into
   `Prima.Manifest.Tincture`, refused at every manifest write when wrong,
   and their digest — the same for two declarations that mean the same
   thing, and moved by a declaration that asks for more.
@@ -13,7 +13,7 @@ defmodule Prima.ManifestTinctureTest do
 
   alias Prima.Manifest
   alias Prima.Manifest.Tincture
-  alias Prima.Manifest.Tincture.{Button, Card, Frame, Source}
+  alias Prima.Manifest.Tincture.{Button, Canvas, Card, Frame, Source}
 
   @declared %{
     "frame" => %{"capabilities" => ["pointer_lock", "fullscreen"], "placement" => "desktop"},
@@ -212,6 +212,76 @@ defmodule Prima.ManifestTinctureTest do
     assert canonical["actions"] == ["execution.list", "records.get"]
     assert {:ok, Tincture.digest(decl)} == Prima.JCS.hash(canonical)
     refute Map.has_key?(hd(canonical["cards"]), "missing")
+  end
+
+  describe "a canvas's block" do
+    @canvas %{
+      "frame" => %{"placement" => "canvas"},
+      "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+      "streams" => [%{"name" => "runs.changes"}]
+    }
+
+    test "reads into the struct, and declares the tincture on its own" do
+      assert {:ok, %Tincture{canvas: %Canvas{module: "canvas.js", toolkit: 1}} = decl} =
+               Tincture.from_manifest(manifest(@canvas))
+
+      assert decl.frame.placement == "canvas"
+      assert Manifest.validate(manifest(@canvas), fn _ -> true end) == :ok
+      assert Tincture.declared?(manifest(%{"canvas" => @canvas["canvas"]}))
+      assert "canvas" in Tincture.blocks()
+
+      # Absent, it is no canvas block; which placement it goes with is the
+      # rules'.
+      assert {:ok, %Tincture{canvas: nil}} = Tincture.from_manifest(manifest(@declared))
+    end
+
+    test "is exactly a string module and an integer toolkit, or refused with a sentence" do
+      for block <- [
+            "canvas.js",
+            [],
+            %{"module" => "canvas.js"},
+            %{"toolkit" => 1},
+            %{"module" => 7, "toolkit" => 1},
+            %{"module" => nil, "toolkit" => 1},
+            %{"module" => "canvas.js", "toolkit" => "1"},
+            %{"module" => "canvas.js", "toolkit" => 1.0},
+            %{"module" => "canvas.js", "toolkit" => 1, "entry" => "index.html"}
+          ] do
+        sentence = refused(Map.put(@canvas, "canvas", block))
+        assert sentence =~ "tincture.canvas"
+      end
+    end
+
+    test "is written into the canonical form only when declared" do
+      {:ok, canvas} = Tincture.from_manifest(manifest(@canvas))
+
+      assert Tincture.canonical(canvas)["canvas"] == %{"module" => "canvas.js", "toolkit" => 1}
+
+      {:ok, moved} =
+        Tincture.from_manifest(manifest(put_in(@canvas, ["canvas", "module"], "next.js")))
+
+      refute Tincture.digest(moved) == Tincture.digest(canvas)
+
+      {:ok, other} =
+        Tincture.from_manifest(manifest(put_in(@canvas, ["canvas", "toolkit"], 2)))
+
+      refute Tincture.digest(other) == Tincture.digest(canvas)
+    end
+
+    # A tincture that is no canvas hashes as it did before the block
+    # existed, so no existing grant asks again for it: this digest is the
+    # JCS of the declaration's canonical form without a canvas key.
+    test "leaves every other declaration's canonical form and digest as they were" do
+      {:ok, decl} = Tincture.from_manifest(manifest(@declared))
+
+      refute Map.has_key?(Tincture.canonical(decl), "canvas")
+
+      assert Map.keys(Tincture.canonical(decl)) |> Enum.sort() ==
+               ~w(actions cards frame streams)
+
+      assert Tincture.digest(decl) ==
+               "sha256:ff63ce15bd9e46faabb41c2187639ad4a50d6582a0aa56fc18e6f7c22de4b994"
+    end
   end
 
   test "the name grammars the wire and the provider declarations share" do

@@ -5,8 +5,10 @@ defmodule Compendium.TinctureTest do
   @moduledoc """
   The tincture rules: which entry a tincture serves, answered to callers
   outside the domain as a typed refusal and inside it as a sentence; the
-  one immutable rule map the console and the HTTP adapter read; and the
-  connect-domain grammar, which is the shared manifest contract's.
+  one immutable rule map the console and the HTTP adapter read; the
+  publish check, a canvas version's included (its module present, no page
+  of its own, and only streams a canvas reads); and the connect-domain
+  grammar, which is the shared manifest contract's.
   """
 
   use ExUnit.Case, async: true
@@ -153,6 +155,124 @@ defmodule Compendium.TinctureTest do
 
         assert message =~ "#{name}: the stream does not take that subject"
       end
+    end
+  end
+
+  describe "a canvas version" do
+    defp canvas(tincture \\ %{}) do
+      %{
+        "type" => "tincture",
+        "tincture" =>
+          Map.merge(
+            %{
+              "frame" => %{"placement" => "canvas"},
+              "canvas" => %{"module" => "canvas.js", "toolkit" => 1}
+            },
+            tincture
+          )
+      }
+    end
+
+    test "a canvas's entry is the module its canvas block names, held to the same rule" do
+      assert {:ok, "canvas.js"} = Tincture.entry_of(canvas())
+      assert {:ok, "canvas.js"} = Compendium.tincture_entry(%{manifest: canvas()})
+
+      nested = canvas(%{"canvas" => %{"module" => "lib/canvas.mjs", "toolkit" => 1}})
+      assert {:ok, "lib/canvas.mjs"} = Tincture.entry_of(nested)
+      assert {:ok, "lib/canvas.mjs"} = Compendium.tincture_entry(nested)
+
+      # The block, not tincture.entry, names a canvas's entry.
+      assert {:ok, "canvas.js"} = Tincture.entry_of(canvas(%{"entry" => "index.html"}))
+
+      # A canvas that names no module has no entry, never the default page.
+      for block <- [nil, %{"toolkit" => 1}, %{"module" => "", "toolkit" => 1}] do
+        manifest = put_in(canvas(), ["tincture", "canvas"], block)
+
+        assert {:error, "a canvas's entry is its module, and it names none"} =
+                 Tincture.entry_of(manifest)
+
+        assert {:error, :invalid_entry} = Compendium.tincture_entry(manifest)
+      end
+
+      for {module, sentence} <- [
+            {"../canvas.js", "entry must not contain '..'"},
+            {".canvas.js", "entry must not be a dotfile"}
+          ] do
+        assert {:error, ^sentence} =
+                 Tincture.entry_of(canvas(%{"canvas" => %{"module" => module, "toolkit" => 1}}))
+      end
+
+      # Only a canvas reads its block: another placement keeps its entry.
+      assert {:ok, "index.html"} =
+               Tincture.entry_of(%{
+                 "tincture" => %{
+                   "frame" => %{"placement" => "float"},
+                   "canvas" => %{"module" => "canvas.js", "toolkit" => 1}
+                 }
+               })
+    end
+
+    test "holds a canvas to its module and to no page of its own" do
+      assert {:ok, 30} = Tincture.check_version(canvas(), [{"canvas.js", 10}, {"data.json", 20}])
+
+      # The module it names, and no other script, is its module.
+      for files <- [[{"other.js", 10}], []] do
+        assert {:error, "the canvas's module canvas.js is not among the version's files"} =
+                 Tincture.check_version(canvas(), files)
+      end
+
+      # A page anywhere in the version, served or not, in any case.
+      for page <- ["index.html", "nested/page.htm", "src/preview.HTML", "README.html"] do
+        assert {:error, message} = Tincture.check_version(canvas(), [{"canvas.js", 1}, {page, 1}])
+        assert message == "#{page} is a page, and a canvas holds none: its host page is CYFR's"
+      end
+
+      # A tincture that is no canvas serves its pages as before.
+      assert {:ok, 2} = Tincture.check_version(%{}, [{"index.html", 1}, {"a.js", 1}])
+    end
+
+    test "holds a canvas to its rules before its files, and to the streams a canvas may read" do
+      # The rules come first: a canvas declaring an entry never reaches its files.
+      assert {:error, message} =
+               Tincture.check_version(canvas(%{"entry" => "index.html"}), [{"index.html", 1}])
+
+      assert message ==
+               "tincture.frame.placement canvas: " <>
+                 "a canvas's entry is its module, so it declares no tincture.entry"
+
+      assert {:error, message} =
+               Tincture.check_version(canvas(%{"actions" => ["execution.list"]}), [
+                 {"canvas.js", 1}
+               ])
+
+      assert message == "tincture.frame.placement canvas: a canvas declares no system action"
+
+      # A stream every tincture may declare, but none whose declaration
+      # carries a shape: a canvas cannot read it.
+      shapeless = %{"name" => "mcp_servers.changes"}
+
+      assert {:error, message} =
+               Tincture.check_version(canvas(%{"streams" => [shapeless]}), [{"canvas.js", 1}])
+
+      assert message ==
+               "tincture.frame.placement canvas: tincture.streams names mcp_servers.changes, " <>
+                 "which a canvas cannot read: the stream declares no shape"
+
+      # The same stream on a tincture that is no canvas is admitted.
+      assert {:ok, 1} =
+               Tincture.check_version(%{"tincture" => %{"streams" => [shapeless]}}, [
+                 {"index.html", 1}
+               ])
+
+      # Which streams exist is still the providers' to say.
+      assert {:error, message} =
+               Tincture.check_version(canvas(%{"streams" => [%{"name" => "vault.changes"}]}), [
+                 {"canvas.js", 1}
+               ])
+
+      assert message =~ "vault.changes, which no provider declares"
+
+      assert {:ok, 1} = Tincture.check_version(canvas(%{"streams" => []}), [{"canvas.js", 1}])
     end
   end
 

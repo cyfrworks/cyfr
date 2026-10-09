@@ -356,7 +356,7 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Consent Sanctum.Context Sanctum.Egress Sanctum.Network
         Sanctum.Namespace Sanctum.Provisioning Sanctum.RegistryCredentials Sanctum.SignIn
-        Sanctum.VaultReader Sanctum.Webhook
+        Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.Webhook
       ),
       reason:
         "`Sanctum.Provisioning` is the first-need hook and the half of filling an " <>
@@ -367,7 +367,12 @@ defmodule Cyfr.Boundaries do
           "A person's push tokens are sealed and read by `Sanctum.RegistryCredentials`; " <>
           "removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
-          "(`Sanctum.Webhook.disable_for_component/2`). `Compendium` never names " <>
+          "(`Sanctum.Webhook.disable_for_component/2`). " <>
+          "`Sanctum.TinctureAuth` is a canvas activation's spend of the validation " <>
+          "credential its trial ran under (`consume_validation/3`, from " <>
+          "`Compendium.Canvas`), and nothing else of the frame credentials: the shell " <>
+          "mints them. A frame's grant revision is read through `Sanctum.Consent`'s own " <>
+          "entries (`profiles/2`, `head_consent/2`). `Compendium` never names " <>
           "`Sanctum.Tenancy`. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
@@ -1414,6 +1419,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.TinctureAccess" => [get_private: 3, get_public: 3, public_context: 1],
     "Sanctum.TinctureAuth" => [
+      consume_validation: 3,
       mint_asset_credential: 2,
       mint_frame_credential: 5,
       resume_frame: 2,

@@ -1178,6 +1178,50 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
   defp squish(text), do: text |> String.split() |> Enum.join(" ")
 
+  # ---------------------------------------------------------------------------
+  # The frame row's placement
+  # ---------------------------------------------------------------------------
+
+  defp frame_row_lines(ref, values) do
+    rows = [
+      %{
+        "kind" => "frame",
+        "node" => ref,
+        "narrowed" => false,
+        "values" => Map.merge(%{"capabilities" => [], "background" => false}, values)
+      }
+    ]
+
+    sheet(
+      %{source_ref: ref, candidates: [], needs: [], dependency_needs: [], rows: rows},
+      preview: keyed_preview(rows)
+    )
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([data-row="frame"] > div))
+    |> Enum.map(&squish(LazyHTML.text(&1)))
+  end
+
+  test "a canvas's frame row says it is a canvas, which reads the streams listed here" do
+    lines = frame_row_lines("tincture:local.sheet-canvas", %{"placement" => "canvas"})
+
+    assert "Can be a canvas, which reads the streams listed here" in lines
+    refute Enum.any?(lines, &String.starts_with?(&1, "Placed:"))
+  end
+
+  test "every other placement keeps its placed line" do
+    for {placement, line} <- [
+          {"float", "Placed: float"},
+          {"desktop", "Placed: desktop"},
+          {nil, "Placed: where the shell places it"}
+        ] do
+      values = if placement, do: %{"placement" => placement}, else: %{}
+      lines = frame_row_lines("tincture:local.sheet-placed", values)
+
+      assert line in lines
+      refute Enum.any?(lines, &(&1 =~ "canvas"))
+    end
+  end
+
   test "every verb of the walk is a registered profile action" do
     {:ok, tool} = Grimoire.get_tool("profile")
 

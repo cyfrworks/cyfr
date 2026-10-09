@@ -1133,6 +1133,18 @@ A typical live-data pipeline:
                                  receives data, renders the chart in the browser
 ```
 
+### Canvases (`canvas` tool)
+
+A canvas is a tincture whose placement is `canvas`: one page CYFR's toolkit draws from the canvas's module, which runs in a worker and reads only the streams its manifest declares (the [Tincture Guide](tincture-guide.md) lists the declaration). The `canvas` tool reads and writes a person's canvases. Which version a glass opens is the canvas's versions document, one per canvas in its athanor; every change publishes it at the revision it read, and a document published since refuses the change as a `conflict`, merging nothing.
+
+| Action | Key args | What it does |
+|--------|----------|--------------|
+| `catalog` | — | What a canvas may read: the toolkit majors, and each stream that declares a shape with its subject grammar, shape, filter and whether it refreshes. Shapes, never values |
+| `versions` | `canvas` | The canvas's versions document (`allocated`, `working`, `kept` and the last `failed` validation) and its revision. A canvas installed with none yet answers the empty document at revision 0 |
+| `write` | `name`, `module` (at most 256 KiB), `streams` (each a stream's name and, for a feed's results, the feed's name as its subject) | Allocate the next version, one patch above every version allocated, installed or shipped, then create that version whole, its manifest and its module, never over a version that exists, and register it. Answers the `canvas`, the `version` and the pinned `reference`. A refused declaration allocates nothing; a name installed as a tincture that is not a canvas is a `conflict`. It activates nothing: a glass validates the version first |
+| `activate` | `canvas`, `version`, `frame`, `outcome` (`tree`, `no_tree` or `died`) | Report a glass's trial of a version in the frame named. It spends that frame's validation credential for every outcome, and refuses `forbidden` (`not_validated`) without one. A tree makes the version the working one and keeps the one it replaces, once the canvas's grant is current (`consent_required` otherwise). A tree changes nothing for the version already working, and for a version older than the working one it changes nothing and answers `conflict`, since a newer version is working; any other outcome records the failure alone. Never from a chain |
+| `restore` | `canvas` | Make the kept version the working one again and keep the one it replaces, under today's grant (`consent_required` otherwise); `not_found` without a kept version. Never from a chain |
+
 ---
 
 ## Configuration

@@ -786,6 +786,48 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.sanctum_exports()["Sanctum.VaultReader"][:oauth_token] == 4
     end
 
+    # A canvas activation spends the validation credential its trial ran
+    # under; the component domain reaches the frame credentials for that
+    # spend alone, and the shell mints them.
+    test "the component domain spends a validation credential from the canvas activation alone" do
+      assert Boundaries.sanctum_exports()["Sanctum.TinctureAuth"][:consume_validation] == 3
+
+      callers =
+        for path <- beams(:cyfr),
+            Beams.production?(path),
+            {"Sanctum.TinctureAuth", :consume_validation, 3} in sanctum_reaches(
+              String.to_charlist(path)
+            ),
+            do: Path.basename(path, ".beam")
+
+      assert callers == ["Elixir.Compendium.Canvas"]
+
+      compendium =
+        for path <- beams(:cyfr),
+            Beams.production?(path),
+            name = Path.basename(path, ".beam"),
+            name == "Elixir.Compendium" or String.starts_with?(name, "Elixir.Compendium."),
+            {"Sanctum.TinctureAuth", function, arity} <- sanctum_reaches(String.to_charlist(path)),
+            uniq: true,
+            do: {function, arity}
+
+      assert compendium == [consume_validation: 3]
+
+      assert [row] =
+               for(
+                 %{into: "Sanctum", from: from} = row <- Boundaries.surfaces(),
+                 "apps/cyfr/lib/compendium/**/*.ex" in from,
+                 do: row
+               )
+
+      assert "Sanctum.TinctureAuth" in row.allow
+
+      assert row.reason =~
+               "`Sanctum.TinctureAuth` is a canvas activation's spend of the validation " <>
+                 "credential its trial ran under (`consume_validation/3`, from " <>
+                 "`Compendium.Canvas`)"
+    end
+
     # Who a person may send a copy to is the tenancy's answer: the Files
     # page's picker reads it, and nothing else of the host does.
     test "the host reads the people a person shares an athanor with from the Files page alone" do

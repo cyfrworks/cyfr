@@ -513,6 +513,7 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `contracts` | string[] | Catalysts (if they answer one) | Named operation sets the component answers on its `run` export, as `family/name@major` — `model/chat@1` is the one the host reads (see [Model catalysts](#model-catalysts-the-modelchat1-contract)) |
 | `agent` | object | Agents | The agent's catalyst, model, and policy (`auto` / `ask` sets). Only valid on `type` `"agent"` |
 | `provides` | object | Optional | Public configuration for a need of a dependency: keyed by a `dependencies.static` reference, then the dependency's need name, each a `destination` and string `values` (at most 4 KiB). The consent shows that need as satisfied by the publisher |
+| `results` | object | Optional | The shape of what each operation answers, keyed by operation name (at most 64, each 1 to 64 characters), in the shape grammar: `string`, `number`, `integer`, `boolean`, `time`, `enum`, `list`, `object` and `json`, any of them `nullable`. `results[operation]` describes the `data` of the operation's `{"status", "data"}` envelope, and a feed accepts only a 2xx envelope whose data matches. An error envelope, a non-2xx status or an output that is not an envelope is refused, for catalysts and formulas alike, so a formula feeding a canvas returns the same envelope. A feed's binding copies the shape when it is bound; it decides nothing a consent covers and is not part of the release digest |
 
 ### Fields by Type
 

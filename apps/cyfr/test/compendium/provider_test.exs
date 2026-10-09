@@ -1818,9 +1818,15 @@ defmodule Compendium.ProviderTest do
     end
 
     test "skill_list and skill_get serve the scrolls, shipped and the athanor's own", %{ctx: ctx} do
-      # The shipped scroll is read in place from the seed.
+      # The shipped scrolls are read in place from the seed.
       {:ok, shipped} = Provider.handle("aqua", ctx, %{"action" => "skill_list"})
-      assert [%{name: "capability-acquisition", description: line}] = shipped.skills
+
+      assert [
+               %{name: "canvas", description: canvas},
+               %{name: "capability-acquisition", description: line}
+             ] = shipped.skills
+
+      assert canvas =~ "canvas"
       assert line =~ "registry"
       refute Map.has_key?(shipped, :hint)
 
@@ -1841,7 +1847,7 @@ defmodule Compendium.ProviderTest do
         )
 
       {:ok, listing} = Provider.handle("aqua", ctx, %{"action" => "skill_list"})
-      assert Enum.map(listing.skills, & &1.name) == ["capability-acquisition", "pdf"]
+      assert Enum.map(listing.skills, & &1.name) == ["canvas", "capability-acquisition", "pdf"]
 
       {:ok, skill} = Provider.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
       assert skill.description == "fills PDF forms"

@@ -171,6 +171,42 @@ defmodule Aqua.SeedContractTest do
     assert untaught == [], Enum.join(untaught, "\n")
   end
 
+  # A canvas is the soul's own to write: it reads what a canvas may read
+  # and writes a version without a card, and the scroll it follows ships
+  # beside the capability-acquisition one.
+  test "the soul writes canvases: its three canvas keys are auto, and the shipped scrolls include canvas" do
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
+
+    for key <- ~w(canvas.catalog canvas.versions canvas.write) do
+      assert soul.tool_policy[key] == "auto", "#{key} is not auto on the soul"
+    end
+
+    roles =
+      for {name, key, _mode} <- seed_policy(),
+          name != Compendium.AquaPath.soul_name(),
+          String.starts_with?(key, "canvas."),
+          do: "#{name}: #{key}"
+
+    assert roles == []
+    refute Map.has_key?(soul.tool_policy, "canvas.activate")
+    refute Map.has_key?(soul.tool_policy, "canvas.restore")
+
+    skills = Path.join(@seed, "skills")
+    assert "canvas" in File.ls!(skills)
+    assert "capability-acquisition" in File.ls!(skills)
+
+    {:ok, meta, body} =
+      Compendium.AquaAgent.parse_frontmatter(
+        File.read!(Path.join([skills, "canvas", "SKILL.md"]))
+      )
+
+    assert Map.keys(meta) |> Enum.sort() == ["description", "name"]
+    assert meta["name"] == "canvas"
+    assert is_binary(meta["description"]) and meta["description"] != ""
+
+    for taught <- ["canvas.catalog", "feed.list", "layout.edit"], do: assert(body =~ taught)
+  end
+
   # ---------------------------------------------------------------------------
 
   defp problems(tool, action, granted) do

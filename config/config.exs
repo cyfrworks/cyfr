@@ -51,6 +51,9 @@ config :cyfr,
     # `compendium`: a person's layout document, which the desktop reads and
     # every edit, the console's or the assistant's, arranges through.
     Compendium.Providers.Layout,
+    # `compendium`: a person's canvases, their versions and what a canvas
+    # may read, beside the declaration a canvas version is held to.
+    Compendium.Providers.Canvas,
     # `emissary`: external MCP server management. `Emissary.External.Proxy`
     # is not here: it owns no tool of its own — the tools it discovers are
     # the upstream servers', reached through `Grimoire.Catalog` on a lookup

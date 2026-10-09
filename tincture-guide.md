@@ -46,7 +46,7 @@ A slot holds one tincture at one of three sizes:
 | `card` | the desktop draws one of the tincture's declared `cards`, as data (below) |
 | `full` | the tincture's own frame, at the slot's place |
 
-A tincture floats over the desktop only when its declaration names `frame.placement: "float"`, and only where the layout puts it. A tincture runs as a desktop only when it names `frame.placement: "desktop"`; a desktop draws other tinctures' cards and reaches nothing of its own, so it declares no `tincture.connect` origin, no `caps.egress` and no component dependency.
+A tincture floats over the desktop only when its declaration names `frame.placement: "float"`, and only where the layout puts it. A tincture runs as a desktop only when it names `frame.placement: "desktop"`; a desktop draws other tinctures' cards and reaches nothing of its own, so it declares no `tincture.connect` origin, no `caps.egress` and no component dependency. A tincture is a canvas only when it names `frame.placement: "canvas"` and declares `canvas` (its `module`, a `.js` or `.mjs` path inside the version that is its entry, and its `toolkit` major, `1`); a canvas holds no page of its own, reaches nothing of its own and runs only while it is shown, so it declares no `tincture.entry`, `tincture.connect` origin, `caps.egress`, component dependency, `tincture.build`, frame capability, `frame.background`, action or card, and it reads only streams that declare a shape, naming each feed it reads.
 
 ### Cards
 
@@ -188,7 +188,8 @@ data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
 | Block | Keys |
 |---|---|
 | `frame` | `background`, `capabilities`, `placement` |
-| `frame.placement` | one of `float`, `desktop` |
+| `frame.placement` | one of `float`, `desktop`, `canvas` |
+| `canvas` | `module`, `toolkit` |
 | `cards[]` | `buttons`, `image`, `list`, `name`, `number`, `source`, `stream`, `title` |
 | `cards[].buttons[]` | `action`, `args`, `label` |
 | `streams[]` | `name`, `subject` |
