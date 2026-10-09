@@ -1145,6 +1145,26 @@ A canvas is a tincture whose placement is `canvas`: one page CYFR's toolkit draw
 | `activate` | `canvas`, `version`, `frame`, `outcome` (`tree`, `no_tree` or `died`) | Report a glass's trial of a version in the frame named. It spends that frame's validation credential for every outcome, and refuses `forbidden` (`not_validated`) without one. A tree makes the version the working one and keeps the one it replaces, once the canvas's grant is current (`consent_required` otherwise). A tree changes nothing for the version already working, and for a version older than the working one it changes nothing and answers `conflict`, since a newer version is working; any other outcome records the failure alone. Never from a chain |
 | `restore` | `canvas` | Make the kept version the working one again and keep the one it replaces, under today's grant (`consent_required` otherwise); `not_found` without a kept version. Never from a chain |
 
+### Feeds (`feed` tool)
+
+A feed is one operation of an installed catalyst or formula, run with fixed arguments on an interval, whose result a canvas reads by the feed's name. Its result is the `data` of the operation's 2xx `{status, data}` envelope, held to the shape the component's manifest declares for that operation (`results`, the [Component Guide](component-guide.md)); an error envelope, a status outside 2xx or an output that is no envelope is refused, and a refused result changes nothing. A feed fires as a schedule does, under its profile, with the `schedule` origin, and an athanor holds at most 10 live feeds, counted apart from its schedules.
+
+| Action | Key args | What it does |
+|--------|----------|--------------|
+| `bind` | `name`, `label`, `reference` (versionless), `profile_id`, `operation`, `args` (a JSON object), `interval_minutes` (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60), `actions` (up to 8 of `{name, label, kind}`: `refresh` reruns the feed, `run` runs its own `operation` with its own `args` and publishes nothing) | Pin the installed version, copy the operation's declared result shape into the binding, check that the caller may bind the profile and that its grant admits runs on a schedule (`consent_required` otherwise, which raises the grant prompt), then create the feed. Answers its `binding` id, `feed` name, `label`, `interval_minutes` and `actions`, never its arguments. Refused `forbidden` (`feed_cap`) past 10 feeds, `conflict` for a name a live feed holds, `not_found` for a component not installed, `invalid_argument` for an operation with no declared result shape. It is external in kind, so the assistant always asks first |
+| `list` | — | The athanor's live feeds: each `binding`, `feed`, `label`, `reference`, `operation`, `interval_minutes`, `result_shape`, `actions` (`name`, `label`, `kind`), and the `revision` and time (`at`) of its last accepted result. Never a feed's arguments or a result's value |
+| `remove` | `binding` | Remove the feed. Its name is free again, and binding it again is a new binding id. A fire in flight finds it gone and writes nothing |
+| `press` | `binding`, `action_name` | Run one of the feed's actions under the feed's profile. A `refresh` claims a fresh revision, accepts the run's result as a fire does and publishes it, answering the `revision`; a `run` publishes nothing and answers its `execution_id` and `status`. A binding id that is no longer live is `not_found`, so a control drawn before a removal or rebind never presses the new binding. External only: Prism calls it, from a person's own press of a control the visible canvas declares |
+
+A canvas's code has no verb that binds, changes or refreshes a feed: it reads feeds, and only a person's press of a declared control, which Prism forwards, reaches `press`.
+
+Two streams carry what a canvas reads. Each declares a shape, which `canvas.catalog` lists, and refreshes: a subscriber is handed the current state first, each item marked `"refresh": true`, and then the live events. An event published while the current state is read arrives twice, so a subscriber deduplicates by `revision` for a feed and by `{execution_id, kind}` for a run.
+
+| Stream | Subject | Each event |
+|--------|---------|------------|
+| `feed.results` | A feed's name. It selects which payloads are delivered on the athanor's one feeds topic, and only a canvas's frame opens it | `binding`, `feed`, `revision`, `at`, `result`, `label`, `actions` (`name`, `label`): an accepted result, published only after it was kept. Never the feed's arguments. The refresh is the feed's last accepted result |
+| `runs.changes` | — | `kind` (`started`, `completed`, `failed`, `cancelled`), `execution_id`, `parent_execution_id`, `reference`, `component_type`, `duration_ms`, `error`. The refresh is the athanor's 20 newest runs |
+
 ---
 
 ## Configuration

@@ -198,6 +198,217 @@ defmodule CyfrWeb.SSETest do
     assert events(conn) == []
   end
 
+  describe "a stream that refreshes and filters" do
+    # A stream on the feeds topic whose refresh publishes a live event of
+    # the same revision before it answers: the event a refresh races.
+    defmodule Racing do
+      @moduledoc false
+      @behaviour Prima.Provider
+
+      @impl true
+      def service, do: "racing"
+
+      @impl true
+      def tools, do: []
+
+      @impl true
+      def handle(_tool, _ctx, _args), do: {:error, :unreachable}
+
+      @impl true
+      def streams do
+        [
+          %Prima.Provider.Stream{
+            name: "racing.results",
+            topic: :feeds,
+            projection: ~w(binding feed revision at result label actions),
+            subject: ~S"\A[a-z0-9][a-z0-9-]{0,47}\z",
+            deadline_bound: 60,
+            refresh: {__MODULE__, :refresh},
+            filter: "feed"
+          },
+          %Prima.Provider.Stream{
+            name: "racing.broken",
+            topic: :feeds,
+            projection: ~w(feed revision),
+            subject: ~S"\A[a-z0-9][a-z0-9-]{0,47}\z",
+            deadline_bound: 60,
+            refresh: {__MODULE__, :broken},
+            filter: "feed"
+          }
+        ]
+      end
+
+      def refresh(ctx, subject) do
+        actor = Sanctum.Context.actor(ctx)
+        current = CyfrWeb.SSETest.envelope(subject, 1, 10)
+
+        :ok =
+          Cyfr.Bus.broadcast(
+            actor,
+            Cyfr.Bus.feeds(actor),
+            Cyfr.Bus.FeedPublished.new(actor, current)
+          )
+
+        {:ok, [current]}
+      end
+
+      def broken(_ctx, _subject), do: {:error, :database_error}
+    end
+
+    defp feed_grant(subject, deadline_ms) do
+      %StreamGrant{
+        topic: :feeds,
+        projection: ~w(binding feed revision at result label actions),
+        subject: subject,
+        deadline: DateTime.add(DateTime.utc_now(), deadline_ms, :millisecond),
+        grant_id: "sgr_sse_feed"
+      }
+    end
+
+    # Deliver in a process of its own; answers the task and its pid once
+    # it is subscribed to the athanor's one feeds topic.
+    defp delivering_feed(ctx, name, grant) do
+      parent = self()
+
+      task =
+        Task.async(fn ->
+          send(parent, {:delivering, self()})
+
+          SSE.deliver(Plug.Test.conn(:post, "/_f/v1/stream"), ctx, grant,
+            name: name,
+            revalidate: standing(ctx)
+          )
+        end)
+
+      assert_receive {:delivering, pid}
+      wait_until(fn -> pid in subscribers(Cyfr.Bus.feeds(Context.actor(ctx))) end)
+      {task, pid}
+    end
+
+    defp published(actor, feed, revision, price) do
+      :ok =
+        Cyfr.Bus.broadcast(
+          actor,
+          Cyfr.Bus.feeds(actor),
+          Cyfr.Bus.FeedPublished.new(actor, envelope(feed, revision, price))
+        )
+    end
+
+    test "a refresh is delivered first and an event racing it is delivered, deduplicable",
+         %{ctx: ctx} do
+      Grimoire.Catalog.with_providers([Racing], fn ->
+        {task, _pid} = delivering_feed(ctx, "racing.results", feed_grant("btc", 500))
+
+        assert [refreshed, raced] = events(Task.await(task))
+
+        # The current state first, marked; then the event published while
+        # it was read, the same revision and the same fields, unmarked.
+        assert %{event: "racing.results", data: %{"refresh" => true, "revision" => 1}} =
+                 refreshed
+
+        assert %{event: "racing.results", data: %{"revision" => 1, "feed" => "btc"} = raced_data} =
+                 raced
+
+        refute Map.has_key?(raced_data, "refresh")
+        assert Map.delete(refreshed.data, "refresh") == raced_data
+      end)
+    end
+
+    test "a filtering stream delivers only its subject's payloads, refresh and live",
+         %{ctx: ctx, actor: actor} do
+      Arca.Test.Actor.ensure_athanor_row(ctx.athanor_id)
+      btc = accepted!(ctx, "btc", 11)
+      _eth = accepted!(ctx, "eth", 22)
+
+      {task, pid} = delivering_feed(ctx, "feed.results", feed_grant("btc", 500))
+
+      # The delivery holds the athanor's one feeds topic and no topic built
+      # from its subject.
+      held = Registry.keys(Cyfr.PubSub, pid)
+      assert Cyfr.Bus.feeds(actor) in held
+      refute Enum.any?(held, &String.contains?(&1, "btc"))
+
+      published(actor, "eth", 5, 33)
+      published(actor, "btc", 6, 44)
+
+      delivered = events(Task.await(task))
+      assert Enum.all?(delivered, &(&1.data["feed"] == "btc")), inspect(delivered)
+
+      assert [%{data: refreshed}, %{data: live}] = delivered
+      assert refreshed == Map.put(btc, "refresh", true)
+      assert %{"revision" => 6, "result" => %{"price" => 44}} = live
+      refute Map.has_key?(live, "refresh")
+    end
+
+    test "a refresh that cannot be read ends the stream, unavailable, through the same cleanup",
+         %{ctx: ctx} do
+      Grimoire.Catalog.with_providers([Racing], fn ->
+        conn =
+          SSE.deliver(Plug.Test.conn(:post, "/_f/v1/stream"), ctx, feed_grant("btc", 60_000),
+            name: "racing.broken",
+            revalidate: standing(ctx)
+          )
+
+        assert [%{event: "refusal", data: %{"class" => "unavailable"}}] = events(conn)
+        assert Registry.keys(Cyfr.PubSub, self()) == []
+      end)
+    end
+  end
+
+  @doc false
+  # An accepted result's envelope, as `Prima.Feed.envelope/5` builds it.
+  def envelope(feed, revision, price) do
+    %{
+      "binding" => "feed_01926f4e-8c1a-7b3d-9e2f-1a2b3c4d5e6f",
+      "feed" => feed,
+      "revision" => revision,
+      "at" => "2026-10-09T00:00:00Z",
+      "result" => %{"price" => price},
+      "label" => "Feed #{feed}",
+      "actions" => []
+    }
+  end
+
+  # A live feed of the context's athanor with one accepted result: its
+  # envelope as the stream's refresh answers it.
+  defp accepted!(ctx, name, price) do
+    {:ok, binding} =
+      Prima.Feed.Binding.validate(%{
+        "name" => name,
+        "label" => "Feed #{name}",
+        "reference" => "catalyst:local.markets",
+        "operation" => "quote",
+        "args" => %{},
+        "interval_minutes" => 5,
+        "result_shape" => %{"type" => "json"},
+        "actions" => []
+      })
+
+    actor = Context.actor(ctx)
+
+    {:ok, row} =
+      Arca.CronSchedule.create_feed(actor, %{
+        binding: binding,
+        resolved_reference: "catalyst:local.markets:1.0.0",
+        profile_id: "prof_sse",
+        cap: Crucible.Feeds.max_per_athanor()
+      })
+
+    {:ok, slot} = Arca.ControlPlane.member_slot()
+    {:ok, seq} = Arca.CronSchedule.claim_feed_seq(actor, row.id)
+
+    {:ok, envelope} =
+      Crucible.Feeds.accept(
+        ctx,
+        row.id,
+        seq,
+        %{"status" => 200, "data" => %{"price" => price}},
+        slot
+      )
+
+    envelope
+  end
+
   describe "a frame's stream slots" do
     setup do
       Cyfr.Test.Settings.put("frame_stream_max_concurrent", 1)

@@ -3,10 +3,12 @@
 
 defmodule Compendium.Cascade do
   @moduledoc """
-  Revokes profiles and disables webhook and cron registrations when the
-  last version of a component name is removed. Consent history and vault
-  entries remain. Called by registry deletion and pruning; the registry
-  owns removal of the component's bytes and row.
+  Revokes profiles and disables webhook and cron registrations (schedules
+  and feeds) when the last version of a component name is removed.
+  Consent history and vault entries remain. A registration whose removal
+  is refused is logged by its id and the reason, and the uninstall still
+  completes. Called by registry deletion and pruning; the registry owns
+  removal of the component's bytes and row.
   """
 
   require Logger
@@ -80,9 +82,7 @@ defmodule Compendium.Cascade do
           targets?(schedule.resolved_reference, name_ref) or
             targets?(Map.get(schedule, :reference), name_ref)
         end)
-        |> Enum.each(fn schedule ->
-          Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), schedule.id)
-        end)
+        |> Enum.each(&remove_registration(ctx, &1))
 
       {:error, reason} ->
         Logger.warning("[Compendium.Cascade] schedule sweep skipped: #{inspect(reason)}")
@@ -97,6 +97,27 @@ defmodule Compendium.Cascade do
 
       :ok
   end
+
+  # A schedule or feed of the removed component. A refused removal (a feed's
+  # on a member that lost its slot answers `:not_owner`) leaves the row
+  # behind, so it is said by the row's id and the reason, never its
+  # content, and the uninstall goes on.
+  defp remove_registration(ctx, schedule) do
+    case Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), schedule.id) do
+      {:ok, _removed} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Compendium.Cascade] registration #{schedule.id} was not removed: " <>
+            refusal_word(reason)
+        )
+    end
+  end
+
+  # The reason's name alone: a validation's map would carry its messages.
+  defp refusal_word({:validation, _errors}), do: "validation"
+  defp refusal_word(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   # Registrations may name a versioned or a name-level ref; both point at
   # the component that just went away.

@@ -31,6 +31,9 @@ defmodule Cyfr.IngressInventoryTest do
     # every surface reaches through the gate (the HTTP controller, the
     # console shell and `/mcp` render its outcomes; none calls run_root).
     "apps/cyfr/lib/crucible/tincture.ex" => :tincture,
+    # A press of a feed's action (`feed.press`), behind the gate call that
+    # asked for it, rooted at the feed binding's own profile.
+    "apps/cyfr/lib/crucible/feeds.ex" => :feed,
     # Formula children run under the authority CYFR holds for the parent's
     # attempt, never their own, admitted for the parent's runner.
     "apps/cyfr/lib/crucible/host/children.ex" => :in_chain,
@@ -101,6 +104,7 @@ defmodule Cyfr.IngressInventoryTest do
     apps/cyfr/lib/crucible/schedules/scheduler.ex
     apps/cyfr/lib/emissary/web/controllers/webhook_controller.ex
     apps/cyfr/lib/crucible/tincture.ex
+    apps/cyfr/lib/crucible/feeds.ex
   )
 
   # Where execution is defined, and where a formula's children are

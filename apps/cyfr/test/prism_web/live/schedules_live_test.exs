@@ -194,6 +194,75 @@ defmodule PrismWeb.SchedulesLiveTest do
     end
   end
 
+  describe "the feeds" do
+    test "lists each feed and never its arguments or result, reads them again on a publication, " <>
+           "and removes one through feed.remove",
+         %{view: view, ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      {feed, binding} = feed!(actor, "btc")
+      refute render(view) =~ feed.id
+
+      # A published result sends the page back to the feeds' list.
+      envelope =
+        Prima.Feed.envelope(feed.id, binding, 1, DateTime.utc_now(), %{"price" => "SECRET-PRICE"})
+
+      :ok =
+        Cyfr.Bus.broadcast(
+          actor,
+          Cyfr.Bus.feeds(actor),
+          Cyfr.Bus.FeedPublished.new(actor, envelope)
+        )
+
+      Prima.Test.Wait.wait_until(fn -> render(view) =~ feed.id end, 2_000, "the feed's row")
+
+      row = view |> element("#feed-#{feed.id}") |> render()
+
+      for shown <- [
+            "btc",
+            feed.id,
+            "catalyst:local.markets",
+            "quote",
+            "Every 5 minutes",
+            "Refresh"
+          ],
+          do: assert(row =~ shown, shown)
+
+      refute render(view) =~ "SECRET"
+
+      view
+      |> element(~s(button[phx-click="remove_feed"][phx-value-id="#{feed.id}"]))
+      |> render_click()
+
+      assert {:error, :not_found} = Arca.CronSchedule.get_feed(actor, feed.id)
+      refute render(view) =~ feed.id
+      assert :sys.get_state(view.pid).socket.assigns.flash["info"] == "Feed removed"
+    end
+  end
+
+  defp feed!(actor, name) do
+    {:ok, binding} =
+      Prima.Feed.Binding.validate(%{
+        "name" => name,
+        "label" => "Feed #{name}",
+        "reference" => "catalyst:local.markets",
+        "operation" => "quote",
+        "args" => %{"symbol" => "SECRET-ARG"},
+        "interval_minutes" => 5,
+        "result_shape" => %{"type" => "json"},
+        "actions" => [%{"name" => "refresh", "label" => "Refresh", "kind" => "refresh"}]
+      })
+
+    {:ok, feed} =
+      Arca.CronSchedule.create_feed(actor, %{
+        binding: binding,
+        resolved_reference: "catalyst:local.markets:1.0.0",
+        profile_id: "prof_schedules_page",
+        cap: Crucible.Feeds.max_per_athanor()
+      })
+
+    {feed, binding}
+  end
+
   defp assert_form(view, params) do
     assigns = :sys.get_state(view.pid).socket.assigns
     assert assigns.show_create

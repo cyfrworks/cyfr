@@ -50,6 +50,7 @@ defmodule Cyfr.Bus do
     Confirmation,
     Execution,
     ExecutionEvent,
+    FeedPublished,
     FileOffer,
     InstanceEntryChanged,
     LayoutPublished,
@@ -89,8 +90,13 @@ defmodule Cyfr.Bus do
       match: {:exact, "bus:executions"},
       template: "tenant:<athanor_id>:bus:executions",
       producers: ["Cyfr.TelemetryBridge"],
-      consumers: ["PrismWeb.ExecutionsLive", "PrismWeb.SchedulesLive", "PrismWeb.TopbarLive"],
-      reason: "an execution's lifecycle, for the athanor's own dashboards"
+      consumers: [
+        "PrismWeb.ExecutionsLive",
+        "PrismWeb.SchedulesLive",
+        "PrismWeb.TopbarLive",
+        "stream:runs.changes"
+      ],
+      reason: "an execution's lifecycle, for the athanor's own dashboards and canvases"
     },
     %{
       key: :requests,
@@ -196,6 +202,19 @@ defmodule Cyfr.Bus do
       producers: ["Crucible.Schedules.Scheduler"],
       consumers: ["PrismWeb.SchedulesLive"],
       reason: "a schedule's occurrence started or its run ended"
+    },
+    %{
+      key: :feeds,
+      scope: :tenant,
+      struct: FeedPublished,
+      match: {:exact, "bus:feeds"},
+      template: "tenant:<athanor_id>:bus:feeds",
+      producers: ["Crucible.Feeds", "Crucible.Schedules.Scheduler"],
+      consumers: ["stream:feed.results", "PrismWeb.SchedulesLive"],
+      reason:
+        "the athanor's feeds' accepted results, each after its accept committed, on one " <>
+          "topic: a canvas's grant names a feed as its subject and its delivery drops every " <>
+          "other feed's payload"
     },
     %{
       key: :vault_changed,
@@ -606,6 +625,13 @@ defmodule Cyfr.Bus do
   @doc "Schedule occurrences (`Cyfr.Bus.Schedules`)."
   @spec schedules(Actor.t()) :: String.t()
   def schedules(actor), do: prefix(actor) <> "bus:schedules"
+
+  @doc """
+  The athanor's accepted feed results (`Cyfr.Bus.FeedPublished`), every
+  feed on one topic.
+  """
+  @spec feeds(Actor.t()) :: String.t()
+  def feeds(actor), do: prefix(actor) <> "bus:feeds"
 
   @doc """
   The athanor's vault entries (`Cyfr.Bus.VaultEntryChanged`). The

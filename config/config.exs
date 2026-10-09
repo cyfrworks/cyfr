@@ -44,6 +44,8 @@ config :cyfr,
     # `crucible`: executions, schedules and a tincture's invocations.
     Crucible.Provider,
     Crucible.Schedules.Provider,
+    # `crucible`: an athanor's feeds, and the streams a canvas reads.
+    Crucible.Providers.Feed,
     Crucible.Providers.Tincture,
     # `compendium`: builds and components.
     Compendium.Builds.Provider,

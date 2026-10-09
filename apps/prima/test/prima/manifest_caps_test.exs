@@ -141,6 +141,40 @@ defmodule Prima.ManifestCapsTest do
     end
   end
 
+  describe "a feed write in the ask" do
+    defp asking_tools(type, tools),
+      do: %{"type" => type, "caps" => %{"tools" => tools}}
+
+    test "is refused at declaration for every type but an agent, by its exact name" do
+      for type <- ["formula", "catalyst", "reagent", "tincture", nil],
+          tool <- ["feed.bind", "feed.remove"] do
+        manifest = asking_tools(type, ["execution.run", tool])
+
+        assert {:error, {:invalid_caps, {:agent_only_tool, ^tool}}} =
+                 Caps.validate(manifest, &guest_path?/1),
+               "#{inspect(type)} named #{tool}"
+
+        # The write boundaries refuse it as one manifest failure, and a
+        # stored manifest asking it reads as no caps block at all.
+        assert {:error, {:invalid_manifest, [{:invalid_caps, {:agent_only_tool, ^tool}}]}} =
+                 Manifest.validate(manifest, &guest_path?/1)
+
+        assert Caps.from_manifest(manifest, &guest_path?/1) == nil
+      end
+    end
+
+    test "is an agent's to name, and a pattern is not refused here" do
+      assert :ok =
+               Caps.validate(asking_tools("agent", ["feed.bind", "feed.remove"]), &guest_path?/1)
+
+      # A pattern grants neither at expansion, whoever asks; the grammar
+      # admits it.
+      for type <- ["formula", "agent"], tools <- [["feed.*"], ["*"], ["feed.list"]] do
+        assert :ok = Caps.validate(asking_tools(type, tools), &guest_path?/1), inspect(tools)
+      end
+    end
+  end
+
   describe "canonical_storage_path?/1" do
     test "is the door's spelling, and the wildcard" do
       for path <- ["data/notes/", "data/report.md", "data", "*"],

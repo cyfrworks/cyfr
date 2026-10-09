@@ -25,7 +25,20 @@ defmodule CyfrWeb.SSE do
   to the one topic the grant admits (`Cyfr.Bus.granted_topic/2`), writes
   each payload projected to the grant's fields (`Prima.StreamGrant.project/2`)
   as one event of `Prima.TinctureWire`'s stream, and keeps enforcing the
-  grant until it closes the stream:
+  grant until it closes the stream.
+
+  The stream's declaration (`Prima.Provider.Stream`, read from the table
+  the gate admitted it from) may add two things. A `refresh` is read once
+  the subscription is in place and delivered before any live event, each
+  item projected and marked `"refresh": true`, so an event published
+  between the subscription and the read is delivered as well, after it,
+  and the subscriber deduplicates it; a refresh that cannot be read ends
+  the stream as `unavailable`. A `filter` names the payload field that
+  must equal the grant's subject: the topic is the row's one topic,
+  resolved with the subject set aside, and every refresh item and live
+  payload of another subject is dropped.
+
+  The grant is enforced until the stream closes:
 
     * at the grant's deadline;
     * when the caller's context no longer stands: it is established again
@@ -196,8 +209,9 @@ defmodule CyfrWeb.SSE do
     name = Keyword.fetch!(opts, :name)
     revalidate = Keyword.fetch!(opts, :revalidate)
     every = Keyword.get(opts, :revalidate_every, @revalidate_every_ms)
+    stream = declared(name)
     actor = Context.actor(ctx)
-    topic = Cyfr.Bus.granted_topic(actor, grant)
+    topic = Cyfr.Bus.granted_topic(actor, topic_grant(grant, stream))
     # The granted topic lies under the caller's own prefix by construction,
     # so the bus's tenant check cannot refuse it.
     :ok = Cyfr.Bus.subscribe(actor, topic)
@@ -212,6 +226,8 @@ defmodule CyfrWeb.SSE do
       grant: grant,
       name: name,
       payload: payload_struct(grant),
+      filter: stream && stream.filter,
+      refresh: stream && stream.refresh,
       revalidate: revalidate,
       every: every,
       max_backlog: Keyword.get(opts, :max_backlog, @max_backlog),
@@ -224,7 +240,7 @@ defmodule CyfrWeb.SSE do
 
     try do
       case Plug.Conn.chunk(conn, ": open\n\n") do
-        {:ok, conn} -> loop(conn, state)
+        {:ok, conn} -> refreshed(conn, state)
         {:error, _closed} -> conn
       end
     after
@@ -244,6 +260,71 @@ defmodule CyfrWeb.SSE do
   defp payload_struct(%StreamGrant{topic: key}) do
     Enum.find_value(Cyfr.Bus.topics(), fn row -> row.key == key && row.struct end)
   end
+
+  # The stream's declaration, from the table the gate admitted it from: its
+  # refresh and its filter. A name the table does not hold delivers as a
+  # stream with neither.
+  defp declared(name) do
+    case Grimoire.Catalog.lookup_stream(name) do
+      {:ok, {_provider, %Prima.Provider.Stream{} = stream}} -> stream
+      :miss -> nil
+    end
+  end
+
+  # A filtering stream's subject selects payloads on the row's one topic,
+  # so the topic is resolved with the subject set aside; it never names a
+  # topic of its own.
+  defp topic_grant(grant, %Prima.Provider.Stream{filter: filter}) when is_binary(filter),
+    do: %{grant | subject: nil}
+
+  defp topic_grant(grant, _stream), do: grant
+
+  # The stream's current state, read after the subscription is in place
+  # and delivered before any live event, each item marked `refresh`. An
+  # event published between the subscription and the read is delivered
+  # too, after it: the subscriber sees it twice and never misses it. A
+  # refresh that cannot be read ends the stream.
+  defp refreshed(conn, %{refresh: nil} = state), do: loop(conn, state)
+
+  defp refreshed(conn, %{refresh: {module, function}} = state) do
+    case fresh(state) do
+      {:ok, state} ->
+        case apply(module, function, [state.ctx, state.grant.subject]) do
+          {:ok, items} when is_list(items) -> refresh_items(conn, state, items)
+          _unread -> close(conn, refresh_unavailable())
+        end
+
+      {:error, refusal} ->
+        close(conn, refusal)
+    end
+  end
+
+  defp refresh_unavailable,
+    do: Prima.Refusal.classify({:unavailable, "The stream's current state"})
+
+  defp refresh_items(conn, state, []), do: loop(conn, state)
+
+  defp refresh_items(conn, state, [item | rest]) do
+    data = StreamGrant.project(state.grant, item)
+
+    if selected?(state, data) do
+      event = TinctureWire.stream_event(nil, state.name, Map.put(data, "refresh", true))
+
+      case Plug.Conn.chunk(conn, event) do
+        {:ok, conn} -> refresh_items(conn, state, rest)
+        {:error, _closed} -> conn
+      end
+    else
+      refresh_items(conn, state, rest)
+    end
+  end
+
+  # A filtering stream delivers only the payloads whose filter field is
+  # the grant's subject.
+  defp selected?(%{filter: nil}, _data), do: true
+
+  defp selected?(%{filter: filter, grant: %StreamGrant{subject: subject}}, data),
+    do: is_binary(subject) and Map.get(data, filter) == subject
 
   defp loop(conn, %{ref: ref, payload: payload} = state) do
     receive do
@@ -284,10 +365,16 @@ defmodule CyfrWeb.SSE do
   # A payload is delivered only under a context that still stands and to
   # a client that keeps up.
   defp delivery(conn, state, message) do
+    data = StreamGrant.project(state.grant, Map.from_struct(message))
+
+    if selected?(state, data),
+      do: deliver_selected(conn, state, message, data),
+      else: loop(conn, state)
+  end
+
+  defp deliver_selected(conn, state, message, data) do
     with :ok <- backlog(state.max_backlog),
          {:ok, state} <- fresh(state) do
-      data = StreamGrant.project(state.grant, Map.from_struct(message))
-
       case Plug.Conn.chunk(conn, TinctureWire.stream_event(sequence(message), state.name, data)) do
         {:ok, conn} -> loop(conn, state)
         {:error, _closed} -> conn

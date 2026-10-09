@@ -76,6 +76,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # are component-typed and project nothing.
   @projection_lists %{"api_key" => :fields, "bundle" => :fields, "oauth" => :scopes}
 
+  # The actions a pattern never grants: each binds or ends a standing
+  # conduit for a profile's authority, so it is granted only where it is
+  # named.
+  @exact_only ~w(feed.bind feed.remove)
+
   @spec live_digest(Sanctum.Context.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def live_digest(ctx, source_ref) do
     key = live_shape_key(ctx, source_ref)
@@ -264,18 +269,33 @@ defmodule Sanctum.Consent.ShapeDerivation do
   present but does not meet the grammar — a release published before a
   rule it now breaks (a storage path spelled other than the door reaches
   it, say). Such a block is refused, never read as asking for nothing.
+
+  Only an agent asks for `#{Enum.join(@exact_only, "` or `")}`, and what a
+  node is is its registered type, read from `source_ref`, never the type
+  its manifest names: a node of any other type asks for neither, whatever
+  its manifest says.
   """
   @spec declared_caps(map(), String.t()) ::
           {:ok, map()} | {:error, {:corrupt, {:manifest, String.t()}}}
   def declared_caps(manifest, source_ref) when is_map(manifest) do
     case Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1) do
       %{} = caps ->
-        {:ok, caps}
+        {:ok, agent_only(caps, source_ref)}
 
       nil ->
         if Map.has_key?(manifest, "caps"),
           do: {:error, {:corrupt, {:manifest, source_ref}}},
           else: {:ok, Caps.empty()}
+    end
+  end
+
+  # A manifest's own `type` is the publisher's word, which the registry
+  # does not hold to the type the component was published as; the node's
+  # key is. A key that does not read as an agent's asks for no feed write.
+  defp agent_only(caps, source_ref) do
+    case Prima.ComponentRef.parse(source_ref) do
+      {:ok, %Prima.ComponentRef{type: "agent"}} -> caps
+      _other -> %{caps | tools: caps.tools -- @exact_only}
     end
   end
 
@@ -300,10 +320,19 @@ defmodule Sanctum.Consent.ShapeDerivation do
   Expand tool patterns against the registered tool catalog. Grants are
   stored expanded: a pattern is not a stable capability, so an action
   added upstream later is correctly outside an existing consent.
+
+  Binding or removing a feed (`#{Enum.join(@exact_only, "`, `")}`) is
+  granted only by its exact name, never by a pattern (`*`, `feed.*` or any
+  other), whatever the component's type. A component other than an agent
+  may not name either (`Prima.Manifest.Caps`), so no component's grant
+  holds one; an agent that names one exactly keeps it, under the
+  assistant's always-ask ceiling.
   """
   @spec expand_tools([String.t()]) :: [String.t()]
   def expand_tools(patterns) when is_list(patterns) do
-    ToolPattern.expand(patterns, all_tool_actions())
+    patterns
+    |> ToolPattern.expand(all_tool_actions())
+    |> Enum.reject(&(&1 in @exact_only and &1 not in patterns))
   end
 
   @doc false

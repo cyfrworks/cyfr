@@ -22,7 +22,36 @@ defmodule Crucible.Feeds do
       decodes the output, unwraps its envelope, holds the data to the
       binding's result bound and shape (`Prima.Feed.check_result/2`) and
       writes its JSON text fenced (`Arca.CronSchedule.accept_feed_result/5`).
-      A refused result writes nothing.
+      A refused result writes nothing. An accepted one is answered as the
+      envelope a feed's stream carries (`Prima.Feed.envelope/5`), built
+      from the row the write committed.
+    * `bind/2`, `remove/2` and `press/3` are the `feed` tool's writes
+      (`Crucible.Providers.Feed`), and `latest/2` is the refresh of its
+      `feed.results` stream.
+
+  ## Publication
+
+  An accepted result is published on the athanor's one feeds topic
+  (`Cyfr.Bus.feeds/1`, `Cyfr.Bus.FeedPublished`) by whoever accepted it,
+  a press here or a fire in the scheduler, and only from the envelope a
+  committed accept answered: a stale, refused or failed accept publishes
+  nothing. A publish that fails is logged by the binding id and never
+  undoes or retries the accept.
+
+  ## A press
+
+  A press names a binding id and one of its actions, and runs under the
+  binding's own profile (`Crucible.run_root/5`) within the call that asked
+  for it, in the caller's context as it arrives: its origin is the one the
+  caller's admission path set, never forced, and Prism's context carries
+  `interactive` itself. An id that is no longer a live binding of the
+  caller's athanor is `not_found`, so a control drawn for a binding
+  removed or rebound since never presses the new one. A `refresh`
+  claims a fresh seq and accepts the run's result as a fire does, and
+  publishes it; a `run` runs its own operation and arguments and publishes
+  nothing. Only a person's press of a control Prism draws reaches it: the
+  operation is external only, and a canvas's code has no verb that binds,
+  changes or refreshes a feed.
 
   ## The envelope
 
@@ -41,12 +70,18 @@ defmodule Crucible.Feeds do
   """
 
   alias Arca.CronSchedule
-  alias Prima.Feed.Binding
+  alias Cyfr.Bus.FeedPublished
+  alias Prima.Feed.{Action, Binding}
+  alias Sanctum.Consent.RegistrationBinding
   alias Sanctum.Context
 
   require Logger
 
   @max_per_athanor 10
+
+  # The sentence of the reason `"error"`, which is this module's and not
+  # one of `Prima.Feed.reasons/0`.
+  @error_sentence "the operation answered an error, or no envelope"
 
   @typedoc """
   A live feed: its binding id, its binding, the seq and time of its
@@ -76,6 +111,126 @@ defmodule Crucible.Feeds do
   @doc "The most live feeds one athanor holds."
   @spec max_per_athanor() :: pos_integer()
   def max_per_athanor, do: @max_per_athanor
+
+  @doc """
+  The sentence a refused result's reason reads as: `Prima.Feed.reasons/0`'s,
+  and for `"error"`, an output that is not a 2xx envelope, "#{@error_sentence}".
+  """
+  @spec reason_sentence(String.t()) :: String.t()
+  def reason_sentence("error"), do: @error_sentence
+
+  def reason_sentence(reason) when is_binary(reason),
+    do: Map.get(Prima.Feed.reasons(), reason, reason)
+
+  @doc """
+  Bind a feed in the caller's athanor from the `feed.bind` arguments, in
+  this order:
+
+    1. `reference` is resolved to its pinned installed version
+       (`Compendium.resolve/2`); one not installed is `not_found`.
+    2. The pinned version's manifest declares `results[operation]`, the
+       shape of the operation's data, which the binding copies; an
+       operation that declares none is `invalid_argument`.
+    3. The binding holds (`Prima.Feed.Binding.validate/1`); a refusal is
+       `invalid_argument` naming its pointer and reason, never a value.
+    4. The caller may bind the profile to the pinned version
+       (`Sanctum.Consent.RegistrationBinding.authorize/3`).
+    5. The profile's head consent admits the `schedule` origin a fire runs
+       under, or the bind answers the consent signal that raises the grant
+       prompt for that profile.
+    6. The row is created under the athanor's feed cap
+       (`Arca.CronSchedule.create_feed/2`), and the scheduler is told.
+
+  Answers the binding id, the feed's name, its label, its interval and
+  its actions' names, labels and kinds, never its arguments.
+  """
+  @spec bind(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  def bind(%Context{} = ctx, %{} = args) do
+    reference = Map.get(args, "reference")
+    profile_id = Map.get(args, "profile_id")
+
+    with {:ok, pinned} <- resolve(ctx, reference),
+         {:ok, shape} <- result_shape(ctx, pinned, reference, Map.get(args, "operation")),
+         {:ok, binding} <- binding(args, shape),
+         :ok <- authorize_profile(ctx, pinned, profile_id),
+         :ok <- schedule_origin(ctx, profile_id),
+         {:ok, row} <- create(ctx, binding, pinned, profile_id) do
+      Crucible.Schedules.Scheduler.add(row.id)
+
+      {:ok,
+       %{
+         binding: row.id,
+         feed: binding.name,
+         label: binding.label,
+         interval_minutes: binding.interval_minutes,
+         actions: actions(binding)
+       }}
+    end
+  end
+
+  @doc """
+  Remove the caller's athanor's live feed `binding_id` and tell the
+  scheduler. An id that is not a live binding of the athanor is
+  `not_found`; a fire in flight then finds the row gone at its accept and
+  writes nothing.
+  """
+  @spec remove(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def remove(%Context{} = ctx, binding_id) when is_binary(binding_id) do
+    case CronSchedule.remove_feed(Context.actor(ctx), binding_id) do
+      {:ok, row} ->
+        Crucible.Schedules.Scheduler.remove(row.id)
+        {:ok, %{removed: true, binding: row.id, feed: row.name}}
+
+      {:error, reason} ->
+        {:error, store_refusal(reason, binding_id)}
+    end
+  end
+
+  @doc """
+  Press action `action` of the caller's athanor's live feed `binding_id`
+  (the moduledoc's "A press"). A `refresh` answers the binding, the action
+  and the accepted revision; a `run` the binding, the action, the
+  execution it ran as and its status, never its output. A refused result
+  is named by its pointer and its reason's sentence, never its content,
+  and a failed run answers the run's own refusal.
+  """
+  @spec press(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def press(%Context{} = ctx, binding_id, action)
+      when is_binary(binding_id) and is_binary(action) do
+    with {:ok, row, binding} <- live_binding(ctx, binding_id),
+         {:ok, declared} <- declared_action(binding, action) do
+      # Minted before the run, as the scheduler mints a fire's: the
+      # execution the run is admitted as.
+      execution_id = Prima.UUID7.execution_id()
+
+      case declared do
+        %Action{kind: :refresh} -> refresh(ctx, row, binding, declared, execution_id)
+        %Action{kind: :run} -> run_action(ctx, row, declared, execution_id)
+      end
+    end
+  end
+
+  @doc """
+  The refresh of the stream `feed.results` for the subject `name`: the
+  caller's athanor's live feed of that name as the envelope of its last
+  accepted result, or none when no live feed holds the name or it has no
+  accepted result yet.
+  """
+  @spec latest(Context.t(), String.t() | nil) ::
+          {:ok, [map()]} | {:error, :no_athanor | :database_error}
+  def latest(%Context{} = ctx, name) when is_binary(name) do
+    with {:ok, feeds} <- list(ctx) do
+      case Enum.find(feeds, &(&1.binding.name == name)) do
+        %{feed_result_seq: seq, feed_result_at: %DateTime{} = at} = feed when seq > 0 ->
+          {:ok, [Prima.Feed.envelope(feed.binding_id, feed.binding, seq, at, feed.result)]}
+
+        _none ->
+          {:ok, []}
+      end
+    end
+  end
+
+  def latest(%Context{}, _name), do: {:ok, []}
 
   @doc """
   A feed row's stored binding (`feed_spec`), read back through its
@@ -138,7 +293,10 @@ defmodule Crucible.Feeds do
   its `Prima.Json.encode/1` text, fenced, the slot and the sequence checked
   again in the write's own transaction.
 
-  Answers `:ok` once written; `{:error, :stale}` when a later-claimed
+  Answers `{:ok, envelope}` once written, the envelope
+  (`Prima.Feed.envelope/5`) of the row the write committed: its binding
+  id, binding, accepted seq and time, and the result its text decodes to.
+  Answers `{:error, :stale}` when a later-claimed
   result was already accepted; `{:error, {:refused, refusal}}` for an
   output that is not JSON (`"json"`) or not a 2xx envelope (`"error"`,
   with its `status` when it has one), or a result past its bound
@@ -149,7 +307,7 @@ defmodule Crucible.Feeds do
   and `:database_error` as they are.
   """
   @spec accept(Context.t(), String.t(), integer(), term(), Arca.ControlPlane.slot() | :none) ::
-          :ok
+          {:ok, map()}
           | {:error,
              :stale
              | {:refused, refusal()}
@@ -168,8 +326,287 @@ defmodule Crucible.Feeds do
          {:ok, decoded} <- decoded(output),
          {:ok, result} <- unwrapped(decoded),
          {:ok, text} <- checked(binding, result),
-         {:ok, _row} <- CronSchedule.accept_feed_result(actor, binding_id, seq, text, slot) do
-      :ok
+         {:ok, written} <- CronSchedule.accept_feed_result(actor, binding_id, seq, text, slot) do
+      {:ok,
+       Prima.Feed.envelope(
+         written.id,
+         binding,
+         written.feed_result_seq,
+         written.feed_result_at,
+         stored_result(written)
+       )}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Bind
+  # ---------------------------------------------------------------------------
+
+  defp resolve(ctx, reference) do
+    case Compendium.resolve(ctx, reference) do
+      {:ok, pinned, _metadata} -> {:ok, pinned}
+      {:error, {:not_found, _what}} -> {:error, {:not_found, "Component", reference}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # The shape of the operation's data, as the pinned version's manifest
+  # declares it.
+  defp result_shape(ctx, pinned, reference, operation) do
+    case Compendium.inspect_component(ctx, pinned) do
+      {:ok, row} ->
+        case Prima.Manifest.decode(Map.get(row, "manifest")) do
+          %{"results" => %{} = results} when is_map_key(results, operation) ->
+            {:ok, Map.fetch!(results, operation)}
+
+          _declares_none ->
+            {:error, {:invalid_argument, "#{operation} declares no result shape"}}
+        end
+
+      {:error, {:not_found, _what}} ->
+        {:error, {:not_found, "Component", reference}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp binding(args, shape) do
+    json = %{
+      "name" => Map.get(args, "name"),
+      "label" => Map.get(args, "label"),
+      "reference" => Map.get(args, "reference"),
+      "operation" => Map.get(args, "operation"),
+      "args" => Map.get(args, "args"),
+      "interval_minutes" => Map.get(args, "interval_minutes"),
+      "result_shape" => shape,
+      "actions" => Map.get(args, "actions")
+    }
+
+    case Binding.validate(json) do
+      {:ok, binding} ->
+        {:ok, binding}
+
+      {:error, %{path: path, reason: reason}} ->
+        {:error, {:invalid_argument, "#{path}: #{reason}"}}
+    end
+  end
+
+  # Binding a feed to a profile mints a standing conduit for that
+  # profile's authority, as binding a schedule does: the consent class
+  # gates it, never a permission a wildcard key holds.
+  defp authorize_profile(ctx, pinned, profile_id) do
+    case RegistrationBinding.authorize(ctx, pinned, profile_id) do
+      :ok -> :ok
+      {:error, reason} -> {:error, binding_refusal(reason)}
+    end
+  end
+
+  defp binding_refusal({:consent_refused, refusal}), do: {:consent_class_required, refusal}
+
+  defp binding_refusal({unread, _subject})
+       when unread in [:head_unavailable, :profiles_unavailable],
+       do: {:unavailable, "Consent"}
+
+  defp binding_refusal({:head_corrupt, _profile_id}), do: {:corrupt, {:digest, "Consent"}}
+  defp binding_refusal({:profile_corrupt, profile_id}), do: {:corrupt, {:profile, profile_id}}
+
+  defp binding_refusal(reason),
+    do: {:invalid_argument, "profile binding refused: " <> RegistrationBinding.message(reason)}
+
+  # A feed fires with the `schedule` origin: a profile whose head consent
+  # does not admit it is asked to grant again, as the loader asks.
+  defp schedule_origin(ctx, profile_id) do
+    case Sanctum.Consent.head_consent(ctx, profile_id) do
+      {:ok, %{admitted_origins: origins, revision: revision}} ->
+        if :schedule in origins do
+          :ok
+        else
+          {:error,
+           {:consent_required,
+            %{profile_id: profile_id, current_revision: revision, shape_diff: []}}}
+        end
+
+      {:error, :not_found} ->
+        {:error, binding_refusal({:no_head_consent, profile_id})}
+
+      {:error, :corrupt} ->
+        {:error, binding_refusal({:head_corrupt, profile_id})}
+
+      {:error, :unavailable} ->
+        {:error, binding_refusal({:head_unavailable, profile_id})}
+
+      {:error, :no_athanor} ->
+        {:error, :no_athanor}
+    end
+  end
+
+  defp create(ctx, binding, pinned, profile_id) do
+    attrs = %{
+      binding: binding,
+      resolved_reference: pinned,
+      profile_id: profile_id,
+      cap: @max_per_athanor
+    }
+
+    case CronSchedule.create_feed(Context.actor(ctx), attrs) do
+      {:ok, row} ->
+        {:ok, row}
+
+      {:error, :feed_cap} ->
+        {:error,
+         %Prima.Refusal{
+           class: :forbidden,
+           reason: :feed_cap,
+           message:
+             "This athanor holds #{@max_per_athanor} live feeds, the most it may; " <>
+               "remove one to bind another (feed_cap)"
+         }}
+
+      {:error, :conflict} ->
+        {:error, {:conflict, "a live feed is named #{binding.name}"}}
+
+      {:error, {:validation, errors}} ->
+        {:error, {:invalid_argument, "the feed was not bound: " <> validation(errors)}}
+
+      {:error, reason} when reason in [:not_owner, :no_athanor] ->
+        {:error, reason}
+
+      {:error, reason} when reason in [:not_found, :database_error] ->
+        {:error, {:unavailable, "Feeds"}}
+    end
+  end
+
+  defp validation(errors) do
+    errors
+    |> Enum.sort()
+    |> Enum.map_join("; ", fn {field, messages} -> "#{field} #{Enum.join(messages, ", ")}" end)
+  end
+
+  # A binding's actions as a canvas and a person see them: never the
+  # operation or arguments a `run` carries.
+  defp actions(%Binding{actions: actions}) do
+    Enum.map(actions, fn %Action{name: name, label: label, kind: kind} ->
+      %{name: name, label: label, kind: Atom.to_string(kind)}
+    end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Press
+  # ---------------------------------------------------------------------------
+
+  defp live_binding(ctx, binding_id) do
+    case CronSchedule.get_feed(Context.actor(ctx), binding_id) do
+      {:ok, row} ->
+        case spec(row) do
+          {:ok, binding} ->
+            {:ok, row, binding}
+
+          {:error, refusal} ->
+            unreadable(row, refusal)
+            {:error, {:not_found, "Feed", binding_id}}
+        end
+
+      {:error, reason} ->
+        {:error, store_refusal(reason, binding_id)}
+    end
+  end
+
+  defp declared_action(%Binding{actions: actions}, name) do
+    case Enum.find(actions, &(&1.name == name)) do
+      %Action{} = action -> {:ok, action}
+      nil -> {:error, {:not_found, "Action", name}}
+    end
+  end
+
+  # A refresh is a fire the person asked for: a fresh seq claimed under
+  # the slot read before the run, the run's result accepted under both,
+  # then published from the envelope the accept committed.
+  defp refresh(ctx, row, binding, action, execution_id) do
+    with {:ok, slot} <- Arca.ControlPlane.member_slot(),
+         {:ok, seq} <- claim(ctx, row.id),
+         {:ok, result} <- run(ctx, row, Prima.Feed.input(binding), execution_id) do
+      case accept(ctx, row.id, seq, Map.get(result, :output, result), slot) do
+        {:ok, envelope} ->
+          publish(ctx, envelope)
+          {:ok, %{binding: row.id, action: action.name, revision: envelope["revision"]}}
+
+        {:error, :stale} ->
+          {:error, {:conflict, "a newer result of feed #{binding.name} was accepted"}}
+
+        {:error, {:refused, refusal}} ->
+          {:error, {:invalid_argument, refused(refusal)}}
+
+        {:error, :not_owner} ->
+          {:error, :not_owner}
+
+        # Removed while the run ran: the binding the press named is gone.
+        {:error, :not_found} ->
+          {:error, {:not_found, "Feed", row.id}}
+
+        {:error, _other} ->
+          {:error, {:unavailable, "Feeds"}}
+      end
+    end
+  end
+
+  defp run_action(ctx, row, action, execution_id) do
+    with {:ok, result} <- run(ctx, row, Prima.Feed.input(action), execution_id) do
+      {:ok,
+       %{
+         binding: row.id,
+         action: action.name,
+         execution_id: execution_id,
+         status: result |> Map.get(:status, :completed) |> to_string()
+       }}
+    end
+  end
+
+  defp claim(ctx, binding_id) do
+    case CronSchedule.claim_feed_seq(Context.actor(ctx), binding_id) do
+      {:ok, seq} -> {:ok, seq}
+      {:error, reason} -> {:error, store_refusal(reason, binding_id)}
+    end
+  end
+
+  # The binding's pinned version under the binding's own profile, in the
+  # caller's context.
+  defp run(ctx, row, input, execution_id) do
+    Crucible.run_root(ctx, {:id, row.profile_id}, row.resolved_reference, input,
+      execution_id: execution_id
+    )
+  end
+
+  # Named by its pointer, its reason's sentence and any status, never by
+  # the result.
+  defp refused(%{path: path, reason: reason} = refusal) do
+    status =
+      case refusal do
+        %{status: status} when is_integer(status) -> " (status #{status})"
+        _none -> ""
+      end
+
+    "the result was refused at #{inspect(path)}: #{reason_sentence(reason)}#{status}"
+  end
+
+  defp store_refusal(:not_found, binding_id), do: {:not_found, "Feed", binding_id}
+  defp store_refusal(reason, _binding_id) when reason in [:not_owner, :no_athanor], do: reason
+  defp store_refusal(_unanswered, _binding_id), do: {:unavailable, "Feeds"}
+
+  # After the accept committed, from the envelope it answered. A publish
+  # that fails is said by the binding id and undoes nothing.
+  defp publish(ctx, envelope) do
+    actor = Context.actor(ctx)
+
+    case Cyfr.Bus.broadcast(actor, Cyfr.Bus.feeds(actor), FeedPublished.new(actor, envelope)) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Crucible.Feeds] feed #{envelope["binding"]}'s accepted result was not published: " <>
+            inspect(reason)
+        )
     end
   end
 

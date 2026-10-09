@@ -132,7 +132,9 @@ defmodule Crucible.Schedules.Scheduler do
   stale or removed completes it, and a refused output (not a 2xx envelope,
   or data outside its shape) fails it with the refusal's reason, path and
   any status as its error. A feed announces no completion and no schedule
-  update.
+  update. An accepted result is published on the athanor's feeds topic
+  (`Cyfr.Bus.feeds/1`) from the envelope its committed accept answered; a
+  stale, refused or failed accept publishes nothing.
   """
 
   use GenServer
@@ -140,7 +142,7 @@ defmodule Crucible.Schedules.Scheduler do
   require Arca.Repo.Errors
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
-  alias Cyfr.Bus.{ScheduleCompleted, Schedules}
+  alias Cyfr.Bus.{FeedPublished, ScheduleCompleted, Schedules}
   alias Crucible.Schedules.Cron
 
   @db_load_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError, RuntimeError]
@@ -1218,7 +1220,9 @@ defmodule Crucible.Schedules.Scheduler do
   # occurrence and record the run; a refused result fails it, and the
   # error names the refusal's reason and path, never the result. A member
   # that lost its slot writes nothing more and leaves the occurrence to
-  # recovery. A feed announces no completion and no schedule update.
+  # recovery. A feed announces no completion and no schedule update; an
+  # accepted result alone is published, from the envelope its committed
+  # accept answered, before the occurrence ends.
   defp feed_completed(schedule, occurrence, ctx, feed, output, fired) do
     Grimoire.close_decision(ctx, fired.call_id, %{
       result: {:ok, output},
@@ -1227,26 +1231,12 @@ defmodule Crucible.Schedules.Scheduler do
     })
 
     case Crucible.Feeds.accept(ctx, schedule.id, feed.seq, output, feed.slot) do
-      answer when answer in [:ok, {:error, :stale}, {:error, :not_found}] ->
-        # An occurrence that is another member's now records no run.
-        ended = finish(occurrence, fired.execution_id, "completed")
+      {:ok, envelope} ->
+        publish_feed(ctx, envelope)
+        feed_ended(schedule, occurrence, ctx, feed, fired, :accepted)
 
-        unless ended == {:error, :stale} do
-          _ = record_run(ctx, schedule.id, fired.execution_id)
-
-          :telemetry.execute(
-            [:cyfr, :schedules, :completed],
-            %{system_time: System.system_time(), duration_ms: fired.duration_ms},
-            fired_meta(schedule, occurrence, ctx, fired)
-          )
-
-          Logger.debug(
-            "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq} completed " <>
-              "(#{fired.execution_id}): #{inspect(answer)}"
-          )
-        end
-
-        left_to_recovery_unless_ended(ended)
+      {:error, reason} when reason in [:stale, :not_found] ->
+        feed_ended(schedule, occurrence, ctx, feed, fired, reason)
 
       {:error, :not_owner} ->
         Logger.warning(
@@ -1289,7 +1279,9 @@ defmodule Crucible.Schedules.Scheduler do
   end
 
   # A refused result, named by the refusal's reason, its path in the result
-  # and the output's status when it carries one, never by the result.
+  # and the output's status when it carries one, never by the result. An
+  # output that is no 2xx envelope is refused at its root, and named by its
+  # reason's sentence.
   defp refused_result(%{path: path, reason: reason} = refusal) do
     status =
       case refusal do
@@ -1297,7 +1289,55 @@ defmodule Crucible.Schedules.Scheduler do
         _none -> ""
       end
 
-    {:invalid_argument, "feed result refused: #{reason} at #{inspect(path)}#{status}"}
+    named =
+      case reason do
+        "error" -> Crucible.Feeds.reason_sentence(reason)
+        code -> "#{code} at #{inspect(path)}"
+      end
+
+    {:invalid_argument, "feed result refused: #{named}#{status}"}
+  end
+
+  # A feed's occurrence completed: its result accepted, stale (a
+  # later-claimed run's result is already in) or its feed removed during
+  # the run. An occurrence that is another member's now records no run.
+  # The line names the outcome, never the result.
+  defp feed_ended(schedule, occurrence, ctx, feed, fired, outcome) do
+    ended = finish(occurrence, fired.execution_id, "completed")
+
+    unless ended == {:error, :stale} do
+      _ = record_run(ctx, schedule.id, fired.execution_id)
+
+      :telemetry.execute(
+        [:cyfr, :schedules, :completed],
+        %{system_time: System.system_time(), duration_ms: fired.duration_ms},
+        fired_meta(schedule, occurrence, ctx, fired)
+      )
+
+      Logger.debug(
+        "[Crucible.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq} completed " <>
+          "(#{fired.execution_id}): #{outcome}"
+      )
+    end
+
+    left_to_recovery_unless_ended(ended)
+  end
+
+  # The accept committed: its envelope goes on the athanor's feeds topic.
+  # A publish that fails is said by the binding id and undoes nothing.
+  defp publish_feed(ctx, envelope) do
+    actor = Sanctum.Context.actor(ctx)
+
+    case Cyfr.Bus.broadcast(actor, Cyfr.Bus.feeds(actor), FeedPublished.new(actor, envelope)) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Crucible.Schedules.Scheduler] feed #{envelope["binding"]}'s accepted result " <>
+            "was not published: #{inspect(reason)}"
+        )
+    end
   end
 
   # This member's end of its own occurrence: its claim, and the execution

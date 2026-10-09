@@ -856,8 +856,8 @@ defmodule Cyfr.Application do
 
   @doc """
   Refuse the boot when a declared stream (`Grimoire.Catalog.stream_entries/0`,
-  or `entries`) names a topic `Cyfr.Bus` does not roster, or one no grant
-  can scope (`stream_topic_findings/1`).
+  or `entries`) names a topic `Cyfr.Bus` does not roster, one no grant can
+  scope, or a refresh no module exports (`stream_topic_findings/1`).
   """
   @spec check_stream_topics!([{module(), Prima.Provider.Stream.t()}]) :: :ok
   def check_stream_topics!(entries \\ Grimoire.Catalog.stream_entries()) do
@@ -866,16 +866,21 @@ defmodule Cyfr.Application do
         :ok
 
       findings ->
-        raise "declared streams name topics the bus cannot carry; refusing to boot:\n" <>
-                Enum.map_join(findings, "\n", &("  - " <> &1))
+        raise "declared streams name topics the bus cannot carry or refreshes that do not " <>
+                "exist; refusing to boot:\n" <> Enum.map_join(findings, "\n", &("  - " <> &1))
     end
   end
 
   @doc """
   One sentence per declared stream whose topic is not on the `Cyfr.Bus`
-  roster (`Cyfr.Bus.topic?/1`), or is on it but cannot carry the stream's
-  grant (`Cyfr.Bus.grantable?/2`), naming the provider, the stream and the
-  topic. Empty when every stream rides a topic a grant can scope.
+  roster (`Cyfr.Bus.topic?/1`), is on it but cannot carry the stream's
+  grant (`Cyfr.Bus.grantable?/2`), or whose `refresh` is not a function
+  of arity 2 its module exports, naming the provider, the stream and the
+  topic. A filtering stream's subject selects payloads on one topic, so
+  its grant is checked as one that takes no subject. Empty when every
+  stream rides a topic a grant can scope and refreshes through a function
+  that exists, so a missing refresh refuses the boot rather than a
+  delivery.
   """
   @spec stream_topic_findings([{module(), Prima.Provider.Stream.t()}]) :: [String.t()]
   def stream_topic_findings(entries) when is_list(entries) do
@@ -885,17 +890,29 @@ defmodule Cyfr.Application do
   end
 
   defp stream_topic_finding(stream) do
+    topic_subject? = not is_nil(stream.subject) and is_nil(stream.filter)
+
     cond do
       not Cyfr.Bus.topic?(stream.topic) ->
         "the bus declares no such topic"
 
-      not Cyfr.Bus.grantable?(stream.topic, not is_nil(stream.subject)) ->
+      not Cyfr.Bus.grantable?(stream.topic, topic_subject?) ->
         "the topic is not a tenant topic of the stream's subject shape"
+
+      not refresh_exported?(stream.refresh) ->
+        "its refresh is not a function of arity 2 its module exports"
 
       true ->
         nil
     end
   end
+
+  defp refresh_exported?(nil), do: true
+
+  defp refresh_exported?({module, function}) when is_atom(module) and is_atom(function),
+    do: Code.ensure_loaded?(module) and function_exported?(module, function, 2)
+
+  defp refresh_exported?(_refresh), do: false
 
   # OIDC issuer reserved-host check. A generic-OIDC issuer pointed at a
   # reserved direct-provider host (github.com, accounts.google.com) would

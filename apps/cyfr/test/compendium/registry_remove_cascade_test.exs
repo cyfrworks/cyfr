@@ -5,6 +5,8 @@ defmodule Compendium.RegistryRemoveCascadeTest do
   # Removal revokes profiles and disables registrations while retaining consents and vault entries.
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
   setup tags do
@@ -129,6 +131,120 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     {:ok, profile} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
     assert profile.status == "active"
+  end
+
+  describe "a feed of the removed component" do
+    @keys [
+      {Arca.ControlPlane, :standing},
+      {Arca.ControlPlane, :generation},
+      {Arca.ControlPlane, :slot}
+    ]
+
+    test "is removed with it", %{ctx: ctx} do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "cascade-feed",
+          version: "1.0.0",
+          type: "catalyst"
+        })
+
+      feed = feed!(ctx, "cascade-feed")
+      {:ok, _} = Compendium.Registry.delete(ctx, "cascade-feed", "1.0.0", "local")
+
+      assert {:error, :not_found} =
+               Arca.CronSchedule.get_feed(Sanctum.Context.actor(ctx), feed.id)
+    end
+
+    test "whose removal is refused is logged by its id and reason, and the uninstall completes",
+         %{ctx: ctx} do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "cascade-fenced",
+          version: "1.0.0",
+          type: "catalyst"
+        })
+
+      slot = claimant!()
+      feed = feed!(ctx, "cascade-fenced")
+
+      # A successor takes the slot over: this member still believes it
+      # holds it, so only the feed row's own fenced write refuses.
+      take_over!(slot)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, _} = Compendium.Registry.delete(ctx, "cascade-fenced", "1.0.0", "local")
+        end)
+
+      assert log =~ "registration #{feed.id} was not removed: not_owner"
+      refute log =~ "cascade-secret-arg"
+      refute log =~ "Cascade feed label"
+
+      # The component is gone; the feed outlives it, and is said.
+      assert {:error, _} = Compendium.Registry.get(ctx, "cascade-fenced", "1.0.0", "local")
+
+      assert {:ok, %{status: "active"}} =
+               Arca.CronSchedule.get_feed(Sanctum.Context.actor(ctx), feed.id)
+    end
+  end
+
+  defp feed!(ctx, name) do
+    {:ok, binding} =
+      Prima.Feed.Binding.validate(%{
+        "name" => name,
+        "label" => "Cascade feed label",
+        "reference" => "catalyst:local.#{name}",
+        "operation" => "quote",
+        "args" => %{"key" => "cascade-secret-arg"},
+        "interval_minutes" => 60,
+        "result_shape" => %{"type" => "json"},
+        "actions" => []
+      })
+
+    {:ok, feed} =
+      Arca.CronSchedule.create_feed(Sanctum.Context.actor(ctx), %{
+        binding: binding,
+        resolved_reference: "catalyst:local.#{name}:1.0.0",
+        profile_id: "prof_cascade",
+        cap: Crucible.Feeds.max_per_athanor()
+      })
+
+    feed
+  end
+
+  # A claimant runs, as a deployment's does, and this member holds its
+  # slot: the umbrella's test configuration runs none, which would leave a
+  # write's live check nothing to check. Restored when the case ends.
+  defp claimant! do
+    saved = Map.new(@keys, &{&1, :persistent_term.get(&1, :absent)})
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+
+    on_exit(fn ->
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+    end)
+
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    node = "node-cascade-#{System.unique_integer([:positive])}"
+    {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+    slot
+  end
+
+  defp take_over!(%{node: node, generation: generation}) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+        set: [owner: node <> "#boot_b", generation: generation + 1]
+      )
+
+    :ok
   end
 
   test "an unrelated component's profile is untouched", %{ctx: ctx} do

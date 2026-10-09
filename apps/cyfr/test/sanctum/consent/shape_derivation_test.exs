@@ -279,14 +279,94 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
              )
   end
 
-  test "expand_tools is the bootstrap expansion, verbatim", %{ctx: ctx} do
+  test "expand_tools is the bootstrap expansion, verbatim, but for what only an exact name grants",
+       %{ctx: ctx} do
     _ = ctx
     catalog = ShapeDerivation.all_tool_actions()
 
-    assert ShapeDerivation.expand_tools(["*"]) == Enum.sort(Enum.uniq(catalog))
+    assert ShapeDerivation.expand_tools(["*"]) ==
+             Enum.sort(Enum.uniq(catalog -- ~w(feed.bind feed.remove)))
 
     assert ShapeDerivation.expand_tools(["component.*"]) ==
              Enum.sort(Enum.filter(catalog, &String.starts_with?(&1, "component.")))
+  end
+
+  describe "a feed write" do
+    test "is never granted by a pattern, and is by its exact name" do
+      catalog = ShapeDerivation.all_tool_actions()
+      assert "feed.bind" in catalog and "feed.remove" in catalog
+
+      for patterns <- [["*"], ["feed.*"], ["feed.*", "*", "component.*"]] do
+        expanded = ShapeDerivation.expand_tools(patterns)
+        refute "feed.bind" in expanded, inspect(patterns)
+        refute "feed.remove" in expanded, inspect(patterns)
+      end
+
+      # The feed tool's other actions follow its pattern as any tool's do.
+      assert ShapeDerivation.expand_tools(["feed.*"]) == ["feed.list", "feed.press"]
+
+      # Named exactly, by any caller, each is kept, beside a pattern too.
+      assert ShapeDerivation.expand_tools(["feed.bind"]) == ["feed.bind"]
+
+      assert ShapeDerivation.expand_tools(["feed.*", "feed.remove"]) ==
+               ["feed.list", "feed.press", "feed.remove"]
+    end
+
+    test "a formula published with a manifest claiming to be an agent is granted neither", %{
+      ctx: ctx
+    } do
+      # The manifest's own type passes the declaration check; the registry
+      # keeps the type the component was published as.
+      manifest = %{
+        "type" => "agent",
+        "caps" => %{"tools" => ["feed.bind", "feed.remove", "feed.list"]}
+      }
+
+      assert {:ok, _} =
+               Compendium.Registry.publish_bytes(ctx, @wasm, %{
+                 name: "spoof",
+                 version: "1.0.0",
+                 type: "formula",
+                 manifest: Jason.encode!(manifest)
+               })
+
+      {:ok, row} = Compendium.Registry.get(ctx, "spoof", "1.0.0", "local", "formula")
+      stored = Prima.Manifest.decode(row.manifest)
+      assert stored["type"] == "agent"
+
+      assert {:ok, %{"tools" => ["feed.list"]}, _limits} =
+               Sanctum.Consent.BlobBuilder.node_grant(ctx, "formula:local.spoof", stored)
+
+      assert {:ok, %{tools: ["feed.list"]}} =
+               ShapeDerivation.declared_caps(stored, "formula:local.spoof")
+
+      assert {:ok, %{tool_actions: ["feed.list"]}} =
+               ShapeDerivation.shape_input(ctx, "formula:local.spoof")
+
+      # The same block on an agent's node keeps both.
+      assert {:ok, %{tools: ["feed.bind", "feed.list", "feed.remove"]}} =
+               ShapeDerivation.declared_caps(stored, "agent:local.spoof")
+    end
+
+    test "is in no component's grant from a pattern, an agent's included", %{ctx: ctx} do
+      for {node, type} <- [{"formula:local.feeder", "formula"}, {"agent:local.feeder", "agent"}],
+          tools <- [["*"], ["feed.*"]] do
+        manifest = %{"type" => type, "caps" => %{"tools" => tools}}
+        assert :ok = Prima.Manifest.Caps.validate(manifest, &Arca.Storage.valid_guest_path?/1)
+
+        assert {:ok, %{"tools" => granted}, _limits} =
+                 Sanctum.Consent.BlobBuilder.node_grant(ctx, node, manifest)
+
+        refute "feed.bind" in granted, "#{node} #{inspect(tools)}"
+        refute "feed.remove" in granted, "#{node} #{inspect(tools)}"
+      end
+
+      # An agent that names both exactly is granted both.
+      manifest = %{"type" => "agent", "caps" => %{"tools" => ["feed.bind", "feed.remove"]}}
+
+      assert {:ok, %{"tools" => ["feed.bind", "feed.remove"]}, _limits} =
+               Sanctum.Consent.BlobBuilder.node_grant(ctx, "agent:local.feeder", manifest)
+    end
   end
 
   describe "manifest-sourced shapes" do

@@ -123,8 +123,28 @@ defmodule Compendium.Providers.CanvasTest do
 
   describe "the actions" do
     test "catalog answers the toolkit majors and the readable streams", %{ctx: ctx} do
-      assert {:ok, %{toolkit: [1], streams: []}} = call(ctx, "catalog")
+      assert {:ok, %{toolkit: [1], streams: streams}} = call(ctx, "catalog")
       assert call(ctx, "catalog") == Compendium.Canvas.catalog(ctx)
+
+      {:ok, {_provider, feeds}} = Grimoire.Catalog.lookup_stream("feed.results")
+      {:ok, {_provider, runs}} = Grimoire.Catalog.lookup_stream("runs.changes")
+
+      assert streams == [
+               %{
+                 name: "feed.results",
+                 subject: ~S"\A[a-z0-9][a-z0-9-]{0,47}\z",
+                 shape: feeds.shape,
+                 filter: "feed",
+                 refresh: true
+               },
+               %{
+                 name: "runs.changes",
+                 subject: nil,
+                 shape: runs.shape,
+                 filter: nil,
+                 refresh: true
+               }
+             ]
     end
 
     test "write, versions and restore answer through the tool", %{ctx: ctx} do

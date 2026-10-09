@@ -27,6 +27,7 @@ defmodule Cyfr.BusTest do
     :api_keys,
     :mcp_servers,
     :schedules,
+    :feeds,
     :vault_changed,
     :notify
   ]
@@ -251,6 +252,40 @@ defmodule Cyfr.BusTest do
                )
     end
 
+    test "of a feed's result reaches its own athanor's feeds topic, and no other athanor's" do
+      a = actor("ath_feeds_a")
+      b = actor("ath_feeds_b")
+      :ok = Bus.subscribe(a, Bus.feeds(a))
+
+      # Another athanor's subscriber, which reports what its mailbox holds
+      # once told to look. The local broadcast is sent from this process,
+      # so anything it delivered is queued before the look.
+      test = self()
+
+      subscriber =
+        spawn_link(fn ->
+          :ok = Bus.subscribe(b, Bus.feeds(b))
+          send(test, :subscribed)
+
+          receive do
+            :look -> send(test, {:held, Process.info(self(), :messages)})
+          end
+        end)
+
+      assert_receive :subscribed
+
+      published = Cyfr.Bus.FeedPublished.new(a, feed_envelope())
+      assert :ok = Bus.broadcast(a, Bus.feeds(a), published)
+      assert_receive %Cyfr.Bus.FeedPublished{athanor_id: "ath_feeds_a", feed: "btc"}
+
+      # Another athanor's subscriber hears nothing, and a publish onto its
+      # topic is refused.
+      send(subscriber, :look)
+      assert_receive {:held, {:messages, []}}
+      assert {:error, :cross_tenant} = Bus.broadcast(a, Bus.feeds(b), published)
+      assert {:error, :cross_tenant} = Bus.subscribe(a, Bus.feeds(b))
+    end
+
     test "of progress reaches the subject's topic and its request's" do
       a = actor("ath_progress_pub")
       :ok = Bus.subscribe(a, Bus.progress(a, {:pull, "p1"}))
@@ -309,6 +344,19 @@ defmodule Cyfr.BusTest do
       subject: subject,
       deadline: DateTime.utc_now(),
       grant_id: "sgr_1"
+    }
+  end
+
+  # An accepted result's envelope, as `Prima.Feed.envelope/5` builds it.
+  defp feed_envelope do
+    %{
+      "binding" => "feed_01926f4e-8c1a-7b3d-9e2f-1a2b3c4d5e6f",
+      "feed" => "btc",
+      "revision" => 1,
+      "at" => "2026-10-09T00:00:00Z",
+      "result" => %{"price" => 1},
+      "label" => "Bitcoin",
+      "actions" => []
     }
   end
 
@@ -375,6 +423,18 @@ defmodule Cyfr.BusTest do
       end
     end
 
+    test "for the feeds is the athanor's one topic, and a subject on it still raises" do
+      assert Bus.granted_topic(actor("ath_1"), grant(:feeds, nil)) == Bus.feeds(actor("ath_1"))
+      assert Bus.grantable?(:feeds, false)
+      refute Bus.grantable?(:feeds, true)
+
+      # A filtering stream's delivery sets its subject aside; a grant that
+      # still carries one names no topic.
+      assert_raise ArgumentError, fn ->
+        Bus.granted_topic(actor("ath_1"), grant(:feeds, "btc"))
+      end
+    end
+
     test "grantable?/2 answers the same shapes" do
       assert Bus.grantable?(:mcp_servers, false)
       refute Bus.grantable?(:mcp_servers, true)
@@ -417,6 +477,51 @@ defmodule Cyfr.BusTest do
                Cyfr.Application.stream_topic_findings([
                  {Some.Provider, stream("some.servers", :mcp_servers, ~S"\A[a-z]+\z")}
                ])
+    end
+
+    test "reads a filtering stream as one that takes no subject" do
+      filtering = %{
+        stream("some.feeds", :feeds, ~S"\A[a-z]+\z")
+        | projection: ["feed"],
+          filter: "feed"
+      }
+
+      assert Cyfr.Application.stream_topic_findings([{Some.Provider, filtering}]) == []
+
+      # Without its filter, the same subject names a topic the row has not.
+      assert [finding] =
+               Cyfr.Application.stream_topic_findings([
+                 {Some.Provider, %{filtering | filter: nil}}
+               ])
+
+      assert finding =~ "Some.Provider declares some.feeds on :feeds"
+      assert finding =~ "subject shape"
+    end
+
+    test "refuses a stream whose refresh is not an exported function of arity 2" do
+      exported = %{stream("some.servers", :mcp_servers) | refresh: {Crucible.Feeds, :latest}}
+      assert Cyfr.Application.stream_topic_findings([{Some.Provider, exported}]) == []
+
+      for refresh <- [
+            {Some.Missing, :latest},
+            {Crucible.Feeds, :no_such},
+            {Crucible.Feeds, :list}
+          ] do
+        missing = %{stream("some.servers", :mcp_servers) | refresh: refresh}
+        assert [finding] = Cyfr.Application.stream_topic_findings([{Some.Provider, missing}])
+        assert finding =~ "Some.Provider declares some.servers on :mcp_servers"
+        assert finding =~ "refresh is not a function of arity 2"
+      end
+
+      error =
+        assert_raise RuntimeError, fn ->
+          Cyfr.Application.check_stream_topics!([
+            {Some.Provider, %{stream("some.servers", :mcp_servers) | refresh: {Some.Missing, :x}}}
+          ])
+        end
+
+      assert error.message =~ "refusing to boot"
+      assert error.message =~ "refresh is not a function of arity 2"
     end
   end
 

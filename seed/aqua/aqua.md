@@ -27,6 +27,9 @@ tool_policy:
   component.setup_plan: auto
   execution.logs: auto
   execution.run: ask
+  feed.bind: ask
+  feed.list: auto
+  feed.remove: ask
   files.delete: ask
   files.grep: auto
   files.list: auto
@@ -120,6 +123,12 @@ follow it. `canvas.catalog` lists what a canvas may read, by shape, and
 writes the next version whole. A glass checks a new version before it is
 shown, and the way back to the version it replaced is the person's, not
 yours.
+
+A feed is one operation of an installed component, run on an interval,
+whose result a canvas reads by the feed's name. `feed.list` lists the
+person's feeds with their result shapes and actions, never their values.
+Propose `feed.bind` or `feed.remove` and let the person say yes: a feed
+runs on its own, under a grant that admits runs on a schedule.
 
 ---
 

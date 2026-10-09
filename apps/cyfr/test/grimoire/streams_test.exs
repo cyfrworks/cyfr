@@ -275,6 +275,76 @@ defmodule Grimoire.StreamsTest do
     end
   end
 
+  describe "a filtering stream" do
+    # A frame's context, as the frame-credential path establishes one.
+    defp framed(ctx) do
+      %{
+        ctx
+        | auth_method: :tincture,
+          origin: :interactive,
+          frame: %{
+            id: "frc_streams",
+            frame_id: "frm_streams",
+            reference: %{publisher: "local", name: "canvas", version: "0.1.0"},
+            version_digest: "sha256:" <> String.duplicate("a", 64),
+            grant_revision: 0,
+            mode: :live
+          }
+      }
+    end
+
+    test "opens for a frame, its subject on the grant and the feeds topic its key", %{ctx: ctx} do
+      assert {:ok, %Prima.StreamGrant{} = grant} =
+               Grimoire.open_stream(framed(ctx), "feed.results", "btc")
+
+      assert grant.topic == :feeds
+      assert grant.subject == "btc"
+
+      assert grant.projection ==
+               ~w(binding feed revision at result label actions)
+
+      assert [%{admission: "admitted"}] = decisions(ctx)
+    end
+
+    test "is refused for a session, an MCP key and a paired device, before anything else", %{
+      ctx: ctx
+    } do
+      callers = [
+        session: %{ctx | auth_method: :session, origin: :interactive},
+        mcp_key: %{
+          ctx
+          | auth_method: :api_key,
+            api_key_id: "key_streams",
+            api_key_type: :application,
+            origin: :programmatic
+        },
+        device: %{ctx | auth_method: :device, client_id: "cli_streams", origin: :interactive}
+      ]
+
+      for {who, caller} <- callers do
+        assert {:error,
+                %Prima.Refusal{
+                  class: :forbidden,
+                  reason: :canvas_stream,
+                  stage: :admission,
+                  message: message
+                }} = Grimoire.open_stream(caller, "feed.results", "btc"),
+               "#{who} opened feed.results"
+
+        assert message =~ "feed.results"
+        assert message =~ "(canvas_stream)"
+      end
+
+      # Each refusal is one decision, and a stream that does not filter
+      # still opens for a session.
+      assert length(decisions(ctx)) == 3
+      assert Enum.all?(decisions(ctx), &(&1.refusal_class == "forbidden"))
+
+      assert {:ok, %{topic: :executions}} =
+               Grimoire.open_stream(callers[:session], "runs.changes")
+    end
+  end
+
   describe "the grant's deadline" do
     test "is the credential's when the credential ends first", %{ctx: ctx} do
       credential = DateTime.add(DateTime.utc_now(), 30, :second)

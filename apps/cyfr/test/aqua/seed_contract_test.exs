@@ -207,6 +207,36 @@ defmodule Aqua.SeedContractTest do
     for taught <- ["canvas.catalog", "feed.list", "layout.edit"], do: assert(body =~ taught)
   end
 
+  # A feed is the person's: the soul reads them on its own and asks before
+  # it binds or removes one, and binding is external in kind, so no policy
+  # could make it automatic.
+  test "the soul lists feeds on its own and asks to bind or remove one" do
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
+
+    assert Map.take(soul.tool_policy, ~w(feed.list feed.bind feed.remove)) == %{
+             "feed.list" => "auto",
+             "feed.bind" => "ask",
+             "feed.remove" => "ask"
+           }
+
+    refute Map.has_key?(soul.tool_policy, "feed.press")
+    assert Aqua.Kinds.kind_for("feed", "bind") == :external
+    refute Aqua.Kinds.auto_permitted?("feed", "bind")
+
+    roles =
+      for {name, key, _mode} <- seed_policy(),
+          name != Compendium.AquaPath.soul_name(),
+          String.starts_with?(key, "feed."),
+          do: "#{name}: #{key}"
+
+    assert roles == []
+
+    # The soul's grant names each exactly, which is the only way a grant
+    # holds a feed write.
+    assert ~w(feed.bind feed.list feed.remove) -- granted() == []
+    assert seed_body("aqua") =~ "feed.list"
+  end
+
   # ---------------------------------------------------------------------------
 
   defp problems(tool, action, granted) do

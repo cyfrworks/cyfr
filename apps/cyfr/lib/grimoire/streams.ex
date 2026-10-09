@@ -16,7 +16,10 @@ defmodule Grimoire.Streams do
   anchored grammar admits, and a credential that has not ended. A
   holder-bound stream (`bind: :holder`) takes the holder's own user id as
   its subject: supplied when the open names none, and any other refused as
-  a subject the stream does not take.
+  a subject the stream does not take. A filtering stream (`filter`), whose
+  subject narrows one topic's payloads in the delivery a frame's data
+  route runs, opens for a frame's context alone: any other caller is
+  refused `forbidden` (`canvas_stream`).
 
   Every open is one decision (`Grimoire.Decisions`) named
   `stream:<name>`, whose request-log row's method is `streams/open`,
@@ -78,13 +81,14 @@ defmodule Grimoire.Streams do
   end
 
   # The checks, in order: the plane and the member's slot before anything
-  # is read, the declaration, the caller, the tenant the grant is scoped
-  # to, the holder a holder-bound stream binds its subject to, the
-  # subject, and the credential's remaining life.
+  # is read, the declaration, a filtering stream's frame, the caller, the
+  # tenant the grant is scoped to, the holder a holder-bound stream binds
+  # its subject to, the subject, and the credential's remaining life.
   defp admit(ctx, name, tool, subject, now) do
     with :ok <- external_plane(ctx, tool),
          :ok <- control_plane(),
          {:ok, {_provider, stream}} <- declared(name),
+         :ok <- filtered_for_frame(stream, ctx),
          :ok <- Catalog.authorize_stream(tool, ctx),
          :ok <- tenant(ctx),
          {:ok, subject} <- bound_subject(stream, ctx, subject),
@@ -116,6 +120,21 @@ defmodule Grimoire.Streams do
       {:ok, entry} -> {:ok, entry}
       :miss -> {:error, {:not_found, "Stream", name}}
     end
+  end
+
+  # A filtering stream rides one topic for every subject and is narrowed
+  # to its subject only by the delivery a frame's data route runs, so it
+  # opens for a frame's context and for no other caller.
+  defp filtered_for_frame(%Prima.Provider.Stream{filter: nil}, _ctx), do: :ok
+  defp filtered_for_frame(%Prima.Provider.Stream{}, %Context{frame: %{}}), do: :ok
+
+  defp filtered_for_frame(%Prima.Provider.Stream{name: name}, %Context{}) do
+    {:error,
+     %Prima.Refusal{
+       class: :forbidden,
+       reason: :canvas_stream,
+       message: "The stream #{name} is read by a canvas's frame alone (canvas_stream)"
+     }}
   end
 
   # Every grantable topic is the athanor's own; a caller in none has no

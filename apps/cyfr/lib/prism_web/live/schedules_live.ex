@@ -13,6 +13,14 @@ defmodule PrismWeb.SchedulesLive do
   once the grant is confirmed the page reads the profile's grant again
   and makes the schedule only if it now admits schedules. A grant
   dismissed, or confirmed without that origin, makes no schedule.
+
+  Below the schedules, the athanor's feeds (`feed.list`): each feed's name,
+  binding id, component, operation, interval, the time of its last
+  accepted result and its actions' labels, removed through `feed.remove`.
+  The page never shows a feed's arguments or a result's content. It reads
+  them again when a result is published (`Cyfr.Bus.FeedPublished`) and
+  when a run ends. A feed's fire is a scheduled fire to the telemetry and
+  the tray, which name it by its binding id.
   """
 
   use PrismWeb, :live_view
@@ -47,7 +55,8 @@ defmodule PrismWeb.SchedulesLive do
       for topic <- [
             Cyfr.Bus.schedules(actor),
             Cyfr.Bus.executions(actor),
-            Cyfr.Bus.components(actor)
+            Cyfr.Bus.components(actor),
+            Cyfr.Bus.feeds(actor)
           ],
           do: Cyfr.Bus.subscribe(actor, topic)
     end
@@ -57,6 +66,7 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:page_title, "Schedules")
       |> assign(:active_nav, "schedules")
       |> assign(:schedules, [])
+      |> assign(:feeds, [])
       |> assign(:components, [])
       |> assign(:loading, true)
       |> assign(:show_create, false)
@@ -148,8 +158,18 @@ defmodule PrismWeb.SchedulesLive do
     end
   end
 
+  def handle_event("remove_feed", %{"id" => id}, socket) do
+    case call_tool(socket, "feed", %{"action" => "remove", "binding" => id}) do
+      {:ok, _} ->
+        {:noreply, fetch_feeds(socket) |> put_flash(:info, "Feed removed")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
+    end
+  end
+
   def handle_event("refresh", _params, socket) do
-    {:noreply, fetch_schedules(socket)}
+    {:noreply, socket |> fetch_schedules() |> fetch_feeds()}
   end
 
   @impl true
@@ -171,6 +191,7 @@ defmodule PrismWeb.SchedulesLive do
     {:noreply,
      socket
      |> fetch_schedules()
+     |> fetch_feeds()
      |> fetch_components()
      |> assign(:loading, false)}
   end
@@ -179,10 +200,16 @@ defmodule PrismWeb.SchedulesLive do
     {:noreply, fetch_schedules(socket)}
   end
 
-  # Refresh schedule stats when executions end (run_count, last_run_at update)
+  # A feed's result was accepted: its last result time moved.
+  def handle_info(%Cyfr.Bus.FeedPublished{}, socket) do
+    {:noreply, fetch_feeds(socket)}
+  end
+
+  # Refresh schedule and feed stats when executions end (run_count,
+  # last_run_at update)
   def handle_info(%Cyfr.Bus.Execution{kind: kind}, socket)
       when kind in [:completed, :failed, :cancelled] do
-    {:noreply, fetch_schedules(socket)}
+    {:noreply, socket |> fetch_schedules() |> fetch_feeds()}
   end
 
   def handle_info(%Cyfr.Bus.Execution{}, socket), do: {:noreply, socket}
@@ -320,6 +347,32 @@ defmodule PrismWeb.SchedulesLive do
 
     assign(socket, :schedules, schedules)
   end
+
+  # `feed.list` answers no arguments and no result's content, so the page
+  # has none to show.
+  defp fetch_feeds(socket) do
+    feeds =
+      case call_tool(socket, "feed", %{"action" => "list"}) do
+        {:ok, %{feeds: list}} when is_list(list) ->
+          list
+
+        other ->
+          Logger.warning("[SchedulesLive] feed list failed: #{inspect(other)}")
+          []
+      end
+
+    assign(socket, :feeds, feeds)
+  end
+
+  defp interval_label(1), do: "Every minute"
+  defp interval_label(60), do: "Every hour"
+  defp interval_label(minutes) when is_integer(minutes), do: "Every #{minutes} minutes"
+  defp interval_label(_minutes), do: "-"
+
+  defp action_labels(actions) when is_list(actions),
+    do: Enum.map_join(actions, ", ", &f(&1, :label))
+
+  defp action_labels(_actions), do: ""
 
   defp fetch_components(socket) do
     all =
@@ -587,6 +640,84 @@ defmodule PrismWeb.SchedulesLive do
           </table>
         </div>
       </.card>
+
+      <section id="feeds" class="space-y-3">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400">Feeds</h2>
+        <.card>
+          <div :if={!@loading && @feeds == []} class="py-8">
+            <.empty_state message="No feeds" />
+          </div>
+          <div :if={@feeds != []} class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-800 table-fixed">
+              <thead>
+                <tr>
+                  <th class="w-[14%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    Name
+                  </th>
+                  <th class="w-[18%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    Binding
+                  </th>
+                  <th class="w-[18%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    Component
+                  </th>
+                  <th class="w-[10%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    Operation
+                  </th>
+                  <th class="w-[10%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    Interval
+                  </th>
+                  <th class="w-[10%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    Last Result
+                  </th>
+                  <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    Actions
+                  </th>
+                  <th class="w-[8%] px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                  </th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-800">
+                <%= for feed <- @feeds do %>
+                  <tr id={"feed-#{f(feed, :binding)}"} class="hover:bg-gray-800/50">
+                    <td class="px-4 py-3 text-sm text-white font-medium truncate">
+                      <span title={f(feed, :label)}>{f(feed, :feed)}</span>
+                    </td>
+                    <td class="px-4 py-3 text-sm truncate max-w-0">
+                      <span class="font-mono text-xs text-gray-400">{f(feed, :binding)}</span>
+                    </td>
+                    <td class="px-4 py-3 text-sm truncate max-w-0">
+                      <span class="font-mono text-xs text-blue-400">{f(feed, :reference)}</span>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-300 truncate">{f(feed, :operation)}</td>
+                    <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">
+                      {interval_label(f(feed, :interval_minutes))}
+                    </td>
+                    <td class="px-4 py-3 text-sm whitespace-nowrap">
+                      <span class="text-xs text-gray-400" title={f(feed, :at)}>
+                        {relative_time(f(feed, :at))}
+                      </span>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-300 truncate">
+                      {action_labels(f(feed, :actions))}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-right">
+                      <.button
+                        variant="danger"
+                        class="text-xs px-2 py-1"
+                        phx-click="remove_feed"
+                        phx-value-id={f(feed, :binding)}
+                        data-confirm="Remove this feed?"
+                      >
+                        Remove
+                      </.button>
+                    </td>
+                  </tr>
+                <% end %>
+              </tbody>
+            </table>
+          </div>
+        </.card>
+      </section>
       <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
     </div>
     """

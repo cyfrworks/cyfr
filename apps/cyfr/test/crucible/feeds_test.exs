@@ -9,7 +9,10 @@ defmodule Crucible.FeedsTest do
   its bound and shape, claimed after the result it replaces, and written
   by a member that still owns its slot; any other output is refused as an
   error named only by its status. A feed's writes are held to its athanor,
-  and a feed announces no schedule completion and no schedule update.
+  and a feed announces no schedule completion and no schedule update. A
+  fire publishes an accepted result on the athanor's feeds topic once its
+  accept committed, and a refused, stale or fenced-off result publishes
+  nothing.
 
   The fires run through the real scheduler path with the scripted worker
   service the scheduler's own suite uses: everything but the component is
@@ -29,7 +32,7 @@ defmodule Crucible.FeedsTest do
   alias Arca.Schemas.CronSchedule, as: ScheduleRow
   alias Crucible.Feeds
   alias Crucible.Schedules.{Provider, Scheduler}
-  alias Cyfr.Bus.ScheduleCompleted
+  alias Cyfr.Bus.{FeedPublished, ScheduleCompleted}
   alias Cyfr.Test.ScriptedWorker
   alias Prima.Test.AuthorityFixtures
   alias Sanctum.Test.ConsentFixtures
@@ -198,14 +201,15 @@ defmodule Crucible.FeedsTest do
       refute match?({:invalid_argument, "feed result refused" <> _}, reason)
     end
 
+    # The `"error"` reason is named by its sentence, never by its code.
     for {label, output, named} <- [
           {"a non-2xx data envelope", %{"status" => 503, "data" => %{"price" => "a secret"}},
-           ~s(error at "" \(status 503\))},
+           "the operation answered an error, or no envelope (status 503)"},
           {"an envelope with a key besides status and data",
            %{"status" => 200, "data" => %{"price" => 1}, "note" => "a secret"},
-           ~s(error at "" \(status 200\))},
+           "the operation answered an error, or no envelope (status 200)"},
           {"an output that is no envelope", %{"price" => 1, "note" => "a secret"},
-           ~s(error at "")}
+           "the operation answered an error, or no envelope"}
         ] do
       test "#{label} completes its run and is refused as the occurrence's error, by status only",
            %{actor: actor} do
@@ -258,7 +262,7 @@ defmodule Crucible.FeedsTest do
       # A refresh starts after it, claims the next seq and finishes first.
       {:ok, slot} = Arca.ControlPlane.member_slot()
       assert {:ok, 2} = CronSchedule.claim_feed_seq(actor, feed.id)
-      assert :ok = Feeds.accept(ctx, feed.id, 2, answer(2.0), slot)
+      assert {:ok, %{"revision" => 2}} = Feeds.accept(ctx, feed.id, 2, answer(2.0), slot)
 
       task = running_task()
       ref = Process.monitor(task)
@@ -287,7 +291,7 @@ defmodule Crucible.FeedsTest do
       # A refresh claims the next seq and is accepted while the fire runs.
       {:ok, slot} = Arca.ControlPlane.member_slot()
       assert {:ok, 2} = CronSchedule.claim_feed_seq(actor, feed.id)
-      assert :ok = Feeds.accept(ctx, feed.id, 2, answer(2.0), slot)
+      assert {:ok, %{"revision" => 2}} = Feeds.accept(ctx, feed.id, 2, answer(2.0), slot)
 
       task = running_task()
       ref = Process.monitor(task)
@@ -406,7 +410,254 @@ defmodule Crucible.FeedsTest do
     end
   end
 
+  describe "a fire's publication" do
+    test "broadcast only after commit: the event is seen once the row holds the result", %{
+      actor: actor
+    } do
+      script!([%{"price" => 42.5}])
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+      test = self()
+
+      # A subscriber that reads the row the moment it hears the event.
+      spawn_link(fn ->
+        :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.feeds(actor))
+        send(test, :watching)
+
+        receive do
+          %FeedPublished{} = published ->
+            {:ok, row} = CronSchedule.get_feed(actor, published.binding)
+            send(test, {:heard, published, row})
+        end
+      end)
+
+      assert_receive :watching
+      scheduler!()
+
+      assert_receive {:heard, published, row}, 10_000
+      assert published.binding == feed.id
+      assert %FeedPublished{feed: "btc", revision: 1, result: %{"price" => 42.5}} = published
+      assert %{feed_result_seq: 1} = row
+      assert {:ok, %{"price" => 42.5}} == Prima.Json.decode(row.feed_result)
+
+      assert published.at ==
+               DateTime.to_iso8601(DateTime.shift_zone!(row.feed_result_at, "Etc/UTC"))
+
+      # The display part of the binding, never its arguments.
+      assert published.actions == [%{"name" => "refresh", "label" => "Refresh"}]
+      refute inspect(published) =~ "BTC"
+    end
+
+    test "a refused result publishes nothing", %{actor: actor} do
+      script!([%{"price" => "not a number"}])
+      watch_feeds(actor)
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+
+      capture_log(fn ->
+        scheduler!()
+        wait_until(fn -> match?([%{state: "failed"}], occurrences(actor, feed.id)) end)
+      end)
+
+      # A publish is sent before the occurrence ends, so none was.
+      refute_received %FeedPublished{}
+    end
+
+    test "a stale result publishes nothing", %{ctx: ctx, actor: actor} do
+      script!([{:probe, self()}, %{"price" => 1.0}])
+      watch_feeds(actor)
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+      scheduler = scheduler!()
+      assert_receive {:scripted_probe, worker, _execution_id}, 10_000
+
+      # A later claim's result is accepted while the fire runs; accepting
+      # alone publishes nothing, the press or fire that accepted does.
+      {:ok, slot} = Arca.ControlPlane.member_slot()
+      {:ok, 2} = CronSchedule.claim_feed_seq(actor, feed.id)
+      {:ok, _envelope} = Feeds.accept(ctx, feed.id, 2, answer(2.0), slot)
+
+      task = running_task()
+      ref = Process.monitor(task)
+      send(worker, :continue)
+      assert_receive {:DOWN, ^ref, :process, ^task, _}, 10_000
+      _ = :sys.get_state(scheduler)
+
+      assert [%{state: "completed"}] = occurrences(actor, feed.id)
+      refute_received %FeedPublished{}
+    end
+
+    test "a stale member's accepted-looking result publishes nothing", %{actor: actor} do
+      slot = claimant!()
+      script!([{:probe, self()}, %{"price" => 1.0}])
+      watch_feeds(actor)
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+      scheduler = scheduler!()
+      assert_receive {:scripted_probe, worker, _execution_id}, 10_000
+
+      # Taken over while the run is in flight: the result is valid, and
+      # only the acceptance's own fence refuses it.
+      take_over!(slot)
+      task = running_task()
+      ref = Process.monitor(task)
+
+      capture_log(fn ->
+        send(worker, :continue)
+        assert_receive {:DOWN, ^ref, :process, ^task, _}, 10_000
+        _ = :sys.get_state(scheduler)
+      end)
+
+      assert {:ok, %{feed_result_seq: 0, feed_result: nil}} =
+               CronSchedule.get_feed(actor, feed.id)
+
+      refute_received %FeedPublished{}
+    end
+  end
+
+  describe "a fire's other ends" do
+    test "an accept answered :not_found, the feed removed during the run, completes and records no error",
+         %{actor: actor} do
+      script!([{:probe, self()}, %{"price" => 1.0}])
+      watch_outcomes(actor)
+      watch_feeds(actor)
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+      scheduler = scheduler!()
+      assert_receive {:scripted_probe, worker, _execution_id}, 10_000
+
+      assert {:ok, _removed} = CronSchedule.remove_feed(actor, feed.id)
+
+      task = running_task()
+      ref = Process.monitor(task)
+      send(worker, :continue)
+      assert_receive {:DOWN, ^ref, :process, ^task, _}, 10_000
+      _ = :sys.get_state(scheduler)
+
+      assert [%{state: "completed"}] = occurrences(actor, feed.id)
+
+      assert {:ok, %{status: "deleted", feed_result_seq: 0, feed_result: nil, error_count: 0}} =
+               CronSchedule.get_for_daemon(feed.id)
+
+      assert_received {:schedule_outcome, [:cyfr, :schedules, :completed], %{schedule_id: id}}
+      assert id == feed.id
+      refute_received {:schedule_outcome, [:cyfr, :schedules, :failed], _}
+      refute_received %FeedPublished{}
+    end
+
+    test "an accept the store refuses otherwise (:unclaimed) fails the occurrence and records it",
+         %{actor: actor} do
+      script!([{:probe, self()}, %{"price" => 1.0}])
+      watch_outcomes(actor)
+      watch_feeds(actor)
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+      scheduler = scheduler!()
+      assert_receive {:scripted_probe, worker, _execution_id}, 10_000
+
+      # The claimed seq no longer reads as claimed when the run answers.
+      {1, _} =
+        Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^feed.id),
+          set: [feed_fire_seq: 0]
+        )
+
+      task = running_task()
+      ref = Process.monitor(task)
+
+      capture_log(fn ->
+        send(worker, :continue)
+        assert_receive {:DOWN, ^ref, :process, ^task, _}, 10_000
+        _ = :sys.get_state(scheduler)
+      end)
+
+      assert [%{state: "failed"}] = occurrences(actor, feed.id)
+
+      assert {:ok, %{feed_result_seq: 0, feed_result: nil, run_count: 0, error_count: 1}} =
+               CronSchedule.get_feed(actor, feed.id)
+
+      assert_received {:schedule_outcome, [:cyfr, :schedules, :failed], %{reason: :unclaimed}}
+      refute_received %FeedPublished{}
+    end
+
+    test "a seq claim refused :not_found, the feed removed after its occurrence was claimed, fails it",
+         %{actor: actor} do
+      script!([%{"price" => 1.0}])
+      watch_outcomes(actor)
+      watch_feeds(actor)
+      {:ok, feed} = bind(actor, feed_binding("btc"))
+
+      # Loaded with its first occurrence an hour away, so the scheduler
+      # starts idle.
+      later = DateTime.add(DateTime.utc_now(), 3_600, :second)
+
+      {1, _} =
+        Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^feed.id),
+          set: [next_run_at: later]
+        )
+
+      scheduler = scheduler!()
+      _ = :sys.get_state(scheduler)
+
+      # The run's task cannot start while the task supervisor is held: the
+      # fire claims its occurrence and waits there, and the feed is removed
+      # before its task claims a seq.
+      tasks = Process.whereis(Crucible.Schedules.TaskSupervisor)
+      :ok = :sys.suspend(tasks)
+      on_exit(fn -> if Process.alive?(tasks), do: :sys.resume(tasks) end)
+
+      due = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      {1, _} =
+        Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^feed.id),
+          set: [next_run_at: due]
+        )
+
+      send(scheduler, {:fire, feed.id})
+      wait_until(fn -> match?([%{state: "claimed"}], occurrences(actor, feed.id)) end)
+      assert {:ok, _removed} = CronSchedule.remove_feed(actor, feed.id)
+
+      capture_log(fn ->
+        :ok = :sys.resume(tasks)
+        wait_until(fn -> match?([%{state: "failed"}], occurrences(actor, feed.id)) end)
+
+        wait_until(fn ->
+          match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(feed.id))
+        end)
+      end)
+
+      assert [%{state: "failed", execution_id: nil}] = occurrences(actor, feed.id)
+
+      assert {:ok, %{status: "deleted", feed_fire_seq: 0, run_count: 0, error_count: 1}} =
+               CronSchedule.get_for_daemon(feed.id)
+
+      assert ScriptedWorker.calls() == []
+      assert_received {:schedule_outcome, [:cyfr, :schedules, :failed], %{reason: :not_found}}
+      refute_received %FeedPublished{}
+    end
+  end
+
   describe "accept/5" do
+    test "an accepted result answers the envelope of the row it wrote, never the arguments", %{
+      ctx: ctx,
+      actor: actor
+    } do
+      binding = feed_binding("btc")
+      {:ok, feed} = bind(actor, binding)
+      {:ok, slot} = Arca.ControlPlane.member_slot()
+      {:ok, seq} = CronSchedule.claim_feed_seq(actor, feed.id)
+
+      assert {:ok, envelope} = Feeds.accept(ctx, feed.id, seq, answer(5), slot)
+      {:ok, row} = CronSchedule.get_feed(actor, feed.id)
+
+      assert envelope ==
+               Prima.Feed.envelope(
+                 feed.id,
+                 binding,
+                 row.feed_result_seq,
+                 row.feed_result_at,
+                 %{"price" => 5}
+               )
+
+      assert envelope |> Map.keys() |> Enum.sort() ==
+               ~w(actions at binding feed label result revision)
+
+      refute inspect(envelope) =~ "BTC"
+    end
+
     test "a result outside its shape changes nothing", %{ctx: ctx, actor: actor} do
       {:ok, feed} = bind(actor, feed_binding("btc"))
       {:ok, slot} = Arca.ControlPlane.member_slot()
@@ -436,7 +687,9 @@ defmodule Crucible.FeedsTest do
 
       # JSON text and a decoded value are the same output, and the result
       # is its envelope's data.
-      assert :ok = Feeds.accept(ctx, feed.id, seq, ~s({"status":201,"data":{"price":3}}), slot)
+      assert {:ok, %{"revision" => ^seq, "result" => %{"price" => 3}}} =
+               Feeds.accept(ctx, feed.id, seq, ~s({"status":201,"data":{"price":3}}), slot)
+
       assert {:ok, %{result: %{"price" => 3}, feed_result_seq: ^seq}} = Feeds.get(ctx, feed.id)
       assert {:error, :stale} = Feeds.accept(ctx, feed.id, seq, answer(4), slot)
     end
@@ -479,7 +732,9 @@ defmodule Crucible.FeedsTest do
                CronSchedule.get_feed(actor, feed.id)
 
       # 200 and 299 bound the range.
-      assert :ok = Feeds.accept(ctx, feed.id, seq, envelope(%{"price" => 2}, 299), slot)
+      assert {:ok, _envelope} =
+               Feeds.accept(ctx, feed.id, seq, envelope(%{"price" => 2}, 299), slot)
+
       assert {:ok, %{result: %{"price" => 2}}} = Feeds.get(ctx, feed.id)
     end
 
@@ -523,7 +778,7 @@ defmodule Crucible.FeedsTest do
       {:ok, slot} = Arca.ControlPlane.member_slot()
       {:ok, 1} = CronSchedule.claim_feed_seq(actor, feed.id)
       {:ok, 2} = CronSchedule.claim_feed_seq(actor, feed.id)
-      :ok = Feeds.accept(ctx, feed.id, 2, answer(2), slot)
+      {:ok, _envelope} = Feeds.accept(ctx, feed.id, 2, answer(2), slot)
 
       for output <- invalid_outputs(), seq <- [1, 2] do
         assert {:error, :stale} = Feeds.accept(ctx, feed.id, seq, output, slot),
@@ -643,7 +898,7 @@ defmodule Crucible.FeedsTest do
 
         case row do
           %{"accepted" => data} ->
-            assert answer == :ok, "#{why}: #{inspect(answer)}"
+            assert match?({:ok, %{"revision" => ^seq}}, answer), "#{why}: #{inspect(answer)}"
 
             assert {:ok, %{feed_result: text, feed_result_seq: ^seq}} =
                      CronSchedule.get_feed(actor, feed.id)
@@ -674,7 +929,7 @@ defmodule Crucible.FeedsTest do
       {:ok, _} = CronSchedule.remove_feed(actor, removed.id)
       {:ok, slot} = Arca.ControlPlane.member_slot()
       {:ok, 1} = CronSchedule.claim_feed_seq(actor, second.id)
-      :ok = Feeds.accept(ctx, second.id, 1, answer(7), slot)
+      {:ok, _envelope} = Feeds.accept(ctx, second.id, 1, answer(7), slot)
 
       assert {:ok,
               [
@@ -900,6 +1155,9 @@ defmodule Crucible.FeedsTest do
     :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.schedule_completions())
     :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.schedules(actor))
   end
+
+  # The athanor's feeds topic, heard by the case itself.
+  defp watch_feeds(actor), do: :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.feeds(actor))
 
   # A claimant runs, as a deployment's does, and this member holds its
   # slot: the umbrella's test configuration runs none, which would leave a

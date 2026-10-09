@@ -158,7 +158,9 @@ defmodule Crucible.CredentialedIngressGateTest do
       {:cron, "apps/cyfr/lib/crucible/schedules/scheduler.ex", :no_fallback_when_bound},
       {:webhook, "apps/cyfr/lib/emissary/web/controllers/webhook_controller.ex",
        :no_fallback_when_bound},
-      {:tincture, "apps/cyfr/lib/crucible/tincture.ex", :falls_back}
+      {:tincture, "apps/cyfr/lib/crucible/tincture.ex", :falls_back},
+      # A feed's press roots on the binding's own profile.
+      {:feed, "apps/cyfr/lib/crucible/feeds.ex", :no_fallback_when_bound}
     ]
 
     test "each ingress routes through the chain" do

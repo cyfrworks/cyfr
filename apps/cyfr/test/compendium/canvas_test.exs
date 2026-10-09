@@ -640,10 +640,32 @@ defmodule Compendium.CanvasTest do
       assert Compendium.canvas_catalog(ctx) == {:ok, catalog}
       assert catalog.toolkit == Compendium.tincture_toolkit_majors()
 
-      # No stream a provider declares carries a shape yet, so a canvas
-      # reads none.
-      assert streams == []
-      assert Grimoire.streams() != []
+      # A canvas reads exactly a feed's results, by the feed's name, and
+      # the athanor's runs; every other stream declares no shape.
+      assert [
+               %{
+                 name: "feed.results",
+                 subject: ~S"\A[a-z0-9][a-z0-9-]{0,47}\z",
+                 shape: %{"type" => "object", "fields" => feed_fields},
+                 filter: "feed",
+                 refresh: true
+               },
+               %{
+                 name: "runs.changes",
+                 subject: nil,
+                 shape: %{"type" => "object", "fields" => run_fields},
+                 filter: nil,
+                 refresh: true
+               }
+             ] = streams
+
+      assert Enum.sort(Map.keys(feed_fields)) ==
+               ~w(actions at binding feed label result revision)
+
+      assert Enum.sort(Map.keys(run_fields)) ==
+               ~w(component_type duration_ms error execution_id kind parent_execution_id reference)
+
+      assert length(Grimoire.streams()) > length(streams)
     end
   end
 

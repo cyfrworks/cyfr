@@ -23,6 +23,7 @@ const (
 	Decision           = "decision"
 	Door               = "door"
 	Execution          = "execution"
+	Feed               = "feed"
 	File               = "file"
 	InstanceEntry      = "instance_entry"
 	Key                = "key"
@@ -135,6 +136,10 @@ const (
 	ExecutionRunStream              = "run_stream"
 	ExecutionStatus                 = "status"
 	ExecutionUsage                  = "usage"
+	FeedBind                        = "bind"
+	FeedList                        = "list"
+	FeedPress                       = "press"
+	FeedRemove                      = "remove"
 	FileAccept                      = "accept"
 	FileDecline                     = "decline"
 	FileDelete                      = "delete"
@@ -326,6 +331,7 @@ var Actions = map[string][]string{
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
 	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status", "usage"},
+	"feed":                {"bind", "list", "press", "remove"},
 	"file":                {"accept", "decline", "delete", "list", "offer", "offers", "read", "withdraw", "write"},
 	"instance_entry":      {"create", "delete", "list", "offered", "people", "rebind", "revoke", "rotate", "set_audience", "set_caps", "set_component_policy", "usage"},
 	"key":                 {"create", "get", "list", "revoke", "rotate"},
@@ -1752,6 +1758,80 @@ func (args ExecutionUsageArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ExecutionUsage, fields: fields(args)})
+}
+
+// FeedBindArgs carries arguments for feed.bind.
+type FeedBindArgs struct {
+	// bind: the feed's name, unique among the athanor's live feeds; a canvas reads the feed by it
+	Name string `json:"name"`
+	// bind: the feed's label
+	Label string `json:"label"`
+	// bind: the catalyst or formula, versionless; its installed version is pinned
+	Reference string `json:"reference"`
+	// bind: the profile the feed runs under; its grant must admit runs on a schedule
+	ProfileId string `json:"profile_id"`
+	// bind: the operation the feed runs, one the component's manifest declares a result shape for: the shape of the data of its 2xx {status, data} envelope
+	Operation string `json:"operation"`
+	// bind: the operation's fixed arguments, a JSON object
+	Args any `json:"args"`
+	// bind: how often the feed runs, in minutes: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60
+	IntervalMinutes int `json:"interval_minutes"`
+	// bind: up to 8 labelled actions a canvas may show as controls, [{name, label, kind}]: a refresh reruns the feed; a run runs its own operation and args and publishes nothing
+	Actions any `json:"actions"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FeedBindArgs) MarshalJSON() ([]byte, error) {
+	type fields FeedBindArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FeedBind, fields: fields(args)})
+}
+
+// FeedListArgs carries arguments for feed.list.
+type FeedListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FeedListArgs) MarshalJSON() ([]byte, error) {
+	type fields FeedListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FeedList, fields: fields(args)})
+}
+
+// FeedPressArgs carries arguments for feed.press.
+type FeedPressArgs struct {
+	// remove, press: the feed's binding id, as bind and list answer it
+	Binding string `json:"binding"`
+	// press: the name of one of the feed's actions
+	ActionName string `json:"action_name"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FeedPressArgs) MarshalJSON() ([]byte, error) {
+	type fields FeedPressArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FeedPress, fields: fields(args)})
+}
+
+// FeedRemoveArgs carries arguments for feed.remove.
+type FeedRemoveArgs struct {
+	// remove, press: the feed's binding id, as bind and list answer it
+	Binding string `json:"binding"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args FeedRemoveArgs) MarshalJSON() ([]byte, error) {
+	type fields FeedRemoveArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: FeedRemove, fields: fields(args)})
 }
 
 // FileAcceptArgs carries arguments for file.accept.

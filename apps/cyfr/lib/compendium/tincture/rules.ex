@@ -124,6 +124,9 @@ defmodule Compendium.Tincture.Rules do
 
   @image_types ~w(.svg .png .jpg .jpeg .gif)
 
+  # The feed operations no tincture declares as a system action.
+  @feed_actions ~w(feed.bind feed.remove feed.press)
+
   @origin ~r/\Ahttps?:\/\/(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?\z/
   @nonce ~r/\A[A-Za-z0-9+\/_=-]{16,128}\z/
 
@@ -396,7 +399,9 @@ defmodule Compendium.Tincture.Rules do
   list has a source (one without is static). A desktop (placement
   `desktop`) reaches nothing of its own: it declares no `tincture.connect`
   origin, no `caps.egress` and no component dependency, static or dynamic;
-  the cards it draws are other tinctures'.
+  the cards it draws are other tinctures'. No tincture, whatever its
+  placement, declares `feed.bind`, `feed.remove` or `feed.press` among
+  its system actions: those are the person's alone.
 
   A canvas (placement `canvas`) declares `tincture.canvas`, which no other
   placement does: its `module`, a relative path with no `..` and no
@@ -416,6 +421,7 @@ defmodule Compendium.Tincture.Rules do
     with {:ok, %Tincture{} = declaration} <- Tincture.from_manifest(manifest),
          :ok <- known(declaration.frame.capabilities),
          :ok <- placement(declaration.frame.placement),
+         :ok <- no_feed_action(declaration.actions),
          :ok <- desktop(declaration.frame.placement, manifest),
          :ok <- canvas(declaration, manifest),
          :ok <- distinct_cards(declaration.cards),
@@ -780,6 +786,22 @@ defmodule Compendium.Tincture.Rules do
   end
 
   defp image?(path), do: String.downcase(Path.extname(path)) in @image_types
+
+  # Binding, removing or pressing a feed is the person's alone: a bind or a
+  # removal they approve, a press of a control Prism draws. A tincture's
+  # frame reaches none of them, whatever its placement.
+  defp no_feed_action(actions) do
+    case Enum.find(actions, &(&1 in @feed_actions)) do
+      nil ->
+        :ok
+
+      action ->
+        refuse(
+          "tincture.actions names #{action}: a tincture never binds, removes or presses a " <>
+            "feed; the person does"
+        )
+    end
+  end
 
   defp refuse(sentence), do: {:error, {:invalid_tincture, sentence}}
 end

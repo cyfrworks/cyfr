@@ -22,6 +22,7 @@ defmodule Cyfr.BusPayloadTest do
     Confirmation,
     Execution,
     ExecutionEvent,
+    FeedPublished,
     FileOffer,
     InstanceEntryChanged,
     LayoutPublished,
@@ -83,6 +84,7 @@ defmodule Cyfr.BusPayloadTest do
         data: %{"name" => "runs", "title" => "Runs", "number" => 3, "list" => []}
       }),
       LayoutPublished.new(@actor, "usr_1", 4),
+      FeedPublished.new(@actor, feed_envelope()),
       Confirmation.new(@actor, :opened,
         ref: "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         operation: "vault.create",
@@ -405,6 +407,39 @@ defmodule Cyfr.BusPayloadTest do
     end
   end
 
+  describe "a feed's publication" do
+    test "is the envelope's seven fields, and nothing of the binding's arguments or reference" do
+      published = FeedPublished.new(@actor, feed_envelope())
+      fields = published |> Map.from_struct() |> Map.keys() |> Enum.sort()
+
+      assert fields ==
+               Enum.sort(~w(athanor_id kind binding feed revision at result label actions)a)
+
+      assert FeedPublished.kinds() == [:published]
+
+      assert %FeedPublished{kind: :published, feed: "btc", revision: 3, result: %{"price" => 1}} =
+               published
+
+      # An envelope missing one of its fields builds nothing, and the
+      # refusal names none of the envelope's values.
+      for broken <- [Map.delete(feed_envelope(), "result"), %{"result" => "SECRET"}, nil] do
+        error = assert_raise ArgumentError, fn -> FeedPublished.new(@actor, broken) end
+        refute error.message =~ "SECRET"
+        refute error.message =~ "btc"
+        refute error.message =~ "price"
+      end
+
+      row = Enum.find(Bus.topics(), &(&1.key == :feeds))
+
+      assert {row.scope, row.template, row.struct, row.producers, row.consumers} ==
+               {:tenant, "tenant:<athanor_id>:bus:feeds", FeedPublished,
+                ["Crucible.Feeds", "Crucible.Schedules.Scheduler"],
+                ["stream:feed.results", "PrismWeb.SchedulesLive"]}
+
+      assert "stream:runs.changes" in Enum.find(Bus.topics(), &(&1.key == :executions)).consumers
+    end
+  end
+
   describe "a file offer's notice" do
     test "is the offer, its kind, its sender and a filename, and nothing of the file" do
       fields =
@@ -464,6 +499,19 @@ defmodule Cyfr.BusPayloadTest do
   end
 
   # ---------------------------------------------------------------------------
+
+  # An accepted result's envelope, as `Prima.Feed.envelope/5` builds it.
+  defp feed_envelope do
+    %{
+      "binding" => "feed_01926f4e-8c1a-7b3d-9e2f-1a2b3c4d5e6f",
+      "feed" => "btc",
+      "revision" => 3,
+      "at" => "2026-10-09T00:00:00Z",
+      "result" => %{"price" => 1},
+      "label" => "Bitcoin",
+      "actions" => [%{"name" => "refresh", "label" => "Refresh"}]
+    }
+  end
 
   defp roster_gaps(row) do
     Enum.reject(

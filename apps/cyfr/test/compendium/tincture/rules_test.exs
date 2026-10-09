@@ -285,6 +285,37 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
+    for action <- ~w(feed.bind feed.remove feed.press) do
+      test "#{action} among the system actions is refused, for every placement" do
+        action = unquote(action)
+
+        sentence =
+          "tincture.actions names #{action}: a tincture never binds, removes or presses a feed; the person does"
+
+        for placement <- Rules.placements() do
+          tincture = %{
+            "frame" => %{"placement" => placement},
+            "actions" => ["execution.list", action]
+          }
+
+          tincture =
+            if placement == "canvas",
+              do: Map.put(tincture, "canvas", %{"module" => "canvas.js", "toolkit" => 1}),
+              else: tincture
+
+          assert Rules.validate_declaration(%{"type" => "tincture", "tincture" => tincture}) ==
+                   {:error, {:invalid_tincture, sentence}},
+                 placement
+        end
+
+        # Reading the feeds is not one of them.
+        assert {:ok, _} =
+                 Rules.validate_declaration(
+                   manifest(Map.put(@declared, "actions", ["execution.list", "feed.list"]))
+                 )
+      end
+    end
+
     test "a card naming an action the declaration lacks is refused" do
       lacking = Map.put(@declared, "actions", ["records.get"])
 
