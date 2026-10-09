@@ -16,13 +16,12 @@ defmodule Crucible.LeaseWatch do
   that raises included, is tolerated only inside the lease the attempt
   last held.
 
-  The keeper is linked to the process that starts it, the holder on every
-  path that holds a lease, so a crash of either takes the other down at
-  once, and it monitors the holder, so a holder that ends without stopping
-  it, normally or as a process other than its starter, ends it too. It
-  makes no link once it runs: `stop/1` drops the caller's link before it
-  kills the keeper, and a link made after that would carry the kill to the
-  holder.
+  The holder is the process that starts the keeper. The keeper is linked
+  to it, so a crash of either takes the other down at once, and monitors
+  it, so a holder that ends without stopping it, normally included, ends
+  it too. It makes no link once it runs: `stop/1` drops the holder's link
+  before it kills the keeper, and a link made after that would carry the
+  kill to the holder.
 
   A holder that moves the attempt out of `running` suspends its keeper
   first (`suspend/1`), so no renewal races the move, and then stops it
@@ -37,14 +36,15 @@ defmodule Crucible.LeaseWatch do
   @tick_ms 60_000
 
   @doc """
-  Start a keeper for `attempt` of `execution_id`, linked to the calling
-  process and watching `holder`.
-  `opts`: `:tick_ms` (the renewal period), `:until` (the lease the
-  attempt holds now).
+  Start a keeper for `attempt` of `execution_id`, held by the calling
+  process. `opts`: `:tick_ms` (the renewal period), `:until` (the lease
+  the attempt holds now).
   """
-  @spec start(pid(), String.t(), String.t(), keyword()) :: {:ok, pid()}
-  def start(holder, execution_id, attempt, opts \\ [])
-      when is_pid(holder) and is_binary(execution_id) and is_binary(attempt) do
+  @spec start(String.t(), String.t(), keyword()) :: {:ok, pid()}
+  def start(execution_id, attempt, opts \\ [])
+      when is_binary(execution_id) and is_binary(attempt) do
+    holder = self()
+
     watch = %{
       holder: holder,
       execution_id: execution_id,
@@ -84,7 +84,7 @@ defmodule Crucible.LeaseWatch do
     :ok
   end
 
-  @doc "Stop a keeper, from the process that started it, without touching its holder."
+  @doc "Stop a keeper from its holder, without touching the holder."
   @spec stop(pid() | nil) :: :ok
   def stop(nil), do: :ok
 

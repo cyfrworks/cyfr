@@ -384,7 +384,7 @@ defmodule Emissary.External.Proxy do
   # barriers — its input retained with admission, its lease kept while
   # the call is in flight, its result retained and the row closed after.
   # A cancel asked of the attempt, or a lease lost, exits the caller
-  # mid-call (`Crucible.start_lease_watch/3`) — the step that made the call
+  # mid-call (`Crucible.start_lease_watch/2`) — the step that made the call
   # closes uncertain, never with a result that arrived after. Once the call
   # answers, the keeper is suspended before the row is closed, so no
   # renewal finds the row closed and exits the caller after it. The answer
@@ -434,7 +434,7 @@ defmodule Emissary.External.Proxy do
            |> maybe_put(:step, Keyword.get(opts, :step)),
          {:ok, staged} <- stage(ctx, id, "input", input, class),
          {:ok, attempt} <- admit(attrs, [{:payloads, [staged]} | admission], staged) do
-      {:ok, watch} = Crucible.start_lease_watch(self(), id, attempt)
+      {:ok, watch} = Crucible.start_lease_watch(id, attempt)
 
       try do
         answer = call.()

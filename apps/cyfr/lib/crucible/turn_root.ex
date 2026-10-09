@@ -83,7 +83,7 @@ defmodule Crucible.TurnRoot do
          :ok <- Record.write_started(record),
          {:ok, token} <- claim_slot(ctx, record) do
       {:ok, keeper} =
-        LeaseWatch.start(self(), record.id, record.attempt, Keyword.take(opts, [:tick_ms]))
+        LeaseWatch.start(record.id, record.attempt, Keyword.take(opts, [:tick_ms]))
 
       {:ok,
        %{
@@ -169,7 +169,6 @@ defmodule Crucible.TurnRoot do
         {:ok, turn} ->
           {:ok, keeper} =
             LeaseWatch.start(
-              self(),
               execution_id,
               turn.attempt,
               [until: until] ++ Keyword.take(opts, [:tick_ms])
@@ -208,7 +207,7 @@ defmodule Crucible.TurnRoot do
            take_slot(ctx, execution_id, Keyword.get(opts, :timeout_ms, @slot_wait_ms)),
          {:ok, token} <- hold_live(ctx, execution_id, attempt, token) do
       {:ok, keeper} =
-        LeaseWatch.start(self(), execution_id, attempt, Keyword.take(opts, [:tick_ms]))
+        LeaseWatch.start(execution_id, attempt, Keyword.take(opts, [:tick_ms]))
 
       {:ok,
        %{

@@ -555,11 +555,12 @@ defmodule Crucible do
   defdelegate list(ctx, opts \\ []), to: Record
 
   @doc """
-  Keep the lease of `attempt` of `execution_id` held outside the engine,
-  exiting `holder` when it is lost (`Crucible.LeaseWatch.start/4`).
+  Keep the lease of `attempt` of `execution_id`, held outside the engine
+  by the calling process, exiting that process when the lease is lost
+  (`Crucible.LeaseWatch.start/3`).
   """
-  @spec start_lease_watch(pid(), String.t(), String.t(), keyword()) :: {:ok, pid()}
-  defdelegate start_lease_watch(holder, execution_id, attempt, opts \\ []),
+  @spec start_lease_watch(String.t(), String.t(), keyword()) :: {:ok, pid()}
+  defdelegate start_lease_watch(execution_id, attempt, opts \\ []),
     to: Crucible.LeaseWatch,
     as: :start
 

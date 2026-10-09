@@ -34,8 +34,8 @@ defmodule Crucible.FacadeTest do
     run_root: 5,
     run_root_edge: 5,
     service: 0,
+    start_lease_watch: 2,
     start_lease_watch: 3,
-    start_lease_watch: 4,
     stop_lease_watch: 1,
     subscribe_events: 2,
     suspend_lease_watch: 1,
@@ -52,37 +52,31 @@ defmodule Crucible.FacadeTest do
   end
 
   test "a lease keeper started through the root stops without touching its holder" do
-    holder = spawn(fn -> receive do: (:release -> :ok) end)
     until = DateTime.add(DateTime.utc_now(), 60, :second)
 
+    # This process holds the keeper, so a kill the stop let through would
+    # end the test with it.
     assert {:ok, keeper} =
-             Crucible.start_lease_watch(holder, "exe_facade", "att_facade",
-               until: until,
-               tick_ms: 60_000
-             )
+             Crucible.start_lease_watch("exe_facade", "att_facade", until: until, tick_ms: 60_000)
 
-    # The keeper takes hold of its holder from its own process: the stop
-    # waits for that hold, so it lands after it and never races it.
-    Prima.Test.Wait.wait_until(fn -> keeper in holds(holder) end)
+    # The keeper watches its holder from its own process: the stop waits
+    # for that watch, so it lands after it.
+    Prima.Test.Wait.wait_until(fn -> keeper in monitors(self()) end)
 
     ref = Process.monitor(keeper)
     assert :ok = Crucible.stop_lease_watch(keeper)
     assert_receive {:DOWN, ^ref, :process, ^keeper, :killed}
 
-    # Once the hold is gone the holder has taken the keeper's exit; a holder
-    # that exit reached is gone with it.
-    Prima.Test.Wait.wait_until(fn -> keeper not in holds(holder) end)
-    assert Process.alive?(holder)
+    # A dying process signals its links before it drops its monitors, so
+    # once the keeper's watch is gone, an exit the stop let through has
+    # reached this process.
+    Prima.Test.Wait.wait_until(fn -> keeper not in monitors(self()) end)
     assert :ok = Crucible.stop_lease_watch(nil)
-
-    send(holder, :release)
   end
 
-  # The processes linked to or monitoring `pid`; none once it is gone.
-  defp holds(pid) do
-    case Process.info(pid, [:links, :monitored_by]) do
-      [links: links, monitored_by: monitors] -> links ++ monitors
-      nil -> []
-    end
+  # The processes monitoring `pid`.
+  defp monitors(pid) do
+    {:monitored_by, monitors} = Process.info(pid, :monitored_by)
+    monitors
   end
 end

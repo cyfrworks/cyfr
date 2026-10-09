@@ -33,7 +33,7 @@ defmodule Crucible.LeaseWatchTest do
 
     {pid, ref} =
       spawn_monitor(fn ->
-        {:ok, watch} = LeaseWatch.start(self(), id, attempt, [tick_ms: 20] ++ opts)
+        {:ok, watch} = LeaseWatch.start(id, attempt, [tick_ms: 20] ++ opts)
         send(parent, {:watching, watch})
 
         receive do
@@ -140,15 +140,6 @@ defmodule Crucible.LeaseWatchTest do
       assert_receive {:DOWN, ^ref, :process, ^pid, ^reason}
       assert_receive {:DOWN, ^keeper, :process, ^watch, ^reason}, 2_000
     end
-  end
-
-  test "a holder other than the keeper's starter ends the keeper, and its crash goes no further",
-       %{id: id, attempt: attempt} do
-    holder = spawn(fn -> receive do: (:crash -> exit(:crashed)) end)
-    {:ok, watch} = LeaseWatch.start(holder, id, attempt, tick_ms: 60_000)
-    keeper = Process.monitor(watch)
-    send(holder, :crash)
-    assert_receive {:DOWN, ^keeper, :process, ^watch, :normal}, 2_000
   end
 
   test "a watch its holder stopped leaves the holder alone", %{id: id, attempt: attempt} do
