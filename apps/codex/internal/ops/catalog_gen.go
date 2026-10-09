@@ -17,7 +17,6 @@ const (
 	Athanor            = "athanor"
 	Build              = "build"
 	Canvas             = "canvas"
-	Card               = "card"
 	Component          = "component"
 	Confirmation       = "confirmation"
 	Decision           = "decision"
@@ -92,8 +91,6 @@ const (
 	CanvasRestore                   = "restore"
 	CanvasVersions                  = "versions"
 	CanvasWrite                     = "write"
-	CardPress                       = "press"
-	CardRefresh                     = "refresh"
 	ComponentCategories             = "categories"
 	ComponentCreate                 = "create"
 	ComponentDelete                 = "delete"
@@ -325,7 +322,6 @@ var Actions = map[string][]string{
 	"athanor":             {"archive", "create", "destroy", "get", "list", "pair", "provision", "purge", "rename", "settings", "unarchive"},
 	"build":               {"compile", "status", "toolchains", "validate"},
 	"canvas":              {"activate", "catalog", "restore", "versions", "write"},
-	"card":                {"press", "refresh"},
 	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
 	"confirmation":        {"cancel", "confirm", "pending", "reauth"},
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
@@ -968,42 +964,6 @@ func (args CanvasWriteArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: CanvasWrite, fields: fields(args)})
-}
-
-// CardPressArgs carries arguments for card.press.
-type CardPressArgs struct {
-	// The id of a card-size slot in your layout
-	Slot string `json:"slot"`
-	// The posture whose arrangement holds the slot
-	Posture string `json:"posture"`
-	// The index of the button among the card's declared buttons
-	Button int `json:"button"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args CardPressArgs) MarshalJSON() ([]byte, error) {
-	type fields CardPressArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: CardPress, fields: fields(args)})
-}
-
-// CardRefreshArgs carries arguments for card.refresh.
-type CardRefreshArgs struct {
-	// The id of a card-size slot in your layout
-	Slot string `json:"slot"`
-	// The posture whose arrangement holds the slot
-	Posture string `json:"posture"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args CardRefreshArgs) MarshalJSON() ([]byte, error) {
-	type fields CardRefreshArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: CardRefresh, fields: fields(args)})
 }
 
 // ComponentCategoriesArgs carries arguments for component.categories.
@@ -2336,7 +2296,7 @@ func (args KeyRotateArgs) MarshalJSON() ([]byte, error) {
 
 // LayoutEditArgs carries arguments for layout.edit.
 type LayoutEditArgs struct {
-	// edit: the whole layout document — {version: 1, postures: {hand|desk: {desktop, slots: [{id, tincture, size: icon|card|full, order, card}], floating: [{tincture, position: {x, y}}]}}}
+	// edit: the whole layout document — {version: 2, canvases: [{id, tincture, postures: {hand|desk: {apps: [{tincture, mode: full|column, order}], floating: [{tincture, position: {x, y}}]}}}]}
 	Document any `json:"document"`
 	// edit: the revision get answered; a layout published since refuses the edit
 	Revision int `json:"revision"`

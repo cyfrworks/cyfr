@@ -1,75 +1,133 @@
 {
-  "about": "Vectors for Prima.Layout (apps/prima/test/prima/layout_test.exs) and the JavaScript SDK test (apps/cyfr/assets/test/sdk/layout.test.mjs). `valid` is a document in canonical order whose canonical JSON (RFC 8785) is `canonical` and whose digest is `digest`; it names a tincture nobody installed, which stays valid. Every `invalid` document is refused for the reason `why` gives.",
+  "about": "Vectors for Prima.Layout (apps/prima/test/prima/layout_test.exs). `valid` is a document in canonical order whose canonical JSON (RFC 8785) is `canonical` and whose digest is `digest`; it names a tincture nobody installed, which stays valid. Every `invalid` document is refused for the reason `why` gives.",
   "valid": {
-    "version": 1,
-    "postures": {
-      "desk": {
-        "desktop": "tincture:local.desktop",
-        "slots": [
-          {"id": "weather", "tincture": "tincture:local.weather-lookup", "size": "card", "order": 0, "card": "today"},
-          {"id": "vault", "tincture": "tincture:local.vault", "size": "icon", "order": 1},
-          {"id": "game", "tincture": "tincture:local.flappy-bird", "size": "full", "order": 2},
-          {"id": "gone", "tincture": "tincture:example.com.not-installed", "size": "icon", "order": 3}
-        ],
-        "floating": [
-          {"tincture": "tincture:local.timer", "position": {"x": 9000, "y": 500}}
-        ]
+    "version": 2,
+    "canvases": [
+      {
+        "id": "home",
+        "tincture": "tincture:local.canvas",
+        "postures": {
+          "desk": {
+            "apps": [
+              {
+                "tincture": "tincture:local.flappy-bird",
+                "mode": "full",
+                "order": 0
+              },
+              {
+                "tincture": "tincture:local.vault",
+                "mode": "column",
+                "order": 1
+              },
+              {
+                "tincture": "tincture:example.com.not-installed",
+                "mode": "column",
+                "order": 2
+              }
+            ],
+            "floating": [
+              {
+                "tincture": "tincture:local.timer",
+                "position": {
+                  "x": 9000,
+                  "y": 500
+                }
+              }
+            ]
+          },
+          "hand": {
+            "apps": [
+              {
+                "tincture": "tincture:local.vault",
+                "mode": "full",
+                "order": 0
+              }
+            ],
+            "floating": []
+          }
+        }
       },
-      "hand": {
-        "desktop": "tincture:local.desktop",
-        "slots": [
-          {"id": "vault", "tincture": "tincture:local.vault", "size": "icon", "order": 0}
-        ],
-        "floating": []
+      {
+        "id": "markets",
+        "tincture": "tincture:local.markets",
+        "postures": {}
       }
-    }
+    ]
   },
-  "canonical": "{\"postures\":{\"desk\":{\"desktop\":\"tincture:local.desktop\",\"floating\":[{\"position\":{\"x\":9000,\"y\":500},\"tincture\":\"tincture:local.timer\"}],\"slots\":[{\"card\":\"today\",\"id\":\"weather\",\"order\":0,\"size\":\"card\",\"tincture\":\"tincture:local.weather-lookup\"},{\"id\":\"vault\",\"order\":1,\"size\":\"icon\",\"tincture\":\"tincture:local.vault\"},{\"id\":\"game\",\"order\":2,\"size\":\"full\",\"tincture\":\"tincture:local.flappy-bird\"},{\"id\":\"gone\",\"order\":3,\"size\":\"icon\",\"tincture\":\"tincture:example.com.not-installed\"}]},\"hand\":{\"desktop\":\"tincture:local.desktop\",\"floating\":[],\"slots\":[{\"id\":\"vault\",\"order\":0,\"size\":\"icon\",\"tincture\":\"tincture:local.vault\"}]}},\"version\":1}",
-  "digest": "sha256:5a031797be00fad2e0b58e9b548f9a70b85a3e986fbb53f4a4b1f966d0ce8346",
+  "canonical": "{\"canvases\":[{\"id\":\"home\",\"postures\":{\"desk\":{\"apps\":[{\"mode\":\"full\",\"order\":0,\"tincture\":\"tincture:local.flappy-bird\"},{\"mode\":\"column\",\"order\":1,\"tincture\":\"tincture:local.vault\"},{\"mode\":\"column\",\"order\":2,\"tincture\":\"tincture:example.com.not-installed\"}],\"floating\":[{\"position\":{\"x\":9000,\"y\":500},\"tincture\":\"tincture:local.timer\"}]},\"hand\":{\"apps\":[{\"mode\":\"full\",\"order\":0,\"tincture\":\"tincture:local.vault\"}],\"floating\":[]}},\"tincture\":\"tincture:local.canvas\"},{\"id\":\"markets\",\"postures\":{},\"tincture\":\"tincture:local.markets\"}],\"version\":2}",
+  "digest": "sha256:450137bd2900e84fd981a0c620f5d33c2b1cd10280f6d5e0244390e9a4a9f770",
   "invalid": [
     {
-      "why": "a slot names an operation: a layout can only arrange",
-      "document": {"version": 1, "postures": {"hand": {"desktop": "tincture:local.desktop", "slots": [{"id": "vault", "tincture": "tincture:local.vault", "size": "icon", "order": 0, "action": "vault.list"}], "floating": []}}}
+      "why": "an app names an operation: a layout can only arrange",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "mode": "column", "order": 0, "action": "vault.list"}], "floating": []}}}]}
     },
     {
       "why": "a posture names a stream: a layout can only arrange",
-      "document": {"version": 1, "postures": {"hand": {"desktop": "tincture:local.desktop", "slots": [], "floating": [], "stream": "vault.status"}}}
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [], "floating": [], "stream": "vault.status"}}}]}
     },
     {
-      "why": "a posture that is neither hand nor desk",
-      "document": {"version": 1, "postures": {"wall": {"desktop": "tincture:local.desktop", "slots": [], "floating": []}}}
+      "why": "a version-1 document, which no reader reads",
+      "document": {"version": 1, "postures": {"desk": {"desktop": "tincture:local.canvas", "slots": [], "floating": []}}}
     },
     {
-      "why": "a tincture named at a version",
-      "document": {"version": 1, "postures": {"desk": {"desktop": "tincture:local.desktop:0.1.0", "slots": [], "floating": []}}}
+      "why": "nine canvases, one more than a layout holds",
+      "document": {"version": 2, "canvases": [{"id": "c1", "tincture": "tincture:local.canvas-1", "postures": {}}, {"id": "c2", "tincture": "tincture:local.canvas-2", "postures": {}}, {"id": "c3", "tincture": "tincture:local.canvas-3", "postures": {}}, {"id": "c4", "tincture": "tincture:local.canvas-4", "postures": {}}, {"id": "c5", "tincture": "tincture:local.canvas-5", "postures": {}}, {"id": "c6", "tincture": "tincture:local.canvas-6", "postures": {}}, {"id": "c7", "tincture": "tincture:local.canvas-7", "postures": {}}, {"id": "c8", "tincture": "tincture:local.canvas-8", "postures": {}}, {"id": "c9", "tincture": "tincture:local.canvas-9", "postures": {}}]}
     },
     {
-      "why": "a component that is not a tincture",
-      "document": {"version": 1, "postures": {"desk": {"desktop": "catalyst:local.claude", "slots": [], "floating": []}}}
+      "why": "two canvases on one tincture",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {}}, {"id": "work", "tincture": "tincture:local.canvas", "postures": {}}]}
     },
     {
-      "why": "a size that is not icon, card or full",
-      "document": {"version": 1, "postures": {"desk": {"desktop": "tincture:local.desktop", "slots": [{"id": "vault", "tincture": "tincture:local.vault", "size": "huge", "order": 0}], "floating": []}}}
+      "why": "one canvas id used twice",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {}}, {"id": "home", "tincture": "tincture:local.markets", "postures": {}}]}
     },
     {
-      "why": "one slot id used twice in a posture",
-      "document": {"version": 1, "postures": {"desk": {"desktop": "tincture:local.desktop", "slots": [{"id": "a", "tincture": "tincture:local.vault", "size": "icon", "order": 0}, {"id": "a", "tincture": "tincture:local.timer", "size": "icon", "order": 1}], "floating": []}}}
-    },
-    {
-      "why": "a card named on a slot that is not a card",
-      "document": {"version": 1, "postures": {"desk": {"desktop": "tincture:local.desktop", "slots": [{"id": "vault", "tincture": "tincture:local.vault", "size": "icon", "order": 0, "card": "today"}], "floating": []}}}
+      "why": "33 apps in one posture, one more than a canvas places",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.app-0", "mode": "column", "order": 0}, {"tincture": "tincture:local.app-1", "mode": "column", "order": 1}, {"tincture": "tincture:local.app-2", "mode": "column", "order": 2}, {"tincture": "tincture:local.app-3", "mode": "column", "order": 3}, {"tincture": "tincture:local.app-4", "mode": "column", "order": 4}, {"tincture": "tincture:local.app-5", "mode": "column", "order": 5}, {"tincture": "tincture:local.app-6", "mode": "column", "order": 6}, {"tincture": "tincture:local.app-7", "mode": "column", "order": 7}, {"tincture": "tincture:local.app-8", "mode": "column", "order": 8}, {"tincture": "tincture:local.app-9", "mode": "column", "order": 9}, {"tincture": "tincture:local.app-10", "mode": "column", "order": 10}, {"tincture": "tincture:local.app-11", "mode": "column", "order": 11}, {"tincture": "tincture:local.app-12", "mode": "column", "order": 12}, {"tincture": "tincture:local.app-13", "mode": "column", "order": 13}, {"tincture": "tincture:local.app-14", "mode": "column", "order": 14}, {"tincture": "tincture:local.app-15", "mode": "column", "order": 15}, {"tincture": "tincture:local.app-16", "mode": "column", "order": 16}, {"tincture": "tincture:local.app-17", "mode": "column", "order": 17}, {"tincture": "tincture:local.app-18", "mode": "column", "order": 18}, {"tincture": "tincture:local.app-19", "mode": "column", "order": 19}, {"tincture": "tincture:local.app-20", "mode": "column", "order": 20}, {"tincture": "tincture:local.app-21", "mode": "column", "order": 21}, {"tincture": "tincture:local.app-22", "mode": "column", "order": 22}, {"tincture": "tincture:local.app-23", "mode": "column", "order": 23}, {"tincture": "tincture:local.app-24", "mode": "column", "order": 24}, {"tincture": "tincture:local.app-25", "mode": "column", "order": 25}, {"tincture": "tincture:local.app-26", "mode": "column", "order": 26}, {"tincture": "tincture:local.app-27", "mode": "column", "order": 27}, {"tincture": "tincture:local.app-28", "mode": "column", "order": 28}, {"tincture": "tincture:local.app-29", "mode": "column", "order": 29}, {"tincture": "tincture:local.app-30", "mode": "column", "order": 30}, {"tincture": "tincture:local.app-31", "mode": "column", "order": 31}, {"tincture": "tincture:local.app-32", "mode": "column", "order": 32}], "floating": []}}}]}
     },
     {
       "why": "a floating position outside the viewport",
-      "document": {"version": 1, "postures": {"desk": {"desktop": "tincture:local.desktop", "slots": [], "floating": [{"tincture": "tincture:local.timer", "position": {"x": 10001, "y": 0}}]}}}
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [], "floating": [{"tincture": "tincture:local.timer", "position": {"x": 10001, "y": 0}}]}}}]}
     },
     {
-      "why": "a version this reader does not read",
-      "document": {"version": 2, "postures": {"desk": {"desktop": "tincture:local.desktop", "slots": [], "floating": []}}}
+      "why": "an unknown key on a canvas",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {}, "title": "Home"}]}
     },
     {
-      "why": "no posture at all",
-      "document": {"version": 1, "postures": {}}
+      "why": "a posture that is neither hand nor desk",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"wall": {"apps": [], "floating": []}}}]}
+    },
+    {
+      "why": "a canvas named at a version",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas:0.1.0", "postures": {}}]}
+    },
+    {
+      "why": "a component that is not a tincture",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "catalyst:local.claude", "mode": "column", "order": 0}], "floating": []}}}]}
+    },
+    {
+      "why": "an app mode that is not full or column",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "mode": "icon", "order": 0}], "floating": []}}}]}
+    },
+    {
+      "why": "one tincture placed twice in a posture, as an app and floating",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.timer", "mode": "column", "order": 0}], "floating": [{"tincture": "tincture:local.timer", "position": {"x": 0, "y": 0}}]}}}]}
+    },
+    {
+      "why": "a canvas without its postures",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas"}]}
+    },
+    {
+      "why": "a posture without its floating entries",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": []}}}]}
+    },
+    {
+      "why": "a canvas id outside its grammar",
+      "document": {"version": 2, "canvases": [{"id": "Home Page", "tincture": "tincture:local.canvas", "postures": {}}]}
+    },
+    {
+      "why": "an order past 1,000,000",
+      "document": {"version": 2, "canvases": [{"id": "home", "tincture": "tincture:local.canvas", "postures": {"desk": {"apps": [{"tincture": "tincture:local.vault", "mode": "column", "order": 1000001}], "floating": []}}}]}
     }
   ]
 }

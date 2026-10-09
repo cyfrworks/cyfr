@@ -3,12 +3,15 @@
 
 defmodule Prism.FramesTest do
   @moduledoc """
-  The frames' pure transitions, without a store: which frames an
-  arrangement places and for which tinctures, what is visible, which
-  credential transitions visibility asks for, to which frame a message is
-  attributed, the one-time handshake, and the signals the view sends. The
-  effects, through `Sanctum.TinctureAuth`, are `PrismWeb.ShellFrameTest`'s
-  and `PrismWeb.CanvasLiveTest`'s.
+  The frames' pure transitions, without a store: which frames the layout
+  places over a canvas and for which tinctures, which canvas and frames
+  are visible, which credential transitions visibility asks for (a hidden
+  canvas frozen whatever it declares, a validation frame never), to which
+  frame a message is attributed, the one-time handshake and a canvas's
+  boot, and the signals the view sends. Only the frames' own open path
+  makes a canvas or validation frame. The effects, through
+  `Sanctum.TinctureAuth`, are `PrismWeb.ShellFrameTest`'s,
+  `PrismWeb.ShellCanvasTest`'s and `Prism.CanvasValidationTest`'s.
   """
 
   use ExUnit.Case, async: true
@@ -28,12 +31,13 @@ defmodule Prism.FramesTest do
     }
   end
 
-  defp frame(placement, tincture_id, fields \\ []) do
+  defp frame(key, placement, fields \\ []) do
     id = Keyword.get(fields, :id, "frm_" <> Base.url_encode64(:crypto.strong_rand_bytes(9)))
+    tincture_id = Keyword.get(fields, :tincture_id, "iframe_" <> String.slice(id, 4, 8))
 
     Map.merge(
       %{
-        key: Frames.key(placement, tincture_id),
+        key: key,
         id: id,
         tincture_id: tincture_id,
         reference: %{publisher: "local", name: tincture_id, version: "1.0.0"},
@@ -47,68 +51,104 @@ defmodule Prism.FramesTest do
         placement: placement,
         visible: true,
         background: false,
-        actions: []
+        actions: [],
+        arranged: false,
+        boot: nil
       },
       Map.new(fields)
     )
   end
 
-  defp held(frames), do: Enum.reduce(frames, Frames.new(), &Frames.put(&2, &1))
+  defp app(canvas, name, placement, fields \\ []),
+    do:
+      frame(
+        {:app, canvas, "tincture:local.#{name}"},
+        placement,
+        [tincture_id: "iframe_#{name}"] ++ fields
+      )
+
+  defp launch(name, fields \\ []),
+    do: frame({:full, "iframe_#{name}"}, :full, [tincture_id: "iframe_#{name}"] ++ fields)
+
+  # A canvas or validation frame, as only the frames' open path makes one;
+  # built here as the value it would hold.
+  defp canvas_frame(kind, canvas_id, fields \\ []) do
+    frame({kind, canvas_id}, kind, [tincture_id: "iframe_canvas"] ++ fields)
+  end
+
+  # Hold the frames, canvas-placement ones as the open path holds them.
+  defp held(frames, canvas \\ "home") do
+    Enum.reduce(frames, %Frames{canvas: canvas}, fn %{key: key} = frame, t ->
+      %{t | frames: Map.put(t.frames, key, frame), order: t.order ++ [key]}
+    end)
+  end
 
   describe "placement" do
-    test "a full slot of an installed tincture is framed at its slot; icon and card slots are not" do
+    test "a column app of an installed tincture is placed over its canvas; a full app is not" do
       cards = [card("notes"), card("clock")]
 
-      arrangement = %{
-        desktop: "tincture:local.desktop",
-        slots: [
-          %{id: "main", tincture: "tincture:local.notes", size: :full, order: 0, card: nil},
-          %{id: "ico", tincture: "tincture:local.clock", size: :icon, order: 1, card: nil},
-          %{id: "crd", tincture: "tincture:local.clock", size: :card, order: 2, card: nil}
+      canvas = %{
+        id: "home",
+        tincture: "tincture:local.canvas",
+        apps: [
+          %{tincture: "tincture:local.notes", mode: :column, order: 3},
+          %{tincture: "tincture:local.clock", mode: :full, order: 1}
         ],
         floating: []
       }
 
-      assert [{{:slot, "main"}, %{id: "iframe_notes"}}] = Frames.placements(arrangement, cards)
+      assert [{{:app, "home", "tincture:local.notes"}, {:column, 3}, %{id: "iframe_notes"}}] =
+               Frames.placements(canvas, cards)
     end
 
     test "an entry naming a tincture nobody installed places nothing" do
-      arrangement = %{
-        desktop: "tincture:local.desktop",
-        slots: [%{id: "gone", tincture: "tincture:acme.gone", size: :full, order: 0, card: nil}],
+      canvas = %{
+        id: "home",
+        tincture: "tincture:local.canvas",
+        apps: [%{tincture: "tincture:acme.gone", mode: :column, order: 0}],
         floating: [%{tincture: "tincture:acme.ghost", position: %{x: 0, y: 0}}]
       }
 
-      assert Frames.placements(arrangement, [card("notes")]) == []
+      assert Frames.placements(canvas, [card("notes")]) == []
     end
 
-    test "only a tincture that declares float floats, once, where the layout first puts it" do
-      cards = [
-        card("clock", %{"placement" => "float"}),
-        card("notes"),
-        card("desk", %{"placement" => "desktop"})
-      ]
+    test "only a tincture that declares float floats, where the layout puts it" do
+      cards = [card("clock", %{"placement" => "float"}), card("notes")]
 
-      arrangement = %{
-        desktop: "tincture:local.desktop",
-        slots: [],
+      canvas = %{
+        id: "work",
+        tincture: "tincture:local.canvas",
+        apps: [],
         floating: [
           %{tincture: "tincture:local.notes", position: %{x: 0, y: 0}},
-          %{tincture: "tincture:local.desk", position: %{x: 1, y: 1}},
-          %{tincture: "tincture:local.clock", position: %{x: 2500, y: 5000}},
-          %{tincture: "tincture:local.clock", position: %{x: 9000, y: 9000}}
+          %{tincture: "tincture:local.clock", position: %{x: 2500, y: 5000}}
         ]
       }
 
-      assert [{{:floating, %{x: 2500, y: 5000}}, %{id: "iframe_clock"}}] =
-               Frames.placements(arrangement, cards)
+      assert [
+               {{:floating, "work", "tincture:local.clock"}, {:floating, %{x: 2500, y: 5000}},
+                %{id: "iframe_clock"}}
+             ] = Frames.placements(canvas, cards)
     end
 
-    test "floats? reads the declaration, and a declaration off the rules floats nothing" do
+    test "floats? and canvas? read the declaration, and a declaration off the rules is neither" do
       assert Frames.floats?(card("a", %{"placement" => "float"}))
       refute Frames.floats?(card("b"))
       refute Frames.floats?(card("c", %{"placement" => "float", "capabilities" => ["camera"]}))
       refute Frames.floats?(%{manifest: nil})
+
+      canvas = %{
+        manifest: %{
+          "tincture" => %{
+            "frame" => %{"placement" => "canvas"},
+            "canvas" => %{"module" => "canvas.js", "toolkit" => 1}
+          }
+        }
+      }
+
+      assert Frames.canvas?(canvas)
+      refute Frames.canvas?(card("d", %{"placement" => "float"}))
+      refute Frames.canvas?(%{manifest: nil})
     end
 
     test "a layout reference resolves to the listed card by publisher and name" do
@@ -119,92 +159,199 @@ defmodule Prism.FramesTest do
       assert Frames.resolve("tincture:local.missing", cards) == nil
       assert Frames.resolve("not a ref", cards) == nil
       assert Frames.resolve(nil, cards) == nil
+      assert Frames.ref_of(card("notes")) == "tincture:local.notes"
     end
 
-    test "only a floating frame moves, and only to the placement it is given" do
-      floating = frame({:floating, %{x: 0, y: 0}}, "iframe_clock")
-      slot = frame({:slot, "main"}, "iframe_notes")
-      t = held([floating, slot])
+    test "only a floating frame moves to a position, and only a column to an order" do
+      floating = frame({:floating, "home", "tincture:local.clock"}, {:floating, %{x: 0, y: 0}})
+      column = app("home", "notes", {:column, 0})
+      full = app("home", "game", :full)
+      t = held([floating, column, full])
 
       moved = Frames.place(t, floating.key, {:floating, %{x: 10, y: 20}})
       assert Frames.get(moved, floating.key).placement == {:floating, %{x: 10, y: 20}}
 
-      assert Frames.place(t, slot.key, {:floating, %{x: 1, y: 1}}) == t
+      reordered = Frames.place(t, column.key, {:column, 4})
+      assert Frames.get(reordered, column.key).placement == {:column, 4}
+
+      assert Frames.place(t, full.key, {:column, 1}) == t
+      assert Frames.place(t, column.key, {:floating, %{x: 1, y: 1}}) == t
       assert Frames.place(t, floating.key, :full) == t
+    end
+
+    test "each key names the canvas it belongs to, and a launch none" do
+      assert Frames.canvas_of({:canvas, "home"}) == "home"
+      assert Frames.canvas_of({:validation, "home"}) == "home"
+      assert Frames.canvas_of({:app, "work", "tincture:local.x"}) == "work"
+      assert Frames.canvas_of({:floating, "work", "tincture:local.x"}) == "work"
+      assert Frames.canvas_of({:full, "iframe_x"}) == nil
+
+      assert Frames.canvas_key?({:canvas, "home"})
+      assert Frames.canvas_key?({:validation, "home"})
+      refute Frames.canvas_key?({:app, "home", "tincture:local.x"})
+      refute Frames.canvas_key?({:full, "iframe_x"})
     end
   end
 
   describe "visibility" do
     setup do
-      full_a = frame(:full, "iframe_a")
-      full_b = frame(:full, "iframe_b")
-      slot = frame({:slot, "main"}, "iframe_notes")
-      floating = frame({:floating, %{x: 0, y: 0}}, "iframe_clock", background: true)
-      {:ok, t: held([slot, floating, full_a, full_b]), full_a: full_a, full_b: full_b}
+      frames = [
+        canvas_frame(:canvas, "home", id: "frm_home_canvas"),
+        canvas_frame(:validation, "work", id: "frm_work_trial"),
+        canvas_frame(:canvas, "work", id: "frm_work_canvas"),
+        app("home", "notes", {:column, 0}),
+        app("home", "game", :full),
+        app("work", "sheet", {:column, 0}),
+        frame({:floating, "home", "tincture:local.clock"}, {:floating, %{x: 0, y: 0}},
+          tincture_id: "iframe_clock"
+        ),
+        launch("radio")
+      ]
+
+      {:ok, t: held(frames)}
     end
 
-    test "with no full frame active, the slot and floating frames are shown and full ones hidden",
-         %{t: t} do
-      shown = t |> Frames.visibility() |> Frames.list() |> Enum.map(&{&1.tincture_id, &1.visible})
-
-      assert shown == [
-               {"iframe_notes", true},
-               {"iframe_clock", true},
-               {"iframe_a", false},
-               {"iframe_b", false}
-             ]
-    end
-
-    test "the active full frame alone is shown", %{t: t, full_b: full_b} do
-      t = t |> Frames.activate(full_b.key) |> Frames.visibility()
-
-      assert [%{tincture_id: "iframe_b"}] = t |> Frames.list() |> Enum.filter(& &1.visible)
-      assert Frames.active_tincture(t) == "iframe_b"
-    end
-
-    test "a hidden live frame without a background grant is to freeze; a background one is not",
-         %{t: t, full_a: full_a} do
-      t = t |> Frames.activate(full_a.key) |> Frames.visibility()
-
-      assert Frames.plan(t) == [
-               {:freeze, {:slot, "main"}},
-               {:freeze, {:full, "iframe_b"}}
-             ]
-    end
-
-    test "a shown frozen frame is to thaw, and a refused one is left alone", %{t: t} do
-      t =
+    defp shown(t),
+      do:
         t
-        |> Frames.freeze({:slot, "main"})
-        |> Frames.refuse({:floating, "iframe_clock"}, :refused)
         |> Frames.visibility()
+        |> Frames.list()
+        |> Enum.filter(& &1.visible)
+        |> Enum.map(& &1.key)
 
-      assert {:thaw, {:slot, "main"}} in Frames.plan(t)
-      refute Enum.any?(Frames.plan(t), &match?({_, {:floating, _}}, &1))
-      assert %{state: :refused, bearer: nil} = Frames.get(t, {:floating, "iframe_clock"})
+    test "with no full frame active, the visible canvas, its columns and its floating frames are shown",
+         %{t: t} do
+      assert shown(t) == [
+               {:canvas, "home"},
+               {:app, "home", "tincture:local.notes"},
+               {:floating, "home", "tincture:local.clock"}
+             ]
     end
 
-    test "activating a key that is not a held full frame changes nothing", %{t: t} do
-      assert Frames.activate(t, {:slot, "main"}) == t
+    test "another canvas shown hides the first and every frame of it", %{t: t} do
+      assert shown(%{t | canvas: "work"}) == [
+               {:canvas, "work"},
+               {:app, "work", "tincture:local.sheet"}
+             ]
+    end
+
+    test "an active full app of the visible canvas, or a launch, alone is shown", %{t: t} do
+      game = {:app, "home", "tincture:local.game"}
+      assert shown(Frames.activate(t, game)) == [game]
+      assert Frames.active_tincture(Frames.activate(t, game)) == "iframe_game"
+
+      assert shown(Frames.activate(t, {:full, "iframe_radio"})) == [{:full, "iframe_radio"}]
+    end
+
+    test "a full app is active only over its own canvas", %{t: t} do
+      t = t |> Frames.activate({:app, "home", "tincture:local.game"})
+
+      assert Frames.active(%{t | canvas: "work"}) == nil
+
+      assert shown(%{t | canvas: "work"}) == [
+               {:canvas, "work"},
+               {:app, "work", "tincture:local.sheet"}
+             ]
+
+      # Shown again over its canvas.
+      assert %{key: {:app, "home", _}} = Frames.active(t)
+    end
+
+    test "a validation frame is never shown", %{t: t} do
+      for canvas <- ["home", "work"] do
+        refute {:validation, "work"} in shown(%{t | canvas: canvas})
+      end
+    end
+
+    test "activating anything but a full frame changes nothing", %{t: t} do
+      assert Frames.activate(t, {:app, "home", "tincture:local.notes"}) == t
+      assert Frames.activate(t, {:canvas, "home"}) == t
       assert Frames.activate(t, {:full, "iframe_nobody"}) == t
     end
 
-    test "forgetting the active frame makes the first full frame still held active",
-         %{t: t, full_a: full_a, full_b: full_b} do
-      t = t |> Frames.activate(full_b.key) |> Frames.forget(full_b.key)
-      assert Frames.active(t).key == full_a.key
+    test "forgetting the active frame makes the first full frame still held over this canvas active",
+         %{t: t} do
+      t =
+        t
+        |> Frames.activate({:full, "iframe_radio"})
+        |> Frames.forget({:full, "iframe_radio"})
 
-      t = Frames.forget(t, full_a.key)
+      assert %{key: {:app, "home", "tincture:local.game"}} = Frames.active(t)
+
+      t = Frames.forget(t, {:app, "home", "tincture:local.game"})
       assert Frames.active(t) == nil
-      assert Enum.map(Frames.list(t), & &1.tincture_id) == ["iframe_notes", "iframe_clock"]
+    end
+  end
+
+  describe "the visibility plan" do
+    test "a hidden canvas is suspended whatever its declaration" do
+      # Both canvases declare a background grant, as no canvas can: the
+      # hidden one is frozen all the same, and an app of it keeps its own.
+      t =
+        held(
+          [
+            canvas_frame(:canvas, "home", background: true),
+            canvas_frame(:canvas, "work", background: true),
+            app("work", "radio", {:column, 0}, background: true),
+            app("work", "notes", {:column, 1})
+          ],
+          "home"
+        )
+        |> Frames.visibility()
+
+      assert Frames.plan(t) == [
+               {:freeze, {:canvas, "work"}},
+               {:freeze, {:app, "work", "tincture:local.notes"}}
+             ]
+
+      # Shown again, the frozen canvas is to thaw.
+      thawing = %{Frames.freeze(t, {:canvas, "work"}) | canvas: "work"} |> Frames.visibility()
+      assert {:thaw, {:canvas, "work"}} in Frames.plan(thawing)
+      assert {:freeze, {:canvas, "home"}} in Frames.plan(thawing)
+    end
+
+    test "a validation frame is never frozen or thawed" do
+      t =
+        held([
+          canvas_frame(:validation, "home"),
+          canvas_frame(:validation, "work", state: :frozen)
+        ])
+        |> Frames.visibility()
+
+      assert Frames.plan(t) == []
+    end
+
+    test "a hidden live frame without a background grant is to freeze; a refused one is left alone" do
+      t =
+        held([
+          app("home", "notes", {:column, 0}),
+          launch("a"),
+          launch("b", background: true),
+          launch("c", state: :refused, refusal: :refused, bearer: nil)
+        ])
+        |> Frames.activate({:full, "iframe_a"})
+        |> Frames.visibility()
+
+      assert Frames.plan(t) == [{:freeze, {:app, "home", "tincture:local.notes"}}]
+    end
+  end
+
+  describe "holding a frame" do
+    test "only the frames' own open path holds a canvas or validation frame" do
+      for kind <- [:canvas, :validation] do
+        assert_raise ArgumentError, fn -> Frames.put(Frames.new(), canvas_frame(kind, "home")) end
+      end
+
+      launched = launch("a")
+      assert Frames.get(Frames.put(Frames.new(), launched), launched.key) == launched
     end
   end
 
   describe "attribution" do
     test "a message is attributed only to a live frame this value holds" do
-      live = frame(:full, "iframe_a", id: "frm_live_frame_1")
-      frozen = frame(:full, "iframe_b", id: "frm_frozen_frame", state: :frozen)
-      refused = frame(:full, "iframe_c", id: "frm_refused_frm", state: :refused)
+      live = launch("a", id: "frm_live_frame_1")
+      frozen = launch("b", id: "frm_frozen_frame", state: :frozen)
+      refused = launch("c", id: "frm_refused_frm", state: :refused)
       t = held([live, frozen, refused])
 
       assert {:ok, %{key: {:full, "iframe_a"}}} = Frames.attribute(t, "frm_live_frame_1")
@@ -215,12 +362,51 @@ defmodule Prism.FramesTest do
     end
 
     test "the bearer is handed over once" do
-      t = held([frame(:full, "iframe_a", id: "frm_handshake_1", bearer: "secret")])
+      t = held([launch("a", id: "frm_handshake_1", bearer: "secret")])
 
       assert {:ok, "secret", t} = Frames.hand_over(t, "frm_handshake_1")
       assert Frames.hand_over(t, "frm_handshake_1") == :error
       assert Frames.hand_over(t, "frm_other_frame") == :error
       assert Frames.hand_over(t, 42) == :error
+    end
+
+    test "a canvas or validation frame is handed its boot, the bearer inside it, once; any other frame its bearer" do
+      boot = %{"mode" => "live", "toolkit" => 1, "streams" => []}
+
+      t =
+        held([
+          canvas_frame(:canvas, "home",
+            id: "frm_canvas_boot",
+            bearer: "canvas-bearer",
+            boot: boot
+          ),
+          canvas_frame(:validation, "home",
+            id: "frm_trial_boot",
+            bearer: "trial-bearer",
+            boot: %{boot | "mode" => "validation"}
+          ),
+          launch("a", id: "frm_launch_boot", bearer: "launch-bearer", boot: boot)
+        ])
+
+      assert {:ok, %{boot: handed}, %{key: {:canvas, "home"}}, t} =
+               Frames.handshake(t, "frm_canvas_boot")
+
+      assert handed == Map.put(boot, "credential", "canvas-bearer")
+      assert Frames.get(t, {:canvas, "home"}).bearer == nil
+      assert Frames.get(t, {:canvas, "home"}).boot == boot
+
+      assert {:ok, %{boot: %{"mode" => "validation", "credential" => "trial-bearer"}}, _, t} =
+               Frames.handshake(t, "frm_trial_boot")
+
+      # A boot is a canvas's alone: a frame under any other key is handed
+      # its bearer and nothing else.
+      assert {:ok, %{credential: "launch-bearer"} = reply, _, t} =
+               Frames.handshake(t, "frm_launch_boot")
+
+      assert Map.keys(reply) == [:credential]
+
+      for id <- ~w(frm_canvas_boot frm_trial_boot frm_launch_boot frm_unknown_one),
+          do: assert(Frames.handshake(t, id) == :error)
     end
 
     test "a dropped message is counted" do
@@ -231,16 +417,16 @@ defmodule Prism.FramesTest do
 
   describe "signals" do
     test "a frame whose state moved between live and frozen is signalled, and nothing else" do
-      a = frame(:full, "iframe_a", id: "frm_signal_aaaa")
-      b = frame(:full, "iframe_b", id: "frm_signal_bbbb")
-      c = frame(:full, "iframe_c", id: "frm_signal_cccc")
+      a = launch("a", id: "frm_signal_aaaa")
+      b = launch("b", id: "frm_signal_bbbb")
+      c = launch("c", id: "frm_signal_cccc")
       before = held([a, b, c])
 
       later =
         before
         |> Frames.freeze(a.key)
         |> Frames.refuse(c.key, :unavailable)
-        |> Frames.put(frame(:full, "iframe_d", state: :frozen))
+        |> Frames.put(launch("d", state: :frozen))
 
       assert Frames.signals(before, later) == [%{frame: "frm_signal_aaaa", state: "frozen"}]
 
@@ -250,8 +436,8 @@ defmodule Prism.FramesTest do
     end
 
     test "a frame reopened under the same key is not signalled as the old one" do
-      old = frame(:full, "iframe_a", id: "frm_old_frame_1", state: :frozen)
-      new = frame(:full, "iframe_a", id: "frm_new_frame_1")
+      old = launch("a", id: "frm_old_frame_1", state: :frozen)
+      new = launch("a", id: "frm_new_frame_1")
 
       assert Frames.signals(held([old]), held([new])) == []
     end
@@ -260,50 +446,23 @@ defmodule Prism.FramesTest do
   describe "refusal classes" do
     test "each refusal reads as the class the frame shows" do
       assert Frames.refusal(:unavailable) == :unavailable
+      assert Frames.refusal({:unavailable, "Canvas versions"}) == :unavailable
       assert Frames.refusal(:not_owner) == :unavailable
       assert Frames.refusal({:undeclared_capability, ["camera"]}) == :undeclared
       assert Frames.refusal({:invalid_tincture, "no"}) == :undeclared
+      assert Frames.refusal({:placement, "canvas"}) == :undeclared
       assert Frames.refusal(:unregistered) == :unregistered
       assert Frames.refusal(:ungranted) == :ungranted
-      assert Frames.refusal(:not_a_desktop) == :undeclared
       assert Frames.refusal(:revoked) == :refused
       assert Frames.refusal(:expired) == :refused
     end
   end
 
-  describe "the desktop" do
-    test "is held under its own key, shown with no full frame active and frozen under one" do
-      desktop = frame(:desktop, "iframe_desk")
-      slot = frame({:slot, "s1"}, "iframe_notes")
-      full = frame(:full, "iframe_app")
-      assert desktop.key == {:desktop, "iframe_desk"}
-
-      t = held([desktop, slot, full]) |> Frames.visibility()
-      assert Frames.desktop(t).visible
-      refute {:freeze, {:desktop, "iframe_desk"}} in Frames.plan(t)
-
-      t = t |> Frames.activate(full.key) |> Frames.visibility()
-      refute Frames.desktop(t).visible
-      assert {:freeze, {:desktop, "iframe_desk"}} in Frames.plan(t)
-    end
-
-    test "is none when no desktop is held" do
-      assert Frames.desktop(held([frame(:full, "iframe_app")])) == nil
-    end
-
-    test "a tincture is a desktop only when its declaration says so" do
-      assert Frames.desktop?(card("desk", %{"placement" => "desktop"}))
-      refute Frames.desktop?(card("float", %{"placement" => "float"}))
-      refute Frames.desktop?(card("plain"))
-      refute Frames.desktop?(%{manifest: nil})
-    end
-  end
-
   describe "declared actions" do
     test "a frame declares only the actions its version listed" do
-      keeper = frame(:full, "iframe_keeper", actions: ["vault.create", "vault.status"])
+      keeper = launch("keeper", actions: ["vault.create", "vault.status"])
       assert Frames.declares?(keeper, "vault.create")
-      refute Frames.declares?(frame(:full, "iframe_x", actions: []), "vault.create")
+      refute Frames.declares?(launch("x", actions: []), "vault.create")
       refute Frames.declares?(%{}, "vault.create")
     end
   end

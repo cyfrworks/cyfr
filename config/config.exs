@@ -50,8 +50,9 @@ config :cyfr,
     # `compendium`: builds and components.
     Compendium.Builds.Provider,
     Compendium.Provider,
-    # `compendium`: a person's layout document, which the desktop reads and
-    # every edit, the console's or the assistant's, arranges through.
+    # `compendium`: a person's layout document, which Prism reads to place
+    # the canvases and every edit, the console's or the assistant's,
+    # arranges through.
     Compendium.Providers.Layout,
     # `compendium`: a person's canvases, their versions and what a canvas
     # may read, beside the declaration a canvas version is held to.

@@ -4812,7 +4812,7 @@ defmodule PrismWeb.SystemLayerTest do
       {:ok, ctx} =
         Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
 
-      safe = %{id: "safe-outage", kind: :safe_mode, action: nil, subject: safe_mode(ctx)}
+      safe = %{id: "safe-outage", kind: :safe_mode, action: nil, subject: safe_mode()}
 
       {:ok, view, _html} =
         live_isolated(conn, BareHost, session: %{"context" => ctx, "test" => self()})
@@ -4827,11 +4827,36 @@ defmodule PrismWeb.SystemLayerTest do
 
       html = prompt(view, safe)
       assert html =~ ~s(data-kind="safe_mode")
-      assert html =~ "Your desktop stopped working."
+      assert html =~ "Your canvas stopped working."
       assert open_prompt(view) == "safe-outage"
 
       view |> element(~s(button[phx-value-offer="retry"])) |> render_click()
-      assert outcome("safe-outage") == :confirmed
+      assert outcome("safe-outage") == {:confirmed, :retry}
+      assert open_prompt(view) == nil
+    end
+
+    test "the shipped canvas is chosen, and reported, with nothing read", %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+      built = person_context(user, athanor)
+      {:ok, session} = Sanctum.TestContext.create_session(%{built | provider: "github"})
+
+      {:ok, ctx} =
+        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+
+      {:ok, view, _html} =
+        live_isolated(conn, BareHost, session: %{"context" => ctx, "test" => self()})
+
+      bound = Application.get_env(:sanctum, :caller_memo_ttl_ms)
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 0)
+      on_exit(fn -> restore_env(:sanctum, :caller_memo_ttl_ms, bound) end)
+      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+      assert CyfrWeb.ContextGuard.check(ctx) == {:error, :unavailable}
+
+      prompt(view, %{id: "safe-shipped", kind: :safe_mode, action: nil, subject: safe_mode()})
+      view |> element(~s(button[phx-value-offer="shipped"])) |> render_click()
+      assert outcome("safe-shipped") == {:confirmed, :shipped}
       assert open_prompt(view) == nil
     end
   end
@@ -4879,70 +4904,78 @@ defmodule PrismWeb.SystemLayerTest do
   describe "safe mode" do
     setup :signed_in
 
-    defp arranged(ctx, desktop, revision) do
-      document = %{
-        "version" => 1,
-        "postures" => %{
-          "desk" => %{
-            "desktop" => desktop,
-            "slots" => [
-              %{
-                "id" => "vault",
-                "tincture" => "tincture:local.vault",
-                "size" => "icon",
-                "order" => 0
+    # The visible canvas `home` on markets, keeping `kept`.
+    defp safe_mode(kept \\ "1.0.0") do
+      Prism.SafeMode.enter(:crashed, %{
+        canvas: "home",
+        tincture: "tincture:local.markets",
+        kept: kept
+      })
+    end
+
+    # Markets installed at `versions`, its versions document `fields`.
+    defp markets!(ctx, versions, fields) do
+      for version <- versions do
+        unit =
+          Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "markets", version,
+            manifest: %{
+              "type" => "tincture",
+              "name" => "markets",
+              "version" => version,
+              "tincture" => %{
+                "frame" => %{"placement" => "canvas"},
+                "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+                "streams" => []
               }
-            ],
-            "floating" => []
-          }
-        }
-      }
+            },
+            files: [{"canvas.js", "// markets #{version}"}]
+          )
 
-      {:ok, %{revision: published}} =
-        Compendium.Providers.Layout.handle("layout", ctx, %{
-          "action" => "edit",
-          "document" => document,
-          "revision" => revision
-        })
+        {:ok, _} =
+          Compendium.Registry.register_from_arca(
+            ctx,
+            Compendium.ComponentPath.version_dir("tincture", "local", "markets", version)
+          )
 
-      published
+        unit
+      end
+
+      {:ok, _} =
+        Arca.CanvasVersions.publish(
+          Context.actor(ctx),
+          "markets",
+          Map.merge(Arca.CanvasVersions.empty(), fields),
+          0
+        )
     end
 
-    defp safe_mode(ctx) do
-      {:ok, read} = Compendium.layout(ctx, "desk")
-      Prism.SafeMode.enter(:crashed, read)
+    defp versions(ctx) do
+      {:ok, stored} = Arca.CanvasVersions.get(Context.actor(ctx), "markets")
+      stored
     end
 
-    defp desk(ctx) do
-      {:ok, read} = Compendium.layout(ctx, "desk")
-      {read.arrangement, read.revision}
-    end
-
-    test "offers trying again and the default, as a non-modal alert with no dismissal", %{
-      view: view,
-      ctx: ctx
-    } do
-      arranged(ctx, "tincture:acme.broken-desk", 0)
-      html = prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode(ctx)})
+    test "offers trying again, the kept version and the shipped canvas, as a non-modal alert with no dismissal",
+         %{view: view} do
+      html = prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
 
       assert html =~ ~s(role="alertdialog")
       assert html =~ ~s(popover="manual")
       assert html =~ ~s(data-dismissable="false")
       assert html =~ ~s(data-mode="popover")
-      assert html =~ "Your desktop stopped working."
+      assert html =~ "Your canvas stopped working."
       assert html =~ "No app runs while safe mode is on."
 
-      assert has_element?(
-               view,
-               ~s(button[phx-click="choose"][phx-value-offer="retry"]),
-               "Try again"
-             )
-
-      assert has_element?(
-               view,
-               ~s(button[phx-click="choose"][phx-value-offer="default"]),
-               "Use the default desktop"
-             )
+      for {offer, label} <- [
+            {"retry", "Try again"},
+            {"kept", "Go back to the version before"},
+            {"shipped", "Use the shipped canvas"}
+          ] do
+        assert has_element?(
+                 view,
+                 ~s(button[phx-click="choose"][phx-value-offer="#{offer}"]),
+                 label
+               )
+      end
 
       refute has_element?(view, ~s([phx-click="dismiss"]))
 
@@ -4952,42 +4985,198 @@ defmodule PrismWeb.SystemLayerTest do
       no_outcome("safe")
     end
 
-    test "choosing the default publishes it through layout.edit", %{view: view, ctx: ctx} do
-      revision = arranged(ctx, "tincture:acme.broken-desk", 0)
-      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode(ctx)})
+    test "each reason reads as its own sentence, and the kept version is offered only while there is one",
+         %{view: view} do
+      for {reason, sentence, id} <- [
+            {:not_ready, "Your canvas did not start.", "safe-1"},
+            {:not_validated, "new version did not start, and it has no earlier version to show.",
+             "safe-2"},
+            {:requested, "You turned safe mode on.", "safe-3"}
+          ] do
+        subject = Prism.SafeMode.enter(reason, %{canvas: "home", tincture: nil, kept: nil})
+        html = prompt(view, %{id: id, kind: :safe_mode, action: nil, subject: subject})
+        assert html =~ sentence
+        refute has_element?(view, ~s(button[phx-value-offer="kept"]))
+        assert has_element?(view, ~s(button[phx-value-offer="shipped"]))
 
-      view |> element(~s(button[phx-value-offer="default"])) |> render_click()
-
-      assert outcome("safe") == :confirmed
-      assert open_prompt(view) == nil
-
-      {arrangement, published} = desk(ctx)
-      assert arrangement.desktop == "tincture:local.desktop"
-      assert [%{id: "vault"}] = arrangement.slots
-      assert published == revision + 1
+        view |> element(~s(button[phx-value-offer="retry"])) |> render_click()
+        assert outcome(id) == {:confirmed, :retry}
+      end
     end
 
-    test "a layout published since safe mode opened is reported and nothing is merged", %{
-      view: view,
-      ctx: ctx
-    } do
-      revision = arranged(ctx, "tincture:acme.broken-desk", 0)
-      safe_mode = safe_mode(ctx)
-      newer = arranged(ctx, "tincture:acme.other-desk", revision)
+    test "choosing the kept version restores it through canvas.restore", %{view: view, ctx: ctx} do
+      markets!(ctx, ["1.0.0", "1.0.1"], %{working: "1.0.1", kept: "1.0.0"})
+      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
 
-      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode})
-      html = view |> element(~s(button[phx-value-offer="default"])) |> render_click()
+      view |> element(~s(button[phx-value-offer="kept"])) |> render_click()
+
+      assert outcome("safe") == {:confirmed, :kept}
+      assert open_prompt(view) == nil
+      assert %{document: %{working: "1.0.0", kept: "1.0.1"}, revision: 2} = versions(ctx)
+    end
+
+    test "versions published since safe mode opened are reported, and nothing is merged",
+         %{view: view, ctx: ctx} do
+      markets!(ctx, ["1.0.0", "1.0.1"], %{working: "1.0.1", kept: "1.0.0"})
+      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
+      hold_after_read!(view.pid)
+
+      # The restore reads the versions; another glass publishes them before
+      # it writes.
+      choosing =
+        Task.async(fn ->
+          view |> element(~s(button[phx-value-offer="kept"])) |> render_click()
+        end)
+
+      assert_receive {:read_versions, reader}, 5_000
+      stored = versions(ctx)
+
+      {:ok, _} =
+        Arca.CanvasVersions.publish(
+          Context.actor(ctx),
+          "markets",
+          %{
+            stored.document
+            | failed: %{version: "1.0.1", outcome: "died", at: "2026-10-09T12:00:00Z"}
+          },
+          stored.revision
+        )
+
+      send(reader, :go)
+      html = Task.await(choosing, 10_000)
 
       assert {:refused, _reason} = outcome("safe")
-      assert html =~ "Your layout changed since safe mode opened, so nothing was changed."
-      assert open_prompt(view) == "safe"
 
-      {arrangement, published} = desk(ctx)
-      assert arrangement.desktop == "tincture:acme.other-desk"
-      assert published == newer
+      assert html =~ "Your canvas" and
+               html =~ "versions changed since safe mode opened, so nothing was changed."
+
+      assert open_prompt(view) == "safe"
+      assert %{document: %{working: "1.0.1", kept: "1.0.0"}, revision: 2} = versions(ctx)
 
       view |> element(~s(button[phx-value-offer="retry"])) |> render_click()
-      assert outcome("safe") == :confirmed
+      assert outcome("safe") == {:confirmed, :retry}
+    end
+
+    test "a restore that waits on the grant asks for it in front of safe mode, and asks the restore again once it is confirmed",
+         %{view: view, ctx: ctx} do
+      markets!(ctx, ["1.0.0", "1.0.1"], %{working: "1.0.1", kept: "1.0.0"})
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          ctx,
+          %{
+            id: "prof_markets_restore",
+            kind: :owner,
+            source_ref: "tincture:local.markets",
+            label: "owner",
+            status: :needs_consent
+          },
+          %{
+            id: "cons_markets_restore",
+            revision: 1,
+            scope: :versionless,
+            pinned_version: "",
+            invoke_mode: :open_inert,
+            shape_digest: "sha256:shape",
+            commit_digest: "sha256:commit",
+            blob_digest: Prima.JCS.hash_binary("{}"),
+            resolved_policy: "{}",
+            activation: %{}
+          }
+        )
+
+      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
+      view |> element(~s(button[phx-value-offer="kept"])) |> render_click()
+
+      # The grant is shown, safe mode waits behind it, and nothing moved.
+      html = render(view)
+      assert html =~ ~s(data-kind="grant")
+      assert html =~ "Grant tincture:local.markets"
+      no_outcome("safe")
+      assert %{document: %{working: "1.0.1"}, revision: 1} = versions(ctx)
+      grant = open_prompt(view)
+      refute grant == "safe"
+
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      assert outcome(grant) == :confirmed
+
+      # Confirmed, the restore is asked again, and safe mode ends with it.
+      assert outcome("safe") == {:confirmed, :kept}
+      assert %{document: %{working: "1.0.0", kept: "1.0.1"}} = versions(ctx)
+      assert open_prompt(view) == nil
+    end
+
+    test "a restore that waits on the grant, dismissed, leaves safe mode as it was",
+         %{view: view, ctx: ctx} do
+      markets!(ctx, ["1.0.0", "1.0.1"], %{working: "1.0.1", kept: "1.0.0"})
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          ctx,
+          %{
+            id: "prof_markets_dismiss",
+            kind: :owner,
+            source_ref: "tincture:local.markets",
+            label: "owner",
+            status: :needs_consent
+          },
+          %{
+            id: "cons_markets_dismiss",
+            revision: 1,
+            scope: :versionless,
+            pinned_version: "",
+            invoke_mode: :open_inert,
+            shape_digest: "sha256:shape",
+            commit_digest: "sha256:commit",
+            blob_digest: Prima.JCS.hash_binary("{}"),
+            resolved_policy: "{}",
+            activation: %{}
+          }
+        )
+
+      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
+      view |> element(~s(button[phx-value-offer="kept"])) |> render_click()
+      grant = open_prompt(view)
+
+      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      assert outcome(grant) == :dismissed
+      assert open_prompt(view) == "safe"
+      assert %{document: %{working: "1.0.1", kept: "1.0.0"}} = versions(ctx)
     end
   end
+
+  # ---- holding a read ---------------------------------------------------
+
+  # The view `pid` stops once, right after its read of markets' versions
+  # document, and says so; it goes on when it is told to. The read is
+  # observed, never waited out.
+  defp hold_after_read!(pid) do
+    id = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(id, [:arca, :repo, :query], &__MODULE__.held_read/4, %{
+        test: self(),
+        pid: pid,
+        key: Arca.CanvasVersions.key("markets")
+      })
+
+    on_exit(fn -> :telemetry.detach(id) end)
+  end
+
+  @doc false
+  def held_read(_event, _measurements, %{source: "fenced_documents", params: params}, config) do
+    if self() == config.pid and config.key in params and not Arca.Repo.in_transaction?() and
+         Process.get({__MODULE__, :held}) != true do
+      Process.put({__MODULE__, :held}, true)
+      send(config.test, {:read_versions, self()})
+
+      receive do
+        :go -> :ok
+      after
+        30_000 -> :ok
+      end
+    end
+  end
+
+  def held_read(_event, _measurements, _metadata, _config), do: :ok
 end

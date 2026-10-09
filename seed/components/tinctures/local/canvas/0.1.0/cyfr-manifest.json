@@ -1,0 +1,23 @@
+{
+  "name": "canvas",
+  "type": "tincture",
+  "version": "0.1.0",
+  "publisher": "local",
+  "description": "Your canvas: your recent runs, and a launcher for each app you installed.",
+  "tags": ["canvas", "system"],
+  "category": "utility",
+  "tincture": {
+    "icon": "canvas",
+    "tagline": "Your recent runs and your apps",
+    "frame": {
+      "placement": "canvas"
+    },
+    "canvas": {
+      "module": "canvas.js",
+      "toolkit": 1
+    },
+    "streams": [
+      {"name": "runs.changes"}
+    ]
+  }
+}

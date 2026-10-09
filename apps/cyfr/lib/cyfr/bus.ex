@@ -45,7 +45,6 @@ defmodule Cyfr.Bus do
     BoundedDispatcher,
     Build,
     CallerInvalidated,
-    CardRefreshed,
     Components,
     Confirmation,
     Execution,
@@ -269,18 +268,6 @@ defmodule Cyfr.Bus do
       reason:
         "one execution's stream: durable rows after commit, deltas before the " <>
           "write-behind sink keeps them, numbered for replay"
-    },
-    %{
-      key: :cards,
-      scope: :tenant,
-      struct: CardRefreshed,
-      match: {:prefix, "bus:cards:"},
-      template: "tenant:<athanor_id>:bus:cards:<user_id>",
-      producers: ["Crucible.Cards"],
-      consumers: ["stream:cards.refreshed"],
-      reason:
-        "one person's placed cards refreshed, on that person's own topic, so a refresh " <>
-          "reaches no other member's grant"
     },
     %{
       key: :layouts,
@@ -657,15 +644,6 @@ defmodule Cyfr.Bus do
   @spec execution_events(Actor.t(), String.t()) :: String.t()
   def execution_events(actor, execution_id) when is_binary(execution_id),
     do: prefix(actor) <> "execution:events:" <> execution_id
-
-  @doc """
-  One person's refreshed cards (`Cyfr.Bus.CardRefreshed`): `user_id` is
-  the person who placed them, and the stream `cards.refreshed` grants this
-  topic to that person alone.
-  """
-  @spec cards(Actor.t(), String.t()) :: String.t()
-  def cards(actor, user_id) when is_binary(user_id) and user_id != "",
-    do: prefix(actor) <> "bus:cards:" <> user_id
 
   @doc """
   One person's layout (`Cyfr.Bus.LayoutPublished`): `user_id` is the

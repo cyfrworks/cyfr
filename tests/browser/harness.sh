@@ -64,19 +64,18 @@ browser_cookie() {
 }
 
 # Publish, for the person whose session token is `$2` on cell `$1`, the
-# layout document `$3` over revision `${4:-0}`, as the console publishes it
-# (`layout.edit` through the gate).
+# layout document `$3` (version 2) over revision `${4:-0}`, as the console
+# publishes it (`layout.edit` through the gate).
 browser_layout() {
   local answer
   answer="$(server_fixture "$1" console "$2" layout/edit "{\"document\":$3,\"revision\":${4:-0}}")"
   printf '%s' "$answer" | grep -q '"ok"' || fail "the layout was not published: $answer"
 }
 
-# A layout whose desktop no one installed: the shell runs no desktop and
-# draws its picker, which the frame experiments launch their tinctures from.
+# A layout with no canvas: the shell runs no canvas and draws its picker,
+# which the frame experiments launch their tinctures from.
 browser_picker_layout() {
-  local none='{"desktop":"tincture:local.no-desktop","slots":[],"floating":[]}'
-  browser_layout "$1" "$2" "{\"version\":1,\"postures\":{\"desk\":$none,\"hand\":$none}}"
+  browser_layout "$1" "$2" '{"version":2,"canvases":[]}'
 }
 
 # ---------------------------------------------------------------------------

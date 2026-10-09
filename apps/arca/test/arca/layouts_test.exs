@@ -47,24 +47,24 @@ defmodule Arca.LayoutsTest do
     {:ok, actor: Arca.Test.Actor.local(athanor_id: athanor), user: "usr_lay", slot: hold_slot!()}
   end
 
-  defp layout(desktop \\ "tincture:local.desktop") do
+  defp layout(canvas \\ "tincture:local.canvas") do
     {:ok, layout} =
       Prima.Layout.validate(%{
-        "version" => 1,
-        "postures" => %{
-          "hand" => %{
-            "desktop" => desktop,
-            "slots" => [
-              %{
-                "id" => "gone",
-                "tincture" => "tincture:acme.uninstalled",
-                "size" => "icon",
-                "order" => 0
+        "version" => 2,
+        "canvases" => [
+          %{
+            "id" => "home",
+            "tincture" => canvas,
+            "postures" => %{
+              "hand" => %{
+                "apps" => [
+                  %{"tincture" => "tincture:acme.uninstalled", "mode" => "column", "order" => 0}
+                ],
+                "floating" => []
               }
-            ],
-            "floating" => []
+            }
           }
-        }
+        ]
       })
 
     layout
@@ -111,7 +111,7 @@ defmodule Arca.LayoutsTest do
     assert {:error, :stale} = Layouts.publish(actor, user, layout("tincture:local.late"), 1)
     assert {:error, :stale} = Layouts.publish(actor, user, layout("tincture:local.late"), 0)
     assert {:ok, %{revision: 2, document: document}} = Layouts.get(actor, user)
-    assert document.postures["hand"].desktop == "tincture:local.second"
+    assert [%{tincture: "tincture:local.second"}] = document.canvases
 
     # The refused attempts' staged bytes are handed to the sweep.
     refused =

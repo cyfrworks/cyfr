@@ -519,15 +519,21 @@ defmodule Cyfr.AdmissionOriginTest do
 
   describe "a hidden frame" do
     test "the shell suspends a hidden frame only when it holds no background grant" do
+      # An app of the visible canvas, and two apps of a hidden one.
+      idle = {:app, "work", "tincture:local.idle"}
+
       frames =
-        Prism.Frames.new()
-        |> Prism.Frames.put(shell_frame({:full, "shown"}, :full, false))
-        |> Prism.Frames.put(shell_frame({:slot, "kept"}, {:slot, "kept"}, true))
-        |> Prism.Frames.put(shell_frame({:slot, "idle"}, {:slot, "idle"}, false))
-        |> Prism.Frames.activate({:full, "shown"})
+        %{Prism.Frames.new() | canvas: "home"}
+        |> Prism.Frames.put(
+          shell_frame({:app, "home", "tincture:local.shown"}, {:column, 0}, false)
+        )
+        |> Prism.Frames.put(
+          shell_frame({:app, "work", "tincture:local.kept"}, {:column, 0}, true)
+        )
+        |> Prism.Frames.put(shell_frame(idle, {:column, 1}, false))
         |> Prism.Frames.visibility()
 
-      assert Prism.Frames.plan(frames) == [{:freeze, {:slot, "idle"}}]
+      assert Prism.Frames.plan(frames) == [{:freeze, idle}]
     end
 
     test "one its background grant keeps live is admitted as interactive; a suspended one is refused" do
@@ -974,8 +980,8 @@ defmodule Cyfr.AdmissionOriginTest do
     )
   end
 
-  # A frame as the shell holds one: shown or hidden by where it sits and
-  # which frame is active, frozen by `plan/1` only when it may not run in
+  # A frame as the shell holds one: shown or hidden by the canvas it sits
+  # over and which canvas is visible, frozen by `plan/1` only when it may not run in
   # the background.
   defp shell_frame(key, placement, background) do
     %{
@@ -993,7 +999,9 @@ defmodule Cyfr.AdmissionOriginTest do
       placement: placement,
       visible: true,
       background: background,
-      actions: []
+      actions: [],
+      arranged: true,
+      boot: nil
     }
   end
 end

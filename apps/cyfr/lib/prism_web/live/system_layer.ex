@@ -26,7 +26,8 @@ defmodule PrismWeb.SystemLayer do
   waiting is the same prompt and is taken once.
 
   Each prompt's outcome goes to the parent LiveView as
-  `{:system_layer, id, :confirmed | :dismissed | {:refused, reason}}`. A
+  `{:system_layer, id, :confirmed | :dismissed | {:refused, reason}}`, and
+  safe mode's confirmation as `{:confirmed, offer}`, naming its way out. A
   malformed prompt is not drawn and is `{:refused, :invalid_prompt}`. A
   refused confirmation shows its sentence, reports `{:refused, reason}`
   and stays open, so the person can dismiss it. A confirmation prompt the
@@ -94,12 +95,16 @@ defmodule PrismWeb.SystemLayer do
       the one value typed under the subject's field;
     * pairing — `pairing.list` when it opens, `pairing.begin`, whose
       answer's `invitation_url` it draws as a QR code, and `pairing.revoke`;
-    * safe mode's default desktop — `layout.edit` at the revision safe mode
-      was entered at; a layout published since is reported and nothing is
-      merged. Trying again dispatches nothing. Safe mode has no dismissal;
-      its `:confirmed` tells the parent the person chose, and the parent
-      runs frames again from the layout. The layer stops and starts no
-      frame itself;
+    * safe mode's kept version — `canvas.restore` of the visible canvas,
+      under today's grant: a grant that waits for the person raises the
+      grant prompt in front of safe mode, and once that is confirmed the
+      restore is asked again; versions published since safe mode opened
+      are reported and nothing is merged. Trying again and the shipped
+      canvas dispatch nothing. Safe mode has no dismissal; it reports
+      `{:confirmed, offer}`, the way out the person chose (`:retry`,
+      `:kept` once restored, or `:shipped`), and the parent shows the
+      canvas again or the shipped canvas in its place. The layer stops and
+      starts no frame itself;
     * a sign-in — nothing: identity is established at the authentication
       boundary, so confirming leaves for the sign-in page;
     * an unlock — no operation unlocks the vault, so an unlock prompt has
@@ -704,6 +709,7 @@ defmodule PrismWeb.SystemLayer do
        held: %{},
        pairing: nil,
        recovery: nil,
+       restoring: %{},
        athanor_route: nil,
        athanor_name: nil
      )}
@@ -1296,7 +1302,11 @@ defmodule PrismWeb.SystemLayer do
 
   defp settle(socket, prompt, :confirmed) do
     report(prompt.id, :confirmed)
-    socket |> drop_prompt_asks(prompt.id) |> advance()
+
+    socket
+    |> drop_prompt_asks(prompt.id)
+    |> advance()
+    |> restore_after_grant(prompt.id, :confirmed)
   end
 
   defp refuse(socket, prompt, reason, sentence) do
@@ -1316,7 +1326,12 @@ defmodule PrismWeb.SystemLayer do
           if dismissable?(prompt) do
             socket = end_own_request(socket, prompt)
             if reports?(socket, prompt), do: report(id, :dismissed)
-            {:noreply, socket |> drop_prompt_asks(id) |> advance()}
+
+            {:noreply,
+             socket
+             |> drop_prompt_asks(id)
+             |> advance()
+             |> restore_after_grant(id, :dismissed)}
           else
             {:noreply, socket}
           end
@@ -1349,14 +1364,16 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
-  # Trying again reads nothing and dispatches nothing, so safe mode's way
-  # back works while the store cannot answer; only what the next prompt
-  # reads waits for it.
-  def handle_event("choose", %{"id" => id, "offer" => "retry"}, socket) do
+  # Trying again and the shipped canvas read nothing and dispatch nothing,
+  # so safe mode's way back works while the store cannot answer; only what
+  # the next prompt reads waits for it.
+  def handle_event("choose", %{"id" => id, "offer" => offer}, socket)
+      when offer in ["retry", "shipped"] do
     with {:ok, %{subject: safe_mode} = prompt} <- open(socket, id, [:safe_mode]),
-         :retry <- SafeMode.choose(safe_mode, :retry) do
-      report(prompt.id, :confirmed)
-      socket = step(socket)
+         {:ok, offer} <- offer(offer),
+         ^offer <- SafeMode.choose(safe_mode, offer) do
+      report(prompt.id, {:confirmed, offer})
+      socket = socket |> drop_restoring(prompt.id) |> step()
       CyfrWeb.ContextGuard.guard(socket, &{:noreply, load_shown(&1)})
     else
       _none -> {:noreply, socket}
@@ -1500,7 +1517,8 @@ defmodule PrismWeb.SystemLayer do
   end
 
   defp offer("retry"), do: {:ok, :retry}
-  defp offer("default"), do: {:ok, :default}
+  defp offer("kept"), do: {:ok, :kept}
+  defp offer("shipped"), do: {:ok, :shipped}
   defp offer(_other), do: :error
 
   # ---------------------------------------------------------------------------
@@ -1766,29 +1784,84 @@ defmodule PrismWeb.SystemLayer do
 
   defp choose(socket, %{subject: safe_mode} = prompt, offer) do
     case SafeMode.choose(safe_mode, offer) do
-      :retry ->
-        settle(socket, prompt, :confirmed)
+      {:restore, name} ->
+        restored(socket, prompt, Ops.call_tool(socket, "canvas/restore", %{"canvas" => name}))
 
-      {:publish, document} ->
-        args = %{"document" => Prima.Layout.to_json(document), "revision" => safe_mode.revision}
-        dispatched(socket, prompt, Ops.call_tool(socket, "layout/edit", args))
-
-      {:error, :not_offered} ->
+      _not_dispatched ->
         socket
     end
   end
 
-  defp dispatched(socket, prompt, {:ok, _result}), do: settle(socket, prompt, :confirmed)
-
-  defp dispatched(socket, %{kind: :safe_mode} = prompt, {:error, {:conflict, _} = reason}) do
-    refuse(
-      socket,
-      prompt,
-      reason,
-      "Your layout changed since safe mode opened, so nothing was changed. " <>
-        "Try again to load the layout as it is now."
-    )
+  # The kept version restored is safe mode's way out. A grant that waits
+  # for the person comes first, in front of safe mode, and the restore is
+  # asked again once it is confirmed; versions published since safe mode
+  # opened are reported, and nothing is merged.
+  defp restored(socket, prompt, {:ok, _restored}) do
+    report(prompt.id, {:confirmed, :kept})
+    socket |> drop_restoring(prompt.id) |> drop_prompt_asks(prompt.id) |> advance()
   end
+
+  defp restored(socket, prompt, {:error, reason}) do
+    case Prima.Refusal.classify(reason).class do
+      :conflict ->
+        refuse(
+          socket,
+          prompt,
+          reason,
+          "Your canvas's versions changed since safe mode opened, so nothing was changed. " <>
+            "Try again to load the canvas as it is now."
+        )
+
+      :consent_required ->
+        restore_grant(socket, prompt, reason)
+
+      _other ->
+        refuse(socket, prompt, reason, Ops.error_message(reason))
+    end
+  end
+
+  defp restore_grant(socket, %{subject: %SafeMode{tincture: ref}} = prompt, reason) do
+    grant_id = "restore-grant-#{System.unique_integer([:positive])}"
+
+    with {:ok, grant} <- grant_prompt(socket, grant_id, ref),
+         {:ok, grant} <- Prompt.validate(grant) do
+      socket
+      |> assign(current: grant, queue: [prompt | socket.assigns.queue], error: nil)
+      |> update(:restoring, &Map.put(&1, grant_id, prompt.id))
+      |> mark_shown()
+    else
+      _unread -> refuse(socket, prompt, reason, Ops.error_message(reason))
+    end
+  end
+
+  # A grant raised for a restore ended: confirmed, the restore is asked
+  # again once safe mode is shown again; dismissed, safe mode is shown as
+  # it was.
+  defp restore_after_grant(socket, grant_id, outcome) do
+    case Map.pop(socket.assigns.restoring, grant_id) do
+      {nil, _restoring} ->
+        socket
+
+      {safe_id, restoring} ->
+        socket = assign(socket, :restoring, restoring)
+
+        case {outcome, socket.assigns.current} do
+          {:confirmed, %{id: ^safe_id, kind: :safe_mode} = safe_mode} ->
+            choose(socket, safe_mode, :kept)
+
+          _dismissed_or_gone ->
+            socket
+        end
+    end
+  end
+
+  defp drop_restoring(socket, safe_id) do
+    update(socket, :restoring, fn restoring ->
+      restoring |> Enum.reject(fn {_grant, safe} -> safe == safe_id end) |> Map.new()
+    end)
+  end
+
+  defp dispatched(socket, prompt, {:ok, _result}), do: settle(socket, prompt, :confirmed)
 
   # A refused commit consumed the walk's plan token whatever it answered:
   # the sheet plans again (the same choices over the same ask, or the grant
@@ -2841,10 +2914,13 @@ defmodule PrismWeb.SystemLayer do
         "never shown again."
 
   defp description(%{kind: :safe_mode, subject: %SafeMode{reason: :not_ready}}),
-    do: "Your desktop did not start."
+    do: "Your canvas did not start."
 
   defp description(%{kind: :safe_mode, subject: %SafeMode{reason: :crashed}}),
-    do: "Your desktop stopped working."
+    do: "Your canvas stopped working."
+
+  defp description(%{kind: :safe_mode, subject: %SafeMode{reason: :not_validated}}),
+    do: "Your canvas's new version did not start, and it has no earlier version to show."
 
   defp description(%{kind: :safe_mode, subject: %SafeMode{reason: :requested}}),
     do: "You turned safe mode on."
@@ -2876,7 +2952,8 @@ defmodule PrismWeb.SystemLayer do
   defp dismiss_label(_prompt, _panel), do: "Dismiss"
 
   defp offer_label(%{offer: :retry}), do: "Try again"
-  defp offer_label(%{offer: :default}), do: "Use the default desktop"
+  defp offer_label(%{offer: :kept}), do: "Go back to the version before"
+  defp offer_label(%{offer: :shipped}), do: "Use the shipped canvas"
 
   defp waiting([_one]), do: "One more prompt is waiting."
   defp waiting(queue), do: "#{length(queue)} more prompts are waiting."

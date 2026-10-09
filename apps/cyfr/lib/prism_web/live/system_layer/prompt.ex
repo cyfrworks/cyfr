@@ -61,7 +61,9 @@ defmodule PrismWeb.SystemLayer.Prompt do
       `expected_payload_rev` the card read), and none of the prefill keys;
     * `:unlock` — optionally `name`, the vault entry it concerns;
     * `:sign_in` — optionally `message`, a sentence saying why;
-    * `:safe_mode` — a `Prism.SafeMode` value;
+    * `:safe_mode` — a `Prism.SafeMode` value: its reason, and the visible
+      canvas, the tincture it runs and the version its versions document
+      keeps, from which the ways out are offered;
     * `:pairing` — nothing: the prompt reads the person's paired clients
       itself and begins a pairing through `pairing.begin`, whose answer's
       link it draws as a QR code (`PrismWeb.SystemLayer.Pairing`);

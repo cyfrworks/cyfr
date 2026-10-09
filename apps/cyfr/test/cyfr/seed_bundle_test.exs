@@ -3,7 +3,7 @@
 
 defmodule Cyfr.Test.SeedBundleTest do
   @moduledoc """
-  The seed tree is the model-catalyst roster and ships the desktop. Tests
+  The seed tree is the model-catalyst roster and ships the canvas. Tests
   read it; they do not keep a vendor list of their own.
   """
 
@@ -44,50 +44,65 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert files.rel == "catalysts/local/files/#{files.version}"
   end
 
-  test "the shipped desktop is the default layout's, and the rules and the publish check accept it" do
-    desktop = SeedBundle.local_unit!("tinctures", "desktop")
-    assert desktop.type == "tincture"
-    assert desktop.ref == "tincture:local.desktop"
+  test "the shipped canvas is the default layout's, and the rules and the publish check accept it" do
+    canvas = SeedBundle.local_unit!("tinctures", "canvas")
+    assert canvas.type == "tincture"
+    assert canvas.ref == "tincture:local.canvas"
 
-    for {_posture, arrangement} <- Prima.Layout.default().postures,
-        do: assert(arrangement.desktop == desktop.ref)
+    # The default layout's one canvas, with nothing placed over it.
+    assert [%{id: "home", tincture: ref, postures: postures}] = Prima.Layout.default().canvases
+    assert ref == canvas.ref
+    assert postures == %{}
 
-    assert Prima.Manifest.validate(desktop.manifest, fn _ -> true end) == :ok
-    assert {:ok, declaration} = Compendium.tincture_declaration(desktop.manifest)
-    assert declaration.frame.placement == "desktop"
+    assert Prima.Manifest.validate(canvas.manifest, fn _ -> true end) == :ok
+    assert {:ok, declaration} = Compendium.tincture_declaration(canvas.manifest)
+    assert declaration.frame.placement == "canvas"
+    assert declaration.frame.background == false
+    assert declaration.frame.capabilities == []
+    assert {:ok, "canvas.js"} = Compendium.tincture_canvas_module(canvas.manifest)
 
-    # Arranging, cards and discovery, and nothing that reaches out.
-    assert Enum.sort(declaration.actions) ==
-             ~w(card.press card.refresh component.list layout.edit layout.get)
-
-    assert [%{name: "cards.refreshed", subject: nil}] = declaration.streams
+    # It reads the athanor's runs, names no feed, and declares nothing
+    # else: no action, no connect origin, no page of its own and no card.
+    assert declaration.actions == []
+    assert [%{name: "runs.changes", subject: nil}] = declaration.streams
     assert Compendium.tincture_check_streams(declaration, Grimoire.streams()) == :ok
-    refute Map.has_key?(desktop.manifest["tincture"], "connect")
-    refute Map.has_key?(desktop.manifest, "caps")
+    assert Compendium.tincture_check_canvas_streams(declaration, Grimoire.streams()) == :ok
 
-    for operation <- declaration.actions do
-      [tool, action] = String.split(operation, ".")
-      assert {:ok, {_provider, definition}} = Grimoire.lookup(tool)
-      assert Map.has_key?(Grimoire.declared_actions(definition), action), operation
-    end
+    for key <- ~w(entry actions connect cards),
+        do: refute(Map.has_key?(canvas.manifest["tincture"], key), key)
 
-    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), desktop.rel)
+    refute Map.has_key?(canvas.manifest, "caps")
+    refute Map.has_key?(canvas.manifest, "dependencies")
+
+    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), canvas.rel)
 
     files =
       for path <- Prima.Test.SourceTree.files!(Path.join(dir, "**/*")),
           File.regular?(path),
           do: {Path.relative_to(path, dir), File.stat!(path).size}
 
-    assert {"index.html", _} = List.keyfind(files, "index.html", 0)
-    assert {:ok, _size} = Compendium.Tincture.check_version(desktop.manifest, files)
+    assert Enum.sort(Enum.map(files, &elem(&1, 0))) == ["canvas.js", "cyfr-manifest.json"]
+    assert {:ok, _size} = Compendium.Tincture.check_version(canvas.manifest, files)
+
+    # The module draws only through the toolkit: it reaches no page, no
+    # request and no markup of its own.
+    module = File.read!(Path.join(dir, "canvas.js"))
+
+    for reach <-
+          ~w(document window fetch XMLHttpRequest WebSocket EventSource importScripts innerHTML),
+        do: refute(module =~ reach, reach)
+
+    refute module =~ ~r/https?:\/\//
   end
 
-  test "the shipped vault is the default layout's icon, declares only what a frame can complete, and passes the publish check" do
+  test "the shipped desktop is gone" do
+    seed = Path.expand("../../../../seed/components/tinctures/local", __DIR__)
+    refute File.exists?(Path.join(seed, "desktop"))
+  end
+
+  test "the shipped vault declares only what a frame can complete, and passes the publish check" do
     vault = SeedBundle.local_unit!("tinctures", "vault")
     assert vault.ref == "tincture:local.vault"
-
-    for {_posture, arrangement} <- Prima.Layout.default().postures,
-        do: assert([%{tincture: "tincture:local.vault", size: :icon}] = arrangement.slots)
 
     assert Prima.Manifest.validate(vault.manifest, fn _ -> true end) == :ok
     assert {:ok, declaration} = Compendium.tincture_declaration(vault.manifest)

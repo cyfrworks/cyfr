@@ -36,7 +36,7 @@ defmodule Cyfr.BusTest do
     execution_events: "exec_1",
     thread: "thr_1",
     progress: {:build, "b1"},
-    cards: "usr_1",
+    confirmations: "usr_1",
     layouts: "usr_1"
   ]
 
@@ -394,12 +394,12 @@ defmodule Cyfr.BusTest do
                Bus.execution_events(actor("ath_1"), "exec_1")
     end
 
-    test "for a person's cards is that person's own topic, and no other person's" do
-      mine = Bus.granted_topic(actor("ath_1"), grant(:cards, "usr_a"))
-      assert mine == Bus.cards(actor("ath_1"), "usr_a")
-      refute mine == Bus.cards(actor("ath_1"), "usr_b")
-      assert Bus.grantable?(:cards, true)
-      refute Bus.grantable?(:cards, false)
+    test "for a person's confirmations is that person's own topic, and no other person's" do
+      mine = Bus.granted_topic(actor("ath_1"), grant(:confirmations, "usr_a"))
+      assert mine == Bus.confirmations(actor("ath_1"), "usr_a")
+      refute mine == Bus.confirmations(actor("ath_1"), "usr_b")
+      assert Bus.grantable?(:confirmations, true)
+      refute Bus.grantable?(:confirmations, false)
     end
 
     test "is the holder's own, so the bus's tenant check admits it and no other's" do

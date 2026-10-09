@@ -4,11 +4,13 @@
 defmodule Compendium.Providers.Layout do
   @moduledoc """
   The `layout` tool: the caller's own layout document (`Prima.Layout`),
-  which tinctures sit where on their desktop, at what size, per posture.
+  their canvases in order and, over each, per posture, the apps and the
+  floating tinctures placed and where.
 
     * `get` answers the caller's document, its revision and digest, or the
       shipped default at revision 0 when they have never arranged one; with
-      a `posture`, also that posture's arrangement.
+      a `posture`, also that posture's arrangement: every canvas in order,
+      each with the apps and floating tinctures placed over it.
     * `edit` takes a whole document and the revision `get` answered, holds
       it to the layout's shape and publishes it fenced (`Arca.Layouts`): a
       document published since the revision was read refuses the edit, and
@@ -16,11 +18,11 @@ defmodule Compendium.Providers.Layout do
       person's own topic (`Cyfr.Bus.layouts/2`, `Cyfr.Bus.LayoutPublished`),
       so every shell the person has open reads the layout again.
 
-  A layout can only arrange: the shape names tinctures, sizes and places
+  A layout can only arrange: the shape names tinctures, modes and places
   and nothing else, so an edit never references an operation or a stream
-  and never widens a grant. A tincture nobody installed is kept and drawn
-  as a placeholder. Which tinctures are installed is the component
-  listing's to answer, not this tool's.
+  and never widens a grant. A tincture nobody installed is kept. Which
+  tinctures are installed is the component listing's to answer, not this
+  tool's.
 
   Both actions run under the caller's context, for the person the context
   names, in the athanor in focus. The console reads through
@@ -67,9 +69,9 @@ defmodule Compendium.Providers.Layout do
             Arg.new("document", :json,
               required: true,
               description:
-                "edit: the whole layout document — {version: 1, postures: {hand|desk: " <>
-                  "{desktop, slots: [{id, tincture, size: icon|card|full, order, card}], " <>
-                  "floating: [{tincture, position: {x, y}}]}}}"
+                "edit: the whole layout document — {version: 2, canvases: [{id, tincture, " <>
+                  "postures: {hand|desk: {apps: [{tincture, mode: full|column, order}], " <>
+                  "floating: [{tincture, position: {x, y}}]}}}]}"
             ),
             Arg.new("revision", :integer,
               required: true,
@@ -83,8 +85,9 @@ defmodule Compendium.Providers.Layout do
         )
       ],
       description:
-        "Your desktop's layout: which tinctures sit where, at what size, per posture. " <>
-          "An edit can only arrange; it names no operation, stream or grant.",
+        "Your layout: your canvases in order and, over each canvas, per posture, the apps " <>
+          "and floating tinctures placed and where. An edit can only arrange; it names no " <>
+          "operation, stream or grant.",
       title: "Layout"
     )
   end
@@ -108,7 +111,7 @@ defmodule Compendium.Providers.Layout do
             {:ok,
              Map.merge(answer, %{
                posture: posture,
-               arrangement: Prima.Layout.posture_to_json(arrangement)
+               arrangement: Enum.map(arrangement, &Prima.Layout.arranged_to_json/1)
              })}
           end
       end
@@ -172,13 +175,15 @@ defmodule Compendium.Providers.Layout do
   end
 
   @doc """
-  The arrangement of `posture` in `layout`: the document's own, or the
-  shipped default's when the document does not name it.
+  The arrangement of `posture` in `layout`: every canvas in the
+  document's order, each with the apps (by order, then reference) and the
+  floating tinctures that posture places over it, none for a posture the
+  canvas does not name (`Prima.Layout.arrangement/2`).
   """
   @spec arrangement(Prima.Layout.t(), term()) ::
-          {:ok, Prima.Layout.posture()} | {:error, {:invalid_argument, String.t()}}
+          {:ok, [Prima.Layout.arranged()]} | {:error, {:invalid_argument, String.t()}}
   def arrangement(%Prima.Layout{} = layout, posture) do
-    case Prima.Layout.posture(layout, posture) do
+    case Prima.Layout.arrangement(layout, posture) do
       {:ok, arrangement} ->
         {:ok, arrangement}
 

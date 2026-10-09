@@ -97,12 +97,11 @@ defmodule Crucible.ProviderTest do
                })
     end
 
-    test "returns the execution and card tools, each action-based" do
+    test "returns the execution tool alone, action-based, and declares no stream" do
       tools = Provider.tools()
-      assert tools |> Enum.map(& &1.name) |> Enum.sort() == ["card", "execution"]
-
-      card = Enum.find(tools, &(&1.name == "card"))
-      assert Enum.sort(card.input_schema["properties"]["action"]["enum"]) == ["press", "refresh"]
+      assert Enum.map(tools, & &1.name) == ["execution"]
+      refute function_exported?(Provider, :streams, 0)
+      assert Grimoire.lookup("card") == :miss
     end
 
     test "each tool has required schema fields" do

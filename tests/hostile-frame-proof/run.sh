@@ -110,10 +110,11 @@ other_token="$(printf '%s' "$other" | python3 -c "import json, sys; print(json.l
 # The person's layout: the picker alone (revision 1, as published above),
 # or with the waiting tincture floating over it.
 LAYOUT_REVISION=1
-none='{"desktop":"tincture:local.no-desktop","slots":[],"floating":[]}'
-float='{"desktop":"tincture:local.no-desktop","slots":[],"floating":[{"tincture":"tincture:local.ungranted-probe","position":{"x":6000,"y":6000}}]}'
+none='{"version":2,"canvases":[]}'
+floated='{"apps":[],"floating":[{"tincture":"tincture:local.ungranted-probe","position":{"x":6000,"y":6000}}]}'
+float="{\"version\":2,\"canvases\":[{\"id\":\"home\",\"tincture\":\"tincture:local.no-canvas\",\"postures\":{\"desk\":$floated,\"hand\":$floated}}]}"
 publish_layout() {
-  browser_layout "$CELL" "$(field token)" "{\"version\":1,\"postures\":{\"desk\":$1,\"hand\":$1}}" "$LAYOUT_REVISION"
+  browser_layout "$CELL" "$(field token)" "$1" "$LAYOUT_REVISION"
   LAYOUT_REVISION=$((LAYOUT_REVISION + 1))
 }
 

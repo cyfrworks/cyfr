@@ -6,15 +6,20 @@ import {afterEach, beforeEach, describe, test} from "node:test"
 
 import Canvas from "../../js/canvas/index.js"
 import {
+  CANVAS_MESSAGE_EVENT,
   CREDENTIAL_CLOSED_EVENT,
   FRAME_STATE_EVENT,
   acting,
   credentialSignal,
   frameSignal,
+  installedSignal,
   nextStanding,
-  safeModeChord
+  safeModeChord,
+  switchChord
 } from "../../js/canvas/signals.js"
 import IframeBridge from "../../js/hooks/iframe_bridge.js"
+import {HANDSHAKE} from "../../js/sdk/wire.js"
+import {decode} from "../../js/toolkit/wire.js"
 
 const FRAME = "frm_01a09fee2e4f"
 const OTHER = "frm_02b10aaa3f5e"
@@ -34,23 +39,38 @@ afterEach(() => {
 })
 
 // A frame element: an event target carrying the bridge's data attributes.
-function frameElement(id, state = "live") {
+function frameElement(id, state = "live", dataset = {}) {
   const el = new EventTarget()
-  el.dataset = {frameId: id, frameState: state}
+  el.dataset = {frameId: id, frameState: state, ...dataset}
   el.contentWindow = {postMessage() {}}
   return el
 }
 
-// The canvas element as the server renders it: its slot list, its
-// geometry and status hosts, and the frames inside it.
-function canvasElement({slots = [], frames = []} = {}) {
+// A canvas frame, with the box it is drawn in.
+function canvasFrame(id, box = {x: 0, y: 0, width: 1024, height: 768}, state = "live") {
+  const el = frameElement(id, state, {frameWire: "canvas"})
+  el.getBoundingClientRect = () => box
+  return el
+}
+
+// A frame's container as the canvas renders it: where it is placed, whether
+// it is shown, and its box.
+function container(place, shown, box) {
+  return {dataset: {canvasPlace: place}, shown, getBoundingClientRect: () => box}
+}
+
+// The canvas element as the server renders it: its column list, its
+// geometry and status hosts, the frames inside it, the containers of the
+// shown frames and the edge strip.
+function canvasElement({columns = [], frames = [], containers = []} = {}) {
   const style = {textContent: "", isConnected: true}
   const geometry = {appended: [], appendChild: (child) => geometry.appended.push(child)}
   const marker = {dataset: {canvasConnection: "connected"}, hidden: true}
+  const events = new EventTarget()
 
   return {
     id: "canvas",
-    dataset: {slots: JSON.stringify(slots)},
+    dataset: {columns: JSON.stringify(columns)},
     ownerDocument: {createElement: () => style},
     getBoundingClientRect: () => ({width: 1024, height: 768}),
     querySelector(selector) {
@@ -58,7 +78,14 @@ function canvasElement({slots = [], frames = []} = {}) {
       if (selector === "#canvas-status [data-canvas-connection]") return marker
       return null
     },
-    querySelectorAll: (selector) => (selector === "iframe[data-frame-id]" ? frames : []),
+    querySelectorAll(selector) {
+      if (selector === "iframe[data-frame-id]") return frames
+      if (selector === '[data-canvas-shown="true"]') return containers.filter((c) => c.shown)
+      return []
+    },
+    addEventListener: (type, fn) => events.addEventListener(type, fn),
+    removeEventListener: (type, fn) => events.removeEventListener(type, fn),
+    dispatch: (event) => events.dispatchEvent(event),
     style,
     marker
   }
@@ -66,24 +93,49 @@ function canvasElement({slots = [], frames = []} = {}) {
 
 function mountCanvas(el) {
   const pushed = []
+  const pushedToView = []
   const handlers = {}
   const hook = Object.assign(Object.create(Canvas), {
     el,
     pushEventTo: (target, event, payload) => pushed.push({target, event, payload}),
+    pushEvent: (event, payload) => pushedToView.push({event, payload}),
     handleEvent: (event, fn) => (handlers[event] = fn)
   })
   hook.mounted()
-  return {hook, pushed, handlers}
+  return {hook, pushed, pushedToView, handlers}
 }
 
-function mountBridge(el) {
+function mountBridge(el, reply) {
   const events = []
   const hook = Object.assign(Object.create(IframeBridge), {
     el,
-    pushEvent: (event, payload) => events.push({event, payload})
+    pushEvent: (event, payload, onReply) => {
+      events.push({event, payload})
+      if (event === "frame_handshake" && onReply) onReply(reply)
+    }
   })
   hook.mounted()
   return {hook, events}
+}
+
+// What a canvas frame is told through its bridge, recorded on its element.
+function told(frame) {
+  const seen = []
+  frame.addEventListener(CANVAS_MESSAGE_EVENT, (event) => seen.push(event.detail))
+  return seen
+}
+
+// A pointer event on the edge strip, or elsewhere in the canvas layer.
+function pointer(type, {x, y, pointerId = 1, onStrip = true}) {
+  const event = new Event(type)
+  const strip = {setPointerCapture() {}}
+  event.pointerId = pointerId
+  event.clientX = x
+  event.clientY = y
+  Object.defineProperty(event, "target", {
+    value: {closest: (selector) => (onStrip && selector === "#canvas-edge-strip" ? strip : null)}
+  })
+  return event
 }
 
 describe("the posture report", () => {
@@ -122,15 +174,15 @@ describe("the posture report", () => {
   })
 })
 
-describe("the slot layout", () => {
-  test("is written from the rendered slot list into the canvas's own stylesheet", () => {
-    const el = canvasElement({slots: [{id: "notes", size: "icon", order: 0}]})
+describe("the column layout", () => {
+  test("is written from the rendered column list into the canvas's own stylesheet", () => {
+    const el = canvasElement({columns: [{frame: FRAME, order: 0}]})
     mountCanvas(el)
-    assert.match(el.style.textContent, /\[data-canvas-place="slot:notes"\]\{left:24px;top:24px;/)
+    assert.match(el.style.textContent, new RegExp(`\\[data-canvas-column="${FRAME}"\\]\\{left:592px;top:12px;`))
   })
 
   test("the last list stays drawn while the socket is down, and follows the window", () => {
-    const el = canvasElement({slots: [{id: "notes", size: "card", order: 0}]})
+    const el = canvasElement({columns: [{frame: FRAME, order: 0}]})
     const {hook} = mountCanvas(el)
     const desk = el.style.textContent
 
@@ -139,18 +191,128 @@ describe("the slot layout", () => {
     assert.equal(el.marker.hidden, false)
 
     // A patch that no longer parses leaves the last list in place.
-    el.dataset.slots = "not json"
+    el.dataset.columns = "not json"
     hook.updated()
     assert.equal(el.style.textContent, desk)
 
     globalThis.window.innerWidth = 600
     listeners.resize()
-    assert.match(el.style.textContent, /slot:notes/)
+    assert.match(el.style.textContent, new RegExp(FRAME))
     assert.notEqual(el.style.textContent, desk)
 
     hook.reconnected()
     assert.equal(el.marker.dataset.canvasConnection, "connected")
     assert.equal(el.marker.hidden, true)
+  })
+})
+
+describe("what a canvas frame is told", () => {
+  test("its posture and what the shown apps and floating frames cover of it, each when it changes", () => {
+    const frame = canvasFrame(FRAME, {x: 0, y: 40, width: 1000, height: 600})
+    const seen = told(frame)
+    const column = container("column", true, {x: 700, y: 52, width: 288, height: 576})
+    const hidden = container("float", false, {x: 0, y: 40, width: 100, height: 100})
+    const el = canvasElement({frames: [frame], containers: [column, hidden]})
+
+    const {hook} = mountCanvas(el)
+    assert.deepEqual(seen, [
+      {verb: "posture", args: {posture: "desk"}},
+      {verb: "covered", args: {rects: [{x: 700, y: 12, width: 288, height: 576}]}}
+    ])
+
+    // Nothing moved: nothing is told again.
+    hook.updated()
+    assert.equal(seen.length, 2)
+
+    // The column closed; the hand posture.
+    column.shown = false
+    globalThis.window.innerWidth = 600
+    listeners.resize()
+    assert.deepEqual(seen.slice(2), [
+      {verb: "posture", args: {posture: "hand"}},
+      {verb: "covered", args: {rects: []}}
+    ])
+  })
+
+  test("the tinctures the shell names reach only the canvas frame it names", () => {
+    const frame = canvasFrame(FRAME)
+    const app = frameElement(OTHER)
+    const seen = told(frame)
+    const elsewhere = told(app)
+    const {handlers} = mountCanvas(canvasElement({frames: [frame, app]}))
+    const tinctures = [{ref: "tincture:local.vault", name: "vault"}]
+
+    seen.splice(0)
+    handlers.canvas_installed({frame: FRAME, tinctures})
+    handlers.canvas_installed({frame: OTHER, tinctures})
+    handlers.canvas_installed({frame: FRAME, tinctures: "all"})
+    handlers.canvas_installed(null)
+
+    assert.deepEqual(seen, [{verb: "installed", args: {tinctures}}])
+    assert.deepEqual(elsewhere, [])
+  })
+})
+
+describe("switching canvases", () => {
+  test("Ctrl+Alt+ArrowLeft and ArrowRight ask the shell for the previous and next canvas", () => {
+    const {hook, pushedToView} = mountCanvas(canvasElement())
+    const press = (keys) => {
+      let prevented = false
+      listeners.keydown({...keys, preventDefault: () => (prevented = true)})
+      return prevented
+    }
+
+    assert.equal(press({key: "ArrowLeft", ctrlKey: true, altKey: true}), true)
+    assert.equal(press({key: "ArrowRight", ctrlKey: true, altKey: true}), true)
+    assert.equal(press({key: "ArrowRight", ctrlKey: true, altKey: false}), false)
+    assert.equal(press({key: "ArrowRight", ctrlKey: true, altKey: true, shiftKey: true}), false)
+    assert.equal(press({key: "ArrowUp", ctrlKey: true, altKey: true}), false)
+
+    assert.deepEqual(pushedToView, [
+      {event: "switch_canvas", payload: {direction: "previous"}},
+      {event: "switch_canvas", payload: {direction: "next"}}
+    ])
+
+    hook.disconnected()
+    press({key: "ArrowLeft", ctrlKey: true, altKey: true})
+    assert.equal(pushedToView.length, 2)
+  })
+
+  test("a horizontal swipe on the edge strip asks for the next canvas leftward and the previous rightward", () => {
+    const el = canvasElement()
+    const {hook, pushedToView} = mountCanvas(el)
+
+    el.dispatch(pointer("pointerdown", {x: 400, y: 760}))
+    el.dispatch(pointer("pointerup", {x: 300, y: 765}))
+    el.dispatch(pointer("pointerdown", {x: 300, y: 760}))
+    el.dispatch(pointer("pointerup", {x: 360, y: 760}))
+
+    // Too short, too steep, begun off the strip, or another pointer's end.
+    el.dispatch(pointer("pointerdown", {x: 300, y: 760}))
+    el.dispatch(pointer("pointerup", {x: 260, y: 760}))
+    el.dispatch(pointer("pointerdown", {x: 300, y: 760}))
+    el.dispatch(pointer("pointerup", {x: 220, y: 660}))
+    el.dispatch(pointer("pointerdown", {x: 300, y: 300, onStrip: false}))
+    el.dispatch(pointer("pointerup", {x: 100, y: 300}))
+    el.dispatch(pointer("pointerdown", {x: 300, y: 760, pointerId: 1}))
+    el.dispatch(pointer("pointerup", {x: 100, y: 760, pointerId: 2}))
+
+    assert.deepEqual(pushedToView, [
+      {event: "switch_canvas", payload: {direction: "next"}},
+      {event: "switch_canvas", payload: {direction: "previous"}}
+    ])
+
+    hook.destroyed()
+    el.dispatch(pointer("pointerdown", {x: 400, y: 760}))
+    el.dispatch(pointer("pointerup", {x: 300, y: 760}))
+    assert.equal(pushedToView.length, 2)
+  })
+
+  test("the chord reads only Ctrl+Alt with an arrow", () => {
+    assert.equal(switchChord({key: "ArrowLeft", ctrlKey: true, altKey: true}), "previous")
+    assert.equal(switchChord({key: "ArrowRight", ctrlKey: true, altKey: true}), "next")
+    assert.equal(switchChord({key: "ArrowRight", ctrlKey: true, altKey: true, metaKey: true}), null)
+    assert.equal(switchChord(null), null)
   })
 })
 
@@ -219,6 +381,106 @@ describe("frame signals", () => {
   })
 })
 
+describe("a canvas frame's bridge", () => {
+  const BOOT = {
+    mode: "live",
+    credential: "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+    data_path: `/_f/v1/o/${FRAME}/`,
+    module_url: "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/local/canvas/0.1.0/canvas.js",
+    toolkit: 1,
+    streams: [{name: "runs.changes", subject: null}]
+  }
+
+  // The canvas frame's window: the handshake it is posted, and its end of
+  // the port.
+  function connect(state = "live", reply = {boot: BOOT}) {
+    const frame = canvasFrame(FRAME, undefined, state)
+    const posted = []
+    frame.contentWindow = {postMessage: (data, origin, transfer) => posted.push({data, origin, transfer})}
+    const bridge = mountBridge(frame, reply)
+    return {frame, posted, ...bridge}
+  }
+
+  async function received(posted, count) {
+    const [{transfer}] = posted
+    const port = transfer[0]
+    const messages = []
+    port.onmessage = (event) => messages.push(event.data)
+    for (let i = 0; i < 100 && messages.length < count; i++) await new Promise((r) => setTimeout(r, 5))
+    return {port, messages}
+  }
+
+  test("posts the handshake, then boot over the port with the bearer inside it, and never cyfr:credential", async () => {
+    const {frame, posted, events, hook} = connect()
+    frame.dispatchEvent(new CustomEvent(CANVAS_MESSAGE_EVENT, {detail: {verb: "posture", args: {posture: "hand"}}}))
+    frame.dispatchEvent(new Event("load"))
+
+    assert.deepEqual(events, [{event: "frame_handshake", payload: {frame: FRAME}}])
+    assert.equal(posted.length, 1)
+    assert.deepEqual(posted[0].data, {v: 1, type: HANDSHAKE, frame: FRAME})
+    assert.ok(!JSON.stringify(posted[0].data).includes(BOOT.credential))
+
+    const {port, messages} = await received(posted, 2)
+    assert.deepEqual(messages[0], {v: 1, verb: "boot", frame: FRAME, args: BOOT})
+    // What the glass said before the boot follows it, the latest first.
+    assert.deepEqual(messages[1], {v: 1, verb: "posture", frame: FRAME, args: {posture: "hand"}})
+    assert.ok(messages.every((message) => decode(message).ok))
+    assert.ok(messages.every((message) => message.type !== "cyfr:credential"))
+    hook.destroyed()
+    port.close()
+  })
+
+  test("a reply without a boot the wire takes hands nothing", () => {
+    for (const reply of [{error: "no_credential"}, {credential: "a-bearer"}, {boot: {...BOOT, module_url: "x.js"}}]) {
+      const {frame, posted, hook} = connect("live", reply)
+      frame.dispatchEvent(new Event("load"))
+      assert.equal(posted.length, 0)
+      hook.destroyed()
+    }
+  })
+
+  test("its verbs reach the view as canvas_verb; another direction's, another frame's or a shell verb are dropped", () => {
+    const {hook, events} = connect()
+    const ready = {v: 1, verb: "ready", frame: FRAME, args: {}}
+
+    hook._receiveCanvas(ready)
+    hook._receiveCanvas({v: 1, verb: "open", frame: FRAME, args: {ref: "tincture:local.vault", extra: 1}})
+    hook._receiveCanvas({v: 1, verb: "posture", frame: FRAME, args: {posture: "desk"}})
+    hook._receiveCanvas({v: 1, verb: "ready", frame: OTHER, args: {}})
+    hook._receiveCanvas({v: 1, verb: "close", frame: FRAME, args: {}})
+
+    assert.deepEqual(events, [{event: "canvas_verb", payload: {frame: FRAME, message: ready}}])
+    assert.equal(hook.dropped, 4)
+    hook.destroyed()
+  })
+
+  test("its state reaches the toolkit over the port once booted, and a frame booted frozen is told so", async () => {
+    const {frame, posted, hook} = connect("frozen")
+    frame.dispatchEvent(new Event("load"))
+    const {port, messages} = await received(posted, 2)
+    assert.deepEqual(messages.slice(1), [{v: 1, verb: "state", frame: FRAME, args: {state: "frozen"}}])
+
+    frame.dispatchEvent(new CustomEvent(FRAME_STATE_EVENT, {detail: {state: "live"}}))
+    frame.dispatchEvent(new CustomEvent(FRAME_STATE_EVENT, {detail: {state: "disconnected"}}))
+    await new Promise((r) => setTimeout(r, 20))
+    assert.deepEqual(messages.slice(2), [{v: 1, verb: "state", frame: FRAME, args: {state: "live"}}])
+    hook.destroyed()
+    port.close()
+  })
+
+  test("a second load closes its port and reports the frame gone", async () => {
+    const {frame, posted, events, hook} = connect()
+    frame.dispatchEvent(new Event("load"))
+    const {port} = await received(posted, 1)
+
+    frame.dispatchEvent(new Event("load"))
+    assert.deepEqual(events.at(-1), {event: "frame_gone", payload: {frame: FRAME}})
+    assert.equal(hook._port, null)
+    assert.equal(posted.length, 1)
+    port.close()
+  })
+})
+
 describe("a closed credential prompt", () => {
   test("reaches only the frame it names, whose bridge tells the frame whether it was saved", async () => {
     const frame = frameElement(FRAME)
@@ -226,8 +488,8 @@ describe("a closed credential prompt", () => {
     const {hook: bridge} = mountBridge(frame)
     const channel = new MessageChannel()
     bridge._port = channel.port1
-    const told = []
-    channel.port2.onmessage = (event) => told.push(event.data)
+    const heard = []
+    channel.port2.onmessage = (event) => heard.push(event.data)
     const elsewhere = []
     other.addEventListener(CREDENTIAL_CLOSED_EVENT, (event) => elsewhere.push(event.detail))
 
@@ -238,7 +500,7 @@ describe("a closed credential prompt", () => {
     handlers.frame_credential(null)
 
     await new Promise((resolve) => setTimeout(resolve, 20))
-    assert.deepEqual(told, [{v: 1, type: "cyfr:credential-closed", frame: FRAME, saved: true}])
+    assert.deepEqual(heard, [{v: 1, type: "cyfr:credential-closed", frame: FRAME, saved: true}])
     assert.deepEqual(elsewhere, [])
     bridge.destroyed()
     channel.port2.close()
@@ -291,6 +553,13 @@ describe("the signal grammar", () => {
     assert.equal(frameSignal({frame: FRAME, state: "disconnected"}), null)
     assert.equal(frameSignal({frame: "x", state: "live"}), null)
     assert.equal(frameSignal("frozen"), null)
+  })
+
+  test("a canvas_installed payload is a frame id and a list, and nothing else", () => {
+    assert.deepEqual(installedSignal({frame: FRAME, tinctures: []}), {frame: FRAME, tinctures: []})
+    assert.equal(installedSignal({frame: FRAME, tinctures: {}}), null)
+    assert.equal(installedSignal({frame: "x", tinctures: []}), null)
+    assert.equal(installedSignal(null), null)
   })
 
   test("a frame acts only live with the socket up", () => {

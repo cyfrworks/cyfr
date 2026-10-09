@@ -63,9 +63,9 @@ defmodule Grimoire.StreamsTest do
     def streams do
       [
         %Prima.Provider.Stream{
-          name: "held.cards",
-          topic: :cards,
-          projection: ["slot"],
+          name: "held.confirmations",
+          topic: :confirmations,
+          projection: ["ref"],
           subject: ~S"\A[A-Za-z0-9|_-]{1,64}\z",
           bind: :holder,
           deadline_bound: 60
@@ -234,12 +234,14 @@ defmodule Grimoire.StreamsTest do
   describe "a stream bound to its holder" do
     test "takes the holder's own user id when the open names no subject", %{ctx: ctx} do
       Catalog.with_providers([Held], fn ->
-        assert {:ok, grant} = Grimoire.open_stream(ctx, "held.cards")
+        assert {:ok, grant} = Grimoire.open_stream(ctx, "held.confirmations")
         assert grant.subject == ctx.user_id
-        assert grant.topic == :cards
+        assert grant.topic == :confirmations
 
         # Naming one's own id is the same grant's subject.
-        assert {:ok, %{subject: subject}} = Grimoire.open_stream(ctx, "held.cards", ctx.user_id)
+        assert {:ok, %{subject: subject}} =
+                 Grimoire.open_stream(ctx, "held.confirmations", ctx.user_id)
+
         assert subject == ctx.user_id
       end)
     end
@@ -248,9 +250,9 @@ defmodule Grimoire.StreamsTest do
          %{ctx: ctx} do
       Catalog.with_providers([Held], fn ->
         assert {:error, %Prima.Refusal{class: :invalid_argument, message: message}} =
-                 Grimoire.open_stream(ctx, "held.cards", "usr_someone_else")
+                 Grimoire.open_stream(ctx, "held.confirmations", "usr_someone_else")
 
-        assert message == "The stream held.cards does not take that subject"
+        assert message == "The stream held.confirmations does not take that subject"
       end)
 
       assert_one_refusal(ctx, :invalid_argument)
@@ -261,17 +263,17 @@ defmodule Grimoire.StreamsTest do
 
       Catalog.with_providers([Held], fn ->
         assert {:error, %Prima.Refusal{class: :invalid_argument, message: message}} =
-                 Grimoire.open_stream(nobody, "held.cards")
+                 Grimoire.open_stream(nobody, "held.confirmations")
 
         assert message =~ "names no person"
       end)
     end
 
-    test "the cards stream is declared bound to its holder" do
-      assert {:ok, {Crucible.Provider, stream}} = Catalog.lookup_stream("cards.refreshed")
+    test "the confirmation stream is declared bound to its holder" do
+      assert {:ok, {Sanctum.Provider, stream}} = Catalog.lookup_stream("confirmation.changes")
       assert Prima.Provider.Stream.holder_bound?(stream)
-      assert stream.topic == :cards
-      assert stream.projection == ["tincture", "card", "slot", "data"]
+      assert stream.topic == :confirmations
+      assert stream.projection == ["ref", "kind", "operation", "expires_at"]
     end
   end
 

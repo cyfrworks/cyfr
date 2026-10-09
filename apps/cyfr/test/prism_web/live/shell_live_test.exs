@@ -241,10 +241,11 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
 
   defp assigns(%Phoenix.LiveViewTest.View{pid: pid}), do: :sys.get_state(pid).socket.assigns
 
-  # The shell, once the canvas has read the layout and placed the desktop.
+  # The shell, once the canvas has read the layout and the shell has
+  # decided what it shows.
   defp shell!(conn) do
     {view, _html} = mount_athanor(conn, "/tinctures")
-    wait_until(fn -> render(view) && assigns(view).desktop != :pending end, 2_000, "the desktop")
+    wait_until(fn -> render(view) && assigns(view).showing != :pending end, 2_000, "the canvas")
     view
   end
 

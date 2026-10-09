@@ -1,22 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.ShellDesktopTest do
+defmodule PrismWeb.ShellPromptsTest do
   @moduledoc """
-  The desktop in the shell, safe mode, the credential verb and the grant
-  prompt.
+  The shell's prompts for the frames it opens: the credential verb, the
+  devices control and the grant prompt.
 
-  The shell opens the desktop the person's layout names as a frame placed
-  `:desktop`, draws the picker only when no desktop runs, and reads the
-  layout again when one of the person's own sessions publishes it. A
-  desktop that never sends `ready`, one refused at open and the person's
-  own ask enter safe mode, which discards every frame with its credential;
-  choosing leaves it and opens only the desktop. A frame's `credential`
-  verb is honoured only for a live, visible frame whose version declares
-  `vault.create`, and the frame learns only whether an entry was saved;
-  the entry waits on its fresh confirmation, and the browser types the
-  value again once its record is confirmed. The shell's `Devices` control
-  opens the system layer's pairing prompt.
+  A frame's `credential` verb is honoured only for a live, visible frame
+  whose version declares `vault.create`, and the frame learns only whether
+  an entry was saved; the entry waits on its fresh confirmation, and the
+  browser types the value again once its record is confirmed. The shell's
+  `Devices` control opens the system layer's pairing prompt. A frame
+  refused for want of a grant is offered the grant prompt, and opens once
+  it is confirmed.
+
+  The frames open as the layout places them: each tincture is a `full` app
+  over one of two canvases, opened by its canvas's `open`, so a frame
+  shown over one canvas is hidden once the other is shown.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -24,13 +24,25 @@ defmodule PrismWeb.ShellDesktopTest do
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
+  alias Prism.Frames
+
+  # Which canvas each tincture is a full app over.
+  @placed %{
+    "plain-dash" => "one",
+    "blocked-dash" => "one",
+    "keeper-dash" => "two",
+    "radio-dash" => "two"
+  }
+
+  @canvases %{"one" => "markets", "two" => "notes-canvas"}
+
   setup %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
     athanor = seated_athanor()
     ctx = %{Sanctum.TestContext.local() | athanor_id: athanor.id}
 
-    base = Path.join(System.tmp_dir!(), "shell_desktop_#{System.unique_integer([:positive])}")
+    base = Path.join(System.tmp_dir!(), "shell_prompts_#{System.unique_integer([:positive])}")
     original_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, base)
 
@@ -39,6 +51,13 @@ defmodule PrismWeb.ShellDesktopTest do
       File.rm_rf(base)
       reload_registry()
     end)
+
+    for {_id, name} <- @canvases do
+      canvas!(ctx, name)
+      working!(ctx, name)
+    end
+
+    layout!(user, athanor)
 
     {:ok, conn: conn, user: user, athanor: athanor, ctx: ctx}
   end
@@ -63,13 +82,13 @@ defmodule PrismWeb.ShellDesktopTest do
 
   # A tincture version in the athanor's tree and its component row, with
   # `tincture` merged into its `tincture` block.
-  defp tincture!(ctx, name, tincture \\ %{}) do
+  defp lay!(ctx, name, tincture, files) do
     manifest = %{
       "name" => name,
       "type" => "tincture",
       "version" => "1.0.0",
       "publisher" => "local",
-      "tincture" => Map.merge(%{"entry" => "index.html"}, tincture)
+      "tincture" => tincture
     }
 
     dir =
@@ -80,7 +99,7 @@ defmodule PrismWeb.ShellDesktopTest do
 
     File.mkdir_p!(dir)
     File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-    File.write!(Path.join(dir, "index.html"), "<html><head></head><body>#{name}</body></html>")
+    for {file, bytes} <- files, do: File.write!(Path.join(dir, file), bytes)
 
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
@@ -111,8 +130,61 @@ defmodule PrismWeb.ShellDesktopTest do
     release_digest
   end
 
-  defp desktop!(ctx, name \\ "desktop"),
-    do: tincture!(ctx, name, %{"frame" => %{"placement" => "desktop"}})
+  defp tincture!(ctx, name, tincture \\ %{}) do
+    lay!(ctx, name, Map.merge(%{"entry" => "index.html"}, tincture), [
+      {"index.html", "<html><head></head><body>#{name}</body></html>"}
+    ])
+  end
+
+  defp canvas!(ctx, name) do
+    lay!(
+      ctx,
+      name,
+      %{
+        "frame" => %{"placement" => "canvas"},
+        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "streams" => []
+      },
+      [{"canvas.js", "export default (canvas) => canvas.render({type: \"spacer\"})"}]
+    )
+  end
+
+  # The canvas's working version, as its validation left it.
+  defp working!(ctx, name) do
+    {:ok, _} =
+      Arca.CanvasVersions.publish(
+        Sanctum.Context.actor(ctx),
+        name,
+        %{Arca.CanvasVersions.empty() | working: "1.0.0"},
+        0
+      )
+  end
+
+  # The person's layout, version 2: every tincture a full app over the
+  # canvas `@placed` names, in both postures.
+  defp layout!(user, athanor) do
+    canvases =
+      for {id, name} <- Enum.sort(@canvases) do
+        apps =
+          for {tincture, ^id} <- Enum.sort(@placed),
+              do: %{"tincture" => "tincture:local.#{tincture}", "mode" => "full", "order" => 0}
+
+        posture = %{"apps" => apps, "floating" => []}
+
+        %{
+          "id" => id,
+          "tincture" => "tincture:local.#{name}",
+          "postures" => %{"desk" => posture, "hand" => posture}
+        }
+      end
+
+    {:ok, _} =
+      Compendium.Providers.Layout.handle("layout", person(user, athanor), %{
+        "action" => "edit",
+        "document" => %{"version" => 2, "canvases" => canvases},
+        "revision" => 0
+      })
+  end
 
   # Type `secret` into the credential prompt, with the host it may go to,
   # have the person confirm the record it waits on (by its ref, as another
@@ -156,278 +228,56 @@ defmodule PrismWeb.ShellDesktopTest do
     )
   end
 
-  defp publish!(ctx, desktop) do
-    {:ok, %{revision: revision}} = Compendium.Providers.Layout.read(ctx)
-
-    document = %{
-      "version" => 1,
-      "postures" => %{
-        "desk" => %{"desktop" => desktop, "slots" => [], "floating" => []},
-        "hand" => %{"desktop" => desktop, "slots" => [], "floating" => []}
-      }
-    }
-
-    {:ok, _} =
-      Compendium.Providers.Layout.handle("layout", ctx, %{
-        "action" => "edit",
-        "document" => document,
-        "revision" => revision
-      })
-  end
-
   defp shell!(conn) do
     {view, _html} = mount_athanor(conn, "/tinctures")
     Process.put(:view, view)
     # The canvas's read and the shell's placing are messages to the view.
-    settle!(view, fn -> assigns(view).desktop != :pending end)
+    wait_until(fn -> render(view) && assigns(view).showing == :canvas end, 2_000, "the canvas")
     view
-  end
-
-  # The canvas reads the layout again through messages the view handles
-  # in turn: render until `check` holds, a bounded number of times.
-  defp settle!(view, check) do
-    Enum.reduce_while(1..200, false, fn _, _ ->
-      _ = render(view)
-
-      if check.() do
-        {:halt, true}
-      else
-        Process.sleep(10)
-        {:cont, false}
-      end
-    end)
   end
 
   defp assigns(%Phoenix.LiveViewTest.View{pid: pid}), do: :sys.get_state(pid).socket.assigns
   defp frames(view), do: assigns(view).frames
-  defp desktop(view), do: Prism.Frames.desktop(frames(view))
-  defp opened(view), do: Prism.Frames.list(frames(view))
-  defp dropped(view), do: Prism.Frames.dropped(frames(view))
+  defp dropped(view), do: Frames.dropped(frames(view))
 
-  defp row(frame_id) do
-    Arca.Repo.one(from(f in Arca.Schemas.FrameCredential, where: f.frame_id == ^frame_id))
+  # The rows of the frames a test opens: every frame credential but the
+  # canvases' own.
+  defp rows do
+    canvases = Map.values(@canvases)
+    Arca.Repo.all(from(f in Arca.Schemas.FrameCredential, where: f.name not in ^canvases))
   end
 
-  defp rows, do: Arca.Repo.all(Arca.Schemas.FrameCredential)
+  # Open `name` as the layout places it: its canvas shown, then the
+  # canvas's `open`, unless its frame shows already. Answers the page.
+  defp open!(view, name) do
+    canvas_id = Map.fetch!(@placed, name)
+    render_hook(view, "switch_canvas", %{"canvas" => canvas_id})
 
-  defp open!(view, name),
-    do: render_click(view, "select_tincture", %{"tincture" => "iframe_#{name}"})
+    case full(view, name) do
+      %{visible: true} ->
+        render(view)
 
-  defp handshake!(view, frame_id) do
-    render_hook(view, "frame_handshake", %{"frame" => frame_id})
-    assert_reply(view, %{credential: _bearer})
+      _not_shown ->
+        canvas = Frames.get(frames(view), {:canvas, canvas_id})
+        ref = "tincture:local.#{name}"
+
+        render_hook(view, "canvas_verb", %{
+          "frame" => canvas.id,
+          "message" =>
+            Prima.CanvasWire.encode(%{verb: :open, frame: canvas.id, args: %{"ref" => ref}})
+        })
+    end
   end
 
-  defp verb!(view, frame_id, verb, args \\ %{}),
+  defp full(view, name),
+    do: Frames.get(frames(view), {:app, Map.fetch!(@placed, name), "tincture:local.#{name}"})
+
+  defp verb!(view, frame_id, verb, args),
     do:
       render_hook(view, "frame_verb", %{
         "frame" => frame_id,
         "message" => Prima.TinctureWire.shell_message(verb, frame_id, args)
       })
-
-  describe "the desktop" do
-    test "is the layout's desktop tincture, opened as a desktop frame, and the picker is not drawn",
-         %{conn: conn, ctx: ctx} do
-      desktop!(ctx)
-      tincture!(ctx, "app-dash")
-      view = shell!(conn)
-
-      assert %{placement: :desktop, state: :live, visible: true, tincture_id: "iframe_desktop"} =
-               desktop(view)
-
-      html = render(view)
-      assert html =~ ~s(data-canvas-place="desktop")
-      refute html =~ ~s(id="shell-picker")
-      assert row(desktop(view).id).state == "active"
-    end
-
-    test "without a desktop tincture installed the picker is drawn", %{conn: conn, ctx: ctx} do
-      tincture!(ctx, "app-dash")
-      view = shell!(conn)
-
-      assert desktop(view) == nil
-      assert render(view) =~ ~s(id="shell-picker")
-    end
-
-    test "is frozen while a full frame covers it and live again once it closes",
-         %{conn: conn, ctx: ctx} do
-      desktop!(ctx)
-      tincture!(ctx, "app-dash")
-      view = shell!(conn)
-      id = desktop(view).id
-
-      open!(view, "app-dash")
-      assert %{state: :frozen, visible: false} = desktop(view)
-      assert row(id).state == "suspended"
-      assert_push_event(view, "frame_state", %{frame: ^id, state: "frozen"})
-
-      render_click(view, "close_active_tincture", %{})
-      assert %{id: ^id, state: :live, visible: true} = desktop(view)
-      assert row(id).state == "active"
-    end
-
-    test "a shown full frame takes everything it covers out of reach, and only that",
-         %{conn: conn, ctx: ctx} do
-      desktop!(ctx)
-      tincture!(ctx, "app-dash")
-      view = shell!(conn)
-
-      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="desktop"]) do
-        refute has_element?(view, "#{covered}[inert]"), covered
-      end
-
-      open!(view, "app-dash")
-
-      # The chrome and every canvas layer under the full frame.
-      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="desktop"]) do
-        assert has_element?(view, "#{covered}[inert]"), covered
-      end
-
-      assert has_element?(view, "#chrome-top[inert] #topbar")
-
-      # The full frame and its capsule, the shell's own Safe mode control,
-      # the system layer and the assistant's panel stay reachable.
-      refute has_element?(view, ~s([data-canvas-place="full"][inert]))
-      refute has_element?(view, ~s([inert] button[phx-click="close_active_tincture"]))
-
-      for reachable <- ~w(#shell-safe-mode #system-layer #aqua-panel) do
-        assert has_element?(view, reachable), reachable
-        refute has_element?(view, "[inert] #{reachable}"), reachable
-        refute has_element?(view, "#{reachable}[inert]"), reachable
-      end
-
-      render_click(view, "close_active_tincture", %{})
-
-      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="desktop"]) do
-        refute has_element?(view, "#{covered}[inert]"), covered
-      end
-    end
-
-    test "a layout published by another session of the same person is read again here; another person's is not",
-         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
-      desktop!(ctx)
-      desktop!(ctx, "desktop-two")
-      view = shell!(conn)
-      assert %{tincture_id: "iframe_desktop"} = desktop(view)
-
-      # Another member of the same athanor arranges their own layout.
-      other = test_user()
-
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(other.user_id, scope: "athanor", athanor_id: athanor.id)
-
-      publish!(person(other, athanor), "tincture:local.desktop-two")
-      _ = render(view)
-      assert %{tincture_id: "iframe_desktop"} = desktop(view)
-
-      # A payload naming someone else never moves this shell, however it arrives.
-      send(view.pid, Cyfr.Bus.LayoutPublished.new(Sanctum.Context.actor(ctx), other.user_id, 9))
-      _ = render(view)
-      assert %{tincture_id: "iframe_desktop"} = desktop(view)
-
-      # The same person, from another session.
-      old = desktop(view).id
-      publish!(person(user, athanor), "tincture:local.desktop-two")
-      settle!(view, fn -> match?(%{tincture_id: "iframe_desktop-two"}, desktop(view)) end)
-
-      assert %{tincture_id: "iframe_desktop-two", state: :live} = desktop(view)
-      assert row(old).state == "revoked"
-    end
-  end
-
-  describe "safe mode" do
-    test "asked for, it revokes every credential the shell minted, draws the picker and the prompt",
-         %{conn: conn, ctx: ctx} do
-      desktop!(ctx)
-      tincture!(ctx, "app-dash")
-      view = shell!(conn)
-      open!(view, "app-dash")
-      minted = Enum.map(opened(view), & &1.id)
-      assert length(minted) == 2
-
-      render_click(view, "safe_mode", %{})
-
-      assert opened(view) == []
-      for id <- minted, do: assert(row(id).state == "revoked")
-
-      html = render(view)
-      assert html =~ ~s(id="shell-picker")
-      assert html =~ ~s(data-kind="safe_mode")
-      assert html =~ "You turned safe mode on."
-
-      # Nothing launches while it is on, and a second ask is the same safe mode.
-      open!(view, "app-dash")
-      render_click(view, "safe_mode", %{})
-      assert opened(view) == []
-    end
-
-    test "choosing leaves it and opens only the desktop", %{conn: conn, ctx: ctx} do
-      desktop!(ctx)
-      tincture!(ctx, "app-dash")
-      view = shell!(conn)
-      open!(view, "app-dash")
-      render_click(view, "safe_mode", %{})
-
-      view |> element(~s(#system-layer-dialog button[phx-value-offer="retry"])) |> render_click()
-      settle!(view, fn -> desktop(view) != nil end)
-
-      assert [%{placement: :desktop, state: :live, tincture_id: "iframe_desktop"}] = opened(view)
-      assert assigns(view).safe_mode == nil
-      refute render(view) =~ ~s(id="shell-picker")
-    end
-
-    test "a desktop that sends ready before its deadline is not safe mode; one that never does is",
-         %{conn: conn, ctx: ctx} do
-      desktop!(ctx)
-      view = shell!(conn)
-      id = desktop(view).id
-      handshake!(view, id)
-
-      # Ready at nine seconds: before the deadline message.
-      verb!(view, id, :ready)
-      send(view.pid, {:desktop_deadline, id})
-      _ = render(view)
-      assert assigns(view).safe_mode == nil
-      assert %{id: ^id, state: :live} = desktop(view)
-
-      # A desktop opened again that never says it is ready.
-      render_click(view, "safe_mode", %{})
-      view |> element(~s(#system-layer-dialog button[phx-value-offer="retry"])) |> render_click()
-      settle!(view, fn -> desktop(view) != nil end)
-      again = desktop(view).id
-      refute again == id
-      handshake!(view, again)
-
-      send(view.pid, {:desktop_deadline, again})
-      _ = render(view)
-      assert %{reason: :not_ready} = assigns(view).safe_mode
-      assert opened(view) == []
-      assert row(again).state == "revoked"
-      assert render(view) =~ "Your desktop did not start."
-    end
-
-    test "a stale deadline, for a desktop no longer held, changes nothing", %{
-      conn: conn,
-      ctx: ctx
-    } do
-      desktop!(ctx)
-      view = shell!(conn)
-      send(view.pid, {:desktop_deadline, "frm_not_this_desktop"})
-      _ = render(view)
-      assert assigns(view).safe_mode == nil
-    end
-
-    test "a desktop refused at open is safe mode", %{conn: conn, ctx: ctx} do
-      # Named as the layout's desktop, but not declared as one.
-      tincture!(ctx, "desktop")
-      view = shell!(conn)
-
-      assert %{reason: :not_ready} = assigns(view).safe_mode
-      assert opened(view) == []
-      assert rows() == []
-      assert render(view) =~ ~s(id="shell-picker")
-    end
-  end
 
   describe "the credential verb" do
     setup %{ctx: ctx} do
@@ -435,8 +285,6 @@ defmodule PrismWeb.ShellDesktopTest do
       tincture!(ctx, "plain-dash", %{"actions" => ["vault.list"]})
       :ok
     end
-
-    defp full(view, name), do: Prism.Frames.get(frames(view), {:full, "iframe_#{name}"})
 
     test "from a frame that does not declare vault.create, a hidden frame or a frame this shell did not create, is dropped",
          %{conn: conn} do
@@ -621,8 +469,7 @@ defmodule PrismWeb.ShellDesktopTest do
       view = shell!(conn)
       html = open!(view, "blocked-dash")
 
-      assert %{state: :refused, refusal: :ungranted} =
-               Prism.Frames.get(frames(view), {:full, "iframe_blocked-dash"})
+      assert %{state: :refused, refusal: :ungranted} = full(view, "blocked-dash")
 
       assert html =~ ~s(data-tincture-state="ungranted")
       assert rows() == []
@@ -636,7 +483,7 @@ defmodule PrismWeb.ShellDesktopTest do
       # The layer asks its sheet for the walk, commits, and reports.
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
-      assert %{state: :live} = Prism.Frames.get(frames(view), {:full, "iframe_blocked-dash"})
+      assert %{state: :live} = full(view, "blocked-dash")
       assert assigns(view).grant_prompts == %{}
     end
 
@@ -648,8 +495,7 @@ defmodule PrismWeb.ShellDesktopTest do
       open!(view, "blocked-dash")
       view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
 
-      assert %{state: :refused, refusal: :ungranted} =
-               Prism.Frames.get(frames(view), {:full, "iframe_blocked-dash"})
+      assert %{state: :refused, refusal: :ungranted} = full(view, "blocked-dash")
 
       assert render(view) =~ "asks for what you have not granted it yet"
       assert rows() == []

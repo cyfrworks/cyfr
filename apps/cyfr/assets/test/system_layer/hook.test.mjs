@@ -560,18 +560,18 @@ describe("the page's frames while a modal prompt is open", () => {
 
   test("a frame its bridge thawed while a prompt was open is live once it closes, as the review's probe showed", () => {
     doc.fullscreenElement = null
-    const desktop = fakeFrame("desktop", {inert: ""})
-    frames = [desktop]
+    const canvas = fakeFrame("canvas", {inert: ""})
+    frames = [canvas]
     const {hook} = layer("system-layer", openPrompt())
-    assert.ok(hidden(desktop))
+    assert.ok(hidden(canvas))
 
-    // The app over it closed itself: the bridge thawed the desktop.
-    desktop.inert = false
+    // The app over it closed itself: the bridge thawed the canvas.
+    canvas.inert = false
     deliver()
-    assert.ok(hidden(desktop), "inert again while the prompt shows")
+    assert.ok(hidden(canvas), "inert again while the prompt shows")
 
     closeLayer(hook)
-    assert.equal(desktop.inert, false, "the live desktop was left inert by the restore")
+    assert.equal(canvas.inert, false, "the live canvas was left inert by the restore")
   })
 
   test("the review's probe: with no observer at all, a frame thawed during the prompt is never made inert again", async () => {
@@ -579,16 +579,16 @@ describe("the page's frames while a modal prompt is open", () => {
     delete globalThis.MutationObserver
     // Frozen behind a full app when the prompt opened; and a live frame,
     // which shows the page was covered.
-    const desktop = fakeFrame("desktop", {inert: ""})
+    const canvas = fakeFrame("canvas", {inert: ""})
     const live = fakeFrame("live")
-    const page = {querySelectorAll: () => [desktop, live]}
+    const page = {querySelectorAll: () => [canvas, live]}
     const probeLayer = {}
 
     cover(probeLayer, true, page)
     assert.equal(live.inert, true, "the page was covered")
-    desktop.inert = false // the app closed itself; the desktop thawed: IframeBridge._apply("live")
+    canvas.inert = false // the app closed itself; the canvas thawed: IframeBridge._apply("live")
     cover(probeLayer, false, page)
-    assert.equal(desktop.inert, false, "the live desktop was left inert by the restore")
+    assert.equal(canvas.inert, false, "the live canvas was left inert by the restore")
     assert.equal(live.inert, false)
   })
 

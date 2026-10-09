@@ -134,7 +134,10 @@ defmodule Compendium.TinctureTest do
 
       assert {:ok, 1} =
                Tincture.check_version(
-                 streams.([%{"name" => "cards.refreshed"}, %{"name" => "mcp_servers.changes"}]),
+                 streams.([
+                   %{"name" => "confirmation.changes"},
+                   %{"name" => "mcp_servers.changes"}
+                 ]),
                  files
                )
 
@@ -146,7 +149,10 @@ defmodule Compendium.TinctureTest do
 
       # A subject the stream does not take: none for a stream bound to its
       # holder, none for a stream that takes no subject.
-      for {name, subject} <- [{"cards.refreshed", "usr_someone"}, {"mcp_servers.changes", "x"}] do
+      for {name, subject} <- [
+            {"confirmation.changes", "usr_someone"},
+            {"mcp_servers.changes", "x"}
+          ] do
         assert {:error, message} =
                  Tincture.check_version(
                    streams.([%{"name" => name, "subject" => subject}]),

@@ -17,7 +17,6 @@ defmodule Cyfr.BusPayloadTest do
     AthanorArchived,
     Build,
     CallerInvalidated,
-    CardRefreshed,
     Components,
     Confirmation,
     Execution,
@@ -76,13 +75,6 @@ defmodule Cyfr.BusPayloadTest do
         node: "reagent:local.x"
       }),
       ThreadEvent.new(@actor, "thr", :message, %{id: "m", kind: "text", content: "hi"}),
-      CardRefreshed.new(@actor, %{
-        tincture: "tincture:local.status",
-        card: "runs",
-        slot: "s0",
-        user_id: "usr_1",
-        data: %{"name" => "runs", "title" => "Runs", "number" => 3, "list" => []}
-      }),
       LayoutPublished.new(@actor, "usr_1", 4),
       FeedPublished.new(@actor, feed_envelope()),
       Confirmation.new(@actor, :opened,
@@ -379,7 +371,6 @@ defmodule Cyfr.BusPayloadTest do
             :progress -> Bus.progress(other, {:pull, "p"})
             :execution_events -> Bus.execution_events(other, "e")
             :thread -> Bus.thread(other, "thr")
-            :cards -> Bus.cards(other, "usr_1")
             :layouts -> Bus.layouts(other, "usr_1")
             :confirmations -> Bus.confirmations(other, "usr_1")
             _ -> apply(Bus, key, [other])

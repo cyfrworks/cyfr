@@ -709,47 +709,54 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     test "bound to its holder is each person's own, and a named subject is refused",
          %{source: source} do
       digest =
-        tincture!(source, "cards-dash", %{"streams" => [%{"name" => "cards.refreshed"}]}, [])
+        tincture!(
+          source,
+          "confirm-dash",
+          %{"streams" => [%{"name" => "confirmation.changes"}]},
+          []
+        )
 
       other = person!("bystander")
-      mine = frame!(source, "cards-dash", digest)
-      theirs = frame!(other, "cards-dash", digest)
+      mine = frame!(source, "confirm-dash", digest)
+      theirs = frame!(other, "confirm-dash", digest)
 
       # A subject from the frame is never taken, the holder's own included.
       for subject <- [other.user_id, source.user_id] do
-        body = TinctureWire.request(:stream_open, %{stream: "cards.refreshed", subject: subject})
+        body =
+          TinctureWire.request(:stream_open, %{stream: "confirmation.changes", subject: subject})
+
         conn = data(:stream_open, body, bearer: mine.bearer)
         assert conn.status == 403
         assert %{message: message} = refused(conn, :stream_open)
         assert message =~ "does not declare that stream"
       end
 
-      body = TinctureWire.request(:stream_open, %{stream: "cards.refreshed", subject: nil})
+      body = TinctureWire.request(:stream_open, %{stream: "confirmation.changes", subject: nil})
       my_stream = Task.async(fn -> data(:stream_open, body, bearer: mine.bearer) end)
       their_stream = Task.async(fn -> data(:stream_open, body, bearer: theirs.bearer) end)
 
       actor = Sanctum.Context.actor(source)
-      my_topic = Cyfr.Bus.cards(actor, source.user_id)
-      their_topic = Cyfr.Bus.cards(actor, other.user_id)
+      my_topic = Cyfr.Bus.confirmations(actor, source.user_id)
+      their_topic = Cyfr.Bus.confirmations(actor, other.user_id)
       wait_until(fn -> Registry.lookup(Cyfr.PubSub, my_topic) != [] end, @stream_ms)
       wait_until(fn -> Registry.lookup(Cyfr.PubSub, their_topic) != [] end, @stream_ms)
 
-      refreshed =
-        Cyfr.Bus.CardRefreshed.new(actor, %{
-          tincture: "tincture:local.status",
-          card: "runs",
-          slot: "s0",
-          user_id: source.user_id,
-          data: %{"name" => "runs", "title" => "Runs", "number" => 3}
-        })
+      ref = Prima.Confirmation.ref("cnf_" <> String.duplicate("A", 43))
 
-      :ok = Cyfr.Bus.broadcast(actor, my_topic, refreshed)
+      opened =
+        Cyfr.Bus.Confirmation.new(actor, :opened,
+          ref: ref,
+          operation: "vault.create",
+          expires_at: ~U[2026-10-09 12:05:00Z]
+        )
+
+      :ok = Cyfr.Bus.broadcast(actor, my_topic, opened)
 
       # A stream re-establishes its caller before delivering once its
       # context is past the freshness bound, so a frame revoked before the
       # event is delivered takes the event with it. The revocation waits
       # until the stream has taken the event and is waiting for the next.
-      wait_until(fn -> delivered?(my_stream.pid, Cyfr.Bus.CardRefreshed) end, @stream_ms)
+      wait_until(fn -> delivered?(my_stream.pid, Cyfr.Bus.Confirmation) end, @stream_ms)
 
       for {frame, ctx} <- [{mine, source}, {theirs, other}],
           do: {:ok, _} = TinctureAuth.revoke_frame(ctx, frame.id)
@@ -759,15 +766,20 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
       assert [
                %{
-                 event: "cards.refreshed",
-                 data: %{"slot" => "s0", "card" => "runs", "data" => %{"number" => 3}} = event
+                 event: "confirmation.changes",
+                 data: %{"ref" => ^ref, "kind" => "opened", "operation" => "vault.create"} = event
                }
                | _closing
              ] = TinctureWire.decode_stream(mine_body)
 
-      # The projection carries no person.
+      # The projection carries no person and no athanor.
       refute Map.has_key?(event, "user_id")
-      refute Enum.any?(TinctureWire.decode_stream(theirs_body), &(&1.event == "cards.refreshed"))
+      refute Map.has_key?(event, "athanor_id")
+
+      refute Enum.any?(
+               TinctureWire.decode_stream(theirs_body),
+               &(&1.event == "confirmation.changes")
+             )
     end
 
     test "holds one of its frame's open-stream slots, released when it closes",

@@ -248,17 +248,27 @@ defmodule Compendium do
   @spec canvas_catalog(Context.t()) :: {:ok, Compendium.Canvas.catalog()}
   defdelegate canvas_catalog(ctx), to: Compendium.Canvas, as: :catalog
 
+  @doc """
+  The versions this install's seed bundle ships for the local component
+  `name` of `type`, newest first (`Compendium.Provenance.shipped_versions/2`):
+  what safe mode's shipped canvas is read from.
+  """
+  @spec shipped_versions(String.t(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  defdelegate shipped_versions(type, name), to: Compendium.Provenance
+
   # ---------------------------------------------------------------------------
   # The layout (`Compendium.Providers.Layout`)
   # ---------------------------------------------------------------------------
 
   @doc """
-  The caller's layout as the desktop renders it: the whole document, its
+  The caller's layout as the screen places it: the whole document, its
   revision and digest (the shipped default at revision 0, with
   `shipped_default: true`, when the person never arranged one) and
-  `posture`'s arrangement. Read under the caller's context for the person
-  it names; an edit is never made here, only through the gate's
-  `layout.edit`. Refusals are the `layout` tool's.
+  `posture`'s arrangement, every canvas in the document's order as
+  `%{id, tincture, apps, floating}`, its apps by order, then reference.
+  Read under the caller's context for the person it names; an edit is
+  never made here, only through the gate's `layout.edit`. Refusals are
+  the `layout` tool's.
   """
   @spec layout(Context.t(), Prima.Layout.posture_name()) ::
           {:ok,
@@ -267,7 +277,7 @@ defmodule Compendium do
              revision: non_neg_integer(),
              digest: String.t(),
              shipped_default: boolean(),
-             arrangement: Prima.Layout.posture()
+             arrangement: [Prima.Layout.arranged()]
            }}
           | {:error, term()}
   def layout(%Context{} = ctx, posture) do

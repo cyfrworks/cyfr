@@ -1111,9 +1111,11 @@ Tinctures are browser frontends the Prism shell opens in a sandboxed frame; the 
 |-------|--------|
 | `GET /t/:athanor/:publisher/:tincture_name` and `…/*path` | A public tincture's entry page and files, to anyone. A tincture is public when it has an active public consent profile: publish one with `profile.publish`, revoke it with `profile.revoke`, and read the current answer with `tincture_visibility.get` |
 | `GET /_s/:credential/:publisher/:name/:version/*file` | A private tincture version's files, under the asset credential the shell mints for a person; the credential is verified on every request and opens that version's files alone |
-| `POST /_f/v1/invoke`, `/_f/v1/action`, `/_f/v1/stream` | A frame's data requests, made by the SDK with the frame's per-open credential as a bearer, or by a public tincture's page naming itself; each is admitted against the tincture's declaration and recorded like any other call |
+| `POST /_f/v1/invoke`, `/_f/v1/action`, `/_f/v1/stream` | A frame's data requests, made by the SDK with the frame's per-open credential as a bearer, or by a public tincture's page naming itself; each is admitted against the tincture's declaration and recorded like any other call. A canvas's credential is refused here |
+| `GET /_c/v1/<asset credential>/<frame id>` | A canvas's host page, for the open the frame id names, under the asset credential the shell minted for that canvas version: the toolkit's host script under a fresh nonce, the worker bundle as inert data, and the canvas's one Content Security Policy |
+| `POST /_f/v1/o/<frame id>/stream` | A canvas's streams: only the bearer of that frame id's own open is admitted, and only for the streams its version declares; a canvas path has no invoke and no action route |
 
-A path under `/_s/` carries a credential: no proxy in front of CYFR may log `/_s/` paths (the shipped `Caddyfile` keeps no access log). Every tincture response carries `Referrer-Policy: no-referrer`; each HTML page carries the Content Security Policy derived from the tincture's declaration. The guide lists the headers, the frame's policy and the wire's shapes.
+A path under `/_s/` or `/_c/v1/` carries a credential: no proxy in front of CYFR may log `/_s/` or `/_c/v1/` paths (the shipped `Caddyfile` keeps no access log). Every tincture response carries `Referrer-Policy: no-referrer`; each HTML page carries the Content Security Policy derived from the tincture's declaration. The guide lists the headers, the frame's policy and the wire's shapes.
 
 ---
 

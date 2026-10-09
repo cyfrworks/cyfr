@@ -5,7 +5,7 @@ defmodule Aqua.IntentsTest do
   @moduledoc """
   The assistant's browser intents move the browser and write nothing: the
   vocabulary is exactly what `validate/1` reads, none of it writes a
-  layout, and arranging the desktop is the `layout` tool's `edit`, which
+  layout, and arranging the canvases is the `layout` tool's `edit`, which
   a running chain reaches through the gate like any tool.
   """
 

@@ -619,7 +619,7 @@ defmodule Prism.TinctureRegistryTest do
     test "each row carries the frame its manifest declares, as the frame's rules read it" do
       frame = %{
         "capabilities" => ["pointer_lock", "fullscreen", "audio_autoplay"],
-        "placement" => "desktop",
+        "placement" => "float",
         "background" => true
       }
 
@@ -632,12 +632,36 @@ defmodule Prism.TinctureRegistryTest do
       row = rows["declares-frame"]
       assert row.frame == declared.frame
       assert Enum.sort(row.frame.capabilities) == ~w(audio_autoplay fullscreen pointer_lock)
-      assert row.frame.placement == "desktop"
+      assert row.frame.placement == "float"
       assert row.frame.background == true
 
       # A tincture that declares no frame holds none of its capabilities.
       assert rows["test-dash"].frame.capabilities == []
       assert rows["test-dash"].frame.background == false
+    end
+
+    test "a canvas is listed with its placement, its module as its entry" do
+      dir = fixture_dir("ath_test", "local", "home-canvas", "1.0.0")
+      File.mkdir_p!(dir)
+
+      manifest = %{
+        "name" => "home-canvas",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{
+          "frame" => %{"placement" => "canvas"},
+          "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+          "streams" => [%{"name" => "runs.changes"}]
+        }
+      }
+
+      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(dir, "canvas.js"), "export default () => {}")
+
+      row = listed(:test_canvas_row)["home-canvas"]
+      assert %{placement: "canvas", background: false, capabilities: []} = row.frame
+      assert row.entry == "canvas.js"
     end
 
     test "a tincture whose declaration the rules refuse is listed with no frame to grant" do

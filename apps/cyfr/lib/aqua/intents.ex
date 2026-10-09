@@ -15,7 +15,7 @@ defmodule Aqua.Intents do
   paths.
 
   The vocabulary (`kinds/0`) moves the browser and nothing else: no
-  intent writes a person's state. Arranging the desktop is the `layout`
+  intent writes a person's state. Arranging the canvases is the `layout`
   tool's `edit`, called through the gate like any tool.
   """
 

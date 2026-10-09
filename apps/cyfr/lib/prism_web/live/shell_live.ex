@@ -5,34 +5,73 @@ defmodule PrismWeb.ShellLive do
   use PrismWeb, :live_view
 
   @moduledoc """
-  The Prism shell: the desktop, the canvas, the system layer and, when no
-  desktop runs, the tincture picker.
+  The Prism shell: the person's canvases, the tinctures opened over them,
+  the system layer and, when no canvas runs, the tincture picker.
 
-  ## The desktop
+  ## The canvases
 
-  The shell opens the desktop tincture the person's layout names for the
-  posture (`tincture:local.desktop` when they never arranged one) as a
-  frame placed `:desktop`, under every slot and floating frame and filling
-  the canvas, through `Prism.Frames` like any frame. A layout published
-  anywhere for this person (`Cyfr.Bus.LayoutPublished` on their own
-  topic) is read again, and the frames follow it.
+  The shell shows one of the canvases the person's layout names for the
+  posture (`Compendium.layout/2`; a person who never arranged one has the
+  shipped canvas, `home` on `tincture:local.canvas`): the visible canvas,
+  the layout's first at mount (`Prism.Frames.visible_canvas/1`). It opens
+  that canvas's working version (`Compendium.canvas_versions/2`) as a frame
+  keyed `{:canvas, id}`, and holds the `column` apps and the floating
+  tinctures the layout places over it. A canvas whose newest installed
+  version is not its working version, its kept version or its recorded
+  failure is validated first (`Prism.CanvasValidation`): only a tree
+  activates it, and the shell then opens the working version. A canvas
+  whose tincture is not installed is not shown, and validates nothing; its
+  apps and floating tinctures still open, and the picker is drawn. A
+  layout published anywhere for this person (`Cyfr.Bus.LayoutPublished` on
+  their own topic) is read again, and the frames follow it.
 
-  A desktop that has not sent `ready` within ten seconds of taking its
-  credential, one whose frame is refused at open, and the person's own
-  ask — the shell's `Safe mode` button or Ctrl+Alt+S on the shell's page,
-  never a frame's message — enter safe mode: every frame is discarded
-  with its credential, the system layer shows the safe mode prompt
-  (`Prism.SafeMode`), and the picker is drawn. The prompt's confirmation
-  leaves safe mode and opens the desktop from the layout as it then
-  stands. The assistant's panel is not the shell's and is untouched.
+  The person switches canvases with the switcher, `Ctrl+Alt+ArrowLeft` and
+  `Ctrl+Alt+ArrowRight`, or a horizontal swipe on the canvas's edge strip,
+  each sent as `switch_canvas`, with no wrap at either end; no canvas
+  switches itself. A switch freezes the canvas it leaves, whatever it
+  declares, and its apps unless they hold a background grant; a canvas
+  once opened stays held until the shell ends, the layout drops it or safe
+  mode clears every frame, and showing it again thaws it.
+
+  A canvas frame speaks `Prima.CanvasWire` over the port its bridge hands
+  it, as `canvas_verb`. Its handshake hands it `boot`, the bearer inside
+  it; `installed` (every listed tincture that is not a canvas, by name) is
+  pushed to each held canvas frame after its handshake and whenever the
+  listing changes, and `posture`, `covered` and `state` come from the glass.
+  From the live, visible canvas, `ready` keeps it out of safe mode, `open`
+  opens a listed tincture where the canvas's arrangement puts it (or `full`
+  in the hand, the next `column` on the desk), and `press` presses a feed's
+  action through `feed.press` once the served version's declaration reads
+  that feed; `tree` is dropped. From a validation frame only `tree` and
+  `failed` act. Anything else is dropped and counted.
+
+  ## Safe mode
+
+  A live canvas that has not sent `ready` within ten seconds of its
+  handshake, or that was refused at its open, is safe mode `not_ready`; one
+  that reports a failure, or whose frame dies while the glass shows it, is
+  `crashed` (a hidden canvas whose frame dies is discarded, and opens anew
+  once shown); a validation that leaves no working
+  version is `not_validated`; and the person's own ask — the shell's `Safe
+  mode` button or Ctrl+Alt+S on the shell's page, never a frame's message —
+  is `requested`. Safe mode discards every frame with its credential and
+  the system layer shows its prompt (`Prism.SafeMode`) over the visible
+  canvas; no picker is drawn and nothing launches. The way out the person
+  chooses ends it: the canvas again, the kept version once the system
+  layer restored it, or the shipped canvas shown on this glass until the
+  shell ends or the layout changes. The assistant's panel is not the
+  shell's and is untouched.
+
+  ## The picker
 
   The picker is preview-first: a large 16:9 preview stage with vertical
   capsule navigation, a compact info bar and keyboard navigation (←/→
-  tinctures, ↑/↓ previews, Enter launches). It is drawn in safe mode and
-  when the layout's desktop is not installed. Launching a tincture opens
-  its frame as the active full frame above everything the canvas draws;
-  closing it, from inside the tincture or through its capsule, shows the
-  next open one or returns to the desktop.
+  tinctures, ↑/↓ previews, Enter launches). It is drawn when no canvas
+  runs: a layout with no canvas, a canvas whose tincture is not installed,
+  or a layout that could not be read. Launching a tincture opens its frame
+  as the active full frame above everything the canvas draws; closing it,
+  from inside the tincture or through its capsule, shows the next open one
+  or returns to the canvas.
 
   ## Prompts
 
@@ -63,9 +102,9 @@ defmodule PrismWeb.ShellLive do
   `Prima.TinctureWire`, which reach this view as `frame_verb`. A message
   that does not decode, that names a frame this view does not hold live,
   or that asks for what its frame may not, is dropped and counted; no
-  verb places, sizes or raises a frame. When a
-  frame freezes or goes live again the view pushes `frame_state`, which
-  the canvas hook relays to the frame's bridge.
+  verb places, sizes or raises a frame. When a frame freezes or goes live
+  again the view pushes `frame_state`, which the canvas hook relays to the
+  frame's bridge.
 
   While a full frame is shown it covers everything under it, so the
   shell sets `covered`: the layout takes its chrome (the top bar, the
@@ -74,21 +113,30 @@ defmodule PrismWeb.ShellLive do
   capsule, the shell's Safe mode control, the system layer and the
   assistant's panel stay reachable.
 
-  Every credential this view minted is revoked on each path that ends it:
-  `terminate/2` (the socket closed, the person navigated away, the view
-  redirected) and the archived-athanor notice before it redirects. A new
-  socket is a new open: nothing minted under an earlier one carries over.
+  Activation, a press and the system layer's restore run in this view's
+  own callbacks; it starts no task for them. Every credential this view
+  minted is revoked on each path that ends it: `terminate/2` (the socket
+  closed, the person navigated away, the view redirected) and the
+  archived-athanor notice before it redirects. A new socket is a new open:
+  nothing minted under an earlier one carries over.
   """
 
   require Logger
 
+  alias Prism.CanvasValidation
   alias Prism.Frames
   alias Prism.SafeMode
   alias Sanctum.TinctureAuth
 
-  # How long a desktop has, from its handshake, to send `ready` before the
-  # shell enters safe mode.
-  @desktop_ready_ms 10_000
+  # How long a live canvas has, from its handshake, to send `ready` before
+  # the shell enters safe mode.
+  @canvas_ready_ms 10_000
+
+  # The most tinctures `installed` names (`Prima.CanvasWire`).
+  @max_installed 512
+
+  # The stream a canvas reads a feed's results on (`Crucible.Providers.Feed`).
+  @feed_stream "feed.results"
 
   # ============================================================================
   # Mount
@@ -102,15 +150,21 @@ defmodule PrismWeb.ShellLive do
       |> assign(:active_nav, "tinctures")
       |> assign(:frames, Frames.new())
       |> assign(:covered, false)
+      |> assign(:posture, "desk")
       |> assign(:arrangement, nil)
-      |> assign(:desktop, :pending)
-      |> assign(:desktop_ready, nil)
+      |> assign(:showing, :pending)
+      |> assign(:canvas_ready, MapSet.new())
+      |> assign(:shipped, nil)
+      |> assign(:layout_changed, false)
+      |> assign(:decisions, %{})
       |> assign(:safe_mode, nil)
       |> assign(:credential_prompts, %{})
       |> assign(:grant_prompts, %{})
+      |> assign(:grant_decisions, %{})
       |> assign(:pairing_prompt, nil)
       |> assign(:prompt_seq, 0)
       |> assign(:tinctures, [])
+      |> assign(:canvases, [])
       |> assign(:focused_index, 0)
       |> assign(:current_preview_index, 0)
 
@@ -312,14 +366,15 @@ defmodule PrismWeb.ShellLive do
   end
 
   # The bridge asks for the frame's credential once, on the frame's first
-  # load, and posts it over the port it hands the frame. The bearer leaves
-  # this process once: a second ask — a reload, a navigation inside the
-  # frame, another script on the page — is answered with nothing.
+  # load, and posts it over the port it hands the frame — a canvas frame's
+  # inside its `boot`. The bearer leaves this process once: a second ask —
+  # a reload, a navigation inside the frame, another script on the page —
+  # is answered with nothing.
   def handle_event("frame_handshake", %{"frame" => frame_id}, socket) do
-    case Frames.hand_over(socket.assigns.frames, frame_id) do
-      {:ok, bearer, frames} ->
-        arm_desktop_deadline(frames, frame_id)
-        {:reply, %{credential: bearer}, assign(socket, :frames, frames)}
+    case Frames.handshake(socket.assigns.frames, frame_id) do
+      {:ok, reply, frame, frames} ->
+        socket = assign(socket, :frames, frames)
+        {:reply, reply, handshaken(socket, frame)}
 
       :error ->
         {:reply, %{error: "no_credential"}, socket}
@@ -330,11 +385,13 @@ defmodule PrismWeb.ShellLive do
     do: {:reply, %{error: "no_credential"}, socket}
 
   # A shell verb the frame posted over its port. The bridge names the frame
-  # whose port it came from, and the message must name the same one.
+  # whose port it came from, and the message must name the same one. A
+  # canvas frame speaks the canvas wire, never this one.
   def handle_event("frame_verb", %{"frame" => frame_id, "message" => message}, socket)
       when is_binary(frame_id) do
     with {:ok, %{frame: ^frame_id} = decoded} <- Prima.TinctureWire.decode_shell_message(message),
-         {:ok, frame} <- Frames.attribute(socket.assigns.frames, frame_id) do
+         {:ok, %{key: key} = frame} <- Frames.attribute(socket.assigns.frames, frame_id),
+         false <- Frames.canvas_key?(key) do
       {:noreply, shell_verb(socket, frame, decoded)}
     else
       _ -> {:noreply, drop_message(socket)}
@@ -342,6 +399,53 @@ defmodule PrismWeb.ShellLive do
   end
 
   def handle_event("frame_verb", _params, socket), do: {:noreply, drop_message(socket)}
+
+  # A canvas wire verb a canvas or validation frame posted over its port,
+  # read as `Prima.CanvasWire` reads it: a verb of the toolkit's direction,
+  # naming the frame whose port it came from, which this view holds live
+  # under a canvas or validation key.
+  def handle_event("canvas_verb", %{"frame" => frame_id, "message" => message}, socket)
+      when is_binary(frame_id) do
+    with {:ok, %{frame: ^frame_id, verb: verb} = decoded} <- Prima.CanvasWire.decode(message),
+         true <- verb in Prima.CanvasWire.to_prism_verbs(),
+         {:ok, %{key: key} = frame} <- Frames.attribute(socket.assigns.frames, frame_id),
+         true <- Frames.canvas_key?(key) do
+      {:noreply, canvas_verb(socket, frame, decoded)}
+    else
+      _ -> {:noreply, drop_message(socket)}
+    end
+  end
+
+  def handle_event("canvas_verb", _params, socket), do: {:noreply, drop_message(socket)}
+
+  # A canvas frame loaded a second time: its port is closed and it is
+  # spent. A validation frame's death is the validation's outcome `died`;
+  # the visible canvas's is safe mode `crashed`; a hidden canvas's is torn
+  # down, its credential revoked and its frame forgotten, so showing that
+  # canvas again opens it anew.
+  def handle_event("frame_gone", %{"frame" => frame_id}, socket) when is_binary(frame_id) do
+    %{context: ctx, frames: frames} = socket.assigns
+
+    case Enum.find(Frames.list(frames), &(&1.id == frame_id and Frames.canvas_key?(&1.key))) do
+      %{key: {:validation, canvas_id}} ->
+        {:noreply, validation_ended(socket, canvas_id, :gone)}
+
+      %{key: {:canvas, canvas_id} = key} ->
+        if canvas_id == Frames.visible_canvas(frames),
+          do: {:noreply, enter_safe_mode(socket, :crashed)},
+          else: {:noreply, frames(socket, &Frames.discard(ctx, &1, key))}
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("frame_gone", _params, socket), do: {:noreply, socket}
+
+  # The person moves to another canvas: by the switcher, which names it, or
+  # by the chord or the edge strip, which name a direction. Nothing wraps.
+  def handle_event("switch_canvas", params, socket) when is_map(params),
+    do: {:noreply, switch_canvas(socket, switch_target(socket.assigns, params))}
 
   # The person asked for safe mode through the shell's own chrome: its
   # button, or the chord the canvas hook hears on the shell's page.
@@ -435,10 +539,13 @@ defmodule PrismWeb.ShellLive do
   # Every change to the frames goes through here, so each frame whose
   # state moved between live and frozen is signalled after the credential
   # transition that moved it, and each frame newly refused for want of a
-  # grant is offered the grant prompt.
-  defp frames(socket, fun) do
+  # grant is offered the grant prompt — a canvas or validation frame
+  # excepted, whose canvas asks for its grant once, itself
+  # (`ask_canvas_grant/3`).
+  defp frames(socket, fun), do: put_frames(socket, fun.(socket.assigns.frames))
+
+  defp put_frames(socket, later) do
     before = socket.assigns.frames
-    later = fun.(before)
 
     socket =
       Enum.reduce(
@@ -448,12 +555,16 @@ defmodule PrismWeb.ShellLive do
       )
 
     ungranted =
-      for %{state: :refused, refusal: :ungranted, id: id} = frame <- Frames.list(later),
-          not match?(%{id: ^id}, Frames.get(before, frame.key)),
+      for %{state: :refused, refusal: :ungranted, id: id, key: key} = frame <- Frames.list(later),
+          not Frames.canvas_key?(key),
+          not match?(%{id: ^id}, Frames.get(before, key)),
           do: frame
 
     Enum.reduce(ungranted, socket, &offer_grant(&2, &1))
   end
+
+  # Every listed card: the tinctures the picker lists and the canvases.
+  defp cards(socket), do: socket.assigns.tinctures ++ socket.assigns.canvases
 
   # ============================================================================
   # Shell verbs
@@ -461,11 +572,6 @@ defmodule PrismWeb.ShellLive do
 
   defp shell_verb(socket, %{key: key}, %{verb: :close}),
     do: frames(socket, &Frames.discard(socket.assigns.context, &1, key))
-
-  # The desktop's `ready` is what keeps the shell out of safe mode; any
-  # other frame's asks for nothing.
-  defp shell_verb(socket, %{placement: :desktop, id: id}, %{verb: :ready}),
-    do: assign(socket, :desktop_ready, id)
 
   defp shell_verb(socket, _frame, %{verb: :ready}), do: socket
 
@@ -511,11 +617,20 @@ defmodule PrismWeb.ShellLive do
   # `open` names a tincture this shell lists, versionless or at the
   # version it lists; anything else opens nothing.
   defp shell_verb(socket, _frame, %{verb: :open, args: %{"ref" => ref}}) do
-    with {:ok, parsed} <- Prima.ComponentRef.parse(ref),
-         %{id: id} <- Enum.find(socket.assigns.tinctures, &lists?(&1, parsed)) do
-      launch_tincture(socket, id)
-    else
-      _ -> drop_message(socket)
+    case listed(socket, ref) do
+      %{id: id} -> launch_tincture(socket, id)
+      nil -> drop_message(socket)
+    end
+  end
+
+  # The listed tincture `ref` names, versionless or at the version listed.
+  defp listed(socket, ref) do
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, %Prima.ComponentRef{type: "tincture"} = parsed} ->
+        Enum.find(socket.assigns.tinctures, &lists?(&1, parsed))
+
+      _ ->
+        nil
     end
   end
 
@@ -530,97 +645,557 @@ defmodule PrismWeb.ShellLive do
   end
 
   # ============================================================================
-  # The desktop and safe mode
+  # Canvas verbs
   # ============================================================================
 
-  # Hold the frames the arrangement places and the desktop it names. A
-  # desktop that is not installed holds none, and the picker is drawn; one
-  # whose frame is refused at open is safe mode.
+  # From a validation frame, only its tree and its failure act.
+  defp canvas_verb(socket, %{key: {:validation, canvas_id}}, %{verb: :tree}),
+    do: validation_ended(socket, canvas_id, :tree)
+
+  defp canvas_verb(socket, %{key: {:validation, canvas_id}}, %{verb: :failed}),
+    do: validation_ended(socket, canvas_id, :failed)
+
+  defp canvas_verb(socket, %{key: {:validation, _}}, _verb), do: drop_message(socket)
+
+  # From a live canvas a tree is dropped; `ready`, a failure, `open` and
+  # `press` act only from the canvas the glass shows.
+  defp canvas_verb(socket, %{key: {:canvas, canvas_id}} = frame, decoded) do
+    if canvas_id == Frames.visible_canvas(socket.assigns.frames),
+      do: live_canvas_verb(socket, frame, decoded),
+      else: drop_message(socket)
+  end
+
+  defp live_canvas_verb(socket, %{id: id}, %{verb: :ready}),
+    do: update(socket, :canvas_ready, &MapSet.put(&1, id))
+
+  defp live_canvas_verb(socket, _frame, %{verb: :failed}), do: enter_safe_mode(socket, :crashed)
+
+  defp live_canvas_verb(socket, %{key: {:canvas, canvas_id}}, %{
+         verb: :open,
+         args: %{"ref" => ref}
+       }),
+       do: open_from_canvas(socket, canvas_id, ref)
+
+  defp live_canvas_verb(socket, frame, %{verb: :press, args: args}),
+    do: press(socket, frame, args)
+
+  defp live_canvas_verb(socket, _frame, _tree), do: drop_message(socket)
+
+  # A listed tincture opens where the canvas's arrangement puts it for the
+  # posture: an app's mode, or a floating entry's position for a tincture
+  # that floats. Otherwise it opens full in the hand, or as the next column
+  # on the desk. Nothing is written to the layout.
+  defp open_from_canvas(socket, canvas_id, ref) do
+    with %{} = card <- listed(socket, ref),
+         %{} = entry <- visible_entry(socket.assigns) do
+      ctx = socket.assigns.context
+      placed = Frames.ref_of(card)
+      app = Enum.find(entry.apps, &(&1.tincture == placed))
+      floating = Enum.find(entry.floating, &(&1.tincture == placed))
+
+      cond do
+        app ->
+          frames(
+            socket,
+            &Frames.open_app(ctx, &1, canvas_id, card, app.mode, app.order, app.mode == :column)
+          )
+
+        floating && Frames.floats?(card) ->
+          frames(socket, &Frames.open_floating(ctx, &1, canvas_id, card, floating.position, true))
+
+        socket.assigns.posture == "hand" ->
+          frames(socket, &Frames.open_app(ctx, &1, canvas_id, card, :full, 0))
+
+        true ->
+          order = next_column(socket.assigns.frames, entry)
+          frames(socket, &Frames.open_app(ctx, &1, canvas_id, card, :column, order))
+      end
+    else
+      _unlisted -> drop_message(socket)
+    end
+  end
+
+  # The order after every column of the canvas, held or placed.
+  defp next_column(frames, entry) do
+    held =
+      for %{key: {:app, id, _}, placement: {:column, order}} <- Frames.list(frames),
+          id == entry.id,
+          do: order
+
+    placed = for %{mode: :column, order: order} <- entry.apps, do: order
+
+    case held ++ placed do
+      [] -> 0
+      orders -> Enum.max(orders) + 1
+    end
+  end
+
+  # A press names a binding by its id and one of its actions. It acts only
+  # when the binding is a live feed of the athanor and the served version's
+  # declaration reads that feed's results; it then goes to `feed.press`
+  # under the shell's context. A refusal is logged by its class alone, and
+  # the canvas is told nothing.
+  defp press(socket, frame, %{"binding" => binding, "action" => action}) do
+    with {:ok, feeds} <- Crucible.feeds(socket.assigns.context),
+         %{binding: %{name: feed}} <- Enum.find(feeds, &(&1.binding_id == binding)),
+         true <- reads_feed?(frame, feed) do
+      case call_tool(socket, "feed/press", %{"binding" => binding, "action_name" => action}) do
+        {:ok, _pressed} ->
+          socket
+
+        {:error, reason} ->
+          class = Prima.Refusal.classify(reason).class
+          Logger.info("[ShellLive] a canvas's press was refused: #{class}")
+          socket
+      end
+    else
+      _not_pressable -> drop_message(socket)
+    end
+  end
+
+  defp reads_feed?(%{boot: %{"streams" => streams}}, feed),
+    do: %{"name" => @feed_stream, "subject" => feed} in streams
+
+  defp reads_feed?(_frame, _feed), do: false
+
+  # A frame took its credential: a live canvas's ready deadline starts, the
+  # moment its page can first speak; a canvas or validation frame is sent
+  # the tinctures it may open.
+  defp handshaken(socket, %{key: {:canvas, _}, id: frame_id}) do
+    Process.send_after(self(), {:canvas_deadline, frame_id}, @canvas_ready_ms)
+    push_installed(socket, [frame_id])
+  end
+
+  defp handshaken(socket, %{key: {:validation, _}, id: frame_id}),
+    do: push_installed(socket, [frame_id])
+
+  defp handshaken(socket, _frame), do: socket
+
+  # Every listed tincture that is not a canvas, as a versionless reference
+  # and its name, sorted by name, to each frame named.
+  defp push_installed(socket, frame_ids) do
+    tinctures =
+      socket.assigns.tinctures
+      |> Enum.map(&%{ref: Frames.ref_of(&1), name: &1.name})
+      |> Enum.sort_by(& &1.name)
+      |> Enum.take(@max_installed)
+
+    Enum.reduce(frame_ids, socket, fn frame_id, socket ->
+      push_event(socket, "canvas_installed", %{frame: frame_id, tinctures: tinctures})
+    end)
+  end
+
+  defp canvas_frame_ids(frames),
+    do: for(%{key: key, id: id} <- Frames.list(frames), Frames.canvas_key?(key), do: id)
+
+  # ============================================================================
+  # The canvases
+  # ============================================================================
+
+  # The canvas the glass shows, as the arrangement read places it, or nil.
+  defp visible_entry(%{arrangement: arrangement, frames: frames}) when is_list(arrangement) do
+    canvas = Frames.visible_canvas(frames)
+    Enum.find(arrangement, &(&1.id == canvas))
+  end
+
+  defp visible_entry(_assigns), do: nil
+
+  # Hold the frames the arrangement places over the visible canvas, and
+  # the canvas itself.
   defp place(%{assigns: %{safe_mode: %{}}} = socket), do: socket
   defp place(%{assigns: %{arrangement: nil}} = socket), do: socket
 
   defp place(socket) do
-    %{context: ctx, tinctures: cards, arrangement: arrangement} = socket.assigns
+    %{context: ctx, arrangement: arrangement} = socket.assigns
 
-    case Frames.resolve(arrangement.desktop, cards) do
+    socket
+    |> frames(&Frames.arrange(ctx, &1, arrangement, cards(socket)))
+    |> show_canvas()
+  end
+
+  # The visible canvas, as it now stands: a validation or a canvas frame
+  # held for it is kept, unless the frame runs a tincture the layout no
+  # longer names for it, which is torn down with no call — a trial's
+  # credential revoked and nothing activated; otherwise the shell decides
+  # what to open.
+  defp show_canvas(%{assigns: %{safe_mode: %{}}} = socket), do: socket
+
+  defp show_canvas(socket) do
+    %{context: ctx, frames: frames} = socket.assigns
+
+    case visible_entry(socket.assigns) do
       nil ->
-        socket
-        |> frames(fn frames ->
-          frames = Frames.arrange(ctx, frames, arrangement, cards)
+        assign(socket, :showing, :none)
 
-          case Frames.desktop(frames) do
-            %{key: key} -> Frames.discard(ctx, frames, key)
-            nil -> frames
-          end
-        end)
-        |> assign(:desktop, :none)
+      %{id: id} = entry ->
+        case Frames.get(frames, {:validation, id}) || Frames.get(frames, {:canvas, id}) do
+          nil ->
+            decide(socket, entry)
 
-      card ->
-        socket =
-          socket
-          |> frames(fn frames ->
-            Frames.open_desktop(ctx, Frames.arrange(ctx, frames, arrangement, cards), card)
-          end)
-          |> assign(:desktop, card.id)
-
-        case Frames.desktop(socket.assigns.frames) do
-          %{state: :refused} -> enter_safe_mode(socket, :not_ready)
-          _held -> socket
+          %{key: key} = frame ->
+            if runs?(socket, frame, entry),
+              do: assign(socket, :showing, :canvas),
+              else: socket |> frames(&Frames.discard(ctx, &1, key)) |> show_canvas()
         end
     end
   end
 
-  # The deadline starts when the desktop takes its credential, the moment
-  # its page can first speak.
-  defp arm_desktop_deadline(frames, frame_id) do
-    case Frames.desktop(frames) do
-      %{id: ^frame_id} ->
-        Process.send_after(self(), {:desktop_deadline, frame_id}, @desktop_ready_ms)
+  defp runs?(socket, %{reference: reference}, entry) do
+    running = Prima.ComponentRef.build("tincture", reference.publisher, reference.name)
 
-      _other ->
-        :ok
+    if socket.assigns.shipped == entry.id,
+      do: running == SafeMode.shipped_canvas(),
+      else: running == entry.tincture
+  end
+
+  # What a canvas with no frame held opens: the shipped canvas safe mode
+  # chose for it; nothing for a tincture nobody installed; safe mode for
+  # one installed as anything but a local canvas; otherwise its versions
+  # decide whether its newest version is validated first or its working
+  # version opens.
+  defp decide(socket, entry) do
+    cond do
+      socket.assigns.shipped == entry.id ->
+        open_shipped(socket, entry)
+
+      card = Frames.resolve(entry.tincture, socket.assigns.canvases) ->
+        if card.publisher == Prima.ComponentPath.default_publisher(),
+          do: versions(socket, entry, card),
+          else: enter_safe_mode(socket, :not_ready)
+
+      Frames.resolve(entry.tincture, socket.assigns.tinctures) ->
+        enter_safe_mode(socket, :not_ready)
+
+      true ->
+        assign(socket, :showing, :none)
     end
   end
 
-  # Safe mode: every frame is discarded with its credential and the system
-  # layer offers the ways out; the picker is drawn meanwhile.
+  defp versions(socket, entry, card) do
+    case Compendium.canvas_versions(socket.assigns.context, card.name) do
+      {:ok, %{document: document}} ->
+        if CanvasValidation.needed?(document, card.version),
+          do: validate(socket, entry, card),
+          else: open_working(socket, entry, card, document.working, :else_safe_mode, :ask)
+
+      {:error, _refused} ->
+        enter_safe_mode(socket, :not_ready)
+    end
+  end
+
+  # The candidate's validation frame. Refused at its open, it holds no
+  # credential and is torn down at once: for want of a grant, the grant
+  # prompt is asked as activation's `consent_required` asks it; otherwise
+  # the working version opens, or the canvas shows the refusal.
+  defp validate(socket, %{id: id} = entry, card) do
+    ctx = socket.assigns.context
+    socket = socket |> decided(id) |> frames(&CanvasValidation.open(ctx, &1, id, card))
+
+    case Frames.get(socket.assigns.frames, {:validation, id}) do
+      %{state: :refused, refusal: :ungranted} ->
+        socket
+        |> frames(&CanvasValidation.cancel(ctx, &1, id))
+        |> ask_validation_grant(entry, card)
+
+      %{state: :refused, refusal: refusal} ->
+        socket
+        |> frames(&CanvasValidation.cancel(ctx, &1, id))
+        |> show_working(entry, {:else_refuse, refusal}, :ask)
+
+      _validating ->
+        assign(socket, :showing, :canvas)
+    end
+  end
+
+  # A validation ended for `event`: its frame is torn down, `canvas.activate`
+  # is called once, and the shell goes on as its answer says.
+  defp validation_ended(socket, canvas_id, event) do
+    %{context: ctx, frames: frames} = socket.assigns
+    call = fn tool, args -> call_tool(socket, tool, args) end
+    {later, next} = CanvasValidation.conclude(ctx, frames, canvas_id, event, call)
+    socket = put_frames(socket, later)
+
+    case {next, visible_entry(socket.assigns)} do
+      {:none, _entry} ->
+        socket
+
+      {_next, %{id: ^canvas_id} = entry} ->
+        socket |> decided(canvas_id) |> after_activation(entry, next)
+
+      {_next, _another} ->
+        decided(socket, canvas_id)
+    end
+  end
+
+  defp after_activation(socket, entry, {:show_working, fallback}),
+    do: show_working(socket, entry, fallback, :ask)
+
+  defp after_activation(socket, entry, :ask_grant) do
+    case Frames.resolve(entry.tincture, socket.assigns.canvases) do
+      nil -> assign(socket, :showing, :none)
+      card -> ask_validation_grant(socket, entry, card)
+    end
+  end
+
+  defp after_activation(socket, entry, {:refuse, refusal}),
+    do: refuse_canvas(socket, entry, refusal)
+
+  # Read the canvas's versions again and open its working version, or,
+  # without one, `fallback`: safe mode `not_validated`, or the canvas's
+  # refusal. `ask` is whether a working version refused for want of its
+  # grant asks for it (`open_live/4`).
+  defp show_working(socket, entry, fallback, ask) do
+    case Frames.resolve(entry.tincture, socket.assigns.canvases) do
+      nil ->
+        assign(socket, :showing, :none)
+
+      card ->
+        case Compendium.canvas_versions(socket.assigns.context, card.name) do
+          {:ok, %{document: %{working: working}}} ->
+            open_working(socket, entry, card, working, fallback, ask)
+
+          {:error, _refused} ->
+            open_working(socket, entry, card, nil, fallback, ask)
+        end
+    end
+  end
+
+  defp open_working(socket, _entry, _card, nil, :else_safe_mode, _ask),
+    do: enter_safe_mode(socket, :not_validated)
+
+  defp open_working(socket, entry, _card, nil, {:else_refuse, refusal}, _ask),
+    do: refuse_canvas(socket, entry, refusal)
+
+  defp open_working(socket, entry, card, working, _fallback, ask) do
+    case card_at(socket.assigns.context, card, working) do
+      {:ok, card} -> open_live(socket, entry, card, ask)
+      :error -> enter_safe_mode(socket, :not_ready)
+    end
+  end
+
+  # The live canvas, opened unless a frame of it is held already: that
+  # frame, live or refused, stands, and nothing of it is read as this
+  # open's answer. Refused at its own open for want of a grant, it shows
+  # its refusal, never safe mode, and is offered the grant prompt once,
+  # kept as the canvas's (`ask_canvas_grant/3`) — `:quiet` in answer to
+  # the person's dismissal of one, which asks nothing again. Any other
+  # refusal at its own open is safe mode `not_ready`.
+  defp open_live(socket, %{id: canvas_id} = entry, card, ask) do
+    if Frames.get(socket.assigns.frames, {:canvas, canvas_id}) do
+      assign(socket, :showing, :canvas)
+    else
+      ctx = socket.assigns.context
+
+      socket =
+        socket |> decided(canvas_id) |> frames(&Frames.open_canvas(ctx, &1, canvas_id, card))
+
+      case Frames.get(socket.assigns.frames, {:canvas, canvas_id}) do
+        %{state: :refused, refusal: :ungranted} ->
+          refused = assign(socket, :showing, :canvas)
+
+          with :ask <- ask,
+               {:ok, asked} <- ask_canvas_grant(refused, entry, card) do
+            asked
+          else
+            _quiet_or_unavailable -> refused
+          end
+
+        %{state: :refused} ->
+          enter_safe_mode(socket, :not_ready)
+
+        _live ->
+          assign(socket, :showing, :canvas)
+      end
+    end
+  end
+
+  # The canvas shows its refusal, never safe mode. Held as it is, so a
+  # refusal for want of a grant asks nothing again until the canvas is
+  # decided again (`forget_refusal/3`). A refusal newly held is a decision
+  # about the canvas.
+  defp refuse_canvas(socket, entry, refusal) do
+    card =
+      Frames.resolve(entry.tincture, socket.assigns.canvases) ||
+        Frames.resolve(entry.tincture, socket.assigns.tinctures)
+
+    case card do
+      nil ->
+        assign(socket, :showing, :none)
+
+      card ->
+        socket =
+          if Frames.get(socket.assigns.frames, {:canvas, entry.id}),
+            do: socket,
+            else: decided(socket, entry.id)
+
+        socket
+        |> assign(:frames, Frames.refuse_canvas(socket.assigns.frames, entry.id, card, refusal))
+        |> assign(:showing, :canvas)
+    end
+  end
+
+  # Every decision about a canvas — a trial started, an outcome, an open,
+  # a refusal — is counted, so a grant prompt an earlier decision raised
+  # is known to be stale (`superseded?/2`).
+  defp decided(socket, canvas_id),
+    do: update(socket, :decisions, &Map.update(&1, canvas_id, 1, fn count -> count + 1 end))
+
+  # The listed card at `version`: the listed one, or that version's own
+  # manifest read from its component row.
+  defp card_at(_ctx, %{version: version} = card, version), do: {:ok, card}
+
+  defp card_at(ctx, card, version) do
+    ref = Prima.ComponentRef.build("tincture", card.publisher, card.name, version)
+
+    case Compendium.inspect_component(ctx, ref) do
+      {:ok, %{"manifest" => manifest}} ->
+        {:ok, %{card | version: version, manifest: Prima.Manifest.decode(manifest)}}
+
+      _unreadable ->
+        :error
+    end
+  end
+
+  # Safe mode's shipped canvas, on this glass alone: the newest version
+  # the install media ships, opened live with no validation and no write.
+  defp open_shipped(socket, entry) do
+    ctx = socket.assigns.context
+    name = shipped_name()
+
+    with {:ok, [version | _older]} <- Compendium.shipped_versions("tincture", name),
+         {:ok, card} <- shipped_card(socket, name, version) do
+      open_live(socket, entry, card, :ask)
+    else
+      _unavailable ->
+        Logger.info("[ShellLive] the shipped canvas could not be read for #{ctx.athanor_id}")
+        enter_safe_mode(socket, :not_ready)
+    end
+  end
+
+  defp shipped_name do
+    {:ok, %Prima.ComponentRef{name: name}} = Prima.ComponentRef.parse(SafeMode.shipped_canvas())
+    name
+  end
+
+  defp shipped_card(socket, name, version) do
+    base =
+      Frames.resolve(SafeMode.shipped_canvas(), socket.assigns.canvases) ||
+        %{
+          id: "iframe_" <> name,
+          publisher: Prima.ComponentPath.default_publisher(),
+          name: name,
+          version: nil,
+          manifest: nil,
+          entry: nil,
+          athanor_segment: nil,
+          public: false
+        }
+
+    card_at(socket.assigns.context, base, version)
+  end
+
+  # ---- switching -------------------------------------------------------------
+
+  # The canvas a switch names: one of the arrangement's, or the one before
+  # or after the visible canvas. Nothing in safe mode, and nothing past
+  # either end.
+  defp switch_target(%{safe_mode: %{}}, _params), do: nil
+  defp switch_target(%{arrangement: nil}, _params), do: nil
+
+  defp switch_target(%{arrangement: arrangement}, %{"canvas" => canvas})
+       when is_binary(canvas) do
+    if Enum.any?(arrangement, &(&1.id == canvas)), do: canvas
+  end
+
+  defp switch_target(%{arrangement: arrangement, frames: frames}, %{"direction" => direction})
+       when direction in ["previous", "next"] do
+    ids = Enum.map(arrangement, & &1.id)
+    step = if direction == "next", do: 1, else: -1
+
+    case Enum.find_index(ids, &(&1 == Frames.visible_canvas(frames))) do
+      nil -> nil
+      index when index + step < 0 -> nil
+      index -> Enum.at(ids, index + step)
+    end
+  end
+
+  defp switch_target(_assigns, _params), do: nil
+
+  defp switch_canvas(socket, nil), do: socket
+
+  defp switch_canvas(socket, canvas_id) do
+    %{context: ctx, frames: frames, arrangement: arrangement} = socket.assigns
+    leaving = Frames.visible_canvas(frames)
+
+    if canvas_id == leaving do
+      socket
+    else
+      socket
+      |> forget_refusal(leaving, :ungranted)
+      |> frames(fn frames ->
+        frames
+        |> then(&CanvasValidation.cancel(ctx, &1, leaving))
+        |> then(&Frames.show(ctx, &1, canvas_id, arrangement, cards(socket)))
+      end)
+      |> show_canvas()
+    end
+  end
+
+  # ---- safe mode -------------------------------------------------------------
+
+  # Safe mode: every frame is discarded with its credential, a validation
+  # in progress included, and the system layer offers the ways out.
   defp enter_safe_mode(%{assigns: %{safe_mode: %{}}} = socket, _reason), do: socket
 
   defp enter_safe_mode(socket, reason) do
     ctx = socket.assigns.context
+    entry = visible_entry(socket.assigns)
     {prompt_id, socket} = next_prompt_id(socket, "safe-mode")
 
-    show_prompt(%{
-      id: prompt_id,
-      kind: :safe_mode,
-      action: nil,
-      subject: SafeMode.enter(reason, layout_as_read(ctx))
-    })
+    subject =
+      SafeMode.enter(reason, %{
+        canvas: entry && entry.id,
+        tincture: entry && entry.tincture,
+        kept: kept(socket, entry)
+      })
+
+    show_prompt(%{id: prompt_id, kind: :safe_mode, action: nil, subject: subject})
 
     socket
     |> assign(:frames, Frames.clear(ctx, socket.assigns.frames))
     |> assign(:covered, false)
-    |> assign(:safe_mode, %{id: prompt_id, reason: reason})
-    |> assign(:desktop_ready, nil)
+    |> assign(:safe_mode, %{id: prompt_id, reason: reason, canvas: subject.canvas})
+    |> assign(:canvas_ready, MapSet.new())
     |> assign(:credential_prompts, %{})
     |> assign(:grant_prompts, %{})
+    |> assign(:grant_decisions, %{})
   end
 
-  # The layout safe mode is entered over: the document and revision read
-  # now. A layout that cannot be read is entered over the shipped default
-  # at revision 0, so the default is still offered; publishing it over a
-  # layout the person has is refused as stale, and nothing is merged.
-  defp layout_as_read(ctx) do
-    case Compendium.layout(ctx, hd(Prima.Layout.postures())) do
-      {:ok, layout} -> layout
-      {:error, _refusal} -> %{document: Prima.Layout.default(), revision: 0}
+  # The version the visible canvas's versions document keeps, read as safe
+  # mode is entered; none when it cannot be read.
+  defp kept(_socket, nil), do: nil
+
+  defp kept(socket, entry) do
+    with %{publisher: "local", name: name} <-
+           Frames.resolve(entry.tincture, socket.assigns.canvases),
+         {:ok, %{document: %{kept: kept}}} <-
+           Compendium.canvas_versions(socket.assigns.context, name) do
+      kept
+    else
+      _none -> nil
     end
   end
 
-  # The person chose: the desktop runs again from the layout as it stands.
-  defp leave_safe_mode(socket) do
+  # The person chose a way out: the canvas runs again from the layout as it
+  # stands — the kept version, once restored, is its working one — or the
+  # shipped canvas is shown in its place on this glass. The reload reads
+  # the layout as it stands now, so a layout change still waiting on a read
+  # from before this choice is spent: only a change published after it
+  # lets the shipped canvas go.
+  defp leave_safe_mode(socket, offer) do
+    shipped = if offer == :shipped, do: socket.assigns.safe_mode.canvas
     send_update(PrismWeb.CanvasLive, id: "canvas", reload: true)
-    assign(socket, safe_mode: nil, desktop: :pending)
+    assign(socket, safe_mode: nil, showing: :pending, shipped: shipped, layout_changed: false)
   end
 
   # ============================================================================
@@ -643,26 +1218,136 @@ defmodule PrismWeb.ShellLive do
   # Otherwise the frame shows its refusal.
   defp offer_grant(socket, %{key: key, tincture_id: tincture_id, reference: reference}) do
     ref = Prima.ComponentRef.build("tincture", reference.publisher, reference.name)
+
+    case grant_prompt(socket, key, tincture_id, ref) do
+      {:ok, asked} -> asked
+      :error -> socket
+    end
+  end
+
+  # The canvas's grant waits for the person — a validation's activation
+  # answered `consent_required`, or a trial or the live canvas was refused
+  # at its open for want of it: the grant prompt for the tincture of the
+  # card whose open it was (the shipped canvas's own on safe mode's
+  # shipped path, never the layout's), kept as `{:activation, canvas_id}`,
+  # once, and answering the canvas's latest decision. While one is open
+  # for the canvas and that tincture, deciding the canvas again asks
+  # nothing more: that prompt stands, as the latest decision's. Confirmed,
+  # the canvas is decided again.
+  defp ask_canvas_grant(socket, %{id: canvas_id}, card) do
+    case asking(socket.assigns.grant_prompts, canvas_id, card.id) do
+      nil -> grant_prompt(socket, {:activation, canvas_id}, card.id, Frames.ref_of(card))
+      prompt_id -> {:ok, answering(socket, prompt_id, {:activation, canvas_id})}
+    end
+  end
+
+  # The grant prompt open for canvas `canvas_id` and the tincture of card
+  # `tincture_id`, if any. One open for another tincture of that canvas is
+  # never taken over, since it names a grant this decision does not ask
+  # for: it answers a decision since replaced, so it acts on nothing.
+  defp asking(prompts, canvas_id, tincture_id) do
+    Enum.find_value(prompts, fn
+      {prompt_id, {{:activation, ^canvas_id}, ^tincture_id}} -> prompt_id
+      _another -> nil
+    end)
+  end
+
+  # A canvas's grant prompt `prompt_id` answers the canvas's latest
+  # decision; any other prompt answers its frame.
+  defp answering(socket, prompt_id, {:activation, canvas_id}) do
+    decision = Map.get(socket.assigns.decisions, canvas_id, 0)
+    update(socket, :grant_decisions, &Map.put(&1, prompt_id, decision))
+  end
+
+  defp answering(socket, _prompt_id, _key), do: socket
+
+  # A validation found the canvas's grant waiting: its prompt, asked with
+  # no trial held. A prompt that cannot be drawn leaves the working
+  # version, or the canvas's refusal, asking nothing more.
+  defp ask_validation_grant(socket, entry, card) do
+    case ask_canvas_grant(socket, entry, card) do
+      {:ok, asked} -> assign(asked, :showing, :canvas)
+      :error -> show_working(socket, entry, {:else_refuse, :ungranted}, :quiet)
+    end
+  end
+
+  defp grant_prompt(socket, key, tincture_id, ref) do
     {prompt_id, next} = next_prompt_id(socket, "grant")
 
     case PrismWeb.SystemLayer.grant_prompt(socket, prompt_id, ref) do
       {:ok, prompt} ->
         show_prompt(prompt)
-        update(next, :grant_prompts, &Map.put(&1, prompt_id, {key, tincture_id}))
+
+        {:ok,
+         next
+         |> update(:grant_prompts, &Map.put(&1, prompt_id, {key, tincture_id}))
+         |> answering(prompt_id, key)}
 
       {:error, _unavailable} ->
-        socket
+        :error
     end
   end
 
-  # A grant confirmed: the refused frame is opened again where it was.
+  # A grant confirmed: the refused frame is opened again where it was, and
+  # a canvas that waited on it is decided again, its refusal first let go.
+  defp granted(socket, {{:activation, canvas_id}, _tincture_id}) do
+    socket
+    |> forget_refusal(canvas_id, :any)
+    |> place()
+  end
+
   defp granted(socket, {key, tincture_id}) do
-    %{context: ctx} = socket.assigns
+    %{context: ctx, frames: frames} = socket.assigns
+    held = Frames.get(frames, key)
     socket = frames(socket, &Frames.discard(ctx, &1, key))
 
-    case key do
-      {:full, _} -> launch_tincture(socket, tincture_id)
-      _placed -> place(socket)
+    case {key, held} do
+      {{:full, _}, _held} ->
+        launch_tincture(socket, tincture_id)
+
+      {{:app, canvas_id, _ref}, %{placement: placement, arranged: arranged}} ->
+        reopen_app(socket, canvas_id, tincture_id, placement, arranged)
+
+      _placed ->
+        place(socket)
+    end
+  end
+
+  defp reopen_app(socket, canvas_id, tincture_id, placement, arranged) do
+    ctx = socket.assigns.context
+
+    case Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id)) do
+      nil ->
+        socket
+
+      card ->
+        {mode, order} = if placement == :full, do: {:full, 0}, else: {:column, elem(placement, 1)}
+        frames(socket, &Frames.open_app(ctx, &1, canvas_id, card, mode, order, arranged))
+    end
+  end
+
+  # The grant a canvas waited on was dismissed: the working version, or
+  # the canvas's refusal, which stays; nothing is asked again in answer.
+  defp grant_dismissed(socket, {{:activation, canvas_id}, _tincture_id}) do
+    case visible_entry(socket.assigns) do
+      %{id: ^canvas_id} = entry -> show_working(socket, entry, {:else_refuse, :ungranted}, :quiet)
+      _another -> socket
+    end
+  end
+
+  defp grant_dismissed(socket, _frame), do: socket
+
+  # Let go of canvas `canvas_id`'s refusal, so the next show decides it
+  # again: `:any` refusal once its grant is confirmed, or one for want of
+  # the grant (`:ungranted`) once the glass leaves it or the layout
+  # changes. A refused frame holds no credential.
+  defp forget_refusal(socket, canvas_id, which) do
+    case Frames.get(socket.assigns.frames, {:canvas, canvas_id}) do
+      %{state: :refused, refusal: refusal} when which in [:any, refusal] ->
+        frames(socket, &Frames.discard(socket.assigns.context, &1, {:canvas, canvas_id}))
+
+      _live_another_or_none ->
+        socket
     end
   end
 
@@ -672,7 +1357,13 @@ defmodule PrismWeb.ShellLive do
 
     cond do
       match?(%{id: ^id}, safe_mode) ->
-        if outcome == :confirmed, do: leave_safe_mode(socket), else: socket
+        case outcome do
+          {:confirmed, offer} when offer in [:retry, :kept, :shipped] ->
+            leave_safe_mode(socket, offer)
+
+          _refused ->
+            socket
+        end
 
       socket.assigns.pairing_prompt == id ->
         if outcome == :dismissed, do: assign(socket, :pairing_prompt, nil), else: socket
@@ -709,16 +1400,36 @@ defmodule PrismWeb.ShellLive do
     do: socket
 
   defp grant_closed(socket, id, frame, outcome) do
-    socket = update(socket, :grant_prompts, &Map.delete(&1, id))
-    if outcome == :confirmed, do: granted(socket, frame), else: socket
+    stale = superseded?(socket.assigns, id, frame)
+
+    socket =
+      socket
+      |> update(:grant_prompts, &Map.delete(&1, id))
+      |> update(:grant_decisions, &Map.delete(&1, id))
+
+    cond do
+      stale -> socket
+      outcome == :confirmed -> granted(socket, frame)
+      true -> grant_dismissed(socket, frame)
+    end
   end
+
+  # A canvas's grant prompt acts only while it is its canvas's latest
+  # decision. Once anything has decided the canvas since — a trial
+  # started, an outcome, an open, a refusal — the prompt is stale and acts
+  # on nothing, dismissed or confirmed; the system layer's commit of a
+  # confirmed grant stands, as a stale deadline changes nothing.
+  defp superseded?(assigns, prompt_id, {{:activation, canvas_id}, _tincture_id}),
+    do: Map.get(assigns.grant_decisions, prompt_id) != Map.get(assigns.decisions, canvas_id, 0)
+
+  defp superseded?(_assigns, _prompt_id, _prompt), do: false
 
   defp load_tinctures(socket) do
     ctx = socket.assigns.context
 
     # Use the cached registry, which scans lazily and follows tincture
     # change notifications. The refresh button forces a rescan.
-    tinctures =
+    cards =
       Prism.TinctureRegistry.list_tinctures(ctx)
       |> Enum.map(fn t ->
         ref = Prima.ComponentRef.build("tincture", t.publisher, t.name)
@@ -748,25 +1459,31 @@ defmodule PrismWeb.ShellLive do
         })
       end)
 
+    # A canvas is opened by the shell from the layout, never launched or
+    # listed for the picker.
+    {canvases, tinctures} = Enum.split_with(cards, &Frames.canvas?/1)
+
     # Clamp focused_index if the list shrank, reset preview cursor.
     focused = min(socket.assigns.focused_index || 0, max(length(tinctures) - 1, 0))
 
     socket
     |> assign(:tinctures, tinctures)
+    |> assign(:canvases, canvases)
     |> assign(:focused_index, focused)
     |> assign(:current_preview_index, 0)
     |> follow_listing()
   end
 
   # A frame whose tincture the registry no longer lists is discarded with
-  # its credential, and the layout's entries are placed again against the
-  # new listing.
+  # its credential, the layout's entries are placed again against the new
+  # listing, and every canvas frame is sent what it may open.
   defp follow_listing(socket) do
-    %{context: ctx, tinctures: cards} = socket.assigns
+    %{context: ctx} = socket.assigns
 
     socket
-    |> frames(&Frames.prune(ctx, &1, cards))
+    |> frames(&Frames.prune(ctx, &1, cards(socket)))
     |> place()
+    |> then(&push_installed(&1, canvas_frame_ids(&1.assigns.frames)))
   end
 
   # Public is an active public profile. A store that could not answer, or
@@ -786,11 +1503,12 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # The picker is for when no desktop runs: safe mode, or a layout whose
-  # desktop is not installed or could not be read. It is under an active
-  # full frame like everything else.
-  defp picker?(%{frames: frames, safe_mode: safe_mode, desktop: desktop}) do
-    Frames.active(frames) == nil and (not is_nil(safe_mode) or desktop == :none)
+  # The picker is for when no canvas runs: a layout with no canvas, a
+  # canvas whose tincture is not installed, or a layout that could not be
+  # read. It is under an active full frame like everything else, and safe
+  # mode draws only its prompt.
+  defp picker?(%{frames: frames, safe_mode: safe_mode, showing: showing}) do
+    is_nil(safe_mode) and Frames.active(frames) == nil and showing == :none
   end
 
   defp prompting?(%{
@@ -889,48 +1607,69 @@ defmodule PrismWeb.ShellLive do
     {:noreply, put_flash(socket, :info, "Report submitted. Thanks.")}
   end
 
-  # The canvas read the layout for the posture the client reported: hold
-  # exactly the frames it places, and the desktop it names.
-  def handle_info({PrismWeb.CanvasLive, :arrangement, arrangement}, socket) do
-    {:noreply, socket |> assign(:arrangement, arrangement) |> place()}
+  # The canvas read the layout for the posture the client reported: a
+  # layout change waiting on this read is applied, then the frames it
+  # places and the visible canvas are held.
+  def handle_info({PrismWeb.CanvasLive, :arrangement, posture, arrangement}, socket) do
+    {:noreply,
+     socket
+     |> apply_layout_change()
+     |> assign(posture: posture, arrangement: arrangement)
+     |> place()}
   end
 
-  # The layout could not be read: no desktop is known, so the picker is
-  # drawn until a read succeeds.
+  # The layout could not be read. At mount, with no canvas known, the
+  # picker is drawn until a read succeeds; otherwise the glass keeps what
+  # it shows, and a layout change waits for a read that succeeds.
   def handle_info({PrismWeb.CanvasLive, :layout_unavailable}, socket) do
-    if socket.assigns.desktop == :pending,
-      do: {:noreply, assign(socket, :desktop, :none)},
+    if socket.assigns.showing == :pending,
+      do: {:noreply, assign(socket, :showing, :none)},
       else: {:noreply, socket}
   end
 
-  # The person's layout was published — by their desktop, the assistant or
-  # safe mode's choice, in this session or another: read it again.
+  # The person's layout was published — by the assistant, a console page or
+  # another session of theirs: read it again. The change is applied only
+  # once that read succeeds (`apply_layout_change/1`).
   def handle_info(%Cyfr.Bus.LayoutPublished{user_id: user_id}, socket) do
-    if user_id == socket.assigns.context.user_id,
-      do: send_update(PrismWeb.CanvasLive, id: "canvas", reload: true)
-
-    {:noreply, socket}
+    if user_id == socket.assigns.context.user_id do
+      send_update(PrismWeb.CanvasLive, id: "canvas", reload: true)
+      {:noreply, assign(socket, :layout_changed, true)}
+    else
+      {:noreply, socket}
+    end
   end
 
-  # The desktop took its credential this long ago. Without its `ready` the
-  # shell enters safe mode; a desktop hidden meanwhile, whose bridge holds
+  # A live canvas took its credential this long ago. Without its `ready` the
+  # shell enters safe mode; a canvas hidden meanwhile, whose bridge holds
   # its verbs, has the time again once it is shown.
-  def handle_info({:desktop_deadline, frame_id}, socket) do
-    %{frames: frames, desktop_ready: ready, safe_mode: safe_mode} = socket.assigns
+  def handle_info({:canvas_deadline, frame_id}, socket) do
+    %{frames: frames, canvas_ready: ready, safe_mode: safe_mode} = socket.assigns
 
-    case Frames.desktop(frames) do
-      %{id: ^frame_id} when ready == frame_id or not is_nil(safe_mode) ->
+    case Enum.find(Frames.list(frames), &match?(%{key: {:canvas, _}, id: ^frame_id}, &1)) do
+      _held when not is_nil(safe_mode) ->
         {:noreply, socket}
 
-      %{id: ^frame_id, state: :frozen} ->
-        Process.send_after(self(), {:desktop_deadline, frame_id}, @desktop_ready_ms)
+      %{state: :frozen} ->
+        unless MapSet.member?(ready, frame_id),
+          do: Process.send_after(self(), {:canvas_deadline, frame_id}, @canvas_ready_ms)
+
         {:noreply, socket}
 
-      %{id: ^frame_id} ->
-        {:noreply, enter_safe_mode(socket, :not_ready)}
+      %{state: :live} ->
+        if MapSet.member?(ready, frame_id),
+          do: {:noreply, socket},
+          else: {:noreply, enter_safe_mode(socket, :not_ready)}
 
-      _another_or_none ->
+      _refused_another_or_none ->
         {:noreply, socket}
+    end
+  end
+
+  # A validation's deadline. One for a frame no longer held changes nothing.
+  def handle_info({:validation_deadline, frame_id}, socket) do
+    case CanvasValidation.canvas_of(socket.assigns.frames, frame_id) do
+      {:ok, canvas_id} -> {:noreply, validation_ended(socket, canvas_id, :deadline)}
+      :none -> {:noreply, socket}
     end
   end
 
@@ -969,6 +1708,30 @@ defmodule PrismWeb.ShellLive do
     {:noreply, socket}
   end
 
+  # A published layout, read: the shipped canvas safe mode showed in its
+  # place goes with the layout it stood in for, and a canvas's refusal for
+  # want of its grant is let go, so the arrangement read decides that
+  # canvas again. Before a read succeeds nothing of it is applied.
+  defp apply_layout_change(%{assigns: %{layout_changed: false}} = socket), do: socket
+
+  defp apply_layout_change(socket) do
+    canvases =
+      for %{key: {:canvas, canvas_id}} <- Frames.list(socket.assigns.frames), do: canvas_id
+
+    socket = socket |> assign(:layout_changed, false) |> drop_shipped()
+    Enum.reduce(canvases, socket, &forget_refusal(&2, &1, :ungranted))
+  end
+
+  # The shipped canvas's frame is discarded, so the canvas the layout names
+  # opens in its place.
+  defp drop_shipped(%{assigns: %{shipped: nil}} = socket), do: socket
+
+  defp drop_shipped(%{assigns: %{shipped: canvas_id, context: ctx}} = socket) do
+    socket
+    |> assign(:shipped, nil)
+    |> frames(&Frames.discard(ctx, &1, {:canvas, canvas_id}))
+  end
+
   # Every frame credential this view minted is revoked as it ends — the
   # socket closed, the person left or navigated away, the view redirected
   # — revoked ones included, since revoking is idempotent. A view that
@@ -997,8 +1760,8 @@ defmodule PrismWeb.ShellLive do
       class="h-full relative bg-surface-base"
       phx-window-keydown="keynav"
     >
-      <%!-- Picker: drawn in safe mode, or when no desktop runs, while no
-           tincture is active --%>
+      <%!-- Picker: drawn when no canvas runs, while no tincture is
+           active and safe mode is off --%>
       <div
         :if={picker?(assigns)}
         id="shell-picker"

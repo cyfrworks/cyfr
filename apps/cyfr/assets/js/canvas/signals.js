@@ -70,3 +70,37 @@ export function safeModeChord(event) {
     (event.code === "KeyS" || event.key === "s" || event.key === "S")
   )
 }
+
+// The canvas switch a keydown asks for: `previous` for Ctrl+Alt+ArrowLeft,
+// `next` for Ctrl+Alt+ArrowRight, null for anything else. Heard on the
+// shell's page alone, as the safe mode chord is.
+export function switchChord(event) {
+  if (event === null || typeof event !== "object") return null
+  if (event.ctrlKey !== true || event.altKey !== true || event.metaKey === true || event.shiftKey === true) {
+    return null
+  }
+  if (event.key === "ArrowLeft") return "previous"
+  if (event.key === "ArrowRight") return "next"
+  return null
+}
+
+// What the canvas tells a canvas frame's bridge to post over its port, as
+// a DOM event on the frame's element whose detail is `{verb, args}`: one
+// of the verbs the shell sends a canvas (`posture`, `covered`,
+// `installed`), which the bridge holds to `Prima.CanvasWire` as it posts.
+export const CANVAS_MESSAGE_EVENT = "cyfr:canvas-message"
+
+// The verbs the glass and the shell send a canvas beside its boot and its
+// state.
+export const CANVAS_VERBS = Object.freeze(["posture", "covered", "installed"])
+
+// A `canvas_installed` payload read back (pushed by `PrismWeb.ShellLive`):
+// `{frame, tinctures}` for a frame id and a list, `null` for anything
+// else. The bridge holds each tincture to the wire before it posts.
+export function installedSignal(payload) {
+  if (payload === null || typeof payload !== "object") return null
+  const {frame, tinctures} = payload
+  return typeof frame === "string" && FRAME_ID.test(frame) && Array.isArray(tinctures)
+    ? {frame, tinctures}
+    : null
+}

@@ -1,57 +1,89 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-import {parseSlots, postureFor, slotGeometry, stylesheet} from "./geometry.js"
+import {columnGeometry, coveredRects, parseColumns, postureFor, stylesheet, swipeDirection} from "./geometry.js"
 import {
+  CANVAS_MESSAGE_EVENT,
   CREDENTIAL_CLOSED_EVENT,
   DISCONNECTED,
   FRAME_STATE_EVENT,
   RECONNECTED,
   credentialSignal,
   frameSignal,
-  safeModeChord
+  installedSignal,
+  safeModeChord,
+  switchChord
 } from "./signals.js"
+
+const EDGE_STRIP = "#canvas-edge-strip"
+const COVERING = ["column", "float", "full"]
 
 /**
  * Canvas hook — the client's half of `PrismWeb.CanvasLive`.
  *
  * It reports the posture (`posture`, `hand` under 768 CSS pixels wide and
  * `desk` otherwise) to the canvas on mount, whenever it changes and when
- * the socket comes back; lays each slot out from the slot list the server
- * rendered (`data-slots`) into a stylesheet it owns, inside an element the
- * server never patches; relays the shell's `frame_state` signals to each
- * frame's bridge as a `cyfr:frame-state` event on the frame's element; and
- * relays its `frame_credential` signals (a credential prompt a frame asked
- * for closed) as `cyfr:credential-closed`.
+ * the socket comes back; lays each shown column app out from the list the
+ * server rendered (`data-columns`) into a stylesheet it owns, inside an
+ * element the server never patches; relays the shell's `frame_state`
+ * signals to each frame's bridge as a `cyfr:frame-state` event on the
+ * frame's element, its `frame_credential` signals (a credential prompt a
+ * frame asked for closed) as `cyfr:credential-closed`, and its
+ * `canvas_installed` pushes to the canvas frame they name.
  *
- * The safe mode chord, Ctrl+Alt+S, is heard here, on the shell's own page,
- * and sent to the shell as `safe_mode`; a frame's keys stay in the frame's
- * document and never reach it.
+ * Each canvas frame (`data-frame-wire="canvas"`) is told, through its
+ * bridge (`cyfr:canvas-message`), the posture and what the shown apps and
+ * floating frames cover of it, in its own pixels, whenever either changes;
+ * its bridge holds the latest until the frame's handshake and posts it
+ * then.
  *
- * The last slot list read is kept for as long as the tab is open, so while
+ * The safe mode chord, Ctrl+Alt+S, and the switch chords,
+ * Ctrl+Alt+ArrowLeft and Ctrl+Alt+ArrowRight, are heard here, on the
+ * shell's own page, and sent to the shell as `safe_mode` and
+ * `switch_canvas` (`previous` or `next`); so is a horizontal swipe on the
+ * edge strip, leftward `next` and rightward `previous`. A frame's keys and
+ * pointer stay in the frame's document and never reach it.
+ *
+ * The last columns read are kept for as long as the tab is open, so while
  * the socket is down the last layout stays drawn and follows the window,
  * marked disconnected, and every frame's bridge is told the socket is down
  * so no frame acts until it is back.
  */
 const Canvas = {
   mounted() {
-    this._slots = []
+    this._columns = []
     this._posture = null
     this._connected = true
     this._style = null
+    this._told = new Map()
+    this._swipe = null
 
     this._onResize = () => this._layout()
     globalThis.window?.addEventListener("resize", this._onResize)
 
     this._onKeydown = (event) => {
-      if (!safeModeChord(event)) return
+      if (safeModeChord(event)) {
+        event.preventDefault()
+        if (this._connected) this.pushEvent("safe_mode", {})
+        return
+      }
+      const direction = switchChord(event)
+      if (direction === null) return
       event.preventDefault()
-      if (this._connected) this.pushEvent("safe_mode", {})
+      if (this._connected) this.pushEvent("switch_canvas", {direction})
     }
     globalThis.window?.addEventListener("keydown", this._onKeydown)
 
+    this._onPointerDown = (event) => this._swipeStart(event)
+    this._onPointerUp = (event) => this._swipeEnd(event)
+    this._onPointerCancel = () => (this._swipe = null)
+    this.el.addEventListener?.("pointerdown", this._onPointerDown)
+    this.el.addEventListener?.("pointerup", this._onPointerUp)
+    this.el.addEventListener?.("pointercancel", this._onPointerCancel)
+
     this.handleEvent("frame_state", (payload) => this._relay(payload))
     this.handleEvent("frame_credential", (payload) => this._credentialClosed(payload))
+    this.handleEvent("canvas_installed", (payload) => this._installed(payload))
 
     this._read()
     this._layout()
@@ -80,12 +112,15 @@ const Canvas = {
   destroyed() {
     globalThis.window?.removeEventListener("resize", this._onResize)
     globalThis.window?.removeEventListener("keydown", this._onKeydown)
+    this.el.removeEventListener?.("pointerdown", this._onPointerDown)
+    this.el.removeEventListener?.("pointerup", this._onPointerUp)
+    this.el.removeEventListener?.("pointercancel", this._onPointerCancel)
   },
 
-  // The last slot list that parses is the one drawn.
+  // The last column list that parses is the one drawn.
   _read() {
-    const slots = parseSlots(this.el.dataset.slots)
-    if (slots !== null) this._slots = slots
+    const columns = parseColumns(this.el.dataset.columns)
+    if (columns !== null) this._columns = columns
   },
 
   _layout() {
@@ -96,9 +131,40 @@ const Canvas = {
       this.pushEventTo(this.el, "posture", {posture})
     }
 
-    const width = this.el.getBoundingClientRect().width
+    const {width, height} = this.el.getBoundingClientRect()
     const style = this._stylesheet()
-    if (style) style.textContent = stylesheet(this.el.id, slotGeometry(this._slots, width, posture))
+    if (style) style.textContent = stylesheet(this.el.id, columnGeometry(this._columns, width, height, posture))
+
+    this._tellCanvases(posture)
+  },
+
+  // Each canvas frame's posture and what covers it, each sent only when it
+  // changed for that frame.
+  _tellCanvases(posture) {
+    const covering = this._covering()
+
+    for (const frame of this._canvasFrames()) {
+      this._tell(frame, "posture", {posture})
+      const box = boxOf(frame)
+      if (box) this._tell(frame, "covered", {rects: coveredRects(box, covering)})
+    }
+  },
+
+  _covering() {
+    const shown = Array.from(this.el.querySelectorAll('[data-canvas-shown="true"]'))
+    return shown
+      .filter((element) => COVERING.includes(element.dataset?.canvasPlace))
+      .map(boxOf)
+      .filter((box) => box !== null)
+  },
+
+  _tell(frame, verb, args) {
+    const id = frame.dataset.frameId
+    const told = this._told.get(id) || {}
+    const value = JSON.stringify(args)
+    if (told[verb] === value) return
+    this._told.set(id, {...told, [verb]: value})
+    frame.dispatchEvent(new CustomEvent(CANVAS_MESSAGE_EVENT, {detail: {verb, args}}))
   },
 
   // The stylesheet lives in the canvas's `-geometry` element, which the
@@ -123,6 +189,10 @@ const Canvas = {
     return Array.from(this.el.querySelectorAll("iframe[data-frame-id]"))
   },
 
+  _canvasFrames() {
+    return this._frames().filter((frame) => frame.dataset.frameWire === "canvas")
+  },
+
   _relay(payload) {
     const signal = frameSignal(payload)
     if (!signal) return
@@ -137,6 +207,32 @@ const Canvas = {
     if (frame) frame.dispatchEvent(new CustomEvent(CREDENTIAL_CLOSED_EVENT, {detail: {saved: signal.saved}}))
   },
 
+  _installed(payload) {
+    const signal = installedSignal(payload)
+    if (!signal) return
+    const frame = this._canvasFrames().find((el) => el.dataset.frameId === signal.frame)
+    if (frame) {
+      frame.dispatchEvent(
+        new CustomEvent(CANVAS_MESSAGE_EVENT, {detail: {verb: "installed", args: {tinctures: signal.tinctures}}})
+      )
+    }
+  },
+
+  _swipeStart(event) {
+    const strip = event.target && typeof event.target.closest === "function" ? event.target.closest(EDGE_STRIP) : null
+    if (!strip) return
+    this._swipe = {pointer: event.pointerId, x: event.clientX, y: event.clientY}
+    if (typeof strip.setPointerCapture === "function") strip.setPointerCapture(event.pointerId)
+  },
+
+  _swipeEnd(event) {
+    const start = this._swipe
+    this._swipe = null
+    if (!start || event.pointerId !== start.pointer) return
+    const direction = swipeDirection(start, {x: event.clientX, y: event.clientY})
+    if (direction !== null && this._connected) this.pushEvent("switch_canvas", {direction})
+  },
+
   _broadcast(state) {
     for (const frame of this._frames()) frame.dispatchEvent(stateEvent(state))
   }
@@ -144,6 +240,13 @@ const Canvas = {
 
 function stateEvent(state) {
   return new CustomEvent(FRAME_STATE_EVENT, {detail: {state}})
+}
+
+// An element's box in the page's pixels, or null for one that has none.
+function boxOf(element) {
+  if (!element || typeof element.getBoundingClientRect !== "function") return null
+  const {x, y, width, height} = element.getBoundingClientRect()
+  return [x, y, width, height].every(Number.isFinite) ? {x, y, width, height} : null
 }
 
 export default Canvas

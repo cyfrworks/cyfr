@@ -143,13 +143,10 @@ for name in canvas-card canvas-full canvas-stall; do
   [ -n "$published" ] || fail "$name was not published"
 done
 
-slot() { printf '{"id":"%s","tincture":"%s","size":"%s","order":%s}' "$@"; }
-vault_slot() { slot vault tincture:local.vault icon "$1"; }
-card_slot() { slot card tincture:local.canvas-card card "$1"; }
-full_slot() { slot full-app tincture:local.canvas-full icon "$1"; }
-desk="{\"desktop\":\"tincture:local.desktop\",\"floating\":[],\"slots\":[$(vault_slot 0),$(card_slot 1),$(full_slot 2)]}"
-hand="{\"desktop\":\"tincture:local.desktop\",\"floating\":[],\"slots\":[$(card_slot 0),$(vault_slot 1),$(full_slot 2)]}"
-browser_layout "$CELL" "$token" "{\"version\":1,\"postures\":{\"desk\":$desk,\"hand\":$hand}}"
+app() { printf '{"tincture":"%s","mode":"%s","order":%s}' "$@"; }
+posture="{\"apps\":[$(app tincture:local.vault column 0),$(app tincture:local.canvas-full full 1)],\"floating\":[]}"
+browser_layout "$CELL" "$token" \
+  "{\"version\":2,\"canvases\":[{\"id\":\"home\",\"tincture\":\"tincture:local.canvas\",\"postures\":{\"desk\":$posture,\"hand\":$posture}}]}"
 seed_vault "$CELL" "$token"
 
 step "the vault's operations in the server, SQLite"

@@ -463,14 +463,16 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/prism/**/*.ex", "apps/cyfr/lib/prism.ex"],
       into: "Sanctum",
-      allow: ~w(Sanctum Sanctum.Consent Sanctum.Context Sanctum.Tenancy Sanctum.TinctureAuth),
+      allow: ~w(Sanctum Sanctum.Context Sanctum.Tenancy Sanctum.TinctureAuth),
       reason:
         "console domain code: the tenancy carrier. The tray's messages arrive on " <>
           "`Cyfr.Bus` as its own structs, so the console names none of the identity " <>
           "domain's announcement vocabulary. The shell's frames (`Prism.Frames`) mint, " <>
           "suspend, resume and revoke each frame credential through " <>
-          "`Sanctum.TinctureAuth`, and read the grant revision it binds through " <>
-          "`Sanctum.Consent`'s own entries (`profiles/2`, `head_consent/2`). " <>
+          "`Sanctum.TinctureAuth`, and a canvas's validation " <>
+          "(`Prism.CanvasValidation`) mints its validation credential there " <>
+          "(`mint_validation_credential/5`); the grant revision a credential binds is " <>
+          "read through the component domain (`Compendium.tincture_grant_revision/2`). " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -1425,6 +1427,7 @@ defmodule Cyfr.Boundaries do
       consume_validation: 3,
       mint_asset_credential: 2,
       mint_frame_credential: 5,
+      mint_validation_credential: 5,
       page_frame: 2,
       resume_frame: 2,
       revoke_frame: 2,

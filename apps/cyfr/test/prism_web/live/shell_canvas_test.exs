@@ -1,0 +1,1838 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule PrismWeb.ShellCanvasTest do
+  @moduledoc """
+  The canvases in the shell, and safe mode.
+
+  The shell shows the layout's first canvas, its working version opened as
+  a canvas frame on the canvas's own host page, and draws the picker only
+  when no canvas runs: a layout with no canvas, or a canvas nobody
+  installed. A new person sees the shipped canvas, validated once and then
+  opened live. It reads the layout again when one of the person's own
+  sessions publishes it. A full frame over a canvas freezes it; switching
+  freezes the canvas left and its apps, and shows the next, with no wrap.
+  A canvas's `open` places a listed tincture where its arrangement puts
+  it, and its `press` reaches `feed.press` only from the visible live
+  canvas whose version reads that feed. A canvas that never sends ready,
+  one refused at open, and the person's own ask enter safe mode, which
+  discards every frame with its credential; its kept version restores and
+  opens only that canvas.
+
+  Takes a slot through `Arca.ControlPlane` in the ownership case, which
+  writes the process-wide standing record; that case saves and restores it.
+  """
+
+  use PrismWeb.ConnCase, async: false
+
+  import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
+
+  alias Prism.Frames
+
+  @seed Path.expand("../../../../../seed/components/tinctures/local/canvas/0.1.0", __DIR__)
+
+  setup %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | athanor_id: athanor.id}
+
+    base = Path.join(System.tmp_dir!(), "shell_canvas_#{System.unique_integer([:positive])}")
+    original_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, base)
+
+    on_exit(fn ->
+      Application.put_env(:arca, :base_path, original_path)
+      File.rm_rf(base)
+      reload_registry()
+    end)
+
+    {:ok, conn: conn, user: user, athanor: athanor, ctx: ctx}
+  end
+
+  defp reload_registry do
+    registry = Process.whereis(Prism.TinctureRegistry)
+
+    case Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo) do
+      :ok ->
+        try do
+          Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
+          :ok = Prism.TinctureRegistry.reload()
+        after
+          Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
+        end
+
+      {:already, _} ->
+        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
+        :ok = Prism.TinctureRegistry.reload()
+    end
+  end
+
+  # ---- what the athanor holds -----------------------------------------------
+
+  # A tincture version laid in the athanor's tree with its component row:
+  # `tincture` its manifest's block, `files` its files. Answers the row's
+  # release digest.
+  defp lay!(ctx, name, version, tincture, files) do
+    manifest = %{
+      "name" => name,
+      "type" => "tincture",
+      "version" => version,
+      "publisher" => "local",
+      "tincture" => tincture
+    }
+
+    dir =
+      Arca.Adapters.Local.build_path(
+        Sanctum.Context.actor(ctx),
+        ["components", "tinctures", "local", name, version]
+      )
+
+    File.mkdir_p!(dir)
+    File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+    for {file, bytes} <- files, do: File.write!(Path.join(dir, file), bytes)
+
+    digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name <> version), case: :lower)
+    {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, _} =
+      Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
+        id: "cmp_#{name}_#{System.unique_integer([:positive])}",
+        name: name,
+        version: version,
+        component_type: "tincture",
+        description: name,
+        tags: "[]",
+        digest: digest,
+        release_digest: release_digest,
+        size: 100,
+        exports: "[]",
+        manifest: Jason.encode!(manifest),
+        publisher: "local",
+        publisher_id: "local|local|#{ctx.namespace}",
+        source: Compendium.Source.filesystem(),
+        signature_verified: false,
+        inserted_at: now,
+        updated_at: now
+      })
+
+    Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
+    release_digest
+  end
+
+  defp tincture!(ctx, name, tincture \\ %{}) do
+    lay!(ctx, name, "1.0.0", Map.merge(%{"entry" => "index.html"}, tincture), [
+      {"index.html", "<html><head></head><body>#{name}</body></html>"}
+    ])
+  end
+
+  defp canvas!(ctx, name, version \\ "1.0.0", streams \\ [%{"name" => "runs.changes"}]) do
+    lay!(
+      ctx,
+      name,
+      version,
+      %{
+        "frame" => %{"placement" => "canvas"},
+        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "streams" => streams
+      },
+      [{"canvas.js", "export default (canvas) => canvas.render({type: \"spacer\"})"}]
+    )
+  end
+
+  # The shipped canvas, as the seed holds it, installed in the athanor.
+  defp shipped!(ctx) do
+    manifest = @seed |> Path.join("cyfr-manifest.json") |> File.read!() |> Jason.decode!()
+    module = File.read!(Path.join(@seed, "canvas.js"))
+    lay!(ctx, "canvas", manifest["version"], manifest["tincture"], [{"canvas.js", module}])
+  end
+
+  # The canvas `name`'s versions document, as a glass's validation leaves it.
+  defp versions!(ctx, name, fields) do
+    actor = Sanctum.Context.actor(ctx)
+
+    revision =
+      case Arca.CanvasVersions.get(actor, name) do
+        {:ok, %{revision: revision}} -> revision
+        {:error, :not_found} -> 0
+      end
+
+    {:ok, _} =
+      Arca.CanvasVersions.publish(
+        actor,
+        name,
+        Map.merge(Arca.CanvasVersions.empty(), fields),
+        revision
+      )
+  end
+
+  defp versions(ctx, name) do
+    case Arca.CanvasVersions.get(Sanctum.Context.actor(ctx), name) do
+      {:ok, %{document: document}} -> document
+      {:error, :not_found} -> Arca.CanvasVersions.empty()
+    end
+  end
+
+  defp entry(id, tincture, postures \\ %{}),
+    do: %{"id" => id, "tincture" => tincture, "postures" => postures}
+
+  defp posture(apps, floating \\ []), do: %{"apps" => apps, "floating" => floating}
+
+  defp app(tincture, mode, order \\ 0),
+    do: %{"tincture" => tincture, "mode" => mode, "order" => order}
+
+  # Publish the person's layout, version 2, as the layout tool does, from
+  # another session of theirs.
+  defp layout!(user, athanor, canvases) do
+    ctx = person(user, athanor)
+
+    {:ok, %{revision: revision}} = Compendium.Providers.Layout.read(ctx)
+
+    {:ok, _} =
+      Compendium.Providers.Layout.handle("layout", ctx, %{
+        "action" => "edit",
+        "document" => %{"version" => 2, "canvases" => canvases},
+        "revision" => revision
+      })
+  end
+
+  # The person's own context, as another of their sessions holds it.
+  defp person(user, athanor) do
+    Sanctum.Context.build(
+      user_id: user.user_id,
+      athanor_id: athanor.id,
+      permissions: Sanctum.Context.person_permissions(),
+      scope: :athanor,
+      auth_method: :oidc,
+      authenticated: true
+    )
+  end
+
+  # ---- the shell ------------------------------------------------------------
+
+  defp shell!(conn) do
+    {view, _html} = mount_athanor(conn, "/tinctures")
+    Process.put(:view, view)
+    # The canvas's read and the shell's placing are messages to the view;
+    # they end in a canvas decided on, or in safe mode.
+    settle!(view, fn ->
+      assigns = assigns(view)
+      assigns.showing != :pending or assigns.safe_mode != nil
+    end)
+
+    view
+  end
+
+  # The canvas reads the layout again through messages the view handles
+  # in turn: render until `check` holds, a bounded number of times.
+  defp settle!(view, check) do
+    wait_until(fn -> render(view) && check.() end, 2_000, "the shell to settle")
+  end
+
+  defp assigns(%Phoenix.LiveViewTest.View{pid: pid}), do: :sys.get_state(pid).socket.assigns
+  defp frames(view), do: assigns(view).frames
+  defp canvas(view, id \\ "home"), do: Frames.get(frames(view), {:canvas, id})
+  defp validation(view, id \\ "home"), do: Frames.get(frames(view), {:validation, id})
+  defp opened(view), do: Frames.list(frames(view))
+  defp dropped(view), do: Frames.dropped(frames(view))
+
+  defp row(frame_id) do
+    Arca.Repo.one(from(f in Arca.Schemas.FrameCredential, where: f.frame_id == ^frame_id))
+  end
+
+  defp rows, do: Arca.Repo.all(Arca.Schemas.FrameCredential)
+
+  defp handshake!(view, frame_id) do
+    render_hook(view, "frame_handshake", %{"frame" => frame_id})
+    assert_reply(view, %{boot: boot})
+    boot
+  end
+
+  defp canvas_verb!(view, frame_id, verb, args \\ %{}),
+    do:
+      render_hook(view, "canvas_verb", %{
+        "frame" => frame_id,
+        "message" => Prima.CanvasWire.encode(%{verb: verb, frame: frame_id, args: args})
+      })
+
+  defp iframe(html, frame_id) do
+    [tag] = Regex.run(~r/<iframe[^>]*id="#{frame_id}"[^>]*>/, html)
+    tag
+  end
+
+  defp attribute(tag, name) do
+    case Regex.run(~r/\s#{name}="([^"]*)"/, tag) do
+      [_, value] -> value
+      nil -> nil
+    end
+  end
+
+  # The install media ships the canvas: a seed tree of the test's own,
+  # restored when it ends.
+  defp shipped_seed! do
+    seed =
+      Path.join(System.tmp_dir!(), "shell_canvas_seed_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(Path.join(seed, "components/tinctures/local/canvas"))
+    File.cp_r!(@seed, Path.join(seed, "components/tinctures/local/canvas/0.1.0"))
+    previous = Application.get_env(:arca, :seed_path)
+    Application.put_env(:arca, :seed_path, seed)
+
+    on_exit(fn ->
+      Application.put_env(:arca, :seed_path, previous)
+      File.rm_rf(seed)
+    end)
+  end
+
+  # The person's stored layout no longer holds its digest: every read of
+  # it, `Compendium.layout/2`'s included, answers an error.
+  defp break_layout!(ctx, user, athanor) do
+    key = Arca.Layouts.key(user.user_id)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(d in Arca.Schemas.FencedDocument,
+          where: d.athanor_id == ^ctx.athanor_id and d.key == ^key
+        ),
+        set: [digest: "sha256:" <> String.duplicate("0", 64)]
+      )
+
+    assert {:error, _} = Compendium.layout(person(user, athanor), "desk")
+  end
+
+  # The digest the person's stored layout holds, and that digest put back
+  # after `break_layout!/3`: reads answer again.
+  defp layout_digest(ctx, user) do
+    key = Arca.Layouts.key(user.user_id)
+
+    Arca.Repo.one(
+      from(d in Arca.Schemas.FencedDocument,
+        where: d.athanor_id == ^ctx.athanor_id and d.key == ^key,
+        select: d.digest
+      )
+    )
+  end
+
+  defp mend_layout!(ctx, user, athanor, digest) do
+    key = Arca.Layouts.key(user.user_id)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(d in Arca.Schemas.FencedDocument,
+          where: d.athanor_id == ^ctx.athanor_id and d.key == ^key
+        ),
+        set: [digest: digest]
+      )
+
+    assert {:ok, _} = Compendium.layout(person(user, athanor), "desk")
+  end
+
+  # The layout published, as the bus tells this shell.
+  defp published!(view, ctx, user),
+    do: send(view.pid, Cyfr.Bus.LayoutPublished.new(Sanctum.Context.actor(ctx), user.user_id, 9))
+
+  defp layout_notes(view),
+    do: length(Regex.scan(~r/data-canvas-layout="unavailable"/, render(view)))
+
+  @keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  # A claimant runs, as a deployment's does, and this member holds its
+  # slot: the umbrella's test configuration runs none.
+  defp claimant! do
+    saved = Map.new(@keys, &{&1, :persistent_term.get(&1, :absent)})
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+
+    on_exit(fn ->
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+    end)
+
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    node = "node-shell-canvas-#{System.unique_integer([:positive])}"
+    {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+    slot
+  end
+
+  # A successor takes the slot over; this member still believes it holds it.
+  defp take_over!(slot) do
+    {1, _} =
+      Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+        set: [owner: slot.node <> "#boot_b", generation: slot.generation + 1]
+      )
+
+    assert Arca.ControlPlane.held?()
+  end
+
+  # Two canvases with working versions, `home` on markets and `work` on
+  # notes-canvas, `home_postures` placed over home. Answers markets'
+  # release digest.
+  defp two_canvases!(ctx, user, athanor, home_postures \\ %{}) do
+    digest = canvas!(ctx, "markets")
+    canvas!(ctx, "notes-canvas")
+    versions!(ctx, "markets", %{working: "1.0.0"})
+    versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+
+    layout!(user, athanor, [
+      entry("home", "tincture:local.markets", home_postures),
+      entry("work", "tincture:local.notes-canvas")
+    ])
+
+    digest
+  end
+
+  # ===========================================================================
+
+  describe "the canvas" do
+    test "the visible canvas is the layout's first, opened as a canvas frame, and the picker is not drawn",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+      digest = two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+
+      assert %{
+               state: :live,
+               visible: true,
+               placement: :canvas,
+               reference: %{name: "markets", version: "1.0.0"}
+             } = home = canvas(view)
+
+      assert canvas(view, "work") == nil
+      assert Frames.visible_canvas(frames(view)) == "home"
+
+      html = render(view)
+      refute html =~ ~s(id="shell-picker")
+      assert html =~ ~s(data-canvas-place="canvas")
+
+      # The canvas's own host page under an asset credential, its sandbox
+      # the rules', and no allow attribute.
+      tag = iframe(html, home.id)
+      assert attribute(tag, "data-frame-wire") == "canvas"
+      assert "/_c/v1/" <> _ = attribute(tag, "src")
+      assert attribute(tag, "src") == home.src
+
+      assert attribute(tag, "sandbox") ==
+               Enum.join(Compendium.tincture_canvas_sandbox_tokens(), " ")
+
+      assert attribute(tag, "allow") == nil
+
+      row = row(home.id)
+      assert row.state == "active"
+      assert row.purpose == "live"
+      assert {row.name, row.version, row.version_digest} == {"markets", "1.0.0", digest}
+
+      # Its handshake is its boot, the bearer inside it, once.
+      boot = handshake!(view, home.id)
+
+      assert %{
+               "mode" => "live",
+               "toolkit" => 1,
+               "streams" => [%{"name" => "runs.changes", "subject" => nil}]
+             } = boot
+
+      assert boot["data_path"] == Prima.CanvasWire.data_path(home.id)
+      assert boot["module_url"] =~ ~r{^/_s/[^/]+/local/markets/1\.0\.0/canvas\.js$}
+
+      assert {:ok, _} =
+               Prima.CanvasWire.decode(%{
+                 "v" => 1,
+                 "verb" => "boot",
+                 "frame" => home.id,
+                 "args" => boot
+               })
+
+      assert {:ok, %{frame_id: frame_id, mode: :live}} =
+               Sanctum.TinctureAuth.verify_frame_credential(boot["credential"])
+
+      assert frame_id == home.id
+      refute render(view) =~ boot["credential"]
+
+      # It is told what it may open: the listed tinctures that are not canvases.
+      home_id = home.id
+      assert_push_event(view, "canvas_installed", %{frame: ^home_id, tinctures: installed})
+      assert installed == [%{ref: "tincture:local.app-dash", name: "app-dash"}]
+
+      render_hook(view, "frame_handshake", %{"frame" => home.id})
+      assert_reply(view, %{error: "no_credential"})
+    end
+
+    test "a layout with no canvas draws the picker", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      canvas!(ctx, "markets")
+      tincture!(ctx, "app-dash")
+      layout!(user, athanor, [])
+      view = shell!(conn)
+
+      assert opened(view) == []
+      assert Frames.visible_canvas(frames(view)) == nil
+      assert render(view) =~ ~s(id="shell-picker")
+      refute render(view) =~ ~s(id="canvas-switcher")
+      assert rows() == []
+    end
+
+    test "a canvas nobody installed is not shown: the picker is drawn and its apps still open",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+      tincture!(ctx, "clock", %{"frame" => %{"placement" => "float"}})
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.no-canvas", %{
+          "desk" =>
+            posture([app("tincture:local.app-dash", "column")], [
+              %{"tincture" => "tincture:local.clock", "position" => %{"x" => 6000, "y" => 6000}}
+            ])
+        })
+      ])
+
+      view = shell!(conn)
+
+      assert canvas(view) == nil
+      assert validation(view) == nil
+      assert render(view) =~ ~s(id="shell-picker")
+
+      assert %{state: :live, visible: true, placement: {:column, 0}} =
+               Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+
+      assert %{state: :live, placement: {:floating, %{x: 6000, y: 6000}}} =
+               Frames.get(frames(view), {:floating, "home", "tincture:local.clock"})
+    end
+
+    test "a new person sees the shipped canvas", %{conn: conn, ctx: ctx} do
+      digest = shipped!(ctx)
+      view = shell!(conn)
+
+      # Its newest version is neither working, kept nor failed: it is
+      # trialled first, hidden and inert, before anything opens live.
+      assert canvas(view) == nil
+
+      assert %{state: :live, visible: false, reference: %{name: "canvas"}} =
+               trial = validation(view)
+
+      assert row(trial.id).purpose == "validation"
+      assert render(view) =~ ~r/data-canvas-place="validation"[^>]*inert/
+      refute render(view) =~ ~s(id="shell-picker")
+
+      boot = handshake!(view, trial.id)
+      assert boot["mode"] == "validation"
+      assert boot["streams"] == [%{"name" => "runs.changes", "subject" => nil}]
+
+      canvas_verb!(view, trial.id, :tree)
+
+      # The trial's credential was spent, the version activated, and the
+      # working version opened live.
+      assert validation(view) == nil
+      assert row(trial.id).state == "revoked"
+      assert %{working: "0.1.0", kept: nil, failed: nil} = versions(ctx, "canvas")
+
+      assert %{state: :live, visible: true, reference: %{name: "canvas", version: "0.1.0"}} =
+               shipped = canvas(view)
+
+      assert row(shipped.id).version_digest == digest
+
+      # Validated once per new version, not per mount.
+      GenServer.stop(view.pid, :normal)
+      again = shell!(conn)
+      assert validation(again) == nil
+      assert %{state: :live, reference: %{version: "0.1.0"}} = canvas(again)
+    end
+
+    test "the canvas is frozen while a full frame covers it and live again once it closes",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+
+      two_canvases!(ctx, user, athanor, %{
+        "desk" => posture([app("tincture:local.app-dash", "full")])
+      })
+
+      view = shell!(conn)
+      home = canvas(view)
+      id = home.id
+
+      canvas_verb!(view, id, :open, %{"ref" => "tincture:local.app-dash"})
+      assert %{state: :frozen, visible: false} = canvas(view)
+      assert row(id).state == "suspended"
+      assert_push_event(view, "frame_state", %{frame: ^id, state: "frozen"})
+
+      assert %{state: :live, visible: true, placement: :full} =
+               Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+
+      render_click(view, "close_active_tincture", %{})
+      assert %{id: ^id, state: :live, visible: true} = canvas(view)
+      assert row(id).state == "active"
+    end
+
+    test "a shown full frame takes everything it covers out of reach, and only that",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+
+      two_canvases!(ctx, user, athanor, %{
+        "desk" => posture([app("tincture:local.app-dash", "full")])
+      })
+
+      view = shell!(conn)
+
+      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="canvas"]) do
+        refute has_element?(view, "#{covered}[inert]"), covered
+      end
+
+      canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
+
+      # The chrome and every canvas layer under the full frame.
+      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="canvas"]) do
+        assert has_element?(view, "#{covered}[inert]"), covered
+      end
+
+      assert has_element?(view, "#chrome-top[inert] #topbar")
+
+      # The full frame and its capsule, the shell's own Safe mode control,
+      # the switcher, the system layer and the assistant's panel stay
+      # reachable.
+      refute has_element?(view, ~s([data-canvas-place="full"][inert]))
+      refute has_element?(view, ~s([inert] button[phx-click="close_active_tincture"]))
+
+      for reachable <- ~w(#shell-safe-mode #canvas-switcher #system-layer #aqua-panel) do
+        assert has_element?(view, reachable), reachable
+        refute has_element?(view, "[inert] #{reachable}"), reachable
+        refute has_element?(view, "#{reachable}[inert]"), reachable
+      end
+
+      render_click(view, "close_active_tincture", %{})
+
+      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="canvas"]) do
+        refute has_element?(view, "#{covered}[inert]"), covered
+      end
+    end
+
+    test "a layout published by another session of the same person is read again here; another person's is not",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{reference: %{name: "markets"}} = canvas(view)
+
+      # Another member of the same athanor arranges their own layout.
+      other = test_user()
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(other.user_id, scope: "athanor", athanor_id: athanor.id)
+
+      layout!(other, athanor, [entry("home", "tincture:local.notes-canvas")])
+      _ = render(view)
+      assert %{reference: %{name: "markets"}} = canvas(view)
+
+      # A payload naming someone else never moves this shell, however it arrives.
+      send(view.pid, Cyfr.Bus.LayoutPublished.new(Sanctum.Context.actor(ctx), other.user_id, 9))
+      _ = render(view)
+      assert %{reference: %{name: "markets"}} = canvas(view)
+
+      # The same person, from another session.
+      old = canvas(view).id
+      layout!(user, athanor, [entry("home", "tincture:local.notes-canvas")])
+      settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
+
+      assert %{reference: %{name: "notes-canvas"}, state: :live} = canvas(view)
+      assert row(old).state == "revoked"
+    end
+  end
+
+  describe "switching" do
+    test "freezes the canvas it leaves whatever it declares, and its apps, and shows the next; nothing wraps",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+
+      two_canvases!(ctx, user, athanor, %{
+        "desk" => posture([app("tincture:local.app-dash", "column")])
+      })
+
+      view = shell!(conn)
+      home = canvas(view)
+      column = Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+      assert %{state: :live, visible: true} = column
+
+      html = render(view)
+      assert html =~ ~s(id="canvas-switcher")
+      assert html =~ ~s(data-canvas="home")
+      assert html =~ ~s(data-canvas="work")
+      assert html =~ ~s(id="canvas-edge-strip")
+
+      # The chord at the first canvas: no wrap.
+      render_hook(view, "switch_canvas", %{"direction" => "previous"})
+      assert Frames.visible_canvas(frames(view)) == "home"
+
+      view |> element(~s(#canvas-switcher button[data-canvas="work"])) |> render_click()
+
+      assert Frames.visible_canvas(frames(view)) == "work"
+      assert %{state: :live, visible: true} = work = canvas(view, "work")
+      assert row(work.id).state == "active"
+      assert %{state: :frozen, visible: false} = canvas(view)
+      assert row(home.id).state == "suspended"
+      home_id = home.id
+      assert_push_event(view, "frame_state", %{frame: ^home_id, state: "frozen"})
+
+      assert %{state: :frozen, visible: false} =
+               Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+
+      # At the last canvas, next goes nowhere.
+      render_hook(view, "switch_canvas", %{"direction" => "next"})
+      assert Frames.visible_canvas(frames(view)) == "work"
+
+      # Back by the chord: the canvas left is held, frozen, and thaws.
+      render_hook(view, "switch_canvas", %{"direction" => "previous"})
+      assert %{id: ^home_id, state: :live, visible: true} = canvas(view)
+      assert row(home.id).state == "active"
+      assert %{state: :frozen} = canvas(view, "work")
+
+      # A canvas the layout does not have, or no canvas at all, is no switch.
+      render_hook(view, "switch_canvas", %{"canvas" => "elsewhere"})
+      render_hook(view, "switch_canvas", %{"direction" => "sideways"})
+      assert Frames.visible_canvas(frames(view)) == "home"
+    end
+
+    test "a switch during validation tears the trial down and activates nothing",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      view = shell!(conn)
+      trial = validation(view)
+      assert %{state: :live} = trial
+
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+
+      assert validation(view) == nil
+      assert row(trial.id).state == "revoked"
+      assert %{working: nil, failed: nil} = versions(ctx, "markets")
+
+      # Its tree, or its deadline, arriving now changes nothing.
+      render_hook(view, "canvas_verb", %{
+        "frame" => trial.id,
+        "message" => Prima.CanvasWire.encode(%{verb: :tree, frame: trial.id, args: %{}})
+      })
+
+      send(view.pid, {:validation_deadline, trial.id})
+      _ = render(view)
+      assert %{working: nil, failed: nil} = versions(ctx, "markets")
+
+      # Shown again, it is validated again.
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert %{state: :live} = again = validation(view)
+      refute again.id == trial.id
+    end
+
+    test "a layout change during validation, the canvas given another tincture or dropped, tears the trial down and activates nothing",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      view = shell!(conn)
+      trial = validation(view)
+      assert %{state: :live, reference: %{name: "markets"}} = trial
+
+      # Given another tincture, the canvas opens as that tincture's versions say.
+      layout!(user, athanor, [entry("home", "tincture:local.notes-canvas")])
+      settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
+
+      assert validation(view) == nil
+      assert row(trial.id).state == "revoked"
+      assert %{working: nil, kept: nil, failed: nil} = versions(ctx, "markets")
+
+      # Given back, it is trialled anew; dropped, its trial goes the same way.
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      settle!(view, fn -> match?(%{state: :live}, validation(view)) end)
+      again = validation(view)
+      refute again.id == trial.id
+
+      layout!(user, athanor, [entry("work", "tincture:local.notes-canvas")])
+      settle!(view, fn -> match?(%{state: :live}, canvas(view, "work")) end)
+
+      assert validation(view) == nil
+      assert row(again.id).state == "revoked"
+      assert %{working: nil, kept: nil, failed: nil} = versions(ctx, "markets")
+    end
+  end
+
+  describe "a validation's grant prompt" do
+    # A canvas tincture's owner profile, markets' unless named: `status`
+    # :needs_consent while its grant waits for the person, :active once the
+    # person granted it.
+    defp owner_head!(ctx, name \\ "markets", status) do
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          ctx,
+          %{
+            id: "prof_#{name}_canvas",
+            kind: :owner,
+            source_ref: "tincture:local.#{name}",
+            label: "owner",
+            status: status
+          },
+          %{
+            id: "cons_#{name}_canvas",
+            revision: 1,
+            scope: :versionless,
+            pinned_version: "",
+            invoke_mode: :open_inert,
+            shape_digest: "sha256:shape",
+            commit_digest: "sha256:commit",
+            blob_digest: Prima.JCS.hash_binary("{}"),
+            resolved_policy: "{}",
+            activation: %{}
+          }
+        )
+    end
+
+    test "a trial refused at its open for want of the grant is torn down at once and asks for it; dismissed, the canvas shows its refusal; confirmed, it is validated again",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      owner_head!(ctx, :needs_consent)
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      view = shell!(conn)
+
+      # Refused at its open, the trial minted nothing and is not held; the
+      # prompt is asked as activation's consent_required asks it.
+      assert validation(view) == nil
+      assert rows() == []
+      assert render(view) =~ ~s(data-kind="grant")
+
+      assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      # Dismissed, with no working version: the canvas shows its refusal.
+      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      _ = render(view)
+
+      assert assigns(view).grant_prompts == %{}
+      assert %{state: :refused, refusal: :ungranted} = canvas(view)
+      assert validation(view) == nil
+      assert assigns(view).safe_mode == nil
+      assert rows() == []
+
+      # Shown anew, it is refused at its open and asks again; confirmed,
+      # the canvas is validated again under the grant now held.
+      layout!(user, athanor, [])
+      settle!(view, fn -> canvas(view) == nil end)
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      settle!(view, fn -> assigns(view).grant_prompts != %{} end)
+      assert validation(view) == nil
+
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
+
+      assert %{state: :live, reference: %{name: "markets"}} = trial = validation(view)
+      assert row(trial.id).state == "active"
+      assert assigns(view).safe_mode == nil
+    end
+
+    for asked_at <- ["activation", "open"] do
+      @tag asked_at: asked_at
+      test "asked at its #{asked_at}, answered once a newer trial of its canvas is held, it tears down nothing and shows nothing",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, asked_at: asked_at} do
+        canvas!(ctx, "markets")
+        canvas!(ctx, "notes-canvas")
+        versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+
+        layout!(user, athanor, [
+          entry("home", "tincture:local.markets"),
+          entry("work", "tincture:local.notes-canvas")
+        ])
+
+        # The grant waits for the person: before the trial opens, so its
+        # open is refused, or once it is underway, so its tree answers
+        # consent_required. Either way the prompt is asked with no trial held.
+        if asked_at == "open", do: owner_head!(ctx, :needs_consent)
+        view = shell!(conn)
+        first = validation(view)
+
+        if asked_at == "activation" do
+          assert %{state: :live} = first
+          owner_head!(ctx, :needs_consent)
+          canvas_verb!(view, first.id, :tree)
+          assert row(first.id).state == "revoked"
+        end
+
+        assert validation(view) == nil
+        assert render(view) =~ ~s(data-kind="grant")
+
+        assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
+                 Map.to_list(assigns(view).grant_prompts)
+
+        # The person granted it another way, and the canvas shown again
+        # starts a newer trial while the first prompt is still open.
+        owner_head!(ctx, :active)
+        render_hook(view, "switch_canvas", %{"canvas" => "work"})
+        render_hook(view, "switch_canvas", %{"canvas" => "home"})
+        assert %{state: :live} = newer = validation(view)
+        if first, do: refute(first.id == newer.id)
+
+        view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+        _ = render(view)
+
+        assert assigns(view).grant_prompts == %{}
+        newer_id = newer.id
+        assert %{id: ^newer_id, state: :live} = validation(view)
+        assert row(newer_id).state == "active"
+        assert canvas(view) == nil
+        assert assigns(view).safe_mode == nil
+        assert %{working: nil, kept: nil, failed: nil} = versions(ctx, "markets")
+      end
+    end
+  end
+
+  describe "a grant prompt answered once its canvas was decided again" do
+    # The first trial's activation finds the grant waiting, and asks; the
+    # grant is then met another way, and a newer trial, started by a switch
+    # away and back, is refused activation for the slot this member lost.
+    # Answers the view, the first prompt and the refusal the canvas shows.
+    defp decided_since!(conn, ctx, user, athanor) do
+      canvas!(ctx, "markets", "1.0.0")
+      canvas!(ctx, "markets", "1.0.1")
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      slot = claimant!()
+      view = shell!(conn)
+
+      assert %{state: :live, reference: %{version: "1.0.1"}} = first = validation(view)
+      owner_head!(ctx, :needs_consent)
+      canvas_verb!(view, first.id, :tree)
+      assert validation(view) == nil
+
+      assert [{prompt, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      owner_head!(ctx, :active)
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert %{state: :live} = newer = validation(view)
+      take_over!(slot)
+      canvas_verb!(view, newer.id, :tree)
+
+      assert validation(view) == nil
+      assert %{state: :refused, refusal: :unavailable} = refused = canvas(view)
+      assert assigns(view).safe_mode == nil
+      {view, prompt, refused}
+    end
+
+    test "dismissed after a newer trial ended in not_owner, it leaves the canvas's refusal: no safe mode, nothing opened",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      {view, _prompt, refused} = decided_since!(conn, ctx, user, athanor)
+      held = opened(view)
+      minted = rows()
+
+      dismiss!(view)
+
+      assert assigns(view).grant_prompts == %{}
+      assert assigns(view).safe_mode == nil
+      assert canvas(view) == refused
+      assert validation(view) == nil
+      assert opened(view) == held
+      assert rows() == minted
+    end
+
+    test "confirmed after a newer trial ended in not_owner, it starts nothing, and the canvas keeps its refusal",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      {view, prompt, refused} = decided_since!(conn, ctx, user, athanor)
+      held = opened(view)
+      minted = rows()
+
+      # The system layer's report of the confirmed grant, as it sends it
+      # once its commit lands.
+      send(view.pid, {:system_layer, prompt, :confirmed})
+      _ = render(view)
+
+      assert assigns(view).grant_prompts == %{}
+      assert assigns(view).safe_mode == nil
+      assert canvas(view) == refused
+      assert validation(view) == nil
+      assert opened(view) == held
+      assert rows() == minted
+    end
+  end
+
+  describe "the live canvas's grant" do
+    test "a working version whose grant waits shows its refusal and one grant prompt, never safe mode; decided again while it is open, nothing more is asked; dismissed, the refusal stays, and a layout change decides it again",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      owner_head!(ctx, :needs_consent)
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      view = shell!(conn)
+
+      assert assigns(view).safe_mode == nil
+
+      assert %{state: :refused, refusal: :ungranted, reference: %{version: "1.0.0"}} =
+               first = canvas(view)
+
+      assert validation(view) == nil
+      assert rows() == []
+      assert render(view) =~ ~s(data-kind="grant")
+
+      assert [{prompt, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      # A layout change while the prompt is open decides the canvas again,
+      # refused again, and asks nothing more: the open prompt stands.
+      first_id = first.id
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      settle!(view, fn ->
+        case canvas(view) do
+          %{state: :refused, id: id} -> id != first_id
+          _deciding -> false
+        end
+      end)
+
+      assert %{state: :refused, refusal: :ungranted} = refused = canvas(view)
+
+      assert [{^prompt, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      # Dismissed, the refusal stays, and nothing is asked again.
+      dismiss!(view)
+
+      assert assigns(view).grant_prompts == %{}
+      assert canvas(view) == refused
+      refute render(view) =~ ~s(data-kind="grant")
+      assert assigns(view).safe_mode == nil
+
+      # A layout change decides the canvas again: refused, it asks once more.
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      settle!(view, fn -> assigns(view).grant_prompts != %{} end)
+
+      assert %{state: :refused, refusal: :ungranted} = again = canvas(view)
+      refute again.id == refused.id
+
+      assert [{another, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      refute another == prompt
+    end
+
+    test "dismissing a validation's grant prompt when the working version's grant also waits shows the refusal, with no second prompt; a switch back decides it again",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets", "1.0.0")
+      canvas!(ctx, "markets", "1.0.1")
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+      owner_head!(ctx, :needs_consent)
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      view = shell!(conn)
+
+      # The newer version's trial is refused at its open, and asks.
+      assert validation(view) == nil
+      assert canvas(view) == nil
+
+      assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      # Dismissed, the working version opens and is refused for want of the
+      # same grant: its refusal shows, and nothing is asked again.
+      dismiss!(view)
+
+      assert %{state: :refused, refusal: :ungranted, reference: %{version: "1.0.0"}} =
+               canvas(view)
+
+      assert assigns(view).grant_prompts == %{}
+      refute render(view) =~ ~s(data-kind="grant")
+      assert assigns(view).safe_mode == nil
+      assert rows() == []
+
+      # A switch back decides the canvas again: its trial is refused and asks once more.
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+
+      assert canvas(view) == nil
+      assert validation(view) == nil
+
+      assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+    end
+
+    test "decided again while its prompt is open, the prompt stands for the newer decision, and confirming it opens the working version live",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      owner_head!(ctx, :needs_consent)
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      view = shell!(conn)
+      assert %{state: :refused, refusal: :ungranted} = first = canvas(view)
+
+      assert [{prompt, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      first_id = first.id
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      settle!(view, fn ->
+        case canvas(view) do
+          %{state: :refused, id: id} -> id != first_id
+          _deciding -> false
+        end
+      end)
+
+      assert [{^prompt, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
+
+      assert %{state: :live, reference: %{version: "1.0.0"}} = live = canvas(view)
+      assert row(live.id).state == "active"
+      assert assigns(view).safe_mode == nil
+    end
+
+    test "confirming a working version's grant prompt opens the working version live",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      owner_head!(ctx, :needs_consent)
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      view = shell!(conn)
+      assert %{state: :refused, refusal: :ungranted} = refused = canvas(view)
+
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
+
+      assert %{state: :live, reference: %{version: "1.0.0"}} = live = canvas(view)
+      refute live.id == refused.id
+      assert row(live.id).state == "active"
+      assert validation(view) == nil
+      assert assigns(view).safe_mode == nil
+    end
+
+    test "a prompt open for one tincture is not taken over when the layout gives the canvas another tincture whose grant waits: that tincture is asked for its own grant",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+      owner_head!(ctx, "markets", :needs_consent)
+      owner_head!(ctx, "notes-canvas", :needs_consent)
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      view = shell!(conn)
+      assert %{state: :refused, refusal: :ungranted, reference: %{name: "markets"}} = canvas(view)
+
+      assert [{markets, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      layout!(user, athanor, [entry("home", "tincture:local.notes-canvas")])
+      settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
+
+      assert %{state: :refused, refusal: :ungranted} = refused = canvas(view)
+      prompts = assigns(view).grant_prompts
+
+      # notes-canvas is asked for once, under a prompt of its own; markets'
+      # prompt names markets still, and answers a decision since replaced.
+      assert [notes] =
+               for({id, {{:activation, "home"}, "iframe_notes-canvas"}} <- prompts, do: id)
+
+      refute notes == markets
+      assert prompts[markets] == {{:activation, "home"}, "iframe_markets"}
+
+      # The stale markets prompt, in front and dismissed, acts on nothing:
+      # the canvas keeps notes-canvas's refusal, and notes-canvas's own
+      # prompt is the one drawn next.
+      dismiss!(view)
+
+      assert canvas(view) == refused
+      assert Map.keys(assigns(view).grant_prompts) == [notes]
+      assert render(view) =~ "Grant tincture:local.notes-canvas"
+      assert assigns(view).safe_mode == nil
+    end
+  end
+
+  describe "a canvas's open" do
+    setup %{ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "full-dash")
+      tincture!(ctx, "column-dash")
+      tincture!(ctx, "loose-dash")
+      tincture!(ctx, "clock", %{"frame" => %{"placement" => "float"}})
+
+      two_canvases!(ctx, user, athanor, %{
+        "desk" =>
+          posture(
+            [app("tincture:local.full-dash", "full", 0)],
+            [%{"tincture" => "tincture:local.clock", "position" => %{"x" => 100, "y" => 200}}]
+          ),
+        "hand" => posture([])
+      })
+
+      :ok
+    end
+
+    test "opens a listed tincture where the arrangement puts it, or as the next column on the desk",
+         %{conn: conn} do
+      view = shell!(conn)
+      id = canvas(view).id
+
+      canvas_verb!(view, id, :open, %{"ref" => "tincture:local.full-dash"})
+
+      assert %{placement: :full, visible: true, state: :live} =
+               Frames.get(frames(view), {:app, "home", "tincture:local.full-dash"})
+
+      render_click(view, "close_active_tincture", %{})
+
+      canvas_verb!(view, id, :open, %{"ref" => "tincture:local.loose-dash"})
+      canvas_verb!(view, id, :open, %{"ref" => "tincture:local.column-dash"})
+
+      assert %{placement: {:column, 0}, visible: true} =
+               Frames.get(frames(view), {:app, "home", "tincture:local.loose-dash"})
+
+      assert %{placement: {:column, 1}, visible: true} =
+               Frames.get(frames(view), {:app, "home", "tincture:local.column-dash"})
+
+      # The floating entry was placed with the canvas; asked for, it stays put.
+      canvas_verb!(view, id, :open, %{"ref" => "tincture:local.clock"})
+
+      assert %{placement: {:floating, %{x: 100, y: 200}}} =
+               Frames.get(frames(view), {:floating, "home", "tincture:local.clock"})
+
+      # Nothing was written to the layout.
+      assert {:ok, %{revision: 1}} = Compendium.layout(person_of(view), "desk")
+      assert dropped(view) == 0
+    end
+
+    test "opens full in the hand", %{conn: conn} do
+      view = shell!(conn)
+      view |> element("#canvas") |> render_hook("posture", %{"posture" => "hand"})
+      settle!(view, fn -> assigns(view).posture == "hand" end)
+
+      canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.loose-dash"})
+
+      assert %{placement: :full, visible: true} =
+               Frames.get(frames(view), {:app, "home", "tincture:local.loose-dash"})
+    end
+
+    test "an open with an extra key, of an unlisted tincture or a canvas, or from a hidden canvas, is dropped",
+         %{conn: conn} do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      render_hook(view, "canvas_verb", %{
+        "frame" => home,
+        "message" => %{
+          "v" => 1,
+          "verb" => "open",
+          "frame" => home,
+          "args" => %{"ref" => "tincture:local.loose-dash", "place" => "full"}
+        }
+      })
+
+      canvas_verb!(view, home, :open, %{"ref" => "tincture:local.nobody"})
+      canvas_verb!(view, home, :open, %{"ref" => "tincture:local.notes-canvas"})
+
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      canvas_verb!(view, home, :open, %{"ref" => "tincture:local.loose-dash"})
+
+      assert dropped(view) == 4
+      refute Enum.any?(opened(view), &match?(%{key: {:app, _, "tincture:local.loose-dash"}}, &1))
+    end
+
+    test "a canvas's tree, or a verb of the shell's own wire from a canvas, is dropped", %{
+      conn: conn
+    } do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      canvas_verb!(view, home, :tree)
+
+      render_hook(view, "frame_verb", %{
+        "frame" => home,
+        "message" => Prima.TinctureWire.shell_message(:close, home)
+      })
+
+      assert dropped(view) == 2
+      assert %{state: :live} = canvas(view)
+    end
+  end
+
+  describe "a canvas's press" do
+    # A live feed of the athanor, `name`, with one refresh action.
+    defp feed!(ctx, name) do
+      {:ok, binding} =
+        Prima.Feed.Binding.validate(%{
+          "name" => name,
+          "label" => "A feed",
+          "reference" => "catalyst:local.markets",
+          "operation" => "quote",
+          "args" => %{},
+          "interval_minutes" => 5,
+          "result_shape" => %{"type" => "json"},
+          "actions" => [%{"name" => "refresh", "label" => "Refresh", "kind" => "refresh"}]
+        })
+
+      {:ok, row} =
+        Arca.CronSchedule.create_feed(Sanctum.Context.actor(ctx), %{
+          binding: binding,
+          resolved_reference: "catalyst:local.markets:1.0.0",
+          profile_id: "prof_feed_#{name}",
+          cap: 10
+        })
+
+      row.id
+    end
+
+    defp pressed(ctx) do
+      Arca.Repo.all(
+        from(d in Arca.Schemas.DecisionLog,
+          where: d.athanor_id == ^ctx.athanor_id and d.tool == "feed" and d.action == "press"
+        )
+      )
+    end
+
+    setup %{ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets", "1.0.0", [
+        %{"name" => "feed.results", "subject" => "btc"},
+        %{"name" => "runs.changes"}
+      ])
+
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      {:ok, btc: feed!(ctx, "btc"), eth: feed!(ctx, "eth")}
+    end
+
+    test "from the visible live canvas whose version reads the feed, it reaches feed.press",
+         %{conn: conn, ctx: ctx, btc: btc} do
+      view = shell!(conn)
+
+      # An action the binding does not declare: feed.press refuses it, the
+      # refusal is logged by class, and the canvas is told nothing.
+      canvas_verb!(view, canvas(view).id, :press, %{"binding" => btc, "action" => "zap"})
+
+      assert [%{admission: "admitted"}] = pressed(ctx)
+      assert dropped(view) == 0
+    end
+
+    test "for an undeclared feed, a binding that is not live, or from a hidden or another frame, it is dropped",
+         %{conn: conn, ctx: ctx, eth: eth, btc: btc} do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      # A feed the served version does not read.
+      canvas_verb!(view, home, :press, %{"binding" => eth, "action" => "refresh"})
+
+      # A binding id that is no live feed of the athanor.
+      gone = "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d"
+      canvas_verb!(view, home, :press, %{"binding" => gone, "action" => "refresh"})
+
+      # From a frozen, hidden canvas.
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      canvas_verb!(view, home, :press, %{"binding" => btc, "action" => "refresh"})
+
+      # From a canvas whose version reads no feed.
+      canvas_verb!(view, canvas(view, "work").id, :press, %{
+        "binding" => btc,
+        "action" => "refresh"
+      })
+
+      assert dropped(view) == 4
+      assert pressed(ctx) == []
+    end
+  end
+
+  describe "safe mode" do
+    test "asked for, safe mode revokes every credential the shell minted and draws the prompt",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+
+      two_canvases!(ctx, user, athanor, %{
+        "desk" => posture([app("tincture:local.app-dash", "full")])
+      })
+
+      view = shell!(conn)
+      canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
+      minted = Enum.map(opened(view), & &1.id)
+      assert length(minted) == 2
+
+      render_click(view, "safe_mode", %{})
+
+      assert opened(view) == []
+      for id <- minted, do: assert(row(id).state == "revoked")
+
+      html = render(view)
+      refute html =~ ~s(id="shell-picker")
+      refute html =~ ~s(id="canvas-switcher")
+      assert html =~ ~s(data-kind="safe_mode")
+      assert html =~ "You turned safe mode on."
+
+      # Nothing launches while it is on, and a second ask is the same safe mode.
+      render_click(view, "select_tincture", %{"tincture" => "iframe_app-dash"})
+      render_click(view, "safe_mode", %{})
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert opened(view) == []
+      assert Frames.visible_canvas(frames(view)) == "home"
+    end
+
+    test "choosing the kept version restores it and opens only that canvas",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets", "1.0.0")
+      canvas!(ctx, "markets", "1.0.1")
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "markets", %{working: "1.0.1", kept: "1.0.0"})
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      view = shell!(conn)
+      assert %{reference: %{version: "1.0.1"}} = canvas(view)
+
+      render_click(view, "safe_mode", %{})
+      html = render(view)
+      assert html =~ "Go back to the version before"
+      assert html =~ "Use the shipped canvas"
+
+      view |> element(~s(#system-layer-dialog button[phx-value-offer="kept"])) |> render_click()
+      settle!(view, fn -> canvas(view) != nil end)
+
+      assert %{working: "1.0.0", kept: "1.0.1"} = versions(ctx, "markets")
+
+      # Restored, the newest version is the kept one: nothing is validated,
+      # and only the visible canvas opens, at its working version.
+      assert [%{key: {:canvas, "home"}, state: :live, reference: %{version: "1.0.0"}}] =
+               opened(view)
+
+      assert assigns(view).safe_mode == nil
+      refute render(view) =~ ~s(id="shell-picker")
+    end
+
+    test "the shipped canvas is shown on this glass alone, and nothing is written",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      # The install media ships the canvas: a seed tree of this test's own,
+      # restored when it ends.
+      seed =
+        Path.join(System.tmp_dir!(), "shell_canvas_seed_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(Path.join(seed, "components/tinctures/local/canvas"))
+      File.cp_r!(@seed, Path.join(seed, "components/tinctures/local/canvas/0.1.0"))
+      previous = Application.get_env(:arca, :seed_path)
+      Application.put_env(:arca, :seed_path, seed)
+
+      on_exit(fn ->
+        Application.put_env(:arca, :seed_path, previous)
+        File.rm_rf(seed)
+      end)
+
+      shipped!(ctx)
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      {:ok, %{revision: layout_revision}} = Compendium.layout(person(user, athanor), "desk")
+
+      view = shell!(conn)
+      render_click(view, "safe_mode", %{})
+
+      view
+      |> element(~s(#system-layer-dialog button[phx-value-offer="shipped"]))
+      |> render_click()
+
+      settle!(view, fn -> canvas(view) != nil end)
+
+      assert %{reference: %{name: "canvas", version: "0.1.0"}, state: :live} = canvas(view)
+      assert validation(view) == nil
+
+      assert {:ok, %{revision: ^layout_revision}} =
+               Compendium.layout(person(user, athanor), "desk")
+
+      assert {:error, :not_found} = Arca.CanvasVersions.get(Sanctum.Context.actor(ctx), "canvas")
+      assert %{working: "1.0.0"} = versions(ctx, "markets")
+
+      # The layout changed: the shipped canvas goes, and the layout's opens.
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      settle!(view, fn -> match?(%{reference: %{name: "markets"}}, canvas(view)) end)
+    end
+
+    test "a canvas that sends ready before its deadline is not safe mode; one that never does is",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      id = canvas(view).id
+      handshake!(view, id)
+
+      # Ready at nine seconds: before the deadline message.
+      canvas_verb!(view, id, :ready)
+      send(view.pid, {:canvas_deadline, id})
+      _ = render(view)
+      assert assigns(view).safe_mode == nil
+      assert %{id: ^id, state: :live} = canvas(view)
+
+      # A canvas opened again that never says it is ready.
+      render_click(view, "safe_mode", %{})
+      view |> element(~s(#system-layer-dialog button[phx-value-offer="retry"])) |> render_click()
+      settle!(view, fn -> canvas(view) != nil end)
+      again = canvas(view).id
+      refute again == id
+      handshake!(view, again)
+
+      send(view.pid, {:canvas_deadline, again})
+      _ = render(view)
+      assert %{reason: :not_ready} = assigns(view).safe_mode
+      assert opened(view) == []
+      assert row(again).state == "revoked"
+      assert render(view) =~ "Your canvas did not start."
+    end
+
+    test "a stale deadline, for a canvas no longer held, changes nothing", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      send(view.pid, {:canvas_deadline, "frm_not_this_canvas"})
+      _ = render(view)
+      assert assigns(view).safe_mode == nil
+    end
+
+    test "a canvas that reports a failure is safe mode crashed", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+
+      canvas_verb!(view, canvas(view).id, :failed, %{"stage" => "runtime"})
+
+      assert %{reason: :crashed} = assigns(view).safe_mode
+      assert opened(view) == []
+      assert render(view) =~ "Your canvas stopped working."
+    end
+
+    test "the visible canvas's frame dying is safe mode crashed", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
+
+      render_hook(view, "frame_gone", %{"frame" => home.id})
+
+      assert %{reason: :crashed} = assigns(view).safe_mode
+      assert opened(view) == []
+      assert row(home.id).state == "revoked"
+      assert render(view) =~ "Your canvas stopped working."
+    end
+
+    test "a hidden canvas's frame dying is torn down with no call, and showing it again opens it anew",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert %{state: :frozen} = canvas(view)
+
+      render_hook(view, "frame_gone", %{"frame" => home.id})
+
+      assert canvas(view) == nil
+      assert row(home.id).state == "revoked"
+      assert assigns(view).safe_mode == nil
+      assert %{state: :live, visible: true} = canvas(view, "work")
+      assert %{working: "1.0.0", failed: nil} = versions(ctx, "markets")
+
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert %{state: :live, visible: true} = again = canvas(view)
+      refute again.id == home.id
+      assert row(again.id).state == "active"
+    end
+
+    test "a canvas refused at open is safe mode", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      # Named as the layout's canvas, but not declared as one.
+      tincture!(ctx, "plain-dash")
+      layout!(user, athanor, [entry("home", "tincture:local.plain-dash")])
+      view = shell!(conn)
+
+      assert %{reason: :not_ready} = assigns(view).safe_mode
+      assert opened(view) == []
+      assert rows() == []
+      refute render(view) =~ ~s(id="shell-picker")
+      assert render(view) =~ "Your canvas did not start."
+    end
+
+    test "a working version refused at its open for anything but its grant is safe mode", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      # The listed version is a canvas; the working one is not declared as one.
+      lay!(ctx, "markets", "1.0.0", %{"entry" => "index.html"}, [
+        {"index.html", "<html><head></head><body>markets</body></html>"}
+      ])
+
+      canvas!(ctx, "markets", "1.0.1")
+      versions!(ctx, "markets", %{working: "1.0.0", kept: "1.0.1"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+
+      assert %{reason: :not_ready} = assigns(view).safe_mode
+      assert opened(view) == []
+      assert rows() == []
+      assert assigns(view).grant_prompts == %{}
+      assert render(view) =~ "Your canvas did not start."
+    end
+  end
+
+  describe "the shipped canvas's grant" do
+    # Safe mode's shipped canvas, chosen while its own grant waits for the
+    # person. Answers the view, the layout's revision and the refusal shown.
+    defp shipped_ungranted!(conn, ctx, user, athanor) do
+      shipped_seed!()
+      shipped!(ctx)
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      {:ok, %{revision: revision}} = Compendium.layout(person(user, athanor), "desk")
+
+      view = shell!(conn)
+      assert %{state: :live, reference: %{name: "markets"}} = canvas(view)
+      render_click(view, "safe_mode", %{})
+      owner_head!(ctx, "canvas", :needs_consent)
+
+      view
+      |> element(~s(#system-layer-dialog button[phx-value-offer="shipped"]))
+      |> render_click()
+
+      settle!(view, fn -> canvas(view) != nil end)
+
+      assert %{reference: %{name: "canvas"}, state: :refused, refusal: :ungranted} =
+               refused = canvas(view)
+
+      {view, revision, refused}
+    end
+
+    test "refused for want of its grant, it asks for tincture:local.canvas's grant; confirmed, the shipped canvas opens live and nothing is written",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      {view, revision, refused} = shipped_ungranted!(conn, ctx, user, athanor)
+
+      html = render(view)
+      assert html =~ "Grant tincture:local.canvas"
+      refute html =~ "Grant tincture:local.markets"
+
+      assert [{_prompt, {{:activation, "home"}, "iframe_canvas"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
+
+      assert %{reference: %{name: "canvas"}, state: :live} = live = canvas(view)
+      refute live.id == refused.id
+      assert row(live.id).state == "active"
+      assert assigns(view).shipped == "home"
+      assert assigns(view).safe_mode == nil
+      assert {:ok, %{revision: ^revision}} = Compendium.layout(person(user, athanor), "desk")
+      assert {:error, :not_found} = Arca.CanvasVersions.get(Sanctum.Context.actor(ctx), "canvas")
+      assert %{working: "1.0.0"} = versions(ctx, "markets")
+    end
+
+    test "dismissed, the shipped canvas's refusal stays", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      {view, _revision, refused} = shipped_ungranted!(conn, ctx, user, athanor)
+
+      dismiss!(view)
+
+      assert assigns(view).grant_prompts == %{}
+      assert canvas(view) == refused
+      assert assigns(view).shipped == "home"
+      assert assigns(view).safe_mode == nil
+      refute render(view) =~ ~s(data-kind="grant")
+    end
+  end
+
+  describe "a layout change whose read fails" do
+    test "keeps the canvas's refusal, and draws the layout note once",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      owner_head!(ctx, :needs_consent)
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      view = shell!(conn)
+      assert %{state: :refused, refusal: :ungranted} = refused = canvas(view)
+      dismiss!(view)
+      assert canvas(view) == refused
+
+      break_layout!(ctx, user, athanor)
+      published!(view, ctx, user)
+      settle!(view, fn -> layout_notes(view) == 1 end)
+
+      assert canvas(view) == refused
+      assert render(view) =~ ~s(data-tincture-state=)
+      assert assigns(view).safe_mode == nil
+      assert assigns(view).grant_prompts == %{}
+      refute render(view) =~ ~s(id="shell-picker")
+    end
+
+    test "keeps the shipped canvas safe mode chose, and draws the layout note once",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      shipped_seed!()
+      shipped!(ctx)
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      view = shell!(conn)
+      render_click(view, "safe_mode", %{})
+
+      view
+      |> element(~s(#system-layer-dialog button[phx-value-offer="shipped"]))
+      |> render_click()
+
+      settle!(view, fn -> canvas(view) != nil end)
+      assert %{reference: %{name: "canvas"}, state: :live} = shipped = canvas(view)
+
+      break_layout!(ctx, user, athanor)
+      published!(view, ctx, user)
+      settle!(view, fn -> layout_notes(view) == 1 end)
+
+      assert canvas(view) == shipped
+      assert row(shipped.id).state == "active"
+      assert assigns(view).shipped == "home"
+      assert assigns(view).safe_mode == nil
+      refute render(view) =~ ~s(id="shell-picker")
+    end
+
+    test "keeps the live canvas, and draws the layout note once",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{state: :live} = live = canvas(view)
+
+      break_layout!(ctx, user, athanor)
+      published!(view, ctx, user)
+      settle!(view, fn -> layout_notes(view) == 1 end)
+
+      assert canvas(view) == live
+      assert row(live.id).state == "active"
+    end
+
+    test "at mount, with nothing shown, draws the picker and the layout note once",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      break_layout!(ctx, user, athanor)
+
+      view = shell!(conn)
+
+      assert assigns(view).showing == :none
+      assert opened(view) == []
+      assert render(view) =~ ~s(id="shell-picker")
+      assert layout_notes(view) == 1
+    end
+
+    test "a change whose read failed before safe mode does not drop the shipped canvas chosen after it",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      shipped_seed!()
+      shipped!(ctx)
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      view = shell!(conn)
+      assert %{state: :live, reference: %{name: "markets"}} = canvas(view)
+
+      # A layout published whose read fails; then the store answers again.
+      digest = layout_digest(ctx, user)
+      break_layout!(ctx, user, athanor)
+      published!(view, ctx, user)
+      settle!(view, fn -> layout_notes(view) == 1 end)
+      assert %{state: :live, reference: %{name: "markets"}} = canvas(view)
+      mend_layout!(ctx, user, athanor, digest)
+
+      # Only then the person enters safe mode and chooses the shipped canvas.
+      render_click(view, "safe_mode", %{})
+
+      view
+      |> element(~s(#system-layer-dialog button[phx-value-offer="shipped"]))
+      |> render_click()
+
+      settle!(view, fn -> canvas(view) != nil end)
+
+      assert %{reference: %{name: "canvas"}, state: :live} = canvas(view)
+      assert assigns(view).shipped == "home"
+      assert layout_notes(view) == 0
+    end
+  end
+
+  defp person_of(view), do: assigns(view).context
+
+  # The system layer's dismissal of the prompt in front.
+  defp dismiss!(view) do
+    view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+    _ = render(view)
+  end
+end

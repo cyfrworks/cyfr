@@ -5,9 +5,10 @@ defmodule Prima.LayoutTest do
   @moduledoc """
   The layout document against `tests/fixtures/layout.json`: the valid
   document reads, writes back to itself and hashes to the fixture's
-  canonical bytes and digest; every refused document is refused; and the
-  shape's own rules — canonical slot order, a posture read from the
-  default, a tincture nobody installed kept.
+  canonical bytes and digest; every refused document is refused, a
+  version-1 document among them; and the shape's own rules — canonical
+  app order, a posture a canvas does not name read as empty, an empty
+  layout, the bounds, a tincture nobody installed kept.
   """
 
   use ExUnit.Case, async: true
@@ -18,23 +19,31 @@ defmodule Prima.LayoutTest do
 
   defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
 
+  defp document(canvases), do: %{"version" => 2, "canvases" => canvases}
+
+  defp canvas(id, tincture, postures \\ %{}),
+    do: %{"id" => id, "tincture" => tincture, "postures" => postures}
+
+  defp app(tincture, mode \\ "column", order \\ 0),
+    do: %{"tincture" => tincture, "mode" => mode, "order" => order}
+
   describe "the fixture" do
     test "the valid document reads, writes back and hashes as the fixture says" do
       v = vectors()
 
-      assert {:ok, %Layout{version: 1} = layout} = Layout.validate(v["valid"])
+      assert {:ok, %Layout{version: 2} = layout} = Layout.validate(v["valid"])
       assert Layout.to_json(layout) == v["valid"]
       assert Layout.encode(layout) == v["canonical"]
       assert Layout.digest(layout) == v["digest"]
       assert {:ok, ^layout} = Layout.decode(v["canonical"])
     end
 
-    test "a tincture nobody installed is kept, to be drawn as a placeholder" do
+    test "a tincture nobody installed is kept" do
       {:ok, layout} = Layout.validate(vectors()["valid"])
       assert "tincture:example.com.not-installed" in Layout.tinctures(layout)
 
-      {:ok, desk} = Layout.posture(layout, "desk")
-      assert Enum.any?(desk.slots, &(&1.tincture == "tincture:example.com.not-installed"))
+      {:ok, [home, _markets]} = Layout.arrangement(layout, "desk")
+      assert Enum.any?(home.apps, &(&1.tincture == "tincture:example.com.not-installed"))
     end
 
     test "every refused document is refused, with a sentence" do
@@ -58,64 +67,131 @@ defmodule Prima.LayoutTest do
   end
 
   describe "the shape" do
-    test "slots are held in {order, id} order, so the digest ignores the list's order" do
-      slots = [
-        %{"id" => "b", "tincture" => "tincture:local.vault", "size" => "icon", "order" => 1},
-        %{"id" => "c", "tincture" => "tincture:local.timer", "size" => "icon", "order" => 0},
-        %{"id" => "a", "tincture" => "tincture:local.timer", "size" => "icon", "order" => 1}
+    test "apps are held in {order, tincture} order, so the digest ignores the list's order" do
+      apps = [
+        app("tincture:local.vault", "column", 1),
+        app("tincture:local.timer", "full", 0),
+        app("tincture:local.clock", "column", 1)
       ]
 
-      document = fn slots ->
-        %{
-          "version" => 1,
-          "postures" => %{
-            "hand" => %{"desktop" => "tincture:local.desktop", "slots" => slots, "floating" => []}
-          }
-        }
+      layout_of = fn apps ->
+        document([
+          canvas("home", "tincture:local.canvas", %{"hand" => %{"apps" => apps, "floating" => []}})
+        ])
       end
 
-      {:ok, forward} = Layout.validate(document.(slots))
-      {:ok, reversed} = Layout.validate(document.(Enum.reverse(slots)))
+      {:ok, forward} = Layout.validate(layout_of.(apps))
+      {:ok, reversed} = Layout.validate(layout_of.(Enum.reverse(apps)))
 
-      assert Enum.map(forward.postures["hand"].slots, & &1.id) == ~w(c a b)
+      {:ok, [%{apps: held}]} = Layout.arrangement(forward, "hand")
+
+      assert Enum.map(held, & &1.tincture) ==
+               ~w(tincture:local.timer tincture:local.clock tincture:local.vault)
+
       assert Layout.digest(forward) == Layout.digest(reversed)
     end
 
-    test "a posture the document does not name reads as the default's" do
+    test "each posture arranges every canvas in order, and a posture a canvas does not name is empty" do
       {:ok, layout} =
-        Layout.validate(%{
-          "version" => 1,
-          "postures" => %{"desk" => %{"desktop" => "tincture:local.other"}}
-        })
+        Layout.validate(
+          document([
+            canvas("home", "tincture:local.canvas", %{
+              "desk" => %{
+                "apps" => [app("tincture:local.vault")],
+                "floating" => [
+                  %{"tincture" => "tincture:local.timer", "position" => %{"x" => 1, "y" => 2}}
+                ]
+              }
+            }),
+            canvas("markets", "tincture:local.markets")
+          ])
+        )
 
-      assert {:ok, %{desktop: "tincture:local.other", slots: [], floating: []}} =
-               Layout.posture(layout, "desk")
+      assert {:ok,
+              [
+                %{
+                  id: "home",
+                  tincture: "tincture:local.canvas",
+                  apps: [%{tincture: "tincture:local.vault", mode: :column, order: 0}],
+                  floating: [%{tincture: "tincture:local.timer", position: %{x: 1, y: 2}}]
+                },
+                %{id: "markets", tincture: "tincture:local.markets", apps: [], floating: []}
+              ]} = Layout.arrangement(layout, "desk")
 
-      assert {:ok, %{desktop: "tincture:local.desktop"}} = Layout.posture(layout, "hand")
-      assert :error = Layout.posture(layout, "wall")
+      assert {:ok, [%{id: "home", apps: [], floating: []}, %{id: "markets"}]} =
+               Layout.arrangement(layout, "hand")
+
+      assert :error = Layout.arrangement(layout, "wall")
     end
 
-    test "the default runs the shipped desktop in every posture, with the vault as an icon, and is itself valid" do
+    test "an empty layout is valid and arranges nothing" do
+      assert {:ok, %Layout{canvases: []} = empty} = Layout.validate(document([]))
+      assert {:ok, []} = Layout.arrangement(empty, "desk")
+      assert Layout.tinctures(empty) == []
+    end
+
+    test "the default is one canvas, home, on the shipped canvas, with nothing placed, and is itself valid" do
       default = Layout.default()
-      assert Enum.sort(Map.keys(default.postures)) == Layout.postures()
-      assert Layout.tinctures(default) == ["tincture:local.desktop", "tincture:local.vault"]
+
+      assert %Layout{
+               version: 2,
+               canvases: [%{id: "home", tincture: "tincture:local.canvas", postures: %{}}]
+             } = default
+
+      assert Layout.tinctures(default) == ["tincture:local.canvas"]
 
       for name <- Layout.postures() do
-        assert {:ok, %{slots: [%{tincture: "tincture:local.vault", size: :icon}], floating: []}} =
-                 Layout.posture(default, name)
+        assert {:ok, [%{id: "home", apps: [], floating: []}]} = Layout.arrangement(default, name)
       end
 
       assert {:ok, ^default} = Layout.validate(Layout.to_json(default))
     end
 
-    test "a reference is spelt canonically" do
+    test "eight canvases, 32 apps and 16 floating tinctures are held, and one more of each is not" do
+      canvases = fn n ->
+        for i <- 1..n//1, do: canvas("c#{i}", "tincture:local.canvas-#{i}")
+      end
+
+      posture = fn apps, floating ->
+        document([
+          canvas("home", "tincture:local.canvas", %{
+            "desk" => %{
+              "apps" => for(i <- 1..apps//1, do: app("tincture:local.app-#{i}", "column", i)),
+              "floating" =>
+                for(
+                  i <- 1..floating//1,
+                  do: %{
+                    "tincture" => "tincture:local.float-#{i}",
+                    "position" => %{"x" => 0, "y" => 0}
+                  }
+                )
+            }
+          })
+        ])
+      end
+
+      assert {:ok, _} = Layout.validate(document(canvases.(8)))
+      assert {:error, {:invalid_layout, _}} = Layout.validate(document(canvases.(9)))
+      assert {:ok, _} = Layout.validate(posture.(32, 16))
+      assert {:error, {:invalid_layout, _}} = Layout.validate(posture.(33, 0))
+      assert {:error, {:invalid_layout, _}} = Layout.validate(posture.(0, 17))
+    end
+
+    test "a version-1 document is refused for its version" do
       document = %{
         "version" => 1,
-        "postures" => %{"hand" => %{"desktop" => "t:local.desktop"}}
+        "postures" => %{"desk" => %{"desktop" => "tincture:local.canvas", "slots" => []}}
       }
 
       assert {:error, {:invalid_layout, sentence}} = Layout.validate(document)
-      assert sentence =~ "tincture:local.desktop"
+      assert sentence =~ "version must be 2"
+    end
+
+    test "a reference is spelt canonically" do
+      assert {:error, {:invalid_layout, sentence}} =
+               Layout.validate(document([canvas("home", "t:local.canvas")]))
+
+      assert sentence =~ "tincture:local.canvas"
     end
 
     test "what is not an object, or not JSON, is refused" do

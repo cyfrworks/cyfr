@@ -3,73 +3,86 @@
 
 defmodule Prima.Layout do
   @moduledoc """
-  The layout document: which tinctures sit where on a person's desktop,
-  at what size, per posture. It is the person's, kept by Arca
-  (`Arca.Layouts`) and published fenced; editing it is instant and can
-  only arrange. Window geometry, which apps are open and what hardware is
-  present stay with the device and are not in it.
+  The layout document: the person's canvases in order and, over each, per
+  posture, the tinctures placed and where. It is the person's, kept by
+  Arca (`Arca.Layouts`) and published fenced; editing it is instant and
+  can only arrange. Which canvas a glass shows, window geometry, which
+  apps are open and what hardware is present stay with the device and are
+  not in it.
 
       %Prima.Layout{
-        version: 1,
-        postures: %{
-          "hand" | "desk" => %{
-            desktop: ref,
-            slots: [%{id, tincture: ref, size: :icon | :card | :full, order, card}],
-            floating: [%{tincture: ref, position: %{x, y}}]
+        version: 2,
+        canvases: [
+          %{
+            id: "home",
+            tincture: ref,
+            postures: %{
+              "desk" | "hand" => %{
+                apps: [%{tincture: ref, mode: :full | :column, order: n}],
+                floating: [%{tincture: ref, position: %{x, y}}]
+              }
+            }
           }
-        }
+        ]
       }
 
-    * A posture is `hand` or `desk`; a document names one or both, and a
-      posture it does not name reads as the shipped default's
-      (`posture/2`).
-    * `desktop` is the one tincture the posture's desktop layer runs.
-    * `slots` are the apps layer: each an `id` unique in its posture, the
-      `tincture` it holds, its `size` and its `order`. `icon` and `card`
-      are data the desktop draws; `full` is the tincture's own frame. A
-      `card` slot may name which of its tincture's declared cards it
-      shows (`card`, an identifier); without one the desktop shows the
-      first declared card.
-    * `floating` entries are placed over the desktop, with permission:
-      the `tincture` and its `position`, `x` and `y` in hundredths of a
-      percent of the viewport (0 to 10000), so a position means the same
-      on every device.
+    * `canvases` are the person's canvases in order, at most 8; an empty
+      list is valid, and the shell then draws its picker.
+      Each canvas has exactly an `id` (a short lowercase name, unique in
+      the document), the `tincture` it runs (each canvas names a tincture
+      of its own) and its `postures`, which may be empty.
+    * A posture is `hand` or `desk`. A posture has exactly `apps` and
+      `floating`, either possibly empty, and a posture a canvas does not
+      name reads as empty (`arrangement/2`).
+    * `apps` are the tinctures placed over the canvas, at most 32: each
+      exactly its `tincture`, its `mode` (`full`, the whole screen while it
+      is shown; `column`, a column beside the canvas) and its `order`, a
+      whole number from 0 to 1,000,000.
+    * `floating` entries are placed over the canvas, with permission, at
+      most 16: exactly the `tincture` and its `position`, `x` and `y`
+      in hundredths of a percent of the viewport (0 to 10000), so a
+      position means the same on every device.
+    * A tincture appears at most once per canvas and posture, across its
+      apps and its floating entries.
 
   A tincture reference is a versionless tincture reference in its
-  canonical spelling (`tincture:local.desktop`): a code change is a new
+  canonical spelling (`tincture:local.canvas`): a code change is a new
   version, and the layout follows it. A reference to a tincture nobody
-  installed is valid and is kept; the desktop draws it as a placeholder.
+  installed is valid and is kept.
 
-  The document names tinctures, sizes and places and nothing else: an
-  unknown key anywhere is refused, so a layout can never carry an
-  operation, a stream or a grant.
+  The document names tinctures, modes and places and nothing else: an
+  unknown key anywhere is refused, and so is a document of any other
+  version, so a layout can never carry an operation, a stream or a grant.
 
   `validate/1` reads the JSON form (string keys) and answers the struct
-  with its slots in `{order, id}` order; `to_json/1` writes it back.
-  `encode/1` is the canonical JSON (`Prima.JCS`) Arca stores and
-  `digest/1` its `sha256:` digest. `tests/fixtures/layout.json` holds a
-  valid document, its canonical bytes and digest, and refused ones.
+  with each posture's apps in `{order, tincture}` order; `to_json/1`
+  writes it back. `encode/1` is the canonical JSON (`Prima.JCS`) Arca
+  stores and `digest/1` its `sha256:` digest. `tests/fixtures/layout.json`
+  holds a valid document, its canonical bytes and digest, and refused
+  ones.
   """
 
   @postures ~w(desk hand)
-  @sizes [:icon, :card, :full]
-  @version 1
+  @modes [:full, :column]
+  @version 2
 
-  @max_slots 64
+  @max_canvases 8
+  @max_apps 32
   @max_floating 16
+  @max_order 1_000_000
   @max_position 10_000
 
-  @default_desktop "tincture:local.desktop"
-  @default_vault "tincture:local.vault"
+  @default_canvas "tincture:local.canvas"
+  @default_id "home"
 
-  @document_keys ~w(version postures)
-  @posture_keys ~w(desktop slots floating)
-  @slot_keys ~w(id tincture size order card)
-  @floating_keys ~w(tincture position)
+  @document_keys ~w(canvases version)
+  @canvas_keys ~w(id postures tincture)
+  @posture_keys ~w(apps floating)
+  @app_keys ~w(mode order tincture)
+  @floating_keys ~w(position tincture)
   @position_keys ~w(x y)
 
-  @slot_id ~r/\A[a-z0-9][a-z0-9_-]{0,63}\z/
-  @card_name ~r/\A[a-z][a-z0-9_]{0,62}\z/
+  @canvas_id ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
 
   @typedoc "A versionless tincture reference, canonically spelt."
   @type ref :: String.t()
@@ -77,17 +90,11 @@ defmodule Prima.Layout do
   @typedoc "A posture's name."
   @type posture_name :: String.t()
 
-  @typedoc "How a slot is drawn."
-  @type size :: :icon | :card | :full
+  @typedoc "How an app is shown over its canvas."
+  @type mode :: :full | :column
 
-  @typedoc "One app slot."
-  @type slot :: %{
-          id: String.t(),
-          tincture: ref(),
-          size: size(),
-          order: non_neg_integer(),
-          card: String.t() | nil
-        }
+  @typedoc "One app placed over a canvas."
+  @type app :: %{tincture: ref(), mode: mode(), order: non_neg_integer()}
 
   @typedoc "One floating tincture and where it sits."
   @type floating :: %{
@@ -95,68 +102,79 @@ defmodule Prima.Layout do
           position: %{x: non_neg_integer(), y: non_neg_integer()}
         }
 
-  @typedoc "One posture's arrangement."
-  @type posture :: %{desktop: ref(), slots: [slot()], floating: [floating()]}
+  @typedoc "One posture's placements over a canvas."
+  @type posture :: %{apps: [app()], floating: [floating()]}
+
+  @typedoc "One canvas: its id, the tincture it runs and its postures."
+  @type canvas :: %{id: String.t(), tincture: ref(), postures: %{posture_name() => posture()}}
+
+  @typedoc "One canvas as a posture arranges it."
+  @type arranged :: %{
+          id: String.t(),
+          tincture: ref(),
+          apps: [app()],
+          floating: [floating()]
+        }
 
   @typedoc "A layout document."
-  @type t :: %__MODULE__{version: pos_integer(), postures: %{posture_name() => posture()}}
+  @type t :: %__MODULE__{version: pos_integer(), canvases: [canvas()]}
 
-  @enforce_keys [:postures]
-  defstruct version: @version, postures: %{}
+  @enforce_keys [:canvases]
+  defstruct version: @version, canvases: []
 
   @typedoc "A refusal: the tag and a sentence."
   @type error :: {:invalid_layout, String.t()}
 
-  @doc "The posture names a document may carry."
+  @doc "The posture names a canvas may carry."
   @spec postures() :: [posture_name()]
   def postures, do: @postures
 
-  @doc "The sizes a slot may take."
-  @spec sizes() :: [size()]
-  def sizes, do: @sizes
+  @doc "The modes an app may take."
+  @spec modes() :: [mode()]
+  def modes, do: @modes
 
   @doc "The document version this module reads and writes."
   @spec version() :: pos_integer()
   def version, do: @version
 
   @doc """
-  The shipped default: every posture runs the shipped desktop
-  (`#{@default_desktop}`) with the shipped vault (`#{@default_vault}`) as
-  its one icon slot, and nothing floating.
+  The shipped default: one canvas, `#{@default_id}`, running the shipped
+  canvas (`#{@default_canvas}`), with nothing placed over it in any
+  posture.
   """
   @spec default() :: t()
   def default do
-    vault = %{id: "vault", tincture: @default_vault, size: :icon, order: 0, card: nil}
-    posture = %{desktop: @default_desktop, slots: [vault], floating: []}
-    %__MODULE__{postures: Map.new(@postures, &{&1, posture})}
+    %__MODULE__{canvases: [%{id: @default_id, tincture: @default_canvas, postures: %{}}]}
   end
 
   @doc """
-  The arrangement for posture `name`: the document's own, or the shipped
-  default's when the document does not name it. `:error` for a name that
-  is not a posture.
+  The canvases as posture `name` arranges them, in the document's order:
+  each canvas's `id` and `tincture`, and that posture's `apps` (in
+  `{order, tincture}` order) and `floating` entries, empty for a posture
+  the canvas does not name. `:error` for a name that is not a posture.
   """
-  @spec posture(t(), term()) :: {:ok, posture()} | :error
-  def posture(%__MODULE__{postures: postures}, name) when name in @postures do
-    case Map.fetch(postures, name) do
-      {:ok, posture} -> {:ok, posture}
-      :error -> Map.fetch(default().postures, name)
-    end
+  @spec arrangement(t(), term()) :: {:ok, [arranged()]} | :error
+  def arrangement(%__MODULE__{canvases: canvases}, name) when name in @postures do
+    {:ok,
+     Enum.map(canvases, fn canvas ->
+       posture = Map.get(canvas.postures, name, %{apps: [], floating: []})
+       %{id: canvas.id, tincture: canvas.tincture, apps: posture.apps, floating: posture.floating}
+     end)}
   end
 
-  def posture(%__MODULE__{}, _name), do: :error
+  def arrangement(%__MODULE__{}, _name), do: :error
 
   @doc """
   A decoded JSON document held to the layout's shape, answered as the
-  struct with each posture's slots in `{order, id}` order. The first shape
-  that is wrong is the refusal.
+  struct with each posture's apps in `{order, tincture}` order. The first
+  shape that is wrong is the refusal.
   """
   @spec validate(term()) :: {:ok, t()} | {:error, error()}
   def validate(%{} = document) do
-    with :ok <- known_keys(document, @document_keys, "the layout"),
-         :ok <- document_version(Map.get(document, "version")),
-         {:ok, postures} <- postures(Map.get(document, "postures")) do
-      {:ok, %__MODULE__{version: @version, postures: postures}}
+    with :ok <- document_version(Map.get(document, "version")),
+         :ok <- known_keys(document, @document_keys, "the layout"),
+         {:ok, canvases} <- canvases(Map.get(document, "canvases")) do
+      {:ok, %__MODULE__{version: @version, canvases: canvases}}
     end
   end
 
@@ -171,12 +189,26 @@ defmodule Prima.Layout do
     end
   end
 
-  @doc "The JSON form: string keys, absent optional fields omitted."
+  @doc "The JSON form: string keys, every posture the document names."
   @spec to_json(t()) :: map()
-  def to_json(%__MODULE__{version: version, postures: postures}) do
+  def to_json(%__MODULE__{version: version, canvases: canvases}) do
     %{
       "version" => version,
-      "postures" => Map.new(postures, fn {name, posture} -> {name, posture_to_json(posture)} end)
+      "canvases" =>
+        Enum.map(canvases, fn canvas ->
+          %{
+            "id" => canvas.id,
+            "tincture" => canvas.tincture,
+            "postures" =>
+              Map.new(canvas.postures, fn {name, posture} ->
+                {name,
+                 %{
+                   "apps" => Enum.map(posture.apps, &app_json/1),
+                   "floating" => Enum.map(posture.floating, &floating_json/1)
+                 }}
+              end)
+          }
+        end)
     }
   end
 
@@ -193,58 +225,92 @@ defmodule Prima.Layout do
 
   @doc "Every tincture the document names, each once, sorted."
   @spec tinctures(t()) :: [ref()]
-  def tinctures(%__MODULE__{postures: postures}) do
-    postures
-    |> Map.values()
-    |> Enum.flat_map(fn posture ->
-      [posture.desktop | Enum.map(posture.slots, & &1.tincture)] ++
-        Enum.map(posture.floating, & &1.tincture)
+  def tinctures(%__MODULE__{canvases: canvases}) do
+    canvases
+    |> Enum.flat_map(fn canvas ->
+      placed =
+        for {_name, posture} <- canvas.postures,
+            entry <- posture.apps ++ posture.floating,
+            do: entry.tincture
+
+      [canvas.tincture | placed]
     end)
     |> Enum.uniq()
     |> Enum.sort()
   end
 
-  @doc "One posture's arrangement in the JSON form `to_json/1` writes."
-  @spec posture_to_json(posture()) :: map()
-  def posture_to_json(posture) do
+  @doc "One canvas as `arrangement/2` answers it, in the JSON form `to_json/1` writes."
+  @spec arranged_to_json(arranged()) :: map()
+  def arranged_to_json(%{id: id, tincture: tincture, apps: apps, floating: floating}) do
     %{
-      "desktop" => posture.desktop,
-      "slots" => Enum.map(posture.slots, &slot_json/1),
-      "floating" =>
-        Enum.map(posture.floating, fn entry ->
-          %{
-            "tincture" => entry.tincture,
-            "position" => %{"x" => entry.position.x, "y" => entry.position.y}
-          }
-        end)
+      "id" => id,
+      "tincture" => tincture,
+      "apps" => Enum.map(apps, &app_json/1),
+      "floating" => Enum.map(floating, &floating_json/1)
     }
   end
 
   # ---- JSON ------------------------------------------------------------------
 
-  defp slot_json(slot) do
-    json = %{
-      "id" => slot.id,
-      "tincture" => slot.tincture,
-      "size" => Atom.to_string(slot.size),
-      "order" => slot.order
-    }
+  defp app_json(app),
+    do: %{"tincture" => app.tincture, "mode" => Atom.to_string(app.mode), "order" => app.order}
 
-    if slot.card, do: Map.put(json, "card", slot.card), else: json
+  defp floating_json(entry) do
+    %{
+      "tincture" => entry.tincture,
+      "position" => %{"x" => entry.position.x, "y" => entry.position.y}
+    }
   end
 
   # ---- the shape -------------------------------------------------------------
 
   defp document_version(@version), do: :ok
-  defp document_version(_other), do: refuse("the layout's version must be #{@version}")
 
-  defp postures(%{} = postures) when map_size(postures) > 0 do
+  defp document_version(_other),
+    do: refuse("the layout's version must be #{@version}; no other version is read")
+
+  defp canvases(canvases) when is_list(canvases) and length(canvases) <= @max_canvases do
+    with {:ok, canvases} <- collect(canvases, &canvas/1),
+         :ok <- distinct(canvases, & &1.id, "the canvas id"),
+         :ok <- distinct(canvases, & &1.tincture, "the canvas tincture") do
+      {:ok, canvases}
+    end
+  end
+
+  defp canvases(canvases) when is_list(canvases),
+    do: refuse("the layout holds at most #{@max_canvases} canvases")
+
+  defp canvases(_other), do: refuse("the layout's canvases must be a list")
+
+  defp canvas(%{} = canvas) do
+    id = Map.get(canvas, "id")
+
+    with :ok <- known_keys(canvas, @canvas_keys, "a canvas"),
+         :ok <- required(canvas, @canvas_keys, "a canvas"),
+         :ok <- canvas_id(id),
+         where = "canvas #{show(id)}",
+         {:ok, tincture} <- tincture(Map.get(canvas, "tincture"), "#{where}: the tincture"),
+         {:ok, postures} <- postures(where, Map.get(canvas, "postures")) do
+      {:ok, %{id: id, tincture: tincture, postures: postures}}
+    end
+  end
+
+  defp canvas(_other), do: refuse("a canvas must be an object")
+
+  defp canvas_id(id) do
+    if is_binary(id) and Regex.match?(@canvas_id, id),
+      do: :ok,
+      else: refuse("a canvas's id must be a short lowercase name, got #{show(id)}")
+  end
+
+  defp postures(where, %{} = postures) do
     case Enum.reject(Map.keys(postures), &(&1 in @postures)) do
       [] ->
         postures
         |> Enum.sort()
         |> collect(fn {name, posture} ->
-          with {:ok, posture} <- arrangement(name, posture), do: {:ok, {name, posture}}
+          with {:ok, posture} <- posture("#{where}, posture #{name}", posture),
+               do: {:ok, {name, posture}}
         end)
         |> case do
           {:ok, pairs} -> {:ok, Map.new(pairs)}
@@ -253,103 +319,85 @@ defmodule Prima.Layout do
 
       unknown ->
         refuse(
-          "the layout names unknown posture(s): #{unknown |> Enum.map(&show/1) |> Enum.join(", ")}"
+          "#{where} names unknown posture(s): #{unknown |> Enum.map(&show/1) |> Enum.sort() |> Enum.join(", ")}"
         )
     end
   end
 
-  defp postures(_other),
-    do: refuse("the layout's postures must be an object naming hand, desk or both")
+  defp postures(where, _other),
+    do: refuse("#{where}: postures must be an object naming hand, desk, both or neither")
 
-  defp arrangement(name, %{} = posture) do
-    with :ok <- known_keys(posture, @posture_keys, "posture #{name}"),
-         {:ok, desktop} <- tincture(Map.get(posture, "desktop"), "posture #{name}: the desktop"),
-         {:ok, slots} <- slots(name, Map.get(posture, "slots", [])),
-         {:ok, floating} <- floating(name, Map.get(posture, "floating", [])) do
-      {:ok, %{desktop: desktop, slots: slots, floating: floating}}
+  defp posture(where, %{} = posture) do
+    with :ok <- known_keys(posture, @posture_keys, where),
+         :ok <- required(posture, @posture_keys, where),
+         {:ok, apps} <- apps(where, Map.get(posture, "apps")),
+         {:ok, floating} <- floating(where, Map.get(posture, "floating")),
+         :ok <-
+           distinct(
+             Enum.map(apps, & &1.tincture) ++ Enum.map(floating, & &1.tincture),
+             & &1,
+             "#{where}: the tincture"
+           ) do
+      {:ok, %{apps: Enum.sort_by(apps, &{&1.order, &1.tincture}), floating: floating}}
     end
   end
 
-  defp arrangement(name, _other), do: refuse("posture #{name} must be an object")
+  defp posture(where, _other), do: refuse("#{where} must be an object of apps and floating")
 
-  defp slots(name, slots) when is_list(slots) and length(slots) <= @max_slots do
-    with {:ok, slots} <- collect(slots, &slot(name, &1)) do
-      case slots |> Enum.frequencies_by(& &1.id) |> Enum.find(fn {_id, n} -> n > 1 end) do
-        nil -> {:ok, Enum.sort_by(slots, &{&1.order, &1.id})}
-        {id, _n} -> refuse("posture #{name}: the slot id #{show(id)} is used twice")
-      end
+  defp apps(where, apps) when is_list(apps) and length(apps) <= @max_apps,
+    do: collect(apps, &app(where, &1))
+
+  defp apps(where, apps) when is_list(apps),
+    do: refuse("#{where} places at most #{@max_apps} apps")
+
+  defp apps(where, _other), do: refuse("#{where}: apps must be a list")
+
+  defp app(where, %{} = app) do
+    where = "#{where}: an app"
+
+    with :ok <- known_keys(app, @app_keys, where),
+         :ok <- required(app, @app_keys, where),
+         {:ok, tincture} <- tincture(Map.get(app, "tincture"), "#{where}'s tincture"),
+         {:ok, mode} <- mode(where, Map.get(app, "mode")),
+         {:ok, order} <- order(where, Map.get(app, "order")) do
+      {:ok, %{tincture: tincture, mode: mode, order: order}}
     end
   end
 
-  defp slots(name, slots) when is_list(slots),
-    do: refuse("posture #{name} holds at most #{@max_slots} slots")
+  defp app(where, _other), do: refuse("#{where}: an app must be an object")
 
-  defp slots(name, _other), do: refuse("posture #{name}: slots must be a list")
+  defp mode(_where, "full"), do: {:ok, :full}
+  defp mode(_where, "column"), do: {:ok, :column}
 
-  defp slot(name, %{} = slot) do
-    id = Map.get(slot, "id")
-    where = "posture #{name}: slot #{show(id)}"
+  defp mode(where, mode),
+    do: refuse("#{where}: the mode must be full or column, got #{show(mode)}")
 
-    with :ok <- known_keys(slot, @slot_keys, "posture #{name}: a slot"),
-         :ok <- slot_id(name, id),
-         {:ok, tincture} <- tincture(Map.get(slot, "tincture"), "#{where}: the tincture"),
-         {:ok, size} <- size(where, Map.get(slot, "size")),
-         {:ok, order} <- order(where, Map.get(slot, "order")),
-         {:ok, card} <- card(where, size, Map.get(slot, "card")) do
-      {:ok, %{id: id, tincture: tincture, size: size, order: order, card: card}}
-    end
-  end
-
-  defp slot(name, _other), do: refuse("posture #{name}: a slot must be an object")
-
-  defp slot_id(name, id) do
-    if is_binary(id) and Regex.match?(@slot_id, id),
-      do: :ok,
-      else: refuse("posture #{name}: a slot's id must be a short lowercase name, got #{show(id)}")
-  end
-
-  defp size(_where, "icon"), do: {:ok, :icon}
-  defp size(_where, "card"), do: {:ok, :card}
-  defp size(_where, "full"), do: {:ok, :full}
-
-  defp size(where, size),
-    do: refuse("#{where}: the size must be icon, card or full, got #{show(size)}")
-
-  defp order(_where, order) when is_integer(order) and order >= 0 and order <= 1_000_000,
+  defp order(_where, order) when is_integer(order) and order >= 0 and order <= @max_order,
     do: {:ok, order}
 
-  defp order(where, _order), do: refuse("#{where}: the order must be a whole number from 0")
+  defp order(where, _order),
+    do: refuse("#{where}: the order must be a whole number from 0 to #{@max_order}")
 
-  defp card(_where, _size, nil), do: {:ok, nil}
+  defp floating(where, entries) when is_list(entries) and length(entries) <= @max_floating,
+    do: collect(entries, &floating_entry(where, &1))
 
-  defp card(where, :card, card) do
-    if is_binary(card) and Regex.match?(@card_name, card),
-      do: {:ok, card},
-      else: refuse("#{where}: the card must name a declared card, got #{show(card)}")
-  end
+  defp floating(where, entries) when is_list(entries),
+    do: refuse("#{where} floats at most #{@max_floating} tinctures")
 
-  defp card(where, _size, _card), do: refuse("#{where}: only a card slot names a card")
+  defp floating(where, _other), do: refuse("#{where}: floating must be a list")
 
-  defp floating(name, entries) when is_list(entries) and length(entries) <= @max_floating,
-    do: collect(entries, &floating_entry(name, &1))
-
-  defp floating(name, entries) when is_list(entries),
-    do: refuse("posture #{name} floats at most #{@max_floating} tinctures")
-
-  defp floating(name, _other), do: refuse("posture #{name}: floating must be a list")
-
-  defp floating_entry(name, %{} = entry) do
-    where = "posture #{name}: a floating tincture"
+  defp floating_entry(where, %{} = entry) do
+    where = "#{where}: a floating tincture"
 
     with :ok <- known_keys(entry, @floating_keys, where),
+         :ok <- required(entry, @floating_keys, where),
          {:ok, tincture} <- tincture(Map.get(entry, "tincture"), where),
          {:ok, position} <- position(where, Map.get(entry, "position")) do
       {:ok, %{tincture: tincture, position: position}}
     end
   end
 
-  defp floating_entry(name, _other),
-    do: refuse("posture #{name}: a floating entry must be an object")
+  defp floating_entry(where, _other), do: refuse("#{where}: a floating entry must be an object")
 
   defp position(where, %{} = position) do
     x = Map.get(position, "x")
@@ -400,6 +448,20 @@ defmodule Prima.Layout do
         refuse(
           "#{where} declares unknown key(s): #{extra |> Enum.map(&show/1) |> Enum.sort() |> Enum.join(", ")}"
         )
+    end
+  end
+
+  defp required(map, keys, where) do
+    case Enum.reject(keys, &Map.has_key?(map, &1)) do
+      [] -> :ok
+      missing -> refuse("#{where} lacks #{Enum.join(missing, ", ")}")
+    end
+  end
+
+  defp distinct(items, by, what) do
+    case items |> Enum.frequencies_by(by) |> Enum.find(fn {_value, n} -> n > 1 end) do
+      nil -> :ok
+      {value, _n} -> refuse("#{what} #{show(value)} is named twice")
     end
   end
 

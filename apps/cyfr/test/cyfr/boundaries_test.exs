@@ -828,6 +828,47 @@ defmodule Cyfr.BoundariesTest do
                  "`Compendium.Canvas`)"
     end
 
+    # A candidate canvas version is trialled under a validation credential
+    # the shell's canvas validation mints, and nothing else mints one.
+    test "the console mints a validation credential from the canvas validation alone" do
+      assert Boundaries.sanctum_exports()["Sanctum.TinctureAuth"][:mint_validation_credential] ==
+               5
+
+      callers =
+        for path <- beams(:cyfr),
+            Beams.production?(path),
+            {"Sanctum.TinctureAuth", :mint_validation_credential, 5} in sanctum_reaches(
+              String.to_charlist(path)
+            ),
+            do: Path.basename(path, ".beam")
+
+      assert callers == ["Elixir.Prism.CanvasValidation"]
+
+      # The frames read the grant revision a credential binds through the
+      # component domain, never through consent's own entries.
+      prism =
+        for path <- beams(:cyfr),
+            Beams.production?(path),
+            name = Path.basename(path, ".beam"),
+            name == "Elixir.Prism" or String.starts_with?(name, "Elixir.Prism."),
+            {"Sanctum.Consent", function, arity} <- sanctum_reaches(String.to_charlist(path)),
+            uniq: true,
+            do: {function, arity}
+
+      assert prism == []
+
+      assert [row] =
+               for(
+                 %{into: "Sanctum", from: from} = row <- Boundaries.surfaces(),
+                 "apps/cyfr/lib/prism/**/*.ex" in from,
+                 do: row
+               )
+
+      assert "Sanctum.TinctureAuth" in row.allow
+      refute "Sanctum.Consent" in row.allow
+      assert row.reason =~ "(`mint_validation_credential/5`)"
+    end
+
     # A canvas's host page reads the frame its path names under its asset
     # credential's authority; nothing else of the host reads a frame by its
     # frame id.

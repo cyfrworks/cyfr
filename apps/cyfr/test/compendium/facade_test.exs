@@ -108,6 +108,7 @@ defmodule Compendium.FacadeTest do
     resolve: 2,
     resolve_activation: 2,
     resolve_verified_activation: 2,
+    shipped_versions: 2,
     skill_dir: 1,
     skills_index: 2,
     skills_index_limit: 0,
