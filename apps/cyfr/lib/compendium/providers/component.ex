@@ -1560,7 +1560,7 @@ defmodule Compendium.Providers.Component do
       {:error, reason} ->
         if anonymous? do
           {:error,
-           reason <>
+           pull_failure_text(reason) <>
              " — No credentials configured for #{Compendium.RegistryHost.canonical_host()}. " <>
              "Run `cyfr login` to authenticate."}
         else
@@ -1568,6 +1568,12 @@ defmodule Compendium.Providers.Component do
         end
     end
   end
+
+  # A pull's refusal as the sentence the sign-in note follows. A typed
+  # refusal of the shared table, which `Compendium.OCI.Client.pull/2`
+  # answers as itself, reads as its sentence.
+  defp pull_failure_text(reason) when is_binary(reason), do: reason
+  defp pull_failure_text(reason), do: Grimoire.render(reason)
 
   # Enrich an OCI pull result with auto-pulled dependencies.
   # After OCI pull, the component should be in the local registry.

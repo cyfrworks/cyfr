@@ -1090,7 +1090,8 @@ defmodule Compendium.Registry do
   @doc """
   The decompressed-tincture ceiling (config-overridable). Public because it
   is also the largest blob any pull may legitimately carry, so the OCI blob
-  transport uses it as its wire-size ceiling.
+  transport uses it as its wire-size ceiling, and the bound a pull's src/
+  layer inflates under.
   """
   @spec tincture_max_decompressed_bytes() :: pos_integer()
   def tincture_max_decompressed_bytes do

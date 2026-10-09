@@ -524,6 +524,72 @@ defmodule Compendium.OCI.ClientTest do
     end
   end
 
+  # A pull's src/ layer inflates under the version's ceiling: a small blob
+  # that expands past it refuses the pull before anything is stored.
+  describe "a pull's source layer" do
+    @repo "alice/reagents/pinned"
+
+    setup :start_registry
+
+    @tag :capture_log
+    test "a layer that inflates past the version's ceiling refuses the pull", ctx do
+      %{registry: registry, a: a} = ctx
+      allow(ctx.agent, ["Bearer tok_a"])
+
+      original = Application.get_env(:cyfr, :tincture_max_decompressed_bytes)
+      Application.put_env(:cyfr, :tincture_max_decompressed_bytes, 4096)
+      on_exit(fn -> restore_env(:tincture_max_decompressed_bytes, original) end)
+
+      # A few hundred bytes on the wire that inflate to a tar of 64 KiB.
+      {:ok, layer} =
+        Compendium.Archive.create_tar_gz([{~c"bundle.js", :binary.copy(<<0>>, 65_536)}])
+
+      assert byte_size(layer) < 4096
+      with_source(ctx.agent, layer)
+
+      result = Client.pull(a, "#{registry}/#{@repo}:1.0.0")
+
+      assert match?({:error, _}, result),
+             "pulled with its source layer inflated past the ceiling: #{inspect(result)}"
+
+      assert {:error, {:invalid_argument, message}} = result
+      assert message =~ "Source layer decompresses beyond the allowed limit (4096 bytes)"
+
+      assert {:error, :not_found} =
+               Compendium.Registry.get(a, "pinned", "1.0.0", "alice", "reagent")
+    end
+  end
+
+  # A caller with no registry credential pulls anonymously, and the
+  # component tool adds the sign-in note to whatever refused the pull, a
+  # typed refusal that `Client.pull/2` answers as itself included.
+  describe "an anonymous pull through the component tool" do
+    @repo "alice/reagents/pinned"
+
+    setup :start_registry
+
+    @tag :capture_log
+    test "a typed refusal reads as its sentence, followed by the sign-in note", ctx do
+      allow(ctx.agent, [:anonymous])
+      anonymous = caller("oci_anonymous")
+
+      # The pull reaches the store, whose cap refuses it with a tuple of
+      # the shared table.
+      Cyfr.Test.Settings.put("athanor_storage_bytes", 1)
+      Arca.Usage.invalidate(Sanctum.Context.actor(anonymous))
+
+      assert {:error, message} =
+               Compendium.Provider.handle("component", anonymous, %{
+                 "action" => "pull",
+                 "reference" => "#{ctx.registry}/#{@repo}:1.0.0"
+               })
+
+      assert message =~ Grimoire.render({:limit_reached, :athanor_storage_bytes, 1})
+      assert message =~ "No credentials configured for"
+      assert message =~ "cyfr login"
+    end
+  end
+
   # ============================================================================
   # Signed pulls
   # ============================================================================
@@ -879,6 +945,31 @@ defmodule Compendium.OCI.ClientTest do
     end)
 
     digest
+  end
+
+  # Adds a src/ layer to the manifest whose blob the registry answers with
+  # `bytes`.
+  defp with_source(agent, bytes) do
+    digest = Blob.compute_digest(bytes)
+
+    Agent.update(agent, fn state ->
+      manifest =
+        state.manifest
+        |> Jason.decode!()
+        |> Map.update!("layers", fn layers ->
+          layers ++
+            [
+              %{
+                "mediaType" => Compendium.OCI.Manifest.source_media_type(),
+                "size" => byte_size(bytes),
+                "digest" => digest
+              }
+            ]
+        end)
+        |> Jason.encode!()
+
+      %{state | manifest: manifest, blobs: Map.put(state.blobs, digest, bytes)}
+    end)
   end
 
   defp config_fixture,

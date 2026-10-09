@@ -69,7 +69,8 @@ defmodule Compendium.OCI.Client do
          # failure fails the pull and rolls the unit back, and the DB row
          # is minted only after the unit is whole. An optional layer the
          # registry does not hold is skipped (maybe_fetch_layer above).
-         unit_files = source_unit_files(source_bytes) ++ readme_unit_files(readme_bytes),
+         {:ok, source_files} <- source_unit_files(source_bytes),
+         unit_files = source_files ++ readme_unit_files(readme_bytes),
          {:ok, component} <-
            store_component(
              ctx,
@@ -932,40 +933,57 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  # The optional src/ layer, as relative unit files for the commit. An
-  # unparsable tarball degrades to no src/ (a fetch-side concern, logged)
-  # — but once extraction succeeds, the files ride the unit commit and a
+  # The optional src/ layer, as relative unit files for the commit. Its
+  # inflate streams under the version's ceiling
+  # (`Compendium.Registry.tincture_max_decompressed_bytes/0`, the bound the
+  # archive ingress inflates under): a layer that expands past it refuses
+  # the pull at the first inflated chunk that crosses the ceiling, so a
+  # small blob is never inflated more than one chunk past it. An
+  # unparsable tarball degrades to no src/ (a fetch-side concern, logged) —
+  # but once extraction succeeds, the files ride the unit commit and a
   # write failure fails the whole pull.
-  defp source_unit_files(nil), do: []
+  defp source_unit_files(nil), do: {:ok, []}
 
   defp source_unit_files(source_bytes) do
-    try do
-      tar_binary = :zlib.gunzip(source_bytes)
+    ceiling = Registry.tincture_max_decompressed_bytes()
 
-      # arca:bypass-ok=D — `[:memory]` extraction does no filesystem I/O at
-      # all; tagged because the gate matches the call, not the option.
-      case :erl_tar.extract({:binary, tar_binary}, [:memory]) do
-        {:ok, entries} ->
-          for {filename, content} <- entries do
-            # filename is a charlist from :erl_tar
-            {["src" | String.split(to_string(filename), "/")], content}
-          end
+    case Compendium.Archive.gunzip_bounded(source_bytes, ceiling) do
+      {:ok, tar_binary} ->
+        {:ok, source_tar_files(tar_binary)}
 
-        {:error, reason} ->
-          Logger.warning(
-            "[Compendium.OCI.Client] Failed to extract source tarball: #{inspect(reason)}"
-          )
+      # A refusal of the shared table, which the pull answers as itself.
+      {:error, :too_large} ->
+        {:error,
+         {:invalid_argument,
+          "Source layer decompresses beyond the allowed limit (#{ceiling} bytes)"}}
 
-          []
-      end
-    rescue
-      e ->
+      {:error, reason} ->
+        Logger.warning("[Compendium.OCI.Client] Failed to decompress source tarball: #{reason}")
+        {:ok, []}
+    end
+  end
+
+  defp source_tar_files(tar_binary) do
+    # arca:bypass-ok=D — `[:memory]` extraction does no filesystem I/O at
+    # all; tagged because the gate matches the call, not the option.
+    case :erl_tar.extract({:binary, tar_binary}, [:memory]) do
+      {:ok, entries} ->
+        for {filename, content} <- entries do
+          # filename is a charlist from :erl_tar
+          {["src" | String.split(to_string(filename), "/")], content}
+        end
+
+      {:error, reason} ->
         Logger.warning(
-          "[Compendium.OCI.Client] Failed to decompress source tarball: #{inspect(e)}"
+          "[Compendium.OCI.Client] Failed to extract source tarball: #{inspect(reason)}"
         )
 
         []
     end
+  rescue
+    e ->
+      Logger.warning("[Compendium.OCI.Client] Failed to extract source tarball: #{inspect(e)}")
+      []
   end
 
   defp readme_unit_files(nil), do: []
