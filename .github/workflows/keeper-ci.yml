@@ -1,6 +1,6 @@
-name: Keeper CI (cyfr-keeper)
+name: Keeper CI (cyfr-locus)
 
-# Test cyfr-keeper, the process helper the Opus and Locus images start
+# Test cyfr-locus, the process helper the Opus and Locus images start
 # every runner, build and backend under. The images' own proofs — that
 # they isolate their spawns from each other and from the service, refuse
 # every request they cannot attribute, and leave no residue across a uid's
@@ -11,7 +11,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'apps/keeper/**'
+      - 'apps/locus/keeper/**'
       # The keeper-protocol vectors the suite reproduces, and the residue
       # canary, which the gofmt step checks with them.
       - 'tests/fixtures/keeper_protocol.json'
@@ -19,7 +19,7 @@ on:
       - '.github/workflows/keeper-ci.yml'
   pull_request:
     paths:
-      - 'apps/keeper/**'
+      - 'apps/locus/keeper/**'
       - 'tests/fixtures/keeper_protocol.json'
       - 'tests/fixtures/residue-canary.go'
       - '.github/workflows/keeper-ci.yml'
@@ -29,21 +29,21 @@ permissions:
 
 jobs:
   keeper:
-    name: vet + test (cyfr-keeper)
+    name: vet + test (cyfr-locus)
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: apps/keeper
+        working-directory: apps/locus/keeper
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: apps/keeper/go.mod
-          cache-dependency-path: apps/keeper/go.sum
+          go-version-file: apps/locus/keeper/go.mod
+          cache-dependency-path: apps/locus/keeper/go.sum
 
       - name: gofmt
-        run: test -z "$(gofmt -l . ../../tests/fixtures)"
+        run: test -z "$(gofmt -l . ../../../tests/fixtures)"
 
       - name: go vet
         run: go vet ./...
@@ -68,8 +68,8 @@ jobs:
             exit 1
           fi
           go_version="$(sed -n 's/^go //p' go.mod)"
-          docker run --rm --security-opt writable-cgroups=true --security-opt seccomp="$GITHUB_WORKSPACE/apps/keeper/seccomp/keeper.json" \
-            -v "$GITHUB_WORKSPACE:/src:ro" -w /src/apps/keeper \
+          docker run --rm --security-opt writable-cgroups=true --security-opt seccomp="$GITHUB_WORKSPACE/apps/locus/keeper/seccomp/keeper.json" \
+            -v "$GITHUB_WORKSPACE:/src:ro" -w /src/apps/locus/keeper \
             -e GOFLAGS=-buildvcs=false \
             "golang:$go_version" \
             go test ./... -race -count=1 -v 2>&1 | tee "$RUNNER_TEMP/keeper-kernel.log"
@@ -80,4 +80,4 @@ jobs:
           for t in TestTheProbeProvesIsolationWhereTheHostAllowsIt TestAnIsolatedSpawnHasItsOwnNamespaceAndNoCapability TestAnIsolatedSpawnsRelayIsCarriedOnceOpened TestAnIsolatedSpawnsRelayIsSilentUnopened TestAnIsolatedSpawnRunsInItsBoundedGroup; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
 
       - name: Static build
-        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-keeper" .
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-locus" .

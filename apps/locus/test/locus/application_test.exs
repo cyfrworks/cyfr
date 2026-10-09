@@ -5,7 +5,7 @@ defmodule Locus.ApplicationTest do
   @moduledoc """
   What a Locus node starts, and when it refuses to: a node serves builds,
   backends, both or neither by the keys it holds; one that serves either
-  does so under cyfr-keeper, or, in a build that does not know the direct
+  does so under cyfr-locus, or, in a build that does not know the direct
   launcher (every build but the test environment's), not at all.
   """
 
@@ -39,7 +39,7 @@ defmodule Locus.ApplicationTest do
     assert ids(App.children(@none, false, @release_launcher)) == [Prima.Slots]
   end
 
-  test "a node that serves under cyfr-keeper starts the keeper's client before the services that depend on it" do
+  test "a node that serves under cyfr-locus starts the keeper's client before the services that depend on it" do
     for launcher <- [Locus.Executor.direct_launcher(), @release_launcher] do
       assert ids(App.children(@builds, true, launcher)) == [Prima.Slots, Locus.Keeper, Bandit]
 
@@ -70,13 +70,13 @@ defmodule Locus.ApplicationTest do
     refute listener[:port] == Locus.Config.port()
   end
 
-  test "serving without cyfr-keeper refuses the boot wherever the direct launcher is unknown" do
+  test "serving without cyfr-locus refuses the boot wherever the direct launcher is unknown" do
     assert_raise RuntimeError,
-                 ~r/every build and every backend only through cyfr-keeper.*fd 3 is not that channel.*--pool build:… --/s,
+                 ~r/every build and every backend only through cyfr-locus.*fd 3 is not that channel.*--pool build:… --/s,
                  fn -> App.children(@builds, false, @release_launcher) end
 
     assert_raise RuntimeError,
-                 ~r/fd 3 is not that channel.*`cyfr-keeper serve --pool backends:… --/s,
+                 ~r/fd 3 is not that channel.*`cyfr-locus serve --pool backends:… --/s,
                  fn -> App.children(@backends, false, @release_launcher) end
 
     assert_raise RuntimeError,

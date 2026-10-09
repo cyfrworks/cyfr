@@ -79,7 +79,7 @@ defmodule Locus.BuilderService do
     build (the keeper's client releases a dead caller's spawn, the direct
     launcher's janitor kills the group), and the slots' monitor gives the
     slot back.
-  - **cyfr-keeper lost**: the keeper's client answers every run in flight
+  - **cyfr-locus lost**: the keeper's client answers every run in flight
     and stops; each build's terminal line is `unavailable`, its slot is
     released, and the listener, which depends on the keeper's client, stops
     with it (`Locus.Application`).

@@ -30,7 +30,7 @@ defmodule Opus.Application do
       :service ->
         settings = Opus.Settings.pool!()
         # A service whose keeper cannot run here would start no runner: the
-        # boot is refused before anything starts, naming cyfr-keeper when
+        # boot is refused before anything starts, naming cyfr-locus when
         # no channel was inherited.
         :ok = keeper!(settings)
         # The nonces the worker listener has seen, owned by the application
@@ -131,7 +131,7 @@ defmodule Opus.Application do
   @doc """
   Whether the keeper `settings` name can run under `env` (the process
   environment by default), raising when it cannot: the service's boot
-  check. The channel keeper's refusal names `cyfr-keeper`.
+  check. The channel keeper's refusal names `cyfr-locus`.
   """
   @spec keeper!(Opus.Settings.pool(), %{optional(String.t()) => String.t()}) :: :ok
   def keeper!(%{keeper: keeper} = settings, env \\ System.get_env()) do

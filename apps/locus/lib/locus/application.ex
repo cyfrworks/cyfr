@@ -4,7 +4,7 @@
 defmodule Locus.Application do
   @moduledoc """
   A Locus node's supervision tree, in dependency order: the build slots,
-  the client of cyfr-keeper when this node was started by it, the builds
+  the client of cyfr-locus when this node was started by it, the builds
   service's listener when this node serves builds, and the backends
   service's children (`Locus.Backends.children/0`) when it serves backends.
 
@@ -14,14 +14,14 @@ defmodule Locus.Application do
   at least one, since its boot refuses without either
   (`config/locus_runtime.exs`), and a node whose environment was never read
   serves none. A node that serves runs every build and every backend
-  through cyfr-keeper, each under a uid and a memory bound of its own, so
+  through cyfr-locus, each under a uid and a memory bound of its own, so
   serving without the keeper's channel refuses the boot. The one node that
   serves without it is the test build's, through the direct launcher its
   test support compiles (`Locus.Executor.direct_launcher/0`), which no
   other build compiles: no setting of a release reaches it.
 
   The tree restarts `:rest_for_one`. Both services depend on the keeper's
-  client: when cyfr-keeper's channel is lost the client stops, everything
+  client: when cyfr-locus's channel is lost the client stops, everything
   started after it stops with it, and a client that cannot come back ends
   the application, and with it the release.
   """
@@ -56,7 +56,7 @@ defmodule Locus.Application do
 
   @doc """
   The children of `Locus.Supervisor` for a node that serves `services`,
-  started by cyfr-keeper or not, under the direct launcher this build has
+  started by cyfr-locus or not, under the direct launcher this build has
   (`Locus.Executor.direct_launcher/0`, `nil` in every build but the test
   one's). Serving either service without the keeper and without a direct
   launcher raises: the boot is refused.
@@ -76,8 +76,8 @@ defmodule Locus.Application do
       served(services, [build_slots()])
     else
       raise "[Locus] FATAL: a Locus node runs every build and every backend only through " <>
-              "cyfr-keeper, which starts it with its channel on fd 3 (KEEPER_CHANNEL); fd 3 " <>
-              "is not that channel. Start the release through `cyfr-keeper serve " <>
+              "cyfr-locus, which starts it with its channel on fd 3 (KEEPER_CHANNEL); fd 3 " <>
+              "is not that channel. Start the release through `cyfr-locus serve " <>
               pools(services) <> " -- /app/bin/locus start` (the image's entrypoint)."
     end
   end

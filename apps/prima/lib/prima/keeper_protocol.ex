@@ -3,7 +3,7 @@
 
 defmodule Prima.KeeperProtocol do
   @moduledoc """
-  The wire between `cyfr-keeper` (`apps/keeper`) and its clients,
+  The wire between `cyfr-locus` (`apps/locus/keeper`) and its clients,
   `Opus.Keeper.Channel` and `Locus.Keeper`: the request and reply lines on
   the inherited channel (fd 3) and the frames on a spawn's attach
   connection. `tests/fixtures/keeper_protocol.json` holds the vectors the
@@ -80,7 +80,7 @@ defmodule Prima.KeeperProtocol do
   @stream_name Map.new(@streams, fn {name, byte} -> {byte, name} end)
   @attach_stream Keyword.fetch!(@streams, :attach)
 
-  # The keeper's request bounds (`apps/keeper/internal/protocol`).
+  # The keeper's request bounds (`apps/locus/keeper/internal/protocol`).
   @max_args 256
   @max_env 256
   @max_value_bytes 32 * 1024

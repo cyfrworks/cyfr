@@ -3,7 +3,7 @@
 
 defmodule Locus.KeeperTest do
   @moduledoc """
-  The client side of cyfr-keeper's protocol. Against a fake keeper
+  The client side of cyfr-locus's protocol. Against a fake keeper
   (`Locus.Test.FakeKeeper`): a run delivers stdin, answers stdout, the log
   line by line and the exit, and returns only after the spawn is reported
   released; every spawn asks for the builder's memory bound, and there is
@@ -266,7 +266,7 @@ defmodule Locus.KeeperTest do
       File.rm_rf!(dir)
     end
 
-    test "fd 3 is the channel only when it is the socket cyfr-keeper names" do
+    test "fd 3 is the channel only when it is the socket cyfr-locus names" do
       previous = System.get_env("KEEPER_CHANNEL")
 
       on_exit(fn ->

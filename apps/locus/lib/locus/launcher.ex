@@ -23,7 +23,7 @@ defmodule Locus.Launcher do
   pool's size, its free uids and its quarantined ones.
 
   `Locus.Executor.launcher/0` names the implementation a node uses:
-  `Locus.Keeper` where cyfr-keeper runs, and the test environment's
+  `Locus.Keeper` where cyfr-locus runs, and the test environment's
   unisolated launcher alone otherwise.
   """
 

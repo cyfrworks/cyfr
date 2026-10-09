@@ -442,12 +442,12 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   end
 
   describe "OPUS_KEEPER" do
-    test "is retired: set to any keeper, or blank, it refuses the boot naming it and cyfr-keeper" do
+    test "is retired: set to any keeper, or blank, it refuses the boot naming it and cyfr-locus" do
       for value <- ["direct", "channel", ""] do
         with_env(opus_env(%{"OPUS_KEEPER" => value}), fn ->
           message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
           assert message =~ "[Cyfr] FATAL: OPUS_KEEPER is retired"
-          assert message =~ "cyfr-keeper"
+          assert message =~ "cyfr-locus"
         end)
       end
     end

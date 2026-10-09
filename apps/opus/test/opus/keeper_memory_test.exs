@@ -3,7 +3,7 @@
 
 defmodule Opus.KeeperMemoryTest do
   @moduledoc """
-  The `cyfr-keeper` client holds every runner to a memory bound, against a
+  The `cyfr-locus` client holds every runner to a memory bound, against a
   scripted keeper on a socket the test holds the keeper's end of: every
   spawn carries the pool's `:runner_memory_bytes` (or the bound the client
   was started with) and no spawn can ask for none; a malformed bound stops

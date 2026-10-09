@@ -3,7 +3,7 @@
 
 defmodule Locus.Test.FakeKeeper do
   @moduledoc """
-  The far end of a `Locus.Keeper` channel, standing in for cyfr-keeper: it
+  The far end of a `Locus.Keeper` channel, standing in for cyfr-locus: it
   answers a spawn by running the command on this machine as the test's own
   user and acting as its relay — it dials the request's attach socket,
   presents the token, reads stdin frames, and sends the command's stderr as
@@ -81,7 +81,7 @@ defmodule Locus.Test.FakeKeeper do
   @doc "The spawn ids whose exit the fake has reported, in order."
   def exits(fake), do: GenServer.call(fake, :exits)
 
-  @doc "Closes the channel, as cyfr-keeper exiting would."
+  @doc "Closes the channel, as cyfr-locus exiting would."
   def close(fake), do: GenServer.call(fake, :close)
 
   @impl true

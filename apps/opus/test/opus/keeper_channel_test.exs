@@ -3,7 +3,7 @@
 
 defmodule Opus.KeeperChannelTest do
   @moduledoc """
-  The `cyfr-keeper` client against a scripted keeper on a socket the test
+  The `cyfr-locus` client against a scripted keeper on a socket the test
   holds the keeper's end of: a runner's handle asks for a spawn in the
   `runner` pool with a control channel and the runner's explicit
   environment; the relay attaches with its token, is sent the zero-length
@@ -387,7 +387,7 @@ defmodule Opus.KeeperChannelTest do
     # its channel.
     error = assert_raise ArgumentError, fn -> Opus.Keeper.check!(Channel, [], %{}) end
     assert Exception.message(error) =~ "no keeper channel was inherited"
-    assert Exception.message(error) =~ "only through cyfr-keeper"
+    assert Exception.message(error) =~ "only through cyfr-locus"
     assert :ok = Opus.Keeper.check!(Channel, [], %{"KEEPER_CHANNEL" => "socket:[3]"})
   end
 end

@@ -20,7 +20,7 @@ ITEMS=(
 )
 # The keeper's seccomp profile, which docker-compose.yml's opus service
 # names as ./keeper.seccomp.json, ships beside it under that name.
-PROFILE=apps/keeper/seccomp/keeper.json
+PROFILE=apps/locus/keeper/seccomp/keeper.json
 PROFILE_NAME=keeper.seccomp.json
 # Every item is shipped or the script fails: a file renamed or removed
 # without this list following must not leave the tarball quietly short.

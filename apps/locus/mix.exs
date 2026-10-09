@@ -30,7 +30,7 @@ defmodule Locus.MixProject do
     ]
   end
 
-  # The test build runs its builds and backends without cyfr-keeper
+  # The test build runs its builds and backends without cyfr-locus
   # through `Locus.DirectLauncher`, which isolates and bounds nothing and
   # is compiled from `test/support` alone (`Locus.Executor.direct_launcher/0`).
   # Every other build names no launcher and compiles none.

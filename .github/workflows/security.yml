@@ -101,7 +101,7 @@ jobs:
       matrix:
         # Every Go tree in the repository, each scanned under the Go version
         # its own go.mod names.
-        tree: [apps/codex, apps/keeper]
+        tree: [apps/codex, apps/locus/keeper]
     defaults:
       run:
         working-directory: ${{ matrix.tree }}

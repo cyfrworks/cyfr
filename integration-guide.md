@@ -1325,7 +1325,7 @@ value, it refuses to boot. `.env.locus.example` documents the builder's own
 Stdio MCP servers run on the Locus backends service (the `locus-backends`
 compose service), which CYFR reaches over a signed wire; every compose
 deploy starts it. Each backend runs under a pooled uid of its own, started
-by `cyfr-keeper`, with a private home, an environment built only from its
+by `cyfr-locus`, with a private home, an environment built only from its
 server's definition and a memory bound of its own; the service keeps no
 state, and CYFR sends each server's definition again when the service
 restarts. With the URL or the key unset CYFR refuses stdio servers; with a
@@ -1368,7 +1368,7 @@ listener.
 
 The backends service takes the key compose passes it from `.env`'s
 `CYFR_LOCUS_BACKENDS_KEY`, and runs under the keeper's `backends` pool,
-which compose's `entrypoint:` names (`cyfr-keeper serve --pool
+which compose's `entrypoint:` names (`cyfr-locus serve --pool
 backends:20001-20032 …`) in place of the image's build pool; CYFR's
 `CYFR_LOCUS_BACKENDS_URL` names the service's listener.
 
@@ -1380,7 +1380,7 @@ backends:20001-20032 …`) in place of the image's build pool; CYFR's
 
 The `opus`, `locus-builds` and `locus-backends` containers hold every
 runner, build and backend to a memory bound of its own, a cgroup
-`cyfr-keeper` makes for it. That needs **Docker Engine 28 or later on a
+`cyfr-locus` makes for it. That needs **Docker Engine 28 or later on a
 cgroup v2 host** and the containers' `security_opt: writable-cgroups=true`,
 which the shipped `docker-compose.yml` sets and which adds no capability.
 Without it nothing runs unbounded and nothing runs: `opus` starts no runner

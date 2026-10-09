@@ -25,6 +25,6 @@ services:
     volumes:
       - ${PROBE_DIR:?set PROBE_DIR}:/probe:ro
       - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro
-    entrypoint: ["cyfr-keeper", "serve", "--pool", "backends:${BACKENDS_POOL:?set BACKENDS_POOL}", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+    entrypoint: ["cyfr-locus", "serve", "--pool", "backends:${BACKENDS_POOL:?set BACKENDS_POOL}", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
     environment:
       - LOCUS_BACKENDS_MEMORY_BYTES=${LOCUS_BACKENDS_MEMORY_BYTES:-}

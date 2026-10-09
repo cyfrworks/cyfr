@@ -37,7 +37,7 @@ defmodule Opus.MixProject do
   # alone (`Opus.Keeper.direct_keeper/0`). Every other environment names no
   # direct keeper and compiles none, configures the credentials or refuses
   # to boot (`Opus.Credentials`), and starts its runners through
-  # cyfr-keeper or refuses to boot (`Opus.Settings`).
+  # cyfr-locus or refuses to boot (`Opus.Settings`).
   defp env(:test) do
     [
       service_id: "wrk_local",

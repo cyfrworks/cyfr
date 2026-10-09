@@ -5,8 +5,8 @@
 
 Every build runs in a cgroup of its own, bounded at
 LOCUS_BUILDS_MEMORY_BYTES (tests/builder-image/memory.py proves that
-bound). What is not a build runs in the group cyfr-keeper keeps for itself,
-`keeper`: cyfr-keeper, the locus release and the relays. Nothing bounds
+bound). What is not a build runs in the group cyfr-locus keeps for itself,
+`keeper`: cyfr-locus, the locus release and the relays. Nothing bounds
 that group but the container's own limit, so docker-compose.yml's limit
 must hold LOCUS_BUILDS_MAX_CONCURRENT bounds and the most the service
 takes, or a build the kernel kills for the container's limit is lost

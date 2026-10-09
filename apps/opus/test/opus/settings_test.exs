@@ -4,7 +4,7 @@
 defmodule Opus.SettingsTest do
   @moduledoc """
   The service's pool settings come from `config :opus` with defaults in
-  code, each validated, the keeper the cyfr-keeper channel when unset and
+  code, each validated, the keeper the cyfr-locus channel when unset and
   the retired `OPUS_KEEPER` refused, a runner's memory bound in the
   keeper's own range and never none; a
   runner's settings come from its process environment alone, and a
@@ -60,7 +60,7 @@ defmodule Opus.SettingsTest do
       end
 
       assert Settings.retired("OPUS_KEEPER") =~ "OPUS_KEEPER is retired"
-      assert Settings.retired("OPUS_KEEPER") =~ "cyfr-keeper"
+      assert Settings.retired("OPUS_KEEPER") =~ "cyfr-locus"
     end
 
     # The release carries no host module, so the prefix is declared here:

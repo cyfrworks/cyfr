@@ -532,7 +532,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
+            "message": "cyfr-locus cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
           },
           "runners": {
             "busy": 3,
@@ -552,7 +552,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-locus cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": "memory_unavailable",
             "since": 1
           },
@@ -574,7 +574,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-locus cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": "Memory_unavailable"
           },
           "runners": {
@@ -595,7 +595,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-locus cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": ""
           },
           "runners": {
@@ -616,7 +616,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-locus cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": "memory unavailable"
           },
           "runners": {
@@ -637,7 +637,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-locus cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
           },
           "runners": {
@@ -658,7 +658,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-locus cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": 5
           },
           "runners": {
@@ -801,7 +801,7 @@
     ],
     "valid": [
       {
-        "why": "a service under cyfr-keeper: every runner bounded at 384 MiB, nothing refused",
+        "why": "a service under cyfr-locus: every runner bounded at 384 MiB, nothing refused",
         "wire": {
           "attempts": [
             "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
@@ -841,7 +841,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-locus cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": "memory_unavailable"
           },
           "runners": {
@@ -862,7 +862,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-keeper has no runner uid free — every one is in use",
+            "message": "cyfr-locus has no runner uid free — every one is in use",
             "reason": "capacity"
           },
           "runners": {

@@ -7,7 +7,7 @@ defmodule Opus.ApplicationTest do
   keeper, its runner pool and the pool's handles, restarted together, and
   the listener CYFR reaches it through. Nothing of the control plane runs
   in it, and it reaches nothing of the control plane's. A service started
-  without the cyfr-keeper channel, or with the retired `OPUS_KEEPER` set,
+  without the cyfr-locus channel, or with the retired `OPUS_KEEPER` set,
   refuses to boot before it starts anything.
   """
 
@@ -42,25 +42,25 @@ defmodule Opus.ApplicationTest do
     end
   end
 
-  test "a service started without an inherited keeper channel refuses to boot, naming cyfr-keeper" do
+  test "a service started without an inherited keeper channel refuses to boot, naming cyfr-locus" do
     supervisor = Process.whereis(Opus.Supervisor)
 
     with_system_env("KEEPER_CHANNEL", nil, fn ->
       with_opus_env(:keeper, :channel, fn ->
         error = assert_raise ArgumentError, fn -> Opus.Application.start(:normal, []) end
         assert Exception.message(error) =~ "Opus.Keeper.Channel cannot run here"
-        assert Exception.message(error) =~ "only through cyfr-keeper"
+        assert Exception.message(error) =~ "only through cyfr-locus"
         assert Exception.message(error) =~ "KEEPER_CHANNEL"
       end)
 
       # Unset is the channel keeper too: nothing falls back to a keeper
       # that isolates nothing.
       with_opus_env(:keeper, nil, fn ->
-        assert_raise ArgumentError, ~r/cyfr-keeper/, fn -> Opus.Application.start(:normal, []) end
+        assert_raise ArgumentError, ~r/cyfr-locus/, fn -> Opus.Application.start(:normal, []) end
       end)
     end)
 
-    assert_raise ArgumentError, ~r/only through cyfr-keeper/, fn ->
+    assert_raise ArgumentError, ~r/only through cyfr-locus/, fn ->
       Opus.Application.keeper!(%{keeper: :channel, attach_dir: "/run/opus"}, %{})
     end
 

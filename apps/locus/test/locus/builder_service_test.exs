@@ -75,7 +75,7 @@ defmodule Locus.BuilderServiceTest do
   end
 
   # The application's keeper for the test: `Locus.Keeper` under its own
-  # name, which is how the service finds it, against a fake cyfr-keeper.
+  # name, which is how the service finds it, against a fake cyfr-locus.
   defp keeper!(mode) do
     {fake, channel} = FakeKeeper.start()
     :ok = FakeKeeper.mode(fake, mode)
@@ -552,7 +552,7 @@ defmodule Locus.BuilderServiceTest do
       assert max == Locus.Config.max_concurrent()
     end
 
-    test "cyfr-keeper lost mid-build answers unavailable and gives the slot back", %{port: port} do
+    test "cyfr-locus lost mid-build answers unavailable and gives the slot back", %{port: port} do
       fake = keeper!(:normal)
       body = Wire.body(Wire.request("sleep 3"))
 

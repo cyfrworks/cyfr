@@ -13,10 +13,10 @@ defmodule Opus.Settings do
   (`:watchdog_grace_ms`, 5 000), how long a released runner is given to
   report its open attempts before its process group is killed
   (`:release_grace_ms`, 2 000), which keeper starts its runners
-  (`:keeper`, `:channel`: the `cyfr-keeper` channel the image inherits;
+  (`:keeper`, `:channel`: the `cyfr-locus` channel the image inherits;
   the test build alone also knows `:direct`, `Opus.Keeper.direct_keeper/0`),
   where the keeper's relays attach (`:attach_dir`, `/run/opus`), and the
-  memory bound of every runner `cyfr-keeper` starts
+  memory bound of every runner `cyfr-locus` starts
   (`:runner_memory_bytes`, 384 MiB). Unset, the keeper is `:channel`,
   whatever the environment says: the service refuses to boot when no
   channel was inherited (`Opus.Keeper.check!/3`), and never falls back to
@@ -29,7 +29,7 @@ defmodule Opus.Settings do
   (`compose_only/0`): this module declares the prefix, because the release
   carries no host module to declare it.
 
-  `:runner_memory_bytes` is what `Opus.Keeper.Channel` asks `cyfr-keeper` to
+  `:runner_memory_bytes` is what `Opus.Keeper.Channel` asks `cyfr-locus` to
   hold each runner to (`runner_memory_bytes/1`): a cgroup of the runner's
   own at that many bytes for its VM, every guest's linear memory, the
   pages of its home and the kernel memory charged to it, together. A
@@ -82,8 +82,8 @@ defmodule Opus.Settings do
   # file, so a name in it is compose's, not a stray one.
   @compose_only ~w(OPUS_MEMORY_LIMIT OPUS_CPU_LIMIT)
 
-  # cyfr-keeper's range for a spawn's `memory_bytes`
-  # (`apps/keeper/internal/protocol`: MinMemoryBytes, MaxMemoryBytes).
+  # cyfr-locus's range for a spawn's `memory_bytes`
+  # (`apps/locus/keeper/internal/protocol`: MinMemoryBytes, MaxMemoryBytes).
   @runner_memory_range 16_777_216..1_099_511_627_776
 
   @pool_defaults %{
@@ -180,7 +180,7 @@ defmodule Opus.Settings do
 
   @doc """
   The memory bound `env` (the `:opus` application environment) gives
-  every runner `cyfr-keeper` starts: its `:runner_memory_bytes`, or the
+  every runner `cyfr-locus` starts: its `:runner_memory_bytes`, or the
   default when unset. A value that is not an integer from 16 MiB to 1 TiB
   refuses.
   """
@@ -193,7 +193,7 @@ defmodule Opus.Settings do
     end
   end
 
-  @doc "The least and the most a runner's memory bound may be, in bytes: `cyfr-keeper`'s range."
+  @doc "The least and the most a runner's memory bound may be, in bytes: `cyfr-locus`'s range."
   @spec runner_memory_range() :: Range.t()
   def runner_memory_range, do: @runner_memory_range
 
@@ -250,7 +250,7 @@ defmodule Opus.Settings do
   @spec retired(String.t()) :: String.t()
   def retired(@retired_keeper_env) do
     "#{@retired_keeper_env} is retired and must not be set: the keeper channel " <>
-      "cyfr-keeper starts the service with (#{@channel_env}) is the only launcher of runners"
+      "cyfr-locus starts the service with (#{@channel_env}) is the only launcher of runners"
   end
 
   @doc "The runner settings the process environment spells, or the first variable that refuses."

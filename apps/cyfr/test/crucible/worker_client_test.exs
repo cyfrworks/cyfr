@@ -250,7 +250,7 @@ defmodule Crucible.WorkerClientTest do
 
   test "a start the service refuses 503 with its sentence is its refusal, answered once" do
     sentence =
-      "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: " <>
+      "cyfr-locus cannot bound a runner's memory in this container, so it starts none: " <>
         "start the opus service with the security option writable-cgroups=true"
 
     endpoint =

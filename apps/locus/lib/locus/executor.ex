@@ -9,14 +9,14 @@ defmodule Locus.Executor do
 
   The executor supplies `HOME` (a directory of the build's own), `TMPDIR`
   inside it, `USER`, `LOGNAME` and `PATH`; `env` is everything else the
-  command sees. `Locus.Keeper` runs the command through cyfr-keeper: under
+  command sees. `Locus.Keeper` runs the command through cyfr-locus: under
   a pooled uid, inside the memory bound the builder runs every build under
   (`Locus.Config.memory_bytes/0`), and it is the one executor of every
   build (`executors/0`). The suites run a real toolchain on a machine
-  without cyfr-keeper through a launcher of their own, compiled from the
+  without cyfr-locus through a launcher of their own, compiled from the
   test support alone and named by the test build's application
   environment (`direct_launcher/0`): no release and no development node
-  compiles it, and a node that holds no cyfr-keeper channel there runs no
+  compiles it, and a node that holds no cyfr-locus channel there runs no
   build (`executor/0`).
 
   A run ends on every path with everything the command started gone: at
@@ -71,7 +71,7 @@ defmodule Locus.Executor do
 
   @doc """
   The launcher the test build runs builds and long-lived processes through
-  when no cyfr-keeper channel was inherited, or `nil`.
+  when no cyfr-locus channel was inherited, or `nil`.
 
   It isolates and bounds nothing, so it is named by the application
   environment of the test build alone (`apps/locus/mix.exs`) and compiled
@@ -93,7 +93,7 @@ defmodule Locus.Executor do
   The executor builds run with: the keeper's client when it is running,
   the test build's direct launcher otherwise where it has one, and
   `{:error, :no_keeper}` everywhere else. A build is never run outside
-  cyfr-keeper by a release.
+  cyfr-locus by a release.
   """
   @spec executor() :: {:ok, module()} | {:error, :no_keeper}
   def executor do

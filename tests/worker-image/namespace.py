@@ -3,12 +3,12 @@
 # Copyright 2026 CYFR Works Inc.
 """Every runner of the Opus image runs in a user and network namespace of its own, proven on the kernel.
 
-cyfr-keeper serves the image's runner pool isolated (`runner:…:netns`): it
+cyfr-locus serves the image's runner pool isolated (`runner:…:netns`): it
 clones each runner's stage into a new user and network namespace, maps the
 runner's pooled uid and gid to themselves from the parent side, places the
 stage in its cgroup, and only then releases it to drop every capability set
 and execute the runner. The clone needs the image's seccomp profile
-(apps/keeper/seccomp/keeper.json, /etc/cyfr/keeper.json in the image) and a
+(apps/locus/keeper/seccomp/keeper.json, /etc/cyfr/keeper.json in the image) and a
 host that allows unprivileged user namespaces; the service runs here under
 that profile, as docker-compose.yml names it.
 
@@ -112,13 +112,13 @@ class IsolatedStack(Stack):
 
 
 def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=()):
-    """cyfr-keeper from the image under the shipped service's options, serving the isolated pool to a shell client."""
+    """cyfr-locus from the image under the shipped service's options, serving the isolated pool to a shell client."""
     args = ["docker", "run", "--rm", *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
             "--security-opt", "no-new-privileges:true", "--read-only", "--ipc", "none", "--init",
             "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"/run/opus:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]
     if seccomp:
         args += ["--security-opt", f"seccomp={PROFILE}"]
-    args += ["--entrypoint", "cyfr-keeper", image, "serve", "--pool", POOL, "--home-root", HOME_ROOT,
+    args += ["--entrypoint", "cyfr-locus", image, "serve", "--pool", POOL, "--home-root", HOME_ROOT,
              "--client-user", "opus", "--", "/bin/sh", "-c", client_script]
     return run(*args, check=False, timeout=timeout)
 
@@ -141,7 +141,7 @@ def test_refusals(image):
     refused = keeper_run(image, "exec sleep 5", seccomp=False, timeout=60)
     expect(refused.returncode == 78 and "user.max_user_namespaces" in refused.stderr
            and "kernel.apparmor_restrict_unprivileged_userns" in refused.stderr,
-           f"under Docker's default seccomp profile cyfr-keeper refuses to serve the isolated pool, naming both settings (exit {refused.returncode})",
+           f"under Docker's default seccomp profile cyfr-locus refuses to serve the isolated pool, naming both settings (exit {refused.returncode})",
            refused.stderr)
     client = (f"printf '%s\\n' '{spawn_line('1', ['/bin/true'], isolated=False)}' >&3; "
               "read -r line <&3; echo \"reply:$line\"")

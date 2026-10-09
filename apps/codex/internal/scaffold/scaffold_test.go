@@ -134,8 +134,8 @@ func TestShippedProfileIsManaged(t *testing.T) {
 	if source == nil || name == nil {
 		t.Fatal("scaffold-tarball.sh names no PROFILE and PROFILE_NAME")
 	}
-	if source[1] != "apps/keeper/seccomp/keeper.json" || name[1] != SeccompProfile {
-		t.Errorf("the tarball ships %s as %s, want apps/keeper/seccomp/keeper.json as %s", source[1], name[1], SeccompProfile)
+	if source[1] != "apps/locus/keeper/seccomp/keeper.json" || name[1] != SeccompProfile {
+		t.Errorf("the tarball ships %s as %s, want apps/locus/keeper/seccomp/keeper.json as %s", source[1], name[1], SeccompProfile)
 	}
 	if !strings.Contains(script, `-C "$STAGE" "$PROFILE_NAME"`) {
 		t.Error("scaffold-tarball.sh does not pack the staged profile")

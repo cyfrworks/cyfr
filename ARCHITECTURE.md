@@ -27,7 +27,7 @@ Three consequences shape everything below.
 - **Fail closed.** Identity, standing, consent, ownership and catalog completeness are established before work is admitted, and a control that cannot answer refuses. The one named exception is the decision audit (§6.4), which records and never decides. Unavailable infrastructure, absent data, denied access and successful work stay distinguishable in every result.
 - **Admission, not sampling.** The gate admits discrete intents: open a stream, send this, confirm. Continuous data (execution deltas, a pointer, a game loop, audio, camera frames) stays in the frame, on the bus or inside the island that produces it, under a grant the gate already admitted. A granted stream may carry audio or frames to wherever the grant names; no frame is an operation.
 - **One product, one code path.** Behaviour that depends on exposure derives from whether authentication is configured, never from an edition. A phone, a small box, a kiosk and a server run the same code with different wiring.
-- **Few names.** A namespace exists only when it owns state, a state machine or a trust boundary nothing else can own. There are thirteen namespaces and one role (§3). A struct is not a namespace and a page is not a domain.
+- **Few names.** A namespace exists only when it owns state, a state machine or a trust boundary nothing else can own. There are thirteen namespaces (§3). A struct is not a namespace and a page is not a domain.
 - **The person is not the door.** Google, GitHub, OIDC, email and passkeys are sign-in methods registered at a relying home; none of them is the person. A person is an identifier that survives every key, device, sign-in method and home address.
 - **Authority follows the resource's owner.** Whatever an athanor owns is decided at that athanor's home: membership, consent, caps, vault, confirmation. A request from another node is admitted there or refused there, never trusted because the other node vouched for it.
 - **Hardware is disposable; the person and their relationships are not.** A lost device is revoked, a lost home is restored from recovery material, a lost sign-in is replaced. Starting over as a new person is the last resort, after every recovery route is gone.
@@ -171,15 +171,13 @@ A service holding a pool of OS runners under the keeper, each execution subtree 
 
 ### Locus: untrusted native processes
 
-Where untrusted native processes run, under the keeper and nowhere else: builds and stdio MCP backends, each its own signed HTTP service with its own key, and on a device perception bodies (a camera, a radio, a HID jack) as a third service over the device protocol. A build or a backend reaches only what its service's network allows and holds no credential the control plane did not inject. *Not built yet:* perception bodies.
+Where untrusted native processes run, under the keeper and nowhere else: builds and stdio MCP backends, each its own signed HTTP service with its own key, and on a device perception bodies (a camera, a radio, a HID jack) as a third service over the device protocol. A build or a backend reaches only what its service's network allows and holds no credential the control plane did not inject.
 
-### keeper: the privileged companion
-
-A role, not a namespace: the Go binary `cyfr-keeper`, the entrypoint of every island image. It pools uids, stages private homes, relays a control channel, bounds each child in a cgroup of its own, places each runner and each body in a network namespace with no route but the relay, and kills and scrubs on release. It holds exactly `SETUID`, `SETGID` and `KILL`, never `CAP_SYS_ADMIN` in the initial namespace, and refuses to serve with anything else. Every island refuses to serve without it.
+**The keeper** is the Go binary `cyfr-locus`, the entrypoint of every island image. It pools uids, stages private homes, relays a control channel, bounds each child in a cgroup of its own, places each runner and each body in a network namespace with no route but the relay, and kills and scrubs on release. It holds exactly `SETUID`, `SETGID` and `KILL`, never `CAP_SYS_ADMIN` in the initial namespace, and refuses to serve with anything else. Every island refuses to serve without it. *Not built yet:* perception bodies.
 
 ### Apps and releases
 
-`prima`, `arca` and `sanctum` are Mix apps of their own because Sanctum's licence boundary is an application directory and Sanctum needs Arca beneath it; `cyfr` hosts Grimoire, Host, every domain and every surface under Boundary declarations. `opus` and `locus` depend on `prima` alone. `keeper` and `codex` are Go. The `cyfr` release starts prima, arca, sanctum and cyfr; the `opus` and `locus` releases start prima and themselves under the keeper.
+`prima`, `arca` and `sanctum` are Mix apps of their own because Sanctum's licence boundary is an application directory and Sanctum needs Arca beneath it; `cyfr` hosts Grimoire, Host, every domain and every surface under Boundary declarations. `opus` and `locus` depend on `prima` alone. `codex` and the keeper (`apps/locus/keeper`) are Go. The `cyfr` release starts prima, arca, sanctum and cyfr; the `opus` and `locus` releases start prima and themselves under the keeper.
 
 ## 4. How modules talk
 

@@ -11,9 +11,9 @@ defmodule Locus.DirectLauncher do
   machine gives it. It is compiled from the test support alone and named
   by the test build's application environment
   (`Locus.Executor.direct_launcher/0`), so the suites can run a real
-  toolchain on a machine without cyfr-keeper; no release and no
+  toolchain on a machine without cyfr-locus; no release and no
   development node compiles it or builds through it, and
-  the builds service refuses to serve without cyfr-keeper anywhere else
+  the builds service refuses to serve without cyfr-locus anywhere else
   (`Locus.Application`).
 
   ## arca:bypass-ok=D — entire module
@@ -225,7 +225,7 @@ defmodule Locus.DirectLauncher do
     :exit, _reason -> {:error, :unknown_spawn}
   end
 
-  # The signals a spawn may be sent are cyfr-keeper's, as its codec reads
+  # The signals a spawn may be sent are cyfr-locus's, as its codec reads
   # a `signal` request.
   defp signal?(sig) do
     _ = Prima.KeeperProtocol.encode(%{type: :signal, spawn_id: @probe_spawn_id, sig: sig})
@@ -437,7 +437,7 @@ defmodule Locus.DirectLauncher.Child do
   def handle_info({port, :eof}, %{port: port} = state), do: {:noreply, state}
 
   # The leader is gone: what is left of its group goes with it, as
-  # cyfr-keeper retires a spawn whose leader exited.
+  # cyfr-locus retires a spawn whose leader exited.
   # The exit is told once the streams are drained, so an owner hears every
   # byte the process wrote before it hears that the process is gone.
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do

@@ -4,7 +4,7 @@
 defmodule Locus.KeeperVectorsTest do
   @moduledoc """
   `Locus.Keeper` against the keeper's shared vectors
-  (`tests/fixtures/keeper_protocol.json`, which cyfr-keeper and its other
+  (`tests/fixtures/keeper_protocol.json`, which cyfr-locus and its other
   clients reproduce), the test process holding the keeper's end of the
   channel, replying with the vectors' own lines and dialling as a spawn's
   relay with the vectors' frames: the spawn this client writes is the

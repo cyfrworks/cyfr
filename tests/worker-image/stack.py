@@ -7,7 +7,7 @@ compose.worker.yml, which adds only the image under test, a loopback port,
 the host gateway the scripted control plane (control_plane.py, on this
 machine) is reached through and the pool settings a test chooses; its project directory holds the keeper's seccomp
 profile the service names, as a scaffolded project does.
-Everything else — cyfr-keeper's capabilities, the security options, the
+Everything else — cyfr-locus's capabilities, the security options, the
 read-only root, `ipc: none`, the tmpfs mounts, the limits, the restart
 policy — is the shipped service. A Stack made with
 `writable_cgroups=False` also layers compose.no-writable-cgroups.yml, as a
@@ -35,7 +35,7 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 # name.
 PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
 # The keeper's seccomp profile and the name the opus service reads it by.
-PROFILE = os.path.join(ROOT, "apps", "keeper", "seccomp", "keeper.json")
+PROFILE = os.path.join(ROOT, "apps", "locus", "keeper", "seccomp", "keeper.json")
 PROFILE_NAME = "keeper.seccomp.json"
 SERVICE = "wrk_image"
 POOL_FIRST, POOL_LAST = 30101, 30108

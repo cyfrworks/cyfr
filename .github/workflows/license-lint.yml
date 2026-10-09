@@ -11,7 +11,7 @@ on:
       - '**/*.ex'
       - '**/*.exs'
       - 'apps/codex/**'
-      - 'apps/keeper/**'
+      - 'apps/locus/keeper/**'
       - 'tests/locus-backends-image/**'
       - 'tests/fixtures/*.go'
       - 'wit/**'
@@ -26,7 +26,7 @@ on:
       - '**/*.ex'
       - '**/*.exs'
       - 'apps/codex/**'
-      - 'apps/keeper/**'
+      - 'apps/locus/keeper/**'
       - 'tests/locus-backends-image/**'
       - 'tests/fixtures/*.go'
       - 'wit/**'
@@ -57,7 +57,7 @@ jobs:
             return 1
           }
 
-          patterns=('*.ex' '*.exs' 'apps/codex/*.go' 'apps/keeper/*.go' 'tests/locus-backends-image/*.py' 'tests/locus-backends-image/*.mjs' 'tests/fixtures/*.go' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
+          patterns=('*.ex' '*.exs' 'apps/codex/*.go' 'apps/locus/keeper/*.go' 'tests/locus-backends-image/*.py' 'tests/locus-backends-image/*.mjs' 'tests/fixtures/*.go' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
 
           # A pattern that matches nothing checks nothing while the scan of
           # the others passes; refuse each such pattern by itself.

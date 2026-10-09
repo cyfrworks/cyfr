@@ -3,7 +3,7 @@
 
 defmodule Locus.Keeper do
   @moduledoc """
-  The builder's client of cyfr-keeper (`apps/keeper`) and the executor builds
+  The builder's client of cyfr-locus (`apps/locus/keeper`) and the executor builds
   run through where it runs.
 
   ## arca:bypass-ok=D — entire module
@@ -13,7 +13,7 @@ defmodule Locus.Keeper do
 
   ## The channel
 
-  cyfr-keeper starts this node with a socketpair on fd 3 and
+  cyfr-locus starts this node with a socketpair on fd 3 and
   `KEEPER_CHANNEL` naming the socket (`socket:[inode]`);
   `channel_inherited?/0` holds fd 3 to that name, so a descriptor the
   runtime opened for itself is never taken for the channel. This server
@@ -25,7 +25,7 @@ defmodule Locus.Keeper do
 
   `run/2` asks for a spawn in the pool `build`, and every spawn it asks for
   carries `memory_bytes`, the builder's bound (`Locus.Config.memory_bytes/0`):
-  a build is never run without one. cyfr-keeper runs the command under a
+  a build is never run without one. cyfr-locus runs the command under a
   pooled uid with a 0700 home, `TMPDIR` inside it, an environment built
   from nothing but the command's `env`, resource limits, and a cgroup of
   its own holding the bound. The spawn's relay, running as this node's
@@ -33,7 +33,7 @@ defmodule Locus.Keeper do
   carries stdin, stdout and stderr as frames: a stream byte (0 stdin, 1
   stdout, 2 stderr, 3 attach), a 4-byte big-endian length and the payload,
   a zero-length frame ending its stream. When the command's leader exits,
-  or on `release`, cyfr-keeper kills every process of the uid and removes
+  or on `release`, cyfr-locus kills every process of the uid and removes
   everything the uid left, then reports `released`; `run/2` answers only
   after that report, so no process of a build outlives the call. A
   deadline passed, a stdout bound exceeded or a cancel
@@ -44,7 +44,7 @@ defmodule Locus.Keeper do
 
   `spawn/2` (`Locus.Launcher`) asks for a spawn in the pool its spec names,
   under the spec's `memory_bytes` where it names one, and answers its
-  handle once cyfr-keeper reports it spawned, or the refusal. The caller
+  handle once cyfr-locus reports it spawned, or the refusal. The caller
   is its owner: this server holds the spawn's relay connection and sends
   the owner `{Locus.Keeper, ref, event}` for the relay attached, each
   stdout and stderr frame, the leader's exit and the uid's retirement,
@@ -60,19 +60,19 @@ defmodule Locus.Keeper do
   ## The memory bound
 
   A spawn that cannot stay under its bound loses every process at once,
-  and the leader's `exited` says so (`memory_exceeded`), read by cyfr-keeper
+  and the leader's `exited` says so (`memory_exceeded`), read by cyfr-locus
   from the cgroup's own counters: `run/2` then answers
   `{:error, {:memory, limit_bytes}}`, the build wire's `memory` refusal,
   whatever else this side was doing when it heard. An `exited` that does
   not say so is a status or a signal like any other, a kill for the
-  container's own limit among them. Where cyfr-keeper cannot give a spawn
+  container's own limit among them. Where cyfr-locus cannot give a spawn
   such a cgroup it refuses the request as `memory_unavailable`, and `run/2`
   answers the wire's `unavailable` refusal naming what the deployment
   lacks: the builder's container needs the `writable-cgroups=true`
   security option (Docker Engine 28 or later on a cgroup v2 host). No
   build runs unbounded instead.
 
-  When the channel closes, cyfr-keeper has already retired every spawn and
+  When the channel closes, cyfr-locus has already retired every spawn and
   is exiting; this server stops, and the builder with it.
   """
 
@@ -98,7 +98,7 @@ defmodule Locus.Keeper do
   @attach_frame_bytes IO.iodata_length(KeeperProtocol.end_frame(:attach)) +
                         KeeperProtocol.token_hex_bytes()
 
-  # cyfr-keeper bounds a stage and a relay's dial at 10 s each.
+  # cyfr-locus bounds a stage and a relay's dial at 10 s each.
   @start_timeout_ms 15_000
   @attach_timeout_ms 10_000
   # Retirement after a release: its grace, the kill loop, the wait for the
@@ -113,7 +113,7 @@ defmodule Locus.Keeper do
   # write it has not taken within the bound closes its connection.
   @stdin_send_timeout_ms 5_000
 
-  @memory_unavailable "cyfr-keeper cannot bound a build's memory in this container, so it " <>
+  @memory_unavailable "cyfr-locus cannot bound a build's memory in this container, so it " <>
                         "runs none: start the builder with the security option " <>
                         "writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
 
@@ -129,7 +129,7 @@ defmodule Locus.Keeper do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  @doc "Whether fd 3 is the channel cyfr-keeper handed this node."
+  @doc "Whether fd 3 is the channel cyfr-locus handed this node."
   @spec channel_inherited?() :: boolean()
   def channel_inherited? do
     with expected when is_binary(expected) and expected != "" <- System.get_env(@channel_env),
@@ -379,7 +379,7 @@ defmodule Locus.Keeper do
 
   # The run is over once the uid is retired and the relay's connection has
   # delivered its last frame and closed; a leader that exited is retired by
-  # cyfr-keeper without a request. The relay has ended before `released` is
+  # cyfr-locus without a request. The relay has ended before `released` is
   # sent, but its connection can reach this process after that report, so
   # until the drain bound a missing connection is waited for.
   defp advance(%{phase: :done} = s), do: s
@@ -694,7 +694,7 @@ defmodule Locus.Keeper do
     end
   end
 
-  # cyfr-keeper retires every spawn before its channel closes: a run's
+  # cyfr-locus retires every spawn before its channel closes: a run's
   # caller hears the channel lost, a long-lived spawn's owner its release.
   def handle_info({:channel_closed, reason}, state) do
     Logger.error(
@@ -924,7 +924,7 @@ defmodule Locus.Keeper do
     end
   end
 
-  # A release for a spawn cyfr-keeper no longer holds: its retirement is done.
+  # A release for a spawn cyfr-locus no longer holds: its retirement is done.
   defp on_reply({:error, nil, spawn_id, "unknown_spawn"}, state) when is_binary(spawn_id),
     do: released(state, spawn_id)
 
@@ -1154,11 +1154,11 @@ defmodule Locus.Keeper do
             _ = send_line(state, line)
             state
 
-          # A grace past what cyfr-keeper accepts, which it would refuse.
+          # A grace past what cyfr-locus accepts, which it would refuse.
           {:error, :unencodable} ->
             Logger.error(
               "[Locus.Keeper] a spawn was not released: a grace of #{grace_ms} ms is past " <>
-                "what cyfr-keeper accepts"
+                "what cyfr-locus accepts"
             )
 
             state

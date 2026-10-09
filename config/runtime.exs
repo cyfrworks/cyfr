@@ -219,14 +219,14 @@ if config_env() != :test do
     # its assignment's deadline a runner may live before it halts itself
     # (OPUS_WATCHDOG_GRACE_MS, 5000), how long a released runner is given to
     # report what it holds before its process group is killed
-    # (OPUS_RELEASE_GRACE_MS, 2000), the memory bound cyfr-keeper holds each
+    # (OPUS_RELEASE_GRACE_MS, 2000), the memory bound cyfr-locus holds each
     # runner to (OPUS_RUNNER_MEMORY_BYTES, a whole number of bytes from
     # 16777216 to 1099511627776, 16 MiB to 1 TiB, the keeper's own range;
     # default 402653184, 384 MiB) and where the keeper's relays attach
     # (OPUS_ATTACH_DIR, /run/opus). Only the set ones are configured, so the
     # code's defaults stand for the rest; a value that is not a positive
     # integer, a byte count in its range or a clean absolute path refuses the
-    # boot naming it. The runners start through the cyfr-keeper channel the
+    # boot naming it. The runners start through the cyfr-locus channel the
     # image inherits and nothing else: the retired OPUS_KEEPER, set here or
     # in an .env file, refuses the boot (`Opus.Settings.pool/2`).
     #

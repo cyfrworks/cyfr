@@ -33,7 +33,7 @@ defmodule Cyfr.DocsDriftTest do
   # owns. The prefixes are this roster, each named by one row.
   @env_prefixes ~w(CYFR_ CYFR_OPUS_ CYFR_CRUCIBLE_ CYFR_HOST_API_ CYFR_LOCUS_BUILDS_
                    CYFR_LOCUS_BACKENDS_ OPUS_ LOCUS_BUILDS_ LOCUS_BACKENDS_ KEEPER_)
-  @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Crucible Emissary Prism Codex Opus Locus keeper
+  @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Crucible Emissary Prism Codex Opus Locus
                      actor athanor)
 
   # The files that read the releases' environment: the control plane's
@@ -57,7 +57,7 @@ defmodule Cyfr.DocsDriftTest do
   # The keeper's Go sources other than its tests, relative to the root.
   defp keeper_sources do
     @repo_root
-    |> Path.join("apps/keeper/**/*.go")
+    |> Path.join("apps/locus/keeper/**/*.go")
     |> Path.wildcard()
     |> Enum.reject(&String.ends_with?(&1, "_test.go"))
     |> Enum.map(&Path.relative_to(&1, @repo_root))
@@ -312,7 +312,7 @@ defmodule Cyfr.DocsDriftTest do
     directories = namespace_directories()
 
     # Guards against the scan quietly matching nothing.
-    assert "keeper" in directories and "codex" in directories and "grimoire" in directories
+    assert "locus" in directories and "codex" in directories and "grimoire" in directories
 
     counts =
       for directory <- directories,

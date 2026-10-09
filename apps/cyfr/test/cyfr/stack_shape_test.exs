@@ -179,7 +179,7 @@ defmodule Cyfr.StackShapeTest do
            ]
 
     assert backends =~
-             ~r{^    entrypoint: \["cyfr-keeper", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"\]$}m
+             ~r{^    entrypoint: \["cyfr-locus", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"\]$}m
 
     # The release's own health probe is the builds wire's; this service
     # probes the backends wire's instead.
@@ -202,7 +202,7 @@ defmodule Cyfr.StackShapeTest do
       assert list_entries(block, "cap_drop") == ["ALL"], service
       assert list_entries(block, "cap_add") == ["SETUID", "SETGID", "KILL"], service
 
-      # cyfr-keeper bounds a spawn's memory only where the container's
+      # cyfr-locus bounds a spawn's memory only where the container's
       # cgroup is mounted writable; without the option every bounded spawn
       # is refused, so the shipped services carry it. The worker's runner
       # pool is isolated, which takes the keeper's seccomp profile too.
@@ -220,7 +220,7 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  # The worker's runner pool is isolated: cyfr-keeper clones each runner into
+  # The worker's runner pool is isolated: cyfr-locus clones each runner into
   # a user and network namespace of its own, which Docker's default seccomp
   # profile denies. The service runs under the keeper's profile, which the
   # image carries and a scaffolded project holds beside its compose file,
@@ -232,7 +232,7 @@ defmodule Cyfr.StackShapeTest do
     assert opus =~ "kernel.apparmor_restrict_unprivileged_userns"
 
     dockerfile = read!("Dockerfile.opus")
-    assert dockerfile =~ ~r{^COPY apps/keeper/seccomp/keeper\.json /etc/cyfr/keeper\.json$}m
+    assert dockerfile =~ ~r{^COPY apps/locus/keeper/seccomp/keeper\.json /etc/cyfr/keeper\.json$}m
     assert dockerfile =~ ~s("--pool", "runner:30101-30108:netns")
 
     dir = Path.join(System.tmp_dir!(), "cyfr-scaffold-#{System.unique_integer([:positive])}")
@@ -251,11 +251,11 @@ defmodule Cyfr.StackShapeTest do
     assert "keeper.seccomp.json" in entries
 
     {profile, 0} = System.cmd("tar", ["-xOzf", tarball, "keeper.seccomp.json"])
-    assert profile == read!("apps/keeper/seccomp/keeper.json")
+    assert profile == read!("apps/locus/keeper/seccomp/keeper.json")
   end
 
   # Each image names its pooled uids for the service that runs under them,
-  # `printf '<name>%02d'` over `<base> + i`; cyfr-keeper refuses pools that
+  # `printf '<name>%02d'` over `<base> + i`; cyfr-locus refuses pools that
   # overlap within one container, and this keeps the images' pools and
   # their services' own users apart across containers too.
   test "every pooled uid is named for its service, and no two pools or services share a uid" do

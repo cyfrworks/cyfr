@@ -11,7 +11,7 @@
 # contracts and Locus (`mix release locus`). Compose runs it twice, as
 # locus-builds and as locus-backends, each with its own key and pool.
 #
-# Process model: cyfr-keeper runs as root holding only SETUID, SETGID and
+# Process model: cyfr-locus runs as root holding only SETUID, SETGID and
 # KILL (it refuses to start with any other capability), starts the locus
 # release as locus, and runs every build or backend under a pooled uid of
 # its own — builds as locus-build01…locus-build16 (30001-30016), backends as
@@ -20,23 +20,23 @@
 # (LOCUS_BUILDS_MEMORY_BYTES, 1 GiB, and LOCUS_BACKENDS_MEMORY_BYTES, 512
 # MiB, unless set). When a build or a backend ends every process of its uid
 # is killed and everything the uid left is removed before another gets it;
-# the locus release refuses to serve either without cyfr-keeper.
+# the locus release refuses to serve either without cyfr-locus.
 #
-# The memory bound is a cgroup v2 group cyfr-keeper makes for each spawn, so
+# The memory bound is a cgroup v2 group cyfr-locus makes for each spawn, so
 # the container must be started with the security option
 # `writable-cgroups=true` (Docker Engine 28 or later on a cgroup v2 host).
-# It adds no capability. Without it cyfr-keeper cannot bound a spawn and
+# It adds no capability. Without it cyfr-locus cannot bound a spawn and
 # refuses every one: the service answers each `unavailable`, naming the
 # option, and none runs unbounded.
 
-# ---- cyfr-keeper, the process helper: a static Go binary, pinned to the Go
-# release apps/keeper/go.mod names ----
+# ---- cyfr-locus, the process helper: a static Go binary, pinned to the Go
+# release apps/locus/keeper/go.mod names ----
 FROM golang:1.27.1-alpine AS keeper
 WORKDIR /src
-COPY apps/keeper/go.mod apps/keeper/go.sum ./
+COPY apps/locus/keeper/go.mod apps/locus/keeper/go.sum ./
 RUN go mod download
-COPY apps/keeper/ ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-keeper .
+COPY apps/locus/keeper/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus .
 
 # ---- Stage 1: release build ----
 FROM hexpm/elixir:1.20.3-erlang-29.0.5-debian-bookworm-20260824 AS relbuilder
@@ -155,7 +155,7 @@ RUN ARCH=$(dpkg --print-architecture) \
 
 # The toolchains stay root-owned: a build or a backend reads them and
 # writes only its own home, so none can alter what the next one runs
-# with. Every spawn runs with cyfr-keeper's fixed PATH, so the Rust
+# with. Every spawn runs with cyfr-locus's fixed PATH, so the Rust
 # toolchain's commands are linked into /usr/local/bin.
 RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 
@@ -185,7 +185,7 @@ ENV ELIXIR_ERL_OPTIONS="+fnu"
 
 WORKDIR /app
 
-COPY --from=keeper /out/cyfr-keeper /usr/local/bin/cyfr-keeper
+COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
 COPY --from=relbuilder /app/_build/prod/rel/locus ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
@@ -234,4 +234,4 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
 # (docker-compose.yml's locus-builds service). The backends service runs
 # the same image with the backends pool in its place (docker-compose.yml's
 # locus-backends service).
-ENTRYPOINT ["cyfr-keeper", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+ENTRYPOINT ["cyfr-locus", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]

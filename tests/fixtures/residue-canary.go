@@ -4,7 +4,7 @@
 //go:build linux
 
 // Command residue-canary plants and looks for what a process can leave
-// behind outside its processes, for the image tests of cyfr-keeper's pooled
+// behind outside its processes, for the image tests of cyfr-locus's pooled
 // uids (tests/locus-backends-image/residue.py, tests/builder-image). It uses
 // only the standard library, so it builds as one file:
 //

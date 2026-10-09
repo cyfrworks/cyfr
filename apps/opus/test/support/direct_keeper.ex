@@ -3,7 +3,7 @@
 
 defmodule Opus.Keeper.Direct do
   @moduledoc """
-  The test build's keeper for a machine without `cyfr-keeper`, compiled
+  The test build's keeper for a machine without `cyfr-locus`, compiled
   from the test support alone and named by the test build's application
   environment (`Opus.Keeper.direct_keeper/0`): a runner is a child
   process of this VM, started with the argv and the explicit environment
@@ -12,10 +12,10 @@ defmodule Opus.Keeper.Direct do
   standard input and output (`OPUS_CONTROL_FD=0`), since a plain port
   hands a child no other descriptor; its standard error is a fifo in its
   home that a reader of its own relays to the process that spawned it, as
-  `cyfr-keeper` relays a runner's, so its log lines are this VM's log's.
+  `cyfr-locus` relays a runner's, so its log lines are this VM's log's.
   Its relay (`Prima.RunnerRelay`) is a unix socket in its home
   (`OPUS_RELAY_SOCKET`) the runner connects to, carried by a process of
-  its own to the process that spawned it as `cyfr-keeper` carries stream
+  its own to the process that spawned it as `cyfr-locus` carries stream
   5. It isolates nothing: a runner can read and signal this VM, and has
   this VM's network. A deployment runs the image, whose keeper isolates.
 
@@ -54,7 +54,7 @@ defmodule Opus.Keeper.Direct do
     if Opus.Settings.channel_inherited?(env),
       do:
         {:error,
-         "a keeper channel was inherited (#{Opus.Settings.channel_env()}); only cyfr-keeper may start runners here"},
+         "a keeper channel was inherited (#{Opus.Settings.channel_env()}); only cyfr-locus may start runners here"},
       else: :ok
   end
 
@@ -129,7 +129,7 @@ defmodule Opus.Keeper.Direct do
   # The runner's relay: a unix socket in its home that the runner connects
   # to, listened on before the runner starts, and a process of this
   # keeper's that accepts the one connection and carries its bytes both
-  # ways, as `cyfr-keeper` carries stream 5.
+  # ways, as `cyfr-locus` carries stream 5.
   defp relay(home) do
     path = Path.join(home, @relay_socket)
     owner = self()

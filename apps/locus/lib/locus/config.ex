@@ -47,7 +47,7 @@ defmodule Locus.Config do
   declares the prefix, because the release carries no host module to
   declare it.
 
-  `:memory_bytes` is the bound every build's spawn asks cyfr-keeper for
+  `:memory_bytes` is the bound every build's spawn asks cyfr-locus for
   (`Locus.Keeper`), and `:backends_memory_bytes` the bound each backend's
   process is spawned under: the memory of the processes, what they write
   to their home and the kernel memory charged to them, together. Their
@@ -94,7 +94,7 @@ defmodule Locus.Config do
     backends_memory_bytes: 536_870_912
   ]
 
-  # cyfr-keeper's range for a spawn's `memory_bytes` (`apps/keeper`'s
+  # cyfr-locus's range for a spawn's `memory_bytes` (`apps/locus/keeper`'s
   # protocol, MinMemoryBytes to MaxMemoryBytes).
   @memory_range 16_777_216..1_099_511_627_776
 
@@ -323,7 +323,7 @@ defmodule Locus.Config do
   @spec max_concurrent_per_tenant() :: pos_integer()
   def max_concurrent_per_tenant, do: get(:max_concurrent_per_tenant)
 
-  @doc "The memory bound every build's spawn asks cyfr-keeper for, in bytes."
+  @doc "The memory bound every build's spawn asks cyfr-locus for, in bytes."
   @spec memory_bytes() :: pos_integer()
   def memory_bytes, do: get(:memory_bytes)
 

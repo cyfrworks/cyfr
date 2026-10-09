@@ -25,7 +25,7 @@
 #
 # `cyfr init` writes this file (and Caddyfile, keeper.seccomp.json + .env)
 # into a fresh project dir; from a source checkout, `cp .env.example .env`
-# and `cp apps/keeper/seccomp/keeper.json keeper.seccomp.json` instead. Then:
+# and `cp apps/locus/keeper/seccomp/keeper.json keeper.seccomp.json` instead. Then:
 #   docker compose --profile locus-builds up -d   # cyfr + locus-backends + opus + locus-builds
 #   docker compose --profile locus-builds --profile tls up -d   # also Caddy for TLS
 # `cyfr up` selects each profile from .env: `locus-builds` when
@@ -140,10 +140,10 @@ services:
     # listening on it (LOCUS_BUILDS_BIND is for a builder outside compose).
     networks:
       - locus-builds
-    # docker-init is PID 1 and forwards stop signals to cyfr-keeper, the
+    # docker-init is PID 1 and forwards stop signals to cyfr-locus, the
     # child subreaper of every build process.
     init: true
-    # cyfr-keeper refuses to start with any capability other than these: it
+    # cyfr-locus refuses to start with any capability other than these: it
     # starts the locus release and each build under their own uids and
     # signals their processes. The release and every build run with none.
     cap_drop:
@@ -154,7 +154,7 @@ services:
       - KILL
     # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
     # mounts the container's own cgroup writable, which adds no capability:
-    # cyfr-keeper gives every build a group of its own there, bounded at
+    # cyfr-locus gives every build a group of its own there, bounded at
     # LOCUS_BUILDS_MEMORY_BYTES. Without the option it cannot bound a build
     # and refuses every one: the service answers each build `unavailable`,
     # naming the option, and none runs unbounded.
@@ -163,7 +163,7 @@ services:
       - writable-cgroups=true
     # No /data mount, read-only root: the builder holds no tenant state —
     # sources arrive in the request, artifacts leave in the response. The
-    # tmpfs mounts below are the only writable surfaces, and cyfr-keeper
+    # tmpfs mounts below are the only writable surfaces, and cyfr-locus
     # refuses to start if any other location is writable by a build's uid
     # (`ipc: none` leaves /dev/shm unmounted). Build homes: each build's
     # uid creates its own 0700 home holding its sources, Cargo home, npm
@@ -229,10 +229,10 @@ services:
       - OPUS_PORT=4200
     networks:
       - worker
-    # docker-init is PID 1 and forwards stop signals to cyfr-keeper, the
+    # docker-init is PID 1 and forwards stop signals to cyfr-locus, the
     # child subreaper of every runner process.
     init: true
-    # cyfr-keeper refuses to start with any capability other than these: it
+    # cyfr-locus refuses to start with any capability other than these: it
     # starts the opus release and each runner under their own uids and
     # signals their processes. The release and every runner run with none.
     cap_drop:
@@ -243,9 +243,9 @@ services:
       - KILL
     # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
     # mounts the container's own cgroup writable, which adds no capability:
-    # cyfr-keeper bounds a spawn's memory with a group of its own there, and
+    # cyfr-locus bounds a spawn's memory with a group of its own there, and
     # refuses a spawn that asks for a bound where it cannot make one.
-    # cyfr-keeper clones every runner into a user and network namespace of
+    # cyfr-locus clones every runner into a user and network namespace of
     # its own, with no route out. Docker's default seccomp profile denies a
     # clone that makes a namespace, so the service runs under
     # keeper.seccomp.json, shipped beside this file (the image's
@@ -255,14 +255,14 @@ services:
     # restricts them (kernel.apparmor_restrict_unprivileged_userns=1, as on
     # Ubuntu 24.04 and later), the container keeps Docker's default
     # AppArmor profile, under which the clone is allowed. Without either,
-    # cyfr-keeper refuses to start, naming both, and the container
+    # cyfr-locus refuses to start, naming both, and the container
     # restart-loops.
     security_opt:
       - no-new-privileges:true
       - writable-cgroups=true
       - seccomp=./keeper.seccomp.json
     # The engine holds no tenant state: read-only root, and the tmpfs
-    # mounts below are the only writable surfaces; cyfr-keeper refuses to
+    # mounts below are the only writable surfaces; cyfr-locus refuses to
     # start if any other location is writable by a runner's uid
     # (`ipc: none` leaves /dev/shm unmounted). Runner homes: each runner's
     # uid creates its own 0700 home, where its VM keeps the release's
@@ -294,7 +294,7 @@ services:
           # charged to it, together, and a runner that reaches it is ended
           # there alone. This limit holds every runner uid the image has (8)
           # at that bound and the service beside them: 8 x 384 MiB + 1 GiB,
-          # where the service (cyfr-keeper and the opus release) peaked at
+          # where the service (cyfr-locus and the opus release) peaked at
           # 192-206 MiB serving the seed components
           # (tests/worker-image/memory.py --measure). Raise it with the
           # bound (.env.example has the arithmetic).
@@ -321,7 +321,7 @@ services:
       - "4101"
     # The image's entrypoint serves builds; this service runs the backend
     # pool instead: 32 uids, each backend under one of its own.
-    entrypoint: ["cyfr-keeper", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+    entrypoint: ["cyfr-locus", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
     # Backends-only settings from .env.locus, every one a LOCUS_BACKENDS_*
     # name. The service never sees the rest of .env: not the keyring, not
     # the database, not the worker root, not the builds key, and refuses to
@@ -345,12 +345,12 @@ services:
     # interface is listening on it.
     networks:
       - locus-backends
-    # docker-init is PID 1 and forwards stop signals to cyfr-keeper, the
+    # docker-init is PID 1 and forwards stop signals to cyfr-locus, the
     # child subreaper of every backend process: an orphaned backend
     # process is reparented to it, not to docker-init, and retired with
     # its uid.
     init: true
-    # cyfr-keeper refuses to start with any capability other than these: it
+    # cyfr-locus refuses to start with any capability other than these: it
     # starts the locus release and each backend under their own uids and
     # signals their processes. The release and every backend run with none.
     cap_drop:
@@ -361,7 +361,7 @@ services:
       - KILL
     # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
     # mounts the container's own cgroup writable, which adds no capability:
-    # cyfr-keeper gives every backend a group of its own there, bounded at
+    # cyfr-locus gives every backend a group of its own there, bounded at
     # LOCUS_BACKENDS_MEMORY_BYTES. Without the option it cannot bound a
     # backend and refuses every spawn as `memory_unavailable`: each backend
     # reports that refusal as its error, and none runs unbounded.
@@ -369,7 +369,7 @@ services:
       - no-new-privileges:true
       - writable-cgroups=true
     # The root is read-only and the tmpfs mounts below are the only writable
-    # surfaces; cyfr-keeper refuses to start if any other location is
+    # surfaces; cyfr-locus refuses to start if any other location is
     # writable by a backend's uid, so a backend has no shared /tmp,
     # /var/tmp, /run or /dev/shm (`ipc: none` leaves /dev/shm unmounted)
     # and writes temporary files under its home. Backend homes: each

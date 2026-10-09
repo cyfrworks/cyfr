@@ -14,7 +14,7 @@ and driven only by requests signed as CYFR signs them (harness.py):
   semaphore set, a message queue and a POSIX message queue — is gone, with
   every process of its uid, once its owner is released, before a second
   owner runs under the same uid; and the keeper logs no quarantine.
-- cyfr-keeper refuses to start where a pooled uid could write a shared
+- cyfr-locus refuses to start where a pooled uid could write a shared
   location: a writable root, a shared /tmp, Docker's default /dev/shm.
 
 Prerequisites: harness.py's. Usage: tests/locus-backends-image/residue.py IMAGE
@@ -112,12 +112,12 @@ def main():
                held_by_uid(stack))
         logs = stack.logs()
         expect(not re.search(r"quarantined|outlived retirement|could not be removed", logs),
-               "cyfr-keeper retired the uid cleanly", logs[-3000:])
+               "cyfr-locus retired the uid cleanly", logs[-3000:])
 
         settings = ["--rm", "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
                     "--security-opt", "no-new-privileges:true", "-e", f"LOCUS_BACKENDS_KEY={stack.key.hex()}",
                     "--tmpfs", f"{HOME_ROOT}:mode=1733", "--tmpfs", f"{RUN_DIR}:uid=10001,gid=10001,mode=0700",
-                    "--entrypoint", "cyfr-keeper"]
+                    "--entrypoint", "cyfr-locus"]
         command = ["serve", "--pool", f"backends:{UID}-{UID}", "--home-root", HOME_ROOT, "--client-user",
                    RELEASE_USER, "--", "/app/bin/locus", "start"]
         for flags, refusal in [
@@ -127,7 +127,7 @@ def main():
         ]:
             result = run("docker", "run", *settings, *flags, image, *command, check=False)
             expect(result.returncode == 78 and re.search(refusal, result.stderr),
-                   f"cyfr-keeper refuses to start with {' '.join(flags)}", result.stderr[-2000:])
+                   f"cyfr-locus refuses to start with {' '.join(flags)}", result.stderr[-2000:])
     finally:
         stack.down()
         shutil.rmtree(canary_dir, ignore_errors=True)

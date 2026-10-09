@@ -702,9 +702,9 @@ jobs:
       - name: Build a component through its lock lifecycle, and a tincture
         run: python3 scripts/builder-smoke.py cyfr-locus:smoke
 
-      # Under the same settings: cyfr-keeper holds exactly SETUID|SETGID|KILL
+      # Under the same settings: cyfr-locus holds exactly SETUID|SETGID|KILL
       # and the release none, with no distribution listener, and the release
-      # refuses to serve without cyfr-keeper; a build runs under a pooled uid
+      # refuses to serve without cyfr-locus; a build runs under a pooled uid
       # in a 0700 home, cannot read or signal the release (whose environ
       # holds the builds key), list the home root or read a concurrent
       # build's tree; a daemon a build.rs starts is gone, with the home, when
@@ -899,10 +899,10 @@ jobs:
       # Each backend under its own pooled uid, alone in its group, in a 0700
       # home, with an environment of its sealed block alone; none can read
       # another's home or /proc environ or the release's, nor signal
-      # another backend, a relay, the release or cyfr-keeper; cyfr-keeper
+      # another backend, a relay, the release or cyfr-locus; cyfr-locus
       # holds exactly SETUID|SETGID|KILL and the release none; releasing an
       # owner leaves no process of its uid, a setsid daemon ignoring SIGTERM
-      # included, and no home; and when the release dies cyfr-keeper
+      # included, and no home; and when the release dies cyfr-locus
       # retires every backend and exits.
       - name: Backend isolation
         run: python3 tests/locus-backends-image/isolation.py cyfr-locus:backends
@@ -1395,6 +1395,8 @@ jobs:
             'Locus\.Test\.FakeSpawner\b' \
             '(^|[^A-Za-z])([Ss]pawners?([^a-z]|$)|SPAWNERS?([^A-Z]|$))|[a-z]Spawner' \
             'Opus\.Keeper\.Spawn\b' \
+            'cyfr-keeper' \
+            'apps/keeper/' \
             'CYFR_WORKER_KEY' \
             'CYFR_WORKERS\b' \
             'CYFR_EXECUTION_EVENTS_' \

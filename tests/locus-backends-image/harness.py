@@ -59,7 +59,7 @@ RELEASE_USER = "locus"
 HOME_ROOT = "/var/lib/locus/homes"
 RUN_DIR = "/run/locus"
 PROBE = "node /probe/probe-backend.mjs"
-# cyfr-keeper's effective, permitted and bounding sets: SETUID, SETGID and
+# cyfr-locus's effective, permitted and bounding sets: SETUID, SETGID and
 # KILL alone.
 KEEPER_CAPS = "00000000000000e0"
 # The MCP revision a signed invoke declares (Prima.MCP.Protocol).

@@ -7,8 +7,8 @@ defmodule Opus.Keeper do
   processes its runners are, behind one behaviour chosen by
   `config :opus, :keeper` (`Opus.Settings`):
 
-    * `:channel`, `Opus.Keeper.Channel` — the client of `cyfr-keeper`
-      (`apps/keeper`), the keeper the image starts the service under and
+    * `:channel`, `Opus.Keeper.Channel` — the client of `cyfr-locus`
+      (`apps/locus/keeper`), the keeper the image starts the service under and
       the one keeper every build runs: each runner is spawned in the
       keeper's `runner` uid pool with an explicit environment, and its
       control channel (`Prima.RunnerControl`) is the socket on its file
@@ -143,13 +143,13 @@ defmodule Opus.Keeper do
   def module(:direct) do
     direct_keeper() ||
       raise ArgumentError,
-            "[Opus.Keeper] this build has no direct keeper: runners start only through cyfr-keeper"
+            "[Opus.Keeper] this build has no direct keeper: runners start only through cyfr-locus"
   end
 
   @doc """
   `keeper.available/2` under `env` (the process environment by default),
   raising with the reason when it refuses. The refusal of the channel
-  keeper names `cyfr-keeper`, the one process that can start the service
+  keeper names `cyfr-locus`, the one process that can start the service
   with the channel it needs.
   """
   @spec check!(module(), keyword(), %{optional(String.t()) => String.t()}) :: :ok
@@ -166,9 +166,9 @@ defmodule Opus.Keeper do
   end
 
   defp remedy(Opus.Keeper.Channel) do
-    ". The worker service starts its runners only through cyfr-keeper, which " <>
+    ". The worker service starts its runners only through cyfr-locus, which " <>
       "starts it with the keeper channel on fd 3 (#{Opus.Settings.channel_env()}): start " <>
-      "the release through `cyfr-keeper serve --pool runner:… -- /app/bin/opus start` " <>
+      "the release through `cyfr-locus serve --pool runner:… -- /app/bin/opus start` " <>
       "(the image's entrypoint)."
   end
 

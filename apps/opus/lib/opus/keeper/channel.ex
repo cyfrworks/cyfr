@@ -3,13 +3,13 @@
 
 defmodule Opus.Keeper.Channel do
   @moduledoc """
-  The client of `cyfr-keeper` (`apps/keeper`), the keeper the image starts
+  The client of `cyfr-locus` (`apps/locus/keeper`), the keeper the image starts
   the service under, and the runners it starts in the keeper's `runner`
   uid pool.
 
   ## The channel
 
-  `cyfr-keeper serve` starts the service with a socketpair on file
+  `cyfr-locus serve` starts the service with a socketpair on file
   descriptor 3 and `KEEPER_CHANNEL` naming it. This process owns
   that channel, whose messages are JSON objects one per line, and the
   attach socket in `:attach_dir` every runner's relay connects to;
@@ -49,7 +49,7 @@ defmodule Opus.Keeper.Channel do
   report what it holds, then the kill, and retires the uid: every process
   of it killed and everything it left removed before another runner gets
   it. `exited` reports the leader's end and `released` the retirement.
-  When the channel closes, `cyfr-keeper` has already retired every spawn
+  When the channel closes, `cyfr-locus` has already retired every spawn
   and is exiting: every runner's owner hears `{:error, :channel_lost}`
   and this process stops, taking the pool and the service with it.
 
@@ -57,17 +57,17 @@ defmodule Opus.Keeper.Channel do
 
   Every spawn this client asks for carries `memory_bytes`, the pool's
   `:runner_memory_bytes` (`Opus.Settings.runner_memory_bytes/1`), or the
-  `:memory_bytes` it was started with; nothing asks for none. `cyfr-keeper`
+  `:memory_bytes` it was started with; nothing asks for none. `cyfr-locus`
   gives the runner a cgroup of its own at that bound: its VM, every
   guest's linear memory, the pages of its home and the kernel memory
   charged to it, together. A runner that cannot stay under it loses every
   process at once; the leader's `exited` then says `memory_exceeded`,
-  read by `cyfr-keeper` from the group's own counters, and this client
+  read by `cyfr-locus` from the group's own counters, and this client
   logs the runner's end at its bound before its owner hears the exit and
   the retirement that follow, as for any other runner's end: the pool
   taints it, the service reports it with the subtree it held, and its uid
   is retired and scrubbed before another runner gets it. Where
-  `cyfr-keeper` cannot give a runner such a group it refuses the spawn as
+  `cyfr-locus` cannot give a runner such a group it refuses the spawn as
   `memory_unavailable`, which the owner hears as
   `{:refused, :memory_unavailable}` (a spawn's refusal, as `refusal/1`
   reads it; any other code the keeper refuses one with is heard as it
@@ -102,13 +102,13 @@ defmodule Opus.Keeper.Channel do
   @attach_frame_bytes IO.iodata_length(KeeperProtocol.end_frame(:attach)) +
                         KeeperProtocol.token_hex_bytes()
 
-  # cyfr-keeper bounds a stage and a relay's dial at 10 s each.
+  # cyfr-locus bounds a stage and a relay's dial at 10 s each.
   @start_timeout_ms 15_000
   @attach_timeout_ms 10_000
   @channel_send_timeout_ms 30_000
   @stats_timeout_ms 5_000
 
-  @memory_unavailable "cyfr-keeper cannot bound a runner's memory in this container, so it " <>
+  @memory_unavailable "cyfr-locus cannot bound a runner's memory in this container, so it " <>
                         "starts none: start the opus service with the security option " <>
                         "writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
 
@@ -200,11 +200,11 @@ defmodule Opus.Keeper.Channel do
 
   def refusal(code) when is_binary(code) do
     reason = if Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, code), do: code, else: "refused"
-    %{reason: reason, message: "cyfr-keeper refused to start a runner (#{reason})"}
+    %{reason: reason, message: "cyfr-locus refused to start a runner (#{reason})"}
   end
 
   def refusal(_reason),
-    do: %{reason: "refused", message: "cyfr-keeper refused to start a runner"}
+    do: %{reason: "refused", message: "cyfr-locus refused to start a runner"}
 
   @impl Opus.Keeper
   def stats, do: stats(__MODULE__)
@@ -654,7 +654,7 @@ defmodule Opus.Keeper.Channel do
 
   defp on_reply({:exited, spawn_id, exit, memory_exceeded}, state) do
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
-      # cyfr-keeper read it from the group's own counters: the kernel killed
+      # cyfr-locus read it from the group's own counters: the kernel killed
       # the runner at its bound, not for the container's limit.
       if memory_exceeded do
         Logger.warning(
@@ -860,7 +860,7 @@ defmodule Opus.Keeper.Channel do
           {:error, :unencodable} ->
             Logger.error(
               "[Opus.Keeper.Channel] runner #{entry.runner} was not released: a grace of " <>
-                "#{grace_ms} ms is past what cyfr-keeper accepts"
+                "#{grace_ms} ms is past what cyfr-locus accepts"
             )
 
             state
