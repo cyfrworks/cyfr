@@ -51,8 +51,8 @@ defmodule Cyfr.GenServerCatchallTest do
     Sanctum.Authority.BudgetGuard => "guards live invoke budgets"
   }
 
-  # The libs the control plane's release holds. Opus's and Locus's adopters
-  # run in their own VMs and are rostered by their own suites.
+  # The libs the control plane's release holds. Locus's adopters, the
+  # runtime's among them, run in their own VMs and are rostered by their own suites.
   @release_libs ~w(apps/cyfr/lib apps/arca/lib apps/sanctum/lib)
 
   # Classify GenServers requiring fixture setup before catch-all probing.

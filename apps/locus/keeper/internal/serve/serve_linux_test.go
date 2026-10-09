@@ -409,7 +409,7 @@ printf 'echo:%s\n' "$line" >&3
 echo 'to stderr' >&2
 exec 3>&-
 sleep 60`
-	spawnID, uid, rc := k.spawn(t, "1", script, map[string]string{"OPUS_ROLE": "runner"}, true)
+	spawnID, uid, rc := k.spawn(t, "1", script, map[string]string{"RUNTIME_ROLE": "runner"}, true)
 	rc.send(t, frame.StreamControl, []byte(`{"v":1,"type":"assign"}`+"\n"))
 	rc.readUntil(t, func() bool {
 		return rc.ended[frame.StreamControl] && strings.Contains(string(rc.got[frame.StreamStdout]), "env:done\n")
@@ -424,7 +424,7 @@ sleep 60`
 	if !strings.Contains(stdout, "fd3:open\n") {
 		t.Fatalf("fd 3 is not open in the runner:\n%s", stdout)
 	}
-	for _, want := range []string{"OPUS_ROLE=runner\n", "HOME=" + k.homes + "/" + strconv.Itoa(uid) + "-", "USER=" + strconv.Itoa(uid) + "\n"} {
+	for _, want := range []string{"RUNTIME_ROLE=runner\n", "HOME=" + k.homes + "/" + strconv.Itoa(uid) + "-", "USER=" + strconv.Itoa(uid) + "\n"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("environment lacks %q:\n%s", want, stdout)
 		}
@@ -691,7 +691,7 @@ func TestAnIsolatedSpawnsRelayIsCarriedOnceOpened(t *testing.T) {
 	assertRetired(t, k, uid)
 }
 
-// A client that never opens stream 5, as today's Opus client, never
+// A client that never opens stream 5, as the runtime's client today, never
 // receives a frame on it, its end included, though the spawn wrote to its
 // relay and exited.
 func TestAnIsolatedSpawnsRelayIsSilentUnopened(t *testing.T) {

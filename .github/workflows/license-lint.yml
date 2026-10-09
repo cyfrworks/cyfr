@@ -1,9 +1,8 @@
 name: License Lint
 
 # Check directory-based licensing: the `apps/sanctum` application uses
-# FSL-1.1-Apache-2.0; all other source uses Apache-2.0. The Locus and
-# Opus images are Apache-2.0 alone, so the apps they release reach no FSL
-# file.
+# FSL-1.1-Apache-2.0; all other source uses Apache-2.0. The Locus image
+# is Apache-2.0 alone, so the apps it releases reach no FSL file.
 
 on:
   pull_request:
@@ -18,7 +17,6 @@ on:
       - 'LICENSES/**'
       - 'mix.exs'
       - 'Dockerfile.locus'
-      - 'Dockerfile.opus'
       - '.github/workflows/license-lint.yml'
   push:
     branches: [main]
@@ -33,7 +31,6 @@ on:
       - 'LICENSES/**'
       - 'mix.exs'
       - 'Dockerfile.locus'
-      - 'Dockerfile.opus'
 
 jobs:
   spdx-headers:
@@ -98,18 +95,18 @@ jobs:
             exit 1
           fi
 
-      # The `locus` and `opus` images are labelled Apache-2.0 alone, so what
-      # each releases must be: its release names the contracts and its own
-      # app and nothing else (root mix.exs), its app depends in the umbrella
-      # on the contracts alone, and no file of either app carries the FSL
-      # header. A reach into the control plane is a compile error in the
-      # island's own build (test.yml's independence jobs); this is the same
-      # boundary read as a licence.
-      - name: Assert the Apache-2.0 images release no FSL code
+      # The `locus` image is labelled Apache-2.0 alone, so what it releases
+      # must be: its release names the contracts and its own app and nothing
+      # else (root mix.exs), its app depends in the umbrella on the
+      # contracts alone, and no file of the app carries the FSL header. A
+      # reach into the control plane is a compile error in the island's own
+      # build (test.yml's independence jobs); this is the same boundary read
+      # as a licence.
+      - name: Assert the Apache-2.0 image releases no FSL code
         run: |
           set -uo pipefail
           fail=0
-          for app in locus opus; do
+          for app in locus; do
             file="Dockerfile.$app"
             if ! grep -qxF 'LABEL org.opencontainers.image.licenses="Apache-2.0"' "$file"; then
               echo "::error file=$file::the $app image must be labelled Apache-2.0 alone"

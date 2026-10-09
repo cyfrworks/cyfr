@@ -31,21 +31,22 @@ defmodule Cyfr.DocsDriftTest do
 
   # The glossary names each part once, with the environment prefixes it
   # owns. The prefixes are this roster, each named by one row.
-  @env_prefixes ~w(CYFR_ CYFR_OPUS_ CYFR_CRUCIBLE_ CYFR_HOST_API_ CYFR_LOCUS_BUILDS_
-                   CYFR_LOCUS_BACKENDS_ OPUS_ LOCUS_BUILDS_ LOCUS_BACKENDS_ KEEPER_)
-  @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Crucible Emissary Prism Codex Opus Locus
+  @env_prefixes ~w(CYFR_ CYFR_CRUCIBLE_ CYFR_HOST_API_ CYFR_LOCUS_RUNTIME_ CYFR_LOCUS_BUILDS_
+                   CYFR_LOCUS_BACKENDS_ LOCUS_RUNTIME_ LOCUS_BUILDS_ LOCUS_BACKENDS_ LOCUS_LOG_
+                   KEEPER_ RUNTIME_)
+  @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Crucible Emissary Prism Codex Locus
                      actor athanor)
 
   # The files that read the releases' environment: the control plane's
   # configuration (the `CYFR_*` variables `config/runtime.exs` reads into
   # the operator keys of `Cyfr.Boundaries.config_key_classes/0`, the
   # resolvers it calls, and the platform settings roster whose variables it
-  # reads), the Opus release's `OPUS_*` rows in the same file, the Locus
-  # release's `Locus.Config`, the Opus settings, and the keeper's own
-  # sources (`keeper_sources/0`).
+  # reads), the Locus release's `Locus.Config`, the runtime role's
+  # `Locus.Runtime.Settings` (its `LOCUS_RUNTIME_*` names and its runners'
+  # `RUNTIME_*`), and the keeper's own sources (`keeper_sources/0`).
   @env_readers ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex
                   apps/cyfr/lib/cyfr/platform/settings/roster.ex
-                  apps/locus/lib/locus/config.ex apps/opus/lib/opus/settings.ex)
+                  apps/locus/lib/locus/config.ex apps/locus/lib/locus/runtime/settings.ex)
 
   # The names the roster spells that no release reads: those other
   # programs own (`Roster.foreign/0`), which their owners document, and
@@ -157,7 +158,7 @@ defmodule Cyfr.DocsDriftTest do
     for file <- @env_readers ++ keeper_sources(),
         [name] <-
           Regex.scan(
-            ~r/"((?:CYFR|OPUS|LOCUS|KEEPER)_[A-Z0-9_]*[A-Z0-9])"/,
+            ~r/"((?:CYFR|LOCUS|KEEPER|RUNTIME)_[A-Z0-9_]*[A-Z0-9])"/,
             File.read!(Path.join(@repo_root, file)),
             capture: :all_but_first
           ),
@@ -178,7 +179,7 @@ defmodule Cyfr.DocsDriftTest do
 
     # Guards against the scan quietly matching nothing.
     assert "CYFR_LOCUS_BACKENDS_KEY" in read and "LOCUS_BACKENDS_KEY" in read
-    assert "OPUS_SERVICE_KEY" in read and "KEEPER_CHANNEL" in read
+    assert "LOCUS_RUNTIME_KEY" in read and "KEEPER_CHANNEL" in read
     assert length(read) >= 100, "the scan found only #{length(read)} variables"
 
     unowned = Enum.filter(read, &is_nil(owning_prefix(&1)))
@@ -576,7 +577,7 @@ defmodule Cyfr.DocsDriftTest do
                apps/cyfr/lib/cyfr/platform/settings/roster.ex),
           [name] <-
             Regex.scan(
-              ~r/"(CYFR_OPUS_WORKERS|CYFR_OPUS_[A-Z0-9_]+|CYFR_HOST_API_[A-Z0-9_]+)"/,
+              ~r/"(CYFR_LOCUS_RUNTIME_[A-Z0-9_]+|CYFR_HOST_API_[A-Z0-9_]+)"/,
               File.read!(Path.join(@repo_root, file)),
               capture: :all_but_first
             ),
@@ -597,15 +598,15 @@ defmodule Cyfr.DocsDriftTest do
   # Where each setting of the worker and the builder is documented
   #
   # Compose hands a service the values its `environment:` names, over
-  # anything its own env file sets: the opus service gets its id, its key
-  # and the host URL interpolated from the project .env and a fixed bind
-  # address and port; the builds service gets its key from .env's
-  # CYFR_LOCUS_BUILDS_KEY. So a variable the opus or locus release reads has
-  # one place an operator sets it, and the documentation is there alone:
+  # anything its own env file sets: the locus-runtime service gets its id,
+  # its key and the host URL interpolated from the project .env and a fixed
+  # bind address and port; the builds service gets its key from .env's
+  # CYFR_LOCUS_BUILDS_KEY. So a variable the locus release reads has one
+  # place an operator sets it, and the documentation is there alone:
   #
   #   * `.env.example`, for what compose interpolates from the project .env;
-  #   * the service's own example (`.env.opus.example`, `.env.locus.example`),
-  #     for what its env file can set;
+  #   * the services' own example (`.env.locus.example`, one file for every
+  #     role), for what its env file can set;
   #   * integration-guide.md's "Running a worker outside Compose", for what
   #     compose fixes and a release run without it is given itself.
   #
@@ -653,23 +654,22 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
-  # The variables the opus and locus releases read from their operator:
-  # config/runtime.exs's OPUS_* (OPUS_ROLE is the keeper's, set on a
-  # runner, not an operator's) and Locus.Config's LOCUS_BUILDS_* and
-  # LOCUS_BACKENDS_*.
-  defp release_variables(runtime, locus_config) do
-    opus =
-      Regex.scan(~r/"(OPUS_[A-Z0-9_]+)"/, runtime, capture: :all_but_first)
+  # The variables the locus release reads from its operator: the runtime
+  # role's LOCUS_RUNTIME_* (`Locus.Runtime.Settings`; the runner's RUNTIME_*
+  # are its service's and the keeper's, set on a runner, not an operator's)
+  # and Locus.Config's LOCUS_BUILDS_*, LOCUS_BACKENDS_* and LOCUS_LOG_*.
+  defp release_variables(runtime_settings, locus_config) do
+    runtime =
+      Regex.scan(~r/"(LOCUS_RUNTIME_[A-Z0-9_]+)"/, runtime_settings, capture: :all_but_first)
       |> List.flatten()
-      |> Enum.reject(&(&1 == "OPUS_ROLE"))
 
     locus =
-      Regex.scan(~r/"(LOCUS_(?:BUILDS|BACKENDS)_[A-Z0-9_]+)"/, locus_config,
+      Regex.scan(~r/"(LOCUS_(?:BUILDS|BACKENDS|LOG)_[A-Z0-9_]+)"/, locus_config,
         capture: :all_but_first
       )
       |> List.flatten()
 
-    Enum.uniq(opus ++ locus)
+    Enum.uniq(runtime ++ locus)
   end
 
   # Each service's env files other than the project .env, and the names its
@@ -715,8 +715,7 @@ defmodule Cyfr.DocsDriftTest do
   # The documentation texts the rules read, by the name a failure shows.
   defp homes do
     Map.new(
-      ~w(.env.example .env.opus.example .env.locus.example integration-guide.md
-         configuration-guide.md),
+      ~w(.env.example .env.locus.example integration-guide.md configuration-guide.md),
       &{&1, File.read!(Path.join(@repo_root, &1))}
     )
   end
@@ -728,7 +727,6 @@ defmodule Cyfr.DocsDriftTest do
 
     documented_in = %{
       ".env.example" => MapSet.difference(documented(homes[".env.example"]), guide),
-      ".env.opus.example" => documented(homes[".env.opus.example"]),
       ".env.locus.example" => documented(homes[".env.locus.example"]),
       "integration-guide.md" => documented_outside_compose(homes["integration-guide.md"]),
       "configuration-guide.md" => guide
@@ -759,7 +757,12 @@ defmodule Cyfr.DocsDriftTest do
       ~r/\$\{([A-Z][A-Z0-9_]*)/ |> Regex.scan(compose, capture: :all_but_first) |> List.flatten()
 
     for variable <- documented(homes[".env.example"]),
-        String.starts_with?(variable, ["OPUS_", "LOCUS_BUILDS_", "LOCUS_BACKENDS_"]),
+        String.starts_with?(variable, [
+          "LOCUS_RUNTIME_",
+          "LOCUS_BUILDS_",
+          "LOCUS_BACKENDS_",
+          "LOCUS_LOG_"
+        ]),
         variable not in interpolated,
         do: variable
   end
@@ -769,7 +772,7 @@ defmodule Cyfr.DocsDriftTest do
 
     variables =
       release_variables(
-        File.read!(Path.join(@repo_root, "config/runtime.exs")),
+        File.read!(Path.join(@repo_root, "apps/locus/lib/locus/runtime/settings.ex")),
         File.read!(Path.join(@repo_root, "apps/locus/lib/locus/config.ex"))
       )
 
@@ -780,12 +783,13 @@ defmodule Cyfr.DocsDriftTest do
     {compose, services, variables, homes} = placement_inputs()
 
     # Guards against the scans quietly matching nothing.
-    assert "OPUS_SERVICE_KEY" in variables and "OPUS_BIND" in variables
+    assert "LOCUS_RUNTIME_KEY" in variables and "LOCUS_RUNTIME_BIND" in variables
     assert "LOCUS_BUILDS_KEY" in variables and "LOCUS_BUILDS_MEMORY_BYTES" in variables
     assert "LOCUS_BACKENDS_KEY" in variables and "LOCUS_BACKENDS_MEMORY_BYTES" in variables
     assert length(variables) >= 27, "the scan found only #{inspect(variables)}"
-    assert services["opus"].env_files == [".env.opus"]
-    assert "OPUS_BIND" in services["opus"].environment
+    assert "LOCUS_LOG_LEVEL" in variables
+    assert services["locus-runtime"].env_files == [".env.locus"]
+    assert "LOCUS_RUNTIME_BIND" in services["locus-runtime"].environment
     assert services["locus-builds"].environment == ["LOCUS_BUILDS_KEY"]
     assert services["locus-backends"].environment == ["LOCUS_BACKENDS_KEY"]
     assert services["locus-backends"].env_files == [".env.locus"]
@@ -823,25 +827,25 @@ defmodule Cyfr.DocsDriftTest do
 
     # The key compose hands the worker from .env, documented in its own
     # file as well: there twice, and overridden where it was planted.
-    planted = plant.(".env.opus.example", "# OPUS_SERVICE_KEY=")
+    planted = plant.(".env.locus.example", "# LOCUS_RUNTIME_KEY=")
 
-    assert {"OPUS_SERVICE_KEY", [".env.example", ".env.opus.example"]} in misplaced(
+    assert {"LOCUS_RUNTIME_KEY", [".env.example", ".env.locus.example"]} in misplaced(
              variables,
              planted
            )
 
-    assert {".env.opus.example", "OPUS_SERVICE_KEY"} in overridden(services, planted)
+    assert {".env.locus.example", "LOCUS_RUNTIME_KEY"} in overridden(services, planted)
 
     # A fixed value documented in the project .env: there twice, and read
     # from .env by nothing.
-    planted = plant.(".env.example", "# OPUS_BIND=0.0.0.0")
+    planted = plant.(".env.example", "# LOCUS_RUNTIME_BIND=0.0.0.0")
 
-    assert {"OPUS_BIND", [".env.example", "integration-guide.md"]} in misplaced(
+    assert {"LOCUS_RUNTIME_BIND", [".env.example", "integration-guide.md"]} in misplaced(
              variables,
              planted
            )
 
-    assert "OPUS_BIND" in stranded(compose, planted)
+    assert "LOCUS_RUNTIME_BIND" in stranded(compose, planted)
 
     # The builder's key in its own file, which compose overrides.
     planted = plant.(".env.locus.example", "# LOCUS_BUILDS_KEY=")
@@ -878,9 +882,13 @@ defmodule Cyfr.DocsDriftTest do
 
     # A setting documented nowhere.
     unplanted =
-      Map.update!(homes, ".env.opus.example", &String.replace(&1, "# OPUS_POOL_SIZE=", "#"))
+      Map.update!(
+        homes,
+        ".env.locus.example",
+        &String.replace(&1, "# LOCUS_RUNTIME_POOL_SIZE=", "#")
+      )
 
-    assert {"OPUS_POOL_SIZE", []} in misplaced(variables, unplanted)
+    assert {"LOCUS_RUNTIME_POOL_SIZE", []} in misplaced(variables, unplanted)
 
     # A guide section that loses its table documents nothing.
     renamed =
@@ -890,7 +898,7 @@ defmodule Cyfr.DocsDriftTest do
         &String.replace(&1, @outside_compose, "Elsewhere")
       )
 
-    assert {"OPUS_PORT", []} in misplaced(variables, renamed)
+    assert {"LOCUS_RUNTIME_PORT", []} in misplaced(variables, renamed)
   end
 
   # Compose reads the variables it interpolates from the project .env, so
@@ -927,10 +935,14 @@ defmodule Cyfr.DocsDriftTest do
     runtime = File.read!(Path.join(@repo_root, "config/runtime.exs"))
     locus_runtime = File.read!(Path.join(@repo_root, "apps/locus/lib/locus/config.ex"))
 
+    runtime_settings =
+      File.read!(Path.join(@repo_root, "apps/locus/lib/locus/runtime/settings.ex"))
+
     for limit <- Enum.filter(interpolated, &String.ends_with?(&1, "_LIMIT")) do
       assert project =~ ~r/^# #{limit}=/m, "#{limit} is not documented in .env.example"
       refute runtime =~ limit, "config/runtime.exs reads the compose-only #{limit}"
       refute locus_runtime =~ limit, "Locus.Config reads the compose-only #{limit}"
+      refute runtime_settings =~ limit, "runtime/settings.ex reads the compose-only #{limit}"
     end
   end
 
@@ -1040,12 +1052,12 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # A pin the control plane refuses reaches the guest as one of the
-  # engine's error types (`Opus.Egress`), and the fetch interface's error
+  # engine's error types (`Locus.Runtime.Egress`), and the fetch interface's error
   # list in the component guide names every one.
   test "component-guide's fetch error types name every type a refused pin reaches the guest as" do
     answered =
       @repo_root
-      |> Path.join("apps/opus/lib/opus/egress.ex")
+      |> Path.join("apps/locus/lib/locus/runtime/egress.ex")
       |> File.read!()
       |> then(&Regex.scan(~r/\{:(?:refused|error), :([a-z_]+),/, &1, capture: :all_but_first))
       |> List.flatten()
@@ -1081,7 +1093,7 @@ defmodule Cyfr.DocsDriftTest do
   # name is read
   #
   # The rules above place the worker and builder variables; this holds the
-  # whole set, every `CYFR_*`, `OPUS_*`, `LOCUS_*` and `KEEPER_*` name the
+  # whole set, every `CYFR_*`, `LOCUS_*`, `KEEPER_*` and `RUNTIME_*` name the
   # releases' readers and the keeper read, to the shipped examples, and
   # each example to what something reads.
   # ==========================================================================
@@ -1093,23 +1105,18 @@ defmodule Cyfr.DocsDriftTest do
     # replaced, never read.
     "KEEPER_CHANNEL" => :keeper,
     # The worker service hands each runner its role and identities
-    # (`Opus.Settings.runner_environment/1`), and the keeper adds the
+    # (`Locus.Runtime.Settings.runner_environment/1`), and the keeper adds the
     # control and relay descriptors; the test build's direct keeper names
     # a relay socket in the descriptor's place.
-    "OPUS_ROLE" => :worker_service,
-    "OPUS_RUNNER_ID" => :worker_service,
-    "OPUS_BOOT_ID" => :worker_service,
-    "OPUS_CONTROL_FD" => :keeper,
-    "OPUS_RELAY_FD" => :keeper,
-    "OPUS_RELAY_SOCKET" => :keeper,
-    # Retired: `Opus.Settings` reads it only to refuse a service that sets it.
-    "OPUS_KEEPER" => :retired
+    "RUNTIME_ROLE" => :worker_service,
+    "RUNTIME_RUNNER_ID" => :worker_service,
+    "RUNTIME_SERVICE_ID" => :worker_service,
+    "RUNTIME_BOOT_ID" => :worker_service,
+    "RUNTIME_WATCHDOG_GRACE_MS" => :worker_service,
+    "RUNTIME_CONTROL_FD" => :keeper,
+    "RUNTIME_RELAY_FD" => :keeper,
+    "RUNTIME_RELAY_SOCKET" => :keeper
   }
-
-  # A name two releases read, each from its own env file, is documented in
-  # each: cyfr's in the configuration guide, the opus service's in
-  # .env.opus.example.
-  @read_by_two %{"CYFR_LOG_LEVEL" => [".env.opus.example", "configuration-guide.md"]}
 
   # Every quoted upper-case name the releases' readers spell: what a
   # documented name must be read as, whatever its prefix.
@@ -1142,7 +1149,6 @@ defmodule Cyfr.DocsDriftTest do
       read
       |> Enum.reject(&Map.has_key?(@set_by_the_starter, &1))
       |> misplaced(homes)
-      |> Enum.reject(fn {name, found} -> Map.get(@read_by_two, name) == found end)
 
     assert violations == [],
            """
@@ -1151,11 +1157,6 @@ defmodule Cyfr.DocsDriftTest do
 
            #{inspect(violations)}
            """
-
-    for {name, examples} <- @read_by_two do
-      assert name in read, "#{name} is on the read-by-two roster, and nothing reads it"
-      assert {name, examples} in misplaced([name], homes)
-    end
   end
 
   # The compose-only class and the deployment list are the roster's
@@ -1169,7 +1170,7 @@ defmodule Cyfr.DocsDriftTest do
       )
 
     unread =
-      for example <- ~w(.env.example .env.opus.example .env.locus.example),
+      for example <- ~w(.env.example .env.locus.example),
           name <- documented(File.read!(Path.join(@repo_root, example))),
           not MapSet.member?(read, name),
           do: {example, name}
@@ -1193,7 +1194,7 @@ defmodule Cyfr.DocsDriftTest do
   @deployment_file_assignments ~w(
     CYFR_SECRET_KEY_BASE CYFR_PORT CYFR_HOST CYFR_BEHIND_PROXY CADDY_ACME_EMAIL
     CYFR_CORS_ALLOWED_ORIGINS CYFR_PRIVATE_EGRESS_TARGETS CYFR_GITHUB_CLIENT_ID
-    CYFR_GOOGLE_CLIENT_ID CYFR_OPUS_KEY OPUS_SERVICE_KEY CYFR_LOCUS_BACKENDS_KEY
+    CYFR_GOOGLE_CLIENT_ID CYFR_LOCUS_RUNTIME_ROOT LOCUS_RUNTIME_KEY CYFR_LOCUS_BACKENDS_KEY
     CYFR_LOCUS_BUILDS_URL CYFR_LOCUS_BUILDS_KEY
   )
 

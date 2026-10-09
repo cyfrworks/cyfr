@@ -251,43 +251,43 @@ defmodule Cyfr.RuntimeConfigTest do
   end
 
   describe "resolve_workers/1 — the worker services, in order" do
-    test "unset => the local Opus service" do
+    test "unset => the local runtime" do
       assert {:ok, [%{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}]} =
                RuntimeConfig.resolve_workers(env(%{}))
 
       assert {:ok, [%{id: "wrk_local"}]} =
-               RuntimeConfig.resolve_workers(env(%{"CYFR_OPUS_WORKERS" => " "}))
+               RuntimeConfig.resolve_workers(env(%{"CYFR_LOCUS_RUNTIME_WORKERS" => " "}))
     end
 
     test "entries are <service_id>=<url>, comma-separated, in order, each running any component" do
       assert {:ok,
               [
-                %{id: "wrk_opus", url: "http://opus:4200", components: nil},
+                %{id: "wrk_locus", url: "http://locus-runtime:4200", components: nil},
                 %{id: "wrk_b-2", url: "https://b.internal", components: nil}
               ]} =
                RuntimeConfig.resolve_workers(
                  env(%{
-                   "CYFR_OPUS_WORKERS" =>
-                     " wrk_opus = http://opus:4200/ ,, wrk_b-2=https://b.internal "
+                   "CYFR_LOCUS_RUNTIME_WORKERS" =>
+                     " wrk_locus = http://locus-runtime:4200/ ,, wrk_b-2=https://b.internal "
                  })
                )
     end
 
     test "a malformed id or URL, or an entry that is not a pair, refuses the boot naming the entry" do
       for bad <- [
-            "opus=http://opus:4200",
-            "wrk_=http://opus:4200",
-            "wrk_#{String.duplicate("a", 65)}=http://opus:4200",
-            "wrk_opus",
-            "wrk_opus=",
-            "wrk_opus=opus:4200",
-            "wrk_opus=http://opus:4200/worker",
-            "wrk_opus=ftp://opus:4200"
+            "runtime=http://locus-runtime:4200",
+            "wrk_=http://locus-runtime:4200",
+            "wrk_#{String.duplicate("a", 65)}=http://locus-runtime:4200",
+            "wrk_locus",
+            "wrk_locus=",
+            "wrk_locus=locus-runtime:4200",
+            "wrk_locus=http://locus-runtime:4200/worker",
+            "wrk_locus=ftp://locus-runtime:4200"
           ] do
         assert {:error, message} =
-                 RuntimeConfig.resolve_workers(env(%{"CYFR_OPUS_WORKERS" => bad}))
+                 RuntimeConfig.resolve_workers(env(%{"CYFR_LOCUS_RUNTIME_WORKERS" => bad}))
 
-        assert message =~ "CYFR_OPUS_WORKERS"
+        assert message =~ "CYFR_LOCUS_RUNTIME_WORKERS"
         assert message =~ String.trim(bad)
       end
     end
@@ -295,7 +295,7 @@ defmodule Cyfr.RuntimeConfigTest do
     test "two entries of one service id refuse the boot" do
       assert {:error, message} =
                RuntimeConfig.resolve_workers(
-                 env(%{"CYFR_OPUS_WORKERS" => "wrk_a=http://a:4200,wrk_a=http://b:4200"})
+                 env(%{"CYFR_LOCUS_RUNTIME_WORKERS" => "wrk_a=http://a:4200,wrk_a=http://b:4200"})
                )
 
       assert message =~ ~s("wrk_a")

@@ -12,7 +12,6 @@ defmodule Prima.Ops.IndependenceTest do
     refute deps =~ ~r/\{:cyfr[,\s]/
     refute deps =~ ":sanctum"
     refute deps =~ ":locus"
-    refute deps =~ ":opus"
     # The network contract takes resolved addresses; applications own DNS,
     # configuration and HTTP. Islands carry only the pure network policy.
     refute deps =~ ":req"

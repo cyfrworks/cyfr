@@ -10,7 +10,7 @@ defmodule Cyfr.IdMintingSeamTest do
   into a mint site; give the id its prefix instead, so every id in the
   system says what it names.
 
-  Scans cyfr, opus and locus for raw id generation. Only `Prima.UUID7`
+  Scans cyfr and locus for raw id generation. Only `Prima.UUID7`
   may call the underlying UUID generator directly.
   """
   use ExUnit.Case, async: true

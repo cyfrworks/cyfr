@@ -6,7 +6,7 @@ defmodule Crucible.WorkerWatch do
   Hears from each configured worker service, and lapses what a boot the
   cell stopped hearing from, or saw replaced, was running.
 
-  Every poll interval (the `opus_watch_poll_ms` platform setting, 5 s by
+  Every poll interval (the `locus_runtime_watch_poll_ms` platform setting, 5 s by
   default) the watch asks each worker service of `config :cyfr, :opus_workers`
   for its status (`Crucible.WorkerClient.status/1`), every entry at
   once, each poll bounded by the client. A status of the contract's shape
@@ -117,7 +117,7 @@ defmodule Crucible.WorkerWatch do
 
   Started by `Cyfr.Application` with no options, the watch reads its
   worker services from `config :cyfr, :opus_workers` and its bounds from
-  the `opus_watch_poll_ms` and `opus_watch_misses` platform settings,
+  the `locus_runtime_watch_poll_ms` and `locus_runtime_watch_misses` platform settings,
   through `Arca.PlatformSettings.effective/1` at every tick, so a change
   reaches the next poll; both serve a stale value, so a store outage
   keeps the last bounds read. It starts only when
@@ -713,8 +713,8 @@ defmodule Crucible.WorkerWatch do
   # a whole poll of headroom and a member that stops hearing loses the
   # watch after two polls at the most. See the module doc.
   defp bounded(%{fixed: fixed} = state) do
-    poll_ms = Keyword.get_lazy(fixed, :poll_ms, fn -> setting("opus_watch_poll_ms") end)
-    misses = Keyword.get_lazy(fixed, :misses, fn -> setting("opus_watch_misses") end)
+    poll_ms = Keyword.get_lazy(fixed, :poll_ms, fn -> setting("locus_runtime_watch_poll_ms") end)
+    misses = Keyword.get_lazy(fixed, :misses, fn -> setting("locus_runtime_watch_misses") end)
     lease_ms = Keyword.get(fixed, :lease_ms, poll_ms * 2)
     Map.merge(state, %{poll_ms: poll_ms, misses: misses, lease_ms: lease_ms})
   end

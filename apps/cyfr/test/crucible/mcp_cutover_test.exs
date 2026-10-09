@@ -4,14 +4,14 @@
 defmodule Crucible.MCPCutoverTest do
   # The CLI/MCP ingress is data-driven: a profile roots the execution
   # under its consent, no profile refuses with consent guidance (nothing
-  # runs), and selection never guesses. A rooted run runs on the Opus
-  # service, and the authority it roots under is the one its runner's
+  # runs), and selection never guesses. A rooted run runs on the
+  # runtime, and the authority it roots under is the one its runner's
   # attach was handed, read on the suite's wire.
   use ExUnit.Case, async: false
 
   import Prima.Test.Wait
 
-  alias Cyfr.Test.{OpusService, TwoServices}
+  alias Cyfr.Test.{RuntimeService, TwoServices}
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
 
@@ -193,7 +193,7 @@ defmodule Crucible.MCPCutoverTest do
     # so none of it reaches the store after this test's owner has gone.
     wait_until(fn -> closed?(id) end, 30_000, "the streamed run to close")
     wait_until(fn -> Crucible.Attempt.whereis(id) == nil end, 30_000, "its attempt to stop")
-    :ok = OpusService.await_reports()
+    :ok = RuntimeService.await_reports()
   end
 
   defp closed?(id) do

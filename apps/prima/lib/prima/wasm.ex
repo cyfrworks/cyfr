@@ -20,7 +20,7 @@ defmodule Prima.Wasm do
   For component-model binaries the suggested type is read from the world
   the binary actually exports (`Prima.WIT.type_for_export/1`) —
   and `validate/2` asserts the declared type's world outright. For core
-  modules (which `Opus.Runtime` refuses to execute) a best-effort export
+  modules (which `Locus.Runtime.Engine` refuses to execute) a best-effort export
   heuristic remains:
   - `catalyst` - Has I/O-related exports (http, socket capabilities)
   - `reagent` - Pure compute, no I/O
@@ -138,7 +138,7 @@ defmodule Prima.Wasm do
   type demands.
 
   Only component-model binaries are asserted — a core module cannot
-  execute at all (`Opus.Runtime` refuses it), so its registration stays a
+  execute at all (`Locus.Runtime.Engine` refuses it), so its registration stays a
   parse-and-store. The point of asserting here, at registration, is
   ordering: the executor resolves vault material and builds the full host
   import surface BEFORE the missing export would surface as a generic

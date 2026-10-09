@@ -105,12 +105,12 @@ defmodule Prima.EnvValueTest do
             ~w(16777215 1099511627777 01099511627776 384M 1GiB 1e9 402653184.0 -402653184 +402653184 0x18000000 lots) do
         assert {:error, message} =
                  EnvValue.bytes(
-                   env(%{"OPUS_RUNNER_MEMORY_BYTES" => bad}),
-                   "OPUS_RUNNER_MEMORY_BYTES",
+                   env(%{"LOCUS_RUNTIME_MEMORY_BYTES" => bad}),
+                   "LOCUS_RUNTIME_MEMORY_BYTES",
                    @memory
                  )
 
-        assert message =~ "OPUS_RUNNER_MEMORY_BYTES"
+        assert message =~ "LOCUS_RUNTIME_MEMORY_BYTES"
         assert message =~ bad
         assert message =~ "whole number of bytes from 16777216 to 1099511627776"
       end

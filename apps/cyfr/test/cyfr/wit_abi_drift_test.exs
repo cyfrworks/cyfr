@@ -9,7 +9,7 @@ defmodule Cyfr.WitAbiDriftTest do
   `Locus.Builder` copies it into the build sandbox, and `Prima.CargoToml`
   points a generated `Cargo.toml` at it — so a component is compiled against
   those interface names. The host side of the same contract is a set of
-  string keys in `Opus`: the import map a component's world is instantiated
+  string keys in `Locus.Runtime`: the import map a component's world is instantiated
   with, and the export path each type is called through.
 
   Rename an interface in `wit/` and both sides still compile. Nothing fails
@@ -25,12 +25,12 @@ defmodule Cyfr.WitAbiDriftTest do
   use ExUnit.Case, async: true
 
   @wit_root Path.expand("../../../../wit", __DIR__)
-  @opus_lib Path.expand("../../../opus/lib", __DIR__)
+  @runtime_lib Path.expand("../../../locus/lib/locus/runtime", __DIR__)
 
   # Every `cyfr:<package>/<interface>@<version>` string the engine hands to
   # Wasmex, whether as an import it provides or an export it calls.
-  defp opus_abi_names do
-    @opus_lib
+  defp runtime_abi_names do
+    @runtime_lib
     |> Path.join("**/*.ex")
     |> Prima.Test.SourceTree.files!()
     |> Enum.flat_map(fn path ->
@@ -67,16 +67,16 @@ defmodule Cyfr.WitAbiDriftTest do
   test "the wit tree is where this test thinks it is" do
     assert File.dir?(@wit_root)
     refute wit_abi_names() == []
-    refute opus_abi_names() == []
+    refute runtime_abi_names() == []
   end
 
   test "every ABI name the engine uses is declared in wit/" do
     declared = wit_abi_names()
-    undeclared = opus_abi_names() -- declared
+    undeclared = runtime_abi_names() -- declared
 
     assert undeclared == [],
            """
-           Opus names guest interfaces that wit/ does not declare:
+           The runtime names guest interfaces that wit/ does not declare:
 
            #{Enum.map_join(undeclared, "\n", &"  #{&1}")}
 
@@ -109,7 +109,7 @@ defmodule Cyfr.WitAbiDriftTest do
 
     refute imported == [], "no imports found in the world files — the regex has drifted"
 
-    missing = imported -- opus_abi_names()
+    missing = imported -- runtime_abi_names()
 
     assert missing == [],
            """
@@ -148,11 +148,11 @@ defmodule Cyfr.WitAbiDriftTest do
   # The registration gate (`Prima.Wasm.validate/2`) demands
   # the exports `Prima.WIT.expected_exports/1` derives from the
   # world files; the engine calls a component through the same names
-  # (`Opus.Runtime.execute_with_convention/3`). If the two drift, either
+  # (`Locus.Runtime.Engine.execute_with_convention/3`). If the two drift, either
   # registration refuses components the engine could run, or the engine
   # calls an export registration never verified — both wrong.
   test "the worlds registration demands are the ones the engine calls" do
-    runtime = File.read!(Path.join(@opus_lib, "opus/runtime.ex"))
+    runtime = File.read!(Path.join(@runtime_lib, "engine.ex"))
 
     for type <- Prima.ComponentRef.executable_types() do
       expected = Prima.WIT.expected_exports(type)
@@ -163,7 +163,7 @@ defmodule Cyfr.WitAbiDriftTest do
 
       for name <- expected do
         assert String.contains?(runtime, ~s("#{name}")),
-               "registration demands #{name} for #{type}, but Opus.Runtime " <>
+               "registration demands #{name} for #{type}, but Locus.Runtime.Engine " <>
                  "never addresses it — the call convention and the gate have drifted"
       end
     end

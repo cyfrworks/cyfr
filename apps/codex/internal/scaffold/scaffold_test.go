@@ -119,7 +119,7 @@ func TestShippedGuidesAreManaged(t *testing.T) {
 
 // TestShippedProfileIsManaged binds the seccomp profile the scaffold tarball
 // packs beside docker-compose.yml to the managed set and to the name the
-// opus service gives it: a profile shipped but not managed would stay
+// locus-runtime service gives it: a profile shipped but not managed would stay
 // behind the image `cyfr update` pulls, and one named otherwise than the
 // compose file names it would never be read.
 func TestShippedProfileIsManaged(t *testing.T) {

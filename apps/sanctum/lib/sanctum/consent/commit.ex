@@ -1481,7 +1481,7 @@ defmodule Sanctum.Consent.Commit do
     edge =
       case Map.get(edge, "storage") do
         # Any storage block, whether or not it spells `actions`. An absent
-        # roster already denies every action downstream (`Opus.EdgeGuard`
+        # roster already denies every action downstream (`Locus.Runtime.EdgeGuard`
         # reads a missing list as the empty one), so writing the filtered
         # list here changes nothing — it just makes the transform total, so
         # the promise above holds by construction rather than by agreement

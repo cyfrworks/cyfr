@@ -28,7 +28,7 @@ defmodule Sanctum.Test.Resolver do
 
   Injected through the `:resolver` option of `Sanctum.Network.pin/2` and
   of `Crucible.Host.Egress.pin/3`, which pins a guest's outbound target
-  through it. The engine resolves no name, so Opus's suite has no
+  through it. The engine resolves no name, so the runtime's suite has no
   resolver: its scripted host answers pins from a table.
   """
 

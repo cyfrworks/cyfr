@@ -13,7 +13,7 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
   endpoint.
 
   A delivery whose target names a connection runs in a real runner of the
-  Opus service: CYFR attaches the bound key to the guest's request while
+  runtime: CYFR attaches the bound key to the guest's request while
   the binding is live, and refuses the request of a delivery after the
   binding's instant before any upstream request.
   """
@@ -272,12 +272,12 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
   end
 
   @attached_probe Path.expand(
-                    "../../../opus/test/support/test_wasm/hostile/attached_header_probe.wasm",
+                    "../../../locus/test/support/runtime/test_wasm/hostile/attached_header_probe.wasm",
                     __DIR__
                   )
   @attached_secret "sk-webhook-e7-canary-93c0a7"
 
-  # The probe of Opus's hostile guests that sends its input as its one
+  # The probe of the runtime's hostile guests that sends its input as its one
   # request, published as a component of the person's own whose need
   # `api_key` CYFR attaches by header, its entry bound until `until` under a
   # consent that admits webhook deliveries, and a webhook firing it with

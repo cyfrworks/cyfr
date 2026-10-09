@@ -7,7 +7,7 @@ defmodule Compendium.Component do
 
   Provides direct function calls for component inspection, blob retrieval,
   and setup plan generation — eliminating the MCP dispatch overhead for
-  internal callers (e.g., Opus executor).
+  internal callers (e.g., the runtime's executor).
   """
 
   alias Sanctum.Context

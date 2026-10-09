@@ -23,11 +23,11 @@ Three consequences shape everything below.
 - **One owner per fact.** Every schema, policy, operation declaration, topic, protocol shape, configuration key, served-file type, frame capability and layout has one authoritative module. Everything else is derived from it and checked against it, because a fact with two definitions drifts.
 - **Downward calls are direct; upward needs are ports; reactions are events.** There are exactly five ports (§4.2). Two owners whose writes must commit together join one Arca transaction through a named closure (§4.4).
 - **Three guards, each with one owner.** Operations pass the Grimoire gate with Sanctum's decision. Domain rows and blobs are tenant-scoped by the actor in Arca. Security rows are read only through Sanctum.
-- **Trust islands speak protocols.** An island shares pure contracts and signed, versioned wire shapes with the control plane, never a code dependency on it.
+- **The trust island speaks protocols.** Locus shares pure contracts and signed, versioned wire shapes with the control plane, never a code dependency on it.
 - **Fail closed.** Identity, standing, consent, ownership and catalog completeness are established before work is admitted, and a control that cannot answer refuses. The one named exception is the decision audit (§6.4), which records and never decides. Unavailable infrastructure, absent data, denied access and successful work stay distinguishable in every result.
 - **Admission, not sampling.** The gate admits discrete intents: open a stream, send this, confirm. Continuous data (execution deltas, a pointer, a game loop, audio, camera frames) stays in the frame, on the bus or inside the island that produces it, under a grant the gate already admitted. A granted stream may carry audio or frames to wherever the grant names; no frame is an operation.
 - **One product, one code path.** Behaviour that depends on exposure derives from whether authentication is configured, never from an edition. A phone, a small box, a kiosk and a server run the same code with different wiring.
-- **Few names.** A namespace exists only when it owns state, a state machine or a trust boundary nothing else can own. There are thirteen namespaces (§3). A struct is not a namespace and a page is not a domain.
+- **Few names.** A namespace exists only when it owns state, a state machine or a trust boundary nothing else can own. There are twelve namespaces (§3). A struct is not a namespace and a page is not a domain.
 - **The person is not the door.** Google, GitHub, OIDC, email and passkeys are sign-in methods registered at a relying home; none of them is the person. A person is an identifier that survives every key, device, sign-in method and home address.
 - **Authority follows the resource's owner.** Whatever an athanor owns is decided at that athanor's home: membership, consent, caps, vault, confirmation. A request from another node is admitted there or refused there, never trusted because the other node vouched for it.
 - **Hardware is disposable; the person and their relationships are not.** A lost device is revoked, a lost home is restored from recovery material, a lost sign-in is replaced. Starting over as a new person is the last resort, after every recovery route is gone.
@@ -43,8 +43,8 @@ Three consequences shape everything below.
 ## 2. Layers
 
 ```
-L4  Trust islands   Opus (WASM engine)   Locus (untrusted native processes: builds, stdio MCP backends, perception bodies)
-                    depend on Prima only; reach L1/L2 over signed, versioned protocols
+L4  Trust island    Locus (untrusted things: the WASM runtime, builds, stdio MCP backends, perception bodies), under its keeper cyfr-locus
+                    depends on Prima only; reaches L1/L2 over signed, versioned protocols
                     runners and bodies have no network of their own; builds and backends have their service's
 
 L3  Surfaces        Emissary (external protocols)   Prism (the screen)   Codex (CLI)
@@ -70,7 +70,7 @@ The order describes dependencies. A request does not have to pass through every 
 | Cyfr (Host) | everything below; its composition modules may name domains and surfaces to wire them | — | boot, cell, bus, telemetry catalog, runtime configuration, platform settings, the admission roster |
 | Domains | Prima, foundations, other domains' facades (acyclic) | surfaces, each other's internals | one facade module, providers, storage under Arca |
 | Surfaces | Prima, foundations, domain facades for reads | other surfaces, domain internals | plugs, routers, controllers, LiveViews, the frame manager, CLI commands |
-| Trust islands | Prima | everything else | a protocol implementation |
+| Trust island | Prima | everything else | a protocol implementation |
 
 **Placement.** A new concern goes in the lowest layer whose neighbours do not need it; if two foundations need it, it goes in Prima. A domain owns its state machine, one facade and its providers; a surface owns adapters only.
 
@@ -165,19 +165,20 @@ Owns the system layer, the frame manager, the shell, the server side of the canv
 
 The `cyfr` binary. It speaks to Emissary over MCP with an API key or a session; its operation catalog is generated from the gate's table.
 
-### Opus: the WASM engine
+### Locus: where untrusted things run
 
-A service holding a pool of OS runners under the keeper, each execution subtree in one runner. **A runner has no network**: its host calls and its pinned fetches leave through the service over the keeper's control channel, bound to the attempt the runner was assigned. The WASM sandbox, the uid, the cgroup and the network namespace are four independent bounds.
+Where untrusted things run, and nothing else: one release, one image and one keeper binary, `cyfr-locus`, each role in a container of its own with its own network and key. A node serves the roles whose keys it holds, and a node holding the runtime's key serves no other role.
 
-### Locus: untrusted native processes
+- **The runtime** is a service holding a pool of OS runners, each execution subtree in one runner. **A runner has no network**: its host calls and its pinned fetches leave through the service over the keeper's control channel, bound to the attempt the runner was assigned. The WASM sandbox, the uid, the cgroup and the network namespace are four independent bounds.
+- **Builds and stdio MCP backends** are each a signed HTTP service with its own key. A build or a backend reaches only what its service's network allows and holds no credential the control plane did not inject.
+- **Perception bodies** (a camera, a radio, a HID jack) run on a device as another role, over the device protocol.
+- **The keeper**, the Go binary `cyfr-locus`, is the image's entrypoint. It pools uids, stages private homes, relays a control channel, bounds each child in a cgroup of its own, places each runner and each body in a network namespace with no route but the relay, and kills and scrubs on release. It holds exactly `SETUID`, `SETGID` and `KILL`, never `CAP_SYS_ADMIN` in the initial namespace, and refuses to serve with anything else. Every role refuses to serve without it.
 
-Where untrusted native processes run, under the keeper and nowhere else: builds and stdio MCP backends, each its own signed HTTP service with its own key, and on a device perception bodies (a camera, a radio, a HID jack) as a third service over the device protocol. A build or a backend reaches only what its service's network allows and holds no credential the control plane did not inject.
-
-**The keeper** is the Go binary `cyfr-locus`, the entrypoint of every island image. It pools uids, stages private homes, relays a control channel, bounds each child in a cgroup of its own, places each runner and each body in a network namespace with no route but the relay, and kills and scrubs on release. It holds exactly `SETUID`, `SETGID` and `KILL`, never `CAP_SYS_ADMIN` in the initial namespace, and refuses to serve with anything else. Every island refuses to serve without it. *Not built yet:* perception bodies.
+Dispatch stays in the control plane: Crucible decides what runs, Compendium what builds, Emissary which backend is called; Locus runs it. *Not built yet:* perception bodies.
 
 ### Apps and releases
 
-`prima`, `arca` and `sanctum` are Mix apps of their own because Sanctum's licence boundary is an application directory and Sanctum needs Arca beneath it; `cyfr` hosts Grimoire, Host, every domain and every surface under Boundary declarations. `opus` and `locus` depend on `prima` alone. `codex` and the keeper (`apps/locus/keeper`) are Go. The `cyfr` release starts prima, arca, sanctum and cyfr; the `opus` and `locus` releases start prima and themselves under the keeper.
+`prima`, `arca` and `sanctum` are Mix apps of their own because Sanctum's licence boundary is an application directory and Sanctum needs Arca beneath it; `cyfr` hosts Grimoire, Host, every domain and every surface under Boundary declarations. `locus` depends on `prima` alone; its keeper is Go, in `apps/locus/keeper`, and `codex` is Go. The `cyfr` release starts prima, arca, sanctum and cyfr; the `locus` release starts prima and locus under the keeper, with the runtime in a container of its own.
 
 ## 4. How modules talk
 
@@ -437,7 +438,7 @@ Memory is an assistant capability, `Aqua.Memory`, not a process the person tends
 - **`Cyfr.Boundaries`** holds the rows the compiler cannot express, each with its reason: narrower allow lists, cross-application reaches, the security-read seam, the admission entries, the bus, gate, configuration, settings, route and port rosters, and the marker groups.
 - **Seam tests** hold actor-first arguments, the unscoped and bypass markers, roster membership, the surface reads each surface may make, Sanctum-only security storage, refusal rendering, the rule that no frame reaches a facade, and the rule that no sandbox token, CSP directive or served file type is written outside the tincture rules.
 - **Drift tests** compare every derived view with its owner: the CLI catalog, discovery, telemetry rosters, protocol vectors in every language, environment variables against the shipped examples, the configuration guide against the settings roster, the guides' tables, the route map and the glossary.
-- **Containment suites** run the shipped images: runner isolation, memory and network, builder and backend isolation, and the credential canary.
+- **Containment suites** run the shipped image in each of its roles: runner isolation, memory and network, builder and backend isolation, and the credential canary.
 
 ### Sources of truth
 

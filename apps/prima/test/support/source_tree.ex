@@ -15,8 +15,8 @@ defmodule Prima.Test.SourceTree do
   each app's `test_helper.exs` calls `ensure_table/0` before tests start,
   and the umbrella runs them all in one VM, so the call is idempotent.
 
-  Falls back to a plain read when the table is absent — Opus and Locus keep
-  copies of their own and do not create it.
+  Falls back to a plain read when the table is absent — Locus keeps a copy
+  of its own and does not create it.
   """
 
   alias Prima.Test.CodeLines

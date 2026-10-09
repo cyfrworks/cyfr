@@ -589,11 +589,11 @@ defmodule Crucible.WorkerWatchTest do
 
       # Unfixed, each bound is its platform setting, the default where none
       # is stored, and a setting stored later is the next tick's.
-      Cyfr.Test.Settings.put("opus_watch_misses", 2)
+      Cyfr.Test.Settings.put("locus_runtime_watch_misses", 2)
       {:ok, pid} = WorkerWatch.start_link(workers: [], name: :configured_watch)
       assert %{poll_ms: 5_000, misses: 2, lease_ms: 10_000} = :sys.get_state(pid)
 
-      Cyfr.Test.Settings.put("opus_watch_poll_ms", 2_000)
+      Cyfr.Test.Settings.put("locus_runtime_watch_poll_ms", 2_000)
       send(pid, :poll)
       assert %{poll_ms: 2_000, misses: 2, lease_ms: 4_000} = :sys.get_state(pid)
       GenServer.stop(pid)

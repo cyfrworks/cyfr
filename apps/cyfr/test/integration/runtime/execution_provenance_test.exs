@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+Code.require_file("support/nested_execution_helper.exs", __DIR__)
+
+defmodule Locus.Runtime.ExecutionProvenanceTest do
+  # What a row keeps of an output and where the bytes go. These tests
+  # reach the record through the executor, the way production does, so a
+  # hop that drops the retention class is caught here and not only in a
+  # record built by hand.
+  use ExUnit.Case, async: false
+
+  alias Locus.Runtime.Test.NestedExecution, as: Probe
+  alias Sanctum.Consent.Bootstrap
+
+  @moduletag timeout: 120_000
+
+  setup tags do
+    test_path = Path.join(System.tmp_dir!(), "provenance_#{:rand.uniform(1_000_000)}")
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
+
+    Cyfr.Test.Sandbox.setup!(tags)
+
+    ctx = Sanctum.TestContext.local(:api)
+    :ok = Probe.publish_probe!(ctx)
+    {:ok, _} = Bootstrap.run(ctx)
+
+    on_exit(fn ->
+      File.rm_rf!(test_path)
+
+      if original_base_path,
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
+    end)
+
+    {:ok, ctx: ctx}
+  end
+
+  defp run(ctx, opts) do
+    {:ok, result} =
+      Crucible.Dispatch.run(
+        ctx,
+        Probe.probe_ref(),
+        %{"op" => "echo"},
+        [type: :formula, authority: Prima.Authority.zero()] ++ opts
+      )
+
+    assert result.status == :completed
+    row = Arca.Repo.get(Arca.Schemas.Execution, result.metadata.execution_id)
+    {row, Jason.decode!(row.output)}
+  end
+
+  test "a child a turn dispatched keeps its result under chat_step, an envelope on the row", %{
+    ctx: ctx
+  } do
+    {row, output} =
+      run(ctx,
+        parent_execution_id: Cyfr.Test.AttemptFixtures.lineage!(ctx).parent_execution_id,
+        retention_class: "chat_step"
+      )
+
+    assert output["envelope"] == "v1"
+    assert is_binary(output["output_hash"])
+    refute Map.has_key?(output, "op")
+
+    assert %{kind: "result", retention_class: "chat_step", attempt: attempt} =
+             Arca.Repo.get_by(Arca.Schemas.ExecutionPayload, execution_id: row.id, kind: "result")
+
+    assert attempt == row.current_attempt
+  end
+
+  test "any other execution's result is an envelope on its row and bytes in the store", %{
+    ctx: ctx
+  } do
+    {row, output} = run(ctx, [])
+
+    assert output["envelope"] == "v1"
+
+    assert %{kind: "result", retention_class: "api", digest: digest} =
+             Arca.Repo.get_by(Arca.Schemas.ExecutionPayload, execution_id: row.id, kind: "result")
+
+    assert digest == output["output_hash"]
+
+    assert {:ok, _payload, bytes} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), row.id, "result")
+
+    assert Prima.Digest.sha256(bytes) == digest
+    assert {:ok, %{output: %{"op" => "echo"} = joined}} = Crucible.get(ctx, row.id)
+    assert Jason.decode!(bytes) == joined
+  end
+end

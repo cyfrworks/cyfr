@@ -285,7 +285,7 @@ defmodule Aqua.LoopTest do
     refute_received {:attempt_ended, _}
   end
 
-  # The files hand is not scripted: it runs on the opus worker service.
+  # The files hand is not scripted: it runs on the runtime's worker service.
   test "hands run as children in workers, reads beside each other, and the response is persisted before they run",
        %{
          ctx: ctx,
@@ -347,7 +347,7 @@ defmodule Aqua.LoopTest do
     assert_receive %ThreadEvent{kind: :tool_activity, data: [_ | _]}, 5_000
   end
 
-  # The files hand is not scripted: it runs on the opus worker service.
+  # The files hand is not scripted: it runs on the runtime's worker service.
   test "a call that asks pauses the turn after the auto steps close, and a decision resumes it",
        %{
          ctx: ctx,
@@ -573,7 +573,7 @@ defmodule Aqua.LoopTest do
 
     @keep_pair %{tool: "notes", action: "keep"}
 
-    # The files hand is not scripted: it runs on the opus worker service.
+    # The files hand is not scripted: it runs on the runtime's worker service.
     test "an allow for this execution and data/notes/ runs a write there and asks for one elsewhere",
          %{ctx: ctx, thread: thread} do
       notes = %{kind: "storage_path", patterns: ["data/notes/"]}

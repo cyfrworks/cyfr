@@ -6,7 +6,7 @@ defmodule Crucible.WorkerClient do
   CYFR's client of one worker service (`Prima.WorkerAPI`) over HTTP, as
   `Prima.WorkerWire` frames it. `Crucible.Dispatch` reaches every
   worker service through it, the scripted one of the test suite exactly as
-  Opus.
+  the runtime.
 
   Each function takes the worker service's `t:Prima.WorkerAPI.endpoint/0`
   and answers as the `Prima.WorkerAPI` callback of the same name, with two

@@ -833,13 +833,13 @@ defmodule Crucible.Schedules.SchedulerTest do
   end
 
   @attached_probe Path.expand(
-                    "../../../../opus/test/support/test_wasm/hostile/attached_header_probe.wasm",
+                    "../../../../locus/test/support/runtime/test_wasm/hostile/attached_header_probe.wasm",
                     __DIR__
                   )
   @attached_secret "sk-scheduled-e7-canary-41d9b0"
 
   describe "a scheduled attached request" do
-    # The probe of Opus's hostile guests that sends its input as its one
+    # The probe of the runtime's hostile guests that sends its input as its one
     # request, published as a component of the person's own whose need
     # `api_key` CYFR attaches by header, its entry bound until `until` under
     # a consent that admits scheduled runs. Answers its reference and the

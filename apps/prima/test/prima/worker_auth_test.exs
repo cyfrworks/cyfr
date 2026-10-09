@@ -555,7 +555,7 @@ defmodule Prima.WorkerAuthTest do
     test "the vectors' frames reproduce, each a length, a kind byte and a sealed value" do
       %{"call_id" => call_id, "label" => label, "frames" => frames} = @vectors["sealed_frames"]
       seal = unhex(@vectors["keys"]["attempt_seal_hex"])
-      assert label == "cyfr-opus/v1/frame-answer"
+      assert label == "cyfr-locus/v1/runtime/frame-answer"
 
       reader =
         Enum.reduce(frames, WorkerAuth.frame_reader(seal, call_id), fn frame, reader ->

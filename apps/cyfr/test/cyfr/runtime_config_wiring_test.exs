@@ -85,12 +85,12 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
-  describe "CYFR_OPUS_KEY" do
+  describe "CYFR_LOCUS_RUNTIME_ROOT" do
     test "is the 32-byte root its 64 hexadecimal digits spell, in either case" do
       root = :crypto.strong_rand_bytes(32)
 
       for text <- [Base.encode16(root, case: :lower), Base.encode16(root)] do
-        with_env(%{"CYFR_OPUS_KEY" => text}, fn ->
+        with_env(%{"CYFR_LOCUS_RUNTIME_ROOT" => text}, fn ->
           assert get_in(read_prod_config!(), [:cyfr, :opus_key]) == root
         end)
       end
@@ -98,7 +98,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "unset or blank configures no root" do
       for value <- [nil, ""] do
-        with_env(%{"CYFR_OPUS_KEY" => value}, fn ->
+        with_env(%{"CYFR_LOCUS_RUNTIME_ROOT" => value}, fn ->
           assert get_in(read_prod_config!(), [:cyfr, :opus_key]) == nil
         end)
       end
@@ -106,9 +106,11 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "a malformed key refuses the boot" do
       for text <- ["abc", String.duplicate("g", 64), Base.encode64(:crypto.strong_rand_bytes(32))] do
-        with_env(%{"CYFR_OPUS_KEY" => text}, fn ->
+        with_env(%{"CYFR_LOCUS_RUNTIME_ROOT" => text}, fn ->
           error = assert_raise RuntimeError, fn -> read_prod_config!() end
-          assert Exception.message(error) =~ "CYFR_OPUS_KEY must be exactly 64 hexadecimal"
+
+          assert Exception.message(error) =~
+                   "CYFR_LOCUS_RUNTIME_ROOT must be exactly 64 hexadecimal"
         end)
       end
     end
@@ -404,78 +406,85 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
-  describe "OPUS_RUNNER_MEMORY_BYTES" do
-    defp opus_env(overrides) do
+  # A `mix` boot runs the runtime beside CYFR and configures it here.
+  describe "LOCUS_RUNTIME_MEMORY_BYTES" do
+    defp runtime_env(overrides) do
       Map.merge(
         %{
-          "RELEASE_NAME" => "opus",
-          "CYFR_SECRET_KEY_BASE" => nil,
-          "OPUS_SERVICE_KEY" => String.duplicate("ab", 32),
-          "OPUS_HOST_URL" => "http://cyfr:4300",
-          "OPUS_RUNNER_MEMORY_BYTES" => nil
+          "RELEASE_NAME" => nil,
+          "LOCUS_RUNTIME_KEY" => String.duplicate("ab", 32),
+          "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300",
+          "LOCUS_RUNTIME_MEMORY_BYTES" => nil
         },
         overrides
       )
     end
 
+    defp runtime_config!, do: read_prod_config!()[:locus][:runtime]
+
     test "unset leaves the setting's default; set, the whole of the keeper's range is taken" do
-      with_env(opus_env(%{}), fn ->
-        refute Keyword.has_key?(read_prod_config!()[:opus], :runner_memory_bytes)
+      with_env(runtime_env(%{}), fn ->
+        refute Keyword.has_key?(runtime_config!(), :runner_memory_bytes)
       end)
 
       for bytes <- ["16777216", "402653184", "1099511627776"] do
-        with_env(opus_env(%{"OPUS_RUNNER_MEMORY_BYTES" => bytes}), fn ->
-          assert read_prod_config!()[:opus][:runner_memory_bytes] == String.to_integer(bytes)
+        with_env(runtime_env(%{"LOCUS_RUNTIME_MEMORY_BYTES" => bytes}), fn ->
+          assert runtime_config!()[:runner_memory_bytes] == String.to_integer(bytes)
         end)
       end
     end
 
     test "a value outside the keeper's range, a unit or a fraction refuses the boot by name" do
       for bad <- ["16777215", "1099511627777", "384M", "402653184.5", "-1", "none"] do
-        with_env(opus_env(%{"OPUS_RUNNER_MEMORY_BYTES" => bad}), fn ->
+        with_env(runtime_env(%{"LOCUS_RUNTIME_MEMORY_BYTES" => bad}), fn ->
           error = assert_raise RuntimeError, fn -> read_prod_config!() end
-          assert Exception.message(error) =~ "[Cyfr] FATAL: OPUS_RUNNER_MEMORY_BYTES"
+          assert Exception.message(error) =~ "[Cyfr] FATAL: LOCUS_RUNTIME_MEMORY_BYTES"
           assert Exception.message(error) =~ "bytes from 16777216 to 1099511627776"
         end)
       end
     end
   end
 
-  describe "OPUS_KEEPER" do
-    test "is retired: set to any keeper, or blank, it refuses the boot naming it and cyfr-locus" do
-      for value <- ["direct", "channel", ""] do
-        with_env(opus_env(%{"OPUS_KEEPER" => value}), fn ->
-          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
-          assert message =~ "[Cyfr] FATAL: OPUS_KEEPER is retired"
-          assert message =~ "cyfr-locus"
-        end)
-      end
-    end
-
-    test "unset, no keeper is configured: the channel keeper is the one launcher" do
-      with_env(opus_env(%{"OPUS_KEEPER" => nil}), fn ->
-        refute Keyword.has_key?(read_prod_config!()[:opus], :keeper)
+  describe "the keeper" do
+    test "no keeper is configured: the channel keeper is the one launcher" do
+      with_env(runtime_env(%{}), fn ->
+        refute Keyword.has_key?(runtime_config!(), :keeper)
       end)
     end
   end
 
   describe "the releases this file configures" do
-    test "the opus release configures nothing of CYFR's, and any other release is CYFR" do
-      with_env(
-        %{
-          "RELEASE_NAME" => "opus",
-          "CYFR_SECRET_KEY_BASE" => nil,
-          "OPUS_SERVICE_KEY" => String.duplicate("ab", 32),
-          "OPUS_HOST_URL" => "http://cyfr:4300"
-        },
-        fn -> refute Keyword.has_key?(read_prod_config!(), :cyfr) end
-      )
-
+    test "every boot is CYFR, and a mix boot alone runs the runtime beside it" do
       with_env(%{"RELEASE_NAME" => "cyfr"}, fn ->
         config = read_prod_config!()
         assert Keyword.has_key?(config[:cyfr], :opus_workers)
-        refute Keyword.has_key?(config, :opus)
+        refute Keyword.has_key?(config, :locus)
       end)
+
+      with_env(runtime_env(%{}), fn ->
+        config = read_prod_config!()
+        assert Keyword.has_key?(config[:cyfr], :opus_workers)
+        assert config[:locus][:runtime][:service_key] == String.duplicate("ab", 32)
+      end)
+    end
+  end
+
+  # The runtime's retired control-plane names are no variable this server
+  # reads: the boot refuses each through its refusal of an undeclared
+  # `CYFR_*` name, so a stale `.env` cannot boot cyfr.
+  describe "the runtime's retired control-plane variables" do
+    test "each is refused by name" do
+      # Spelled split so the retired names are not themselves found here.
+      for name <- [
+            "CYFR_OP" <> "US_KEY",
+            "CYFR_OP" <> "US_WORKERS",
+            "CYFR_OP" <> "US_WATCH_POLL_MS"
+          ] do
+        with_env(%{name => "x"}, fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+          assert message =~ "[Cyfr] FATAL: #{name} is not a variable this server reads"
+        end)
+      end
     end
   end
 
@@ -528,7 +537,11 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   describe "the worker wire" do
     test "the cyfr release takes the local worker and loopback host API by default" do
       with_env(
-        %{"CYFR_OPUS_WORKERS" => nil, "CYFR_HOST_API_BIND" => nil, "CYFR_HOST_API_PORT" => nil},
+        %{
+          "CYFR_LOCUS_RUNTIME_WORKERS" => nil,
+          "CYFR_HOST_API_BIND" => nil,
+          "CYFR_HOST_API_PORT" => nil
+        },
         fn ->
           cyfr = read_prod_config!()[:cyfr]
 
@@ -543,15 +556,16 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           # issues assignments naming none, and its worker posts to the
           # single address it was configured with.
           assert cyfr[:host_api_url] == nil
-          refute Keyword.has_key?(read_prod_config!(), :opus)
+          refute Keyword.has_key?(read_prod_config!(), :locus)
         end
       )
     end
 
-    test "CYFR_OPUS_WORKERS, CYFR_HOST_API_BIND, _PORT and _URL are taken as set" do
+    test "CYFR_LOCUS_RUNTIME_WORKERS, CYFR_HOST_API_BIND, _PORT and _URL are taken as set" do
       with_env(
         %{
-          "CYFR_OPUS_WORKERS" => "wrk_opus=http://opus:4200, wrk_b=https://b.internal/",
+          "CYFR_LOCUS_RUNTIME_WORKERS" =>
+            "wrk_locus=http://locus-runtime:4200, wrk_b=https://b.internal/",
           "CYFR_HOST_API_BIND" => "0.0.0.0",
           "CYFR_HOST_API_PORT" => "4301",
           "CYFR_HOST_API_URL" => "http://cyfr-1:4301"
@@ -560,7 +574,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           cyfr = read_prod_config!()[:cyfr]
 
           assert cyfr[:opus_workers] == [
-                   %{id: "wrk_opus", url: "http://opus:4200", components: nil},
+                   %{id: "wrk_locus", url: "http://locus-runtime:4200", components: nil},
                    %{id: "wrk_b", url: "https://b.internal", components: nil}
                  ]
 
@@ -573,8 +587,8 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "a malformed worker entry, address or port refuses the boot by name" do
       for {var, value} <- [
-            {"CYFR_OPUS_WORKERS", "opus=http://opus:4200"},
-            {"CYFR_OPUS_WORKERS", "wrk_opus=opus:4200"},
+            {"CYFR_LOCUS_RUNTIME_WORKERS", "runtime=http://locus-runtime:4200"},
+            {"CYFR_LOCUS_RUNTIME_WORKERS", "wrk_locus=locus-runtime:4200"},
             {"CYFR_HOST_API_BIND", "cyfr"},
             {"CYFR_HOST_API_PORT", "65536"}
           ] do
@@ -585,86 +599,87 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       end
     end
 
-    test "the opus release configures the worker service from OPUS_* alone" do
+    test "a mix boot configures the runtime from LOCUS_RUNTIME_* over its own defaults" do
       key = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
 
       with_env(
         %{
-          "RELEASE_NAME" => "opus",
-          "CYFR_SECRET_KEY_BASE" => nil,
-          "OPUS_SERVICE_ID" => "wrk_opus",
-          "OPUS_SERVICE_KEY" => key,
-          "OPUS_HOST_URL" => "http://cyfr:4300/",
-          "OPUS_BIND" => "0.0.0.0",
-          "OPUS_PORT" => "4200"
+          "RELEASE_NAME" => nil,
+          "LOCUS_RUNTIME_SERVICE_ID" => "wrk_locus",
+          "LOCUS_RUNTIME_KEY" => key,
+          "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300/",
+          "LOCUS_RUNTIME_BIND" => "0.0.0.0",
+          "LOCUS_RUNTIME_PORT" => "4200"
         },
         fn ->
-          config = read_prod_config!()
-
-          assert config[:opus] == [
-                   service_id: "wrk_opus",
+          assert read_prod_config!()[:locus][:runtime] == [
+                   service_id: "wrk_locus",
                    service_key: key,
                    host_url: "http://cyfr:4300/",
                    bind: "0.0.0.0",
                    port: 4200
                  ]
-
-          refute Keyword.has_key?(config, :cyfr)
         end
       )
     end
 
-    test "the opus release refuses a missing key or host URL, and a malformed value, by name" do
+    test "a mix boot refuses a malformed runtime value, or a stray LOCUS_RUNTIME_* name, by name" do
       base = %{
-        "RELEASE_NAME" => "opus",
-        "CYFR_SECRET_KEY_BASE" => nil,
-        "OPUS_SERVICE_KEY" => String.duplicate("ab", 32),
-        "OPUS_HOST_URL" => "http://cyfr:4300"
+        "RELEASE_NAME" => nil,
+        "LOCUS_RUNTIME_KEY" => String.duplicate("ab", 32),
+        "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
       }
 
       for {overrides, message} <- [
-            {%{"OPUS_SERVICE_KEY" => nil}, "OPUS_SERVICE_KEY is not set"},
-            {%{"OPUS_HOST_URL" => nil}, "OPUS_HOST_URL is not set"},
-            {%{"OPUS_SERVICE_KEY" => "abc"}, "OPUS_SERVICE_KEY must be"},
-            {%{"OPUS_SERVICE_ID" => "opus"}, "OPUS_SERVICE_ID must be"},
-            {%{"OPUS_HOST_URL" => "cyfr:4300"}, "OPUS_HOST_URL must be"},
-            {%{"OPUS_BIND" => "cyfr"}, "OPUS_BIND must be"}
+            {%{"LOCUS_RUNTIME_KEY" => "abc"}, "LOCUS_RUNTIME_KEY must be"},
+            {%{"LOCUS_RUNTIME_SERVICE_ID" => "runtime"}, "LOCUS_RUNTIME_SERVICE_ID must be"},
+            {%{"LOCUS_RUNTIME_HOST_API_URL" => "cyfr:4300"},
+             "LOCUS_RUNTIME_HOST_API_URL must be"},
+            {%{"LOCUS_RUNTIME_BIND" => "cyfr"}, "LOCUS_RUNTIME_BIND must be"},
+            {%{"LOCUS_RUNTIME_POOL_SIZ" => "4"},
+             "LOCUS_RUNTIME_POOL_SIZ is not a variable the locus release reads"}
           ] do
         with_env(Map.merge(base, overrides), fn ->
           error = assert_raise RuntimeError, fn -> read_prod_config!() end
           assert Exception.message(error) =~ "[Cyfr] FATAL: " <> message
         end)
       end
+
+      # The container limits compose reads from the same .env are the
+      # roster's, and refuse nothing.
+      with_env(Map.merge(base, %{"LOCUS_RUNTIME_MEMORY_LIMIT" => "4G"}), fn ->
+        assert read_prod_config!()[:locus][:runtime][:service_key] == String.duplicate("ab", 32)
+      end)
     end
 
-    test "a boot that runs Opus beside CYFR derives the service key from the root, minting one if unset" do
+    test "a boot that runs the runtime beside CYFR derives the service key from the root, minting one if unset" do
       root = :crypto.strong_rand_bytes(32)
       {:ok, derived} = Prima.WorkerAuth.worker_key(root, "wrk_local")
 
       with_env(
         %{
           "RELEASE_NAME" => nil,
-          "CYFR_OPUS_KEY" => Base.encode16(root),
-          "OPUS_SERVICE_KEY" => nil
+          "CYFR_LOCUS_RUNTIME_ROOT" => Base.encode16(root),
+          "LOCUS_RUNTIME_KEY" => nil
         },
         fn ->
           config = read_prod_config!()
           assert config[:cyfr][:opus_key] == root
-          assert config[:opus][:service_id] == "wrk_local"
-          assert config[:opus][:service_key] == Base.encode16(derived, case: :lower)
-          assert config[:opus][:host_url] == "http://127.0.0.1:4300"
-          assert config[:opus][:port] == 4200
+          assert config[:locus][:runtime][:service_id] == "wrk_local"
+          assert config[:locus][:runtime][:service_key] == Base.encode16(derived, case: :lower)
+          assert config[:locus][:runtime][:host_url] == "http://127.0.0.1:4300"
+          assert config[:locus][:runtime][:port] == 4200
         end
       )
 
       with_env(
-        %{"RELEASE_NAME" => nil, "CYFR_OPUS_KEY" => nil, "OPUS_SERVICE_KEY" => nil},
+        %{"RELEASE_NAME" => nil, "CYFR_LOCUS_RUNTIME_ROOT" => nil, "LOCUS_RUNTIME_KEY" => nil},
         fn ->
           config = read_prod_config!()
           minted = config[:cyfr][:opus_key]
           assert byte_size(minted) == 32
           {:ok, key} = Prima.WorkerAuth.worker_key(minted, "wrk_local")
-          assert config[:opus][:service_key] == Base.encode16(key, case: :lower)
+          assert config[:locus][:runtime][:service_key] == Base.encode16(key, case: :lower)
         end
       )
     end

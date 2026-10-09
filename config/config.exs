@@ -125,17 +125,19 @@ config :phoenix, :json_library, Jason
 # (nil for any). A run goes to the first entry whose status answers its id,
 # over `Crucible.WorkerClient`. With none, a run is refused as
 # :execution_unavailable. The runtime configuration replaces this list with
-# `CYFR_OPUS_WORKERS`; the default names the Opus service of a local boot.
+# `CYFR_LOCUS_RUNTIME_WORKERS`; the default names the runtime of a local boot.
 config :cyfr, :opus_workers, [%{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}]
 
-# The Opus worker service's own id, which every assignment it accepts must
-# name, where it reaches CYFR's host API, and where its listener binds (the
-# `wrk_local` entry above). Its service key is the worker key CYFR derives
-# for that id (`Prima.WorkerAuth.worker_key/2`, 64 hex): the test
-# configuration derives it from the test worker root, a development boot
-# derives it from its root in `config/runtime.exs`, and the `opus` release
-# receives it from `OPUS_SERVICE_KEY`.
-config :opus,
+# The runtime role's worker service: its own id, which every assignment it
+# accepts must name, where it reaches CYFR's host API, and where its
+# listener binds (the `wrk_local` entry above). Its service key is the
+# worker key CYFR derives for that id (`Prima.WorkerAuth.worker_key/2`,
+# 64 hex): the test configuration derives it from the test runtime root,
+# a development boot derives it from its root in `config/runtime.exs`, and
+# the `locus` release receives it from `LOCUS_RUNTIME_KEY`
+# (`config/locus_runtime.exs`). A node serves the runtime only once it
+# holds that key.
+config :locus, :runtime,
   service_id: "wrk_local",
   host_url: "http://127.0.0.1:4300",
   bind: "127.0.0.1",

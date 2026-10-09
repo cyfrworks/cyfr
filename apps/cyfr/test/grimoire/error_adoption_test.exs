@@ -153,11 +153,11 @@ defmodule Grimoire.ErrorAdoptionTest do
     "apps/cyfr/lib/grimoire/proxy.ex" => 1,
     # The config keys that are missing or malformed, atoms this module
     # spells.
-    "apps/opus/lib/opus/credentials.ex" => 2,
+    "apps/locus/lib/locus/runtime/credentials.ex" => 2,
     # The keeper module that cannot run.
-    "apps/opus/lib/opus/keeper.ex" => 1,
+    "apps/locus/lib/locus/runtime/keeper.ex" => 1,
     # The malformed setting's config key.
-    "apps/opus/lib/opus/settings.ex" => 1,
+    "apps/locus/lib/locus/runtime/settings.ex" => 1,
     # The installed port module.
     "apps/prima/lib/prima/caps.ex" => 1,
     # The provider module whose declaration is malformed.

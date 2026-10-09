@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-Code.require_file("opus/support/nested_execution_helper.exs", __DIR__)
-Code.require_file("opus/support/formula_host_helper.exs", __DIR__)
+Code.require_file("runtime/support/nested_execution_helper.exs", __DIR__)
+Code.require_file("runtime/support/formula_host_helper.exs", __DIR__)
 
 defmodule Cyfr.TwoWorkersTest do
   @moduledoc """
   Two worker services, reached over the wire and reaching back over it:
-  the test boot's Opus service (`wrk_local`) and the scripted service
+  the test boot's runtime (`wrk_local`) and the scripted service
   (`wrk_scripted`), each with the key CYFR derives for its id. Independent
   roots run on each, and a request signed with one service's key is
   refused by the other. What the wire may lose is answered by its class:
@@ -46,10 +46,10 @@ defmodule Cyfr.TwoWorkersTest do
 
   alias Crucible.{Attempt, Keys, WorkerClient}
   alias Prima.Slots
-  alias Cyfr.Test.{AttemptFixtures, OpusService, ScriptedWorker, TwoServices}
+  alias Cyfr.Test.{AttemptFixtures, RuntimeService, ScriptedWorker, TwoServices}
   alias Cyfr.Test.TwoServices.Wire
   alias Prima.{WorkerAuth, WorkerWire}
-  alias Opus.Test.NestedExecution, as: Probe
+  alias Locus.Runtime.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap}
 
   @moduletag timeout: 180_000
@@ -64,7 +64,7 @@ defmodule Cyfr.TwoWorkersTest do
   @stub_text "The stub answers at once."
   @stub_deltas ["The stub ", "answers ", "at ", "once."]
   @lapsed "Execution terminated: runner stopped without cleanup"
-  @local OpusService.service()
+  @local RuntimeService.service()
   @other ScriptedWorker.service()
 
   setup tags do
@@ -95,10 +95,10 @@ defmodule Cyfr.TwoWorkersTest do
   end
 
   # ---------------------------------------------------------------------------
-  # The step stub on Opus, the scripted reagent on the scripted service
+  # The step stub on the runtime, the scripted reagent on the scripted service
   # ---------------------------------------------------------------------------
 
-  describe "with the step stub on Opus and a scripted reagent" do
+  describe "with the step stub on the runtime and a scripted reagent" do
     setup %{ctx: ctx, run_dir: run_dir} do
       Application.put_env(:arca, :seed_path, lay_seed!(Path.join(run_dir, "seed")))
       :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
@@ -121,26 +121,26 @@ defmodule Cyfr.TwoWorkersTest do
       arm!(ctx, key: "k-#{System.unique_integer([:positive])}", token: "t-unused")
       answer = %{"content" => [%{"type" => "text", "text" => "scripted"}]}
       start_supervised!({ScriptedWorker, ref: @scripted, script: [answer]})
-      opus_id = Prima.UUID7.execution_id()
+      runtime_id = Prima.UUID7.execution_id()
 
-      on_opus =
+      on_runtime =
         Task.async(fn ->
-          Crucible.run_root(ctx, :default, @stub, chat(), execution_id: opus_id)
+          Crucible.run_root(ctx, :default, @stub, chat(), execution_id: runtime_id)
         end)
 
       on_scripted = Task.async(fn -> scripted_run!(ctx) end)
 
       assert {:ok, %{output: %{"data" => %{"content" => [%{"text" => @stub_text}]}}}} =
-               Task.await(on_opus, 60_000)
+               Task.await(on_runtime, 60_000)
 
       assert {{:ok, %{status: :completed, output: %{"data" => ^answer}}}, scripted_id} =
                Task.await(on_scripted, 60_000)
 
       # Each row's attempt names the service and boot it ran on.
-      assert %{state: "completed", service_id: @local, boot_id: opus_boot} =
-               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), opus_id)
+      assert %{state: "completed", service_id: @local, boot_id: runtime_boot} =
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), runtime_id)
 
-      assert opus_boot == OpusService.boot()
+      assert runtime_boot == RuntimeService.boot()
 
       assert %{state: "completed", service_id: @other, boot_id: scripted_boot} =
                Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), scripted_id)
@@ -154,20 +154,21 @@ defmodule Cyfr.TwoWorkersTest do
       {:ok, other_key} = Keys.opus_key(@other)
       refute local_key == other_key
 
-      assert {401, %{"error" => "bad_mac"}} = status_request(OpusService.url(), @local, other_key)
+      assert {401, %{"error" => "bad_mac"}} =
+               status_request(RuntimeService.url(), @local, other_key)
 
       assert {401, %{"error" => "bad_mac"}} =
                status_request(ScriptedWorker.url(), @other, local_key)
 
       assert {200, %{"ok" => %{"service" => @local}}} =
-               status_request(OpusService.url(), @local, local_key)
+               status_request(RuntimeService.url(), @local, local_key)
 
       assert {200, %{"ok" => %{"service" => @other}}} =
                status_request(ScriptedWorker.url(), @other, other_key)
 
       # Each status read over the wire has the contract's shape, a count of
       # tainted runners among it: neither service holds one after its run.
-      for endpoint <- [OpusService.endpoint(), ScriptedWorker.endpoint()] do
+      for endpoint <- [RuntimeService.endpoint(), ScriptedWorker.endpoint()] do
         assert {:ok, %{runners: %{tainted: 0}} = status} = WorkerClient.status(endpoint)
         assert Prima.WorkerAPI.valid_status?(status)
       end
@@ -255,7 +256,7 @@ defmodule Cyfr.TwoWorkersTest do
       fixture = attached!(ctx)
 
       client =
-        Opus.HostClient.new(fixture.keys, fixture.runner, fixture.boot, %{
+        Locus.Runtime.HostClient.new(fixture.keys, fixture.runner, fixture.boot, %{
           member: fixture.member,
           host_url: wire.url
         })
@@ -263,27 +264,34 @@ defmodule Cyfr.TwoWorkersTest do
       attempt = fixture.attempt
 
       Wire.plan(wire, WorkerWire.host_route(:renew), [:forward_then_drop])
-      assert {:ok, %{^attempt => {:ok, _until}}} = Opus.HostClient.renew(client, [attempt])
+
+      assert {:ok, %{^attempt => {:ok, _until}}} =
+               Locus.Runtime.HostClient.renew(client, [attempt])
+
       assert Wire.seen(wire, WorkerWire.host_route(:renew)) == [:forward_then_drop, :forward]
 
       Wire.plan(wire, WorkerWire.host_route(:record_denial), [:forward_then_drop])
 
       assert {:error, {:uncertain, _sentence}} =
-               Opus.HostClient.record_denial(client, "egress_denied", "refused by the test")
+               Locus.Runtime.HostClient.record_denial(
+                 client,
+                 "egress_denied",
+                 "refused by the test"
+               )
 
       assert Wire.seen(wire, WorkerWire.host_route(:record_denial)) == [:forward_then_drop]
 
       {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
 
       parent =
-        Opus.Test.FormulaHost.attached!(
+        Locus.Runtime.Test.FormulaHost.attached!(
           ctx: ctx,
           authority: authority,
           component_ref: "formula:local.two-workers-parent:0.1.0"
         )
 
       parent_client =
-        Opus.HostClient.new(parent.keys, parent.runner, parent.boot, %{
+        Locus.Runtime.HostClient.new(parent.keys, parent.runner, parent.boot, %{
           member: parent.member,
           host_url: wire.url
         })
@@ -291,7 +299,7 @@ defmodule Cyfr.TwoWorkersTest do
       Wire.plan(wire, WorkerWire.host_route(:admit_child), [:forward_then_drop])
 
       assert {:ok, child} =
-               Opus.HostClient.admit_child(
+               Locus.Runtime.HostClient.admit_child(
                  parent_client,
                  "#{@stub}:#{@version}",
                  nil,
@@ -307,7 +315,7 @@ defmodule Cyfr.TwoWorkersTest do
 
       child_id = child.assignment.execution_id
       assert [%{id: ^child_id}] = Arca.Repo.all(children_of(parent.execution_id))
-      assert :ok = Opus.HostClient.release_child(parent_client, child_id)
+      assert :ok = Locus.Runtime.HostClient.release_child(parent_client, child_id)
       assert %{status: "failed"} = row(child_id)
     end
 
@@ -380,15 +388,15 @@ defmodule Cyfr.TwoWorkersTest do
       assert {:error, :not_found} =
                Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
 
-      wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
+      wait_until(fn -> RuntimeService.status().attempts == [] end, 10_000)
     end
   end
 
   # ---------------------------------------------------------------------------
-  # The nested probe on Opus
+  # The nested probe on the runtime
   # ---------------------------------------------------------------------------
 
-  describe "with the nested probe on Opus" do
+  describe "with the nested probe on the runtime" do
     setup %{ctx: ctx} do
       :ok = Probe.publish_probe!(ctx)
       {:ok, %{minted: minted}} = Bootstrap.run(ctx)
@@ -443,17 +451,17 @@ defmodule Cyfr.TwoWorkersTest do
       wait_until(fn -> reported_exit?(runner) end, 10_000, "the runner's exit report")
       assert Enum.all?(held, &reported_exit?(runner, attempt_of(ctx, &1)))
       for id <- held, do: wait_until(fn -> Attempt.whereis(id) == nil end)
-      wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
+      wait_until(fn -> RuntimeService.status().attempts == [] end, 10_000)
       wait_until(fn -> Slots.status(@slots).child_active == children_before end)
     end
 
     test "a restarted service holds none of its predecessor's attempts, which its watch lapses",
          %{ctx: ctx} do
       # The worker watch is off in the test boot; this case runs one of its
-      # own over the Opus service, polling fast.
+      # own over the runtime, polling fast.
       start_supervised!(
         {Crucible.WorkerWatch,
-         workers: [OpusService.endpoint()], poll_ms: 50, misses: 3, name: :two_workers_watch}
+         workers: [RuntimeService.endpoint()], poll_ms: 50, misses: 3, name: :two_workers_watch}
       )
 
       root_id = Prima.UUID7.execution_id()
@@ -472,20 +480,20 @@ defmodule Cyfr.TwoWorkersTest do
       assert %{attempt: attempt, boot_id: old_boot, state: "running"} =
                Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), root_id)
 
-      assert old_boot == OpusService.boot()
+      assert old_boot == RuntimeService.boot()
 
       wait_until(
         fn ->
-          Crucible.WorkerWatch.fresh_boot(OpusService.endpoint(), :two_workers_watch) ==
+          Crucible.WorkerWatch.fresh_boot(RuntimeService.endpoint(), :two_workers_watch) ==
             {:ok, old_boot}
         end,
         10_000,
         "the watch to hear the old boot"
       )
 
-      new_boot = OpusService.restart!()
+      new_boot = RuntimeService.restart!()
       refute new_boot == old_boot
-      assert %{boot: ^new_boot, attempts: []} = OpusService.status()
+      assert %{boot: ^new_boot, attempts: []} = RuntimeService.status()
 
       # The old boot's runner went with it, and its close is lost. Nothing
       # reported the runner: the watch hears a new boot, and lapses the old
@@ -503,17 +511,17 @@ defmodule Cyfr.TwoWorkersTest do
   end
 
   # ---------------------------------------------------------------------------
-  # The Opus service
+  # The runtime
   # ---------------------------------------------------------------------------
 
-  # An attempt attached on the Opus service's boot, as a runner of its
+  # An attempt attached on the runtime's boot, as a runner of its
   # would hold it.
   defp attached!(ctx) do
     AttemptFixtures.attached!(
       ctx: ctx,
       service_id: @local,
-      boot_id: OpusService.boot(),
-      worker: OpusService.endpoint()
+      boot_id: RuntimeService.boot(),
+      worker: RuntimeService.endpoint()
     )
   end
 
@@ -554,7 +562,7 @@ defmodule Cyfr.TwoWorkersTest do
 
     fields = %{service: service, boot: boot, ts: System.system_time(:millisecond), nonce: nonce()}
     {:ok, header} = WorkerAuth.report_header(WorkerAuth.dispatch_key(worker_key), fields, body)
-    post(OpusService.host_url() <> WorkerWire.host_route(:runner_exited), header, body)
+    post(RuntimeService.host_url() <> WorkerWire.host_route(:runner_exited), header, body)
   end
 
   defp post(url, header, body) do
@@ -587,7 +595,7 @@ defmodule Cyfr.TwoWorkersTest do
   defp attempt_of(ctx, id),
     do: Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id).attempt
 
-  # Whether the Opus service reported `runner`'s exit over the wire, naming
+  # Whether the runtime reported `runner`'s exit over the wire, naming
   # `attempt` when one is given.
   defp reported_exit?(runner, attempt \\ nil) do
     Enum.any?(TwoServices.calls(), fn

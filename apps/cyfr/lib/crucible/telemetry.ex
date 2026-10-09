@@ -11,7 +11,7 @@ defmodule Crucible.Telemetry do
   distinct from the execution's persistent record (`Crucible.Record`).
   `[:cyfr, :opus, :emit]` is for operator metrics. The events a running
   component's storage, tool and formula calls produce are
-  `Opus.Telemetry`'s.
+  `Locus.Runtime.Telemetry`'s.
 
   ## Events
 

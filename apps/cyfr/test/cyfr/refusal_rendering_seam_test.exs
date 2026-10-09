@@ -171,7 +171,7 @@ defmodule Cyfr.RefusalRenderingSeamTest do
     test "reaches every umbrella app's lib" do
       libs = Prima.Test.SourceTree.app_libs(@root)
 
-      for app <- ~w(arca cyfr locus opus prima sanctum) do
+      for app <- ~w(arca cyfr locus prima sanctum) do
         assert "apps/#{app}/lib" in libs, "the scan does not read apps/#{app}/lib"
       end
     end

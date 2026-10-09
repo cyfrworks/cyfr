@@ -46,9 +46,9 @@ defmodule Prima.LogFilter do
   when its application starts, and a primary filter added later runs
   earlier, so each node installs this one from its first application
   start, before any process of the node holds a secret: `Arca.Supervisor`
-  on the control plane, `Opus.Application` in either role, and
-  `Locus.Application`. A `Cyfr.Release` task, which runs where no
-  application starts, installs it too.
+  on the control plane, and `Locus.Application` on an island node, whichever
+  role it serves, a runner's included. A `Cyfr.Release` task, which runs
+  where no application starts, installs it too.
 
   None of them reaches a value an exception's reason carries outside a
   frame or a call (a `MatchError`'s term), nor text formatted any other

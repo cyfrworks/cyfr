@@ -4,7 +4,7 @@
 defmodule Prima.KeeperProtocol do
   @moduledoc """
   The wire between `cyfr-locus` (`apps/locus/keeper`) and its clients,
-  `Opus.Keeper.Channel` and `Locus.Keeper`: the request and reply lines on
+  `Locus.Runtime.Keeper.Channel` and `Locus.Keeper`: the request and reply lines on
   the inherited channel (fd 3) and the frames on a spawn's attach
   connection. `tests/fixtures/keeper_protocol.json` holds the vectors the
   keeper and every client reproduce. Pure: the attach token's entropy is

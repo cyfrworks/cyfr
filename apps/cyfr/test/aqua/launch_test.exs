@@ -273,7 +273,7 @@ defmodule Aqua.LaunchTest do
   # ---------------------------------------------------------------------------
 
   @probe Path.expand(
-           "../../../opus/test/support/test_wasm/hostile/attached_header_probe.wasm",
+           "../../../locus/test/support/runtime/test_wasm/hostile/attached_header_probe.wasm",
            __DIR__
          )
   @math_wasm Path.expand("../support/test_wasm/math.wasm", __DIR__)

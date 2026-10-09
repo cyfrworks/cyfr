@@ -15,7 +15,7 @@ defmodule Cyfr.EgressInventoryTest do
 
   The pure `Prima.Network` policy validates a supplied address and constructs
   pinned options. Sanctum owns DNS resolution; Sanctum.Egress sends
-  control-plane requests, and Opus owns the guest HTTP handlers, which
+  control-plane requests, and the runtime owns the guest HTTP handlers, which
   connect to the address the control plane pinned and resolve nothing.
   A guest's request that names a connection is the one guest request the
   control plane makes itself (`Crucible.Host.AttachedFetch`), to the
@@ -51,7 +51,7 @@ defmodule Cyfr.EgressInventoryTest do
     # granted the attempt, the attempt's edge and limits checked again, the
     # rate taken, the answer bounded while it streams and sent on under the
     # runner's credit.
-    "apps/opus/lib/opus/relay.ex" => :guest_fetch,
+    "apps/locus/lib/locus/runtime/relay.ex" => :guest_fetch,
     # A guest's attached request (`attached_fetch`), made by the control
     # plane itself because it carries a credential no runner or worker
     # service holds: the connection granted, the destination and the
@@ -60,14 +60,14 @@ defmodule Cyfr.EgressInventoryTest do
     # followed, the answer bounded and masked as it streams.
     "apps/cyfr/lib/crucible/host/attached_fetch.ex" => :attached_fetch,
     # The worker wire, CYFR's side: `Prima.WorkerAPI` requests to the
-    # operator-configured worker services (CYFR_OPUS_WORKERS), signed with each
+    # operator-configured worker services (CYFR_LOCUS_RUNTIME_WORKERS), signed with each
     # service's dispatch key, bounded answers (`Prima.WorkerWire`).
     "apps/cyfr/lib/crucible/worker_client.ex" => :worker_client,
-    # The worker wire, Opus's side: the service posts its runners' host
+    # The worker wire, the runtime's side: the service posts its runners' host
     # calls, sealed and signed with the attempt's keys and verified by the
     # service before it posts them, its own rate calls and its exit reports
-    # to CYFR's host API (OPUS_HOST_URL), bounded answers.
-    "apps/opus/lib/opus/host_client.ex" => :host_client,
+    # to CYFR's host API (LOCUS_RUNTIME_HOST_API_URL), bounded answers.
+    "apps/locus/lib/locus/runtime/host_client.ex" => :host_client,
     # The builds wire, CYFR's side: `Prima.BuilderProtocol` requests to the
     # operator-configured Locus builds service (CYFR_LOCUS_BUILDS_URL),
     # signed with the key derived from the service's, the answer bounded
@@ -108,7 +108,7 @@ defmodule Cyfr.EgressInventoryTest do
   # `Crucible.Host.Egress` pins it under the attempt's authority — never
   # names them.
   @operator_targets [":operator", "private_egress_targets", "private_allowed?"]
-  @guest_side ~w(apps/opus/lib/**/*.ex apps/cyfr/lib/crucible/**/*.ex apps/cyfr/lib/crucible.ex)
+  @guest_side ~w(apps/locus/lib/locus/runtime/**/*.ex apps/cyfr/lib/crucible/**/*.ex apps/cyfr/lib/crucible.ex)
 
   defp root, do: Path.expand("../../../..", __DIR__)
 

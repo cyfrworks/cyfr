@@ -4,16 +4,16 @@
 defmodule Cyfr.Test.TwoServices do
   @moduledoc """
   What an integration test needs to run work on the two worker services of
-  the test boot at once: the Opus service (`Cyfr.Test.OpusService`,
+  the test boot at once: the runtime (`Cyfr.Test.RuntimeService`,
   `wrk_local`), which runs a component for real in runners that are OS
   processes of their own, and the scripted service
   (`Cyfr.Test.ScriptedWorker`, `wrk_scripted`), which answers from a
   script. Both are reached over HTTP and hold keys of their own. Users are
-  `async: false`: the routing, the Opus service, the scripted service and
+  `async: false`: the routing, the runtime, the scripted service and
   the suite's wire are each one.
 
   - The athanor: `lay_seed!/2` lays a seed whose catalyst is the step stub
-    (`stub/0`), a `model/chat@1` catalyst Opus runs for real, under the
+    (`stub/0`), a `model/chat@1` catalyst the runtime runs for real, under the
     limits its manifest asks for; `arm!/2` binds the key it needs.
     `scripted/0` names a reagent only the scripted service runs.
   - The routing: `route!/2` sends the runs of a reference both services
@@ -25,8 +25,8 @@ defmodule Cyfr.Test.TwoServices do
   - The wire: `Wire` is a proxy that forwards what it is told to, loses
     what it is told to, holds a call a test asks for until the test lets
     it go, and records what crossed it, each call read as the host reads
-    it. The Opus service's runners reach CYFR's host listener through the
-    suite's own wire (`Cyfr.Test.OpusService.wire!/1`) for the whole run,
+    it. The runtime's runners reach CYFR's host listener through the
+    suite's own wire (`Cyfr.Test.RuntimeService.wire!/1`) for the whole run,
     so a test holds a guest at one of its host calls (`hold!/2`), reads
     what crossed (`calls/1`, `entered/1`) once it is recorded
     (`settled!/0`) and loses a call (`plan!/2`) without restarting the
@@ -736,18 +736,18 @@ defmodule Cyfr.Test.TwoServices do
 
   @doc """
   Send the runs of `refs`, which the scripted service scripts, to
-  `:scripted` or to `:opus` from now on: `config :cyfr, :opus_workers` with the
+  `:scripted` or to `:runtime` from now on: `config :cyfr, :opus_workers` with the
   scripted service's entry for them ahead of the rest, or without it. A run
   is routed when it is dispatched, so one already dispatched stays where it
   is. The caller restores `:opus_workers` when its test ends.
   """
-  @spec route!(:scripted | :opus, [String.t()] | String.t()) :: :ok
+  @spec route!(:scripted | :runtime, [String.t()] | String.t()) :: :ok
   def route!(:scripted, refs) do
     configured = Application.get_env(:cyfr, :opus_workers)
     Application.put_env(:cyfr, :opus_workers, ScriptedWorker.workers(refs, configured))
   end
 
-  def route!(:opus, _refs) do
+  def route!(:runtime, _refs) do
     configured = Application.get_env(:cyfr, :opus_workers, [])
     scripted = ScriptedWorker.service()
     Application.put_env(:cyfr, :opus_workers, Enum.reject(configured, &(&1[:id] == scripted)))
@@ -844,7 +844,7 @@ defmodule Cyfr.Test.TwoServices do
   @suite_wire __MODULE__.SuiteWire
 
   @doc """
-  Start the suite's wire between the Opus service's runners and `target`,
+  Start the suite's wire between the runtime's runners and `target`,
   CYFR's host listener, for the rest of the run, or answer it if it runs.
   """
   @spec serve_wire!(String.t()) :: Wire.t()

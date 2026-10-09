@@ -56,7 +56,7 @@ defmodule Cyfr.PathSafetyTest do
     end
   end
 
-  describe "validate_relative_path/1 (Opus contract)" do
+  describe "validate_relative_path/1 (the runtime's contract)" do
     test "accepts ordinary relative paths" do
       assert :ok = PathSafety.validate_relative_path("data/cache/results.json")
       assert :ok = PathSafety.validate_relative_path("")

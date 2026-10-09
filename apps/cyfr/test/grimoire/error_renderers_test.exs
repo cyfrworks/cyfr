@@ -78,7 +78,7 @@ defmodule Grimoire.ErrorRenderersTest do
         assert PrismWeb.Ops.error_message(reason) == expected,
                "the console disagrees about #{inspect(reason)}"
 
-        assert Opus.FormulaHandler.render_reason(reason) == expected,
+        assert Locus.Runtime.FormulaHandler.render_reason(reason) == expected,
                "the guest view disagrees about #{inspect(reason)}"
       end
     end
@@ -104,7 +104,7 @@ defmodule Grimoire.ErrorRenderersTest do
         assert PrismWeb.Ops.error_message(reason) == expected,
                "the console disagrees about #{inspect(reason)}"
 
-        assert Opus.FormulaHandler.render_reason(reason) == expected,
+        assert Locus.Runtime.FormulaHandler.render_reason(reason) == expected,
                "the guest view disagrees about #{inspect(reason)}"
       end
     end
@@ -133,7 +133,7 @@ defmodule Grimoire.ErrorRenderersTest do
         assert Prima.GuestError.render(reason) == expected,
                "the runner's vocabulary disagrees about #{inspect(reason)}"
 
-        assert Opus.FormulaHandler.render_reason(reason) == expected,
+        assert Locus.Runtime.FormulaHandler.render_reason(reason) == expected,
                "the in-chain guest view disagrees about #{inspect(reason)}"
 
         assert PrismWeb.Ops.error_message(reason) == expected,
@@ -143,14 +143,17 @@ defmodule Grimoire.ErrorRenderersTest do
 
     test "an atom outside the vocabulary is internal, and is not spelled out" do
       # What the runner's renderer did to every atom it did not know.
-      assert Opus.FormulaHandler.render_reason(:some_internal_state) == "The call failed."
+      assert Locus.Runtime.FormulaHandler.render_reason(:some_internal_state) ==
+               "The call failed."
+
       assert Prima.GuestError.render(:some_internal_state) == nil
     end
   end
 
   describe "the guest never sees an internal term" do
     test "an unknown reason renders as a generic sentence, not inspect output" do
-      rendered = Opus.FormulaHandler.render_reason({:some_internal, %{"secret" => "leak"}})
+      rendered =
+        Locus.Runtime.FormulaHandler.render_reason({:some_internal, %{"secret" => "leak"}})
 
       refute rendered =~ "secret"
       refute rendered =~ "leak"
@@ -158,20 +161,20 @@ defmodule Grimoire.ErrorRenderersTest do
     end
 
     test "a crafted binary still passes through" do
-      assert Opus.FormulaHandler.render_reason("No provider found for scheme ftp") ==
+      assert Locus.Runtime.FormulaHandler.render_reason("No provider found for scheme ftp") ==
                "No provider found for scheme ftp"
     end
 
     test "the other typed vocabularies render through their own module" do
-      assert Opus.FormulaHandler.render_reason({:not_found, "component", "x"}) ==
+      assert Locus.Runtime.FormulaHandler.render_reason({:not_found, "component", "x"}) ==
                Refusal.message({:not_found, "component", "x"})
 
-      # Opus renders from contract data alone (`Prima.GuestError`): a Sanctum
+      # The runtime renders from contract data alone (`Prima.GuestError`): a Sanctum
       # refusal reaches a guest only once CYFR has rendered it into the wire
       # answer, so the bare term is internal to the engine and generalized.
       unauthorized = {:missing_permission, :vault_read}
       assert Sanctum.Unauthorized.reason?(unauthorized)
-      assert Opus.FormulaHandler.render_reason(unauthorized) == "The call failed."
+      assert Locus.Runtime.FormulaHandler.render_reason(unauthorized) == "The call failed."
     end
   end
 

@@ -6,7 +6,7 @@ defmodule Crucible.Keys do
   The keys CYFR and its execution workers authenticate each other with
   (`Prima.WorkerAuth`).
 
-  The worker root is `config :cyfr, :opus_key` (`CYFR_OPUS_KEY`, 32
+  The worker root is `config :cyfr, :opus_key` (`CYFR_LOCUS_RUNTIME_ROOT`, 32
   bytes). Without one, the root is 32 random bytes minted when the
   application starts and held only in this BEAM, which serves only a
   worker service running in this BEAM; a restart then retires every

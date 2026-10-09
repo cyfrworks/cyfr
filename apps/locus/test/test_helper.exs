@@ -18,4 +18,41 @@ if excludes != [] do
   ExUnit.configure(exclude: excludes)
 end
 
+# The runtime's suites run with the contracts alone: no database and no
+# control plane. Every host call a test makes goes to a scripted host
+# (`Locus.Runtime.Test.ScriptedHost`) served on a loopback port. The worker
+# service the application starts is given the key that host derives for
+# it, so its reports verify there, and a host URL nothing listens on; a
+# test that needs the running service to reach a host points it at its
+# own. Its listener binds port 0: a test that needs one starts its own and
+# asks which port it was given.
+#
+# The service runs its runners as OS processes of their own (the `Direct`
+# keeper), a pool of one kept ahead, since every test that points the
+# service at its host restarts it and refills the pool. Runner code a test
+# runs in this VM (the runtime, the handlers, `Locus.Runtime.Runner`) runs
+# on the engine the suite starts here (`Locus.Runtime.Test.Engine`).
+root = Locus.Runtime.Test.ScriptedHost.root()
+{:ok, worker_key} = Prima.WorkerAuth.worker_key(root, Locus.Runtime.Test.ScriptedHost.service())
+
+Locus.Runtime.Test.Env.merge(
+  service_id: Locus.Runtime.Test.ScriptedHost.service(),
+  service_key: Base.encode16(worker_key, case: :lower),
+  host_url: "http://127.0.0.1:9",
+  bind: "127.0.0.1",
+  port: 0,
+  keeper: :direct,
+  pool_size: 1
+)
+
+# The umbrella starts the application before this helper runs (and another
+# suite in this VM may have given the service other credentials): the
+# runtime's service tree is restarted so it holds these.
+case Application.ensure_all_started(:locus) do
+  {:ok, []} -> Locus.Runtime.Test.ScriptedHost.restart_service!()
+  {:ok, _started} -> :ok
+end
+
+:ok = Locus.Runtime.Test.Engine.start!()
+
 ExUnit.start()

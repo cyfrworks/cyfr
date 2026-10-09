@@ -136,11 +136,13 @@ defmodule Cyfr.Test.StepBench do
     # it through the suite's wire for the whole run, which the bench keeps:
     # pointing them past it would restart the service and leave every later
     # test's holds and reads on a wire no call crosses.
-    Cyfr.Test.OpusService.wire!(proxy: Cyfr.Test.TwoServices.wire() != nil)
+    Cyfr.Test.RuntimeService.wire!(proxy: Cyfr.Test.TwoServices.wire() != nil)
 
     unless Crucible.available?(),
       do:
-        raise("the Opus worker service of this boot does not answer; run from the umbrella root")
+        raise(
+          "the runtime's worker service of this boot does not answer; run from the umbrella root"
+        )
 
     with_upstream(fn upstream ->
       with_sandbox(fn ->

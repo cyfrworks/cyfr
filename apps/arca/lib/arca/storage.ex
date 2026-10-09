@@ -14,7 +14,7 @@ defmodule Arca.Storage do
   `File.*` / `Path.wildcard` call elsewhere in `apps/cyfr/lib` is a
   regression — it means the same code no longer behaves identically on the
   local filesystem and on a configured object-store adapter. The execution
-  and build workers (`apps/opus/lib`, `apps/locus/lib`) hold no tenant state
+  and build workers (`apps/locus/lib/locus/runtime`, `apps/locus/lib`) hold no tenant state
   and reach storage only through the control plane; the files they touch are
   a runner's or a build's own sandbox (group D), and the same scan holds
   them to their tags.
@@ -32,7 +32,7 @@ defmodule Arca.Storage do
   | A | Inside the adapter itself | The adapter IS the layer that translates segments to bytes. | `Arca.Adapters.Local`, any configured object-store adapter |
   | B | Pre-Arca bootstrap | Code runs before `Arca.Repo` / config is up; chicken-and-egg. | `Cyfr.Application.ensure_db_directory!`, `verify_db_writable!` |
   | C | Compile-time embedded resources | Module attribute `@external_resource` — not runtime I/O. | `@sdk_source`, `@component_guide`, `@wit_files_*` |
-  | D | Local-only sandbox / OS toolchain / user-import boundary | Tar extraction tmp dirs, cargo build sandbox, user-supplied filesystem paths during publish. After validation, content rejoins Arca. | `Compendium.Registry.extract_and_store_tincture`, `Locus.Builder`, `Opus.Keeper.Channel` |
+  | D | Local-only sandbox / OS toolchain / user-import boundary | Tar extraction tmp dirs, cargo build sandbox, user-supplied filesystem paths during publish. After validation, content rejoins Arca. | `Compendium.Registry.extract_and_store_tincture`, `Locus.Builder`, `Locus.Runtime.Keeper.Channel` |
   | E | Repo-local code generation | The output is a source file under version control, never an athanor's tree; there is no tenant, adapter or context in reach. | `Mix.Tasks.Ops.Gen.Cli` |
 
   Any code that doesn't fit one of these groups must use `Arca` (which dispatches
@@ -699,7 +699,7 @@ defmodule Arca.Storage do
   Validate that path segments contain no traversal attacks.
 
   Delegates to `Prima.PathSafety.validate_segments!/1` (the canonical
-  denylist, shared with the Opus storage policy boundary). Called once
+  denylist, shared with the runtime's storage policy boundary). Called once
   per operation, from the adapter's single path/key builder
   (`Arca.Adapters.Local.build_path/2`, the S3 adapter's key builder) —
   never per callback on top.

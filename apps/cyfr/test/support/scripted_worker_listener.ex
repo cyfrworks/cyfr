@@ -8,14 +8,14 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
   choosing, in front of any `Prima.WorkerAPI` module. It is what
   `Cyfr.Test.ScriptedWorker` is reached through, and what a test's own
   worker module is served by, so `Crucible.Dispatch` reaches either
-  exactly as it reaches Opus.
+  exactly as it reaches the runtime.
 
   `start_link/1` takes `worker:` (the `Prima.WorkerAPI` module it serves)
   and `service:` (that worker service's configured id, whose dispatch key
   CYFR derives for it: `Crucible.Keys.opus_key/1`); `url/1` is the
   base URL a `t:Prima.WorkerAPI.endpoint/0` names.
 
-  A request is answered as Opus's listener answers it: the `x-cyfr-auth`
+  A request is answered as the runtime's listener answers it: the `x-cyfr-auth`
   header is verified with the service's dispatch key before the body is
   read (`Prima.WorkerAuth.verify_request_header/3`, `401` with the
   refusal), the body is read up to `Prima.HostAPI.max_body_bytes/0` (`413`

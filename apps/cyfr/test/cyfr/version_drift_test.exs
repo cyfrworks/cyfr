@@ -19,7 +19,7 @@ defmodule Cyfr.VersionDriftTest do
   test "the root and every application's mix.exs state it" do
     files = [Path.join(@root, "mix.exs") | SourceTree.files!(Path.join(@root, "apps/*/mix.exs"))]
 
-    assert length(files) >= 7
+    assert length(files) >= 6
 
     for file <- files do
       assert [_, version] = Regex.run(~r/^\s*version: "([^"]+)",?$/m, File.read!(file)),

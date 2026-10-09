@@ -94,7 +94,7 @@ type workerAuthVectors struct {
 
 // The service key init writes is Prima.WorkerAuth.worker_key/2's: the value
 // the vector file records for its root and service, and the root is read
-// as the platform reads CYFR_OPUS_KEY.
+// as the platform reads CYFR_LOCUS_RUNTIME_ROOT.
 func TestWorkerKeyReproducesTheVectorFile(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "worker_auth.json"))
 	if err != nil {
@@ -173,7 +173,7 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 		t.Errorf("the shipped template's %s is %q, want %s on one line", buildsURLVar, v, defaultBuildsURL)
 	}
 	if _, assigned := f.value(serviceIDVar); assigned {
-		t.Errorf("the shipped template assigns %s; compose's default names the opus service", serviceIDVar)
+		t.Errorf("the shipped template assigns %s; compose's default names the locus-runtime service", serviceIDVar)
 	}
 }
 
@@ -309,7 +309,7 @@ func assertStackPairs(t *testing.T, text, serviceID string) {
 func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 	const root = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	rootBytes, _ := decodeHexKey(root)
-	opusKey := hex.EncodeToString(workerKey(rootBytes, "wrk_opus"))
+	runtimeKey := hex.EncodeToString(workerKey(rootBytes, "wrk_locus"))
 	otherKey := hex.EncodeToString(workerKey(rootBytes, "wrk_other"))
 	const buildsKey = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
 	const base = "CYFR_SECRET_KEY_BASE=kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept\nCYFR_LOCUS_BACKENDS_KEY=" + buildsKey + "\n"
@@ -324,95 +324,95 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 	}{
 		{
 			name:    "no root and no service key: both are minted, builds turned on",
-			body:    base + "CYFR_OPUS_KEY=\nOPUS_SERVICE_KEY=\n",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=\nLOCUS_RUNTIME_KEY=\n",
 			added:   []string{workerRootVar, serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
-			service: "wrk_opus",
+			service: "wrk_locus",
 		},
 		{
 			name:    "a root and no service key: the key is derived from that root",
-			body:    base + "CYFR_OPUS_KEY=" + root + "\n# OPUS_SERVICE_KEY=\n",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\n# LOCUS_RUNTIME_KEY=\n",
 			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{workerRootVar: root},
-			service: "wrk_opus",
+			service: "wrk_locus",
 		},
 		{
 			name:    "a root spelled in capitals derives the same key",
-			body:    base + "CYFR_OPUS_KEY=\"" + strings.ToUpper(root) + "\"\n",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=\"" + strings.ToUpper(root) + "\"\n",
 			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{workerRootVar: strings.ToUpper(root)},
-			service: "wrk_opus",
+			service: "wrk_locus",
 		},
 		{
 			name:    "a service id .env names is the one the key derives for",
-			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_ID=wrk_other\n",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_SERVICE_ID=wrk_other\n",
 			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{serviceKeyVar: otherKey},
 			service: "wrk_other",
 		},
 		{
 			name:    "a consistent pair is kept as it is",
-			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\n",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\n",
 			added:   []string{corsOriginsVar, buildsURLVar, buildsKeyVar},
-			kept:    map[string]string{workerRootVar: root, serviceKeyVar: opusKey},
-			service: "wrk_opus",
+			kept:    map[string]string{workerRootVar: root, serviceKeyVar: runtimeKey},
+			service: "wrk_locus",
 		},
 		{
 			name:    "a service key without a root is refused",
-			body:    base + "CYFR_OPUS_KEY=\nOPUS_SERVICE_KEY=" + opusKey + "\n",
-			refusal: "OPUS_SERVICE_KEY is set in .env but CYFR_OPUS_KEY, the root it is derived from, is not",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\n",
+			refusal: "LOCUS_RUNTIME_KEY is set in .env but CYFR_LOCUS_RUNTIME_ROOT, the root it is derived from, is not",
 		},
 		{
 			name:    "a service key another root derives is refused",
-			body:    base + "CYFR_OPUS_KEY=" + strings.Repeat("ab", 32) + "\nOPUS_SERVICE_KEY=" + opusKey + "\n",
-			refusal: "OPUS_SERVICE_KEY in .env is not the key CYFR_OPUS_KEY derives for OPUS_SERVICE_ID wrk_opus",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + strings.Repeat("ab", 32) + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\n",
+			refusal: "LOCUS_RUNTIME_KEY in .env is not the key CYFR_LOCUS_RUNTIME_ROOT derives for LOCUS_RUNTIME_SERVICE_ID wrk_locus",
 		},
 		{
 			name:    "a service key derived for another service id is refused",
-			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_ID=wrk_other\nOPUS_SERVICE_KEY=" + opusKey + "\n",
-			refusal: "for OPUS_SERVICE_ID wrk_other",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_SERVICE_ID=wrk_other\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\n",
+			refusal: "for LOCUS_RUNTIME_SERVICE_ID wrk_other",
 		},
 		{
 			name:    "a malformed service key is refused",
-			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=abc\n",
-			refusal: "is not the key CYFR_OPUS_KEY derives",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=abc\n",
+			refusal: "is not the key CYFR_LOCUS_RUNTIME_ROOT derives",
 		},
 		{
 			name:    "a malformed root is refused",
-			body:    base + "CYFR_OPUS_KEY=" + root[:63] + "\n",
-			refusal: "CYFR_OPUS_KEY in .env is not 64 hexadecimal digits",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root[:63] + "\n",
+			refusal: "CYFR_LOCUS_RUNTIME_ROOT in .env is not 64 hexadecimal digits",
 		},
 		{
 			name:    "a malformed service id is refused",
-			body:    base + "OPUS_SERVICE_ID=opus\n",
-			refusal: "OPUS_SERVICE_ID in .env is \"opus\"",
+			body:    base + "LOCUS_RUNTIME_SERVICE_ID=runtime\n",
+			refusal: "LOCUS_RUNTIME_SERVICE_ID in .env is \"runtime\"",
 		},
 		{
 			name:    "a root assigned twice is refused",
-			body:    base + "CYFR_OPUS_KEY=\nCYFR_OPUS_KEY=" + root + "\n",
-			refusal: "CYFR_OPUS_KEY is assigned on 2 lines of .env",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=\nCYFR_LOCUS_RUNTIME_ROOT=" + root + "\n",
+			refusal: "CYFR_LOCUS_RUNTIME_ROOT is assigned on 2 lines of .env",
 		},
 		{
 			name:    "a builds key without a URL gets the URL",
-			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_KEY=" + buildsKey + "\n",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_KEY=" + buildsKey + "\n",
 			added:   []string{corsOriginsVar, buildsURLVar},
 			kept:    map[string]string{buildsKeyVar: buildsKey},
-			service: "wrk_opus",
+			service: "wrk_locus",
 		},
 		{
 			name:    "a builds URL without a key gets a minted key",
-			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_LOCUS_BUILDS_KEY=\n",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_LOCUS_BUILDS_KEY=\n",
 			added:   []string{corsOriginsVar, buildsKeyVar},
-			service: "wrk_opus",
+			service: "wrk_locus",
 		},
 		{
 			name:  "a builds URL set empty with no key is builds turned off, and left so",
-			body:  base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\n",
+			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\n",
 			added: []string{corsOriginsVar},
 			kept:  map[string]string{buildsURLVar: "", buildsKeyVar: ""},
 		},
 		{
 			name:  "an allowlist .env assigns is kept, empty or not",
-			body:  base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=https://app.example.com\n",
+			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=https://app.example.com\n",
 			added: nil,
 			kept:  map[string]string{corsOriginsVar: "https://app.example.com"},
 		},
@@ -421,7 +421,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 			body:    "CYFR_HOST=localhost",
 			added:   []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{"CYFR_HOST": "localhost"},
-			service: "wrk_opus",
+			service: "wrk_locus",
 		},
 	}
 
@@ -478,7 +478,7 @@ func TestEnsureEnvFileKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
 
-	refused := "# mine\nCYFR_OPUS_KEY=\nOPUS_SERVICE_KEY=" + strings.Repeat("ab", 32) + "\n"
+	refused := "# mine\nCYFR_LOCUS_RUNTIME_ROOT=\nLOCUS_RUNTIME_KEY=" + strings.Repeat("ab", 32) + "\n"
 	if err := os.WriteFile(path, []byte(refused), 0640); err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +489,7 @@ func TestEnsureEnvFileKeys(t *testing.T) {
 		t.Errorf("a refused .env was written:\n%s", got)
 	}
 
-	partial := "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_OPUS_KEY=\n"
+	partial := "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_LOCUS_RUNTIME_ROOT=\n"
 	if err := os.WriteFile(path, []byte(partial), 0640); err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestEnsureEnvFileKeys(t *testing.T) {
 		t.Fatalf("changes %v, %v", changes, err)
 	}
 	got, _ := os.ReadFile(path)
-	if !strings.HasPrefix(string(got), "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_OPUS_KEY=") {
+	if !strings.HasPrefix(string(got), "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_LOCUS_RUNTIME_ROOT=") {
 		t.Errorf("the file's own lines moved:\n%s", got)
 	}
 	assertStackPairs(t, string(got), defaultServiceID)

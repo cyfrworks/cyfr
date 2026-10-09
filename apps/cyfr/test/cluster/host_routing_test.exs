@@ -233,7 +233,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       Cell.kill(:a)
 
       # A member that is gone answers nothing. The post never becomes an
-      # answer at all, which is what `Opus.HostClient` reads as a lost
+      # answer at all, which is what `Locus.Runtime.HostClient` reads as a lost
       # answer — retried where the callback's class allows it and
       # `uncertain` where it does not — rather than as CYFR's word.
       lost = post(call(held, "renew", %{"attempts" => [held.attempt]}), address(held))

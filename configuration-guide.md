@@ -11,9 +11,9 @@ same on every member, and a platform admin changes it on Prism's
 Settings page, with `cyfr settings`, or through the `settings` tool.
 
 `.env.example` is the starting `.env`: the keys and addresses `cyfr init`
-writes, and the deployment choices commented out. The execution worker's
-own settings are in `.env.opus.example` and the Locus services' in
-`.env.locus.example`. A `CYFR_*` name in the server's `.env` that no table
+writes, and the deployment choices commented out. The Locus services'
+own settings, the runtime's among them, are in `.env.locus.example`, one
+file for every role. A `CYFR_*` name in the server's `.env` that no table
 below declares refuses the boot, naming it; the process environment may
 carry the names other programs own as well.
 
@@ -26,7 +26,7 @@ carry the names other programs own as well.
 | `CYFR_BEHIND_PROXY` | `true` when a reverse proxy fronts the server: forwarded headers are trusted, the plain-HTTP warning is silent, and `cyfr up` starts the stack's Caddy (`--profile tls`). `cyfr init`'s TLS answer writes it. |
 | `CYFR_BIND_ADDRESS` | The address the one endpoint binds (default `0.0.0.0`); `127.0.0.1` binds localhost only. |
 | `CYFR_CELL_COOKIE` | A cell's cookie: at least 32 characters (`openssl rand -hex 32`), the same on every member and the cookie each member's BEAM runs under (`RELEASE_COOKIE` or `-setcookie`). |
-| `CYFR_CLUSTER` | Several members on one database as one cell (default off). A member boots only with PostgreSQL, S3 storage, TLS distribution, `CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_OPUS_KEY` and its own `CYFR_HOST_API_URL`; each missing one is a named refusal. |
+| `CYFR_CLUSTER` | Several members on one database as one cell (default off). A member boots only with PostgreSQL, S3 storage, TLS distribution, `CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_LOCUS_RUNTIME_ROOT` and its own `CYFR_HOST_API_URL`; each missing one is a named refusal. |
 | `CYFR_CLUSTER_DNS_QUERY` | A cell's discovery by DNS: the headless service whose addresses are the members, each named `<CYFR_CLUSTER_NODE_BASENAME>@<address>`. |
 | `CYFR_CLUSTER_NODE_BASENAME` | The node basename of the members `CYFR_CLUSTER_DNS_QUERY` finds. |
 | `CYFR_CLUSTER_NODES` | A cell's members by name, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`). |
@@ -49,9 +49,9 @@ carry the names other programs own as well.
 | `CYFR_GOOGLE_CLIENT_SECRET` | The Google OAuth client secret, set in `.env` alone and never in a tracked file. |
 | `CYFR_HEADLESS` | A Codex-only node (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_AUTH_PROVIDER=oidc`. |
 | `CYFR_HOST` | The hostname clients reach the server at (default `localhost`); in TLS mode Caddy's certificate names it. |
-| `CYFR_HOST_API_BIND` | The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1`; compose binds every interface of the worker network). |
+| `CYFR_HOST_API_BIND` | The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1`; compose binds every interface of the locus-runtime network). |
 | `CYFR_HOST_API_PORT` | The host API's port (default 4300). |
-| `CYFR_HOST_API_URL` | The address a worker service reaches this member's host API at, carried by every assignment the member issues; unset, a worker uses its own `OPUS_HOST_URL`, and a cell refuses to boot without it. |
+| `CYFR_HOST_API_URL` | The address a worker service reaches this member's host API at, carried by every assignment the member issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cell refuses to boot without it. |
 | `CYFR_LIVE_SALT` | The LiveView socket's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation. |
 | `CYFR_LOCUS_BACKENDS_KEY` | The backends service's key, 32 random bytes as 64 hexadecimal digits (`openssl rand -hex 32`), which `cyfr init` mints and compose hands the service as `LOCUS_BACKENDS_KEY`; without it, or without `CYFR_LOCUS_BACKENDS_URL`, stdio MCP servers are refused. |
 | `CYFR_LOCUS_BACKENDS_URL` | The backends service's base URL; compose sets `http://locus-backends:4101`. Set it for a service elsewhere, and name its host in `CYFR_PRIVATE_EGRESS_TARGETS`. |
@@ -64,8 +64,8 @@ carry the names other programs own as well.
 | `CYFR_OIDC_CLIENT_ID` | The client ID at the OIDC issuer, with `CYFR_AUTH_PROVIDER=oidc`. The issuer lists two redirect URIs for it: `<origin>/auth/oidcc/callback` for sign-in and `<origin>/auth/oidcc/reauth` for the fresh sign-in that confirms a sensitive change, which counts only when the issuer sends `auth_time` in its ID token. |
 | `CYFR_OIDC_CLIENT_SECRET` | The client secret at the OIDC issuer, with `CYFR_AUTH_PROVIDER=oidc`. |
 | `CYFR_OIDC_ISSUER` | The OIDC issuer's URL (Okta, Auth0, Keycloak, Azure AD and the like), with `CYFR_AUTH_PROVIDER=oidc`. |
-| `CYFR_OPUS_KEY` | The worker root, 32 random bytes as 64 hexadecimal digits, read by cyfr alone; every worker service's key derives from it. `cyfr init` mints it, every member of a cell holds the same one, and without it no component runs. |
-| `CYFR_OPUS_WORKERS` | The worker services runs are dispatched to, comma-separated `<service_id>=<url>` entries tried in order; compose sets `wrk_opus=http://opus:4200`, and outside compose the default is a worker on this machine. |
+| `CYFR_LOCUS_RUNTIME_ROOT` | The worker root, 32 random bytes as 64 hexadecimal digits, read by cyfr alone; every worker service's key derives from it. `cyfr init` mints it, every member of a cell holds the same one, and without it no component runs. |
+| `CYFR_LOCUS_RUNTIME_WORKERS` | The worker services runs are dispatched to, comma-separated `<service_id>=<url>` entries tried in order; compose sets `wrk_locus=http://locus-runtime:4200`, and outside compose the default is a worker on this machine. |
 | `CYFR_OTEL_ENABLED` | OpenTelemetry traces over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default off). |
 | `CYFR_PLATFORM_ADMIN_EMAILS` | The server's operators, comma-separated emails: each is always let in and holds the platform-admin capability, reconciled at every boot. Unset, no one can sign in. |
 | `CYFR_PORT` | The one endpoint's port (default 4000). |
@@ -140,8 +140,8 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_DEVICE_LABEL` | `device_label` | `string` | none | `registry` | live | serve | The label recorded against the registry push tokens this server mints. Unset, the hostname. |
 | `CYFR_HEALTH_READY_CACHE_MS` | `health_ready_cache_ms` | `integer` | `5000` | `health` | live | serve | How long `/health/ready` reuses its last probe, in milliseconds; on S3 every uncached probe is a billable write. |
 | `CYFR_DECISION_RETENTION_DAYS` | `decision_retention_days` | `integer` | `365` | `retention` | live | serve | Days the server keeps the admission decisions it made before any athanor was resolved; each athanor keeps its own under its retention settings. |
-| `CYFR_OPUS_WATCH_POLL_MS` | `opus_watch_poll_ms` | `integer` | `5000` | `workers` | live | serve | How often cyfr asks each worker service for its status, in milliseconds. |
-| `CYFR_OPUS_WATCH_MISSES` | `opus_watch_misses` | `integer` | `3` | `workers` | live | serve | Status polls a worker service may miss in a row before cyfr ends the runs of the boot it last heard from. |
+| `CYFR_LOCUS_RUNTIME_WATCH_POLL_MS` | `locus_runtime_watch_poll_ms` | `integer` | `5000` | `workers` | live | serve | How often cyfr asks each worker service for its status, in milliseconds. |
+| `CYFR_LOCUS_RUNTIME_WATCH_MISSES` | `locus_runtime_watch_misses` | `integer` | `3` | `workers` | live | serve | Status polls a worker service may miss in a row before cyfr ends the runs of the boot it last heard from. |
 | `CYFR_LOCUS_BACKENDS_LEASE_MS` | `locus_backends_lease_ms` | `integer` | `30000` | `backends` | live | serve | How long the backends service runs a stdio server's backends without a renewal from cyfr, in milliseconds; cyfr renews every third of it. |
 | `CYFR_LOCUS_BACKENDS_IDLE_MS` | `locus_backends_idle_ms` | `integer` | `900000` | `backends` | live | serve | How long a stdio backend runs without a tool call before it is stopped and its slot freed, in milliseconds; its next call starts it again. |
 | `CYFR_LOG_LEVEL` | `log_level` | `atom` | `info` | `logging` | live | serve | The Logger level, `emergency` to `debug`; debug output may include unredacted dependency messages. |
@@ -171,8 +171,8 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_CPU_LIMIT` | The cyfr container's CPU limit (default 4), which bounds the aggregate CPU of components that never yield. |
 | `LOCUS_BUILDS_CPU_LIMIT` | The locus-builds container's CPU limit (default 2). |
 | `LOCUS_BUILDS_MEMORY_LIMIT` | The locus-builds container's memory limit (default 4G), at least `LOCUS_BUILDS_MAX_CONCURRENT` x (`LOCUS_BUILDS_MEMORY_BYTES` + 1 GiB), so each build reaches its own bound before the container reaches its limit. |
-| `OPUS_CPU_LIMIT` | The opus container's CPU limit (default 4). |
-| `OPUS_MEMORY_LIMIT` | The opus container's memory limit (default 4G), at least 8 runner uids x `OPUS_RUNNER_MEMORY_BYTES` + 1 GiB, so each runner reaches its own bound before the container reaches its limit. |
+| `LOCUS_RUNTIME_CPU_LIMIT` | The locus-runtime container's CPU limit (default 4). |
+| `LOCUS_RUNTIME_MEMORY_LIMIT` | The locus-runtime container's memory limit (default 4G), at least 8 runner uids x `LOCUS_RUNTIME_MEMORY_BYTES` + 1 GiB, so each runner reaches its own bound before the container reaches its limit. |
 
 ## Names other programs own
 

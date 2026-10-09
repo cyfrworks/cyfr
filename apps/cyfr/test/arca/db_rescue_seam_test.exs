@@ -23,7 +23,7 @@ defmodule Arca.DbRescueSeamTest do
 
   # The enumerated exceptions: every file allowed to keep an inline rescue,
   # with how many sites it holds and why each stays inline. Everything else
-  # under apps/{cyfr,opus,locus}/lib must go through with_db_rescue.
+  # under apps/{cyfr,locus}/lib must go through with_db_rescue.
   @allowed %{
     # The helper's own home: the moduledoc shows the raw rescue shape once,
     # as documentation of what the roster is for.

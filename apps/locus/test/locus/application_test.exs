@@ -3,10 +3,12 @@
 
 defmodule Locus.ApplicationTest do
   @moduledoc """
-  What a Locus node starts, and when it refuses to: a node serves builds,
-  backends, both or neither by the keys it holds; one that serves either
-  does so under cyfr-locus, or, in a build that does not know the direct
-  launcher (every build but the test environment's), not at all.
+  What a Locus node starts, and when it refuses to: a node serves the
+  runtime, builds, backends, builds and backends, or nothing by the keys
+  it holds, and refuses to hold the runtime's key beside either other
+  key; one that serves builds or backends does so under cyfr-locus, or,
+  in a build that does not know the direct launcher (every build but the
+  test environment's), not at all.
   """
 
   # Replaces the logger's level and default formatter for one test.
@@ -15,10 +17,11 @@ defmodule Locus.ApplicationTest do
   alias Locus.Application, as: App
 
   @release_launcher nil
-  @none %{builds: false, backends: false}
-  @builds %{builds: true, backends: false}
-  @backends %{builds: false, backends: true}
-  @both %{builds: true, backends: true}
+  @none %{runtime: false, builds: false, backends: false}
+  @runtime %{runtime: true, builds: false, backends: false}
+  @builds %{runtime: false, builds: true, backends: false}
+  @backends %{runtime: false, builds: false, backends: true}
+  @both %{runtime: false, builds: true, backends: true}
   @backends_children [
     Locus.Backends.Owners,
     DynamicSupervisor,
@@ -29,8 +32,67 @@ defmodule Locus.ApplicationTest do
   defp ids(children) do
     Enum.map(children, fn
       {module, _opts} -> module
+      %{id: id} -> id
       module when is_atom(module) -> module
     end)
+  end
+
+  test "a node holding the runtime key and the builds key refuses to boot, naming both" do
+    error =
+      assert_raise ArgumentError, fn ->
+        App.roles!(%{runtime: true, builds: true, backends: false})
+      end
+
+    assert Exception.message(error) =~ "LOCUS_RUNTIME_KEY"
+    assert Exception.message(error) =~ "LOCUS_BUILDS_KEY"
+    refute Exception.message(error) =~ "LOCUS_BACKENDS_KEY"
+  end
+
+  test "a node holding the runtime key and the backends key refuses to boot, naming both" do
+    error =
+      assert_raise ArgumentError, fn ->
+        App.roles!(%{runtime: true, builds: false, backends: true})
+      end
+
+    assert Exception.message(error) =~ "LOCUS_RUNTIME_KEY"
+    assert Exception.message(error) =~ "LOCUS_BACKENDS_KEY"
+    refute Exception.message(error) =~ "LOCUS_BUILDS_KEY"
+
+    # All three keys: the refusal names every key held beside the runtime's.
+    error =
+      assert_raise ArgumentError, fn ->
+        App.roles!(%{runtime: true, builds: true, backends: true})
+      end
+
+    assert Exception.message(error) =~ "LOCUS_BUILDS_KEY and LOCUS_BACKENDS_KEY"
+  end
+
+  test "a builds-and-backends node still boots, and the runtime alone is served" do
+    assert App.roles!(@both) == @both
+    assert ids(App.children(@both, true, @release_launcher)) |> hd() == Prima.Slots
+
+    for roles <- [@none, @runtime, @builds, @backends] do
+      assert App.roles!(roles) == roles
+    end
+  end
+
+  test "a runtime node starts the runtime's supervisor, and the keeper's client is the runtime's own" do
+    for keeper? <- [true, false],
+        launcher <- [Locus.Executor.direct_launcher(), @release_launcher] do
+      assert ids(App.children(@runtime, keeper?, launcher)) == [
+               Prima.Slots,
+               Locus.Runtime.Supervisor
+             ]
+    end
+
+    assert [
+             %{
+               id: Locus.Runtime.Supervisor,
+               type: :supervisor,
+               start: {Locus.Runtime, :start_service, []}
+             }
+           ] =
+             Locus.Runtime.children(:service)
   end
 
   test "a node that holds neither key serves nothing, whoever started it" do

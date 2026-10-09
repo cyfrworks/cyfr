@@ -207,7 +207,7 @@ class CyfrStack(Stack):
             handle.write("\n".join([
                 f"CYFR_SECRET_KEY_BASE={secrets.token_urlsafe(48)}",
                 f"CYFR_LOCUS_BACKENDS_KEY={self.key.hex()}",
-                f"CYFR_OPUS_KEY={secrets.token_hex(32)}",
+                f"CYFR_LOCUS_RUNTIME_ROOT={secrets.token_hex(32)}",
                 "CYFR_LOCUS_BUILDS_URL=",
                 "CYFR_LOCUS_BUILDS_KEY=",
                 "CYFR_CORS_ALLOWED_ORIGINS=",

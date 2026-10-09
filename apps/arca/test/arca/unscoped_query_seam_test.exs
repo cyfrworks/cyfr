@@ -40,7 +40,7 @@ defmodule Arca.UnscopedQuerySeamTest do
   @scoped ~r/where_tenant|where_athanor|stamp_tenant!|athanor_id ==|athanor_id:/
   @tag_marker ~r/#\s*arca:unscoped-ok\s+\S/
 
-  # All apps, not just cyfr: opus and locus hold no Repo call today, so the
+  # All apps, not just cyfr: locus holds no Repo call today, so the
   # wider glob costs nothing — and the first engine-side query would
   # otherwise escape the roster by construction.
   defp sources do

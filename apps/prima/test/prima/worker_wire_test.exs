@@ -328,18 +328,21 @@ defmodule Prima.WorkerWireTest do
 
   test "a base URL is http or https with a host and nothing after it" do
     assert {:ok, "http://127.0.0.1:4200"} = WorkerWire.base_url("http://127.0.0.1:4200")
-    assert {:ok, "https://opus.internal"} = WorkerWire.base_url("https://opus.internal/")
+
+    assert {:ok, "https://locus-runtime.internal"} =
+             WorkerWire.base_url("https://locus-runtime.internal/")
+
     assert {:ok, "http://[::1]:4300"} = WorkerWire.base_url("http://[::1]:4300")
 
     for bad <- [
-          "opus:4200",
-          "ftp://opus:4200",
+          "locus-runtime:4200",
+          "ftp://locus-runtime:4200",
           "http://",
           "http:///worker",
-          "http://opus:4200/worker/v1",
-          "http://opus:4200?x=1",
-          "http://opus:4200#f",
-          "http://user:pw@opus:4200",
+          "http://locus-runtime:4200/worker/v1",
+          "http://locus-runtime:4200?x=1",
+          "http://locus-runtime:4200#f",
+          "http://user:pw@locus-runtime:4200",
           "",
           nil,
           4200

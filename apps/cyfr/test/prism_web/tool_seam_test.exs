@@ -101,7 +101,7 @@ defmodule PrismWeb.ToolSeamTest do
   # surface. `Aqua` belongs here for the same reason as the rest — a
   # thread's blobs are an athanor's state, and an agent writes them
   # through the same verbs.
-  @watched_roots ~w(Arca Sanctum Compendium Opus Locus Emissary Aqua)
+  @watched_roots ~w(Arca Sanctum Compendium Locus Emissary Aqua)
 
   # `scan` writes registry rows (Compendium.AutoIndexer walks the tree and
   # registers what it finds) — it slipped past the roster as a

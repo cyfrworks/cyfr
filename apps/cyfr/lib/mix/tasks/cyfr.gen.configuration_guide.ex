@@ -75,9 +75,9 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
     Settings page, with `cyfr settings`, or through the `settings` tool.
 
     `.env.example` is the starting `.env`: the keys and addresses `cyfr init`
-    writes, and the deployment choices commented out. The execution worker's
-    own settings are in `.env.opus.example` and the Locus services' in
-    `.env.locus.example`. A `CYFR_*` name in the server's `.env` that no table
+    writes, and the deployment choices commented out. The Locus services'
+    own settings, the runtime's among them, are in `.env.locus.example`, one
+    file for every role. A `CYFR_*` name in the server's `.env` that no table
     below declares refuses the boot, naming it; the process environment may
     carry the names other programs own as well.
 

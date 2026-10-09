@@ -4,7 +4,7 @@
 defmodule Prima.RunnerRelayTest do
   @moduledoc """
   The runner relay codec reproduces the shared vectors
-  (`tests/fixtures/runner_relay.json`, which Opus's runner and worker
+  (`tests/fixtures/runner_relay.json`, which the runtime's runner and worker
   service read too): the exchange, played between a runner's channel and a
   service's, encodes every frame to exactly its bytes and decodes each to
   the frame sent, one example of every kind among them and a fetch whose

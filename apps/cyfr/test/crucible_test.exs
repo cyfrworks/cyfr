@@ -8,7 +8,7 @@ defmodule CrucibleTest do
   id, execution is unavailable and a run is refused before it is admitted;
   a configured worker service that answers its id makes it available, and
   one that answers as another service is skipped. The test boot's worker
-  services are endpoints, and its Opus service holds the key CYFR derives
+  services are endpoints, and its runtime holds the key CYFR derives
   for its id.
   """
   use ExUnit.Case, async: false
@@ -133,15 +133,17 @@ defmodule CrucibleTest do
     assert {:error, :execution_unavailable} = Dispatch.worker("reagent:local.other")
   end
 
-  test "the test boot's worker services are endpoints, and Opus holds the key CYFR derives for its id",
+  test "the test boot's worker services are endpoints, and the runtime holds the key CYFR derives for its id",
        %{configured: configured} do
     assert [%{id: "wrk_local", url: url, components: nil}] = configured
-    assert url == Cyfr.Test.OpusService.url()
+    assert url == Cyfr.Test.RuntimeService.url()
     assert {:ok, %{service: "wrk_local"}} = Dispatch.worker()
-    assert Application.get_env(:opus, :service_id) == "wrk_local"
+    assert Application.get_env(:locus, :runtime)[:service_id] == "wrk_local"
     assert Application.get_env(:cyfr, :opus_key) == Keys.root()
 
     {:ok, worker_key} = WorkerAuth.worker_key(Keys.root(), "wrk_local")
-    assert Application.get_env(:opus, :service_key) == Base.encode16(worker_key, case: :lower)
+
+    assert Application.get_env(:locus, :runtime)[:service_key] ==
+             Base.encode16(worker_key, case: :lower)
   end
 end

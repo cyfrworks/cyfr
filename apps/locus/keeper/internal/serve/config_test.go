@@ -34,12 +34,12 @@ func TestParseArgs(t *testing.T) {
 		t.Fatalf("two pools: %+v %v", two, err)
 	}
 
-	// Dockerfile.opus's command line: the runner pool is isolated.
-	opus, err := ParseArgs(strings.Fields("--pool runner:30101-30108:netns --home-root /var/lib/opus/homes --client-user opus -- /app/bin/opus start"))
-	if err != nil || !reflect.DeepEqual(opus.Pools, []pool.Spec{{Name: "runner", First: 30101, Last: 30108, Isolated: true}}) {
-		t.Fatalf("an isolated pool: %+v %v", opus, err)
+	// The locus-runtime service's command line: the runner pool is isolated.
+	isolated, err := ParseArgs(strings.Fields("--pool runner:30101-30108:netns --home-root /var/lib/locus/homes --client-user locus -- /app/bin/locus start"))
+	if err != nil || !reflect.DeepEqual(isolated.Pools, []pool.Spec{{Name: "runner", First: 30101, Last: 30108, Isolated: true}}) {
+		t.Fatalf("an isolated pool: %+v %v", isolated, err)
 	}
-	if !opus.Isolating() || cfg.Isolating() {
+	if !isolated.Isolating() || cfg.Isolating() {
 		t.Fatal("Isolating does not say whether some pool is isolated")
 	}
 }

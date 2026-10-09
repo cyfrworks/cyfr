@@ -15,7 +15,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   attached is left to that runner, and the listener refuses what its
   service's key did not sign before it reads a body.
 
-  The runners reach CYFR as Opus's do, over HTTP through a real host
+  The runners reach CYFR as the runtime's do, over HTTP through a real host
   listener (`Crucible.HostListener`), sealed and signed with their
   attempt's keys, so every scripted run crosses that listener's checks.
   The listener refuses a header at another version before it reads the
@@ -604,7 +604,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     test "is a real host listener, bound on a port of its own", %{url: url} do
       assert "http://127.0.0.1:" <> port = url
-      refute url == Cyfr.Test.OpusService.host_url()
+      refute url == Cyfr.Test.RuntimeService.host_url()
       assert String.to_integer(port) > 0
     end
 

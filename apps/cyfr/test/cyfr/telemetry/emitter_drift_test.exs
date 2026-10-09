@@ -11,11 +11,11 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   the host's own (`apps/cyfr/lib`) or one of the two applications below it
   (`apps/arca/lib`, `apps/sanctum/lib`), which start in the same VM. An
   event
-  emitted under `apps/opus/lib` runs in a runner, the OS process that runs
-  a guest, and is rostered as the worker's (`emitter: :worker`), for the
-  operator alone; one rostered so is emitted there and nowhere in the
-  control plane. No other app emits an event: the contracts run in both
-  VMs, and no one listens in Locus's.
+  emitted under `apps/locus/lib/locus/runtime` runs in a runner, the OS
+  process that runs a guest, and is rostered as the worker's
+  (`emitter: :worker`), for the operator alone; one rostered so is emitted
+  there and nowhere in the control plane. Nothing else emits an event: the
+  contracts run in both VMs, and no one listens in the rest of Locus's.
 
   An event is emitted by a file whose code passes it to `:telemetry.execute`
   or `:telemetry.span`, as a literal list or a module attribute holding
@@ -39,7 +39,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   @control_plane ["apps/cyfr/lib", "apps/arca/lib", "apps/sanctum/lib"]
   # Where a planted control-plane emission goes, when a case needs one.
   @host "apps/cyfr/lib"
-  @worker "apps/opus/lib"
+  @worker "apps/locus/lib/locus/runtime"
   @emitting [:execute, :span]
 
   # ---------------------------------------------------------------------------
@@ -98,19 +98,19 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   # Reading what code emits
   # ---------------------------------------------------------------------------
 
+  # Each app's lib, the runtime's tree keyed apart from the rest of
+  # Locus's: the runtime's code runs in a runner, and the rest in a node.
   defp emitted_by_tree do
-    Map.new(Prima.Test.SourceTree.app_libs(@root), fn lib ->
-      events =
-        @root
-        |> Path.join(lib)
-        |> Path.join("**/*.ex")
-        |> Path.wildcard()
-        |> Enum.reduce(MapSet.new(), fn path, acc ->
-          MapSet.union(acc, emitted_by_source(Prima.Test.SourceTree.read(path)))
-        end)
+    worker = Path.join(@root, @worker) <> "/"
 
-      {lib, events}
-    end)
+    for lib <- Prima.Test.SourceTree.app_libs(@root),
+        path <- @root |> Path.join(lib) |> Path.join("**/*.ex") |> Path.wildcard(),
+        reduce: Map.new(Prima.Test.SourceTree.app_libs(@root) ++ [@worker], &{&1, MapSet.new()}) do
+      emitted ->
+        key = if String.starts_with?(path, worker), do: @worker, else: lib
+        events = emitted_by_source(Prima.Test.SourceTree.read(path))
+        Map.update!(emitted, key, &MapSet.union(&1, events))
+    end
   end
 
   # The events one source file's code emits.
@@ -244,7 +244,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
     # runner's vault import emitted the secret events, which only the
     # control plane's audit consumed.
     runner = """
-    defmodule Opus.Runtime do
+    defmodule Locus.Runtime.Engine do
       def get(name) do
         :telemetry.execute([:cyfr, :opus, :secret, :accessed], %{}, %{secret_name: name})
       end
@@ -279,7 +279,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   end
 
   test "a bridged event emitted only in a runner is refused" do
-    event = [:cyfr, :opus, :planted, :bridged]
+    event = [:cyfr, :locus, :runtime, :planted, :bridged]
     catalog = Map.put(Catalog.all(), event, %{consumers: [:bridge]})
     emitted = Map.update!(emitted_by_tree(), @worker, &MapSet.put(&1, event))
 
@@ -295,7 +295,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   end
 
   test "a runner's event missing from the worker's roster, or rostered and unheard, is refused" do
-    event = [:cyfr, :opus, :formula, :spawn]
+    event = [:cyfr, :locus, :runtime, :formula, :spawn]
 
     unrostered = Map.update!(Catalog.all(), event, &Map.delete(&1, :emitter))
 

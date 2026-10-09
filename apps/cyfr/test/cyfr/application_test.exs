@@ -304,7 +304,7 @@ defmodule Cyfr.ApplicationTest do
       assert Cyfr.RuntimeConfig.host_api_port() == 0
       port = Crucible.HostListener.port(listener)
       assert port > 0
-      assert Cyfr.Test.OpusService.host_url() == "http://127.0.0.1:#{port}"
+      assert Cyfr.Test.RuntimeService.host_url() == "http://127.0.0.1:#{port}"
 
       {:ok, %Req.Response{status: 401, body: body}} =
         Req.post("http://127.0.0.1:#{port}" <> Prima.WorkerWire.host_route(:attach),

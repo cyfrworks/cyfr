@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Locus.Runtime.ComponentTypeTest do
+  use ExUnit.Case, async: true
+
+  alias Locus.Runtime.ComponentType
+
+  describe "parse/1" do
+    test "parses nil as reagent (default)" do
+      # A missing type is an error, not a reagent.
+      assert {:error, _} = ComponentType.parse(nil)
+    end
+
+    test "parses string types" do
+      assert {:ok, :catalyst} = ComponentType.parse("catalyst")
+      assert {:ok, :reagent} = ComponentType.parse("reagent")
+      assert {:ok, :formula} = ComponentType.parse("formula")
+    end
+
+    test "parses atom types" do
+      assert {:ok, :catalyst} = ComponentType.parse(:catalyst)
+      assert {:ok, :reagent} = ComponentType.parse(:reagent)
+      assert {:ok, :formula} = ComponentType.parse(:formula)
+    end
+
+    test "returns error for invalid type" do
+      assert {:error, msg} = ComponentType.parse("invalid")
+      assert msg =~ "Invalid component type"
+      assert msg =~ "catalyst, reagent, formula"
+    end
+
+    test "every canonical executable type round-trips as string and atom" do
+      for type <- Prima.ComponentRef.executable_types() do
+        atom = String.to_existing_atom(type)
+        assert {:ok, ^atom} = ComponentType.parse(type)
+        assert {:ok, ^atom} = ComponentType.parse(atom)
+      end
+    end
+  end
+
+  describe "wasi_options/1" do
+    test "reagent returns WasiP2Options with allow_http: false" do
+      opts = ComponentType.wasi_options(:reagent)
+      assert %Wasmex.Wasi.WasiP2Options{} = opts
+      assert opts.allow_http == false
+      assert opts.inherit_stdin == false
+      assert opts.inherit_stdout == false
+      assert opts.inherit_stderr == false
+    end
+
+    test "formula returns WasiP2Options with allow_http: false" do
+      opts = ComponentType.wasi_options(:formula)
+      assert %Wasmex.Wasi.WasiP2Options{} = opts
+      assert opts.allow_http == false
+      assert opts.inherit_stdin == false
+      assert opts.inherit_stdout == false
+      assert opts.inherit_stderr == false
+    end
+
+    test "catalyst returns WasiP2Options with allow_http: false (uses host function)" do
+      opts = ComponentType.wasi_options(:catalyst)
+      assert %Wasmex.Wasi.WasiP2Options{} = opts
+      assert opts.allow_http == false
+      assert opts.inherit_stdin == false
+      assert opts.inherit_stdout == false
+      assert opts.inherit_stderr == false
+    end
+
+    test "all types have empty args and env by default" do
+      for type <- [:catalyst, :reagent, :formula] do
+        opts = ComponentType.wasi_options(type)
+        assert opts.args == []
+        assert opts.env == %{}
+      end
+    end
+
+    test "unknown type defaults to nil (secure)" do
+      assert ComponentType.wasi_options(:unknown) == nil
+    end
+  end
+
+  describe "valid?/1" do
+    test "returns true for valid types" do
+      assert ComponentType.valid?(:catalyst)
+      assert ComponentType.valid?(:reagent)
+      assert ComponentType.valid?(:formula)
+    end
+
+    test "returns false for invalid types" do
+      refute ComponentType.valid?(:unknown)
+      refute ComponentType.valid?(:invalid)
+    end
+  end
+
+  describe "valid_types/0" do
+    test "returns list of valid types" do
+      # Also the @type t pin: the typespec is hand-written (`:catalyst |
+      # :reagent | :formula`) beside a derived value list. A new executable
+      # type in Prima.ComponentRef fails this literal until BOTH the
+      # assertion and the typespec are updated — the spec cannot go silently
+      # stale.
+      assert ComponentType.valid_types() == [:catalyst, :reagent, :formula]
+    end
+  end
+end

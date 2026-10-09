@@ -4,7 +4,7 @@
 defmodule Cyfr.Test.ChatFixture do
   @moduledoc """
   What a test needs to drive a turn on the chat fixture
-  (`test_wasm/chat_fixture/`), a `model/chat@1` catalyst the Opus service
+  (`test_wasm/chat_fixture/`), a `model/chat@1` catalyst the runtime
   runs for real, which plays the script the turn's message carries and
   answers what it was given.
 

@@ -32,12 +32,12 @@ ExUnit.configure(
   ]
 )
 
-# The suite runs from the umbrella root, where the Opus worker service is
+# The suite runs from the umbrella root, where the runtime's worker service is
 # up beside CYFR: its listener and CYFR's host API listener each bound a
 # port of the system's choosing, and here each is pointed at the other,
 # so every run the suite dispatches crosses the wire as a deployment's
-# does (`Cyfr.Test.OpusService`).
-Cyfr.Test.OpusService.wire!()
+# does (`Cyfr.Test.RuntimeService`).
+Cyfr.Test.RuntimeService.wire!()
 
 # The Locus builds service is up beside them too, serving builds on a
 # loopback port of its own once given its key; a test that builds points

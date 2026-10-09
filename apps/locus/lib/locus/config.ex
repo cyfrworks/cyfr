@@ -8,7 +8,10 @@ defmodule Locus.Config do
   `:locus` application environment and nothing else, and read back
   through the accessors below, each with its default. The builds service
   reads the `LOCUS_BUILDS_*` rows, the backends service (`Locus.Backends`)
-  the `LOCUS_BACKENDS_*` rows.
+  the `LOCUS_BACKENDS_*` rows, and every role the `LOCUS_LOG_*` rows. The
+  runtime role's `LOCUS_RUNTIME_*` names are declared and read by
+  `Locus.Runtime.Settings` (`Locus.Runtime.Settings.from_env/2`), whose
+  answer this module writes under the `:runtime` key.
 
   | Variable | Setting | Accepted | Default |
   |---|---|---|---|
@@ -20,8 +23,8 @@ defmodule Locus.Config do
   | `LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT` | `:max_concurrent_per_tenant` | 1..1024 | 1 |
   | `LOCUS_BUILDS_MEMORY_BYTES` | `:memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 1073741824 (1 GiB) |
   | `LOCUS_BUILDS_CARGO_SEED` | `:cargo_seed` | a directory | none |
-  | `LOCUS_BUILDS_LOG_LEVEL` | `:log_level` | a Logger level | `info` |
-  | `LOCUS_BUILDS_LOG_FORMAT` | `:log_format` | `text` or `json` | `text` |
+  | `LOCUS_LOG_LEVEL` | `:log_level` | a Logger level | `info` |
+  | `LOCUS_LOG_FORMAT` | `:log_format` | `text` or `json` | `text` |
   | `LOCUS_BACKENDS_KEY` | `:backends_key` | 64 hexadecimal digits, the backends service key | none: the node serves no backends |
   | `LOCUS_BACKENDS_BIND` | `:backends_bind` | an IPv4 or IPv6 address | `0.0.0.0` |
   | `LOCUS_BACKENDS_PORT` | `:backends_port` | 1..65535 | 4101 |
@@ -30,22 +33,24 @@ defmodule Locus.Config do
   | `LOCUS_BACKENDS_RPC_TIMEOUT_MS` | `:backends_rpc_timeout_ms` | 1000..600000 | 30000 |
   | `LOCUS_BACKENDS_MEMORY_BYTES` | `:backends_memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 536870912 (512 MiB) |
 
-  A node serves the builds service when it holds a builds key and the
-  backends service when it holds a backends key (`Locus.Application`);
-  the release must hold at least one. `:request_key` is the key build
+  A node serves the runtime when it holds the runtime's key, the builds
+  service when it holds a builds key and the backends service when it
+  holds a backends key (`Locus.Application`); the release must hold at
+  least one, and a node holding the runtime's key holds no other. `:request_key` is the key build
   requests are verified with (`Prima.BuilderProtocol.request_key/1`),
   derived once here; the configured builds key itself is kept nowhere.
   `:backends_key` is the backends service key itself, decoded: every
   owner's key is derived from it per request
   (`Prima.LocusBackends.owner_key/2`). A set variable that does not parse,
-  or neither key, refuses the boot with a message naming the variable. So
-  does the control plane's configuration in the node's environment
-  (`refused_environment/1`): the database URL, the keyring, the worker
-  root and the control plane's copy of the backends key are CYFR's, and a
-  node that can see them was given more than it holds. And so does any
-  `LOCUS_*` name the table does not list (`unknown_names/1`): this module
-  declares the prefix, because the release carries no host module to
-  declare it.
+  or none of the three keys, refuses the boot with a message naming the
+  variable. So does the control plane's configuration in the node's
+  environment, on every boot of every role (`refused_environment/1`): the
+  database URL, the keyring, the runtime's root and the control plane's
+  copy of the backends key are CYFR's, and a node that can see them was
+  given more than it holds. And so does any `LOCUS_*` name neither the
+  table nor `Locus.Runtime.Settings.variables/0` lists (`unknown_names/1`):
+  this module declares the prefix, because the release carries no host
+  module to declare it.
 
   `:memory_bytes` is the bound every build's spawn asks cyfr-locus for
   (`Locus.Keeper`), and `:backends_memory_bytes` the bound each backend's
@@ -57,14 +62,15 @@ defmodule Locus.Config do
   backend at a time, and the two timeouts bound a backend's handshake and
   each call to it.
 
-  A node's logging is one setting whichever service it serves:
-  `:log_level` and `:log_format` become the logger's when a node that
-  serves either starts (`Locus.Application`).
+  A node's logging is the release's one setting whichever role it serves:
+  `:log_level` and `:log_format` become the logger's when a release node
+  that serves a role starts (`Locus.Application`). A runner reads neither:
+  it logs at the default level, as plain text to standard error.
 
   Where the environment was never read — a development node, the test
   suite — every accessor answers its default and both keys are nil, so no
-  request verifies and the node serves neither service
-  (`Locus.Application`).
+  request verifies, the node serves neither service and its logger stays
+  the one its config files set (`Locus.Application`).
   """
 
   alias Prima.EnvValue
@@ -98,14 +104,14 @@ defmodule Locus.Config do
   # protocol, MinMemoryBytes to MaxMemoryBytes).
   @memory_range 16_777_216..1_099_511_627_776
 
-  @control_plane_only ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_OPUS_KEY
+  @control_plane_only ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_LOCUS_RUNTIME_ROOT
                          CYFR_LOCUS_BACKENDS_KEY)
 
   # Every `LOCUS_*` name a node reads: the table above.
   @variables ~w(LOCUS_BUILDS_KEY LOCUS_BUILDS_BIND LOCUS_BUILDS_PORT LOCUS_BUILDS_TIMEOUT_MS
                 LOCUS_BUILDS_MAX_CONCURRENT LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT
-                LOCUS_BUILDS_MEMORY_BYTES LOCUS_BUILDS_CARGO_SEED LOCUS_BUILDS_LOG_LEVEL
-                LOCUS_BUILDS_LOG_FORMAT LOCUS_BACKENDS_KEY LOCUS_BACKENDS_BIND
+                LOCUS_BUILDS_MEMORY_BYTES LOCUS_BUILDS_CARGO_SEED LOCUS_LOG_LEVEL
+                LOCUS_LOG_FORMAT LOCUS_BACKENDS_KEY LOCUS_BACKENDS_BIND
                 LOCUS_BACKENDS_PORT LOCUS_BACKENDS_MAX_IN_FLIGHT LOCUS_BACKENDS_INIT_TIMEOUT_MS
                 LOCUS_BACKENDS_RPC_TIMEOUT_MS LOCUS_BACKENDS_MEMORY_BYTES)
 
@@ -127,7 +133,8 @@ defmodule Locus.Config do
           backends_max_in_flight: pos_integer(),
           backends_init_timeout_ms: pos_integer(),
           backends_rpc_timeout_ms: pos_integer(),
-          backends_memory_bytes: pos_integer()
+          backends_memory_bytes: pos_integer(),
+          runtime: keyword()
         ]
 
   @doc """
@@ -135,7 +142,9 @@ defmodule Locus.Config do
   with its default where unset, or the first refusal as a message naming
   the variable. `names` is every name that environment assigns, the
   process environment's by default: a `LOCUS_*` one this node does not
-  declare refuses too.
+  declare refuses too. The runtime role's settings are present under
+  `:runtime` only when the runtime's key is set
+  (`Locus.Runtime.Settings.from_env/2`).
   """
   @spec from_env(EnvValue.getenv(), [String.t()]) :: {:ok, settings()} | {:error, String.t()}
   def from_env(getenv, names \\ Map.keys(System.get_env()))
@@ -144,10 +153,14 @@ defmodule Locus.Config do
          :ok <- no_unknown(names),
          {:ok, builds} <- builds(getenv),
          {:ok, backends} <- backends(getenv),
-         :ok <- some_key(builds, backends),
+         {:ok, runtime} <- Locus.Runtime.Settings.from_env(getenv, []),
+         :ok <- some_key(builds, backends, runtime),
          {:ok, log_level} <- log_level(getenv),
          {:ok, log_format} <- log_format(getenv) do
-      {:ok, builds ++ [log_level: log_level, log_format: log_format] ++ backends}
+      {:ok,
+       builds ++
+         [log_level: log_level, log_format: log_format] ++
+         backends ++ if(runtime, do: [runtime: runtime], else: [])}
     else
       {:error, message} ->
         {:error, message}
@@ -155,7 +168,7 @@ defmodule Locus.Config do
       refused when is_list(refused) ->
         {:error,
          "the locus release must not see #{Enum.join(refused, ", ")}: the database, " <>
-           "the keyring, the worker root and the control plane's backends key " <>
+           "the keyring, the runtime's root and the control plane's backends key " <>
            "are CYFR's"}
     end
   end
@@ -217,27 +230,35 @@ defmodule Locus.Config do
     end
   end
 
-  # A release that holds neither key would serve nothing.
-  defp some_key(builds, backends) do
-    if builds[:request_key] == nil and backends[:backends_key] == nil do
+  # A release that holds none of the three keys would serve nothing.
+  defp some_key(builds, backends, runtime) do
+    if builds[:request_key] == nil and backends[:backends_key] == nil and runtime == nil do
       {:error,
-       "LOCUS_BUILDS_KEY and LOCUS_BACKENDS_KEY are both unset; a node serves builds with " <>
-         "the one and backends with the other (64 hexadecimal digits each, the same key as " <>
-         "CYFR_LOCUS_BUILDS_KEY or CYFR_LOCUS_BACKENDS_KEY on the server)."}
+       "LOCUS_RUNTIME_KEY, LOCUS_BUILDS_KEY and LOCUS_BACKENDS_KEY are all unset; a node " <>
+         "serves the runtime with the first, builds with the second and backends with the " <>
+         "third (64 hexadecimal digits each: the key `mix cyfr.locus.runtime_key` derives " <>
+         "from CYFR_LOCUS_RUNTIME_ROOT, and the same key as CYFR_LOCUS_BUILDS_KEY or " <>
+         "CYFR_LOCUS_BACKENDS_KEY on the server)."}
     else
       :ok
     end
   end
 
-  @doc "Every `LOCUS_*` name a node reads."
+  @doc """
+  Every `LOCUS_*` name a node reads: the table above, then the runtime
+  role's (`Locus.Runtime.Settings.variables/0`, whose `RUNTIME_*` names a
+  runner reads).
+  """
   @spec variables() :: [String.t()]
-  def variables, do: @variables
+  def variables, do: @variables ++ Locus.Runtime.Settings.variables()
 
   @doc "The `LOCUS_*` names in `names` that a node does not read, sorted."
   @spec unknown_names([String.t()]) :: [String.t()]
   def unknown_names(names) when is_list(names) do
+    declared = variables()
+
     names
-    |> Enum.filter(&(String.starts_with?(&1, "LOCUS_") and &1 not in @variables))
+    |> Enum.filter(&(String.starts_with?(&1, "LOCUS_") and &1 not in declared))
     |> Enum.uniq()
     |> Enum.sort()
   end
@@ -257,15 +278,16 @@ defmodule Locus.Config do
 
   @doc """
   The names in the environment that only the control plane may hold: the
-  database URL, the keyring, the worker root and the control plane's copy
-  of the backends key. Empty for an environment a Locus node may run in.
+  database URL, the keyring, the runtime's root and the control plane's
+  copy of the backends key. Empty for an environment a Locus node of any
+  role may run in.
   """
   @spec refused_environment(EnvValue.getenv()) :: [String.t()]
   def refused_environment(getenv) when is_function(getenv, 1),
     do: Enum.filter(@control_plane_only, &(getenv.(&1) != nil))
 
   defp log_level(getenv) do
-    case EnvValue.text(getenv, "LOCUS_BUILDS_LOG_LEVEL") do
+    case EnvValue.text(getenv, "LOCUS_LOG_LEVEL") do
       {:ok, nil} ->
         {:ok, @defaults[:log_level]}
 
@@ -273,7 +295,7 @@ defmodule Locus.Config do
         case Enum.find(Logger.levels(), &(Atom.to_string(&1) == name)) do
           nil ->
             {:error,
-             "LOCUS_BUILDS_LOG_LEVEL=#{inspect(name)} is not a Logger level; use one of " <>
+             "LOCUS_LOG_LEVEL=#{inspect(name)} is not a Logger level; use one of " <>
                Enum.join(Logger.levels(), ", ") <> "."}
 
           level ->
@@ -283,7 +305,7 @@ defmodule Locus.Config do
   end
 
   defp log_format(getenv) do
-    case EnvValue.text(getenv, "LOCUS_BUILDS_LOG_FORMAT") do
+    case EnvValue.text(getenv, "LOCUS_LOG_FORMAT") do
       {:ok, nil} ->
         {:ok, @defaults[:log_format]}
 
@@ -294,8 +316,7 @@ defmodule Locus.Config do
         {:ok, :json}
 
       {:ok, other} ->
-        {:error,
-         "LOCUS_BUILDS_LOG_FORMAT=#{inspect(other)} is not a log format; use text or json."}
+        {:error, "LOCUS_LOG_FORMAT=#{inspect(other)} is not a log format; use text or json."}
     end
   end
 
@@ -331,7 +352,7 @@ defmodule Locus.Config do
   @spec cargo_seed() :: String.t() | nil
   def cargo_seed, do: get(:cargo_seed)
 
-  @doc "The level the node logs at, whichever service it serves."
+  @doc "The level the node logs at, whichever role it serves."
   @spec log_level() :: Logger.level()
   def log_level, do: get(:log_level)
 

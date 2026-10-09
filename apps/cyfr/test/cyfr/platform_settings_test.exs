@@ -503,18 +503,18 @@ defmodule Cyfr.PlatformSettingsTest do
     end
 
     test "a change it hears drops the cached value, whatever its revision" do
-      {:ok, _} = Store.put("opus_watch_misses", 4, revision(), "ops")
-      assert Store.effective("opus_watch_misses") == {:ok, 4}
+      {:ok, _} = Store.put("locus_runtime_watch_misses", 4, revision(), "ops")
+      assert Store.effective("locus_runtime_watch_misses") == {:ok, 4}
 
-      write_behind("opus_watch_misses", 7)
-      assert Store.effective("opus_watch_misses") == {:ok, 4}
+      write_behind("locus_runtime_watch_misses", 7)
+      assert Store.effective("locus_runtime_watch_misses") == {:ok, 4}
 
       {pid, _name} = start_process(claimed: false)
 
       send(
         pid,
         SettingsChanged.new(:changed,
-          setting: "opus_watch_misses",
+          setting: "locus_runtime_watch_misses",
           revision: 1,
           op: :put,
           value: 7
@@ -523,7 +523,7 @@ defmodule Cyfr.PlatformSettingsTest do
 
       _ = :sys.get_state(pid)
 
-      assert Store.effective("opus_watch_misses") == {:ok, 7}
+      assert Store.effective("locus_runtime_watch_misses") == {:ok, 7}
     end
 
     test "each member's observed revision is kept, the highest heard" do

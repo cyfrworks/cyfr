@@ -1186,10 +1186,10 @@ Every variable the `cyfr` server reads and every platform setting, each
 with what it sets and its default, is in
 [configuration-guide.md](configuration-guide.md), rendered from the
 server's settings roster; this guide does not repeat them. `.env.example`
-is the starting `.env`, and the execution worker's and the Locus
-services' own settings are in `.env.opus.example` and
-`.env.locus.example`. What follows is what an integrator needs beyond
-the values themselves.
+is the starting `.env`, and the Locus services' own settings, the
+runtime's among them, are in `.env.locus.example`, one file for every
+role. What follows is what an integrator needs beyond the values
+themselves.
 
 ### Platform admins
 
@@ -1254,7 +1254,7 @@ sharing one database, one object store and one set of workers, each
 holding its own slot and taking a peer's work only after that peer's
 lease has run out on the database's clock. `CYFR_CLUSTER=1` turns it on,
 and it boots only with Postgres, `CYFR_STORAGE=s3`, TLS distribution,
-`CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_OPUS_KEY` and
+`CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_LOCUS_RUNTIME_ROOT` and
 this member's own `CYFR_HOST_API_URL`; each missing one is a named
 refusal at boot, and the configuration guide says what each one sets.
 
@@ -1280,7 +1280,7 @@ What a cell changes for a client and an operator:
   call, a lease renewal included, so one worker service can serve several
   members and a misrouted call is lost loudly rather than answered for
   work the member does not hold. Each member still lists the workers it
-  dispatches to in its own `CYFR_OPUS_WORKERS`.
+  dispatches to in its own `CYFR_LOCUS_RUNTIME_WORKERS`.
 - **Stdio MCP servers are not available** in a cell.
 - **Per-member ceilings multiply.** `CYFR_CRUCIBLE_MAX_CONCURRENT`,
   `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT` and the per-credential
@@ -1293,12 +1293,14 @@ What a cell changes for a client and an operator:
 
 ### Execution workers
 
-Components run on worker services CYFR reaches over HTTP (the `opus`
-compose service). `cyfr init` mints the root into `.env` and derives the
-`opus` service's key from it. Compose hands the worker its id, its key and
-the host API's URL from `.env`; `.env.opus.example` documents the worker's
-own settings, and [Running a worker outside
-Compose](#running-a-worker-outside-compose) what compose sets for it.
+Components run on worker services CYFR reaches over HTTP (the
+`locus-runtime` compose service, Locus's runtime role). `cyfr init` mints
+the root into `.env` and derives the `locus-runtime` service's key from
+it. Compose hands the worker its id, its key and the host API's URL from
+`.env`; `.env.locus.example` documents the worker's own settings, and
+[Running a worker outside Compose](#running-a-worker-outside-compose) what
+compose sets for it. A node holding the runtime's key refuses to start
+with the builds or the backends key beside it.
 
 CYFR and its workers speak one versioned wire. Every body and answer
 carries `"v": 1` as its first member and every `x-cyfr-auth` header begins
@@ -1337,26 +1339,30 @@ A backend's environment may name only a single-field disclosed entry of its own 
 
 ### Running a worker outside Compose
 
-The `cyfr-opus` and `cyfr-locus` images also run without the shipped
-`docker-compose.yml`: on another container platform, or on a host of their own.
-Each release reads its settings from its own environment alone, so it is
-given what compose's `environment:` gives its service besides the settings
-of its own env example (`.env.opus.example`, `.env.locus.example`), and the
-hardening the compose file gives the service: `cap_drop`, `cap_add`,
-`security_opt`, `init`, the read-only root and its tmpfs mounts.
+The `cyfr-locus` image also runs without the shipped `docker-compose.yml`:
+on another container platform, or on a host of its own. Every role reads
+its settings from its own environment alone, so each is given what
+compose's `environment:` gives its service besides the settings of its env
+example (`.env.locus.example`), the entrypoint compose gives it where the
+role is not the image's builds role, and the hardening the compose file
+gives the service: `cap_drop`, `cap_add`, `security_opt`, `init`, the
+read-only root and its tmpfs mounts.
 
-The execution worker takes `OPUS_SERVICE_ID`, `OPUS_SERVICE_KEY` and
-`OPUS_HOST_URL` as `.env.example` documents them, and the two below, which
-compose fixes for its container. CYFR lists the worker in `CYFR_OPUS_WORKERS`
-under its service id at the URL of this listener, and binds
-`CYFR_HOST_API_BIND` to an address the worker reaches at `OPUS_HOST_URL`
-— or, where several members share the worker, at each member's own
-`CYFR_HOST_API_URL`.
+The runtime takes `LOCUS_RUNTIME_SERVICE_ID`, `LOCUS_RUNTIME_KEY` and
+`LOCUS_RUNTIME_HOST_API_URL` as `.env.example` documents them, and the two below, which
+compose fixes for its container. It runs under the keeper's isolated
+`runner` pool, which compose's `entrypoint:` names (`cyfr-locus serve
+--pool runner:30101-30108:netns …`) in place of the image's build pool,
+and under the keeper's seccomp profile. CYFR lists the worker in
+`CYFR_LOCUS_RUNTIME_WORKERS` under its service id at the URL of this
+listener, and binds `CYFR_HOST_API_BIND` to an address the worker reaches
+at `LOCUS_RUNTIME_HOST_API_URL` — or, where several members share the
+worker, at each member's own `CYFR_HOST_API_URL`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPUS_BIND` | `127.0.0.1` | The address the worker's listener binds, one CYFR reaches. Compose binds every interface, since the container is attached to the worker network alone |
-| `OPUS_PORT` | `4200` | The port the worker's listener binds (compose: `4200`) |
+| `LOCUS_RUNTIME_BIND` | `127.0.0.1` | The address the worker's listener binds, one CYFR reaches. Compose binds every interface, since the container is attached to the `locus-runtime` network alone |
+| `LOCUS_RUNTIME_PORT` | `4200` | The port the worker's listener binds (compose: `4200`) |
 
 The builds service takes the key compose passes it from `.env`'s
 `CYFR_LOCUS_BUILDS_KEY`; CYFR's `CYFR_LOCUS_BUILDS_URL` names the service's
@@ -1374,16 +1380,16 @@ backends:20001-20032 …`) in place of the image's build pool; CYFR's
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LOCUS_BACKENDS_KEY` | — | The backends key, 64 hex digits: the same value as `CYFR_LOCUS_BACKENDS_KEY`. A node with neither this nor `LOCUS_BUILDS_KEY` refuses to start |
+| `LOCUS_BACKENDS_KEY` | — | The backends key, 64 hex digits: the same value as `CYFR_LOCUS_BACKENDS_KEY`. A node with none of this, `LOCUS_BUILDS_KEY` and `LOCUS_RUNTIME_KEY` refuses to start |
 
 ### Docker requirement
 
-The `opus`, `locus-builds` and `locus-backends` containers hold every
+The `locus-runtime`, `locus-builds` and `locus-backends` containers hold every
 runner, build and backend to a memory bound of its own, a cgroup
 `cyfr-locus` makes for it. That needs **Docker Engine 28 or later on a
 cgroup v2 host** and the containers' `security_opt: writable-cgroups=true`,
 which the shipped `docker-compose.yml` sets and which adds no capability.
-Without it nothing runs unbounded and nothing runs: `opus` starts no runner
+Without it nothing runs unbounded and nothing runs: `locus-runtime` starts no runner
 and logs, naming `writable-cgroups=true`, that it cannot bound one, so no
 component runs; every build is refused as `unavailable`, naming the option;
 and every backend reports the keeper's refusal as its error.

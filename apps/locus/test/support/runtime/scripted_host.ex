@@ -1,0 +1,547 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Locus.Runtime.Test.ScriptedHost do
+  @moduledoc """
+  CYFR's host API as a test scripts it, served on a loopback port: the
+  routes `Prima.WorkerWire` names, each request verified as CYFR verifies
+  it (`Prima.WorkerAuth.verify_host_call/5` for a runner's call, whose
+  sealed body is then opened and whose answer is sealed back;
+  `Prima.WorkerAuth.verify_report/4` for a worker service's plain report)
+  under a root of the test's choosing, and answered from the test's script.
+
+  `start!/1` serves one host for the calling test and answers where it is.
+  `attempt!/2` mints an attempt on it as CYFR would — its keys, a signed
+  assignment, the keys sealed for the worker service — and the
+  `Locus.Runtime.HostClient` a runner of that attempt holds. `script/3` sets what
+  an operation answers: one answer for every call, a list consumed in
+  order, or a function of the call's args and verified header. An
+  operation with no script answers a harmless default. `requests/1` is
+  every request the host saw, verified or refused, oldest first.
+
+  An answer is `{:ok, value}`, `{:error, name}`, a guest error, a
+  `setup_required` or `failed` refusal as `Locus.Runtime.HostClient` reads them,
+  `{:answer, json}`, those exact bytes sealed as the answer, or `:drop`,
+  which answers nothing readable — a lost answer. `pins/3` answers
+  `egress_pin` from a table of addresses the test sets, as CYFR pins a
+  guest's URL; with no table, every pin is refused `resolution`.
+
+  `attached_fetch` takes one more answer, `{:frames, frames}`: its answer
+  streamed as CYFR streams an admitted request's, chunked under
+  `Prima.WorkerWire.attached_frames_content_type/0`, each frame written
+  as it is made. A frame is `{:head, status, headers}`, `{:chunk, body}`,
+  `:end` or `{:error, type, message}`, sealed at its place in the list
+  for the request's `call_id` under the caller's seal key with a fresh IV
+  (`Prima.WorkerAuth.seal_frame/7`), or `{:raw, bytes}`, written as given
+  — a frame tampered with. A guest error answering `attached_fetch` names
+  the request's `call_id`, as CYFR's does, and an unscripted one is the
+  `dispatch_error` every call without a script answers.
+
+  The default root is the one `test_helper.exs` derives the running worker
+  service's key from, so a host started with it verifies that service's
+  reports; a host started with another root is a stranger to it.
+  """
+
+  alias Prima.{Assignment, PinnedTarget, WorkerAuth, WorkerWire}
+
+  @root :crypto.hash(:sha256, "runtime-test-root")
+  @service "wrk_local"
+  @generation 1
+
+  @type t :: %{
+          url: String.t(),
+          root: binary(),
+          generation: pos_integer(),
+          member: String.t(),
+          service: String.t(),
+          agent: pid()
+        }
+
+  @doc "The root the running worker service's key derives from."
+  @spec root() :: binary()
+  def root, do: @root
+
+  @doc "The service id the running worker service is configured with."
+  @spec service() :: String.t()
+  def service, do: @service
+
+  @doc """
+  Serve a scripted host for the calling test, stopped when the test ends.
+  Options: `:root` (default `root/0`), `:generation` (default 1),
+  `:member` (the boot id this host answers as, default a fresh one),
+  `:service` (default `service/0`), `:script` (a map of operation name to
+  answers, as `script/3` takes them).
+  """
+  @spec start!(keyword()) :: t()
+  def start!(opts \\ []) do
+    root = Keyword.get(opts, :root, @root)
+    generation = Keyword.get(opts, :generation, @generation)
+
+    member =
+      Keyword.get_lazy(opts, :member, fn -> "host@test#" <> Prima.UUID7.generate_id("boot") end)
+
+    service = Keyword.get(opts, :service, @service)
+    unique = System.unique_integer([:positive])
+
+    agent =
+      ExUnit.Callbacks.start_supervised!(
+        Supervisor.child_spec(
+          {Agent,
+           fn ->
+             %{
+               root: root,
+               generation: generation,
+               member: member,
+               script: Keyword.get(opts, :script, %{}),
+               requests: []
+             }
+           end},
+          id: {__MODULE__.Agent, unique}
+        )
+      )
+
+    server =
+      ExUnit.Callbacks.start_supervised!(
+        Supervisor.child_spec(
+          {Bandit,
+           plug: {__MODULE__.Plug, agent}, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
+          id: {__MODULE__.Server, unique}
+        )
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+
+    %{
+      url: "http://127.0.0.1:#{port}",
+      root: root,
+      generation: generation,
+      member: member,
+      service: service,
+      agent: agent
+    }
+  end
+
+  @doc """
+  Point the running worker service at this host, restarting it (a new
+  boot), and point it back when the test ends. Answers the service's new
+  boot id. For a sync test only: the service is one.
+  """
+  @spec serve!(t()) :: String.t()
+  def serve!(%{url: url}) do
+    previous = Locus.Runtime.Test.Env.put(:host_url, url)
+    restart_service!()
+
+    ExUnit.Callbacks.on_exit(fn ->
+      Locus.Runtime.Test.Env.restore(previous, [:host_url])
+      restart_service!()
+    end)
+
+    {:ok, %{boot: boot}} = Locus.Runtime.WorkerService.status()
+    boot
+  end
+
+  @doc "Restart the running worker service and its runners: a new boot that holds no attempt."
+  @spec restart_service!() :: :ok
+  def restart_service! do
+    :ok = Supervisor.terminate_child(Locus.Runtime.Supervisor, Locus.Runtime.WorkerService.Tree)
+
+    {:ok, _pid} =
+      Supervisor.restart_child(Locus.Runtime.Supervisor, Locus.Runtime.WorkerService.Tree)
+
+    :ok
+  end
+
+  @doc "Set what `op` answers (`answers`: one answer, a list in order, or a function of args and caller)."
+  @spec script(t(), String.t(), term()) :: :ok
+  def script(%{agent: agent}, op, answers) when is_binary(op) do
+    Agent.update(agent, &put_in(&1, [:script, op], answers))
+  end
+
+  @doc """
+  Answer `egress_pin` from `table`: a URL's host, lowercase and an IPv6
+  literal without its brackets, to the address this host pins it at (IP
+  text), or to the refusal it answers (an atom of
+  `Prima.PinnedTarget.refusals/0`). A host the table does not name is
+  refused `resolution`. Each pin names the URL's own scheme, port and
+  host, a fresh id, and an `expires_at` `:expires_in` ms (default 30 000,
+  negative for a pin already past it) after it is answered.
+  """
+  @spec pins(t(), %{String.t() => String.t() | atom()}, keyword()) :: :ok
+  def pins(host, table, opts \\ []) when is_map(table) do
+    expires_in = Keyword.get(opts, :expires_in, 30_000)
+    script(host, "egress_pin", fn args, _caller -> pin(table, args, expires_in) end)
+  end
+
+  @doc false
+  # The answer `pins/3`'s table gives for an `egress_pin` request's args.
+  def pin(table, %{"url" => url}, expires_in) do
+    uri = URI.parse(url)
+
+    case Map.get(table, String.downcase(uri.host)) do
+      nil ->
+        {:error, :resolution}
+
+      refusal when is_atom(refusal) ->
+        {:error, refusal}
+
+      ip when is_binary(ip) ->
+        {:ok, address} = :inet.parse_strict_address(String.to_charlist(ip))
+
+        pin = %PinnedTarget{
+          id: "pin_" <> Integer.to_string(System.unique_integer([:positive])),
+          ip: ip,
+          family: if(tuple_size(address) == 4, do: 4, else: 6),
+          scheme: uri.scheme,
+          port: uri.port,
+          host: if(String.contains?(uri.host, ":"), do: "[#{uri.host}]", else: uri.host),
+          expires_at: System.system_time(:millisecond) + expires_in
+        }
+
+        {:ok, PinnedTarget.to_wire(pin)}
+    end
+  end
+
+  @doc "Every request the host saw, oldest first: `%{op, args, caller, header, body}` (the body opened) or `{:refused, op, reason}`."
+  @spec requests(t()) :: [map() | {:refused, String.t(), atom()}]
+  def requests(%{agent: agent}), do: agent |> Agent.get(& &1.requests) |> Enum.reverse()
+
+  @doc "The verified requests of `op`, oldest first."
+  @spec requests(t(), String.t()) :: [map()]
+  def requests(host, op), do: for(%{op: ^op} = request <- requests(host), do: request)
+
+  @doc """
+  An attempt on this host, as CYFR mints one: its fields, its keys
+  (`Prima.WorkerAuth.attempt_keys/2`), a signed assignment (`:assignment`),
+  the keys sealed for the worker service (`:sealed_keys`), the input JSON
+  the assignment's digest binds (`:input`) and the `:client` a runner of
+  it holds. Options: `:boot` (default `"boot_test"`), `:runner` (default a
+  fresh id), `:service` (default the host's), `:component_type` (default
+  `:catalyst`), `:component_ref`, `:digest`, `:input` (default
+  `%{"fixture" => true}`), `:authority` (default `Prima.Authority.zero/0`),
+  `:timeout_ms` (default 60 s), `:intercepted` (default `[]`),
+  `:athanor_id` (default `"ath_test"`).
+  """
+  @spec attempt!(t(), keyword()) :: map()
+  def attempt!(host, opts \\ []) do
+    now = System.system_time(:millisecond)
+    service = Keyword.get(opts, :service, host.service)
+    boot = Keyword.get(opts, :boot, "boot_test")
+    runner = Keyword.get(opts, :runner, Prima.UUID7.generate_id("runner"))
+    component_type = Keyword.get(opts, :component_type, :catalyst)
+
+    component_ref =
+      Keyword.get_lazy(opts, :component_ref, fn ->
+        "#{component_type}:local.fixture-#{System.unique_integer([:positive])}:0.1.0"
+      end)
+
+    digest = Keyword.get_lazy(opts, :digest, fn -> Prima.Digest.sha256(component_ref) end)
+    input = Keyword.get(opts, :input, %{"fixture" => true})
+    input_json = Jason.encode!(input)
+    timeout_ms = Keyword.get(opts, :timeout_ms, 60_000)
+    execution_id = Prima.UUID7.execution_id()
+
+    attempt = %{
+      athanor_id: Keyword.get(opts, :athanor_id, "ath_test"),
+      execution_id: execution_id,
+      attempt: Prima.UUID7.generate_id("att"),
+      fence: 1,
+      generation: host.generation,
+      service: service
+    }
+
+    assignment = %Assignment{
+      generation: host.generation,
+      service: service,
+      boot: boot,
+      member: Keyword.get(opts, :member, host.member),
+      host_url: Keyword.get(opts, :host_url, host.url),
+      issued_at: now,
+      claim_by: now + Assignment.claim_window_ms(),
+      execution_id: execution_id,
+      attempt: attempt.attempt,
+      fence: 1,
+      root_execution_id: execution_id,
+      athanor_id: attempt.athanor_id,
+      actor: %Prima.Actor{},
+      authority: Prima.Authority.to_wire(Keyword.get(opts, :authority, Prima.Authority.zero())),
+      component: %{
+        ref: component_ref,
+        type: Atom.to_string(component_type),
+        digest: digest,
+        declared_needs: [],
+        activation_digest: nil
+      },
+      input_digest: Prima.Digest.sha256(input_json),
+      timeout_ms: timeout_ms,
+      deadline: now + timeout_ms,
+      lease_until: now + 60_000,
+      intercepted: Keyword.get(opts, :intercepted, [])
+    }
+
+    {:ok, keys} = WorkerAuth.attempt_keys(host.root, attempt)
+    {:ok, token} = Assignment.sign(assignment, WorkerAuth.assign_key(host.root))
+    {:ok, worker_key} = WorkerAuth.worker_key(host.root, service)
+    {:ok, sealed} = WorkerAuth.seal_attempt_keys(WorkerAuth.dispatch_seal_key(worker_key), keys)
+
+    Map.merge(attempt, %{
+      boot: boot,
+      runner: runner,
+      keys: keys,
+      assignment: token,
+      sealed_keys: sealed,
+      input: input_json,
+      component_ref: component_ref,
+      digest: digest,
+      # As a runner builds its client: at the member the assignment names,
+      # falling back to the address this worker service is configured
+      # with when the assignment names none.
+      client:
+        Locus.Runtime.HostClient.new(
+          keys,
+          runner,
+          boot,
+          Locus.Runtime.HostClient.at(assignment, host.url)
+        )
+    })
+  end
+
+  @doc "The dispatch key of `service` under this host's root, which signs requests to that service."
+  @spec dispatch_key(t(), String.t()) :: binary()
+  def dispatch_key(host, service \\ nil) do
+    {:ok, worker_key} = WorkerAuth.worker_key(host.root, service || host.service)
+    WorkerAuth.dispatch_key(worker_key)
+  end
+
+  @doc false
+  # What the host answers for a verified request with no script: enough
+  # for a runner to attach, renew, emit and close.
+  def default(op, args, _caller)
+
+  def default("attach", _args, _caller), do: {:ok, %{}}
+
+  def default("renew", %{"attempts" => attempts}, _caller) do
+    until = System.system_time(:millisecond) + 60_000
+    {:ok, Map.new(attempts, &{&1, %{"lease_until" => until}})}
+  end
+
+  def default("push_deltas", %{"deltas" => deltas}, _caller),
+    do: {:ok, Enum.map(deltas, fn _ -> Jason.encode!(%{"ok" => true}) end)}
+
+  def default("complete", %{"outcome" => %{"output" => output}}, _caller), do: {:ok, output}
+  def default("fail", %{"outcome" => %{"error" => error}}, _caller), do: {:ok, error}
+  def default("take_rate", _args, _caller), do: {:ok, true}
+  def default("record_denial", _args, _caller), do: {:ok, true}
+  def default("release_child", _args, _caller), do: {:ok, true}
+  def default("runner_exited", _args, _caller), do: {:ok, true}
+  def default("fetch_artifact", _args, _caller), do: {:error, :not_found}
+  def default("egress_pin", _args, _caller), do: {:error, :resolution}
+
+  def default(_op, _args, _caller),
+    do:
+      {:error, {:guest_error, "dispatch_error", "The scripted host has no answer for this call."}}
+
+  @doc false
+  # The wire answer for a scripted answer.
+  def encode({:ok, value}), do: WorkerWire.ok(value)
+
+  def encode({:error, {:guest_error, type, message}}),
+    do: WorkerWire.error(:guest_error, %{"type" => type, "message" => message})
+
+  def encode({:error, {:guest_error, type, message, remediation}}),
+    do:
+      WorkerWire.error(:guest_error, %{
+        "type" => type,
+        "message" => message,
+        "remediation" => remediation
+      })
+
+  def encode({:error, {:setup_required, payload}}),
+    do: WorkerWire.error(:setup_required, %{"payload" => payload})
+
+  def encode({:error, {:failed, message}}), do: WorkerWire.error(:failed, %{"message" => message})
+  def encode({:error, name}) when is_atom(name), do: WorkerWire.error(name)
+
+  defmodule Plug do
+    @moduledoc false
+    @behaviour Elixir.Plug
+
+    import Elixir.Plug.Conn
+
+    alias Locus.Runtime.Test.ScriptedHost
+
+    @impl true
+    def init(agent), do: agent
+
+    @impl true
+    def call(conn, agent) do
+      {:ok, body, conn} = read_body(conn, length: 50_000_000)
+      header = conn |> get_req_header(WorkerWire.auth_header()) |> List.first()
+      now = System.system_time(:millisecond)
+      %{root: root, generation: generation, member: member} = Agent.get(agent, & &1)
+
+      case WorkerWire.host_callback(conn.request_path) do
+        {:ok, callback} ->
+          op = Atom.to_string(callback)
+
+          case verify(
+                 callback,
+                 root,
+                 %{generation: generation, member: member},
+                 header,
+                 body,
+                 now
+               ) do
+            {:ok, caller, plain, seal} ->
+              args = args(plain, callback)
+              request = %{op: op, args: args, caller: caller, header: header, body: plain}
+              Agent.update(agent, &%{&1 | requests: [request | &1.requests]})
+              answer(conn, agent, op, args, caller, seal)
+
+            {:error, reason} ->
+              Agent.update(agent, &%{&1 | requests: [{:refused, op, reason} | &1.requests]})
+              json(conn, 401, ScriptedHost.encode({:error, :lost}), nil)
+          end
+
+        :error ->
+          json(conn, 404, ScriptedHost.encode({:error, :not_found}), nil)
+      end
+    end
+
+    # A report is plain; a host call's body opens under the attempt's seal
+    # key as the call the header names, and its answer seals the same way.
+    defp verify(:runner_exited, root, _standing, header, body, now) do
+      with {:ok, report} <- WorkerAuth.verify_report(root, header, body, now),
+           do: {:ok, report, body, nil}
+    end
+
+    defp verify(_callback, root, standing, header, sealed, now) do
+      with {:ok, caller} <- WorkerAuth.verify_host_call(root, header, sealed, now, standing),
+           {:ok, seal} <- WorkerAuth.attempt_seal_key(root, caller),
+           {:ok, plain} <- WorkerAuth.open_call(seal, :body, caller, sealed) do
+        {:ok, caller, plain, {seal, caller}}
+      end
+    end
+
+    defp args(body, callback) do
+      op = Atom.to_string(callback)
+
+      case Jason.decode(body) do
+        {:ok, %{"op" => ^op, "args" => %{} = args}} -> args
+        _ -> :malformed
+      end
+    end
+
+    defp answer(conn, agent, op, args, caller, seal) do
+      # A function answer runs here, in the request's own process, so one
+      # that holds its answer holds nothing else the host is asked.
+      scripted =
+        Agent.get_and_update(agent, fn state ->
+          case Map.get(state.script, op) do
+            nil -> {:default, state}
+            [] -> {{:error, :lost}, state}
+            [next | rest] -> {next, put_in(state, [:script, op], rest)}
+            answer -> {answer, state}
+          end
+        end)
+
+      scripted = if is_function(scripted, 2), do: scripted.(args, caller), else: scripted
+
+      case scripted do
+        :default ->
+          json(conn, 200, encode(op, args, ScriptedHost.default(op, args, caller)), seal)
+
+        :drop ->
+          send_resp(conn, 500, "")
+
+        {:answer, bytes} when is_binary(bytes) ->
+          send_json(conn, 200, bytes, seal)
+
+        {:raw, status, body} ->
+          send_resp(conn, status, body)
+
+        {:frames, frames} when op == "attached_fetch" ->
+          stream_frames(conn, frames, args, seal)
+
+        answer ->
+          json(conn, 200, encode(op, args, answer), seal)
+      end
+    end
+
+    # A guest error answering an attached request names its call id.
+    defp encode(
+           "attached_fetch",
+           %{"call_id" => call_id},
+           {:error, {:guest_error, type, message}}
+         ),
+         do:
+           WorkerWire.error(:guest_error, %{
+             "type" => type,
+             "message" => message,
+             "call_id" => call_id
+           })
+
+    defp encode(_op, _args, answer), do: ScriptedHost.encode(answer)
+
+    # An admitted attached request's answer: each frame sealed at its place
+    # for the request's call id and written as one chunk as it is made.
+    defp stream_frames(conn, frames, %{"call_id" => call_id}, {seal_key, _caller}) do
+      conn =
+        conn
+        |> put_resp_content_type(WorkerWire.attached_frames_content_type(), nil)
+        |> send_chunked(200)
+
+      frames
+      |> Enum.with_index()
+      |> Enum.reduce_while(conn, fn {frame, seq}, conn ->
+        case chunk(conn, frame_bytes(seal_key, call_id, seq, frame)) do
+          {:ok, conn} -> {:cont, conn}
+          {:error, _closed} -> {:halt, conn}
+        end
+      end)
+    end
+
+    defp frame_bytes(_seal_key, _call_id, _seq, {:raw, bytes}), do: bytes
+
+    defp frame_bytes(seal_key, call_id, seq, frame) do
+      {kind, plaintext} =
+        case frame do
+          {:head, status, headers} -> {:head, WorkerAuth.head_plaintext(status, headers)}
+          {:chunk, body} -> {:chunk, body}
+          :end -> {:end, ""}
+          {:error, type, message} -> {:error, WorkerAuth.error_plaintext(type, message)}
+        end
+
+      {:ok, bytes} =
+        WorkerAuth.seal_frame(
+          seal_key,
+          :answer,
+          call_id,
+          seq,
+          kind,
+          plaintext,
+          :crypto.strong_rand_bytes(12)
+        )
+
+      bytes
+    end
+
+    defp json(conn, status, answer, seal),
+      do: send_json(conn, status, Jason.encode!(answer), seal)
+
+    defp send_json(conn, status, encoded, seal) do
+      body =
+        case seal do
+          {key, caller} ->
+            {:ok, sealed} = WorkerAuth.seal_call(key, :answer, caller, encoded)
+            sealed
+
+          nil ->
+            encoded
+        end
+
+      conn
+      |> put_resp_content_type("application/json")
+      |> send_resp(status, body)
+    end
+  end
+end

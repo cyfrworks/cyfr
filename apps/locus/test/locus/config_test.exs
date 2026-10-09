@@ -3,12 +3,13 @@
 
 defmodule Locus.ConfigTest do
   @moduledoc """
-  A Locus node's settings come from `LOCUS_BUILDS_*` and `LOCUS_BACKENDS_*`
-  and nothing else: a full valid environment produces the documented
-  settings, either service key alone is enough and neither refuses, every
-  malformed value refuses with a message naming its variable, and any of
-  the control plane's variables in the environment refuses before anything
-  else is read. Where the environment was never read, every accessor
+  A Locus node's settings come from `LOCUS_RUNTIME_*`, `LOCUS_BUILDS_*`,
+  `LOCUS_BACKENDS_*` and `LOCUS_LOG_*` and nothing else: a full valid
+  environment produces the documented settings, any one role's key alone
+  is enough and none refuses, every malformed value refuses with a message
+  naming its variable, and any of the control plane's variables in the
+  environment refuses before anything else is read, whichever role the
+  node serves. Where the environment was never read, every accessor
   answers its default and no key is held.
   """
   use ExUnit.Case, async: true
@@ -42,8 +43,8 @@ defmodule Locus.ConfigTest do
       "LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT" => "2",
       "LOCUS_BUILDS_MEMORY_BYTES" => "2147483648",
       "LOCUS_BUILDS_CARGO_SEED" => "/opt/cyfr/cargo-seed",
-      "LOCUS_BUILDS_LOG_LEVEL" => "debug",
-      "LOCUS_BUILDS_LOG_FORMAT" => "json",
+      "LOCUS_LOG_LEVEL" => "debug",
+      "LOCUS_LOG_FORMAT" => "json",
       "LOCUS_BACKENDS_KEY" => @backends_key_hex,
       "LOCUS_BACKENDS_BIND" => "127.0.0.2",
       "LOCUS_BACKENDS_PORT" => "4201",
@@ -127,15 +128,54 @@ defmodule Locus.ConfigTest do
              })
   end
 
-  test "neither key refuses, naming both variables and their counterparts on the server" do
+  test "the runtime's key alone is enough: the node serves the runtime and nothing else" do
+    runtime_env = %{
+      "LOCUS_RUNTIME_KEY" => @key_hex,
+      "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300",
+      "LOCUS_RUNTIME_BIND" => "0.0.0.0",
+      "LOCUS_RUNTIME_PORT" => "4200"
+    }
+
+    assert {:ok, settings} = Config.from_env(env(runtime_env), Map.keys(runtime_env))
+    assert settings[:request_key] == nil
+    assert settings[:backends_key] == nil
+
+    assert settings[:runtime] == [
+             service_id: "wrk_local",
+             service_key: @key_hex,
+             host_url: "http://cyfr:4300",
+             bind: "0.0.0.0",
+             port: 4200
+           ]
+
+    # Without the runtime's key no runtime setting is written at all.
+    assert {:ok, settings} = Config.from_env(env(%{"LOCUS_BUILDS_KEY" => @key_hex}))
+    refute Keyword.has_key?(settings, :runtime)
+
+    # A runtime value that does not parse refuses, naming its variable.
+    assert {:error, message} =
+             Config.from_env(env(Map.put(runtime_env, "LOCUS_RUNTIME_PORT", "http")))
+
+    assert message =~ "LOCUS_RUNTIME_PORT"
+  end
+
+  test "none of the three keys refuses, naming each variable and their counterparts on the server" do
     assert {:error, message} = Config.from_env(env(%{}))
+    assert message =~ "LOCUS_RUNTIME_KEY"
     assert message =~ "LOCUS_BUILDS_KEY"
     assert message =~ "LOCUS_BACKENDS_KEY"
+    assert message =~ "CYFR_LOCUS_RUNTIME_ROOT"
     assert message =~ "CYFR_LOCUS_BUILDS_KEY"
     assert message =~ "CYFR_LOCUS_BACKENDS_KEY"
 
     assert {:error, ^message} =
-             Config.from_env(env(%{"LOCUS_BUILDS_KEY" => "  ", "LOCUS_BACKENDS_KEY" => ""}))
+             Config.from_env(
+               env(%{
+                 "LOCUS_RUNTIME_KEY" => " ",
+                 "LOCUS_BUILDS_KEY" => "  ",
+                 "LOCUS_BACKENDS_KEY" => ""
+               })
+             )
   end
 
   test "a malformed value refuses, naming its variable and the accepted form" do
@@ -156,8 +196,8 @@ defmodule Locus.ConfigTest do
           {"LOCUS_BUILDS_MEMORY_BYTES", "1073741824.5", "bytes from 16777216 to 1099511627776"},
           {"LOCUS_BUILDS_MEMORY_BYTES", "-1073741824", "bytes from 16777216 to 1099511627776"},
           {"LOCUS_BUILDS_MEMORY_BYTES", "unlimited", "bytes from 16777216 to 1099511627776"},
-          {"LOCUS_BUILDS_LOG_LEVEL", "verbose", "Logger level"},
-          {"LOCUS_BUILDS_LOG_FORMAT", "xml", "text or json"},
+          {"LOCUS_LOG_LEVEL", "verbose", "Logger level"},
+          {"LOCUS_LOG_FORMAT", "xml", "text or json"},
           {"LOCUS_BACKENDS_KEY", "not-a-key", "64 hexadecimal digits"},
           {"LOCUS_BACKENDS_BIND", "backends", "IPv4 or IPv6 address"},
           {"LOCUS_BACKENDS_PORT", "65536", "port from 1 to 65535"},
@@ -239,11 +279,62 @@ defmodule Locus.ConfigTest do
 
     assert Config.unknown_names(Config.variables()) == []
     assert {:ok, _settings} = Config.from_env(env(full()), Map.keys(full()))
+
+    # The runtime role's names are the node's too, and the retired names
+    # of the release's log setting are not.
+    assert Config.unknown_names(Locus.Runtime.Settings.variables()) == []
+
+    # Spelled split so the retired names are not themselves found here.
+    retired = ["LOCUS_BUILDS_" <> "LOG_LEVEL", "LOCUS_BUILDS_" <> "LOG_FORMAT"]
+    assert Config.unknown_names(retired) == Enum.sort(retired)
+
+    assert {:error, message} =
+             Config.from_env(env(full()), Map.keys(full()) ++ ["LOCUS_RUNTIME_POOL_SIZ"])
+
+    assert message =~ "LOCUS_RUNTIME_POOL_SIZ is not a variable the locus release reads"
+  end
+
+  # The one list every role's boot reads: no `RELEASE_NAME` is consulted.
+  test "the control plane's four variables refuse a runtime node, each by name" do
+    runtime = %{
+      "LOCUS_RUNTIME_KEY" => @key_hex,
+      "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
+    }
+
+    assert {:ok, _settings} = Config.from_env(env(runtime), Map.keys(runtime))
+    refused_on(runtime)
+  end
+
+  test "the control plane's four variables refuse a builds node, each by name" do
+    builds = %{"LOCUS_BUILDS_KEY" => @key_hex}
+    assert {:ok, _settings} = Config.from_env(env(builds), Map.keys(builds))
+    refused_on(builds)
+  end
+
+  test "the control plane's four variables refuse a backends node, each by name" do
+    backends = %{"LOCUS_BACKENDS_KEY" => @backends_key_hex}
+    assert {:ok, _settings} = Config.from_env(env(backends), Map.keys(backends))
+    refused_on(backends)
+  end
+
+  defp refused_on(role_env) do
+    refute Map.has_key?(role_env, "RELEASE_NAME")
+
+    for variable <-
+          ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY) do
+      with_variable = Map.put(role_env, variable, "x")
+
+      assert {:error, message} = Config.from_env(env(with_variable), Map.keys(with_variable)),
+             variable
+
+      assert message =~ variable
+      assert message =~ "must not see"
+    end
   end
 
   test "a control-plane variable in the environment refuses the boot before anything else is read" do
     for variable <-
-          ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_OPUS_KEY CYFR_LOCUS_BACKENDS_KEY) do
+          ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY) do
       assert Config.refused_environment(env(%{variable => "x"})) == [variable]
 
       assert {:error, message} = Config.from_env(env(Map.put(full(), variable, "x")))
@@ -257,9 +348,9 @@ defmodule Locus.ConfigTest do
     assert Config.refused_environment(env(full())) == []
 
     assert {:error, message} =
-             Config.from_env(env(%{"CYFR_DATABASE_URL" => "x", "CYFR_OPUS_KEY" => "y"}))
+             Config.from_env(env(%{"CYFR_DATABASE_URL" => "x", "CYFR_LOCUS_RUNTIME_ROOT" => "y"}))
 
-    assert message =~ "CYFR_DATABASE_URL, CYFR_OPUS_KEY"
+    assert message =~ "CYFR_DATABASE_URL, CYFR_LOCUS_RUNTIME_ROOT"
   end
 
   test "an unread environment leaves every accessor at its default and no key held" do
@@ -294,21 +385,28 @@ defmodule Locus.RuntimeConfigFileTest do
   @moduledoc """
   `config/locus_runtime.exs` evaluates the way the `locus` release boots:
   it writes exactly what `Locus.Config.from_env/1` answers, under `:locus`
-  and no other application, and refuses the boot with the message.
+  and no other application, and refuses the boot with the message. The
+  release's one log setting reaches the logger by boot kind: a release
+  node applies it whichever role it serves, a `mix` or test boot keeps its
+  own logger, and a runner keeps its default.
   """
-  # Sets the operating system's environment for the duration of a test.
+  # Sets the operating system's environment and the logger for the
+  # duration of a test.
   use ExUnit.Case, async: false
+
+  alias Locus.Application, as: App
 
   @root Path.expand("../../../..", __DIR__)
   @config_file Path.join(@root, "config/locus_runtime.exs")
   @key_hex "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
 
-  @cleared ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_OPUS_KEY CYFR_LOCUS_BACKENDS_KEY
+  @cleared ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY
               LOCUS_BUILDS_KEY LOCUS_BUILDS_BIND LOCUS_BUILDS_PORT LOCUS_BUILDS_TIMEOUT_MS
               LOCUS_BUILDS_MAX_CONCURRENT LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT
-              LOCUS_BUILDS_MEMORY_BYTES LOCUS_BUILDS_CARGO_SEED LOCUS_BUILDS_LOG_LEVEL LOCUS_BUILDS_LOG_FORMAT
+              LOCUS_BUILDS_MEMORY_BYTES LOCUS_BUILDS_CARGO_SEED LOCUS_LOG_LEVEL LOCUS_LOG_FORMAT
               LOCUS_BACKENDS_KEY LOCUS_BACKENDS_BIND LOCUS_BACKENDS_PORT LOCUS_BACKENDS_MAX_IN_FLIGHT
-              LOCUS_BACKENDS_INIT_TIMEOUT_MS LOCUS_BACKENDS_RPC_TIMEOUT_MS LOCUS_BACKENDS_MEMORY_BYTES)
+              LOCUS_BACKENDS_INIT_TIMEOUT_MS LOCUS_BACKENDS_RPC_TIMEOUT_MS LOCUS_BACKENDS_MEMORY_BYTES
+              RUNTIME_ROLE) ++ Locus.Runtime.Settings.variables()
 
   defp with_env(set, fun) do
     previous = Map.new(@cleared, &{&1, System.get_env(&1)})
@@ -358,12 +456,43 @@ defmodule Locus.RuntimeConfigFileTest do
     end)
   end
 
+  test "writes the runtime role's settings under :runtime, and nothing for a runner" do
+    set = %{
+      "LOCUS_RUNTIME_KEY" => @key_hex,
+      "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300",
+      "LOCUS_RUNTIME_POOL_SIZE" => "2"
+    }
+
+    with_env(set, fn ->
+      config = Config.Reader.read!(@config_file, env: :prod, imports: :disabled)
+      {:ok, expected} = Locus.Config.from_env(&Map.get(set, &1))
+
+      assert Keyword.keys(config) == [:locus]
+      assert Enum.sort(config[:locus]) == Enum.sort(expected)
+      assert config[:locus][:runtime][:service_key] == @key_hex
+      assert config[:locus][:runtime][:pool_size] == 2
+      assert config[:locus][:request_key] == nil
+    end)
+
+    # A runner reads its `RUNTIME_*` environment when it starts: the file
+    # configures nothing for it, and refuses nothing.
+    with_env(%{"RUNTIME_ROLE" => "runner"}, fn ->
+      assert Config.Reader.read!(@config_file, env: :prod, imports: :disabled) == []
+    end)
+  end
+
   test "refuses the boot with the message naming the variable" do
     with_env(%{}, fn ->
-      assert_raise RuntimeError, ~r/\[Locus\] FATAL: LOCUS_BUILDS_KEY/, fn ->
+      assert_raise RuntimeError, ~r/\[Locus\] FATAL: LOCUS_RUNTIME_KEY, LOCUS_BUILDS_KEY/, fn ->
         Config.Reader.read!(@config_file, env: :prod, imports: :disabled)
       end
     end)
+
+    # The runtime's key beside the builds key boots no node: the
+    # application refuses it before any child starts (`Locus.Application`).
+    assert_raise ArgumentError, ~r/LOCUS_RUNTIME_KEY.*LOCUS_BUILDS_KEY/s, fn ->
+      Locus.Application.roles!(%{runtime: true, builds: true, backends: false})
+    end
 
     with_env(%{"LOCUS_BUILDS_KEY" => @key_hex, "CYFR_DATABASE_URL" => "postgres://x"}, fn ->
       assert_raise RuntimeError,
@@ -382,5 +511,118 @@ defmodule Locus.RuntimeConfigFileTest do
 
     assert Code.ensure_loaded?(Prima.JsonFormatter) and
              function_exported?(Prima.JsonFormatter, :format, 4)
+  end
+
+  # Each test takes the steps a boot of its kind takes, from the
+  # environment on, and puts back the logger level, the default handler
+  # and the two log settings it changed, whatever the test's outcome.
+  describe "the release's log setting, by boot kind" do
+    setup do
+      level = Logger.level()
+      {:ok, handler} = :logger.get_handler_config(:default)
+      settings = Map.new([:log_level, :log_format], &{&1, Application.fetch_env(:locus, &1)})
+
+      on_exit(fn ->
+        Logger.configure(level: level)
+        restore_handler(handler)
+
+        Enum.each(settings, fn
+          {key, :error} -> Application.delete_env(:locus, key)
+          {key, {:ok, value}} -> Application.put_env(:locus, key, value)
+        end)
+      end)
+
+      %{handler: handler}
+    end
+
+    test "a release node applies LOCUS_LOG_LEVEL and LOCUS_LOG_FORMAT, serving the runtime or builds",
+         %{handler: handler} do
+      nodes = [
+        {%{"LOCUS_RUNTIME_KEY" => @key_hex, "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"},
+         %{runtime: true, builds: false, backends: false}},
+        {%{"LOCUS_BUILDS_KEY" => @key_hex}, %{runtime: false, builds: true, backends: false}}
+      ]
+
+      for {role_env, roles} <- nodes do
+        Logger.configure(level: :notice)
+        :ok = :logger.update_handler_config(:default, :formatter, handler.formatter)
+        set = Map.merge(role_env, %{"LOCUS_LOG_LEVEL" => "error", "LOCUS_LOG_FORMAT" => "json"})
+
+        locus =
+          with_env(set, fn ->
+            Config.Reader.read!(@config_file, env: :prod, imports: :disabled)[:locus]
+          end)
+
+        # What the file wrote is the release node's application
+        # environment: the two log settings go there, and its roles are
+        # read from it as the node's start reads them.
+        Application.put_env(:locus, :log_level, Keyword.fetch!(locus, :log_level))
+        Application.put_env(:locus, :log_format, Keyword.fetch!(locus, :log_format))
+        assert App.node_roles!(locus) == roles
+
+        assert :ok = App.release_logging(App.node_roles!(locus))
+        assert Logger.level() == :error, "#{inspect(roles)} left #{Logger.level()}"
+
+        assert {:ok, %{formatter: {Logger.Formatter, config}}} =
+                 :logger.get_handler_config(:default)
+
+        assert inspect(config) =~ "Prima.JsonFormatter", inspect(roles)
+      end
+    end
+
+    test "a mix or test boot serving the runtime keeps the logger its config files set" do
+      # This boot never read config/locus_runtime.exs, and config/test.exs
+      # gives it the runtime's key.
+      Logger.configure(level: :critical)
+      {:ok, handler} = :logger.get_handler_config(:default)
+      Application.delete_env(:locus, :log_level)
+      Application.delete_env(:locus, :log_format)
+
+      roles = App.node_roles!(Application.get_all_env(:locus))
+      assert roles.runtime
+
+      assert :ok = App.release_logging(roles)
+      assert Logger.level() == :critical
+      assert {:ok, ^handler} = :logger.get_handler_config(:default)
+    end
+
+    test "a runner keeps its default logging: the file writes no log setting and its start applies none",
+         %{handler: handler} do
+      Logger.configure(level: :critical)
+
+      set = %{
+        "RUNTIME_ROLE" => "runner",
+        "LOCUS_LOG_LEVEL" => "error",
+        "LOCUS_LOG_FORMAT" => "json"
+      }
+
+      with_env(set, fn ->
+        assert Config.Reader.read!(@config_file, env: :prod, imports: :disabled) == []
+
+        # The application's start for a runner: its logging step, then its
+        # settings, which this environment does not carry, so the start
+        # ends there before any child.
+        assert_raise ArgumentError, ~r/RUNTIME_RUNNER_ID is not set/, fn ->
+          App.start(:normal, [])
+        end
+      end)
+
+      assert Logger.level() == :critical
+
+      assert {:ok, %{config: %{type: :standard_error}, formatter: formatter}} =
+               :logger.get_handler_config(:default)
+
+      assert formatter == handler.formatter
+      refute inspect(formatter) =~ "JsonFormatter"
+    end
+  end
+
+  # Puts the default handler back as it was: the runner's start replaces
+  # it with one writing to standard error.
+  defp restore_handler(handler) do
+    if :logger.get_handler_config(:default) != {:ok, handler} do
+      _ = :logger.remove_handler(:default)
+      :ok = :logger.add_handler(:default, handler.module, Map.drop(handler, [:id, :module]))
+    end
   end
 end

@@ -34,7 +34,7 @@ defmodule Cyfr.Platform.Settings.Roster do
   it, which `mix cyfr.gen.configuration_guide` renders from this module.
 
   `config/runtime.exs` reads this module only on the `cyfr` boot: an island
-  release carries no host module, and `Opus.Settings` and `Locus.Config`
+  release carries no host module, and `Locus.Runtime.Settings` and `Locus.Config`
   declare their own prefixes.
   """
 
@@ -138,7 +138,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_CELL_COOKIE",
      "A cell's cookie: at least 32 characters (`openssl rand -hex 32`), the same on every member and the cookie each member's BEAM runs under (`RELEASE_COOKIE` or `-setcookie`)."},
     {"CYFR_CLUSTER",
-     "Several members on one database as one cell (default off). A member boots only with PostgreSQL, S3 storage, TLS distribution, `CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_OPUS_KEY` and its own `CYFR_HOST_API_URL`; each missing one is a named refusal."},
+     "Several members on one database as one cell (default off). A member boots only with PostgreSQL, S3 storage, TLS distribution, `CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_LOCUS_RUNTIME_ROOT` and its own `CYFR_HOST_API_URL`; each missing one is a named refusal."},
     {"CYFR_CLUSTER_DNS_QUERY",
      "A cell's discovery by DNS: the headless service whose addresses are the members, each named `<CYFR_CLUSTER_NODE_BASENAME>@<address>`."},
     {"CYFR_CLUSTER_NODE_BASENAME",
@@ -180,10 +180,10 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_HOST",
      "The hostname clients reach the server at (default `localhost`); in TLS mode Caddy's certificate names it."},
     {"CYFR_HOST_API_BIND",
-     "The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1`; compose binds every interface of the worker network)."},
+     "The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1`; compose binds every interface of the locus-runtime network)."},
     {"CYFR_HOST_API_PORT", "The host API's port (default 4300)."},
     {"CYFR_HOST_API_URL",
-     "The address a worker service reaches this member's host API at, carried by every assignment the member issues; unset, a worker uses its own `OPUS_HOST_URL`, and a cell refuses to boot without it."},
+     "The address a worker service reaches this member's host API at, carried by every assignment the member issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cell refuses to boot without it."},
     {"CYFR_LIVE_SALT",
      "The LiveView socket's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
     {"CYFR_LOCUS_BACKENDS_KEY",
@@ -207,10 +207,10 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The client secret at the OIDC issuer, with `CYFR_AUTH_PROVIDER=oidc`."},
     {"CYFR_OIDC_ISSUER",
      "The OIDC issuer's URL (Okta, Auth0, Keycloak, Azure AD and the like), with `CYFR_AUTH_PROVIDER=oidc`."},
-    {"CYFR_OPUS_KEY",
+    {"CYFR_LOCUS_RUNTIME_ROOT",
      "The worker root, 32 random bytes as 64 hexadecimal digits, read by cyfr alone; every worker service's key derives from it. `cyfr init` mints it, every member of a cell holds the same one, and without it no component runs."},
-    {"CYFR_OPUS_WORKERS",
-     "The worker services runs are dispatched to, comma-separated `<service_id>=<url>` entries tried in order; compose sets `wrk_opus=http://opus:4200`, and outside compose the default is a worker on this machine."},
+    {"CYFR_LOCUS_RUNTIME_WORKERS",
+     "The worker services runs are dispatched to, comma-separated `<service_id>=<url>` entries tried in order; compose sets `wrk_locus=http://locus-runtime:4200`, and outside compose the default is a worker on this machine."},
     {"CYFR_OTEL_ENABLED",
      "OpenTelemetry traces over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default off)."},
     {"CYFR_PLATFORM_ADMIN_EMAILS",
@@ -266,9 +266,9 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"LOCUS_BUILDS_CPU_LIMIT", "The locus-builds container's CPU limit (default 2)."},
     {"LOCUS_BUILDS_MEMORY_LIMIT",
      "The locus-builds container's memory limit (default 4G), at least `LOCUS_BUILDS_MAX_CONCURRENT` x (`LOCUS_BUILDS_MEMORY_BYTES` + 1 GiB), so each build reaches its own bound before the container reaches its limit."},
-    {"OPUS_CPU_LIMIT", "The opus container's CPU limit (default 4)."},
-    {"OPUS_MEMORY_LIMIT",
-     "The opus container's memory limit (default 4G), at least 8 runner uids x `OPUS_RUNNER_MEMORY_BYTES` + 1 GiB, so each runner reaches its own bound before the container reaches its limit."}
+    {"LOCUS_RUNTIME_CPU_LIMIT", "The locus-runtime container's CPU limit (default 4)."},
+    {"LOCUS_RUNTIME_MEMORY_LIMIT",
+     "The locus-runtime container's memory limit (default 4G), at least 8 runner uids x `LOCUS_RUNTIME_MEMORY_BYTES` + 1 GiB, so each runner reaches its own bound before the container reaches its limit."}
   ]
 
   # Names under the prefix that other programs own. A trailing `*` is a
@@ -336,9 +336,9 @@ defmodule Cyfr.Platform.Settings.Roster do
       "How long `/health/ready` reuses its last probe, in milliseconds; on S3 every uncached probe is a billable write.",
     "decision_retention_days" =>
       "Days the server keeps the admission decisions it made before any athanor was resolved; each athanor keeps its own under its retention settings.",
-    "opus_watch_poll_ms" =>
+    "locus_runtime_watch_poll_ms" =>
       "How often cyfr asks each worker service for its status, in milliseconds.",
-    "opus_watch_misses" =>
+    "locus_runtime_watch_misses" =>
       "Status polls a worker service may miss in a row before cyfr ends the runs of the boot it last heard from.",
     "locus_backends_lease_ms" =>
       "How long the backends service runs a stdio server's backends without a renewal from cyfr, in milliseconds; cyfr renews every third of it.",
@@ -562,9 +562,9 @@ defmodule Cyfr.Platform.Settings.Roster do
         :retention
       ),
       %Entry{
-        key: "opus_watch_poll_ms",
+        key: "locus_runtime_watch_poll_ms",
         app: :cyfr,
-        variable: "CYFR_OPUS_WATCH_POLL_MS",
+        variable: "CYFR_LOCUS_RUNTIME_WATCH_POLL_MS",
         type: :integer,
         default: 5_000,
         validator: whole(1_000..60_000, "milliseconds"),
@@ -573,9 +573,9 @@ defmodule Cyfr.Platform.Settings.Roster do
         stale: :serve
       },
       %Entry{
-        key: "opus_watch_misses",
+        key: "locus_runtime_watch_misses",
         app: :cyfr,
-        variable: "CYFR_OPUS_WATCH_MISSES",
+        variable: "CYFR_LOCUS_RUNTIME_WATCH_MISSES",
         type: :integer,
         default: 3,
         validator: whole(1..100, "misses"),

@@ -9,7 +9,7 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
   # shared test user and exercises an unknown execution id.
   describe "GET /api/executions/:id/events" do
     # The controller returns 503 when no worker service answers; the test
-    # boot's Opus service does (`Cyfr.Test.OpusService`).
+    # boot's runtime does (`Cyfr.Test.RuntimeService`).
 
     # Sandbox is set up by ConnCase.
 

@@ -105,7 +105,7 @@ defmodule Prima.Authority do
   # Chain depth bound. Must sit strictly below the per-tenant execution
   # slot count (`Prima.Slots`, default 16): a parent holds its slot while
   # blocking on a child, so a deeper chain than there are slots would
-  # self-deadlock a tenant. Asserted against live config in the opus suite.
+  # self-deadlock a tenant. Asserted against live config in the runtime's suite.
   @depth_cap 8
 
   # ZeroAuthority limits (see moduledoc): the timeouts and the task bound

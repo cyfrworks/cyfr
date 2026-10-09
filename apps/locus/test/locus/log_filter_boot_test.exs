@@ -4,14 +4,15 @@
 defmodule Locus.LogFilterBootTest do
   @moduledoc """
   The `locus` application's start installs `Prima.LogFilter` ahead of
-  Logger's translator, whichever services the node serves. A crashed
+  Logger's translator before it reads its role, so a service node, whichever
+  roles it serves, and every runner log alike. A crashed
   server's report names the failed callback by arity, in the text format
-  and in the JSON format `LOCUS_BUILDS_LOG_FORMAT=json` selects, and so
+  and in the JSON format `LOCUS_LOG_FORMAT=json` selects, and so
   does a logged exception's `:crash_reason`; neither carries the message
   the server was handed nor its state.
 
-  The tests add Logger handlers and one removes the filter, so the module
-  runs alone.
+  The tests add Logger handlers, two remove the filter and one sets the
+  role's variable, so the module runs alone.
   """
   use ExUnit.Case, async: false
 
@@ -69,6 +70,25 @@ defmodule Locus.LogFilterBootTest do
 
     filters = Enum.map(:logger.get_primary_config().filters, &elem(&1, 0))
     assert hd(filters) == :prima_log_filter
+  end
+
+  test "the filter is installed before the role is read" do
+    role = System.get_env("RUNTIME_ROLE")
+    _ = :logger.remove_primary_filter(:prima_log_filter)
+    System.put_env("RUNTIME_ROLE", "neither")
+
+    on_exit(fn ->
+      if role, do: System.put_env("RUNTIME_ROLE", role), else: System.delete_env("RUNTIME_ROLE")
+      :ok = Prima.LogFilter.install()
+    end)
+
+    assert_raise ArgumentError, ~r/RUNTIME_ROLE names no role/, fn ->
+      Locus.Application.start(:normal, [])
+    end
+
+    filters = Enum.map(:logger.get_primary_config().filters, &elem(&1, 0))
+    assert hd(filters) == :prima_log_filter
+    assert index(filters, :prima_log_filter) < index(filters, :logger_translator)
   end
 
   for {format, opts} <- [text: [], json: [format: {Prima.JsonFormatter, :format}]] do

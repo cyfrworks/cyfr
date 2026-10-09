@@ -1,8 +1,8 @@
 name: Keeper CI (cyfr-locus)
 
-# Test cyfr-locus, the process helper the Opus and Locus images start
-# every runner, build and backend under. The images' own proofs — that
-# they isolate their spawns from each other and from the service, refuse
+# Test cyfr-locus, the process helper the Locus image starts every
+# runner, build and backend under. The image's own proofs — that its roles
+# isolate their spawns from each other and from the service, refuse
 # every request they cannot attribute, and leave no residue across a uid's
 # reuse — run in test.yml beside the other image suites, which the tag's
 # `verify` calls.

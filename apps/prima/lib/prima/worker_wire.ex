@@ -6,7 +6,7 @@ defmodule Prima.WorkerWire do
   How the worker protocol crosses HTTP: the header that carries a
   `Prima.WorkerAuth` header, the route each callback of `Prima.HostAPI` and
   `Prima.WorkerAPI` is posted to, and the shape of a request body and an
-  answer. CYFR's host listener and worker client and Opus's worker
+  answer. CYFR's host listener and worker client and the runtime's worker
   listener and host client are built on it; nothing here holds state.
 
     * Every request is a `POST` whose `x-cyfr-auth` header carries the

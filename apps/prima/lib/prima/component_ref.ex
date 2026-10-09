@@ -407,7 +407,7 @@ defmodule Prima.ComponentRef do
   def valid_type_atoms, do: Enum.map(@valid_types, &String.to_atom/1)
 
   @doc """
-  Component types that execute through the Opus runtime. Tinctures are
+  Component types that execute through the runtime. Tinctures are
   browser-side frontend components and never execute server-side, so they
   are excluded — an execution record must not carry type "tincture".
 

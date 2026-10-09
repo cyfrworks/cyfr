@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-Code.require_file("../integration/opus/support/nested_execution_helper.exs", __DIR__)
+Code.require_file("../integration/runtime/support/nested_execution_helper.exs", __DIR__)
 
 defmodule Cyfr.Test.SandboxTest.WorkingView do
   @moduledoc false
@@ -59,7 +59,7 @@ defmodule Cyfr.Test.SandboxTest do
   A sync test's background work is stopped before its sandbox owner is:
   every dynamic supervisor this repository's applications start is swept,
   and each child's last database work lands while the owner still holds
-  the connection. The Opus service's runners are swept through their pool
+  the connection. The runtime's runners are swept through their pool
   instead: a runner the test left busy is ended and its exit reported,
   and the fresh runners stay pooled for the next test.
 
@@ -74,7 +74,7 @@ defmodule Cyfr.Test.SandboxTest do
 
   alias Cyfr.Test.{Sandbox, TwoServices}
   alias Cyfr.Test.SandboxTest.WorkingView
-  alias Opus.Test.NestedExecution, as: Probe
+  alias Locus.Runtime.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap}
 
   @endpoint CyfrWeb.Endpoint
@@ -87,9 +87,9 @@ defmodule Cyfr.Test.SandboxTest do
     assert Enum.sort(running) == Enum.sort(Enum.filter(Sandbox.supervisors(), &Process.whereis/1))
   end
 
-  test "the Opus service's runners are swept through their pool, not stopped" do
-    assert Sandbox.pooled() == [Opus.RunnerPool.Runners]
-    assert Opus.RunnerPool.Runners in repository_dynamic_supervisors()
+  test "the runtime's runners are swept through their pool, not stopped" do
+    assert Sandbox.pooled() == [Locus.Runtime.RunnerPool.Runners]
+    assert Locus.Runtime.RunnerPool.Runners in repository_dynamic_supervisors()
   end
 
   describe "a sync test's work" do
@@ -130,7 +130,9 @@ defmodule Cyfr.Test.SandboxTest do
       on_exit(fn ->
         %{busy: busy, fresh: fresh} = Agent.get(seen, & &1)
         Agent.stop(seen)
-        pooled = Map.new(Opus.RunnerPool.runners(Opus.RunnerPool), &{&1.id, &1.state})
+
+        pooled =
+          Map.new(Locus.Runtime.RunnerPool.runners(Locus.Runtime.RunnerPool), &{&1.id, &1.state})
 
         refute Map.has_key?(pooled, busy), "the busy runner outlived the sweep"
 
@@ -188,7 +190,7 @@ defmodule Cyfr.Test.SandboxTest do
 
       assert_receive {:held, ^root_id, _call}, 30_000
 
-      runners = Opus.RunnerPool.runners(Opus.RunnerPool)
+      runners = Locus.Runtime.RunnerPool.runners(Locus.Runtime.RunnerPool)
       assert [%{id: busy}] = for(%{state: :busy} = runner <- runners, do: runner)
       fresh = for %{state: :fresh, id: id} <- runners, do: id
       Agent.update(seen, fn _ -> %{busy: busy, fresh: fresh} end)
@@ -358,7 +360,7 @@ defmodule Cyfr.Test.SandboxTest do
 
   # The tree the repository builds is walked: its `Supervisor.start_link/2`
   # groups, and a supervisor a module of the repository starts from a
-  # function of its own (the Opus service tree). A library's own supervisor
+  # function of its own (the runtime's service tree). A library's own supervisor
   # is not descended into, and a dynamic supervisor's children are the work
   # a sweep stops.
   defp dynamic_supervisors(supervisor) do

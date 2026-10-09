@@ -679,7 +679,7 @@ defmodule Crucible.HostListenerTest do
         })
 
       # Each body is written whole before its answer is read, as
-      # `Opus.HostClient` writes one, and its rest only once the listener
+      # `Locus.Runtime.HostClient` writes one, and its rest only once the listener
       # has sent its refusal: by the declared length, after a first part of
       # the body none of which is read, and as the body streams past the
       # bound, after a first part that passes it.

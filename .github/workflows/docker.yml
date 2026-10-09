@@ -19,15 +19,15 @@ jobs:
     if: github.repository == 'cyfrworks/cyfr'
     uses: ./.github/workflows/test.yml
 
-  # The app image, the Opus image and the Locus image, which serves both
-  # the builds and the backends service: every deploy pulls all three, and
-  # a project `cyfr init` writes carries no sources to build them from.
+  # The app image and the Locus image, which serves the runtime, the builds
+  # and the backends service: every deploy pulls both, and a project
+  # `cyfr init` writes carries no sources to build them from.
   build:
     needs: verify
     if: github.repository == 'cyfrworks/cyfr'
     strategy:
       matrix:
-        image: [cyfr, cyfr-opus, cyfr-locus]
+        image: [cyfr, cyfr-locus]
         platform: [linux/amd64, linux/arm64]
         include:
           - platform: linux/amd64
@@ -36,8 +36,6 @@ jobs:
             runner: ubuntu-24.04-arm
           - image: cyfr
             file: Dockerfile
-          - image: cyfr-opus
-            file: Dockerfile.opus
           - image: cyfr-locus
             file: Dockerfile.locus
     runs-on: ${{ matrix.runner }}
@@ -102,7 +100,7 @@ jobs:
     needs: build
     strategy:
       matrix:
-        image: [cyfr, cyfr-opus, cyfr-locus]
+        image: [cyfr, cyfr-locus]
     runs-on: ubuntu-latest
     steps:
       - name: Log in to GHCR

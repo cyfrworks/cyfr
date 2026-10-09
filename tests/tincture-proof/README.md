@@ -47,7 +47,7 @@ builds image `cyfr-locus:c1smoke` built from `Dockerfile.locus`.
 Pending:
 
 - **The completed save.** The save is admitted past the frame's checks and
-  dispatched by the gate; with no Opus worker in the harness it ends
+  dispatched by the gate; with no runtime in the harness it ends
   `unavailable`. A save that completes needs the worker beside the release
   and a seeded catalyst that reads the invoke input
   `{"operation", "params"}`, which no seeded catalyst does today.

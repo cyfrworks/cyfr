@@ -442,7 +442,7 @@ defmodule Cyfr.CellTest do
 
     test "an unset or malformed worker root is refused, naming what a peer cannot verify" do
       assert [message] = Cell.refusals(%{@cell_facts | opus_key: nil})
-      assert message =~ "CYFR_OPUS_KEY"
+      assert message =~ "CYFR_LOCUS_RUNTIME_ROOT"
       assert message =~ "MAC verification"
 
       assert [_short] = Cell.refusals(%{@cell_facts | opus_key: <<1, 2, 3>>})

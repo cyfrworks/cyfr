@@ -31,7 +31,7 @@ func joinTypeShorthand(args []string) []string {
 }
 
 // parseReference converts a CLI reference string into the canonical
-// string format expected by the Opus executor.
+// string format expected by the runtime's executor.
 //
 // The CLI does minimal input normalization only — full parsing and validation
 // is handled server-side by Prima.ComponentRef.

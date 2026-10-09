@@ -443,43 +443,6 @@ jobs:
           mix compile --warnings-as-errors
           mix test
 
-  opus-independence:
-    name: Opus compiles and tests from its declared apps alone
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
-        id: beam
-        with:
-          otp-version: '29'
-          elixir-version: '1.20.3'
-      - name: Cache deps
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: deps
-          key: ${{ runner.os }}-mix-opus-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-opus-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
-      - name: Install dependencies
-        run: mix deps.get
-      # The worker service releases without the control plane: a checkout
-      # holding only the lock, the contracts, Opus, the fetched deps, the
-      # WIT tree (`Prima.WIT` embeds it; `Opus.Runtime` reads the
-      # same tree) and the protocol vectors compiles it with warnings as
-      # errors and runs its suite, against a scripted host and no database.
-      # The vector tests fail rather than skip without their fixture.
-      - name: Compile and test Opus from its declared apps alone
-        run: |
-          set -euo pipefail
-          island="$RUNNER_TEMP/opus-island"
-          mkdir -p "$island/apps" "$island/tests"
-          cp mix.lock "$island/"
-          cp -R apps/prima apps/opus "$island/apps/"
-          cp -R deps wit "$island/"
-          cp -R tests/fixtures "$island/tests/"
-          cd "$island/apps/opus"
-          mix compile --warnings-as-errors
-          mix test
-
   arca-independence:
     name: Arca compiles and tests from its declared apps alone
     runs-on: ubuntu-latest
@@ -578,12 +541,13 @@ jobs:
         run: mix deps.get
       # Locus releases without the control plane: a checkout holding only
       # the lock, the contracts, Locus, the fetched deps, the WIT tree
-      # (`Prima.WIT` embeds it), the vector files its two wires' and its
-      # keeper tests read (tests/fixtures) and the locus release's runtime
+      # (`Prima.WIT` embeds it; `Locus.Runtime.Engine` reads the same
+      # tree), the vector files its wires', its runtime's and its keeper
+      # tests read (tests/fixtures) and the locus release's runtime
       # configuration (config/locus_runtime.exs, which its config test
-      # evaluates) compiles it with warnings as errors and runs its suite,
-      # against no database. Its vector tests fail rather than skip
-      # without the vector file.
+      # evaluates) compiles every role with warnings as errors and runs its
+      # suite, against a scripted host and no database. Its vector tests
+      # fail rather than skip without the vector file.
       - name: Compile and test Locus from its declared apps alone
         run: |
           set -euo pipefail
@@ -749,8 +713,8 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
 
-  worker-image:
-    name: Worker image (runner kills, memory bound, settlement, cleanup)
+  locus-runtime-image:
+    name: Runtime image (runner kills, memory bound, settlement, cleanup)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -777,20 +741,23 @@ jobs:
       # The host's AppArmor restriction on unprivileged user namespaces stays
       # as the runner image sets it: the keeper clones each runner's
       # namespaces under Docker's default AppArmor profile, which allows
-      # the clone (docker-compose.yml's opus service says why).
+      # the clone (docker-compose.yml's locus-runtime service says why).
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Build the worker image
+      - name: Build the Locus image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          file: Dockerfile.opus
+          file: Dockerfile.locus
           load: true
-          tags: cyfr-opus:smoke
-          cache-from: type=gha,scope=opus
-          cache-to: type=gha,scope=opus,mode=max
-      # docker-compose.yml's opus service with its own settings (layered
-      # with tests/worker-image/compose.worker.yml for the image, a loopback
-      # port and a pool of two), reaching a scripted control plane on this
+          tags: cyfr-locus:runtime
+          cache-from: |
+            type=gha,scope=locus
+            type=gha,scope=locus-runtime
+          cache-to: type=gha,scope=locus-runtime,mode=max
+      # docker-compose.yml's locus-runtime service with its own settings
+      # (layered with tests/locus-runtime-image/compose.locus-runtime.yml
+      # for the image, a loopback port and a pool of two), reaching a
+      # scripted control plane on this
       # runner: a spinning guest killed at its deadline with its process
       # gone and CPU flat, a sibling that completes meanwhile, the service's
       # VM killed and the container restarted as a new boot, the control
@@ -808,8 +775,8 @@ jobs:
       # control plane records it and as the container's processes, uids,
       # homes, groups, memory and CPU show it.
       - name: Runner kills, memory bound, settlement and cleanup
-        run: python3 tests/worker-image/runners.py cyfr-opus:smoke
-      # The credential canary (tests/worker-image/canary.py): a hostile
+        run: python3 tests/locus-runtime-image/runners.py cyfr-locus:runtime
+      # The credential canary (tests/locus-runtime-image/canary.py): a hostile
       # catalyst names its connection on a request to an upstream that
       # reflects it, and the scripted control plane attaches a canary value;
       # with the attempt's close held, the runner's and the service's process
@@ -818,13 +785,14 @@ jobs:
       # the upstream's log does. A positive control plants another canary in
       # a disclosed field and the same dump finds it.
       - name: The credential canary
-        run: python3 tests/worker-image/canary.py cyfr-opus:smoke
+        run: python3 tests/locus-runtime-image/canary.py cyfr-locus:runtime
 
-      # The same scan docker.yml runs before publishing the worker image.
+      # The same scan docker.yml runs before publishing the Locus image, here
+      # on the image the runtime role ran.
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: cyfr-opus:smoke
+          image-ref: cyfr-locus:runtime
           format: table
           exit-code: '1'
           severity: CRITICAL,HIGH
@@ -1326,7 +1294,8 @@ jobs:
       # The tenancy unit is the athanor and a conversation is a thread. This
       # asserts the old vocabularies — org/project, the athanor's retired
       # second name, conversation/topic subscription, the prism: PubSub
-      # prefix, the keeper's retired role name — cannot creep back into code,
+      # prefix, the keeper's retired role name, the WASM engine's retired
+      # names — cannot creep back into code,
       # config, or operator-facing docs. Each retired name is matched as a
       # word or inside an identifier, never inside an English word that
       # merely contains its letters.
@@ -1335,7 +1304,7 @@ jobs:
       - name: Tier A/B fossil patterns must be absent
         run: |
           set -uo pipefail
-          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus Dockerfile.opus docker-entrypoint.sh .env.example .env.locus.example .env.opus.example .gitignore .dockerignore README.md ARCHITECTURE.md CONTRIBUTING.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md'
+          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus docker-entrypoint.sh .env.example .env.locus.example .gitignore .dockerignore README.md ARCHITECTURE.md CONTRIBUTING.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md'
           excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
           fail=0
           for p in \
@@ -1394,7 +1363,17 @@ jobs:
             'Locus\.Spawner\b' \
             'Locus\.Test\.FakeSpawner\b' \
             '(^|[^A-Za-z])([Ss]pawners?([^a-z]|$)|SPAWNERS?([^A-Z]|$))|[a-z]Spawner' \
-            'Opus\.Keeper\.Spawn\b' \
+            'apps/opus/' \
+            'Dockerfile\.opus' \
+            '\.env\.opus' \
+            'cyfr-opus([^-A-Za-z0-9_]|$)' \
+            '(^|[^A-Za-z0-9_])OPUS_' \
+            'CYFR_OPUS_(KEY|WORKERS|WATCH_)' \
+            'wrk_opus' \
+            'OpusService' \
+            'cyfr\.opus\.key' \
+            'Opus\.(Runner|RunnerPool|RunnerProcess|Relay|WorkerService|WorkerListener|HostClient|Release|Credentials|Settings|FormulaHandler|Keeper)\b' \
+            'LOCUS_BUILDS_LOG_' \
             'cyfr-keeper' \
             'apps/keeper/' \
             'CYFR_WORKER_KEY' \

@@ -85,7 +85,7 @@ func isManagedAqua(path string) bool {
 	return false
 }
 
-// SeccompProfile is the keeper's seccomp profile, which the opus service of
+// SeccompProfile is the keeper's seccomp profile, which the locus-runtime service of
 // docker-compose.yml names beside it. It follows the image it lets start,
 // so `cyfr update`, which pulls the image, refreshes it too.
 const SeccompProfile = "keeper.seccomp.json"
@@ -133,7 +133,7 @@ func extract(version string, overwriteManaged bool) error {
 	client := &http.Client{Timeout: requestTimeout}
 
 	// The tarball carries docker-compose.yml, which names the images `cyfr
-	// up` will pull and run (cyfr, cyfr-opus and cyfr-locus) — verify it
+	// up` will pull and run (cyfr and cyfr-locus) — verify it
 	// against the release's cosign-signed checksums.txt before extracting a
 	// byte. The release binary itself gets the same treatment from
 	// install.sh.

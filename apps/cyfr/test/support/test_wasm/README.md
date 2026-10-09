@@ -1,6 +1,6 @@
 # Test WASM Files
 
-This directory contains pre-compiled WASM binaries for testing Opus execution.
+This directory contains pre-compiled WASM binaries for testing the runtime's execution.
 
 ## Files
 

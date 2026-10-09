@@ -26,8 +26,8 @@ defmodule Cyfr.RuntimeConfig do
 
   @type getenv :: (String.t() -> String.t() | nil)
 
-  # The worker vocabulary `CYFR_OPUS_WORKERS` and the host API listener take
-  # their defaults from: a local Opus service, reached and reaching back
+  # The worker vocabulary `CYFR_LOCUS_RUNTIME_WORKERS` and the host API listener take
+  # their defaults from: a local runtime service, reached and reaching back
   # over loopback.
   @default_workers "wrk_local=http://127.0.0.1:4200"
   @default_host_api_bind {127, 0, 0, 1}
@@ -419,7 +419,7 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Resolve the worker services runs are dispatched to from `CYFR_OPUS_WORKERS`:
+  Resolve the worker services runs are dispatched to from `CYFR_LOCUS_RUNTIME_WORKERS`:
   comma-separated `<service_id>=<url>` entries, default
   `wrk_local=http://127.0.0.1:4200`. A service id is `wrk_` followed by 1
   to 64 letters, digits, `_` or `-`, the id its key derives over
@@ -431,7 +431,7 @@ defmodule Cyfr.RuntimeConfig do
   @spec resolve_workers(getenv) :: {:ok, [Prima.WorkerAPI.endpoint()]} | {:error, String.t()}
   def resolve_workers(getenv) when is_function(getenv, 1) do
     entries =
-      (blank_to_nil(getenv.("CYFR_OPUS_WORKERS")) || @default_workers)
+      (blank_to_nil(getenv.("CYFR_LOCUS_RUNTIME_WORKERS")) || @default_workers)
       |> String.split(",")
       |> Enum.map(&String.trim/1)
       |> Enum.reject(&(&1 == ""))
@@ -440,13 +440,15 @@ defmodule Cyfr.RuntimeConfig do
       case worker_entry(entry) do
         {:ok, %{id: id} = endpoint} ->
           if Enum.any?(acc, &(&1.id == id)),
-            do: {:halt, {:error, "CYFR_OPUS_WORKERS names the service #{inspect(id)} twice."}},
+            do:
+              {:halt,
+               {:error, "CYFR_LOCUS_RUNTIME_WORKERS names the service #{inspect(id)} twice."}},
             else: {:cont, {:ok, acc ++ [endpoint]}}
 
         :error ->
           {:halt,
            {:error,
-            "CYFR_OPUS_WORKERS entry #{inspect(entry)} is not <service_id>=<url>: a service id " <>
+            "CYFR_LOCUS_RUNTIME_WORKERS entry #{inspect(entry)} is not <service_id>=<url>: a service id " <>
               "is `wrk_` followed by 1 to 64 letters, digits, `_` or `-`, and a URL is " <>
               "http or https with a host and no path."}}
       end
@@ -570,7 +572,7 @@ defmodule Cyfr.RuntimeConfig do
   name a worker reaches it by: a bind address says which interfaces it
   answers on, never which address anything else routes to. Unset, the
   assignments this member issues carry no address and a worker posts their
-  host calls to the address it is configured with (`OPUS_HOST_URL`) — one
+  host calls to the address it is configured with (`LOCUS_RUNTIME_HOST_API_URL`) — one
   member, one address, which is what a single-member deployment has. A
   cell refuses to boot without it (`Cyfr.Cell.refusals/1`), because there
   the configured address names one member and the others lose their work.

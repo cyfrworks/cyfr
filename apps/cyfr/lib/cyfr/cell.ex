@@ -277,7 +277,7 @@ defmodule Cyfr.Cell do
 
   defp opus_key(_facts) do
     """
-    CYFR_CLUSTER=1 needs CYFR_OPUS_KEY set and identical on every member. \
+    CYFR_CLUSTER=1 needs CYFR_LOCUS_RUNTIME_ROOT set and identical on every member. \
     Unset, the worker root is random per boot, so a worker's report to a \
     peer fails MAC verification and its assignment is refused. Generate one \
     with `openssl rand -hex 32` and set the same value on every member, or \

@@ -206,9 +206,9 @@ in the tree.
 
 | Claim | Test file | Test | Owner |
 |---|---|---|---|
-| E1: real own/provided/instance attached requests reach only the admitted destination, with current instance policy enforced | `apps/cyfr/test/integration/opus/attached_fetch_test.exs` | "own and provided connections reach the pinned upstream without entering the runner"; "destination and egress refusals contact no upstream"; "any admits a consented custom component only within its destination and egress"; "tightening to shipped refuses the next custom component request before claim or upstream contact" | K.K5 |
-| E2: reflected material, runner memory/logs/events/output and positive control | `apps/cyfr/test/integration/opus/attached_fetch_test.exs`; `tests/worker-image/canary.py`; `apps/cyfr/test/integration/opus/secret_audit_test.exs` | "reflected credentials are masked across frames and execution exits"; scenario `credential_canary` (real runner, scripted control plane, with its mandatory positive-control record); "an attached value is audited by field and destination without material" | K.K5 / K.K4 |
-| E3: real streamed AQUA turn through an instance entry, cap and revocation | `apps/cyfr/test/integration/opus/model_contract_test.exs` | "an instance entry drives a streamed model turn without exposing its value"; "instance cap and revocation refuse the next model request" | K.K3 |
+| E1: real own/provided/instance attached requests reach only the admitted destination, with current instance policy enforced | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs` | "own and provided connections reach the pinned upstream without entering the runner"; "destination and egress refusals contact no upstream"; "any admits a consented custom component only within its destination and egress"; "tightening to shipped refuses the next custom component request before claim or upstream contact" | K.K5 |
+| E2: reflected material, runner memory/logs/events/output and positive control | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs`; `tests/locus-runtime-image/canary.py`; `apps/cyfr/test/integration/runtime/secret_audit_test.exs` | "reflected credentials are masked across frames and execution exits"; scenario `credential_canary` (real runner, scripted control plane, with its mandatory positive-control record); "an attached value is audited by field and destination without material" | K.K5 / K.K4 |
+| E3: real streamed AQUA turn through an instance entry, cap and revocation | `apps/cyfr/test/integration/runtime/model_contract_test.exs` | "an instance entry drives a streamed model turn without exposing its value"; "instance cap and revocation refuse the next model request" | K.K3 |
 | E4: bootstrap binding and matching/lifetime decisions | `apps/cyfr/test/sanctum/consent/bootstrap_test.exs`; `apps/sanctum/test/sanctum/instance_entries_test.exs`; `apps/cyfr/test/sanctum/consent/commit_test.exs` | "a newly provisioned athanor binds its sole offered provider entry"; "the fourth claim is refused with its database reset"; "any and shipped enforce the stored component policy at each resolution"; "widening a component policy requires confirmation and rejects a stale write"; "matching and binding lifetimes are committed per edge without implicit disclosure" | A.A0 / U.U1 |
 | E10: administrator lacks a seat; stale platform basis cannot issue tenant authority | `apps/cyfr/test/sanctum/context_focus_test.exs`; `apps/sanctum/test/sanctum/issuance_test.exs` | "a platform administrator without a seat cannot focus an athanor"; "a platform membership cannot authorize tenant credential issuance" | U.U0 |
 
@@ -221,7 +221,7 @@ The unchanged shipped model artifact → production
 peers); `Crucible.Host.Egress.pin/3` has a resolver option which the actual
 host never passes (`apps/cyfr/lib/crucible/host/egress.ex:94`). The
 existing suites found in `seed_model_catalysts_test.exs`,
-`model_contract_test.exs`, `TwoServices`, `tests/worker-image/` and
+`model_contract_test.exs`, `TwoServices`, `tests/locus-runtime-image/` and
 `Sanctum.Test.ResolverFixture` do not provide an end-to-end local
 replacement for that production path. E12 exercises the shipped artifact
 with a scripted host; E1/E3 exercise production attachment with controlled

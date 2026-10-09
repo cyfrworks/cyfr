@@ -228,8 +228,8 @@ config :sanctum,
   # CredentialStore via the session-resolution path.
   default_test_namespace: "testns"
 
-# The worker root every key CYFR issues derives from (`Prima.WorkerAuth`),
-# fixed for the suite so the Opus worker service of a test boot holds the
+# The runtime root every key CYFR issues derives from (`Prima.WorkerAuth`),
+# fixed for the suite so the runtime's worker service of a test boot holds the
 # key CYFR derives for its id: `worker_key(root, "wrk_local")`, spelled
 # here as the HMAC it is (`Prima.MacEnvelope.derive/4`: the label, then the
 # service id, one per line) because the contracts are not compiled when
@@ -238,20 +238,23 @@ config :sanctum,
 test_worker_root = :crypto.hash(:sha256, "cyfr-test-worker-root")
 config :cyfr, :opus_key, test_worker_root
 
-# The Opus service of a test boot listens on a port of the system's choosing,
-# and so does CYFR's host API listener; `Cyfr.Test.OpusService` points each
-# at the other's once both are up. Its runners are OS processes of their
-# own, started by the test build's `:direct` keeper (`apps/opus/mix.exs`)
-# and pooled across tests; a runner holds no sys.config, so what it takes
-# from this configuration (the log level, the scheduler counts) the service
-# passes it explicitly (`Opus.Release.runner_command/0`).
-config :opus,
+# The runtime's service of a test boot listens on a port of the system's
+# choosing, and so does CYFR's host API listener; `Cyfr.Test.RuntimeService`
+# points each at the other's once both are up. Its runners are OS processes
+# of their own, started by the test build's `:direct` keeper, which its test
+# support compiles and this configuration alone names
+# (`Locus.Runtime.Keeper.direct_keeper/0`), and pooled across tests; a
+# runner holds no sys.config, so what it takes from this configuration (the
+# log level, the scheduler counts) the service passes it explicitly
+# (`Locus.Runtime.Release.runner_command/0`).
+config :locus, :runtime,
   service_key:
     :hmac
-    |> :crypto.mac(:sha256, test_worker_root, "cyfr-opus/v1/worker\nwrk_local")
+    |> :crypto.mac(:sha256, test_worker_root, "cyfr-locus/v1/runtime\nwrk_local")
     |> Base.encode16(case: :lower),
   port: 0,
-  keeper: :direct
+  keeper: :direct,
+  direct_keeper: Locus.Runtime.Keeper.Direct
 
 config :cyfr, :host_api_port, 0
 

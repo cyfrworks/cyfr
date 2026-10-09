@@ -5,7 +5,7 @@ defmodule Sanctum.Policy.Enforcement do
   @moduledoc """
   Records policy enforcement decisions to `Arca.PolicyLog` and emits telemetry.
 
-  Every enforcement chokepoint (Opus pre-execution gate, HTTP egress checks,
+  Every enforcement chokepoint (the pre-execution gate, HTTP egress checks,
   tincture rate limits, etc.) calls `record/1` on either an allowed or denied
   outcome. The record lands in the database for audit; a telemetry event lets
   Prism subscribers stream decisions live. Allowed executions record one

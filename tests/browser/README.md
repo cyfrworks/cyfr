@@ -300,7 +300,7 @@ bridge.
 ## Image suites and acceptance runs
 
 Run on `p1` on 2026-09-26 against images built from this tree
-(`Dockerfile.locus`, `Dockerfile.opus`, `Dockerfile`), each as
+(`Dockerfile.locus`, `Dockerfile`), each as
 `.github/workflows/test.yml` invokes it; counts are the suites' `ok:` lines.
 The Trivy scans of those jobs were not run here.
 
@@ -315,15 +315,15 @@ The Trivy scans of those jobs were not run here.
 | locus-backends-image: `refusals.py` | pass, 35 |
 | locus-backends-image: `residue.py` | pass, 29 |
 | locus-backends-image: `memory.py` | pass, 25 and 26 in two runs (its status polls print a line each) |
-| worker-image: `runners.py` (A1's E1 egress cases), on `p1` | fail after 8: the pinned-egress case's guest cannot reach the harness's listener (the ufw row above) |
-| worker-image: `runners.py`, on the Docker-in-Docker host | 86 pass, including every pinned-egress, kill, taint, stream, late-child and control-plane-cut case; then fail: after the case that kills the service's VM, the restarted container's cyfr-locus reports "memory bounds are unavailable … processes remain in /sys/fs/cgroup" and starts no runner, so the pool never refills and the memory cases after it do not run. A harness artefact: the case polled the container with `docker exec` while it restarted in place, and runc's processes entering it for the exec sat in the reused cgroup root, in the host's pid namespace, when the new keeper drained it, listed there as pid 0. The case now lists processes from the host (`docker top`) across the restart, and the keeper's drain skips an entry of another pid namespace and waits between its passes |
-| worker-image: `runners.py` and `namespace.py`, native engine, harness in a container on a shared network | pass: 172 and 28, the service-death case and the restart step among them |
+| locus-runtime-image: `runners.py` (A1's E1 egress cases), on `p1` | fail after 8: the pinned-egress case's guest cannot reach the harness's listener (the ufw row above) |
+| locus-runtime-image: `runners.py`, on the Docker-in-Docker host | 86 pass, including every pinned-egress, kill, taint, stream, late-child and control-plane-cut case; then fail: after the case that kills the service's VM, the restarted container's cyfr-locus reports "memory bounds are unavailable … processes remain in /sys/fs/cgroup" and starts no runner, so the pool never refills and the memory cases after it do not run. A harness artefact: the case polled the container with `docker exec` while it restarted in place, and runc's processes entering it for the exec sat in the reused cgroup root, in the host's pid namespace, when the new keeper drained it, listed there as pid 0. The case now lists processes from the host (`docker top`) across the restart, and the keeper's drain skips an entry of another pid namespace and waits between its passes |
+| locus-runtime-image: `runners.py` and `namespace.py`, native engine, harness in a container on a shared network | pass: 172 and 28, the service-death case and the restart step among them |
 | browser: `run.sh` | pass, every attempt observed in every browser |
 | tincture proof: `tests/tincture-proof/run.sh` | pass in every browser (its README holds the record) |
 | release-boot: `boot.sh sqlite`, with the backup round trip | pass |
 | release-boot: `boot.sh postgres`, with the backup round trip | pass |
 | s3-minio: `--only s3_integration` against `pgsty/minio` (RELEASE.2026-08-04T00-00-00Z) | pass, 35 of 35 |
-| `scripts/test-partitioned.sh -n 4 -a sqlite apps/cyfr/test` | 5259 of 5260; the one failure is the resolver-dependent `nonexistent.test` case of `Opus.HttpHandlerEnforcementTest`, which fails on this host on every tree; no new ownership line |
+| `scripts/test-partitioned.sh -n 4 -a sqlite apps/cyfr/test` | 5259 of 5260; the one failure is the resolver-dependent `nonexistent.test` case of `Locus.Runtime.HttpHandlerEnforcementTest`, which fails on this host on every tree; no new ownership line |
 | the same on PostgreSQL (`_build/test_pg`) | 5259 of 5260, the same one failure; no new ownership line |
 
 ## The harness's two shapes

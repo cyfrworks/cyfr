@@ -62,7 +62,7 @@ per=$(( cores / PARTITIONS )); [ "$per" -lt 2 ] && per=2
 # threads spinning for work compete with the one that has it, and pinned to
 # two CPUs beside six busy loops a partition's throughput fell as low as
 # 1.5% of what it had on them unloaded (about 63% with busy-wait off). A
-# runner VM outside a release makes the same choice (`Opus.Release`).
+# runner VM outside a release makes the same choice (`Locus.Runtime.Release`).
 export ERL_FLAGS="+S ${per}:${per} +SDcpu ${per} +SDio 16 +sbwt none +sbwtdcpu none +sbwtdio none"
 umask 077
 # UNIX socket paths have a small fixed ceiling on macOS. Do not nest under

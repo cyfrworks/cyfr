@@ -4,7 +4,7 @@
 defmodule Cyfr.StackShapeTest do
   @moduledoc """
   The shipped stack is one origin: every request Caddy takes reaches cyfr's
-  one endpoint, and compose runs cyfr, the execution worker, the Locus
+  one endpoint, and compose runs cyfr, the Locus runtime, the Locus
   backends service and (optionally) caddy and the Locus builds service —
   nothing else. Read the files, assert the shape; the same style as the
   ingress inventory.
@@ -46,7 +46,7 @@ defmodule Cyfr.StackShapeTest do
     refute caddy =~ ~r/porta|4001/
   end
 
-  test "compose runs cyfr, opus, locus-backends, locus-builds and caddy — one web origin" do
+  test "compose runs cyfr, locus-runtime, locus-backends, locus-builds and caddy — one web origin" do
     compose = read!("docker-compose.yml")
 
     # Only the keys under `services:` — the file also has `volumes:` and
@@ -59,30 +59,35 @@ defmodule Cyfr.StackShapeTest do
       |> List.flatten()
       |> Enum.sort()
 
-    assert services == ["caddy", "cyfr", "locus-backends", "locus-builds", "opus"]
+    assert services == ["caddy", "cyfr", "locus-backends", "locus-builds", "locus-runtime"]
     refute compose =~ ~r/porta|4001|8080/
 
-    # The execution worker is attached to the worker network and no other,
+    # The runtime is attached to the locus-runtime network and no other,
     # which cyfr joins: cyfr reaches it there, it reaches cyfr's host API
-    # there, and the Locus services and caddy never see either port. The
-    # network is the service's alone: its runners have none, and reach the
-    # host API and a pinned address only through the service.
-    [_, opus_block | _] = Regex.split(~r/^  opus:\s*$/m, services_block)
-    [opus_block | _] = Regex.split(~r/^  [a-z]/m, opus_block)
-    [_, opus_networks | _] = Regex.split(~r/^    networks:\s*$/m, opus_block)
-    [opus_networks | _] = Regex.split(~r/^    [a-z]/m, opus_networks)
-    assert Regex.scan(~r/^      - (\S+)/m, opus_networks, capture: :all_but_first) == [["worker"]]
-    assert opus_block =~ ~r/^\s*- OPUS_SERVICE_KEY=\$\{OPUS_SERVICE_KEY:-\}$/m
-    assert opus_block =~ ~r/^\s*- OPUS_HOST_URL=\$\{OPUS_HOST_URL:-http:\/\/cyfr:/m
+    # there, and the other Locus services and caddy never see either port.
+    # The network is the service's alone: its runners have none, and reach
+    # the host API and a pinned address only through the service.
+    [_, runtime_block | _] = Regex.split(~r/^  locus-runtime:\s*$/m, services_block)
+    [runtime_block | _] = Regex.split(~r/^  [a-z]/m, runtime_block)
+    [_, runtime_networks | _] = Regex.split(~r/^    networks:\s*$/m, runtime_block)
+    [runtime_networks | _] = Regex.split(~r/^    [a-z]/m, runtime_networks)
+
+    assert Regex.scan(~r/^      - (\S+)/m, runtime_networks, capture: :all_but_first) ==
+             [["locus-runtime"]]
+
+    assert runtime_block =~ ~r/^\s*- LOCUS_RUNTIME_KEY=\$\{LOCUS_RUNTIME_KEY:-\}$/m
+
+    assert runtime_block =~
+             ~r/^\s*- LOCUS_RUNTIME_HOST_API_URL=\$\{LOCUS_RUNTIME_HOST_API_URL:-http:\/\/cyfr:/m
 
     [_, cyfr_block | _] = Regex.split(~r/^  cyfr:\s*$/m, services_block)
     [cyfr_block | _] = Regex.split(~r/^  [a-z]/m, cyfr_block)
 
     assert cyfr_block =~
-             ~r/^\s*- CYFR_OPUS_WORKERS=\$\{CYFR_OPUS_WORKERS:-wrk_opus=http:\/\/opus:4200\}$/m
+             ~r/^\s*- CYFR_LOCUS_RUNTIME_WORKERS=\$\{CYFR_LOCUS_RUNTIME_WORKERS:-wrk_locus=http:\/\/locus-runtime:4200\}$/m
 
     assert cyfr_block =~ ~r/^\s*- CYFR_HOST_API_BIND=0\.0\.0\.0$/m
-    assert cyfr_block =~ ~r/^\s*- worker$/m
+    assert cyfr_block =~ ~r/^\s*- locus-runtime$/m
 
     assert cyfr_block =~ ~r/^\s*- locus-builds$/m
     assert cyfr_block =~ ~r/^\s*- locus-backends$/m
@@ -109,24 +114,23 @@ defmodule Cyfr.StackShapeTest do
   # them join, and a build reaches crates.io and the npm registry over the
   # same network: it is not `internal`, so the isolation is who is attached.
   # The backends network is the same shape for a backend's registry and
-  # upstream API, and the worker network for a guest's consented egress.
-  test "the builds, backends and worker networks carry cyfr to each service and the service out" do
+  # upstream API, and the runtime's network for a guest's consented egress.
+  test "the builds, backends and runtime networks carry cyfr to each service and the service out" do
     compose = read!("docker-compose.yml")
     [_, networks] = Regex.split(~r/^networks:\s*$/m, compose)
     [networks | _] = Regex.split(~r/^[a-z]/m, networks)
 
-    for network <- ["locus-backends", "locus-builds", "worker"] do
+    for network <- ["locus-backends", "locus-builds", "locus-runtime"] do
       assert networks =~ ~r/^  #{network}: \{\}$/m, "#{network} must be declared plain"
 
       attached =
-        for service <- ["caddy", "cyfr", "locus-backends", "locus-builds", "opus"],
+        for service <- ["caddy", "cyfr", "locus-backends", "locus-builds", "locus-runtime"],
             block = service_block(compose, service),
             block =~ ~r/^    networks:\s*$/m,
             network in list_entries(block, "networks"),
             do: service
 
-      expected = if network == "worker", do: ["cyfr", "opus"], else: ["cyfr", network]
-      assert attached == expected, "#{network} joins #{inspect(attached)}"
+      assert attached == ["cyfr", network], "#{network} joins #{inspect(attached)}"
     end
 
     refute networks =~ ~r/internal:\s*true/
@@ -186,7 +190,7 @@ defmodule Cyfr.StackShapeTest do
     assert backends =~ Prima.LocusBackends.route(:health)
   end
 
-  test "the Locus services and the worker keep their hardening, and can bound a spawn's memory" do
+  test "the Locus services keep their hardening, and can bound a spawn's memory" do
     compose = read!("docker-compose.yml")
 
     for {service, homes, run_dir} <- [
@@ -194,8 +198,8 @@ defmodule Cyfr.StackShapeTest do
            "/run/locus:uid=10001,gid=10001,mode=0700,size=16m"},
           {"locus-backends", "/var/lib/locus/homes:mode=1733,exec,size=2g",
            "/run/locus:uid=10001,gid=10001,mode=0700,size=16m"},
-          {"opus", "/var/lib/opus/homes:mode=1733,exec,size=256m",
-           "/run/opus:uid=10002,gid=10002,mode=0700,size=16m"}
+          {"locus-runtime", "/var/lib/locus/homes:mode=1733,exec,size=256m",
+           "/run/locus:uid=10001,gid=10001,mode=0700,size=16m"}
         ] do
       block = service_block(compose, service)
 
@@ -204,11 +208,11 @@ defmodule Cyfr.StackShapeTest do
 
       # cyfr-locus bounds a spawn's memory only where the container's
       # cgroup is mounted writable; without the option every bounded spawn
-      # is refused, so the shipped services carry it. The worker's runner
+      # is refused, so the shipped services carry it. The runtime's runner
       # pool is isolated, which takes the keeper's seccomp profile too.
       assert list_entries(block, "security_opt") ==
                ["no-new-privileges:true", "writable-cgroups=true"] ++
-                 if(service == "opus", do: ["seccomp=./keeper.seccomp.json"], else: []),
+                 if(service == "locus-runtime", do: ["seccomp=./keeper.seccomp.json"], else: []),
              service
 
       assert list_entries(block, "tmpfs") == [homes, run_dir], service
@@ -220,20 +224,26 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
-  # The worker's runner pool is isolated: cyfr-locus clones each runner into
+  # The runtime's runner pool is isolated: cyfr-locus clones each runner into
   # a user and network namespace of its own, which Docker's default seccomp
   # profile denies. The service runs under the keeper's profile, which the
   # image carries and a scaffolded project holds beside its compose file,
   # where compose reads it; a project without it does not start the service.
-  test "the worker runs under the keeper's seccomp profile, shipped beside the compose file" do
-    opus = service_block(read!("docker-compose.yml"), "opus")
-    assert "seccomp=./keeper.seccomp.json" in list_entries(opus, "security_opt")
-    assert opus =~ "user.max_user_namespaces"
-    assert opus =~ "kernel.apparmor_restrict_unprivileged_userns"
+  test "the runtime runs under the keeper's seccomp profile, shipped beside the compose file" do
+    runtime = service_block(read!("docker-compose.yml"), "locus-runtime")
+    assert "seccomp=./keeper.seccomp.json" in list_entries(runtime, "security_opt")
+    assert runtime =~ "user.max_user_namespaces"
+    assert runtime =~ "kernel.apparmor_restrict_unprivileged_userns"
 
-    dockerfile = read!("Dockerfile.opus")
+    # The image's entrypoint is the builds role's; the runtime's service
+    # names its own, the isolated runner pool, and its own health probe.
+    assert runtime =~
+             ~r{^    entrypoint: \["cyfr-locus", "serve", "--pool", "runner:30101-30108:netns", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"\]$}m
+
+    assert runtime =~ Prima.WorkerWire.worker_route(:status)
+
+    dockerfile = read!("Dockerfile.locus")
     assert dockerfile =~ ~r{^COPY apps/locus/keeper/seccomp/keeper\.json /etc/cyfr/keeper\.json$}m
-    assert dockerfile =~ ~s("--pool", "runner:30101-30108:netns")
 
     dir = Path.join(System.tmp_dir!(), "cyfr-scaffold-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -254,17 +264,17 @@ defmodule Cyfr.StackShapeTest do
     assert profile == read!("apps/locus/keeper/seccomp/keeper.json")
   end
 
-  # Each image names its pooled uids for the service that runs under them,
+  # The image names its pooled uids for the role that runs under them,
   # `printf '<name>%02d'` over `<base> + i`; cyfr-locus refuses pools that
-  # overlap within one container, and this keeps the images' pools and
-  # their services' own users apart across containers too.
+  # overlap within one container, and this keeps every role's pool and the
+  # release's own user apart across the role's containers too.
   test "every pooled uid is named for its service, and no two pools or services share a uid" do
     pool_loop =
       ~r/for i in \$\(seq 1 (\d+)\); do \\\s+name="\$\(printf '([a-z-]+)%02d' "\$i"\)"; uid=\$\(\((\d+) \+ i\)\)/
 
     pools =
-      for file <- ["Dockerfile.locus", "Dockerfile.opus"],
-          [count, name, base] <- Regex.scan(pool_loop, read!(file), capture: :all_but_first) do
+      for [count, name, base] <-
+            Regex.scan(pool_loop, read!("Dockerfile.locus"), capture: :all_but_first) do
         base = String.to_integer(base)
         {name, (base + 1)..(base + String.to_integer(count))}
       end
@@ -272,7 +282,7 @@ defmodule Cyfr.StackShapeTest do
     assert Enum.sort(pools) == [
              {"locus-backend", 20_001..20_032},
              {"locus-build", 30_001..30_016},
-             {"opus-runner", 30_101..30_108}
+             {"locus-runner", 30_101..30_108}
            ]
 
     ranges = Enum.map(pools, &elem(&1, 1))
@@ -281,11 +291,13 @@ defmodule Cyfr.StackShapeTest do
         b <- Enum.drop(ranges, i + 1),
         do: assert(Range.disjoint?(a, b), "#{inspect(a)} and #{inspect(b)} overlap")
 
-    for service_uid <- [10_001, 10_002], range <- ranges, do: refute(service_uid in range)
+    for range <- ranges, do: refute(10_001 in range)
 
-    # The shipped entrypoints serve exactly those ranges.
+    # The shipped entrypoints serve exactly those ranges: the image's the
+    # builds role's, each other role's its compose service's.
     assert read!("Dockerfile.locus") =~ ~s("--pool", "build:30001-30016")
-    assert read!("Dockerfile.opus") =~ ~s("--pool", "runner:30101-30108:netns")
+    assert read!("docker-compose.yml") =~ ~s("--pool", "runner:30101-30108:netns")
+    assert read!("docker-compose.yml") =~ ~s("--pool", "backends:20001-20032")
 
     # Spelled split so the retired names are not themselves found here.
     refute read!("Dockerfile.locus") =~
@@ -407,37 +419,39 @@ defmodule Cyfr.StackShapeTest do
              ~r/CYFR_PORT[A]_BIND|CYFR_PRIS[M]_|CYFR_COMPONENT[S]_PATH|4001|CYFR_WORKE[R]_|CYFR_WORKER[S]\b|CYFR_EXECUTIO[N]_EVENTS_|CYFR_MAX_CONCURRENT_EXECUTION[S]|CYFR_SPAWN_CHANNE[L]/
 
     for knob <-
-          ~w(CYFR_OPUS_KEY OPUS_SERVICE_ID OPUS_SERVICE_KEY OPUS_HOST_URL CYFR_OPUS_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT) do
+          ~w(CYFR_LOCUS_RUNTIME_ROOT LOCUS_RUNTIME_SERVICE_ID LOCUS_RUNTIME_KEY LOCUS_RUNTIME_HOST_API_URL CYFR_LOCUS_RUNTIME_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT) do
       assert env =~ ~r/^#? ?#{knob}=/m, "#{knob} is missing from .env.example"
     end
 
-    # Compose sets five variables in the opus service's environment, over
-    # anything .env.opus sets: the three it interpolates from the project
-    # .env are documented in .env.example above, and the two it fixes in
-    # integration-guide.md's section on running a worker outside Compose.
-    # .env.opus.example documents none of them, and says where they are.
-    environment = list_entries(service_block(read!("docker-compose.yml"), "opus"), "environment")
+    # Compose sets five variables in the locus-runtime service's
+    # environment, over anything .env.locus sets: the three it interpolates
+    # from the project .env are documented in .env.example above, and the
+    # two it fixes in integration-guide.md's section on running a worker
+    # outside Compose. .env.locus.example documents none of them, and says
+    # where they are.
+    environment =
+      list_entries(service_block(read!("docker-compose.yml"), "locus-runtime"), "environment")
 
     assert environment == [
-             "OPUS_SERVICE_ID=${OPUS_SERVICE_ID:-wrk_opus}",
-             "OPUS_SERVICE_KEY=${OPUS_SERVICE_KEY:-}",
-             "OPUS_HOST_URL=${OPUS_HOST_URL:-http://cyfr:${CYFR_HOST_API_PORT:-4300}}",
-             "OPUS_BIND=0.0.0.0",
-             "OPUS_PORT=4200"
+             "LOCUS_RUNTIME_SERVICE_ID=${LOCUS_RUNTIME_SERVICE_ID:-wrk_locus}",
+             "LOCUS_RUNTIME_KEY=${LOCUS_RUNTIME_KEY:-}",
+             "LOCUS_RUNTIME_HOST_API_URL=${LOCUS_RUNTIME_HOST_API_URL:-http://cyfr:${CYFR_HOST_API_PORT:-4300}}",
+             "LOCUS_RUNTIME_BIND=0.0.0.0",
+             "LOCUS_RUNTIME_PORT=4200"
            ]
 
     set = for entry <- environment, do: entry |> String.split("=", parts: 2) |> hd()
-    opus = read!(".env.opus.example")
+    example = read!(".env.locus.example")
 
     for knob <- set do
-      refute opus =~ ~r/^#? ?#{knob}=/m, "#{knob} is documented in .env.opus.example"
+      refute example =~ ~r/^#? ?#{knob}=/m, "#{knob} is documented in .env.locus.example"
     end
 
-    assert opus =~ "project .env"
+    assert example =~ "project .env"
 
     guide = read!("integration-guide.md")
-    assert guide =~ ~r/^\| `OPUS_BIND` \|/m and guide =~ ~r/^\| `OPUS_PORT` \|/m
+    assert guide =~ ~r/^\| `LOCUS_RUNTIME_BIND` \|/m and guide =~ ~r/^\| `LOCUS_RUNTIME_PORT` \|/m
 
-    refute opus =~ ~r/CYFR_OPUS_KEY|CYFR_DATABASE_UR[L]|CYFR_CRYPTO_KEYRIN[G]=/
+    refute example =~ ~r/CYFR_LOCUS_RUNTIME_ROOT|CYFR_DATABASE_UR[L]|CYFR_CRYPTO_KEYRIN[G]=/
   end
 end

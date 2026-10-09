@@ -1,33 +1,62 @@
 # syntax=docker/dockerfile:1.7-labs
-# The Locus container: the untrusted native processes CYFR runs, and
-# nothing else. It serves the builds service, the backends service or
-# both, each by its key: holding LOCUS_BUILDS_KEY it compiles components
-# and tinctures over the build wire (Prima.BuilderProtocol), sources in a
-# signed request and artifacts in its answer; holding LOCUS_BACKENDS_KEY it
-# runs the stdio MCP servers CYFR registers over the backends wire
-# (Prima.LocusBackends). The app image (Dockerfile) carries no compilers and
-# runs no backend; this one carries no endpoint of the product's, no
-# database and no tenant state, and the release holds only the shared
-# contracts and Locus (`mix release locus`). Compose runs it twice, as
-# locus-builds and as locus-backends, each with its own key and pool.
+# The Locus container: the untrusted things CYFR runs, and nothing else.
+# One release serves three roles, each by its key and each in a container
+# of its own: holding LOCUS_RUNTIME_KEY it is the runtime, the WASM engine
+# and its worker service, reached by CYFR on its own listener and reaching
+# CYFR's host API over HTTP (Prima.WorkerAPI, Prima.HostAPI); holding
+# LOCUS_BUILDS_KEY it compiles components and tinctures over the build
+# wire (Prima.BuilderProtocol), sources in a signed request and artifacts
+# in its answer; holding LOCUS_BACKENDS_KEY it runs the stdio MCP servers
+# CYFR registers over the backends wire (Prima.LocusBackends). A node that
+# holds the runtime's key holds no other: its runners have no network, and
+# it shares no node, key or network with a role that has open egress. The
+# app image (Dockerfile) carries no compilers, engine or backend; this one
+# carries no endpoint of the product's, no database and no tenant state,
+# and the release holds only the shared contracts and Locus (`mix release
+# locus`). Compose runs it three times, as locus-runtime, locus-builds and
+# locus-backends, each with its own key, pool and network.
 #
 # Process model: cyfr-locus runs as root holding only SETUID, SETGID and
 # KILL (it refuses to start with any other capability), starts the locus
-# release as locus, and runs every build or backend under a pooled uid of
-# its own — builds as locus-build01…locus-build16 (30001-30016), backends as
+# release as locus, and runs every runner, build or backend under a pooled
+# uid of its own — runners as locus-runner01…locus-runner08 (30101-30108),
+# builds as locus-build01…locus-build16 (30001-30016), backends as
 # locus-backend01…locus-backend32 (20001-20032) — with a 0700 home under
 # /var/lib/locus/homes, inside a memory bound of its own
-# (LOCUS_BUILDS_MEMORY_BYTES, 1 GiB, and LOCUS_BACKENDS_MEMORY_BYTES, 512
-# MiB, unless set). When a build or a backend ends every process of its uid
-# is killed and everything the uid left is removed before another gets it;
-# the locus release refuses to serve either without cyfr-locus.
+# (LOCUS_RUNTIME_MEMORY_BYTES, 384 MiB, LOCUS_BUILDS_MEMORY_BYTES, 1 GiB,
+# and LOCUS_BACKENDS_MEMORY_BYTES, 512 MiB, unless set). When a runner, a
+# build or a backend ends every process of its uid is killed and
+# everything the uid left is removed before another gets it; the locus
+# release refuses to serve any role without cyfr-locus. A runner runs one
+# execution subtree at a time (`Locus.Runtime.Runner`) with its control
+# channel on file descriptor 3, holds no key, and the runtime's service
+# loads no component.
 #
 # The memory bound is a cgroup v2 group cyfr-locus makes for each spawn, so
 # the container must be started with the security option
 # `writable-cgroups=true` (Docker Engine 28 or later on a cgroup v2 host).
 # It adds no capability. Without it cyfr-locus cannot bound a spawn and
-# refuses every one: the service answers each `unavailable`, naming the
-# option, and none runs unbounded.
+# refuses every one: the builds and backends services answer each
+# `unavailable`, and the runtime starts no runner and logs, both naming the
+# option; none runs unbounded.
+#
+# The runtime's runner pool is isolated (`runner:…:netns`): cyfr-locus
+# clones every runner into a user and network namespace of its own,
+# mapping only the runner's pooled uid and gid, whose loopback stays down,
+# so a runner holds no capability and reaches nothing but the descriptors
+# it inherited. The clone takes no capability of the container's, but two
+# things of the host and the engine: the host allows unprivileged user
+# namespaces (user.max_user_namespaces above 0, and where AppArmor
+# restricts them, kernel.apparmor_restrict_unprivileged_userns), and the
+# container runs under the seccomp profile /etc/cyfr/keeper.json carries,
+# Docker's default with clone allowed to make a user and network namespace
+# and unshare and setns denied (docker-compose.yml's locus-runtime
+# `security_opt: seccomp=./keeper.seccomp.json`,
+# apps/locus/keeper/seccomp/keeper.json shipped beside it), since Docker's
+# own profile denies such a clone. Without either, cyfr-locus refuses to
+# start, naming both. The runtime container's read-only root carries the
+# build toolchain's files too; its runners still hold no capability, no
+# route and no descriptor but their channel and relay.
 
 # ---- cyfr-locus, the process helper: a static Go binary, pinned to the Go
 # release apps/locus/keeper/go.mod names ----
@@ -159,12 +188,18 @@ RUN ARCH=$(dpkg --print-architecture) \
 # toolchain's commands are linked into /usr/local/bin.
 RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 
-# The locus release's user, the build pool and the backend pool: each user
-# is alone in its own group and belongs to no other. /run/locus holds the
-# release's temporary files and the attach socket spawns' relays connect
-# to.
+# The locus release's user, the runner pool, the build pool and the
+# backend pool: each user is alone in its own group and belongs to no
+# other. /run/locus holds the release's temporary files and the attach
+# socket spawns' relays connect to; the home root holds each spawn's 0700
+# home, on a tmpfs mounted with mode=1733.
 RUN groupadd -r -g 10001 locus \
     && useradd -r -u 10001 -g locus -d /nonexistent -M -s /usr/sbin/nologin locus \
+    && for i in $(seq 1 8); do \
+         name="$(printf 'locus-runner%02d' "$i")"; uid=$((30100 + i)); \
+         groupadd -r -g "$uid" "$name" \
+         && useradd -r -u "$uid" -g "$name" -d /nonexistent -M -s /usr/sbin/nologin "$name" || exit 1; \
+       done \
     && for i in $(seq 1 16); do \
          name="$(printf 'locus-build%02d' "$i")"; uid=$((30000 + i)); \
          groupadd -r -g "$uid" "$name" \
@@ -186,6 +221,7 @@ ENV ELIXIR_ERL_OPTIONS="+fnu"
 WORKDIR /app
 
 COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
+COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 COPY --from=relbuilder /app/_build/prod/rel/locus ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
@@ -210,20 +246,24 @@ RUN LOCUS_BUILDS_KEY="$(head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' \n')"
        done \
     && rm -rf /tmp/cargo-seed
 
-# The release starts no Erlang distribution: a listener any build could
-# reach, authenticated by a cookie any build could read. Its temporary
-# files go where only its own user can reach them.
+# The release starts no Erlang distribution: a listener any guest, build
+# or backend could reach, authenticated by a cookie any of them could read.
+# Its temporary files go where only its own user can reach them; a
+# runner's go under the home the keeper gives it
+# (`Locus.Runtime.Release.runner_command/0`).
 ENV RELEASE_DISTRIBUTION=none \
     RELEASE_TMP=/run/locus
 
+ARG LOCUS_RUNTIME_PORT=4200
 ARG LOCUS_BUILDS_PORT=4100
 ARG LOCUS_BACKENDS_PORT=4101
-EXPOSE ${LOCUS_BUILDS_PORT} ${LOCUS_BACKENDS_PORT}
+EXPOSE ${LOCUS_RUNTIME_PORT} ${LOCUS_BUILDS_PORT} ${LOCUS_BACKENDS_PORT}
 
 # The builds wire's health operation: a POST of the versioned body,
 # answered without a key (Prima.BuilderProtocol). A container serving the
-# backends service alone probes its own (Prima.LocusBackends), as
-# docker-compose.yml's locus-backends service does.
+# backends service or the runtime probes its own (Prima.LocusBackends, and
+# the worker listener's 401 to an unsigned status request), as
+# docker-compose.yml's locus-backends and locus-runtime services do.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
     CMD curl -fsS -X POST -H 'content-type: application/json' -d '{"version":1}' \
         "http://localhost:${LOCUS_BUILDS_PORT:-4100}/locus/v1/builds/health" || exit 1
@@ -233,5 +273,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
 # root, `ipc: none` and the homes and /run/locus tmpfs mounts
 # (docker-compose.yml's locus-builds service). The backends service runs
 # the same image with the backends pool in its place (docker-compose.yml's
-# locus-backends service).
+# locus-backends service), and the runtime with the isolated runner pool
+# and the seccomp profile above (docker-compose.yml's locus-runtime
+# service).
 ENTRYPOINT ["cyfr-locus", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]

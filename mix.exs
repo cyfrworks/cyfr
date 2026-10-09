@@ -6,7 +6,7 @@ defmodule Cyfr.MixProject do
   def project do
     [
       apps_path: "apps",
-      apps: [:prima, :arca, :sanctum, :cyfr, :locus, :opus],
+      apps: [:prima, :arca, :sanctum, :cyfr, :locus],
       version: "0.5.8",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -71,9 +71,9 @@ defmodule Cyfr.MixProject do
 
   defp releases do
     [
-      # The control plane. Execution workers run in the `opus` release and
-      # builds in the `locus` release, each reached over its wire; the
-      # control plane starts neither.
+      # The control plane. The runtime, builds and backends run in the
+      # `locus` release, each role reached over its wire; the control plane
+      # starts none of them.
       cyfr: [
         applications: [
           prima: :permanent,
@@ -82,20 +82,12 @@ defmodule Cyfr.MixProject do
           cyfr: :permanent
         ]
       ],
-      # The execution worker: the WASM engine and its worker service on the
-      # shared contracts, and nothing of the control plane
-      # (`Opus.HostSurfaceTest`). It holds one derived worker key and
-      # reaches CYFR's host API over HTTP.
-      opus: [
-        applications: [
-          prima: :permanent,
-          opus: :permanent
-        ]
-      ],
-      # The builder: Locus on the shared contracts, and nothing of the
-      # control plane (`Locus.HostSurfaceTest`). It holds one builds key,
-      # reads `LOCUS_BUILDS_*` through its own runtime configuration, and is
-      # reached by CYFR over the build wire (`Prima.BuilderProtocol`).
+      # The island: Locus on the shared contracts, and nothing of the
+      # control plane. A node serves each role whose key it holds: the
+      # runtime (the WASM engine and its worker service, reaching CYFR's
+      # host API over HTTP), builds and backends, each reached by CYFR over
+      # its wire. It reads every role's settings through its own runtime
+      # configuration.
       locus: [
         applications: [
           prima: :permanent,

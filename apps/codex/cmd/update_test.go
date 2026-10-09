@@ -34,7 +34,7 @@ func TestMissingStackServices(t *testing.T) {
 	if err := os.WriteFile(path, []byte(old), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got := missingStackServices(path); !slices.Equal(got, []string{"opus", "locus-builds"}) {
+	if got := missingStackServices(path); !slices.Equal(got, []string{"locus-runtime", "locus-builds"}) {
 		t.Errorf("a compose file with cyfr, locus-backends and caddy lacks %v", got)
 	}
 

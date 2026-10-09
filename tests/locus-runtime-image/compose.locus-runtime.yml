@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered over docker-compose.yml by the runtime image tests
+# (tests/locus-runtime-image/stack.py): the locus-runtime service keeps every setting
+# compose gives it — cyfr-locus's capabilities, its security options
+# (`writable-cgroups=true` among them: compose appends a `security_opt`
+# list and refuses an entry named twice, so none is named here), the
+# read-only root, `ipc: none`, the homes and /run/locus tmpfs mounts, the
+# limits, the restart policy; this adds only the image under test, a
+# loopback port for the tests to call it on, the host gateway its host API
+# lives behind (the scripted control plane runs on the host) and the pool
+# settings a test chooses, and lets compose name the container after the
+# project, so a run does not meet a deployed cyfr-locus-runtime on the same host.
+# The tests supply the service's id, key and host URL through the
+# environment compose interpolates, as .env would.
+services:
+  locus-runtime:
+    image: ${LOCUS_RUNTIME_IMAGE:?set LOCUS_RUNTIME_IMAGE}
+    pull_policy: never
+    container_name: !reset null
+    ports:
+      - "127.0.0.1::4200"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - LOCUS_RUNTIME_POOL_SIZE=${LOCUS_RUNTIME_POOL_SIZE:?set LOCUS_RUNTIME_POOL_SIZE}
+      - LOCUS_RUNTIME_IDLE_TTL_MS=${LOCUS_RUNTIME_IDLE_TTL_MS:?set LOCUS_RUNTIME_IDLE_TTL_MS}
+      - LOCUS_RUNTIME_WATCHDOG_GRACE_MS=${LOCUS_RUNTIME_WATCHDOG_GRACE_MS:?set LOCUS_RUNTIME_WATCHDOG_GRACE_MS}
+      - LOCUS_RUNTIME_RELEASE_GRACE_MS=${LOCUS_RUNTIME_RELEASE_GRACE_MS:?set LOCUS_RUNTIME_RELEASE_GRACE_MS}

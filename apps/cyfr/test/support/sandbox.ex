@@ -19,18 +19,18 @@ defmodule Cyfr.Test.Sandbox do
   repository start (`supervisors/0`, pinned by `Cyfr.Test.SandboxTest`),
   stopped in order: what starts work before the work it started — runners
   (whose loops die with them), then the tasks that wait on runs, then the
-  runs' attempts, then the Opus service's runners, then the event buffers
+  runs' attempts, then the runtime's runners, then the event buffers
   they wrote to, then the decision log's writers, which work at every tier
   starts. Each child is stopped synchronously, so the sweep returns
-  only once every child is gone. The Opus service's runners are OS
-  processes, and their handles' supervisor (`Opus.RunnerPool.Runners`) is
+  only once every child is gone. The runtime's runners are OS
+  processes, and their handles' supervisor (`Locus.Runtime.RunnerPool.Runners`) is
   swept through the pool instead (`pooled/0`): every busy runner is ended
-  at once and awaited (`Opus.RunnerPool.retire_busy/2`), fresh and idle
+  at once and awaited (`Locus.Runtime.RunnerPool.retire_busy/2`), fresh and idle
   ones stay pooled for the next test, and every report of a runner's exit
-  the service has in flight is awaited (`Opus.WorkerService.await_reports/1`),
+  the service has in flight is awaited (`Locus.Runtime.WorkerService.await_reports/1`),
   so no runner's host call and no report lands after the owner is gone.
   Then the connections open on the listeners of the worker wire
-  (`Cyfr.Test.OpusService.listeners/0`) are closed: a host call a stopped
+  (`Cyfr.Test.RuntimeService.listeners/0`) are closed: a host call a stopped
   runner had in flight runs on one of them, and it must not reach the
   database after the owner is gone.
 
@@ -64,8 +64,8 @@ defmodule Cyfr.Test.Sandbox do
   code handles is logged below error level and is not counted.
   """
 
-  # The Opus service is a sibling application, not a dependency.
-  @compile {:no_warn_undefined, [Opus.RunnerPool, Opus.WorkerService]}
+  # The runtime is a sibling application, not a dependency.
+  @compile {:no_warn_undefined, [Locus.Runtime.RunnerPool, Locus.Runtime.WorkerService]}
 
   @supervisors [
     Aqua.RunnerSupervisor,
@@ -83,14 +83,14 @@ defmodule Cyfr.Test.Sandbox do
     Compendium.Builds.TaskSupervisor,
     Emissary.External.ServerSupervisor,
     Crucible.Attempt.Supervisor,
-    Opus.RunnerPool.Runners,
+    Locus.Runtime.RunnerPool.Runners,
     Crucible.Events.Supervisor,
     Arca.DecisionLog.Writers
   ]
 
   # Swept through the pool whose runners' handles it supervises, never by
   # stopping its children: a handle stopped kills its runner with no report.
-  @pooled [Opus.RunnerPool.Runners]
+  @pooled [Locus.Runtime.RunnerPool.Runners]
 
   # Where the test process keeps what its sweeps spare: its sandbox owner
   # and what it started before the sandbox.
@@ -557,14 +557,14 @@ defmodule Cyfr.Test.Sandbox do
         do: DynamicSupervisor.terminate_child(supervisor, child)
   end
 
-  # The Opus service's busy runners are ended and awaited, then the reports
+  # The runtime's busy runners are ended and awaited, then the reports
   # of their exits: answered as stopped work when there was any. A service
   # a test is restarting has no pool to ask, and its runners went with the
   # old one.
   defp retire_runners do
-    busy = Opus.RunnerPool.status(Opus.RunnerPool).runners.busy
-    :ok = Opus.RunnerPool.retire_busy(Opus.RunnerPool)
-    :ok = Opus.WorkerService.await_reports()
+    busy = Locus.Runtime.RunnerPool.status(Locus.Runtime.RunnerPool).runners.busy
+    :ok = Locus.Runtime.RunnerPool.retire_busy(Locus.Runtime.RunnerPool)
+    :ok = Locus.Runtime.WorkerService.await_reports()
     List.duplicate(:retired, busy)
   catch
     :exit, {:noproc, _call} -> []
@@ -574,7 +574,7 @@ defmodule Cyfr.Test.Sandbox do
   # lost answer, which a stopped runner no longer reads. Each kill is
   # awaited, so the sweep returns only once the request is gone.
   defp close_connections do
-    for server <- Cyfr.Test.OpusService.listeners(),
+    for server <- Cyfr.Test.RuntimeService.listeners(),
         {:ok, connections} <- [ThousandIsland.connection_pids(server)],
         connection <- connections do
       ref = Process.monitor(connection)

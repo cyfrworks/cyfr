@@ -363,14 +363,14 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert fixture!("host_api.json")["auth_header"] == MacEnvelope.auth_header()
     assert Prima.WorkerWire.auth_header() == MacEnvelope.auth_header()
 
-    worker_auth_py = read!("tests/worker-image/worker_auth.py")
-    control_plane_py = read!("tests/worker-image/control_plane.py")
+    worker_auth_py = read!("tests/locus-runtime-image/worker_auth.py")
+    control_plane_py = read!("tests/locus-runtime-image/control_plane.py")
     assert worker_auth_py =~ ~s(["auth_header"] == "#{MacEnvelope.auth_header()}")
     assert control_plane_py =~ ~s("#{MacEnvelope.auth_header()}")
 
-    # Opus: every canonical string of the worker vector file is under the
-    # domain, and the worker key the Go CLI mints reproduces the file's
-    # over the worker label.
+    # The runtime: every canonical string of the worker vector file is under
+    # its label, and the worker key the Go CLI mints reproduces the file's
+    # over that label.
     vectors = fixture!("worker_auth.json")
 
     canonicals =
@@ -379,15 +379,15 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert canonicals != []
 
     for canonical <- canonicals do
-      assert String.starts_with?(canonical, MacEnvelope.domain(:opus) <> "/"), canonical
+      assert String.starts_with?(canonical, MacEnvelope.label(:runtime) <> "/"), canonical
     end
 
-    assert worker_auth_py =~ ~s(PREFIX = "#{MacEnvelope.domain(:opus)}")
+    assert worker_auth_py =~ ~s(PREFIX = "#{MacEnvelope.label(:runtime)}")
 
     {:ok, root} = MacEnvelope.decode_root(vectors["root_hex"])
 
     {:ok, worker_key} =
-      MacEnvelope.derive(root, MacEnvelope.label(:worker), [service: :string], %{
+      MacEnvelope.derive(root, MacEnvelope.label(:runtime), [service: :string], %{
         service: vectors["service"]
       })
 
@@ -395,8 +395,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert Prima.WorkerAuth.worker_key(root, vectors["service"]) == {:ok, worker_key}
 
     for side <- ["apps/codex/cmd/lifecycle.go", "config/test.exs"] do
-      assert read!(side) =~ ~s("#{MacEnvelope.label(:worker)}\\n),
-             "#{side} derives the worker key over another label"
+      assert read!(side) =~ ~s("#{MacEnvelope.label(:runtime)}\\n),
+             "#{side} derives the runtime's worker key over another label"
     end
 
     # The protocol modules hold no spelling of their own.

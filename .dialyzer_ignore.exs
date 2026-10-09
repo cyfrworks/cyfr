@@ -30,11 +30,11 @@
   # The step bench's harness, `Cyfr.Test.StepBench`, is test support: it is
   # compiled only under MIX_ENV=test, the one environment the task runs in.
   {"lib/mix/tasks/cyfr.bench.step.ex", :unknown_function},
-  {"lib/opus/component_cache.ex", :unknown_type},
-  {"lib/opus/formula_handler.ex", :missing_range},
-  {"lib/opus/runtime.ex", :call},
-  {"lib/opus/runtime.ex", :extra_range},
-  {"lib/opus/runtime.ex", :pattern_match},
+  {"lib/locus/runtime/component_cache.ex", :unknown_type},
+  {"lib/locus/runtime/formula_handler.ex", :missing_range},
+  {"lib/locus/runtime/engine.ex", :call},
+  {"lib/locus/runtime/engine.ex", :extra_range},
+  {"lib/locus/runtime/engine.ex", :pattern_match},
   {"lib/prism_web/controllers/auth_controller.ex", :pattern_match_cov},
   {"lib/prism_web/controllers/legal_accept_controller.ex", :pattern_match_cov},
   {"lib/cyfr_web/minimal_page.ex", :extra_range},

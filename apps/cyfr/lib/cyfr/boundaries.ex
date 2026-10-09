@@ -71,8 +71,8 @@ defmodule Cyfr.Boundaries do
       whose standing it does not require, and every read it makes before
       any caller is known, with the module that makes it and why: a system
       responsibility is rostered, never a caller's flag.
-    * `opus_named_by_cyfr_tests/0` — which CYFR test files may name an
-      Opus module, and why.
+    * `runtime_named_by_cyfr_tests/0` — which CYFR test files may name a
+      `Locus.Runtime` module, and why.
 
   Every check here takes a tree already read through
   `Prima.Test.CodeLines`: the module names a file names, for the namespace
@@ -105,7 +105,7 @@ defmodule Cyfr.Boundaries do
   # ---------------------------------------------------------------------------
 
   @typedoc "A layer of the dependency graph, or `:outside` for everything else."
-  @type layer :: :prima | :arca | :sanctum | :host | :opus | :locus | :outside
+  @type layer :: :prima | :arca | :sanctum | :host | :locus | :outside
 
   @applications [
     %{
@@ -135,24 +135,19 @@ defmodule Cyfr.Boundaries do
       lib: "apps/cyfr/lib",
       umbrella_deps: [:arca, :prima, :sanctum],
       note:
-        "the host and everything above it. It declares neither island: " <>
-          "`Crucible` is the seam to Opus and `Prima.BuilderProtocol` to Locus"
-    },
-    %{
-      app: :opus,
-      layer: :opus,
-      lib: "apps/opus/lib",
-      umbrella_deps: [:prima],
-      note: "the WASM engine island; it reaches CYFR over its host API alone",
-      dependency_roots: ~w(Jason Req Plug Bandit Wasmex)
+        "the host and everything above it. It does not declare the island: " <>
+          "`Crucible` is the seam to Locus's runtime, and `Prima.BuilderProtocol` and " <>
+          "`Prima.LocusBackends` to its builds and backends"
     },
     %{
       app: :locus,
       layer: :locus,
       lib: "apps/locus/lib",
       umbrella_deps: [:prima],
-      note: "the builds and backends island; CYFR reaches it over its two wires alone",
-      dependency_roots: ~w(Plug Bandit ThousandIsland)
+      note:
+        "the island: the runtime, which reaches CYFR over its host API alone, and builds " <>
+          "and backends, which CYFR reaches over their wires alone",
+      dependency_roots: ~w(Jason Req Plug Bandit Wasmex ThousandIsland)
     }
   ]
 
@@ -210,7 +205,7 @@ defmodule Cyfr.Boundaries do
   # boundary's modules, not which names are this repository's.
   @product_roots ~w(
     Arca Sanctum Aqua Compendium Crucible Emissary Grimoire
-    Prism PrismWeb Cyfr CyfrWeb Opus Locus Codex Prima
+    Prism PrismWeb Cyfr CyfrWeb Locus Codex Prima
   )
 
   @doc "The namespace roots this repository owns."
@@ -231,7 +226,6 @@ defmodule Cyfr.Boundaries do
       MapSet.member?(prima, module) -> :prima
       root?(module, "Sanctum") -> :sanctum
       root?(module, "Arca") -> :arca
-      root?(module, "Opus") -> :opus
       root?(module, "Locus") -> :locus
       (module |> String.split(".") |> hd()) in @product_roots -> :host
       true -> :outside
@@ -902,7 +896,6 @@ defmodule Cyfr.Boundaries do
     %{
       from: [
         "apps/prima/lib/**/*.ex",
-        "apps/opus/lib/**/*.ex",
         "apps/locus/lib/**/*.ex",
         "apps/arca/lib/**/*.ex",
         "apps/cyfr/lib/compendium/**/*.ex",
@@ -924,7 +917,6 @@ defmodule Cyfr.Boundaries do
     %{
       from: [
         "apps/prima/lib/**/*.ex",
-        "apps/opus/lib/**/*.ex",
         "apps/locus/lib/**/*.ex",
         "apps/arca/lib/**/*.ex",
         "apps/cyfr/lib/compendium/**/*.ex",
@@ -945,7 +937,6 @@ defmodule Cyfr.Boundaries do
     %{
       from: [
         "apps/prima/lib/**/*.ex",
-        "apps/opus/lib/**/*.ex",
         "apps/locus/lib/**/*.ex",
         "apps/arca/lib/**/*.ex",
         "apps/sanctum/lib/**/*.ex",
@@ -1061,24 +1052,16 @@ defmodule Cyfr.Boundaries do
           "exports these stores to Sanctum alone."
     },
 
-    # --- the host names neither island ---
-    %{
-      from: ["apps/cyfr/lib/**/*.ex"],
-      into: "Opus",
-      allow: [],
-      reason:
-        "`apps/cyfr/mix.exs` declares no dependency on `opus`: `Crucible` is " <>
-          "the seam, and a run reaches a worker over `Prima.WorkerWire`. " <>
-          "`Opus` is no boundary and `cyfr` does not depend on it: the pruned code path makes " <>
-          "a call an undefined-module warning, and a bare name compiles."
-    },
+    # --- the host names nothing of the island ---
     %{
       from: ["apps/cyfr/lib/**/*.ex"],
       into: "Locus",
       allow: [],
       reason:
-        "`apps/cyfr/mix.exs` declares no dependency on `locus`: `Prima.BuilderProtocol` " <>
-          "is the seam, and CYFR reaches the builder over the build wire. " <>
+        "`apps/cyfr/mix.exs` declares no dependency on `locus`: `Crucible` is the seam to " <>
+          "the runtime, which a run reaches over `Prima.WorkerWire`, and " <>
+          "`Prima.BuilderProtocol` and `Prima.LocusBackends` are the seams to builds and " <>
+          "backends, which CYFR reaches over their wires. " <>
           "`Locus` is no boundary and `cyfr` does not depend on it: the pruned code path " <>
           "makes a call an undefined-module warning, and a bare name compiles."
     }
@@ -2401,11 +2384,11 @@ defmodule Cyfr.Boundaries do
   # 7. What the suites may name
   # ---------------------------------------------------------------------------
 
-  @opus_named_by_cyfr_tests %{
+  @runtime_named_by_cyfr_tests %{
     "apps/cyfr/test/integration/**" =>
       "the wiring suite: the umbrella runs one VM and these " <>
         "cases are integration tests of CYFR against a real worker service.",
-    "apps/cyfr/test/support/opus_service.ex" =>
+    "apps/cyfr/test/support/runtime_service.ex" =>
       "starts and stops the in-VM worker service the integration suite runs against.",
     "apps/cyfr/test/support/sandbox.ex" =>
       "drains the runner pool between cases, which is the only way a pooled runner " <>
@@ -2414,35 +2397,36 @@ defmodule Cyfr.Boundaries do
       "the sandbox helper's own case: what it drains IS the pool, so the assertion " <>
         "has to name it.",
     "apps/cyfr/test/crucible/start_refusal_test.exs" =>
-      "the refusal a keeper gives is `Opus.Keeper.Channel.refusal/1`'s shape, and this " <>
+      "the refusal a keeper gives is `Locus.Runtime.Keeper.Channel.refusal/1`'s shape, and this " <>
         "case holds CYFR's rendering of it to that shape.",
     "apps/cyfr/test/grimoire/error_renderers_test.exs" =>
-      "the in-chain guest's renderer is Opus's, and the one-vocabulary case is that " <>
-        "the three renderers agree sentence for sentence.",
+      "the in-chain guest's renderer is the runtime's, and the one-vocabulary case is " <>
+        "that the three renderers agree sentence for sentence.",
     "apps/cyfr/test/cyfr/runtime_env_reading_test.exs" =>
       "pins the shape of the reads in `config/runtime.exs`, and that file configures " <>
-        "the `opus` release too: what it names, this case quotes.",
+        "the runtime a `mix` boot runs beside CYFR too: what it names, this case quotes.",
     "apps/cyfr/test/cyfr/platform_settings_roster_test.exs" =>
-      "holds the inventory of every name a boot reads, and the `opus` release declares " <>
-        "its own prefix (`Opus.Settings.variables/0`): an opus boot's refusal of a stray " <>
-        "name is `Opus.Settings.unknown/1`'s, and this case quotes it.",
+      "holds the inventory of every name a boot reads, and the runtime declares its own " <>
+        "prefix (`Locus.Runtime.Settings.variables/0`): a `mix` boot's refusal of a stray " <>
+        "`LOCUS_RUNTIME_*` name is `Locus.Runtime.Settings.unknown/1`'s, and this case quotes it.",
     "apps/cyfr/test/cyfr/wit_abi_drift_test.exs" =>
-      "names `Opus.Runtime` in the sentence its failure prints, so a reader is told " <>
+      "names `Locus.Runtime.Engine` in the sentence its failure prints, so a reader is told " <>
         "which side of the ABI to look at."
   }
 
   @doc """
-  Which CYFR test files may name an Opus module, and why.
+  Which CYFR test files may name a `Locus.Runtime` module, and why.
 
-  `apps/cyfr/mix.exs` declares no dependency on `opus`, and `apps/cyfr/lib`
-  names no Opus module — that is the production boundary. The suite is
+  `apps/cyfr/mix.exs` declares no dependency on `locus`, and `apps/cyfr/lib`
+  names no Locus module — that is the production boundary. The suite is
   another matter: the umbrella loads both applications into one VM, and
   the integration suite's whole job is CYFR against a real worker
-  service. So a CYFR test MAY name an Opus module, from the wiring suite
+  service. So a CYFR test MAY name a runtime module, from the wiring suite
   and the support that starts it, and everywhere else by a row here.
+  Other `Locus` modules a CYFR test names are not rostered.
   """
-  @spec opus_named_by_cyfr_tests() :: %{String.t() => String.t()}
-  def opus_named_by_cyfr_tests, do: @opus_named_by_cyfr_tests
+  @spec runtime_named_by_cyfr_tests() :: %{String.t() => String.t()}
+  def runtime_named_by_cyfr_tests, do: @runtime_named_by_cyfr_tests
 
   # ---------------------------------------------------------------------------
   # 8. The filesystem seam

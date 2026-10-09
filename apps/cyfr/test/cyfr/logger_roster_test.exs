@@ -346,7 +346,7 @@ defmodule Cyfr.LoggerRosterTest do
       for mix <- Path.wildcard(Path.join(root(), "apps/*/mix.exs")),
           do: mix |> Path.dirname() |> Path.basename() |> String.to_atom()
 
-    assert :prima in apps and :cyfr in apps and :opus in apps and :locus in apps
+    assert :prima in apps and :cyfr in apps and :locus in apps
     apps
   end
 

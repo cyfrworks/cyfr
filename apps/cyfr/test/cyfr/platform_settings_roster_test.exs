@@ -13,8 +13,9 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   and every read name declared. Then the boot itself, evaluated from
   `config/runtime.exs` the way a release evaluates it: presence recorded as
   pins, only the restart-scoped settings written to the application
-  environment, every undeclared `CYFR_*` name refused by name, and an
-  `opus` release that reads no roster refusing its own stray names.
+  environment, every undeclared `CYFR_*` name refused by name, and a `mix`
+  boot refusing the runtime's stray names through the runtime's own
+  declaration, while the `locus` release reads no roster.
 
   The checks are functions of the entries, so each is also run on a
   planted violation it must refuse.
@@ -96,7 +97,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
 
   # The keywords a group of settings was once read under whole: the caps
   # under Sanctum and the worker watch's bounds under the host.
-  @keywords ~w(caps opus_watch)
+  @keywords ~w(caps runtime_watch)
 
   # Every use of a live setting's value in the application environment,
   # under any application, by one of `verbs`: `{path, app, key}`. The key
@@ -119,10 +120,10 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         do: {path, String.to_atom(app), String.to_atom(key)}
   end
 
-  # The islands (Opus, Locus) read none of the roster's settings: each
-  # declares its own under its own prefix, and may name a key of its own
-  # alike (Locus's `:log_level`).
-  @islands ~w(apps/opus/ apps/locus/)
+  # The island (Locus) reads none of the roster's settings: it declares its
+  # own under its own prefixes, and may name a key of its own alike
+  # (Locus's `:log_level`, the runtime's `:runtime`).
+  @islands ~w(apps/locus/)
 
   defp tree(glob) do
     for path <- Path.wildcard(Path.join(@root, glob)),
@@ -156,7 +157,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         spelled(~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex)) ++
           Roster.variables() ++
           Roster.deployment() ++
-          Opus.Settings.variables() ++ Locus.Config.variables()
+          Locus.Runtime.Settings.variables() ++ Locus.Config.variables()
       )
 
     interpolated |> Enum.uniq() |> Enum.reject(&MapSet.member?(read, &1)) |> Enum.sort()
@@ -235,7 +236,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  frame_stream_max_concurrent
                  session_ttl_hours webhook_max_skew_seconds webhook_idempotency_ttl_seconds
                  device_label health_ready_cache_ms decision_retention_days
-                 opus_watch_poll_ms opus_watch_misses locus_backends_lease_ms
+                 locus_runtime_watch_poll_ms locus_runtime_watch_misses locus_backends_lease_ms
                  locus_backends_idle_ms log_level
                  asset_credential_window_s frame_credential_deadline_s
                  frame_invocation_max frame_invocation_window_ms
@@ -585,7 +586,8 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         MapSet.new(
           Roster.variables() ++
             Roster.deployment() ++
-            Roster.compose_only() ++ Opus.Settings.variables() ++ Locus.Config.variables()
+            Roster.compose_only() ++
+            Locus.Runtime.Settings.variables() ++ Locus.Config.variables()
         )
 
       undeclared = Enum.reject(documented(".env.example"), &MapSet.member?(declared, &1))
@@ -938,32 +940,49 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     end
   end
 
-  describe "an opus release booted alone" do
-    defp opus_env(overrides) do
+  describe "the runtime" do
+    defp runtime_env(overrides) do
       Map.merge(
         %{
-          "RELEASE_NAME" => "opus",
-          "CYFR_SECRET_KEY_BASE" => nil,
-          "OPUS_SERVICE_KEY" => String.duplicate("ab", 32),
-          "OPUS_HOST_URL" => "http://cyfr:4300"
+          "LOCUS_RUNTIME_KEY" => String.duplicate("ab", 32),
+          "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
         },
         overrides
       )
     end
 
-    test "reads no roster: a stray CYFR_* name is not its to refuse" do
-      with_env(opus_env(%{"CYFR_RETIRED_KNOB" => "1"}), fn ->
-        config = read_prod_config!()
-        refute Keyword.has_key?(config, :cyfr)
-        assert config[:logger][:level] == :info
+    test "the locus release reads no roster: a stray CYFR_* name is not its to refuse" do
+      # The control plane's own variables a test run carries are refused by
+      # the release for what they are, so they are cleared here.
+      cleared =
+        Map.new(
+          ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY),
+          &{&1, nil}
+        )
+
+      set = Map.merge(cleared, %{"RELEASE_NAME" => "locus", "CYFR_RETIRED_KNOB" => "1"})
+
+      with_env(runtime_env(set), fn ->
+        config =
+          Config.Reader.read!(Path.join(@root, "config/locus_runtime.exs"),
+            env: :prod,
+            imports: :disabled
+          )
+
+        assert Keyword.keys(config) == [:locus]
+        assert config[:locus][:runtime][:service_key] == String.duplicate("ab", 32)
       end)
     end
 
-    test "refuses a stray OPUS_* name through Opus.Settings" do
-      with_env(opus_env(%{"OPUS_POOL_SIZ" => "4"}), fn ->
+    test "a mix boot refuses a stray LOCUS_RUNTIME_* name through Locus.Runtime.Settings" do
+      with_env(runtime_env(%{"RELEASE_NAME" => nil, "LOCUS_RUNTIME_POOL_SIZ" => "4"}), fn ->
         message = refusal!()
-        assert message =~ "[Cyfr] FATAL: OPUS_POOL_SIZ is not a variable the opus release reads"
-        assert message == "[Cyfr] FATAL: " <> Opus.Settings.unknown(["OPUS_POOL_SIZ"])
+
+        assert message =~
+                 "[Cyfr] FATAL: LOCUS_RUNTIME_POOL_SIZ is not a variable the locus release reads"
+
+        assert message ==
+                 "[Cyfr] FATAL: " <> Locus.Runtime.Settings.unknown(["LOCUS_RUNTIME_POOL_SIZ"])
       end)
     end
   end

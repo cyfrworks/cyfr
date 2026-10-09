@@ -63,8 +63,8 @@ defmodule Locus.Builder do
   itself does: under the build's uid, in its home, with the environment
   above, which carries no credential — the builds key and anything else
   of this node's environment stay outside. The compiled WASM is validated
-  (`Prima.Wasm`) before it is answered; it executes only inside the Opus
-  sandbox.
+  (`Prima.Wasm`) before it is answered; it executes only inside the
+  runtime's sandbox.
 
   A tincture's bundle keeps the notices of what it ships:
   `dist/third-party-notices.json` lists every runtime package the

@@ -541,12 +541,17 @@ defmodule Cyfr.Cluster.Cell do
       libcluster: [
         {:topologies, [cyfr: [strategy: Cluster.Strategy.Epmd, config: [hosts: all_nodes()]]]}
       ],
-      opus: [
-        {:service_key, nil},
-        {:service_id, member.worker},
-        {:port, 0},
-        {:bind, "127.0.0.1"},
-        {:keeper, :direct}
+      # `Application.put_all_env/1` replaces the `:runtime` keyword whole,
+      # and the inherited one carries the direct keeper.
+      locus: [
+        runtime:
+          Keyword.merge(Application.get_env(:locus, :runtime, []),
+            service_key: nil,
+            service_id: member.worker,
+            port: 0,
+            bind: "127.0.0.1",
+            keeper: :direct
+          )
       ],
       # The established-caller memo is off in `config/test.exs` (a
       # per-request convenience the single-node suite asserts around). A

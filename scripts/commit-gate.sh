@@ -19,7 +19,7 @@
 #   vocab     the CI vocabulary job's own script, read from test.yml
 #   islands   prima, arca and sanctum compiled and tested from a copy that
 #             holds only what CI gives them, once the SQLite suite's
-#             partitions have exited; opus and locus with --close
+#             partitions have exited; locus with --close
 # With --close the static leg also forces the test rebuild on both
 # adapters. Image suites, the S3 suite, the Go checks, the security
 # scanners and the benchmark are not part of this gate: a closing record
@@ -202,9 +202,7 @@ leg_islands() {
   island sanctum apps/prima apps/arca apps/sanctum config/database_choice.exs & local p3=$!
   wait $p1 || status=1; wait $p2 || status=1; wait $p3 || status=1
   if $CLOSE; then
-    island opus apps/prima apps/opus tests/fixtures & local p4=$!
-    island locus apps/prima apps/locus tests/fixtures config/locus_runtime.exs & local p5=$!
-    wait $p4 || status=1; wait $p5 || status=1
+    island locus apps/prima apps/locus tests/fixtures config/locus_runtime.exs || status=1
   fi
   return $status
 }

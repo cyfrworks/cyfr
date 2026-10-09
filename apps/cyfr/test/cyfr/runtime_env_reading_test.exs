@@ -123,31 +123,25 @@ defmodule Cyfr.RuntimeEnvReadingTest do
            "CYFR_BEHIND_PROXY must not be read as a string"
   end
 
-  # The `opus` release boots as the service or, started by the service's
-  # keeper, as a runner (`OPUS_ROLE=runner`). A runner holds no credential
-  # and starts no listener: the block that reads the service's credentials
-  # and pool must run for the service role alone, or every runner boot
-  # would refuse for the OPUS_SERVICE_KEY it must never see.
-  test "the opus release configures the service's credentials and pool for the service role alone" do
+  # A `mix` boot runs the runtime beside CYFR, and configures it here
+  # through the runtime's own reader; the `cyfr` release runs none. A
+  # runner never reads this file: it is started as a plain VM, or as the
+  # `locus` release, whose runtime file configures nothing for it.
+  test "a mix boot alone configures the runtime, through the runtime's own reader" do
     src = source()
 
-    assert src =~
-             ~S|Opus.Release.role(%{"OPUS_ROLE" => env_str.("OPUS_ROLE", nil)})|,
-           "the role must be read as Opus.Release reads it"
-
-    assert src =~ ~S|opus_boot? = opus_role == :service|
-    assert src =~ ~S|if opus_boot? do|
-    refute src =~ ~S|opus_boot? = release_name in [nil, "opus"]|
+    assert src =~ ~S|if release_name == nil do|
+    assert src =~ ~S|Locus.Runtime.Settings.from_env(getenv, fallback)|
+    assert src =~ ~S|{:ok, runtime} -> config :locus, :runtime, runtime|
+    refute src =~ ~S|"RUNTIME_ROLE"|
+    refute src =~ ~r/runtime_boot\?|runtime_role|cyfr_boot\?/
   end
 
-  # Three releases, two runtime files: the `locus` release is configured by
-  # `config/locus_runtime.exs` alone, so this file skips its CYFR half for
-  # the `opus` release and for nothing else, and names no other release.
-  test "the CYFR half is skipped for the opus release alone" do
+  # Two releases, two runtime files: the `locus` release is configured by
+  # `config/locus_runtime.exs` alone, so this file configures CYFR for
+  # every boot that reads it and names no release.
+  test "the CYFR half is configured for every boot, and no release is named" do
     src = source()
-
-    assert src =~ ~S|cyfr_boot? = release_name != "opus"|
-    assert src =~ ~S|if cyfr_boot? do|
 
     named =
       ~r/release_name\s*(?:==|!=|in|not in)\s*(\[[^\]]*\]|"[^"]*")/
@@ -157,7 +151,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
       |> List.flatten()
       |> Enum.uniq()
 
-    assert named == ["opus"], "runtime.exs names releases other than opus: #{inspect(named)}"
+    assert named == [], "runtime.exs names releases: #{inspect(named)}"
     refute src =~ ~r/builder_boot\?|"builder"/
   end
 
@@ -172,31 +166,28 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     refute src =~ ~S|env_str.("CYFR_LOCUS_BUILDS|
   end
 
-  # The pool's bounds are read through the strict readers, so a set value
-  # that does not parse refuses the boot by name.
-  test "the Opus pool bounds are read strictly" do
+  # The runtime's settings are read by the runtime's own strict reader
+  # (`Locus.Runtime.Settings.from_env/2`), so this file spells none of its
+  # pool's variables, and a set value that does not parse refuses the boot
+  # by name there.
+  test "the runtime's settings are read by its own reader, and its stray names refused" do
     src = source()
 
-    for name <- ~w(OPUS_POOL_SIZE OPUS_IDLE_TTL_MS OPUS_WATCHDOG_GRACE_MS OPUS_RELEASE_GRACE_MS) do
-      assert src =~ ~s|env_bound.("#{name}", |, "#{name} must go through the strict bound reader"
-      refute src =~ ~s|env_int.("#{name}"|, "#{name} must not be read with env_int"
+    for name <- ~w(LOCUS_RUNTIME_KEY LOCUS_RUNTIME_HOST_API_URL LOCUS_RUNTIME_BIND
+                   LOCUS_RUNTIME_PORT LOCUS_RUNTIME_POOL_SIZE LOCUS_RUNTIME_IDLE_TTL_MS
+                   LOCUS_RUNTIME_WATCHDOG_GRACE_MS LOCUS_RUNTIME_RELEASE_GRACE_MS
+                   LOCUS_RUNTIME_MEMORY_BYTES LOCUS_RUNTIME_ATTACH_DIR) do
+      refute src =~ ~s|"#{name}"|, "config/runtime.exs spells the runtime's #{name} itself"
     end
 
-    # The runner's memory bound is a byte count, whose range the bound
-    # reader cannot hold: it is read by the byte reader, in the keeper's range.
-    assert src =~ ~S|runner_memory_bytes: opus_bytes.("OPUS_RUNNER_MEMORY_BYTES")|
-    assert src =~ ~S|Prima.EnvValue.bytes(getenv, key, Opus.Settings.runner_memory_range())|
-    refute src =~ ~S|env_int.("OPUS_RUNNER_MEMORY_BYTES"|
-    refute src =~ ~S|env_bound.("OPUS_RUNNER_MEMORY_BYTES"|
-
-    # The pool is checked against everything this file reads, so the retired
-    # keeper variable is refused from an .env file as from the process.
-    assert src =~ ~S|Opus.Settings.pool(opus_pool, sourced)|
-    assert src =~ ~S|{:error, {:retired, name}} ->|
-    assert src =~ ~S|{:error, {:unknown, names}} ->|
+    # The names are checked against everything this file reads, so a
+    # stray `LOCUS_RUNTIME_*` name is refused from an .env file as from the
+    # process; the container limits compose reads are the roster's.
+    assert src =~ ~S|Locus.Runtime.Settings.unknown_names()|
+    assert src =~ ~S|Kernel.--(Cyfr.Platform.Settings.Roster.compose_only())|
+    assert src =~ ~S|Locus.Runtime.Settings.unknown(stray)|
 
     # The keeper is the channel: nothing here reads a choice of another.
-    refute src =~ ~S|"OPUS_KEEPER"|
     refute src =~ ~S|keeper:|
   end
 
@@ -212,9 +203,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     assert src =~ ~S|roster.read(entry, getenv)|
     assert src =~ ~S|roster.unknown(file_names, Map.keys(System.get_env()))|
 
-    # CYFR_LOG_LEVEL is the one exception: the `opus` release reads it too,
-    # and carries no roster to read it through.
-    for name <- Cyfr.Platform.Settings.Roster.variables() -- ["CYFR_LOG_LEVEL"] do
+    for name <- Cyfr.Platform.Settings.Roster.variables() do
       refute src =~ ~s|"#{name}"|, "config/runtime.exs spells the rostered #{name} itself"
     end
 

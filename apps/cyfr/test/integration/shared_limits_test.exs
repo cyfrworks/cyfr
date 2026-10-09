@@ -5,7 +5,7 @@ defmodule Cyfr.SharedLimitsTest do
   @moduledoc """
   One consent's limits hold across two worker services. The step stub's
   consent allows 10 invocations a minute and 2 concurrent tasks, and its
-  runs are split between the Opus service, which runs the stub for real,
+  runs are split between the runtime, which runs the stub for real,
   and the scripted service, each reached over HTTP: ten invocations are
   admitted between them and the eleventh is refused whichever service it
   was headed for, and two tasks held open, one on each, are the consent's
@@ -32,7 +32,7 @@ defmodule Cyfr.SharedLimitsTest do
   alias Prima.Authority
   alias Crucible.{Attempt, Keys, Rates, Sweeper}
   alias Prima.Slots
-  alias Cyfr.Test.{OpusService, ScriptedWorker}
+  alias Cyfr.Test.{RuntimeService, ScriptedWorker}
   alias Cyfr.Test.TwoServices.Wire
   alias Prima.{WorkerAuth, WorkerWire}
   alias Sanctum.Consent.{Bootstrap}
@@ -46,7 +46,7 @@ defmodule Cyfr.SharedLimitsTest do
   @rate %{requests: 10, window: "1m"}
   @tasks 2
   @lapsed "Execution terminated: runner stopped without cleanup"
-  @local OpusService.service()
+  @local RuntimeService.service()
   @other ScriptedWorker.service()
 
   setup tags do
@@ -139,7 +139,7 @@ defmodule Cyfr.SharedLimitsTest do
     # Neither service was asked to run a refused invocation.
     assert length(ScriptedWorker.calls()) == 5
     assert {:ok, %{attempts: []}} = ScriptedWorker.status()
-    wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
+    wait_until(fn -> RuntimeService.status().attempts == [] end, 10_000)
 
     assert {:ok, 10, 0, _window_ms} =
              Rates.status(Sanctum.Context.actor(ctx), @stub_ref, %{rate_limit: @rate})
@@ -155,12 +155,12 @@ defmodule Cyfr.SharedLimitsTest do
     before = Slots.status(@slots).child_active
     root = root!(ctx, authority)
 
-    on_opus = hold_on_opus!(ctx, authority, root)
+    on_runtime = hold_on_runtime!(ctx, authority, root)
     on_scripted = hold_on_scripted!(ctx, authority, root)
-    assert_held(ctx, authority, [on_opus, on_scripted], before)
+    assert_held(ctx, authority, [on_runtime, on_scripted], before)
 
     # Each service holds one of the two.
-    assert %{attempts: [_one]} = OpusService.status()
+    assert %{attempts: [_one]} = RuntimeService.status()
     assert {:ok, %{attempts: [_one]}} = ScriptedWorker.status()
 
     for service <- [@local, @other] do
@@ -181,10 +181,10 @@ defmodule Cyfr.SharedLimitsTest do
                1
              )
 
-    assert_held(ctx, authority, [on_opus, on_scripted], before)
+    assert_held(ctx, authority, [on_runtime, on_scripted], before)
     assert length(ScriptedWorker.calls()) == 1
 
-    finish!(on_opus)
+    finish!(on_runtime)
     cancel!(ctx, on_scripted)
     assert_held(ctx, authority, [], before)
   end
@@ -200,7 +200,7 @@ defmodule Cyfr.SharedLimitsTest do
     before = Slots.status(@slots).child_active
     root = root!(ctx, authority)
 
-    on_opus = hold_on_opus!(ctx, authority, root)
+    on_runtime = hold_on_runtime!(ctx, authority, root)
     filler = fill_slots!()
 
     # Admitted, charged and waiting: no slot is free for its attempt. What
@@ -225,7 +225,7 @@ defmodule Cyfr.SharedLimitsTest do
     assert {{:error, "Execution cancelled"}, ^queued} = Task.await(waiter, 10_000)
     wait_until(fn -> Attempt.whereis(queued) == nil end, 10_000, "the queued attempt stopped")
     assert %{state: "cancelled", claimed_by: nil} = attempt(ctx, queued)
-    assert_held(ctx, authority, [on_opus], before + filler.held)
+    assert_held(ctx, authority, [on_runtime], before + filler.held)
     assert_slots(%{available: 0, queued: 0})
 
     # The cancel again gives nothing back again, and the next slot freed
@@ -240,7 +240,7 @@ defmodule Cyfr.SharedLimitsTest do
       "the freed slot stayed free"
     )
 
-    assert_held(ctx, authority, [on_opus], before + filler.held - 1)
+    assert_held(ctx, authority, [on_runtime], before + filler.held - 1)
     assert_slots(%{available: 1, queued: 0})
 
     # The scripted service was asked neither to start the task nor to kill
@@ -250,7 +250,7 @@ defmodule Cyfr.SharedLimitsTest do
     assert ScriptedWorker.calls() == []
 
     release_slots!(filler, filler.held - 1)
-    assert_held(ctx, authority, [on_opus], before)
+    assert_held(ctx, authority, [on_runtime], before)
 
     # One more fits, and only one.
     on_scripted = hold_on_scripted!(ctx, authority, root)
@@ -258,9 +258,9 @@ defmodule Cyfr.SharedLimitsTest do
     assert {{:error, {:invoke_denied, :invoke_budget_exhausted}}, _refused} =
              spawn!(ctx, authority, root)
 
-    assert_held(ctx, authority, [on_opus, on_scripted], before)
+    assert_held(ctx, authority, [on_runtime, on_scripted], before)
 
-    finish!(on_opus)
+    finish!(on_runtime)
     cancel!(ctx, on_scripted)
     assert_held(ctx, authority, [], before)
   end
@@ -271,7 +271,7 @@ defmodule Cyfr.SharedLimitsTest do
     before = Slots.status(@slots).child_active
     root = root!(ctx, authority)
 
-    on_opus = hold_on_opus!(ctx, authority, root)
+    on_runtime = hold_on_runtime!(ctx, authority, root)
     filler = fill_slots!()
 
     # Admitted, charged and waiting: no slot is free for its attempt.
@@ -293,7 +293,7 @@ defmodule Cyfr.SharedLimitsTest do
     assert Task.shutdown(waiter, :brutal_kill) == nil
     wait_until(fn -> Attempt.whereis(queued) == nil end, 10_000, "the queued attempt stopped")
     assert %{state: "lapsed", claimed_by: nil} = attempt(ctx, queued)
-    assert_held(ctx, authority, [on_opus], before + filler.held)
+    assert_held(ctx, authority, [on_runtime], before + filler.held)
     assert_slots(%{available: 0, queued: 0})
 
     # The next slot freed is nobody's: the other task's slot, and every
@@ -306,13 +306,13 @@ defmodule Cyfr.SharedLimitsTest do
       "the freed slot stayed free"
     )
 
-    assert_held(ctx, authority, [on_opus], before + filler.held - 1)
+    assert_held(ctx, authority, [on_runtime], before + filler.held - 1)
     assert_slots(%{available: 1, queued: 0})
     assert ScriptedWorker.calls() == []
     assert ScriptedWorker.kills() == []
 
     release_slots!(filler, filler.held - 1)
-    assert_held(ctx, authority, [on_opus], before)
+    assert_held(ctx, authority, [on_runtime], before)
 
     # One more fits, and only one.
     on_scripted = hold_on_scripted!(ctx, authority, root)
@@ -320,9 +320,9 @@ defmodule Cyfr.SharedLimitsTest do
     assert {{:error, {:invoke_denied, :invoke_budget_exhausted}}, _refused} =
              spawn!(ctx, authority, root)
 
-    assert_held(ctx, authority, [on_opus, on_scripted], before)
+    assert_held(ctx, authority, [on_runtime, on_scripted], before)
 
-    finish!(on_opus)
+    finish!(on_runtime)
     cancel!(ctx, on_scripted)
     assert_held(ctx, authority, [], before)
   end
@@ -333,16 +333,16 @@ defmodule Cyfr.SharedLimitsTest do
     before = Slots.status(@slots).child_active
     root = root!(ctx, authority)
 
-    on_opus = hold_on_opus!(ctx, authority, root)
+    on_runtime = hold_on_runtime!(ctx, authority, root)
     on_scripted = hold_on_scripted!(ctx, authority, root)
     scripted_id = on_scripted.id
     assert_receive {:scripted_probe, runner, ^scripted_id}, 10_000
 
-    # The Opus service dies and comes back another boot. Nothing reports its
+    # The runtime dies and comes back another boot. Nothing reports its
     # runner: the attempt's lease lapses, and the sweep ends the task.
-    old_boot = OpusService.boot()
-    refute OpusService.restart!() == old_boot
-    assert %{state: "running", attempt: lapsing} = attempt(ctx, on_opus.id)
+    old_boot = RuntimeService.boot()
+    refute RuntimeService.restart!() == old_boot
+    assert %{state: "running", attempt: lapsing} = attempt(ctx, on_runtime.id)
     past = DateTime.add(DateTime.utc_now(), -1, :second)
 
     assert {:ok, ^past} =
@@ -350,12 +350,12 @@ defmodule Cyfr.SharedLimitsTest do
 
     :ok = Sweeper.sweep()
 
-    assert {{:error, @lapsed}, _id} = Task.await(on_opus.task, 30_000)
-    assert %{state: "lapsed", boot_id: ^old_boot} = attempt(ctx, on_opus.id)
+    assert {{:error, @lapsed}, _id} = Task.await(on_runtime.task, 30_000)
+    assert %{state: "lapsed", boot_id: ^old_boot} = attempt(ctx, on_runtime.id)
     assert_held(ctx, authority, [on_scripted], before)
 
-    # One more fits, and only one: on the Opus service's new boot.
-    again = hold_on_opus!(ctx, authority, root)
+    # One more fits, and only one: on the runtime's new boot.
+    again = hold_on_runtime!(ctx, authority, root)
 
     assert {{:error, {:invoke_denied, :invoke_budget_exhausted}}, _refused} =
              spawn!(ctx, authority, root)
@@ -378,19 +378,19 @@ defmodule Cyfr.SharedLimitsTest do
     before = Slots.status(@slots).child_active
     root = root!(ctx, authority)
 
-    on_opus = hold_on_opus!(ctx, authority, root)
+    on_runtime = hold_on_runtime!(ctx, authority, root)
     on_scripted = hold_on_scripted!(ctx, authority, root)
-    assert_held(ctx, authority, [on_opus, on_scripted], before)
+    assert_held(ctx, authority, [on_runtime, on_scripted], before)
 
     # The completion's answer is lost once CYFR has recorded it, so the
-    # Opus service's runner sends it again.
+    # runtime's runner sends it again.
     plan!(:complete, [:forward_then_drop])
-    finish!(on_opus)
+    finish!(on_runtime)
     wait_until(fn -> seen(:complete) == [:forward_then_drop, :forward] end)
     assert_held(ctx, authority, [on_scripted], before)
 
     # One more fits, and only one.
-    again = hold_on_opus!(ctx, authority, root)
+    again = hold_on_runtime!(ctx, authority, root)
 
     assert {{:error, {:invoke_denied, :invoke_budget_exhausted}}, _refused} =
              spawn!(ctx, authority, root)
@@ -433,7 +433,7 @@ defmodule Cyfr.SharedLimitsTest do
   defp spawn!(ctx, authority, root, id \\ Prima.UUID7.execution_id()),
     do: spawn_child!(ctx, authority, root, @stub_ref, chat(), execution_id: id)
 
-  defp route!(@local), do: route!(:opus, @stub)
+  defp route!(@local), do: route!(:runtime, @stub)
   defp route!(@other), do: route!(:scripted, @stub)
 
   # Reach the scripted service through `wire` until the runs are routed
@@ -449,9 +449,9 @@ defmodule Cyfr.SharedLimitsTest do
     )
   end
 
-  # A task the Opus service runs, held at the first delta its guest
+  # A task the runtime runs, held at the first delta its guest
   # pushes: attached, its guest run, nothing of it written yet.
-  defp hold_on_opus!(ctx, authority, root) do
+  defp hold_on_runtime!(ctx, authority, root) do
     id = Prima.UUID7.execution_id()
     hold!(:push_deltas, id, once: true)
     route!(@local)
@@ -477,7 +477,7 @@ defmodule Cyfr.SharedLimitsTest do
     %{id: id, task: task}
   end
 
-  # Let a task held on the Opus service run to its end.
+  # Let a task held on the runtime run to its end.
   defp finish!(%{id: id, task: task, guest: guest}) do
     release!(guest)
     assert {{:ok, %{status: :completed}}, ^id} = Task.await(task, 60_000)
@@ -615,7 +615,7 @@ defmodule Cyfr.SharedLimitsTest do
     {:ok, header} = WorkerAuth.report_header(WorkerAuth.dispatch_key(worker_key), fields, body)
 
     {:ok, %Req.Response{status: status, body: answer}} =
-      Req.post(OpusService.host_url() <> WorkerWire.host_route(:runner_exited),
+      Req.post(RuntimeService.host_url() <> WorkerWire.host_route(:runner_exited),
         headers: [{WorkerWire.auth_header(), header}, {"content-type", "application/json"}],
         body: body,
         retry: false,

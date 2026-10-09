@@ -5,8 +5,9 @@ defmodule Prima.MacEnvelope do
   @moduledoc """
   The construction two parties sharing a 32-byte root secret use to
   authenticate messages and seal values to each other.
+  `Prima.BuilderProtocol` (CYFR and the Locus builds service),
   `Prima.LocusBackends` (CYFR and the Locus backends service) and
-  `Prima.WorkerAuth` (CYFR and its execution workers) are built on it.
+  `Prima.WorkerAuth` (CYFR and the Locus runtime) are built on it.
 
     * **Keys** are HMAC-SHA256 of the root over a label, or over a label
       followed by field values one per line (`derive/2`, `derive/4`), so
@@ -43,13 +44,14 @@ defmodule Prima.MacEnvelope do
   ## Names
 
   Every protocol built on the envelope signs under one spelling of each
-  name, held here and nowhere else: the MAC domain of each island
+  name, held here and nowhere else: the MAC domain of the island
   (`domain/1`), each service's name within it (`service/1`) and the label
   its keys derive over (`label/1`), and the HTTP header a signature travels
-  in (`auth_header/0`). `Prima.BuilderProtocol`, `Prima.LocusBackends` and
-  `Prima.WorkerWire` read them; the vector files under `tests/fixtures/`
-  carry them to the Go and Python sides, and `Cyfr.CrossLanguageDriftTest`
-  holds each value to every file that spells it.
+  in (`auth_header/0`). `Prima.BuilderProtocol`, `Prima.LocusBackends`,
+  `Prima.WorkerAuth` and `Prima.WorkerWire` read them; the vector files
+  under `tests/fixtures/` carry them to the Go and Python sides, and
+  `Cyfr.CrossLanguageDriftTest` holds each value to every file that spells
+  it.
   """
 
   @enforce_keys [:prefix, :kind, :fields]
@@ -66,11 +68,11 @@ defmodule Prima.MacEnvelope do
           body_hash_in_header: boolean()
         }
 
-  @typedoc "An island whose protocols sign under a MAC domain of their own."
-  @type island :: :opus | :locus
+  @typedoc "The island whose protocols sign under a MAC domain of their own."
+  @type island :: :locus
 
   @typedoc "A service signing under its island's domain."
-  @type service :: :builds | :backends | :worker
+  @type service :: :builds | :backends | :runtime
 
   @typedoc "A message's fields by name: strings and non-negative integers."
   @type message :: %{optional(atom()) => String.t() | non_neg_integer()}
@@ -87,13 +89,13 @@ defmodule Prima.MacEnvelope do
   @body_hash ~r/\A[0-9a-f]{64}\z/
 
   # A domain names an island and the version of its protocols, so no key or
-  # header of one island verifies on the other; a service's label,
+  # header signed under it verifies under another; a service's label,
   # `<domain>/<service>`, keeps each service's keys apart within its island.
-  @domains %{opus: "cyfr-opus/v1", locus: "cyfr-locus/v1"}
+  @domains %{locus: "cyfr-locus/v1"}
   @services %{
     builds: {:locus, "builds"},
     backends: {:locus, "backends"},
-    worker: {:opus, "worker"}
+    runtime: {:locus, "runtime"}
   }
   @auth_header "x-cyfr-auth"
 
@@ -113,7 +115,7 @@ defmodule Prima.MacEnvelope do
     domain(island) <> "/" <> name
   end
 
-  @doc "The HTTP header a signature travels in on every wire of either island, lowercase."
+  @doc "The HTTP header a signature travels in on every wire of the island, lowercase."
   @spec auth_header() :: String.t()
   def auth_header, do: @auth_header
 

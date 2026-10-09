@@ -1,17 +1,17 @@
 # CYFR self-hosted stack:
 #   cyfr        — the one endpoint (:4000): Prism (chat + console), API, MCP,
-#                 tinctures; its host API (:4300, the worker network only)
-#                 takes the execution worker's host calls
+#                 tinctures; its host API (:4300, the locus-runtime network
+#                 only) takes the runtime's host calls
 #   locus-backends — runs the stdio/npx MCP servers CYFR registers with
 #                 transport `stdio`, one owner per server row, each backend
 #                 under a uid and a memory bound of its own. Every request
 #                 between cyfr and the service is signed under
 #                 CYFR_LOCUS_BACKENDS_KEY; the service keeps no state.
-#   opus        — the execution worker: runs WASM components as CYFR
-#                 assigns them, on the internal `worker` network. Every
-#                 request between cyfr and opus is signed under the worker
-#                 key CYFR derives for OPUS_SERVICE_ID; opus holds no
-#                 tenant state. It runs under keeper.seccomp.json,
+#   locus-runtime — the runtime: runs WASM components as CYFR assigns
+#                 them, on the `locus-runtime` network. Every request
+#                 between cyfr and the runtime is signed under the worker
+#                 key CYFR derives for LOCUS_RUNTIME_SERVICE_ID; the runtime
+#                 holds no tenant state. It runs under keeper.seccomp.json,
 #                 shipped beside this file, on a host that allows
 #                 unprivileged user namespaces (see the service).
 #   locus-builds — the builder: compiles components and tinctures, each
@@ -26,7 +26,7 @@
 # `cyfr init` writes this file (and Caddyfile, keeper.seccomp.json + .env)
 # into a fresh project dir; from a source checkout, `cp .env.example .env`
 # and `cp apps/locus/keeper/seccomp/keeper.json keeper.seccomp.json` instead. Then:
-#   docker compose --profile locus-builds up -d   # cyfr + locus-backends + opus + locus-builds
+#   docker compose --profile locus-builds up -d   # cyfr + locus-backends + locus-runtime + locus-builds
 #   docker compose --profile locus-builds --profile tls up -d   # also Caddy for TLS
 # `cyfr up` selects each profile from .env: `locus-builds` when
 # CYFR_LOCUS_BUILDS_URL names that service, and `tls` when
@@ -41,8 +41,8 @@ services:
     image: ghcr.io/cyfrworks/cyfr:latest
     expose:
       - "${CYFR_PORT:-4000}"
-      # The host API, reached by opus over the worker network; never
-      # published.
+      # The host API, reached by locus-runtime over the locus-runtime
+      # network; never published.
       - "${CYFR_HOST_API_PORT:-4300}"
     ports:
       # Loopback-only: the Codex CLI and the browser talk to
@@ -72,18 +72,19 @@ services:
       # this and CYFR_LOCUS_BACKENDS_KEY, which cyfr reads from .env
       # (env_file above).
       - CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-http://locus-backends:4101}
-      # The execution worker cyfr dispatches runs to, and where it listens
-      # for the worker's host calls: every interface, since the container is
-      # reached over the worker network alone. CYFR_OPUS_KEY, the root
-      # the worker's key derives from, comes from .env.
-      - CYFR_OPUS_WORKERS=${CYFR_OPUS_WORKERS:-wrk_opus=http://opus:4200}
+      # The runtime cyfr dispatches runs to, and where it listens for the
+      # runtime's host calls: every interface, since the container is
+      # reached over the locus-runtime network alone.
+      # CYFR_LOCUS_RUNTIME_ROOT, the root the runtime's key derives from,
+      # comes from .env.
+      - CYFR_LOCUS_RUNTIME_WORKERS=${CYFR_LOCUS_RUNTIME_WORKERS:-wrk_locus=http://locus-runtime:4200}
       - CYFR_HOST_API_BIND=0.0.0.0
       - CYFR_HOST_API_PORT=${CYFR_HOST_API_PORT:-4300}
     networks:
       - default
       - locus-backends
       - locus-builds
-      - worker
+      - locus-runtime
     restart: unless-stopped
     # The endpoints drain connections for up to 30s on shutdown; compose's
     # default 10s grace would SIGKILL mid-drain.
@@ -119,9 +120,9 @@ services:
     profiles: ["locus-builds"]
     expose:
       - "4100"
-    # Builder-only settings from .env.locus, every one a LOCUS_BUILDS_*
-    # name. The builder never sees the rest of .env: not the keyring, not
-    # the database, not the worker root, not the backends key, and refuses
+    # The release's settings from .env.locus, one file for every role. The
+    # builder never sees the rest of .env: not the keyring, not the
+    # database, not the runtime's root, not the backends key, and refuses
     # to start with any of them in its environment.
     env_file:
       - path: .env.locus
@@ -133,7 +134,7 @@ services:
       # start (and restart-loops here).
       - LOCUS_BUILDS_KEY=${CYFR_LOCUS_BUILDS_KEY:-}
     # Only cyfr can reach the builder: it sits on its own network, which
-    # cyfr also joins; locus-backends, opus and caddy never see port 4100. The
+    # cyfr also joins; locus-backends, locus-runtime and caddy never see port 4100. The
     # network is not `internal` — cargo and npm need crates.io and the
     # registry — so the isolation is who is attached, not egress. This is
     # the container's only network, so listening on every interface is
@@ -200,40 +201,48 @@ services:
           memory: ${LOCUS_BUILDS_MEMORY_LIMIT:-4G}
           cpus: "${LOCUS_BUILDS_CPU_LIMIT:-2}"
 
-  # The execution worker. cyfr reaches it at http://opus:4200 (CYFR_OPUS_WORKERS)
-  # and it reaches cyfr's host API at OPUS_HOST_URL; both sit on the worker
-  # network, which nothing else joins. The network is the service's alone:
-  # a runner has no interface on it or on any other, and its host calls and
-  # pinned fetches leave through its relay to the service, which posts and
-  # connects for it.
-  opus:
-    container_name: cyfr-opus
-    image: ghcr.io/cyfrworks/cyfr-opus:latest
+  # The runtime: the same image as locus-builds, holding the runtime's key
+  # and the runner pool, and no other key. cyfr reaches it at
+  # http://locus-runtime:4200 (CYFR_LOCUS_RUNTIME_WORKERS) and it reaches
+  # cyfr's host API at LOCUS_RUNTIME_HOST_API_URL; both sit on the
+  # locus-runtime network, which nothing else joins. The network is the
+  # service's alone: a runner has no interface on it or on any other, and
+  # its host calls and pinned fetches leave through its relay to the
+  # service, which posts and connects for it.
+  locus-runtime:
+    container_name: cyfr-locus-runtime
+    # Pulled as published; a source checkout builds it with
+    # `docker compose build locus-runtime`.
+    image: ghcr.io/cyfrworks/cyfr-locus:latest
     build:
       context: .
-      dockerfile: Dockerfile.opus
+      dockerfile: Dockerfile.locus
     expose:
       - "4200"
-    # Worker-only settings from .env.opus; OPUS_SERVICE_KEY comes from .env
-    # below. The worker never sees the rest of .env: not the worker root,
-    # not the keyring, not the database, and refuses to start with any of
-    # them in its environment.
+    # The image's entrypoint serves builds; this service runs the isolated
+    # runner pool instead: 8 uids, each runner under one of its own.
+    entrypoint: ["cyfr-locus", "serve", "--pool", "runner:30101-30108:netns", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+    # The release's settings from .env.locus, one file for every role;
+    # LOCUS_RUNTIME_KEY comes from .env below. The runtime never sees the
+    # rest of .env: not the runtime's root, not the keyring, not the
+    # database, and refuses to start with any of them in its environment,
+    # or with the builds or backends key beside its own.
     env_file:
-      - path: .env.opus
+      - path: .env.locus
         required: false
     environment:
-      - OPUS_SERVICE_ID=${OPUS_SERVICE_ID:-wrk_opus}
-      - OPUS_SERVICE_KEY=${OPUS_SERVICE_KEY:-}
-      - OPUS_HOST_URL=${OPUS_HOST_URL:-http://cyfr:${CYFR_HOST_API_PORT:-4300}}
-      - OPUS_BIND=0.0.0.0
-      - OPUS_PORT=4200
+      - LOCUS_RUNTIME_SERVICE_ID=${LOCUS_RUNTIME_SERVICE_ID:-wrk_locus}
+      - LOCUS_RUNTIME_KEY=${LOCUS_RUNTIME_KEY:-}
+      - LOCUS_RUNTIME_HOST_API_URL=${LOCUS_RUNTIME_HOST_API_URL:-http://cyfr:${CYFR_HOST_API_PORT:-4300}}
+      - LOCUS_RUNTIME_BIND=0.0.0.0
+      - LOCUS_RUNTIME_PORT=4200
     networks:
-      - worker
+      - locus-runtime
     # docker-init is PID 1 and forwards stop signals to cyfr-locus, the
     # child subreaper of every runner process.
     init: true
     # cyfr-locus refuses to start with any capability other than these: it
-    # starts the opus release and each runner under their own uids and
+    # starts the locus release and each runner under their own uids and
     # signals their processes. The release and every runner run with none.
     cap_drop:
       - ALL
@@ -268,14 +277,14 @@ services:
     # uid creates its own 0700 home, where its VM keeps the release's
     # temporary files; mode 1733 lets it create one without listing the
     # others, and the runner runs the release from there, so it allows
-    # exec. Its size counts against the memory limit below. /run/opus holds
+    # exec. Its size counts against the memory limit below. /run/locus holds
     # the service's temporary files and the socket runners' relays attach
     # to.
     read_only: true
     ipc: none
     tmpfs:
-      - /var/lib/opus/homes:mode=1733,exec,size=256m
-      - /run/opus:uid=10002,gid=10002,mode=0700,size=16m
+      - /var/lib/locus/homes:mode=1733,exec,size=256m
+      - /run/locus:uid=10001,gid=10001,mode=0700,size=16m
     restart: unless-stopped
     # Running attempts close or are reported on shutdown; compose's default
     # 10s grace would SIGKILL mid-report.
@@ -285,23 +294,32 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    # Liveness: the worker listener refuses an unsigned status request with
+    # 401, which it answers only once the worker service holds its
+    # credentials; in place of the image's builds probe.
+    healthcheck:
+      test: ["CMD-SHELL", "[ \"$$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:4200/worker/v1/status)\" = \"401\" ] || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
     deploy:
       resources:
         limits:
           # Every runner has a memory bound of its own
-          # (OPUS_RUNNER_MEMORY_BYTES, 384 MiB): its VM, every guest's
+          # (LOCUS_RUNTIME_MEMORY_BYTES, 384 MiB): its VM, every guest's
           # linear memory, its home's tmpfs pages and the kernel memory
           # charged to it, together, and a runner that reaches it is ended
           # there alone. This limit holds every runner uid the image has (8)
           # at that bound and the service beside them: 8 x 384 MiB + 1 GiB,
-          # where the service (cyfr-locus and the opus release) peaked at
+          # where the service (cyfr-locus and the locus release) peaked at
           # 192-206 MiB serving the seed components
-          # (tests/worker-image/memory.py --measure). Raise it with the
+          # (tests/locus-runtime-image/memory.py --measure). Raise it with the
           # bound (.env.example has the arithmetic).
-          memory: ${OPUS_MEMORY_LIMIT:-4G}
+          memory: ${LOCUS_RUNTIME_MEMORY_LIMIT:-4G}
           # Caps aggregate damage from WASM components that never yield
           # (a killed tight-loop leaks a spinning native thread).
-          cpus: "${OPUS_CPU_LIMIT:-4}"
+          cpus: "${LOCUS_RUNTIME_CPU_LIMIT:-4}"
 
   # The backends service: the same image as locus-builds, holding the
   # backends key and the backend pool in place of the builds key and the
@@ -322,9 +340,9 @@ services:
     # The image's entrypoint serves builds; this service runs the backend
     # pool instead: 32 uids, each backend under one of its own.
     entrypoint: ["cyfr-locus", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
-    # Backends-only settings from .env.locus, every one a LOCUS_BACKENDS_*
-    # name. The service never sees the rest of .env: not the keyring, not
-    # the database, not the worker root, not the builds key, and refuses to
+    # The release's settings from .env.locus, one file for every role. The
+    # service never sees the rest of .env: not the keyring, not the
+    # database, not the runtime's root, not the builds key, and refuses to
     # start with any control-plane variable in its environment. Backends
     # receive only the environment their server row defines.
     env_file:
@@ -338,7 +356,7 @@ services:
       # key the service refuses to start (and restart-loops here).
       - LOCUS_BACKENDS_KEY=${CYFR_LOCUS_BACKENDS_KEY:-}
     # Only cyfr can reach the service: it sits on its own network, which
-    # cyfr also joins; locus-builds, opus and caddy never see port 4101.
+    # cyfr also joins; locus-builds, locus-runtime and caddy never see port 4101.
     # The network is not `internal` — `npx` needs the registry and a
     # backend its upstream API — so the isolation is who is attached, not
     # egress. This is the container's only network, so listening on every
@@ -458,12 +476,12 @@ networks:
   locus-backends: {}
   # cyfr <-> locus-builds only (see the locus-builds service).
   locus-builds: {}
-  # cyfr <-> opus only: the Locus services and caddy never see port
-  # 4200, and no runner is on it (see the opus service). The network is
-  # not `internal` — a guest's consented HTTP egress leaves from the worker
-  # service, which connects to the pinned address for it — so the isolation
-  # is who is attached.
-  worker: {}
+  # cyfr <-> locus-runtime only: the other Locus services and caddy never
+  # see port 4200, and no runner is on it (see the locus-runtime service).
+  # The network is not `internal` — a guest's consented HTTP egress leaves
+  # from the worker service, which connects to the pinned address for it —
+  # so the isolation is who is attached.
+  locus-runtime: {}
 
 volumes:
   caddy_data:

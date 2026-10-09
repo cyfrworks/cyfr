@@ -4,7 +4,7 @@
 defmodule Prima.RunnerControlTest do
   @moduledoc """
   The runner control codec reproduces the shared vectors
-  (`tests/fixtures/runner_control.json`, which Opus's runner and service
+  (`tests/fixtures/runner_control.json`, which the runtime's runner and service
   suite reads too): every valid frame encodes to exactly its line and decodes back to
   its message, with or without its newline, and every invalid line is
   refused with its reason. An `assign` carries what `start` was given,
@@ -33,6 +33,8 @@ defmodule Prima.RunnerControlTest do
   @exec "exec_01a09fee-07cc-791f-a598-e7f90608c9e2"
   @runner "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b"
 
+  # The attempt keys are the worker auth vectors' own, so those vectors stay
+  # their one copy.
   @keys %{
     attempt: %{
       athanor_id: "ath_01a09fee-045b-770b-b745-a62792bb8798",
@@ -42,14 +44,8 @@ defmodule Prima.RunnerControlTest do
       generation: 7,
       service: "wrk_4f3c2a1e9d8b7c6a"
     },
-    call:
-      Base.decode16!("3cb8492ec8c02995ea05e6baaaf6fd9fbee331348c98737e0e0efee507405c6d",
-        case: :lower
-      ),
-    seal:
-      Base.decode16!("573d6c336e49b5565f81ab9d5e029854bf3e2c7393cdb8fad2e3a07b5f962237",
-        case: :lower
-      )
+    call: Base.decode16!(@worker_auth["keys"]["attempt_call_hex"], case: :lower),
+    seal: Base.decode16!(@worker_auth["keys"]["attempt_seal_hex"], case: :lower)
   }
 
   defp line(%{"line" => line}), do: line

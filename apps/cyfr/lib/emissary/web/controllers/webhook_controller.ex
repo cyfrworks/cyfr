@@ -199,8 +199,8 @@ defmodule Emissary.Web.WebhookController do
     # not inherit it. Same idiom as `CyfrWeb.Plugs.Authenticate`.
     logger_metadata = Prima.LoggerContext.capture()
 
-    # The release starts :cyfr (binding this endpoint) before :opus brings
-    # up the execution machinery — refuse the request cleanly in that
+    # The release starts :cyfr (binding this endpoint) before the execution
+    # machinery is up — refuse the request cleanly in that
     # window instead of accepting work that noproc-crashes in the task.
     spawn_result =
       if Crucible.available?() do

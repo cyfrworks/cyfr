@@ -8,9 +8,9 @@ defmodule Cyfr.BoundariesTest do
   Eight roster tests scanned this tree before this one, each its own way:
   `namespace_direction`, `web_direction`, `sanctum_surfaces`,
   `emissary_surface` and `layer_independence` under `apps/cyfr/test/cyfr`,
-  `compendium/reverse_surface`, and the two host-surface suites in
-  `apps/opus` and `apps/locus`. Every boundary they held is a row of the
-  catalog now, and this file is what reads the rows.
+  `compendium/reverse_surface`, and the two host-surface suites of the
+  island's apps. Every boundary they held is a row of the catalog now, and
+  this file is what reads the rows.
 
   Three rules govern what is here, and they are why it is longer than a
   roster:
@@ -2234,48 +2234,49 @@ defmodule Cyfr.BoundariesTest do
 
              The umbrella loads every suite into one VM, so the second definition
              replaces the first and which code each ran against follows app
-             order. Two suites both defined `Opus.WorkerServiceTest` and it stood
+             order. Two suites both defined `Locus.Runtime.WorkerServiceTest` and it stood
              for four slices. A module name is one authoritative definition.
              """
     end
 
-    test "a CYFR test names an Opus module only where the catalog says it may" do
-      rostered = Boundaries.opus_named_by_cyfr_tests()
+    test "a CYFR test names a runtime module only where the catalog says it may" do
+      rostered = Boundaries.runtime_named_by_cyfr_tests()
 
       offenders =
         for {path, lines} <- scan("apps/cyfr/test/**/*.{ex,exs}"),
             not Enum.any?(Map.keys(rostered), &covers?(&1, path)),
             {line, n} <- lines,
-            line =~ ~r/\bOpus\.[A-Z]/,
+            line =~ ~r/\bLocus\.Runtime\b/,
             do: "#{path}:#{n}: #{String.trim(line)}"
 
       assert offenders == [],
              """
-             A CYFR test names an Opus module outside the wiring suite:
+             A CYFR test names a `Locus.Runtime` module outside the wiring suite:
 
              #{Enum.join(offenders, "\n")}
 
-             `apps/cyfr/mix.exs` declares no dependency on `opus` and
-             `apps/cyfr/lib` names no Opus module — that is the production
+             `apps/cyfr/mix.exs` declares no dependency on `locus` and
+             `apps/cyfr/lib` names no Locus module — that is the production
              boundary, and it is checked above. The suite is another matter: the
              umbrella loads both applications into one VM, and the integration
              suite's job is CYFR against a real worker service. So a CYFR test
-             MAY name an Opus module, from `apps/cyfr/test/integration/` and the
+             MAY name a runtime module, from `apps/cyfr/test/integration/` and the
              support that starts it, and everywhere else by a row in
-             `Cyfr.Boundaries.opus_named_by_cyfr_tests/0` saying what it needs.
+             `Cyfr.Boundaries.runtime_named_by_cyfr_tests/0` saying what it needs.
              """
     end
 
-    test "every row of that roster still names a file that names Opus" do
+    test "every row of that roster still names a file that names the runtime" do
       stale =
-        for {pattern, _reason} <- Boundaries.opus_named_by_cyfr_tests(),
+        for {pattern, _reason} <- Boundaries.runtime_named_by_cyfr_tests(),
             not Enum.any?(scan("apps/cyfr/test/**/*.{ex,exs}"), fn {path, lines} ->
-              covers?(pattern, path) and Enum.any?(lines, &(elem(&1, 0) =~ ~r/\bOpus\.[A-Z]/))
+              covers?(pattern, path) and
+                Enum.any?(lines, &(elem(&1, 0) =~ ~r/\bLocus\.Runtime\b/))
             end),
             do: pattern
 
       assert stale == [],
-             "these rows name no file that names Opus any more: #{inspect(stale)}"
+             "these rows name no file that names the runtime any more: #{inspect(stale)}"
     end
 
     test "the builder's suite names nothing of the control plane" do

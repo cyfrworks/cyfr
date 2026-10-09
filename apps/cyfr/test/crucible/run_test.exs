@@ -3,7 +3,7 @@
 
 defmodule Crucible.RunTest do
   @moduledoc """
-  A root run through `Crucible` on the opus worker service, and the
+  A root run through `Crucible` on the runtime's worker service, and the
   records it leaves: a run that fails is recorded failed, an unconsented or
   empty reference runs nothing, and a finished run cannot be cancelled.
   """
@@ -53,7 +53,7 @@ defmodule Crucible.RunTest do
     # Every execution roots under a consent: seed the in-memory source
     # with an owner profile whose blob is the policy for the test node.
     profile = %{
-      id: "prof-opus-test",
+      id: "prof-runtime-test",
       kind: :owner,
       source_ref: @test_node,
       label: "default",
@@ -62,13 +62,13 @@ defmodule Crucible.RunTest do
 
     :ok =
       ConsentFixtures.seed_head!(ctx, profile, %{
-        id: "consent-opus-test",
+        id: "consent-runtime-test",
         revision: 1,
         scope: :versionless,
         pinned_version: "",
         invoke_mode: :open_inert,
-        shape_digest: "sha256:shape-opus-test",
-        commit_digest: "sha256:commit-opus-test",
+        shape_digest: "sha256:shape-runtime-test",
+        commit_digest: "sha256:commit-runtime-test",
         resolved_policy:
           Jason.encode!(%{
             "canonical" => "jcs-1",

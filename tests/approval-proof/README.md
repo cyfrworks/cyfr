@@ -290,10 +290,10 @@ in the tree.
 
 | Claim | Test file | Test | Owner |
 |---|---|---|---|
-| E1: real own/provided/instance attached requests reach only the admitted destination, with current instance policy enforced | `apps/cyfr/test/integration/opus/attached_fetch_test.exs` | "own and provided connections reach the pinned upstream without entering the runner"; "destination and egress refusals contact no upstream"; "any admits a consented custom component only within its destination and egress"; "tightening to shipped refuses the next custom component request before claim or upstream contact" | K.K5 |
-| E5: named account reaches an actually executed child | `apps/cyfr/test/integration/opus/formula_handler_test.exs` | "a real formula runs two named-account children with distinct upstream credentials" | A.A2 |
+| E1: real own/provided/instance attached requests reach only the admitted destination, with current instance policy enforced | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs` | "own and provided connections reach the pinned upstream without entering the runner"; "destination and egress refusals contact no upstream"; "any admits a consented custom component only within its destination and egress"; "tightening to shipped refuses the next custom component request before claim or upstream contact" | K.K5 |
+| E5: named account reaches an actually executed child | `apps/cyfr/test/integration/runtime/formula_handler_test.exs` | "a real formula runs two named-account children with distinct upstream credentials" | A.A2 |
 | E6: a new grant cannot widen the live turn | `apps/cyfr/test/aqua/loop/loop_test.exs` | "a named-account grant leaves the running turn pinned and only a new turn uses it" | A.A2b |
-| E7: once, expiry, scheduled/webhook fire and revocation at use | `apps/cyfr/test/integration/opus/attached_fetch_test.exs`; `apps/cyfr/test/crucible/schedules/scheduler_test.exs`; `apps/cyfr/test/integration/webhook_flow_test.exs` | "once expiry and revocation refuse subsequent roots before an upstream request"; "a scheduled attached request succeeds before expiry and is refused after it"; "a webhook attached request succeeds before expiry and is refused after it" | K.K5 |
+| E7: once, expiry, scheduled/webhook fire and revocation at use | `apps/cyfr/test/integration/runtime/attached_fetch_test.exs`; `apps/cyfr/test/crucible/schedules/scheduler_test.exs`; `apps/cyfr/test/integration/webhook_flow_test.exs` | "once expiry and revocation refuse subsequent roots before an upstream request"; "a scheduled attached request succeeds before expiry and is refused after it"; "a webhook attached request succeeds before expiry and is refused after it" | K.K5 |
 | E8: external definitions cannot redirect material; disclosed stdio is explicit | `apps/cyfr/test/emissary/external/provider_test.exs`; `apps/cyfr/test/emissary/external/backends_test.exs` | "an external definition cannot send an entry outside its destination"; "stdio refuses an attach-only entry before starting a backend" | K.K1 |
 
 E1 shows the POST a GET-only grant refuses; this proof shows the committed
@@ -308,7 +308,7 @@ The unchanged shipped model artifact → production
 peers); `Crucible.Host.Egress.pin/3` has a resolver option which the actual
 host never passes (`apps/cyfr/lib/crucible/host/egress.ex:94`). The
 existing suites found in `seed_model_catalysts_test.exs`,
-`model_contract_test.exs`, `TwoServices`, `tests/worker-image/` and
+`model_contract_test.exs`, `TwoServices`, `tests/locus-runtime-image/` and
 `Sanctum.Test.ResolverFixture` do not provide an end-to-end local
 replacement for that production path. E12 exercises the shipped artifact
 with a scripted host; E1/E3 exercise production attachment with controlled

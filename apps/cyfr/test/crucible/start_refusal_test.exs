@@ -14,10 +14,10 @@ defmodule Crucible.StartRefusalTest do
   `Cyfr.Test.ScriptedWorkerTest` and `Cyfr.TwoWorkersTest`.)
 
   The worker service is a stub listener that answers `status` as a
-  refusing Opus service does and `start` as the case needs; the sentence
-  is the one Opus's keeper client gives (`Opus.Keeper.Channel.refusal/1`),
-  which Opus's own suite shows its listener answering a start with
-  (`Opus.WorkerServicePoolTest`).
+  refusing runtime does and `start` as the case needs; the sentence
+  is the one the runtime's keeper client gives (`Locus.Runtime.Keeper.Channel.refusal/1`),
+  which the runtime's own suite shows its listener answering a start with
+  (`Locus.Runtime.WorkerServicePoolTest`).
   """
 
   use ExUnit.Case, async: false
@@ -26,7 +26,7 @@ defmodule Crucible.StartRefusalTest do
   alias Prima.Authority.Blob
   alias Prima.WorkerWire
 
-  @compile {:no_warn_undefined, [Opus.Keeper.Channel]}
+  @compile {:no_warn_undefined, [Locus.Runtime.Keeper.Channel]}
 
   @service "wrk_refusing"
   @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
@@ -95,7 +95,7 @@ defmodule Crucible.StartRefusalTest do
         description: "A reagent no worker service starts"
       })
 
-    {:ok, ctx: ctx, refusal: Opus.Keeper.Channel.refusal(:memory_unavailable)}
+    {:ok, ctx: ctx, refusal: Locus.Runtime.Keeper.Channel.refusal(:memory_unavailable)}
   end
 
   defp serve!(start, refusal) do
