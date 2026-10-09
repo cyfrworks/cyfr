@@ -19,6 +19,98 @@ defmodule Emissary.Web.TinctureControllerTest do
     )
   end
 
+  # A version written straight into the registry's storage, past the
+  # publish check, with `files` beside its manifest and an active public
+  # profile written as a commit would write one.
+  defp public_version!(name, tincture, files) do
+    manifest = %{
+      "name" => name,
+      "type" => "tincture",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "tincture" => tincture
+    }
+
+    stored_version!(name, Jason.encode!(manifest), files)
+  end
+
+  # The same, with the row's manifest column stored as it is given: valid
+  # JSON, JSON that is no object, text that is not JSON, or none at all.
+  defp stored_version!(name, stored, files) do
+    ctx = Sanctum.TestContext.local()
+    dir = tincture_dir(name)
+    File.mkdir_p!(dir)
+    File.write!(Path.join(dir, "cyfr-manifest.json"), stored || "")
+    for {file, bytes} <- files, do: File.write!(Path.join(dir, file), bytes)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, _} =
+      Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
+        id: "test_#{name}_#{:rand.uniform(1_000_000)}",
+        name: name,
+        version: "1.0.0",
+        component_type: "tincture",
+        description: name,
+        tags: "[]",
+        digest: digest(name),
+        release_digest: release_digest(name),
+        size: 100,
+        exports: "[]",
+        manifest: stored,
+        publisher: "local",
+        publisher_id: "local|local|testns",
+        source: Compendium.Source.filesystem(),
+        signature_verified: false,
+        inserted_at: now,
+        updated_at: now
+      })
+
+    {:ok, _} =
+      Arca.ProfileStorage.put(%{
+        id: "prof_#{name}_#{:rand.uniform(1_000_000)}",
+        athanor_id: ctx.athanor_id,
+        source_ref: "tincture:local.#{name}",
+        kind: "public",
+        label: "public",
+        status: "active"
+      })
+
+    :ok
+  end
+
+  # A version's manifest column as stored when it does not decode to a JSON
+  # object: text that is not JSON, JSON that is no object, and none at all.
+  @undecodable %{
+    "bad-json" => "{\"name\": \"bad-json\",",
+    "list-json" => "[]",
+    "no-manifest" => nil
+  }
+  @undecodable_files [
+    {"index.html", "<html><head></head><body>Page</body></html>"},
+    {"app.js", "console.log('app')"},
+    {"style.css", "body { margin: 0; }"}
+  ]
+
+  defp undecodable_versions! do
+    for {name, stored} <- @undecodable, do: stored_version!(name, stored, @undecodable_files)
+    Map.keys(@undecodable)
+  end
+
+  # Each of `paths` under `name`'s address answers exactly as the same
+  # request under a tincture that does not exist.
+  defp assert_not_public(name, paths) do
+    for path <- paths do
+      served = get(build_conn(), "/t/test/local/#{name}#{path}")
+      absent = get(build_conn(), "/t/test/local/nonexistent#{path}")
+      assert json_response(absent, 404)["code"] == "not_found"
+
+      assert {name, path, served.status, get_resp_header(served, "content-type"),
+              served.resp_body} ==
+               {name, path, absent.status, get_resp_header(absent, "content-type"),
+                absent.resp_body}
+    end
+  end
+
   setup do
     base = Path.join(System.tmp_dir!(), "tincture_ctrl_#{:rand.uniform(1_000_000)}")
     original = Application.get_env(:arca, :base_path)
@@ -241,6 +333,12 @@ defmodule Emissary.Web.TinctureControllerTest do
   # ── Public tincture (no auth needed) ─────────────────────────────
 
   describe "public tincture — unauthenticated" do
+    test "a version whose stored manifest does not decode is not public" do
+      for name <- undecodable_versions!() do
+        assert_not_public(name, ["", "/index.html", "/app.js", "/style.css"])
+      end
+    end
+
     test "serves index.html without authentication", %{conn: conn} do
       conn = get(conn, "/t/test/local/pub-dash")
       assert conn.status == 200
@@ -351,6 +449,66 @@ defmodule Emissary.Web.TinctureControllerTest do
       assert conn.status == 404
     end
 
+    test "a canvas version is never served on the public route, even with a public profile" do
+      # A public profile written as a commit would write one, which no
+      # staging mints for a canvas.
+      :ok =
+        public_version!(
+          "canvas-dash",
+          %{
+            "frame" => %{"placement" => "canvas"},
+            "canvas" => %{"module" => "canvas.js", "toolkit" => 1}
+          },
+          [
+            {"canvas.js", "export default (c) => c.render({type: \"spacer\"})"},
+            {"style.css", "body { margin: 0; }"}
+          ]
+        )
+
+      # Its address, its module and its other files each answer exactly as
+      # the same request for a tincture that does not exist.
+      assert_not_public("canvas-dash", ["", "/canvas.js", "/style.css"])
+
+      # A tincture that is no canvas is still served at its address.
+      page = get(build_conn(), "/t/test/local/pub-dash")
+      assert page.status == 200
+      assert page.resp_body =~ "Public"
+      assert get(build_conn(), "/t/test/local/pub-dash/style.css").status == 200
+    end
+
+    test "a version whose declaration today's rules refuse is never served on the public route, even with a public profile" do
+      # Installed past the publish check, as a rules change after install
+      # leaves a version: a placement the rules no longer name, with a page
+      # or a script for its entry, and a canvas of a toolkit major they do
+      # not name. Each is held as a canvas.
+      plants = [
+        {"desk-dash", %{"frame" => %{"placement" => "desktop"}, "entry" => "index.html"}},
+        {"desk-js", %{"frame" => %{"placement" => "desktop"}, "entry" => "main.js"}},
+        {"old-canvas",
+         %{
+           "frame" => %{"placement" => "canvas"},
+           "canvas" => %{"module" => "canvas.js", "toolkit" => 2}
+         }}
+      ]
+
+      for {name, tincture} <- plants do
+        assert {:error, _refused} = Compendium.tincture_declaration(%{"tincture" => tincture})
+
+        :ok =
+          public_version!(name, tincture, [
+            {"index.html", "<html><head></head><body>Desk</body></html>"},
+            {"main.js", "const t = \"<head></head>\";\n"},
+            {"canvas.js", "export default (c) => c.render({text: \"<head></head>\"});\n"},
+            {"style.css", "body { margin: 0; }"}
+          ])
+
+        assert_not_public(name, ["", "/index.html", "/main.js", "/canvas.js", "/style.css"])
+      end
+
+      # A tincture whose declaration the rules read is still served.
+      assert get(build_conn(), "/t/test/local/pub-dash").status == 200
+    end
+
     test "does not serve a public tincture from a different athanor", %{conn: conn} do
       # pub-dash is public in the test athanor; another athanor must not
       # resolve it (athanor isolation), and an unknown athanor is a 404 too.
@@ -430,6 +588,14 @@ defmodule Emissary.Web.TinctureControllerTest do
 
     defp served(credential, file, name \\ "auth-dash"),
       do: Prima.TinctureUrl.asset_path(credential, ["local", name, "1.0.0" | file])
+
+    test "a version whose stored manifest does not decode is not found, its pages and files alike",
+         %{conn: conn, ctx: ctx} do
+      for name <- undecodable_versions!(), {file, _bytes} <- @undecodable_files do
+        answer = get(conn, served(credential(ctx, name), [file], name))
+        assert {name, file, answer.status} == {name, file, 404}
+      end
+    end
 
     test "serves the entry page with the SDK, based under the credential's own path",
          %{conn: conn, ctx: ctx} do

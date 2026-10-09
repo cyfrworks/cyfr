@@ -16,6 +16,11 @@ defmodule Emissary.Web.TinctureController do
   GET  /t/:athanor/:publisher/:tincture_name/*path     — a public tincture's files
   GET  /_s/:credential/:publisher/:name/:version/*file — a private tincture version's files
 
+  A canvas is never public: it is the person's own data page, so its
+  address and its files answer as a tincture that is not public does. A
+  version whose placement cannot be read, its declaration refused by
+  today's rules, is held as a canvas and answers the same.
+
   The bytes and their headers are `Emissary.Web.TinctureAssets`'. A
   tincture's data — its invocations, actions and streams — is
   `Emissary.Web.TinctureDataController`'s.
@@ -153,11 +158,13 @@ defmodule Emissary.Web.TinctureController do
 
       case Compendium.inspect_component(ctx, reference) do
         {:ok, %{"release_digest" => ^digest} = row} ->
-          {:ok,
-           %{
-             segments: Prima.ComponentPath.version_dir("tincture", publisher, name, version),
-             manifest: decode_manifest(row["manifest"])
-           }}
+          with {:ok, manifest} <- decode_manifest(row["manifest"]) do
+            {:ok,
+             %{
+               segments: Prima.ComponentPath.version_dir("tincture", publisher, name, version),
+               manifest: manifest
+             }}
+          end
 
         {:ok, _another_version} ->
           {:error, :not_found}
@@ -175,16 +182,18 @@ defmodule Emissary.Web.TinctureController do
     end
   end
 
-  defp decode_manifest(manifest) when is_map(manifest), do: manifest
+  # A manifest that does not decode to a JSON object, or none at all, is a
+  # declaration refused: the version holds no pages and is not found.
+  defp decode_manifest(manifest) when is_map(manifest), do: {:ok, manifest}
 
   defp decode_manifest(manifest) when is_binary(manifest) do
     case Jason.decode(manifest) do
-      {:ok, decoded} when is_map(decoded) -> decoded
-      _ -> %{}
+      {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
+      _ -> {:error, :not_found}
     end
   end
 
-  defp decode_manifest(_manifest), do: %{}
+  defp decode_manifest(_manifest), do: {:error, :not_found}
 
   # A store that could not say whether the credential stands: retryable,
   # and nothing is served — never read as "not found" or as allowed.
@@ -204,8 +213,22 @@ defmodule Emissary.Web.TinctureController do
   # unavailable.
   defp resolve_public(athanor, publisher, tincture_name) do
     with {:ok, public_ctx} <- TinctureAccess.public_context(athanor),
-         {:ok, tincture} <- TinctureAccess.get_public(public_ctx, publisher, tincture_name) do
+         {:ok, tincture} <- TinctureAccess.get_public(public_ctx, publisher, tincture_name),
+         :ok <- not_canvas(tincture) do
       {:ok, tincture, public_ctx}
+    end
+  end
+
+  # Only a version whose declaration the frame's rules read
+  # (`Compendium.tincture_declaration/1`), placed anywhere but a canvas, is
+  # served here. A canvas, and a version whose declaration today's rules
+  # refuse, held as a canvas, is not found whatever public profile it
+  # holds: the same refusal as a tincture that is not public, so the route
+  # never tells them apart.
+  defp not_canvas(tincture) do
+    case Compendium.tincture_declaration(tincture.manifest) do
+      {:ok, %{frame: %{placement: placement}}} when placement != "canvas" -> :ok
+      _canvas_or_unread -> {:error, :not_found}
     end
   end
 end

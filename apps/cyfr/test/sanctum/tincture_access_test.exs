@@ -221,6 +221,63 @@ defmodule Sanctum.TinctureAccessTest do
     end
   end
 
+  describe "a version whose stored manifest does not decode to a JSON object" do
+    # Text that is not JSON, JSON that is no object, and none at all: each
+    # a declaration refused, so the version is found neither publicly nor
+    # privately, though it holds an active public profile.
+    test "is found by neither get_public/3 nor get_private/3" do
+      ctx = Sanctum.TestContext.local()
+      public_ctx = Context.build(athanor_id: ctx.athanor_id, authenticated: false)
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      for {name, stored} <- [
+            {"bad-json", "{\"name\": \"bad-json\","},
+            {"list-json", "[]"},
+            {"no-manifest", nil}
+          ] do
+        dir = tincture_dir(name)
+        File.mkdir_p!(dir)
+        File.write!(Path.join(dir, "index.html"), "<html></html>")
+
+        {:ok, _} =
+          Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
+            id: "test_#{name}_#{:rand.uniform(1_000_000)}",
+            name: name,
+            version: "1.0.0",
+            component_type: "tincture",
+            description: name,
+            tags: "[]",
+            digest: "sha256:test_#{name}",
+            size: 100,
+            exports: "[]",
+            manifest: stored,
+            publisher: "local",
+            publisher_id: "local|local|testns",
+            source: Compendium.Source.filesystem(),
+            signature_verified: false,
+            inserted_at: now,
+            updated_at: now
+          })
+
+        {:ok, _} =
+          Arca.ProfileStorage.put(%{
+            id: "prof_#{name}_#{:rand.uniform(1_000_000)}",
+            athanor_id: ctx.athanor_id,
+            source_ref: "tincture:local.#{name}",
+            kind: "public",
+            label: "public",
+            status: "active"
+          })
+
+        assert {name, TinctureAccess.get_public(public_ctx, "local", name)} ==
+                 {name, {:error, :not_found}}
+
+        assert {name, TinctureAccess.get_private(ctx, "local", name)} ==
+                 {name, {:error, :not_found}}
+      end
+    end
+  end
+
   describe "public_context/1" do
     defp create_athanor!(kind, slug) do
       {:ok, athanor} =

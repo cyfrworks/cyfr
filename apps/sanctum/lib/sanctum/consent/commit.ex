@@ -149,6 +149,9 @@ defmodule Sanctum.Consent.Commit do
 
   @readonly_storage_actions ~w(read list exists)
 
+  @canvas_not_public "A canvas has no public profile: it is the person's own data page."
+  @declaration_refused "This tincture's declaration is refused by today's rules, so it has no public profile."
+
   # ---------------------------------------------------------------------------
   # Preview
   # ---------------------------------------------------------------------------
@@ -420,6 +423,11 @@ defmodule Sanctum.Consent.Commit do
   pinned decisions. Retains credentials only for `need_ids` and returns a
   plan token for preview and commit, with what the public profile would
   grant as preview rows and the origins it would admit.
+
+  A canvas has no public profile, so its staging is refused as an invalid
+  argument, as is every public preview and commit of one, and so is a
+  tincture whose declaration today's rules refuse, since its placement
+  cannot be read.
   """
   @spec stage_publish(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def stage_publish(%Context{} = ctx, %{profile_id: profile_id} = params) do
@@ -495,6 +503,57 @@ defmodule Sanctum.Consent.Commit do
   defp check_owner_profile(%{kind: "owner", status: status}) when status != "revoked", do: :ok
   defp check_owner_profile(_), do: {:error, :publish_requires_owner_profile}
 
+  # A canvas is the person's own data page, never public: no public
+  # preparation is made for one, so neither a staging nor a commit replaying
+  # its plan can mint a public profile of it. A stored manifest or
+  # declaration that does not parse is a damaged row, classed as
+  # `ShapeDerivation` classes it. The placement itself is the frame's
+  # rules' verdict, and those rules sit above this app (`Compendium`), so a
+  # tincture's is asked through the component-facts port: only a
+  # declaration today's rules read, placed anywhere but a canvas, is
+  # published, and one they refuse is held as a canvas.
+  defp check_publishable(ctx, :public, component, source_ref) do
+    tincture? = to_string(Prima.ComponentRow.field(component, :component_type)) == "tincture"
+
+    with :ok <- check_declaration_parses(component, source_ref, tincture?) do
+      if tincture?, do: check_public_placement(ctx, component), else: :ok
+    end
+  end
+
+  defp check_publishable(_ctx, _kind, _component, _source_ref), do: :ok
+
+  # A tincture whose row stores no manifest is as damaged as one whose
+  # manifest does not decode: neither holds a declaration to publish.
+  defp check_declaration_parses(component, source_ref, tincture?) do
+    stored = Map.get(component, :manifest) || Map.get(component, "manifest")
+
+    if tincture? and is_nil(stored),
+      do: {:error, {:corrupt, {:manifest, source_ref}}},
+      else: declaration_parses(stored, source_ref)
+  end
+
+  defp declaration_parses(stored, source_ref) do
+    with {:ok, manifest} <- Prima.Manifest.decode_strict(stored),
+         true <- Prima.Manifest.Tincture.declared?(manifest),
+         {:ok, _declaration} <- Prima.Manifest.Tincture.from_manifest(manifest) do
+      :ok
+    else
+      false -> :ok
+      {:error, _unread} -> {:error, {:corrupt, {:manifest, source_ref}}}
+    end
+  end
+
+  # An outage is the components unavailable, as the closure's reads are;
+  # every other answer but a placement that is no canvas refuses.
+  defp check_public_placement(ctx, component) do
+    case Components.tincture_placement(ctx, component) do
+      {:ok, "canvas"} -> {:error, {:invalid_argument, @canvas_not_public}}
+      {:ok, _placed} -> :ok
+      {:error, outage} when Components.is_outage(outage) -> {:error, {:unavailable, "Components"}}
+      {:error, _refused} -> {:error, {:invalid_argument, @declaration_refused}}
+    end
+  end
+
   defp prepare_with_blob(ctx, decisions, published) do
     label = Map.get(decisions, :label, "default")
     kind = Map.get(decisions, :kind, :owner)
@@ -506,6 +565,7 @@ defmodule Sanctum.Consent.Commit do
          {:ok, subset} <- decided_subset(decisions),
          {:ok, source_ref} <- Plan.name_ref(Map.get(decisions, :ref, "")),
          {:ok, component} <- Plan.fetch_component(ctx, source_ref),
+         :ok <- check_publishable(ctx, kind, component, source_ref),
          {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, closure_rows} <- resolve_closure_rows(ctx, component, activation),
          :ok <- check_published_nodes(published, closure_rows, source_ref),

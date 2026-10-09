@@ -287,12 +287,40 @@ defmodule Emissary.Web.TinctureAssetsTest do
           do: refute(csp(conn) =~ token)
     end
 
-    test "a declaration the rules refuse opens scripts alone", %{ctx: ctx, base: base} do
+    test "a declaration the rules refuse serves no page", %{ctx: ctx, base: base} do
       page!(base, "index.html", "<html><head></head></html>")
       manifest = %{"tincture" => %{"frame" => %{"capabilities" => ["camera"]}}}
+      refused = %{segments: ["components"], manifest: manifest}
 
-      conn = serve(ctx, %{segments: ["components"], manifest: manifest}, ["index.html"])
-      assert String.ends_with?(csp(conn), "; sandbox allow-scripts")
+      # Its placement cannot be read, so it is held as a canvas: its entry
+      # is not found, and a script of it is still answered as its type.
+      assert_not_found(serve(ctx, refused, ["index.html"]))
+
+      script = serve(ctx, refused, ["app.js"])
+      assert script.status == 200
+      assert header(script, "content-type") == ["text/javascript; charset=utf-8"]
+      assert script.resp_body == "console.log('hi')"
+
+      # A policy derived for it still opens nothing beyond scripts.
+      assert String.ends_with?(
+               TinctureAssets.csp(manifest, String.duplicate("n", 22)),
+               "; sandbox allow-scripts"
+             )
+    end
+
+    test "a manifest that is not a map serves no page", %{ctx: ctx, base: base} do
+      page!(base, "index.html", "<html><head></head></html>")
+
+      # A manifest that did not decode to an object reads, to the
+      # declaration's parse, as an empty declaration; it holds no pages.
+      for manifest <- [nil, [], "{"] do
+        unread = %{segments: ["components"], manifest: manifest}
+        assert_not_found(serve(ctx, unread, ["index.html"]))
+
+        script = serve(ctx, unread, ["app.js"])
+        assert script.status == 200
+        assert header(script, "content-type") == ["text/javascript; charset=utf-8"]
+      end
     end
 
     test "another page of the version carries the same policy and no SDK",

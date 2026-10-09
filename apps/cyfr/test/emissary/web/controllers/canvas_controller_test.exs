@@ -8,8 +8,11 @@ defmodule Emissary.Web.CanvasControllerTest do
   athanor and version, for a version whose placement is `canvas`, and 404
   with no body otherwise; the canvas's one policy for its own open; the
   toolkit's host bundle as its one script and the worker bundle only as
-  inert data; no bearer in its markup; no redirect on any canvas, data or
-  served path; and the credential in no telemetry span or log line.
+  inert data; no bearer in its markup; the canvas's module served as
+  JavaScript under its served prefix, never as a document, and no HTML file
+  of a canvas, or of a version whose declaration today's rules refuse,
+  served as a page; no redirect on any canvas, data or served path; and the
+  credential in no telemetry span or log line.
   """
 
   # Mints credentials, flips the rate limit and the global log level,
@@ -126,6 +129,39 @@ defmodule Emissary.Web.CanvasControllerTest do
   end
 
   defp toolkit(file), do: File.read!(Path.join(@toolkit, file))
+
+  # The versions' files in a storage root of the test's own, the
+  # configured one restored after it.
+  defp own_storage(_context) do
+    root = Path.join(System.tmp_dir!(), "canvas_module_#{System.unique_integer([:positive])}")
+    previous = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, root)
+
+    on_exit(fn ->
+      Application.put_env(:arca, :base_path, previous)
+      File.rm_rf!(root)
+    end)
+
+    :ok
+  end
+
+  # `files` written into the version `name` of the source's athanor.
+  defp lay!(source, name, files) do
+    dir =
+      Arca.Adapters.Local.build_path(
+        Sanctum.Context.actor(source),
+        Prima.ComponentPath.version_dir("tincture", "local", name, @version)
+      )
+
+    File.mkdir_p!(dir)
+    for {file, bytes} <- files, do: File.write!(Path.join(dir, file), bytes)
+    :ok
+  end
+
+  # A file of the version `name` under its served prefix.
+  defp served(credential, name, file),
+    do:
+      get(build_conn(), Prima.TinctureUrl.asset_path(credential, ["local", name, @version, file]))
 
   # ---------------------------------------------------------------------------
   # The page
@@ -306,6 +342,145 @@ defmodule Emissary.Web.CanvasControllerTest do
             bearer_as_credential
           ] do
         assert {conn.status, conn.resp_body} == {404, ""}
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # The module the page's toolkit imports
+  # ---------------------------------------------------------------------------
+
+  describe "the module" do
+    setup :own_storage
+
+    test "a canvas's module is served as JavaScript under its served prefix, never as a document",
+         %{source: source, credential: credential} do
+      # A head element in the module's text is where an entry document's
+      # `<base>` and SDK would be injected.
+      module = ~s|export default (c) => c.render({type: "text", text: "<head></head>"});\n|
+
+      dir =
+        Arca.Adapters.Local.build_path(
+          Sanctum.Context.actor(source),
+          Prima.ComponentPath.version_dir("tincture", "local", "page-canvas", @version)
+        )
+
+      File.mkdir_p!(dir)
+      File.write!(Path.join(dir, "canvas.js"), module)
+
+      conn =
+        get(
+          build_conn(),
+          Prima.TinctureUrl.asset_path(credential, ["local", "page-canvas", @version, "canvas.js"])
+        )
+
+      assert conn.status == 200
+
+      # Its type is the one the rules serve `.js` as, with the charset a
+      # textual type names.
+      assert Map.fetch!(Compendium.tincture_served_types(), ".js") == "text/javascript"
+      assert get_resp_header(conn, "content-type") == ["text/javascript; charset=utf-8"]
+      assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+
+      # The lockdown every file that is no document carries, never the
+      # entry document's policy, and the stored bytes as they are, nothing
+      # injected.
+      assert [policy] = get_resp_header(conn, "content-security-policy")
+      assert policy == "default-src 'none'; frame-ancestors 'none'"
+      refute policy =~ "nonce-"
+      refute policy =~ "sandbox"
+      assert conn.resp_body == module
+      refute conn.resp_body =~ "<base"
+      refute conn.resp_body =~ "<script"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A version that holds no page: a canvas, or one whose placement cannot
+  # be read
+  # ---------------------------------------------------------------------------
+
+  describe "a version that holds no page" do
+    setup :own_storage
+
+    test "a canvas version's HTML file is never a page: it is not found, and its module is served",
+         %{source: source} do
+      module = ~s|export default (c) => c.render({type: "spacer"});\n|
+      credential = asset!(source, canvas!(source, "paged-canvas"))
+
+      lay!(source, "paged-canvas", [
+        {"canvas.js", module},
+        {"page.html", "<html><head></head><body>a page</body></html>"}
+      ])
+
+      # The page answers exactly as a file the store does not hold.
+      page = served(credential, "paged-canvas", "page.html")
+      absent = served(credential, "paged-canvas", "absent.js")
+      assert json_response(absent, 404)["code"] == "not_found"
+
+      assert {page.status, get_resp_header(page, "content-type"), page.resp_body} ==
+               {absent.status, get_resp_header(absent, "content-type"), absent.resp_body}
+
+      refute Enum.any?(get_resp_header(page, "content-security-policy"), &(&1 =~ "sandbox"))
+
+      # The module beside it is still served as the script it is.
+      script = served(credential, "paged-canvas", "canvas.js")
+
+      assert {script.status, get_resp_header(script, "content-type"), script.resp_body} ==
+               {200, ["text/javascript; charset=utf-8"], module}
+    end
+
+    test "a version whose declaration today's rules refuse is held as a canvas: no page, no document",
+         %{source: source} do
+      # Installed straight into the registry's storage, past the publish
+      # check, as a rules change after install leaves a version: a
+      # placement the rules no longer name, with a page or a script for
+      # its entry, and a canvas of a toolkit major they do not name.
+      plants = [
+        {"desk-dash", %{"frame" => %{"placement" => "desktop"}, "entry" => "index.html"}},
+        {"desk-js", %{"frame" => %{"placement" => "desktop"}, "entry" => "main.js"}},
+        {"old-canvas",
+         %{
+           "frame" => %{"placement" => "canvas"},
+           "canvas" => %{"module" => "canvas.js", "toolkit" => 2}
+         }}
+      ]
+
+      scripts = %{
+        "main.js" => ~s|const t = "<head></head>";\n|,
+        "canvas.js" => ~s|export default (c) => c.render({text: "<head></head>"});\n|
+      }
+
+      for {name, tincture} <- plants do
+        assert {:error, _refused} = Compendium.tincture_declaration(%{"tincture" => tincture})
+        credential = asset!(source, put_version!(source, name, tincture))
+
+        lay!(source, name, [
+          {"index.html", "<html><head></head><body>Desk</body></html>"},
+          {"style.css", "body { margin: 0; }"} | Map.to_list(scripts)
+        ])
+
+        # Its page answers exactly as a file the store does not hold.
+        page = served(credential, name, "index.html")
+        absent = served(credential, name, "absent.js")
+        assert json_response(absent, 404)["code"] == "not_found"
+
+        assert {name, page.status, get_resp_header(page, "content-type"), page.resp_body} ==
+                 {name, absent.status, get_resp_header(absent, "content-type"), absent.resp_body}
+
+        # Its scripts, whichever is its entry, are scripts: the lockdown
+        # policy, never a document's, and their bytes with nothing injected.
+        for {file, bytes} <- scripts do
+          conn = served(credential, name, file)
+
+          assert {name, file, conn.status, get_resp_header(conn, "content-type"),
+                  get_resp_header(conn, "content-security-policy"), conn.resp_body} ==
+                   {name, file, 200, ["text/javascript; charset=utf-8"],
+                    ["default-src 'none'; frame-ancestors 'none'"], bytes}
+        end
+
+        style = served(credential, name, "style.css")
+        assert {name, style.status, style.resp_body} == {name, 200, "body { margin: 0; }"}
       end
     end
   end

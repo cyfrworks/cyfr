@@ -43,6 +43,12 @@ defmodule Emissary.Web.TinctureAssets do
   — outside the shell's frame — is never a first-party page of this
   origin. The entry page is also given the SDK, compile-embedded so it
   never round-trips to storage, as an inline script under the nonce.
+
+  A canvas holds no page here: its entry is its module, served as the
+  script it is, its page is CYFR's host page
+  (`Emissary.Web.CanvasController`), and an HTML file of a canvas version
+  is not found. A version whose placement cannot be read, its declaration
+  refused by today's rules, is served as a canvas version is.
   """
 
   import Plug.Conn
@@ -74,6 +80,13 @@ defmodule Emissary.Web.TinctureAssets do
   page's `<base>` names the entry's own directory, so a built entry at
   `dist/index.html` resolves its relative assets from `dist/`.
 
+  A version holds pages only when the frame's rules read its declaration
+  and its placement is not `canvas`. Any other version — a canvas, or one
+  whose declaration today's rules refuse — serves no document: its `.html`
+  file answers the not-found refusal below, as an `.htm` file of any
+  version does, and every other file, a canvas's module included, is
+  served as its type.
+
   A reserved file, a dotfile, an unsafe path, a type the rules do not
   serve and an absent file all answer the same JSON `not_found` refusal
   (`CyfrWeb.ApiError`).
@@ -89,7 +102,10 @@ defmodule Emissary.Web.TinctureAssets do
       path = Enum.join(file, "/")
 
       cond do
-        Compendium.tincture_entry(tincture) == {:ok, path} ->
+        type == "text/html" and not holds_pages?(tincture) ->
+          not_found(conn)
+
+        entry_document?(tincture, path) ->
           base = Keyword.fetch!(opts, :base) <> entry_dir(path)
           document(conn, ctx, tincture, file, base)
 
@@ -178,6 +194,29 @@ defmodule Emissary.Web.TinctureAssets do
     extension = file |> List.last() |> Path.extname() |> String.downcase()
     Map.fetch(Compendium.tincture_served_types(), extension)
   end
+
+  # Whether `path` is the tincture's entry page. Only a version that holds
+  # pages has one: a canvas's entry (`Compendium.tincture_entry/1`) is its
+  # module, a script its host page's toolkit imports, and a version whose
+  # placement cannot be read is held as a canvas, so either is served as
+  # its type.
+  defp entry_document?(tincture, path),
+    do: Compendium.tincture_entry(tincture) == {:ok, path} and holds_pages?(tincture)
+
+  # Whether the version holds pages: only when its manifest is a decoded
+  # object, the frame's rules read its declaration
+  # (`Compendium.tincture_declaration/1`) and its placement is not
+  # `canvas`. A declaration today's rules refuse fails closed, held as a
+  # canvas, whatever its raw placement says, and so does a manifest that is
+  # not a map, which the declaration's parse would read as an empty one.
+  defp holds_pages?(%{manifest: manifest}) when is_map(manifest) do
+    case Compendium.tincture_declaration(manifest) do
+      {:ok, %{frame: %{placement: placement}}} -> placement != "canvas"
+      {:error, _refused} -> false
+    end
+  end
+
+  defp holds_pages?(_no_manifest), do: false
 
   defp headers(conn, cache) do
     conn

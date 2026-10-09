@@ -162,7 +162,7 @@ defmodule Sanctum.TinctureAccess do
   defp lookup_tincture(ctx, publisher, tincture_name) do
     case Components.get_latest(ctx, tincture_name, publisher, "tincture") do
       {:ok, component} ->
-        {:ok, enrich_with_segments(component)}
+        enrich_with_segments(component)
 
       {:error, :not_found} ->
         {:error, :not_found}
@@ -170,28 +170,32 @@ defmodule Sanctum.TinctureAccess do
   end
 
   defp enrich_with_segments(component) do
-    manifest = decode_manifest(component[:manifest] || component["manifest"])
+    with {:ok, manifest} <- decode_manifest(component[:manifest] || component["manifest"]) do
+      segments =
+        Prima.ComponentPath.version_dir(
+          component.component_type,
+          component.publisher,
+          component.name,
+          component.version
+        )
 
-    segments =
-      Prima.ComponentPath.version_dir(
-        component.component_type,
-        component.publisher,
-        component.name,
-        component.version
-      )
-
-    component
-    |> Map.put(:segments, segments)
-    |> Map.put(:manifest, manifest)
-  end
-
-  defp decode_manifest(manifest) when is_binary(manifest) do
-    case Jason.decode(manifest) do
-      {:ok, decoded} -> decoded
-      {:error, _} -> %{}
+      {:ok,
+       component
+       |> Map.put(:segments, segments)
+       |> Map.put(:manifest, manifest)}
     end
   end
 
-  defp decode_manifest(manifest) when is_map(manifest), do: manifest
-  defp decode_manifest(_), do: %{}
+  # A manifest that does not decode to a JSON object, or none at all, is a
+  # declaration refused: the version holds no pages and is not public, so
+  # it is not found here, publicly or privately.
+  defp decode_manifest(manifest) when is_binary(manifest) do
+    case Jason.decode(manifest) do
+      {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp decode_manifest(manifest) when is_map(manifest), do: {:ok, manifest}
+  defp decode_manifest(_), do: {:error, :not_found}
 end

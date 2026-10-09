@@ -7,9 +7,10 @@ defmodule Compendium.ConsentFacts do
   `Sanctum.Consent.Components`.
 
   Consent decides what a component may do; deciding it means reading what
-  the athanor holds, which is this domain's to know. Four of the five
-  answers are one call each — the activation, the verified activation, the
-  row a ref names, the athanor's agents. The fifth, `shipped_nodes/2`,
+  the athanor holds, which is this domain's to know. Most answers are one
+  call each — the activation, the verified activation, the row a ref
+  names, the athanor's agents, the newest shipped version, and a
+  tincture's placement under the frame's rules. `shipped_nodes/2`
   is the seed-vouching fact the consent bootstrap mints over: the release
   digest the **install media** ships at a row's path, never the athanor's
   copy. Its three cases are this domain's own layout — an agent file under
@@ -80,6 +81,21 @@ defmodule Compendium.ConsentFacts do
       {:ok, [%{superseded: true, shipped_versions: [newest | _]}]} -> {:ok, newest}
       {:ok, [_annotated]} -> {:ok, nil}
       {:error, _} = error -> error
+    end
+  end
+
+  # The frame's rules' verdict on a tincture row's declaration
+  # (`Compendium.tincture_declaration/1`): the placement it names, or
+  # `:refused` when today's rules refuse it, a manifest that does not
+  # decode, or none at all, among them.
+  @impl Sanctum.Consent.Components
+  def tincture_placement(%Context{}, row) do
+    with stored when not is_nil(stored) <- Prima.ComponentRow.field(row, :manifest),
+         {:ok, manifest} <- Prima.Manifest.decode_strict(stored),
+         {:ok, declaration} <- Compendium.tincture_declaration(manifest) do
+      {:ok, declaration.frame.placement}
+    else
+      _refused -> {:error, :refused}
     end
   end
 

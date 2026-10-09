@@ -14,10 +14,36 @@ defmodule Sanctum.Consent.CommitTest do
 
   alias Prima.ConsentPreview
   alias Sanctum.Consent.Commit
+  alias Sanctum.Consent.Components
   alias Sanctum.Consent.Plan
   alias Sanctum.Providers.Profile
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+
+  # The component domain's facts, but for the optional placement, which
+  # this implementation does not answer.
+  defmodule FactsWithoutPlacement do
+    @moduledoc false
+    @behaviour Sanctum.Consent.Components
+
+    @impl true
+    defdelegate resolve(ctx, row), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate resolve_verified(ctx, row), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate get_component(ctx, name, version, publisher, type), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate agent_rows(ctx), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate shipped_nodes(ctx, rows), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
+  end
 
   # A catalog that answers as the installed one and counts the tool-action
   # reads `Commit.grant/3` makes. Armed with a function and a count, it runs
@@ -107,13 +133,25 @@ defmodule Sanctum.Consent.CommitTest do
 
   # A tincture row written as the registry holds one, with its release
   # digest, so its activation resolves.
-  defp tincture!(ctx, name, declaration) do
+  defp tincture!(ctx, name, declaration),
+    do: tincture_row!(ctx, name, Map.put(declaration, "entry", "index.html"))
+
+  # A canvas's row: its entry is its module, so it names none.
+  defp canvas!(ctx, name) do
+    tincture_row!(ctx, name, %{
+      "frame" => %{"placement" => "canvas"},
+      "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+      "streams" => [%{"name" => "mcp_servers.changes"}]
+    })
+  end
+
+  defp tincture_row!(ctx, name, tincture) do
     manifest = %{
       "name" => name,
       "type" => "tincture",
       "version" => "1.0.0",
       "publisher" => "local",
-      "tincture" => Map.put(declaration, "entry", "index.html")
+      "tincture" => tincture
     }
 
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
@@ -939,6 +977,121 @@ defmodule Sanctum.Consent.CommitTest do
                Commit.stage_publish(person, %{profile_id: owner, need_ids: ["@ingress"]})
 
       assert instance =~ "instance entry is offered to people"
+    end
+
+    test "a public profile is never staged for a canvas", %{ctx: ctx} do
+      ref = canvas!(ctx, "commit-canvas")
+      {:ok, %{profile_id: owner}} = walk!(ctx, ref)
+      sentence = "A canvas has no public profile: it is the person's own data page."
+
+      # `profile.publish` answers the sentence, and the preparation behind
+      # it refuses typed before anything is staged.
+      assert {:error, ^sentence} =
+               Profile.handle(ctx, %{"action" => "publish", "profile_id" => owner})
+
+      assert {:error, {:invalid_argument, ^sentence}} =
+               Commit.stage_publish(ctx, %{profile_id: owner})
+
+      # Its public preview is refused the same way, so no commit can follow.
+      assert {:error, {:invalid_argument, ^sentence}} =
+               Commit.preview(ctx, %{publish_from: owner})
+
+      # Nothing was staged: the owner profile is the canvas's only one.
+      {:ok, profiles} = Arca.ConsentStorage.profile_entries(Sanctum.Context.actor(ctx), ref)
+      assert [%{id: ^owner, kind: :owner}] = profiles
+
+      # A tincture that is no canvas still stages its public profile.
+      plain = tincture!(ctx, "commit-plain", %{"frame" => %{"capabilities" => []}})
+      {:ok, %{profile_id: plain_owner}} = walk!(ctx, plain)
+      assert {:ok, %{plan_token: token}} = Commit.stage_publish(ctx, %{profile_id: plain_owner})
+      assert is_binary(token)
+    end
+
+    test "a public profile is never staged for a tincture whose declaration today's rules refuse",
+         %{ctx: ctx} do
+      sentence =
+        "This tincture's declaration is refused by today's rules, so it has no public profile."
+
+      # Written past the publish check, as a rules change after install
+      # leaves a version: a placement the rules no longer name, with a page
+      # or a script for its entry, and a canvas of a toolkit major they do
+      # not name. Each is held as a canvas, whatever its raw placement.
+      plants = [
+        {"desk-dash", %{"frame" => %{"placement" => "desktop"}, "entry" => "index.html"}},
+        {"desk-js", %{"frame" => %{"placement" => "desktop"}, "entry" => "main.js"}},
+        {"old-canvas",
+         %{
+           "frame" => %{"placement" => "canvas"},
+           "canvas" => %{"module" => "canvas.js", "toolkit" => 2},
+           "streams" => [%{"name" => "mcp_servers.changes"}]
+         }}
+      ]
+
+      for {name, tincture} <- plants do
+        assert {:error, _refused} = Compendium.tincture_declaration(%{"tincture" => tincture})
+        ref = tincture_row!(ctx, name, tincture)
+        {:ok, %{profile_id: owner}} = walk!(ctx, ref)
+
+        assert {name, {:error, sentence}} ==
+                 {name, Profile.handle(ctx, %{"action" => "publish", "profile_id" => owner})}
+
+        assert {name, {:error, {:invalid_argument, sentence}}} ==
+                 {name, Commit.stage_publish(ctx, %{profile_id: owner})}
+
+        assert {name, {:error, {:invalid_argument, sentence}}} ==
+                 {name, Commit.preview(ctx, %{publish_from: owner})}
+
+        {:ok, profiles} = Arca.ConsentStorage.profile_entries(Sanctum.Context.actor(ctx), ref)
+        assert [%{id: ^owner, kind: :owner}] = profiles
+      end
+    end
+
+    test "a tincture's public staging refuses while its placement cannot be asked", %{ctx: ctx} do
+      plain = tincture!(ctx, "commit-unasked", %{"frame" => %{"capabilities" => []}})
+      {:ok, %{profile_id: owner}} = walk!(ctx, plain)
+      real = Components.impl!()
+
+      # An implementation that answers every required callback but not the
+      # optional placement is installed, and the port answers the placement
+      # as unreadable facts: a public staging refuses as for any other
+      # component fact it cannot read, never as a placement answered.
+      Components.install!(FactsWithoutPlacement)
+
+      try do
+        assert {:error, {:unavailable, "Components"}} =
+                 Commit.stage_publish(ctx, %{profile_id: owner})
+      after
+        Components.install!(real)
+      end
+
+      # With the placement answered again, the same staging goes through.
+      assert {:ok, %{plan_token: _}} = Commit.stage_publish(ctx, %{profile_id: owner})
+    end
+
+    test "a public profile is never staged for a tincture whose stored manifest does not decode",
+         %{ctx: ctx} do
+      # Text that is not JSON, JSON that is no object, and none at all: the
+      # row holds no declaration to publish, so it is refused as damaged.
+      for {name, stored} <- [
+            {"commit-badjson", "{\"name\": \"commit-badjson\","},
+            {"commit-listjson", "[]"},
+            {"commit-nomanifest", nil}
+          ] do
+        ref = tincture!(ctx, name, %{"frame" => %{"capabilities" => []}})
+        {:ok, %{profile_id: owner}} = walk!(ctx, ref)
+        actor = Sanctum.Context.actor(ctx)
+        {:ok, [row]} = Arca.ComponentStorage.list_components(actor, name: name)
+        {:ok, _} = Arca.ComponentStorage.put_component(actor, Map.put(row, :manifest, stored))
+
+        assert {name, {:error, {:corrupt, {:manifest, _}}}} =
+                 {name, Commit.stage_publish(ctx, %{profile_id: owner})}
+
+        assert {name, {:error, _refused}} =
+                 {name, Profile.handle(ctx, %{"action" => "publish", "profile_id" => owner})}
+
+        assert {:ok, profiles} = Arca.ConsentStorage.profiles(actor, ref)
+        refute Enum.any?(profiles, &(&1.kind == :public)), name
+      end
     end
   end
 

@@ -9,7 +9,8 @@ defmodule Sanctum.Consent.Components do
   means reading what the athanor actually holds: the activation a ref
   resolves to, the verified graph and its digest, the registry row a ref
   names, the athanor's enabled agents, what the install media ships at
-  a row's path, and the newer version it ships of a row's component. None of that is identity's to know, and all of it
+  a row's path, the newer version it ships of a row's component, and the
+  placement a tincture's declaration names under the frame's rules. None of that is identity's to know, and all of it
   lives in the component domain — so the contract is written here, in the
   domain that depends on it, and the component domain implements it
   (`Compendium.ConsentFacts`).
@@ -125,16 +126,35 @@ defmodule Sanctum.Consent.Components do
   @callback newer_shipped(Context.t(), map()) :: {:ok, String.t() | nil} | {:error, term()}
 
   @doc """
+  The placement a tincture row's declaration names under the frame's
+  rules as they are today: `{:ok, placement}`, nil for a tincture that
+  names none, or `{:error, :refused}` when those rules refuse the
+  declaration. The rules are the component domain's, so consent asks
+  for this verdict rather than reading a placement from the raw manifest.
+
+  Optional: an implementation that does not answer it is asked nothing,
+  and the port answers `{:error, :component_facts_unavailable}` for it.
+  """
+  @callback tincture_placement(Context.t(), map()) ::
+              {:ok, String.t() | nil} | {:error, term()}
+
+  @optional_callbacks tincture_placement: 2
+
+  @doc """
   Install the port's implementation. Called once by `Cyfr.Application` at
   boot, before any consent is decided.
 
-  A module that does not export every callback is refused here, loudly,
-  at boot, and the port is left as it was.
+  A module that does not export every required callback is refused here,
+  loudly, at boot, and the port is left as it was. An optional callback it
+  does not export is answered as unavailable when asked.
   """
   @spec install!(module()) :: module()
   def install!(module) when is_atom(module) do
+    required =
+      __MODULE__.behaviour_info(:callbacks) -- __MODULE__.behaviour_info(:optional_callbacks)
+
     missing =
-      for {name, arity} <- __MODULE__.behaviour_info(:callbacks),
+      for {name, arity} <- required,
           not (Code.ensure_loaded?(module) and function_exported?(module, name, arity)),
           do: "#{name}/#{arity}"
 
@@ -215,6 +235,22 @@ defmodule Sanctum.Consent.Components do
   @spec newer_shipped(Context.t(), map()) :: {:ok, String.t() | nil} | {:error, term()}
   def newer_shipped(%Context{} = ctx, row) when is_map(row),
     do: call(& &1.newer_shipped(ctx, row))
+
+  @doc """
+  The placement a tincture row's declaration names under today's rules,
+  or `{:error, :refused}` when they refuse it.
+  `{:error, :component_facts_unavailable}` when no implementation is
+  installed, or the installed one does not answer this optional callback:
+  a placement that cannot be asked is never read as one that was answered.
+  """
+  @spec tincture_placement(Context.t(), map()) :: {:ok, String.t() | nil} | {:error, term()}
+  def tincture_placement(%Context{} = ctx, row) when is_map(row) do
+    call(fn module ->
+      if Code.ensure_loaded?(module) and function_exported?(module, :tincture_placement, 2),
+        do: module.tincture_placement(ctx, row),
+        else: {:error, :component_facts_unavailable}
+    end)
+  end
 
   # An uninstalled port is an unreadable athanor, not an empty one: every
   # caller refuses on this word, and none of them may mistake it for
