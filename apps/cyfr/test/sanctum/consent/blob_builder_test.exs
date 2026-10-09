@@ -341,7 +341,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
 
   describe "a kind its enforcement point cannot narrow" do
     test "is refused, never granted as narrowed", %{ctx: ctx} do
-      for kind <- ~w(credential tool_servers frame streams cards system_actions) do
+      for kind <- ~w(credential tool_servers frame streams system_actions) do
         assert {:error, {:invalid_argument, why}} = preview(ctx, %{@ref => %{kind => %{}}})
         assert why =~ "#{kind} cannot be narrowed; it is granted whole or not at all"
       end

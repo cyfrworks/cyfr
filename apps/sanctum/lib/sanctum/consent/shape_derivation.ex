@@ -28,7 +28,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   answers `{:error, {:corrupt, {:manifest, source_ref}}}` for it, never the
   empty ask, which would read as a component that asks for nothing.
 
-  A tincture that declares a frame, cards, streams or system actions
+  A tincture that declares a frame, a canvas, streams or system actions
   (`Prima.Manifest.Tincture`) carries that declaration's digest as
   `tincture_digest`, so a version that declares more changes the shape and
   asks again; one that declares none carries no digest, and its shape is

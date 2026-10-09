@@ -8,7 +8,7 @@ defmodule Compendium.Tincture.Rules do
   declare and what each opens in the frame's `sandbox` and `allow`
   attributes, the entry page's Content Security Policy, the templates a
   tincture starts from, the lockfile a build tincture ships, and the
-  grammar of its frame, canvas, cards, streams and system actions. A
+  grammar of its frame, canvas, streams and system actions. A
   canvas (placement `canvas`) is held tighter: its declaration reaches
   nothing of its own and reads only canvas-readable streams
   (`check_canvas_streams/2`), its frame's sandbox is `allow-scripts` alone
@@ -84,7 +84,7 @@ defmodule Compendium.Tincture.Rules do
   }
 
   @frame_capabilities ~w(pointer_lock fullscreen gamepad audio_autoplay)
-  @placements ~w(float desktop canvas)
+  @placements ~w(float canvas)
 
   # The toolkit majors a canvas may be drawn by.
   @toolkit_majors [1]
@@ -121,8 +121,6 @@ defmodule Compendium.Tincture.Rules do
   ]
 
   @lockfile "package-lock.json"
-
-  @image_types ~w(.svg .png .jpg .jpeg .gif)
 
   # The feed operations no tincture declares as a system action.
   @feed_actions ~w(feed.bind feed.remove feed.press)
@@ -182,9 +180,9 @@ defmodule Compendium.Tincture.Rules do
   def frame_capabilities, do: @frame_capabilities
 
   @doc """
-  The placements a frame may declare: floating over the shell, a desktop
-  of its own, or a canvas, a page the toolkit draws from the module its
-  `tincture.canvas` block names (`validate_declaration/1`).
+  The placements a frame may declare: floating over the shell, or a
+  canvas, a page the toolkit draws from the module its `tincture.canvas`
+  block names (`validate_declaration/1`).
   """
   @spec placements() :: [String.t()]
   def placements, do: @placements
@@ -389,19 +387,12 @@ defmodule Compendium.Tincture.Rules do
   def lockfile_required?(_manifest), do: false
 
   @doc """
-  The manifest's frame, canvas, cards, streams and system actions, held to
-  their shapes (`Prima.Manifest.Tincture`) and to these rules: every
-  capability is one of `frame_capabilities/0`, a placement is one of
-  `placements/0`, card names are distinct, a card's image is a served
-  image, each button names an action the declaration lists, a card's
-  stream is one it declares, a card's source names a component the
-  tincture may invoke (`invokes?/2`), and a card that shows a number or a
-  list has a source (one without is static). A desktop (placement
-  `desktop`) reaches nothing of its own: it declares no `tincture.connect`
-  origin, no `caps.egress` and no component dependency, static or dynamic;
-  the cards it draws are other tinctures'. No tincture, whatever its
-  placement, declares `feed.bind`, `feed.remove` or `feed.press` among
-  its system actions: those are the person's alone.
+  The manifest's frame, canvas, streams and system actions, held to their
+  shapes (`Prima.Manifest.Tincture`) and to these rules: every capability
+  is one of `frame_capabilities/0` and a placement is one of
+  `placements/0`. No tincture, whatever its placement, declares
+  `feed.bind`, `feed.remove` or `feed.press` among its system actions:
+  those are the person's alone.
 
   A canvas (placement `canvas`) declares `tincture.canvas`, which no other
   placement does: its `module`, a relative path with no `..` and no
@@ -410,7 +401,7 @@ defmodule Compendium.Tincture.Rules do
   reaches nothing of its own and runs only while shown: no
   `tincture.connect` origin, no `caps.egress`, no component dependency,
   static or dynamic, no `tincture.build`, no frame capability, no
-  background, no system action and no card. Each refusal says which.
+  background and no system action. Each refusal says which.
 
   A manifest that declares none of the blocks answers the empty
   declaration. Which streams exist is `check_streams/2`'s, and which a
@@ -422,10 +413,7 @@ defmodule Compendium.Tincture.Rules do
          :ok <- known(declaration.frame.capabilities),
          :ok <- placement(declaration.frame.placement),
          :ok <- no_feed_action(declaration.actions),
-         :ok <- desktop(declaration.frame.placement, manifest),
-         :ok <- canvas(declaration, manifest),
-         :ok <- distinct_cards(declaration.cards),
-         :ok <- cards(declaration, manifest) do
+         :ok <- canvas(declaration, manifest) do
       {:ok, declaration}
     end
   end
@@ -434,7 +422,7 @@ defmodule Compendium.Tincture.Rules do
   Whether the tincture `manifest` may invoke the component `ref`: one
   among its `dependencies.static`, by type, publisher and name, and by
   version where both name one. The one rule a frame's invoke is admitted
-  by and a card's source is held to.
+  by.
   """
   @spec invokes?(term(), term()) :: boolean()
   def invokes?(manifest, ref) when is_binary(ref) do
@@ -622,42 +610,6 @@ defmodule Compendium.Tincture.Rules do
   defp placement(_placement),
     do: refuse("tincture.frame.placement is one of #{Enum.join(@placements, ", ")}")
 
-  defp distinct_cards(cards) do
-    names = Enum.map(cards, & &1.name)
-
-    if Enum.uniq(names) == names,
-      do: :ok,
-      else: refuse("tincture.cards names a card twice")
-  end
-
-  # A desktop draws other tinctures' cards and reaches nothing of its own.
-  defp desktop("desktop", manifest) do
-    tincture = if is_map(manifest), do: Map.get(manifest, "tincture"), else: nil
-    caps = if is_map(manifest), do: Map.get(manifest, "caps"), else: nil
-    dependencies = if is_map(manifest), do: Map.get(manifest, "dependencies"), else: nil
-
-    cond do
-      present?(is_map(tincture) && Map.get(tincture, "connect")) ->
-        refuse("tincture.frame.placement desktop: a desktop declares no tincture.connect origin")
-
-      is_map(caps) and Map.has_key?(caps, "egress") ->
-        refuse("tincture.frame.placement desktop: a desktop declares no caps.egress")
-
-      is_map(dependencies) and
-          (present?(Map.get(dependencies, "static")) or
-             not is_nil(Map.get(dependencies, "dynamic"))) ->
-        refuse(
-          "tincture.frame.placement desktop: a desktop declares no component dependency; " <>
-            "the cards it draws are other tinctures'"
-        )
-
-      true ->
-        :ok
-    end
-  end
-
-  defp desktop(_placement, _manifest), do: :ok
-
   # A canvas is a page the toolkit draws from its module. It reaches
   # nothing of its own and runs only while it is shown; the block that
   # names its module is a canvas's alone.
@@ -703,9 +655,6 @@ defmodule Compendium.Tincture.Rules do
       declaration.actions != [] ->
         canvas_refuse("a canvas declares no system action")
 
-      declaration.cards != [] ->
-        canvas_refuse("a canvas declares no card")
-
       true ->
         :ok
     end
@@ -740,52 +689,6 @@ defmodule Compendium.Tincture.Rules do
 
   defp present?(value) when value in [nil, false, [], ""], do: false
   defp present?(_value), do: true
-
-  defp cards(%Tincture{cards: cards, actions: actions, streams: streams}, manifest) do
-    stream_names = MapSet.new(streams, & &1.name)
-
-    Enum.reduce_while(cards, :ok, fn card, :ok ->
-      case card_rules(card, actions, stream_names, manifest) do
-        :ok -> {:cont, :ok}
-        refusal -> {:halt, refusal}
-      end
-    end)
-  end
-
-  defp card_rules(card, actions, stream_names, manifest) do
-    cond do
-      card.source && not invokes?(manifest, card.source.component) ->
-        refuse(
-          "tincture.cards #{card.name}: its source #{card.source.component} is not a component " <>
-            "dependencies.static declares"
-        )
-
-      is_nil(card.source) and (card.number || card.list) ->
-        refuse(
-          "tincture.cards #{card.name}: a card that shows a number or a list has a source to refresh it from"
-        )
-
-      undeclared = Enum.find(card.buttons, &(&1.action not in actions)) ->
-        refuse(
-          "tincture.cards #{card.name}: a button names #{undeclared.action}, which tincture.actions does not declare"
-        )
-
-      card.stream && not MapSet.member?(stream_names, card.stream) ->
-        refuse(
-          "tincture.cards #{card.name}: its stream #{card.stream} is not one tincture.streams declares"
-        )
-
-      card.image && not image?(card.image) ->
-        refuse(
-          "tincture.cards #{card.name}: the image must be a served image (#{Enum.join(@image_types, ", ")})"
-        )
-
-      true ->
-        :ok
-    end
-  end
-
-  defp image?(path), do: String.downcase(Path.extname(path)) in @image_types
 
   # Binding, removing or pressing a feed is the person's alone: a bind or a
   # removal they approve, a press of a control Prism draws. A tincture's

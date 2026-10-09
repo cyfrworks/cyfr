@@ -31,7 +31,7 @@ end
 defmodule Cyfr.ConsentPreviewRenderTest do
   @moduledoc """
   No renderer hides a row kind. One preview holding a row of every kind —
-  a tincture's frame, streams, cards and system actions included, one
+  a tincture's frame, streams and system actions included, one
   vault entry lent on two edges and one stream under two subjects among
   them (`tests/fixtures/consent_preview.json`) — is rendered by Prism's
   consent sheet and by the system layer's grant prompt, and every row's
@@ -218,7 +218,6 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   defp expected(_row, "tools", ["*"]), do: ["Every tool of the catalog (*)"]
   defp expected(_row, "background", true), do: ["Keeps running in the background"]
   defp expected(_row, "background", false), do: ["Stops when hidden"]
-  defp expected(_row, "args", args), do: [Jason.encode!(args)]
 
   defp expected(_row, "rate_limit", %{"requests" => requests, "window" => window}),
     do: ["#{requests} per #{window}"]

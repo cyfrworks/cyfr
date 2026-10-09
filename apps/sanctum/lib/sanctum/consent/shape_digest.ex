@@ -6,7 +6,7 @@ defmodule Sanctum.Consent.ShapeDigest do
 
   The shape is the *question*: this component, at this scope, declaring
   these needs, asking for these capabilities — and, for a tincture, the
-  frame, cards, streams and system actions it declares, by their digest. The answer — which credential
+  frame, canvas, streams and system actions it declares, by their digest. The answer — which credential
   satisfies which need, what gets projected — is the commit digest's job
   (`Sanctum.Consent.CommitDigest`).
 

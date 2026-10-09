@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map; accepts each origin spelling and refuses each invalid one; and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools and limits can be narrowed. Origins are answered in the enum's order: interactive, programmatic, schedule, webhook. A row is one per kind and node; a credential one per binding, keyed by its binding_key: the row's node, the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need) and its slot (default, or name:<connection> for a named account); a stream one per name and subject; a tool server and a card one per name. So one entry lent on two edges is two rows, and so is one stream under two subjects. A credential row names the entry's provider hint (absent when it has none), its destination in Prima.Destination's canonical spelling, its source (own, instance or provided), whether it is disclosed, suggested and a choice the person must make, and its lifetime: standing, until an RFC 3339 UTC time, or once. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask. A preview names the bindings of the profile's head the revision removes, as removed: a list, empty when it removes none, sorted by binding_key, each key once. Each removal is one binding as the head's row holds it: its binding_key, node, edge and connection (absent for a default) spelled as a credential row's, the need it was bound for (null when it cannot be told), exactly one of entry_id, instance_entry_id and via (the lender's label), and the entry's name and source (own or instance), each absent when the entry cannot be read.",
+  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map; accepts each origin spelling and refuses each invalid one; and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools and limits can be narrowed. Origins are answered in the enum's order: interactive, programmatic, schedule, webhook. A row is one per kind and node; a credential one per binding, keyed by its binding_key: the row's node, the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need) and its slot (default, or name:<connection> for a named account); a stream one per name and subject; a tool server one per name. So one entry lent on two edges is two rows, and so is one stream under two subjects. A credential row names the entry's provider hint (absent when it has none), its destination in Prima.Destination's canonical spelling, its source (own, instance or provided), whether it is disclosed, suggested and a choice the person must make, and its lifetime: standing, until an RFC 3339 UTC time, or once. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask. A preview names the bindings of the profile's head the revision removes, as removed: a list, empty when it removes none, sorted by binding_key, each key once. Each removal is one binding as the head's row holds it: its binding_key, node, edge and connection (absent for a default) spelled as a credential row's, the need it was bound for (null when it cannot be told), exactly one of entry_id, instance_entry_id and via (the lender's label), and the entry's name and source (own or instance), each absent when the entry cannot be read.",
   "kinds": [
     "credential",
     "egress",
@@ -9,7 +9,6 @@
     "limits",
     "frame",
     "streams",
-    "cards",
     "system_actions"
   ],
   "narrowable_kinds": [
@@ -331,27 +330,6 @@
         "node": "tincture:local.dashboard",
         "values": {
           "name": "threads.messages"
-        }
-      },
-      {
-        "kind": "cards",
-        "narrowed": false,
-        "node": "tincture:local.dashboard",
-        "values": {
-          "args": {
-            "city": "Lisbon"
-          },
-          "component": "reagent:local.weather",
-          "name": "today",
-          "operation": "run"
-        }
-      },
-      {
-        "kind": "cards",
-        "narrowed": false,
-        "node": "tincture:local.dashboard",
-        "values": {
-          "name": "about"
         }
       },
       {
@@ -1066,30 +1044,6 @@
                 "window": "1m"
               },
               "timeout": "forever"
-            }
-          }
-        ],
-        "v": 1
-      }
-    },
-    {
-      "error": "invalid_field",
-      "name": "a card naming half a source",
-      "preview": {
-        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
-        "origins": [
-          "interactive"
-        ],
-        "removed": [],
-        "rows": [
-          {
-            "kind": "cards",
-            "narrowed": false,
-            "node": "tincture:local.dashboard",
-            "values": {
-              "component": "reagent:local.weather",
-              "name": "today",
-              "operation": "run"
             }
           }
         ],

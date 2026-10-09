@@ -3,7 +3,7 @@
 
 defmodule Prima.ManifestTinctureTest do
   @moduledoc """
-  The frame, canvas, cards, streams and actions blocks: their shapes, read into
+  The frame, canvas, streams and actions blocks: their shapes, read into
   `Prima.Manifest.Tincture`, refused at every manifest write when wrong,
   and their digest — the same for two declarations that mean the same
   thing, and moved by a declaration that asks for more.
@@ -13,28 +13,12 @@ defmodule Prima.ManifestTinctureTest do
 
   alias Prima.Manifest
   alias Prima.Manifest.Tincture
-  alias Prima.Manifest.Tincture.{Button, Canvas, Card, Frame, Source}
+  alias Prima.Manifest.Tincture.{Canvas, Frame}
 
   @declared %{
-    "frame" => %{"capabilities" => ["pointer_lock", "fullscreen"], "placement" => "desktop"},
+    "frame" => %{"capabilities" => ["pointer_lock", "fullscreen"], "placement" => "float"},
     "actions" => ["execution.list", "records.get"],
-    "streams" => [%{"name" => "executions.deltas", "subject" => "*"}],
-    "cards" => [
-      %{
-        "name" => "status",
-        "title" => "Status",
-        "number" => "count",
-        "list" => "recent",
-        "image" => "public/media/icon.svg",
-        "buttons" => [%{"label" => "Refresh", "action" => "execution.list"}],
-        "stream" => "executions.deltas",
-        "source" => %{
-          "component" => "reagent:local.status",
-          "operation" => "summary",
-          "args" => %{"window" => "day"}
-        }
-      }
-    ]
+    "streams" => [%{"name" => "executions.deltas", "subject" => "*"}]
   }
 
   defp manifest(tincture), do: %{"type" => "tincture", "tincture" => tincture}
@@ -54,33 +38,18 @@ defmodule Prima.ManifestTinctureTest do
 
     assert decl.frame == %Frame{
              capabilities: ["pointer_lock", "fullscreen"],
-             placement: "desktop",
+             placement: "float",
              background: false
            }
 
     assert decl.actions == ["execution.list", "records.get"]
     assert [%Tincture.Stream{name: "executions.deltas", subject: "*"}] = decl.streams
 
-    assert [
-             %Card{
-               name: "status",
-               number: "count",
-               list: "recent",
-               stream: "executions.deltas",
-               buttons: [%Button{label: "Refresh", action: "execution.list", args: %{}}],
-               source: %Source{
-                 component: "reagent:local.status",
-                 operation: "summary",
-                 args: %{"window" => "day"}
-               }
-             }
-           ] = decl.cards
-
     assert Manifest.validate(manifest(@declared), fn _ -> true end) == :ok
   end
 
   test "a manifest that declares none of the blocks reads as the empty declaration, and is not declared" do
-    assert {:ok, %Tincture{frame: %Frame{capabilities: []}, cards: [], streams: [], actions: []}} =
+    assert {:ok, %Tincture{frame: %Frame{capabilities: []}, streams: [], actions: []}} =
              Tincture.from_manifest(manifest(%{"entry" => "index.html"}))
 
     assert {:ok, %Tincture{}} = Tincture.from_manifest(%{"type" => "catalyst"})
@@ -100,64 +69,6 @@ defmodule Prima.ManifestTinctureTest do
     refused(%{"streams" => [%{"name" => "deltas"}]})
     refused(%{"streams" => [%{"name" => "executions.deltas", "subject" => "a b"}]})
     refused(%{"streams" => [%{"name" => "executions.deltas", "topic" => "x"}]})
-    refused(%{"cards" => [%{"name" => "status"}]})
-    refused(%{"cards" => [%{"name" => "Status", "title" => "x"}]})
-    refused(%{"cards" => [%{"name" => "s", "title" => "x", "image" => "../out.svg"}]})
-    refused(%{"cards" => [%{"name" => "s", "title" => "x", "buttons" => [%{"label" => "Go"}]}]})
-
-    refused(%{
-      "cards" => [
-        %{
-          "name" => "s",
-          "title" => "x",
-          "buttons" => List.duplicate(%{"label" => "a", "action" => "a.b"}, 5)
-        }
-      ]
-    })
-
-    sentence = refused(%{"cards" => [%{"name" => "s", "title" => String.duplicate("t", 81)}]})
-    assert sentence =~ "at most 80"
-  end
-
-  describe "a card's source" do
-    defp with_source(source),
-      do: %{"cards" => [%{"name" => "s", "title" => "S", "source" => source}]}
-
-    test "is an invoke's shape, its args absent read as none" do
-      assert {:ok, %Tincture{cards: [%Card{source: source}]}} =
-               Tincture.from_manifest(
-                 manifest(with_source(%{"component" => "c:local.a", "operation" => "run"}))
-               )
-
-      assert source == %Source{component: "c:local.a", operation: "run", args: %{}}
-
-      assert {:ok, %Tincture{cards: [%Card{source: nil}]}} =
-               Tincture.from_manifest(manifest(%{"cards" => [%{"name" => "s", "title" => "S"}]}))
-    end
-
-    test "is refused when it is not an invoke, with a sentence naming the card" do
-      for source <- [
-            "c:local.a",
-            %{"operation" => "run"},
-            %{"component" => "not a ref", "operation" => "run"},
-            %{"component" => "c:local.a", "operation" => "Run It"},
-            %{"component" => "c:local.a", "operation" => "run", "args" => ["x"]},
-            %{"component" => "c:local.a", "operation" => "run", "params" => %{}}
-          ] do
-        assert refused(with_source(source)) =~ "tincture.cards s: "
-      end
-    end
-
-    test "holds its args to 4096 bytes of canonical JSON" do
-      fits = %{"k" => String.duplicate("a", 4096 - byte_size(~s({"k":""})))}
-      over = %{"k" => String.duplicate("a", 4097 - byte_size(~s({"k":""})))}
-      source = %{"component" => "c:local.a", "operation" => "run"}
-
-      assert {:ok, _} =
-               Tincture.from_manifest(manifest(with_source(Map.put(source, "args", fits))))
-
-      assert refused(with_source(Map.put(source, "args", over))) =~ "at most 4096 bytes"
-    end
   end
 
   test "the digest is the same for declarations that mean the same thing" do
@@ -190,14 +101,7 @@ defmodule Prima.ManifestTinctureTest do
           put_in(@declared, ["frame", "background"], true),
           Map.update!(@declared, "actions", &["records.delete" | &1]),
           Map.update!(@declared, "streams", &[%{"name" => "builds.progress"} | &1]),
-          put_in(@declared, ["streams"], [%{"name" => "executions.deltas", "subject" => "exec_1"}]),
-          update_in(@declared, ["cards"], fn [card] ->
-            [put_in(card, ["source", "args", "window"], "week")]
-          end),
-          update_in(@declared, ["cards"], fn [card] ->
-            [put_in(card, ["source", "component"], "reagent:local.other")]
-          end),
-          update_in(@declared, ["cards"], fn [card] -> [Map.delete(card, "source")] end)
+          put_in(@declared, ["streams"], [%{"name" => "executions.deltas", "subject" => "exec_1"}])
         ] do
       {:ok, wider} = Tincture.from_manifest(manifest(more))
       refute Tincture.digest(wider) == digest
@@ -211,7 +115,6 @@ defmodule Prima.ManifestTinctureTest do
     assert canonical["frame"]["capabilities"] == ["fullscreen", "pointer_lock"]
     assert canonical["actions"] == ["execution.list", "records.get"]
     assert {:ok, Tincture.digest(decl)} == Prima.JCS.hash(canonical)
-    refute Map.has_key?(hd(canonical["cards"]), "missing")
   end
 
   describe "a canvas's block" do
@@ -268,19 +171,19 @@ defmodule Prima.ManifestTinctureTest do
       refute Tincture.digest(other) == Tincture.digest(canvas)
     end
 
-    # A tincture that is no canvas hashes as it did before the block
-    # existed, so no existing grant asks again for it: this digest is the
-    # JCS of the declaration's canonical form without a canvas key.
-    test "leaves every other declaration's canonical form and digest as they were" do
+    # A tincture that is no canvas writes exactly its frame, streams and
+    # actions: this digest is the JCS of that canonical form, with no canvas
+    # key and no other block.
+    test "leaves every other declaration's canonical form to its frame, streams and actions" do
       {:ok, decl} = Tincture.from_manifest(manifest(@declared))
 
       refute Map.has_key?(Tincture.canonical(decl), "canvas")
 
       assert Map.keys(Tincture.canonical(decl)) |> Enum.sort() ==
-               ~w(actions cards frame streams)
+               ~w(actions frame streams)
 
       assert Tincture.digest(decl) ==
-               "sha256:ff63ce15bd9e46faabb41c2187639ad4a50d6582a0aa56fc18e6f7c22de4b994"
+               "sha256:49de96ba563cdb7b366b82d5ba9e5af36ea08f835332b543300f155389067c59"
     end
   end
 

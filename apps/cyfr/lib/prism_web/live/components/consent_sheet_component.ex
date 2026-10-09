@@ -9,7 +9,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   It draws the typed rows of a `Prima.ConsentPreview` itself, grouped by
   kind in its own words: every row the preview answers, of every kind, a
-  tincture's frame, streams, cards and system actions included, and never
+  tincture's frame, streams and system actions included, and never
   a sentence the home wrote. Before a preview is read it draws the plan's
   rows, the ask. A plan whose closure is unresolved is drawn as that,
   naming what is missing, or the dependency stored damaged, with no rows
@@ -2920,20 +2920,6 @@ defmodule PrismWeb.ConsentSheetComponent do
     """
   end
 
-  defp row(%{row: %{"kind" => "cards"}} = assigns) do
-    ~H"""
-    <div class="consent-sheet__row" data-row="cards" data-node={@row["node"]}>
-      <.node_line row={@row} />
-      <span class="font-medium">{@row["values"]["name"]}</span>
-      <span :if={@row["values"]["component"]}>
-        — from {@row["values"]["operation"]} of {@row["values"]["component"]} with
-        <span class="font-mono">{Jason.encode!(@row["values"]["args"])}</span>
-      </span>
-      <span :if={!@row["values"]["component"]}>— static, from no component</span>
-    </div>
-    """
-  end
-
   defp row(%{row: %{"kind" => "system_actions"}} = assigns) do
     ~H"""
     <div class="consent-sheet__row" data-row="system_actions" data-node={@row["node"]}>
@@ -3110,7 +3096,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp kind_heading("limits"), do: "Limits"
   defp kind_heading("frame"), do: "Its frame"
   defp kind_heading("streams"), do: "Streams it listens to"
-  defp kind_heading("cards"), do: "Cards it shares with the desktop"
   defp kind_heading("system_actions"), do: "System actions it may call"
   defp kind_heading(kind), do: kind
 

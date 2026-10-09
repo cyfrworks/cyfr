@@ -406,7 +406,7 @@ defmodule Sanctum.Consent.CommitDigestTest do
     end
 
     test "a kind its enforcement point cannot narrow is refused, never bound as narrowed" do
-      for kind <- ~w(credential tool_servers frame streams cards system_actions) do
+      for kind <- ~w(credential tool_servers frame streams system_actions) do
         assert {:error, {:invalid_commit, :subset, why}} =
                  CommitDigest.compute(Map.put(@base, :subset, %{@node => %{kind => %{}}}))
 

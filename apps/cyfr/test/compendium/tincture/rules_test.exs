@@ -7,9 +7,9 @@ defmodule Compendium.Tincture.RulesTest do
   opens in the sandbox and the permissions policy (never a forbidden
   token), the entry page's policy derived against the frame facts
   `tests/browser/README.md` records, the templates and the lockfile rule,
-  and the declaration grammar — a capability the rules do not list, a card
-  naming an action the declaration lacks and a stream no provider declares
-  each refused. A canvas is held tighter: its policy names only its open's
+  and the declaration grammar — a capability or a placement the rules do
+  not list and a stream no provider declares each refused. A canvas is
+  held tighter: its policy names only its open's
   two paths, its sandbox is scripts alone, each declaration it may not
   make is refused with its own sentence, and it reads only streams that
   declare a shape, each feed by its name. The facade answers what the
@@ -31,14 +31,8 @@ defmodule Compendium.Tincture.RulesTest do
     do: %{
       "type" => "tincture",
       "tincture" => tincture,
-      "dependencies" => %{"static" => [%{"ref" => @runs, "reason" => "the runs card"}]}
+      "dependencies" => %{"static" => [%{"ref" => @runs, "reason" => "the runs it counts"}]}
     }
-
-  # A desktop's manifest: no dependency of its own unless a test adds one.
-  defp desktop(tincture, extra \\ %{}) do
-    %{"type" => "tincture", "tincture" => Map.put(tincture, "frame", %{"placement" => "desktop"})}
-    |> Map.merge(extra)
-  end
 
   describe "served types" do
     test "every family the frame serves has its type, and the listing's blocked raster is not served" do
@@ -243,18 +237,7 @@ defmodule Compendium.Tincture.RulesTest do
         "background" => true
       },
       "actions" => ["execution.list"],
-      "streams" => [%{"name" => "executions.deltas", "subject" => "*"}],
-      "cards" => [
-        %{
-          "name" => "runs",
-          "title" => "Runs",
-          "number" => "count",
-          "image" => "public/media/icon.svg",
-          "buttons" => [%{"label" => "Refresh", "action" => "execution.list"}],
-          "stream" => "executions.deltas",
-          "source" => %{"component" => "reagent:local.runs:1.0.0", "operation" => "count"}
-        }
-      ]
+      "streams" => [%{"name" => "executions.deltas", "subject" => "*"}]
     }
 
     @deltas %Prima.Provider.Stream{
@@ -270,7 +253,7 @@ defmodule Compendium.Tincture.RulesTest do
       assert decl.frame.background
       assert Compendium.tincture_declaration(manifest(@declared)) == {:ok, decl}
 
-      assert {:ok, %Tincture{cards: [], actions: []}} =
+      assert {:ok, %Tincture{streams: [], actions: []}} =
                Rules.validate_declaration(manifest(%{"entry" => "index.html"}))
     end
 
@@ -283,6 +266,13 @@ defmodule Compendium.Tincture.RulesTest do
         assert {:error, {:invalid_tincture, _}} =
                  Rules.validate_declaration(manifest(Map.put(@declared, "frame", frame)))
       end
+    end
+
+    test "the placements are float and canvas, and a desktop is refused by the placement sentence" do
+      assert Rules.placements() == ~w(float canvas)
+
+      assert Rules.validate_declaration(manifest(%{"frame" => %{"placement" => "desktop"}})) ==
+               {:error, {:invalid_tincture, "tincture.frame.placement is one of float, canvas"}}
     end
 
     for action <- ~w(feed.bind feed.remove feed.press) do
@@ -316,53 +306,15 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
-    test "a card naming an action the declaration lacks is refused" do
-      lacking = Map.put(@declared, "actions", ["records.get"])
+    test "a frame may invoke a component its dependencies.static names, and no other" do
+      declared = manifest(@declared)
 
-      assert {:error, {:invalid_tincture, sentence}} =
-               Rules.validate_declaration(manifest(lacking))
-
-      assert sentence =~ "execution.list"
-    end
-
-    test "a card's stream must be declared, its name distinct and its image a served image" do
-      undeclared = Map.put(@declared, "streams", [])
-      assert {:error, {:invalid_tincture, _}} = Rules.validate_declaration(manifest(undeclared))
-
-      twice = Map.update!(@declared, "cards", &(&1 ++ &1))
-      assert {:error, {:invalid_tincture, _}} = Rules.validate_declaration(manifest(twice))
-
-      mp4 =
-        put_in(@declared, ["cards"], [%{"name" => "c", "title" => "C", "image" => "clip.mp4"}])
-
-      assert {:error, {:invalid_tincture, _}} = Rules.validate_declaration(manifest(mp4))
-    end
-
-    test "a card's source names a component the tincture may invoke, by the invoke's own rule" do
-      elsewhere =
-        put_in(@declared, ["cards"], [
-          %{
-            "name" => "runs",
-            "title" => "Runs",
-            "number" => "count",
-            "source" => %{"component" => "reagent:local.stripe", "operation" => "count"}
-          }
-        ])
-
-      assert {:error, {:invalid_tincture, sentence}} =
-               Rules.validate_declaration(manifest(elsewhere))
-
-      assert sentence ==
-               "tincture.cards runs: its source reagent:local.stripe is not a component " <>
-                 "dependencies.static declares"
-
-      # One rule: what a frame's invoke is admitted by is what the source is held to.
-      refute Rules.invokes?(manifest(elsewhere), "reagent:local.stripe")
-      assert Rules.invokes?(manifest(elsewhere), "reagent:local.runs:1.0.0")
-      assert Rules.invokes?(manifest(elsewhere), "r:local.runs")
-      refute Rules.invokes?(manifest(elsewhere), "reagent:local.runs-two")
-      refute Rules.invokes?(manifest(elsewhere), nil)
-      assert Compendium.tincture_invokes?(manifest(elsewhere), @runs)
+      refute Rules.invokes?(declared, "reagent:local.stripe")
+      assert Rules.invokes?(declared, "reagent:local.runs:1.0.0")
+      assert Rules.invokes?(declared, "r:local.runs")
+      refute Rules.invokes?(declared, "reagent:local.runs-two")
+      refute Rules.invokes?(declared, nil)
+      assert Compendium.tincture_invokes?(declared, @runs)
 
       pinned = %{
         "dependencies" => %{"static" => ["reagent:local.runs:1.0.0"]}
@@ -372,78 +324,7 @@ defmodule Compendium.Tincture.RulesTest do
       assert Rules.invokes?(pinned, "reagent:local.runs")
     end
 
-    test "a card that shows a number or a list has a source; one without either is static" do
-      for field <- ["number", "list"] do
-        sourceless =
-          put_in(@declared, ["cards"], [%{"name" => "runs", "title" => "Runs", field => "f"}])
-
-        assert {:error, {:invalid_tincture, sentence}} =
-                 Rules.validate_declaration(manifest(sourceless))
-
-        assert sentence ==
-                 "tincture.cards runs: a card that shows a number or a list has a source to refresh it from"
-      end
-
-      static = put_in(@declared, ["cards"], [%{"name" => "runs", "title" => "Runs"}])
-
-      assert {:ok, %Tincture{cards: [%{source: nil}]}} =
-               Rules.validate_declaration(manifest(static))
-    end
-
-    test "a card's source args are held to their bound at publish" do
-      over =
-        put_in(@declared, ["cards"], [
-          %{
-            "name" => "runs",
-            "title" => "Runs",
-            "source" => %{
-              "component" => @runs,
-              "operation" => "count",
-              "args" => %{"pad" => String.duplicate("x", 4096)}
-            }
-          }
-        ])
-
-      assert {:error, {:invalid_tincture, sentence}} = Rules.validate_declaration(manifest(over))
-      assert sentence =~ "tincture.cards runs: the source's args are at most 4096 bytes"
-    end
-
-    test "a desktop reaches nothing of its own, each refused with its sentence" do
-      assert {:ok, %Tincture{frame: %{placement: "desktop"}}} =
-               Rules.validate_declaration(desktop(%{"entry" => "index.html"}))
-
-      assert {:ok, _} =
-               Rules.validate_declaration(
-                 desktop(%{"connect" => []}, %{"dependencies" => %{"static" => []}})
-               )
-
-      assert Rules.validate_declaration(desktop(%{"connect" => ["api.example.com"]})) ==
-               {:error,
-                {:invalid_tincture,
-                 "tincture.frame.placement desktop: a desktop declares no tincture.connect origin"}}
-
-      assert Rules.validate_declaration(
-               desktop(%{}, %{"caps" => %{"egress" => %{"domains" => ["api.example.com"]}}})
-             ) ==
-               {:error,
-                {:invalid_tincture,
-                 "tincture.frame.placement desktop: a desktop declares no caps.egress"}}
-
-      dependency =
-        {:error,
-         {:invalid_tincture,
-          "tincture.frame.placement desktop: a desktop declares no component dependency; " <>
-            "the cards it draws are other tinctures'"}}
-
-      assert Rules.validate_declaration(
-               desktop(%{}, %{"dependencies" => %{"static" => ["reagent:local.runs"]}})
-             ) == dependency
-
-      assert Rules.validate_declaration(
-               desktop(%{}, %{"dependencies" => %{"dynamic" => %{"discover" => true}}})
-             ) == dependency
-
-      # A tincture that is not a desktop keeps its origins and dependencies.
+    test "a tincture that is no canvas keeps its origins and dependencies" do
       assert {:ok, _} =
                Rules.validate_declaration(
                  manifest(%{
@@ -455,7 +336,7 @@ defmodule Compendium.Tincture.RulesTest do
 
     test "a malformed block is refused as the shapes refuse it" do
       assert {:error, {:invalid_tincture, _}} =
-               Rules.validate_declaration(manifest(%{"cards" => "nope"}))
+               Rules.validate_declaration(manifest(%{"streams" => "nope"}))
     end
 
     test "a stream a provider does not declare is refused, and a subject the stream does not take" do
@@ -698,8 +579,6 @@ defmodule Compendium.Tincture.RulesTest do
         {canvas(%{"frame" => %{"placement" => "canvas", "capabilities" => ["fullscreen"]}}),
          "a canvas declares no frame capability"},
         {canvas(%{"actions" => ["execution.list"]}), "a canvas declares no system action"},
-        {canvas(%{"cards" => [%{"name" => "runs", "title" => "Runs"}]}),
-         "a canvas declares no card"},
         {canvas() |> update_in(["tincture"], &Map.delete(&1, "canvas")),
          "a canvas declares tincture.canvas, its module and its toolkit"}
       ]
@@ -713,7 +592,7 @@ defmodule Compendium.Tincture.RulesTest do
       # Declared as empty, each is no declaration at all.
       assert {:ok, _} =
                Rules.validate_declaration(
-                 canvas(%{"connect" => [], "actions" => [], "cards" => []}, %{
+                 canvas(%{"connect" => [], "actions" => []}, %{
                    "dependencies" => %{"static" => []}
                  })
                )
@@ -772,7 +651,7 @@ defmodule Compendium.Tincture.RulesTest do
     end
 
     test "a canvas block on a placement other than canvas is refused" do
-      for frame <- [%{"placement" => "float"}, %{"placement" => "desktop"}, %{}] do
+      for frame <- [%{"placement" => "float"}, %{}] do
         manifest = canvas(%{"frame" => frame})
 
         assert Rules.validate_declaration(manifest) ==

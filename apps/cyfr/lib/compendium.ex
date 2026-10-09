@@ -124,7 +124,7 @@ defmodule Compendium do
   defdelegate tincture_lockfile_required?(manifest), to: Rules, as: :lockfile_required?
 
   @doc """
-  A manifest's frame, cards, streams and system actions, held to the rules
+  A manifest's frame, canvas, streams and system actions, held to the rules
   (`Compendium.Tincture.Rules.validate_declaration/1`).
   """
   @spec tincture_declaration(term()) ::
@@ -133,7 +133,7 @@ defmodule Compendium do
 
   @doc """
   Whether a tincture's manifest may invoke a component, the rule a frame's
-  invoke and a card's source share (`Compendium.Tincture.Rules.invokes?/2`).
+  invoke is admitted by (`Compendium.Tincture.Rules.invokes?/2`).
   """
   @spec tincture_invokes?(term(), term()) :: boolean()
   defdelegate tincture_invokes?(manifest, ref), to: Rules, as: :invokes?

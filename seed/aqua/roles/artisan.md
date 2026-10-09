@@ -143,10 +143,8 @@ outside it is refused.
 | Block | Keys |
 |---|---|
 | `frame` | `background`, `capabilities`, `placement` |
-| `frame.placement` | one of `float`, `desktop`, `canvas` |
+| `frame.placement` | one of `float`, `canvas` |
 | `canvas` | `module`, `toolkit` |
-| `cards[]` | `buttons`, `image`, `list`, `name`, `number`, `source`, `stream`, `title` |
-| `cards[].buttons[]` | `action`, `args`, `label` |
 | `streams[]` | `name`, `subject` |
 | `actions[]` | an operation name, `tool.action` |
 <!-- /tincture:declaration -->

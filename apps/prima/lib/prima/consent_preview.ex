@@ -50,15 +50,13 @@ defmodule Prima.ConsentPreview do
     * `streams` — `name` and `subject` (a literal, `"*"`, or absent). One
       row per stream and subject, so one stream declared under two
       subjects is two rows.
-    * `cards` — `name`, and the `component`, `operation` and `args` its
-      data comes from, all three or, for a static card, none. One row per card.
     * `system_actions` — `actions`, the `tool.action` names.
 
   Only `egress`, `storage`, `tools` and `limits` can be narrowed
   (`narrowable_kinds/0`); a row of another kind is granted whole or not at
   all and is never marked narrowed, and neither is a wildcard tools row,
   which is the whole ask. Lists of names are sets: no name twice, and at
-  most 256. A kind outside these ten is refused, and so is a field a kind
+  most 256. A kind outside these nine is refused, and so is a field a kind
   does not carry.
 
   ## Removed bindings
@@ -92,7 +90,6 @@ defmodule Prima.ConsentPreview do
     :limits,
     :frame,
     :streams,
-    :cards,
     :system_actions
   ]
   @narrowable [:egress, :storage, :tools, :limits]
@@ -106,7 +103,6 @@ defmodule Prima.ConsentPreview do
           | :limits
           | :frame
           | :streams
-          | :cards
           | :system_actions
 
   @typedoc "A removed binding in its JSON form (`check_removed/1`)."
@@ -136,7 +132,7 @@ defmodule Prima.ConsentPreview do
   @spec version() :: pos_integer()
   def version, do: @version
 
-  @doc "The ten row kinds."
+  @doc "The nine row kinds."
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
 
@@ -279,14 +275,12 @@ defmodule Prima.ConsentPreview.Row do
     "limits" => :limits,
     "frame" => :frame,
     "streams" => :streams,
-    "cards" => :cards,
     "system_actions" => :system_actions
   }
   @narrowable [:egress, :storage, :tools, :limits]
   @one_per_node [:egress, :storage, :tools, :limits, :frame, :system_actions]
   @max_text 1024
   @max_set 256
-  @max_args_bytes 4096
   @wildcard "*"
   @sources ~w(own instance provided)
   @lifetimes ~w(standing until once)
@@ -433,11 +427,6 @@ defmodule Prima.ConsentPreview.Row do
   defp spec(:streams),
     do: {~w(name), ~w(subject), %{"name" => &Tincture.stream_name?/1, "subject" => &subject?/1}}
 
-  defp spec(:cards),
-    do:
-      {~w(name), ~w(component operation args),
-       %{"name" => &text?/1, "component" => &text?/1, "operation" => &text?/1, "args" => &args?/1}}
-
   defp spec(:system_actions), do: {~w(actions), [], %{"actions" => &operations?/1}}
 
   defp each(values, checks) do
@@ -455,14 +444,6 @@ defmodule Prima.ConsentPreview.Row do
     case Prima.Limits.new(values) do
       {:ok, _limits} -> :ok
       {:error, {:invalid_limit, field, _why}} -> {:error, {:invalid_field, to_string(field)}}
-    end
-  end
-
-  # A card's data comes from one source, named whole, or it is static.
-  defp whole(:cards, values) do
-    case Enum.count(~w(component operation args), &Map.has_key?(values, &1)) do
-      count when count in [0, 3] -> :ok
-      _partial -> {:error, {:invalid_field, "component"}}
     end
   end
 
@@ -545,13 +526,4 @@ defmodule Prima.ConsentPreview.Row do
 
   defp subject?("*"), do: true
   defp subject?(subject), do: Tincture.literal_subject?(subject)
-
-  defp args?(args) when is_map(args) do
-    case Encoding.jcs(args) do
-      {:ok, bytes} -> byte_size(bytes) <= @max_args_bytes
-      {:error, _reason} -> false
-    end
-  end
-
-  defp args?(_args), do: false
 end

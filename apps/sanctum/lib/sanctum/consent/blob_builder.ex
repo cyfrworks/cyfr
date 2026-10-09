@@ -1183,7 +1183,7 @@ defmodule Sanctum.Consent.BlobBuilder do
     end
   end
 
-  # A tincture's frame, streams, cards and system actions, from the
+  # A tincture's frame, streams and system actions, from the
   # declaration the shape digest binds (`Prima.Manifest.Tincture`); none
   # for a manifest that declares none. Never narrowed.
   defp tincture_rows(node_key, manifest) do
@@ -1208,16 +1208,7 @@ defmodule Sanctum.Consent.BlobBuilder do
 
     [row("frame", node_key, frame, false)] ++
       Enum.map(canonical["streams"], &row("streams", node_key, &1, false)) ++
-      Enum.map(canonical["cards"], &row("cards", node_key, card_values(&1), false)) ++
       actions
-  end
-
-  # A card's source, named whole, or none for a static card.
-  defp card_values(%{"name" => name} = card) do
-    case card["source"] do
-      nil -> %{"name" => name}
-      source -> Map.put(Map.take(source, ~w(component operation args)), "name", name)
-    end
   end
 
   defp limits_map_from_caps(node_key, caps) do

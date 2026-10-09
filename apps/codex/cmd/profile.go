@@ -1485,7 +1485,7 @@ func unresolvedPlan(plan map[string]any) (string, bool) {
 // (tests/fixtures/consent_preview.json holds them).
 var previewKinds = []string{
 	"credential", "egress", "storage", "tools", "tool_servers",
-	"limits", "frame", "streams", "cards", "system_actions",
+	"limits", "frame", "streams", "system_actions",
 }
 
 var kindHeadings = map[string]string{
@@ -1497,7 +1497,6 @@ var kindHeadings = map[string]string{
 	"limits":         "Limits",
 	"frame":          "Its frame",
 	"streams":        "Streams it listens to",
-	"cards":          "Cards it shares with the desktop",
 	"system_actions": "System actions it may call",
 }
 
@@ -1641,14 +1640,6 @@ func describeRow(row map[string]any) []string {
 
 	case "streams":
 		return []string{node, str(values["name"]) + " " + subjectLabel(values["subject"])}
-
-	case "cards":
-		if component := str(values["component"]); component != "" {
-			args, _ := json.Marshal(values["args"])
-			return []string{node, fmt.Sprintf("%s, from %s of %s with %s",
-				str(values["name"]), str(values["operation"]), component, args)}
-		}
-		return []string{node, str(values["name"]) + ", static, from no component"}
 
 	case "system_actions":
 		return []string{node, "actions: " + listOr(values["actions"], "none")}

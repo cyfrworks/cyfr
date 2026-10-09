@@ -1632,8 +1632,6 @@ defmodule Cyfr.DocsDriftTest do
       "| `frame` | #{list.(keys.(%Prima.Manifest.Tincture.Frame{}))} |",
       "| `frame.placement` | one of #{list.(Compendium.tincture_placements())} |",
       "| `canvas` | #{list.(keys.(%Prima.Manifest.Tincture.Canvas{}))} |",
-      "| `cards[]` | #{list.(keys.(%Prima.Manifest.Tincture.Card{name: "", title: ""}))} |",
-      "| `cards[].buttons[]` | #{list.(keys.(%Prima.Manifest.Tincture.Button{label: "", action: ""}))} |",
       "| `streams[]` | #{list.(keys.(%Prima.Manifest.Tincture.Stream{name: ""}))} |",
       "| `actions[]` | an operation name, `tool.action` |"
     ]

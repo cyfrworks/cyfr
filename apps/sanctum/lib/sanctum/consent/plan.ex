@@ -26,7 +26,7 @@ defmodule Sanctum.Consent.Plan do
 
   The ask is answered as `rows`, the typed rows of `Prima.ConsentPreview`
   in their JSON form, one per resource each node of the closure asks for,
-  its limits, and a tincture's frame, streams, cards and system actions:
+  its limits, and a tincture's frame, streams and system actions:
   what a narrowing is chosen from, none of it narrowed yet. `origins` is
   the default a decision that names none admits, `interactive` alone.
 

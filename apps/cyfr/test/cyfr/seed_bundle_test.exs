@@ -62,13 +62,13 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert {:ok, "canvas.js"} = Compendium.tincture_canvas_module(canvas.manifest)
 
     # It reads the athanor's runs, names no feed, and declares nothing
-    # else: no action, no connect origin, no page of its own and no card.
+    # else: no action, no connect origin and no page of its own.
     assert declaration.actions == []
     assert [%{name: "runs.changes", subject: nil}] = declaration.streams
     assert Compendium.tincture_check_streams(declaration, Grimoire.streams()) == :ok
     assert Compendium.tincture_check_canvas_streams(declaration, Grimoire.streams()) == :ok
 
-    for key <- ~w(entry actions connect cards),
+    for key <- ~w(entry actions connect),
         do: refute(Map.has_key?(canvas.manifest["tincture"], key), key)
 
     refute Map.has_key?(canvas.manifest, "caps")

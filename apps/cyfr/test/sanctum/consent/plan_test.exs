@@ -5,7 +5,7 @@ defmodule Sanctum.Consent.PlanTest do
   @moduledoc """
   The plan answers the ask as `Prima.ConsentPreview` rows: one per resource
   each node of the closure asks for, its limits, and a tincture's frame,
-  streams, cards and system actions, none narrowed, in one order; with the
+  streams and system actions, none narrowed, in one order; with the
   origins a decision that names none admits, `interactive` alone.
   """
 
@@ -2404,22 +2404,10 @@ defmodule Sanctum.Consent.PlanTest do
     @declaration %{
       "frame" => %{"capabilities" => ["pointer_lock"], "placement" => "float"},
       "streams" => [%{"name" => "executions.deltas", "subject" => "run_1"}],
-      "cards" => [
-        %{"name" => "about", "title" => "About"},
-        %{
-          "name" => "today",
-          "title" => "Today",
-          "source" => %{
-            "component" => "reagent:local.plan-dep",
-            "operation" => "run",
-            "args" => %{"city" => "Lisbon"}
-          }
-        }
-      ],
       "actions" => ["execution.list"]
     }
 
-    test "are rows: the frame, each stream, each card and the system actions", %{ctx: ctx} do
+    test "are rows: the frame, each stream and the system actions", %{ctx: ctx} do
       ref = tincture!(ctx, "plan-frame", "1.0.0", @declaration)
       {:ok, plan} = Plan.plan(ctx, %{ref: ref})
       grouped = by_kind(decode!(plan.rows))
@@ -2433,18 +2421,12 @@ defmodule Sanctum.Consent.PlanTest do
              ]
 
       assert grouped[{:streams, ref}] == [%{"name" => "executions.deltas", "subject" => "run_1"}]
-
-      assert grouped[{:cards, ref}] == [
-               %{"name" => "about"},
-               %{
-                 "name" => "today",
-                 "component" => "reagent:local.plan-dep",
-                 "operation" => "run",
-                 "args" => %{"city" => "Lisbon"}
-               }
-             ]
-
       assert grouped[{:system_actions, ref}] == [%{"actions" => ["execution.list"]}]
+
+      # A tincture's rows are its limits and its declaration's: one frame,
+      # one per stream and one of system actions, and no other kind.
+      assert grouped |> Map.keys() |> Enum.filter(&(elem(&1, 1) == ref)) |> Enum.sort() ==
+               Enum.sort([{:frame, ref}, {:streams, ref}, {:system_actions, ref}, {:limits, ref}])
     end
 
     test "a version adding background permission and widening a stream's subject changes " <>

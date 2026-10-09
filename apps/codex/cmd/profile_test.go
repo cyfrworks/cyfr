@@ -40,7 +40,8 @@ func loadPreviewVectors(t *testing.T) previewVectors {
 	return v
 }
 
-// The CLI knows every kind the preview names, in the preview's order.
+// The CLI knows every kind the preview names, in the preview's order, and
+// heads no kind the preview does not name.
 func TestRenderPreview_KnowsEveryKind(t *testing.T) {
 	v := loadPreviewVectors(t)
 	if !reflect.DeepEqual(v.Kinds, previewKinds) {
@@ -50,6 +51,9 @@ func TestRenderPreview_KnowsEveryKind(t *testing.T) {
 		if kindHeadings[kind] == "" {
 			t.Errorf("kind %q has no heading", kind)
 		}
+	}
+	if len(kindHeadings) != len(v.Kinds) {
+		t.Errorf("the CLI heads %d kinds, the preview names %d", len(kindHeadings), len(v.Kinds))
 	}
 }
 
@@ -228,8 +232,8 @@ func TestRenderPreview_KeepsRowsApartByEdgeAndSubject(t *testing.T) {
 }
 
 // Every row names the node it is for, so in a closure of several
-// components the person sees which one each row is for: the tool server,
-// stream and card rows as much as the rest.
+// components the person sees which one each row is for: the tool server
+// and stream rows as much as the rest.
 func TestRenderPreview_EveryRowNamesItsNode(t *testing.T) {
 	v := loadPreviewVectors(t)
 	seen := map[string]bool{}
@@ -240,7 +244,7 @@ func TestRenderPreview_EveryRowNamesItsNode(t *testing.T) {
 			t.Errorf("a %s row does not name its node %s:\n%s", row["kind"], row["node"], lines)
 		}
 	}
-	for _, kind := range []string{"tool_servers", "streams", "cards"} {
+	for _, kind := range []string{"tool_servers", "streams"} {
 		if !seen[kind] {
 			t.Errorf("the vectors hold no %s row", kind)
 		}
@@ -1453,9 +1457,6 @@ func expected(row map[string]any, field string, value any) []string {
 		return []string{"keeps running in the background"}
 	case field == "background":
 		return []string{"stops when hidden"}
-	case field == "args":
-		args, _ := json.Marshal(value)
-		return []string{string(args)}
 	case field == "rate_limit":
 		rate := value.(map[string]any)
 		return []string{num(rate["requests"]) + " per " + str(rate["window"])}

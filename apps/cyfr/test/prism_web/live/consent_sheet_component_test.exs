@@ -1211,7 +1211,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
   test "every other placement keeps its placed line" do
     for {placement, line} <- [
           {"float", "Placed: float"},
-          {"desktop", "Placed: desktop"},
           {nil, "Placed: where the shell places it"}
         ] do
       values = if placement, do: %{"placement" => placement}, else: %{}

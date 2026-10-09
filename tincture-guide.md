@@ -46,11 +46,7 @@ A slot holds one tincture at one of three sizes:
 | `card` | the desktop draws one of the tincture's declared `cards`, as data (below) |
 | `full` | the tincture's own frame, at the slot's place |
 
-A tincture floats over the desktop only when its declaration names `frame.placement: "float"`, and only where the layout puts it. A tincture runs as a desktop only when it names `frame.placement: "desktop"`; a desktop draws other tinctures' cards and reaches nothing of its own, so it declares no `tincture.connect` origin, no `caps.egress` and no component dependency. A tincture is a canvas only when it names `frame.placement: "canvas"` and declares `canvas` (its `module`, a `.js` or `.mjs` path inside the version that is its entry, and its `toolkit` major, `1`); a canvas holds no page of its own, reaches nothing of its own and runs only while it is shown, so it declares no `tincture.entry`, `tincture.connect` origin, `caps.egress`, component dependency, `tincture.build`, frame capability, `frame.background`, action or card, and it reads only streams that declare a shape, naming each feed it reads.
-
-### Cards
-
-A card is data the desktop draws, never a frame. **`card.refresh`** (a `slot` and a `posture`) runs the card's `source` under the card tincture's own grant, projects the answer through the declaration (the `number` and `list` fields of the source's answer, the declared title, image and buttons) and answers it; a static card runs nothing. Each refresh is also delivered on the stream **`cards.refreshed`**, which is bound to its holder: a frame opens it with no subject, and it carries the refreshes of that person's own cards and nobody else's. **`card.press`** (a `slot`, a `posture` and a `button` index) fires the button's declared action with its fixed `args`, through the gate, under the person's context; a button never fires the `card` tool itself. A desktop declares `card.refresh`, `card.press` and the stream `cards.refreshed` to draw cards.
+A tincture floats over the desktop only when its declaration names `frame.placement: "float"`, and only where the layout puts it. A tincture is a canvas only when it names `frame.placement: "canvas"` and declares `canvas` (its `module`, a `.js` or `.mjs` path inside the version that is its entry, and its `toolkit` major, `1`); a canvas holds no page of its own, reaches nothing of its own and runs only while it is shown, so it declares no `tincture.entry`, `tincture.connect` origin, `caps.egress`, component dependency, `tincture.build`, frame capability, `frame.background` or action, and it reads only streams that declare a shape, naming each feed it reads.
 
 ### Hidden, frozen and background frames
 
@@ -152,8 +148,7 @@ data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
     "window": {"width": 1280, "height": 720, "resizable": true},
     "frame": {"capabilities": ["pointer_lock", "fullscreen", "audio_autoplay"]},
     "actions": [],
-    "streams": [],
-    "cards": []
+    "streams": []
   },
   "dependencies": {
     "static": [
@@ -176,28 +171,24 @@ data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
 | `connect` | string[] | `[]` | Bare external domains added to the page's `connect-src` over `https` (e.g. `["api.example.com"]`) |
 | `media` | object | — | Overrides for the auto-discovered media; the `public/media/` convention needs none |
 | `frame` | object | — | The frame's capabilities, placement and background flag (below) |
-| `cards` | object[] | `[]` | Cards the shell may show for the tincture (below) |
 | `streams` | object[] | `[]` | The streams the tincture may open (below) |
 | `actions` | string[] | `[]` | The system actions the tincture may run, as `tool.action` |
 
 ### The declaration
 
-`frame`, `cards`, `streams` and `actions` are the tincture's declaration. It is held to the rules at publish and read again at every open and every request: the declaration is the grant, and anything a frame asks for outside it is refused before it is dispatched. A version that declares more is consented to again.
+`frame`, `canvas`, `streams` and `actions` are the tincture's declaration. It is held to the rules at publish and read again at every open and every request: the declaration is the grant, and anything a frame asks for outside it is refused before it is dispatched. A version that declares more is consented to again.
 
 <!-- tincture:declaration -->
 | Block | Keys |
 |---|---|
 | `frame` | `background`, `capabilities`, `placement` |
-| `frame.placement` | one of `float`, `desktop`, `canvas` |
+| `frame.placement` | one of `float`, `canvas` |
 | `canvas` | `module`, `toolkit` |
-| `cards[]` | `buttons`, `image`, `list`, `name`, `number`, `source`, `stream`, `title` |
-| `cards[].buttons[]` | `action`, `args`, `label` |
 | `streams[]` | `name`, `subject` |
 | `actions[]` | an operation name, `tool.action` |
 <!-- /tincture:declaration -->
 
 - `frame.capabilities` names capabilities from the table below; `frame.background: true` keeps the frame active while hidden.
-- A card's `number` and `list` name fields of its `source`'s answer, its `image` is a served image inside the version, and each button runs a declared action with fixed `args`. A card that shows a number or a list has a `source`: `component`, `operation` and `args` fixed at publish, an invoke of a component the tincture declares in `dependencies.static`, at most 4096 bytes of canonical JSON. A card without one is static.
 - A stream's `name` is a stream a provider declares (two or more dotted names, such as `mcp_servers.changes`); its `subject` is a literal, `"*"` for any subject that stream's grammar admits, or absent for a stream that takes none.
 
 ### Frame capabilities

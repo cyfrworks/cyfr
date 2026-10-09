@@ -34,6 +34,11 @@ defmodule Prima.ConsentPreviewTest do
     assert v["narrowable_kinds"] == Enum.map(ConsentPreview.narrowable_kinds(), &Atom.to_string/1)
   end
 
+  test "the kinds are these nine, in this order" do
+    assert vectors()["kinds"] ==
+             ~w(credential egress storage tools tool_servers limits frame streams system_actions)
+  end
+
   test "the preview holds a row of every kind and writes back to itself" do
     preview = vectors()["preview"]
 

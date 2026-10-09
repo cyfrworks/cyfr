@@ -1212,7 +1212,7 @@ defmodule PrismWeb.ShellLive do
 
   # A frame refused because the person has not granted what its tincture
   # declares now: the grant prompt, whose sheet draws the preview's rows,
-  # the tincture's frame, streams, cards and system actions among them,
+  # the tincture's frame, streams and system actions among them,
   # and binds the vault entries it needs, when the consent walk's plan and
   # preview can be read for it (`PrismWeb.SystemLayer.grant_prompt/4`).
   # Otherwise the frame shows its refusal.
