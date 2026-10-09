@@ -19,7 +19,9 @@ defmodule Compendium.Registry do
     mint into `local` (`Compendium.NamespacePolicy`).
   - `publish_tincture_archive/4` (`source: "oci"`) — a tar+gzip tincture
     bundle, decompression-bounded (`Compendium.Archive.gunzip_bounded/2`),
-    symlink-refusing, validated before a byte is stored.
+    symlink-refusing, validated as the unit it installs (the archive with
+    the publish's own files and manifest laid over it) before a byte is
+    stored.
   - `register_from_arca/3` (`source: "filesystem"`) — a unit of the tree
     derived and written through the projection reconciler
     (`Compendium.ProjectionReconciler`, `projection_plan/3`), as every
@@ -92,6 +94,9 @@ defmodule Compendium.Registry do
     - `:category` - Category name
     - `:license` - SPDX license identifier
 
+  A `:manifest` naming a `type` names the published one: a manifest naming
+  another type is refused with `{:error, {:manifest_identity_mismatch, _}}`.
+
   For `local` publisher, allows overwriting an existing version.
   Other publishers reject duplicate name:version combinations unless
   `allow_overwrite: true` is passed in opts (used by OCI pull).
@@ -130,6 +135,7 @@ defmodule Compendium.Registry do
          :ok <- validate_publish_origin(publisher, Keyword.get(opts, :origin)),
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
+         :ok <- validate_manifest_type(manifest_map, component_type),
          {:ok, warnings} <- validate_manifest_capability_blocks(ctx, manifest_map),
          # Before the unit commit: a refused republish must leave no bytes
          # behind for the scanner to pick up.
@@ -276,8 +282,11 @@ defmodule Compendium.Registry do
   @doc """
   Publish a tincture from a tar+gzip archive (used by OCI pull).
 
-  Extracts the archive to a temp directory, validates with `TinctureValidator`,
-  stores files to Arca, and registers the component in the database.
+  Extracts the archive to a temp directory, lays the publish's own files
+  over it — each of `:unit_files`, then the metadata's manifest in place
+  of the archive's — validates that tree with `TinctureValidator`, stores
+  exactly that tree to Arca, and registers the component in the database.
+  What is installed is what was validated, the manifest included.
 
   Unlike `publish_bytes/3`, this handles directory-based tincture packages
   rather than single WASM binaries.
@@ -286,9 +295,13 @@ defmodule Compendium.Registry do
 
   - `ctx` - User context
   - `archive_bytes` - Gzipped tar archive of the tincture directory
-  - `metadata` - Component metadata map (name, version, type, publisher, etc.)
+  - `metadata` - Component metadata map (name, version, type, publisher,
+    etc.); `:manifest` (JSON text) is required, and a `type` it names is
+    `"tincture"`
   - `opts` - Options:
     - `:allow_overwrite` - Allow overwriting existing versions (default: false)
+    - `:unit_files` - `{relative_segments, bytes}` the unit carries beside
+      the archive (a pull's README and src/ tree)
   """
   def publish_tincture_archive(%Context{} = ctx, archive_bytes, metadata, opts \\ [])
       when is_binary(archive_bytes) and is_map(metadata) do
@@ -310,11 +323,13 @@ defmodule Compendium.Registry do
          # tinctures register from the filesystem), so the local-namespace
          # refusal is unconditional here — no origin marker to forget.
          :ok <- validate_publish_origin(publisher, :remote),
-         manifest_bytes = Map.get(metadata, :manifest),
-         # Validate the manifest blocks on the OCI pull path too — the WASM
-         # path (publish_bytes/4) already does, and a manifest sourced from a
-         # remote registry is no more trustworthy than a directly-published one.
+         # The metadata manifest — the pull path's authoritative config
+         # blob — is the one manifest of this publish: its blocks are held
+         # to their grammar here, the tree is validated with it in place of
+         # the archive's own, and the unit installs it and the row records it.
+         {:ok, manifest_bytes} <- required_manifest(metadata),
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
+         :ok <- validate_manifest_type(manifest_map, "tincture"),
          {:ok, warnings} <- validate_manifest_capability_blocks(ctx, manifest_map),
          {:ok, validation} <-
            extract_and_store_tincture(ctx, archive_bytes, publisher, name, version,
@@ -333,13 +348,10 @@ defmodule Compendium.Registry do
                  "tincture"
                )
              end,
-             # The metadata manifest — the pull path's authoritative config
-             # blob — is the commit's sentinel when present; absent, the
-             # archive's own manifest completes the unit.
-             sentinel: manifest_bytes,
-             # Extra unit files (a pull's README and src/ tree) ride the
-             # same commit; listed after the archive's entries, so a layer
-             # wins any name collision with an archived file.
+             manifest: manifest_bytes,
+             # Extra unit files (a pull's README and src/ tree) are laid
+             # over the archive before validation, so a layer wins any name
+             # collision with an archived file and is checked as it lands.
              unit_files: Keyword.get(opts, :unit_files, [])
            ),
          {:ok, component} <-
@@ -964,12 +976,19 @@ defmodule Compendium.Registry do
   # Storage Operations
   # ============================================================================
 
-  # Extract a tincture tar+gzip archive, validate it, and store files to Arca.
-  # Returns {:ok, %{digest, size, exports}} on success.
+  # Extract a tincture tar+gzip archive, lay the publish's own files over
+  # it (`lay_unit_files/2`), validate the tree that results and store
+  # exactly that tree to Arca. Returns {:ok, %{digest, size, exports}} on
+  # success.
   defp extract_and_store_tincture(ctx, archive_bytes, publisher, name, version, opts) do
     # Hook between validation and the first Arca write. Callers use it to
     # refuse a publish without leaving extracted files behind.
     before_store = Keyword.get(opts, :before_store, fn _validation -> :ok end)
+
+    # The manifest last, so it replaces the archive's own and any layer's.
+    laid =
+      Keyword.get(opts, :unit_files, []) ++
+        [{[ComponentPath.manifest_name()], Keyword.fetch!(opts, :manifest)}]
 
     # The scratch name is unguessable, not merely varied: `File.mkdir_p!/1`
     # succeeds on a directory that already exists — including one an attacker
@@ -978,8 +997,8 @@ defmodule Compendium.Registry do
     tmp_dir = Path.join(System.tmp_dir!(), "cyfr_tincture_#{Compendium.Archive.scratch_id()}")
 
     # `:erl_tar.extract` requires a real local FS to write to. After
-    # extraction we validate the bundle and write the validated files back
-    # through Arca via `store_tincture_files/4`. Entry-path traversal is
+    # extraction the publish's own files are laid over the bundle, and the
+    # tree is validated and committed back through Arca. Entry-path traversal is
     # OTP's own guarantee, not ours: erl_tar routes every entry through
     # `filelib:safe_relative_path/2` and throws `unsafe_path`/`unsafe_symlink`
     # — an invisible dependency worth naming, since nothing here re-checks it.
@@ -997,7 +1016,8 @@ defmodule Compendium.Registry do
           # arca:bypass-ok=D — tar extraction into the scratch dir above.
           case :erl_tar.extract({:binary, tar_binary}, [{:cwd, String.to_charlist(tmp_dir)}]) do
             :ok ->
-              with {:ok, validation} <- Compendium.TinctureValidator.validate(tmp_dir),
+              with :ok <- lay_unit_files(tmp_dir, laid),
+                   {:ok, validation} <- Compendium.TinctureValidator.validate(tmp_dir),
                    :ok <- before_store.(validation),
                    {:ok, entries} <- collect_tincture_entries(tmp_dir, tmp_dir) do
                 version_dir =
@@ -1008,39 +1028,21 @@ defmodule Compendium.Registry do
                     version
                   )
 
-                extras = Keyword.get(opts, :unit_files, [])
-                extras_bytes = Enum.sum(for {_rel, bytes} <- extras, do: byte_size(bytes))
-
-                # The recorded digest covers exactly what gets stored:
-                # extras are part of the unit, so they are part of the hash.
-                validation =
-                  case extras do
-                    [] ->
-                      validation
-
-                    _ ->
-                      {digest, size} =
-                        Compendium.TinctureValidator.digest_with_extras(tmp_dir, extras)
-
-                      %{validation | digest: digest, size: size}
-                  end
-
-                # One unit commit: the validated files stream from the
-                # scratch dir one at a time (lazy reads keep the memory
-                # bound), the manifest sentinel lands last, a partial
-                # write rolls back — the registry never records a healthy
-                # component whose stored files miss its digest.
+                # One unit commit of the tree just validated, so the
+                # recorded digest and size cover exactly what is stored:
+                # the files stream from the scratch dir one at a time
+                # (lazy reads keep the memory bound), the tree's manifest
+                # is the sentinel and lands last, a partial write rolls
+                # back — the registry never records a healthy component
+                # whose stored files miss its digest.
                 source =
                   {:files,
                    Enum.map(entries, fn {rel, path} ->
                      {rel, fn -> read_scratch(tmp_dir, path) end}
-                   end) ++ extras}
+                   end)}
 
                 Sanctum.Context.actor(ctx)
-                |> Arca.Overlay.commit_unit(version_dir, source,
-                  cap: {:checked, validation.size + extras_bytes},
-                  sentinel: Keyword.get(opts, :sentinel)
-                )
+                |> Arca.Overlay.commit_unit(version_dir, source, cap: {:checked, validation.size})
                 |> commit_outcome(:tincture_store_failed)
                 |> case do
                   {:ok, _written} -> {:ok, validation}
@@ -1097,6 +1099,54 @@ defmodule Compendium.Registry do
       :tincture_max_decompressed_bytes,
       @default_tincture_max_decompressed
     )
+  end
+
+  # The publish's own files written into the extracted archive's scratch
+  # tree, each over any archived file of its name, before the tree is
+  # validated. A path that is not a safe relative one is refused before
+  # anything is written, and nothing is written through a link the archive
+  # placed: the validator refuses a link, but only after the write.
+  defp lay_unit_files(base_dir, files) do
+    Enum.reduce_while(files, :ok, fn {segments, bytes}, :ok ->
+      case lay_unit_file(base_dir, segments, bytes) do
+        :ok -> {:cont, :ok}
+        {:error, _} = refusal -> {:halt, refusal}
+      end
+    end)
+  end
+
+  defp lay_unit_file(_base_dir, [], _bytes),
+    do: {:error, {:invalid_path, "a unit file names no path"}}
+
+  defp lay_unit_file(base_dir, segments, bytes) do
+    with :ok <- unit_file_path(segments),
+         :ok <- no_link_on(base_dir, segments) do
+      path = Path.join([base_dir | segments])
+      # arca:bypass-ok=D — lay a publish's file into its scratch tree.
+      File.mkdir_p!(Path.dirname(path))
+      # arca:bypass-ok=D — same scratch tree, its parent made just above.
+      File.write!(path, bytes)
+    end
+  end
+
+  defp unit_file_path(segments) do
+    case Prima.PathSafety.validate_segments(segments) do
+      :ok -> :ok
+      {:error, {_reason, message}} -> {:error, {:invalid_path, message}}
+    end
+  end
+
+  # lstat each prefix of the path, the file's own included: a write follows
+  # a link wherever it sits on the path.
+  defp no_link_on(base_dir, segments) do
+    1..length(segments)
+    |> Enum.map(&Path.join([base_dir | Enum.take(segments, &1)]))
+    # arca:bypass-ok=D — stat the tar-extract scratch entries.
+    |> Enum.find(&match?({:ok, %File.Stat{type: :symlink}}, File.lstat(&1)))
+    |> case do
+      nil -> :ok
+      link -> {:error, {:tincture_symlink_rejected, Path.relative_to(link, base_dir)}}
+    end
   end
 
   # arca:bypass-ok=D — read a tar-extract scratch file for the commit's
@@ -1467,6 +1517,31 @@ defmodule Compendium.Registry do
     case Prima.Manifest.decode_strict(manifest) do
       {:ok, map} -> {:ok, map}
       {:error, :malformed_manifest} -> {:error, {:invalid_manifest, "manifest is not valid JSON"}}
+    end
+  end
+
+  # A tincture publish's manifest, as the JSON text the unit installs.
+  defp required_manifest(metadata) do
+    case get_required(metadata, :manifest) do
+      {:ok, manifest} when is_binary(manifest) -> {:ok, manifest}
+      {:ok, _not_text} -> {:error, {:invalid_manifest, "manifest is not JSON text"}}
+      {:error, _} = missing -> missing
+    end
+  end
+
+  # A publish's manifest names the type it registers, or none. Readers take
+  # a manifest's own `type` for the component's (a consent shape's model
+  # target is read for an "agent"), so one naming another type is refused,
+  # as the tree refuses one that disagrees with its directory.
+  defp validate_manifest_type(manifest, type) do
+    case manifest["type"] do
+      declared when is_nil(declared) or declared == type ->
+        :ok
+
+      declared ->
+        {:error,
+         {:manifest_identity_mismatch,
+          "manifest type #{inspect(declared)} disagrees with the published type (#{inspect(type)})"}}
     end
   end
 

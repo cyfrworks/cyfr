@@ -120,7 +120,7 @@ defmodule Compendium.TinctureValidator do
   end
 
   # arca:bypass-ok=D — operates on the tar-extract tmp dir set up by
-  # `Compendium.Registry.extract_and_store_tincture/5`. Validation completes
+  # `Compendium.Registry.extract_and_store_tincture/6`. Validation completes
   # before content is written back through Arca. The pair-based variant
   # (`validate_from_pairs/1`) is the adapter-agnostic path used by indexers.
   defp read_file(path) do
@@ -183,32 +183,6 @@ defmodule Compendium.TinctureValidator do
   """
   @spec excluded?(String.t()) :: boolean()
   def excluded?(path) when is_binary(path), do: Path.basename(path) in @excluded_files
-
-  @doc """
-  The bundle digest recomputed to cover extra unit files a store appends
-  beside the validated tree (a pull's README and extracted `src/`). The
-  stored subtree is what `validate_from_pairs/1` hashes on any later
-  re-validation, so the recorded digest must cover exactly the same set —
-  extras included, excluded basenames out either way. Without this, the
-  scratch-dir digest and the stored-subtree digest disagreed for the same
-  unit whenever extras rode along.
-  """
-  @spec digest_with_extras(String.t(), [{[String.t()], binary()}]) ::
-          {String.t(), non_neg_integer()}
-  def digest_with_extras(tmp_dir, extras) do
-    bundle =
-      tmp_dir
-      |> list_files_recursive()
-      |> Enum.reject(&excluded?/1)
-      |> Map.new(fn f -> {Path.relative_to(f, tmp_dir), File.read!(f)} end)
-
-    extra_pairs =
-      extras
-      |> Enum.reject(fn {segs, _bytes} -> segs |> List.last() |> excluded?() end)
-      |> Map.new(fn {segs, bytes} -> {Enum.join(segs, "/"), bytes} end)
-
-    Prima.Digest.file_set(Map.merge(bundle, extra_pairs))
-  end
 
   # arca:bypass-ok=D — tar-extract tmp dir scan; see module note.
   defp check_reserved_dirs(dir) do

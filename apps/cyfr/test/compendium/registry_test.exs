@@ -1109,7 +1109,13 @@ defmodule Compendium.RegistryTest do
                  name: "bomb-test",
                  version: "1.0.0",
                  type: "tincture",
-                 publisher: "acme"
+                 publisher: "acme",
+                 manifest:
+                   Jason.encode!(%{
+                     "name" => "bomb-test",
+                     "version" => "1.0.0",
+                     "type" => "tincture"
+                   })
                })
 
       assert msg =~ "decompresses beyond"
@@ -1121,12 +1127,10 @@ defmodule Compendium.RegistryTest do
       Cyfr.Test.Settings.put("athanor_storage_bytes", 1)
       Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
 
+      manifest = Jason.encode!(%{"name" => "capped", "version" => "1.0.0", "type" => "tincture"})
+
       archive =
-        tincture_archive([
-          {"cyfr-manifest.json",
-           Jason.encode!(%{"name" => "capped", "version" => "1.0.0", "type" => "tincture"})},
-          {"index.html", "<html></html>"}
-        ])
+        tincture_archive([{"cyfr-manifest.json", manifest}, {"index.html", "<html></html>"}])
 
       # The OCI-pull publish is capped like every other write: the check
       # sees the measured decompressed size and runs before any Arca write.
@@ -1135,7 +1139,8 @@ defmodule Compendium.RegistryTest do
                  name: "capped",
                  version: "1.0.0",
                  type: "tincture",
-                 publisher: "acme"
+                 publisher: "acme",
+                 manifest: manifest
                })
 
       assert {:error, :not_found} = Registry.get(ctx, "capped", "1.0.0")
@@ -1306,6 +1311,225 @@ defmodule Compendium.RegistryTest do
     end
   end
 
+  describe "publish_tincture_archive/4 — the unit installed is the unit validated" do
+    test "the stored unit re-validates to its row: the supplied manifest and the layers included",
+         %{ctx: ctx} do
+      archived =
+        Jason.encode!(%{
+          "name" => "layered",
+          "version" => "1.0.0",
+          "type" => "tincture",
+          "publisher" => "local"
+        })
+
+      # A pull's config blob is the stored manifest re-stamped with the
+      # registry's publisher, never byte-equal to the archived one.
+      supplied =
+        Jason.encode!(%{
+          "name" => "layered",
+          "version" => "1.0.0",
+          "type" => "tincture",
+          "publisher" => "acme",
+          "description" => "as the registry holds it"
+        })
+
+      archive =
+        tincture_archive([{"cyfr-manifest.json", archived}, {"index.html", "<html></html>"}])
+
+      assert {:ok, component} =
+               Registry.publish_tincture_archive(
+                 ctx,
+                 archive,
+                 %{
+                   name: "layered",
+                   version: "1.0.0",
+                   type: "tincture",
+                   publisher: "acme",
+                   manifest: supplied
+                 },
+                 unit_files: [{["src", "app.ts"], "export {};\n"}, {["README.md"], "# layered\n"}]
+               )
+
+      version_dir = Compendium.ComponentPath.version_dir("tincture", "acme", "layered", "1.0.0")
+      {:ok, pairs} = Arca.read_subtree(Sanctum.Context.actor(ctx), version_dir)
+      stored = Map.new(pairs, fn {segments, bytes} -> {Enum.join(segments, "/"), bytes} end)
+
+      assert stored["cyfr-manifest.json"] == supplied
+      assert component.manifest == supplied
+
+      assert Map.keys(stored) |> Enum.sort() ==
+               ~w(README.md cyfr-manifest.json index.html src/app.ts)
+
+      assert {:ok, %{digest: digest}} = Compendium.TinctureValidator.validate_from_pairs(pairs)
+      assert digest == component.digest
+    end
+
+    test "the manifest is the publish's, not the archive's: a publish without one is refused",
+         %{ctx: ctx} do
+      manifest =
+        Jason.encode!(%{"name" => "unstated", "version" => "1.0.0", "type" => "tincture"})
+
+      archive =
+        tincture_archive([{"cyfr-manifest.json", manifest}, {"index.html", "<html></html>"}])
+
+      assert {:error, {:missing_required, :manifest}} =
+               Registry.publish_tincture_archive(ctx, archive, %{
+                 name: "unstated",
+                 version: "1.0.0",
+                 type: "tincture",
+                 publisher: "acme"
+               })
+
+      assert {:error, :not_found} = Registry.get(ctx, "unstated", "1.0.0")
+    end
+
+    # A layer's file names come from the registry: a pull's src/ entries are
+    # read from its tarball in memory, with no path check of their own.
+    test "a layer path that climbs out of the scratch tree is refused and writes nothing",
+         %{ctx: ctx} do
+      manifest = Jason.encode!(%{"name" => "climber", "version" => "1.0.0", "type" => "tincture"})
+
+      archive =
+        tincture_archive([{"cyfr-manifest.json", manifest}, {"index.html", "<html></html>"}])
+
+      # The scratch tree is a directory of the temp dir, so two `..` above
+      # its src/ name a file of the temp dir itself.
+      escape = "climbed-#{System.unique_integer([:positive])}"
+      escaped = Path.join(System.tmp_dir!(), escape)
+      on_exit(fn -> File.rm(escaped) end)
+
+      result =
+        Registry.publish_tincture_archive(
+          ctx,
+          archive,
+          %{
+            name: "climber",
+            version: "1.0.0",
+            type: "tincture",
+            publisher: "acme",
+            manifest: manifest
+          },
+          unit_files: [{["src", "..", "..", escape], "written outside the scratch tree"}]
+        )
+
+      refute File.exists?(escaped), "the layer's file was written outside the scratch tree"
+      assert {:error, {:invalid_path, _}} = result
+      assert {:error, :not_found} = Registry.get(ctx, "climber", "1.0.0")
+    end
+
+    test "a layer path through a link the archive placed is refused before the write",
+         %{ctx: ctx} do
+      manifest = Jason.encode!(%{"name" => "linked", "version" => "1.0.0", "type" => "tincture"})
+
+      # The archive's src is a link to its assets/ directory, inside the
+      # tree, as erl_tar extracts one.
+      source = Path.join(System.tmp_dir!(), "linked_source_#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf!(source) end)
+      File.mkdir_p!(Path.join(source, "assets"))
+      File.write!(Path.join(source, "assets/a.js"), "a")
+      File.ln_s!("assets", Path.join(source, "src"))
+
+      archive =
+        tincture_archive([
+          {"cyfr-manifest.json", manifest},
+          {"index.html", "<html></html>"},
+          {"assets/a.js", String.to_charlist(Path.join(source, "assets/a.js"))},
+          {"src", String.to_charlist(Path.join(source, "src"))}
+        ])
+
+      # Refused by the lay, naming the link: the validator's own refusal of a
+      # link would come only after the file was written through it.
+      assert {:error, {:tincture_symlink_rejected, "src"}} =
+               Registry.publish_tincture_archive(
+                 ctx,
+                 archive,
+                 %{
+                   name: "linked",
+                   version: "1.0.0",
+                   type: "tincture",
+                   publisher: "acme",
+                   manifest: manifest
+                 },
+                 unit_files: [{["src", "x.js"], "through the link"}]
+               )
+
+      assert {:error, :not_found} = Registry.get(ctx, "linked", "1.0.0")
+    end
+  end
+
+  describe "a publish's manifest names the type it registers" do
+    test "publish_bytes refuses a manifest naming another type, and stores nothing", %{ctx: ctx} do
+      manifest =
+        Jason.encode!(%{
+          "name" => "posing",
+          "version" => "1.0.0",
+          "type" => "agent",
+          "publisher" => "acme"
+        })
+
+      assert {:error, {:manifest_identity_mismatch, message}} =
+               Registry.publish_bytes(ctx, @valid_wasm, %{
+                 name: "posing",
+                 version: "1.0.0",
+                 type: "reagent",
+                 publisher: "acme",
+                 manifest: manifest
+               })
+
+      assert message =~ ~s("agent")
+      assert message =~ ~s("reagent")
+      assert {:error, :not_found} = Registry.get(ctx, "posing", "1.0.0")
+
+      version_dir = Compendium.ComponentPath.version_dir("reagent", "acme", "posing", "1.0.0")
+
+      case Arca.list(Sanctum.Context.actor(ctx), version_dir) do
+        {:ok, entries} -> assert entries == []
+        {:error, _not_found} -> :ok
+      end
+    end
+
+    test "publish_bytes takes a manifest naming its type, or naming none", %{ctx: ctx} do
+      for {name, manifest} <- [
+            {"typed", %{"name" => "typed", "type" => "reagent"}},
+            {"untyped", %{"name" => "untyped"}}
+          ] do
+        assert {:ok, component} =
+                 Registry.publish_bytes(ctx, @valid_wasm, %{
+                   name: name,
+                   version: "1.0.0",
+                   type: "reagent",
+                   publisher: "acme",
+                   manifest: Jason.encode!(manifest)
+                 })
+
+        assert component.component_type == "reagent"
+      end
+    end
+
+    test "publish_tincture_archive refuses a supplied manifest naming another type", %{ctx: ctx} do
+      archived =
+        Jason.encode!(%{"name" => "turncoat", "version" => "1.0.0", "type" => "tincture"})
+
+      supplied =
+        Jason.encode!(%{"name" => "turncoat", "version" => "1.0.0", "type" => "catalyst"})
+
+      archive =
+        tincture_archive([{"cyfr-manifest.json", archived}, {"index.html", "<html></html>"}])
+
+      assert {:error, {:manifest_identity_mismatch, message}} =
+               Registry.publish_tincture_archive(ctx, archive, %{
+                 name: "turncoat",
+                 version: "1.0.0",
+                 type: "tincture",
+                 publisher: "acme",
+                 manifest: supplied
+               })
+
+      assert message =~ ~s("catalyst")
+      assert {:error, :not_found} = Registry.get(ctx, "turncoat", "1.0.0")
+    end
+  end
+
   describe "publish_tincture_archive/4 — partial storage failure" do
     test "a failed file write aborts registration and cleans up partial files", %{ctx: ctx} do
       original = Application.get_env(:arca, :storage_adapter)
@@ -1317,10 +1541,11 @@ defmodule Compendium.RegistryTest do
           else: Application.delete_env(:arca, :storage_adapter)
       end)
 
+      manifest = Jason.encode!(%{"name" => "partial", "version" => "1.0.0", "type" => "tincture"})
+
       archive =
         tincture_archive([
-          {"cyfr-manifest.json",
-           Jason.encode!(%{"name" => "partial", "version" => "1.0.0", "type" => "tincture"})},
+          {"cyfr-manifest.json", manifest},
           {"index.html", "<html></html>"},
           {"boom.js", "this write fails"}
         ])
@@ -1330,7 +1555,8 @@ defmodule Compendium.RegistryTest do
                  name: "partial",
                  version: "1.0.0",
                  type: "tincture",
-                 publisher: "acme"
+                 publisher: "acme",
+                 manifest: manifest
                })
 
       # Nothing registered — a component whose stored files do not match its
