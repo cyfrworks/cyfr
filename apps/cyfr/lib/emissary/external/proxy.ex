@@ -385,7 +385,9 @@ defmodule Emissary.External.Proxy do
   # the call is in flight, its result retained and the row closed after.
   # A cancel asked of the attempt, or a lease lost, exits the caller
   # mid-call (`Crucible.start_lease_watch/3`) — the step that made the call
-  # closes uncertain, never with a result that arrived after. The answer
+  # closes uncertain, never with a result that arrived after. Once the call
+  # answers, the keeper is suspended before the row is closed, so no
+  # renewal finds the row closed and exits the caller after it. The answer
   # is the caller's only once it is kept and the row is closed: a result
   # that cannot be kept is `result_lost`, a close that cannot be written
   # `not_recorded`, and neither hands the answer back. A console call
@@ -435,7 +437,9 @@ defmodule Emissary.External.Proxy do
       {:ok, watch} = Crucible.start_lease_watch(self(), id, attempt)
 
       try do
-        close(ctx, id, {attempt, grant}, started_at, class, call.())
+        answer = call.()
+        Crucible.suspend_lease_watch(watch)
+        close(ctx, id, {attempt, grant}, started_at, class, answer)
       after
         Crucible.stop_lease_watch(watch)
       end

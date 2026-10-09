@@ -563,6 +563,18 @@ defmodule Crucible do
     to: Crucible.LeaseWatch,
     as: :start
 
+  @doc """
+  Suspend a lease keeper before its holder moves the attempt out of
+  `running`, a terminal write included; answers once the keeper will renew
+  nothing more (`Crucible.LeaseWatch.suspend/1`).
+  """
+  @spec suspend_lease_watch(pid()) :: :ok
+  defdelegate suspend_lease_watch(keeper), to: Crucible.LeaseWatch, as: :suspend
+
+  @doc "Resume a suspended lease keeper whose move did not happen (`Crucible.LeaseWatch.resume/1`)."
+  @spec resume_lease_watch(pid()) :: :ok
+  defdelegate resume_lease_watch(keeper), to: Crucible.LeaseWatch, as: :resume
+
   @doc "Stop a lease keeper; a keeper that is gone answers `:ok` (`Crucible.LeaseWatch.stop/1`)."
   @spec stop_lease_watch(pid() | nil) :: :ok
   defdelegate stop_lease_watch(keeper), to: Crucible.LeaseWatch, as: :stop

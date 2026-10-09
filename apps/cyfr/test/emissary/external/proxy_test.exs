@@ -603,6 +603,24 @@ defmodule Emissary.External.ProxyTest do
       GenServer.stop(pid)
     end
 
+    test "the call's keeper renews nothing once the call answers, so no renewal finds its row closed",
+         %{ctx: ctx, server: server} do
+      {:ok, pid} = __MODULE__.AnsweringServer.start(ctx, server, %{"content" => []})
+      answers = [{%{"content" => []}, :ok}, {{:refuse, "quota exhausted"}, :error}]
+      calls = for {answer, kind} <- answers, do: {answer, kind, chained(ctx, %{})}
+      Cyfr.Test.KeeperProbe.watch()
+
+      for {answer, kind, args} <- calls do
+        :sys.replace_state(pid, fn _ -> answer end)
+        assert {^kind, _} = call("kept:probe", ctx, args, :in_chain)
+
+        assert_received {:attempt_ended, :suspended}
+        refute_received {:attempt_ended, _}
+      end
+
+      GenServer.stop(pid)
+    end
+
     test "a result the store cannot keep closes the attempt result_lost and hands nothing back",
          %{ctx: ctx, server: server} do
       {:ok, pid} = __MODULE__.AnsweringServer.start(ctx, server, %{"content" => []})

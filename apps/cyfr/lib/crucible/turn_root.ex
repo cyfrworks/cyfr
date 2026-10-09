@@ -17,8 +17,10 @@ defmodule Crucible.TurnRoot do
   the slot back, so a crash between leaves a paused row and a slot the
   execution slots' monitor releases — never a running row with no holder.
   A pause whose rows did not move resumes the same keeper, so the claim's
-  keeper is always the one a later pause or release stops. A resume takes
-  the slot first and moves the rows only once it holds one.
+  keeper is always the one a later pause or release stops. A turn's end
+  keeps the same order: its holder suspends the keeper before the terminal
+  write, and the release stops it. A resume takes the slot first and moves
+  the rows only once it holds one.
 
   The slot is one of the execution slots (`Prima.Slots`, the instance
   `Crucible.Slots`), keyed by the athanor. It is taken together with
@@ -222,9 +224,12 @@ defmodule Crucible.TurnRoot do
   @doc """
   Local cleanup once the turn's terminal write landed
   (`Arca.TurnStorage.finish/4`): the keeper stops and the slot is
-  released. `opts`: `:claim`; `:failed` — a sentence — closes a root
-  still open as failed first, for a turn that ended before it carried
-  its root (a row the turn's own terminal write could not reach).
+  released. The holder suspended the keeper before that write
+  (`Crucible.suspend_lease_watch/1`), so no renewal finds the root ended
+  and exits the holder before this stop. `opts`: `:claim`; `:failed` — a
+  sentence — closes a root still open as failed first, for a turn that
+  ended before it carried its root (a row the turn's own terminal write
+  could not reach).
   """
   @spec release(Context.t(), String.t(), keyword()) :: :ok
   def release(%Context{} = ctx, execution_id, opts) do

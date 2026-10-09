@@ -255,6 +255,36 @@ defmodule Aqua.LoopTest do
              Arca.Repo.get(Arca.Schemas.Execution, child)
   end
 
+  test "the keeper renews nothing from the turn's terminal write until the release stops it", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    turn = accept!(ctx, thread, "@aqua hello")
+    script!([reply("hi there")])
+    Cyfr.Test.KeeperProbe.watch()
+
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+    assert_received {:attempt_ended, :suspended}
+    refute_received {:attempt_ended, _}
+  end
+
+  test "a turn that never ran ends with its keeper suspended too", %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua hello")
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: @model,
+       script: [],
+       describe: {:refuse, %{"type" => "unknown_model", "message" => "not a model"}}}
+    )
+
+    Cyfr.Test.KeeperProbe.watch()
+
+    assert {:failed, {:unknown_model, _}} = Task.await(run(ctx, turn), 30_000)
+    assert_received {:attempt_ended, :suspended}
+    refute_received {:attempt_ended, _}
+  end
+
   # The files hand is not scripted: it runs on the opus worker service.
   test "hands run as children in workers, reads beside each other, and the response is persisted before they run",
        %{

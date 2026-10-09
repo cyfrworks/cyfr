@@ -27,6 +27,7 @@ defmodule Crucible.FacadeTest do
     list: 2,
     pause_turn_root: 3,
     release_turn_root: 3,
+    resume_lease_watch: 1,
     resume_turn_root: 3,
     run_child: 5,
     run_root: 4,
@@ -37,6 +38,7 @@ defmodule Crucible.FacadeTest do
     start_lease_watch: 4,
     stop_lease_watch: 1,
     subscribe_events: 2,
+    suspend_lease_watch: 1,
     unsubscribe_events: 2
   ]
 

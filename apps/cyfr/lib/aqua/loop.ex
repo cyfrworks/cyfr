@@ -158,6 +158,7 @@ defmodule Aqua.Loop do
   end
 
   defp end_unrun(ctx, claim, turn, error) do
+    Crucible.suspend_lease_watch(claim.keeper)
     _ = Tape.finish(ctx, turn, "failed", %{error: error})
     Crucible.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
   end
@@ -462,7 +463,10 @@ defmodule Aqua.Loop do
   # ---------------------------------------------------------------------------
 
   # The one terminal transaction, then the local cleanup — from this
-  # process, which holds the slot. A paused turn already let it go.
+  # process, which holds the slot. A paused turn already let it go. The
+  # keeper is suspended before the write, so no renewal finds the root
+  # ended and exits this process before the release stops it; a steer that
+  # keeps the turn going resumes it.
   defp conclude(%State{clone?: true}, {result, _state}), do: result
 
   defp conclude(%State{} = state, {result, ended}) do
@@ -472,11 +476,13 @@ defmodule Aqua.Loop do
 
       _ ->
         {status, error} = terminal(result)
+        suspend_keeper(ended)
 
         case Tape.finish(ctx(state), ended.turn, status, %{error: error}) do
           # A steer landed while the last answer was written: the turn goes
           # on to answer it.
           {:error, :steer_pending} ->
+            resume_keeper(ended)
             conclude(state, loop(ended))
 
           finish ->
@@ -516,6 +522,12 @@ defmodule Aqua.Loop do
   end
 
   defp release(_state), do: :ok
+
+  defp suspend_keeper(%State{claim: %{keeper: keeper}}), do: Crucible.suspend_lease_watch(keeper)
+  defp suspend_keeper(_state), do: :ok
+
+  defp resume_keeper(%State{claim: %{keeper: keeper}}), do: Crucible.resume_lease_watch(keeper)
+  defp resume_keeper(_state), do: :ok
 
   # ---------------------------------------------------------------------------
   # The loop

@@ -121,16 +121,19 @@ defmodule Crucible.LeaseWatch do
     receive do
       {:suspend, from, ref} ->
         send(from, {ref, :suspended})
-
-        receive do
-          :resume -> loop(watch, until)
-          {:DOWN, ^down, :process, _, _} -> :ok
-        end
+        suspended(watch, until)
 
       {:DOWN, ^down, :process, _, _} ->
         :ok
     after
       watch.tick -> renew(watch, until)
+    end
+  end
+
+  defp suspended(%{down: down} = watch, until) do
+    receive do
+      :resume -> loop(watch, until)
+      {:DOWN, ^down, :process, _, _} -> :ok
     end
   end
 
