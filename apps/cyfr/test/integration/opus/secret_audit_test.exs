@@ -191,6 +191,7 @@ defmodule Opus.SecretAuditTest do
         )
       end)
 
+    TwoServices.settled!()
     %{result: result, id: id, bus: drain(), log: log}
   end
 
@@ -438,6 +439,7 @@ defmodule Opus.SecretAuditTest do
           )
         end)
 
+      TwoServices.settled!()
       assert {:ok, %{output: %{"status" => 200, "body" => "audited"}}} = result
       assert_receive {:upstream, sent}, 5_000
       assert {"x-api-key", @canary} in sent.headers

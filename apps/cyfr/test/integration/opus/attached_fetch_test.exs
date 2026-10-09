@@ -308,6 +308,7 @@ defmodule Opus.AttachedFetchTest do
         Crucible.run_root(ctx, :default, ref <> ":1.0.0", input, execution_id: id)
       end)
 
+    TwoServices.settled!()
     %{result: result, id: id, bus: drain(), log: log}
   end
 

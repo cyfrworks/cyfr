@@ -365,9 +365,13 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
   end
 
   # One delivery, signed, and the run it fired, awaited to its end: the
-  # guest's answer as its runner closed the attempt with it.
+  # guest's answer as its runner closed the attempt with it, the one
+  # `complete` call recorded after those found before delivering. The
+  # delivery's stop event can come before the suite's wire has recorded
+  # that call, so the wire is settled first.
   defp deliver!(%{slug: slug, secret: secret}) do
     body = ~s({"event":"fired"})
+    earlier = length(completes())
 
     response =
       build_conn()
@@ -382,13 +386,13 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
                     %{request_id: ^request_id}},
                    30_000
 
-    assert %{args: %{"outcome" => %{"output" => output}}} =
-             Cyfr.Test.TwoServices.calls()
-             |> Enum.filter(&(&1.callback == :complete))
-             |> List.last()
-
+    Cyfr.Test.TwoServices.settled!()
+    assert [%{args: %{"outcome" => %{"output" => output}}}] = Enum.drop(completes(), earlier)
     output
   end
+
+  defp completes,
+    do: for(%{callback: :complete} = call <- Cyfr.Test.TwoServices.calls(), do: call)
 
   test "a webhook attached request succeeds before expiry and is refused after it", %{ctx: ctx} do
     upstream =

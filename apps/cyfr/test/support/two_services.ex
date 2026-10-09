@@ -28,8 +28,9 @@ defmodule Cyfr.Test.TwoServices do
     it. The Opus service's runners reach CYFR's host listener through the
     suite's own wire (`Cyfr.Test.OpusService.wire!/1`) for the whole run,
     so a test holds a guest at one of its host calls (`hold!/2`), reads
-    what crossed (`calls/1`, `entered/1`) and loses a call (`plan!/2`)
-    without restarting the service.
+    what crossed (`calls/1`, `entered/1`) once it is recorded
+    (`settled!/0`) and loses a call (`plan!/2`) without restarting the
+    service.
 
   Every function that attaches a handler, starts a process or changes
   configuration or the wire undoes it when the test ends
@@ -114,6 +115,12 @@ defmodule Cyfr.Test.TwoServices do
     (`serve!/2`) records only while a test watches it (`watch/1`), and
     `reset/1` forgets everything a test asked of it, dropping every call
     still held.
+
+    A watched call is recorded once its answer is back, so its listener
+    acts on it before it is recorded: whatever the listener does in
+    answering it can reach a test first. A watched call is crossing from
+    just before the wire forwards or drops it until it is recorded or its
+    request fails, and the wire is settled (`settled?/1`) when none is.
     """
     @behaviour Plug
 
@@ -178,8 +185,18 @@ defmodule Cyfr.Test.TwoServices do
       %{agent: agent, server: server, url: "http://127.0.0.1:#{port}"}
     end
 
-    defp initial(watching),
-      do: %{watching: watching, plan: %{}, holds: [], held: %{}, hooks: [], seen: [], calls: []}
+    defp initial(watching) do
+      %{
+        watching: watching,
+        plan: %{},
+        holds: [],
+        held: %{},
+        hooks: [],
+        seen: [],
+        calls: [],
+        crossing: %{}
+      }
+    end
 
     @doc "Plan the next actions of `route`, in order."
     def plan(%{agent: agent}, route, actions) when is_list(actions),
@@ -196,6 +213,15 @@ defmodule Cyfr.Test.TwoServices do
 
     @doc "Record every request from now on."
     def watch(%{agent: agent}), do: Agent.update(agent, &%{&1 | watching: true})
+
+    @doc """
+    Whether every watched call is recorded: none is crossing but on a
+    request process that has died.
+    """
+    @spec settled?(t()) :: boolean()
+    def settled?(%{agent: agent}),
+      do:
+        agent |> Agent.get(& &1.crossing) |> Map.values() |> Enum.all?(&(not Process.alive?(&1)))
 
     @doc """
     Hold each forwarded call `matcher` accepts, telling `:holder` (default
@@ -259,18 +285,24 @@ defmodule Cyfr.Test.TwoServices do
               planned -> planned
             end
 
-          answer =
-            if action == :drop,
-              do: :dropped,
-              else: forward(conn, target, route, body, action == :forward)
+          mark = crossing(agent)
 
-          call = %{call | action: action, answer: answered(call, answer)}
+          try do
+            answer =
+              if action == :drop,
+                do: :dropped,
+                else: forward(conn, target, route, body, action == :forward)
 
-          if match?(%Req.Response{}, answer) or match?({:streamed, _}, answer),
-            do: hooks(agent, call)
+            call = %{call | action: action, answer: answered(call, answer)}
 
-          record(agent, route, call)
-          {action, answer}
+            if match?(%Req.Response{}, answer) or match?({:streamed, _}, answer),
+              do: hooks(agent, call)
+
+            record(agent, route, call)
+            {action, answer}
+          after
+            crossed(agent, mark)
+          end
         else
           {:forward, forward(conn, target, route, body, true)}
         end
@@ -353,6 +385,26 @@ defmodule Cyfr.Test.TwoServices do
     defp hooks(agent, call) do
       for hook <- Agent.get(agent, & &1.hooks), do: hook.(call)
     end
+
+    # A call's mark is set before its listener can act on it and cleared
+    # only after the call is recorded, or its request has failed: a reader
+    # that finds no mark finds every call the listener acted on recorded.
+    # The mark names the request's process, which a kill may stop before it
+    # clears it.
+    defp crossing(agent) do
+      mark = make_ref()
+      conn = self()
+
+      Agent.update(agent, fn
+        %{watching: true} = state -> put_in(state, [:crossing, mark], conn)
+        state -> state
+      end)
+
+      mark
+    end
+
+    defp crossed(agent, mark),
+      do: Agent.update(agent, &%{&1 | crossing: Map.delete(&1.crossing, mark)})
 
     defp record(agent, route, call) do
       Agent.update(agent, fn
@@ -829,6 +881,28 @@ defmodule Cyfr.Test.TwoServices do
     Wire.watch(wire)
     on_exit(fn -> Wire.reset(wire) end)
     wire
+  end
+
+  @doc """
+  Wait until the suite's wire has recorded every call it took while
+  watched (`Wire.settled?/1`); at once when it is not served. CYFR can end
+  a run, and the test learn of it, before the calls that ended it are
+  recorded, so a test settles the wire before it reads what crossed for a
+  run that has ended.
+  """
+  @spec settled!() :: :ok
+  def settled! do
+    case wire() do
+      nil ->
+        :ok
+
+      wire ->
+        Prima.Test.Wait.wait_until(
+          fn -> Wire.settled?(wire) end,
+          30_000,
+          "the suite's wire to record every call it took"
+        )
+    end
   end
 
   @doc "Every call that crossed the suite's wire while this test watched it, oldest first."

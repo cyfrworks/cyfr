@@ -876,8 +876,11 @@ defmodule Crucible.Schedules.SchedulerTest do
       {ref <> ":1.0.0", profile_id}
     end
 
-    # What the guest of `execution_id` answered as its runner closed it.
+    # What the guest of `execution_id` answered as its runner closed it,
+    # read once the suite's wire has recorded that call.
     defp scheduled_answer(execution_id) do
+      Cyfr.Test.TwoServices.settled!()
+
       [%{args: %{"outcome" => %{"output" => output}}}] =
         Cyfr.Test.TwoServices.calls(:complete, execution_id)
 

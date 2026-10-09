@@ -307,11 +307,15 @@ defmodule Opus.SeedModelCatalystsTest do
   defp needs(component), do: Needs.from_manifest(component.manifest)
 
   defp run(ctx, ref, operation, params) do
-    Provider.handle("execution", ctx, %{
-      "action" => "run",
-      "reference" => ref,
-      "input" => %{"operation" => operation, "params" => params}
-    })
+    result =
+      Provider.handle("execution", ctx, %{
+        "action" => "run",
+        "reference" => ref,
+        "input" => %{"operation" => operation, "params" => params}
+      })
+
+    TwoServices.settled!()
+    result
   end
 
   # `ref`'s owner consent, binding `entry_id` to its `api_key` need through

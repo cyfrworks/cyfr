@@ -1048,6 +1048,7 @@ defmodule Opus.ModelContractTest do
   end
 
   defp settled(ctx, %{thread: thread, observer: observer, turn_id: turn_id} = played) do
+    TwoServices.settled!()
     {:ok, turn} = Tape.turn(ctx, turn_id)
     {:ok, steps} = Tape.steps(ctx, turn)
 
