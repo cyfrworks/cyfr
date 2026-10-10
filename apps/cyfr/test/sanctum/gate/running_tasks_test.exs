@@ -429,7 +429,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
       :sys.get_state(RunningTasks)
       assert [{^handle, ^pid}] = row(handle)
 
-      assert :ok = Sanctum.Gate.cancel_call(handle)
+      assert :ok = RunningTasks.cancel_handle(handle)
       assert_receive {:DOWN, ^ref, :process, ^pid, :cancelled}, 1_000
 
       Prima.Test.Wait.wait_until(
@@ -456,7 +456,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
       assert :done = Task.await(task)
       Prima.Test.Wait.wait_until(fn -> row(handle) == [] end, 1_000, "the task's row to go")
 
-      assert :ok = Sanctum.Gate.cancel_call(handle)
+      assert :ok = RunningTasks.cancel_handle(handle)
       assert [] = row(handle)
       assert :ok = RunningTasks.release_handle(handle)
       assert [] = row(handle)
@@ -547,18 +547,18 @@ defmodule Sanctum.Gate.RunningTasksTest do
       assert [{^handle, :cancelled}] = row(handle)
 
       RunningTasks.release_handle(handle)
-      assert :ok = Sanctum.Gate.cancel_call(handle)
+      assert :ok = RunningTasks.cancel_handle(handle)
       assert [] = row(handle)
     end
 
     test "a cancel of a handle never claimed here writes nothing" do
       handle = handle()
-      assert :ok = Sanctum.Gate.cancel_call(handle)
+      assert :ok = RunningTasks.cancel_handle(handle)
       assert [] = row(handle)
 
       assert :ok = RunningTasks.claim(handle)
       assert [{^handle, :pending}] = row(handle)
-      assert :ok = Sanctum.Gate.release_call(handle)
+      assert :ok = RunningTasks.release_handle(handle)
       assert [] = row(handle)
     end
   end
@@ -567,10 +567,10 @@ defmodule Sanctum.Gate.RunningTasksTest do
     test "answers not_found once the first cancel has run" do
       {%Task{ref: ref}, _} = started("req_twice")
 
-      assert :ok = Sanctum.Gate.cancel_request("req_twice")
+      assert :ok = RunningTasks.cancel("req_twice")
       assert_receive {:DOWN, ^ref, :process, _pid, :cancelled}, 1_000
 
-      assert {:error, :not_found = reason} = Sanctum.Gate.cancel_request("req_twice")
+      assert {:error, :not_found = reason} = RunningTasks.cancel("req_twice")
       assert %Prima.Refusal{class: :not_found} = Sanctum.Refusals.classify(reason)
     end
   end

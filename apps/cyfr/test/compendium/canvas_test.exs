@@ -625,7 +625,7 @@ defmodule Compendium.CanvasTest do
     test "is the toolkit majors and every stream that declares a shape, by name, and no value",
          %{ctx: ctx} do
       shaped =
-        for %Prima.Provider.Stream{shape: shape} = stream <- Sanctum.Gate.streams(),
+        for %Prima.Provider.Stream{shape: shape} = stream <- Sanctum.Catalog.streams(),
             shape != nil do
           %{
             name: stream.name,
@@ -666,7 +666,7 @@ defmodule Compendium.CanvasTest do
       assert Enum.sort(Map.keys(run_fields)) ==
                ~w(component_type duration_ms error execution_id kind parent_execution_id reference)
 
-      assert length(Sanctum.Gate.streams()) > length(streams)
+      assert length(Sanctum.Catalog.streams()) > length(streams)
     end
   end
 

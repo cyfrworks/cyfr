@@ -649,7 +649,7 @@ defmodule Emissary.External.Provider do
   # table's sentence — a start failure can carry the row's configuration,
   # and a term is never spelled back.
   defp error_text(reason) when is_binary(reason), do: reason
-  defp error_text(reason), do: Sanctum.Gate.render(reason)
+  defp error_text(reason), do: Sanctum.Refusals.render(reason)
 
   # The row is deleted first; stopping the process then releases what it
   # ran.
@@ -924,7 +924,7 @@ defmodule Emissary.External.Provider do
               "[Emissary.External.Provider] refresh failed for #{name}: #{inspect(r)}"
             )
 
-            %{name: name, error: Sanctum.Gate.render(r)}
+            %{name: name, error: Sanctum.Refusals.render(r)}
           end
 
         if refreshed != [], do: Proxy.invalidate_external_tools_cache(ctx)

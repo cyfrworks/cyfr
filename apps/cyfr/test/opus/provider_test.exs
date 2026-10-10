@@ -101,7 +101,7 @@ defmodule Opus.ProviderTest do
       tools = Provider.tools()
       assert Enum.map(tools, & &1.name) == ["execution"]
       refute function_exported?(Provider, :streams, 0)
-      assert Sanctum.Gate.lookup("card") == :miss
+      assert Sanctum.Catalog.lookup("card") == :miss
     end
 
     test "each tool has required schema fields" do
@@ -1298,7 +1298,7 @@ defmodule Opus.ProviderTest do
 
       [tool] =
         Sanctum.Visibility.filter_for_context(
-          Enum.filter(Sanctum.Gate.list_tools(), &(&1["name"] == "execution")),
+          Enum.filter(Sanctum.Catalog.list_tools(), &(&1["name"] == "execution")),
           ctx
         )
 

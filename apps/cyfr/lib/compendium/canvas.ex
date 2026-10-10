@@ -216,7 +216,7 @@ defmodule Compendium.Canvas do
   @doc """
   What a canvas may read, derived from the operation table and never
   written by hand: the toolkit majors (`Compendium.tincture_toolkit_majors/0`)
-  and every stream whose declaration carries a shape (`Sanctum.Gate.streams/0`),
+  and every stream whose declaration carries a shape (`Sanctum.Catalog.streams/0`),
   sorted by name, each with its subject grammar (the source of its anchored
   expression, or nil for none), its shape, its filter and whether it
   refreshes. Shapes and names, never a value.
@@ -224,7 +224,7 @@ defmodule Compendium.Canvas do
   @spec catalog(Context.t()) :: {:ok, catalog()}
   def catalog(%Context{}) do
     streams =
-      for %Prima.Provider.Stream{shape: shape} = stream <- Sanctum.Gate.streams(),
+      for %Prima.Provider.Stream{shape: shape} = stream <- Sanctum.Catalog.streams(),
           not is_nil(shape) do
         %{
           name: stream.name,
@@ -322,7 +322,7 @@ defmodule Compendium.Canvas do
   # the manifest's grammar, the rules, and the streams a canvas reads. The
   # version is the one thing it does not read.
   defp declaration(manifest) do
-    table = Sanctum.Gate.streams()
+    table = Sanctum.Catalog.streams()
 
     with :ok <- grammar(manifest),
          {:ok, declaration} <- Compendium.tincture_declaration(manifest),

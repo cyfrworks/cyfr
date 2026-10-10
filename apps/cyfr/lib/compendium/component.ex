@@ -10,7 +10,7 @@ defmodule Compendium.Component do
   internal callers (e.g., the runtime's executor).
   """
 
-  alias Sanctum.Context
+  alias Sanctum.{Context, Refusals}
   alias Compendium.Registry
 
   require Logger
@@ -170,7 +170,7 @@ defmodule Compendium.Component do
             {:error, {:not_found, {:component, reference}}}
 
           {:error, reason} ->
-            {:error, "Failed to resolve component #{reference}: #{Sanctum.Gate.render(reason)}"}
+            {:error, "Failed to resolve component #{reference}: #{Refusals.render(reason)}"}
         end
 
       {:error, reason} ->

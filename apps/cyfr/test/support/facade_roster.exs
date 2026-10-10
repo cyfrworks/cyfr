@@ -17,6 +17,7 @@
     "Arca.Retention"
   ],
   "Sanctum" => [
+    "Sanctum.Annotations",
     "Sanctum.Attach",
     "Sanctum.Auth.CyfrDoor",
     "Sanctum.Consent",
@@ -30,9 +31,12 @@
     "Sanctum.Recovery",
     "Sanctum.RegistryCredentials",
     "Sanctum.RequestLog",
+    "Sanctum.Resources",
+    "Sanctum.RunningTasks",
     "Sanctum.TinctureAccess",
     "Sanctum.ToolGrants",
     "Sanctum.VirtualTools",
+    "Sanctum.Visibility",
     "Sanctum.Webhook"
   ],
   "Compendium" => ["Compendium.Providers.Component"],

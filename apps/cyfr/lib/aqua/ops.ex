@@ -37,24 +37,24 @@ defmodule Aqua.Ops do
   @doc """
   The registry's `kind` annotation for `tool`/`action` — nil when the tool
   or the annotation is unknown, so the gap stays visible (no `_default`
-  fallback). A catalogued tool's kind alone: `Sanctum.Gate.tool_kind/2` also
+  fallback). A catalogued tool's kind alone: `Sanctum.Catalog.tool_kind/2` also
   classifies the virtual hands and the external namespace.
   """
   @spec action_kind(String.t(), String.t()) :: atom() | nil
   def action_kind(tool, action) do
-    case Sanctum.Gate.get_tool(tool) do
-      {:ok, tool_def} -> Sanctum.Gate.annotation_kind(tool_def, action)
+    case Sanctum.Catalog.get_tool(tool) do
+      {:ok, tool_def} -> Sanctum.Annotations.kind(tool_def, action)
       _ -> nil
     end
   end
 
   @doc "Stop the supervised handler of the in-chain call named by `handle`."
   @spec cancel_call(term()) :: :ok
-  def cancel_call(handle), do: Sanctum.Gate.cancel_call(handle)
+  def cancel_call(handle), do: Sanctum.RunningTasks.cancel_handle(handle)
 
   @doc "Forget a call's cancellation handle once the loop is done with it."
   @spec release_call(term()) :: :ok
-  def release_call(handle), do: Sanctum.Gate.release_call(handle)
+  def release_call(handle), do: Sanctum.RunningTasks.release_handle(handle)
 
   @doc """
   Whether `tool`/`action` is reviewed as safe to re-dispatch after an
@@ -63,8 +63,8 @@ defmodule Aqua.Ops do
   """
   @spec replay_safe?(String.t(), String.t()) :: boolean()
   def replay_safe?(tool, action) do
-    case Sanctum.Gate.get_tool(tool) do
-      {:ok, tool_def} -> Sanctum.Gate.annotation_recovery(tool_def, action) == :replay_safe
+    case Sanctum.Catalog.get_tool(tool) do
+      {:ok, tool_def} -> Sanctum.Annotations.recovery(tool_def, action) == :replay_safe
       _ -> false
     end
   end
@@ -75,8 +75,8 @@ defmodule Aqua.Ops do
   """
   @spec action_standing(String.t(), String.t()) :: :thread | false | nil
   def action_standing(tool, action) do
-    case Sanctum.Gate.get_tool(tool) do
-      {:ok, tool_def} -> Sanctum.Gate.annotation_standing(tool_def, action)
+    case Sanctum.Catalog.get_tool(tool) do
+      {:ok, tool_def} -> Sanctum.Annotations.standing(tool_def, action)
       _ -> nil
     end
   end
@@ -84,7 +84,7 @@ defmodule Aqua.Ops do
   @doc "Whether a running chain would refuse `tool`/`action` (nothing a chain can run)."
   @spec in_chain_refused?(String.t(), String.t()) :: boolean()
   def in_chain_refused?(tool, action),
-    do: Sanctum.Gate.in_chain_refused?(tool, action)
+    do: Sanctum.Catalog.in_chain_refused?(tool, action)
 
   @doc """
   Whether an approved `tool`/`action` is an execution the assistant runs
@@ -93,13 +93,13 @@ defmodule Aqua.Ops do
   a card (`Aqua.Loop`).
   """
   @spec child_execution?(String.t(), String.t()) :: boolean()
-  def child_execution?(tool, action), do: Sanctum.Gate.host_intercepted?(tool, action)
+  def child_execution?(tool, action), do: Sanctum.Catalog.host_intercepted?(tool, action)
 
   @doc """
-  One sentence for a refusal: the gate's renderer (`Sanctum.Gate.render/1`),
+  One sentence for a refusal: the gate's renderer (`Sanctum.Refusals.render/1`),
   the same sentence everywhere — this text persists as a thread message
   every member reads, so an internal term is never spelled into it.
   """
   @spec render_refusal(term()) :: String.t()
-  def render_refusal(reason), do: Sanctum.Gate.render(reason)
+  def render_refusal(reason), do: Sanctum.Refusals.render(reason)
 end

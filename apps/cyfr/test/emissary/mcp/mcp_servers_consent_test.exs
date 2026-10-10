@@ -62,7 +62,7 @@ defmodule Emissary.MCP.McpServersConsentTest do
   end
 
   defp shown_actions(ctx) do
-    Sanctum.Gate.list_tools()
+    Sanctum.Catalog.list_tools()
     |> Visibility.filter_for_context(ctx)
     |> Enum.find(&(&1["name"] == "mcp_servers"))
     |> get_in(["inputSchema", "properties", "action", "enum"])

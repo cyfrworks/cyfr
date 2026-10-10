@@ -232,7 +232,7 @@ defmodule Sanctum.Gate.RequestLogTest do
 
       log = row(decision.call_id)
       assert log.status == "error"
-      assert log.error == Sanctum.Gate.render({:not_found, "component", "c1"})
+      assert log.error == Sanctum.Refusals.render({:not_found, "component", "c1"})
       assert log.duration_ms == 10
       # The meaning is the class; a JSON-RPC code is a transport's rendering.
       assert log.error_code == nil

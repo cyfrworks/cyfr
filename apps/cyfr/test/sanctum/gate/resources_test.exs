@@ -24,8 +24,8 @@ defmodule Sanctum.Gate.ResourcesTest do
     end
 
     test "is the term the table was written with" do
-      assert Sanctum.Gate.resources().resources == Resources.list_resources()
-      assert Sanctum.Gate.resources().templates == Resources.list_resource_templates()
+      assert Resources.table().resources == Resources.list_resources()
+      assert Resources.table().templates == Resources.list_resource_templates()
     end
 
     test "keys are strings and a mime type is always present" do
@@ -61,7 +61,7 @@ defmodule Sanctum.Gate.ResourcesTest do
 
       for uri <- advertised ++ templates do
         assert {:ok, tool, action} = Resources.resolve(uri)
-        assert {:ok, {_module, meta}} = Sanctum.Gate.lookup(tool)
+        assert {:ok, {_module, meta}} = Sanctum.Catalog.lookup(tool)
         operation = Enum.find(meta.operations, &(&1.action == action))
         {:ok, scheme} = Prima.Provider.resource_scheme(uri)
         assert scheme in operation.resource_schemes

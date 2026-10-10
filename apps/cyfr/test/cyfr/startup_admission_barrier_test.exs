@@ -462,7 +462,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
     @tag :capture_log
     test "a restarted infra tier serves the operation table this boot built", %{key: key} do
-      operations = Sanctum.Gate.operations()
+      operations = Sanctum.Catalog.operations()
       {starter, root} = booted!(key)
 
       kill!(root, [:barrier_infra, Cyfr.Cell])
@@ -471,7 +471,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       send(gate, {:lift, &Sanctum.reconcile_platform_admins/2})
       next_started!(restarting(@post_gate))
 
-      assert Sanctum.Gate.operations() === operations
+      assert Sanctum.Catalog.operations() === operations
       assert :persistent_term.get({Sanctum.Gate, :operations}) === operations
       stop_tree(starter)
     end

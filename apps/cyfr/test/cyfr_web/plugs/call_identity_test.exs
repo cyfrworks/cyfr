@@ -75,7 +75,7 @@ defmodule CyfrWeb.Plugs.CallIdentityTest do
       assert decision.plane == "external"
       assert is_nil(decision.athanor_id)
       assert is_nil(decision.user_id)
-      assert decision.reason == Sanctum.Gate.render(:invalid_bearer)
+      assert decision.reason == Sanctum.Refusals.render(:invalid_bearer)
       # A null-tenant decision has no request-log row.
       assert mcp_rows(conn.assigns.request_id) == []
     end

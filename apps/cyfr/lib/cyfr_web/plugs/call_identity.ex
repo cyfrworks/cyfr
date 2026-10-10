@@ -104,7 +104,7 @@ defmodule CyfrWeb.Plugs.CallIdentity do
       {tool, action} = names(conn)
 
       decision =
-        Sanctum.Gate.refused_decision(ctx, reason,
+        Sanctum.Decisions.refused(ctx, reason,
           call_id: call_id,
           request_id: Map.get(assigns, :request_id),
           plane: :external,
@@ -112,7 +112,7 @@ defmodule CyfrWeb.Plugs.CallIdentity do
           action: action
         )
 
-      Sanctum.Gate.open_decision(ctx, decision, %{method: method(conn), input: %{}})
+      Sanctum.Decisions.open(ctx, decision, %{method: method(conn), input: %{}})
       decided(conn)
     end
   end

@@ -74,7 +74,7 @@ defmodule Compendium.Providers.AquaConsentTest do
 
     # Discovery agrees with dispatch: the key is shown the reads alone.
     [aqua] =
-      Sanctum.Gate.list_tools()
+      Sanctum.Catalog.list_tools()
       |> Visibility.filter_for_context(star)
       |> Enum.filter(&(&1["name"] == "aqua"))
 

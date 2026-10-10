@@ -70,6 +70,7 @@ defmodule Emissary.External.Server do
   require Logger
 
   alias Prima.MCP.{Message, Protocol}
+  alias Sanctum.Refusals
 
   @initialize_timeout_ms 15_000
   # How long a caller waits for a connect, which for a stdio server includes
@@ -454,8 +455,7 @@ defmodule Emissary.External.Server do
              }}
 
           {:error, reason} ->
-            {:reply, {:error, "External call failed to start: #{Sanctum.Gate.render(reason)}"},
-             state}
+            {:reply, {:error, "External call failed to start: #{Refusals.render(reason)}"}, state}
         end
     end
   end
@@ -902,7 +902,7 @@ defmodule Emissary.External.Server do
 
   defp failure_sentence(reason) when is_binary(reason), do: reason
   defp failure_sentence(%{__exception__: true} = exception), do: Exception.message(exception)
-  defp failure_sentence(reason), do: Sanctum.Gate.render(reason)
+  defp failure_sentence(reason), do: Refusals.render(reason)
 
   # An upstream JSON-RPC error's own message; one without a message is
   # named as such rather than spelled.

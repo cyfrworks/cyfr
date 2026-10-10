@@ -44,7 +44,7 @@ defmodule Emissary.MCP.Router do
 
   `resources/list` and `resources/templates/list` are unauthenticated
   metadata. `resources/read` is an ordinary operation call:
-  `Sanctum.Gate.resolve_resource/1` names the operation that
+  `Sanctum.Resources.resolve/1` names the operation that
   declares the URI's scheme, and the Router calls it once through
   `Sanctum.Gate.call_external/4` with the URI as its one argument —
   the same gate, plane, authentication, permission and runner a
@@ -159,8 +159,8 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
 
   defp dispatch_method(ctx, "tools/list", params, _id) do
-    Sanctum.Gate.list_tools()
-    |> Sanctum.Gate.visible_tools(ctx)
+    Sanctum.Catalog.list_tools()
+    |> Sanctum.Visibility.filter_for_context(ctx)
     |> paginate("tools", params)
   end
 
@@ -179,7 +179,7 @@ defmodule Emissary.MCP.Router do
       )
     else
       # Check tool existence first — unknown tools are protocol errors per spec
-      case Sanctum.Gate.get_tool(name) do
+      case Sanctum.Catalog.get_tool(name) do
         {:error, :not_found} ->
           refused(
             ctx,
@@ -206,7 +206,7 @@ defmodule Emissary.MCP.Router do
               else
                 {:ok,
                  %{
-                   "content" => [%{"type" => "text", "text" => Sanctum.Gate.render(reason)}],
+                   "content" => [%{"type" => "text", "text" => Sanctum.Refusals.render(reason)}],
                    "isError" => true
                  }}
               end
@@ -222,12 +222,12 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
 
   defp dispatch_method(_ctx, "resources/list", params, _id) do
-    resources = Sanctum.Gate.list_resources()
+    resources = Sanctum.Resources.list_resources()
     paginate(resources, "resources", params)
   end
 
   defp dispatch_method(_ctx, "resources/templates/list", params, _id) do
-    templates = Sanctum.Gate.list_resource_templates()
+    templates = Sanctum.Resources.list_resource_templates()
     paginate(templates, "resourceTemplates", params)
   end
 
@@ -294,14 +294,14 @@ defmodule Emissary.MCP.Router do
     # Under the pipeline's call id, or one the decision mints for a caller
     # that arrived with none.
     decision =
-      Sanctum.Gate.refused_decision(ctx, reason,
+      Sanctum.Decisions.refused(ctx, reason,
         call_id: ctx.call_id,
         plane: :external,
         tool: tool,
         action: input_action(input)
       )
 
-    Sanctum.Gate.open_decision(ctx, decision, %{method: method, input: input})
+    Sanctum.Decisions.open(ctx, decision, %{method: method, input: input})
   end
 
   defp input_action(%{"action" => action}) when is_binary(action), do: action
@@ -309,7 +309,7 @@ defmodule Emissary.MCP.Router do
 
   defp read_resource(ctx, uri, _id) do
     read =
-      with {:ok, tool, action} <- Sanctum.Gate.resolve_resource(uri) do
+      with {:ok, tool, action} <- Sanctum.Resources.resolve(uri) do
         Sanctum.Gate.call_external(tool, ctx, %{"action" => action, "uri" => uri},
           runner: :supervised,
           call_id: ctx.call_id,
@@ -392,8 +392,8 @@ defmodule Emissary.MCP.Router do
   # sentence — an authorization refusal's worded for the caller's
   # credential, a consent signal's with its `error.data`.
   defp protocol_error(ctx, reason, where) do
-    refusal = Sanctum.Gate.classify(reason)
-    code = Message.refusal_code(refusal, where, Sanctum.Gate.code_override(refusal))
+    refusal = Sanctum.Refusals.classify(reason)
+    code = Message.refusal_code(refusal, where, Sanctum.Refusals.code_override(refusal))
     inner = refusal.reason
 
     cond do

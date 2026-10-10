@@ -146,7 +146,7 @@ defmodule Emissary.Web.TinctureDataController do
   """
   @impl true
   def send(%Plug.Conn{} = conn, status, reason, _message) do
-    refusal = %{Sanctum.Gate.classify(reason) | stage: :admission}
+    refusal = %{Sanctum.Refusals.classify(reason) | stage: :admission}
 
     conn
     |> CallIdentity.refused(refusal)
@@ -175,7 +175,7 @@ defmodule Emissary.Web.TinctureDataController do
 
   # A refusal the gate made and recorded.
   defp refused_by_gate(conn, reason) do
-    refusal = Sanctum.Gate.classify(reason)
+    refusal = Sanctum.Refusals.classify(reason)
 
     conn
     |> CallIdentity.decided()
@@ -472,7 +472,7 @@ defmodule Emissary.Web.TinctureDataController do
   # A stream bound to its holder takes no subject from the frame: the
   # gate supplies the holder's own.
   defp holder_bound?(name) do
-    case Prima.Provider.fetch_stream(Sanctum.Gate.streams(), name) do
+    case Prima.Provider.fetch_stream(Sanctum.Catalog.streams(), name) do
       {:ok, stream} -> Prima.Provider.Stream.holder_bound?(stream)
       {:error, :undeclared_stream} -> false
     end
@@ -603,7 +603,7 @@ defmodule Emissary.Web.TinctureDataController do
   # Another stream: the fixture of its shape, and none for a stream that
   # declares no shape.
   defp fixtures(_ctx, name, _subject) do
-    case Prima.Provider.fetch_stream(Sanctum.Gate.streams(), name) do
+    case Prima.Provider.fetch_stream(Sanctum.Catalog.streams(), name) do
       {:ok, %Prima.Provider.Stream{shape: %{} = shape}} ->
         {:ok, [Prima.Canvas.Shape.fixture(shape)]}
 
@@ -706,5 +706,5 @@ defmodule Emissary.Web.TinctureDataController do
     }
   end
 
-  defp credential_refusal(reason), do: Sanctum.Gate.classify(reason)
+  defp credential_refusal(reason), do: Sanctum.Refusals.classify(reason)
 end

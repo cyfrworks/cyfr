@@ -317,7 +317,7 @@ defmodule Compendium.AquaAgent do
   assistant's runtime ceiling demotes whatever loaded anyway, so a file
   written past this door reaches the guest already demoted.
 
-  An action's kind is the gate's classification (`Sanctum.Gate.tool_kind/2`:
+  An action's kind is the gate's classification (`Sanctum.Catalog.tool_kind/2`:
   a virtual hand's from `Sanctum.VirtualTools`, `:external` for a
   `server:tool`, else the catalogued tool's annotation); only a kind
   `Sanctum.VirtualTools.auto_permitted_kind?/1` admits may be `auto`, and an
@@ -397,13 +397,13 @@ defmodule Compendium.AquaAgent do
 
   # The gate's one classification: a virtual hand's kind, `:external` for
   # a `server:tool`, else the catalogued tool's annotation, nil unknown.
-  defp kind_for(tool, action), do: Sanctum.Gate.tool_kind(tool, action)
+  defp kind_for(tool, action), do: Sanctum.Catalog.tool_kind(tool, action)
 
   defp auto_permitted?(tool, action),
     do: VirtualTools.auto_permitted_kind?(kind_for(tool, action))
 
   # What a `tool.*` glob stands for, in declared order.
-  defp actions_of(tool), do: Sanctum.Gate.tool_actions(tool)
+  defp actions_of(tool), do: Sanctum.Catalog.tool_actions(tool)
 
   defp valid_policy_key?("native_search"), do: true
 

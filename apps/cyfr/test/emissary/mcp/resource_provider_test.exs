@@ -73,7 +73,7 @@ defmodule Emissary.MCP.ResourceProviderTest do
 
   test "every configured provider that advertises a resource declares its reader" do
     advertisers =
-      for module <- Sanctum.Gate.configured_providers(),
+      for module <- Catalog.configured_providers(),
           fun <- [:resources, :resource_templates],
           function_exported?(module, fun, 0),
           apply(module, fun, []) != [],
@@ -88,7 +88,7 @@ defmodule Emissary.MCP.ResourceProviderTest do
                Sanctum.Provider
              ])
 
-    for module <- Sanctum.Gate.configured_providers() do
+    for module <- Catalog.configured_providers() do
       refute function_exported?(module, :read, 2) and module in advertisers,
              "#{inspect(module)} still exports a read/2 beside its declared reader"
     end

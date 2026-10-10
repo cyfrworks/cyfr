@@ -222,7 +222,7 @@ defmodule Compendium.AutoIndexer do
             version: version,
             type: type,
             status: "error",
-            error: Sanctum.Gate.render(reason)
+            error: Sanctum.Refusals.render(reason)
           }
 
         _ ->
@@ -231,7 +231,7 @@ defmodule Compendium.AutoIndexer do
             version: "unknown",
             type: "unknown",
             status: "error",
-            error: Sanctum.Gate.render(reason)
+            error: Sanctum.Refusals.render(reason)
           }
       end
 

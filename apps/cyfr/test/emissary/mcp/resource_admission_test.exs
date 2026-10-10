@@ -76,7 +76,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
   describe "the declarations" do
     test "four read operations, one per scheme, each resolved from its scheme" do
       for {tool, action, permission, auth, scheme, uri} <- @declarations do
-        assert {:ok, {_module, meta}} = Sanctum.Gate.lookup(tool)
+        assert {:ok, {_module, meta}} = Catalog.lookup(tool)
         op = Enum.find(meta.operations, &(&1.action == action))
 
         assert %Operation{kind: :read, planes: [:external], consent: nil} = op

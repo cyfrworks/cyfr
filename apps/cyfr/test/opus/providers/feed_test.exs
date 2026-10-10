@@ -142,12 +142,12 @@ defmodule Opus.Providers.FeedTest do
       assert Enum.find_index(providers, &(&1 == Feed)) ==
                Enum.find_index(providers, &(&1 == Opus.Schedules.Provider)) + 1
 
-      assert {:ok, {Feed, _meta}} = Sanctum.Gate.lookup("feed")
+      assert {:ok, {Feed, _meta}} = Sanctum.Catalog.lookup("feed")
 
       for action <- ~w(bind list remove),
-          do: assert(Sanctum.Gate.chain_reachable?("feed", action))
+          do: assert(Sanctum.Catalog.chain_reachable?("feed", action))
 
-      assert Sanctum.Gate.in_chain_refused?("feed", "press")
+      assert Sanctum.Catalog.in_chain_refused?("feed", "press")
     end
 
     test "the two streams a canvas reads, each with its shape, refresh and filter" do
@@ -733,8 +733,8 @@ defmodule Opus.Providers.FeedTest do
     do: call(ctx, %{"action" => "press", "binding" => binding, "action_name" => action})
 
   # A refused answer as every surface renders it: its class and sentence
-  # (`Sanctum.Gate.classify/1`).
-  defp refused({:error, reason}), do: Sanctum.Gate.classify(reason)
+  # (`Sanctum.Refusals.classify/1`).
+  defp refused({:error, reason}), do: Sanctum.Refusals.classify(reason)
 
   defp bind_args(name, overrides \\ %{}) do
     Map.merge(

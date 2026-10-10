@@ -138,11 +138,15 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(Consent.Components Proxy Tenancy.Caps),
        "the ports the composition root installs: component facts, proxied tool " <>
          "resolution and the storage cap"},
-      {~w(Catalog Gate.Supervisor), "the composition root loads the table and starts the gate"},
+      {~w(Catalog Gate.Supervisor),
+       "the composition root loads the table and starts the gate, and the layers above " <>
+         "read the table on the catalog itself, never through a second name"},
       {~w(Catalog.NotLoadedError),
        "the operation table's refusal to be read before boot, which the readiness probe " <>
          "answers as not written"},
-      {~w(Refusals), "the gate's refusal renderer, which the adapters answer with"},
+      {~w(Refusals),
+       "the gate's refusal classification and renderer, which the layers above answer " <>
+         "a refusal with"},
       {~w(Carry Directory.Client IdentityFreshness Person),
        "the person's keys, the directory client, identity freshness and the sign-in " <>
          "carry, which the identity domain composes and the host's suites drive"},

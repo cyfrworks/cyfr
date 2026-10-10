@@ -55,8 +55,8 @@ defmodule Emissary.Web.MCPError do
     if Message.code?(code) do
       {code, message}
     else
-      refusal = Sanctum.Gate.classify(code)
-      code = Message.refusal_code(refusal, :transport, Sanctum.Gate.code_override(refusal))
+      refusal = Sanctum.Refusals.classify(code)
+      code = Message.refusal_code(refusal, :transport, Sanctum.Refusals.code_override(refusal))
       {code, message || refusal.message}
     end
   end

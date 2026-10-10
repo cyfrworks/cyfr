@@ -112,13 +112,13 @@ defmodule Compendium.Providers.CanvasTest do
       assert Enum.find_index(providers, &(&1 == Canvas)) ==
                Enum.find_index(providers, &(&1 == Compendium.Providers.Layout)) + 1
 
-      assert {:ok, {Canvas, _meta}} = Sanctum.Gate.lookup("canvas")
+      assert {:ok, {Canvas, _meta}} = Sanctum.Catalog.lookup("canvas")
 
       for action <- ~w(catalog versions write),
-          do: assert(Sanctum.Gate.chain_reachable?("canvas", action))
+          do: assert(Sanctum.Catalog.chain_reachable?("canvas", action))
 
       for action <- ~w(activate restore),
-          do: assert(Sanctum.Gate.in_chain_refused?("canvas", action))
+          do: assert(Sanctum.Catalog.in_chain_refused?("canvas", action))
     end
   end
 

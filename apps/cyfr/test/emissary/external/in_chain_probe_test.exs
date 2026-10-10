@@ -168,7 +168,7 @@ defmodule Emissary.External.InChainProbeTest do
           root |> Opus.Record.complete(answer) |> Opus.Record.write_completed()
 
         {:error, reason} ->
-          root |> Opus.Record.fail(Sanctum.Gate.render(reason)) |> Opus.Record.write_failed()
+          root |> Opus.Record.fail(Sanctum.Refusals.render(reason)) |> Opus.Record.write_failed()
       end
 
     answer =

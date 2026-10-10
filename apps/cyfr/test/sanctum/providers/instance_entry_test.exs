@@ -46,7 +46,7 @@ defmodule Sanctum.Providers.InstanceEntryTest do
   end
 
   defp operation(action) do
-    {:ok, {_module, tool}} = Sanctum.Gate.lookup("instance_entry")
+    {:ok, {_module, tool}} = Sanctum.Catalog.lookup("instance_entry")
     Enum.find(tool.operations, &(&1.action == action)) || flunk("instance_entry.#{action}")
   end
 

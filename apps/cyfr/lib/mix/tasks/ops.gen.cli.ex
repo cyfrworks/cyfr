@@ -72,7 +72,7 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   @spec render() :: String.t()
   def render do
     operations =
-      for provider <- Sanctum.Gate.configured_providers(),
+      for provider <- Sanctum.Catalog.configured_providers(),
           tool <- provider.tools(),
           operation <- tool.operations,
           :external in operation.planes,

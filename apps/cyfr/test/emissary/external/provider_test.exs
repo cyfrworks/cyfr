@@ -344,7 +344,7 @@ defmodule Emissary.External.ProviderTest do
       assert {:ok, %{status: "error", error: sentence}} =
                Provider.handle("mcp_servers", ctx, %{"action" => "test", "name" => "kept"})
 
-      assert sentence == Sanctum.Gate.render(:destination_mismatch)
+      assert sentence == Sanctum.Refusals.render(:destination_mismatch)
       refute sentence =~ "openai-key"
       assert last_used_at(ctx, openai) == nil
     end

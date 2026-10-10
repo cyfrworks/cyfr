@@ -492,7 +492,7 @@ defmodule PrismWeb.AquaApprovalCard do
     do: false
 
   defp standing_offered?(kind, standing, scope),
-    do: standing_offered(kind, Sanctum.Gate.standing_scope(standing), scope)
+    do: standing_offered(kind, Sanctum.Annotations.standing(standing), scope)
 
   defp standing_offered(_kind, false, _scope), do: false
   defp standing_offered(_kind, :thread, :always), do: false

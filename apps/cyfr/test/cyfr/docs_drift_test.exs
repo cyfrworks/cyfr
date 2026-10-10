@@ -501,7 +501,7 @@ defmodule Cyfr.DocsDriftTest do
   # Every action a provider annotates `auth: :anonymous` — the actions that
   # answer without a session, which is exactly what the table claims to list.
   defp anonymous_actions do
-    for provider <- Sanctum.Gate.configured_providers(),
+    for provider <- Sanctum.Catalog.configured_providers(),
         tool <- provider.tools(),
         {action, meta} <- get_in(tool, [Access.key(:annotations, %{}), :actions]) || %{},
         meta[:auth] == :anonymous,
@@ -1323,7 +1323,7 @@ defmodule Cyfr.DocsDriftTest do
   # The operations of the configured tool named `tool`, by action.
   defp operations(tool) do
     definition =
-      Enum.find_value(Sanctum.Gate.configured_providers(), fn provider ->
+      Enum.find_value(Sanctum.Catalog.configured_providers(), fn provider ->
         Enum.find(provider.tools(), &(&1.name == tool))
       end)
 

@@ -73,7 +73,7 @@ defmodule PrismWeb.ActivitiesLiveTest do
     # One recorded call under a request, and an execution the same request
     # started.
     decision = decision(ctx, tool: "execution", action: "run")
-    :ok = Sanctum.Gate.open_decision(ctx, decision, %{input: %{"reference" => "probe-input"}})
+    :ok = Sanctum.Decisions.open(ctx, decision, %{input: %{"reference" => "probe-input"}})
     _lineage = Cyfr.Test.AttemptFixtures.lineage!(ctx)
 
     {view, _html} = mount_athanor(conn, "/activities")
@@ -116,13 +116,13 @@ defmodule PrismWeb.ActivitiesLiveTest do
         reason: "Not allowed here."
       )
 
-    :ok = Sanctum.Gate.open_decision(ctx, refused, %{input: %{}})
+    :ok = Sanctum.Decisions.open(ctx, refused, %{input: %{}})
 
     admitted = decision(ctx, tool: "storage", action: "get")
-    :ok = Sanctum.Gate.open_decision(ctx, admitted, %{input: %{}})
+    :ok = Sanctum.Decisions.open(ctx, admitted, %{input: %{}})
 
     :ok =
-      Sanctum.Gate.close_decision(ctx, admitted.call_id, %{
+      Sanctum.Decisions.close(ctx, admitted.call_id, %{
         result: {:error, {:not_found, "File", "x"}},
         duration_ms: 3
       })
@@ -150,7 +150,7 @@ defmodule PrismWeb.ActivitiesLiveTest do
   test "?id=req_… focuses the request and correlates it", %{conn: conn} do
     ctx = athanor_context()
     decision = decision(ctx, tool: "execution", action: "run")
-    :ok = Sanctum.Gate.open_decision(ctx, decision, %{input: %{}})
+    :ok = Sanctum.Decisions.open(ctx, decision, %{input: %{}})
 
     {view, _html} = mount_athanor(conn, "/activities?id=#{ctx.request_id}")
     html = settled_render(view)

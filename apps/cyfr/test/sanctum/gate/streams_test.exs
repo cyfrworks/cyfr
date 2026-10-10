@@ -280,12 +280,12 @@ defmodule Sanctum.Gate.StreamsTest do
   describe "the table" do
     test "holds every provider's declared streams, the servers stream among them" do
       assert %Prima.Provider.Stream{topic: :mcp_servers, projection: ["kind"], subject: nil} =
-               Enum.find(Sanctum.Gate.streams(), &(&1.name == "mcp_servers.changes"))
+               Enum.find(Catalog.streams(), &(&1.name == "mcp_servers.changes"))
 
       assert {:ok, {Emissary.External.Provider, %Prima.Provider.Stream{}}} =
                Catalog.lookup_stream("mcp_servers.changes")
 
-      assert Sanctum.Gate.streams() == Enum.sort_by(Sanctum.Gate.streams(), & &1.name)
+      assert Catalog.streams() == Enum.sort_by(Catalog.streams(), & &1.name)
       assert Catalog.lookup_stream("nobody.declares") == :miss
     end
 

@@ -993,12 +993,12 @@ defmodule Emissary.External.BackendsTest do
 
     # Its server process and its Test answer say why, never which entry.
     assert {:error, connect_sentence} = Servers.ensure_started(underneath, ctx)
-    assert connect_sentence == Sanctum.Gate.render(:disclosure_refused)
+    assert connect_sentence == Sanctum.Refusals.render(:disclosure_refused)
 
     assert {:ok, %{status: "error", error: sentence}} =
              Provider.handle("mcp_servers", admin, %{"action" => "test", "name" => "underneath"})
 
-    assert sentence == Sanctum.Gate.render(:disclosure_refused)
+    assert sentence == Sanctum.Refusals.render(:disclosure_refused)
     refute sentence =~ "gh-token"
     refute_receive {:control, "sync", _sync, _fields}, 200
 

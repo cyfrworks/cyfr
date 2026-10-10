@@ -69,7 +69,7 @@ defmodule Sanctum.Providers.McpLogTest do
           reason: "Not allowed."
         )
 
-      :ok = Sanctum.Gate.open_decision(ctx, decision, %{input: %{}})
+      :ok = Sanctum.Decisions.open(ctx, decision, %{input: %{}})
 
       assert {:ok, row} =
                MCP.handle("mcp_log", actor(ctx), %{"action" => "get", "id" => decision.call_id})

@@ -26,12 +26,12 @@ defmodule Sanctum.Catalog do
   than answering a narrower roster: a shape derived from no table at all
   would grant nothing and read as a component that asks for nothing.
 
-  Callers outside the gate enter through `Sanctum.Gate`; this module is its
-  implementation.
+  Callers outside the gate are admitted through `Sanctum.Gate`, whose
+  dispatching entries this module implements, and read the table here.
 
   ## Usage
 
-      Sanctum.Gate.list_tools()
+      Sanctum.Catalog.list_tools()
       Sanctum.Gate.call_external("retention", context, %{"action" => "get"})
 
   ## One node, honestly
@@ -610,7 +610,7 @@ defmodule Sanctum.Catalog do
   the assistant, which already hold an authenticated context and a
   process of their own; `:supervised` runs it in a task under a timeout,
   registered under `ctx.request_id` so a transport whose caller
-  disconnects can stop it (`Sanctum.Gate.cancel_request/1`), for the wire.
+  disconnects can stop it (`Sanctum.RunningTasks.cancel/1`), for the wire.
 
   Every call is one admission decision (`Sanctum.Decisions`), recorded
   under `opts[:call_id]` — a `call_` id an entry minted before its own
@@ -664,7 +664,7 @@ defmodule Sanctum.Catalog do
   transition step and releases it when the synchronous dispatch returns.
 
   Options: `:guest_fn` (`:call` | `:spawn`, default `:call`), `:cancel_handle`
-  (a caller-owned name for this call, by which `Sanctum.Gate.cancel_call/1`
+  (a caller-owned name for this call, by which `Sanctum.RunningTasks.cancel_handle/1`
   stops the supervised handler alone), plus `call_external/4`'s
   options. The runner defaults to `:supervised` here: the handler runs on
   a guest's behalf, and a crash or a hang inside it must not take the
@@ -1312,7 +1312,7 @@ defmodule Sanctum.Catalog do
       inserted_at: audit.inserted_at,
       admission: admission,
       refusal_class: refusal && refusal.class,
-      reason: refusal && Sanctum.Gate.render(refusal)
+      reason: refusal && Refusals.render(refusal)
     }
 
     Sanctum.Decisions.open(ctx, decision, audit.projection)

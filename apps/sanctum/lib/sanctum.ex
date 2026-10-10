@@ -32,6 +32,7 @@ defmodule Sanctum do
   use Boundary,
     deps: [Arca],
     exports: [
+      Annotations,
       ApiKey,
       Attach,
       Auth,
@@ -90,6 +91,8 @@ defmodule Sanctum do
       Refusals,
       RegistryCredentials,
       RequestLog,
+      Resources,
+      RunningTasks,
       Session,
       SignIn,
       Tenancy,
@@ -107,6 +110,7 @@ defmodule Sanctum do
       Vault.OAuthGrant,
       VaultReader,
       VirtualTools,
+      Visibility,
       Webhook
     ],
     check: [aliases: true, apps: [:ecto, :ecto_sql, :postgrex, :exqlite, :ecto_sqlite3]]

@@ -992,7 +992,7 @@ defmodule Compendium.Providers.Aqua do
           cloneable: false,
           note:
             "The soul was not given leave to clone into it: " <>
-              Sanctum.Gate.render(reason)
+              Sanctum.Refusals.render(reason)
         }
     end
   end

@@ -604,7 +604,7 @@ defmodule Sanctum.Gate.CatalogTest do
         # The gate runs the handler under its own task supervisor.
         assert handler_pid in Task.Supervisor.children(Sanctum.Gate.TaskSupervisor)
 
-        assert :ok = Sanctum.Gate.cancel_request("req_tracked")
+        assert :ok = Sanctum.RunningTasks.cancel("req_tracked")
 
         # Killing the handler surfaces to the caller as a typed error rather than
         # taking the dispatcher down with it.
@@ -614,7 +614,7 @@ defmodule Sanctum.Gate.CatalogTest do
 
         # A second cancel, once the first one's unregister has run, finds nothing.
         :sys.get_state(Sanctum.RunningTasks)
-        assert {:error, :not_found = gone} = Sanctum.Gate.cancel_request("req_tracked")
+        assert {:error, :not_found = gone} = Sanctum.RunningTasks.cancel("req_tracked")
         assert %Prima.Refusal{class: :not_found} = Sanctum.Refusals.classify(gone)
       end)
     end
@@ -643,11 +643,11 @@ defmodule Sanctum.Gate.CatalogTest do
         ref = Process.monitor(handler_pid)
         assert [{^handle, ^handler_pid}] = :ets.lookup(Sanctum.RunningTasks.Handles, handle)
 
-        assert :ok = Sanctum.Gate.cancel_call(handle)
+        assert :ok = Sanctum.RunningTasks.cancel_handle(handle)
         assert_receive {:DOWN, ^ref, :process, _, :cancelled}, 5_000
         assert_receive {:result, {:error, {:cancelled, "Tool " <> _}}}, 5_000
 
-        assert :ok = Sanctum.Gate.cancel_call(handle)
+        assert :ok = Sanctum.RunningTasks.cancel_handle(handle)
         assert [] = :ets.lookup(Sanctum.RunningTasks.Handles, handle)
       end)
     end
@@ -659,7 +659,7 @@ defmodule Sanctum.Gate.CatalogTest do
         Catalog.call_external("system", ctx, %{"action" => "status"}, runner: :supervised)
 
       :sys.get_state(Sanctum.RunningTasks)
-      assert {:error, :not_found} = Sanctum.Gate.cancel_request("req_finished")
+      assert {:error, :not_found} = Sanctum.RunningTasks.cancel("req_finished")
     end
 
     # The in-process runner: the console and the assistant hold an

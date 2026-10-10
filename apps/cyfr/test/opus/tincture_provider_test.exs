@@ -97,22 +97,22 @@ defmodule Opus.Providers.TinctureTest do
     end
 
     test "the provider is configured, audited and in the operation table" do
-      assert Tincture in Sanctum.Gate.configured_providers()
+      assert Tincture in Sanctum.Catalog.configured_providers()
       assert Sanctum.Catalog.audit_action_kinds([Tincture]) == :ok
-      assert {:ok, {Tincture, _tool}} = Sanctum.Gate.lookup("tincture")
+      assert {:ok, {Tincture, _tool}} = Sanctum.Catalog.lookup("tincture")
       assert Tincture.service() == "opus"
     end
 
     test "no action is reachable from a running chain" do
       for action <- ["invoke_public", "invoke_protected"] do
-        refute Sanctum.Gate.chain_reachable?("tincture", action)
+        refute Sanctum.Catalog.chain_reachable?("tincture", action)
       end
     end
   end
 
   describe "discovery" do
     defp listed(ctx) do
-      Sanctum.Gate.list_tools()
+      Sanctum.Catalog.list_tools()
       |> Sanctum.Visibility.filter_for_context(ctx)
       |> Enum.find(&(&1["name"] == "tincture"))
     end

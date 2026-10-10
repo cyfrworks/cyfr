@@ -221,9 +221,9 @@ defmodule Opus.Host.Children do
       # recorded here as the gate would have: on the in-chain plane, under
       # no actor (there is no context to name one), with no parent call.
       {:error, reason} = refused ->
-        Sanctum.Gate.open_decision(
+        Sanctum.Decisions.open(
           nil,
-          Sanctum.Gate.refused_decision(nil, reason, plane: :in_chain, tool: tool.name)
+          Sanctum.Decisions.refused(nil, reason, plane: :in_chain, tool: tool.name)
         )
 
         refused
@@ -424,9 +424,9 @@ defmodule Opus.Host.Children do
 
   defp guest_error(type, message), do: {:guest_error, Atom.to_string(type), message}
 
-  # A refusal's one sentence (`Sanctum.Gate.render/1`); an internal term
+  # A refusal's one sentence (`Sanctum.Refusals.render/1`); an internal term
   # is never rendered.
-  defp render(reason), do: Sanctum.Gate.render(reason)
+  defp render(reason), do: Sanctum.Refusals.render(reason)
 
   # A chain-authority refusal in the authority vocabulary's own words; the
   # guest branches on the error's type, never on a reason's name.

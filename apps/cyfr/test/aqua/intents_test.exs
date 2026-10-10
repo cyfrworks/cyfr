@@ -40,10 +40,10 @@ defmodule Aqua.IntentsTest do
   end
 
   test "layout.edit is an operation a running chain reaches through the gate" do
-    assert {:ok, {Compendium.Providers.Layout, tool}} = Sanctum.Gate.lookup("layout")
-    assert %{"edit" => edit} = Sanctum.Gate.declared_actions(tool)
+    assert {:ok, {Compendium.Providers.Layout, tool}} = Sanctum.Catalog.lookup("layout")
+    assert %{"edit" => edit} = Sanctum.Annotations.actions_of(tool)
     assert :in_chain in edit.planes
-    assert Sanctum.Gate.chain_reachable?("layout", "edit")
-    refute Sanctum.Gate.host_intercepted?("layout", "edit")
+    assert Sanctum.Catalog.chain_reachable?("layout", "edit")
+    refute Sanctum.Catalog.host_intercepted?("layout", "edit")
   end
 end

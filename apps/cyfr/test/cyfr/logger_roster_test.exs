@@ -40,7 +40,7 @@ defmodule Cyfr.LoggerRosterTest do
   # writes or returns of a reason carries a frame, a call or an argument.
   @inspected_reasons %{
     {"apps/cyfr/lib/aqua/loop.ex", "describe/1"} =>
-      "renders a reason through Sanctum.Gate.render/1; it inspects only the account " <>
+      "renders a reason through Sanctum.Refusals.render/1; it inspects only the account " <>
         "a setup_required refusal names",
     {"apps/cyfr/lib/opus/attempt.ex", "reason_shape/1"} =>
       "keeps a reason's atom, its tag or its exception's module, and redacts the rest"

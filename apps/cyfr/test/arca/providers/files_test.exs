@@ -121,7 +121,7 @@ defmodule Arca.Providers.FilesTest do
            }
 
     assert :ok = Catalog.audit_action_kinds([Tool])
-    assert "file" in Enum.map(Sanctum.Gate.list_tools(), & &1["name"])
+    assert "file" in Enum.map(Catalog.list_tools(), & &1["name"])
   end
 
   test "the offer actions: all but a withdrawal are interactive, and none is a chain's" do

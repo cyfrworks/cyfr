@@ -584,7 +584,7 @@ defmodule Compendium.OCI.ClientTest do
                  "reference" => "#{ctx.registry}/#{@repo}:1.0.0"
                })
 
-      assert message =~ Sanctum.Gate.render({:limit_reached, :athanor_storage_bytes, 1})
+      assert message =~ Sanctum.Refusals.render({:limit_reached, :athanor_storage_bytes, 1})
       assert message =~ "No credentials configured for"
       assert message =~ "cyfr login"
     end

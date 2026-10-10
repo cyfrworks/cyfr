@@ -108,12 +108,12 @@ defmodule Aqua.Providers.ApprovalTest do
              })
 
     refute Enum.any?(
-             Visibility.filter_for_context(Sanctum.Gate.list_tools(), star),
+             Visibility.filter_for_context(Sanctum.Catalog.list_tools(), star),
              &(&1["name"] == "approval")
            )
 
     assert Enum.any?(
-             Visibility.filter_for_context(Sanctum.Gate.list_tools(), ctx),
+             Visibility.filter_for_context(Sanctum.Catalog.list_tools(), ctx),
              &(&1["name"] == "approval")
            )
 

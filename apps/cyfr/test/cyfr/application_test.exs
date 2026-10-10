@@ -154,7 +154,7 @@ defmodule Cyfr.ApplicationTest do
       # a term written before the tree starts, owned by no child.
       refute Sanctum.Catalog in ids
       refute Emissary.MCP.ResourceRegistry in ids
-      assert is_map(Sanctum.Gate.operations())
+      assert is_map(Sanctum.Catalog.operations())
       refute Arca.Repo in ids
       refute CyfrWeb.Endpoint in ids
     end

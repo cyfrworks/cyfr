@@ -74,7 +74,7 @@ unless Code.ensure_loaded?(Locus.Runtime.Test.FormulaHost) do
 
     @doc "The actions an assignment names as a formula's host's to run."
     @spec intercepted() :: [String.t()]
-    def intercepted, do: Sanctum.Gate.host_intercepted_actions()
+    def intercepted, do: Sanctum.Catalog.host_intercepted_actions()
 
     @doc "The options a formula's host functions run with under `authority`."
     @spec opts(Prima.Authority.t()) :: keyword()

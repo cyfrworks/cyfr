@@ -83,5 +83,5 @@ defmodule Prism.AquaTemplatePolicyTest do
     end
   end
 
-  defp refused_action?(tool, action), do: Sanctum.Gate.in_chain_refused?(tool, action)
+  defp refused_action?(tool, action), do: Sanctum.Catalog.in_chain_refused?(tool, action)
 end

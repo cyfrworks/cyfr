@@ -614,7 +614,7 @@ defmodule Aqua.Providers.NotesTest do
     # Discovery agrees with dispatch: the key is not shown the tool.
     shown =
       Sanctum.Visibility.filter_for_context(
-        Sanctum.Gate.list_tools(),
+        Sanctum.Catalog.list_tools(),
         star
       )
 

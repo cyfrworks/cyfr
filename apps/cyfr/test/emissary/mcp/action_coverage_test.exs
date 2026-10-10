@@ -48,7 +48,7 @@ defmodule Emissary.MCP.ActionCoverageTest do
     test "#{inspect(provider)} #{tool.name}.#{action} reaches its handler through the gate" do
       name = unquote(tool.name)
       action = unquote(action)
-      {:ok, {_module, tool}} = Sanctum.Gate.lookup(name)
+      {:ok, {_module, tool}} = Sanctum.Catalog.lookup(name)
       operation = Enum.find(tool.operations, &(&1.action == action))
 
       {result, log} = with_log(fn -> dispatch(operation, arguments(operation)) end)
@@ -60,7 +60,7 @@ defmodule Emissary.MCP.ActionCoverageTest do
 
   test "a handler that raises or exits fails the coverage; one that refuses does not" do
     Sanctum.Catalog.with_providers([Sanctum.Gate.Probe.Crashing], fn ->
-      {:ok, {_module, tool}} = Sanctum.Gate.lookup(Sanctum.Gate.Probe.Crashing.tool())
+      {:ok, {_module, tool}} = Sanctum.Catalog.lookup(Sanctum.Gate.Probe.Crashing.tool())
 
       for action <- ~w(raise exit) do
         operation = Enum.find(tool.operations, &(&1.action == action))
@@ -81,7 +81,7 @@ defmodule Emissary.MCP.ActionCoverageTest do
   end
 
   test "the roster reaches every provider the table holds" do
-    table = Sanctum.Gate.operations() |> Map.values() |> Enum.map(&elem(&1, 0)) |> MapSet.new()
+    table = Sanctum.Catalog.operations() |> Map.values() |> Enum.map(&elem(&1, 0)) |> MapSet.new()
     assert MapSet.subset?(table, MapSet.new(@providers))
   end
 

@@ -122,7 +122,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
 
   test "the stream is declared beside the operations, bound to its holder, projecting the ref, its kind and no preview" do
     assert {:ok, stream} =
-             Prima.Provider.fetch_stream(Sanctum.Gate.streams(), "confirmation.changes")
+             Prima.Provider.fetch_stream(Sanctum.Catalog.streams(), "confirmation.changes")
 
     assert stream.topic == :confirmations
     assert stream.projection == ["ref", "kind", "operation", "expires_at"]
@@ -133,7 +133,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
   test "a fact of the stream says what happened to the record, and carries nothing else", %{
     session_ctx: session_ctx
   } do
-    {:ok, stream} = Prima.Provider.fetch_stream(Sanctum.Gate.streams(), "confirmation.changes")
+    {:ok, stream} = Prima.Provider.fetch_stream(Sanctum.Catalog.streams(), "confirmation.changes")
     {:ok, grant} = Sanctum.Gate.open_stream(session_ctx, "confirmation.changes")
     actor = Context.actor(session_ctx)
     :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.granted_topic(actor, grant))

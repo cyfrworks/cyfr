@@ -562,7 +562,7 @@ defmodule Emissary.External.Proxy do
 
             {:error,
              {:not_recorded,
-              "the call's ending could not be recorded: " <> Sanctum.Gate.render(reason)}}
+              "the call's ending could not be recorded: " <> Sanctum.Refusals.render(reason)}}
         end
 
       {:error, reason} ->

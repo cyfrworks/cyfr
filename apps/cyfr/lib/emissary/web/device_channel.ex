@@ -631,7 +631,7 @@ defmodule Emissary.Web.DeviceChannel do
       end
     else
       {:error, reason} ->
-        refusal = %{Sanctum.Gate.classify(reason) | stage: :admission}
+        refusal = %{Sanctum.Refusals.classify(reason) | stage: :admission}
         record(state, refusal, "streams", "open")
         {:reply, :ok, answer_refused(id, refusal), state}
     end
@@ -808,7 +808,7 @@ defmodule Emissary.Web.DeviceChannel do
   # A consent signal is answered in its own `{tag, payload}` shape; every
   # other refusal by its class and sentence.
   defp error(reason) do
-    refusal = Sanctum.Gate.classify(reason)
+    refusal = Sanctum.Refusals.classify(reason)
 
     if Prima.ConsentSignal.signal?(refusal.reason),
       do: Prima.ConsentSignal.data(refusal.reason),
@@ -857,7 +857,7 @@ defmodule Emissary.Web.DeviceChannel do
   # One refused decision under the call id assigned the refused message.
   defp record(state, refusal, tool, action) do
     decision =
-      Sanctum.Gate.refused_decision(state.client, refusal,
+      Sanctum.Decisions.refused(state.client, refusal,
         call_id: state.call_id,
         request_id: state.ctx.request_id,
         plane: :external,
@@ -865,7 +865,7 @@ defmodule Emissary.Web.DeviceChannel do
         action: action
       )
 
-    Sanctum.Gate.open_decision(state.client, decision, %{method: "device", input: %{}})
+    Sanctum.Decisions.open(state.client, decision, %{method: "device", input: %{}})
   end
 
   defp close(state, code, reason, []), do: {:stop, :normal, {code, reason}, state}
@@ -905,7 +905,7 @@ defmodule Emissary.Web.DeviceChannel do
   # A renewal the gate refused, in the class and sentence the gate gave
   # it, so its close says what ended it.
   defp renewal_refusal(reason) do
-    refusal = Sanctum.Gate.classify(reason)
+    refusal = Sanctum.Refusals.classify(reason)
     %{refusal | reason: :renewal_refused, stage: :admission}
   end
 

@@ -84,7 +84,7 @@ defmodule PrismWeb.Ops do
   end
 
   # The guard's refusal as the call's one decision, through the path an
-  # entry records a refusal before the gate on (`Sanctum.Gate.refused_decision/3`):
+  # entry records a refusal before the gate on (`Sanctum.Decisions.refused/3`):
   # under the person the refused context presented and no tenant, on the
   # plane every ingress takes, with the operation it named and the guard's
   # reason. The call id is minted for it, never a call id the context still
@@ -96,14 +96,14 @@ defmodule PrismWeb.Ops do
     ctx = attributed(ctx)
 
     decision =
-      Sanctum.Gate.refused_decision(ctx, reason,
+      Sanctum.Decisions.refused(ctx, reason,
         request_id: ctx.request_id || Prima.UUID7.request_id(),
         plane: :external,
         tool: name,
         action: action_of(args)
       )
 
-    Sanctum.Gate.open_decision(ctx, decision, %{method: "tools/call", input: %{}})
+    Sanctum.Decisions.open(ctx, decision, %{method: "tools/call", input: %{}})
   end
 
   # A refusal the guard makes is filed under no tenant, whatever the state
@@ -151,14 +151,14 @@ defmodule PrismWeb.Ops do
   @doc """
   One user-facing sentence for a tool failure.
 
-  Every refusal renders through the table (`Sanctum.Gate.render/1`), the
+  Every refusal renders through the table (`Sanctum.Refusals.render/1`), the
   same sentence on the wire and the page: a bare sentence as its own
   words, an authorization refusal through its vocabulary, anything else
   logged and generalized — internal terms never reach the page.
   """
   def error_message(reason)
   def error_message(:no_context), do: "Not signed in."
-  def error_message(reason), do: Sanctum.Gate.render(reason)
+  def error_message(reason), do: Sanctum.Refusals.render(reason)
 
   defp normalize_tool_call(tool_name, args) do
     case String.split(tool_name, "/", parts: 2) do

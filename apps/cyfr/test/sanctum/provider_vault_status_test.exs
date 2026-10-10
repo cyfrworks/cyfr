@@ -136,7 +136,7 @@ defmodule Sanctum.ProviderVaultStatusTest do
   end
 
   test "is a read on the external plane under no consent class; a guest reaches neither" do
-    assert {:ok, {Sanctum.Provider, meta}} = Sanctum.Gate.lookup("vault")
+    assert {:ok, {Sanctum.Provider, meta}} = Sanctum.Catalog.lookup("vault")
 
     tincture = %{Sanctum.TestContext.local(:prism) | auth_method: :tincture}
     args = fn action -> %{"action" => action} end

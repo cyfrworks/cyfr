@@ -148,7 +148,7 @@ defmodule Opus.Close do
   is recorded as it is. A typed refusal records its readable message,
   announces a `setup_required` event on the run's root or parent stream,
   and answers `{:error, typed}` whole. Any other term is recorded as the
-  sentence `Sanctum.Gate.render/1` gives it — an internal one as the
+  sentence `Sanctum.Refusals.render/1` gives it — an internal one as the
   fixed sentence, logged by its shape. Answers `{:error, masked_message}`
   otherwise.
   """
@@ -334,7 +334,7 @@ defmodule Opus.Close do
   # the row failed and said so in its own log line.
   defp audit_error(record, {:error, {:result_lost, _reason} = lost}) do
     emit_audit_error(record, :completed, lost)
-    Sanctum.Gate.render(lost)
+    Sanctum.Refusals.render(lost)
   end
 
   defp audit_error(record, {:error, reason}) do
@@ -344,7 +344,7 @@ defmodule Opus.Close do
     )
 
     emit_audit_error(record, :completed, reason)
-    Sanctum.Gate.render(reason)
+    Sanctum.Refusals.render(reason)
   end
 
   # The reason travels as data: `Arca.AuditHandler` redacts this metadata
@@ -495,7 +495,7 @@ defmodule Opus.Close do
 
   defp failure_message(reason), do: "Execution failed: #{client_reason(reason)}"
 
-  # A refusal gets its one sentence (`Sanctum.Gate.render/1`); an
+  # A refusal gets its one sentence (`Sanctum.Refusals.render/1`); an
   # internal term is never spelled into a message that outlives this call.
-  defp client_reason(reason), do: Sanctum.Gate.render(reason)
+  defp client_reason(reason), do: Sanctum.Refusals.render(reason)
 end

@@ -13,7 +13,7 @@ defmodule Compendium.Scaffold do
   `components/{type}s/local/{name}/{version}/`.
   """
 
-  alias Sanctum.{Context, Gate}
+  alias Sanctum.{Context, Refusals}
 
   # A built template's npm packages, and the lockfile its build installs
   # from: a tincture builds only from its lockfile, so a scaffold that ships
@@ -248,7 +248,7 @@ defmodule Compendium.Scaffold do
         {:error, reason} = refusal ->
           if Prima.Refusal.reason?(reason),
             do: refusal,
-            else: {:error, "Failed to write scaffold files: #{Gate.render(reason)}"}
+            else: {:error, "Failed to write scaffold files: #{Refusals.render(reason)}"}
       end
     end
   end
@@ -340,7 +340,7 @@ defmodule Compendium.Scaffold do
         end
 
       {:error, reason} ->
-        {:error, "Cannot scaffold right now — seed media unreadable: #{Gate.render(reason)}"}
+        {:error, "Cannot scaffold right now — seed media unreadable: #{Refusals.render(reason)}"}
     end
   end
 

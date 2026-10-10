@@ -309,8 +309,9 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Consent Sanctum.Context Sanctum.ExecutionStanding Sanctum.Gate
-        Sanctum.Notify Sanctum.Provisioning Sanctum.Tenancy Sanctum.ToolGrants
+        Sanctum Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
+        Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Notify Sanctum.Provisioning
+        Sanctum.Refusals Sanctum.RunningTasks Sanctum.Tenancy Sanctum.ToolGrants
         Sanctum.VirtualTools
       ),
       reason:
@@ -327,9 +328,12 @@ defmodule Cyfr.Boundaries do
           "declares, through consent's own derivation (`Aqua.ConsentStatus`), and which " <>
           "named accounts an app's own ingress binds (`Sanctum.Consent.Accounts`); the " <>
           "row below narrows it. " <>
-          "`Sanctum.Gate` is the gate a turn's tool calls pass, and the table's kinds, " <>
-          "actions and annotations the assistant reads. `Sanctum.VirtualTools` declares " <>
-          "the assistant's virtual tools, which its hands, kinds and policy read. " <>
+          "`Sanctum.Gate` is the gate a turn's tool calls pass. `Sanctum.Catalog` is the " <>
+          "table's tool definitions, kinds and actions the assistant reads, and " <>
+          "`Sanctum.Annotations` an action's declared kind, standing and recovery. " <>
+          "`Sanctum.RunningTasks` cancels and releases a call a turn runs, and " <>
+          "`Sanctum.Refusals` renders a refusal's one sentence. `Sanctum.VirtualTools` " <>
+          "declares the assistant's virtual tools, which its hands, kinds and policy read. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -353,9 +357,10 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Consent Sanctum.Context Sanctum.Egress Sanctum.Gate Sanctum.Network
-        Sanctum.Namespace Sanctum.Provisioning Sanctum.RegistryCredentials Sanctum.SignIn
-        Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
+        Sanctum Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress Sanctum.Gate
+        Sanctum.Network Sanctum.Namespace Sanctum.Provisioning Sanctum.Refusals
+        Sanctum.RegistryCredentials Sanctum.SignIn Sanctum.TinctureAuth Sanctum.VaultReader
+        Sanctum.VirtualTools Sanctum.Webhook
       ),
       reason:
         "`Sanctum.Provisioning` is the first-need hook and the half of filling an " <>
@@ -373,9 +378,11 @@ defmodule Cyfr.Boundaries do
           "mints them. A frame's grant revision is read through `Sanctum.Consent`'s own " <>
           "entries (`profiles/2`, `head_consent/2`). `Compendium` never names " <>
           "`Sanctum.Tenancy`. " <>
-          "`Sanctum.Gate` is the gate the component domain's own calls pass, the streams " <>
-          "it lists and the refusals it renders. `Sanctum.VirtualTools` declares the " <>
-          "virtual tools an agent's source and the assistant's agent read. " <>
+          "`Sanctum.Gate` is the gate the component domain's own calls pass. " <>
+          "`Sanctum.Catalog` is the stream declarations a tincture's and a canvas's " <>
+          "checks read and the kinds and actions an agent's tool policy reads, and " <>
+          "`Sanctum.Refusals` renders a refusal's one sentence. `Sanctum.VirtualTools` " <>
+          "declares the virtual tools an agent's source and the assistant's agent read. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -390,7 +397,7 @@ defmodule Cyfr.Boundaries do
         Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.Door Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries
-        Sanctum.Network Sanctum.Policy Sanctum.Proxy Sanctum.Session
+        Sanctum.Network Sanctum.Policy Sanctum.Proxy Sanctum.Refusals Sanctum.Session
         Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
       ),
       reason:
@@ -409,10 +416,12 @@ defmodule Cyfr.Boundaries do
           "decides whether an admitted execution's grant still stands: admission, " <>
           "every host effect, the in-chain gate and the sweep ask it. " <>
           "`Sanctum.Catalog` is the composition root's load of the operation table and its " <>
-          "check of every declared stream's topic; `Sanctum.Proxy` is the proxy port it " <>
-          "installs. `Sanctum.Gate` is the gate's facade: the admission roster names " <>
-          "its heads, execution's in-chain calls, decisions and refusals go through it, " <>
-          "and the root starts its supervisor. " <>
+          "check of every declared stream's topic, and the actions an attempt's host " <>
+          "intercepts (`Opus.Assignments`); `Sanctum.Proxy` is the proxy port the root " <>
+          "installs. `Sanctum.Gate` is the gate's admission entries: the admission roster " <>
+          "names its heads, execution's in-chain calls pass it, and the root starts its " <>
+          "supervisor. `Sanctum.Refusals` classifies and renders a refusal for execution " <>
+          "and for the bridge's announcements. " <>
           "`Sanctum.Network` is `Opus.Host.Egress`'s one resolution of a guest's " <>
           "outbound host, which it pins under the attempt's authority. " <>
           "`Sanctum.TinctureAccess` is that invocation's reread of the tincture it " <>
@@ -423,7 +432,9 @@ defmodule Cyfr.Boundaries do
           "instance-entry usage days (`sweep_usage/0`), which names no entry and no person. " <>
           "`Sanctum.Decisions` is `Cyfr.RetentionScheduler`'s purge of the host's own " <>
           "decisions, the rows without a tenant, under the platform's system actor " <>
-          "(`purge_global/2`), which reaches no athanor's row. " <>
+          "(`purge_global/2`), which reaches no athanor's row, and the decision an entry " <>
+          "that decides on its own records: a schedule's fire and an in-chain child " <>
+          "refused before the gate (`open/2,3`, `close/3`, `refused/3`). " <>
           "`Sanctum.Attach` is `Opus.Host.AttachedFetch`'s one resolution of the value " <>
           "an attached request carries (`resolve/5`): the vault decides, and the control " <>
           "plane attaches and performs. " <>
@@ -435,15 +446,15 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       depth: 3,
       allow: ~w(
-        Sanctum Sanctum.BearerToken Sanctum.Caller Sanctum.Catalog.NotLoadedError
-        Sanctum.ClientIp Sanctum.Consent
-        Sanctum.Context Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
+        Sanctum Sanctum.BearerToken Sanctum.Caller Sanctum.Catalog
+        Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent
+        Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
-        Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Session
-        Sanctum.TinctureAccess
+        Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
+        Sanctum.RunningTasks Sanctum.Session Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Vault.OAuthGrant Sanctum.VaultReader
-        Sanctum.Webhook
+        Sanctum.Visibility Sanctum.Webhook
       ),
       reason:
         "the auth fabric's own front door, where a wide roster is the front door doing " <>
@@ -467,10 +478,19 @@ defmodule Cyfr.Boundaries do
           "restore ingress `Sanctum.Recovery`'s, and the device channel checks each " <>
           "certificate and proof through `Sanctum.DeviceCerts`. " <>
           "`Sanctum.Gate` is the gate every MCP and HTTP call the adapters make passes. " <>
-          "`Sanctum.Proxy` is the proxy port `Emissary.External.Proxy` implements, and " <>
-          "`Sanctum.Refusals` the gate's refusal renderer it answers a proxied call with. " <>
-          "`Sanctum.Catalog.NotLoadedError` alone of the table: the readiness probe " <>
-          "answers the operation table's refusal to be read before boot as not written. " <>
+          "`Sanctum.Catalog` is the table the adapters serve: `tools/list` and a call's " <>
+          "tool definition, the stream declarations the tincture data routes read, and " <>
+          "the readiness probe's check that the table is written; the probe answers the " <>
+          "table's refusal to be read before boot (`Sanctum.Catalog.NotLoadedError`) as " <>
+          "not written. `Sanctum.Resources` is the resource index `resources/list` and " <>
+          "`resources/read` serve and the probe checks, and `Sanctum.Visibility` narrows " <>
+          "`tools/list` to its caller. `Sanctum.Decisions` is the decision an entry that " <>
+          "decides on its own records: a webhook's delivery and its outcome, and a " <>
+          "refusal the router or the device channel makes before the gate. " <>
+          "`Sanctum.RunningTasks` cancels the calls a request whose caller went away still " <>
+          "runs. `Sanctum.Proxy` is the proxy port `Emissary.External.Proxy` implements, and " <>
+          "`Sanctum.Refusals` the gate's refusal classification and renderer the adapters " <>
+          "answer a refusal with. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -499,10 +519,10 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller Sanctum.Catalog
-        Sanctum.ClientIp Sanctum.Consent Sanctum.Context Sanctum.Decisions Sanctum.Door
-        Sanctum.Gate Sanctum.Pairing Sanctum.Passkeys Sanctum.Refusals Sanctum.RequestLog
-        Sanctum.Session Sanctum.SignIn Sanctum.Tenancy Sanctum.TinctureAuth
+        Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
+        Sanctum.Catalog Sanctum.ClientIp Sanctum.Consent Sanctum.Context Sanctum.Decisions
+        Sanctum.Door Sanctum.Gate Sanctum.Pairing Sanctum.Passkeys Sanctum.Refusals
+        Sanctum.RequestLog Sanctum.Session Sanctum.SignIn Sanctum.Tenancy Sanctum.TinctureAuth
         Sanctum.Unauthorized Sanctum.Webhook
       ),
       reason:
@@ -535,12 +555,17 @@ defmodule Cyfr.Boundaries do
           "it passes no rate-limit plug, which makes the console the only per-address " <>
           "bound on the anonymous device flows it starts. " <>
           "`Sanctum.Gate` is the gate the console's and the web tier's calls pass. " <>
-          "`Sanctum.Catalog` is the approval card's read of an action's declaration and " <>
-          "the stream ingress's read of a stream's (`CyfrWeb.SSE`), and `Sanctum.Refusals` " <>
-          "the renderer the vault page answers a refusal with. " <>
+          "`Sanctum.Catalog` is the approval card's read of an action's declaration, " <>
+          "the stream ingress's read of a stream's (`CyfrWeb.SSE`) and the AQUA page's " <>
+          "read of the table's tools and of what a chain reaches; `Sanctum.Annotations` " <>
+          "is that page's read of a tool's declared actions and the approval card's " <>
+          "decoding of a standing. `Sanctum.Refusals` classifies and renders a refusal " <>
+          "for the console's pages and the web tier's answers. " <>
           "`Sanctum.Decisions` and `Sanctum.RequestLog` are the activity page's reads of " <>
           "the decision record and the request log under its fresh context " <>
           "(`PrismWeb.ActivitiesLive`): security rows, read only through Sanctum. " <>
+          "`Sanctum.Decisions` is also the decision the identity plug and the console's " <>
+          "guard record for a refusal they make before the gate. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -1248,6 +1273,14 @@ defmodule Cyfr.Boundaries do
       reconcile_platform_admins: 2,
       system_context: 0
     ],
+    "Sanctum.Annotations" => [
+      actions_of: 1,
+      kind: 2,
+      recovery: 2,
+      standing: 1,
+      standing: 2,
+      standing_to_wire: 1
+    ],
     "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
     "Sanctum.Attach" => [resolve: 5],
     "Sanctum.Auth" => [provider: 0],
@@ -1276,9 +1309,21 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Carry" => [sweep: 1],
     "Sanctum.Catalog" => [
       action_declaration: 1,
+      chain_reachable?: 2,
+      configured_providers: 0,
+      get_tool: 1,
+      host_intercepted?: 2,
+      host_intercepted_actions: 0,
+      in_chain_refused?: 2,
+      list_tools: 0,
       load!: 0,
       lookup_stream: 1,
-      stream_entries: 0
+      operations: 0,
+      restrict_tool: 2,
+      stream_entries: 0,
+      streams: 0,
+      tool_actions: 1,
+      tool_kind: 2
     ],
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
@@ -1314,7 +1359,15 @@ defmodule Cyfr.Boundaries do
       require_permission: 2,
       require_tenant!: 1
     ],
-    "Sanctum.Decisions" => [correlate: 2, list: 2, purge_global: 2],
+    "Sanctum.Decisions" => [
+      close: 3,
+      correlate: 2,
+      list: 2,
+      open: 2,
+      open: 3,
+      purge_global: 2,
+      refused: 3
+    ],
     "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
     "Sanctum.Directory" => [append: 2, outcome: 1, recover: 2, register: 1, resolve: 1],
     "Sanctum.Door" => [admit_identity: 2, platform_admin_emails: 0, refusal_message: 0],
@@ -1322,44 +1375,11 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Egress" => [pinned_request: 5],
     "Sanctum.ExecutionStanding" => [capture: 1, retired_attempts: 3, stamp_only: 1, verify: 1],
     "Sanctum.Gate" => [
-      annotation_kind: 2,
-      annotation_recovery: 2,
-      annotation_standing: 2,
       call_external: 3,
       call_external: 4,
       call_in_chain: 5,
-      cancel_call: 1,
-      cancel_request: 1,
-      chain_reachable?: 2,
-      classify: 1,
-      close_decision: 3,
-      code_override: 1,
-      configured_providers: 0,
-      declared_actions: 1,
-      get_tool: 1,
-      host_intercepted?: 2,
-      host_intercepted_actions: 0,
-      in_chain_refused?: 2,
-      list_resource_templates: 0,
-      list_resources: 0,
-      list_tools: 0,
-      open_decision: 2,
-      open_decision: 3,
       open_stream: 2,
-      open_stream: 3,
-      operations: 0,
-      refused_decision: 3,
-      release_call: 1,
-      render: 1,
-      resolve_resource: 1,
-      resources: 0,
-      restrict_tool: 2,
-      standing_scope: 1,
-      standing_to_wire: 1,
-      streams: 0,
-      tool_actions: 1,
-      tool_kind: 2,
-      visible_tools: 2
+      open_stream: 3
     ],
     "Sanctum.InstanceEntries" => [sweep_usage: 0],
     "Sanctum.Namespace" => [lookup_status: 1],
@@ -1391,9 +1411,11 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Proxy" => [install!: 1],
     "Sanctum.Recovery" => [reproof: 2, restore: 2, restore_challenge: 1],
-    "Sanctum.Refusals" => [classify: 1, render: 1],
+    "Sanctum.Refusals" => [classify: 1, code_override: 1, render: 1],
     "Sanctum.RegistryCredentials" => [delete: 3, get: 3, list: 2, put_push_token: 6],
     "Sanctum.RequestLog" => [list: 2],
+    "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
+    "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1, get: 1],
     "Sanctum.SignIn" => [admitted: 2, link_ticket: 2, record_namespace: 2, suggested_slug: 2],
     "Sanctum.Tenancy" => [
@@ -1477,6 +1499,7 @@ defmodule Cyfr.Boundaries do
       table: 0,
       tool?: 1
     ],
+    "Sanctum.Visibility" => [filter_for_context: 2],
     "Sanctum.Webhook" => [
       decode_input_template: 1,
       default_signature_header: 0,

@@ -125,7 +125,7 @@ defmodule PrismWeb.LegalAcceptController do
         # 502: cyfr.run refused or misanswered the accept — a 200 said
         # "fine" about a failure. Internal terms are logged, never shown.
         Logger.error("[LegalAcceptController] accept_policies error: #{inspect(err)}")
-        error_page(conn, 502, Sanctum.Gate.render(err))
+        error_page(conn, 502, Sanctum.Refusals.render(err))
     end
   end
 

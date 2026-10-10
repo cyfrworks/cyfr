@@ -720,7 +720,7 @@ defmodule PrismWeb.AuthController do
   defp failure_message(_failure), do: "Authentication failed"
 
   # The sign-in page's own words for the refusals a sign-in answers; any
-  # other reason reads as the table's sentence (`Sanctum.Gate.render/1`),
+  # other reason reads as the table's sentence (`Sanctum.Refusals.render/1`),
   # which logs an unknown term by its shape.
   defp friendly_error_message(:session_not_found), do: "Session not found"
   defp friendly_error_message(:session_expired), do: "Session has expired"
@@ -753,5 +753,5 @@ defmodule PrismWeb.AuthController do
   defp friendly_error_message({:validation_error, _}), do: "Invalid authentication data"
   defp friendly_error_message({:provider_error, _}), do: "Authentication provider error"
 
-  defp friendly_error_message(reason), do: Sanctum.Gate.render(reason)
+  defp friendly_error_message(reason), do: Sanctum.Refusals.render(reason)
 end

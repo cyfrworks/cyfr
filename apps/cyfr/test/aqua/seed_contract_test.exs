@@ -51,7 +51,7 @@ defmodule Aqua.SeedContractTest do
     refused =
       for key <- granted,
           {tool, action} = split(key),
-          not Sanctum.Gate.chain_reachable?(tool, action),
+          not Sanctum.Catalog.chain_reachable?(tool, action),
           do: key
 
     assert refused == [], "caps grant actions a chain cannot reach: #{inspect(refused)}"
@@ -277,7 +277,7 @@ defmodule Aqua.SeedContractTest do
 
     [
       if(not MapSet.member?(granted, key), do: "is not in the manifest caps"),
-      if(Sanctum.Gate.in_chain_refused?(tool, action), do: "is not reachable from a chain")
+      if(Sanctum.Catalog.in_chain_refused?(tool, action), do: "is not reachable from a chain")
     ]
     |> Enum.reject(&is_nil/1)
   end

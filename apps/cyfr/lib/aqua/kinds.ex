@@ -7,20 +7,20 @@ defmodule Aqua.Kinds do
   run without a card, the verbs a tool has, and whether a chat can run
   it at all — read from the catalog's annotations and the virtual-tool
   catalog, one rule for the AQUA page and the runtime ceiling alike. The
-  classification is the gate's (`Sanctum.Gate.tool_kind/2`,
-  `Sanctum.Gate.tool_actions/1`), which the `aqua` tool's door in the
+  classification is the gate's (`Sanctum.Catalog.tool_kind/2`,
+  `Sanctum.Catalog.tool_actions/1`), which the `aqua` tool's door in the
   component domain (`Compendium.AquaAgent.validate_tool_policy/2`) reads
   too.
   """
 
   @doc """
   The kind of `tool.action` — the gate's one classification
-  (`Sanctum.Gate.tool_kind/2`): a virtual hand's kind, `:external` for a
+  (`Sanctum.Catalog.tool_kind/2`): a virtual hand's kind, `:external` for a
   `server:tool`, else the catalogued tool's declared kind, nil when
   unknown.
   """
   @spec kind_for(String.t(), String.t()) :: atom() | nil
-  defdelegate kind_for(tool, action), to: Sanctum.Gate, as: :tool_kind
+  defdelegate kind_for(tool, action), to: Sanctum.Catalog, as: :tool_kind
 
   @doc """
   Whether `tool.action` may ever run without a card: only a read, write or
@@ -44,7 +44,7 @@ defmodule Aqua.Kinds do
   """
 
   @spec actions_of(String.t()) :: [String.t()]
-  defdelegate actions_of(tool), to: Sanctum.Gate, as: :tool_actions
+  defdelegate actions_of(tool), to: Sanctum.Catalog, as: :tool_actions
 
   @doc "Whether the virtual catalog or the registry holds a tool of this name."
 

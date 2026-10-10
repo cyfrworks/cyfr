@@ -852,7 +852,8 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       if feed_provider?,
         do:
           assert(
-            {:ok, _declared} = Prima.Provider.fetch_stream(Sanctum.Gate.streams(), "feed.results")
+            {:ok, _declared} =
+              Prima.Provider.fetch_stream(Sanctum.Catalog.streams(), "feed.results")
           )
 
       fun.()
@@ -1119,7 +1120,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
         :ok = CyfrWeb.SSE.claim_slot(:frame_stream, trial_ctx, :frame_stream_max_concurrent)
 
         {:ok, %{shape: shape}} =
-          Prima.Provider.fetch_stream(Sanctum.Gate.streams(), "probe.shaped")
+          Prima.Provider.fetch_stream(Sanctum.Catalog.streams(), "probe.shaped")
 
         shaped = canvas_stream(trial.frame_id, "probe.shaped", nil, bearer: trial.bearer)
         assert shaped.status == 200

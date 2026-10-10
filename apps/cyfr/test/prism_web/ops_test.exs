@@ -76,7 +76,7 @@ defmodule PrismWeb.OpsTest do
         assert Sanctum.Tenancy.Athanors.active?(stale.athanor_id)
         assert {:ok, [refused]} = global_decisions(request_id)
 
-        refusal = Sanctum.Gate.classify(reason)
+        refusal = Sanctum.Refusals.classify(reason)
 
         assert {refused.admission, refused.plane, refused.tool, refused.action} ==
                  {:refused, :external, "ingress_probe", "echo"}

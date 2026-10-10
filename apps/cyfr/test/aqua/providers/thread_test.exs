@@ -140,11 +140,11 @@ defmodule Aqua.Providers.ThreadTest do
                  "thread" => thread.id
                })
 
-      shown = Visibility.filter_for_context(Sanctum.Gate.list_tools(), star)
+      shown = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), star)
       refute Enum.any?(shown, &(&1["name"] == "turn"))
 
       assert Enum.any?(
-               Visibility.filter_for_context(Sanctum.Gate.list_tools(), ctx),
+               Visibility.filter_for_context(Sanctum.Catalog.list_tools(), ctx),
                &(&1["name"] == "turn")
              )
     end
@@ -218,10 +218,10 @@ defmodule Aqua.Providers.ThreadTest do
       # is not offered a door it cannot open.
       star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
-      shown = Visibility.filter_for_context(Sanctum.Gate.list_tools(), star)
+      shown = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), star)
       refute Enum.any?(shown, &(&1["name"] == "thread"))
 
-      shown_oidc = Visibility.filter_for_context(Sanctum.Gate.list_tools(), ctx)
+      shown_oidc = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), ctx)
       assert Enum.any?(shown_oidc, &(&1["name"] == "thread"))
     end
 

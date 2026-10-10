@@ -332,7 +332,7 @@ defmodule PrismWeb.SettingsLiveTest do
         assert {:error, refusal} =
                  Sanctum.Gate.call_external("instance_entry", ctx, %{"action" => action})
 
-        assert Sanctum.Gate.render(refusal) =~ ~r/platform admin/i, action
+        assert Sanctum.Refusals.render(refusal) =~ ~r/platform admin/i, action
       end
     end
 

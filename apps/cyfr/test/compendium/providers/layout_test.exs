@@ -112,7 +112,7 @@ defmodule Compendium.Providers.LayoutTest do
 
     test "the provider is rostered, so the gate serves it" do
       assert Layout in Application.fetch_env!(:sanctum, :tool_providers)
-      assert {:ok, {Layout, _meta}} = Sanctum.Gate.lookup("layout")
+      assert {:ok, {Layout, _meta}} = Sanctum.Catalog.lookup("layout")
     end
   end
 

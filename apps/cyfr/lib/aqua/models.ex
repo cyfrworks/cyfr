@@ -239,7 +239,7 @@ defmodule Aqua.Models do
     end
   end
 
-  defp refusal_text(reason), do: Sanctum.Gate.render(reason)
+  defp refusal_text(reason), do: Sanctum.Refusals.render(reason)
 
   @doc """
   For each soul's catalyst: the installed release it resolves to and

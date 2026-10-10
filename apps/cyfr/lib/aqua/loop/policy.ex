@@ -319,10 +319,11 @@ defmodule Aqua.Loop.Policy do
   end
 
   # A launch is an external act, approved one card at a time.
-  defp standing(%Call{kind: :launch}), do: Sanctum.Gate.standing_to_wire(false)
+  defp standing(%Call{kind: :launch}), do: Sanctum.Annotations.standing_to_wire(false)
 
   defp standing(%Call{} = call),
-    do: Sanctum.Gate.standing_to_wire(Aqua.Kinds.standing_for(call.tool, call.action || ""))
+    do:
+      Sanctum.Annotations.standing_to_wire(Aqua.Kinds.standing_for(call.tool, call.action || ""))
 
   @doc """
   The canonical proposal a card shows for `call`, and its digest hashes.

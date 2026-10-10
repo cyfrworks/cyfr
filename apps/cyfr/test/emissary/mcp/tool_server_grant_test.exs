@@ -156,7 +156,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     # Everything in-chain-planed but ungranted was pruned, and a call
     # would be denied — the catalogue and the verdict are one fact.
-    for tool_def <- Sanctum.Gate.list_tools(),
+    for tool_def <- Sanctum.Catalog.list_tools(),
         name = tool_def["name"],
         not String.contains?(name, ":"),
         action <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],

@@ -2247,7 +2247,7 @@ defmodule Compendium.ProviderTest do
                  "reference" => "reagent:local.test:0.1.0"
                })
 
-      assert Sanctum.Gate.render(refusal) =~ "interactive sign-in"
+      assert Sanctum.Refusals.render(refusal) =~ "interactive sign-in"
 
       # Discovery agrees with dispatch: the key is not shown the push.
       refute "push" in visible_component_actions(key_ctx)

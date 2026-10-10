@@ -19,7 +19,7 @@ defmodule Sanctum.PersonPermissionsTest do
     declared =
       for pair <- Sanctum.Catalog.tool_actions(),
           [tool, action] = String.split(pair, ".", parts: 2),
-          {:ok, {_module, meta}} <- [Sanctum.Gate.lookup(tool)],
+          {:ok, {_module, meta}} <- [Sanctum.Catalog.lookup(tool)],
           permission = Annotations.permission(meta, action),
           not is_nil(permission),
           uniq: true,

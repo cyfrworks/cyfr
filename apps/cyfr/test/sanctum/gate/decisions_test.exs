@@ -173,7 +173,7 @@ defmodule Sanctum.Gate.DecisionsTest do
       assert decision.user_id == ctx.user_id
       assert decision.admission == :refused
       assert decision.refusal_class == :unauthenticated
-      assert decision.reason == Sanctum.Gate.render(:invalid_bearer)
+      assert decision.reason == Sanctum.Refusals.render(:invalid_bearer)
       assert :ok = Prima.Decision.validate(decision)
 
       # Under no context: no actor, a null tenant, and an entry's own id kept.
@@ -398,7 +398,7 @@ defmodule Sanctum.Gate.DecisionsTest do
       # asynchronous run's attempt closes its own row and nothing else.
       source = File.read!(Path.join(@root, "apps/cyfr/lib/opus/close.ex"))
 
-      for name <- ["DecisionLog", "Sanctum.Decisions", "close_decision", "finish("] do
+      for name <- ["DecisionLog", "Sanctum.Decisions", "Decisions", "finish("] do
         refute source =~ name, "Opus.Close names #{name}"
       end
     end

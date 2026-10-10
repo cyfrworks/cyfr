@@ -639,7 +639,7 @@ defmodule Emissary.External.ServerTest do
       Arca.Repo.query!("ALTER TABLE vault_entries RENAME TO vault_entries_unreadable")
 
       assert {:error, sentence} = connect(pid)
-      assert sentence == Sanctum.Gate.render({:unavailable, "Vault"})
+      assert sentence == Sanctum.Refusals.render({:unavailable, "Vault"})
 
       state = :sys.get_state(pid)
       assert state.vault_revisions == nil
@@ -654,7 +654,7 @@ defmodule Emissary.External.ServerTest do
       Arca.Repo.query!("ALTER TABLE vault_entries RENAME TO vault_entries_unreadable")
 
       assert {:error, reason} = connect(pid)
-      refute reason == Sanctum.Gate.render({:unavailable, "Vault"})
+      refute reason == Sanctum.Refusals.render({:unavailable, "Vault"})
       assert :sys.get_state(pid).vault_revisions == %{}
     end
   end
@@ -681,7 +681,7 @@ defmodule Emissary.External.ServerTest do
         )
 
       assert {:error, sentence} = GenServer.call(pid, :get_tools, 30_000)
-      assert sentence == Sanctum.Gate.render(:destination_mismatch)
+      assert sentence == Sanctum.Refusals.render(:destination_mismatch)
 
       state = :sys.get_state(pid)
       assert state.status == :error
@@ -723,7 +723,7 @@ defmodule Emissary.External.ServerTest do
       assert {:ok, %{last_used_at: nil}} =
                Arca.VaultStorage.get(Sanctum.Context.actor(ctx), covered.id)
 
-      assert sentence == Sanctum.Gate.render(:destination_mismatch)
+      assert sentence == Sanctum.Refusals.render(:destination_mismatch)
 
       # An entry that is not there refuses the set alike, in the header's
       # own words, with the covered one still unread.

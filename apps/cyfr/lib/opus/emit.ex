@@ -252,7 +252,7 @@ defmodule Opus.Emit do
     end
   end
 
-  defp render(reason), do: Sanctum.Gate.render(reason)
+  defp render(reason), do: Sanctum.Refusals.render(reason)
 
   defp safe_encode(data), do: Prima.WitResponse.safe_encode(data)
   defp encode_error(type, message), do: Prima.WitResponse.encode_error(type, message)

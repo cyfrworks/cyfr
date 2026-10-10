@@ -662,7 +662,7 @@ defmodule Aqua.Providers.Thread do
         {:error, reason}
 
       {:error, reason} ->
-        {:error, {:invalid_argument, "attach refused: " <> Sanctum.Gate.render(reason)}}
+        {:error, {:invalid_argument, "attach refused: " <> Sanctum.Refusals.render(reason)}}
     end
   end
 

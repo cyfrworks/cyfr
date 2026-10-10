@@ -12,12 +12,12 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   shortcut and pushes `toggle` / `close` events here; the click triggers
   push the same events by target.
 
-  All backing queries pass through tenant-scoped APIs — `Arca.McpLog.list`
-  requires an `athanor_id`, and Compendium / TinctureRegistry
-  lookups use the user's `Sanctum.Context`. The palette never calls
-  platform-scope variants. Action invocation goes through
-  `Sanctum.Gate.call_external/4` with the user's context — same authz
-  path as a normal page interaction.
+  All backing queries pass through tenant-scoped APIs — the `mcp_log`
+  tool's `list` reads the request log under the user's `Sanctum.Context`,
+  and Compendium / TinctureRegistry lookups use the same context. The
+  palette never calls platform-scope variants. Action invocation goes
+  through `Sanctum.Gate.call_external/4` with the user's context — same
+  authz path as a normal page interaction.
   """
 
   use PrismWeb, :live_component
