@@ -22,17 +22,33 @@ defmodule Locus.Launcher do
   following once nothing of it is left. `c:pool_stats/2` answers the
   pool's size, its free uids and its quarantined ones.
 
+  A spec with `control: true` asks for a process whose control channel is
+  carried beside its stdio, as a runner of the runtime has one, and
+  `isolation: "netns"` for one in a network namespace of its own whose
+  relay is its only way out. Such a process is answered as soon as it is
+  asked for, its spawn id, uid and pid following as the first event, and
+  its owner hears `t:control_event/0` in place of `t:event/0`.
+  `c:send_control/2` writes to its control channel, holding what it is
+  sent until the process attaches; `c:send_relay/2` writes to its relay
+  from any process, and `c:close_relay/1` ends the relay.
+
   `Locus.Executor.launcher/0` names the implementation a node uses:
   `Locus.Keeper` where cyfr-locus runs, and the test environment's
   unisolated launcher alone otherwise.
   """
 
-  @typedoc "What a process is started with: `memory_bytes` where its pool bounds it."
+  @typedoc """
+  What a process is started with: `memory_bytes` where its pool bounds it,
+  `control` where it has a control channel, and `isolation` where its pool
+  isolates it.
+  """
   @type spec :: %{
           required(:argv) => [String.t(), ...],
           required(:env) => %{optional(String.t()) => String.t()},
           required(:pool) => String.t(),
-          optional(:memory_bytes) => pos_integer()
+          optional(:memory_bytes) => pos_integer(),
+          optional(:control) => boolean(),
+          optional(:isolation) => String.t()
         }
 
   @typedoc """
@@ -58,6 +74,30 @@ defmodule Locus.Launcher do
           | {:stdout, binary()}
           | {:stderr, binary()}
           | {:exited, integer() | nil, String.t() | nil}
+          | :released
+
+  @typedoc """
+  What the owner of a process with a control channel hears of it: its
+  spawn id, uid and pid (nil where the launcher gives none), or the
+  launcher's refusal, no process of it having run; its relay attached;
+  bytes of its control channel, of its relay and of its stdout and
+  stderr as they arrive; the control channel's and the relay's end, each
+  once; its leader's end and whether it was ended at its memory bound; a
+  relay that broke the frame codec or a channel lost; and its release,
+  the last.
+  """
+  @type control_event ::
+          {:spawned, String.t() | nil, non_neg_integer() | nil, non_neg_integer() | nil}
+          | {:refused, String.t()}
+          | :attached
+          | {:control, binary()}
+          | :control_closed
+          | {:relay, binary()}
+          | :relay_closed
+          | {:stdout, binary()}
+          | {:stderr, binary()}
+          | {:exited, {:status, integer()} | {:signal, String.t()}, boolean()}
+          | {:error, :relay_protocol | :channel_lost}
           | :released
 
   @typedoc "A pool's uids: all of them, the free ones and the quarantined ones."
@@ -94,4 +134,15 @@ defmodule Locus.Launcher do
   @doc "The uids of `pool`."
   @callback pool_stats(GenServer.server() | keyword(), String.t()) ::
               {:ok, pool_stats()} | {:error, error()}
+
+  @doc "Write `data` to the control channel of a process started with `control: true`."
+  @callback send_control(handle(), iodata()) :: :ok | {:error, term()}
+
+  @doc "Write `data` to the relay of a process started with `control: true`."
+  @callback send_relay(handle(), iodata()) :: :ok | {:error, term()}
+
+  @doc "End the relay of a process started with `control: true`: nothing more is written to it."
+  @callback close_relay(handle()) :: :ok
+
+  @optional_callbacks send_control: 2, send_relay: 2, close_relay: 1
 end

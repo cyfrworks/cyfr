@@ -6,9 +6,10 @@ defmodule Locus.ApplicationTest do
   What a Locus node starts, and when it refuses to: a node serves the
   runtime, builds, backends, builds and backends, or nothing by the keys
   it holds, and refuses to hold the runtime's key beside either other
-  key; one that serves builds or backends does so under cyfr-locus, or,
-  in a build that does not know the direct launcher (every build but the
-  test environment's), not at all.
+  key; one started by cyfr-locus starts its one client before every role
+  it serves, the runtime's included; one that serves builds or backends
+  does so under cyfr-locus, or, in a build that does not know the direct
+  launcher (every build but the test environment's), not at all.
   """
 
   # Replaces the logger's level and default formatter for one test.
@@ -76,10 +77,21 @@ defmodule Locus.ApplicationTest do
     end
   end
 
-  test "a runtime node starts the runtime's supervisor, and the keeper's client is the runtime's own" do
-    for keeper? <- [true, false],
-        launcher <- [Locus.Executor.direct_launcher(), @release_launcher] do
-      assert ids(App.children(@runtime, keeper?, launcher)) == [
+  test "a runtime node started by cyfr-locus starts the one client of it before the runtime's supervisor" do
+    for launcher <- [Locus.Executor.direct_launcher(), @release_launcher] do
+      assert ids(App.children(@runtime, true, launcher)) == [
+               Prima.Slots,
+               Locus.Keeper,
+               Locus.Runtime.Supervisor
+             ]
+
+      # Its runners' relays attach where the runtime's settings say.
+      assert {Locus.Keeper, opts} = Enum.at(App.children(@runtime, true, launcher), 1)
+      assert opts[:attach_dir] == Locus.Runtime.Settings.pool!().attach_dir
+
+      # A test or mix boot holds no channel: its runtime runs on the direct
+      # keeper, and no client starts.
+      assert ids(App.children(@runtime, false, launcher)) == [
                Prima.Slots,
                Locus.Runtime.Supervisor
              ]

@@ -3,7 +3,7 @@
 
 defmodule Locus.Runtime.RunnerBoundaryTest do
   @moduledoc """
-  The worker service over its runner boundary, with the `Direct` keeper:
+  The worker service over its runner boundary, with the direct launcher:
   each runner is a VM of its own, started with this VM's code paths, that
   attaches, runs the subtree and reports over the control channel. The
   service loads no component. A clean completion leaves the runner idle
@@ -117,7 +117,7 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
     refute Enum.any?(runner, &match?(%{id: Locus.Runtime.WorkerListener}, &1))
 
     tree = Locus.Runtime.service_tree(settings)
-    assert Enum.any?(tree, &match?(%{id: Locus.Runtime.Keeper.Direct}, &1))
+    assert Enum.any?(tree, &match?(%{id: Locus.DirectLauncher.Runner}, &1))
     assert Enum.any?(tree, &match?({Locus.Runtime.RunnerPool, _}, &1))
     assert Locus.Runtime.WorkerService in tree
   end
@@ -321,7 +321,7 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
     os_pids = for runner <- RunnerPool.runners(RunnerPool), pid = os_pid(runner), do: pid
     assert os_pids != []
 
-    Process.exit(Process.whereis(Locus.Runtime.Keeper.Direct), :kill)
+    Process.exit(Process.whereis(Locus.DirectLauncher.Runner), :kill)
 
     for os_pid <- os_pids,
         do: wait_until(fn -> not alive?(os_pid) end, 10_000, "runner #{os_pid} to be gone")

@@ -58,7 +58,7 @@ defmodule Locus.Runtime.SettingsTest do
       assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :spawn], %{})
 
       assert {:error, {:malformed, :keeper}} =
-               Settings.pool([keeper: Locus.Runtime.Keeper.Direct], %{})
+               Settings.pool([keeper: Locus.DirectLauncher.Runner], %{})
     end
 
     # The release carries no host module, so the prefix is declared here:
@@ -114,7 +114,7 @@ defmodule Locus.Runtime.SettingsTest do
     # The direct keeper is the test build's: without it, the channel alone.
     test "the keepers are the channel and the test build's direct keeper, and the channel alone without it" do
       assert Settings.keepers() == [:channel, :direct]
-      assert Locus.Runtime.Keeper.direct_keeper() == Locus.Runtime.Keeper.Direct
+      assert Locus.Runtime.Keeper.direct_keeper() == Locus.DirectLauncher.Runner
 
       previous = Locus.Runtime.Test.Env.delete(:direct_keeper)
 

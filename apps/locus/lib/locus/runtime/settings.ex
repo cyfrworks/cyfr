@@ -73,7 +73,7 @@ defmodule Locus.Runtime.Settings do
   channel is on (3 by default; 0 means the channel is its standard input
   and output), `RUNTIME_RELAY_FD` the file descriptor its relay to the
   service is on (4 by default, `Locus.Runtime.Relay.Runner`), or
-  `RUNTIME_RELAY_SOCKET` the unix socket the test build's direct keeper
+  `RUNTIME_RELAY_SOCKET` the unix socket the test build's direct launcher
   gives it in its place, and `RUNTIME_WATCHDOG_GRACE_MS` the grace above.
   A runner is given no address of CYFR's: it has no network, and every
   host call it makes leaves through its relay, whose service end posts
@@ -85,8 +85,6 @@ defmodule Locus.Runtime.Settings do
 
   @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
   @id ~r/\A[\x21-\x7E]{1,256}\z/
-
-  @channel_env "KEEPER_CHANNEL"
 
   # The prefix this module declares for the service.
   @prefix "LOCUS_RUNTIME_"
@@ -169,22 +167,6 @@ defmodule Locus.Runtime.Settings do
   @spec keepers() :: [atom()]
   def keepers,
     do: if(Locus.Runtime.Keeper.direct_keeper(), do: [:channel, :direct], else: [:channel])
-
-  @doc "The environment variable the keeper sets to name the inherited channel."
-  @spec channel_env() :: String.t()
-  def channel_env, do: @channel_env
-
-  @doc "Whether this process inherited a keeper channel (`KEEPER_CHANNEL` is set)."
-  @spec channel_inherited?() :: boolean()
-  def channel_inherited?, do: channel_inherited?(System.get_env())
-
-  @doc false
-  def channel_inherited?(env) when is_map(env) do
-    case Map.get(env, @channel_env) do
-      value when is_binary(value) and value != "" -> true
-      _ -> false
-    end
-  end
 
   @typedoc "Why the pool's settings refuse the boot."
   @type pool_refusal :: {:malformed, atom()} | {:unknown, [String.t(), ...]}
@@ -521,7 +503,7 @@ defmodule Locus.Runtime.Settings do
   end
 
   # The keeper's descriptor 4, or the unix socket the test build's direct
-  # keeper names in its place: an absolute path, which wins when set.
+  # launcher names in its place: an absolute path, which wins when set.
   defp relay(env) do
     case Map.fetch(env, "RUNTIME_RELAY_SOCKET") do
       {:ok, "/" <> _ = path} ->

@@ -3,16 +3,19 @@
 
 defmodule Locus.Runtime.KeeperMemoryTest do
   @moduledoc """
-  The `cyfr-locus` client holds every runner to a memory bound, against a
-  scripted keeper on a socket the test holds the keeper's end of: every
-  spawn carries the pool's `:runner_memory_bytes` (or the bound the client
-  was started with) and no spawn can ask for none; a malformed bound stops
-  the client before any runner is started; a runner the keeper reports
-  ended at its bound reaches its handle as the signal that ended it, is
-  logged as ended at its bound, and is tainted, released and never handed
-  out again by the pool; and a spawn the keeper cannot bound is refused
-  typed, logged naming what the deployment lacks, and never retried
-  without its bound.
+  The runtime's adapter to `cyfr-locus` holds every runner to a memory
+  bound, against a scripted keeper on a socket the test holds the
+  keeper's end of, through the node's one client (`Locus.Keeper`): every
+  spawn carries the pool's `:runner_memory_bytes` (or the bound the
+  adapter was started with) and no spawn can ask for none; a malformed
+  bound stops the adapter before any runner is started; a runner the
+  keeper reports ended at its bound reaches its handle as the signal that
+  ended it, is logged as ended at its bound, and is tainted, released and
+  never handed out again by the pool; and a spawn the keeper cannot bound
+  is refused typed, logged naming what the deployment lacks, and never
+  retried without its bound. No log line the pool writes of a runner's
+  failure, a send that found its client gone or a lost channel among
+  them, carries a key or an environment value.
   """
 
   # The application environment's `:runner_memory_bytes` is set by one
@@ -24,6 +27,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
   alias Locus.Runtime.Keeper.Channel
   alias Locus.Runtime.{RunnerPool, RunnerProcess}
+  alias Locus.Runtime.Test.ScriptedHost
 
   @stream_attach 3
 
@@ -58,14 +62,24 @@ defmodule Locus.Runtime.KeeperMemoryTest do
     {:ok, listener: listener, path: path, dir: dir, unique: unique}
   end
 
-  # A client on a fresh channel: its name and the keeper's end.
+  # The node's client on a fresh channel and the runtime's adapter
+  # spawning through it: the adapter's name and the keeper's end.
   defp start_client!(ctx, opts \\ []) do
     {keeper, client_end} = channel(ctx)
     name = Keyword.get(opts, :name, :"memory_keeper_#{ctx.unique}")
+    client = client_name(ctx)
 
     start_supervised!(
       Supervisor.child_spec(
-        {Channel, [channel: client_end, attach_dir: ctx.dir, name: name] ++ opts},
+        {Locus.Keeper, channel: client_end, attach_dir: ctx.dir, name: client},
+        id: {Locus.Keeper, client},
+        restart: :temporary
+      )
+    )
+
+    start_supervised!(
+      Supervisor.child_spec(
+        {Channel, [client: client, name: name] ++ Keyword.take(opts, [:memory_bytes])},
         id: {Channel, name},
         restart: :temporary
       )
@@ -74,6 +88,8 @@ defmodule Locus.Runtime.KeeperMemoryTest do
     on_exit(fn -> :socket.close(keeper) end)
     {name, keeper}
   end
+
+  defp client_name(ctx), do: :"memory_client_#{ctx.unique}"
 
   defp channel(%{listener: listener, path: path}) do
     {:ok, client_end} = :socket.open(:local, :stream)
@@ -142,16 +158,13 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       assert %{"memory_bytes" => 16_777_216} = next_request(keeper)
     end
 
-    test "a malformed bound, or none, stops the client before a runner is asked for", ctx do
+    test "a malformed bound, or none, stops the adapter before a runner is asked for", ctx do
       Process.flag(:trap_exit, true)
 
       for bound <- [nil, 0, 16_777_215, 1_099_511_627_777, -1, 1.0e9, "1G", :unbounded] do
-        {_keeper, client_end} = channel(ctx)
-
         assert {:error, {:keeper_unavailable, {:malformed, :runner_memory_bytes}}} =
                  Channel.start_link(
-                   channel: client_end,
-                   attach_dir: ctx.dir,
+                   client: client_name(ctx),
                    memory_bytes: bound,
                    name: :"memory_refused_#{ctx.unique}"
                  )
@@ -298,6 +311,89 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
       assert {:ok, other, other_runner} = RunnerPool.take(pool, "ath_memory", "exec_next")
       assert other != pid and other_runner != runner
+    end
+  end
+
+  describe "no credential on an exit path" do
+    # A key planted as an assign's call and seal keys, and a secret as the
+    # runners' environment value, absent from every line logged.
+    test "the pool's log of a send that found its client gone and of a lost channel holds no key or environment value",
+         ctx do
+      key = :crypto.strong_rand_bytes(32)
+      secret = "planted-" <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
+      attempt = ScriptedHost.attempt!(ScriptedHost.start!())
+      keys = %{attempt.keys | call: key, seal: key}
+
+      clean? = fn text ->
+        Enum.all?(
+          [key, Base.encode16(key, case: :lower), secret],
+          &(:binary.match(text, &1) == :nomatch)
+        )
+      end
+
+      {_name, keeper} = start_client!(ctx, name: Channel, memory_bytes: 268_435_456)
+      client = Process.whereis(client_name(ctx))
+      supervisor = :"plant_pool_runners_#{ctx.unique}"
+      start_supervised!({DynamicSupervisor, name: supervisor, strategy: :one_for_one})
+      {:ok, defaults} = Locus.Runtime.Settings.pool([], %{})
+
+      pool =
+        start_supervised!(
+          {RunnerPool,
+           name: :"plant_pool_#{ctx.unique}",
+           settings: %{defaults | pool_size: 1},
+           keeper: Channel,
+           supervisor: supervisor,
+           command: %{argv: ["/app/bin/locus", "start"], env: %{"RUNTIME_PLANT" => secret}}}
+        )
+
+      log =
+        capture_log(fn ->
+          :ok =
+            RunnerPool.serve(
+              pool,
+              %{service_id: "wrk_local", boot: "boot_plant", host_url: "http://127.0.0.1:9"},
+              self()
+            )
+
+          %{"id" => id, "attach" => %{"token" => token}, "env" => env} = next_request(keeper)
+          assert env["RUNTIME_PLANT"] == secret
+
+          reply(keeper, %{
+            v: 1,
+            type: "spawned",
+            id: id,
+            spawn_id: spawn_id(9),
+            uid: 30_101,
+            pid: 4242
+          })
+
+          # The assign is held by the runner's handle until it attaches.
+          {:ok, pid, _runner} = RunnerPool.take(pool, "ath_plant", "exec_plant")
+
+          :ok =
+            RunnerProcess.assign(pid, attempt.assignment, "{}", keys, "http://127.0.0.1:9")
+
+          # The runner attaches while its handle is suspended, and the
+          # client stops, its channel lost, before the handle hears it: the
+          # held assign is written to a client that is gone.
+          :ok = :sys.suspend(pid)
+          _relay = attach!(ctx.dir, token)
+          wait_until(fn -> Process.info(pid, :message_queue_len) != {:message_queue_len, 0} end)
+          monitor = Process.monitor(client)
+          :socket.close(keeper)
+          assert_receive {:DOWN, ^monitor, :process, ^client, _reason}, 5_000
+          :ok = :sys.resume(pid)
+
+          assert_receive {RunnerPool, ^pid, {:gone, {:send_failed, _reason}}}, 5_000
+          _ = :sys.get_state(pid)
+          _ = :sys.get_state(pool)
+        end)
+
+      assert log =~ "send_failed"
+      assert log =~ "keeper channel closed"
+      assert log =~ ":channel_lost"
+      assert clean?.(log), "a log line carries a planted value:\n" <> log
     end
   end
 

@@ -21,11 +21,11 @@ config :locus, :runtime,
 
 # A test binds no fixed port: each listener a test needs is started on
 # port 0 and asked which it was given. Its runners are OS processes of
-# their own, started by the direct keeper its test support compiles
+# their own, started by the direct launcher its test support compiles
 # (`Locus.Runtime.Keeper.direct_keeper/0`), which no other build names.
 if config_env() == :test do
   config :locus, :runtime,
     port: 0,
     keeper: :direct,
-    direct_keeper: Locus.Runtime.Keeper.Direct
+    direct_keeper: Locus.DirectLauncher.Runner
 end

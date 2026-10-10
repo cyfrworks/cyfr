@@ -3,16 +3,19 @@
 
 defmodule Locus.Runtime.KeeperChannelTest do
   @moduledoc """
-  The `cyfr-locus` client against a scripted keeper on a socket the test
-  holds the keeper's end of: a runner's handle asks for a spawn in the
-  `runner` pool with a control channel and the runner's explicit
-  environment; the relay attaches with its token, is sent the zero-length
-  frame that opens the relay stream (5), and carries the control channel
-  as stream 4, a line split across frames either way; an assign binds the
-  runner's relay to its attempt before it is written; the
-  keeper's `exited` and `released` reach the handle; a release carries
-  its grace; the pool's stats are asked and answered; and the channel's
-  loss reaches every handle and ends the client.
+  The runtime's adapter (`Locus.Runtime.Keeper.Channel`) over the node's
+  one client of `cyfr-locus` (`Locus.Keeper`), against a scripted keeper
+  on a socket the test holds the keeper's end of: a runner's handle asks
+  for a spawn in the `runner` pool with a control channel and the
+  runner's explicit environment; the relay attaches with its token, is
+  sent the zero-length frame that opens the relay stream (5), and carries
+  the control channel as stream 4, a line split across frames either way;
+  an assign binds the runner's relay to its attempt before it is written;
+  the keeper's `exited` and `released` reach the handle; a release carries
+  its grace, and a second asks for nothing more; the pool's stats are
+  asked and answered; the channel's loss reaches every handle and ends
+  the client; and the adapter runs only where the channel was inherited,
+  the direct launcher only where it was not.
   """
 
   use ExUnit.Case, async: true
@@ -55,12 +58,21 @@ defmodule Locus.Runtime.KeeperChannelTest do
     :ok = :socket.connect(client_end, %{family: :local, path: path})
     {:ok, keeper} = :socket.accept(listener)
 
+    # The node's client of the keeper on the test's channel, and the
+    # runtime's adapter spawning through it.
+    client = :"spawn_client_#{unique}"
     name = :"spawn_keeper_#{unique}"
 
     start_supervised!(
-      Supervisor.child_spec({Channel, channel: client_end, attach_dir: dir, name: name},
+      Supervisor.child_spec(
+        {Locus.Keeper, channel: client_end, attach_dir: dir, name: client},
+        id: client,
         restart: :temporary
       )
+    )
+
+    start_supervised!(
+      Supervisor.child_spec({Channel, client: client, name: name}, id: name, restart: :temporary)
     )
 
     on_exit(fn ->
@@ -70,7 +82,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
       File.rm_rf(dir)
     end)
 
-    {:ok, keeper: keeper, name: name, dir: dir}
+    {:ok, keeper: keeper, name: name, client: client, dir: dir}
   end
 
   defp start_handle!(name, id \\ "runner_1") do
@@ -215,9 +227,10 @@ defmodule Locus.Runtime.KeeperChannelTest do
     :gen_tcp.close(relay)
   end
 
-  test "an assign held for a relay that has not attached shows no key in either status", %{
+  test "an assign held for a relay that has not attached shows no key in any status", %{
     keeper: keeper,
-    name: name
+    name: name,
+    client: client
   } do
     attempt = ScriptedHost.attempt!(ScriptedHost.start!())
     keys = attempt.keys
@@ -247,7 +260,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     _ = request(keeper)
     assert :ok = Channel.send(channel, RunnerControl.encode(assign))
 
-    for process <- [handle, name], key <- [keys.call, keys.seal] do
+    for process <- [handle, name, client], key <- [keys.call, keys.seal] do
       status = :erlang.term_to_binary(:sys.get_status(process))
       assert :binary.match(status, key) == :nomatch
       assert :binary.match(status, Base.encode16(key, case: :lower)) == :nomatch
@@ -285,6 +298,48 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
   end
 
+  test "a release is written once, and a runner whose owner is gone is followed until it is retired",
+       %{keeper: keeper, name: name, client: client} do
+    test = self()
+
+    owner =
+      spawn(fn ->
+        spec = %{
+          runner: "runner_2",
+          argv: ["/app/bin/locus", "start"],
+          env: @spec_env,
+          server: name
+        }
+
+        {:ok, channel, []} = Channel.spawn(spec)
+        send(test, {:channel, channel})
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive {:channel, channel}, 5_000
+    %{"id" => id} = request(keeper)
+    spawn_id = String.duplicate("12", 16)
+    reply(keeper, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_104, pid: 4245})
+    :ok = Channel.release(channel, 500)
+    assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 500} = request(keeper)
+
+    # A second release, and the owner's death, ask nothing more of the
+    # keeper, which is retiring the uid already.
+    :ok = Channel.release(channel, 0)
+    Process.exit(owner, :kill)
+    assert {:error, :timeout} = :socket.recv(keeper, 0, 200)
+    assert map_size(:sys.get_state(client).requests) == 1
+
+    # Its retirement reported, the runner is forgotten.
+    reply(keeper, %{v: 1, type: "released", spawn_id: spawn_id})
+
+    Locus.Runtime.Test.Wait.wait_until(
+      fn -> :sys.get_state(client).requests == %{} end,
+      5_000,
+      "the retired runner to be forgotten"
+    )
+  end
+
   test "a release asked before the keeper answered the spawn follows the spawned reply", %{
     keeper: keeper,
     name: name
@@ -319,11 +374,12 @@ defmodule Locus.Runtime.KeeperChannelTest do
 
   test "the channel's loss reaches every handle and ends the client", %{
     keeper: keeper,
-    name: name
+    name: name,
+    client: client
   } do
     handle = start_handle!(name)
     _ = request(keeper)
-    client = Process.whereis(name)
+    client = Process.whereis(client)
     ref = Process.monitor(client)
 
     :socket.close(keeper)
@@ -379,24 +435,24 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
   end
 
-  test "the client refuses to run without an inherited channel, and the direct keeper with one" do
-    assert :ok = Channel.available(%{"KEEPER_CHANNEL" => "socket:[3]"}, [])
-    assert {:error, _} = Channel.available(%{}, [])
-    assert :ok = Channel.available(%{}, channel: :a_test_socket)
-    assert :ok = Locus.Runtime.Keeper.Direct.available(%{}, [])
+  test "the adapter runs only where the channel was inherited, and the direct launcher only where it was not" do
+    assert :ok = Channel.available(true, [])
+    assert {:error, reason} = Channel.available(false, [])
+    assert reason =~ "KEEPER_CHANNEL is unset, or fd 3 is not the socket it names"
+    assert :ok = Locus.DirectLauncher.Runner.available(false, [])
+    assert {:error, _} = Locus.DirectLauncher.Runner.available(true, [])
 
-    assert {:error, _} =
-             Locus.Runtime.Keeper.Direct.available(%{"KEEPER_CHANNEL" => "socket:[3]"}, [])
-
+    # This VM inherited no channel: the real check refuses the adapter.
     assert_raise ArgumentError, ~r/cannot run here/, fn ->
       Locus.Runtime.Keeper.check!(Channel, [])
     end
 
     # The refusal names the one process that can start the service with
     # its channel.
-    error = assert_raise ArgumentError, fn -> Locus.Runtime.Keeper.check!(Channel, [], %{}) end
+    error = assert_raise ArgumentError, fn -> Locus.Runtime.Keeper.check!(Channel, [], false) end
     assert Exception.message(error) =~ "no keeper channel was inherited"
+    assert Exception.message(error) =~ "fd 3"
     assert Exception.message(error) =~ "only through cyfr-locus"
-    assert :ok = Locus.Runtime.Keeper.check!(Channel, [], %{"KEEPER_CHANNEL" => "socket:[3]"})
+    assert :ok = Locus.Runtime.Keeper.check!(Channel, [], true)
   end
 end

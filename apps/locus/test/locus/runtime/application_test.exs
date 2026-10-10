@@ -7,8 +7,8 @@ defmodule Locus.Runtime.ApplicationTest do
   keeper, its runner pool and the pool's handles, restarted together, and
   the listener CYFR reaches it through. Nothing of the control plane runs
   in it, and it reaches nothing of the control plane's. A service started
-  without the cyfr-locus channel refuses to boot before it starts
-  anything.
+  without the cyfr-locus channel, or with `KEEPER_CHANNEL` naming a
+  socket fd 3 is not, refuses to boot before it starts anything.
   """
 
   # Two cases replace the keeper setting and the process environment the
@@ -61,45 +61,62 @@ defmodule Locus.Runtime.ApplicationTest do
     end)
 
     assert_raise ArgumentError, ~r/only through cyfr-locus/, fn ->
-      Locus.Runtime.keeper!(%{keeper: :channel, attach_dir: "/run/locus"}, %{})
+      Locus.Runtime.keeper!(%{keeper: :channel, attach_dir: "/run/locus"}, false)
     end
 
     # The refusal came before anything was started.
     assert Process.whereis(Locus.Runtime.Supervisor) == supervisor
   end
 
-  test "the direct keeper is compiled from the test support alone and named by the test configuration alone" do
-    refute File.exists?(Path.join(@locus_root, "lib/locus/runtime/keeper/direct.ex"))
-    assert File.exists?(Path.join(@locus_root, "test/support/runtime/direct_keeper.ex"))
-    assert Locus.Runtime.Keeper.direct_keeper() == Locus.Runtime.Keeper.Direct
+  test "a service whose fd 3 is not the socket KEEPER_CHANNEL names refuses to boot, naming fd 3 and cyfr-locus" do
+    supervisor = Process.whereis(Locus.Runtime.Supervisor)
+
+    # The variable is set, as cyfr-locus sets it, but this VM's fd 3 is
+    # not that socket: a descriptor the VM opened for itself is never
+    # taken for the channel.
+    with_system_env("KEEPER_CHANNEL", "socket:[0]", fn ->
+      with_runtime_env(:keeper, :channel, fn ->
+        error = assert_raise ArgumentError, fn -> Locus.Runtime.start_service() end
+        assert Exception.message(error) =~ "fd 3"
+        assert Exception.message(error) =~ "cyfr-locus"
+      end)
+    end)
+
+    assert Process.whereis(Locus.Runtime.Supervisor) == supervisor
+  end
+
+  test "the direct launcher's runner face is compiled from the test support alone and named by the test configuration alone" do
+    refute File.exists?(Path.join(@locus_root, "lib/locus/direct_launcher.ex"))
+    assert File.exists?(Path.join(@locus_root, "test/support/direct_launcher.ex"))
+    assert Locus.Runtime.Keeper.direct_keeper() == Locus.DirectLauncher.Runner
 
     mix = File.read!(Path.join(@locus_root, "mix.exs"))
     assert mix =~ ~S|defp elixirc_paths(:test), do: ["lib", "test/support"]|
     assert mix =~ ~S|defp elixirc_paths(_), do: ["lib"]|
     assert mix =~ ~S|defp env(_env), do: []|
-    refute mix =~ "Keeper.Direct,"
+    refute mix =~ "DirectLauncher.Runner"
 
     # The test configuration names it, inside the test environment's block
     # in the app's own configuration, and nothing a release reads does.
     standalone = File.read!(Path.join(@locus_root, "config/config.exs"))
     [_before, test_block] = String.split(standalone, "if config_env() == :test do", parts: 2)
-    assert test_block =~ "direct_keeper: Locus.Runtime.Keeper.Direct"
+    assert test_block =~ "direct_keeper: Locus.DirectLauncher.Runner"
 
     if File.exists?(Path.join(@umbrella_root, "config/test.exs")) do
       assert File.read!(Path.join(@umbrella_root, "config/test.exs")) =~
-               "direct_keeper: Locus.Runtime.Keeper.Direct"
+               "direct_keeper: Locus.DirectLauncher.Runner"
 
       for file <- ~w(config.exs dev.exs prod.exs runtime.exs locus_runtime.exs),
           path = Path.join(@umbrella_root, "config/" <> file),
           File.exists?(path) do
-        refute File.read!(path) =~ "Keeper.Direct", "config/#{file} names the direct keeper"
+        refute File.read!(path) =~ "DirectLauncher", "config/#{file} names the direct launcher"
       end
     end
 
     named =
       for path <- Path.wildcard(Path.join(@locus_root, "lib/**/*.ex")),
           {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
-          line =~ "Keeper.Direct",
+          line =~ "DirectLauncher",
           do: "#{Path.relative_to(path, @locus_root)}:#{n}"
 
     assert named == []
@@ -125,7 +142,7 @@ defmodule Locus.Runtime.ApplicationTest do
 
     assert Enum.sort(ids) ==
              Enum.sort([
-               Locus.Runtime.Keeper.Direct,
+               Locus.DirectLauncher.Runner,
                Locus.Runtime.RunnerPool.Runners,
                Locus.Runtime.RunnerPool,
                Locus.Runtime.WorkerService

@@ -6,8 +6,8 @@ defmodule Cyfr.Test.RuntimeService do
   The runtime's worker service of the test boot, reached as CYFR reaches it and
   reaching CYFR as it does: over HTTP, through the listeners the boot
   starts on ports of the system's choosing. Its runners are OS processes
-  of their own (the `Direct` keeper, `config/test.exs`), pooled and reused
-  across tests.
+  of their own (the test build's direct launcher, `config/test.exs`),
+  pooled and reused across tests.
 
   The umbrella starts CYFR's host API listener (`Crucible.HostListener`,
   port 0 under `config/test.exs`) and the Locus application, whose listener

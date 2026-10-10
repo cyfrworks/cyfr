@@ -241,8 +241,8 @@ config :cyfr, :opus_key, test_worker_root
 # The runtime's service of a test boot listens on a port of the system's
 # choosing, and so does CYFR's host API listener; `Cyfr.Test.RuntimeService`
 # points each at the other's once both are up. Its runners are OS processes
-# of their own, started by the test build's `:direct` keeper, which its test
-# support compiles and this configuration alone names
+# of their own, started by the test build's direct launcher (`:direct`),
+# which its test support compiles and this configuration alone names
 # (`Locus.Runtime.Keeper.direct_keeper/0`), and pooled across tests; a
 # runner holds no sys.config, so what it takes from this configuration (the
 # log level, the scheduler counts) the service passes it explicitly
@@ -254,7 +254,7 @@ config :locus, :runtime,
     |> Base.encode16(case: :lower),
   port: 0,
   keeper: :direct,
-  direct_keeper: Locus.Runtime.Keeper.Direct
+  direct_keeper: Locus.DirectLauncher.Runner
 
 config :cyfr, :host_api_port, 0
 

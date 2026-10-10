@@ -27,11 +27,12 @@ end
 # own. Its listener binds port 0: a test that needs one starts its own and
 # asks which port it was given.
 #
-# The service runs its runners as OS processes of their own (the `Direct`
-# keeper), a pool of one kept ahead, since every test that points the
-# service at its host restarts it and refills the pool. Runner code a test
-# runs in this VM (the runtime, the handlers, `Locus.Runtime.Runner`) runs
-# on the engine the suite starts here (`Locus.Runtime.Test.Engine`).
+# The service runs its runners as OS processes of their own (the direct
+# launcher's runner face), a pool of one kept ahead, since every test that
+# points the service at its host restarts it and refills the pool. Runner
+# code a test runs in this VM (the runtime, the handlers,
+# `Locus.Runtime.Runner`) runs on the engine the suite starts here
+# (`Locus.Runtime.Test.Engine`).
 root = Locus.Runtime.Test.ScriptedHost.root()
 {:ok, worker_key} = Prima.WorkerAuth.worker_key(root, Locus.Runtime.Test.ScriptedHost.service())
 

@@ -145,32 +145,31 @@ defmodule Locus.Runtime do
         ]
   def service_tree(%{keeper: keeper} = settings) do
     module = Locus.Runtime.Keeper.module(keeper)
-    keeper_opts = keeper_opts(settings)
-    :ok = Locus.Runtime.Keeper.check!(module, keeper_opts)
+    :ok = Locus.Runtime.Keeper.check!(module, [])
 
     [
       {DynamicSupervisor, name: Locus.Runtime.RunnerPool.Runners, strategy: :one_for_one},
-      module.child_spec(keeper_opts),
+      module.child_spec([]),
       {Locus.Runtime.RunnerPool,
        settings: settings,
        keeper: module,
-       keeper_opts: keeper_opts,
+       keeper_opts: [],
        supervisor: Locus.Runtime.RunnerPool.Runners},
       Locus.Runtime.WorkerService
     ]
   end
 
   @doc """
-  Whether the keeper `settings` name can run under `env` (the process
-  environment by default), raising when it cannot: the service's boot
-  check. The channel keeper's refusal names `cyfr-locus`.
+  Whether the keeper `settings` name can run where `inherited?` says
+  whether cyfr-locus's channel was inherited
+  (`Locus.Keeper.channel_inherited?/0` by default), raising when it
+  cannot: the service's boot check. The channel keeper's refusal names
+  `cyfr-locus`.
   """
-  @spec keeper!(Locus.Runtime.Settings.pool(), %{optional(String.t()) => String.t()}) :: :ok
-  def keeper!(%{keeper: keeper} = settings, env \\ System.get_env()) do
-    Locus.Runtime.Keeper.check!(Locus.Runtime.Keeper.module(keeper), keeper_opts(settings), env)
+  @spec keeper!(Locus.Runtime.Settings.pool(), boolean()) :: :ok
+  def keeper!(%{keeper: keeper}, inherited? \\ Locus.Keeper.channel_inherited?()) do
+    Locus.Runtime.Keeper.check!(Locus.Runtime.Keeper.module(keeper), [], inherited?)
   end
-
-  defp keeper_opts(settings), do: [attach_dir: settings.attach_dir]
 
   # The credentials are loaded by the worker service, which refuses the
   # boot when they are missing or malformed; the listener reads the same.

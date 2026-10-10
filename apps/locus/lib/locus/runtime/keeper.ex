@@ -7,9 +7,10 @@ defmodule Locus.Runtime.Keeper do
   processes its runners are, behind one behaviour chosen by the
   `:keeper` of `config :locus, :runtime` (`Locus.Runtime.Settings`):
 
-    * `:channel`, `Locus.Runtime.Keeper.Channel` — the client of `cyfr-locus`
-      (`apps/locus/keeper`), the keeper the image starts the service under and
-      the one keeper every build runs: each runner is spawned in the
+    * `:channel`, `Locus.Runtime.Keeper.Channel` — the adapter to
+      `Locus.Keeper`, the node's one client of `cyfr-locus`
+      (`apps/locus/keeper`), the keeper the image starts every role under:
+      each runner is spawned in the
       keeper's `runner` uid pool with an explicit environment, and its
       control channel (`Prima.RunnerControl`) is the socket on its file
       descriptor 3, relayed over the attach connection as stream 4, and its
@@ -33,6 +34,9 @@ defmodule Locus.Runtime.Keeper do
   channel closed, the
   process exited, its uid or process group retired, the spawn refused
   (no process of it ever ran, as when `c:spawn/1` refuses), or a failure.
+  Both keepers spawn through a `Locus.Launcher` that tells a runner's
+  owner its events in its own words (`t:Locus.Launcher.control_event/0`),
+  and both read them through `event/1`.
   `c:refusal/1` says what a refusal means for an operator. Control bytes go back with `c:send/2`,
   relay bytes with `c:send_relay/2`, callable from any process once the
   runner attached, and `c:close_relay/1` ends the relay;
@@ -40,10 +44,11 @@ defmodule Locus.Runtime.Keeper do
   holds, then the group kill. `c:memory_bytes/1` is the bound every
   runner runs under, nil for a keeper that applies none.
 
-  The keeper's own process, one per pool (`c:child_spec/1`), holds the
-  keeper channel and the attach listener (Channel) or watches the runners'
-  owners and reaps a runner whose owner is gone (`:direct`); the pool
-  starts it as a sibling and is restarted with it.
+  The keeper's own process, one per pool (`c:child_spec/1`), holds what
+  its runners share: the client they spawn through and their bound
+  (Channel), or the janitor that ends every runner it started when the
+  pool goes down (`:direct`); the pool starts it as a sibling and is
+  restarted with it.
   """
 
   @typedoc "What a runner is started with: its id, its argv and the environment beside the keeper's own."
@@ -69,11 +74,19 @@ defmodule Locus.Runtime.Keeper do
           | {:refused, term()}
           | {:error, term()}
 
-  @doc "The keeper's process for a pool, from the pool's options (`:attach_dir`, `:channel`, `:name`)."
+  @doc """
+  The keeper's process for a pool, from the pool's options: the adapter's
+  `:client`, `:memory_bytes` and `:name` (Channel), the janitor's `:name`
+  (`:direct`).
+  """
   @callback child_spec(keyword()) :: Supervisor.child_spec()
 
-  @doc "Whether this keeper may run in `env` (the process environment) with `opts` (the pool's keeper options)."
-  @callback available(%{optional(String.t()) => String.t()}, keyword()) :: :ok | {:error, term()}
+  @doc """
+  Whether this keeper may run where `inherited?` says whether cyfr-locus's
+  channel was inherited (`Locus.Keeper.channel_inherited?/0`), with `opts`
+  (the pool's keeper options).
+  """
+  @callback available(inherited? :: boolean(), keyword()) :: :ok | {:error, term()}
 
   @doc "Start a runner for `spec` from the calling process, answering its channel and the events already known."
   @callback spawn(spec()) :: {:ok, channel(), [event()]} | {:error, term()}
@@ -147,15 +160,39 @@ defmodule Locus.Runtime.Keeper do
   end
 
   @doc """
-  `keeper.available/2` under `env` (the process environment by default),
+  The runtime's event for `event`, an event a runner's launcher told its
+  owner (`t:Locus.Launcher.control_event/0`): the OS pid once spawned, a
+  refusal at the memory bound as `:memory_unavailable` and any other as
+  its code, stdout and stderr as the runner's log, an exit without its
+  memory report (the keeper logs an end at the bound itself), and every
+  other event as it is.
+  """
+  @spec event(Locus.Launcher.control_event()) :: event()
+  def event({:spawned, _spawn_id, _uid, pid}), do: {:spawned, pid}
+  def event({:refused, "memory_unavailable"}), do: {:refused, :memory_unavailable}
+  def event({:refused, code}), do: {:refused, code}
+  def event({:stdout, bytes}), do: {:log, bytes}
+  def event({:stderr, bytes}), do: {:log, bytes}
+  def event({:exited, exit, _memory_exceeded}), do: {:exited, exit}
+  def event(:attached), do: :attached
+  def event({:control, bytes}), do: {:control, bytes}
+  def event(:control_closed), do: :control_closed
+  def event({:relay, bytes}), do: {:relay, bytes}
+  def event(:relay_closed), do: :relay_closed
+  def event({:error, reason}), do: {:error, reason}
+  def event(:released), do: :released
+
+  @doc """
+  `keeper.available/2` where `inherited?` says whether cyfr-locus's
+  channel was inherited (`Locus.Keeper.channel_inherited?/0` by default),
   raising with the reason when it refuses. The refusal of the channel
   keeper names `cyfr-locus`, the one process that can start the service
   with the channel it needs.
   """
-  @spec check!(module(), keyword(), %{optional(String.t()) => String.t()}) :: :ok
-  def check!(keeper, opts, env \\ System.get_env())
-      when is_atom(keeper) and is_list(opts) and is_map(env) do
-    case keeper.available(env, opts) do
+  @spec check!(module(), keyword(), boolean()) :: :ok
+  def check!(keeper, opts, inherited? \\ Locus.Keeper.channel_inherited?())
+      when is_atom(keeper) and is_list(opts) and is_boolean(inherited?) do
+    case keeper.available(inherited?, opts) do
       :ok ->
         :ok
 
@@ -168,7 +205,7 @@ defmodule Locus.Runtime.Keeper do
 
   defp remedy(Locus.Runtime.Keeper.Channel) do
     ". The worker service starts its runners only through cyfr-locus, which " <>
-      "starts it with the keeper channel on fd 3 (#{Locus.Runtime.Settings.channel_env()}): start " <>
+      "starts it with the keeper channel on fd 3 (#{Locus.Keeper.channel_env()}): start " <>
       "the release through `cyfr-locus serve --pool runner:… -- /app/bin/locus start` " <>
       "(the locus-runtime service's entrypoint)."
   end

@@ -12,7 +12,14 @@ defmodule Locus.DirectLauncherTest do
   long-lived process for its owner: stdin as it is sent, stdout and
   stderr apart, a signal, a release with a grace, the exit and the
   release, the last; an owner that dies has the process group killed and
-  its home removed.
+  its home removed. As the runtime's keeper (`Locus.DirectLauncher.Runner`)
+  it ends a runner's whole process group, the leader and everything it
+  started: at once on a release with no grace, after the grace for what
+  ignores the term signal, and when the process that spawned the runner
+  ends without releasing it. A stderr reader waiting on a fifo no process
+  opened ends when its home is removed, and one stranded there, which
+  that removal does not wake, is stopped on every path a runner ends by:
+  its release, its own exit, its owner's death and the janitor's end.
   """
 
   use ExUnit.Case, async: true
@@ -270,6 +277,250 @@ defmodule Locus.DirectLauncherTest do
 
       for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end)
       wait_until(fn -> not File.exists?(home) end)
+    end
+  end
+
+  describe "a runner, through the runtime's face" do
+    alias Locus.DirectLauncher.Runner
+
+    setup do
+      unless Process.whereis(Runner), do: start_supervised!(Runner)
+      :ok
+    end
+
+    # A process that has exited is gone even while its parent has yet to
+    # reap it: a zombie holds no memory and runs nothing.
+    defp running?(os_pid) do
+      case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(os_pid)],
+             stderr_to_stdout: true
+           ) do
+        {stat, 0} -> not String.starts_with?(String.trim(stat), "Z")
+        {_none, _status} -> false
+      end
+    end
+
+    defp assert_gone(os_pids) do
+      for os_pid <- os_pids, do: wait_until(fn -> not running?(os_pid) end)
+    end
+
+    # The runtime's events of `channel`, until `done` holds of one, which is
+    # answered.
+    defp event_until(%{ref: ref} = channel, done) do
+      receive do
+        {DirectLauncher, ^ref, _event} = message ->
+          {:events, [event], _channel} = Runner.handle_message(channel, message)
+          if done.(event), do: event, else: event_until(channel, done)
+      after
+        10_000 -> flunk("the runner never sent the event awaited")
+      end
+    end
+
+    # A leader that starts a child, names it on its standard output, which
+    # is the channel the keeper hands the spawning process, and waits on
+    # it; with `ignore_term`, both ignore the term signal, which a child
+    # inherits.
+    defp spawn_family!(opts \\ []) do
+      trap = if Keyword.get(opts, :ignore_term, false), do: "trap '' TERM; ", else: ""
+
+      spec = %{
+        runner: "runner_direct_#{System.unique_integer([:positive])}",
+        argv: ["/bin/sh", "-c", trap <> "sleep 300 & echo $!; wait"],
+        env: %{}
+      }
+
+      {:ok, channel, []} = Runner.spawn(spec)
+      {:spawned, leader} = event_until(channel, &match?({:spawned, _pid}, &1))
+      {:control, line} = event_until(channel, &match?({:control, _bytes}, &1))
+      {channel, leader, line |> String.trim() |> String.to_integer()}
+    end
+
+    test "a release with no grace kills the leader and the child it started" do
+      {channel, leader, child} = spawn_family!()
+      assert running?(leader) and running?(child)
+
+      :ok = Runner.release(channel, 0)
+
+      assert_gone([leader, child])
+      assert {:exited, {:signal, "SIGKILL"}} = event_until(channel, &match?({:exited, _}, &1))
+      assert :released = event_until(channel, &(&1 == :released))
+    end
+
+    test "a release with a grace kills what ignored the term signal once the grace is over" do
+      {channel, leader, child} = spawn_family!(ignore_term: true)
+      assert running?(leader) and running?(child)
+
+      :ok = Runner.release(channel, 200)
+
+      assert_gone([leader, child])
+    end
+
+    test "a runner whose spawning process ends unreleased is reaped, child and all" do
+      test = self()
+
+      owner =
+        spawn(fn ->
+          send(test, {:family, spawn_family!()})
+
+          receive do
+            :exit -> :ok
+          end
+        end)
+
+      assert_receive {:family, {_channel, leader, child}}, 10_000
+      assert running?(leader) and running?(child)
+
+      send(owner, :exit)
+
+      assert_gone([leader, child])
+    end
+
+    # A runner whose stderr reader is stranded (`strand_reader: true`): the
+    # reader waits in its open of a fifo the runner never opens and the
+    # home's removal does not wake, so only the reader's stop ends it. The
+    # runner's handle and the reader's OS pid.
+    defp stranded!(script, janitor \\ Runner) do
+      spec = %{argv: ["/bin/sh", "-c", script], env: %{}, pool: "runner", control: true}
+      {:ok, handle} = DirectLauncher.spawn([janitor: janitor, strand_reader: true], spec)
+      reader = "/bin/cat " <> Path.join(handle.home, "stderr")
+      wait_until(fn -> readers(reader) != [] end)
+      [os_pid] = readers(reader)
+
+      # On Linux the kernel says where it waits: for a writer of the fifo.
+      if File.exists?("/proc/#{os_pid}/wchan") do
+        wait_until(fn -> File.read("/proc/#{os_pid}/wchan") == {:ok, "wait_for_partner"} end)
+      end
+
+      {handle, os_pid}
+    end
+
+    # The OS pids of the processes whose command line is `command`.
+    defp readers(command) do
+      {listing, 0} = System.cmd("ps", ["-eo", "pid=,args="])
+
+      for line <- String.split(listing, "\n"),
+          [pid, args] <- [String.split(String.trim(line), " ", parts: 2)],
+          args == command,
+          do: String.to_integer(pid)
+    end
+
+    defp released!(%{ref: ref}) do
+      receive do
+        {DirectLauncher, ^ref, :released} -> :ok
+        {DirectLauncher, ^ref, _event} -> released!(%{ref: ref})
+      after
+        10_000 -> flunk("the runner was never released")
+      end
+    end
+
+    defp reader_gone!(os_pid) do
+      wait_until(fn -> not running?(os_pid) end)
+      refute running?(os_pid), "the stderr reader #{os_pid} outlived its runner"
+    end
+
+    test "a stranded stderr reader of a released runner is stopped" do
+      {handle, reader} = stranded!("exec sleep 30")
+
+      :ok = DirectLauncher.release([], handle, 0)
+
+      released!(handle)
+      reader_gone!(reader)
+    end
+
+    test "a stranded stderr reader of a runner that ended on its own is stopped" do
+      {handle, reader} = stranded!("sleep 0.5; exit 0")
+
+      released!(handle)
+      reader_gone!(reader)
+    end
+
+    test "a stranded stderr reader of a runner whose owner died is stopped" do
+      test = self()
+
+      owner =
+        spawn(fn ->
+          send(test, {:stranded, stranded!("exec sleep 30")})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:stranded, {handle, reader}}, 10_000
+      Process.exit(owner, :kill)
+
+      wait_until(fn -> not File.exists?(handle.home) end)
+      reader_gone!(reader)
+    end
+
+    test "the janitor forgets a reader that has ended, so its pid is never signalled" do
+      name = :"direct_janitor_#{System.unique_integer([:positive])}"
+      {:ok, janitor} = GenServer.start(Runner, [], name: name)
+      on_exit(fn -> if Process.alive?(janitor), do: GenServer.stop(janitor) end)
+
+      # The runner closes its stderr and runs on: its reader reads the end
+      # and exits while the runner is still held.
+      spec = %{
+        argv: ["/bin/sh", "-c", "exec 2>&-; sleep 30"],
+        env: %{},
+        pool: "runner",
+        control: true
+      }
+
+      {:ok, handle} = DirectLauncher.spawn([janitor: name], spec)
+      child = handle.server
+
+      wait_until(fn -> :sys.get_state(janitor).runners[child].reader_os_pid == nil end)
+      assert running?(handle.pid)
+
+      :ok = DirectLauncher.release([], handle, 0)
+      released!(handle)
+    end
+
+    test "a stranded stderr reader is stopped by the janitor's end" do
+      name = :"direct_janitor_#{System.unique_integer([:positive])}"
+      {:ok, janitor} = GenServer.start(Runner, [], name: name)
+      {handle, reader} = stranded!("exec sleep 30", name)
+
+      :ok = GenServer.stop(janitor)
+
+      assert_gone([handle.pid])
+      reader_gone!(reader)
+    end
+
+    # A home as a runner's lays it out, and a reader of its fifo as the
+    # launcher starts one, with no runner ever opening the fifo to write:
+    # the reader waits in its open, which is where a runner ended before
+    # its shell opened the fifo leaves it.
+    defp stranded_reader! do
+      home =
+        Path.join(System.tmp_dir!(), "locus_spawn_test_#{System.unique_integer([:positive])}")
+
+      log = Path.join(home, "stderr")
+      File.mkdir_p!(home)
+      {_out, 0} = System.cmd("mkfifo", ["-m", "600", log])
+      reader = Port.open({:spawn_executable, "/bin/cat"}, [:binary, :stream, :eof, args: [log]])
+      {:os_pid, os_pid} = Port.info(reader, :os_pid)
+      {home, reader, os_pid}
+    end
+
+    test "a reader waiting on a fifo no runner opened ends when the home is removed" do
+      {home, reader, os_pid} = stranded_reader!()
+      assert running?(os_pid)
+
+      assert :ok = DirectLauncher.remove_home(home)
+
+      assert_receive {^reader, :eof}, 5_000
+      Port.close(reader)
+      assert_gone([os_pid])
+      refute File.exists?(home)
+    end
+
+    test "removing a home whose reader has already ended does not wait on its fifo" do
+      {home, reader, os_pid} = stranded_reader!()
+      Port.close(reader)
+      System.cmd("kill", ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true)
+      assert_gone([os_pid])
+
+      task = Task.async(fn -> DirectLauncher.remove_home(home) end)
+      assert {:ok, :ok} = Task.yield(task, 5_000)
+      refute File.exists?(home)
     end
   end
 end

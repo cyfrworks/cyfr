@@ -26,20 +26,21 @@ defmodule Locus.Application do
   A node that serves runs every runner, build and backend through
   cyfr-locus, each under a uid and a memory bound of its own, so serving
   without the keeper's channel refuses the boot. The test build alone
-  serves without it, through the direct launchers its test support
-  compiles (`Locus.Executor.direct_launcher/0`,
+  serves without it, through the direct launcher its test support
+  compiles (`Locus.Executor.direct_launcher/0`, and its runtime face,
   `Locus.Runtime.Keeper.direct_keeper/0`), which no other build compiles:
-  no setting of a release reaches them.
+  no setting of a release reaches it.
 
   The tree restarts `:rest_for_one`, in dependency order: the build
-  slots, the client of cyfr-locus when this node was started by it and
-  serves no runtime (the runtime's own keeper client owns the channel
-  where it is served), the runtime (`Locus.Runtime.children/1`) when it is
-  served, the builds service's listener when builds are served, and the
-  backends service's children (`Locus.Backends.children/0`) when backends
-  are. When cyfr-locus's channel is lost its client stops, everything
-  started after it stops with it, and a client that cannot come back ends
-  the application, and with it the release.
+  slots, the one client of cyfr-locus (`Locus.Keeper`) when this node was
+  started by it, whatever roles it serves (a runtime node's attaches its
+  runners' relays in the runtime's attach directory), the runtime
+  (`Locus.Runtime.children/1`) when it is served, the builds service's
+  listener when builds are served, and the backends service's children
+  (`Locus.Backends.children/0`) when backends are. When cyfr-locus's
+  channel is lost its client stops, everything started after it stops
+  with it, and a client that cannot come back ends the application, and
+  with it the release.
   """
 
   use Application
@@ -160,9 +161,17 @@ defmodule Locus.Application do
     end
   end
 
-  def children(%{runtime: runtime?} = roles, keeper?, _direct_launcher) do
-    served(roles, [build_slots()] ++ if(keeper? and not runtime?, do: [Locus.Keeper], else: []))
+  def children(roles, keeper?, _direct_launcher) do
+    served(roles, [build_slots()] ++ if(keeper?, do: [keeper(roles)], else: []))
   end
+
+  # The client of cyfr-locus, every role's: a runtime node's attaches its
+  # runners' relays where the runtime's settings say
+  # (`LOCUS_RUNTIME_ATTACH_DIR`), builds and backends at its default.
+  defp keeper(%{runtime: true}),
+    do: {Locus.Keeper, attach_dir: Locus.Runtime.Settings.pool!().attach_dir}
+
+  defp keeper(_roles), do: Locus.Keeper
 
   defp served(%{runtime: runtime?, builds: builds?, backends: backends?}, children) do
     children ++

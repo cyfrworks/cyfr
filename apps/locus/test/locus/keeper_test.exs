@@ -19,13 +19,22 @@ defmodule Locus.KeeperTest do
   `release` with a grace and `pool` are the vectors' requests, byte for
   byte but for their own ids; an owner that dies has its spawn released
   with no grace; a request the keeper would refuse is refused before it
-  is sent. The build spawn's vectors are `Locus.KeeperVectorsTest`'s.
-  Whether a real spawn is isolated is the builder image tests' to prove.
+  is sent. Fd 3 is the channel only when it links to the socket
+  `KEEPER_CHANNEL` names. No credential leaves the client: a runner's
+  held assign, a frame not yet whole and every message carrying a
+  payload show no key or environment value in a status or a crash
+  report, and a call to a client that is gone, or a run whose client
+  crashed, answers the failure by its kind alone. A runner's relay that
+  stops reading is closed once a write to it waits out the 5 s bound, and
+  its owner hears its control channel and relay closed. The spawns'
+  vectors are `Locus.KeeperVectorsTest`'s. Whether a real spawn is
+  isolated is the image tests' to prove.
   """
 
   use ExUnit.Case, async: false
 
   alias Locus.Keeper
+  alias Locus.Runtime.Test.ScriptedHost
   alias Locus.Test.FakeKeeper
   alias Prima.KeeperProtocol
 
@@ -267,6 +276,18 @@ defmodule Locus.KeeperTest do
     end
 
     test "fd 3 is the channel only when it is the socket cyfr-locus names" do
+      env = fn value -> fn "KEEPER_CHANNEL" -> value end end
+      link = fn target -> fn "/proc/self/fd/3" -> target end end
+
+      assert Keeper.channel_inherited?(env.("socket:[4242]"), link.({:ok, "socket:[4242]"}))
+      refute Keeper.channel_inherited?(env.("socket:[4242]"), link.({:ok, "socket:[1]"}))
+      refute Keeper.channel_inherited?(env.("socket:[4242]"), link.({:ok, "/dev/null"}))
+      refute Keeper.channel_inherited?(env.("socket:[4242]"), link.({:error, :enoent}))
+      refute Keeper.channel_inherited?(env.(nil), link.({:ok, "socket:[4242]"}))
+      refute Keeper.channel_inherited?(env.(""), link.({:ok, ""}))
+
+      # This VM was started by no keeper: whatever its fd 3 is, the
+      # variable names nothing it links to.
       previous = System.get_env("KEEPER_CHANNEL")
 
       on_exit(fn ->
@@ -280,6 +301,346 @@ defmodule Locus.KeeperTest do
 
       System.put_env("KEEPER_CHANNEL", "socket:[1]")
       refute Keeper.channel_inherited?()
+      assert Keeper.channel_env() == "KEEPER_CHANNEL"
+    end
+  end
+
+  describe "no credential on an exit path" do
+    # A key planted as an assign's call and seal keys, and a secret as a
+    # spawn's environment value: a status, a crash report's message, an
+    # answer or a log line is clean when none of the key, its lowercase hex
+    # or the secret occurs in it.
+    defp plant do
+      key = :crypto.strong_rand_bytes(32)
+      secret = "planted-" <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
+      attempt = ScriptedHost.attempt!(ScriptedHost.start!())
+      keys = %{attempt.keys | call: key, seal: key}
+
+      assign =
+        %{type: :assign, assignment: attempt.assignment, input: "{}", keys: keys}
+        |> Prima.RunnerControl.encode()
+        |> IO.iodata_to_binary()
+
+      %{
+        key: key,
+        secret: secret,
+        assign: assign,
+        env: %{"RUNTIME_ROLE" => "runner", "RUNTIME_PLANT" => secret}
+      }
+    end
+
+    defp clean?(plant, text) when is_binary(text) do
+      Enum.all?(
+        [plant.key, Base.encode16(plant.key, case: :lower), plant.secret],
+        &(:binary.match(text, &1) == :nomatch)
+      )
+    end
+
+    defp clean?(plant, term), do: clean?(plant, :erlang.term_to_binary(term))
+
+    # A client on a channel whose far end the test holds.
+    defp plain_client! do
+      {peer, channel} = channel_pair()
+      attach_dir = FakeKeeper.short_tmp_dir()
+      name = :"keeper_plant_#{System.unique_integer([:positive])}"
+      {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
+      Process.unlink(client)
+      :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
+
+      on_exit(fn ->
+        Process.exit(client, :kill)
+        File.rm_rf!(attach_dir)
+      end)
+
+      %{peer: peer, name: name, client: client, attach_dir: attach_dir}
+    end
+
+    defp channel_pair do
+      dir = FakeKeeper.short_tmp_dir()
+      path = Path.join(dir, "channel.sock")
+      {:ok, listener} = :socket.open(:local, :stream)
+      :ok = :socket.bind(listener, %{family: :local, path: path})
+      :ok = :socket.listen(listener)
+      {:ok, client} = :socket.open(:local, :stream)
+      :ok = :socket.connect(client, %{family: :local, path: path})
+      {:ok, ours} = :socket.accept(listener)
+      :socket.close(listener)
+      File.rm_rf!(dir)
+      {ours, client}
+    end
+
+    defp request(peer, buffer \\ "") do
+      case :binary.split(buffer, "\n") do
+        [line, _rest] ->
+          Jason.decode!(line)
+
+        [partial] ->
+          {:ok, data} = :socket.recv(peer, 0, 5_000)
+          request(peer, partial <> data)
+      end
+    end
+
+    test "(a) a runner's held assign, its partial frames and every payload message show no key or environment value" do
+      p = plant()
+      c = plain_client!()
+      adapter = :"keeper_plant_adapter_#{System.unique_integer([:positive])}"
+
+      start_supervised!(
+        {Locus.Runtime.Keeper.Channel, client: c.name, memory_bytes: 268_435_456, name: adapter}
+      )
+
+      # The runtime's adapter asks for the runner, as a runner's process
+      # does, with the planted environment.
+      spec = %{
+        runner: "runner_plant",
+        argv: ["/app/bin/locus", "start"],
+        env: p.env,
+        server: adapter
+      }
+
+      assert {:ok, channel, []} = Locus.Runtime.Keeper.Channel.spawn(spec)
+      %{"id" => id, "attach" => %{"token" => token}} = request(c.peer)
+      spawn_id = String.duplicate("ab", 16)
+
+      :ok =
+        :socket.send(c.peer, [
+          Jason.encode!(%{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}),
+          ?\n
+        ])
+
+      assert_receive {Keeper, _ref, {:spawned, ^spawn_id, 1, 1}}, 5_000
+
+      # The assign, sent before the relay attaches, is held.
+      assert :ok = Locus.Runtime.Keeper.Channel.send(channel, p.assign)
+
+      for process <- [c.client, adapter],
+          do: assert(clean?(p, :sys.get_status(process)), "#{inspect(process)} shows the assign")
+
+      # A frame of the control stream not yet whole, carrying the key.
+      {:ok, relay} =
+        :gen_tcp.connect({:local, Path.join(c.attach_dir, "attach.sock")}, 0, [
+          :binary,
+          active: false
+        ])
+
+      :ok = :gen_tcp.send(relay, Prima.KeeperProtocol.attach_frame(token))
+      assert_receive {Keeper, _ref, :attached}, 5_000
+      hex = Base.encode16(p.key, case: :lower)
+      :ok = :gen_tcp.send(relay, [<<4, 4_000::32>>, ~s({"keys":{"call":"#{hex}")])
+
+      wait_until(fn ->
+        Enum.any?(:sys.get_state(c.client).requests, fn {_ref, entry} -> entry.frames != "" end)
+      end)
+
+      assert clean?(p, :sys.get_status(c.client)), "the status shows a partial frame"
+
+      # Every message that carries a payload, as a crash report shows it.
+      {:ok, port} = :gen_tcp.listen(0, [])
+      on_exit(fn -> :gen_tcp.close(port) end)
+      ref = channel.ref
+
+      for message <- [
+            {:tcp, port, p.assign},
+            {:stdin, ref, p.assign},
+            {:control, ref, p.assign},
+            {:relay, ref, p.assign},
+            {:spawn, ["/app/bin/locus", "start"], p.env, 268_435_456},
+            {:spawn_handle, ref, ["/app/bin/locus", "start"], p.env,
+             %{pool: "runner", memory_bytes: 268_435_456, control: true, isolation: "netns"}}
+          ] do
+        status =
+          Keeper.format_status(%{message: message, state: :sys.get_state(c.client), log: []})
+
+        assert clean?(p, status), "format_status shows #{inspect(elem(message, 0))}'s payload"
+      end
+
+      assert %{message: {:attach, :redacted}} =
+               Keeper.format_status(%{message: {:attach, token}})
+
+      :gen_tcp.close(relay)
+    end
+
+    test "(b) a call to a client that is gone answers its kind alone" do
+      p = plant()
+      gone = %{ref: make_ref(), server: :no_such_keeper_client}
+
+      spawned =
+        Locus.Runtime.Keeper.Channel.spawn(%{
+          runner: "runner_plant",
+          argv: ["/app/bin/locus", "start"],
+          env: p.env,
+          server: :no_such_runtime_adapter
+        })
+
+      sent = Locus.Runtime.Keeper.Channel.send(gone, p.assign)
+      relayed = Locus.Runtime.Keeper.Channel.send_relay(gone, p.assign)
+
+      run =
+        Keeper.run(
+          :no_such_keeper_client,
+          %{argv: ["/bin/true"], env: p.env, stdin: p.assign},
+          timeout_ms: 1_000,
+          max_stdout_bytes: 1_000
+        )
+
+      launched =
+        Keeper.spawn(:no_such_keeper_client, %{argv: ["/bin/true"], env: p.env, pool: "runner"})
+
+      answers = [spawned, sent, relayed, run, launched, Keeper.send_control(gone, p.assign)]
+      for answer <- answers, do: assert(clean?(p, answer), "#{inspect(answer)} carries a payload")
+
+      assert spawned == {:error, {:keeper_unavailable, :noproc}}
+      assert sent == {:error, {:keeper_unavailable, :noproc}}
+      assert relayed == {:error, {:keeper_unavailable, :noproc}}
+      assert run == {:error, {:spawn_failed, {:keeper_unavailable, :noproc}}}
+      assert launched == {:error, {:launcher_unavailable, :noproc}}
+    end
+
+    test "(b) a run whose client crashes answers the crash by its kind alone" do
+      p = plant()
+      c = plain_client!()
+
+      task =
+        Task.async(fn ->
+          Keeper.run(c.name, %{argv: ["/bin/true"], env: p.env, stdin: p.assign},
+            timeout_ms: 10_000,
+            max_stdout_bytes: 1_000
+          )
+        end)
+
+      assert %{"type" => "spawn"} = request(c.peer)
+      :sys.terminate(c.client, {:crashed_holding, p.secret, p.assign})
+
+      assert {:error, {:spawn_failed, {:keeper_down, :crashed}}} = answer = Task.await(task)
+      assert clean?(p, answer)
+    end
+  end
+
+  describe "a runner's spawn" do
+    # A runner spawned and attached on a client whose channel's far end the
+    # test holds, its relay's opening frame read: its handle and the relay.
+    defp attached_runner!(c) do
+      assert {:ok, %{ref: ref} = handle} =
+               Keeper.spawn(c.name, %{
+                 argv: ["/app/bin/locus", "start"],
+                 env: %{},
+                 pool: "runner",
+                 memory_bytes: 268_435_456,
+                 control: true,
+                 isolation: "netns"
+               })
+
+      %{"id" => id, "attach" => %{"token" => token}} = request(c.peer)
+      spawn_id = String.duplicate("cd", 16)
+
+      spawned = %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 1, pid: 1}
+      :ok = :socket.send(c.peer, [Jason.encode!(spawned), ?\n])
+      assert_receive {Keeper, ^ref, {:spawned, ^spawn_id, 1, 1}}, 5_000
+
+      {:ok, relay} =
+        :gen_tcp.connect({:local, Path.join(c.attach_dir, "attach.sock")}, 0, [
+          :binary,
+          active: false
+        ])
+
+      :ok = :gen_tcp.send(relay, KeeperProtocol.attach_frame(token))
+      assert_receive {Keeper, ^ref, :attached}, 5_000
+      assert {:ok, <<5, 0::32>>} = :gen_tcp.recv(relay, 5, 5_000)
+      {handle, relay}
+    end
+
+    # Every event of `ref` until a second passes with none, in order.
+    defp heard(ref, acc \\ []) do
+      receive do
+        {Keeper, ^ref, event} -> heard(ref, [event | acc])
+      after
+        1_000 -> Enum.reverse(acc)
+      end
+    end
+
+    defp queued_at_least(pid, n) do
+      wait_until(fn -> elem(Process.info(pid, :message_queue_len), 1) >= n end)
+    end
+
+    # A process waiting for a write to a connection that does not take it:
+    # suspended on the busy port, or waiting for the driver's reply.
+    defp writing?(pid) do
+      case Process.info(pid, [:status, :current_function]) do
+        [status: :suspended, current_function: _function] -> true
+        [status: _status, current_function: {:prim_inet, _name, _arity}] -> true
+        _other -> false
+      end
+    end
+
+    # One server holds every spawn's connection on the node: a runner whose
+    # relay stops reading is closed once a write to it waits out its bound,
+    # and the server goes on serving the rest.
+    @tag timeout: 60_000
+    test "a relay that stops reading is closed at the write bound, and its owner hears so" do
+      c = plain_client!()
+      {%{ref: ref} = handle, relay} = attached_runner!(c)
+
+      # The relay reads nothing: the connection's buffers fill, and a write
+      # waits out the bound.
+      chunk = :binary.copy("x", KeeperProtocol.max_frame_bytes())
+      started = System.monotonic_time(:millisecond)
+
+      assert {:error, :timeout} =
+               Stream.repeatedly(fn -> Keeper.send_control(handle, chunk) end)
+               |> Enum.find(&(&1 != :ok))
+
+      assert System.monotonic_time(:millisecond) - started >= 5_000
+      assert_receive {Keeper, ^ref, :control_closed}, 5_000
+      assert_receive {Keeper, ^ref, :relay_closed}, 5_000
+      assert {:error, :control_closed} = Keeper.send_control(handle, "more")
+      assert {:error, :relay_closed} = Keeper.send_relay(handle, "more")
+      assert :sys.get_state(c.client).conns == %{}
+      :gen_tcp.close(relay)
+    end
+
+    # A failed write closes the connection, but never before what it
+    # already carried reaches the owner.
+    test "a runner's last control frame reaches its owner before the close a failed write finds" do
+      c = plain_client!()
+      {%{ref: ref} = handle, relay} = attached_runner!(c)
+
+      # The service writes to the runner while the runner, having written
+      # its last control line, closes its end; the client hears all three
+      # only after the write.
+      :ok = :sys.suspend(c.client)
+      writer = Task.async(fn -> Keeper.send_control(handle, ~s({"type":"cancel_child"}\n)) end)
+      queued_at_least(c.client, 1)
+      last = ~s({"type":"complete"}\n)
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, last))
+      :ok = :gen_tcp.close(relay)
+      queued_at_least(c.client, 3)
+      :ok = :sys.resume(c.client)
+
+      assert {:error, _reason} = Task.await(writer)
+      assert heard(ref) == [{:control, last}, :control_closed, :relay_closed]
+    end
+
+    @tag timeout: 60_000
+    test "a runner's control frame received while a write waits out its bound reaches its owner first" do
+      c = plain_client!()
+      {%{ref: ref} = handle, relay} = attached_runner!(c)
+      chunk = :binary.copy("x", KeeperProtocol.max_frame_bytes())
+
+      writer =
+        Task.async(fn ->
+          Stream.repeatedly(fn -> Keeper.send_control(handle, chunk) end)
+          |> Enum.find(&(&1 != :ok))
+        end)
+
+      # Once a write waits on the full connection, the runner writes its
+      # last line, which the client receives while it waits.
+      wait_until(fn -> writing?(Process.whereis(c.name)) end)
+      last = ~s({"type":"complete"}\n)
+      :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, last))
+
+      assert {:error, :timeout} = Task.await(writer, 15_000)
+      assert heard(ref) == [{:control, last}, :control_closed, :relay_closed]
+      :gen_tcp.close(relay)
     end
   end
 

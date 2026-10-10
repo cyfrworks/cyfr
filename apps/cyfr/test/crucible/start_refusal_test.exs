@@ -15,7 +15,7 @@ defmodule Crucible.StartRefusalTest do
 
   The worker service is a stub listener that answers `status` as a
   refusing runtime does and `start` as the case needs; the sentence
-  is the one the runtime's keeper client gives (`Locus.Runtime.Keeper.Channel.refusal/1`),
+  is the one the runtime's keeper gives (`Locus.Runtime.Keeper.Channel.refusal/1`),
   which the runtime's own suite shows its listener answering a start with
   (`Locus.Runtime.WorkerServicePoolTest`).
   """

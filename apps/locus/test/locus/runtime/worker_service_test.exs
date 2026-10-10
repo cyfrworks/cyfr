@@ -5,8 +5,8 @@ defmodule Locus.Runtime.WorkerServiceTest do
   @moduledoc """
   The worker service starts only an assignment addressed to it and its
   boot, with the input its digest binds and keys sealed for it that open
-  as its attempt. Its runners are OS processes of their own (the `Direct`
-  keeper). A runner that exits leaving its attempt open is reported to
+  as its attempt. Its runners are OS processes of their own (the direct
+  launcher). A runner that exits leaving its attempt open is reported to
   CYFR at once over the wire, signed with the service's dispatch key; a
   killed runner is reported the same way. A restarted service is a new
   boot that holds none of its predecessor's attempts, and its runners'
@@ -252,11 +252,13 @@ defmodule Locus.Runtime.WorkerServiceTest do
     %Locus.Runtime.Credentials{} = credentials = Locus.Runtime.Credentials.current()
     handles = for %{pid: pid} <- RunnerPool.runners(RunnerPool), do: pid
 
-    # Each runner's relay holds the keys of the attempt it is bound to.
+    # Each runner's relay holds the keys of the attempt it is bound to, and
+    # each runner's process of the launcher carried them on its stdio.
     relays = for pid <- handles, relay = :sys.get_state(pid).relay, do: relay
     assert relays != []
+    children = for pid <- handles, do: :sys.get_state(pid).channel.server
 
-    for process <- [WorkerService, Locus.Runtime.Keeper.Direct | handles ++ relays],
+    for process <- [WorkerService, Locus.DirectLauncher.Runner | handles ++ relays ++ children],
         key <- [
           attempt.keys.call,
           attempt.keys.seal,
