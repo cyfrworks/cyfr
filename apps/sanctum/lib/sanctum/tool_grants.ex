@@ -17,7 +17,10 @@ defmodule Sanctum.ToolGrants do
   `check_standing/2` is the one rule. Both writes apply it, and a reader
   applies it again to every row it reads back, so an allow the action's
   current declaration would refuse counts for nothing, however it was
-  written. It reads the action through `Sanctum.OperationTable`:
+  written. It reads the action from the operation table
+  (`Sanctum.Catalog.action_declaration/1`), which raises
+  `Sanctum.Catalog.NotLoadedError` before boot has loaded it rather than
+  read a catalogued action as unknown:
 
     * a destructive or external action, or one whose kind is unknown,
       takes no standing allow;
@@ -195,7 +198,7 @@ defmodule Sanctum.ToolGrants do
   `attrs` is a decision or a stored row: its `scope`, `effect`, `tool`
   and `action`, and any bounds. A deny stands exactly when it carries no
   bound. An allow stands only while the action's current declaration,
-  read through `Sanctum.OperationTable`, would take it at its scope, and its
+  read from the operation table, would take it at its scope, and its
   bounds are well formed: a lifecycle names its kind and its row
   together, a deadline is after `now`, and a constraint is a resource
   kind the action declares with patterns in the store's one grammar for
@@ -285,7 +288,7 @@ defmodule Sanctum.ToolGrants do
   end
 
   defp declaration(tool, action) do
-    case Sanctum.OperationTable.action_declaration("#{tool}.#{action}") do
+    case Sanctum.Catalog.action_declaration("#{tool}.#{action}") do
       {:ok, %{kind: _, standing: _, resource: _} = declaration} -> {:ok, declaration}
       _ -> refuse(:unknown_kind)
     end

@@ -62,7 +62,7 @@ defmodule Cyfr.Boundaries do
 
   And the registers:
 
-    * `ports/0` and `internal_strategies/0` — the five ports of
+    * `ports/0` and `internal_strategies/0` — the four ports of
       `ARCHITECTURE.md`, and the two behaviours Sanctum declares that are not
       ports.
     * `actor_paths/0` — every way a `%Prima.Actor{}` is constructed, with
@@ -390,7 +390,7 @@ defmodule Cyfr.Boundaries do
         Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.Door Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries
-        Sanctum.Network Sanctum.OperationTable Sanctum.Policy Sanctum.Proxy Sanctum.Session
+        Sanctum.Network Sanctum.Policy Sanctum.Proxy Sanctum.Session
         Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
       ),
       reason:
@@ -408,10 +408,9 @@ defmodule Cyfr.Boundaries do
           "every member and calls back down to make it. `Sanctum.ExecutionStanding` " <>
           "decides whether an admitted execution's grant still stands: admission, " <>
           "every host effect, the in-chain gate and the sweep ask it. " <>
-          "`Sanctum.Catalog` is the composition root's load of the operation table, its " <>
-          "check of every declared stream's topic, and the table it installs as " <>
-          "consent's port (`Sanctum.OperationTable`); `Sanctum.Proxy` is the proxy port " <>
-          "it installs. `Sanctum.Gate` is the gate's facade: the admission roster names " <>
+          "`Sanctum.Catalog` is the composition root's load of the operation table and its " <>
+          "check of every declared stream's topic; `Sanctum.Proxy` is the proxy port it " <>
+          "installs. `Sanctum.Gate` is the gate's facade: the admission roster names " <>
           "its heads, execution's in-chain calls, decisions and refusals go through it, " <>
           "and the root starts its supervisor. " <>
           "`Sanctum.Network` is `Opus.Host.Egress`'s one resolution of a guest's " <>
@@ -436,7 +435,8 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       depth: 3,
       allow: ~w(
-        Sanctum Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
+        Sanctum Sanctum.BearerToken Sanctum.Caller Sanctum.Catalog.NotLoadedError
+        Sanctum.ClientIp Sanctum.Consent
         Sanctum.Context Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Session
@@ -469,6 +469,8 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Gate` is the gate every MCP and HTTP call the adapters make passes. " <>
           "`Sanctum.Proxy` is the proxy port `Emissary.External.Proxy` implements, and " <>
           "`Sanctum.Refusals` the gate's refusal renderer it answers a proxied call with. " <>
+          "`Sanctum.Catalog.NotLoadedError` alone of the table: the readiness probe " <>
+          "answers the operation table's refusal to be read before boot as not written. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -1363,7 +1365,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Notify" => [broadcast: 3],
-    "Sanctum.OperationTable" => [install!: 1],
     "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
     "Sanctum.Passkeys" => [sign_in: 2, sign_in_challenge: 0],
     "Sanctum.Policy.Enforcement" => [record: 1],
@@ -2024,13 +2025,6 @@ defmodule Cyfr.Boundaries do
       written_at_boot_by: @boot_writer
     },
     %{
-      behaviour: "Sanctum.OperationTable",
-      what: "consent's view of the operation table",
-      declared_by: :sanctum,
-      implemented_by: "Sanctum.Catalog",
-      written_at_boot_by: @boot_writer
-    },
-    %{
       behaviour: "Sanctum.Consent.Components",
       what: "component facts for consent and the gate's stream admission",
       declared_by: :sanctum,
@@ -2070,7 +2064,7 @@ defmodule Cyfr.Boundaries do
   ]
 
   @doc """
-  The five ports of `ARCHITECTURE.md`, and only these. A sixth is an
+  The four ports of `ARCHITECTURE.md`, and only these. A fifth is an
   architecture change. A port's implementation is written at boot and read
   from `:persistent_term`, so Boundary sees no edge from the declaring
   module to it.

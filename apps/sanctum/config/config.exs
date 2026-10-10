@@ -19,13 +19,13 @@ config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB
 # `redirect_uri` needs an absolute origin either way.
 config :sanctum, :fallback_origin, "http://localhost:4000"
 
-# The three ports this domain declares — consent's view of the operation
-# table (`Sanctum.OperationTable`), the component facts a consent rests on
-# (`Sanctum.Consent.Components`) and proxied tool resolution
+# The two ports this domain declares — the component facts a consent rests
+# on (`Sanctum.Consent.Components`) and proxied tool resolution
 # (`Sanctum.Proxy`) — are not configuration: the umbrella's boot installs
-# their implementations (`install!/1`), the first of them this
-# application's own `Sanctum.Catalog`. An uninstalled port refuses every
-# call through it, distinguishably from an absent component.
+# their implementations (`install!/1`). An uninstalled port refuses every
+# call through it, distinguishably from an absent component. Consent reads
+# the operation table from this application's own `Sanctum.Catalog`, which
+# refuses every read until the boot has loaded it.
 
 # The rows are Arca's; the mix tasks are told where to find them.
 config :sanctum, ecto_repos: [Arca.Repo]

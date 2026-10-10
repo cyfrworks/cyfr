@@ -10,10 +10,11 @@ defmodule Sanctum.Proxy do
   The table cannot declare those tools. An upstream catalogue is
   unbounded and changes without us, so a lookup miss on a namespaced
   name asks this port, and the transport that speaks to the servers
-  answers it. The contract is written here, in the gate that depends on
-  it; the one implementation is `Emissary.External.Proxy`, and
-  `Cyfr.Application` writes it in at boot with `install!/1`. Nothing in
-  the gate names the transport.
+  answers it. Consent asks it the same way which servers a grant may name
+  (`c:consent_candidates/1`, `c:consent_candidate/2`). The contract is
+  written here, in the gate that depends on it; the one implementation is
+  `Emissary.External.Proxy`, and `Cyfr.Application` writes it in at boot
+  with `install!/1`. Nothing in the gate or in consent names the transport.
 
   ## Two questions
 
@@ -71,6 +72,20 @@ defmodule Sanctum.Proxy do
   @typedoc "What `c:resolve/4` resolved a name to: the implementation's own, opaque to the gate."
   @type target :: term()
 
+  @typedoc """
+  An external tool server as a grant may name it: its `name`, the
+  `server_digest` a grant binds to (`nil` when its configuration cannot be
+  digested), the `tool_patterns` the operator exposes and, when the server
+  answered, the `tool_names` matched and a `descriptions_digest` over
+  their descriptions.
+  """
+  @type tool_server_candidate :: %{
+          required(:name) => String.t(),
+          required(:server_digest) => String.t() | nil,
+          required(:tool_patterns) => [String.t()],
+          optional(atom()) => term()
+        }
+
   @doc """
   The tools one of the caller's athanor's servers answers with now, as
   its running process last listed them.
@@ -97,12 +112,17 @@ defmodule Sanctum.Proxy do
   @callback dispatch(target(), Context.t(), args :: map(), plane(), opts :: keyword()) ::
               {:ok, map()} | {:error, reason()}
 
-  @doc "Every external tool server of the caller's athanor, each as a grant candidate."
-  @callback consent_candidates(Context.t()) :: [Sanctum.OperationTable.tool_server_candidate()]
+  @doc """
+  Every external tool server of the caller's athanor, each as a grant
+  candidate: what a consent plan offers. A server that cannot be reached
+  is still one, with no matched tool names: a grant is on its configured
+  patterns, not on what it happens to expose at the moment.
+  """
+  @callback consent_candidates(Context.t()) :: [tool_server_candidate()]
 
-  @doc "One external tool server by name, as a grant candidate, or why not."
+  @doc "One external tool server by name, as a grant candidate, or why not: what a commit binds."
   @callback consent_candidate(Context.t(), server_name :: String.t()) ::
-              {:ok, Sanctum.OperationTable.tool_server_candidate()} | {:error, term()}
+              {:ok, tool_server_candidate()} | {:error, term()}
 
   @doc "The proxied tools of the caller's athanor, named `server:tool`."
   @callback list_external_tools(Context.t()) :: [map()]

@@ -131,9 +131,9 @@ defmodule Cyfr.DocsDriftTest do
              "parts #{inspect(@part_names)}"
   end
 
-  test "ARCHITECTURE.md's five ports are the port roster" do
+  test "ARCHITECTURE.md's four ports are the port roster" do
     [section] =
-      Regex.run(~r/^### 4\.2 The five ports\n(.*?)(?=^### )/ms, File.read!(@architecture),
+      Regex.run(~r/^### 4\.2 The four ports\n(.*?)(?=^### )/ms, File.read!(@architecture),
         capture: :all_but_first
       )
 
@@ -146,7 +146,7 @@ defmodule Cyfr.DocsDriftTest do
 
     rostered = Enum.map(Cyfr.Boundaries.ports(), & &1.behaviour)
 
-    assert length(documented) == 5
+    assert length(documented) == 4
 
     assert Enum.sort(documented) == Enum.sort(rostered),
            "ARCHITECTURE.md documents the ports #{inspect(documented)}; " <>

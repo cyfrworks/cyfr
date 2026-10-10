@@ -739,7 +739,7 @@ defmodule Sanctum.Consent.Commit do
     |> Enum.reduce_while({:ok, []}, fn raw, {:ok, acc} ->
       name = Map.get(raw, :server_name)
 
-      case Sanctum.OperationTable.tool_server_candidate(ctx, name || "") do
+      case tool_server_candidate(ctx, name || "") do
         {:ok, %{server_digest: digest} = candidate} when is_binary(digest) ->
           # Intersect granted patterns with the server’s configured patterns.
           # Dispatch also rechecks the live configuration.
@@ -770,6 +770,11 @@ defmodule Sanctum.Consent.Commit do
       error -> error
     end
   end
+
+  # One external tool server as a grant may bind it, from the proxy port:
+  # the server's live digest and patterns are the transport's to read.
+  defp tool_server_candidate(%Context{} = ctx, name) when is_binary(name),
+    do: Sanctum.Proxy.impl!().consent_candidate(ctx, name)
 
   defp prepared_bindings(ctx, decisions, nil, declared, place),
     do: resolve_bindings(ctx, decisions, declared, place)

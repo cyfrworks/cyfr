@@ -163,8 +163,6 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # The installed port module.
     "apps/sanctum/lib/sanctum/consent/components.ex" => 1,
     # The installed port module.
-    "apps/sanctum/lib/sanctum/operation_table.ex" => 1,
-    # The installed port module.
     "apps/sanctum/lib/sanctum/proxy.ex" => 1
   }
 

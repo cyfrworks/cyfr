@@ -118,7 +118,7 @@ defmodule Aqua.Providers.ThreadTest do
       refute "turn" in schema["required"]
 
       # And the catalog serves both, under the provider's one service.
-      served = MapSet.new(Sanctum.OperationTable.tool_actions())
+      served = MapSet.new(Sanctum.Catalog.tool_actions())
       assert MapSet.member?(served, "turn.suspend")
       assert MapSet.member?(served, "turn.recover")
       assert Sanctum.Services.service_name(Tool) == "aqua"

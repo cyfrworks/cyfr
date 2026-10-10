@@ -13,66 +13,114 @@ defmodule Sanctum.ToolGrantsTest do
 
   alias Sanctum.ToolGrants
 
-  # The operation catalog as the standing rule reads it. This suite runs
-  # without the host, so it installs its own port for the length of each
-  # test and puts back whatever was installed before.
-  defmodule StubOperationTable do
+  # The actions the standing rule reads in this suite, declared as a
+  # provider declares them and planted in the operation table, under tool
+  # names no configured provider declares. `files.write` is a virtual
+  # hand's and `srv:thing.do` an upstream server's: neither is the table's.
+  defmodule Declarations do
     @moduledoc false
-    @behaviour Sanctum.OperationTable
+    @behaviour Prima.Provider
 
-    @declarations %{
-      "component.pull" => %{kind: :read, standing: nil, resource: nil},
-      "component.list" => %{kind: :read, standing: nil, resource: nil},
-      "notes.forget" => %{kind: :destructive, standing: nil, resource: nil},
-      "notes.pin" => %{kind: :write, standing: false, resource: nil},
-      "notes.keep" => %{kind: :write, standing: :thread, resource: nil},
-      "files.write" => %{kind: :write, standing: nil, resource: {"path", :storage_path}},
-      "web.fetch" => %{kind: :read, standing: nil, resource: {"domain", :egress_domain}},
-      "execution.run" => %{kind: :execute, standing: nil, resource: {"connection", :vault_entry}},
-      "srv:thing.do" => %{kind: :external, standing: nil, resource: nil}
-    }
+    alias Prima.Arg
+    alias Prima.Operation
 
     @impl true
-    def action_declaration(name) do
-      case Map.fetch(@declarations, name) do
-        {:ok, declaration} -> {:ok, declaration}
-        :error -> {:error, :not_found}
-      end
+    def service, do: "probe"
+
+    @impl true
+    def tools do
+      [
+        Operation.tool([
+          op("probe_component", "pull", kind: :read),
+          op("probe_component", "list", kind: :read)
+        ]),
+        Operation.tool([
+          op("probe_notes", "forget", kind: :destructive),
+          op("probe_notes", "pin", kind: :write, standing: false),
+          op("probe_notes", "keep", kind: :write, standing: :thread)
+        ]),
+        Operation.tool([
+          op("probe_web", "fetch", [Arg.new("domain", :string)],
+            kind: :read,
+            resource: {"domain", :egress_domain}
+          )
+        ]),
+        Operation.tool([
+          op("probe_execution", "run", [Arg.new("connection", :string)],
+            kind: :execute,
+            resource: {"connection", :vault_entry}
+          )
+        ])
+      ]
     end
 
     @impl true
-    def tool_actions, do: Map.keys(@declarations)
+    def handle(_tool, _ctx, _args), do: {:error, :not_found}
 
-    @impl true
-    def providers_loaded, do: :ok
-
-    @impl true
-    def tool_server_candidates(_ctx), do: []
-
-    @impl true
-    def tool_server_candidate(_ctx, _name), do: {:error, :not_found}
+    defp op(tool, action, args \\ [], opts),
+      do: Operation.new(tool, action, "#{tool} #{action}", args, [planes: [:external]] ++ opts)
   end
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
-
-    installed =
-      try do
-        Sanctum.OperationTable.impl!()
-      rescue
-        Sanctum.OperationTable.NotInstalledError -> nil
-      end
-
-    Sanctum.OperationTable.install!(StubOperationTable)
-
-    on_exit(fn ->
-      if installed,
-        do: Sanctum.OperationTable.install!(installed),
-        else: Sanctum.OperationTable.reset()
-    end)
+    unless tags[:unloaded_table], do: plant_declarations!()
 
     {ctx, other} = Sanctum.TestContext.two_contexts()
     {:ok, ctx: ctx, other: other}
+  end
+
+  # The declarations, in the table for the length of a test: a holder
+  # keeps `Sanctum.Catalog.with_providers/2`'s block open until the test's
+  # exit releases it, and the block's end puts the table back as it was,
+  # unloaded in the Sanctum island and the host's in the umbrella.
+  defp plant_declarations! do
+    test = self()
+
+    holder =
+      spawn(fn ->
+        Sanctum.Catalog.with_providers([Declarations], fn ->
+          send(test, {:planted, self()})
+
+          receive do
+            :release -> :ok
+          end
+        end)
+      end)
+
+    ref = Process.monitor(holder)
+
+    receive do
+      {:planted, ^holder} -> Process.demonitor(ref, [:flush])
+      {:DOWN, ^ref, :process, ^holder, reason} -> flunk("not planted: #{inspect(reason)}")
+    after
+      5_000 -> flunk("the declarations were not planted within 5s")
+    end
+
+    on_exit(fn ->
+      ref = Process.monitor(holder)
+      send(holder, :release)
+
+      receive do
+        {:DOWN, ^ref, :process, ^holder, _reason} -> :ok
+      after
+        5_000 -> raise "the planted declarations were not released within 5s"
+      end
+    end)
+  end
+
+  # The table's terms erased for the block and put back after it as they
+  # were: the island has nothing to erase, and the umbrella's boot loaded
+  # them.
+  defp unloaded(fun) do
+    terms = for name <- [:operations, :tool_list, :streams, :resources], do: {Sanctum.Gate, name}
+    saved = for key <- terms, do: {key, :persistent_term.get(key, nil)}
+    Enum.each(terms, &:persistent_term.erase/1)
+
+    try do
+      fun.()
+    after
+      for {key, term} <- saved, term != nil, do: :persistent_term.put(key, term)
+    end
   end
 
   defp decision(overrides \\ %{}) do
@@ -82,7 +130,7 @@ defmodule Sanctum.ToolGrantsTest do
         effect: "allow",
         thread_id: "thread_1",
         agent_name: "aqua",
-        tool: "component",
+        tool: "probe_component",
         action: "pull"
       },
       overrides
@@ -99,13 +147,29 @@ defmodule Sanctum.ToolGrantsTest do
     assert ToolGrants.effects() == ["allow", "deny"]
   end
 
+  @tag :unloaded_table
+  test "an unloaded table is refused by name, never read as no actions", %{ctx: ctx} do
+    unloaded(fn ->
+      assert_raise Sanctum.Catalog.NotLoadedError,
+                   &Sanctum.Consent.ShapeDerivation.all_tool_actions/0
+
+      assert_raise Sanctum.Catalog.NotLoadedError, fn ->
+        ToolGrants.check_standing(decision(), DateTime.utc_now())
+      end
+
+      assert_raise Sanctum.Catalog.NotLoadedError, fn -> ToolGrants.put(ctx, decision()) end
+    end)
+
+    assert {:ok, []} = ToolGrants.for_thread(ctx, "thread_1")
+  end
+
   describe "put/2 and for_thread/2" do
     test "a decision lands in the caller's tenant, by the caller", %{ctx: ctx} do
       assert {:ok, grant} = ToolGrants.put(ctx, decision())
       assert grant.athanor_id == ctx.athanor_id
       assert grant.granted_by == ctx.user_id
 
-      assert {:ok, [%{tool: "component", action: "pull", effect: "allow"}]} =
+      assert {:ok, [%{tool: "probe_component", action: "pull", effect: "allow"}]} =
                ToolGrants.for_thread(ctx, "thread_1")
     end
 
@@ -141,7 +205,7 @@ defmodule Sanctum.ToolGrantsTest do
     test "an answer that may not stand is refused with its reason and writes nothing",
          %{ctx: ctx} do
       assert {:error, {:scope_not_permitted, :destructive}} =
-               ToolGrants.put(ctx, decision(%{tool: "notes", action: "forget"}))
+               ToolGrants.put(ctx, decision(%{tool: "probe_notes", action: "forget"}))
 
       assert {:error, {:scope_not_permitted, :bounded_deny}} =
                ToolGrants.put(ctx, decision(%{effect: "deny", expires_at: soon()}))
@@ -181,7 +245,7 @@ defmodule Sanctum.ToolGrantsTest do
       refute ToolGrants.admits?(ctx, %{
                agent_name: "aqua",
                thread_id: "thread_1",
-               tool: "component",
+               tool: "probe_component",
                action: "pull",
                args: %{}
              })
@@ -222,7 +286,7 @@ defmodule Sanctum.ToolGrantsTest do
                effect: "allow",
                thread_id: "thread_1",
                agent_name: "aqua",
-               tool: "component",
+               tool: "probe_component",
                action: "pull"
              }
 
@@ -271,7 +335,7 @@ defmodule Sanctum.ToolGrantsTest do
 
     test "a deny stands, and one carrying any bound is refused, so a deny never lapses",
          %{now: now} do
-      deny = decision(%{effect: "deny", tool: "notes", action: "forget"})
+      deny = decision(%{effect: "deny", tool: "probe_notes", action: "forget"})
       assert :ok = ToolGrants.check_standing(deny, now)
 
       for bound <- [
@@ -291,7 +355,7 @@ defmodule Sanctum.ToolGrantsTest do
       assert :ok = ToolGrants.check_standing(decision(), now)
 
       assert {:error, {:scope_not_permitted, :destructive}} =
-               ToolGrants.check_standing(decision(%{tool: "notes", action: "forget"}), now)
+               ToolGrants.check_standing(decision(%{tool: "probe_notes", action: "forget"}), now)
 
       assert {:error, {:scope_not_permitted, :external}} =
                ToolGrants.check_standing(decision(%{tool: "srv:thing", action: "do"}), now)
@@ -300,13 +364,14 @@ defmodule Sanctum.ToolGrantsTest do
                ToolGrants.check_standing(decision(%{tool: "nothing", action: "here"}), now)
 
       assert {:error, {:scope_not_permitted, :never_standing}} =
-               ToolGrants.check_standing(decision(%{tool: "notes", action: "pin"}), now)
+               ToolGrants.check_standing(decision(%{tool: "probe_notes", action: "pin"}), now)
 
-      assert :ok = ToolGrants.check_standing(decision(%{tool: "notes", action: "keep"}), now)
+      assert :ok =
+               ToolGrants.check_standing(decision(%{tool: "probe_notes", action: "keep"}), now)
 
       assert {:error, {:scope_not_permitted, :thread_only}} =
                ToolGrants.check_standing(
-                 decision(%{scope: "agent", tool: "notes", action: "keep"}),
+                 decision(%{scope: "agent", tool: "probe_notes", action: "keep"}),
                  now
                )
 
@@ -399,7 +464,7 @@ defmodule Sanctum.ToolGrantsTest do
                  now
                )
 
-      fetch = decision(%{tool: "web", action: "fetch"})
+      fetch = decision(%{tool: "probe_web", action: "fetch"})
 
       assert :ok =
                ToolGrants.check_standing(
@@ -601,11 +666,11 @@ defmodule Sanctum.ToolGrantsTest do
 
       refute ToolGrants.admits?(ctx, call(thread, %{execution_id: a}))
 
-      allow!(ctx, thread, %{}, %{tool: "component", action: "list"})
+      allow!(ctx, thread, %{}, %{tool: "probe_component", action: "list"})
 
       refute ToolGrants.admits?(
                ctx,
-               call(thread, %{tool: "component", action: "list", execution_id: a})
+               call(thread, %{tool: "probe_component", action: "list", execution_id: a})
              )
     end
 
@@ -628,7 +693,7 @@ defmodule Sanctum.ToolGrantsTest do
           effect: "allow",
           thread_id: thread,
           agent_name: "aqua",
-          tool: "notes",
+          tool: "probe_notes",
           action: "pin",
           granted_by: ctx.user_id,
           lifecycle_kind: "execution",
@@ -637,7 +702,7 @@ defmodule Sanctum.ToolGrantsTest do
 
       refute ToolGrants.admits?(
                ctx,
-               call(thread, %{tool: "notes", action: "pin", execution_id: a})
+               call(thread, %{tool: "probe_notes", action: "pin", execution_id: a})
              )
     end
 
@@ -654,12 +719,12 @@ defmodule Sanctum.ToolGrantsTest do
           lifecycle_id: a,
           constraint: %{kind: "egress_domain", patterns: ["*.example.com"]}
         },
-        %{tool: "web", action: "fetch"}
+        %{tool: "probe_web", action: "fetch"}
       )
 
       fetch = fn domain ->
         call(thread, %{
-          tool: "web",
+          tool: "probe_web",
           action: "fetch",
           execution_id: a,
           args: %{"domain" => domain}
@@ -682,7 +747,7 @@ defmodule Sanctum.ToolGrantsTest do
           lifecycle_id: a,
           constraint: %{kind: "vault_entry", patterns: ["vlt_work-1"]}
         },
-        %{tool: "execution", action: "run"}
+        %{tool: "probe_execution", action: "run"}
       )
 
       run = fn over ->
@@ -690,7 +755,7 @@ defmodule Sanctum.ToolGrantsTest do
           thread,
           Map.merge(
             %{
-              tool: "execution",
+              tool: "probe_execution",
               action: "run",
               execution_id: a,
               args: %{"reference" => "catalyst:local.mail:1.0.0", "connection" => "Work"}

@@ -143,9 +143,9 @@ defmodule Sanctum.Gate.ProxyTest do
     end
 
     test "consent's view of the tool servers is the port's", %{ctx: ctx} do
-      assert [%{name: "stub"}] = Sanctum.Catalog.tool_server_candidates(ctx)
-      assert {:ok, %{name: "stub"}} = Sanctum.Catalog.tool_server_candidate(ctx, "stub")
-      assert {:error, :not_found} = Sanctum.Catalog.tool_server_candidate(ctx, "gone")
+      assert [%{name: "stub"}] = Proxy.impl!().consent_candidates(ctx)
+      assert {:ok, %{name: "stub"}} = Proxy.impl!().consent_candidate(ctx, "stub")
+      assert {:error, :not_found} = Proxy.impl!().consent_candidate(ctx, "gone")
     end
 
     test "the tool listing carries the port's proxied tools", %{ctx: ctx} do

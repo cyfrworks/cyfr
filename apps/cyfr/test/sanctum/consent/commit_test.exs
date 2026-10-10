@@ -45,51 +45,26 @@ defmodule Sanctum.Consent.CommitTest do
     defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
   end
 
-  # A catalog that answers as the installed one and counts the tool-action
-  # reads `Commit.grant/3` makes. Armed with a function and a count, it runs
-  # the function once, just before the read after that count: a revision
-  # landing between two of the grant's reads.
-  defmodule CountingOperationTable do
-    @moduledoc false
-    @behaviour Sanctum.OperationTable
+  # Runs `grant` with the table's tool-action reads counted, wherever the
+  # grant makes them. Armed with a count and a function, it runs the
+  # function once, just before the read after that count: a revision
+  # landing between two of the grant's reads. Answers the grant's answer,
+  # the reads it made and whether the armed function ran.
+  defp counting_reads(armed, grant) do
+    reads = :atomics.new(1, [])
+    fired = :atomics.new(1, [])
 
-    @impl true
-    def tool_actions do
-      if granting?() do
-        count = Process.get({__MODULE__, :count}, 0) + 1
-        Process.put({__MODULE__, :count}, count)
+    hook = fn ->
+      count = :atomics.add_get(reads, 1, 1)
 
-        case Process.get({__MODULE__, :armed}) do
-          {after_count, fun} when count > after_count ->
-            Process.delete({__MODULE__, :armed})
-            fun.()
-
-          _not_yet ->
-            :ok
-        end
+      with {after_count, fun} when count > after_count <- armed,
+           :ok <- :atomics.compare_exchange(fired, 1, 0, 1) do
+        fun.()
       end
-
-      real().tool_actions()
     end
 
-    @impl true
-    def action_declaration(name), do: real().action_declaration(name)
-
-    @impl true
-    def providers_loaded, do: real().providers_loaded()
-
-    @impl true
-    def tool_server_candidates(ctx), do: real().tool_server_candidates(ctx)
-
-    @impl true
-    def tool_server_candidate(ctx, name), do: real().tool_server_candidate(ctx, name)
-
-    defp granting? do
-      {:current_stacktrace, stack} = Process.info(self(), :current_stacktrace)
-      Enum.any?(stack, &match?({Sanctum.Consent.Commit, :grant, 3, _}, &1))
-    end
-
-    defp real, do: :persistent_term.get({__MODULE__, :real})
+    answer = Sanctum.Catalog.with_read_hook(hook, grant)
+    {answer, :atomics.get(reads, 1), :atomics.get(fired, 1) == 1}
   end
 
   setup tags do
@@ -644,15 +619,6 @@ defmodule Sanctum.Consent.CommitTest do
 
     test "a revision landing while a narrowed head is re-issued refuses the grant and stands",
          %{ctx: ctx} do
-      real = Sanctum.OperationTable.impl!()
-      :persistent_term.put({CountingOperationTable, :real}, real)
-      Sanctum.OperationTable.install!(CountingOperationTable)
-
-      on_exit(fn ->
-        Sanctum.OperationTable.install!(real)
-        :persistent_term.erase({CountingOperationTable, :real})
-      end)
-
       entry = entry!(ctx)
       binding = [%{need: "@ingress", entry_id: entry.id}]
 
@@ -660,16 +626,16 @@ defmodule Sanctum.Consent.CommitTest do
       # narrowing touched is walked once.
       publish!(ctx, "commit-grant-twin")
       {:ok, %{profile_id: twin}} = walk!(ctx, "reagent:local.commit-grant-twin")
-      Process.put({CountingOperationTable, :count}, 0)
 
-      assert {:ok, _} =
-               Commit.grant(ctx, %{
-                 profile_id: twin,
-                 bindings: binding,
-                 expected_consent_revision: 1
-               })
+      assert {{:ok, _}, one_walk, false} =
+               counting_reads(nil, fn ->
+                 Commit.grant(ctx, %{
+                   profile_id: twin,
+                   bindings: binding,
+                   expected_consent_revision: 1
+                 })
+               end)
 
-      one_walk = Process.get({CountingOperationTable, :count})
       assert one_walk > 0
 
       publish!(ctx, "commit-grant-race")
@@ -683,10 +649,7 @@ defmodule Sanctum.Consent.CommitTest do
 
       # The person's next decision lands as the grant starts its second walk,
       # the one that re-issues the head's narrowing.
-      Process.put({CountingOperationTable, :count}, 0)
-
-      Process.put(
-        {CountingOperationTable, :armed},
+      next_decision =
         {one_walk,
          fn ->
            {:ok, %{revision: 2}} =
@@ -695,20 +658,24 @@ defmodule Sanctum.Consent.CommitTest do
                subset: %{ref => %{"egress" => %{"domains" => []}}}
              })
          end}
-      )
+
+      {refused, _reads, fired?} =
+        counting_reads(next_decision, fn ->
+          Commit.grant(ctx, %{
+            profile_id: profile_id,
+            bindings: binding,
+            expected_consent_revision: 1
+          })
+        end)
 
       # Refused by the second walk's fence: the revision it read is the one
       # that landed, not the one presented.
       assert {:error,
               {:consent_conflict, %{cause: :stale_plan, expected_revision: 1, actual_revision: 2}}} =
-               Commit.grant(ctx, %{
-                 profile_id: profile_id,
-                 bindings: binding,
-                 expected_consent_revision: 1
-               })
+               refused
 
       # The race fired, and the person's revision stands unwidened.
-      refute Process.get({CountingOperationTable, :armed})
+      assert fired?
       head = head!(ctx, profile_id)
       assert head.revision == 2
       assert head.admitted_origins == [:interactive]

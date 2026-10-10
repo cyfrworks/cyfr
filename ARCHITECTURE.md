@@ -21,7 +21,7 @@ Three consequences shape everything below.
 - **Prompts are not permissions.** A model proposes; CYFR decides what it can reach. Every mutation is a declared operation admitted by one gate under a consent that binds to the exact action and resources shown.
 - **Layers, one direction.** A module depends on its own layer or below, never above and never sideways across surfaces. The layering is a compile error where the compiler can see it and a seam test where it cannot, so a forbidden dependency is caught before it merges.
 - **One owner per fact.** Every schema, policy, operation declaration, topic, protocol shape, configuration key, served-file type, frame capability and layout has one authoritative module. Everything else is derived from it and checked against it, because a fact with two definitions drifts.
-- **Downward calls are direct; upward needs are ports; reactions are events.** There are exactly five ports (§4.2). Two owners whose writes must commit together join one Arca transaction through a named closure (§4.4).
+- **Downward calls are direct; upward needs are ports; reactions are events.** There are exactly four ports (§4.2). Two owners whose writes must commit together join one Arca transaction through a named closure (§4.4).
 - **Three guards, each with one owner.** Operations pass Sanctum's gate under Sanctum's decision. Domain rows and blobs are tenant-scoped by the actor in Arca. Security rows, the decision record and the request log among them, are read only through Sanctum.
 - **The trust island speaks protocols.** Locus shares pure contracts and signed, versioned wire shapes with the control plane, never a code dependency on it.
 - **Fail closed.** Identity, standing, consent, ownership and catalog completeness are established before work is admitted, and a control that cannot answer refuses. The one named exception is the decision audit (§6.4), which records and never decides. Unavailable infrastructure, absent data, denied access and successful work stay distinguishable in every result.
@@ -105,7 +105,7 @@ Owns the repo, every schema, query and transaction, blobs and path translation, 
 Owns identity, sessions, doors, API keys, membership and tenancy, the caller context, authority and its transitions, consent and its proofs, the vault, the instance's entries, and credential attachment and disclosure, policy logging, caps policy, provisioning, the control plane's own network resolution and pinned transport, paired clients and their standing, passkeys, the changes that need fresh confirmation, the credentials tinctures are served under, the person's keys and recovery, the directory's decisions, device certificates and pending confirmations, and the gate: the operation table (`Sanctum.Catalog`), the gate (`Sanctum.Gate`), argument casting, dispatch on the external and in-chain planes, stream admission (`Sanctum.Streams`), replay and uncertainty semantics, discovery, the request log (`Sanctum.RequestLog`), running tasks (`Sanctum.RunningTasks`), the decision record (`Sanctum.Decisions`) and the system provider.
 
 - It uses no Ecto. It is the only reader of security rows, the decision record and the request log among them, and a seam test refuses a reader outside it.
-- Its upward needs are its two ports (§4.2), component facts and proxied tool resolution; consent reads the operation table through a third port it declares and implements itself. Its internal strategies (consent proof storage, sign-in methods) are behaviours it declares and implements itself, selected by configuration.
+- Its upward needs are its two ports (§4.2), component facts and proxied tool resolution. Its internal strategies (consent proof storage, sign-in methods) are behaviours it declares and implements itself, selected by configuration.
 - It emits telemetry for every standing change and never broadcasts. Every standing change drops the cached caller context for the affected credentials before returning.
 - There is one entry for operations on each plane and one for streams. An operation that is undeclared, unannotated or called on the wrong plane is denied; boot refuses a partial table; every provider module is on the configured roster.
 - **Streams are declared where operations are.** A provider declares the streams it offers beside its operations. The gate admits a stream once, records it once and answers with a bounded grant; the delivery owner above Sanctum keeps enforcing it and closes the stream on a standing change, the grant's deadline, a suspended frame, overflow or failed revalidation. A reconnect is a new admission.
@@ -114,7 +114,7 @@ Owns identity, sessions, doors, API keys, membership and tenancy, the caller con
 
 ### Cyfr (Host): the machine
 
-Owns supervision, boot, the cell claim and renewal, the bus and its topic roster, telemetry and its bridge, runtime configuration and platform settings, `Cyfr.Boundaries`, the endpoint, the admission roster, and the composition root that installs the five ports.
+Owns supervision, boot, the cell claim and renewal, the bus and its topic roster, telemetry and its bridge, runtime configuration and platform settings, `Cyfr.Boundaries`, the endpoint, the admission roster, and the composition root that installs the four ports.
 
 - Ordinary Host modules name no domain or surface; `Cyfr.Application`, `CyfrWeb.Endpoint` and `CyfrWeb.Router` are the composition boundaries. Host keeps the listeners, the endpoint and the composition that wires them; every adapter behind the endpoint is Emissary's or Prism's.
 - **The admission roster** names every path an intent enters by: the HTTP endpoint through the gate, the HostAPI listener's child admission through Opus, the scheduler's fire, the device channel (§9.3), and, on a device, a local socket and a compositor or physical jack, which appears as a body and never as a namespace. A path not on the roster admits nothing. Each admission point that decides for itself records its decision. *Not built yet:* the local socket and the compositor, which the roster declares and defers, so they admit nothing.
@@ -182,7 +182,7 @@ Dispatch stays in the control plane: Opus decides what runs, Compendium what bui
 | Between | Channel | Rule |
 |---|---|---|
 | A module and one below it | A direct facade call, context or actor first | Returns facts, decisions and reason codes |
-| A lower module needing something from above | One of the five ports, installed by Host at boot | A sixth port is an architecture change |
+| A lower module needing something from above | One of the four ports, installed by Host at boot | A fifth port is an architecture change |
 | Two domains | Facade calls, in one direction only | Never another domain's internals |
 | Two owners, one commit | Arca's transaction with the higher owner's named closure (§4.4) | Each owner's code touches only its own rows |
 | After a commit | An event on the bus | Reactions only; an event never grants authority |
@@ -192,12 +192,11 @@ Dispatch stays in the control plane: Opus decides what runs, Compendium what bui
 
 Foundations below Host emit telemetry; Host's bridge is the one place telemetry becomes a bus message.
 
-### 4.2 The five ports
+### 4.2 The four ports
 
 | Upward need | Declared by | Implemented by |
 |---|---|---|
 | The storage and counted cap decision (`Prima.Caps`) | Prima | Sanctum |
-| Consent's view of the operation table (`Sanctum.OperationTable`) | Sanctum | Sanctum's catalog, installed by Host |
 | Component facts for consent and the gate's stream admission (`Sanctum.Consent.Components`) | Sanctum | Compendium |
 | Proxied tool resolution (`Sanctum.Proxy`) | Sanctum | Emissary's external half |
 | Where a storage unit's bytes live (`Arca.Storage.UnitLocator`) | Arca | Compendium's component and AQUA path grammars |
@@ -230,7 +229,7 @@ The architecture grows through these seams, not through new layers:
 - **A new outside service** is reached one of three ways: by a component, through a catalyst over pinned egress under its consent; as an external MCP server, through Emissary; or by the control plane itself, through the owning module and Sanctum's pinned transport, never on a guest's behalf. Its wire is a versioned Prima shape with one vector file.
 - **A new record** is an actor-scoped Arca row owned by the domain that keeps it; a record about authority is a security row Sanctum owns.
 
-Only a need none of these covers, a sixth port, a new layer edge or a new namespace, is an architecture change.
+Only a need none of these covers, a fifth port, a new layer edge or a new namespace, is an architecture change.
 
 ## 5. Tenancy, authority and isolation
 

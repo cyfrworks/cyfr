@@ -36,17 +36,16 @@ defmodule Cyfr.Application do
     # start serves `/live` again.
     :ok = CyfrWeb.LiveSocket.undrain()
 
-    # The five ports' one write each, before every domain this
+    # The four ports' one write each, before every domain this
     # application starts: each declaring module reads its implementation
     # from the term written here, and an uninstalled port raises where it
     # is asked rather than answering as though nothing were there. The
-    # storage and counted caps, asked on the first tenant byte; consent's
-    # view of the operation table; the component facts a consent rests on;
-    # the proxied `server:tool` tools the table resolves on a miss; and
-    # the overlaid roots' unit locators, asserted against the layout here
-    # before Bootstrap or the tincture registry scans the union.
+    # storage and counted caps, asked on the first tenant byte; the
+    # component facts a consent rests on; the proxied `server:tool` tools
+    # the table resolves on a miss and a grant names; and the overlaid
+    # roots' unit locators, asserted against the layout here before
+    # Bootstrap or the tincture registry scans the union.
     Prima.Caps.install!(Sanctum.Tenancy.Caps)
-    Sanctum.OperationTable.install!(Sanctum.Catalog)
     Sanctum.Consent.Components.install!(Compendium.ConsentFacts)
     Sanctum.Proxy.install!(Emissary.External.Proxy)
 

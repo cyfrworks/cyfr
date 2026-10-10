@@ -994,7 +994,7 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | Locus | where untrusted things run: the roles runtime (WASM), builds and stdio MCP backends, under the keeper `cyfr-locus` | `apps/locus` | the `locus` release and the keeper binary `cyfr-locus`, image `cyfr-locus` | `locus-runtime`, `locus-builds`, `locus-backends` | `LOCUS_RUNTIME_`, `LOCUS_BUILDS_`, `LOCUS_BACKENDS_`, `LOCUS_LOG_`, `KEEPER_`, `RUNTIME_`, `CYFR_LOCUS_RUNTIME_`, `CYFR_LOCUS_BUILDS_`, `CYFR_LOCUS_BACKENDS_` | `cyfr-locus/v1`, with its `runtime`, `builds` and `backends` services, each under a key of its own | — | `[Locus…]`, `[cyfr-locus]` |
 | provider | the implementation of a tool's operations, `<Name>.Provider` or `<Name>.Providers.<Tool>`; its service label is its part's name | — | — | — | — | — | — | — |
 | facade | a part's own module, the one entry the parts above it call | — | — | — | — | — | — | — |
-| port | one of five behaviours a lower part declares and a higher one implements, installed at boot; `Sanctum.OperationTable` is consent's view of the operation table, and `Sanctum.Catalog` is the table | — | — | — | — | — | — | — |
+| port | one of four behaviours a lower part declares and a higher one implements, installed at boot | — | — | — | — | — | — | — |
 | plane | the kind of caller an operation is admitted for: an external caller, or a call inside a running chain | — | — | — | — | — | — | — |
 | actor | the tenant and identity carrier | — | — | — | — | — | — | — |
 | athanor | the tenancy unit, a person's own or a group's, with no organization or project above it | — | — | — | — | — | — | — |

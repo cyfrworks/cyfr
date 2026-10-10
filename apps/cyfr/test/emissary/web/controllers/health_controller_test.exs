@@ -128,6 +128,39 @@ defmodule Emissary.Web.HealthControllerTest do
       assert json_response(get(conn, "/api/health/ready"), 503)["status"] == "not_ready"
     end
 
+    test "an unloaded operation table is 503 not_ready: its registry is not written", %{
+      conn: conn
+    } do
+      # Boot writes the table before any listener, so this is a probe that
+      # finds it unwritten. The table refuses every read by name until it is
+      # loaded, and the probe answers that as not written, never a crash.
+      Arca.Cache.invalidate({Emissary.Web.HealthController, :ready_cache})
+
+      on_exit(fn ->
+        Arca.Cache.invalidate({Emissary.Web.HealthController, :ready_cache})
+      end)
+
+      terms =
+        for name <- [:operations, :tool_list, :streams, :resources], do: {Sanctum.Gate, name}
+
+      saved = for key <- terms, do: {key, :persistent_term.get(key)}
+      Enum.each(terms, &:persistent_term.erase/1)
+
+      {response, log} =
+        try do
+          ExUnit.CaptureLog.with_log(fn -> json_response(get(conn, "/api/health/ready"), 503) end)
+        after
+          for {key, term} <- saved, do: :persistent_term.put(key, term)
+          Arca.Cache.invalidate({Emissary.Web.HealthController, :ready_cache})
+        end
+
+      assert response["status"] == "not_ready"
+      assert response["checks"]["tool_registry"] == "failed"
+      assert response["checks"]["resource_registry"] == "failed"
+      assert log =~ "tool_registry: {:error, :not_written}"
+      assert log =~ "resource_registry: {:error, :not_written}"
+    end
+
     test "a stranded probe key is overwritten, not accumulated", %{conn: conn} do
       # The probe writes ONE fixed key and deletes it — a past failed
       # delete strands at most one object, reclaimed by the next probe's

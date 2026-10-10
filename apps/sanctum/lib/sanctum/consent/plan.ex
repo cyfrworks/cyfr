@@ -160,7 +160,7 @@ defmodule Sanctum.Consent.Plan do
           head_narrowing: map(),
           shape_diff: [Sanctum.Consent.ShapeDiff.entry()],
           candidates: [map()],
-          tool_server_candidates: [Sanctum.OperationTable.tool_server_candidate()],
+          tool_server_candidates: [Sanctum.Proxy.tool_server_candidate()],
           warnings: [String.t()],
           defaults: map()
         }
@@ -277,7 +277,7 @@ defmodule Sanctum.Consent.Plan do
          head_narrowing: head_narrowing,
          shape_diff: head.shape_diff,
          candidates: candidates,
-         tool_server_candidates: Sanctum.OperationTable.tool_server_candidates(ctx),
+         tool_server_candidates: Sanctum.Proxy.impl!().consent_candidates(ctx),
          warnings: need_warnings(needs, provided_notes),
          defaults: %{scope: :versionless, kind: kind, label: label, invoke_mode: :open_inert}
        }}

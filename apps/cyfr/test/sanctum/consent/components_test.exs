@@ -94,7 +94,7 @@ defmodule Sanctum.Consent.ComponentsTest do
 
   test "an install that does not answer every callback is refused, and changes nothing" do
     assert_raise ArgumentError, ~r/does not implement Sanctum.Consent.Components/, fn ->
-      Components.install!(Sanctum.OperationTable)
+      Components.install!(Sanctum.Proxy)
     end
 
     assert_raise ArgumentError, ~r/does not implement/, fn ->
@@ -204,5 +204,22 @@ defmodule Sanctum.Consent.ComponentsTest do
     # was the port's and not an empty athanor.
     assert {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert "reagent:local.facts-mint" in minted
+  end
+
+  # Consent reaches the transport through the ports and nowhere else: no
+  # module under `sanctum/consent` names it.
+  test "consent names no Emissary module" do
+    root = Path.expand("../../../../..", __DIR__)
+
+    reaches =
+      for file <-
+            Prima.Test.SourceTree.files!(
+              Path.join(root, "apps/sanctum/lib/sanctum/consent/**/*.ex")
+            ),
+          line <- file |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.lines(),
+          line =~ ~r/\bEmissary\./,
+          do: "#{Path.relative_to(file, root)}: #{String.trim(line)}"
+
+    assert reaches == []
   end
 end

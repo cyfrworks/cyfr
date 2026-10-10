@@ -19,6 +19,13 @@ defmodule Sanctum.Catalog do
   are not in it: they are the tenant's, cached per athanor by the proxy
   port (`Sanctum.Proxy`).
 
+  Consent reads the table here: shape derivation asks which `tool.action`
+  pairs it serves (`tool_actions/0`), and the standing rule what one action
+  is (`action_declaration/1`). Before `load!/0` has written the table,
+  every read of it here raises `Sanctum.Catalog.NotLoadedError` rather
+  than answering a narrower roster: a shape derived from no table at all
+  would grant nothing and read as a component that asks for nothing.
+
   Callers outside the gate enter through `Sanctum.Gate`; this module is its
   implementation.
 
@@ -58,13 +65,37 @@ defmodule Sanctum.Catalog do
   anything else.
   """
 
-  @behaviour Sanctum.OperationTable
   require Logger
 
   alias Sanctum.Annotations
   alias Sanctum.Refusals
   alias Prima.Operation
   alias Sanctum.Context
+
+  defmodule NotLoadedError do
+    @moduledoc """
+    Raised by every read of the operation table before `Sanctum.Catalog.load!/0`
+    has written it. An unloaded table is not an empty one: nothing can say
+    which actions exist, and nothing guesses.
+    """
+
+    defexception message:
+                   "the operation table is not loaded: nothing called " <>
+                     "Sanctum.Catalog.load!/0. Nothing can read the table until boot loads it."
+  end
+
+  @typedoc """
+  What one `tool.action` is, as the standing rule reads it: its `kind`,
+  its `standing` declaration (`:thread`, `false`, or nil for either
+  scope) and its `resource`, the argument that names the resource the
+  action touches with that resource's kind (`Prima.Operation`'s
+  `resource:`), or nil when it declares none.
+  """
+  @type action_declaration :: %{
+          kind: atom(),
+          standing: term(),
+          resource: {String.t(), Prima.Operation.resource_kind()} | nil
+        }
 
   # Default tool execution timeout (5 minutes)
   @tool_timeout_ms :timer.minutes(5)
@@ -107,16 +138,25 @@ defmodule Sanctum.Catalog do
     |> install!()
   end
 
-  # The test seams: a planted provider and a lenient roster. Both are
-  # compiled into the test build alone, so no setting of a release can
-  # narrow its table or skip a provider it cannot load.
+  # The test seams: a planted provider, a lenient roster and a read hook.
+  # All three are compiled into the test build alone, so no setting of a
+  # release can narrow its table, skip a provider it cannot load or run
+  # anything on a read.
   if Mix.env() == :test do
+    # The resource index's term, which `Sanctum.Resources` writes only
+    # through a load: a block run on an unloaded table erases it by its key.
+    @resources {Sanctum.Gate, :resources}
+
+    # The read hook's slot in the process dictionary of the process holding it.
+    @read_hook {__MODULE__, :read_hook}
+
     @doc false
     # The table for a block, then the table as it was. A test that plants a
     # probe provider runs it through here, synchronously (`async: false`):
     # the planted providers join the configured roster, pass the same audits
     # as a booted provider, and are gone when the block returns, however it
-    # returns.
+    # returns. A table nothing had loaded, as in the Sanctum island's suites,
+    # is unloaded again.
     @spec with_providers([module()], (-> result)) :: result when result: term()
     def with_providers(providers, fun) when is_list(providers) and is_function(fun, 0) do
       for provider <- providers, not loadable?(provider) do
@@ -124,9 +164,7 @@ defmodule Sanctum.Catalog do
               "#{inspect(provider)} is not a provider: it does not export tools/0"
       end
 
-      saved =
-        {:persistent_term.get(@operations), :persistent_term.get(@tool_list),
-         :persistent_term.get(@streams), Sanctum.Resources.table()}
+      saved = saved_table()
 
       try do
         configured_providers()
@@ -137,13 +175,72 @@ defmodule Sanctum.Catalog do
 
         fun.()
       after
-        {operations, tool_list, streams, resources} = saved
-        :persistent_term.put(@operations, operations)
-        :persistent_term.put(@tool_list, tool_list)
-        :persistent_term.put(@streams, streams)
-        Sanctum.Resources.put(resources)
+        restore_table(saved)
       end
     end
+
+    defp saved_table do
+      case :persistent_term.get(@operations, nil) do
+        nil ->
+          :not_loaded
+
+        operations ->
+          {operations, table!(@tool_list), table!(@streams), Sanctum.Resources.table()}
+      end
+    end
+
+    defp restore_table(:not_loaded) do
+      for key <- [@operations, @tool_list, @streams, @resources], do: :persistent_term.erase(key)
+      :ok
+    end
+
+    defp restore_table({operations, tool_list, streams, resources}) do
+      :persistent_term.put(@operations, operations)
+      :persistent_term.put(@tool_list, tool_list)
+      :persistent_term.put(@streams, streams)
+      Sanctum.Resources.put(resources)
+    end
+
+    @doc false
+    # Runs `fun` with `hook` called just before each read of the action
+    # roster (`tool_actions/0`) made by this process or by a process started
+    # on its behalf (one whose `$callers` names it), then removes the hook
+    # however `fun` returns. A test counts those reads with it and moves
+    # state between two of them. The hook is held in the holding process's
+    # own dictionary, so no other test's reads reach it; one that keeps
+    # state keeps it where every reading process can reach it.
+    @spec with_read_hook((-> term()), (-> result)) :: result when result: term()
+    def with_read_hook(hook, fun) when is_function(hook, 0) and is_function(fun, 0) do
+      previous = Process.put(@read_hook, hook)
+
+      try do
+        fun.()
+      after
+        if previous,
+          do: Process.put(@read_hook, previous),
+          else: Process.delete(@read_hook)
+      end
+    end
+
+    defp read_hook do
+      case Process.get(@read_hook) || Enum.find_value(callers(), &held_hook/1) do
+        nil -> :ok
+        hook -> hook.()
+      end
+    end
+
+    defp callers, do: Process.get(:"$callers", [])
+
+    defp held_hook(pid) when is_pid(pid) do
+      with {:dictionary, dictionary} <- Process.info(pid, :dictionary),
+           {@read_hook, hook} <- List.keyfind(dictionary, @read_hook, 0) do
+        hook
+      else
+        _none -> nil
+      end
+    end
+
+    defp held_hook(_name), do: nil
 
     # The roster without the configured providers that cannot load: a
     # refusal, or — leniently — each skipped with its reason.
@@ -170,6 +267,8 @@ defmodule Sanctum.Catalog do
   else
     @spec without_unloadable!([module()], [module()]) :: no_return()
     defp without_unloadable!(_configured, missing), do: refuse_unloadable!(missing)
+
+    defp read_hook, do: :ok
   end
 
   # The configured providers this boot can load. One that cannot refuses
@@ -296,15 +395,29 @@ defmodule Sanctum.Catalog do
     |> Prima.MapUtil.put_present("annotations", meta[:annotations])
   end
 
-  @doc "The operation table: tool name → `{provider, tool}`."
+  # The one read of the table's terms. An unloaded table raises
+  # `NotLoadedError`, never `:persistent_term`'s bare `ArgumentError`, and
+  # never answers as an empty table.
+  defp table!(key) do
+    case :persistent_term.get(key, nil) do
+      nil -> raise NotLoadedError
+      term -> term
+    end
+  end
+
+  @doc """
+  The operation table: tool name → `{provider, tool}`. Raises
+  `Sanctum.Catalog.NotLoadedError` before `load!/0` has written it, as every
+  read of the table below does.
+  """
   @spec operations() :: %{String.t() => {module(), map()}}
-  def operations, do: :persistent_term.get(@operations)
+  def operations, do: table!(@operations)
 
   @doc """
   Every tool the table holds, as `tools/list` serves it, sorted by name.
   """
   @spec list_tools() :: [map()]
-  def list_tools, do: :persistent_term.get(@tool_list)
+  def list_tools, do: table!(@tool_list)
 
   @doc """
   Every stream the providers declare, as plain data sorted by name: what
@@ -313,7 +426,7 @@ defmodule Sanctum.Catalog do
   """
   @spec streams() :: [Prima.Provider.Stream.t()]
   def streams do
-    :persistent_term.get(@streams)
+    table!(@streams)
     |> Enum.map(fn {_name, {_module, stream}} -> stream end)
     |> Enum.sort_by(& &1.name)
   end
@@ -324,7 +437,7 @@ defmodule Sanctum.Catalog do
   """
   @spec stream_entries() :: [{module(), Prima.Provider.Stream.t()}]
   def stream_entries do
-    :persistent_term.get(@streams)
+    table!(@streams)
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.map(fn {_name, entry} -> entry end)
   end
@@ -332,7 +445,7 @@ defmodule Sanctum.Catalog do
   @doc "A stream's provider and its declaration, from the table."
   @spec lookup_stream(String.t()) :: {:ok, {module(), Prima.Provider.Stream.t()}} | :miss
   def lookup_stream(name) when is_binary(name) do
-    case :persistent_term.get(@streams) do
+    case table!(@streams) do
       %{^name => entry} -> {:ok, entry}
       _ -> :miss
     end
@@ -1895,14 +2008,6 @@ defmodule Sanctum.Catalog do
     end)
   end
 
-  @impl Sanctum.OperationTable
-  def providers_loaded do
-    case Enum.reject(configured_providers(), &loadable?/1) do
-      [] -> :ok
-      missing -> {:error, missing}
-    end
-  end
-
   @doc """
   Every `tool.action` served outside a running chain: the declared
   actions whose planes include `:external`.
@@ -1930,22 +2035,29 @@ defmodule Sanctum.Catalog do
     )
   end
 
-  # Every `tool.action` the table holds — what a consent shape may name
-  # (`Sanctum.OperationTable`).
-  @impl Sanctum.OperationTable
+  @doc """
+  Every `tool.action` the table holds, from its loaded providers: what a
+  consent shape may name.
+  """
+  @spec tool_actions() :: [String.t()]
   def tool_actions do
+    read_hook()
+
     for tool <- declared_tools(:table),
         {action, _annotation} <- Annotations.actions_of(tool),
         do: "#{tool.name}.#{action}"
   end
 
-  # One `tool.action` as the standing rule reads it (`Sanctum.OperationTable`),
-  # classified as `tool_kind/2` classifies it: a virtual hand from its
-  # table, an upstream `server:tool` as external (it declares no standing
-  # and names no resource), a catalogued action from its operation. An
-  # action name holds no dot, so the pair splits at the last one, and a
-  # server's tool name keeps any dot of its own.
-  @impl Sanctum.OperationTable
+  @doc """
+  One `tool.action` as the standing rule reads it, by its name, classified
+  as `tool_kind/2` classifies it: a virtual hand from its table, an
+  upstream `server:tool` as external (it declares no standing and names no
+  resource), a catalogued action from its operation. An action name holds
+  no dot, so the pair splits at the last one, and a server's tool name
+  keeps any dot of its own. `{:error, :not_found}` for a pair nothing
+  declares.
+  """
+  @spec action_declaration(String.t()) :: {:ok, action_declaration()} | {:error, :not_found}
   def action_declaration(name) when is_binary(name) do
     case String.split(name, ".") do
       [_, _ | _] = parts ->
@@ -1983,17 +2095,6 @@ defmodule Sanctum.Catalog do
         end
     end
   end
-
-  # The external tool servers a grant may name (`Sanctum.OperationTable`). The
-  # proxied `server:tool` entries are the proxy port's (`Sanctum.Proxy`),
-  # so it is what describes them.
-  @impl Sanctum.OperationTable
-  def tool_server_candidates(%Context{} = ctx),
-    do: Sanctum.Proxy.impl!().consent_candidates(ctx)
-
-  @impl Sanctum.OperationTable
-  def tool_server_candidate(%Context{} = ctx, name) when is_binary(name),
-    do: Sanctum.Proxy.impl!().consent_candidate(ctx, name)
 
   defp loadable?(module),
     do: Code.ensure_loaded?(module) and function_exported?(module, :tools, 0)

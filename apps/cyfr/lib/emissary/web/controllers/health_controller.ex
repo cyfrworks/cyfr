@@ -187,9 +187,12 @@ defmodule Emissary.Web.HealthController do
     e -> {:error, Prima.LogFilter.exception_message(e)}
   end
 
+  # An unwritten term is `:persistent_term`'s `ArgumentError`, or the
+  # operation table's own refusal to be read before boot loaded it.
   defp check_written(read) do
     if is_map(read.()), do: :ok, else: {:error, :not_written}
   rescue
     ArgumentError -> {:error, :not_written}
+    Sanctum.Catalog.NotLoadedError -> {:error, :not_written}
   end
 end

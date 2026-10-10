@@ -18,8 +18,9 @@ defmodule Sanctum.Gate do
   admission decision (`Sanctum.Decisions`), and an entry that decides on
   its own — a webhook, a schedule's fire — records its decision through
   `open_decision/3` and `close_decision/3`. `Sanctum.Catalog` is the
-  implementation: outside the gate only the composition root names it, to
-  load its table and install it as consent's port. `Sanctum.VirtualTools`
+  implementation: outside Sanctum the composition root names it to load
+  its table, and the readiness probe names its refusal to be read before
+  then (`Sanctum.Catalog.NotLoadedError`). `Sanctum.VirtualTools`
   declares the assistant's virtual tools, dispatched inside a formula
   rather than through the table; the gate classifies them from it, and
   Aqua and Compendium read it.

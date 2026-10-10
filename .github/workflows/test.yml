@@ -1347,6 +1347,7 @@ jobs:
             'Emissary\.MCP\.VaultRef\b' \
             'Cyfr\.Ops\b' \
             '[Gg]rimoire|GRIMOIRE' \
+            'OperationTable' \
             'Emissary\.MCP\.(RequestLog|RunningTasks|Tools\.SystemProvider)\b' \
             'Cyfr\.Execution\b' \
             'Cyfr\.Schedules\b' \

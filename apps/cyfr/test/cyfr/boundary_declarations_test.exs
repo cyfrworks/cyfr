@@ -135,10 +135,13 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           UnauthorizedError Vault Vault.OAuthGrant VaultReader),
        "the identity, authority, consent and vault entries the layers above call " <>
          "downward, each rostered for its callers in `Cyfr.Boundaries`' surface rows"},
-      {~w(Consent.Components OperationTable Proxy Tenancy.Caps),
-       "the ports the composition root installs: component facts, the operation " <>
-         "table, proxied tool resolution and the storage cap"},
+      {~w(Consent.Components Proxy Tenancy.Caps),
+       "the ports the composition root installs: component facts, proxied tool " <>
+         "resolution and the storage cap"},
       {~w(Catalog Gate.Supervisor), "the composition root loads the table and starts the gate"},
+      {~w(Catalog.NotLoadedError),
+       "the operation table's refusal to be read before boot, which the readiness probe " <>
+         "answers as not written"},
       {~w(Refusals), "the gate's refusal renderer, which the adapters answer with"},
       {~w(Carry Directory.Client IdentityFreshness Person),
        "the person's keys, the directory client, identity freshness and the sign-in " <>

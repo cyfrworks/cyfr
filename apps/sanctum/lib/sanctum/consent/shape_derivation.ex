@@ -338,9 +338,10 @@ defmodule Sanctum.Consent.ShapeDerivation do
   end
 
   @doc false
-  # The catalog's own roster, through the port consent reads it by, so a
-  # shape derived here can only name actions the catalog can serve.
-  def all_tool_actions, do: Sanctum.OperationTable.tool_actions()
+  # The operation table's own roster, so a shape derived here can only name
+  # actions the table can serve. An unloaded table raises
+  # `Sanctum.Catalog.NotLoadedError` here rather than answer none.
+  def all_tool_actions, do: Sanctum.Catalog.tool_actions()
 
   # ---------------------------------------------------------------------------
   # Internal

@@ -23,52 +23,19 @@ defmodule Sanctum.Consent.PlanTest do
   # The plan binds no commit digest; decoding its rows as a preview needs one.
   @placeholder_digest "sha256:" <> String.duplicate("0", 64)
 
-  # The installed catalog, answering as it does, that runs `fun` once at the
-  # `at`th catalog read the caller of `run/3` makes: state moving at a
-  # chosen point inside one call.
-  defmodule RacingOperationTable do
-    @moduledoc false
-    @behaviour Sanctum.OperationTable
+  # Runs `call` with the table's tool-action reads counted, wherever the
+  # call makes them, running `fun` once just before the `at`th: state
+  # moving at a chosen point inside one call. Answers the call's answer and
+  # the reads it made.
+  defp racing(at, fun, call) do
+    reads = :atomics.new(1, [])
 
-    def run(at, fun, call) do
-      Process.put(__MODULE__, {0, at, fun})
-
-      try do
-        answer = call.()
-        {reads, _at, _fun} = Process.get(__MODULE__)
-        {answer, reads}
-      after
-        Process.delete(__MODULE__)
-      end
+    hook = fn ->
+      if :atomics.add_get(reads, 1, 1) == at, do: fun.()
     end
 
-    @impl true
-    def tool_actions do
-      case Process.get(__MODULE__) do
-        {reads, at, fun} ->
-          Process.put(__MODULE__, {reads + 1, at, fun})
-          if reads + 1 == at, do: fun.()
-
-        nil ->
-          :ok
-      end
-
-      real().tool_actions()
-    end
-
-    @impl true
-    def action_declaration(name), do: real().action_declaration(name)
-
-    @impl true
-    def providers_loaded, do: real().providers_loaded()
-
-    @impl true
-    def tool_server_candidates(ctx), do: real().tool_server_candidates(ctx)
-
-    @impl true
-    def tool_server_candidate(ctx, name), do: real().tool_server_candidate(ctx, name)
-
-    defp real, do: :persistent_term.get({__MODULE__, :real})
+    answer = Sanctum.Catalog.with_read_hook(hook, call)
+    {answer, :atomics.get(reads, 1)}
   end
 
   setup tags do
@@ -646,15 +613,6 @@ defmodule Sanctum.Consent.PlanTest do
       {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, ref)
       {:ok, %{scope: scope}} = Sanctum.Consent.head_consent(ctx, profile_id)
 
-      real = Sanctum.OperationTable.impl!()
-      :persistent_term.put({RacingOperationTable, :real}, real)
-      Sanctum.OperationTable.install!(RacingOperationTable)
-
-      on_exit(fn ->
-        Sanctum.OperationTable.install!(real)
-        :persistent_term.erase({RacingOperationTable, :real})
-      end)
-
       damage = fn -> ConsentFixtures.hand_edit_head!(ctx, profile_id, scope: "bogus") end
 
       restore = fn ->
@@ -662,8 +620,7 @@ defmodule Sanctum.Consent.PlanTest do
       end
 
       # The catalog reads one plan makes, each a point the head can move at.
-      {{:ok, whole}, reads} =
-        RacingOperationTable.run(0, fn -> :ok end, fn -> Plan.plan(ctx, %{ref: ref}) end)
+      {{:ok, whole}, reads} = racing(0, fn -> :ok end, fn -> Plan.plan(ctx, %{ref: ref}) end)
 
       assert whole.head_narrowing == get_only
       assert reads > 1
@@ -676,8 +633,7 @@ defmodule Sanctum.Consent.PlanTest do
         for at <- 1..reads do
           :ok = restore.()
 
-          {answer, _reads} =
-            RacingOperationTable.run(at, damage, fn -> Plan.plan(ctx, %{ref: ref}) end)
+          {answer, _reads} = racing(at, damage, fn -> Plan.plan(ctx, %{ref: ref}) end)
 
           case answer do
             {:ok, plan} ->

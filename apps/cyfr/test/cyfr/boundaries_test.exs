@@ -1846,9 +1846,9 @@ defmodule Cyfr.BoundariesTest do
   # ---------------------------------------------------------------------------
 
   describe "the ports" do
-    test "there are five, and only five" do
-      assert length(Boundaries.ports()) == 5,
-             "a sixth port is an architecture change, not a catalog edit"
+    test "there are four, and only four" do
+      assert length(Boundaries.ports()) == 4,
+             "a fifth port is an architecture change, not a catalog edit"
     end
 
     test "every behaviour Sanctum declares is a listed port or a named internal strategy" do
@@ -1862,11 +1862,11 @@ defmodule Cyfr.BoundariesTest do
              Sanctum declares #{inspect(Enum.sort(declared))}; the catalog allows
              #{inspect(Boundaries.sanctum_behaviours())}.
 
-             A behaviour the identity domain declares is either one of the five
+             A behaviour the identity domain declares is either one of the four
              ports of `ARCHITECTURE.md` — something above it implements and the boot
              writes in — or a named internal strategy, declared and implemented
              inside Sanctum and selected by configuration. Anything else is a
-             sixth port, which is an architecture change.
+             fifth port, which is an architecture change.
              """
     end
 
@@ -1916,7 +1916,7 @@ defmodule Cyfr.BoundariesTest do
              """
     end
 
-    test "the boot installs the five in order, before its supervisor starts" do
+    test "the boot installs the four in order, before its supervisor starts" do
       source = SourceTree.read(Path.join(root(), "apps/cyfr/lib/cyfr/application.ex"))
       calls = for {_behaviour, call, _file} <- Boundaries.boot_writes(), do: call
 
@@ -1932,7 +1932,6 @@ defmodule Cyfr.BoundariesTest do
     test "every port row names its declaring module, its implementation and the boot" do
       assert Enum.map(Boundaries.ports(), & &1.behaviour) == [
                "Prima.Caps",
-               "Sanctum.OperationTable",
                "Sanctum.Consent.Components",
                "Sanctum.Proxy",
                "Arca.Storage.UnitLocator"
@@ -1969,7 +1968,6 @@ defmodule Cyfr.BoundariesTest do
 
       assert installed == [
                {"Prima.Caps", Sanctum.Tenancy.Caps},
-               {"Sanctum.OperationTable", Sanctum.Catalog},
                {"Sanctum.Consent.Components", Compendium.ConsentFacts},
                {"Sanctum.Proxy", Emissary.External.Proxy},
                {"Arca.Storage.UnitLocator",

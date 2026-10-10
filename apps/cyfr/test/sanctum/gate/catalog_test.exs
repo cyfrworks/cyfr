@@ -57,6 +57,14 @@ defmodule Sanctum.Gate.CatalogTest do
   alias Prima.Refusal
   alias Sanctum.Context
 
+  # The operation table's terms: its own three and the resource index's.
+  @table_terms [
+    {Sanctum.Gate, :operations},
+    {Sanctum.Gate, :tool_list},
+    {Sanctum.Gate, :streams},
+    {Sanctum.Gate, :resources}
+  ]
+
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     :ok
@@ -263,6 +271,96 @@ defmodule Sanctum.Gate.CatalogTest do
       assert_raise ArgumentError, ~r/does not export tools\/0/, fn ->
         Catalog.with_providers([Sanctum.Gate.CatalogTest.NoSuchProvider], fn -> :ok end)
       end
+    end
+  end
+
+  describe "an unloaded table" do
+    test "every read of it, and consent's, raises the named refusal" do
+      unloaded(fn ->
+        for read <- [
+              &Catalog.operations/0,
+              &Catalog.list_tools/0,
+              &Catalog.streams/0,
+              &Catalog.stream_entries/0,
+              fn -> Catalog.lookup_stream("any.stream") end,
+              fn -> Catalog.lookup("system") end,
+              &Catalog.tool_actions/0,
+              fn -> Catalog.action_declaration("system.status") end,
+              &Sanctum.Consent.ShapeDerivation.all_tool_actions/0,
+              fn ->
+                Sanctum.ToolGrants.check_standing(
+                  %{scope: "thread", effect: "allow", tool: "system", action: "status"},
+                  DateTime.utc_now()
+                )
+              end
+            ] do
+          error = assert_raise Catalog.NotLoadedError, read
+          assert error.message =~ "Sanctum.Catalog.load!/0"
+        end
+
+        # A virtual hand and an upstream tool are no provider's
+        # declarations, so neither reads the table.
+        assert {:ok, %{kind: :write}} = Catalog.action_declaration("files.write")
+        assert {:ok, %{kind: :external}} = Catalog.action_declaration("srv:thing.do")
+      end)
+    end
+
+    test "a planted provider loads it for the block, and the block leaves it unloaded" do
+      unloaded(fn ->
+        Catalog.with_providers([Probe.Crashing], fn ->
+          assert Catalog.exists?(Probe.Crashing.tool())
+          assert %{resources: _} = Sanctum.Resources.table()
+        end)
+
+        for key <- @table_terms do
+          assert :persistent_term.get(key, :unloaded) == :unloaded,
+                 "#{inspect(key)} outlived the block"
+        end
+
+        assert_raise Catalog.NotLoadedError, &Catalog.operations/0
+      end)
+    end
+  end
+
+  describe "the read hook" do
+    test "runs before each roster read of its holder and of a process started for it, no other's" do
+      reads = :counters.new(1, [:atomics])
+
+      Catalog.with_read_hook(fn -> :counters.add(reads, 1, 1) end, fn ->
+        Catalog.tool_actions()
+        assert :counters.get(reads, 1) == 1
+
+        # A process started on the holder's behalf names it in `$callers`,
+        # however deep.
+        Task.await(Task.async(fn -> Catalog.tool_actions() end))
+        assert :counters.get(reads, 1) == 2
+
+        Task.await(Task.async(fn -> Task.await(Task.async(&Catalog.tool_actions/0)) end))
+        assert :counters.get(reads, 1) == 3
+
+        # A process started for no one: another test's reads.
+        parent = self()
+        spawn(fn -> send(parent, {:read, Catalog.tool_actions()}) end)
+        assert_receive {:read, [_ | _]}
+        assert :counters.get(reads, 1) == 3
+      end)
+
+      Catalog.tool_actions()
+      assert :counters.get(reads, 1) == 3, "the hook outlived its block"
+    end
+  end
+
+  # The table's four terms erased for the block and put back after it,
+  # however it ends: what a member whose boot has not loaded the table
+  # reads. The module is synchronous, so no other case reads it erased.
+  defp unloaded(fun) do
+    saved = for key <- @table_terms, do: {key, :persistent_term.get(key)}
+    Enum.each(@table_terms, &:persistent_term.erase/1)
+
+    try do
+      fun.()
+    after
+      for {key, term} <- saved, do: :persistent_term.put(key, term)
     end
   end
 
@@ -834,13 +932,11 @@ defmodule Sanctum.Gate.CatalogTest do
           original ++ [Sanctum.Gate.CatalogTest.NoSuchProvider]
         )
 
-        assert {:error, [Sanctum.Gate.CatalogTest.NoSuchProvider]} = Catalog.providers_loaded()
-
         Application.put_env(:sanctum, :tool_providers_lenient, false)
 
-        assert_raise RuntimeError, ~r/failed to load.*refusing to boot/, fn ->
-          Catalog.load!()
-        end
+        assert_raise RuntimeError,
+                     ~r/failed to load: \[Sanctum\.Gate\.CatalogTest\.NoSuchProvider\].*refusing to boot/,
+                     fn -> Catalog.load!() end
 
         # A refused boot wrote nothing.
         assert Catalog.operations() == before

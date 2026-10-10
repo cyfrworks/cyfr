@@ -17,7 +17,7 @@ defmodule Sanctum.PersonPermissionsTest do
     refute :* in person
 
     declared =
-      for pair <- Sanctum.OperationTable.tool_actions(),
+      for pair <- Sanctum.Catalog.tool_actions(),
           [tool, action] = String.split(pair, ".", parts: 2),
           {:ok, {_module, meta}} <- [Sanctum.Gate.lookup(tool)],
           permission = Annotations.permission(meta, action),
