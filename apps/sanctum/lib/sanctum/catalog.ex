@@ -454,18 +454,13 @@ defmodule Sanctum.Catalog do
   @doc """
   The gate's authorization of a stream open, as an action with no
   declaration beyond the default is authorized (`@stream_annotation`):
-  the same auth, scope, permission and consent checks, on the external
+  the same predicate (`Sanctum.Visibility.authorize/4`), on the external
   plane. `name` is the operation name the refusal carries.
   """
   @spec authorize_stream(String.t(), Context.t()) ::
           :ok | {:error, Sanctum.Unauthorized.reason()}
-  def authorize_stream(name, %Context{} = ctx) when is_binary(name) do
-    with :ok <- check_auth(name, ctx, @stream_annotation),
-         :ok <- check_scope(ctx, @stream_annotation),
-         :ok <- check_permission(ctx, @stream_annotation) do
-      check_consent(ctx, @stream_annotation, false)
-    end
-  end
+  def authorize_stream(name, %Context{} = ctx) when is_binary(name),
+    do: Sanctum.Visibility.authorize(name, @stream_annotation, ctx, false)
 
   @doc """
   Prune a tools/list payload to the in-chain *plane*: actions whose plane
@@ -1140,8 +1135,10 @@ defmodule Sanctum.Catalog do
   defp resolve_server_digest(ctx, server_name), do: elem(resolve_server(ctx, server_name), 1)
 
   @doc false
-  # The dispatch gate: enforce the action's access annotation — auth,
-  # permission, consent — before the handler runs. Handlers keep only the
+  # The dispatch gate: enforce the action's access annotation before the
+  # handler runs — a declared action on the caller's plane, then auth,
+  # scope, permission and consent through the predicate discovery asks
+  # too (`Sanctum.Visibility.authorize/4`). Handlers keep only the
   # residual checks the annotation cannot express (tenant presence,
   # ownership, definition authority, the domain's finer consent arms).
   # Public solely so the discovery-parity test can ask the exact question
@@ -1168,11 +1165,7 @@ defmodule Sanctum.Catalog do
         {:error, {:unknown_action, "#{name}.#{action}"}}
 
       true ->
-        with :ok <- check_auth(name, ctx, annotation),
-             :ok <- check_scope(ctx, annotation),
-             :ok <- check_permission(ctx, annotation) do
-          check_consent(ctx, annotation, in_chain?)
-        end
+        Sanctum.Visibility.authorize(name, annotation, ctx, in_chain?)
     end
   end
 
@@ -1213,60 +1206,6 @@ defmodule Sanctum.Catalog do
   # Remote tools carry their own schemas and are not local operation providers.
   defp validate_chain_arguments(name, args) do
     if String.contains?(name, ":"), do: {:ok, args}, else: validate_arguments(name, args)
-  end
-
-  # `scope: :platform` is the operator capability, not a widened tenant scope:
-  # the caller still works inside one athanor and only the membership fact
-  # (`platform_admin`) admits them.
-  defp check_scope(ctx, annotation) do
-    case Map.get(annotation, :scope) do
-      nil -> :ok
-      :platform when ctx.platform_admin -> :ok
-      :platform -> {:error, :platform_admin_required}
-    end
-  end
-
-  defp check_auth(name, ctx, annotation) do
-    if Sanctum.Visibility.admits?(annotation, ctx) do
-      :ok
-    else
-      {:error, {:tool_auth_required, name}}
-    end
-  end
-
-  defp check_permission(ctx, annotation) do
-    case Map.get(annotation, :permission) do
-      nil -> :ok
-      permission -> Context.require_permission(ctx, permission, :in_chain)
-    end
-  end
-
-  # Preserve typed consent refusals for rendering through Authz.message/1.
-  # In-chain interactive calls retain the surface check; the approved
-  # proposal supplies consent for the guest plane. Staging actions require
-  # the full surface and plane checks and are unavailable in-chain.
-  defp check_consent(ctx, annotation, in_chain?) do
-    case Map.get(annotation, :consent) do
-      nil ->
-        :ok
-
-      :interactive ->
-        interactive =
-          if in_chain?,
-            do: Sanctum.Consent.Authz.authorize_interactive_in_chain(ctx),
-            else: Sanctum.Consent.Authz.authorize_interactive(ctx)
-
-        case interactive do
-          {:ok, :interactive} -> :ok
-          {:error, refusal} -> {:error, {:consent_class_required, refusal}}
-        end
-
-      :staging ->
-        case Sanctum.Consent.Authz.authorize_staging(ctx) do
-          :ok -> :ok
-          {:error, refusal} -> {:error, {:consent_class_required, refusal}}
-        end
-    end
   end
 
   # The gate. Every call, on either plane, is decided here once: the

@@ -3,23 +3,29 @@
 
 defmodule Sanctum.Visibility do
   @moduledoc """
-  Derives what a caller may see in `tools/list` — and, for a caller with
-  no credential, what they may reach at all — from the same per-action
-  access annotations `Sanctum.Catalog` enforces at dispatch.
+  The one authorization predicate over an action's access annotation
+  (`authorize/4`), and what a caller may see in `tools/list`.
 
-  Discovery is not a policy of its own. Every question here is answered by
-  reading the action's annotation (`auth`, `permission`, `consent`), so a
-  caller is shown exactly the doors dispatch would open for them:
+  The gate (`Sanctum.Catalog`) asks `authorize/4` before a handler runs,
+  and discovery asks it of every action it lists, so a caller is shown
+  exactly the doors dispatch would open for them. It reads the
+  annotation's `auth`, `scope`, `permission` and `consent`, in that order,
+  and the first that refuses names the refusal:
 
-  - An external-plane caller sees only actions whose planes include
-    `:external`; a running chain's view is pruned to its own plane by
-    `Sanctum.Catalog`.
-  - `auth: :anonymous` actions are visible to everyone.
-  - `permission:` actions require the named permission.
-  - `consent:` actions require an admitted surface: `:interactive` accepts
-    OIDC sessions and paired devices; `:staging` accepts those or API
-    keys.
-  - Unannotated actions are invisible and refused by dispatch.
+  - `auth: :anonymous` serves everyone, `:signed_in` an authenticated
+    caller or a session that has not claimed its namespace yet, and
+    `:required` (the default) an authenticated caller.
+  - `scope: :platform` serves a platform administrator alone.
+  - `permission:` requires the named permission.
+  - `consent:` requires a surface `Sanctum.Consent.Authz` admits:
+    `:interactive` an OIDC session or a paired device, and inside a
+    running chain the session alone; `:staging` those or an API key, and
+    never inside a chain.
+
+  Discovery also serves a caller outside a running chain only actions whose
+  planes include `:external`, as dispatch does; a running chain's view is
+  pruned to its own plane by `Sanctum.Catalog`. Unannotated actions are
+  invisible and refused by dispatch.
 
   The completeness audit (`Sanctum.Catalog.audit_action_kinds/0`,
   asserted `:ok` in CI) guarantees every registered action carries a full
@@ -52,37 +58,92 @@ defmodule Sanctum.Visibility do
   end
 
   @doc """
-  May this caller reach an action with this annotation, as far as
-  authentication goes? Authenticated callers always may; `:anonymous`
-  actions serve anyone; `:signed_in` actions serve a session that has not
-  claimed its namespace yet (`user_id` set, `authenticated: false`).
+  May this caller act under this access annotation? The gate's
+  authorization of a declared action
+  (`Sanctum.Catalog.authorize_annotated_action/5`) and of a stream open,
+  and discovery's of every action it lists: `auth`, then `scope`,
+  `permission` and `consent`, the first refusal answered. `name` is the
+  operation the authentication refusal names; `in_chain?` asks the consent
+  class as a call inside a running chain is asked.
   """
-  @spec admits?(map(), Context.t()) :: boolean()
-  def admits?(annotation, %Context{} = ctx) do
-    case Map.get(annotation, :auth, :required) do
-      :anonymous -> true
-      :signed_in -> ctx.authenticated or is_binary(ctx.user_id)
-      _ -> ctx.authenticated
+  @spec authorize(String.t(), map(), Context.t(), boolean()) ::
+          :ok | {:error, Sanctum.Unauthorized.reason()}
+  def authorize(name, annotation, %Context{} = ctx, in_chain?)
+      when is_map(annotation) and is_boolean(in_chain?) do
+    with :ok <- check_auth(name, ctx, annotation),
+         :ok <- check_scope(ctx, annotation),
+         :ok <- check_permission(ctx, annotation) do
+      check_consent(ctx, annotation, in_chain?)
     end
   end
 
-  @doc "`admits?/2` by tool and action name, for the Router's invocation gate."
-  @spec admits_action?(String.t(), String.t(), Context.t()) :: boolean()
-  def admits_action?(name, action, %Context{} = ctx) do
-    case Sanctum.Catalog.lookup(name) do
-      {:ok, {_module, meta}} ->
-        admits?(Annotations.annotation(meta, action) || %{}, ctx)
+  # Authenticated callers always pass; `:anonymous` actions serve anyone;
+  # `:signed_in` actions serve a session that has not claimed its
+  # namespace yet (`user_id` set, `authenticated: false`).
+  defp check_auth(name, ctx, annotation) do
+    admitted =
+      case Map.get(annotation, :auth, :required) do
+        :anonymous -> true
+        :signed_in -> ctx.authenticated or is_binary(ctx.user_id)
+        _ -> ctx.authenticated
+      end
 
-      :miss ->
-        false
+    if admitted, do: :ok, else: {:error, {:tool_auth_required, name}}
+  end
+
+  # `scope: :platform` is the operator capability, not a widened tenant scope:
+  # the caller still works inside one athanor and only the membership fact
+  # (`platform_admin`) admits them.
+  defp check_scope(ctx, annotation) do
+    case Map.get(annotation, :scope) do
+      nil -> :ok
+      :platform when ctx.platform_admin -> :ok
+      :platform -> {:error, :platform_admin_required}
+    end
+  end
+
+  defp check_permission(ctx, annotation) do
+    case Map.get(annotation, :permission) do
+      nil -> :ok
+      permission -> Context.require_permission(ctx, permission, :in_chain)
+    end
+  end
+
+  # Consent is decided on how the caller authenticated, never by permission
+  # atom, so `:*` does not short-circuit it. The typed refusals are kept for
+  # rendering through `Sanctum.Consent.Authz.message/1`. In-chain interactive
+  # calls keep the surface check; the approved proposal supplies consent for
+  # the guest plane. Staging actions require the full surface and plane
+  # checks and are unavailable in-chain.
+  defp check_consent(ctx, annotation, in_chain?) do
+    case Map.get(annotation, :consent) do
+      nil ->
+        :ok
+
+      :interactive ->
+        interactive =
+          if in_chain?,
+            do: Sanctum.Consent.Authz.authorize_interactive_in_chain(ctx),
+            else: Sanctum.Consent.Authz.authorize_interactive(ctx)
+
+        case interactive do
+          {:ok, :interactive} -> :ok
+          {:error, refusal} -> {:error, {:consent_class_required, refusal}}
+        end
+
+      :staging ->
+        case Sanctum.Consent.Authz.authorize_staging(ctx) do
+          :ok -> :ok
+          {:error, refusal} -> {:error, {:consent_class_required, refusal}}
+        end
     end
   end
 
   @doc """
   Filter tool definitions to only include tools/actions the caller can see.
 
-  - For each tool: prunes the action enum to actions whose annotation admits
-    this caller, drops tools with none remaining.
+  - For each tool: prunes the action enum to actions `authorize/4` admits
+    this caller to, drops tools with none remaining.
   - Tools with no action enum (external `server:tool` proxies) pass through
     unchanged for authenticated callers and are hidden from anonymous ones.
   """
@@ -99,8 +160,9 @@ defmodule Sanctum.Visibility do
         if ctx.authenticated, do: tool_def, else: nil
 
       actions when is_list(actions) ->
+        name = tool_def["name"]
         annotations = Annotations.actions_of(tool_def)
-        visible = Enum.filter(actions, &visible_action?(Map.get(annotations, &1), ctx))
+        visible = Enum.filter(actions, &visible_action?(name, Map.get(annotations, &1), ctx))
 
         case visible do
           [] -> nil
@@ -111,63 +173,21 @@ defmodule Sanctum.Visibility do
   end
 
   # Unclassified action: invisible, matching the dispatch refusal.
-  defp visible_action?(nil, _ctx), do: false
+  defp visible_action?(_name, nil, _ctx), do: false
 
-  defp visible_action?(annotation, ctx),
-    do: plane_visible?(annotation, ctx) and access_visible?(annotation, ctx)
+  # A context on the guest plane is a running chain's, which only
+  # `Sanctum.Catalog.call_in_chain/5` serves, so it is asked as that entry
+  # asks.
+  defp visible_action?(name, annotation, ctx),
+    do:
+      plane_visible?(annotation, ctx) and
+        authorize(name, annotation, ctx, ctx.plane == :guest) == :ok
 
   # Outside a running chain, only external-plane actions are served.
   defp plane_visible?(annotation, %Context{plane: :external}),
     do: :external in Map.get(annotation, :planes, [])
 
   defp plane_visible?(_annotation, _guest_ctx), do: true
-
-  # A caller with no credential — or a session ahead of its claim — sees
-  # only what dispatch would let it call.
-  defp access_visible?(annotation, %Context{authenticated: false} = ctx),
-    do: admits?(annotation, ctx)
-
-  defp access_visible?(annotation, ctx),
-    do:
-      scope_visible?(annotation, ctx) and permission_visible?(annotation, ctx) and
-        consent_visible?(annotation, ctx)
-
-  # Operator-only actions are shown to operators alone (mirrors dispatch).
-  defp scope_visible?(annotation, ctx) do
-    case Map.get(annotation, :scope) do
-      nil -> true
-      :platform -> ctx.platform_admin
-    end
-  end
-
-  defp permission_visible?(annotation, ctx) do
-    case Map.get(annotation, :permission) do
-      nil -> true
-      permission -> Context.has_permission?(ctx, permission)
-    end
-  end
-
-  # Mirrors Sanctum.Consent.Authz's surface arms — which admit by
-  # auth_method, never by permission atom, so `:*` deliberately does not
-  # short-circuit here.
-  defp consent_visible?(annotation, ctx) do
-    case Map.get(annotation, :consent) do
-      nil -> true
-      :interactive -> interactive?(ctx)
-      :staging -> interactive?(ctx) or keyed?(ctx)
-    end
-  end
-
-  # On the external plane, a browser session that names no paired client,
-  # or a paired device that names its client (the device channel's alone);
-  # inside a chain, the in-chain arm's session alone.
-  defp interactive?(%Context{plane: :guest, auth_method: method}), do: method == :oidc
-  defp interactive?(%Context{auth_method: :oidc, client_id: nil}), do: true
-  defp interactive?(%Context{auth_method: :device, client_id: id}), do: is_binary(id)
-  defp interactive?(%Context{}), do: false
-
-  defp keyed?(%Context{auth_method: :api_key, client_id: nil}), do: true
-  defp keyed?(%Context{}), do: false
 
   # One shape reaches here. `Sanctum.Catalog` emits the wire
   # spelling for registered tools and `Emissary.External.Proxy` maps a peer's

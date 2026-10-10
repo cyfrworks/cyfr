@@ -68,12 +68,25 @@ defmodule Sanctum.Gate.VisibilityTest do
     )
   end
 
+  # A session ahead of its claim, or a door-denied person's: a user and no
+  # authentication.
+  defp unclaimed_ctx do
+    Context.build(
+      user_id: "test_user",
+      permissions: [],
+      auth_method: :oidc,
+      authenticated: false
+    )
+  end
+
   defp action_enum(tool_def) do
     get_in(tool_def, ["inputSchema", "properties", "action", "enum"])
   end
 
-  defp visible_actions(name, ctx) do
-    case Visibility.filter_for_context([live_tool(name)], ctx) do
+  defp visible_actions(name, ctx), do: shown_actions(live_tool(name), ctx)
+
+  defp shown_actions(tool_def, ctx) do
+    case Visibility.filter_for_context([tool_def], ctx) do
       [tool] -> action_enum(tool) || []
       [] -> []
     end
@@ -176,7 +189,7 @@ defmodule Sanctum.Gate.VisibilityTest do
   end
 
   # ============================================================================
-  # Consent-class visibility mirrors the Authz surface arms
+  # Consent-class visibility: the Authz surface arms the gate asks
   # ============================================================================
 
   describe "consent-class actions" do
@@ -289,43 +302,271 @@ defmodule Sanctum.Gate.VisibilityTest do
   # Discovery = invocation, by construction and by test
   # ============================================================================
 
+  # Every kind of caller an ingress produces: no credential; a session ahead
+  # of its claim; a browser session; a paired device, and each half of one
+  # without the other; an API key; a schedule; a webhook; a tincture a
+  # person invokes and a public one (`anonymous: true`); the system; and a
+  # tincture session's upgrade. Each holds no permission, one, or the
+  # wildcard, as a member and as a platform administrator, on the external
+  # plane and inside a running chain. Contexts are built with explicit
+  # permissions: Sanctum.TestContext.local/0 holds :* and would prove nothing.
+  defp live_callers do
+    kinds = [
+      anonymous_ctx(),
+      unclaimed_ctx(),
+      ctx_with([], :oidc),
+      paired_device_ctx([]),
+      ctx_with([], :device),
+      %{ctx_with([], :oidc) | client_id: "pcl_probe"},
+      ctx_with([], :api_key),
+      ctx_with([], :scheduled),
+      ctx_with([], :webhook),
+      ctx_with([], :tincture),
+      %{ctx_with([:execute], :tincture) | anonymous: true},
+      ctx_with([], :system),
+      ctx_with([], :session)
+    ]
+
+    for kind <- kinds,
+        permissions <- [[], [:execute], [:storage_read], [:admin], [:component_manage], [:*]],
+        platform_admin <- [false, true],
+        ctx = %{kind | permissions: MapSet.new(permissions), platform_admin: platform_admin},
+        plane_ctx <- [ctx, Context.enter_guest(ctx)],
+        do: plane_ctx
+  end
+
+  # The fields a refusal depends on, to name a caller in a failure.
+  defp caller(%Context{} = ctx) do
+    ctx
+    |> Map.take(~w(plane authenticated user_id anonymous auth_method client_id platform_admin)a)
+    |> Map.put(:permissions, Enum.sort(ctx.permissions))
+  end
+
+  # At most `limit` of `cases`, with their count, for a failure message.
+  defp sample(cases, limit \\ 12) do
+    "#{length(cases)} cases, the first #{min(limit, length(cases))}:\n" <>
+      Enum.map_join(Enum.take(Enum.reverse(cases), limit), "\n", &inspect/1)
+  end
+
   describe "dispatch parity" do
-    # For every registered action and a spread of caller shapes, discovery
-    # and dispatch must agree: an action a caller is shown, dispatch would
-    # authorize; an action dispatch refuses, discovery hides. Contexts are
-    # built with explicit scopes — Sanctum.TestContext.local/0 holds :* and
-    # would prove nothing.
+    # For every registered action and every kind of caller, discovery and
+    # dispatch agree: an action a caller is shown, dispatch would authorize;
+    # an action dispatch refuses, discovery hides. A context on the guest
+    # plane is a running chain's (`call_external/4` refuses it), so it is
+    # asked as `call_in_chain/5` asks, on the actions its plane reaches.
     test "a caller is shown exactly the actions dispatch would authorize" do
-      probes = [
-        anonymous_ctx(),
-        ctx_with([]),
-        ctx_with([], :oidc),
-        ctx_with([:execute]),
-        ctx_with([:storage_read]),
-        ctx_with([:admin]),
-        ctx_with([:component_manage], :oidc),
-        # A paired device, and each half of one without the other.
-        paired_device_ctx([]),
-        paired_device_ctx([:component_manage]),
-        ctx_with([], :device),
-        %{ctx_with([], :oidc) | client_id: "pcl_probe"}
-      ]
+      callers = live_callers()
 
-      for tool_def <- live_tools(),
-          name = tool_def["name"],
-          {:ok, {_module, meta}} = Catalog.lookup(name),
-          action <- action_enum(tool_def) || [],
-          ctx <- probes do
-        visible = action in visible_actions(name, ctx)
+      {disagreements, seen} =
+        for tool_def <- live_tools(),
+            name = tool_def["name"],
+            {:ok, {_module, meta}} = Catalog.lookup(name),
+            ctx <- callers,
+            reduce: {[], MapSet.new()} do
+          acc ->
+            shown = shown_actions(tool_def, ctx)
+            in_chain? = ctx.plane == :guest
 
-        authorized =
-          Catalog.authorize_annotated_action(name, meta, ctx, %{"action" => action}) == :ok
+            for action <- action_enum(tool_def) || [],
+                not in_chain? or Catalog.in_chain_reachable?(name, action),
+                reduce: acc do
+              {disagreements, seen} ->
+                visible = action in shown
+                args = %{"action" => action}
+                answer = Catalog.authorize_annotated_action(name, meta, ctx, args, in_chain?)
+                seen = MapSet.put(seen, {ctx.plane, visible})
+                entry = {"#{name}.#{action}", caller(ctx), shown: visible, gate: answer}
 
-        assert visible == authorized,
-               "#{name}.#{action}: discovery says #{inspect(visible)} but dispatch says " <>
-                 "#{inspect(authorized)} for auth_method=#{inspect(ctx.auth_method)} " <>
-                 "permissions=#{inspect(ctx.permissions)} authenticated=#{ctx.authenticated}"
+                if visible == (answer == :ok),
+                  do: {disagreements, seen},
+                  else: {[entry | disagreements], seen}
+            end
+        end
+
+      assert disagreements == [], "discovery and dispatch disagree in " <> sample(disagreements)
+
+      # Not vacuous: on each plane, some action is shown and some hidden.
+      assert seen ==
+               MapSet.new(
+                 for plane <- [:external, :guest], shown <- [true, false], do: {plane, shown}
+               )
+    end
+  end
+
+  # ============================================================================
+  # One predicate: every annotation against every caller
+  # ============================================================================
+
+  # Every annotation over the fields admission reads: `auth` (absent, so its
+  # default, or each value), `scope`, `permission` and `consent`, each absent
+  # or each value, and `planes`; and an action with no annotation at all.
+  defp synthetic_annotations do
+    annotated =
+      for auth <- [:absent, :required, :signed_in, :anonymous],
+          scope <- [nil, :platform],
+          permission <- [nil, :execute],
+          consent <- [nil, :interactive, :staging],
+          planes <- [[:external], [:in_chain], [:external, :in_chain]] do
+        [auth: auth, scope: scope, permission: permission, consent: consent]
+        |> Enum.reject(fn {_field, value} -> value in [nil, :absent] end)
+        |> Map.new()
+        |> Map.merge(%{kind: :read, planes: planes})
       end
+
+    [nil | annotated]
+  end
+
+  # Every caller over the fields admission reads: the plane; the identity
+  # (authenticated with a user, a user without authentication, neither),
+  # anonymous or not; every authentication method; a paired client or none;
+  # platform administration; and no permission, the one the annotations
+  # name, another, or the wildcard.
+  defp synthetic_callers do
+    for plane <- [:external, :guest],
+        {authenticated, user_id} <- [{true, "test_user"}, {false, "test_user"}, {false, nil}],
+        anonymous <- [false, true],
+        auth_method <- [
+          :oidc,
+          :device,
+          :api_key,
+          :scheduled,
+          :webhook,
+          :tincture,
+          :system,
+          :session,
+          nil
+        ],
+        client_id <- [nil, "pcl_probe"],
+        platform_admin <- [false, true],
+        permissions <- [[], [:execute], [:admin], [:*]] do
+      Context.build(
+        user_id: user_id,
+        permissions: permissions,
+        auth_method: auth_method,
+        authenticated: authenticated,
+        anonymous: anonymous,
+        client_id: client_id,
+        platform_admin: platform_admin,
+        plane: plane
+      )
+    end
+  end
+
+  # One action, `probe.act`, carrying `annotation`: its wire definition,
+  # which discovery reads, and its table entry, which the gate reads.
+  defp probe_tool(nil), do: make_tool("probe", ["act"])
+  defp probe_tool(annotation), do: make_tool("probe", ["act"], %{actions: %{"act" => annotation}})
+
+  defp probe_meta(nil), do: %{}
+  defp probe_meta(annotation), do: %{annotations: %{actions: %{"act" => annotation}}}
+
+  # The gate's answer, asked as the caller's plane asks it.
+  defp gate(annotation, ctx) do
+    Catalog.authorize_annotated_action(
+      "probe",
+      probe_meta(annotation),
+      ctx,
+      %{"action" => "act"},
+      ctx.plane == :guest
+    )
+  end
+
+  defp shown?(annotation, ctx),
+    do: Visibility.filter_for_context([probe_tool(annotation)], ctx) != []
+
+  # The gate's answer, check by check: an action without a declaration, or
+  # outside the caller's plane, is unknown; then auth, scope, permission and
+  # consent, in that order, the first that refuses naming the refusal.
+  defp expected(nil, _ctx), do: {:error, {:unknown_action, "probe.act"}}
+
+  defp expected(annotation, ctx) do
+    in_chain? = ctx.plane == :guest
+    permission = Map.get(annotation, :permission)
+
+    cond do
+      not in_chain? and :external not in annotation.planes ->
+        {:error, {:unknown_action, "probe.act"}}
+
+      not auth_admits?(Map.get(annotation, :auth, :required), ctx) ->
+        {:error, {:tool_auth_required, "probe"}}
+
+      Map.get(annotation, :scope) == :platform and not ctx.platform_admin ->
+        {:error, :platform_admin_required}
+
+      permission != nil and not Context.has_permission?(ctx, permission) ->
+        {:error, {:missing_permission, permission}}
+
+      true ->
+        case consent_refusal(Map.get(annotation, :consent), ctx, in_chain?) do
+          nil -> :ok
+          refusal -> {:error, {:consent_class_required, refusal}}
+        end
+    end
+  end
+
+  defp auth_admits?(:anonymous, _ctx), do: true
+  defp auth_admits?(:signed_in, ctx), do: ctx.authenticated or is_binary(ctx.user_id)
+  defp auth_admits?(:required, ctx), do: ctx.authenticated
+
+  # Who may act under a consent class (`Sanctum.Consent.Authz`): staging
+  # never inside a chain; then a caller authenticated on a credential of
+  # its own; then, inside a chain, a session alone, and outside one the
+  # surfaces the class admits, a paired client being the device channel's
+  # alone.
+  defp consent_refusal(nil, _ctx, _in_chain?), do: nil
+  defp consent_refusal(:staging, %Context{plane: :guest}, _in_chain?), do: :guest_plane
+  defp consent_refusal(_class, %Context{authenticated: false}, _in_chain?), do: :not_authenticated
+  defp consent_refusal(_class, %Context{anonymous: true}, _in_chain?), do: :anonymous
+  defp consent_refusal(:interactive, %Context{auth_method: :oidc}, true), do: nil
+
+  defp consent_refusal(:interactive, %Context{auth_method: method}, true),
+    do: {:surface_not_permitted, method}
+
+  defp consent_refusal(class, %Context{auth_method: method, client_id: client_id}, false) do
+    surface =
+      cond do
+        method == :device and is_binary(client_id) -> :device
+        method != :device and is_nil(client_id) -> method
+        true -> nil
+      end
+
+    admitted = if class == :interactive, do: [:oidc, :device], else: [:oidc, :device, :api_key]
+    if surface != nil and surface in admitted, do: nil, else: {:surface_not_permitted, method}
+  end
+
+  describe "one predicate for discovery and the gate" do
+    test "the gate answers every annotation and caller with its first refusing check, in auth, scope, permission, consent order" do
+      callers = synthetic_callers()
+
+      differing =
+        for annotation <- synthetic_annotations(), ctx <- callers, reduce: [] do
+          acc ->
+            answer = gate(annotation, ctx)
+
+            if answer == expected(annotation, ctx),
+              do: acc,
+              else: [{annotation, caller(ctx), answer} | acc]
+        end
+
+      assert differing == [],
+             "the gate answers other than its checks name in " <> sample(differing)
+    end
+
+    test "discovery shows exactly what the gate admits, over every annotation and caller" do
+      callers = synthetic_callers()
+
+      disagreements =
+        for annotation <- synthetic_annotations(), ctx <- callers, reduce: [] do
+          acc ->
+            shown = shown?(annotation, ctx)
+            answer = gate(annotation, ctx)
+
+            if shown == (answer == :ok),
+              do: acc,
+              else: [{annotation, caller(ctx), shown: shown, gate: answer} | acc]
+        end
+
+      assert disagreements == [], "discovery and the gate disagree in " <> sample(disagreements)
     end
   end
 
