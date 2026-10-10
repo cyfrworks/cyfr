@@ -48,9 +48,18 @@ const COVERING = ["column", "float", "full"]
  * the socket is down the last layout stays drawn and follows the window,
  * marked disconnected, and every frame's bridge is told the socket is down
  * so no frame acts until it is back.
+ *
+ * The hook sits on an empty element of its own inside the canvas layer,
+ * which carries `data-posture` and `data-columns`. LiveView locks the
+ * element an event is pushed from until its reply, and a locked element
+ * around the frames would bring back a frame the layer discarded meanwhile;
+ * so every push goes from the hook's own element, and the layer, read as
+ * that element's parent, is where the pointer is heard, its size measured,
+ * its stylesheet scoped and its frames, hosts and edge strip found.
  */
 const Canvas = {
   mounted() {
+    this._layer = this.el.parentElement
     this._columns = []
     this._posture = null
     this._connected = true
@@ -77,9 +86,9 @@ const Canvas = {
     this._onPointerDown = (event) => this._swipeStart(event)
     this._onPointerUp = (event) => this._swipeEnd(event)
     this._onPointerCancel = () => (this._swipe = null)
-    this.el.addEventListener?.("pointerdown", this._onPointerDown)
-    this.el.addEventListener?.("pointerup", this._onPointerUp)
-    this.el.addEventListener?.("pointercancel", this._onPointerCancel)
+    this._layer.addEventListener?.("pointerdown", this._onPointerDown)
+    this._layer.addEventListener?.("pointerup", this._onPointerUp)
+    this._layer.addEventListener?.("pointercancel", this._onPointerCancel)
 
     this.handleEvent("frame_state", (payload) => this._relay(payload))
     this.handleEvent("frame_credential", (payload) => this._credentialClosed(payload))
@@ -112,9 +121,9 @@ const Canvas = {
   destroyed() {
     globalThis.window?.removeEventListener("resize", this._onResize)
     globalThis.window?.removeEventListener("keydown", this._onKeydown)
-    this.el.removeEventListener?.("pointerdown", this._onPointerDown)
-    this.el.removeEventListener?.("pointerup", this._onPointerUp)
-    this.el.removeEventListener?.("pointercancel", this._onPointerCancel)
+    this._layer.removeEventListener?.("pointerdown", this._onPointerDown)
+    this._layer.removeEventListener?.("pointerup", this._onPointerUp)
+    this._layer.removeEventListener?.("pointercancel", this._onPointerCancel)
   },
 
   // The last column list that parses is the one drawn.
@@ -131,9 +140,9 @@ const Canvas = {
       this.pushEventTo(this.el, "posture", {posture})
     }
 
-    const {width, height} = this.el.getBoundingClientRect()
+    const {width, height} = this._layer.getBoundingClientRect()
     const style = this._stylesheet()
-    if (style) style.textContent = stylesheet(this.el.id, columnGeometry(this._columns, width, height, posture))
+    if (style) style.textContent = stylesheet(this._layer.id, columnGeometry(this._columns, width, height, posture))
 
     this._tellCanvases(posture)
   },
@@ -151,7 +160,7 @@ const Canvas = {
   },
 
   _covering() {
-    const shown = Array.from(this.el.querySelectorAll('[data-canvas-shown="true"]'))
+    const shown = Array.from(this._layer.querySelectorAll('[data-canvas-shown="true"]'))
     return shown
       .filter((element) => COVERING.includes(element.dataset?.canvasPlace))
       .map(boxOf)
@@ -167,26 +176,26 @@ const Canvas = {
     frame.dispatchEvent(new CustomEvent(CANVAS_MESSAGE_EVENT, {detail: {verb, args}}))
   },
 
-  // The stylesheet lives in the canvas's `-geometry` element, which the
+  // The stylesheet lives in the layer's `-geometry` element, which the
   // server renders empty with `phx-update="ignore"`, so no patch touches it.
   _stylesheet() {
     if (this._style && this._style.isConnected) return this._style
-    const host = this.el.querySelector(`#${this.el.id}-geometry`)
+    const host = this._layer.querySelector(`#${this._layer.id}-geometry`)
     if (!host) return null
-    this._style = this.el.ownerDocument.createElement("style")
+    this._style = this._layer.ownerDocument.createElement("style")
     host.appendChild(this._style)
     return this._style
   },
 
   _mark() {
-    const marker = this.el.querySelector(`#${this.el.id}-status [data-canvas-connection]`)
+    const marker = this._layer.querySelector(`#${this._layer.id}-status [data-canvas-connection]`)
     if (!marker) return
     marker.dataset.canvasConnection = this._connected ? "connected" : "disconnected"
     marker.hidden = this._connected
   },
 
   _frames() {
-    return Array.from(this.el.querySelectorAll("iframe[data-frame-id]"))
+    return Array.from(this._layer.querySelectorAll("iframe[data-frame-id]"))
   },
 
   _canvasFrames() {

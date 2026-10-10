@@ -19,7 +19,11 @@ defmodule PrismWeb.ShellLive do
   tinctures the layout places over it. A canvas whose newest installed
   version is not its working version, its kept version or its recorded
   failure is validated first (`Prism.CanvasValidation`): only a tree
-  activates it, and the shell then opens the working version. A canvas
+  activates it, and the shell then opens the working version. The shell
+  reads its listing (`Prism.TinctureRegistry`) again each time it decides
+  a canvas with no frame held, and decides against that one read, so a
+  tincture, a canvas or a version installed or removed while the shell is
+  open is decided as the registry lists it now. A canvas
   whose tincture is not installed is not shown, and validates nothing; its
   apps and floating tinctures still open, and the picker is drawn. A
   layout published anywhere for this person (`Cyfr.Bus.LayoutPublished` on
@@ -92,7 +96,15 @@ defmodule PrismWeb.ShellLive do
   frame, and reaches each frame credential only through
   `Sanctum.TinctureAuth`. The canvas (`PrismWeb.CanvasLive`) draws them,
   and sends the shell each arrangement of the person's layout it reads;
-  the shell holds the frames that arrangement places. The system layer
+  the shell holds the frames that arrangement places. It is the shell's
+  first element and the picker its last, so nothing whose presence varies
+  is drawn before the canvas layer, and drawing or hiding the picker moves
+  no element: no patch of the page reloads a frame the canvas holds or
+  takes the system layer's open dialog out of the top layer. No element
+  around the frames pushes an event, since the page locks the element an
+  event is pushed from until its reply, and a patch made meanwhile would
+  bring back a frame the layer discarded: the shell's keys (`keynav`) are
+  heard on `#shell-keys`, an empty element of their own. The system layer
   (`PrismWeb.SystemLayer`) is mounted above them.
 
   The `IframeBridge` hook hands a frame a `MessagePort` on its first load,
@@ -771,14 +783,18 @@ defmodule PrismWeb.ShellLive do
 
   defp handshaken(socket, _frame), do: socket
 
-  # Every listed tincture that is not a canvas, as a versionless reference
-  # and its name, sorted by name, to each frame named.
+  # What `installed` carries: every listed tincture that is not a canvas,
+  # as a versionless reference and its name, sorted by name.
+  defp installed(socket) do
+    socket.assigns.tinctures
+    |> Enum.map(&%{ref: Frames.ref_of(&1), name: &1.name})
+    |> Enum.sort_by(& &1.name)
+    |> Enum.take(@max_installed)
+  end
+
+  # `installed`, to each frame named.
   defp push_installed(socket, frame_ids) do
-    tinctures =
-      socket.assigns.tinctures
-      |> Enum.map(&%{ref: Frames.ref_of(&1), name: &1.name})
-      |> Enum.sort_by(& &1.name)
-      |> Enum.take(@max_installed)
+    tinctures = installed(socket)
 
     Enum.reduce(frame_ids, socket, fn frame_id, socket ->
       push_event(socket, "canvas_installed", %{frame: frame_id, tinctures: tinctures})
@@ -852,8 +868,13 @@ defmodule PrismWeb.ShellLive do
   # chose for it; nothing for a tincture nobody installed; safe mode for
   # one installed as anything but a local canvas; otherwise its versions
   # decide whether its newest version is validated first or its working
-  # version opens.
+  # version opens. The listing is read again first (`reread_listing/1`),
+  # and every branch is decided against that one read: what is installed,
+  # and as what, is the registry's now, never the listing's from when the
+  # shell mounted.
   defp decide(socket, entry) do
+    socket = reread_listing(socket)
+
     cond do
       socket.assigns.shipped == entry.id ->
         open_shipped(socket, entry)
@@ -1424,40 +1445,28 @@ defmodule PrismWeb.ShellLive do
 
   defp superseded?(_assigns, _prompt_id, _prompt), do: false
 
-  defp load_tinctures(socket) do
+  defp load_tinctures(socket), do: socket |> read_listing() |> follow_listing()
+
+  # The listing read again for a decision. A read that changes what
+  # `installed` carries is pushed to every held canvas frame, as
+  # `follow_listing/1` pushes it; nothing is placed.
+  defp reread_listing(socket) do
+    before = installed(socket)
+    socket = read_listing(socket)
+
+    if installed(socket) == before,
+      do: socket,
+      else: push_installed(socket, canvas_frame_ids(socket.assigns.frames))
+  end
+
+  # The listing, read once: every card the registry lists, the canvases
+  # split from the tinctures the picker lists. It places nothing.
+  defp read_listing(socket) do
     ctx = socket.assigns.context
 
     # Use the cached registry, which scans lazily and follows tincture
     # change notifications. The refresh button forces a rescan.
-    cards =
-      Prism.TinctureRegistry.list_tinctures(ctx)
-      |> Enum.map(fn t ->
-        ref = Prima.ComponentRef.build("tincture", t.publisher, t.name)
-
-        card = %{
-          id: "iframe_#{t.name}",
-          name: t.name,
-          publisher: t.publisher,
-          athanor_id: t.athanor_id,
-          athanor_segment: t.athanor_segment,
-          version: t.version,
-          title: t.title,
-          tagline: t.tagline,
-          icon: t.icon,
-          icon_emoji: emoji_from_hint(t.icon),
-          entry: t.entry,
-          manifest: t.manifest,
-          public: visibility(ctx, ref)
-        }
-
-        media = media_base(ctx, card)
-
-        Map.merge(card, %{
-          icon_url: media_url(media, t.media_icon),
-          preview_urls:
-            t.media_previews |> Enum.map(&media_url(media, &1)) |> Enum.reject(&is_nil/1)
-        })
-      end)
+    cards = Enum.map(Prism.TinctureRegistry.list_tinctures(ctx), &card(ctx, &1))
 
     # A canvas is opened by the shell from the layout, never launched or
     # listed for the picker.
@@ -1471,7 +1480,34 @@ defmodule PrismWeb.ShellLive do
     |> assign(:canvases, canvases)
     |> assign(:focused_index, focused)
     |> assign(:current_preview_index, 0)
-    |> follow_listing()
+  end
+
+  # The card of a tincture the registry lists.
+  defp card(ctx, t) do
+    ref = Prima.ComponentRef.build("tincture", t.publisher, t.name)
+
+    card = %{
+      id: "iframe_#{t.name}",
+      name: t.name,
+      publisher: t.publisher,
+      athanor_id: t.athanor_id,
+      athanor_segment: t.athanor_segment,
+      version: t.version,
+      title: t.title,
+      tagline: t.tagline,
+      icon: t.icon,
+      icon_emoji: emoji_from_hint(t.icon),
+      entry: t.entry,
+      manifest: t.manifest,
+      public: visibility(ctx, ref)
+    }
+
+    media = media_base(ctx, card)
+
+    Map.merge(card, %{
+      icon_url: media_url(media, t.media_icon),
+      preview_urls: t.media_previews |> Enum.map(&media_url(media, &1)) |> Enum.reject(&is_nil/1)
+    })
   end
 
   # A frame whose tincture the registry no longer lists is discarded with
@@ -1755,13 +1791,70 @@ defmodule PrismWeb.ShellLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div
-      id="shell"
-      class="h-full relative bg-surface-base"
-      phx-window-keydown="keynav"
-    >
+    <div id="shell" class="h-full relative bg-surface-base">
+      <%!-- The canvas layer comes first: an element whose presence varies
+           drawn before it would have the page's patch move it, and every
+           frame it holds would reload. --%>
+      <.live_component
+        module={PrismWeb.CanvasLive}
+        id="canvas"
+        context={@context}
+        frames={@frames}
+        tinctures={@tinctures}
+        safe_mode={not is_nil(@safe_mode)}
+      />
+
+      <%!-- The page's keys, pushed from an element of their own: the page
+           locks the element an event is pushed from until its reply, and a
+           locked element around the frames keeps a frame the layer discards
+           while it waits. --%>
+      <div id="shell-keys" phx-window-keydown="keynav" hidden></div>
+
+      <%!-- The shell's own chrome: no frame draws it or reaches it. --%>
+      <button
+        id="shell-safe-mode"
+        type="button"
+        phx-click="safe_mode"
+        disabled={not is_nil(@safe_mode)}
+        aria-keyshortcuts="Control+Alt+S"
+        title="Safe mode (Ctrl+Alt+S)"
+        class="absolute bottom-2 left-2 z-[55] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-50"
+      >
+        Safe mode
+      </button>
+
+      <button
+        id="shell-devices"
+        type="button"
+        phx-click="devices"
+        data-test="shell-devices"
+        title="Pair or revoke a device"
+        class="absolute bottom-2 left-24 z-[55] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+      >
+        Devices
+      </button>
+
+      <.live_component
+        module={PrismWeb.SystemLayer}
+        id={PrismWeb.SystemLayer.layer_id()}
+        context={@context}
+        athanor_route={@athanor_route}
+        athanor_name={@athanor && @athanor.name}
+      />
+
+      <.live_component
+        module={PrismWeb.ReportComponent}
+        id="report"
+        context={@context}
+        athanor_route={@athanor_route}
+      />
+
       <%!-- Picker: drawn when no canvas runs, while no tincture is
-           active and safe mode is off --%>
+           active and safe mode is off. It is the shell's last element, so
+           drawing or hiding it moves no other one, the system layer's
+           open dialog included, which a move would take out of the top
+           layer. Its z-index keeps it above the canvas layer and under
+           the chrome. --%>
       <div
         :if={picker?(assigns)}
         id="shell-picker"
@@ -1803,54 +1896,6 @@ defmodule PrismWeb.ShellLive do
           />
         <% end %>
       </div>
-
-      <.live_component
-        module={PrismWeb.CanvasLive}
-        id="canvas"
-        context={@context}
-        frames={@frames}
-        tinctures={@tinctures}
-        safe_mode={not is_nil(@safe_mode)}
-      />
-
-      <%!-- The shell's own chrome: no frame draws it or reaches it. --%>
-      <button
-        id="shell-safe-mode"
-        type="button"
-        phx-click="safe_mode"
-        disabled={not is_nil(@safe_mode)}
-        aria-keyshortcuts="Control+Alt+S"
-        title="Safe mode (Ctrl+Alt+S)"
-        class="absolute bottom-2 left-2 z-[55] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-50"
-      >
-        Safe mode
-      </button>
-
-      <button
-        id="shell-devices"
-        type="button"
-        phx-click="devices"
-        data-test="shell-devices"
-        title="Pair or revoke a device"
-        class="absolute bottom-2 left-24 z-[55] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
-      >
-        Devices
-      </button>
-
-      <.live_component
-        module={PrismWeb.SystemLayer}
-        id={PrismWeb.SystemLayer.layer_id()}
-        context={@context}
-        athanor_route={@athanor_route}
-        athanor_name={@athanor && @athanor.name}
-      />
-
-      <.live_component
-        module={PrismWeb.ReportComponent}
-        id="report"
-        context={@context}
-        athanor_route={@athanor_route}
-      />
     </div>
     """
   end

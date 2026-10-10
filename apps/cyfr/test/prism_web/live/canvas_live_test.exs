@@ -11,12 +11,17 @@ defmodule PrismWeb.CanvasLiveTest do
   app opens only when the canvas asks for it. A posture report that is
   neither `hand` nor `desk` is ignored. The switcher and the edge strip are
   drawn for more than one canvas. Opening a full frame over the canvas
-  freezes the frames beneath it, and closing it lets them run again.
+  freezes the frames beneath it, and closing it lets them run again. The
+  frames' wrappers are a stream, after only the layer's always-present
+  elements, and a frame discarded leaves the others where they were: every
+  update streams each held frame, deletes only the wrappers of frames no
+  longer held, and never resets.
   """
 
   use PrismWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
 
   setup %{conn: conn} do
     user = test_user()
@@ -201,7 +206,116 @@ defmodule PrismWeb.CanvasLiveTest do
   end
 
   defp posture!(view, posture),
-    do: view |> element("#canvas") |> render_hook("posture", %{"posture" => posture})
+    do: view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => posture})
+
+  # The person's layout published again over `revision`, as the bus tells
+  # the shell.
+  defp relayout!(view, ctx, user, canvases, revision) do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, layout} = Prima.Layout.validate(%{"version" => 2, "canvases" => canvases})
+    {:ok, next} = Arca.Layouts.publish(actor, user.user_id, layout, revision)
+    send(view.pid, Cyfr.Bus.LayoutPublished.new(actor, user.user_id, next))
+  end
+
+  # The person's stored layout no longer holds its digest: every read of it
+  # answers an error.
+  defp break_layout!(ctx, user) do
+    key = Arca.Layouts.key(user.user_id)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(d in Arca.Schemas.FencedDocument,
+          where: d.athanor_id == ^ctx.athanor_id and d.key == ^key
+        ),
+        set: [digest: "sha256:" <> String.duplicate("0", 64)]
+      )
+  end
+
+  # The canvas layer's children in document order: each by its id, the
+  # layout note by its data attribute.
+  defp layer(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#canvas > *")
+    |> Enum.map(fn child ->
+      case LazyHTML.attribute(child, "id") do
+        [id] -> id
+        [] -> if LazyHTML.attribute(child, "data-canvas-layout") != [], do: "layout-note"
+      end
+    end)
+  end
+
+  # The children of the canvas layer's stream container in document order:
+  # each one's id and frame, and its iframe's id and src.
+  defp wrappers(view) do
+    html = view |> render() |> LazyHTML.from_fragment()
+    assert LazyHTML.attribute(LazyHTML.query(html, "#canvas-frames"), "phx-update") == ["stream"]
+
+    html
+    |> LazyHTML.query("#canvas-frames > *")
+    |> Enum.map(fn child ->
+      iframe = LazyHTML.query(child, "iframe")
+
+      {LazyHTML.attribute(child, "id"), LazyHTML.attribute(child, "data-canvas-frame"),
+       LazyHTML.attribute(iframe, "id"), LazyHTML.attribute(iframe, "src")}
+    end)
+  end
+
+  defp wrapper(frame), do: {["canvas-frame-#{frame.id}"], [frame.id], [frame.id], [frame.src]}
+
+  # A frame as the layer's stream reads it: its id, its key and its state.
+  defp held_frame(name, state \\ :live),
+    do: %{id: "frm_#{name}", key: {:app, "home", "tincture:local.#{name}"}, state: state}
+
+  defp holding(frames) do
+    %Prism.Frames{
+      Prism.Frames.new()
+      | frames: Map.new(frames, &{&1.key, &1}),
+        order: Enum.map(frames, & &1.key)
+    }
+  end
+
+  # The canvas layer's socket, as LiveView mounts a component's.
+  defp layer_socket do
+    socket = %Phoenix.LiveView.Socket{
+      private: %{live_temp: %{}, lifecycle: %Phoenix.LiveView.Lifecycle{}}
+    }
+
+    {:ok, socket} = PrismWeb.CanvasLive.mount(socket)
+    socket
+  end
+
+  # One update of the layer with `frames` held, and what its stream sends
+  # for it: whether it resets, the wrappers it deletes, and the wrappers it
+  # inserts in order, each with its position and its frame's state. The
+  # stream's pending changes are then dropped, as LiveView drops them once
+  # it has rendered them.
+  defp update!(socket, ctx, frames) do
+    assigns = %{
+      id: "canvas",
+      context: ctx,
+      frames: holding(frames),
+      tinctures: [],
+      safe_mode: false
+    }
+
+    {:ok, socket} = PrismWeb.CanvasLive.update(assigns, socket)
+    stream = socket.assigns.streams.frames
+
+    inserts =
+      for {id, at, frame, _limit, _update_only} <- Enum.reverse(stream.inserts),
+          do: {id, at, frame.state}
+
+    sent = %{reset: stream.reset?, deletes: Enum.sort(stream.deletes), inserts: inserts}
+
+    deleted = MapSet.new(sent.deletes)
+    assert Enum.all?(sent.inserts, fn {id, _at, _state} -> not MapSet.member?(deleted, id) end)
+
+    {sent, update_in(socket.assigns.streams.frames, &Phoenix.LiveView.LiveStream.prune/1)}
+  end
+
+  defp streamed(frame, state \\ :live), do: {"canvas-frame-#{frame.id}", -1, state}
 
   test "the desk arrangement is drawn and its frames are held", %{
     conn: conn,
@@ -250,6 +364,85 @@ defmodule PrismWeb.CanvasLiveTest do
              "iframe_float-dash",
              "iframe_markets"
            ]
+  end
+
+  test "the frames are a stream whose only earlier siblings are always present",
+       %{conn: conn, ctx: ctx, user: user} do
+    installed!(ctx)
+    layout!(ctx, user, canvases())
+
+    {view, _html} = mount_athanor(conn, "/tinctures")
+    [first, middle, last] = held = Prism.Frames.list(frames(view))
+    assert middle.key == {:floating, "home", "tincture:local.float-dash"}
+
+    # Every frame's wrapper, and only those, in the order it was opened.
+    assert wrappers(view) == Enum.map(held, &wrapper/1)
+
+    # The middle frame of three discarded: the other two keep their ids,
+    # their src and their order.
+    [home, work] = canvases()
+
+    home =
+      update_in(home, ["postures", "desk", "floating"], fn floating ->
+        Enum.reject(floating, &(&1["tincture"] == "tincture:local.float-dash"))
+      end)
+
+    relayout!(view, ctx, user, [home, work], 1)
+
+    wait_until(
+      fn -> render(view) && by_key(view, middle.key) == nil end,
+      2_000,
+      "the floating frame discarded"
+    )
+
+    assert row(middle.id).state == "revoked"
+    assert Enum.map(Prism.Frames.list(frames(view)), & &1.id) == [first.id, last.id]
+    assert wrappers(view) == [wrapper(first), wrapper(last)]
+
+    # The layout note and a floating placeholder drawn: the container's only
+    # earlier siblings are the geometry and status elements.
+    break_layout!(ctx, user)
+    posture!(view, "hand")
+
+    {earlier, ["canvas-frames" | later]} =
+      Enum.split_while(layer(view), &(&1 != "canvas-frames"))
+
+    assert earlier == ["canvas-geometry", "canvas-status"]
+    assert "layout-note" in later
+    assert "canvas-float-1" in later
+    assert render(view) =~ ~s(data-canvas-placeholder="tincture:acme.ghost")
+    assert wrappers(view) == [wrapper(first), wrapper(last)]
+  end
+
+  test "each update streams every held frame, deletes only the wrappers of frames no longer held, and never resets",
+       %{ctx: ctx} do
+    [a, b, c, d] = Enum.map(~w(a b c d), &held_frame/1)
+
+    # The first update: every frame, in the order it was opened.
+    {sent, socket} = update!(layer_socket(), ctx, [a, b, c])
+    assert sent == %{reset: false, deletes: [], inserts: [streamed(a), streamed(b), streamed(c)]}
+
+    # The same frames, one of them frozen: each updated where it stands.
+    {sent, socket} = update!(socket, ctx, [a, %{b | state: :frozen}, c])
+
+    assert sent == %{
+             reset: false,
+             deletes: [],
+             inserts: [streamed(a), streamed(b, :frozen), streamed(c)]
+           }
+
+    # The middle frame discarded: its wrapper alone is deleted.
+    {sent, socket} = update!(socket, ctx, [a, c])
+
+    assert sent == %{
+             reset: false,
+             deletes: ["canvas-frame-frm_b"],
+             inserts: [streamed(a), streamed(c)]
+           }
+
+    # A new frame opened: inserted after the others.
+    {sent, _socket} = update!(socket, ctx, [a, c, d])
+    assert sent == %{reset: false, deletes: [], inserts: [streamed(a), streamed(c), streamed(d)]}
   end
 
   test "a tincture that does not declare float is not placed", %{conn: conn, ctx: ctx, user: user} do

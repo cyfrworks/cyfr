@@ -59,23 +59,28 @@ function container(place, shown, box) {
   return {dataset: {canvasPlace: place}, shown, getBoundingClientRect: () => box}
 }
 
-// The canvas element as the server renders it: its column list, its
-// geometry and status hosts, the frames inside it, the containers of the
-// shown frames and the edge strip.
-function canvasElement({columns = [], frames = [], containers = []} = {}) {
+// The canvas layer as the server renders it: its geometry and status
+// hosts, the frames inside it, the containers of the shown frames and the
+// edge strip, and, as `hook`, the hook's own element inside it, which
+// carries the column list and holds nothing. Anything read of the layer
+// through the hook's element fails.
+function canvasElement({columns = [], frames = [], containers = [], id = "canvas"} = {}) {
   const style = {textContent: "", isConnected: true}
   const geometry = {appended: [], appendChild: (child) => geometry.appended.push(child)}
   const marker = {dataset: {canvasConnection: "connected"}, hidden: true}
   const events = new EventTarget()
+  const ownerDocument = {createElement: () => style}
+  const notTheLayer = () => {
+    throw new Error("the hook's own element is not the layer")
+  }
 
-  return {
-    id: "canvas",
-    dataset: {columns: JSON.stringify(columns)},
-    ownerDocument: {createElement: () => style},
+  const layer = {
+    id,
+    ownerDocument,
     getBoundingClientRect: () => ({width: 1024, height: 768}),
     querySelector(selector) {
-      if (selector === "#canvas-geometry") return geometry
-      if (selector === "#canvas-status [data-canvas-connection]") return marker
+      if (selector === `#${id}-geometry`) return geometry
+      if (selector === `#${id}-status [data-canvas-connection]`) return marker
       return null
     },
     querySelectorAll(selector) {
@@ -87,16 +92,31 @@ function canvasElement({columns = [], frames = [], containers = []} = {}) {
     removeEventListener: (type, fn) => events.removeEventListener(type, fn),
     dispatch: (event) => events.dispatchEvent(event),
     style,
+    geometry,
     marker
   }
+
+  layer.hook = {
+    id: `${id}-hook`,
+    parentElement: layer,
+    dataset: {columns: JSON.stringify(columns), posture: "desk"},
+    ownerDocument,
+    getBoundingClientRect: notTheLayer,
+    querySelector: notTheLayer,
+    querySelectorAll: notTheLayer,
+    addEventListener: notTheLayer,
+    removeEventListener: notTheLayer
+  }
+
+  return layer
 }
 
-function mountCanvas(el) {
+function mountCanvas(layer) {
   const pushed = []
   const pushedToView = []
   const handlers = {}
   const hook = Object.assign(Object.create(Canvas), {
-    el,
+    el: layer.hook,
     pushEventTo: (target, event, payload) => pushed.push({target, event, payload}),
     pushEvent: (event, payload) => pushedToView.push({event, payload}),
     handleEvent: (event, fn) => (handlers[event] = fn)
@@ -139,10 +159,10 @@ function pointer(type, {x, y, pointerId = 1, onStrip = true}) {
 }
 
 describe("the posture report", () => {
-  test("is desk on a wide viewport, sent to the canvas itself on mount", () => {
+  test("is desk on a wide viewport, sent to the canvas from the hook's own element on mount", () => {
     const el = canvasElement()
     const {pushed} = mountCanvas(el)
-    assert.deepEqual(pushed, [{target: el, event: "posture", payload: {posture: "desk"}}])
+    assert.deepEqual(pushed, [{target: el.hook, event: "posture", payload: {posture: "desk"}}])
   })
 
   test("is sent again only when the posture changes", () => {
@@ -174,6 +194,38 @@ describe("the posture report", () => {
   })
 })
 
+describe("the hook's element", () => {
+  test("the layer is read from the hook's parent, and pushes go from the hook's own element", () => {
+    const frame = canvasFrame(FRAME)
+    const seen = told(frame)
+    const layer = canvasElement({id: "layer-x", columns: [{frame: OTHER, order: 0}], frames: [frame]})
+    const {hook, pushed, pushedToView} = mountCanvas(layer)
+
+    // The stylesheet lives in the layer's geometry host, scoped by its id,
+    // and the columns are laid out in the layer's size.
+    assert.deepEqual(layer.geometry.appended, [layer.style])
+    assert.match(layer.style.textContent, new RegExp(`^#layer-x \\[data-canvas-column="${OTHER}"\\]\\{left:592px;`))
+
+    // The layer's frames are told; the posture goes from the hook's element.
+    assert.deepEqual(seen[0], {verb: "posture", args: {posture: "desk"}})
+    assert.deepEqual(pushed, [{target: layer.hook, event: "posture", payload: {posture: "desk"}}])
+
+    // The pointer is read on the layer.
+    layer.dispatch(pointer("pointerdown", {x: 400, y: 760}))
+    layer.dispatch(pointer("pointerup", {x: 300, y: 765}))
+    assert.deepEqual(pushedToView, [{event: "switch_canvas", payload: {direction: "next"}}])
+
+    // The connection is marked in the layer's status host.
+    hook.disconnected()
+    assert.equal(layer.marker.dataset.canvasConnection, "disconnected")
+
+    hook.destroyed()
+    layer.dispatch(pointer("pointerdown", {x: 400, y: 760}))
+    layer.dispatch(pointer("pointerup", {x: 300, y: 765}))
+    assert.equal(pushedToView.length, 1)
+  })
+})
+
 describe("the column layout", () => {
   test("is written from the rendered column list into the canvas's own stylesheet", () => {
     const el = canvasElement({columns: [{frame: FRAME, order: 0}]})
@@ -191,7 +243,7 @@ describe("the column layout", () => {
     assert.equal(el.marker.hidden, false)
 
     // A patch that no longer parses leaves the last list in place.
-    el.dataset.columns = "not json"
+    el.hook.dataset.columns = "not json"
     hook.updated()
     assert.equal(el.style.textContent, desk)
 
@@ -493,17 +545,22 @@ describe("a closed credential prompt", () => {
     const elsewhere = []
     other.addEventListener(CREDENTIAL_CLOSED_EVENT, (event) => elsewhere.push(event.detail))
 
-    const {handlers} = mountCanvas(canvasElement({frames: [frame, other]}))
-    handlers.frame_credential({frame: FRAME, saved: true})
-    handlers.frame_credential({frame: FRAME, saved: "yes"})
-    handlers.frame_credential({frame: "short", saved: false})
-    handlers.frame_credential(null)
+    // The ports are closed however the test ends: an open port keeps the
+    // runner's process alive.
+    try {
+      const {handlers} = mountCanvas(canvasElement({frames: [frame, other]}))
+      handlers.frame_credential({frame: FRAME, saved: true})
+      handlers.frame_credential({frame: FRAME, saved: "yes"})
+      handlers.frame_credential({frame: "short", saved: false})
+      handlers.frame_credential(null)
 
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    assert.deepEqual(heard, [{v: 1, type: "cyfr:credential-closed", frame: FRAME, saved: true}])
-    assert.deepEqual(elsewhere, [])
-    bridge.destroyed()
-    channel.port2.close()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      assert.deepEqual(heard, [{v: 1, type: "cyfr:credential-closed", frame: FRAME, saved: true}])
+      assert.deepEqual(elsewhere, [])
+    } finally {
+      bridge.destroyed()
+      channel.port2.close()
+    }
   })
 })
 
@@ -511,7 +568,7 @@ describe("the safe mode chord", () => {
   test("Ctrl+Alt+S on the shell's page asks the shell for safe mode; nothing else does", () => {
     const pushed = []
     const hook = Object.assign(Object.create(Canvas), {
-      el: canvasElement(),
+      el: canvasElement().hook,
       pushEventTo: () => {},
       pushEvent: (event, payload) => pushed.push({event, payload}),
       handleEvent: () => {}

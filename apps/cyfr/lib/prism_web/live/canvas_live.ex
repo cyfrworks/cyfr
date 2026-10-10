@@ -36,16 +36,39 @@ defmodule PrismWeb.CanvasLive do
   Assigns: `context`, `frames` (the shell's `Prism.Frames`), `tinctures`
   (the shell's tincture cards) and `safe_mode`.
 
-  The hook lays the shown columns out from the list rendered in
+  The hook sits on an empty element of its own, `#<id>-hook`, after the
+  frames, which carries `data-posture` and `data-columns`; it reads the
+  layer as that element's parent, and its pushes go from that element. It
+  lays the shown columns out from the list rendered in
   `data-columns` (each frame's id and order), relays the shell's
   `frame_state`, `frame_credential` and `canvas_installed` pushes to each
   frame's bridge, sends each canvas frame its posture and what the shown
   apps and floating frames cover of it, and keeps the last columns drawn
-  while the socket is down. An iframe is never moved in the document,
-  since a moved frame reloads: frames render in the order they were
-  opened, and a column takes its geometry by `data-canvas-column`. A canvas
-  or validation frame carries `data-frame-wire="canvas"`, so its bridge
-  speaks `Prima.CanvasWire` to it.
+  while the socket is down. A column takes its geometry by
+  `data-canvas-column`. A canvas or validation frame carries
+  `data-frame-wire="canvas"`, so its bridge speaks `Prima.CanvasWire` to
+  it.
+
+  An iframe is never moved in the document, since a moved frame reloads:
+  no patch removes or re-inserts a held frame's iframe or any element
+  around it, and only that frame's own discard removes it. The page's
+  patch moves an element when an earlier sibling is removed or one whose
+  presence varies appears or disappears before it, so the frames' wrappers
+  are a stream: the only children of one `phx-update="stream"` container,
+  where a patch updates a child in place and never re-adds it. Every
+  update streams each held frame, a wrapper already drawn patched where it
+  stands and a new one appended, so frames keep the order they were opened
+  in, and deletes the wrapper of each frame no longer held. In the layer
+  the container follows only the geometry and status elements, which are
+  always drawn; the hook's element, the layout note, the placeholders, the
+  edge strip and the switcher follow it. The shell draws nothing whose
+  presence varies before the layer.
+
+  No element around the frames, up to the page's root, carries a hook or
+  an event binding. The page locks the element an event is pushed from
+  until its reply and patches a copy of it meanwhile; a wrapper deleted
+  then is removed from the document but kept in the copy, which the reply
+  puts back, and the discarded frame would load again.
   """
 
   use PrismWeb, :live_component
@@ -63,6 +86,7 @@ defmodule PrismWeb.CanvasLive do
        arrangement: nil,
        layout_unavailable: false,
        frames: Frames.new(),
+       streamed: nil,
        tinctures: [],
        safe_mode: false
      )}
@@ -74,7 +98,7 @@ defmodule PrismWeb.CanvasLive do
   end
 
   def update(assigns, socket) do
-    socket = assign(socket, assigns)
+    socket = socket |> assign(assigns) |> stream_frames()
 
     if connected?(socket) and socket.assigns.loaded != socket.assigns.posture do
       {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, load(&1)})
@@ -96,6 +120,32 @@ defmodule PrismWeb.CanvasLive do
   end
 
   def handle_event("posture", _params, socket), do: {:noreply, socket}
+
+  # Every frame held, streamed: a wrapper already drawn is updated where it
+  # stands, a new one is appended after the rest, and the wrapper of a
+  # frame no longer held is deleted. A wrapper is never deleted and
+  # inserted in one update, which would re-insert it. The stream's ids are
+  # the wrappers', so it is configured once the component's id is known.
+  defp stream_frames(%{assigns: %{streamed: nil, id: id}} = socket) do
+    socket
+    |> stream_configure(:frames, dom_id: &wrapper_id(id, &1.id))
+    |> stream(:frames, [])
+    |> assign(:streamed, MapSet.new())
+    |> stream_frames()
+  end
+
+  defp stream_frames(%{assigns: %{id: id, frames: frames, streamed: streamed}} = socket) do
+    list = Frames.list(frames)
+    held = MapSet.new(list, & &1.id)
+
+    streamed
+    |> MapSet.difference(held)
+    |> Enum.reduce(socket, &stream_delete_by_dom_id(&2, :frames, wrapper_id(id, &1)))
+    |> stream(:frames, list)
+    |> assign(:streamed, held)
+  end
+
+  defp wrapper_id(id, frame_id), do: "#{id}-frame-#{frame_id}"
 
   # The posture's arrangement, read under the caller's context. A read
   # that fails keeps what is drawn and marks the posture read, so the
@@ -123,29 +173,20 @@ defmodule PrismWeb.CanvasLive do
     # In safe mode nothing of the layout is drawn.
     arrangement = if assigns.safe_mode, do: nil, else: assigns.arrangement
     visible = Frames.visible_canvas(assigns.frames)
-    list = Frames.list(assigns.frames)
 
     assigns =
       assign(assigns,
         canvases: canvases(arrangement),
         visible: visible,
         floating: floating(arrangement, visible),
-        list: list,
-        columns: columns(list),
+        columns: columns(Frames.list(assigns.frames)),
         # Under a shown full frame every other layer is covered, and taken
         # out of reach so no key lands on a control nobody can see.
         covering: covering(assigns.frames)
       )
 
     ~H"""
-    <div
-      id={@id}
-      phx-hook="Canvas"
-      phx-target={@myself}
-      data-posture={@posture}
-      data-columns={Jason.encode!(@columns)}
-      class="pointer-events-none absolute inset-0"
-    >
+    <div id={@id} class="pointer-events-none absolute inset-0">
       <div id={"#{@id}-geometry"} phx-update="ignore"></div>
       <div id={"#{@id}-status"} phx-update="ignore">
         <div
@@ -157,34 +198,16 @@ defmodule PrismWeb.CanvasLive do
         </div>
       </div>
 
-      <p
-        :if={@layout_unavailable}
-        data-canvas-layout="unavailable"
-        inert={@covering != nil}
-        class="absolute bottom-3 left-3 z-20 text-xs text-text-muted"
-      >
-        Your layout can't be read right now.
-      </p>
-
-      <%!-- Floating tinctures nobody installed, over the visible canvas. --%>
-      <%= for {entry, index} <- Enum.with_index(@floating),
-              is_nil(Frames.resolve(entry.tincture, @tinctures)) do %>
+      <%!-- Every frame, in the order it was opened, as a stream: nothing
+           before this container but the two elements above, which are
+           always drawn. It fills the layer as the layer does and sets no
+           z-index, so it adds no geometry and no stacking context. The
+           sandbox and allow attributes are the rules' derivation, never
+           written here. --%>
+      <div id={"#{@id}-frames"} phx-update="stream" class="pointer-events-none absolute inset-0">
         <div
-          id={"#{@id}-float-#{index}"}
-          data-canvas-placeholder={entry.tincture}
-          inert={@covering != nil}
-          class="pointer-events-auto absolute z-30 flex items-center justify-center rounded-xl border border-dashed border-border-default bg-surface-raised/80 p-3 text-center text-xs text-text-muted"
-          style={float_style(entry.position)}
-        >
-          Not installed: {entry.tincture}
-        </div>
-      <% end %>
-
-      <%!-- Every frame, in the order it was opened. The sandbox and allow
-           attributes are the rules' derivation, never written here. --%>
-      <%= for frame <- @list do %>
-        <div
-          id={"#{@id}-frame-#{frame.id}"}
+          :for={{wrapper_id, frame} <- @streams.frames}
+          id={wrapper_id}
           data-canvas-frame={frame.id}
           data-canvas-place={place(frame)}
           data-canvas-column={column_of(frame)}
@@ -215,6 +238,42 @@ defmodule PrismWeb.CanvasLive do
             {refusal_sentence(frame.refusal)}
           </div>
           <.iframe_capsule :if={frame.placement == :full} />
+        </div>
+      </div>
+
+      <%!-- The `Canvas` hook, on an empty element of its own: the page locks
+           the element an event is pushed from until its reply, and a locked
+           element around the frames keeps a frame the layer discards while
+           it waits. The hook reads the layer as this element's parent. --%>
+      <div
+        id={"#{@id}-hook"}
+        phx-hook="Canvas"
+        phx-target={@myself}
+        data-posture={@posture}
+        data-columns={Jason.encode!(@columns)}
+      >
+      </div>
+
+      <p
+        :if={@layout_unavailable}
+        data-canvas-layout="unavailable"
+        inert={@covering != nil}
+        class="absolute bottom-3 left-3 z-20 text-xs text-text-muted"
+      >
+        Your layout can't be read right now.
+      </p>
+
+      <%!-- Floating tinctures nobody installed, over the visible canvas. --%>
+      <%= for {entry, index} <- Enum.with_index(@floating),
+              is_nil(Frames.resolve(entry.tincture, @tinctures)) do %>
+        <div
+          id={"#{@id}-float-#{index}"}
+          data-canvas-placeholder={entry.tincture}
+          inert={@covering != nil}
+          class="pointer-events-auto absolute z-30 flex items-center justify-center rounded-xl border border-dashed border-border-default bg-surface-raised/80 p-3 text-center text-xs text-text-muted"
+          style={float_style(entry.position)}
+        >
+          Not installed: {entry.tincture}
         </div>
       <% end %>
 

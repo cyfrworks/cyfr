@@ -9,8 +9,12 @@ defmodule PrismWeb.ShellCanvasTest do
   a canvas frame on the canvas's own host page, and draws the picker only
   when no canvas runs: a layout with no canvas, or a canvas nobody
   installed. A new person sees the shipped canvas, validated once and then
-  opened live. It reads the layout again when one of the person's own
-  sessions publishes it. A full frame over a canvas freezes it; switching
+  opened live. A canvas is decided against the listing read as it is
+  decided, so what was installed or removed while the shell is open is
+  decided as it now stands. Nothing whose presence varies comes before the
+  canvas layer, and no element around its frames pushes an event. It reads
+  the layout again when one of the person's own sessions
+  publishes it. A full frame over a canvas freezes it; switching
   freezes the canvas left and its apps, and shows the next, with no wrap.
   A canvas's `open` places a listed tincture where its arrangement puts
   it, and its `press` reaches `feed.press` only from the visible live
@@ -126,6 +130,19 @@ defmodule PrismWeb.ShellCanvasTest do
     lay!(ctx, name, "1.0.0", Map.merge(%{"entry" => "index.html"}, tincture), [
       {"index.html", "<html><head></head><body>#{name}</body></html>"}
     ])
+  end
+
+  # Every version of tincture `name` gone from the athanor's tree, and the
+  # registry scanned again.
+  defp unlay!(ctx, name) do
+    File.rm_rf!(
+      Arca.Adapters.Local.build_path(
+        Sanctum.Context.actor(ctx),
+        ["components", "tinctures", "local", name]
+      )
+    )
+
+    Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
   end
 
   defp canvas!(ctx, name, version \\ "1.0.0", streams \\ [%{"name" => "runs.changes"}]) do
@@ -256,6 +273,47 @@ defmodule PrismWeb.ShellCanvasTest do
         "frame" => frame_id,
         "message" => Prima.CanvasWire.encode(%{verb: verb, frame: frame_id, args: args})
       })
+
+  # `#shell`'s children in document order, each by its id, or by its tag
+  # when it has none.
+  defp shell_children(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#shell > *")
+    |> Enum.map(fn child ->
+      List.first(LazyHTML.attribute(child, "id")) || hd(LazyHTML.tag(child))
+    end)
+  end
+
+  # Every ancestor of the element `selector` names in the shell's render,
+  # nearest first.
+  defp ancestors(view, selector) do
+    [node] =
+      view |> render() |> LazyHTML.from_fragment() |> LazyHTML.query(selector) |> Enum.to_list()
+
+    parents(LazyHTML.parent_node(node))
+  end
+
+  defp parents(node) do
+    if Enum.empty?(node), do: [], else: [node | parents(LazyHTML.parent_node(node))]
+  end
+
+  defp label(node), do: List.first(LazyHTML.attribute(node, "id")) || hd(LazyHTML.tag(node))
+
+  # The element's hook and event bindings, each as its element and attribute:
+  # an event pushed from an element locks it until the reply.
+  @bindings ~w(phx-hook phx-click phx-click-away phx-capture-click phx-blur phx-focus phx-change phx-submit
+               phx-mounted phx-connected phx-disconnected phx-remove)
+
+  defp bindings(node) do
+    [attributes] = LazyHTML.attributes(node)
+
+    for {name, _value} <- attributes,
+        name in @bindings or
+          String.starts_with?(name, ["phx-window-", "phx-key", "phx-viewport-"]),
+        do: {label(node), name}
+  end
 
   defp iframe(html, frame_id) do
     [tag] = Regex.run(~r/<iframe[^>]*id="#{frame_id}"[^>]*>/, html)
@@ -651,6 +709,317 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert %{reference: %{name: "notes-canvas"}, state: :live} = canvas(view)
       assert row(old).state == "revoked"
+    end
+
+    test "a version written while the shell is open is validated before its canvas opens",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{state: :live, reference: %{version: "1.0.0"}} = home = canvas(view)
+
+      # A newer version installed after the shell listed its tinctures, and
+      # a fresh canvas id on the same tincture in home's place.
+      canvas!(ctx, "markets", "1.0.1")
+      layout!(user, athanor, [entry("fresh", "tincture:local.markets")])
+
+      settle!(view, fn ->
+        Frames.visible_canvas(frames(view)) == "fresh" and
+          (validation(view, "fresh") != nil or canvas(view, "fresh") != nil)
+      end)
+
+      assert %{state: :live, visible: false, reference: %{name: "markets", version: "1.0.1"}} =
+               trial = validation(view, "fresh")
+
+      assert canvas(view, "fresh") == nil
+      assert %{purpose: "validation", version: "1.0.1"} = row(trial.id)
+      assert row(home.id).state == "revoked"
+      assert %{working: "1.0.0"} = versions(ctx, "markets")
+    end
+
+    test "a canvas installed while the shell is open is decided, never taken for uninstalled",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{state: :live} = canvas(view)
+
+      # Installed after the shell listed its tinctures, then added to the
+      # layout and shown.
+      canvas!(ctx, "notes-canvas")
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      settle!(view, fn -> Enum.any?(assigns(view).arrangement || [], &(&1.id == "work")) end)
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+
+      assert %{
+               state: :live,
+               visible: false,
+               reference: %{name: "notes-canvas", version: "1.0.0"}
+             } = validation(view, "work")
+
+      assert assigns(view).showing == :canvas
+      refute render(view) =~ ~s(id="shell-picker")
+    end
+
+    test "nothing whose presence varies comes before the canvas layer",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("ghost", "tincture:local.no-canvas")
+      ])
+
+      view = shell!(conn)
+      refute has_element?(view, "#shell-picker")
+      without = shell_children(view)
+      assert ["canvas" | _] = without
+
+      # The picker drawn over the held frames, for a canvas whose tincture
+      # nobody installed: the last child, every other child as it was.
+      render_hook(view, "switch_canvas", %{"canvas" => "ghost"})
+      assert %{state: :frozen} = canvas(view)
+      assert has_element?(view, "#shell-picker")
+      drawn = shell_children(view)
+      assert ["canvas" | _] = drawn
+      assert List.last(drawn) == "shell-picker"
+      assert List.delete(drawn, "shell-picker") == without
+
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      refute has_element?(view, "#shell-picker")
+      assert shell_children(view) == without
+    end
+
+    test "a tincture installed while the shell is open as anything but a canvas, then named as a canvas, is safe mode not_ready",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{state: :live} = canvas(view)
+
+      # Installed after the shell listed its tinctures, not as a canvas, then
+      # named as a canvas by the layout and shown.
+      tincture!(ctx, "plain-dash")
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.plain-dash")
+      ])
+
+      settle!(view, fn -> Enum.any?(assigns(view).arrangement || [], &(&1.id == "work")) end)
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+
+      assert %{reason: :not_ready} = assigns(view).safe_mode
+      refute render(view) =~ ~s(id="shell-picker")
+    end
+
+    test "the same tincture installed before the shell mounted is safe mode not_ready on the same switch",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      tincture!(ctx, "plain-dash")
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{state: :live} = canvas(view)
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.plain-dash")
+      ])
+
+      settle!(view, fn -> Enum.any?(assigns(view).arrangement || [], &(&1.id == "work")) end)
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+
+      assert %{reason: :not_ready} = assigns(view).safe_mode
+      refute render(view) =~ ~s(id="shell-picker")
+    end
+
+    test "a tincture listed at mount and removed since, then named as a canvas, draws the picker and is not safe mode",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      tincture!(ctx, "plain-dash")
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{state: :live} = canvas(view)
+      assert Enum.any?(assigns(view).tinctures, &(&1.name == "plain-dash"))
+
+      # Removed after the shell listed its tinctures, then named as a canvas
+      # by the layout and shown.
+      unlay!(ctx, "plain-dash")
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.plain-dash")
+      ])
+
+      settle!(view, fn -> Enum.any?(assigns(view).arrangement || [], &(&1.id == "work")) end)
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+
+      assert assigns(view).safe_mode == nil
+      assert assigns(view).showing == :none
+      assert render(view) =~ ~s(id="shell-picker")
+    end
+
+    test "a listing a decision reads is pushed to every held canvas frame",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+      tincture!(ctx, "app-dash")
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      view = shell!(conn)
+      assert %{state: :live, id: home_id} = canvas(view)
+      _boot = handshake!(view, home_id)
+
+      assert_push_event(view, "canvas_installed", %{
+        frame: ^home_id,
+        tinctures: [%{name: "app-dash"}]
+      })
+
+      # Installed after the shell listed its tinctures: the switch's decision
+      # reads the listing again, and every held canvas frame is told.
+      tincture!(ctx, "plain-dash")
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert %{state: :live} = canvas(view, "work")
+      assert %{state: :frozen} = canvas(view, "home")
+      assert Enum.sort(Enum.map(assigns(view).tinctures, & &1.name)) == ["app-dash", "plain-dash"]
+
+      assert_push_event(view, "canvas_installed", %{
+        frame: ^home_id,
+        tinctures: [%{name: "app-dash"}, %{name: "plain-dash"}]
+      })
+    end
+
+    test "a refreshed listing is pushed to every held canvas frame",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+      tincture!(ctx, "app-dash")
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      view = shell!(conn)
+      assert %{state: :live, id: home_id} = canvas(view)
+      _boot = handshake!(view, home_id)
+
+      assert_push_event(view, "canvas_installed", %{
+        frame: ^home_id,
+        tinctures: [%{name: "app-dash"}]
+      })
+
+      tincture!(ctx, "plain-dash")
+      send(view.pid, :tinctures_refreshed)
+      _ = render(view)
+      assert Enum.sort(Enum.map(assigns(view).tinctures, & &1.name)) == ["app-dash", "plain-dash"]
+
+      assert_push_event(view, "canvas_installed", %{
+        frame: ^home_id,
+        tinctures: [%{name: "app-dash"}, %{name: "plain-dash"}]
+      })
+    end
+
+    test "a decision whose read changes nothing pushes no installed",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+      tincture!(ctx, "app-dash")
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      view = shell!(conn)
+      assert %{state: :live, id: home_id} = canvas(view)
+      _boot = handshake!(view, home_id)
+
+      assert_push_event(view, "canvas_installed", %{
+        frame: ^home_id,
+        tinctures: [%{name: "app-dash"}]
+      })
+
+      # Nothing installed or removed since: the switch's decision reads the
+      # same listing, and no frame is pushed `installed`.
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert %{state: :live} = canvas(view, "work")
+      assert %{state: :frozen} = canvas(view, "home")
+      refute_push_event(view, "canvas_installed", %{frame: _})
+    end
+
+    test "a tincture removed since the last read is pushed out at a decision",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+      tincture!(ctx, "app-dash")
+      tincture!(ctx, "plain-dash")
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      view = shell!(conn)
+      assert %{state: :live, id: home_id} = canvas(view)
+      _boot = handshake!(view, home_id)
+
+      assert_push_event(view, "canvas_installed", %{
+        frame: ^home_id,
+        tinctures: [%{name: "app-dash"}, %{name: "plain-dash"}]
+      })
+
+      unlay!(ctx, "plain-dash")
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert %{state: :live} = canvas(view, "work")
+      assert %{state: :frozen} = canvas(view, "home")
+      assert Enum.map(assigns(view).tinctures, & &1.name) == ["app-dash"]
+
+      assert_push_event(view, "canvas_installed", %{
+        frame: ^home_id,
+        tinctures: [%{name: "app-dash"}]
+      })
+    end
+
+    test "no ancestor of the frames container carries a hook or an event binding",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{state: :live} = canvas(view)
+
+      ancestors = ancestors(view, "#canvas-frames")
+      labels = Enum.map(ancestors, &label/1)
+
+      # The walk reaches the canvas layer, the shell and the layout's main.
+      assert Enum.take(labels, 2) == ["canvas", "shell"]
+      assert "page-content" in labels and "main" in labels
+
+      assert Enum.flat_map(ancestors, &bindings/1) == []
     end
   end
 
@@ -1242,7 +1611,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
     test "opens full in the hand", %{conn: conn} do
       view = shell!(conn)
-      view |> element("#canvas") |> render_hook("posture", %{"posture" => "hand"})
+      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
       settle!(view, fn -> assigns(view).posture == "hand" end)
 
       canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.loose-dash"})
