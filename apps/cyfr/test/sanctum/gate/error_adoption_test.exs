@@ -87,7 +87,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/prima/lib/prima/limits.ex" => 7,
     # The shape checks' sentences — why a decision or a completion is
     # outside the vocabulary, which `new/1` raises and the log refuses to
-    # write — never a refusal on the wire; reached because the records
+    # write — never a refusal on the wire; reached because the decision
     # provider renders decisions.
     "apps/prima/lib/prima/decision.ex" => 13,
     "apps/sanctum/lib/sanctum/provider_credentials.ex" => 5,

@@ -55,6 +55,16 @@ defmodule Sanctum.Decisions do
   the operation table knows and `"unknown"` otherwise: a tag is a series,
   and a series per guessed name is a series an attacker mints. The row
   keeps the name as sent, cut to the column (`bounded/1`).
+
+  ## Reading the record
+
+  Decisions are security rows: Sanctum is their only reader, and a reader
+  above it takes them from here. `list/2` and `correlate/2` read the
+  caller's athanor's decisions under the context's actor and nothing
+  wider, a platform administrator's included: a context with no athanor
+  is refused, and no option names another athanor. `purge_global/2` is
+  the host's retention of the decisions without a tenant, under the
+  platform's own system actor alone.
   """
 
   require Logger
@@ -191,6 +201,48 @@ defmodule Sanctum.Decisions do
       {:error, %AuditFailure{} = failure} -> lost(failure)
     end
   end
+
+  # ============================================================================
+  # Reads
+  # ============================================================================
+
+  @doc """
+  The caller's athanor's decisions, newest first, read under the context's
+  actor (`Arca.DecisionLog.list/2`, whose options `opts` are; an
+  `:athanor_id` among them names nothing). A context with no athanor is
+  `{:error, :no_athanor}`, whatever its scope. The log's refusals pass
+  through as it answers them.
+  """
+  @spec list(Context.t(), keyword()) ::
+          {:ok, [Decision.t()]} | {:error, :no_athanor | :database_error}
+  def list(%Context{} = ctx, opts) when is_list(opts),
+    do: Arca.DecisionLog.list(Context.actor(ctx), opts)
+
+  @doc """
+  Every decision of the caller's athanor made under the ingress request
+  `request_id` (a chain's calls), oldest first, read under the context's
+  actor (`Arca.DecisionLog.correlate/2`). A context with no athanor is
+  `{:error, :no_athanor}`, whatever its scope.
+  """
+  @spec correlate(Context.t(), String.t()) ::
+          {:ok, [Decision.t()]} | {:error, :no_athanor | :database_error}
+  def correlate(%Context{} = ctx, request_id) when is_binary(request_id),
+    do: Arca.DecisionLog.correlate(Context.actor(ctx), request_id)
+
+  @doc """
+  Delete the host's decisions, the rows without a tenant, made before
+  `cutoff`: the host's responsibility under its held retention claim
+  (`Cyfr.Boundaries.system_responsibilities/0`). Only the platform's own
+  system actor (`Prima.Actor.system/0`) may; any other is
+  `{:error, :forbidden}` before any query (`Arca.DecisionLog.purge_global/2`),
+  and it never touches an athanor's row. It is the one function here that
+  takes a bare actor, since the retention step holds no context; every
+  read takes the caller's.
+  """
+  @spec purge_global(Prima.Actor.t(), DateTime.t()) ::
+          {:ok, non_neg_integer()} | {:error, :forbidden | :database_error}
+  def purge_global(%Prima.Actor{} = actor, %DateTime{} = cutoff),
+    do: Arca.DecisionLog.purge_global(actor, cutoff)
 
   # ============================================================================
   # Writes

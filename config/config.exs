@@ -23,8 +23,12 @@ config :sanctum,
     # and a namespace with several providers is one service. Identity and
     # authority, `sanctum`:
     Sanctum.Provider,
-    # `arca`: the records the storage layer keeps (executions, MCP and
-    # policy logs) and its retention policy, handed the caller's actor alone.
+    # `sanctum`: the decision record and the request log, security rows
+    # read under the caller's actor alone.
+    Sanctum.Providers.Decision,
+    Sanctum.Providers.McpLog,
+    # `arca`: the records the storage layer keeps (executions and policy
+    # logs) and its retention policy, handed the caller's actor alone.
     Arca.Providers.Records,
     # `aqua`: chat on the wire, so Prism is a client of the agent runtime
     # rather than the only way to reach it.

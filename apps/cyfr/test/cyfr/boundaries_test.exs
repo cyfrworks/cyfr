@@ -561,9 +561,11 @@ defmodule Cyfr.BoundariesTest do
       assert MapSet.member?(below, "Arca.ConsentStorage")
       assert MapSet.member?(below, "Arca.RegistryTokenStorage")
       assert MapSet.member?(below, "Arca.Members")
+      assert MapSet.member?(below, "Arca.DecisionLog")
+      assert MapSet.member?(below, "Arca.McpLog")
     end
 
-    test "the security-row roster is exactly the thirty stores, each a module" do
+    test "the security-row roster is exactly the thirty-two stores, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
@@ -575,7 +577,7 @@ defmodule Cyfr.BoundariesTest do
                  Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
                  Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions
                  Arca.InstallationClaims Arca.RequestRateWindows Arca.InstanceEntries
-                 Arca.InstanceEntryUsage
+                 Arca.InstanceEntryUsage Arca.DecisionLog Arca.McpLog
                ))
 
       for name <- Boundaries.sanctum_only_storage() do
@@ -1422,6 +1424,21 @@ defmodule Cyfr.BoundariesTest do
 
       assert Boundaries.surface_violations(row, standing) == ["Arca.Members"]
 
+      # The decision record and the request log are security rows too: the
+      # activity page reads them through Sanctum, never from the stores.
+      activity = [
+        {"apps/cyfr/lib/prism_web/live/planted_activities_live.ex",
+         CodeLines.aliases(~S'''
+         defmodule PrismWeb.PlantedActivitiesLive do
+           def decisions(actor, opts), do: Arca.DecisionLog.list(actor, opts)
+           def chain(actor, request_id), do: Arca.DecisionLog.correlate(actor, request_id)
+           def logs(scope), do: Arca.McpLog.list(scope)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(row, activity) == ["Arca.DecisionLog", "Arca.McpLog"]
+
       for name <- Boundaries.sanctum_only_storage() do
         ["Arca", store] = String.split(name, ".")
 
@@ -2141,7 +2158,7 @@ defmodule Cyfr.BoundariesTest do
       assert %{modules: ["Cyfr.RetentionScheduler"]} =
                Enum.find(
                  Boundaries.system_responsibilities(),
-                 &(&1.check == "Arca.DecisionLog.purge_global/2")
+                 &(&1.check == "Sanctum.Decisions.purge_global/2")
                ),
              "the host's decision purge is not a rostered system responsibility"
 
@@ -2154,7 +2171,7 @@ defmodule Cyfr.BoundariesTest do
             %{system | scope: :athanor, athanor_id: "ath_boundaries"},
             %{Prima.Actor.in_athanor("ath_boundaries") | platform_admin: true}
           ] do
-        assert {:error, :forbidden} = Arca.DecisionLog.purge_global(actor, cutoff)
+        assert {:error, :forbidden} = Sanctum.Decisions.purge_global(actor, cutoff)
       end
     end
 

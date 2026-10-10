@@ -299,6 +299,7 @@ defmodule Cyfr.Boundaries do
     Arca.DeviceCertificates Arca.DeviceCertifications Arca.PairingInvitations Arca.Passkeys
     Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
     Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage
+    Arca.DecisionLog Arca.McpLog
   )
   @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]
 
@@ -387,10 +388,10 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
-        Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door
-        Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries Sanctum.Network
-        Sanctum.OperationTable Sanctum.Policy Sanctum.Proxy Sanctum.Session Sanctum.Tenancy
-        Sanctum.TinctureAccess Sanctum.VaultReader
+        Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
+        Sanctum.Door Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries
+        Sanctum.Network Sanctum.OperationTable Sanctum.Policy Sanctum.Proxy Sanctum.Session
+        Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
       ),
       reason:
         "the glue and application namespace: boot wiring, the operation table, " <>
@@ -421,6 +422,9 @@ defmodule Cyfr.Boundaries do
           "person's expired sign-in carries (`sweep/1`), which names no store. " <>
           "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
           "instance-entry usage days (`sweep_usage/0`), which names no entry and no person. " <>
+          "`Sanctum.Decisions` is `Cyfr.RetentionScheduler`'s purge of the host's own " <>
+          "decisions, the rows without a tenant, under the platform's system actor " <>
+          "(`purge_global/2`), which reaches no athanor's row. " <>
           "`Sanctum.Attach` is `Opus.Host.AttachedFetch`'s one resolution of the value " <>
           "an attached request carries (`resolve/5`): the vault decides, and the control " <>
           "plane attaches and performs. " <>
@@ -494,9 +498,10 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller Sanctum.Catalog
-        Sanctum.ClientIp Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Gate
-        Sanctum.Pairing Sanctum.Passkeys Sanctum.Refusals Sanctum.Session Sanctum.SignIn
-        Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
+        Sanctum.ClientIp Sanctum.Consent Sanctum.Context Sanctum.Decisions Sanctum.Door
+        Sanctum.Gate Sanctum.Pairing Sanctum.Passkeys Sanctum.Refusals Sanctum.RequestLog
+        Sanctum.Session Sanctum.SignIn Sanctum.Tenancy Sanctum.TinctureAuth
+        Sanctum.Unauthorized Sanctum.Webhook
       ),
       reason:
         "the console, its browser sign-in (`PrismWeb.AuthController`, which asks the " <>
@@ -531,6 +536,9 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Catalog` is the approval card's read of an action's declaration and " <>
           "the stream ingress's read of a stream's (`CyfrWeb.SSE`), and `Sanctum.Refusals` " <>
           "the renderer the vault page answers a refusal with. " <>
+          "`Sanctum.Decisions` and `Sanctum.RequestLog` are the activity page's reads of " <>
+          "the decision record and the request log under its fresh context " <>
+          "(`PrismWeb.ActivitiesLive`): security rows, read only through Sanctum. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -1059,8 +1067,9 @@ defmodule Cyfr.Boundaries do
           "the identities, memberships, athanors and doors that decide standing, a " <>
           "person's identity row, keys, attempts and carries, the directory's logs " <>
           "and cached heads, passkeys, pending confirmations, the installation claim, " <>
-          "the pre-authentication rate windows, and the instance's own entries and " <>
-          "their use counts " <>
+          "the pre-authentication rate windows, the instance's own entries and " <>
+          "their use counts, and the admission decisions and the request-log rows " <>
+          "that project them " <>
           "are security rows. A domain or a surface learns about them only " <>
           "through Sanctum's entries, which scope by the caller's context. Arca holds " <>
           "the rows and Sanctum reads them; no other tree names the stores. " <>
@@ -1303,6 +1312,7 @@ defmodule Cyfr.Boundaries do
       require_permission: 2,
       require_tenant!: 1
     ],
+    "Sanctum.Decisions" => [correlate: 2, list: 2, purge_global: 2],
     "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
     "Sanctum.Directory" => [append: 2, outcome: 1, recover: 2, register: 1, resolve: 1],
     "Sanctum.Door" => [admit_identity: 2, platform_admin_emails: 0, refusal_message: 0],
@@ -1382,6 +1392,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Recovery" => [reproof: 2, restore: 2, restore_challenge: 1],
     "Sanctum.Refusals" => [classify: 1, render: 1],
     "Sanctum.RegistryCredentials" => [delete: 3, get: 3, list: 2, put_push_token: 6],
+    "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1, get: 1],
     "Sanctum.SignIn" => [admitted: 2, link_ticket: 2, record_namespace: 2, suggested_slug: 2],
     "Sanctum.Tenancy" => [
@@ -2377,13 +2388,14 @@ defmodule Cyfr.Boundaries do
     %{
       responsibility: "Host purges null-tenant decision rows under its held claim",
       modules: ~w(Cyfr.RetentionScheduler),
-      check: "Arca.DecisionLog.purge_global/2",
+      check: "Sanctum.Decisions.purge_global/2",
       reason:
         "a decision refused before any caller or tenant was established is appended " <>
           "with no athanor, so no athanor's retention reaches it and no tenant reads it: " <>
           "the scheduler's `decisions_global` step, holding the cell's retention claim " <>
           "and its slot, deletes those rows once they are older than " <>
-          "CYFR_DECISION_RETENTION_DAYS. The storage layer takes only the platform's own " <>
+          "CYFR_DECISION_RETENTION_DAYS, through Sanctum's decision record, the rows' one " <>
+          "reader. The storage layer takes only the platform's own " <>
           "system actor for it and matches only rows without an athanor, so the purge " <>
           "can reach no athanor's decisions, which go with the athanor or its own policy."
     }

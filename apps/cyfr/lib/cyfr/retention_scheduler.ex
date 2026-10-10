@@ -485,14 +485,15 @@ defmodule Cyfr.RetentionScheduler do
 
   # The admission decisions made before any tenant was resolved carry no
   # athanor, so no athanor's retention reaches them: the host purges them
-  # under the claim it holds, as the platform's own actor, once they are
-  # older than the `decision_retention_days` platform setting, which serves
-  # a stale value. Never an athanor's row.
+  # through Sanctum's decision record under the claim it holds, as the
+  # platform's own actor, once they are older than the
+  # `decision_retention_days` platform setting, which serves a stale value.
+  # Never an athanor's row.
   defp purge_host_decisions do
     {:ok, days} = Arca.PlatformSettings.effective("decision_retention_days")
     cutoff = DateTime.add(DateTime.utc_now(), -days * 86_400, :second)
 
-    case Arca.DecisionLog.purge_global(Prima.Actor.system(), cutoff) do
+    case Sanctum.Decisions.purge_global(Prima.Actor.system(), cutoff) do
       {:ok, 0} ->
         :ok
 

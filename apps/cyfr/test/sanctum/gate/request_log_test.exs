@@ -5,8 +5,9 @@ defmodule Sanctum.Gate.RequestLogTest do
   @moduledoc """
   The request log's rows as projections of admission decisions: a
   decision opened with its row in one write, the row closed with the
-  decision's completion, no row for a decision without a tenant, and an
-  append that cannot land answered `:ok` with the loss event.
+  decision's completion, no row for a decision without a tenant, an
+  append that cannot land answered `:ok` with the loss event, and the
+  rows read back by the caller's athanor alone.
   """
   use ExUnit.Case, async: false
 
@@ -467,6 +468,47 @@ defmodule Sanctum.Gate.RequestLogTest do
       # code is not a column the gate's rows write.
       refute Map.has_key?(RequestLog.closed({:error, "No."}, %{error_code: -1}), :error_code)
       refute Map.has_key?(RequestLog.closed({:ok, %{}}, %{error_code: -1}), :error_code)
+    end
+  end
+
+  describe "list/2" do
+    test "answers the caller's athanor's rows alone, whatever athanor the options name",
+         %{ctx: ctx} do
+      {_ath_a, other} = Sanctum.TestContext.two_contexts()
+      other = %{other | request_id: ctx.request_id}
+      own = decision(ctx)
+      foreign = decision(other)
+
+      assert :ok = Decisions.open(ctx, own, %{input: %{}})
+      assert :ok = Decisions.open(other, foreign, %{input: %{}})
+
+      for opts <- [
+            [request_id: ctx.request_id],
+            [request_id: ctx.request_id, athanor_id: other.athanor_id]
+          ] do
+        assert {:ok, [log]} = RequestLog.list(ctx, opts)
+        assert log.id == own.call_id
+        assert log.athanor_id == ctx.athanor_id
+      end
+
+      # The two athanors share the request id, and each reads its own row.
+      assert {:ok, [log]} =
+               RequestLog.list(other, request_id: ctx.request_id, athanor_id: ctx.athanor_id)
+
+      assert log.id == foreign.call_id
+    end
+
+    test "a context with no athanor is refused before any row is read, whatever its scope",
+         %{ctx: ctx} do
+      assert :ok = Decisions.open(ctx, decision(ctx), %{input: %{}})
+
+      for reader <- [
+            %{ctx | athanor_id: nil},
+            Sanctum.TestContext.platform(platform_admin: true),
+            Sanctum.system_context()
+          ] do
+        assert {:error, :no_athanor} = RequestLog.list(reader, request_id: ctx.request_id)
+      end
     end
   end
 

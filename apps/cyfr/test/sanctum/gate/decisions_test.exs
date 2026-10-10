@@ -7,7 +7,9 @@ defmodule Sanctum.Gate.DecisionsTest do
   roster of calls that are not recorded, the loss event for an append or
   a completion that did not land — a store that cannot answer, or every
   writer of the node busy — and an answer of `:ok` either way, with the
-  operation's own result unchanged and nothing run again.
+  operation's own result unchanged and nothing run again. And who reads
+  the record back: the caller's athanor's decisions under its own
+  context, never another athanor's or the host's.
   """
   use ExUnit.Case, async: false
 
@@ -316,6 +318,77 @@ defmodule Sanctum.Gate.DecisionsTest do
       assert log =~ "append raised ArgumentError"
       refute log =~ "ath_somebody_else"
       refute log =~ "is the actor's"
+    end
+  end
+
+  # One decision appended under `ctx`'s actor, or under none for the
+  # host's row, made under `request_id`, with `fields` over an admitted
+  # default.
+  defp appended!(ctx, request_id, fields \\ []) do
+    decision =
+      Decision.new(
+        Keyword.merge(
+          [
+            call_id: UUID7.generate_id("call"),
+            request_id: request_id,
+            user_id: ctx && ctx.user_id,
+            athanor_id: ctx && ctx.athanor_id,
+            plane: :external,
+            tool: "storage",
+            action: "get",
+            inserted_at: DateTime.utc_now(),
+            admission: :admitted
+          ],
+          fields
+        )
+      )
+
+    :ok = Arca.DecisionLog.append(ctx && Sanctum.Context.actor(ctx), decision)
+    decision
+  end
+
+  describe "reading the record" do
+    setup do
+      ctx = Sanctum.TestContext.local()
+      {_ath_a, other} = Sanctum.TestContext.two_contexts()
+      request_id = UUID7.request_id()
+
+      own = appended!(ctx, request_id)
+      foreign = appended!(other, request_id)
+      host = appended!(nil, request_id, admission: :refused, refusal_class: :unauthenticated)
+
+      {:ok,
+       ctx: ctx, other: other, request_id: request_id, own: own, foreign: foreign, host: host}
+    end
+
+    test "list/2 and correlate/2 answer the caller's athanor's decisions, never another's or the host's",
+         %{ctx: ctx, other: other, request_id: request_id, own: own, foreign: foreign} do
+      assert {:ok, [listed]} = Decisions.list(ctx, request_id: request_id)
+      assert listed.call_id == own.call_id
+
+      # An option naming another athanor names nothing: the read is the
+      # context's actor's.
+      assert {:ok, [^listed]} =
+               Decisions.list(ctx, request_id: request_id, athanor_id: other.athanor_id)
+
+      assert {:ok, [correlated]} = Decisions.correlate(ctx, request_id)
+      assert correlated.call_id == own.call_id
+
+      # The other athanor reads its own, and only its own.
+      assert {:ok, [theirs]} = Decisions.correlate(other, request_id)
+      assert theirs.call_id == foreign.call_id
+    end
+
+    test "a context with no athanor reads nothing, a platform administrator's included",
+         %{ctx: ctx, request_id: request_id} do
+      for reader <- [
+            Sanctum.TestContext.platform(platform_admin: true),
+            Sanctum.system_context(),
+            %{ctx | athanor_id: nil}
+          ] do
+        assert {:error, :no_athanor} = Decisions.list(reader, request_id: request_id)
+        assert {:error, :no_athanor} = Decisions.correlate(reader, request_id)
+      end
     end
   end
 

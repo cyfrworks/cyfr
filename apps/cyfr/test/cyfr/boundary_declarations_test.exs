@@ -93,10 +93,11 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   # Exports beyond the facade manifest's rows, each group with its reason.
   @export_additions %{
     Arca => [
-      {~w(ApiKeyStorage Athanors ConsentProofStorage ConsentStorage Doors FrameCredentials
-          InstanceEntries InstanceEntryUsage Members PairedClients ProfileStorage
-          ProviderCredentialStorage RegistryTokenStorage SessionStorage ToolGrantStorage Users
-          VaultStorage WebhookStorage),
+      {~w(ApiKeyStorage Athanors ConsentProofStorage ConsentStorage DecisionLog
+          DecisionLog.AuditFailure Doors FrameCredentials InstanceEntries InstanceEntryUsage
+          McpLog Members PairedClients ProfileStorage ProviderCredentialStorage
+          RegistryTokenStorage SessionStorage ToolGrantStorage Users VaultStorage
+          WebhookStorage),
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
       {~w(CarryActions DeviceCertificates DeviceCertifications DirectoryHeads IdentityAttempts
@@ -107,16 +108,17 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "security row"},
       {~w(AgentRevisions AgentStorage BudgetReservations BuildRecords Cache Cache.Keys
           CipherRotation ComponentStorage ControlPlane CredentialBindings CronSchedule
-          DecisionLog DecisionLog.AuditFailure Execution ExecutionAttempts ExecutionEvents
-          ExecutionPayloads ExecutionStanding Health JobClaims McpLog McpServerStorage
-          Overlay PolicyLog ProvisioningClaims RateWindows RecordSink ScheduleOccurrences
-          SecurityTransitions ServerMetaStorage Storage StorageProjectionChanges
-          StorageProjectionRoots TenantTables ThreadStorage ThreadSubscriptionStorage
-          TurnStorage Usage VaultDefaults WebhookDeliveryStorage),
+          Execution ExecutionAttempts ExecutionEvents ExecutionPayloads ExecutionStanding
+          Health JobClaims McpServerStorage Overlay PolicyLog ProvisioningClaims RateWindows
+          RecordSink ScheduleOccurrences SecurityTransitions ServerMetaStorage Storage
+          StorageProjectionChanges StorageProjectionRoots TenantTables ThreadStorage
+          ThreadSubscriptionStorage TurnStorage Usage VaultDefaults WebhookDeliveryStorage),
        "the storage, lease, claim and cache facades the layers above call downward"},
       {~w(InstallationClaims),
        "the installation mode Sanctum installs and the first-person mint reads"},
-      {~w(Providers.Records), "the records door the gate's resources read through"},
+      {~w(Providers.Records),
+       "the records door the gate's resources read through, whose execution and policy-log " <>
+         "projections the request log's correlation renders with"},
       {~w(Repo.Errors), "the row plane's error convention, which callers rescue by"},
       {~w(SchemaFingerprint SchemaFingerprint.Check AuditHandler Storage.UnitLocator),
        "the composition root and the release task: the schema check, the audit " <>

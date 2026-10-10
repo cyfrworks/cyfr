@@ -3,11 +3,13 @@
 
 defmodule Arca.Providers.Records do
   @moduledoc """
-  The record tools — `record`, `mcp_log`, `policy_log` and `decision` —
-  over what Arca persists about executions, MCP requests, policy
-  consultations and admission decisions, the `retention` tool over what
-  the athanor keeps of them, and the reader behind the
-  `arca://files/{path}` resource.
+  The record tools — `record` and `policy_log` — over what Arca persists
+  about executions and policy consultations, the `retention` tool over
+  what the athanor keeps of them, and the reader behind the
+  `arca://files/{path}` resource. The decision record and the request log
+  are security rows, read through Sanctum's own tools; their correlation
+  renders a request's executions and policy logs through this door's two
+  projections (`execution_to_map/1`, `policy_log_to_map/1`).
 
   The provider declares `context_kind: :actor`: the gate authorizes every
   call with the caller's full context and hands these handlers the
@@ -17,14 +19,6 @@ defmodule Arca.Providers.Records do
   of `:platform` scope reads across athanors and is not), and in-chain an
   execution reads its own payload alone, for the attempt the host stamped
   on its lineage and only while that attempt is its current one.
-
-  ## The `decision` tool
-
-  `list`, `get` and `correlate` read the caller's athanor's decisions
-  (`Arca.DecisionLog`), never a row without a tenant. `list_global` and
-  `get_global` read every tenant's and the host's own: they are the
-  platform admin's (`scope: :platform`, which the gate checks against the
-  operator capability), and the log refuses any other actor again.
 
   ## The `retention` tool
 
@@ -122,84 +116,6 @@ defmodule Arca.Providers.Records do
       Operation.tool(
         [
           Operation.new(
-            "mcp_log",
-            "list",
-            "List mcp log",
-            [
-              Arg.new("request_id", :string,
-                description:
-                  "The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it."
-              ),
-              Arg.new("tool", :string, description: "Tool name filter"),
-              Arg.new("since", :string,
-                description: "ISO8601 timestamp — return logs after this time"
-              ),
-              Arg.new("user_id", :string, description: "Filter by user ID"),
-              Arg.new("status", :string, description: "Filter by status"),
-              Arg.new("limit", :integer, description: "Max results (default: 20)")
-            ],
-            kind: :read,
-            planes: [:external],
-            permission: :storage_read
-          ),
-          Operation.new(
-            "mcp_log",
-            "get",
-            "Get mcp log",
-            [Arg.new("id", :string, required: true, description: "Request ID")],
-            kind: :read,
-            planes: [:external],
-            permission: :storage_read
-          ),
-          Operation.new(
-            "mcp_log",
-            "correlate",
-            "Correlate mcp log",
-            [
-              Arg.new("request_id", :string,
-                required: true,
-                description:
-                  "The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it."
-              )
-            ],
-            kind: :read,
-            planes: [:external],
-            permission: :storage_read
-          ),
-          Operation.new(
-            "mcp_log",
-            "fan_outs",
-            "Fan outs mcp log",
-            [
-              Arg.new("request_ids", {:array, Arg.new(nil, :string)},
-                required: true,
-                description: "Batch of request IDs for fan_outs action"
-              )
-            ],
-            kind: :read,
-            planes: [:external],
-            permission: :storage_read
-          ),
-          Operation.new(
-            "mcp_log",
-            "stats",
-            "Stats mcp log",
-            [
-              Arg.new("since_hours", :integer,
-                description: "Number of hours of request statistics (default: 1)"
-              )
-            ],
-            kind: :read,
-            planes: [:external],
-            permission: :storage_read
-          )
-        ],
-        description: "Query MCP request logs - list, get, correlate, fan_outs, or view stats",
-        title: "MCP Request Logs"
-      ),
-      Operation.tool(
-        [
-          Operation.new(
             "policy_log",
             "list",
             "List policy log",
@@ -236,88 +152,8 @@ defmodule Arca.Providers.Records do
         description: "Query policy consultation logs - list, get, or correlate logs",
         title: "Policy Logs"
       ),
-      decision_tool(),
       retention_tool()
     ]
-  end
-
-  # The tenant readers take `storage_read`; the global readers are the
-  # platform admin's, which the gate checks as the operation's scope.
-  defp decision_tool do
-    alias Prima.{Arg, Operation}
-
-    filters = [
-      Arg.new("request_id", :string,
-        description:
-          "The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it."
-      ),
-      Arg.new("tool", :string, description: "Tool name filter"),
-      Arg.new("admission", :string,
-        enum: Enum.map(Prima.Decision.admissions(), &Atom.to_string/1),
-        description: "Filter by admission"
-      ),
-      Arg.new("refusal_class", :string, description: "Filter by refusal class"),
-      Arg.new("since", :string,
-        description: "ISO8601 timestamp — return decisions made at or after this time"
-      ),
-      Arg.new("limit", :integer, description: "Max results (default: 20)")
-    ]
-
-    call_id = [Arg.new("call_id", :string, required: true, description: "Call ID")]
-
-    Operation.tool(
-      [
-        Operation.new("decision", "list", "List decision", filters,
-          kind: :read,
-          planes: [:external],
-          permission: :storage_read
-        ),
-        Operation.new("decision", "get", "Get decision", call_id,
-          kind: :read,
-          planes: [:external],
-          permission: :storage_read
-        ),
-        Operation.new(
-          "decision",
-          "correlate",
-          "Correlate decision",
-          [
-            Arg.new("request_id", :string,
-              required: true,
-              description:
-                "The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it."
-            )
-          ],
-          kind: :read,
-          planes: [:external],
-          permission: :storage_read
-        ),
-        Operation.new(
-          "decision",
-          "list_global",
-          "List global decision",
-          filters ++
-            [
-              Arg.new("athanor_id", :string,
-                description: "global only: one athanor's decisions, or none for the host's own"
-              )
-            ],
-          kind: :read,
-          planes: [:external],
-          scope: :platform,
-          permission: :storage_read
-        ),
-        Operation.new("decision", "get_global", "Get global decision", call_id,
-          kind: :read,
-          planes: [:external],
-          scope: :platform,
-          permission: :storage_read
-        )
-      ],
-      description:
-        "Query admission decisions - list, get, or correlate the calls admitted or refused",
-      title: "Admission Decisions"
-    )
   end
 
   # Both the settable keys and the cleanup vocabulary derive from the
@@ -485,130 +321,6 @@ defmodule Arca.Providers.Records do
   end
 
   # ============================================================================
-  # MCP Log Tool
-  # ============================================================================
-
-  def handle("mcp_log", %Prima.Actor{} = actor, %{"action" => "get", "id" => id}) do
-    with :ok <- tenant_ok(actor) do
-      case Arca.McpLog.get_tenant(actor, id) do
-        nil ->
-          {:error, {:not_found, "MCP log", id}}
-
-        # Same outage shape as the execution arm above.
-        {:error, :database_error} ->
-          {:error, {:unavailable, "Storage"}}
-
-        record ->
-          {:ok, mcp_log_to_map(record)}
-      end
-    end
-  end
-
-  def handle("mcp_log", %Prima.Actor{}, %{"action" => "get"}) do
-    {:error, {:invalid_argument, "Missing required argument: id"}}
-  end
-
-  def handle("mcp_log", %Prima.Actor{} = actor, %{"action" => "list"} = args) do
-    with :ok <- tenant_ok(actor) do
-      opts =
-        [
-          limit: min(args["limit"] || 20, 1000),
-          athanor_id: actor.athanor_id
-        ]
-        |> maybe_put(:user_id, args["user_id"])
-        |> maybe_put(:status, args["status"])
-        |> maybe_put(:request_id, args["request_id"])
-        |> maybe_put(:tool, args["tool"])
-
-      with {:ok, opts} <- parse_since_opt(opts, args["since"]),
-           {:ok, records} <- Arca.McpLog.list(opts) do
-        {:ok, %{logs: Enum.map(records, &mcp_log_to_map/1)}}
-      else
-        {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
-        {:error, _} = err -> err
-      end
-    end
-  end
-
-  def handle("mcp_log", %Prima.Actor{} = actor, %{
-        "action" => "correlate",
-        "request_id" => request_id
-      }) do
-    with :ok <- tenant_ok(actor) do
-      decisions =
-        case Arca.DecisionLog.correlate(actor, request_id) do
-          {:ok, rows} -> Enum.map(rows, &decision_to_map/1)
-          {:error, _} -> []
-        end
-
-      {:ok, Map.put(correlation(actor, request_id), :decisions, decisions)}
-    end
-  end
-
-  def handle("mcp_log", %Prima.Actor{}, %{"action" => "correlate"}) do
-    {:error, {:invalid_argument, "Missing required argument: request_id"}}
-  end
-
-  # Batched fan-out counts: for each request_id, how many executions were
-  # recorded against it? Used by ActivitiesLive to render the EXECS column
-  # for a page of MCP log rows in a single GROUP BY instead of N correlate
-  # queries.
-  def handle("mcp_log", %Prima.Actor{} = actor, %{"action" => "fan_outs", "request_ids" => ids})
-      when is_list(ids) do
-    with :ok <- tenant_ok(actor) do
-      ids = Enum.filter(ids, &is_binary/1)
-
-      # `count_by_request/2` refuses rather than defaulting, so an outage
-      # answers `{:error, :database_error}` — which was being wrapped and
-      # shipped as `counts: ["error", "database_error"]`, a structured
-      # falsehood a client would render as a fan-out count. Same refusal
-      # the other arms give.
-      case Arca.Execution.count_by_request(actor, ids) do
-        counts when is_map(counts) -> {:ok, %{counts: counts}}
-        {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
-      end
-    end
-  end
-
-  def handle("mcp_log", %Prima.Actor{}, %{"action" => "fan_outs"}) do
-    {:error,
-     {:invalid_argument, "Missing or invalid argument: request_ids (must be a list of strings)"}}
-  end
-
-  def handle("mcp_log", %Prima.Actor{} = actor, %{"action" => "stats"} = args) do
-    with :ok <- tenant_ok(actor) do
-      since_hours = args["since_hours"] || 1
-
-      since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
-
-      opts = [since: since, athanor_id: actor.athanor_id]
-
-      case Arca.McpLog.stats(opts) do
-        {:ok, stats} ->
-          {:ok,
-           %{
-             since: DateTime.to_iso8601(since),
-             total: stats.total,
-             errors: stats.errors,
-             avg_duration_ms: stats.avg_duration_ms,
-             error_rate:
-               if(stats.total > 0,
-                 do: Float.round(stats.errors / stats.total * 100, 1),
-                 else: 0.0
-               )
-           }}
-
-        {:error, :database_error} ->
-          {:error, {:unavailable, "Storage"}}
-      end
-    end
-  end
-
-  def handle("mcp_log", %Prima.Actor{}, _args) do
-    {:error, Prima.Provider.invalid_action("mcp_log", action_enum("mcp_log"))}
-  end
-
-  # ============================================================================
   # Policy Log Tool
   # ============================================================================
 
@@ -679,71 +391,6 @@ defmodule Arca.Providers.Records do
 
   def handle("policy_log", %Prima.Actor{}, _args) do
     {:error, Prima.Provider.invalid_action("policy_log", action_enum("policy_log"))}
-  end
-
-  # ============================================================================
-  # Decision Tool
-  # ============================================================================
-
-  def handle("decision", %Prima.Actor{} = actor, %{"action" => "list"} = args) do
-    with {:ok, opts} <- decision_filters(args) do
-      actor |> Arca.DecisionLog.list(opts) |> decisions_answer()
-    end
-  end
-
-  def handle("decision", %Prima.Actor{} = actor, %{"action" => "get", "call_id" => call_id})
-      when is_binary(call_id) do
-    actor |> Arca.DecisionLog.get(call_id) |> decision_answer(call_id)
-  end
-
-  # The decisions leg is the tool's own, so a store that cannot answer it
-  # is a refusal; the legs it is joined with stay best-effort, as they
-  # are in `mcp_log.correlate`.
-  def handle("decision", %Prima.Actor{} = actor, %{
-        "action" => "correlate",
-        "request_id" => request_id
-      })
-      when is_binary(request_id) do
-    case Arca.DecisionLog.correlate(actor, request_id) do
-      {:ok, rows} ->
-        {:ok,
-         Map.put(
-           correlation(actor, request_id),
-           :decisions,
-           Enum.map(rows, &decision_to_map/1)
-         )}
-
-      {:error, reason} ->
-        {:error, decision_refusal(reason, request_id)}
-    end
-  end
-
-  def handle("decision", %Prima.Actor{} = actor, %{"action" => "list_global"} = args) do
-    with {:ok, opts} <- decision_filters(args),
-         {:ok, opts} <- global_tenant(opts, args["athanor_id"]) do
-      actor |> Arca.DecisionLog.list_global(opts) |> decisions_answer()
-    end
-  end
-
-  def handle("decision", %Prima.Actor{} = actor, %{
-        "action" => "get_global",
-        "call_id" => call_id
-      })
-      when is_binary(call_id) do
-    actor |> Arca.DecisionLog.get_global(call_id) |> decision_answer(call_id)
-  end
-
-  def handle("decision", %Prima.Actor{}, %{"action" => action})
-      when action in ["get", "get_global"] do
-    {:error, {:invalid_argument, "Missing required argument: call_id"}}
-  end
-
-  def handle("decision", %Prima.Actor{}, %{"action" => "correlate"}) do
-    {:error, {:invalid_argument, "Missing required argument: request_id"}}
-  end
-
-  def handle("decision", %Prima.Actor{}, _args) do
-    {:error, Prima.Provider.invalid_action("decision", action_enum("decision"))}
   end
 
   # ============================================================================
@@ -952,7 +599,11 @@ defmodule Arca.Providers.Records do
   # Internal
   # ============================================================================
 
-  defp execution_to_map(exec) when is_struct(exec) or is_map(exec) do
+  @doc false
+  # An execution as the wire carries it. The request log's correlation
+  # (`Sanctum.Providers.McpLog`) renders a request's executions through it.
+  @spec execution_to_map(map()) :: map()
+  def execution_to_map(exec) when is_struct(exec) or is_map(exec) do
     %{
       id: Map.get(exec, :id),
       request_id: Map.get(exec, :request_id),
@@ -975,28 +626,11 @@ defmodule Arca.Providers.Records do
 
   defp format_datetime(value), do: Prima.Time.iso8601(value)
 
-  defp mcp_log_to_map(%{id: _} = log) do
-    %{
-      id: log.id,
-      request_id: log.request_id,
-      user_id: log.user_id,
-      timestamp: format_datetime(log.timestamp),
-      tool: log.tool,
-      action: log.action,
-      method: log.method,
-      status: log.status,
-      duration_ms: log.duration_ms,
-      routed_to: log.routed_to,
-      # The row's meaning: a refused call's class. A JSON-RPC code is a
-      # transport's rendering of it, and the rows carry none.
-      refusal_class: log.refusal_class,
-      input: decode_json(log.input, "input"),
-      output: decode_json(log.output, "output"),
-      error: log.error
-    }
-  end
-
-  defp policy_log_to_map(%{id: _} = log) do
+  @doc false
+  # A policy log as the wire carries it. The request log's correlation
+  # renders a request's policy logs through it.
+  @spec policy_log_to_map(map()) :: map()
+  def policy_log_to_map(%{id: _} = log) do
     %{
       id: log.id,
       request_id: log.request_id,
@@ -1011,96 +645,6 @@ defmodule Arca.Providers.Records do
       decision_reason: log.decision_reason
     }
   end
-
-  # What a request left behind besides its decisions, joined best-effort:
-  # a storage outage on one leg leaves that leg empty rather than raising
-  # on the error tuple.
-  defp correlation(actor, request_id) do
-    mcp_logs =
-      case Arca.McpLog.list(request_id: request_id, limit: 100, athanor_id: actor.athanor_id) do
-        {:ok, rows} -> Enum.map(rows, &mcp_log_to_map/1)
-        {:error, _} -> []
-      end
-
-    executions =
-      case Arca.Execution.list_by_request(actor, request_id) do
-        rows when is_list(rows) -> Enum.map(rows, &execution_to_map/1)
-        {:error, _} -> []
-      end
-
-    policy_logs =
-      case Arca.PolicyLog.list(request_id: request_id, limit: 100, athanor_id: actor.athanor_id) do
-        {:ok, rows} -> Enum.map(rows, &policy_log_to_map/1)
-        {:error, _} -> []
-      end
-
-    %{
-      request_id: request_id,
-      mcp_logs: mcp_logs,
-      executions: executions,
-      policy_logs: policy_logs
-    }
-  end
-
-  # A decision as the wire carries it: every `Prima.Decision` field under
-  # its own name, vocabulary atoms as their names and times as ISO8601.
-  defp decision_to_map(%Prima.Decision{} = decision) do
-    Map.new(Map.from_struct(decision), fn {field, value} ->
-      {Atom.to_string(field), decision_value(value)}
-    end)
-  end
-
-  defp decision_value(%DateTime{} = value), do: format_datetime(value)
-  defp decision_value(value) when is_atom(value) and not is_nil(value), do: Atom.to_string(value)
-  defp decision_value(value), do: value
-
-  defp decisions_answer({:ok, rows}), do: {:ok, %{decisions: Enum.map(rows, &decision_to_map/1)}}
-  defp decisions_answer({:error, reason}), do: {:error, decision_refusal(reason, nil)}
-
-  defp decision_answer({:ok, row}, _call_id), do: {:ok, %{decision: decision_to_map(row)}}
-  defp decision_answer({:error, reason}, call_id), do: {:error, decision_refusal(reason, call_id)}
-
-  # The decision log's refusals as the wire renders them. `:forbidden` is
-  # the log's own refusal of an actor the gate should already have
-  # refused: it reads as the same missing capability.
-  defp decision_refusal(:no_athanor, _id), do: :missing_tenant
-  defp decision_refusal(:not_found, id), do: {:not_found, "Decision", id}
-  defp decision_refusal(:forbidden, _id), do: :platform_admin_required
-  defp decision_refusal(:database_error, _id), do: {:unavailable, "Storage"}
-
-  # The filters `list` and `list_global` share, typed as the log reads
-  # them. A name outside the vocabulary is the caller's error, never a
-  # filter that silently matches nothing.
-  defp decision_filters(args) do
-    opts =
-      [limit: args["limit"] || 20]
-      |> maybe_put(:request_id, args["request_id"])
-      |> maybe_put(:tool, args["tool"])
-
-    with {:ok, opts} <- parse_since_opt(opts, args["since"]),
-         {:ok, opts} <-
-           vocabulary_opt(opts, :admission, args["admission"], Prima.Decision.admissions()) do
-      vocabulary_opt(opts, :refusal_class, args["refusal_class"], Prima.Refusal.classes())
-    end
-  end
-
-  defp vocabulary_opt(opts, _key, nil, _vocabulary), do: {:ok, opts}
-
-  defp vocabulary_opt(opts, key, name, vocabulary) do
-    case Enum.find(vocabulary, &(Atom.to_string(&1) == name)) do
-      nil -> {:error, {:invalid_argument, "Unknown #{key}: #{name}"}}
-      atom -> {:ok, Keyword.put(opts, key, atom)}
-    end
-  end
-
-  defp global_tenant(opts, nil), do: {:ok, opts}
-  defp global_tenant(opts, "none"), do: {:ok, Keyword.put(opts, :athanor_id, :none)}
-
-  defp global_tenant(opts, id) when is_binary(id) and id != "",
-    do: {:ok, Keyword.put(opts, :athanor_id, id)}
-
-  defp global_tenant(_opts, _id),
-    do: {:error, {:invalid_argument, "athanor_id must be an athanor id or none"}}
 
   defp decode_json(nil, _field), do: nil
 
@@ -1127,15 +671,6 @@ defmodule Arca.Providers.Records do
         )
 
         default
-    end
-  end
-
-  defp parse_since_opt(opts, nil), do: {:ok, opts}
-
-  defp parse_since_opt(opts, since_str) do
-    case DateTime.from_iso8601(since_str) do
-      {:ok, dt, _} -> {:ok, Keyword.put(opts, :since, dt)}
-      _ -> {:error, {:invalid_argument, "Invalid ISO8601 timestamp for 'since': #{since_str}"}}
     end
   end
 

@@ -7,18 +7,22 @@ defmodule PrismWeb.ActivitiesLive do
 
   Each row is one `Prima.Decision` — a call the server admitted or
   refused in this athanor (an MCP call, a tincture invoke, a cron firing),
-  whose own id is its call id — read through `Arca.DecisionLog` under the
-  caller's actor. A row is keyed by the request it belongs to — its
+  whose own id is its call id — read through `Sanctum.Decisions` under the
+  caller's context. A row is keyed by the request it belongs to — its
   `request_id`, which the calls of one chain share: expanding it
   correlates that request (its decisions, the request-log rows that carry
   each call's input and output, the executions it started and its policy
   logs), the fan-out counts are the request's, and `?id=req_…` focuses
   the request.
 
-  Reads call the storage facades directly under the caller's context,
-  held to the freshness rule first (`CyfrWeb.ContextGuard.check/1`); none
-  of them is an operation. `ExecutionsLive` at `/executions` groups
-  activity by execution for run inspection and control.
+  The decisions and the request-log rows are security rows, read through
+  Sanctum under the caller's context (`Sanctum.Decisions.list/2` and
+  `correlate/2`, `Sanctum.RequestLog.list/2`); the executions and policy
+  logs through the storage facades directly under the caller's actor.
+  Every read is held to the freshness rule first
+  (`CyfrWeb.ContextGuard.check/1`), and none of them is an operation.
+  `ExecutionsLive` at `/executions` groups activity by execution for run
+  inspection and control.
   """
 
   use PrismWeb, :live_view
@@ -213,14 +217,14 @@ defmodule PrismWeb.ActivitiesLive do
       |> put_opt(:admission, admission(socket.assigns.admission_filter))
       |> put_opt(:since, since(socket.assigns.time_filter))
 
-    with {:ok, actor} <- reader(socket),
-         {:ok, decisions} <- Arca.DecisionLog.list(actor, opts) do
+    with {:ok, ctx} <- reader(socket),
+         {:ok, decisions} <- Sanctum.Decisions.list(ctx, opts) do
       decisions = Enum.map(decisions, &Map.from_struct/1)
 
       socket
       |> assign(:decisions, decisions)
       |> assign(:leaders, leaders(decisions))
-      |> assign(:fan_outs, build_fan_outs(actor, decisions))
+      |> assign(:fan_outs, build_fan_outs(Sanctum.Context.actor(ctx), decisions))
       |> assign(:loading, false)
       |> assign(:error, nil)
     else
@@ -235,17 +239,13 @@ defmodule PrismWeb.ActivitiesLive do
     end
   end
 
-  # The caller's actor, once its context still stands: a long-lived
-  # socket's context is revalidated past the freshness bound before any
-  # read, as `PrismWeb.Ops.call_tool/3` does before a call.
+  # The caller's context, once it still stands: a long-lived socket's
+  # context is revalidated past the freshness bound before any read, as
+  # `PrismWeb.Ops.call_tool/3` does before a call.
   defp reader(socket) do
     case socket.assigns do
-      %{context: %Sanctum.Context{} = ctx} ->
-        with {:ok, ctx} <- CyfrWeb.ContextGuard.check(ctx),
-             do: {:ok, Sanctum.Context.actor(ctx)}
-
-      _ ->
-        {:error, :no_context}
+      %{context: %Sanctum.Context{} = ctx} -> CyfrWeb.ContextGuard.check(ctx)
+      _ -> {:error, :no_context}
     end
   end
 
@@ -267,15 +267,16 @@ defmodule PrismWeb.ActivitiesLive do
   # that cannot answer them is the expansion's refusal; the other legs are
   # joined best-effort, and an outage on one leaves it empty.
   defp correlate(socket, request_id) do
-    with {:ok, actor} <- reader(socket),
-         {:ok, decisions} <- Arca.DecisionLog.correlate(actor, request_id) do
+    with {:ok, ctx} <- reader(socket),
+         {:ok, decisions} <- Sanctum.Decisions.correlate(ctx, request_id) do
+      actor = Sanctum.Context.actor(ctx)
       scope = [request_id: request_id, limit: 100, athanor_id: actor.athanor_id]
 
       {:ok,
        %{
          request_id: request_id,
          decisions: Enum.map(decisions, &Map.from_struct/1),
-         mcp_logs: leg(Arca.McpLog.list(scope)),
+         mcp_logs: leg(Sanctum.RequestLog.list(ctx, scope)),
          executions: leg(Arca.Execution.list_by_request(actor, request_id)),
          policy_logs: leg(Arca.PolicyLog.list(scope))
        }}

@@ -28,6 +28,14 @@ defmodule Sanctum.RequestLog do
   the decision alone. A public tincture's calls carry the tincture's
   athanor.
 
+  ## Reading the log
+
+  The rows are security rows: Sanctum is their only reader, and a reader
+  above it takes them from here. `list/2` reads the caller's athanor's
+  rows and no other: the athanor is the context's, whatever the options
+  name, and a context with no athanor, a platform administrator's
+  included, is refused before any row is read.
+
   ## Sensitive Data
 
   Input parameters are sanitized to redact passwords, secrets, tokens and
@@ -78,6 +86,26 @@ defmodule Sanctum.RequestLog do
   end
 
   def opened(_ctx, %Decision{}, projection) when is_map(projection), do: nil
+
+  # ============================================================================
+  # Reads
+  # ============================================================================
+
+  @doc """
+  The caller's athanor's request-log rows, newest first
+  (`Arca.McpLog.list/1`, whose filters `opts` carries: `:limit`,
+  `:user_id`, `:status`, `:request_id`, `:tool` and `:since`). The
+  athanor is the context's, set over any `:athanor_id` the options name.
+  A context with no athanor is `{:error, :no_athanor}` before any row is
+  read, whatever its scope.
+  """
+  @spec list(Context.t(), keyword()) ::
+          {:ok, [map()]} | {:error, :no_athanor | :database_error}
+  def list(%Context{athanor_id: athanor_id}, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(opts),
+      do: Arca.McpLog.list(Keyword.put(opts, :athanor_id, athanor_id))
+
+  def list(%Context{}, opts) when is_list(opts), do: {:error, :no_athanor}
 
   @doc """
   The completion columns of a call's row: `"success"` with its sanitized

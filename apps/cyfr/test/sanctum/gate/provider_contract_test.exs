@@ -192,13 +192,19 @@ defmodule Sanctum.Gate.ProviderContractTest do
       end
     end
 
-    test "the configured :actor providers are the storage doors, and only they" do
+    test "the configured :actor providers are the storage and audit doors, and only they" do
       actors =
         for module <- Catalog.configured_providers(),
             Provider.context_kind(module) == :actor,
             do: module
 
-      assert Enum.sort(actors) == [Arca.Providers.Files, Arca.Providers.Records]
+      assert Enum.sort(actors) == [
+               Arca.Providers.Files,
+               Arca.Providers.Records,
+               Sanctum.Providers.Decision,
+               Sanctum.Providers.McpLog
+             ]
+
       assert :ok = Catalog.audit_context_kinds()
     end
 
