@@ -208,7 +208,7 @@ defmodule Cyfr.Test.AttemptFixtures do
   @doc """
   The host-stamped lineage of an in-chain call from a real execution: a
   root admitted in `ctx`'s athanor under its standing grant and with its
-  origin, answered as `Grimoire.call_in_chain/5`'s `:lineage` — the
+  origin, answered as `Sanctum.Gate.call_in_chain/5`'s `:lineage` — the
   execution as parent and root, and the attempt that owns it — with
   `extra` merged in. An in-chain call is admitted only under such an
   attempt.

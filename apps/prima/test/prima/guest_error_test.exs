@@ -43,7 +43,7 @@ defmodule Prima.GuestErrorTest do
   test "a unit commit's refusals render as the sentence the console renders" do
     # The same words the console renders, so a guest in a chain and
     # a person at the console are told the same thing; the parity is held
-    # by `Grimoire.ErrorRenderersTest`.
+    # by `Sanctum.Gate.ErrorRenderersTest`.
     assert GuestError.render(:stale_writer) =~ "fifteen minutes"
     assert GuestError.render(:stale_revision) =~ "landed first"
     assert GuestError.render(:missing_unit) =~ "removed"

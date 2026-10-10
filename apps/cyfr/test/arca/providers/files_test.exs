@@ -66,7 +66,7 @@ defmodule Arca.Providers.FilesTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Grimoire.Catalog
+  alias Sanctum.Catalog
   alias Arca.Providers.Files, as: Tool
   alias Arca.Providers.FilesTest.Store
   alias Arca.Schemas.{FileOffer, FileReceipt}
@@ -121,7 +121,7 @@ defmodule Arca.Providers.FilesTest do
            }
 
     assert :ok = Catalog.audit_action_kinds([Tool])
-    assert "file" in Enum.map(Grimoire.list_tools(), & &1["name"])
+    assert "file" in Enum.map(Sanctum.Gate.list_tools(), & &1["name"])
   end
 
   test "the offer actions: all but a withdrawal are interactive, and none is a chain's" do
@@ -152,33 +152,41 @@ defmodule Arca.Providers.FilesTest do
   end
 
   test "the catalog serves the tree in the console's words", %{ctx: ctx} do
-    assert {:ok, %{entries: folders}} = Grimoire.call_external("file", ctx, %{"action" => "list"})
+    assert {:ok, %{entries: folders}} =
+             Sanctum.Gate.call_external("file", ctx, %{"action" => "list"})
+
     assert Enum.map(folders, & &1.name) == ~w(data aqua components threads notes)
 
     assert {:ok, %{written: "data/hello.txt", size: 5}} =
-             Grimoire.call_external("file", ctx, %{
+             Sanctum.Gate.call_external("file", ctx, %{
                "action" => "write",
                "path" => "data/hello.txt",
                "content" => "hello"
              })
 
     assert {:ok, %{content: "hello", encoding: "utf8"}} =
-             Grimoire.call_external("file", ctx, %{"action" => "read", "path" => "data/hello.txt"})
+             Sanctum.Gate.call_external("file", ctx, %{
+               "action" => "read",
+               "path" => "data/hello.txt"
+             })
 
     assert {:ok, %{entries: [%{name: "hello.txt", kind: :file, size: 5}]}} =
-             Grimoire.call_external("file", ctx, %{"action" => "list", "path" => "data"})
+             Sanctum.Gate.call_external("file", ctx, %{"action" => "list", "path" => "data"})
 
     assert {:ok, %{deleted: "data/hello.txt"}} =
-             Grimoire.call_external("file", ctx, %{
+             Sanctum.Gate.call_external("file", ctx, %{
                "action" => "delete",
                "path" => "data/hello.txt"
              })
 
     assert {:error, {:not_found, "File", "data/hello.txt"}} =
-             Grimoire.call_external("file", ctx, %{"action" => "read", "path" => "data/hello.txt"})
+             Sanctum.Gate.call_external("file", ctx, %{
+               "action" => "read",
+               "path" => "data/hello.txt"
+             })
 
     assert {:error, {:not_found, "Folder", "payloads"}} =
-             Grimoire.call_external("file", ctx, %{"action" => "list", "path" => "payloads"})
+             Sanctum.Gate.call_external("file", ctx, %{"action" => "list", "path" => "payloads"})
   end
 
   test "a missing argument and an unknown action answer in words", %{ctx: ctx} do
@@ -240,10 +248,11 @@ defmodule Arca.Providers.FilesTest do
         permissions: MapSet.new([:storage_read])
     }
 
-    assert {:ok, %{entries: _}} = Grimoire.call_external("file", reader, %{"action" => "list"})
+    assert {:ok, %{entries: _}} =
+             Sanctum.Gate.call_external("file", reader, %{"action" => "list"})
 
     assert {:error, _refused} =
-             Grimoire.call_external("file", reader, %{
+             Sanctum.Gate.call_external("file", reader, %{
                "action" => "write",
                "path" => "data/x.txt",
                "content" => "x"
@@ -731,7 +740,7 @@ defmodule Arca.Providers.FilesTest do
                 %Prima.Refusal{
                   stage: :admission,
                   reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
-                }} = Grimoire.call_external("file", key.(who), args),
+                }} = Sanctum.Gate.call_external("file", key.(who), args),
                "file.#{args["action"]} answered a key"
       end
 
@@ -741,7 +750,7 @@ defmodule Arca.Providers.FilesTest do
 
       # A withdrawal is the sender's own row in the sender's athanor.
       assert {:ok, %{status: "withdrawn"}} =
-               Grimoire.call_external("file", key.(sender), %{
+               Sanctum.Gate.call_external("file", key.(sender), %{
                  "action" => "withdraw",
                  "offer_id" => offer_id
                })
@@ -954,7 +963,7 @@ defmodule Arca.Providers.FilesTest do
     :ok
   end
 
-  defp call(who, args), do: Grimoire.call_external("file", who.ctx, args)
+  defp call(who, args), do: Sanctum.Gate.call_external("file", who.ctx, args)
 
   defp offer(who, paths, to),
     do: call(who, %{"action" => "offer", "paths" => paths, "to" => to})

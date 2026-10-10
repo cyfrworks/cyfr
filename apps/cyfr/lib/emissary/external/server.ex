@@ -454,7 +454,8 @@ defmodule Emissary.External.Server do
              }}
 
           {:error, reason} ->
-            {:reply, {:error, "External call failed to start: #{Grimoire.render(reason)}"}, state}
+            {:reply, {:error, "External call failed to start: #{Sanctum.Gate.render(reason)}"},
+             state}
         end
     end
   end
@@ -901,7 +902,7 @@ defmodule Emissary.External.Server do
 
   defp failure_sentence(reason) when is_binary(reason), do: reason
   defp failure_sentence(%{__exception__: true} = exception), do: Exception.message(exception)
-  defp failure_sentence(reason), do: Grimoire.render(reason)
+  defp failure_sentence(reason), do: Sanctum.Gate.render(reason)
 
   # An upstream JSON-RPC error's own message; one without a message is
   # named as such rather than spelled.

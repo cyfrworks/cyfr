@@ -492,8 +492,8 @@ defmodule Locus.Runtime.ModelContractTest do
     # A catalog tool's schema is the one the gate derives for the actions the
     # policy offers, and nothing the policy does not offer is named.
     for {name, actions} <- [{"notes", ~w(keep list read search)}, {"system", ~w(status)}] do
-      {:ok, definition} = Grimoire.get_tool(name)
-      derived = Grimoire.restrict_tool(definition, actions)["inputSchema"]
+      {:ok, definition} = Sanctum.Gate.get_tool(name)
+      derived = Sanctum.Gate.restrict_tool(definition, actions)["inputSchema"]
       %{"parameters" => given} = Enum.find(tools, &(&1["name"] == name))
 
       assert given == Jason.decode!(Jason.encode!(derived))

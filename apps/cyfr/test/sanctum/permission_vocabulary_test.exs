@@ -52,7 +52,7 @@ defmodule Sanctum.PermissionVocabularyTest do
   end
 
   defp annotation_permissions do
-    for module <- Application.fetch_env!(:cyfr, :tool_providers),
+    for module <- Application.fetch_env!(:sanctum, :tool_providers),
         Code.ensure_loaded?(module),
         tool <- module.tools(),
         {_verb, annotation} <- get_in(tool, [Access.key(:annotations, %{}), :actions]) || %{},

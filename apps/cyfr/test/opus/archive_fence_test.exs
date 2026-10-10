@@ -423,7 +423,7 @@ defmodule Opus.ArchiveFenceTest do
       }
 
       assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
-               Grimoire.call_in_chain("system", guest, forged, authority)
+               Sanctum.Gate.call_in_chain("system", guest, forged, authority)
     end
 
     test "refuses once the calling execution's athanor was archived", %{
@@ -607,7 +607,7 @@ defmodule Opus.ArchiveFenceTest do
 
   defp status(guest, authority, lineage) do
     opts = if lineage, do: [lineage: lineage], else: []
-    Grimoire.call_in_chain("system", guest, %{"action" => "status"}, authority, opts)
+    Sanctum.Gate.call_in_chain("system", guest, %{"action" => "status"}, authority, opts)
   end
 
   defp refusal_sentence, do: "An in-chain call names the execution that makes it"

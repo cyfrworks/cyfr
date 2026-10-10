@@ -88,7 +88,7 @@ defmodule Aqua.Loop.Policy do
   """
   @spec replay_safe?(Call.t()) :: boolean()
   def replay_safe?(%Call{kind: :hand, tool: tool, action: action}),
-    do: Grimoire.VirtualTools.recovery(tool, action) == :replay_safe
+    do: Sanctum.VirtualTools.recovery(tool, action) == :replay_safe
 
   def replay_safe?(%Call{kind: :catalog, tool: tool, action: action}),
     do: Aqua.Ops.replay_safe?(tool, action)
@@ -319,10 +319,10 @@ defmodule Aqua.Loop.Policy do
   end
 
   # A launch is an external act, approved one card at a time.
-  defp standing(%Call{kind: :launch}), do: Grimoire.standing_to_wire(false)
+  defp standing(%Call{kind: :launch}), do: Sanctum.Gate.standing_to_wire(false)
 
   defp standing(%Call{} = call),
-    do: Grimoire.standing_to_wire(Aqua.Kinds.standing_for(call.tool, call.action || ""))
+    do: Sanctum.Gate.standing_to_wire(Aqua.Kinds.standing_for(call.tool, call.action || ""))
 
   @doc """
   The canonical proposal a card shows for `call`, and its digest hashes.

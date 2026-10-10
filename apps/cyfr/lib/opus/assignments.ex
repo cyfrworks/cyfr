@@ -107,7 +107,7 @@ defmodule Opus.Assignments do
       # parent's; a run admitted with none has its own timeout from now.
       deadline: Map.get(admitted, :deadline) || now + admitted.timeout_ms,
       lease_until: now + Arca.ExecutionAttempts.lease_seconds() * 1000,
-      intercepted: Grimoire.host_intercepted_actions()
+      intercepted: Sanctum.Gate.host_intercepted_actions()
     }
 
     with {:ok, token} <- Assignment.sign(assignment, Keys.assign_key()),

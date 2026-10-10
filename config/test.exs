@@ -111,7 +111,7 @@ config :sanctum, allow_tenancy_resolver_override: true
 
 # One app's tests run without the sibling apps' providers; the catalog
 # boots leniently here and refuses to elsewhere.
-config :cyfr, tool_providers_lenient: true
+config :sanctum, tool_providers_lenient: true
 
 # Don't run the background retention sweeper in the test supervision tree —
 # its periodic DB cleanup conflicts with the Ecto sandbox connection lifecycle.

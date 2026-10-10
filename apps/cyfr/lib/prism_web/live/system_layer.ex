@@ -143,7 +143,7 @@ defmodule PrismWeb.SystemLayer do
   connected page with a person behind it, unless it was mounted with
   `listen: false`, which hears no record's facts: one listener process per
   LiveView, opened through the gate's stream admission
-  (`Grimoire.open_stream/3`) under the page's context, ended with the
+  (`Sanctum.Gate.open_stream/3`) under the page's context, ended with the
   LiveView, opened again at its grant's deadline or when the page's focus
   moves, a refused open included. Each open reads `confirmation.pending`
   and shows every record already waiting, since no fact announces them
@@ -815,7 +815,7 @@ defmodule PrismWeb.SystemLayer do
     if connected?(socket) and listenable?(ctx) do
       tag = CyfrWeb.ContextGuard.capture(socket)
 
-      with {:ok, grant} <- Grimoire.open_stream(ctx, @stream, nil),
+      with {:ok, grant} <- Sanctum.Gate.open_stream(ctx, @stream, nil),
            {:ok, pid} <- Listener.start(self(), socket.assigns.id, ctx, grant, tag) do
         socket
         |> assign(:listening, %{pid: pid, grant_id: grant.grant_id, athanor_id: ctx.athanor_id})

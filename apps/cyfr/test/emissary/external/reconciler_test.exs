@@ -448,7 +448,7 @@ defmodule Emissary.External.ReconcilerTest do
     {:ok, %{last_used_at: used}} = Arca.VaultStorage.get(actor, entry.id)
     {:ok, row} = Arca.McpServerStorage.get(actor, "movedsrv")
     assert {:error, sentence} = Emissary.External.Servers.ensure_started(row, ctx)
-    assert sentence == Grimoire.render(:destination_mismatch)
+    assert sentence == Sanctum.Gate.render(:destination_mismatch)
     assert {:ok, %{last_used_at: ^used}} = Arca.VaultStorage.get(actor, entry.id)
   end
 

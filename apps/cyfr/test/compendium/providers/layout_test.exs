@@ -111,8 +111,8 @@ defmodule Compendium.Providers.LayoutTest do
     end
 
     test "the provider is rostered, so the gate serves it" do
-      assert Layout in Application.fetch_env!(:cyfr, :tool_providers)
-      assert {:ok, {Layout, _meta}} = Grimoire.lookup("layout")
+      assert Layout in Application.fetch_env!(:sanctum, :tool_providers)
+      assert {:ok, {Layout, _meta}} = Sanctum.Gate.lookup("layout")
     end
   end
 

@@ -17,7 +17,7 @@ defmodule Emissary.MCP.Router do
   The Router decides nothing; the gate authorizes, once, and records the
   call as one admission decision under the call id the request's context
   carries (`ctx.call_id`), or one it mints. A `tools/call`
-  of a tool the table holds goes to `Grimoire.call_external/4` with the
+  of a tool the table holds goes to `Sanctum.Gate.call_external/4` with the
   caller's arguments as sent, and the gate authorizes the declared action
   before it casts the remaining fields, so an unauthorized caller
   receives the access refusal rather than a schema-detail error. What the
@@ -25,7 +25,7 @@ defmodule Emissary.MCP.Router do
   as a JSON-RPC error by its class; what the tool itself answered is a
   failed tool result, except an authentication, permission or consent
   refusal, which keeps its JSON-RPC code wherever it was raised.
-  Discovery reads the same annotations through `Grimoire.Visibility`.
+  Discovery reads the same annotations through `Sanctum.Visibility`.
   Handlers keep only the residual checks an annotation cannot express
   (tenant presence, ownership, definition authority, the domain's finer
   consent arms).
@@ -36,7 +36,7 @@ defmodule Emissary.MCP.Router do
 
   The anonymous surface — which tool actions a caller with no credential may
   reach — is the set of actions annotated `auth: :anonymous`, read through
-  `Grimoire.Visibility`, which also decides what such a caller may
+  `Sanctum.Visibility`, which also decides what such a caller may
   *see*. Discovery and invocation read one declaration: when each held its
   own list, discovery advertised writes that invocation refused.
 
@@ -44,9 +44,9 @@ defmodule Emissary.MCP.Router do
 
   `resources/list` and `resources/templates/list` are unauthenticated
   metadata. `resources/read` is an ordinary operation call:
-  `Grimoire.resolve_resource/1` names the operation that
+  `Sanctum.Gate.resolve_resource/1` names the operation that
   declares the URI's scheme, and the Router calls it once through
-  `Grimoire.call_external/4` with the URI as its one argument —
+  `Sanctum.Gate.call_external/4` with the URI as its one argument —
   the same gate, plane, authentication, permission and runner a
   `tools/call` gets. The Router makes no authorization decision of its
   own; it renders the answer.
@@ -159,8 +159,8 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
 
   defp dispatch_method(ctx, "tools/list", params, _id) do
-    Grimoire.list_tools()
-    |> Grimoire.visible_tools(ctx)
+    Sanctum.Gate.list_tools()
+    |> Sanctum.Gate.visible_tools(ctx)
     |> paginate("tools", params)
   end
 
@@ -179,7 +179,7 @@ defmodule Emissary.MCP.Router do
       )
     else
       # Check tool existence first — unknown tools are protocol errors per spec
-      case Grimoire.get_tool(name) do
+      case Sanctum.Gate.get_tool(name) do
         {:error, :not_found} ->
           refused(
             ctx,
@@ -193,7 +193,7 @@ defmodule Emissary.MCP.Router do
         {:ok, tool_def} ->
           has_output_schema = Map.has_key?(tool_def, "outputSchema")
 
-          case Grimoire.call_external(name, ctx, arguments,
+          case Sanctum.Gate.call_external(name, ctx, arguments,
                  runner: :supervised,
                  call_id: ctx.call_id
                ) do
@@ -206,7 +206,7 @@ defmodule Emissary.MCP.Router do
               else
                 {:ok,
                  %{
-                   "content" => [%{"type" => "text", "text" => Grimoire.render(reason)}],
+                   "content" => [%{"type" => "text", "text" => Sanctum.Gate.render(reason)}],
                    "isError" => true
                  }}
               end
@@ -222,12 +222,12 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
 
   defp dispatch_method(_ctx, "resources/list", params, _id) do
-    resources = Grimoire.list_resources()
+    resources = Sanctum.Gate.list_resources()
     paginate(resources, "resources", params)
   end
 
   defp dispatch_method(_ctx, "resources/templates/list", params, _id) do
-    templates = Grimoire.list_resource_templates()
+    templates = Sanctum.Gate.list_resource_templates()
     paginate(templates, "resourceTemplates", params)
   end
 
@@ -294,14 +294,14 @@ defmodule Emissary.MCP.Router do
     # Under the pipeline's call id, or one the decision mints for a caller
     # that arrived with none.
     decision =
-      Grimoire.refused_decision(ctx, reason,
+      Sanctum.Gate.refused_decision(ctx, reason,
         call_id: ctx.call_id,
         plane: :external,
         tool: tool,
         action: input_action(input)
       )
 
-    Grimoire.open_decision(ctx, decision, %{method: method, input: input})
+    Sanctum.Gate.open_decision(ctx, decision, %{method: method, input: input})
   end
 
   defp input_action(%{"action" => action}) when is_binary(action), do: action
@@ -309,8 +309,8 @@ defmodule Emissary.MCP.Router do
 
   defp read_resource(ctx, uri, _id) do
     read =
-      with {:ok, tool, action} <- Grimoire.resolve_resource(uri) do
-        Grimoire.call_external(tool, ctx, %{"action" => action, "uri" => uri},
+      with {:ok, tool, action} <- Sanctum.Gate.resolve_resource(uri) do
+        Sanctum.Gate.call_external(tool, ctx, %{"action" => action, "uri" => uri},
           runner: :supervised,
           call_id: ctx.call_id,
           method: "resources/read"
@@ -392,8 +392,8 @@ defmodule Emissary.MCP.Router do
   # sentence — an authorization refusal's worded for the caller's
   # credential, a consent signal's with its `error.data`.
   defp protocol_error(ctx, reason, where) do
-    refusal = Grimoire.classify(reason)
-    code = Message.refusal_code(refusal, where, Grimoire.code_override(refusal))
+    refusal = Sanctum.Gate.classify(reason)
+    code = Message.refusal_code(refusal, where, Sanctum.Gate.code_override(refusal))
     inner = refusal.reason
 
     cond do
@@ -497,6 +497,6 @@ defmodule Emissary.MCP.Router do
   # `cursor` as the only parameter, and nothing in this repository — no client,
   # no guide, no test — ever sent it. The view it produced is still reachable
   # where it is actually used, through the `tools` tool
-  # (`Grimoire.Provider`), which is how a running component
+  # (`Sanctum.Providers.System`), which is how a running component
   # discovers what it may call.
 end

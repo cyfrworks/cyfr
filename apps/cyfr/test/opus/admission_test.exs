@@ -954,7 +954,7 @@ defmodule Opus.AdmissionTest do
                Admission.admit(ctx, "#{@target_node}:0.1.0", %{}, type: "formula")
 
       assert %Prima.Refusal{class: :invalid_argument, message: message} =
-               Grimoire.Error.classify(reason)
+               Sanctum.Refusals.classify(reason)
 
       refute message =~ @target_node
     end
@@ -966,7 +966,7 @@ defmodule Opus.AdmissionTest do
                Admission.admit(ctx, "#{@target_node}:0.1.0", %{}, type: "sk-not-a-type")
 
       assert %Prima.Refusal{class: :invalid_argument, message: message} =
-               Grimoire.Error.classify(:invalid_component_type)
+               Sanctum.Refusals.classify(:invalid_component_type)
 
       refute message =~ "sk-not-a-type"
     end
@@ -990,7 +990,7 @@ defmodule Opus.AdmissionTest do
       assert {:error, {:corrupt, {:artifact, ^digest}} = reason} =
                Opus.Artifacts.fetch(ctx, digest, "#{@target_node}:0.1.0")
 
-      assert %Prima.Refusal{class: :corrupt} = Grimoire.Error.classify(reason)
+      assert %Prima.Refusal{class: :corrupt} = Sanctum.Refusals.classify(reason)
     end
   end
 
@@ -1052,7 +1052,7 @@ defmodule Opus.AdmissionTest do
         refute_received {^lifecycle, _event, ^execution_id}
         assert log == ""
 
-        assert %Prima.Refusal{class: :not_owner} = Grimoire.Error.classify(:not_owner)
+        assert %Prima.Refusal{class: :not_owner} = Sanctum.Refusals.classify(:not_owner)
       end
     end
   end

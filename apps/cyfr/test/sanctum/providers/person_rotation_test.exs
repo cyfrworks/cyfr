@@ -156,9 +156,13 @@ defmodule Sanctum.Providers.PersonRotationTest do
   end
 
   defp rotate(ctx, request_id),
-    do: Grimoire.call_external("person", ctx, %{"action" => "rotate", "request_id" => request_id})
+    do:
+      Sanctum.Gate.call_external("person", ctx, %{
+        "action" => "rotate",
+        "request_id" => request_id
+      })
 
-  defp refusal({:error, reason}), do: Grimoire.Error.classify(reason)
+  defp refusal({:error, reason}), do: Sanctum.Refusals.classify(reason)
 
   describe "person.rotate" do
     test "a session alone is asked for key_rotation and opens nothing" do

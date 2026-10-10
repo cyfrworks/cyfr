@@ -17,7 +17,7 @@ defmodule Aqua.Ops do
   @doc "Call a tool on the external plane under `ctx`."
   @spec call_tool(String.t(), Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
   def call_tool(tool, %Sanctum.Context{} = ctx, args) when is_binary(tool) and is_map(args) do
-    Grimoire.call_external(tool, ctx, args)
+    Sanctum.Gate.call_external(tool, ctx, args)
   end
 
   @doc """
@@ -31,30 +31,30 @@ defmodule Aqua.Ops do
   @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Prima.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   def call_in_chain(tool, %Sanctum.Context{} = ctx, args, authority, opts \\ []) do
-    Grimoire.call_in_chain(tool, ctx, args, authority, opts)
+    Sanctum.Gate.call_in_chain(tool, ctx, args, authority, opts)
   end
 
   @doc """
   The registry's `kind` annotation for `tool`/`action` — nil when the tool
   or the annotation is unknown, so the gap stays visible (no `_default`
-  fallback). A catalogued tool's kind alone: `Grimoire.tool_kind/2` also
+  fallback). A catalogued tool's kind alone: `Sanctum.Gate.tool_kind/2` also
   classifies the virtual hands and the external namespace.
   """
   @spec action_kind(String.t(), String.t()) :: atom() | nil
   def action_kind(tool, action) do
-    case Grimoire.get_tool(tool) do
-      {:ok, tool_def} -> Grimoire.annotation_kind(tool_def, action)
+    case Sanctum.Gate.get_tool(tool) do
+      {:ok, tool_def} -> Sanctum.Gate.annotation_kind(tool_def, action)
       _ -> nil
     end
   end
 
   @doc "Stop the supervised handler of the in-chain call named by `handle`."
   @spec cancel_call(term()) :: :ok
-  def cancel_call(handle), do: Grimoire.cancel_call(handle)
+  def cancel_call(handle), do: Sanctum.Gate.cancel_call(handle)
 
   @doc "Forget a call's cancellation handle once the loop is done with it."
   @spec release_call(term()) :: :ok
-  def release_call(handle), do: Grimoire.release_call(handle)
+  def release_call(handle), do: Sanctum.Gate.release_call(handle)
 
   @doc """
   Whether `tool`/`action` is reviewed as safe to re-dispatch after an
@@ -63,8 +63,8 @@ defmodule Aqua.Ops do
   """
   @spec replay_safe?(String.t(), String.t()) :: boolean()
   def replay_safe?(tool, action) do
-    case Grimoire.get_tool(tool) do
-      {:ok, tool_def} -> Grimoire.annotation_recovery(tool_def, action) == :replay_safe
+    case Sanctum.Gate.get_tool(tool) do
+      {:ok, tool_def} -> Sanctum.Gate.annotation_recovery(tool_def, action) == :replay_safe
       _ -> false
     end
   end
@@ -75,8 +75,8 @@ defmodule Aqua.Ops do
   """
   @spec action_standing(String.t(), String.t()) :: :thread | false | nil
   def action_standing(tool, action) do
-    case Grimoire.get_tool(tool) do
-      {:ok, tool_def} -> Grimoire.annotation_standing(tool_def, action)
+    case Sanctum.Gate.get_tool(tool) do
+      {:ok, tool_def} -> Sanctum.Gate.annotation_standing(tool_def, action)
       _ -> nil
     end
   end
@@ -84,7 +84,7 @@ defmodule Aqua.Ops do
   @doc "Whether a running chain would refuse `tool`/`action` (nothing a chain can run)."
   @spec in_chain_refused?(String.t(), String.t()) :: boolean()
   def in_chain_refused?(tool, action),
-    do: Grimoire.in_chain_refused?(tool, action)
+    do: Sanctum.Gate.in_chain_refused?(tool, action)
 
   @doc """
   Whether an approved `tool`/`action` is an execution the assistant runs
@@ -93,13 +93,13 @@ defmodule Aqua.Ops do
   a card (`Aqua.Loop`).
   """
   @spec child_execution?(String.t(), String.t()) :: boolean()
-  def child_execution?(tool, action), do: Grimoire.host_intercepted?(tool, action)
+  def child_execution?(tool, action), do: Sanctum.Gate.host_intercepted?(tool, action)
 
   @doc """
-  One sentence for a refusal: the gate's renderer (`Grimoire.render/1`),
+  One sentence for a refusal: the gate's renderer (`Sanctum.Gate.render/1`),
   the same sentence everywhere — this text persists as a thread message
   every member reads, so an internal term is never spelled into it.
   """
   @spec render_refusal(term()) :: String.t()
-  def render_refusal(reason), do: Grimoire.render(reason)
+  def render_refusal(reason), do: Sanctum.Gate.render(reason)
 end

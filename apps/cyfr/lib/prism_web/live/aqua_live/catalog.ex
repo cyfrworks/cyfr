@@ -31,13 +31,13 @@ defmodule PrismWeb.AquaLive.Catalog do
   """
   def enumerate_tool_actions do
     mcp =
-      Grimoire.list_tools()
+      Sanctum.Gate.list_tools()
       |> Enum.map(fn t ->
         name = t["name"]
         schema = t["inputSchema"] || %{}
         props = schema["properties"] || %{}
         action_enum = get_in(props, ["action", "enum"]) || []
-        actions_meta = Grimoire.declared_actions(t)
+        actions_meta = Sanctum.Gate.declared_actions(t)
         default_meta = actions_meta["_default"]
 
         actions =
@@ -81,7 +81,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   end
 
   defp reachable?(name, action) when is_binary(name),
-    do: Grimoire.chain_reachable?(name, action)
+    do: Sanctum.Gate.chain_reachable?(name, action)
 
   defp reachable?(_name, _action), do: false
 

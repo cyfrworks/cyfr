@@ -107,7 +107,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     on_exit(fn -> Arca.Cache.delete_match({:external_tools, :_}) end)
 
     {:ok, %{tools: tools}} =
-      Grimoire.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth,
+      Sanctum.Gate.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
@@ -132,7 +132,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:ok, %{tools: tools}} =
-      Grimoire.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth,
+      Sanctum.Gate.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
@@ -156,11 +156,11 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     # Everything in-chain-planed but ungranted was pruned, and a call
     # would be denied — the catalogue and the verdict are one fact.
-    for tool_def <- Grimoire.list_tools(),
+    for tool_def <- Sanctum.Gate.list_tools(),
         name = tool_def["name"],
         not String.contains?(name, ":"),
         action <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
-        :in_chain in Grimoire.Annotations.planes(tool_def, action),
+        :in_chain in Sanctum.Annotations.planes(tool_def, action),
         {name, action} not in advertised do
       assert {:deny, :tool_not_granted} =
                Prima.Authority.Transition.step(
@@ -175,7 +175,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, reason} =
-      Grimoire.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
+      Sanctum.Gate.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
@@ -183,14 +183,14 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     # which the proxy hands back classified rather than as a bare sentence.
     refute is_binary(reason)
     refute match?(%Prima.Refusal{stage: :admission}, reason)
-    refute Grimoire.Error.render(reason) =~ "Denied by chain authority"
+    refute Sanctum.Refusals.render(reason) =~ "Denied by chain authority"
   end
 
   test "a tool outside the granted patterns is not callable", %{ctx: ctx, digest: digest} do
     auth = authority_with_server(digest)
 
     {:error, %Prima.Refusal{stage: :admission, message: message}} =
-      Grimoire.call_in_chain("ghserver:repo_get", guest(ctx), %{}, auth,
+      Sanctum.Gate.call_in_chain("ghserver:repo_get", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
@@ -208,7 +208,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, %Prima.Refusal{stage: :admission, message: message}} =
-      Grimoire.call_in_chain("othersrv:issues.list", guest(ctx), %{}, auth,
+      Sanctum.Gate.call_in_chain("othersrv:issues.list", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
@@ -228,7 +228,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
 
     {:error, %Prima.Refusal{stage: :admission, message: message}} =
-      Grimoire.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
+      Sanctum.Gate.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
@@ -239,7 +239,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, %Prima.Refusal{stage: :admission, message: message}} =
-      Grimoire.call_in_chain("ghost:issues.list", guest(ctx), %{}, auth,
+      Sanctum.Gate.call_in_chain("ghost:issues.list", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 

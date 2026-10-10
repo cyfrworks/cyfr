@@ -36,7 +36,7 @@ defmodule Emissary.Web.MCPController do
 
   The transport records no row of its own. A `tools/call` or
   `resources/read` is an operation call, recorded by the gate as one
-  admission decision with its request-log row (`Grimoire.Decisions`),
+  admission decision with its request-log row (`Sanctum.Decisions`),
   correlated to this request by its `X-Request-Id`; discovery is not
   recorded.
 
@@ -45,7 +45,7 @@ defmodule Emissary.Web.MCPController do
   Closing the response stream cancels the request — the only cancellation
   signal this transport has. It is noticed on the next write, which is either
   the next notification or the keep-alive comment, and it kills the tool task
-  through the gate (`Grimoire.cancel_request/1`) as well as the wrapper
+  through the gate (`Sanctum.Gate.cancel_request/1`) as well as the wrapper
   waiting on it. A call whose wrapper is killed that way records no
   completion: its decision stays admitted with an unknown outcome.
 
@@ -120,8 +120,8 @@ defmodule Emissary.Web.MCPController do
       # `:auth_required`, which is what a client retries on. Answering
       # every refusal `:insufficient_permissions` told an unauthenticated
       # caller their permissions were the problem.
-      refusal = Grimoire.classify(e.reason)
-      code = Message.refusal_code(refusal, :transport, Grimoire.code_override(refusal))
+      refusal = Sanctum.Gate.classify(e.reason)
+      code = Message.refusal_code(refusal, :transport, Sanctum.Gate.code_override(refusal))
 
       # Re-rendered from the reason rather than `Exception.message/1`: the
       # struct bakes its prose at raise time without the auth method, and
@@ -301,8 +301,8 @@ defmodule Emissary.Web.MCPController do
   # decision and echoes the request's JSON-RPC id. `reason` is the
   # refusal's term; its class picks the code and the HTTP status.
   defp listen_error(conn, request_id, reason, message) do
-    refusal = Grimoire.classify(reason)
-    code = Message.refusal_code(refusal, :transport, Grimoire.code_override(refusal))
+    refusal = Sanctum.Gate.classify(reason)
+    code = Message.refusal_code(refusal, :transport, Sanctum.Gate.code_override(refusal))
 
     conn
     |> put_resp_header("x-request-id", request_id)
@@ -387,16 +387,16 @@ defmodule Emissary.Web.MCPController do
   # retryable when the store could not answer or a remote person's identity
   # could not be confirmed fresh, a sign-in otherwise.
   defp refuse_stream(conn, id, :identity_stale),
-    do: refuse_stream(conn, id, Grimoire.classify(:identity_stale))
+    do: refuse_stream(conn, id, Sanctum.Gate.classify(:identity_stale))
 
   defp refuse_stream(conn, id, :unavailable) do
-    refusal = Grimoire.classify(:auth_provider_error)
+    refusal = Sanctum.Gate.classify(:auth_provider_error)
 
     sse_event(
       conn,
       Message.encode_error(
         id,
-        Message.refusal_code(refusal, :transport, Grimoire.code_override(refusal)),
+        Message.refusal_code(refusal, :transport, Sanctum.Gate.code_override(refusal)),
         refusal.message
       )
     )
@@ -407,7 +407,7 @@ defmodule Emissary.Web.MCPController do
       conn,
       Message.encode_error(
         id,
-        Message.refusal_code(refusal, :transport, Grimoire.code_override(refusal)),
+        Message.refusal_code(refusal, :transport, Sanctum.Gate.code_override(refusal)),
         refusal.message
       )
     )
@@ -576,7 +576,7 @@ defmodule Emissary.Web.MCPController do
   # killed after it, since killing the wrapper alone would leave the
   # `async_nolink`'d tool task running with nobody waiting on it.
   defp cancel_work(%Task{} = task, request_id) do
-    Grimoire.cancel_request(request_id)
+    Sanctum.Gate.cancel_request(request_id)
     Task.shutdown(task, :brutal_kill)
     :cancelled
   end

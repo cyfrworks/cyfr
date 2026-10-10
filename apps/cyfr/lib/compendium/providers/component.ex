@@ -1573,7 +1573,7 @@ defmodule Compendium.Providers.Component do
   # refusal of the shared table, which `Compendium.OCI.Client.pull/2`
   # answers as itself, reads as its sentence.
   defp pull_failure_text(reason) when is_binary(reason), do: reason
-  defp pull_failure_text(reason), do: Grimoire.render(reason)
+  defp pull_failure_text(reason), do: Sanctum.Gate.render(reason)
 
   # Enrich an OCI pull result with auto-pulled dependencies.
   # After OCI pull, the component should be in the local registry.

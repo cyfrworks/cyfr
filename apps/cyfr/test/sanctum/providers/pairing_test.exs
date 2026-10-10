@@ -73,9 +73,9 @@ defmodule Sanctum.Providers.PairingTest do
   defp glass, do: Context.build(%{authenticated: false, client_ip: "198.51.100.44"})
 
   defp call(ctx, action, args),
-    do: Grimoire.call_external("pairing", ctx, Map.put(args, "action", action))
+    do: Sanctum.Gate.call_external("pairing", ctx, Map.put(args, "action", action))
 
-  defp refusal({:error, reason}), do: Grimoire.Error.classify(reason)
+  defp refusal({:error, reason}), do: Sanctum.Refusals.classify(reason)
 
   # Beginning a pairing and revoking a device are sensitive changes: the
   # person proves each, and the call repeats naming it

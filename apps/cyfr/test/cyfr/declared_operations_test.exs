@@ -21,19 +21,19 @@ defmodule Cyfr.DeclaredOperationsTest do
   @digest "sha256:" <> String.duplicate("ab", 32)
 
   defp operation(tool, action) do
-    {_provider, meta} = Map.fetch!(Grimoire.Catalog.operations(), tool)
+    {_provider, meta} = Map.fetch!(Sanctum.Catalog.operations(), tool)
 
     Enum.find(meta.operations, &(&1.action == action)) ||
       flunk("#{tool}.#{action} is not declared")
   end
 
   defp call(ctx, tool, action, args),
-    do: Grimoire.call_external(tool, ctx, Map.put(args, "action", action))
+    do: Sanctum.Gate.call_external(tool, ctx, Map.put(args, "action", action))
 
   describe "the declared operations" do
     test "are on the table as their work will be admitted: interactive, external, never replayed" do
       for tool <- ~w(person pairing passkey confirmation) do
-        {_provider, meta} = Map.fetch!(Grimoire.Catalog.operations(), tool)
+        {_provider, meta} = Map.fetch!(Sanctum.Catalog.operations(), tool)
 
         for op <- meta.operations do
           assert op.planes == [:external], "#{tool}.#{op.action}"

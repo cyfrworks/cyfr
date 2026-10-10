@@ -13,7 +13,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
   """
   use ExUnit.Case, async: false
 
-  alias Grimoire.Probe
+  alias Sanctum.Gate.Probe
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.Context
@@ -102,11 +102,13 @@ defmodule Emissary.MCP.ChainLoggingTest do
     root_call_id = Prima.UUID7.generate_id("call")
     ctx = %{ctx | request_id: request_id}
 
-    Grimoire.Catalog.with_providers([Probe.Typed], fn ->
+    Sanctum.Catalog.with_providers([Probe.Typed], fn ->
       # The root call, as a transport hands it to the gate under the call
       # id its entry minted.
       {:ok, _} =
-        Grimoire.call_external("typed_probe", ctx, %{"action" => "empty"}, call_id: root_call_id)
+        Sanctum.Gate.call_external("typed_probe", ctx, %{"action" => "empty"},
+          call_id: root_call_id
+        )
 
       # Now the component that call started runs and calls a tool from
       # inside the sandbox. Its context is the handler's with the plane
@@ -121,7 +123,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
       auth = authority_granting(["typed_probe.empty"])
 
       {:ok, _} =
-        Grimoire.call_in_chain("typed_probe", guest, %{"action" => "empty"}, auth,
+        Sanctum.Gate.call_in_chain("typed_probe", guest, %{"action" => "empty"}, auth,
           lineage: Map.put(lineage, :call_id, root_call_id)
         )
     end)
@@ -159,9 +161,9 @@ defmodule Emissary.MCP.ChainLoggingTest do
     guest = Context.enter_guest(ctx)
     auth = authority_granting(["typed_probe.empty"])
 
-    Grimoire.Catalog.with_providers([Probe.Typed], fn ->
+    Sanctum.Catalog.with_providers([Probe.Typed], fn ->
       assert {:ok, echoed} =
-               Grimoire.call_in_chain(
+               Sanctum.Gate.call_in_chain(
                  "typed_probe",
                  guest,
                  %{
@@ -188,8 +190,8 @@ defmodule Emissary.MCP.ChainLoggingTest do
 
     # The dispatch of that very request. It arrives with a request id
     # already on the context; the transport writes no row of its own.
-    Grimoire.Catalog.with_providers([Probe.Typed], fn ->
-      {:ok, _} = Grimoire.call_external("typed_probe", ctx, %{"action" => "empty"})
+    Sanctum.Catalog.with_providers([Probe.Typed], fn ->
+      {:ok, _} = Sanctum.Gate.call_external("typed_probe", ctx, %{"action" => "empty"})
     end)
 
     assert [row] = rows_for(ctx, request_id)
@@ -201,8 +203,8 @@ defmodule Emissary.MCP.ChainLoggingTest do
   test "an internal caller with no request id becomes its own root", %{ctx: ctx} do
     ctx = %{ctx | request_id: nil}
 
-    Grimoire.Catalog.with_providers([Probe.Typed], fn ->
-      {:ok, _} = Grimoire.call_external("typed_probe", ctx, %{"action" => "empty"})
+    Sanctum.Catalog.with_providers([Probe.Typed], fn ->
+      {:ok, _} = Sanctum.Gate.call_external("typed_probe", ctx, %{"action" => "empty"})
     end)
 
     {:ok, rows} = Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100)
@@ -220,9 +222,9 @@ defmodule Emissary.MCP.ChainLoggingTest do
   test "discovery and the log's own reads are not recorded", %{ctx: ctx} do
     ctx = %{ctx | request_id: nil}
 
-    {:ok, _} = Grimoire.call_external("mcp_log", ctx, %{"action" => "list"})
-    {:ok, _} = Grimoire.call_external("system", ctx, %{"action" => "status"})
-    {:ok, _} = Grimoire.call_external("tools", ctx, %{"action" => "list"})
+    {:ok, _} = Sanctum.Gate.call_external("mcp_log", ctx, %{"action" => "list"})
+    {:ok, _} = Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
+    {:ok, _} = Sanctum.Gate.call_external("tools", ctx, %{"action" => "list"})
 
     assert Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100) == {:ok, []},
            "a discovery or log read wrote a row to the log"

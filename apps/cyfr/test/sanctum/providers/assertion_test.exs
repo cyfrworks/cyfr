@@ -95,7 +95,7 @@ defmodule Sanctum.Providers.AssertionTest do
     %{user: user, ctx: ctx, genesis: genesis}
   end
 
-  defp call(ctx, args), do: Grimoire.call_external("person", ctx, args)
+  defp call(ctx, args), do: Sanctum.Gate.call_external("person", ctx, args)
 
   # The person begins a sign-in carry to `destination` here, as their
   # browser's `/carry` page asks.

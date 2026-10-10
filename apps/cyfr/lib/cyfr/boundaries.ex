@@ -88,7 +88,7 @@ defmodule Cyfr.Boundaries do
   use Boundary,
     top_level?: true,
     deps: [
-      Grimoire,
+      Sanctum,
       Opus,
       Emissary,
       Emissary.Router,
@@ -204,7 +204,7 @@ defmodule Cyfr.Boundaries do
   # from one of Elixir, OTP or a fetched dependency. Boundary knows each
   # boundary's modules, not which names are this repository's.
   @product_roots ~w(
-    Arca Sanctum Aqua Compendium Opus Emissary Grimoire
+    Arca Sanctum Aqua Compendium Opus Emissary
     Prism PrismWeb Cyfr CyfrWeb Locus Codex Prima
   )
 
@@ -217,7 +217,7 @@ defmodule Cyfr.Boundaries do
 
   `prima` is the set of module names Prima defines, read from the tree
   rather than listed here: `Prima.Actor` is Prima's and
-  `Grimoire.Catalog` is the host's, and only the tree knows which is
+  `Compendium.Registry` is the host's, and only the tree knows which is
   which.
   """
   @spec layer(String.t(), MapSet.t(String.t())) :: layer()
@@ -308,8 +308,9 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Consent Sanctum.Context Sanctum.ExecutionStanding Sanctum.Notify
-        Sanctum.Provisioning Sanctum.Tenancy Sanctum.ToolGrants
+        Sanctum Sanctum.Consent Sanctum.Context Sanctum.ExecutionStanding Sanctum.Gate
+        Sanctum.Notify Sanctum.Provisioning Sanctum.Tenancy Sanctum.ToolGrants
+        Sanctum.VirtualTools
       ),
       reason:
         "`Sanctum.ToolGrants` holds the standing answers a person gave, which are " <>
@@ -325,6 +326,9 @@ defmodule Cyfr.Boundaries do
           "declares, through consent's own derivation (`Aqua.ConsentStatus`), and which " <>
           "named accounts an app's own ingress binds (`Sanctum.Consent.Accounts`); the " <>
           "row below narrows it. " <>
+          "`Sanctum.Gate` is the gate a turn's tool calls pass, and the table's kinds, " <>
+          "actions and annotations the assistant reads. `Sanctum.VirtualTools` declares " <>
+          "the assistant's virtual tools, which its hands, kinds and policy read. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -348,9 +352,9 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Consent Sanctum.Context Sanctum.Egress Sanctum.Network
+        Sanctum Sanctum.Consent Sanctum.Context Sanctum.Egress Sanctum.Gate Sanctum.Network
         Sanctum.Namespace Sanctum.Provisioning Sanctum.RegistryCredentials Sanctum.SignIn
-        Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.Webhook
+        Sanctum.TinctureAuth Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
       ),
       reason:
         "`Sanctum.Provisioning` is the first-need hook and the half of filling an " <>
@@ -368,24 +372,25 @@ defmodule Cyfr.Boundaries do
           "mints them. A frame's grant revision is read through `Sanctum.Consent`'s own " <>
           "entries (`profiles/2`, `head_consent/2`). `Compendium` never names " <>
           "`Sanctum.Tenancy`. " <>
+          "`Sanctum.Gate` is the gate the component domain's own calls pass, the streams " <>
+          "it lists and the refusals it renders. `Sanctum.VirtualTools` declares the " <>
+          "virtual tools an agent's source and the assistant's agent read. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
     %{
       from: [
         "apps/cyfr/lib/cyfr/**/*.ex",
-        "apps/cyfr/lib/grimoire/**/*.ex",
         "apps/cyfr/lib/opus/**/*.ex",
         "apps/cyfr/lib/opus.ex"
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Atoms Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller
-        Sanctum.Carry Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door
-        Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Grimoire Sanctum.InstanceEntries
-        Sanctum.Network Sanctum.Policy Sanctum.Session
-        Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.ToolServerDigest Sanctum.Unauthorized
-        Sanctum.UnauthorizedError Sanctum.VaultReader
+        Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
+        Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door
+        Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries Sanctum.Network
+        Sanctum.OperationTable Sanctum.Policy Sanctum.Proxy Sanctum.Session Sanctum.Tenancy
+        Sanctum.TinctureAccess Sanctum.VaultReader
       ),
       reason:
         "the glue and application namespace: boot wiring, the operation table, " <>
@@ -401,8 +406,13 @@ defmodule Cyfr.Boundaries do
           "host's own watch (`Cyfr.StandingWatch`) is what carries the drop to " <>
           "every member and calls back down to make it. `Sanctum.ExecutionStanding` " <>
           "decides whether an admitted execution's grant still stands: admission, " <>
-          "every host effect, the in-chain gate and the sweep ask it. `Sanctum.Egress` " <>
-          "is `Grimoire.Provider`'s registry probe and `system.notify` webhook. " <>
+          "every host effect, the in-chain gate and the sweep ask it. " <>
+          "`Sanctum.Catalog` is the composition root's load of the operation table, its " <>
+          "check of every declared stream's topic, and the table it installs as " <>
+          "consent's port (`Sanctum.OperationTable`); `Sanctum.Proxy` is the proxy port " <>
+          "it installs. `Sanctum.Gate` is the gate's facade: the admission roster names " <>
+          "its heads, execution's in-chain calls, decisions and refusals go through it, " <>
+          "and the root starts its supervisor. " <>
           "`Sanctum.Network` is `Opus.Host.Egress`'s one resolution of a guest's " <>
           "outbound host, which it pins under the attempt's authority. " <>
           "`Sanctum.TinctureAccess` is that invocation's reread of the tincture it " <>
@@ -424,8 +434,9 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
         Sanctum.Context Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
-        Sanctum.ExecutionStanding
-        Sanctum.Network Sanctum.Recovery Sanctum.Session Sanctum.TinctureAccess
+        Sanctum.ExecutionStanding Sanctum.Gate
+        Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Session
+        Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Vault.OAuthGrant Sanctum.VaultReader
         Sanctum.Webhook
@@ -451,6 +462,9 @@ defmodule Cyfr.Boundaries do
           "when it mints. The directory's routes are `Sanctum.Directory`'s decisions, the " <>
           "restore ingress `Sanctum.Recovery`'s, and the device channel checks each " <>
           "certificate and proof through `Sanctum.DeviceCerts`. " <>
+          "`Sanctum.Gate` is the gate every MCP and HTTP call the adapters make passes. " <>
+          "`Sanctum.Proxy` is the proxy port `Emissary.External.Proxy` implements, and " <>
+          "`Sanctum.Refusals` the gate's refusal renderer it answers a proxied call with. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -479,10 +493,10 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp
-        Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Pairing Sanctum.Passkeys
-        Sanctum.Session Sanctum.SignIn Sanctum.Tenancy Sanctum.TinctureAuth
-        Sanctum.Unauthorized Sanctum.Webhook
+        Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller Sanctum.Catalog
+        Sanctum.ClientIp Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Gate
+        Sanctum.Pairing Sanctum.Passkeys Sanctum.Refusals Sanctum.Session Sanctum.SignIn
+        Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
       ),
       reason:
         "the console, its browser sign-in (`PrismWeb.AuthController`, which asks the " <>
@@ -513,6 +527,10 @@ defmodule Cyfr.Boundaries do
           "alone: the `/live` socket is handled by the endpoint BEFORE the router, so " <>
           "it passes no rate-limit plug, which makes the console the only per-address " <>
           "bound on the anonymous device flows it starts. " <>
+          "`Sanctum.Gate` is the gate the console's and the web tier's calls pass. " <>
+          "`Sanctum.Catalog` is the approval card's read of an action's declaration and " <>
+          "the stream ingress's read of a stream's (`CyfrWeb.SSE`), and `Sanctum.Refusals` " <>
+          "the renderer the vault page answers a refusal with. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -1002,8 +1020,6 @@ defmodule Cyfr.Boundaries do
         "apps/prima/lib/**/*.ex",
         "apps/arca/lib/**/*.ex",
         "apps/sanctum/lib/**/*.ex",
-        "apps/cyfr/lib/grimoire/**/*.ex",
-        "apps/cyfr/lib/grimoire.ex",
         "apps/cyfr/lib/compendium/**/*.ex",
         "apps/cyfr/lib/compendium.ex",
         "apps/cyfr/lib/aqua/**/*.ex",
@@ -1170,7 +1186,7 @@ defmodule Cyfr.Boundaries do
   # depend on who publishes or hears it.
   @bus_free %{
     from: ["apps/cyfr/lib/cyfr/bus.ex", "apps/cyfr/lib/cyfr/bus/**/*.ex"],
-    roots: ~w(Sanctum Aqua Compendium Opus Grimoire Emissary Prism PrismWeb CyfrWeb),
+    roots: ~w(Sanctum Aqua Compendium Opus Emissary Prism PrismWeb CyfrWeb),
     namespaces: ~w(Opus Opus.Schedules),
     reason:
       "`Cyfr.Bus` owns every topic and payload and checks every publish against the " <>
@@ -1178,7 +1194,7 @@ defmodule Cyfr.Boundaries do
         "make the one shared carrier depend on its own publishers and subscribers. " <>
         "The roster names them as text (`Cyfr.Bus.topics/0`), which is not a reach. " <>
         "Boundary cannot hold this: the bus sits in the host's boundary, whose deps " <>
-        "admit `Sanctum` and `Grimoire` for the rest of the host."
+        "admit `Sanctum` for the rest of the host."
   }
 
   @doc """
@@ -1204,53 +1220,6 @@ defmodule Cyfr.Boundaries do
       Enum.any?(@bus_free.namespaces, &(module == &1 or String.starts_with?(module, &1 <> ".")))
   end
 
-  # The gate sits below the domains and the surfaces it dispatches for: it
-  # reaches providers through the operation table and the transport's
-  # proxied tools through `Grimoire.Proxy`, so it names neither. Each
-  # allowed reach is exact, names the owner it moves to, and is reported
-  # stale the day the gate stops making it.
-  @gate_free %{
-    from: ["apps/cyfr/lib/grimoire.ex", "apps/cyfr/lib/grimoire/**/*.ex"],
-    roots: ~w(Emissary Aqua Compendium Opus Prism PrismWeb CyfrWeb),
-    allow: [],
-    reason:
-      "the operation table dispatches for every domain and surface; naming one " <>
-        "would make the gate depend on what it gates. Proxied tools reach it " <>
-        "through `Grimoire.Proxy`, which `Cyfr.Application` installs. The gate's " <>
-        "boundary refuses each of these edges; this roster also reads an alias " <>
-        "directive and a quoted name, which Boundary does not trace."
-  }
-
-  @doc """
-  The gate's own tree and what it may not name: `from` is where to read,
-  `roots` the domain and surface namespaces it stays clear of, and
-  `allow` the exact reaches still moving to their `owner`.
-  """
-  @spec gate_free() :: map()
-  def gate_free, do: @gate_free
-
-  @doc "Every name in `named` the gate may not reach, as `path:line names Module`."
-  @spec gate_violations(named()) :: [String.t()]
-  def gate_violations(named) do
-    allowed = MapSet.new(@gate_free.allow, & &1.name)
-
-    for {path, names} <- named,
-        {module, number} <- names,
-        (module |> String.split(".") |> hd()) in @gate_free.roots,
-        not MapSet.member?(allowed, module),
-        uniq: true,
-        do: "#{path}:#{number} names #{module}"
-  end
-
-  @doc "The allowed reaches `named` no longer makes."
-  @spec stale_gate_allowances(named()) :: [String.t()]
-  def stale_gate_allowances(named) do
-    reached =
-      for {_path, names} <- named, {module, _number} <- names, into: MapSet.new(), do: module
-
-    for %{name: name} <- @gate_free.allow, not MapSet.member?(reached, name), do: name
-  end
-
   # What the host application calls of the identity domain, function by
   # function. The namespace rows above say which Sanctum namespaces a tree
   # may name; this says which functions of them `apps/cyfr/lib` calls at
@@ -1269,7 +1238,6 @@ defmodule Cyfr.Boundaries do
       system_context: 0
     ],
     "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
-    "Sanctum.Atoms" => [known_permissions: 0],
     "Sanctum.Attach" => [resolve: 5],
     "Sanctum.Auth" => [provider: 0],
     "Sanctum.Auth.CyfrDoor" => [
@@ -1295,6 +1263,12 @@ defmodule Cyfr.Boundaries do
       revalidate_session: 1
     ],
     "Sanctum.Carry" => [sweep: 1],
+    "Sanctum.Catalog" => [
+      action_declaration: 1,
+      load!: 0,
+      lookup_stream: 1,
+      stream_entries: 0
+    ],
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
     "Sanctum.ClientIp" => [from_connect_info: 1, resolve: 1],
@@ -1302,15 +1276,7 @@ defmodule Cyfr.Boundaries do
     # The assistant reads which named accounts an app's own ingress binds
     # and which entry a name resolves to, never a value, never a write.
     "Sanctum.Consent.Accounts" => [list: 1, resolve: 4],
-    "Sanctum.Consent.Authz" => [
-      authorize_interactive: 1,
-      authorize_interactive_in_chain: 1,
-      authorize_staging: 1
-    ],
-    # The gate's stream admission reads a frame's version and its placement
-    # through the component-facts port, the one reader of a version's
-    # placement Grimoire has, since it names no Compendium.
-    "Sanctum.Consent.Components" => [get_component: 5, install!: 1, tincture_placement: 2],
+    "Sanctum.Consent.Components" => [install!: 1],
     # Admission reads the loader's own-head damage through its one
     # definition, the family and the refusal each member answers.
     "Sanctum.Consent.Loader" => [
@@ -1332,11 +1298,9 @@ defmodule Cyfr.Boundaries do
       enter_guest: 1,
       focus: 2,
       for_scheduled: 2,
-      has_permission?: 2,
       internal: 1,
       refocus: 2,
       require_permission: 2,
-      require_permission: 3,
       require_tenant!: 1
     ],
     "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
@@ -1345,11 +1309,51 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Door.Store" => [requests: 0],
     "Sanctum.Egress" => [pinned_request: 5],
     "Sanctum.ExecutionStanding" => [capture: 1, retired_attempts: 3, stamp_only: 1, verify: 1],
-    "Sanctum.Grimoire" => [install!: 1],
+    "Sanctum.Gate" => [
+      annotation_kind: 2,
+      annotation_recovery: 2,
+      annotation_standing: 2,
+      call_external: 3,
+      call_external: 4,
+      call_in_chain: 5,
+      cancel_call: 1,
+      cancel_request: 1,
+      chain_reachable?: 2,
+      classify: 1,
+      close_decision: 3,
+      code_override: 1,
+      configured_providers: 0,
+      declared_actions: 1,
+      get_tool: 1,
+      host_intercepted?: 2,
+      host_intercepted_actions: 0,
+      in_chain_refused?: 2,
+      list_resource_templates: 0,
+      list_resources: 0,
+      list_tools: 0,
+      open_decision: 2,
+      open_decision: 3,
+      open_stream: 2,
+      open_stream: 3,
+      operations: 0,
+      refused_decision: 3,
+      release_call: 1,
+      render: 1,
+      resolve_resource: 1,
+      resources: 0,
+      restrict_tool: 2,
+      standing_scope: 1,
+      standing_to_wire: 1,
+      streams: 0,
+      tool_actions: 1,
+      tool_kind: 2,
+      visible_tools: 2
+    ],
     "Sanctum.InstanceEntries" => [sweep_usage: 0],
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Notify" => [broadcast: 3],
+    "Sanctum.OperationTable" => [install!: 1],
     "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
     "Sanctum.Passkeys" => [sign_in: 2, sign_in_challenge: 0],
     "Sanctum.Policy.Enforcement" => [record: 1],
@@ -1374,7 +1378,9 @@ defmodule Cyfr.Boundaries do
       take_claim: 2,
       under_claim: 3
     ],
+    "Sanctum.Proxy" => [install!: 1],
     "Sanctum.Recovery" => [reproof: 2, restore: 2, restore_challenge: 1],
+    "Sanctum.Refusals" => [classify: 1, render: 1],
     "Sanctum.RegistryCredentials" => [delete: 3, get: 3, list: 2, put_push_token: 6],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1, get: 1],
     "Sanctum.SignIn" => [admitted: 2, link_ticket: 2, record_namespace: 2, suggested_slug: 2],
@@ -1434,7 +1440,7 @@ defmodule Cyfr.Boundaries do
       normalize_input_schema: 1,
       tool_patterns: 1
     ],
-    "Sanctum.Unauthorized" => [class: 1, code_override: 1, message: 1, message: 2, reason?: 1],
+    "Sanctum.Unauthorized" => [message: 1, message: 2, reason?: 1],
     "Sanctum.Vault" => [destination_matches?: 3, disclosed?: 2],
     "Sanctum.Vault.OAuthGrant" => [complete: 3, redirect_uri: 0],
     "Sanctum.VaultReader" => [
@@ -1444,6 +1450,20 @@ defmodule Cyfr.Boundaries do
       unseal_disclosed: 2,
       unseal_for: 3,
       usable: 3
+    ],
+    "Sanctum.VirtualTools" => [
+      action: 2,
+      action_kinds: 0,
+      action_pairs: 0,
+      actions_of: 1,
+      auto_only?: 2,
+      auto_permitted_kind?: 1,
+      catalyst_for: 1,
+      catalysts: 0,
+      kind_for: 2,
+      recovery: 2,
+      table: 0,
+      tool?: 1
     ],
     "Sanctum.Webhook" => [
       decode_input_template: 1,
@@ -1993,10 +2013,10 @@ defmodule Cyfr.Boundaries do
       written_at_boot_by: @boot_writer
     },
     %{
-      behaviour: "Sanctum.Grimoire",
+      behaviour: "Sanctum.OperationTable",
       what: "consent's view of the operation table",
       declared_by: :sanctum,
-      implemented_by: "Grimoire.Catalog",
+      implemented_by: "Sanctum.Catalog",
       written_at_boot_by: @boot_writer
     },
     %{
@@ -2007,9 +2027,9 @@ defmodule Cyfr.Boundaries do
       written_at_boot_by: @boot_writer
     },
     %{
-      behaviour: "Grimoire.Proxy",
+      behaviour: "Sanctum.Proxy",
       what: "proxied tool resolution",
-      declared_by: :cyfr,
+      declared_by: :sanctum,
       implemented_by: "Emissary.External.Proxy",
       written_at_boot_by: @boot_writer
     },
@@ -2060,11 +2080,11 @@ defmodule Cyfr.Boundaries do
   @admission_entries [
     # The gate's heads: refusals made before its own checks and identity.
     # The external head takes the context its surface built.
-    %{module: Grimoire, site: :call_external, plane: :external, origin: :none},
-    %{module: Grimoire, site: :call_in_chain, plane: :in_chain, origin: :inherits},
+    %{module: Sanctum.Gate, site: :call_external, plane: :external, origin: :none},
+    %{module: Sanctum.Gate, site: :call_in_chain, plane: :in_chain, origin: :inherits},
     # The gate's stream entry: an open is decided and recorded there, and
     # MCP `subscriptions/listen` admits through it.
-    %{module: Grimoire, site: :open_stream, plane: :external, origin: :none},
+    %{module: Sanctum.Gate, site: :open_stream, plane: :external, origin: :none},
     # The JSON-RPC router's pre-gate refusals: a request naming no tool or
     # an unknown one, a read naming no resource, an unknown method.
     %{module: Emissary.MCP.Router, site: :dispatch, plane: :external, origin: :programmatic},
@@ -2399,7 +2419,7 @@ defmodule Cyfr.Boundaries do
     "apps/cyfr/test/opus/start_refusal_test.exs" =>
       "the refusal a keeper gives is `Locus.Runtime.Keeper.Channel.refusal/1`'s shape, and this " <>
         "case holds CYFR's rendering of it to that shape.",
-    "apps/cyfr/test/grimoire/error_renderers_test.exs" =>
+    "apps/cyfr/test/sanctum/gate/error_renderers_test.exs" =>
       "the in-chain guest's renderer is the runtime's, and the one-vocabulary case is " <>
         "that the three renderers agree sentence for sentence.",
     "apps/cyfr/test/cyfr/wit_abi_drift_test.exs" =>

@@ -33,7 +33,7 @@ defmodule Prima.Ops.IndependenceTest do
         |> String.replace(~r/@typedoc\s+""".*?"""/s, "")
 
       refute source =~ ~r/\bSanctum\b/, "#{file} names Sanctum outside documentation"
-      refute source =~ ~r/(?<![\w.])Grimoire\.Catalog\b/, "#{file} reaches the catalog"
+      refute source =~ ~r/\bSanctum\.Catalog\b/, "#{file} reaches the catalog"
     end
 
     assert {:handle, 3} in Prima.Provider.behaviour_info(:callbacks)

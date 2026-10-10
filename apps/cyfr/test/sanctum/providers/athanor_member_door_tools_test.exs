@@ -8,7 +8,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   """
   use ExUnit.Case, async: false
 
-  alias Grimoire.Error
+  alias Sanctum.Refusals
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
@@ -51,7 +51,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     {:ok, alice: alice, bob: bob, ops: ops, ctx: ctx, n: n}
   end
 
-  defp call(ctx, tool, args), do: Grimoire.call_external(tool, ctx, args)
+  defp call(ctx, tool, args), do: Sanctum.Gate.call_external(tool, ctx, args)
 
   test "a person creates a group, is its only member, and the others see it once added",
        %{alice: alice, bob: bob, ctx: ctx, n: n} do
@@ -73,7 +73,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(b, "member", %{"action" => "list", "athanor" => group.id})
 
-    assert Error.render(msg) =~ "Not a member"
+    assert Refusals.render(msg) =~ "Not a member"
 
     # add by user id, then bob sees it
     assert {:ok, %{state: "added"}} =
@@ -170,7 +170,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => shared})
 
-    assert Error.render(msg) =~ "More than one person"
+    assert Refusals.render(msg) =~ "More than one person"
 
     # An address the provider positively refuses cannot be seated by email:
     # a permanent invitation nobody could ever claim is the alternative.
@@ -187,7 +187,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => unverified})
 
-    assert Error.render(msg) =~ "not verified"
+    assert Refusals.render(msg) =~ "not verified"
     refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
 
     # By user id they are seatable — the id is the person.
@@ -227,9 +227,9 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     k = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
 
     assert {:error, msg} = call(k, "athanor", %{"action" => "create", "name" => "Nope"})
-    assert Error.render(msg) =~ "person's act"
+    assert Refusals.render(msg) =~ "person's act"
     assert {:error, msg} = call(k, "member", %{"action" => "add", "email" => "x@example.com"})
-    assert Error.render(msg) =~ "person's act"
+    assert Refusals.render(msg) =~ "person's act"
     # reads are fine
     assert {:ok, %{athanors: _}} = call(k, "athanor", %{"action" => "list"})
   end
@@ -251,9 +251,9 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: personal.id)
     assert {:error, msg} = call(a, "athanor", %{"action" => "archive", "athanor" => personal.id})
-    assert Error.render(msg) =~ "own athanor"
+    assert Refusals.render(msg) =~ "own athanor"
     assert {:error, msg} = call(a, "member", %{"action" => "leave", "athanor" => personal.id})
-    assert Error.render(msg) =~ "own athanor"
+    assert Refusals.render(msg) =~ "own athanor"
   end
 
   test "door.* is the operator's: refused for a member, hidden from tools/list, open to an admin",
@@ -297,7 +297,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(admin, "door", %{"action" => "deny", "value" => "ops@example.com"})
 
-    assert Error.render(msg) =~ "platform admin"
+    assert Refusals.render(msg) =~ "platform admin"
 
     # allowing again reverses the standing
     assert {:ok, _} = call(admin, "door", %{"action" => "allow", "value" => email})
@@ -630,11 +630,11 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     b = %{ctx.(bob, Sanctum.TestContext.athanor_id(), []) | session_token_hash: "x"}
     assert {:error, msg} = call(b, "session", %{"action" => "use", "athanor" => group.slug})
-    assert Error.render(msg) =~ "Not a member"
+    assert Refusals.render(msg) =~ "Not a member"
 
     k = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
     assert {:error, msg} = call(k, "session", %{"action" => "use", "athanor" => group.slug})
-    assert Error.render(msg) =~ "needs a session"
+    assert Refusals.render(msg) =~ "needs a session"
   end
 
   test "a person's own athanor has one member on every path — its owner is neither joined nor removed",
@@ -653,11 +653,11 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     for target <- [%{"user_id" => bob}, %{"email" => "bob#{n}@example.com"}] do
       assert {:error, msg} = call(a, "member", Map.merge(%{"action" => "add"}, target))
-      assert Error.render(msg) =~ "one member"
+      assert Refusals.render(msg) =~ "one member"
     end
 
     assert {:error, msg} = call(a, "member", %{"action" => "remove", "user_id" => alice})
-    assert Error.render(msg) =~ "owner"
+    assert Refusals.render(msg) =~ "owner"
     assert Members.member?(alice, personal.id)
     assert Members.count_by_athanor(personal.id) == {:ok, 1}
 
@@ -686,7 +686,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
         ] do
       assert {:error, msg} = call(who, tool, Map.put(args, "athanor", group.id))
 
-      assert Error.render(msg) =~ "archived",
+      assert Refusals.render(msg) =~ "archived",
              "#{tool}.#{args["action"]} ran on an archived athanor"
     end
 
@@ -711,7 +711,9 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     for {tool, action} <- [{"member", "list"}, {"athanor", "unarchive"}] do
       assert {:error, msg} = call(operator, tool, %{"action" => action, "athanor" => group.id})
-      assert Error.render(msg) =~ "Not a member", "#{tool}.#{action} admitted a seatless operator"
+
+      assert Refusals.render(msg) =~ "Not a member",
+             "#{tool}.#{action} admitted a seatless operator"
     end
 
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
@@ -726,7 +728,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
       assert {:error, msg} =
                call(operator, "athanor", %{"action" => action, "athanor" => group.id})
 
-      assert Error.render(msg) =~ "Not a member", "athanor.#{action} admitted a seatless operator"
+      assert Refusals.render(msg) =~ "Not a member",
+             "athanor.#{action} admitted a seatless operator"
     end
 
     assert {:ok, %{status: "active"}} = Athanors.get(group.id)
@@ -771,7 +774,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(operator, "athanor", %{"action" => "unarchive", "athanor" => personal.id})
 
-    assert Error.render(msg) =~ "Not a member"
+    assert Refusals.render(msg) =~ "Not a member"
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
     assert {:ok, %{id: id, status: "archived"}} =
@@ -798,7 +801,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(operator, "athanor", %{"action" => "purge", "athanor" => group.id})
 
-    assert Error.render(msg) =~ "archive it first"
+    assert Refusals.render(msg) =~ "archive it first"
 
     assert {:ok, %{status: "archived"}} =
              call(a, "athanor", %{"action" => "archive", "athanor" => group.id})
@@ -843,7 +846,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(operator, "athanor", %{"action" => "destroy", "athanor" => personal.id})
 
-    assert Error.render(msg) =~ "own athanor is not destroyed here"
+    assert Refusals.render(msg) =~ "own athanor is not destroyed here"
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
   end
 

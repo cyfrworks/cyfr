@@ -65,8 +65,8 @@ defmodule Cyfr.Test.SeedBundleTest do
     # else: no action, no connect origin and no page of its own.
     assert declaration.actions == []
     assert [%{name: "runs.changes", subject: nil}] = declaration.streams
-    assert Compendium.tincture_check_streams(declaration, Grimoire.streams()) == :ok
-    assert Compendium.tincture_check_canvas_streams(declaration, Grimoire.streams()) == :ok
+    assert Compendium.tincture_check_streams(declaration, Sanctum.Gate.streams()) == :ok
+    assert Compendium.tincture_check_canvas_streams(declaration, Sanctum.Gate.streams()) == :ok
 
     for key <- ~w(entry actions connect),
         do: refute(Map.has_key?(canvas.manifest["tincture"], key), key)
@@ -120,8 +120,8 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     for operation <- declaration.actions do
       [tool, action] = String.split(operation, ".")
-      assert {:ok, {_provider, definition}} = Grimoire.lookup(tool)
-      assert Map.has_key?(Grimoire.declared_actions(definition), action), operation
+      assert {:ok, {_provider, definition}} = Sanctum.Gate.lookup(tool)
+      assert Map.has_key?(Sanctum.Gate.declared_actions(definition), action), operation
     end
 
     dir = Path.join(Path.expand("../../../../seed/components", __DIR__), vault.rel)

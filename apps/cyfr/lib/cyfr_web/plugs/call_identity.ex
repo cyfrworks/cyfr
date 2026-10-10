@@ -17,7 +17,7 @@ defmodule CyfrWeb.Plugs.CallIdentity do
 
   `CyfrWeb.Plugs.Authenticate` stamps both ids on the context it
   builds (`stamp/2`); an entry that builds its own context does the same.
-  The gate takes the call id as its own (`Grimoire.call_external/4`'s
+  The gate takes the call id as its own (`Sanctum.Gate.call_external/4`'s
   `:call_id`), so the decision it records and the row the transport
   answered share one identity.
 
@@ -104,7 +104,7 @@ defmodule CyfrWeb.Plugs.CallIdentity do
       {tool, action} = names(conn)
 
       decision =
-        Grimoire.refused_decision(ctx, reason,
+        Sanctum.Gate.refused_decision(ctx, reason,
           call_id: call_id,
           request_id: Map.get(assigns, :request_id),
           plane: :external,
@@ -112,7 +112,7 @@ defmodule CyfrWeb.Plugs.CallIdentity do
           action: action
         )
 
-      Grimoire.open_decision(ctx, decision, %{method: method(conn), input: %{}})
+      Sanctum.Gate.open_decision(ctx, decision, %{method: method(conn), input: %{}})
       decided(conn)
     end
   end

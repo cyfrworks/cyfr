@@ -6,7 +6,7 @@ defmodule Aqua.Hands do
   AQUA's hands — `files`, `storage`, `http`, `request_setup`: the
   model-visible operations that run a local catalyst under the pinned
   authority, and the UI event that is none. Their table is
-  `Grimoire.VirtualTools`; this module reads it.
+  `Sanctum.VirtualTools`; this module reads it.
 
   Every question about a hand is answered from those rows:
 
@@ -33,9 +33,9 @@ defmodule Aqua.Hands do
   launch may name (`launch_accounts/1`), read once when a turn starts.
   """
 
-  alias Grimoire.VirtualTools
+  alias Sanctum.VirtualTools
 
-  # The table is `Grimoire.VirtualTools`'s; the catalysts are read from it at
+  # The table is `Sanctum.VirtualTools`'s; the catalysts are read from it at
   # compile time so the patterns below match what it declares.
   @files_catalyst VirtualTools.catalyst_for("files")
   @http_catalyst VirtualTools.catalyst_for("http")
@@ -44,7 +44,7 @@ defmodule Aqua.Hands do
   @components_prefix "components/"
   @components_root "components"
 
-  @doc "The catalyst a virtual tool family runs on (`Grimoire.VirtualTools.catalyst_for/1`)."
+  @doc "The catalyst a virtual tool family runs on (`Sanctum.VirtualTools.catalyst_for/1`)."
   @spec catalyst_for(String.t()) :: String.t() | nil
   defdelegate catalyst_for(tool), to: VirtualTools
 
@@ -53,30 +53,30 @@ defmodule Aqua.Hands do
 
   @type canonical :: %{tool: String.t(), action: String.t(), args: map()}
 
-  @doc "The whole virtual-tool table (`Grimoire.VirtualTools.table/0`)."
+  @doc "The whole virtual-tool table (`Sanctum.VirtualTools.table/0`)."
   @spec catalog() :: %{String.t() => VirtualTools.family()}
   defdelegate catalog, to: VirtualTools, as: :table
 
-  @doc "The kind of a virtual `tool.action`, or nil (`Grimoire.VirtualTools.kind_for/2`)."
+  @doc "The kind of a virtual `tool.action`, or nil (`Sanctum.VirtualTools.kind_for/2`)."
   @spec kind_for(String.t(), String.t()) :: atom() | nil
   defdelegate kind_for(tool, action), to: VirtualTools
 
   @doc """
   Whether `tool.action` may only ever be `auto`: a UI event the guest
   answers in place, never a catalyst call a card could run
-  (`Grimoire.VirtualTools.auto_only?/2`).
+  (`Sanctum.VirtualTools.auto_only?/2`).
   """
   @spec auto_only?(String.t(), String.t()) :: boolean()
   defdelegate auto_only?(tool, action), to: VirtualTools
 
-  @doc "The actions a virtual tool has, or `[]` (`Grimoire.VirtualTools.actions_of/1`)."
+  @doc "The actions a virtual tool has, or `[]` (`Sanctum.VirtualTools.actions_of/1`)."
   @spec actions_of(String.t()) :: [String.t()]
   defdelegate actions_of(tool), to: VirtualTools
 
   @doc """
   Return `[{tool, [{action, kind}]}]` shaped like the MCP path's enumeration,
   so the AQUA harness can merge MCP + virtual + external surfaces into one
-  uniform list (`Grimoire.VirtualTools.action_kinds/0`).
+  uniform list (`Sanctum.VirtualTools.action_kinds/0`).
   """
   @spec list_for_panel() :: [{String.t(), [{String.t(), atom()}]}]
   defdelegate list_for_panel, to: VirtualTools, as: :action_kinds

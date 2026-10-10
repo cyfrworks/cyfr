@@ -180,7 +180,7 @@ defmodule PrismWeb.TopbarLiveTest do
       )
 
     assert {:ok, _} =
-             Grimoire.call_external("door", ctx, %{
+             Sanctum.Gate.call_external("door", ctx, %{
                "action" => "resolve",
                "id" => id,
                "decision" => "reject"
@@ -241,7 +241,7 @@ defmodule PrismWeb.TopbarLiveTest do
 
     offer = fn paths ->
       {:ok, %{offer_id: offer_id}} =
-        Grimoire.call_external("file", sam_ctx, %{
+        Sanctum.Gate.call_external("file", sam_ctx, %{
           "action" => "offer",
           "paths" => paths,
           "to" => rita.user_id
@@ -275,7 +275,7 @@ defmodule PrismWeb.TopbarLiveTest do
 
     # Declined, it waits no longer; the other still does.
     assert {:ok, %{status: "declined"}} =
-             Grimoire.call_external("file", session(rita.user_id, home.id), %{
+             Sanctum.Gate.call_external("file", session(rita.user_id, home.id), %{
                "action" => "decline",
                "offer_id" => first
              })

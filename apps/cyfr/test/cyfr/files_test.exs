@@ -540,7 +540,7 @@ defmodule Arca.FilesTest do
     :ok
   end
 
-  defp file(who, args), do: Grimoire.call_external("file", who.ctx, args)
+  defp file(who, args), do: Sanctum.Gate.call_external("file", who.ctx, args)
 
   # A document published straight through the store, as a note is kept:
   # staged bytes and their reference, with no claimant in this suite.

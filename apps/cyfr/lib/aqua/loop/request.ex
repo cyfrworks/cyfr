@@ -373,7 +373,7 @@ defmodule Aqua.Loop.Request do
   end
 
   defp catalog_tool(tool, actions, policy) do
-    case Grimoire.get_tool(tool) do
+    case Sanctum.Gate.get_tool(tool) do
       {:ok, definition} ->
         schema = definition["inputSchema"] || %{"type" => "object"}
         properties = Map.get(schema, "properties", %{})
@@ -387,7 +387,7 @@ defmodule Aqua.Loop.Request do
           %{
             "name" => tool,
             "description" => (definition["description"] || "") <> asks(tool, kept, policy),
-            "parameters" => Grimoire.restrict_tool(definition, kept)["inputSchema"]
+            "parameters" => Sanctum.Gate.restrict_tool(definition, kept)["inputSchema"]
           }
         end
 

@@ -68,7 +68,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   end
 
   defp grants(ctx, args),
-    do: Grimoire.call_external("profile", ctx, Map.put(args, "action", "grants"))
+    do: Sanctum.Gate.call_external("profile", ctx, Map.put(args, "action", "grants"))
 
   # `profile.grants` as an MCP client sends it, under a request of its
   # own: the response the client receives.
@@ -513,7 +513,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert ids(answer) == Enum.sort([lender, borrower])
 
       assert {:ok, %{status: "revoked"}} =
-               Grimoire.call_external("profile", ctx, %{
+               Sanctum.Gate.call_external("profile", ctx, %{
                  "action" => "revoke",
                  "profile_id" => lender
                })
@@ -571,7 +571,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
         assert %Prima.Refusal{
                  class: :unavailable,
                  message: "A profile that lends a key here cannot be read right now — try again."
-               } = Grimoire.Error.classify(reason)
+               } = Sanctum.Refusals.classify(reason)
 
         Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
       end
@@ -585,7 +585,8 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert {:error, {:lender_corrupt, @dep, ^lender} = reason} =
                grants(ctx, %{"entry_id" => entry})
 
-      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} =
+               Sanctum.Refusals.classify(reason)
 
       :ok = ConsentFixtures.hand_edit_head!(ctx, lender, scope: "versionless")
       set_profile!(ctx, lender, kind: "sideways")
@@ -593,7 +594,8 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert {:error, {:lender_corrupt, @dep, ^lender} = reason} =
                grants(ctx, %{"entry_id" => entry})
 
-      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} =
+               Sanctum.Refusals.classify(reason)
     end
 
     test "a borrower reaches the entry only under an origin its lender admits", %{ctx: ctx} do
@@ -640,7 +642,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
       # Revoked through the tool: gone from the read at once.
       assert {:ok, %{status: "revoked"}} =
-               Grimoire.call_external("profile", ctx, %{
+               Sanctum.Gate.call_external("profile", ctx, %{
                  "action" => "revoke",
                  "profile_id" => active
                })
@@ -691,7 +693,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
         assert {:error, {:head_corrupt, ^damaged} = reason} = grants(ctx, args), inspect(args)
 
         assert %Prima.Refusal{class: :corrupt, message: ^sentence} =
-                 Grimoire.Error.classify(reason)
+                 Sanctum.Refusals.classify(reason)
 
         assert grants_over_mcp(ctx, args) == error_response(-33104, sentence)
       end
@@ -793,7 +795,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
         Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
 
         assert {:error, reason} = answer, "#{table} #{inspect(args)}"
-        assert %Prima.Refusal{class: :unavailable} = Grimoire.Error.classify(reason)
+        assert %Prima.Refusal{class: :unavailable} = Sanctum.Refusals.classify(reason)
       end
 
       assert {:ok, %{count: 1}} = grants(ctx, %{"entry_id" => entry})
@@ -952,7 +954,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
     actor = Sanctum.Context.actor(ctx)
     {:ok, head} = Arca.ConsentStorage.head_consent(actor, app.profile_id)
 
-    assert Grimoire.call_external("profile", ctx, %{
+    assert Sanctum.Gate.call_external("profile", ctx, %{
              "action" => "grant",
              "profile_id" => app.profile_id,
              "expected_consent_revision" => head.revision,
@@ -985,7 +987,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       actor = Sanctum.Context.actor(ctx)
       {:ok, head} = Arca.ConsentStorage.head_consent(actor, app.profile_id)
 
-      assert Grimoire.call_external("profile", ctx, %{
+      assert Sanctum.Gate.call_external("profile", ctx, %{
                "action" => "preview",
                "decisions" => %{
                  "ref" => app.ref,

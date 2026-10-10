@@ -97,23 +97,23 @@ defmodule Opus.Providers.TinctureTest do
     end
 
     test "the provider is configured, audited and in the operation table" do
-      assert Tincture in Grimoire.configured_providers()
-      assert Grimoire.Catalog.audit_action_kinds([Tincture]) == :ok
-      assert {:ok, {Tincture, _tool}} = Grimoire.lookup("tincture")
+      assert Tincture in Sanctum.Gate.configured_providers()
+      assert Sanctum.Catalog.audit_action_kinds([Tincture]) == :ok
+      assert {:ok, {Tincture, _tool}} = Sanctum.Gate.lookup("tincture")
       assert Tincture.service() == "opus"
     end
 
     test "no action is reachable from a running chain" do
       for action <- ["invoke_public", "invoke_protected"] do
-        refute Grimoire.chain_reachable?("tincture", action)
+        refute Sanctum.Gate.chain_reachable?("tincture", action)
       end
     end
   end
 
   describe "discovery" do
     defp listed(ctx) do
-      Grimoire.list_tools()
-      |> Grimoire.Visibility.filter_for_context(ctx)
+      Sanctum.Gate.list_tools()
+      |> Sanctum.Visibility.filter_for_context(ctx)
       |> Enum.find(&(&1["name"] == "tincture"))
     end
 
@@ -139,10 +139,10 @@ defmodule Opus.Providers.TinctureTest do
       # Admitted: the handler answers, and a tincture that does not exist
       # is not found.
       assert {:error, %Prima.Refusal{class: :not_found, stage: :execution}} =
-               Grimoire.call_external("tincture", public_ctx, args("invoke_public"))
+               Sanctum.Gate.call_external("tincture", public_ctx, args("invoke_public"))
 
       assert {:error, %Prima.Refusal{class: :unauthenticated, stage: :admission}} =
-               Grimoire.call_external("tincture", public_ctx, args("invoke_protected"))
+               Sanctum.Gate.call_external("tincture", public_ctx, args("invoke_protected"))
     end
 
     test "a guest-planed context is refused both actions before any handler" do
@@ -150,7 +150,7 @@ defmodule Opus.Providers.TinctureTest do
 
       for action <- ["invoke_public", "invoke_protected"] do
         assert {:error, %Prima.Refusal{class: :forbidden, stage: :admission}} =
-                 Grimoire.call_external("tincture", guest, args(action))
+                 Sanctum.Gate.call_external("tincture", guest, args(action))
       end
     end
 
@@ -166,12 +166,12 @@ defmodule Opus.Providers.TinctureTest do
             {"invoke_protected", %{"route" => "public"}}
           ] do
         assert {:error, %Prima.Refusal{class: :invalid_argument, stage: :admission}} =
-                 Grimoire.call_external("tincture", ctx, args(action, extra))
+                 Sanctum.Gate.call_external("tincture", ctx, args(action, extra))
       end
 
       # The public action cannot be called without its address.
       assert {:error, %Prima.Refusal{class: :invalid_argument, stage: :admission}} =
-               Grimoire.call_external(
+               Sanctum.Gate.call_external(
                  "tincture",
                  ctx,
                  Map.delete(args("invoke_public"), "athanor")
@@ -182,7 +182,7 @@ defmodule Opus.Providers.TinctureTest do
                 class: :invalid_argument,
                 message: "Missing required field: reference"
               }} =
-               Grimoire.call_external(
+               Sanctum.Gate.call_external(
                  "tincture",
                  ctx,
                  Map.delete(args("invoke_protected"), "reference")
@@ -193,7 +193,7 @@ defmodule Opus.Providers.TinctureTest do
       ctx = Sanctum.TestContext.local(:prism)
 
       assert {:error, %Prima.Refusal{class: :not_found}} =
-               Grimoire.call_external("tincture", ctx, args("invoke_protected"))
+               Sanctum.Gate.call_external("tincture", ctx, args("invoke_protected"))
 
       assert [row] =
                Arca.Repo.all(

@@ -296,7 +296,7 @@ defmodule CyfrWeb.SSETest do
 
     test "a refresh is delivered first and an event racing it is delivered, deduplicable",
          %{ctx: ctx} do
-      Grimoire.Catalog.with_providers([Racing], fn ->
+      Sanctum.Catalog.with_providers([Racing], fn ->
         {task, _pid} = delivering_feed(ctx, "racing.results", feed_grant("btc", 500))
 
         assert [refreshed, raced] = events(Task.await(task))
@@ -342,7 +342,7 @@ defmodule CyfrWeb.SSETest do
 
     test "a refresh that cannot be read ends the stream, unavailable, through the same cleanup",
          %{ctx: ctx} do
-      Grimoire.Catalog.with_providers([Racing], fn ->
+      Sanctum.Catalog.with_providers([Racing], fn ->
         conn =
           SSE.deliver(Plug.Test.conn(:post, "/_f/v1/stream"), ctx, feed_grant("btc", 60_000),
             name: "racing.broken",

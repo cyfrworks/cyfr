@@ -11,7 +11,7 @@ defmodule Cyfr.Providers.SettingsTest do
   use ExUnit.Case, async: false
 
   alias Arca.PlatformSettings, as: Store
-  alias Grimoire.Error
+  alias Sanctum.Refusals
   alias Sanctum.Context
 
   setup tags do
@@ -47,9 +47,9 @@ defmodule Cyfr.Providers.SettingsTest do
     {:ok, admin: ctx.(true), member: ctx.(false)}
   end
 
-  defp call(ctx, args), do: Grimoire.call_external("settings", ctx, args)
+  defp call(ctx, args), do: Sanctum.Gate.call_external("settings", ctx, args)
 
-  defp class({:error, reason}), do: Error.classify(reason).class
+  defp class({:error, reason}), do: Refusals.classify(reason).class
 
   test "the tool is the operator's: refused for a member, hidden from its tools, open to an admin",
        %{admin: admin, member: member} do
@@ -58,7 +58,7 @@ defmodule Cyfr.Providers.SettingsTest do
                call(member, %{"action" => action, "key" => "device_label", "value" => "x"})
     end
 
-    assert Grimoire.Visibility.filter_for_context(Grimoire.Catalog.list_tools(), member)
+    assert Sanctum.Visibility.filter_for_context(Sanctum.Catalog.list_tools(), member)
            |> Enum.all?(&(&1["name"] != "settings"))
 
     assert {:ok, %{settings: settings, count: count, revision: revision, ttl_ms: ttl}} =
@@ -93,7 +93,7 @@ defmodule Cyfr.Providers.SettingsTest do
       })
 
     assert class(stale) == :conflict
-    assert Error.render(elem(stale, 1)) =~ "changed since they were read"
+    assert Refusals.render(elem(stale, 1)) =~ "changed since they were read"
 
     assert {:ok, %{value: 120, revision: reset_at}} =
              call(admin, %{"action" => "reset", "key" => "mcp_rate_limit_max"})
@@ -112,7 +112,7 @@ defmodule Cyfr.Providers.SettingsTest do
     invalid = call(admin, %{"action" => "set", "key" => "mcp_rate_limit_max", "value" => "0"})
     assert class(invalid) == :invalid_argument
 
-    assert Error.render(elem(invalid, 1)) ==
+    assert Refusals.render(elem(invalid, 1)) ==
              "mcp_rate_limit_max must be a whole number of requests from 1 to 1000000000"
 
     unknown = call(admin, %{"action" => "set", "key" => "no_such", "value" => "1"})
@@ -121,6 +121,6 @@ defmodule Cyfr.Providers.SettingsTest do
     Application.put_env(:cyfr, :deployment_pinned, [{"max_athanors", 5}])
     pinned = call(admin, %{"action" => "reset", "key" => "max_athanors"})
     assert class(pinned) == :conflict
-    assert Error.render(elem(pinned, 1)) =~ "set by the deployment"
+    assert Refusals.render(elem(pinned, 1)) =~ "set by the deployment"
   end
 end

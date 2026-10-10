@@ -38,7 +38,7 @@ defmodule Opus do
   """
 
   use Boundary,
-    deps: [Compendium, Grimoire, Cyfr, Sanctum, Arca],
+    deps: [Compendium, Cyfr, Sanctum, Arca],
     exports: [
       Host.Children,
       Keys,

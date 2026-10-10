@@ -44,7 +44,7 @@ defmodule Emissary.Web.DeviceChannel do
   The channel is the delivery owner of a stream its client opens. The
   intent `streams.open`, with `args` `{stream, subject?}` (the tincture
   data routes' stream-open shape), is checked like every intent and then
-  admitted by the gate's stream entry (`Grimoire.open_stream/3`), which
+  admitted by the gate's stream entry (`Sanctum.Gate.open_stream/3`), which
   records it. An admitted open is answered `answer` with
   `result: {grant_id}`, then `grant`, naming the stream, its subject, the
   fields it forwards and when it ends; a refused one is answered with its
@@ -506,7 +506,7 @@ defmodule Emissary.Web.DeviceChannel do
       "proof" => Proof.encode(proof)
     }
 
-    case Grimoire.call_external("pairing", ctx, args,
+    case Sanctum.Gate.call_external("pairing", ctx, args,
            call_id: state.call_id,
            method: "device/renew"
          ) do
@@ -592,7 +592,7 @@ defmodule Emissary.Web.DeviceChannel do
     }
 
     answer =
-      case Grimoire.call_external(tool, ctx, Map.put(args, "action", action),
+      case Sanctum.Gate.call_external(tool, ctx, Map.put(args, "action", action),
              call_id: state.call_id,
              method: "device/intent"
            ) do
@@ -622,7 +622,7 @@ defmodule Emissary.Web.DeviceChannel do
 
     with {:ok, name, subject} <- stream_args(args),
          :ok <- grant_room(state) do
-      case Grimoire.open_stream(ctx, name, subject) do
+      case Sanctum.Gate.open_stream(ctx, name, subject) do
         {:ok, grant} ->
           granted(id, name, grant, state)
 
@@ -631,7 +631,7 @@ defmodule Emissary.Web.DeviceChannel do
       end
     else
       {:error, reason} ->
-        refusal = %{Grimoire.classify(reason) | stage: :admission}
+        refusal = %{Sanctum.Gate.classify(reason) | stage: :admission}
         record(state, refusal, "streams", "open")
         {:reply, :ok, answer_refused(id, refusal), state}
     end
@@ -808,7 +808,7 @@ defmodule Emissary.Web.DeviceChannel do
   # A consent signal is answered in its own `{tag, payload}` shape; every
   # other refusal by its class and sentence.
   defp error(reason) do
-    refusal = Grimoire.classify(reason)
+    refusal = Sanctum.Gate.classify(reason)
 
     if Prima.ConsentSignal.signal?(refusal.reason),
       do: Prima.ConsentSignal.data(refusal.reason),
@@ -857,7 +857,7 @@ defmodule Emissary.Web.DeviceChannel do
   # One refused decision under the call id assigned the refused message.
   defp record(state, refusal, tool, action) do
     decision =
-      Grimoire.refused_decision(state.client, refusal,
+      Sanctum.Gate.refused_decision(state.client, refusal,
         call_id: state.call_id,
         request_id: state.ctx.request_id,
         plane: :external,
@@ -865,7 +865,7 @@ defmodule Emissary.Web.DeviceChannel do
         action: action
       )
 
-    Grimoire.open_decision(state.client, decision, %{method: "device", input: %{}})
+    Sanctum.Gate.open_decision(state.client, decision, %{method: "device", input: %{}})
   end
 
   defp close(state, code, reason, []), do: {:stop, :normal, {code, reason}, state}
@@ -905,7 +905,7 @@ defmodule Emissary.Web.DeviceChannel do
   # A renewal the gate refused, in the class and sentence the gate gave
   # it, so its close says what ended it.
   defp renewal_refusal(reason) do
-    refusal = Grimoire.classify(reason)
+    refusal = Sanctum.Gate.classify(reason)
     %{refusal | reason: :renewal_refused, stage: :admission}
   end
 

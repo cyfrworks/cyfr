@@ -23,7 +23,7 @@ defmodule Emissary.Web do
 
   use Boundary,
     top_level?: true,
-    deps: [Emissary, Grimoire, Sanctum, Arca, Cyfr, Compendium, Opus, CyfrWeb],
+    deps: [Emissary, Sanctum, Arca, Cyfr, Compendium, Opus, CyfrWeb],
     exports: [
       CanvasController,
       CertificateRenewalController,

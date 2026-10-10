@@ -448,7 +448,7 @@ defmodule Cyfr.BusTest do
   describe "the boot check on declared streams" do
     test "passes the table this boot loaded" do
       assert Cyfr.Application.check_stream_topics!() == :ok
-      assert Cyfr.Application.stream_topic_findings(Grimoire.Catalog.stream_entries()) == []
+      assert Cyfr.Application.stream_topic_findings(Sanctum.Catalog.stream_entries()) == []
     end
 
     test "refuses a stream naming no rostered topic, naming the provider, stream and topic" do

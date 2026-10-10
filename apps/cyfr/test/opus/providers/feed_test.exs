@@ -137,17 +137,17 @@ defmodule Opus.Providers.FeedTest do
     end
 
     test "the provider is rostered after the schedules', and a press never runs from a chain" do
-      providers = Application.fetch_env!(:cyfr, :tool_providers)
+      providers = Application.fetch_env!(:sanctum, :tool_providers)
 
       assert Enum.find_index(providers, &(&1 == Feed)) ==
                Enum.find_index(providers, &(&1 == Opus.Schedules.Provider)) + 1
 
-      assert {:ok, {Feed, _meta}} = Grimoire.lookup("feed")
+      assert {:ok, {Feed, _meta}} = Sanctum.Gate.lookup("feed")
 
       for action <- ~w(bind list remove),
-          do: assert(Grimoire.chain_reachable?("feed", action))
+          do: assert(Sanctum.Gate.chain_reachable?("feed", action))
 
-      assert Grimoire.in_chain_refused?("feed", "press")
+      assert Sanctum.Gate.in_chain_refused?("feed", "press")
     end
 
     test "the two streams a canvas reads, each with its shape, refresh and filter" do
@@ -156,7 +156,7 @@ defmodule Opus.Providers.FeedTest do
       for stream <- [results, runs] do
         assert Prima.Provider.Stream.valid?(stream), stream.name
         assert stream.deadline_bound == 86_400
-        assert {:ok, {Feed, ^stream}} = Grimoire.Catalog.lookup_stream(stream.name)
+        assert {:ok, {Feed, ^stream}} = Sanctum.Catalog.lookup_stream(stream.name)
       end
 
       assert {results.name, results.topic, results.filter, results.refresh} ==
@@ -642,7 +642,7 @@ defmodule Opus.Providers.FeedTest do
       assert {:ok, []} = Feeds.latest(ctx, "nobody")
       assert {:ok, []} = Feeds.latest(foreign(ctx), "btc")
 
-      {:ok, {_feed, stream}} = Grimoire.Catalog.lookup_stream("feed.results")
+      {:ok, {_feed, stream}} = Sanctum.Catalog.lookup_stream("feed.results")
       assert :ok = Prima.Canvas.Shape.check(stream.shape, accepted)
     end
 
@@ -659,7 +659,7 @@ defmodule Opus.Providers.FeedTest do
       assert %{"kind" => "completed", "reference" => @pinned} = List.last(changes)
       assert List.last(changes)["execution_id"] == ran
 
-      {:ok, {_feed, stream}} = Grimoire.Catalog.lookup_stream("runs.changes")
+      {:ok, {_feed, stream}} = Sanctum.Catalog.lookup_stream("runs.changes")
       for change <- changes, do: assert(:ok = Prima.Canvas.Shape.check(stream.shape, change))
 
       assert {:ok, []} = Feed.recent_runs(foreign(ctx), nil)
@@ -683,7 +683,7 @@ defmodule Opus.Providers.FeedTest do
       assert %{"kind" => "failed", "error" => %{"class" => nil, "message" => message}} = failed
       assert is_binary(message) and message != ""
 
-      {:ok, {_feed, stream}} = Grimoire.Catalog.lookup_stream("runs.changes")
+      {:ok, {_feed, stream}} = Sanctum.Catalog.lookup_stream("runs.changes")
       assert :ok = Prima.Canvas.Shape.check(stream.shape, failed)
 
       # A live failure's projected error is an object of the same keys on
@@ -727,14 +727,14 @@ defmodule Opus.Providers.FeedTest do
     Map.new(tool.operations, &{&1.action, &1})
   end
 
-  defp call(ctx, args), do: Grimoire.call_external("feed", ctx, args)
+  defp call(ctx, args), do: Sanctum.Gate.call_external("feed", ctx, args)
 
   defp press(ctx, binding, action),
     do: call(ctx, %{"action" => "press", "binding" => binding, "action_name" => action})
 
   # A refused answer as every surface renders it: its class and sentence
-  # (`Grimoire.classify/1`).
-  defp refused({:error, reason}), do: Grimoire.classify(reason)
+  # (`Sanctum.Gate.classify/1`).
+  defp refused({:error, reason}), do: Sanctum.Gate.classify(reason)
 
   defp bind_args(name, overrides \\ %{}) do
     Map.merge(

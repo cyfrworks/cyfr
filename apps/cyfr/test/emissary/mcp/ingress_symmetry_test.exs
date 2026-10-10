@@ -10,8 +10,8 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   """
   use ExUnit.Case, async: false
 
-  alias Grimoire.Catalog
-  alias Grimoire.Probe
+  alias Sanctum.Catalog
+  alias Sanctum.Gate.Probe
   alias Prima.Refusal
 
   setup do
@@ -24,7 +24,7 @@ defmodule Emissary.MCP.IngressSymmetryTest do
     Catalog.with_providers([Probe.Ingress], fn ->
       # Require string ids on both HTTP and console dispatch.
       assert {:error, %Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
-               Grimoire.call_external("ingress_probe", ctx, %{
+               Sanctum.Gate.call_external("ingress_probe", ctx, %{
                  "action" => "echo",
                  "id" => 12_345
                })
@@ -37,7 +37,7 @@ defmodule Emissary.MCP.IngressSymmetryTest do
     Catalog.with_providers([Probe.Ingress], fn ->
       # The catalog returns unknown_action for undeclared actions before schema validation.
       assert {:error, %Refusal{stage: :admission, reason: {:unknown_action, _}}} =
-               Grimoire.call_external("ingress_probe", ctx, %{"action" => "nope"})
+               Sanctum.Gate.call_external("ingress_probe", ctx, %{"action" => "nope"})
 
       refute_receive {:reached_handler, _}, 200
     end)
@@ -46,7 +46,7 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   test "a well-formed call still reaches the handler", %{ctx: ctx} do
     Catalog.with_providers([Probe.Ingress], fn ->
       assert {:ok, _} =
-               Grimoire.call_external("ingress_probe", ctx, %{
+               Sanctum.Gate.call_external("ingress_probe", ctx, %{
                  "action" => "echo",
                  "id" => "abc"
                })
@@ -58,7 +58,7 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   test "a tool with no additional arguments still refuses unknown actions", %{ctx: ctx} do
     Catalog.with_providers([Probe.Ingress], fn ->
       assert {:error, %Refusal{stage: :admission, reason: {:unknown_action, _}}} =
-               Grimoire.call_external("ingress_probe_bare", ctx, %{"action" => "nope"})
+               Sanctum.Gate.call_external("ingress_probe_bare", ctx, %{"action" => "nope"})
     end)
   end
 end

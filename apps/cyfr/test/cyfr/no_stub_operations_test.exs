@@ -53,7 +53,7 @@ defmodule Cyfr.NoStubOperationsTest do
 
   test "the scan reads every operation provider on the roster" do
     scanned = MapSet.new(lib_files())
-    operations = Grimoire.Catalog.operations()
+    operations = Sanctum.Catalog.operations()
 
     assert map_size(operations) > 20
 

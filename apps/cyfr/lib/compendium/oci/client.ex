@@ -1111,5 +1111,5 @@ defmodule Compendium.OCI.Client do
   defp failure_text(%Errors{} = err), do: Errors.to_string(err)
   defp failure_text(reason) when is_binary(reason), do: reason
   defp failure_text(%{__exception__: true} = exception), do: Exception.message(exception)
-  defp failure_text(reason), do: Grimoire.render(reason)
+  defp failure_text(reason), do: Sanctum.Gate.render(reason)
 end

@@ -6,8 +6,8 @@ defmodule PrismWeb.OpsTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Grimoire.Catalog
-  alias Grimoire.Probe
+  alias Sanctum.Catalog
+  alias Sanctum.Gate.Probe
   alias PrismWeb.Ops
 
   setup do
@@ -76,7 +76,7 @@ defmodule PrismWeb.OpsTest do
         assert Sanctum.Tenancy.Athanors.active?(stale.athanor_id)
         assert {:ok, [refused]} = global_decisions(request_id)
 
-        refusal = Grimoire.classify(reason)
+        refusal = Sanctum.Gate.classify(reason)
 
         assert {refused.admission, refused.plane, refused.tool, refused.action} ==
                  {:refused, :external, "ingress_probe", "echo"}

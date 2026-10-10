@@ -9,7 +9,6 @@ defmodule Cyfr.Application do
     deps: [
       Arca,
       Sanctum,
-      Grimoire,
       Cyfr,
       Compendium,
       Aqua,
@@ -47,9 +46,9 @@ defmodule Cyfr.Application do
     # the overlaid roots' unit locators, asserted against the layout here
     # before Bootstrap or the tincture registry scans the union.
     Prima.Caps.install!(Sanctum.Tenancy.Caps)
-    Sanctum.Grimoire.install!(Grimoire.Catalog)
+    Sanctum.OperationTable.install!(Sanctum.Catalog)
     Sanctum.Consent.Components.install!(Compendium.ConsentFacts)
-    Grimoire.Proxy.install!(Emissary.External.Proxy)
+    Sanctum.Proxy.install!(Emissary.External.Proxy)
 
     Arca.Storage.UnitLocator.install!(%{
       "aqua" => Compendium.AquaPath,
@@ -68,12 +67,12 @@ defmodule Cyfr.Application do
     Cyfr.Platform.Settings.apply()
 
     # The operation table and its resource index, built from the
-    # configured providers and written once into Grimoire's term — after
+    # configured providers and written once into the gate's term — after
     # the ports its audit and its providers read, before any process that
     # dispatches, derives a consent shape or serves `tools/list` exists.
     # A provider that cannot load, or a declaration the gates cannot
     # classify, refuses the boot here.
-    Grimoire.Catalog.load!()
+    Sanctum.Catalog.load!()
 
     # Every stream the table holds rides a topic the bus declares, one a
     # grant can scope: checked before any process that could open one
@@ -375,7 +374,7 @@ defmodule Cyfr.Application do
   # The domains' subtrees: the census reads each one's children through
   # its own `init/1`, the definition its start runs.
   @owners [
-    Grimoire.Supervisor,
+    Sanctum.Gate.Supervisor,
     Compendium.Supervisor,
     Opus.Supervisor,
     Aqua.Supervisor,
@@ -501,7 +500,7 @@ defmodule Cyfr.Application do
       CyfrWeb.SSE.Registry,
       # The domains' subtrees, in order: the gate's handlers, the
       # component athanor, execution, the assistant, then the MCP surface.
-      Grimoire.Supervisor,
+      Sanctum.Gate.Supervisor,
       Compendium.Supervisor,
       # The slots' caps and the host API's bind and port
       # (`CYFR_HOST_API_BIND`, `CYFR_HOST_API_PORT`) are read here and
@@ -855,12 +854,12 @@ defmodule Cyfr.Application do
   end
 
   @doc """
-  Refuse the boot when a declared stream (`Grimoire.Catalog.stream_entries/0`,
+  Refuse the boot when a declared stream (`Sanctum.Catalog.stream_entries/0`,
   or `entries`) names a topic `Cyfr.Bus` does not roster, one no grant can
   scope, or a refresh no module exports (`stream_topic_findings/1`).
   """
   @spec check_stream_topics!([{module(), Prima.Provider.Stream.t()}]) :: :ok
-  def check_stream_topics!(entries \\ Grimoire.Catalog.stream_entries()) do
+  def check_stream_topics!(entries \\ Sanctum.Catalog.stream_entries()) do
     case stream_topic_findings(entries) do
       [] ->
         :ok

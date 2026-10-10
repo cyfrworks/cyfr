@@ -27,8 +27,8 @@ defmodule Cyfr.ApplicationTest do
     Cyfr.TelemetryBridge => 5_000,
     Cyfr.Platform.Settings => 5_000,
     Cyfr.RetentionScheduler => 5_000,
-    Grimoire.RunningTasks => 5_000,
-    Grimoire.TaskSupervisor => 30_000,
+    Sanctum.RunningTasks => 5_000,
+    Sanctum.Gate.TaskSupervisor => 30_000,
     Compendium.Builds.TaskSupervisor => 30_000,
     Compendium.ProvisioningSupervisor => 30_000,
     Compendium.Provisioning => 5_000,
@@ -152,9 +152,9 @@ defmodule Cyfr.ApplicationTest do
       # The repo is the `arca` application's, and so is the cache table's
       # owner; this tier reaches the repo by name. The operation table is
       # a term written before the tree starts, owned by no child.
-      refute Grimoire.Catalog in ids
+      refute Sanctum.Catalog in ids
       refute Emissary.MCP.ResourceRegistry in ids
-      assert is_map(Grimoire.operations())
+      assert is_map(Sanctum.Gate.operations())
       refute Arca.Repo in ids
       refute CyfrWeb.Endpoint in ids
     end
@@ -197,7 +197,7 @@ defmodule Cyfr.ApplicationTest do
       pubsub = Enum.find_index(started, &(&1 in [Cyfr.PubSub, Phoenix.PubSub.Supervisor]))
 
       order = [
-        Grimoire.Supervisor,
+        Sanctum.Gate.Supervisor,
         Compendium.Supervisor,
         Opus.Supervisor,
         Aqua.Supervisor,
@@ -209,10 +209,10 @@ defmodule Cyfr.ApplicationTest do
       ]
 
       assert Enum.filter(started, &(&1 in order)) == order
-      assert Enum.find_index(started, &(&1 == Grimoire.Supervisor)) > pubsub
+      assert Enum.find_index(started, &(&1 == Sanctum.Gate.Supervisor)) > pubsub
 
       for {supervisor, children} <- [
-            {Grimoire.Supervisor, [Grimoire.RunningTasks, Grimoire.TaskSupervisor]},
+            {Sanctum.Gate.Supervisor, [Sanctum.RunningTasks, Sanctum.Gate.TaskSupervisor]},
             {Compendium.Supervisor,
              [
                Compendium.Builds.TaskSupervisor,

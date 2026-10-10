@@ -170,7 +170,7 @@ defmodule Compendium.Component do
             {:error, {:not_found, {:component, reference}}}
 
           {:error, reason} ->
-            {:error, "Failed to resolve component #{reference}: #{Grimoire.render(reason)}"}
+            {:error, "Failed to resolve component #{reference}: #{Sanctum.Gate.render(reason)}"}
         end
 
       {:error, reason} ->

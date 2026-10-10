@@ -104,7 +104,7 @@ defmodule Aqua.Providers.NotesTest do
   defp in_chain(ctx, args, auth, opts \\ []) do
     caller = caller!(ctx)
     opts = Keyword.update(opts, :lineage, caller, &Map.merge(caller, &1))
-    Grimoire.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
+    Sanctum.Gate.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
   end
 
   defp caller!(ctx),
@@ -388,7 +388,7 @@ defmodule Aqua.Providers.NotesTest do
     # And the door still refuses the guest plane outright — before consent
     # is even consulted.
     assert {:error, %Prima.Refusal{stage: :admission, reason: {:guest_plane_call, "notes"}}} =
-             Grimoire.call_external("notes", Context.enter_guest(ctx), args)
+             Sanctum.Gate.call_external("notes", Context.enter_guest(ctx), args)
 
     # A chain whose authority predates the notes actions is denied before
     # the tool is reached — legibly, so re-consent is the obvious answer.
@@ -595,7 +595,7 @@ defmodule Aqua.Providers.NotesTest do
               stage: :admission,
               reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
             }} =
-             Grimoire.call_external("notes", star, %{
+             Sanctum.Gate.call_external("notes", star, %{
                "action" => "keep",
                "name" => "sneak",
                "content" => "x"
@@ -606,15 +606,15 @@ defmodule Aqua.Providers.NotesTest do
               stage: :admission,
               reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
             }} =
-             Grimoire.call_external("notes", star, %{
+             Sanctum.Gate.call_external("notes", star, %{
                "action" => "list",
                "scope" => "mine"
              })
 
     # Discovery agrees with dispatch: the key is not shown the tool.
     shown =
-      Grimoire.Visibility.filter_for_context(
-        Grimoire.list_tools(),
+      Sanctum.Visibility.filter_for_context(
+        Sanctum.Gate.list_tools(),
         star
       )
 

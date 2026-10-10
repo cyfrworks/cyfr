@@ -404,7 +404,7 @@ defmodule PrismWeb.FilesLiveTest do
     do: :ok = Arca.put(Sanctum.Context.actor(who.ctx), ["data", name], content)
 
   defp call(ctx, action, args \\ %{}),
-    do: Grimoire.call_external("file", ctx, Map.put(args, "action", action))
+    do: Sanctum.Gate.call_external("file", ctx, Map.put(args, "action", action))
 
   defp actor(ctx), do: Sanctum.Context.actor(ctx)
 

@@ -107,10 +107,10 @@ defmodule Opus.Schedules.Scheduler do
   an occurrence only through `recover/4`'s compare-and-set and the
   fences of the claim and the admission.
 
-  Each fire is one admission decision (`Grimoire.open_decision/3`, tool
+  Each fire is one admission decision (`Sanctum.Gate.open_decision/3`, tool
   `schedule`, action `fire`), recorded before the run under a call id the
   run's context carries, so the root execution's row names it, and
-  completed with the run's answer (`Grimoire.close_decision/3`). A fire
+  completed with the run's answer (`Sanctum.Gate.close_decision/3`). A fire
   whose member lost its generation between the run and its answer records
   no completion — a stale owner emits no result — and neither does one
   whose runner task died: its decision reads as unknown.
@@ -470,7 +470,7 @@ defmodule Opus.Schedules.Scheduler do
         "[Opus.Schedules.Scheduler] failed to load schedule #{schedule.id}: exited #{Prima.LogFilter.inspect_reason(reason)}"
       )
 
-      timer_failed(schedule.id, Grimoire.render(reason))
+      timer_failed(schedule.id, Sanctum.Gate.render(reason))
       acc
   end
 
@@ -961,7 +961,7 @@ defmodule Opus.Schedules.Scheduler do
 
           unless ended == {:error, :stale} do
             emit_schedule_failed(schedule.id, ctx, {:spawn_failed, reason})
-            record_error(ctx, schedule.id, Grimoire.render(:unavailable))
+            record_error(ctx, schedule.id, Sanctum.Gate.render(:unavailable))
           end
 
           schedule_timer(schedule.id, left_open_unless_ended(state, ended))
@@ -1034,7 +1034,7 @@ defmodule Opus.Schedules.Scheduler do
       )
 
       emit_schedule_failed(schedule.id, ctx, reason)
-      record_error(ctx, schedule.id, Grimoire.render(reason))
+      record_error(ctx, schedule.id, Sanctum.Gate.render(reason))
     end
 
     left_to_recovery_unless_ended(ended)
@@ -1063,7 +1063,7 @@ defmodule Opus.Schedules.Scheduler do
         admission: :admitted
       )
 
-    Grimoire.open_decision(ctx, decision, %{
+    Sanctum.Gate.open_decision(ctx, decision, %{
       method: "cron/fire",
       input: %{schedule_id: schedule.id, reference: exec_reference, input: input}
     })
@@ -1124,11 +1124,11 @@ defmodule Opus.Schedules.Scheduler do
             {:error, :stale} ->
               # Another member's occurrence now: this member's decision is
               # still closed, and nothing else is written or announced.
-              Grimoire.close_decision(ctx, call_id, closed)
+              Sanctum.Gate.close_decision(ctx, call_id, closed)
 
             finished ->
               recorded = record_run(ctx, schedule.id, execution_id)
-              Grimoire.close_decision(ctx, call_id, closed)
+              Sanctum.Gate.close_decision(ctx, call_id, closed)
 
               :telemetry.execute(
                 [:cyfr, :schedules, :completed],
@@ -1165,7 +1165,7 @@ defmodule Opus.Schedules.Scheduler do
           # transaction or on the fast path before it: nothing was written,
           # the occurrence is still this member's claim, never invoked, and
           # recovery takes it. Only this member's own decision is closed.
-          Grimoire.close_decision(ctx, call_id, %{
+          Sanctum.Gate.close_decision(ctx, call_id, %{
             result: {:error, reason},
             duration_ms: duration_ms,
             routed_to: Opus.service()
@@ -1184,7 +1184,7 @@ defmodule Opus.Schedules.Scheduler do
           # way it ends failed, and nothing was invoked twice.
           ended = finish(occurrence, execution_id, "failed")
 
-          Grimoire.close_decision(ctx, call_id, %{
+          Sanctum.Gate.close_decision(ctx, call_id, %{
             result: {:error, reason},
             duration_ms: duration_ms,
             routed_to: Opus.service()
@@ -1196,7 +1196,7 @@ defmodule Opus.Schedules.Scheduler do
             )
 
             emit_schedule_failed(schedule.id, ctx, reason, execution_id)
-            record_error(ctx, schedule.id, Grimoire.render(reason))
+            record_error(ctx, schedule.id, Sanctum.Gate.render(reason))
           end
 
           left_to_recovery_unless_ended(ended)
@@ -1222,7 +1222,7 @@ defmodule Opus.Schedules.Scheduler do
   # accepted result alone is published, from the envelope its committed
   # accept answered, before the occurrence ends.
   defp feed_completed(schedule, occurrence, ctx, feed, output, fired) do
-    Grimoire.close_decision(ctx, fired.call_id, %{
+    Sanctum.Gate.close_decision(ctx, fired.call_id, %{
       result: {:ok, output},
       duration_ms: fired.duration_ms,
       routed_to: Opus.service()
@@ -1251,11 +1251,11 @@ defmodule Opus.Schedules.Scheduler do
         unless ended == {:error, :stale} do
           Logger.warning(
             "[Opus.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq} failed: " <>
-              Grimoire.render(reason)
+              Sanctum.Gate.render(reason)
           )
 
           emit_schedule_failed(schedule.id, ctx, reason, fired.execution_id)
-          record_error(ctx, schedule.id, Grimoire.render(reason))
+          record_error(ctx, schedule.id, Sanctum.Gate.render(reason))
         end
 
         left_to_recovery_unless_ended(ended)
@@ -1269,7 +1269,7 @@ defmodule Opus.Schedules.Scheduler do
           )
 
           emit_schedule_failed(schedule.id, ctx, reason, fired.execution_id)
-          record_error(ctx, schedule.id, Grimoire.render(reason))
+          record_error(ctx, schedule.id, Sanctum.Gate.render(reason))
         end
 
         left_to_recovery_unless_ended(ended)
@@ -1413,7 +1413,7 @@ defmodule Opus.Schedules.Scheduler do
       |> logged_stale(%{id: task.occurrence_id, schedule_id: schedule_id})
 
     unless settled == {:error, :stale},
-      do: record_error(task.ctx, schedule_id, Grimoire.render(reason))
+      do: record_error(task.ctx, schedule_id, Sanctum.Gate.render(reason))
 
     settled
   end

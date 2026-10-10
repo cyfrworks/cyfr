@@ -1224,7 +1224,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     :ok =
       :telemetry.attach(
         handler,
-        [:cyfr, :grimoire, :decision, :admitted],
+        [:cyfr, :sanctum, :decision, :admitted],
         fn _event, _measurements, meta, _config ->
           if meta[:tool] == "component" and meta[:action] == "setup_plan", do: inject.()
         end,

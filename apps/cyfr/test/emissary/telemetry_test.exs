@@ -53,23 +53,23 @@ defmodule Emissary.TelemetryTest do
     test "the loss is a counter an operator can alert on, by stage and kind" do
       metrics = Map.new(CyfrWeb.Telemetry.metrics(), &{&1.name, &1})
 
-      lost = metrics[[:cyfr, :grimoire, :decision, :lost, :total]]
+      lost = metrics[[:cyfr, :sanctum, :decision, :lost, :total]]
       assert %Telemetry.Metrics.Counter{} = lost
-      assert lost.event_name == [:cyfr, :grimoire, :decision, :lost]
+      assert lost.event_name == [:cyfr, :sanctum, :decision, :lost]
       assert lost.tags == [:stage, :kind]
 
-      assert metrics[[:cyfr, :grimoire, :decision, :refused, :count]].tags ==
+      assert metrics[[:cyfr, :sanctum, :decision, :refused, :count]].tags ==
                [:plane, :tool, :action, :refusal_class]
 
-      assert metrics[[:cyfr, :grimoire, :decision, :admitted, :count]].tags ==
+      assert metrics[[:cyfr, :sanctum, :decision, :admitted, :count]].tags ==
                [:plane, :tool, :action]
     end
 
     test "the gate's emitters send each decision and each loss" do
       events = [
-        [:cyfr, :grimoire, :decision, :admitted],
-        [:cyfr, :grimoire, :decision, :refused],
-        [:cyfr, :grimoire, :decision, :lost]
+        [:cyfr, :sanctum, :decision, :admitted],
+        [:cyfr, :sanctum, :decision, :refused],
+        [:cyfr, :sanctum, :decision, :lost]
       ]
 
       ref = :telemetry_test.attach_event_handlers(self(), events)
@@ -86,17 +86,17 @@ defmodule Emissary.TelemetryTest do
 
       refused = %{admitted | admission: :refused, refusal_class: :forbidden, tool: nil}
 
-      Grimoire.Decisions.emit(admitted)
-      Grimoire.Decisions.emit(refused)
-      Grimoire.Decisions.lost(%Arca.DecisionLog.AuditFailure{stage: :append, kind: :timeout})
+      Sanctum.Decisions.emit(admitted)
+      Sanctum.Decisions.emit(refused)
+      Sanctum.Decisions.lost(%Arca.DecisionLog.AuditFailure{stage: :append, kind: :timeout})
 
-      assert_receive {[:cyfr, :grimoire, :decision, :admitted], ^ref, %{count: 1},
+      assert_receive {[:cyfr, :sanctum, :decision, :admitted], ^ref, %{count: 1},
                       %{plane: :external, tool: "storage", action: "read"}}
 
-      assert_receive {[:cyfr, :grimoire, :decision, :refused], ^ref, %{count: 1},
+      assert_receive {[:cyfr, :sanctum, :decision, :refused], ^ref, %{count: 1},
                       %{refusal_class: :forbidden, tool: ""}}
 
-      assert_receive {[:cyfr, :grimoire, :decision, :lost], ^ref, %{count: 1},
+      assert_receive {[:cyfr, :sanctum, :decision, :lost], ^ref, %{count: 1},
                       %{stage: :append, kind: :timeout}}
     end
   end

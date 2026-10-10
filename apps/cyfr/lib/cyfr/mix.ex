@@ -8,5 +8,5 @@ defmodule Cyfr.Mix do
   shared contract, and names exactly the boundaries listed here.
   """
 
-  use Boundary, top_level?: true, deps: [Grimoire], exports: [], check: [aliases: true]
+  use Boundary, top_level?: true, deps: [Sanctum], exports: [], check: [aliases: true]
 end

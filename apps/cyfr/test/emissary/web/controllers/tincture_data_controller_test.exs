@@ -848,11 +848,11 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     feed_provider? = Code.ensure_loaded?(Opus.Providers.Feed)
     planted = if feed_provider?, do: [ShapedProbe], else: [ShapedProbe, FeedProbe]
 
-    Grimoire.Catalog.with_providers(planted, fn ->
+    Sanctum.Catalog.with_providers(planted, fn ->
       if feed_provider?,
         do:
           assert(
-            {:ok, _declared} = Prima.Provider.fetch_stream(Grimoire.streams(), "feed.results")
+            {:ok, _declared} = Prima.Provider.fetch_stream(Sanctum.Gate.streams(), "feed.results")
           )
 
       fun.()
@@ -1117,7 +1117,9 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
         assert trial_ctx.frame.mode == :validation
         :ok = CyfrWeb.SSE.claim_slot(:frame_stream, trial_ctx, :frame_stream_max_concurrent)
-        {:ok, %{shape: shape}} = Prima.Provider.fetch_stream(Grimoire.streams(), "probe.shaped")
+
+        {:ok, %{shape: shape}} =
+          Prima.Provider.fetch_stream(Sanctum.Gate.streams(), "probe.shaped")
 
         shaped = canvas_stream(trial.frame_id, "probe.shaped", nil, bearer: trial.bearer)
         assert shaped.status == 200

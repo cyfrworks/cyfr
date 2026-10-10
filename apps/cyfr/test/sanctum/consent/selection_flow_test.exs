@@ -655,7 +655,9 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
       set_profile!(ctx, lender, kind: "sideways")
       assert {:error, {:lender_corrupt, @dep, ^lender} = reason} = run(ctx, ref)
-      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} =
+               Sanctum.Refusals.classify(reason)
 
       set_profile!(ctx, lender, kind: "owner", label: "elsewhere")
       assert %{via: %{label: "default"}} = edge_vault(ctx, ref)
@@ -663,7 +665,9 @@ defmodule Sanctum.Consent.SelectionFlowTest do
       set_profile!(ctx, lender, label: "default")
       :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender, scope: "sideways")
       assert {:error, {:lender_corrupt, @dep, ^lender} = reason} = run(ctx, ref)
-      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} =
+               Sanctum.Refusals.classify(reason)
 
       :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender, scope: "versionless")
 
@@ -689,7 +693,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
         assert {:error, {:lender_unavailable, @dep} = reason} = run(ctx, ref), table
 
         assert %Prima.Refusal{class: :unavailable, message: ^unreadable} =
-                 Grimoire.Error.classify(reason)
+                 Sanctum.Refusals.classify(reason)
 
         Arca.Repo.query!("ALTER TABLE #{table}_unavailable RENAME TO #{table}")
       end
@@ -712,7 +716,9 @@ defmodule Sanctum.Consent.SelectionFlowTest do
         )
 
       assert {:error, {:lender_corrupt, @dep, ^lender} = reason} = run(ctx, ref)
-      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} =
+               Sanctum.Refusals.classify(reason)
 
       :ok =
         Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
@@ -721,7 +727,9 @@ defmodule Sanctum.Consent.SelectionFlowTest do
         )
 
       assert {:error, {:lender_corrupt, @dep, ^lender} = reason} = run(ctx, ref)
-      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} =
+               Sanctum.Refusals.classify(reason)
 
       :ok =
         Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
@@ -761,7 +769,9 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
       :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, borrower, scope: "sideways")
       assert {:error, {:head_corrupt, ^borrower} = reason} = run(ctx, ref)
-      assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} =
+               Sanctum.Refusals.classify(reason)
 
       :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, borrower, scope: "versionless")
       Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
@@ -770,7 +780,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
       assert %Prima.Refusal{
                class: :unavailable,
                message: "This app's consent cannot be read right now — try again."
-             } = Grimoire.Error.classify(reason)
+             } = Sanctum.Refusals.classify(reason)
     end
   end
 

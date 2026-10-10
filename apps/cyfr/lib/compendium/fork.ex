@@ -216,5 +216,5 @@ defmodule Compendium.Fork do
 
   # A fork's own refusal in its words; any other as the table's sentence.
   defp failure_text({:invalid_manifest, sentence}) when is_binary(sentence), do: sentence
-  defp failure_text(reason), do: Grimoire.render(reason)
+  defp failure_text(reason), do: Sanctum.Gate.render(reason)
 end

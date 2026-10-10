@@ -428,7 +428,7 @@ defmodule Emissary.Web.WebhookControllerTest do
 
       :telemetry.attach(
         id,
-        [:cyfr, :grimoire, :decision, :lost],
+        [:cyfr, :sanctum, :decision, :lost],
         fn _event, _measurements, metadata, test -> send(test, {:decision_lost, metadata}) end,
         self()
       )

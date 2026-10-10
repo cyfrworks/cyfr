@@ -65,7 +65,7 @@ defmodule Cyfr.AdmissionTest do
       assert {:ok, row} = Admission.fetch(:device_channel)
       assert row.sockets == [{"/device", "Emissary.Web.DeviceChannel"}]
       assert row.listener == "CyfrWeb.Endpoint"
-      assert Enum.sort(row.entries) == ["Emissary.Web.DeviceChannel", "Grimoire"]
+      assert Enum.sort(row.entries) == ["Emissary.Web.DeviceChannel", "Sanctum.Gate"]
     end
 
     test "a path declared and deferred admits nothing, and names nothing it would carry" do

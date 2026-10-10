@@ -8,7 +8,7 @@ defmodule Emissary.MCP.ResourceReadAuditTest do
 
   alias Emissary.MCP.Router
   alias Prima.MCP.Message
-  alias Grimoire.Resources
+  alias Sanctum.Resources
   alias Sanctum.Context
 
   @moduledoc """

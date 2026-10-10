@@ -146,7 +146,7 @@ defmodule PrismWeb.McpServersLiveTest do
     view |> element(~s(button[phx-click="test"][phx-value-name="edited"])) |> render_click()
 
     assert flash(view, "error") ==
-             "Test edited: " <> Grimoire.render(:destination_mismatch)
+             "Test edited: " <> Sanctum.Gate.render(:destination_mismatch)
 
     refute flash(view, "error") =~ "openai-key"
   end

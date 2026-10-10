@@ -5,7 +5,7 @@ defmodule Compendium.Providers.RegistryTest do
   use ExUnit.Case, async: false
 
   alias Compendium.Providers.Registry, as: RegistryProvider
-  alias Grimoire.Error
+  alias Sanctum.Refusals
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -22,7 +22,7 @@ defmodule Compendium.Providers.RegistryTest do
                  "token_id" => "tok_1"
                })
 
-      assert Error.render(reason) =~ "no push token"
+      assert Refusals.render(reason) =~ "no push token"
     end
 
     test "members_add", %{ctx: ctx} do
@@ -34,7 +34,7 @@ defmodule Compendium.Providers.RegistryTest do
                  "role" => "member"
                })
 
-      assert Error.render(reason) =~ "no push token"
+      assert Refusals.render(reason) =~ "no push token"
     end
 
     test "members_update", %{ctx: ctx} do
@@ -46,7 +46,7 @@ defmodule Compendium.Providers.RegistryTest do
                  "role" => "admin"
                })
 
-      assert Error.render(reason) =~ "no push token"
+      assert Refusals.render(reason) =~ "no push token"
     end
 
     test "members_remove", %{ctx: ctx} do
@@ -57,7 +57,7 @@ defmodule Compendium.Providers.RegistryTest do
                  "target_personal_slug" => "bob"
                })
 
-      assert Error.render(reason) =~ "no push token"
+      assert Refusals.render(reason) =~ "no push token"
     end
   end
 
@@ -109,8 +109,8 @@ defmodule Compendium.Providers.RegistryTest do
       assert {:error, {:corrupt, :registry_credential} = reason} =
                RegistryProvider.handle(ctx, %{"action" => "list_my_reports"})
 
-      assert %Prima.Refusal{class: :corrupt} = Error.classify(reason)
-      assert Error.render(reason) =~ "sign in to the registry again"
+      assert %Prima.Refusal{class: :corrupt} = Refusals.classify(reason)
+      assert Refusals.render(reason) =~ "sign in to the registry again"
     end
 
     @tag :capture_log
@@ -136,7 +136,7 @@ defmodule Compendium.Providers.RegistryTest do
         assert {:error, reason} = RegistryProvider.handle(ctx, %{"action" => action}),
                "expected a refusal for bare #{action}"
 
-        assert Error.render(reason) =~ sentence,
+        assert Refusals.render(reason) =~ sentence,
                "expected the arg-missing sentence for #{action}, got: #{inspect(reason)}"
       end
     end

@@ -16,7 +16,7 @@ defmodule PrismWeb do
   """
 
   use Boundary,
-    deps: [Prism, CyfrWeb, Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Opus],
+    deps: [Prism, CyfrWeb, Sanctum, Arca, Cyfr, Compendium, Aqua, Opus],
     exports: [
       ActiveContext,
       ActivitiesLive,

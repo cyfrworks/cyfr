@@ -50,12 +50,12 @@ defmodule CyfrWeb.ApiError do
 
   @doc """
   Render `reason` — a `%Prima.Refusal{}`, or a reason term classified here
-  (`Grimoire.classify/1`) — at the status its class answers with,
+  (`Sanctum.Gate.classify/1`) — at the status its class answers with,
   with its own sentence.
   """
   @spec refuse(Plug.Conn.t(), term()) :: Plug.Conn.t()
   def refuse(%Plug.Conn{} = conn, reason) do
-    refusal = Grimoire.classify(reason)
+    refusal = Sanctum.Gate.classify(reason)
     __MODULE__.send(conn, status(refusal.class), refusal, nil)
   end
 
@@ -67,7 +67,7 @@ defmodule CyfrWeb.ApiError do
   """
   @impl true
   def send(%Plug.Conn{} = conn, status, reason, _message) do
-    refusal = Grimoire.classify(reason)
+    refusal = Sanctum.Gate.classify(reason)
 
     conn
     |> CyfrWeb.Plugs.CallIdentity.refused(refusal)

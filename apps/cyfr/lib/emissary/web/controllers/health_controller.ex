@@ -80,8 +80,8 @@ defmodule Emissary.Web.HealthController do
       storage: check_storage(),
       # The operation table and its resource index are written once at
       # boot, before any listener: each check says its term is there.
-      tool_registry: check_written(&Grimoire.operations/0),
-      resource_registry: check_written(&Grimoire.resources/0),
+      tool_registry: check_written(&Sanctum.Gate.operations/0),
+      resource_registry: check_written(&Sanctum.Gate.resources/0),
       # A boot that lost its control-plane lease is not ready: the endpoint
       # answers 503 to everything but this probe until the claim is won back.
       control_plane:

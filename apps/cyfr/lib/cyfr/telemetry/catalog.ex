@@ -406,9 +406,9 @@ defmodule Cyfr.Telemetry.Catalog do
     },
 
     # ——— admission decisions ———
-    [:cyfr, :grimoire, :decision, :admitted] => %{consumers: [:metrics]},
-    [:cyfr, :grimoire, :decision, :refused] => %{consumers: [:metrics]},
-    [:cyfr, :grimoire, :decision, :lost] => %{
+    [:cyfr, :sanctum, :decision, :admitted] => %{consumers: [:metrics]},
+    [:cyfr, :sanctum, :decision, :refused] => %{consumers: [:metrics]},
+    [:cyfr, :sanctum, :decision, :lost] => %{
       consumers: [:metrics, :operator],
       note:
         "an admission decision or its completion the decision log could not write within " <>

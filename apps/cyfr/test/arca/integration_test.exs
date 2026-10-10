@@ -167,7 +167,7 @@ defmodule Arca.IntegrationTest do
     test "retention workflow via MCP", %{ctx: ctx, actor: actor} do
       # 1. Set retention via MCP
       {:ok, set_result} =
-        Grimoire.call_external("retention", ctx, %{
+        Sanctum.Gate.call_external("retention", ctx, %{
           "action" => "set",
           "settings" => %{"executions" => 2}
         })
@@ -195,7 +195,7 @@ defmodule Arca.IntegrationTest do
 
       # 3. Dry run via MCP
       {:ok, dry_result} =
-        Grimoire.call_external("retention", ctx, %{
+        Sanctum.Gate.call_external("retention", ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => true
@@ -205,7 +205,7 @@ defmodule Arca.IntegrationTest do
 
       # 4. Actual cleanup via MCP
       {:ok, cleanup_result} =
-        Grimoire.call_external("retention", ctx, %{
+        Sanctum.Gate.call_external("retention", ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions"
         })
@@ -214,7 +214,7 @@ defmodule Arca.IntegrationTest do
 
       # 5. Verify via MCP get
       {:ok, get_result} =
-        Grimoire.call_external("retention", ctx, %{
+        Sanctum.Gate.call_external("retention", ctx, %{
           "action" => "get"
         })
 

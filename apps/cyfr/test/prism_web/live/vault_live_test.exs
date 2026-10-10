@@ -231,7 +231,7 @@ defmodule PrismWeb.VaultLiveTest do
     {:ok, _} =
       Sanctum.TestContext.confirming(
         ctx,
-        &Grimoire.call_external("vault", &1, %{
+        &Sanctum.Gate.call_external("vault", &1, %{
           "action" => "create",
           "name" => "bridge-token",
           "kind" => "api_key",
@@ -241,7 +241,7 @@ defmodule PrismWeb.VaultLiveTest do
       )
 
     {:ok, _} =
-      Grimoire.call_external("mcp_servers", ctx, %{
+      Sanctum.Gate.call_external("mcp_servers", ctx, %{
         "action" => "create",
         "name" => "bridge",
         "config" => %{
@@ -257,7 +257,7 @@ defmodule PrismWeb.VaultLiveTest do
 
     # the list verb carries the names — never the header values
     assert {:ok, %{servers: [server]}} =
-             Grimoire.call_external("mcp_servers", ctx, %{"action" => "list"})
+             Sanctum.Gate.call_external("mcp_servers", ctx, %{"action" => "list"})
 
     assert server.vault_refs == ["bridge-token"]
     refute inspect(server) =~ "Authorization"
@@ -763,7 +763,7 @@ defmodule PrismWeb.VaultLiveTest do
       {:error, reason} =
         PrismWeb.Ops.call_tool(ctx, "profile/plan", %{"ref" => "reagent:local.vault-unknown"})
 
-      refute Grimoire.Error.classify(reason).class in [:unavailable, :not_found, :corrupt]
+      refute Sanctum.Refusals.classify(reason).class in [:unavailable, :not_found, :corrupt]
 
       {view, _html} = mount_athanor(conn, "/vault")
       render_click(view, "show_add", %{"mode" => "fields"})
@@ -1152,7 +1152,7 @@ defmodule PrismWeb.VaultLiveTest do
     :ok =
       :telemetry.attach(
         handler,
-        [:cyfr, :grimoire, :decision, :admitted],
+        [:cyfr, :sanctum, :decision, :admitted],
         fn _event, _measurements, meta, _config ->
           if meta[:tool] == "profile" and meta[:action] == "plan" do
             :telemetry.detach(handler)
@@ -1505,7 +1505,7 @@ defmodule PrismWeb.VaultLiveTest do
              Sanctum.ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
 
     assert {:ok, %{providers: [%{provider: "google"}]}} =
-             Grimoire.call_external("oauth", ctx, %{"action" => "list"})
+             Sanctum.Gate.call_external("oauth", ctx, %{"action" => "list"})
 
     view
     |> element("button[phx-click=delete_client][phx-value-provider=google]")
@@ -1516,7 +1516,7 @@ defmodule PrismWeb.VaultLiveTest do
 
     # removing what is not there says so
     assert {:error, msg} =
-             Grimoire.call_external("oauth", ctx, %{
+             Sanctum.Gate.call_external("oauth", ctx, %{
                "action" => "delete_client",
                "provider" => "google"
              })
@@ -1768,7 +1768,7 @@ defmodule PrismWeb.VaultLiveTest do
       {:ok, _} =
         Sanctum.TestContext.confirming(
           ctx,
-          &Grimoire.call_external("vault", &1, %{
+          &Sanctum.Gate.call_external("vault", &1, %{
             "action" => "create",
             "name" => name,
             "kind" => "api_key",

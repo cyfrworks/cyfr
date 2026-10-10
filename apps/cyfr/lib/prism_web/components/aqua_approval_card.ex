@@ -29,7 +29,7 @@ defmodule PrismWeb.AquaApprovalCard do
       run was started by (`:always`, lifecycle `:schedule`), offered only
       when that run's row names one (`scheduled`);
     - limit to these paths — for an action that declares which argument
-      names a storage path (`Grimoire.Catalog.action_declaration/1`), a
+      names a storage path (`Sanctum.Catalog.action_declaration/1`), a
       standing choice may carry the path the call names, in the storage
       door's spelling, as its constraint.
 
@@ -342,7 +342,7 @@ defmodule PrismWeb.AquaApprovalCard do
 
     with true <- is_binary(tool) and is_binary(action),
          {:ok, %{resource: {argument, :storage_path}}} <-
-           Grimoire.Catalog.action_declaration("#{tool}.#{action}"),
+           Sanctum.Catalog.action_declaration("#{tool}.#{action}"),
          path when is_binary(path) <- args[argument],
          pattern when is_binary(pattern) <- Prima.ComponentPath.door_path(path) do
       %{kind: "storage_path", patterns: [pattern]}
@@ -492,7 +492,7 @@ defmodule PrismWeb.AquaApprovalCard do
     do: false
 
   defp standing_offered?(kind, standing, scope),
-    do: standing_offered(kind, Grimoire.standing_scope(standing), scope)
+    do: standing_offered(kind, Sanctum.Gate.standing_scope(standing), scope)
 
   defp standing_offered(_kind, false, _scope), do: false
   defp standing_offered(_kind, :thread, :always), do: false

@@ -91,7 +91,7 @@ defmodule Compendium.Builds do
 
   Answers the operation's result — `status`, `reference`, `digest`,
   `size`, `files`, `exports`, `language`, `target_type` and
-  `registration: "pending"` — or a refusal `Grimoire.render/1`
+  `registration: "pending"` — or a refusal `Sanctum.Gate.render/1`
   renders.
   """
   @spec compile(Context.t(), String.t(), [option()]) :: {:ok, map()} | {:error, term()}
@@ -242,7 +242,7 @@ defmodule Compendium.Builds do
     do: BuildRecords.record_finished(Context.actor(ctx), build_id, "compiled", result)
 
   defp record_outcome(%{ctx: ctx, build_id: build_id}, {:error, reason}) do
-    sentence = Grimoire.render(reason)
+    sentence = Sanctum.Gate.render(reason)
 
     BuildRecords.record_finished(Context.actor(ctx), build_id, "failed", sentence)
   end
@@ -403,7 +403,7 @@ defmodule Compendium.Builds do
         {:ok, parsed.version}
 
       {:error, reason} ->
-        {:error, "Cannot resolve version for #{reference}: #{Grimoire.render(reason)}"}
+        {:error, "Cannot resolve version for #{reference}: #{Sanctum.Gate.render(reason)}"}
     end
   end
 
@@ -654,7 +654,7 @@ defmodule Compendium.Builds do
         Prima.LoggerContext.restore(logger_metadata)
 
         outcome =
-          case Grimoire.call_external("component", ctx, %{"action" => "register"}) do
+          case Sanctum.Gate.call_external("component", ctx, %{"action" => "register"}) do
             {:ok, _} ->
               "done"
 

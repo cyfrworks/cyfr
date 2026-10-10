@@ -73,7 +73,7 @@ defmodule Cyfr.Test.Sandbox do
     Prism.TaskSupervisor,
     Emissary.TaskSupervisor,
     Emissary.Web.TaskSupervisor,
-    Grimoire.TaskSupervisor,
+    Sanctum.Gate.TaskSupervisor,
     Sanctum.ProvisioningSupervisor,
     Compendium.ProvisioningSupervisor,
     Opus.Schedules.TaskSupervisor,

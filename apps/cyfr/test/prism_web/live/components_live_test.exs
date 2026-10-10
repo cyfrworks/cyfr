@@ -621,7 +621,7 @@ defmodule PrismWeb.ComponentsLiveTest do
     :ok =
       :telemetry.attach(
         handler,
-        [:cyfr, :grimoire, :decision, :admitted],
+        [:cyfr, :sanctum, :decision, :admitted],
         fn _event, _measurements, meta, _config ->
           if self() == pid and meta[:tool] == "component" and meta[:action] == "setup_plan" do
             :telemetry.detach(handler)

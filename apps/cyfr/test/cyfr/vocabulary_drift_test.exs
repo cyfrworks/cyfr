@@ -22,10 +22,15 @@ defmodule Cyfr.VocabularyDriftTest do
   @root Path.expand("../../../..", __DIR__)
   @literals ["\"sub-agent\""]
 
+  # The lib trees the code-line pins read: the host's, and Sanctum's, which
+  # holds the gate.
+  @lib_trees ["apps/cyfr/lib/**/*.ex", "apps/sanctum/lib/**/*.ex"]
+
   # The word the runner, the rows and the tool option used to call the
   # agent a turn is addressed to. It is gone from every code line under
-  # lib and from every column of the baseline: quoted, bare, as an atom
-  # or as a field — by file and exact count, none.
+  # `apps/cyfr/lib` and `apps/sanctum/lib` and from every column of the
+  # baseline: quoted, bare, as an atom or as a field — by file and exact
+  # count, none.
   @retired_word "orch" <> "estrator"
   @retired_word_allowed %{}
   @baseline "apps/arca/priv/repo/migrations/*_baseline.exs"
@@ -52,9 +57,9 @@ defmodule Cyfr.VocabularyDriftTest do
     assert type_value_line?("agent.type == \"role\"")
   end
 
-  # One walk of the tree serves every pin.
+  # One walk of the lib trees serves every pin.
   setup_all do
-    sources = code_lines("apps/cyfr/lib/**/*.ex")
+    sources = Enum.flat_map(@lib_trees, &code_lines/1)
 
     counts =
       for {rel, lines} <- sources,

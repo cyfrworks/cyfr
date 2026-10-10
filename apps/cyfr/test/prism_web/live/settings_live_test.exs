@@ -233,7 +233,7 @@ defmodule PrismWeb.SettingsLiveTest do
       :ok =
         :telemetry.attach(
           handler,
-          [:cyfr, :grimoire, :decision, :admitted],
+          [:cyfr, :sanctum, :decision, :admitted],
           fn _event, _measure, meta, _config ->
             if meta.tool == "instance_entry" and meta.action == "set_audience",
               do: send(test_pid, :save_admitted)
@@ -330,9 +330,9 @@ defmodule PrismWeb.SettingsLiveTest do
 
       for action <- ~w(list people) do
         assert {:error, refusal} =
-                 Grimoire.call_external("instance_entry", ctx, %{"action" => action})
+                 Sanctum.Gate.call_external("instance_entry", ctx, %{"action" => action})
 
-        assert Grimoire.render(refusal) =~ ~r/platform admin/i, action
+        assert Sanctum.Gate.render(refusal) =~ ~r/platform admin/i, action
       end
     end
 
@@ -460,7 +460,7 @@ defmodule PrismWeb.SettingsLiveTest do
       assert render(view) =~ "Choose Any consented component or Unmodified shipped components."
 
       assert {:error, _refused} =
-               Grimoire.call_external("instance_entry", ctx, %{
+               Sanctum.Gate.call_external("instance_entry", ctx, %{
                  "action" => "set_component_policy",
                  "entry_id" => entry.id,
                  "component_policy" => "everything"
@@ -1163,7 +1163,7 @@ defmodule PrismWeb.SettingsLiveTest do
       :ok =
         :telemetry.attach(
           handler,
-          [:cyfr, :grimoire, :decision, :admitted],
+          [:cyfr, :sanctum, :decision, :admitted],
           fn _event, _measure, meta, _config ->
             if meta.tool == "instance_entry" and meta.action == "set_audience" do
               :ok =

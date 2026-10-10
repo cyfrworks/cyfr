@@ -6,7 +6,7 @@ defmodule Emissary.MCP.MessageTest do
   Every refusal the gate classifies answers the MCP wire with its code:
   the row's override, a consent signal's own tag, or its class's code.
   The codec (`Prima.MCP.Message`) is pure; the classification and the
-  override are the gate's, so this reads both through `Grimoire`.
+  override are the gate's, so this reads both through `Sanctum.Gate`.
   """
   use ExUnit.Case, async: true
 
@@ -16,10 +16,10 @@ defmodule Emissary.MCP.MessageTest do
     # Classified by the gate and answered with its row's override, as every
     # caller does: the override is what keeps a Sanctum row's code.
     defp code(reason, where \\ :tools_call) do
-      refusal = Grimoire.classify(reason)
+      refusal = Sanctum.Gate.classify(reason)
 
       refusal
-      |> Message.refusal_code(where, Grimoire.code_override(refusal))
+      |> Message.refusal_code(where, Sanctum.Gate.code_override(refusal))
       |> Message.error_code()
     end
 
@@ -80,7 +80,7 @@ defmodule Emissary.MCP.MessageTest do
                code({:consent_required, %{}})
              ]
 
-      assert Grimoire.classify(signal).class == :confirmation_required
+      assert Sanctum.Gate.classify(signal).class == :confirmation_required
     end
 
     test "a confirmation signal that names no confirmation is refused by shape" do

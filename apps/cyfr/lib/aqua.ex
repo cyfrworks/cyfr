@@ -49,7 +49,7 @@ defmodule Aqua do
   """
 
   use Boundary,
-    deps: [Compendium, Opus, Grimoire, Cyfr, Sanctum, Arca],
+    deps: [Compendium, Opus, Cyfr, Sanctum, Arca],
     exports: [
       Supervisor,
       Text

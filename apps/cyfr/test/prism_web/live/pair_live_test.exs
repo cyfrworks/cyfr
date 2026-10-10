@@ -57,7 +57,7 @@ defmodule PrismWeb.PairLiveTest do
     {:ok, %{invitation_url: url}} =
       Sanctum.TestContext.confirming(
         ctx,
-        &Grimoire.call_external("pairing", &1, %{"action" => "begin"})
+        &Sanctum.Gate.call_external("pairing", &1, %{"action" => "begin"})
       )
 
     %URI{path: "/pair", fragment: "code=" <> code} = URI.parse(url)
@@ -97,7 +97,7 @@ defmodule PrismWeb.PairLiveTest do
 
   defp paired_clients(ctx) do
     {:ok, %{clients: clients}} =
-      Grimoire.call_external("pairing", ctx, %{"action" => "list"})
+      Sanctum.Gate.call_external("pairing", ctx, %{"action" => "list"})
 
     clients
   end

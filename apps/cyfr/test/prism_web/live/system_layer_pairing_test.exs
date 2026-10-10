@@ -142,7 +142,7 @@ defmodule PrismWeb.SystemLayerPairingTest do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
     glass = Context.build(%{authenticated: false, client_ip: "198.51.100.71"})
     submission = %{"invitation_secret" => secret, "device_key" => Encoding.b64(device_key)}
-    call = &Grimoire.call_external("pairing", glass, Map.merge(&1, %{"action" => "complete"}))
+    call = &Sanctum.Gate.call_external("pairing", glass, Map.merge(&1, %{"action" => "complete"}))
 
     {:ok, %{challenge: challenge}} = call.(submission)
     {:ok, challenge} = Challenge.decode(challenge)
@@ -264,7 +264,7 @@ defmodule PrismWeb.SystemLayerPairingTest do
       {:ok, %{invitation_url: url}} =
         Sanctum.TestContext.confirming(
           other,
-          &Grimoire.call_external("pairing", &1, %{"action" => "begin"})
+          &Sanctum.Gate.call_external("pairing", &1, %{"action" => "begin"})
         )
 
       client_id = complete!(url)

@@ -77,13 +77,13 @@ defmodule CyfrWeb.Plugs.ControlPlaneOwnershipTest do
               class: :not_owner,
               reason: :control_plane_lost,
               message: message
-            }} = Grimoire.call_external("system", ctx, %{"action" => "status"})
+            }} = Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
 
-    assert message == Grimoire.Error.render(:control_plane_lost)
+    assert message == Sanctum.Refusals.render(:control_plane_lost)
     assert message =~ "control plane"
 
     ControlPlane.record(:unclaimed)
-    assert {:ok, _} = Grimoire.call_external("system", ctx, %{"action" => "status"})
+    assert {:ok, _} = Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
   end
 
   test "a proxied external server is not dispatched for a member that lost its slot" do
@@ -91,7 +91,7 @@ defmodule CyfrWeb.Plugs.ControlPlaneOwnershipTest do
     ControlPlane.record(:lost)
 
     assert {:error, %Prima.Refusal{stage: :admission, reason: :control_plane_lost}} =
-             Grimoire.call_external("notion:create_page", ctx, %{"action" => "create"})
+             Sanctum.Gate.call_external("notion:create_page", ctx, %{"action" => "create"})
   end
 
   # Over `/mcp` the gate's admission refusal is a JSON-RPC error by its
@@ -108,7 +108,7 @@ defmodule CyfrWeb.Plugs.ControlPlaneOwnershipTest do
     }
 
     assert {:error, :not_owner, message} = Emissary.MCP.Router.dispatch(ctx, call)
-    assert message == Grimoire.Error.render(:control_plane_lost)
+    assert message == Sanctum.Refusals.render(:control_plane_lost)
     assert Prima.MCP.Message.error_code(:not_owner) == -33_102
   end
 end

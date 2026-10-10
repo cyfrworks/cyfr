@@ -90,7 +90,7 @@ defmodule Opus.ProviderTest do
       end
 
       assert {:error, {:invalid_argument, _}} =
-               Grimoire.call_external("execution", ctx, %{
+               Sanctum.Gate.call_external("execution", ctx, %{
                  "action" => "run",
                  "reference" => "agent:local.aqua",
                  "input" => %{}
@@ -101,7 +101,7 @@ defmodule Opus.ProviderTest do
       tools = Provider.tools()
       assert Enum.map(tools, & &1.name) == ["execution"]
       refute function_exported?(Provider, :streams, 0)
-      assert Grimoire.lookup("card") == :miss
+      assert Sanctum.Gate.lookup("card") == :miss
     end
 
     test "each tool has required schema fields" do
@@ -1292,13 +1292,13 @@ defmodule Opus.ProviderTest do
 
     test "dispatch refuses a member and hides the action from them", %{ctx: ctx} do
       assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
-               Grimoire.call_external("execution", ctx, %{
+               Sanctum.Gate.call_external("execution", ctx, %{
                  "action" => "force_release"
                })
 
       [tool] =
-        Grimoire.Visibility.filter_for_context(
-          Enum.filter(Grimoire.list_tools(), &(&1["name"] == "execution")),
+        Sanctum.Visibility.filter_for_context(
+          Enum.filter(Sanctum.Gate.list_tools(), &(&1["name"] == "execution")),
           ctx
         )
 
@@ -1344,7 +1344,7 @@ defmodule Opus.ProviderTest do
       # Through the dispatcher, where a permission refusal would come from: the
       # handler alone refuses nothing on permission.
       result =
-        Grimoire.call_external("execution", restricted_ctx, %{
+        Sanctum.Gate.call_external("execution", restricted_ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
@@ -1372,14 +1372,14 @@ defmodule Opus.ProviderTest do
       # Through the dispatcher — the :execute gate lives in the action
       # annotation, enforced by the catalog, not in the handler.
       assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :execute}}} =
-               Grimoire.call_external("execution", no_execute_ctx, %{
+               Sanctum.Gate.call_external("execution", no_execute_ctx, %{
                  "action" => "status"
                })
     end
 
     test "execution.cancel denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
       assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :execute}}} =
-               Grimoire.call_external("execution", no_execute_ctx, %{
+               Sanctum.Gate.call_external("execution", no_execute_ctx, %{
                  "action" => "cancel",
                  "execution_id" => "exec_nonexistent"
                })
@@ -1712,7 +1712,7 @@ defmodule Opus.ProviderTest do
   # the gate like any other call; the answer is `%{content:, mimeType:}`.
   defp read(ctx, uri),
     do:
-      Grimoire.call_external("execution", ctx, %{
+      Sanctum.Gate.call_external("execution", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })
@@ -1917,7 +1917,7 @@ defmodule Opus.ProviderTest do
   end
 
   defp err_msg(reason) do
-    Grimoire.Error.render(reason) ||
+    Sanctum.Refusals.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 

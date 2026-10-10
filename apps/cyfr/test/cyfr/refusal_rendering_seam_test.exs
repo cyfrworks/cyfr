@@ -9,7 +9,7 @@ defmodule Cyfr.RefusalRenderingSeamTest do
   `inspect/1` it puts Elixir syntax, internal field names and whatever
   the term carried into `turns.error`, `executions.error_message`,
   `mcp_logs`, a schedule row, an HTTP or JSON-RPC body or a guest's
-  answer. The table renders it instead (`Grimoire.render/1`,
+  answer. The table renders it instead (`Sanctum.Gate.render/1`,
   `Prima.Refusal.classify/1`), or the site logs it.
 
   The scan reads every umbrella app's `lib` as code, not text, and finds
@@ -71,7 +71,7 @@ defmodule Cyfr.RefusalRenderingSeamTest do
            #{Enum.join(Enum.sort(unlisted), "\n")}
 
            A stored row, a wire body and a guest's answer read a refusal
-           through the table — `Grimoire.render/1` or
+           through the table — `Sanctum.Gate.render/1` or
            `Prima.Refusal.classify/1` — never its spelling. Log the term
            inside the `Logger` call if an operator needs it.
            """

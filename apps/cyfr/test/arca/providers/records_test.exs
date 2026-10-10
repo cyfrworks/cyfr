@@ -88,7 +88,7 @@ defmodule Arca.Providers.RecordsTest do
   describe "the arca://files/{path} template" do
     test "is advertised by the system provider that declares its read" do
       refute function_exported?(MCP, :resource_templates, 0)
-      templates = Grimoire.Provider.resource_templates()
+      templates = Sanctum.Providers.System.resource_templates()
       assert [%{uriTemplate: "arca://files/{path}"} = template] = templates
 
       # Rendered from the layout table, so the advertised vocabulary can
@@ -443,20 +443,20 @@ defmodule Arca.Providers.RecordsTest do
             %{"action" => "set", "settings" => %{"executions" => 5}},
             %{"action" => "cleanup", "cleanup_type" => "executions"}
           ] do
-        assert {:error, :missing_tenant} = Grimoire.call_external("retention", ctx, args),
+        assert {:error, :missing_tenant} = Sanctum.Gate.call_external("retention", ctx, args),
                "#{inspect(ctx.scope)} #{args["action"]}"
       end
     end
 
     test "set answers the merged settings", %{ctx: ctx} do
       assert {:ok, _} =
-               Grimoire.call_external("retention", ctx, %{
+               Sanctum.Gate.call_external("retention", ctx, %{
                  "action" => "set",
                  "settings" => %{"executions" => 5}
                })
 
       assert {:ok, %{action: "set", updated: true, settings: settings}} =
-               Grimoire.call_external("retention", ctx, %{
+               Sanctum.Gate.call_external("retention", ctx, %{
                  "action" => "set",
                  "settings" => %{"builds" => 3}
                })
@@ -487,7 +487,7 @@ defmodule Arca.Providers.RecordsTest do
             %{"action" => "cleanup", "cleanup_type" => "executions"}
           ] do
         assert {:error, {:corrupt, {:settings, :retention}} = reason} =
-                 Grimoire.call_external("retention", ctx, args),
+                 Sanctum.Gate.call_external("retention", ctx, args),
                args["action"]
 
         assert err_msg(reason) == "The stored retention settings are damaged."
@@ -499,7 +499,7 @@ defmodule Arca.Providers.RecordsTest do
       Arca.Repo.query!("DROP TABLE retention_settings")
 
       assert {:error, {:unavailable, "Retention settings"} = reason} =
-               Grimoire.call_external("retention", ctx, %{"action" => "get"})
+               Sanctum.Gate.call_external("retention", ctx, %{"action" => "get"})
 
       assert err_msg(reason) =~ "unavailable"
     end
@@ -627,7 +627,7 @@ defmodule Arca.Providers.RecordsTest do
     end
 
     test "can get retention settings", %{app_ctx: app_ctx} do
-      {:ok, result} = Grimoire.call_external("retention", app_ctx, %{"action" => "get"})
+      {:ok, result} = Sanctum.Gate.call_external("retention", app_ctx, %{"action" => "get"})
       assert is_map(result.settings)
     end
 
@@ -635,7 +635,7 @@ defmodule Arca.Providers.RecordsTest do
       # The dispatcher must enforce the declared :storage_write permission.
       assert {:error,
               %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_write}}} =
-               Grimoire.call_external("retention", app_ctx, %{
+               Sanctum.Gate.call_external("retention", app_ctx, %{
                  "action" => "set",
                  "settings" => %{"executions" => 5}
                })
@@ -643,7 +643,7 @@ defmodule Arca.Providers.RecordsTest do
 
     test "cannot run cleanup", %{app_ctx: app_ctx} do
       assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :admin}}} =
-               Grimoire.call_external("retention", app_ctx, %{
+               Sanctum.Gate.call_external("retention", app_ctx, %{
                  "action" => "cleanup",
                  "cleanup_type" => "executions"
                })
@@ -668,7 +668,7 @@ defmodule Arca.Providers.RecordsTest do
 
     test "can set retention settings", %{oidc_ctx: oidc_ctx} do
       {:ok, result} =
-        Grimoire.call_external("retention", oidc_ctx, %{
+        Sanctum.Gate.call_external("retention", oidc_ctx, %{
           "action" => "set",
           "settings" => %{"executions" => 5}
         })
@@ -678,7 +678,7 @@ defmodule Arca.Providers.RecordsTest do
 
     test "can run cleanup", %{oidc_ctx: oidc_ctx} do
       {:ok, result} =
-        Grimoire.call_external("retention", oidc_ctx, %{
+        Sanctum.Gate.call_external("retention", oidc_ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => true
@@ -879,7 +879,7 @@ defmodule Arca.Providers.RecordsTest do
           reason: "Not allowed."
         )
 
-      :ok = Grimoire.open_decision(ctx, decision, %{input: %{}})
+      :ok = Sanctum.Gate.open_decision(ctx, decision, %{input: %{}})
 
       assert {:ok, row} =
                MCP.handle("mcp_log", actor(ctx), %{"action" => "get", "id" => decision.call_id})
@@ -921,7 +921,7 @@ defmodule Arca.Providers.RecordsTest do
 
       for {tool, verb} <- retired do
         {:error, %Prima.Refusal{stage: :admission, reason: {:unknown_action, name_action}}} =
-          Grimoire.call_external(tool, ctx, %{"action" => verb})
+          Sanctum.Gate.call_external(tool, ctx, %{"action" => verb})
 
         assert name_action == "#{tool}.#{verb}"
       end
@@ -966,7 +966,7 @@ defmodule Arca.Providers.RecordsTest do
     test "mcp_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
       assert {:error,
               %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_read}}} =
-               Grimoire.call_external("mcp_log", ctx, %{
+               Sanctum.Gate.call_external("mcp_log", ctx, %{
                  "action" => "correlate",
                  "request_id" => "req_x"
                })
@@ -975,7 +975,7 @@ defmodule Arca.Providers.RecordsTest do
     test "policy_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
       assert {:error,
               %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_read}}} =
-               Grimoire.call_external("policy_log", ctx, %{
+               Sanctum.Gate.call_external("policy_log", ctx, %{
                  "action" => "correlate",
                  "request_id" => "req_x"
                })
@@ -1014,7 +1014,7 @@ defmodule Arca.Providers.RecordsTest do
     test "stats requires :storage_read like its siblings", %{no_read_ctx: ctx} do
       assert {:error,
               %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_read}}} =
-               Grimoire.call_external("mcp_log", ctx, %{"action" => "stats"})
+               Sanctum.Gate.call_external("mcp_log", ctx, %{"action" => "stats"})
     end
 
     test "stats succeeds for a :storage_read context", %{ctx: ctx} do
@@ -1058,7 +1058,7 @@ defmodule Arca.Providers.RecordsTest do
           action <- tool.input_schema["properties"]["action"]["enum"] do
         args = Map.put(extra_args.({tool.name, action}), "action", action)
 
-        case Grimoire.call_external(tool.name, no_perm_ctx, args) do
+        case Sanctum.Gate.call_external(tool.name, no_perm_ctx, args) do
           {:error, %Prima.Refusal{stage: :admission, reason: reason}} ->
             assert Sanctum.Unauthorized.reason?(reason),
                    "#{tool.name}.#{action} error is not a permission denial: #{inspect(reason)}"
@@ -1320,7 +1320,7 @@ defmodule Arca.Providers.RecordsTest do
       host: host
     } do
       assert {:ok, %{decisions: rows}} =
-               Grimoire.call_external("decision", admin, %{
+               Sanctum.Gate.call_external("decision", admin, %{
                  "action" => "list_global",
                  "request_id" => request_id
                })
@@ -1328,7 +1328,7 @@ defmodule Arca.Providers.RecordsTest do
       assert ids(rows) == Enum.sort([tenant.call_id, host.call_id])
 
       assert {:ok, %{decision: %{"call_id" => call_id, "athanor_id" => nil}}} =
-               Grimoire.call_external("decision", admin, %{
+               Sanctum.Gate.call_external("decision", admin, %{
                  "action" => "get_global",
                  "call_id" => host.call_id
                })
@@ -1371,7 +1371,7 @@ defmodule Arca.Providers.RecordsTest do
             %{"action" => "get_global", "call_id" => host.call_id}
           ] do
         assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
-                 Grimoire.call_external("decision", ctx, args)
+                 Sanctum.Gate.call_external("decision", ctx, args)
       end
     end
 
@@ -1398,7 +1398,7 @@ defmodule Arca.Providers.RecordsTest do
 
       :telemetry.attach_many(
         {__MODULE__, ref},
-        [[:cyfr, :grimoire, :decision, :admitted], [:cyfr, :grimoire, :decision, :refused]],
+        [[:cyfr, :sanctum, :decision, :admitted], [:cyfr, :sanctum, :decision, :refused]],
         fn _event, _measurements, metadata, _ -> send(test, {ref, metadata}) end,
         nil
       )
@@ -1416,7 +1416,7 @@ defmodule Arca.Providers.RecordsTest do
             {admin, %{"action" => "list_global"}},
             {admin, %{"action" => "get_global", "call_id" => "call_missing"}}
           ] do
-        Grimoire.call_external("decision", caller, args)
+        Sanctum.Gate.call_external("decision", caller, args)
       end
 
       refute_received {^ref, _}
@@ -1434,7 +1434,7 @@ defmodule Arca.Providers.RecordsTest do
       guest = Sanctum.Context.enter_guest(%{ctx | platform_admin: true})
 
       for action <- actions do
-        refute Grimoire.Catalog.in_chain_reachable?("decision", action)
+        refute Sanctum.Catalog.in_chain_reachable?("decision", action)
 
         args =
           if action in ["get", "get_global"],
@@ -1442,7 +1442,7 @@ defmodule Arca.Providers.RecordsTest do
             else: %{"action" => action, "request_id" => "req_x"}
 
         assert {:error, %Prima.Refusal{stage: :admission, message: message}} =
-                 Grimoire.call_in_chain("decision", guest, args, authority, lineage: lineage)
+                 Sanctum.Gate.call_in_chain("decision", guest, args, authority, lineage: lineage)
 
         assert message =~ "not reachable from a running chain"
       end
@@ -1500,7 +1500,7 @@ defmodule Arca.Providers.RecordsTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Grimoire.Error.render(reason) ||
+    Sanctum.Refusals.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 

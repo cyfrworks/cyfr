@@ -26,9 +26,9 @@ defmodule Sanctum.Consent.PlanTest do
   # The installed catalog, answering as it does, that runs `fun` once at the
   # `at`th catalog read the caller of `run/3` makes: state moving at a
   # chosen point inside one call.
-  defmodule RacingGrimoire do
+  defmodule RacingOperationTable do
     @moduledoc false
-    @behaviour Sanctum.Grimoire
+    @behaviour Sanctum.OperationTable
 
     def run(at, fun, call) do
       Process.put(__MODULE__, {0, at, fun})
@@ -646,13 +646,13 @@ defmodule Sanctum.Consent.PlanTest do
       {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, ref)
       {:ok, %{scope: scope}} = Sanctum.Consent.head_consent(ctx, profile_id)
 
-      real = Sanctum.Grimoire.impl!()
-      :persistent_term.put({RacingGrimoire, :real}, real)
-      Sanctum.Grimoire.install!(RacingGrimoire)
+      real = Sanctum.OperationTable.impl!()
+      :persistent_term.put({RacingOperationTable, :real}, real)
+      Sanctum.OperationTable.install!(RacingOperationTable)
 
       on_exit(fn ->
-        Sanctum.Grimoire.install!(real)
-        :persistent_term.erase({RacingGrimoire, :real})
+        Sanctum.OperationTable.install!(real)
+        :persistent_term.erase({RacingOperationTable, :real})
       end)
 
       damage = fn -> ConsentFixtures.hand_edit_head!(ctx, profile_id, scope: "bogus") end
@@ -663,7 +663,7 @@ defmodule Sanctum.Consent.PlanTest do
 
       # The catalog reads one plan makes, each a point the head can move at.
       {{:ok, whole}, reads} =
-        RacingGrimoire.run(0, fn -> :ok end, fn -> Plan.plan(ctx, %{ref: ref}) end)
+        RacingOperationTable.run(0, fn -> :ok end, fn -> Plan.plan(ctx, %{ref: ref}) end)
 
       assert whole.head_narrowing == get_only
       assert reads > 1
@@ -677,7 +677,7 @@ defmodule Sanctum.Consent.PlanTest do
           :ok = restore.()
 
           {answer, _reads} =
-            RacingGrimoire.run(at, damage, fn -> Plan.plan(ctx, %{ref: ref}) end)
+            RacingOperationTable.run(at, damage, fn -> Plan.plan(ctx, %{ref: ref}) end)
 
           case answer do
             {:ok, plan} ->
@@ -1781,7 +1781,7 @@ defmodule Sanctum.Consent.PlanTest do
     assert {:error, {:lender_unavailable, @lend_dep} = reason} = answer
 
     assert %Prima.Refusal{class: :unavailable, message: @unreadable} =
-             Grimoire.Error.classify(reason)
+             Sanctum.Refusals.classify(reason)
   end
 
   # `profile.plan`'s answer over a damaged lender, naming the profile to
@@ -1793,7 +1793,7 @@ defmodule Sanctum.Consent.PlanTest do
       "A profile that lends a key here is damaged and cannot lend its key — " <>
         "revoke profile #{lender} and grant it again."
 
-    assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Grimoire.Error.classify(reason)
+    assert %Prima.Refusal{class: :corrupt, message: ^damaged} = Sanctum.Refusals.classify(reason)
   end
 
   # `profile` as an MCP client calls it, under a request of its own: the

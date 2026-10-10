@@ -21,7 +21,7 @@ defmodule CyfrWeb do
   """
 
   use Boundary,
-    deps: [Grimoire, Sanctum, Arca, Cyfr],
+    deps: [Sanctum, Arca, Cyfr],
     exports: [
       ApiError,
       ContextGuard,

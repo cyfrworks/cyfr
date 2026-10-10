@@ -417,7 +417,7 @@ defmodule Locus.Runtime.SecurityTest do
         })
 
       assert {:consent_required, %{}} = msg
-      refute Grimoire.Error.render(msg) =~ "Signature verification"
+      refute Sanctum.Refusals.render(msg) =~ "Signature verification"
     end
   end
 end

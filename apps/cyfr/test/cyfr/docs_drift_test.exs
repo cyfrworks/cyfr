@@ -34,7 +34,7 @@ defmodule Cyfr.DocsDriftTest do
   @env_prefixes ~w(CYFR_ CYFR_OPUS_ CYFR_HOST_API_ CYFR_LOCUS_RUNTIME_ CYFR_LOCUS_BUILDS_
                    CYFR_LOCUS_BACKENDS_ LOCUS_RUNTIME_ LOCUS_BUILDS_ LOCUS_BACKENDS_ LOCUS_LOG_
                    KEEPER_ RUNTIME_)
-  @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Opus Emissary Prism Codex Locus
+  @glossary_names ~w(Prima Arca Sanctum Cyfr Compendium Aqua Opus Emissary Prism Codex Locus
                      actor athanor)
 
   # The files that read the releases' environment: the control plane's
@@ -314,7 +314,7 @@ defmodule Cyfr.DocsDriftTest do
     directories = namespace_directories()
 
     # Guards against the scan quietly matching nothing.
-    assert "locus" in directories and "codex" in directories and "grimoire" in directories
+    assert "locus" in directories and "codex" in directories and "compendium" in directories
 
     counts =
       for directory <- directories,
@@ -501,7 +501,7 @@ defmodule Cyfr.DocsDriftTest do
   # Every action a provider annotates `auth: :anonymous` — the actions that
   # answer without a session, which is exactly what the table claims to list.
   defp anonymous_actions do
-    for provider <- Grimoire.configured_providers(),
+    for provider <- Sanctum.Gate.configured_providers(),
         tool <- provider.tools(),
         {action, meta} <- get_in(tool, [Access.key(:annotations, %{}), :actions]) || %{},
         meta[:auth] == :anonymous,
@@ -1323,7 +1323,7 @@ defmodule Cyfr.DocsDriftTest do
   # The operations of the configured tool named `tool`, by action.
   defp operations(tool) do
     definition =
-      Enum.find_value(Grimoire.configured_providers(), fn provider ->
+      Enum.find_value(Sanctum.Gate.configured_providers(), fn provider ->
         Enum.find(provider.tools(), &(&1.name == tool))
       end)
 

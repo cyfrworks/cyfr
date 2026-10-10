@@ -14,7 +14,7 @@ import (
 )
 
 func init() {
-	statusCmd.Flags().String("scope", "all", "Check specific service: aqua, arca, compendium (with the registry), emissary, grimoire, opus, sanctum")
+	statusCmd.Flags().String("scope", "all", "Check specific service: aqua, arca, compendium (with the registry), emissary, opus, sanctum")
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(notifyCmd)
 }

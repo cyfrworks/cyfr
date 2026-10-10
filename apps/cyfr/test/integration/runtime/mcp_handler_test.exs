@@ -9,7 +9,7 @@ defmodule Locus.Runtime.FormulaHandlerMcpTest do
 
   Every dispatch is a host call of the formula's attempt, decided by CYFR
   under the authority it holds for that attempt: a catalog tool goes
-  through `Grimoire.call_in_chain/5`, where the grant is the
+  through `Sanctum.Gate.call_in_chain/5`, where the grant is the
   consented edge's tool list — exact `tool.action` entries,
   deny-by-default. The telemetry a call emits in its runner's VM is
   `Locus.Runtime.FormulaHandlerRunnerTest`'s, in the runtime's suite.
@@ -270,7 +270,7 @@ defmodule Locus.Runtime.FormulaHandlerMcpTest do
   describe "host interception" do
     test "the host has an arm for exactly the actions an assignment names as intercepted" do
       execution = Enum.find(Opus.Provider.tools(), &(&1.name == "execution"))
-      actions = execution |> Grimoire.Annotations.actions_of() |> Map.keys()
+      actions = execution |> Sanctum.Annotations.actions_of() |> Map.keys()
       intercepted = FormulaHost.intercepted()
 
       assert intercepted != []

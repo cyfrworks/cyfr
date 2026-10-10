@@ -38,7 +38,7 @@ defmodule Emissary.Web.CertificateRenewalController do
     ctx = context(conn)
     args = params |> Map.take(@fields) |> Map.put("action", "renew_certificate")
 
-    case Grimoire.call_external("person", ctx, args, call_id: ctx.call_id) do
+    case Sanctum.Gate.call_external("person", ctx, args, call_id: ctx.call_id) do
       {:ok, answer} ->
         conn
         |> CallIdentity.decided()

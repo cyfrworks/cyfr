@@ -19,7 +19,6 @@ defmodule CyfrWeb.Router do
     deps: [
       Arca,
       Sanctum,
-      Grimoire,
       Cyfr,
       Compendium,
       Aqua,

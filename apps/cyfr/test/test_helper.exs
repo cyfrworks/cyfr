@@ -16,7 +16,7 @@ end
 # running the whole application against one Postgres and one object store.
 # It costs two operating-system processes and a full boot each, and it
 # needs a database of its own, so it runs only when it is asked for.
-# :benchmark is the admission latency matrix (`Grimoire.AdmissionLatencyTest`):
+# :benchmark is the admission latency matrix (`Sanctum.Gate.AdmissionLatencyTest`):
 # minutes of timed samples against committed rows, run alone with
 # `--only benchmark` so nothing else competes for the pool it measures.
 # :boundary_plant is the Boundary compiler's planted violations

@@ -543,7 +543,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       # The argument is declared as the account a call names, an entry for
       # a standing approval's constraint.
       assert {:ok, %{resource: {"connection", :vault_entry}}} =
-               Grimoire.Catalog.action_declaration("execution.run")
+               Sanctum.Catalog.action_declaration("execution.run")
 
       before = Arca.Repo.aggregate(Arca.Schemas.Execution, :count)
       named = %{"reference" => ref, "input" => %{"a" => 1}, "connection" => "Work"}
@@ -551,21 +551,25 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       # No profile roots the reference: the consent signal, as a run naming
       # no account meets it.
       assert {:error, {:consent_required, %{"ref" => ^ref}}} =
-               Grimoire.call_external("execution", ctx, Map.put(named, "action", "run"))
+               Sanctum.Gate.call_external("execution", ctx, Map.put(named, "action", "run"))
 
       # Granted, for runs over the API, with no account on its own calls:
       # the name is a grant to make, never run under the default.
       grant_programmatic!(@test_node)
 
       assert {:error, refused} =
-               Grimoire.call_external("execution", ctx, Map.put(named, "action", "run"))
+               Sanctum.Gate.call_external("execution", ctx, Map.put(named, "action", "run"))
 
       assert %Prima.Refusal{class: :setup_required, reason: :connection_not_granted} =
                Prima.Refusal.classify(refused)
 
       # A stream declares no connection, and is refused naming it.
       assert {:error, %Prima.Refusal{class: :invalid_argument, message: message}} =
-               Grimoire.call_external("execution", ctx, Map.put(named, "action", "run_stream"))
+               Sanctum.Gate.call_external(
+                 "execution",
+                 ctx,
+                 Map.put(named, "action", "run_stream")
+               )
 
       assert message =~ "connection"
       assert Arca.Repo.aggregate(Arca.Schemas.Execution, :count) == before

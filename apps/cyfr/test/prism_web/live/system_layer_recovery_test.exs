@@ -518,7 +518,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
             %{"action" => "kit", "attempt_id" => "att_1"},
             %{"action" => "enroll", "recovery_secret" => seed(), "request_id" => request_id()}
           ] do
-        assert {:error, reason} = Grimoire.call_external("person", frame, args)
+        assert {:error, reason} = Sanctum.Gate.call_external("person", frame, args)
         refute match?({:ok, _}, reason)
         refute inspect(reason) =~ "recovery_secret"
       end

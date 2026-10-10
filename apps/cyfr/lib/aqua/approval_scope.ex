@@ -7,7 +7,7 @@ defmodule Aqua.ApprovalScope do
 
   Encodes and decodes `:once`, `:thread`, `:always` and `:never` for
   the wire, cards, panes and runner. Action standing declarations use
-  `Grimoire.standing_scope/1`.
+  `Sanctum.Gate.standing_scope/1`.
   """
 
   @type t :: :once | :thread | :always | :never

@@ -18,7 +18,7 @@ defmodule Prima.Refusal do
   (`forbidden`) nor a consent to give (`consent_required`).
 
   The authorization vocabulary is `Sanctum.Unauthorized`'s, which
-  classifies its own reasons; `Grimoire.Error.classify/1` tries it first
+  classifies its own reasons; `Sanctum.Refusals.classify/1` tries it first
   and comes here for everything else. A reason this table does not know —
   a Sanctum term included, since the contracts do not name Sanctum — is
   `internal`, reads "The outcome could not be confirmed." and is
@@ -632,7 +632,7 @@ defmodule Prima.Refusal do
     do: {:not_found, "Unknown tool: #{name}"}
 
   # A `server:tool` name no external server of the caller's athanor
-  # answers (`Grimoire.Proxy`).
+  # answers (`Sanctum.Proxy`).
   defp row(:not_external), do: {:not_found, "Unknown tool"}
 
   defp row(:database_error),

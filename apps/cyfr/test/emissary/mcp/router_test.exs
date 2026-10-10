@@ -201,7 +201,7 @@ defmodule Emissary.MCP.RouterTest do
     end
 
     test "the gate's refusals are protocol errors by class", %{context: ctx} do
-      Grimoire.Catalog.with_providers([Grimoire.Probe.Refusing], fn ->
+      Sanctum.Catalog.with_providers([Sanctum.Gate.Probe.Refusing], fn ->
         # A declared argument the gate cannot cast.
         assert {:error, :invalid_params, message} =
                  call(ctx, "refusing_probe", %{"action" => "invalid", "n" => "x"})
@@ -237,7 +237,7 @@ defmodule Emissary.MCP.RouterTest do
 
     test "a tool's own refusal is a failed tool result; its permission refusal keeps its code",
          %{context: ctx} do
-      Grimoire.Catalog.with_providers([Grimoire.Probe.Refusing], fn ->
+      Sanctum.Catalog.with_providers([Sanctum.Gate.Probe.Refusing], fn ->
         assert {:ok, %{"isError" => true, "content" => [%{"text" => text}]}} =
                  call(ctx, "refusing_probe", %{"action" => "invalid", "n" => 1})
 
@@ -250,7 +250,7 @@ defmodule Emissary.MCP.RouterTest do
 
     test "a pending confirmation is a protocol error, -33505, its secret in the data alone",
          %{context: ctx} do
-      Grimoire.Catalog.with_providers([Emissary.MCP.RouterTest.Confirming], fn ->
+      Sanctum.Catalog.with_providers([Emissary.MCP.RouterTest.Confirming], fn ->
         assert {:error, :confirmation_required, message, data} =
                  call(ctx, "confirming_probe", %{"action" => "change"})
 
@@ -283,7 +283,7 @@ defmodule Emissary.MCP.RouterTest do
   end
 
   describe "dispatch/2 with resources/list" do
-    test "delegates to Grimoire.Resources and returns resources list", %{context: ctx} do
+    test "delegates to Sanctum.Resources and returns resources list", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 7,

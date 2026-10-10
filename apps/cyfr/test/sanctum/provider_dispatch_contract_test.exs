@@ -210,7 +210,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
 
   defp read(ctx, uri),
     do:
-      Grimoire.call_external("session", ctx, %{
+      Sanctum.Gate.call_external("session", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })
@@ -226,7 +226,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
         assert {:error, reason} =
                  Provider.handle(tool, ctx, %{"action" => "___no_such_action___"})
 
-        assert Grimoire.Error.render(reason) == expected,
+        assert Sanctum.Refusals.render(reason) == expected,
                "invalid-action message drift for tool #{tool}"
       end
     end

@@ -7,8 +7,8 @@ defmodule Emissary.MCP.ActionCoverageTest do
   gate, and the handler does not raise.
 
   Each action is called as a caller would call it: through
-  `Grimoire.call_external/4` under a full context when the external plane
-  reaches it, and through `Grimoire.call_in_chain/5` under a chain
+  `Sanctum.Gate.call_external/4` under a full context when the external plane
+  reaches it, and through `Sanctum.Gate.call_in_chain/5` under a chain
   authority that grants it when only a chain does — so the gate's context
   projection (`:actor` providers get the actor alone) applies exactly as
   in production. Its arguments are built from its declaration: a
@@ -33,7 +33,7 @@ defmodule Emissary.MCP.ActionCoverageTest do
   alias Sanctum.Context
 
   # config:compile-runtime-ok — cases require the live registry’s roster at compile time.
-  @providers Application.compile_env(:cyfr, :tool_providers, [])
+  @providers Application.compile_env(:sanctum, :tool_providers, [])
 
   setup tags do
     Arca.Cache.init()
@@ -48,7 +48,7 @@ defmodule Emissary.MCP.ActionCoverageTest do
     test "#{inspect(provider)} #{tool.name}.#{action} reaches its handler through the gate" do
       name = unquote(tool.name)
       action = unquote(action)
-      {:ok, {_module, tool}} = Grimoire.lookup(name)
+      {:ok, {_module, tool}} = Sanctum.Gate.lookup(name)
       operation = Enum.find(tool.operations, &(&1.action == action))
 
       {result, log} = with_log(fn -> dispatch(operation, arguments(operation)) end)
@@ -59,8 +59,8 @@ defmodule Emissary.MCP.ActionCoverageTest do
   end
 
   test "a handler that raises or exits fails the coverage; one that refuses does not" do
-    Grimoire.Catalog.with_providers([Grimoire.Probe.Crashing], fn ->
-      {:ok, {_module, tool}} = Grimoire.lookup(Grimoire.Probe.Crashing.tool())
+    Sanctum.Catalog.with_providers([Sanctum.Gate.Probe.Crashing], fn ->
+      {:ok, {_module, tool}} = Sanctum.Gate.lookup(Sanctum.Gate.Probe.Crashing.tool())
 
       for action <- ~w(raise exit) do
         operation = Enum.find(tool.operations, &(&1.action == action))
@@ -81,7 +81,7 @@ defmodule Emissary.MCP.ActionCoverageTest do
   end
 
   test "the roster reaches every provider the table holds" do
-    table = Grimoire.operations() |> Map.values() |> Enum.map(&elem(&1, 0)) |> MapSet.new()
+    table = Sanctum.Gate.operations() |> Map.values() |> Enum.map(&elem(&1, 0)) |> MapSet.new()
     assert MapSet.subset?(table, MapSet.new(@providers))
   end
 
@@ -91,11 +91,11 @@ defmodule Emissary.MCP.ActionCoverageTest do
 
   defp dispatch(%Prima.Operation{} = operation, args) do
     if :external in operation.planes do
-      Grimoire.call_external(operation.tool, external_context(operation), args)
+      Sanctum.Gate.call_external(operation.tool, external_context(operation), args)
     else
       ctx = chain_context()
 
-      Grimoire.call_in_chain(operation.tool, ctx, args, granting(operation),
+      Sanctum.Gate.call_in_chain(operation.tool, ctx, args, granting(operation),
         lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
       )
     end

@@ -26,7 +26,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
   end
 
   defp in_chain_pairs do
-    for module <- Application.get_env(:cyfr, :tool_providers, []),
+    for module <- Application.get_env(:sanctum, :tool_providers, []),
         tool <- module.tools(),
         {action, annotation} <- get_in(tool, [:annotations, :actions]) || %{},
         :in_chain in (annotation[:planes] || []),
@@ -94,7 +94,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
     refusals =
       for {tool, action} <- pairs,
           result =
-            Grimoire.call_in_chain(tool, ctx, %{"action" => action}, auth,
+            Sanctum.Gate.call_in_chain(tool, ctx, %{"action" => action}, auth,
               lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
             ),
           match?({:error, msg} when is_binary(msg), result),
@@ -126,7 +126,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     args = %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"}
 
-    case Grimoire.call_in_chain("tincture_visibility", ctx, args, auth,
+    case Sanctum.Gate.call_in_chain("tincture_visibility", ctx, args, auth,
            lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
          ) do
       {:ok, _result} ->
@@ -149,7 +149,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, %Prima.Refusal{stage: :admission, reason: {:guest_plane_call, "component"}}} =
-             Grimoire.call_external("component", ctx, %{"action" => "list"})
+             Sanctum.Gate.call_external("component", ctx, %{"action" => "list"})
   end
 
   test "call_in_chain denies an action the authority does not grant" do
@@ -166,7 +166,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
-             Grimoire.call_in_chain("component", ctx, %{"action" => "search"}, auth,
+             Sanctum.Gate.call_in_chain("component", ctx, %{"action" => "search"}, auth,
                lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
              )
 
@@ -188,7 +188,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
-             Grimoire.call_in_chain(
+             Sanctum.Gate.call_in_chain(
                "execution",
                ctx,
                %{"action" => "force_release"},
@@ -228,7 +228,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     for {tool, action} <- verbs do
       assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
-               Grimoire.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth,
+               Sanctum.Gate.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth,
                  lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
                )
 
@@ -250,7 +250,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
-             Grimoire.call_in_chain("github:create_issue", ctx, %{}, auth,
+             Sanctum.Gate.call_in_chain("github:create_issue", ctx, %{}, auth,
                lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
              )
 

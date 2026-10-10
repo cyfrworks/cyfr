@@ -40,7 +40,7 @@ defmodule Emissary.Web.CertificateRenewalControllerTest do
     }
 
     {:ok, %{certificate: certificate}} =
-      TestContext.confirming(person.ctx, &Grimoire.call_external("person", &1, certify))
+      TestContext.confirming(person.ctx, &Sanctum.Gate.call_external("person", &1, certify))
 
     %{person: person, certificate: certificate, private: private}
   end

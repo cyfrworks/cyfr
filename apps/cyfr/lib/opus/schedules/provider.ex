@@ -25,7 +25,7 @@ defmodule Opus.Schedules.Provider do
 
   def service, do: "opus"
 
-  alias Sanctum.Context
+  alias Sanctum.{Context, Gate}
 
   require Logger
 
@@ -451,7 +451,7 @@ defmodule Opus.Schedules.Provider do
             re_resolve_to(ctx, schedule, pinned, id)
 
           {:error, reason} ->
-            {:error, "Failed to re-resolve '#{schedule.reference}': #{Grimoire.render(reason)}"}
+            {:error, "Failed to re-resolve '#{schedule.reference}': #{Gate.render(reason)}"}
         end
     end
   end
@@ -599,7 +599,7 @@ defmodule Opus.Schedules.Provider do
         {:ok, pinned, pinned}
 
       {:error, reason} ->
-        {:error, "Cannot #{label}: failed to resolve '#{reference}'. #{Grimoire.render(reason)}"}
+        {:error, "Cannot #{label}: failed to resolve '#{reference}'. #{Gate.render(reason)}"}
     end
   end
 

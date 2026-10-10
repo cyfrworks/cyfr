@@ -592,7 +592,7 @@ defmodule PrismWeb.VaultLive do
   end
 
   # One component's plan, read on its refusal's class
-  # (`Grimoire.Error.classify/1`), never its words.
+  # (`Sanctum.Refusals.classify/1`), never its words.
   defp plan_needs(socket, ref) do
     case call_tool(socket, "profile/plan", %{"ref" => ref}) do
       {:ok, %{} = plan} ->
@@ -602,7 +602,7 @@ defmodule PrismWeb.VaultLive do
         {:refused, unread_plan(ref, {:unexpected_shape, other})}
 
       {:error, reason} ->
-        case Grimoire.Error.classify(reason).class do
+        case Sanctum.Refusals.classify(reason).class do
           :unavailable -> {:unread, "#{ref}: #{fmt(reason)}"}
           :not_found -> :removed
           _damaged_or_unknown -> {:refused, unread_plan(ref, reason)}

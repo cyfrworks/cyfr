@@ -7,7 +7,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   from their source and held to the architecture: every module belongs to
   exactly one boundary, each boundary's `deps` is the settled edge set,
   no boundary switches a check off, the one exception is the console's,
-  and what Arca, Sanctum, the gate and each domain export is the facade
+  and what Arca, Sanctum and each domain export is the facade
   roster's entries (`test/support/facade_roster.exs`) plus the additions
   rostered here, each with its reason. Nothing under `apps`, `tests`,
   `scripts` or `.github` reads the untracked design material beside the
@@ -27,7 +27,6 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   @composition [
     Arca,
     Sanctum,
-    Grimoire,
     Cyfr,
     Compendium,
     Aqua,
@@ -42,8 +41,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   @deps %{
     Arca => [],
     Sanctum => [Arca],
-    Grimoire => [Sanctum, Arca],
-    Cyfr => [Grimoire, Sanctum, Arca],
+    Cyfr => [Sanctum, Arca],
     Cyfr.Application => @composition,
     # The endpoint plugs the root router and answers `/mcp` parser
     # failures in the MCP adapter's JSON-RPC renderer.
@@ -53,19 +51,19 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     # so the router cannot name the endpoint.
     CyfrWeb.Router =>
       (@composition -- [CyfrWeb.Endpoint]) ++ [Emissary.Router, Emissary.Web, Prism.Router],
-    CyfrWeb => [Grimoire, Sanctum, Arca, Cyfr],
-    Compendium => [Grimoire, Cyfr, Sanctum, Arca],
-    Opus => [Compendium, Grimoire, Cyfr, Sanctum, Arca],
-    Aqua => [Compendium, Opus, Grimoire, Cyfr, Sanctum, Arca],
-    Emissary => [Grimoire, Sanctum, Arca, Cyfr, Opus, CyfrWeb],
-    Emissary.Web => [Emissary, Grimoire, Sanctum, Arca, Cyfr, Compendium, Opus, CyfrWeb],
+    CyfrWeb => [Sanctum, Arca, Cyfr],
+    Compendium => [Cyfr, Sanctum, Arca],
+    Opus => [Compendium, Cyfr, Sanctum, Arca],
+    Aqua => [Compendium, Opus, Cyfr, Sanctum, Arca],
+    Emissary => [Sanctum, Arca, Cyfr, Opus, CyfrWeb],
+    Emissary.Web => [Emissary, Sanctum, Arca, Cyfr, Compendium, Opus, CyfrWeb],
     Emissary.Router => [],
-    Prism => [Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Opus, CyfrWeb],
+    Prism => [Sanctum, Arca, Cyfr, Compendium, Aqua, Opus, CyfrWeb],
     Prism.Router => [],
-    PrismWeb => [Prism, CyfrWeb, Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Opus],
-    Cyfr.Mix => [Grimoire],
+    PrismWeb => [Prism, CyfrWeb, Sanctum, Arca, Cyfr, Compendium, Aqua, Opus],
+    Cyfr.Mix => [Sanctum],
     Cyfr.Boundaries => [
-      Grimoire,
+      Sanctum,
       Opus,
       Emissary,
       Emissary.Router,
@@ -125,9 +123,9 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "handler and the overlay port it installs"}
     ],
     Sanctum => [
-      {~w(ApiKey Atoms Auth Auth.DeviceFlow Auth.EmailVerification Auth.Identity
+      {~w(ApiKey Auth Auth.DeviceFlow Auth.EmailVerification Auth.Identity
           Auth.OAuth Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller Cipher
-          Cipher.Rotation ClientIp Consent.Authz Consent.Loader Consent.Proof
+          Cipher.Rotation ClientIp Consent.Loader Consent.Proof
           Consent.RegistrationBinding Consent.ShapeDerivation Consent.ShapeDiff Context
           Door Door.Store Egress ExecutionStanding Namespace Network Notify
           Policy.Enforcement Provisioning Session SignIn Tenancy Tenancy.Athanors
@@ -135,9 +133,11 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           UnauthorizedError Vault Vault.OAuthGrant VaultReader),
        "the identity, authority, consent and vault entries the layers above call " <>
          "downward, each rostered for its callers in `Cyfr.Boundaries`' surface rows"},
-      {~w(Consent.Components Grimoire Tenancy.Caps),
+      {~w(Consent.Components OperationTable Proxy Tenancy.Caps),
        "the ports the composition root installs: component facts, the operation " <>
-         "table and the storage cap"},
+         "table, proxied tool resolution and the storage cap"},
+      {~w(Catalog Gate.Supervisor), "the composition root loads the table and starts the gate"},
+      {~w(Refusals), "the gate's refusal renderer, which the adapters answer with"},
       {~w(Carry Directory.Client IdentityFreshness Person),
        "the person's keys, the directory client, identity freshness and the sign-in " <>
          "carry, which the identity domain composes and the host's suites drive"},
@@ -148,10 +148,6 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       {~w(Consent.Accounts),
        "the assistant's read of which named accounts an app's own ingress binds and " <>
          "which entry a name resolves to, never a value, never a write"}
-    ],
-    Grimoire => [
-      {~w(Catalog Supervisor), "the composition root loads the table and starts the gate"},
-      {~w(Error), "the gate's refusal renderer, which the MCP adapter answers with"}
     ],
     Compendium => [
       {~w(AquaPath ComponentPath ConsentFacts),
@@ -166,7 +162,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     Aqua => [{~w(Supervisor), "the tree the composition root starts"}]
   }
 
-  @manifest_rows ~w(Arca Sanctum Grimoire Compendium Opus Aqua)
+  @manifest_rows ~w(Arca Sanctum Compendium Opus Aqua)
   @roster_path Path.join(@root, "apps/cyfr/test/support/facade_roster.exs")
 
   defp sources(app), do: Path.wildcard(Path.join(@root, "apps/#{app}/lib/**/*.ex"))
@@ -337,7 +333,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     assert bounds[Sanctum].check[:apps] == [:ecto, :ecto_sql, :postgrex, :exqlite, :ecto_sqlite3]
   end
 
-  test "Arca, Sanctum, the gate and each domain export the manifest's rows and the rostered additions" do
+  test "Arca, Sanctum and each domain export the manifest's rows and the rostered additions" do
     bounds = boundaries(inventory())
     manifest = manifest_exports()
 

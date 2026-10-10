@@ -136,20 +136,20 @@ defmodule Sanctum.ProviderVaultStatusTest do
   end
 
   test "is a read on the external plane under no consent class; a guest reaches neither" do
-    assert {:ok, {Sanctum.Provider, meta}} = Grimoire.lookup("vault")
+    assert {:ok, {Sanctum.Provider, meta}} = Sanctum.Gate.lookup("vault")
 
     tincture = %{Sanctum.TestContext.local(:prism) | auth_method: :tincture}
     args = fn action -> %{"action" => action} end
 
     assert :ok =
-             Grimoire.Catalog.authorize_annotated_action("vault", meta, tincture, args.("status"))
+             Sanctum.Catalog.authorize_annotated_action("vault", meta, tincture, args.("status"))
 
     assert {:error, {:consent_class_required, _}} =
-             Grimoire.Catalog.authorize_annotated_action("vault", meta, tincture, args.("list"))
+             Sanctum.Catalog.authorize_annotated_action("vault", meta, tincture, args.("list"))
 
     # No running chain reaches either: a guest has no enumeration of the
     # vault.
-    refute Grimoire.Catalog.in_chain_reachable?("vault", "status")
-    refute Grimoire.Catalog.in_chain_reachable?("vault", "list")
+    refute Sanctum.Catalog.in_chain_reachable?("vault", "status")
+    refute Sanctum.Catalog.in_chain_reachable?("vault", "list")
   end
 end

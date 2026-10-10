@@ -28,7 +28,7 @@ defmodule Emissary.MCP.Subscriptions do
 
   Each acknowledged type is a declared stream (`mcp_servers.changes`, the
   servers provider's), opened through the gate's one stream entry
-  (`Grimoire.open_stream/3`) before anything is subscribed: one decision
+  (`Sanctum.Gate.open_stream/3`) before anything is subscribed: one decision
   per open, and a refusal refuses the listen. The listener subscribes to
   the topic its grant names and nothing else (`Cyfr.Bus.granted_topic/2`),
   and keeps enforcing the grant: the stream ends at the earliest grant's
@@ -80,7 +80,7 @@ defmodule Emissary.MCP.Subscriptions do
     requested = for {type, stream} <- @streams, truthy?(filter[type]), do: {type, stream}
 
     Enum.reduce_while(requested, {:ok, %{}, []}, fn {type, stream}, {:ok, acknowledged, grants} ->
-      case Grimoire.open_stream(ctx, stream) do
+      case Sanctum.Gate.open_stream(ctx, stream) do
         {:ok, grant} ->
           actor = Context.actor(ctx)
           # The granted topic lies under the caller's own prefix by

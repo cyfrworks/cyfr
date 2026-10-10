@@ -169,7 +169,7 @@ defmodule Sanctum.WebhookMCPTest do
 
     test "unknown name returns not_found", %{ctx: ctx} do
       {:error, msg} = handle(ctx, %{"action" => "get", "name" => "ghost"})
-      assert Grimoire.Error.render(msg) =~ "not found"
+      assert Sanctum.Refusals.render(msg) =~ "not found"
     end
   end
 
@@ -250,7 +250,7 @@ defmodule Sanctum.WebhookMCPTest do
 
     test "unknown name returns not_found", %{ctx: ctx} do
       {:error, msg} = handle(ctx, %{"action" => "revoke", "name" => "ghost"})
-      assert Grimoire.Error.render(msg) =~ "not found"
+      assert Sanctum.Refusals.render(msg) =~ "not found"
     end
   end
 
@@ -299,7 +299,7 @@ defmodule Sanctum.WebhookMCPTest do
 
     test "unknown name returns not_found", %{ctx: ctx} do
       {:error, msg} = handle(ctx, %{"action" => "rotate", "name" => "ghost"})
-      assert Grimoire.Error.render(msg) =~ "not found"
+      assert Sanctum.Refusals.render(msg) =~ "not found"
     end
   end
 

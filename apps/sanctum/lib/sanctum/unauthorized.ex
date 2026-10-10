@@ -9,7 +9,7 @@ defmodule Sanctum.Unauthorized do
   Authorization gates return typed `{:error, reason}` values. `class/1`
   places each reason in `Prima.Refusal`'s classes, which decide status and
   code at every surface; `message/2` is the sentence a person reads. This
-  vocabulary classifies its own reasons — `Grimoire.Error.classify/1`
+  vocabulary classifies its own reasons — `Sanctum.Refusals.classify/1`
   tries it before `Prima.Refusal`'s table, which does not know it.
 
   It also carries the consent loader's refusals that reach a surface

@@ -9,7 +9,7 @@ defmodule Aqua.Providers.ThreadTest do
 
   alias Arca.ThreadStorage, as: Threads
   alias Aqua.Providers.Thread, as: Tool
-  alias Grimoire.Visibility
+  alias Sanctum.Visibility
 
   setup do
     Cyfr.Test.Sandbox.setup!()
@@ -92,7 +92,7 @@ defmodule Aqua.Providers.ThreadTest do
     test "suspend and recover are declared once, and every derived view follows" do
       annotations =
         Tool.turn_definition()
-        |> Grimoire.Annotations.actions_of()
+        |> Sanctum.Annotations.actions_of()
 
       assert Map.keys(annotations) |> Enum.sort() == ["recover", "suspend"]
 
@@ -109,8 +109,8 @@ defmodule Aqua.Providers.ThreadTest do
       end
 
       # Recovery is never itself replay-safe.
-      assert Grimoire.Annotations.recovery(Tool.turn_definition(), "recover") == nil
-      assert Grimoire.Annotations.recovery(Tool.turn_definition(), "suspend") == nil
+      assert Sanctum.Annotations.recovery(Tool.turn_definition(), "recover") == nil
+      assert Sanctum.Annotations.recovery(Tool.turn_definition(), "suspend") == nil
 
       # A turn to recover is named; a turn to suspend need not be.
       schema = Tool.turn_definition().input_schema
@@ -118,10 +118,10 @@ defmodule Aqua.Providers.ThreadTest do
       refute "turn" in schema["required"]
 
       # And the catalog serves both, under the provider's one service.
-      served = MapSet.new(Sanctum.Grimoire.tool_actions())
+      served = MapSet.new(Sanctum.OperationTable.tool_actions())
       assert MapSet.member?(served, "turn.suspend")
       assert MapSet.member?(served, "turn.recover")
-      assert Grimoire.Services.service_name(Tool) == "aqua"
+      assert Sanctum.Services.service_name(Tool) == "aqua"
     end
 
     test "an API key cannot set a person's turn down, and is not shown the tool", %{
@@ -135,16 +135,16 @@ defmodule Aqua.Providers.ThreadTest do
                 stage: :admission,
                 reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
               }} =
-               Grimoire.call_external("turn", star, %{
+               Sanctum.Gate.call_external("turn", star, %{
                  "action" => "suspend",
                  "thread" => thread.id
                })
 
-      shown = Visibility.filter_for_context(Grimoire.list_tools(), star)
+      shown = Visibility.filter_for_context(Sanctum.Gate.list_tools(), star)
       refute Enum.any?(shown, &(&1["name"] == "turn"))
 
       assert Enum.any?(
-               Visibility.filter_for_context(Grimoire.list_tools(), ctx),
+               Visibility.filter_for_context(Sanctum.Gate.list_tools(), ctx),
                &(&1["name"] == "turn")
              )
     end
@@ -194,7 +194,7 @@ defmodule Aqua.Providers.ThreadTest do
                 stage: :admission,
                 reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
               }} =
-               Grimoire.call_external("thread", star, %{
+               Sanctum.Gate.call_external("thread", star, %{
                  "action" => "events",
                  "thread" => thread.id
                })
@@ -206,7 +206,7 @@ defmodule Aqua.Providers.ThreadTest do
                 stage: :admission,
                 reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
               }} =
-               Grimoire.call_external("thread", scoped, %{
+               Sanctum.Gate.call_external("thread", scoped, %{
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "hi"
@@ -218,10 +218,10 @@ defmodule Aqua.Providers.ThreadTest do
       # is not offered a door it cannot open.
       star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
-      shown = Visibility.filter_for_context(Grimoire.list_tools(), star)
+      shown = Visibility.filter_for_context(Sanctum.Gate.list_tools(), star)
       refute Enum.any?(shown, &(&1["name"] == "thread"))
 
-      shown_oidc = Visibility.filter_for_context(Grimoire.list_tools(), ctx)
+      shown_oidc = Visibility.filter_for_context(Sanctum.Gate.list_tools(), ctx)
       assert Enum.any?(shown_oidc, &(&1["name"] == "thread"))
     end
 
@@ -235,7 +235,7 @@ defmodule Aqua.Providers.ThreadTest do
       guest = Sanctum.Context.enter_guest(ctx)
 
       assert {:error, %Prima.Refusal{stage: :admission, reason: {:guest_plane_call, "thread"}}} =
-               Grimoire.call_external("thread", guest, %{
+               Sanctum.Gate.call_external("thread", guest, %{
                  "action" => "events",
                  "thread" => thread.id
                })

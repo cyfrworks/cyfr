@@ -729,7 +729,7 @@ defmodule Aqua.LaunchTest do
     :ok =
       :telemetry.attach(
         handler,
-        [:cyfr, :grimoire, :decision, :admitted],
+        [:cyfr, :sanctum, :decision, :admitted],
         fn _event, _measurements, %{tool: tool, action: action}, _config ->
           if self() == test and {tool, action} == {"execution", "run"} and
                not Process.get(:regranted, false) do
@@ -856,7 +856,7 @@ defmodule Aqua.LaunchTest do
 
     {refused, calls} =
       traced([@root_load], fn ->
-        Grimoire.call_external("execution", ctx, Map.put(run, "approved_entry", other.id))
+        Sanctum.Gate.call_external("execution", ctx, Map.put(run, "approved_entry", other.id))
       end)
 
     assert {:error,
@@ -871,7 +871,8 @@ defmodule Aqua.LaunchTest do
 
     # Named nowhere, the expectation is absent: the root is loaded with
     # none, and the run goes ahead under the account the call names.
-    {_ran, calls} = traced([@root_load], fn -> Grimoire.call_external("execution", ctx, run) end)
+    {_ran, calls} =
+      traced([@root_load], fn -> Sanctum.Gate.call_external("execution", ctx, run) end)
 
     assert [[root_ctx, _profile, _opts]] = args_of(calls, @root_load)
     assert Map.fetch(root_ctx, :approved_entry) == {:ok, nil}
@@ -933,7 +934,7 @@ defmodule Aqua.LaunchTest do
     refute log =~ "Prima.Refusal"
 
     assert %Prima.Refusal{class: :corrupt, message: message} =
-             Grimoire.Error.classify({:head_corrupt, profile_id})
+             Sanctum.Refusals.classify({:head_corrupt, profile_id})
 
     assert message == damaged_head_sentence(profile_id)
   end

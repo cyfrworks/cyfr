@@ -49,9 +49,9 @@ defmodule Sanctum.Consent.CommitTest do
   # reads `Commit.grant/3` makes. Armed with a function and a count, it runs
   # the function once, just before the read after that count: a revision
   # landing between two of the grant's reads.
-  defmodule CountingGrimoire do
+  defmodule CountingOperationTable do
     @moduledoc false
-    @behaviour Sanctum.Grimoire
+    @behaviour Sanctum.OperationTable
 
     @impl true
     def tool_actions do
@@ -644,13 +644,13 @@ defmodule Sanctum.Consent.CommitTest do
 
     test "a revision landing while a narrowed head is re-issued refuses the grant and stands",
          %{ctx: ctx} do
-      real = Sanctum.Grimoire.impl!()
-      :persistent_term.put({CountingGrimoire, :real}, real)
-      Sanctum.Grimoire.install!(CountingGrimoire)
+      real = Sanctum.OperationTable.impl!()
+      :persistent_term.put({CountingOperationTable, :real}, real)
+      Sanctum.OperationTable.install!(CountingOperationTable)
 
       on_exit(fn ->
-        Sanctum.Grimoire.install!(real)
-        :persistent_term.erase({CountingGrimoire, :real})
+        Sanctum.OperationTable.install!(real)
+        :persistent_term.erase({CountingOperationTable, :real})
       end)
 
       entry = entry!(ctx)
@@ -660,7 +660,7 @@ defmodule Sanctum.Consent.CommitTest do
       # narrowing touched is walked once.
       publish!(ctx, "commit-grant-twin")
       {:ok, %{profile_id: twin}} = walk!(ctx, "reagent:local.commit-grant-twin")
-      Process.put({CountingGrimoire, :count}, 0)
+      Process.put({CountingOperationTable, :count}, 0)
 
       assert {:ok, _} =
                Commit.grant(ctx, %{
@@ -669,7 +669,7 @@ defmodule Sanctum.Consent.CommitTest do
                  expected_consent_revision: 1
                })
 
-      one_walk = Process.get({CountingGrimoire, :count})
+      one_walk = Process.get({CountingOperationTable, :count})
       assert one_walk > 0
 
       publish!(ctx, "commit-grant-race")
@@ -683,10 +683,10 @@ defmodule Sanctum.Consent.CommitTest do
 
       # The person's next decision lands as the grant starts its second walk,
       # the one that re-issues the head's narrowing.
-      Process.put({CountingGrimoire, :count}, 0)
+      Process.put({CountingOperationTable, :count}, 0)
 
       Process.put(
-        {CountingGrimoire, :armed},
+        {CountingOperationTable, :armed},
         {one_walk,
          fn ->
            {:ok, %{revision: 2}} =
@@ -708,7 +708,7 @@ defmodule Sanctum.Consent.CommitTest do
                })
 
       # The race fired, and the person's revision stands unwidened.
-      refute Process.get({CountingGrimoire, :armed})
+      refute Process.get({CountingOperationTable, :armed})
       head = head!(ctx, profile_id)
       assert head.revision == 2
       assert head.admitted_origins == [:interactive]

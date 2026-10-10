@@ -275,10 +275,10 @@ defmodule Emissary.Web.MCPConfirmationRepeatTest do
       assert Enum.any?(seen, &match?({_, [:cyfr, :emissary, :request], _, _}, &1))
 
       assert {:ok, %{logs: logs}} =
-               Grimoire.call_external("mcp_log", ctx, %{"action" => "list", "limit" => 100})
+               Sanctum.Gate.call_external("mcp_log", ctx, %{"action" => "list", "limit" => 100})
 
       assert {:ok, %{decisions: decisions}} =
-               Grimoire.call_external("decision", ctx, %{"action" => "list", "limit" => 100})
+               Sanctum.Gate.call_external("decision", ctx, %{"action" => "list", "limit" => 100})
 
       assert Enum.any?(logs, &(&1.tool == "vault" and &1.status == "success"))
 
@@ -306,7 +306,7 @@ defmodule Emissary.Web.MCPConfirmationRepeatTest do
       Process.register(self(), __MODULE__)
       id = "cnf_" <> String.duplicate("A", 43)
 
-      Grimoire.Catalog.with_providers([__MODULE__.Probe], fn ->
+      Sanctum.Catalog.with_providers([__MODULE__.Probe], fn ->
         conn = tools_call(token, "confirmation_probe", %{"action" => "carried"}, repeat(id))
         assert json_response(conn, 200)
         assert_received {:carried, ^id}

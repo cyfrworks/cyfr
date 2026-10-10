@@ -115,7 +115,7 @@ defmodule Emissary.External.ProxyTest do
                  server: %{stored | name: "other"}
                )
 
-      refute Grimoire.Error.render(reason) =~ "disabled"
+      refute Sanctum.Refusals.render(reason) =~ "disabled"
       Emissary.External.ServerSupervisor.stop("one-rev", ctx.athanor_id)
     end
 
@@ -147,7 +147,7 @@ defmodule Emissary.External.ProxyTest do
       # never the plane sentence.
       assert {:error, reason} = call("console-ok:tool", ctx, %{}, :external)
       refute reason == :not_external
-      refute Grimoire.Error.render(reason) =~ "only from inside a chain"
+      refute Sanctum.Refusals.render(reason) =~ "only from inside a chain"
 
       Emissary.External.ServerSupervisor.stop("console-ok", ctx.athanor_id)
     end
@@ -190,7 +190,7 @@ defmodule Emissary.External.ProxyTest do
                 stage: :admission,
                 class: :invalid_argument,
                 reason: {:invalid_argument, msg}
-              }} = Grimoire.call_external("plane-pin:sometool", ctx, %{})
+              }} = Sanctum.Gate.call_external("plane-pin:sometool", ctx, %{})
 
       assert msg =~ "only from inside a chain"
 
@@ -229,7 +229,7 @@ defmodule Emissary.External.ProxyTest do
       assert {:error, reason} = result
       refute reason == :not_external
       refute is_binary(reason)
-      assert %Prima.Refusal{} = Grimoire.Error.classify(reason)
+      assert %Prima.Refusal{} = Sanctum.Refusals.classify(reason)
 
       # Cleanup
       Emissary.External.ServerSupervisor.stop("autostart", athanor_id)

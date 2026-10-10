@@ -16,9 +16,9 @@ defmodule Sanctum.ToolGrantsTest do
   # The operation catalog as the standing rule reads it. This suite runs
   # without the host, so it installs its own port for the length of each
   # test and puts back whatever was installed before.
-  defmodule StubGrimoire do
+  defmodule StubOperationTable do
     @moduledoc false
-    @behaviour Sanctum.Grimoire
+    @behaviour Sanctum.OperationTable
 
     @declarations %{
       "component.pull" => %{kind: :read, standing: nil, resource: nil},
@@ -58,17 +58,17 @@ defmodule Sanctum.ToolGrantsTest do
 
     installed =
       try do
-        Sanctum.Grimoire.impl!()
+        Sanctum.OperationTable.impl!()
       rescue
-        Sanctum.Grimoire.NotInstalledError -> nil
+        Sanctum.OperationTable.NotInstalledError -> nil
       end
 
-    Sanctum.Grimoire.install!(StubGrimoire)
+    Sanctum.OperationTable.install!(StubOperationTable)
 
     on_exit(fn ->
       if installed,
-        do: Sanctum.Grimoire.install!(installed),
-        else: Sanctum.Grimoire.reset()
+        do: Sanctum.OperationTable.install!(installed),
+        else: Sanctum.OperationTable.reset()
     end)
 
     {ctx, other} = Sanctum.TestContext.two_contexts()

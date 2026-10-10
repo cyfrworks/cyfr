@@ -22,12 +22,12 @@ Three consequences shape everything below.
 - **Layers, one direction.** A module depends on its own layer or below, never above and never sideways across surfaces. The layering is a compile error where the compiler can see it and a seam test where it cannot, so a forbidden dependency is caught before it merges.
 - **One owner per fact.** Every schema, policy, operation declaration, topic, protocol shape, configuration key, served-file type, frame capability and layout has one authoritative module. Everything else is derived from it and checked against it, because a fact with two definitions drifts.
 - **Downward calls are direct; upward needs are ports; reactions are events.** There are exactly five ports (§4.2). Two owners whose writes must commit together join one Arca transaction through a named closure (§4.4).
-- **Three guards, each with one owner.** Operations pass the Grimoire gate with Sanctum's decision. Domain rows and blobs are tenant-scoped by the actor in Arca. Security rows are read only through Sanctum.
+- **Three guards, each with one owner.** Operations pass Sanctum's gate under Sanctum's decision. Domain rows and blobs are tenant-scoped by the actor in Arca. Security rows are read only through Sanctum.
 - **The trust island speaks protocols.** Locus shares pure contracts and signed, versioned wire shapes with the control plane, never a code dependency on it.
 - **Fail closed.** Identity, standing, consent, ownership and catalog completeness are established before work is admitted, and a control that cannot answer refuses. The one named exception is the decision audit (§6.4), which records and never decides. Unavailable infrastructure, absent data, denied access and successful work stay distinguishable in every result.
 - **Admission, not sampling.** The gate admits discrete intents: open a stream, send this, confirm. Continuous data (execution deltas, a pointer, a game loop, audio, camera frames) stays in the frame, on the bus or inside the island that produces it, under a grant the gate already admitted. A granted stream may carry audio or frames to wherever the grant names; no frame is an operation.
 - **One product, one code path.** Behaviour that depends on exposure derives from whether authentication is configured, never from an edition. A phone, a small box, a kiosk and a server run the same code with different wiring.
-- **Few names.** A namespace exists only when it owns state, a state machine or a trust boundary nothing else can own. There are twelve namespaces (§3). A struct is not a namespace and a page is not a domain.
+- **Few names.** A namespace exists only when it owns state, a state machine or a trust boundary nothing else can own. There are eleven namespaces (§3). A struct is not a namespace and a page is not a domain.
 - **The person is not the door.** Google, GitHub, OIDC, email and passkeys are sign-in methods registered at a relying home; none of them is the person. A person is an identifier that survives every key, device, sign-in method and home address.
 - **Authority follows the resource's owner.** Whatever an athanor owns is decided at that athanor's home: membership, consent, caps, vault, confirmation. A request from another node is admitted there or refused there, never trusted because the other node vouched for it.
 - **Hardware is disposable; the person and their relationships are not.** A lost device is revoked, a lost home is restored from recovery material, a lost sign-in is replaced. Starting over as a new person is the last resort, after every recovery route is gone.
@@ -48,12 +48,12 @@ L4  Trust island    Locus (untrusted things: the WASM runtime, builds, stdio MCP
                     runners and bodies have no network of their own; builds and backends have their service's
 
 L3  Surfaces        Emissary (external protocols)   Prism (the screen)   Codex (CLI)
-                    adapters over Grimoire and Sanctum.Caller; a surface never names another surface
+                    adapters over Sanctum's gate and Sanctum.Caller; a surface never names another surface
 
 L2  Domains         Compendium   Aqua   Opus
                     an acyclic graph (Aqua→Opus, Aqua→Compendium, Opus→Compendium), facade-only
 
-L1  Foundations     Cyfr (Host)  >  Grimoire  >  Sanctum  >  Arca
+L1  Foundations     Cyfr (Host)  >  Sanctum  >  Arca
                     strict order; a lower foundation never names a higher one
 
 L0  Prima           types, wire shapes, behaviours, pure primitives, the actor
@@ -64,9 +64,8 @@ The order describes dependencies. A request does not have to pass through every 
 | Layer | May depend on | Must not know | Public surface |
 |---|---|---|---|
 | Prima | Jason and its rostered runtime primitives | the repo, product modules, unclassified effects | structs, behaviours, codecs, primitives started by their owners |
-| Arca | Prima | Sanctum, Grimoire, Host, domains, surfaces | storage facades returning plain data; blobs; cache; leases; two providers |
-| Sanctum | Prima, Arca | Grimoire, Host, domains, surfaces | its Boundary export list |
-| Grimoire | Prima, Arca, Sanctum | Host, domains, surfaces | the operation and stream entries, discovery, the request log, decisions, the system provider |
+| Arca | Prima | Sanctum, Host, domains, surfaces | storage facades returning plain data; blobs; cache; leases; two providers |
+| Sanctum | Prima, Arca | Host, domains, surfaces | its Boundary export list: the decisions, the operation and stream entries, discovery, the request log, the decision record, the system provider |
 | Cyfr (Host) | everything below; its composition modules may name domains and surfaces to wire them | — | boot, cell, bus, telemetry catalog, runtime configuration, platform settings, the admission roster |
 | Domains | Prima, foundations, other domains' facades (acyclic) | surfaces, each other's internals | one facade module, providers, storage under Arca |
 | Surfaces | Prima, foundations, domain facades for reads | other surfaces, domain internals | plugs, routers, controllers, LiveViews, the frame manager, CLI commands |
@@ -101,22 +100,17 @@ Owns the repo, every schema, query and transaction, blobs and path translation, 
 - Locking is a conditional write. Row locks serve only multi-row transitions, through Arca's helpers, and nothing above Arca names the database adapter. SQLite and PostgreSQL behave the same.
 - Each athanor's storage holds `components/`, `aqua/`, `threads/`, `notes/`, `memory/`, `payloads/` and `data/`; `notes/` and `memory/` are host-only, with no guest scope.
 
-### Sanctum: decisions
+### Sanctum: decisions and the gate
 
-Owns identity, sessions, doors, API keys, membership and tenancy, the caller context, authority and its transitions, consent and its proofs, the vault, the instance's entries, and credential attachment and disclosure, policy logging, caps policy, provisioning, the control plane's own network resolution and pinned transport, paired clients and their standing, passkeys, the changes that need fresh confirmation, the credentials tinctures are served under, the person's keys and recovery, the directory's decisions, device certificates and pending confirmations.
+Owns identity, sessions, doors, API keys, membership and tenancy, the caller context, authority and its transitions, consent and its proofs, the vault, the instance's entries, and credential attachment and disclosure, policy logging, caps policy, provisioning, the control plane's own network resolution and pinned transport, paired clients and their standing, passkeys, the changes that need fresh confirmation, the credentials tinctures are served under, the person's keys and recovery, the directory's decisions, device certificates and pending confirmations, and the gate: the operation table (`Sanctum.Catalog`), the gate (`Sanctum.Gate`), argument casting, dispatch on the external and in-chain planes, stream admission (`Sanctum.Streams`), replay and uncertainty semantics, discovery, the request log (`Sanctum.RequestLog`), running tasks (`Sanctum.RunningTasks`), the decision record (`Sanctum.Decisions`) and the system provider.
 
 - It uses no Ecto. It is the only reader of security rows, and a seam test refuses a reader outside it.
-- Its upward needs are its two ports (§4.2). Its internal strategies (consent proof storage, sign-in methods) are behaviours it declares and implements itself, selected by configuration.
+- Its upward needs are its two ports (§4.2), component facts and proxied tool resolution; consent reads the operation table through a third port it declares and implements itself. Its internal strategies (consent proof storage, sign-in methods) are behaviours it declares and implements itself, selected by configuration.
 - It emits telemetry for every standing change and never broadcasts. Every standing change drops the cached caller context for the affected credentials before returning.
-
-### Grimoire: the operation table and the gate
-
-Owns the operation table, the gate, argument casting, dispatch on the external and in-chain planes, stream admission, replay and uncertainty semantics, discovery, the request log, running tasks, the decision record and the system provider.
-
 - There is one entry for operations on each plane and one for streams. An operation that is undeclared, unannotated or called on the wrong plane is denied; boot refuses a partial table; every provider module is on the configured roster.
-- **Streams are declared where operations are.** A provider declares the streams it offers beside its operations. The gate admits a stream once, records it once and answers with a bounded grant; the delivery owner above Grimoire keeps enforcing it and closes the stream on a standing change, the grant's deadline, a suspended frame, overflow or failed revalidation. A reconnect is a new admission.
+- **Streams are declared where operations are.** A provider declares the streams it offers beside its operations. The gate admits a stream once, records it once and answers with a bounded grant; the delivery owner above Sanctum keeps enforcing it and closes the stream on a standing change, the grant's deadline, a suspended frame, overflow or failed revalidation. A reconnect is a new admission.
 - Every admission makes one decision record (§6.4), except an admitted call the catalog lists as unrecorded: discovery, the audit's own reads, and the reads the shell makes of the caller's own state on its own initiative. A refusal is always recorded, whatever the action. Ownership is checked downward, through Arca, before dispatch.
-- Grimoire names no surface, no Host module and no bus; the delivery owner resolves a granted topic.
+- The gate names no surface, no Host module and no bus; the delivery owner resolves a granted topic.
 
 ### Cyfr (Host): the machine
 
@@ -179,7 +173,7 @@ Dispatch stays in the control plane: Opus decides what runs, Compendium what bui
 
 ### Apps and releases
 
-`prima`, `arca` and `sanctum` are Mix apps of their own because Sanctum's licence boundary is an application directory and Sanctum needs Arca beneath it; `cyfr` hosts Grimoire, Host, every domain and every surface under Boundary declarations. `locus` depends on `prima` alone; its keeper is Go, in `apps/locus/keeper`, and `codex` is Go. The `cyfr` release starts prima, arca, sanctum and cyfr; the `locus` release starts prima and locus under the keeper, with the runtime in a container of its own.
+`prima`, `arca` and `sanctum` are Mix apps of their own because Sanctum's licence boundary is an application directory and Sanctum needs Arca beneath it; `cyfr` hosts Host, every domain and every surface under Boundary declarations. `locus` depends on `prima` alone; its keeper is Go, in `apps/locus/keeper`, and `codex` is Go. The `cyfr` release starts prima, arca, sanctum and cyfr; the `locus` release starts prima and locus under the keeper, with the runtime in a container of its own.
 
 ## 4. How modules talk
 
@@ -203,9 +197,9 @@ Foundations below Host emit telemetry; Host's bridge is the one place telemetry 
 | Upward need | Declared by | Implemented by |
 |---|---|---|
 | The storage and counted cap decision (`Prima.Caps`) | Prima | Sanctum |
-| Consent's view of the operation table (`Sanctum.Grimoire`) | Sanctum | Grimoire |
+| Consent's view of the operation table (`Sanctum.OperationTable`) | Sanctum | Sanctum's catalog, installed by Host |
 | Component facts for consent and the gate's stream admission (`Sanctum.Consent.Components`) | Sanctum | Compendium |
-| Proxied tool resolution (`Grimoire.Proxy`) | Grimoire | Emissary's external half |
+| Proxied tool resolution (`Sanctum.Proxy`) | Sanctum | Emissary's external half |
 | Where a storage unit's bytes live (`Arca.Storage.UnitLocator`) | Arca | Compendium's component and AQUA path grammars |
 
 Host writes each implementation at boot and the declaring module reads it; an uninstalled port raises. The same mechanism carries **installed data** downward, such as the settings roster's defaults: a plain value a lower layer reads, never a call it makes, so it is not a port. A frame's capabilities, a paired client's standing and a tincture's grant are facts the catalog and Sanctum already hold, so the screen and devices add no port. `Prima.Provider`, `Prima.HostAPI`, `Prima.WorkerAPI` and `Prima.Device` are contracts their implementers declare, not ports.
@@ -214,7 +208,7 @@ Host writes each implementation at boot and the declaring module reads it; an un
 
 Topics are declared once in `Cyfr.Bus` with their tenant prefix rule, and each carries one payload struct declared beside it. A stream a tincture may declare names the topic it rides, and Host checks at boot that the topic exists. A grantable topic carries discrete facts, never samples. Broadcast follows commit. Execution deltas are the one exception: they are buffered and broadcast with sequence numbers before the write-behind sink persists them.
 
-A subscriber that reconnects is admitted afresh (§3, Grimoire), then the stream replays or refreshes, as it declares. A replaying stream answers the retained events after the subscriber's last position, within a bounded window, each under a stable identifier the subscriber deduplicates by; a refreshing stream, or a position older than the window, answers current state. Delivery may repeat, and nothing is promised that the stream does not retain. *Not built yet:* a declared replay or refresh for the other streams; the execution events replay today, and the canvas-readable streams refresh.
+A subscriber that reconnects is admitted afresh (§3, Sanctum), then the stream replays or refreshes, as it declares. A replaying stream answers the retained events after the subscriber's last position, within a bounded window, each under a stable identifier the subscriber deduplicates by; a refreshing stream, or a position older than the window, answers current state. Delivery may repeat, and nothing is promised that the stream does not retain. *Not built yet:* a declared replay or refresh for the other streams; the execution events replay today, and the canvas-readable streams refresh.
 
 A reaction that must survive a crash starts from an Arca outbox record committed with the source transition. The record identifies the source, revision, tenant and event kind through a Prima shape; it names no consumer. A consumer keeps its own durable receipt and derived work, deduplicates by source and revision, and rechecks authority before reading or publishing. Delivery may repeat; the bus only wakes the consumer. Opus emits its own completion fact and never writes Aqua's memory rows. *Not built yet:* the durable outbox and its consumers; schedule notes are currently best effort.
 
@@ -436,7 +430,7 @@ Memory is an assistant capability, `Aqua.Memory`, not a process the person tends
 ## 12. How the architecture is held
 
 - **Compilation.** Layer edges are Mix dependencies and Boundary declarations, so a forbidden edge fails to compile. Sanctum's lack of Ecto is enforced the same way.
-- **`Cyfr.Boundaries`** holds the rows the compiler cannot express, each with its reason: narrower allow lists, cross-application reaches, the security-read seam, the admission entries, the bus, gate, configuration, settings, route and port rosters, and the marker groups.
+- **`Cyfr.Boundaries`** holds the rows the compiler cannot express, each with its reason: narrower allow lists, cross-application reaches, the security-read seam, the admission entries, the bus, configuration, settings, route and port rosters, and the marker groups.
 - **Seam tests** hold actor-first arguments, the unscoped and bypass markers, roster membership, the surface reads each surface may make, Sanctum-only security storage, refusal rendering, the rule that no frame reaches a facade, and the rule that no sandbox token, CSP directive or served file type is written outside the tincture rules.
 - **Drift tests** compare every derived view with its owner: the CLI catalog, discovery, telemetry rosters, protocol vectors in every language, environment variables against the shipped examples, the image and compose files against the Locus role table, the configuration guide against the settings roster, the guides' tables, the route map and the glossary.
 - **Containment suites** run the shipped image in each of its roles: runner isolation, memory and network, builder and backend isolation, and the credential canary.
@@ -448,7 +442,7 @@ Memory is an assistant capability, `Aqua.Memory`, not a process the person tends
 | Wire shapes, versions, signing domains, actor, authority data, MCP codec, device, identity and confirmation shapes, the Locus role table | Prima | vector files; Go, Python and JavaScript codecs; the image and compose files |
 | Schemas, transactions, revision pointers, retention kinds, the lease row | Arca | schema fingerprint, baseline migration |
 | Who may do what, consent, credential projection, the changes that need fresh confirmation, identity decisions, caps | Sanctum | surface rosters, consent golden files, the system layer's prompts |
-| Operations, arguments, planes, permissions, streams | Grimoire providers | discovery, CLI catalog, consent shapes, guide tables, the canvas catalog |
+| Operations, arguments, planes, permissions, streams | the providers on Sanctum's roster | discovery, CLI catalog, consent shapes, guide tables, the canvas catalog |
 | Boot ownership, topics, configuration schema, settings roster, telemetry, boundaries, admission roster | Host | consumer rosters, `.env*.example`, `configuration-guide.md`, the route map |
 | Served file types, frame capabilities, sandbox and CSP, templates, canvas declaration and stream grammar | Compendium's tincture rules | the publish check, `tincture-guide.md`, the frame's headers |
 | Memory records and pages | Aqua, stored by Arca | rebuildable indexes |

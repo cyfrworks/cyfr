@@ -440,10 +440,10 @@ defmodule Compendium.CanvasTest do
       gate = Sanctum.TestContext.via(ctx, :prism)
 
       assert {:ok, _} =
-               Grimoire.call_external("canvas", gate, Map.put(args, "action", "activate"))
+               Sanctum.Gate.call_external("canvas", gate, Map.put(args, "action", "activate"))
 
       assert {:error, %Prima.Refusal{class: :forbidden} = refusal} =
-               Grimoire.call_external("canvas", gate, Map.put(args, "action", "activate"))
+               Sanctum.Gate.call_external("canvas", gate, Map.put(args, "action", "activate"))
 
       refute refusal.message =~ trial.bearer
       refute refusal.message =~ trial.frame
@@ -625,7 +625,8 @@ defmodule Compendium.CanvasTest do
     test "is the toolkit majors and every stream that declares a shape, by name, and no value",
          %{ctx: ctx} do
       shaped =
-        for %Prima.Provider.Stream{shape: shape} = stream <- Grimoire.streams(), shape != nil do
+        for %Prima.Provider.Stream{shape: shape} = stream <- Sanctum.Gate.streams(),
+            shape != nil do
           %{
             name: stream.name,
             subject: stream.subject,
@@ -665,7 +666,7 @@ defmodule Compendium.CanvasTest do
       assert Enum.sort(Map.keys(run_fields)) ==
                ~w(component_type duration_ms error execution_id kind parent_execution_id reference)
 
-      assert length(Grimoire.streams()) > length(streams)
+      assert length(Sanctum.Gate.streams()) > length(streams)
     end
   end
 

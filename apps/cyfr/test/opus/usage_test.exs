@@ -50,7 +50,7 @@ defmodule Opus.UsageTest do
   end
 
   defp usage(ctx, args),
-    do: Grimoire.call_external("execution", ctx, Map.put(args, "action", "usage"))
+    do: Sanctum.Gate.call_external("execution", ctx, Map.put(args, "action", "usage"))
 
   test "a profile's runs answer with their origin, root and time, newest first",
        %{mine: ctx} do
@@ -142,7 +142,7 @@ defmodule Opus.UsageTest do
     run = run!(ctx, %{profile_id: profile_id, origin: "interactive"})
 
     assert {:ok, %{status: "revoked"}} =
-             Grimoire.call_external("profile", ctx, %{
+             Sanctum.Gate.call_external("profile", ctx, %{
                "action" => "revoke",
                "profile_id" => profile_id
              })

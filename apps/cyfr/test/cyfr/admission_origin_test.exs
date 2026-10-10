@@ -81,7 +81,7 @@ defmodule Cyfr.AdmissionOriginTest do
   @rows for row <- Boundaries.admission_entries(), row.origin != :none, do: row
 
   @drivers %{
-    {Grimoire, :call_in_chain} => :gate_in_chain,
+    {Sanctum.Gate, :call_in_chain} => :gate_in_chain,
     {Emissary.MCP.Router, :dispatch} => :mcp_router,
     {CyfrWeb.Plugs.Authenticate, :call} => :http_api,
     {Emissary.Web.TinctureDataController, :invoke} => :frame_invoke,
@@ -164,7 +164,7 @@ defmodule Cyfr.AdmissionOriginTest do
 
     {:ok, %{"origin" => seen}} =
       with_probe(fn ->
-        Grimoire.call_in_chain(
+        Sanctum.Gate.call_in_chain(
           Probe.tool(),
           Sanctum.Context.enter_guest(ctx),
           %{"action" => "peek", "origin" => "interactive"},
@@ -555,7 +555,7 @@ defmodule Cyfr.AdmissionOriginTest do
   # Helpers
   # ==========================================================================
 
-  defp with_probe(fun), do: Grimoire.Catalog.with_providers([Probe], fun)
+  defp with_probe(fun), do: Sanctum.Catalog.with_providers([Probe], fun)
 
   # A context the scheduler's fire builds, in the fixture athanor.
   defp scheduled do

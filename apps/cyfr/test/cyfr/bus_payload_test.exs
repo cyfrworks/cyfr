@@ -199,7 +199,7 @@ defmodule Cyfr.BusPayloadTest do
   describe "the tree agrees with the roster" do
     test "a consumer that is a stream is a declared stream riding the topic" do
       for row <- Bus.topics(), "stream:" <> name <- row.consumers do
-        assert {:ok, stream} = Prima.Provider.fetch_stream(Grimoire.streams(), name),
+        assert {:ok, stream} = Prima.Provider.fetch_stream(Sanctum.Gate.streams(), name),
                "#{row.key} names the stream #{name}, which no provider declares"
 
         assert stream.topic == row.key, "#{name} rides #{inspect(stream.topic)}, not #{row.key}"

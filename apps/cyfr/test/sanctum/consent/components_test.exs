@@ -94,7 +94,7 @@ defmodule Sanctum.Consent.ComponentsTest do
 
   test "an install that does not answer every callback is refused, and changes nothing" do
     assert_raise ArgumentError, ~r/does not implement Sanctum.Consent.Components/, fn ->
-      Components.install!(Sanctum.Grimoire)
+      Components.install!(Sanctum.OperationTable)
     end
 
     assert_raise ArgumentError, ~r/does not implement/, fn ->

@@ -121,7 +121,7 @@ defmodule PrismWeb.ClaimNamespaceController do
         # 422: the claim was refused and the form re-renders for a retry —
         # a 200 said "fine" about a failure. The refusal's sentence is
         # what the page shows; an internal term reads as the fixed one.
-        page(conn, 422, username, Grimoire.render(err))
+        page(conn, 422, username, Sanctum.Gate.render(err))
     end
   end
 

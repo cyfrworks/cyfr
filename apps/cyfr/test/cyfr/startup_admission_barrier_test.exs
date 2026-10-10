@@ -70,7 +70,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   @post_gate [
     Cyfr.RetentionScheduler,
     CyfrWeb.SSE.Registry,
-    {Grimoire.Supervisor, [Grimoire.RunningTasks, Grimoire.TaskSupervisor]},
+    {Sanctum.Gate.Supervisor, [Sanctum.RunningTasks, Sanctum.Gate.TaskSupervisor]},
     {Compendium.Supervisor,
      [
        Compendium.Builds.TaskSupervisor,
@@ -125,7 +125,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   @supervisors %{
     Cyfr.InfraSupervisor => {:rest_for_one, {10, 60}},
     Cyfr.WebSupervisor => {:one_for_one, {10, 60}},
-    Grimoire.Supervisor => {:rest_for_one, {10, 60}},
+    Sanctum.Gate.Supervisor => {:rest_for_one, {10, 60}},
     Compendium.Supervisor => {:one_for_one, {10, 60}},
     Opus.Supervisor => {:rest_for_one, {10, 60}},
     Opus.Tree => {:rest_for_one, {10, 60}},
@@ -175,8 +175,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Compendium.Provisioning,
     Compendium.ProvisioningSupervisor,
     Compendium.Builds.TaskSupervisor,
-    Grimoire.TaskSupervisor,
-    Grimoire.RunningTasks,
+    Sanctum.Gate.TaskSupervisor,
+    Sanctum.RunningTasks,
     CyfrWeb.SSE.Registry,
     Cyfr.RetentionScheduler,
     Cyfr.Platform.Settings,
@@ -462,7 +462,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
     @tag :capture_log
     test "a restarted infra tier serves the operation table this boot built", %{key: key} do
-      operations = Grimoire.operations()
+      operations = Sanctum.Gate.operations()
       {starter, root} = booted!(key)
 
       kill!(root, [:barrier_infra, Cyfr.Cell])
@@ -471,25 +471,31 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       send(gate, {:lift, &Sanctum.reconcile_platform_admins/2})
       next_started!(restarting(@post_gate))
 
-      assert Grimoire.operations() === operations
-      assert :persistent_term.get({Grimoire, :operations}) === operations
+      assert Sanctum.Gate.operations() === operations
+      assert :persistent_term.get({Sanctum.Gate, :operations}) === operations
       stop_tree(starter)
     end
 
     test "the operation table and its index are written by the catalog's load alone" do
-      lib = Path.expand("../../lib", __DIR__)
+      root = Path.expand("../../../..", __DIR__)
 
+      # The host's tree and Sanctum's, which holds the gate.
       sources =
-        for path <- Path.wildcard(Path.join(lib, "**/*.ex")),
+        for lib <- ~w(apps/cyfr/lib apps/sanctum/lib),
+            path <- Path.wildcard(Path.join([root, lib, "**/*.ex"])),
             into: %{},
-            do: {Path.relative_to(path, lib), File.read!(path)}
+            do: {Path.relative_to(path, root), File.read!(path)}
 
-      writers = for {path, source} <- sources, grimoire_term_put?(source), do: path
-      assert Enum.sort(writers) == ["grimoire/catalog.ex", "grimoire/resources.ex"]
+      writers = for {path, source} <- sources, gate_term_put?(source), do: path
+
+      assert Enum.sort(writers) == [
+               "apps/sanctum/lib/sanctum/catalog.ex",
+               "apps/sanctum/lib/sanctum/resources.ex"
+             ]
 
       # The index's writer is a helper, and the catalog is its one caller.
       callers = for {path, source} <- sources, source =~ ~r/Resources\.put[(\/]/, do: path
-      assert callers == ["grimoire/catalog.ex"]
+      assert callers == ["apps/sanctum/lib/sanctum/catalog.ex"]
     end
 
     @tag :capture_log
@@ -812,17 +818,20 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   defp id_of({id, _children}), do: id
   defp id_of(id), do: id
 
-  # Whether `source` writes a `:persistent_term` key `{Grimoire, _}`, given
-  # literally or through a module attribute bound to one.
-  defp grimoire_term_put?(source) do
+  # Whether `source` writes a `:persistent_term` key `{Sanctum.Gate, _}`, given
+  # literally or through a module attribute bound to one. The key is read up
+  # to its first comma, so a literal one is matched by the tuple's first
+  # element.
+  defp gate_term_put?(source) do
     attributes =
-      for [name] <- Regex.scan(~r/@(\w+)\s+\{Grimoire,/, source, capture: :all_but_first),
+      for [name] <- Regex.scan(~r/@(\w+)\s+\{Sanctum.Gate,/, source, capture: :all_but_first),
           do: "@" <> name
 
     source
     |> then(&Regex.scan(~r/:persistent_term\.put\(\s*([^,]+),/, &1, capture: :all_but_first))
     |> Enum.any?(fn [key] ->
-      String.starts_with?(key, "{Grimoire,") or String.trim(key) in attributes
+      key = String.trim(key)
+      key =~ ~r/^\{\s*Sanctum\.Gate$/ or key in attributes
     end)
   end
 

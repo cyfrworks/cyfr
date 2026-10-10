@@ -15,7 +15,7 @@ defmodule Cyfr do
   """
 
   use Boundary,
-    deps: [Grimoire, Sanctum, Arca],
+    deps: [Sanctum, Arca],
     exports: [
       Admission,
       Bootstrap,

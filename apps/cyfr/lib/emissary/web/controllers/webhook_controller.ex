@@ -17,13 +17,13 @@ defmodule Emissary.Web.WebhookController do
   returns `200 {"status":"accepted","request_id":...}` immediately — webhook
   senders only need a 2xx ack to consider delivery successful (Stripe /
   GitHub / Twilio / PayPal docs all converge on this). The delivery is
-  one admission decision (`Grimoire.open_decision/3`), recorded with its
+  one admission decision (`Sanctum.Gate.open_decision/3`), recorded with its
   request-log row before the run is spawned, under a call id minted beside
   the request id and carried on the context, so the root execution's row
   names it. The context carries the origin `webhook` (`Prima.Origin`),
   which that row records; a retried delivery the idempotency claim
   admits again runs under the same origin. The component outcome is its
-  completion (`Grimoire.close_decision/3`), recorded and emitted via `[:cyfr,
+  completion (`Sanctum.Gate.close_decision/3`), recorded and emitted via `[:cyfr,
   :emissary, :webhook, :invoke, :stop]` telemetry from inside the spawned
   task, correlated to the HTTP response by `request_id`.
 
@@ -185,7 +185,7 @@ defmodule Emissary.Web.WebhookController do
         admission: :admitted
       )
 
-    Grimoire.open_decision(ctx, decision, %{method: "POST /hooks/:slug", input: log_input})
+    Sanctum.Gate.open_decision(ctx, decision, %{method: "POST /hooks/:slug", input: log_input})
 
     start_time = System.monotonic_time()
 
@@ -225,9 +225,9 @@ defmodule Emissary.Web.WebhookController do
 
         # The stored row and the telemetry read the table's sentence; the
         # term itself goes only to the log line above.
-        error = Grimoire.render(reason)
+        error = Sanctum.Gate.render(reason)
 
-        Grimoire.close_decision(ctx, ctx.call_id, %{
+        Sanctum.Gate.close_decision(ctx, ctx.call_id, %{
           result: {:error, reason},
           duration_ms: duration_ms,
           routed_to: Opus.service()
@@ -298,7 +298,7 @@ defmodule Emissary.Web.WebhookController do
         {:ok, result} ->
           duration_ms = duration_ms(start_time)
 
-          Grimoire.close_decision(ctx, ctx.call_id, %{
+          Sanctum.Gate.close_decision(ctx, ctx.call_id, %{
             result: {:ok, result.output},
             duration_ms: duration_ms,
             routed_to: Opus.service()
@@ -316,7 +316,7 @@ defmodule Emissary.Web.WebhookController do
           duration_ms = duration_ms(start_time)
           Logger.warning("[WebhookInvoke] error slug=#{webhook.slug}: #{inspect(reason)}")
 
-          Grimoire.close_decision(ctx, ctx.call_id, %{
+          Sanctum.Gate.close_decision(ctx, ctx.call_id, %{
             result: {:error, reason},
             duration_ms: duration_ms,
             routed_to: Opus.service()
@@ -344,7 +344,7 @@ defmodule Emissary.Web.WebhookController do
         # exception, which is classified by its shape alone (a KeyError's
         # message quotes the map it raised on), and telemetry gets the
         # fixed slug — its consumers must not see internal reasons.
-        Grimoire.close_decision(ctx, ctx.call_id, %{
+        Sanctum.Gate.close_decision(ctx, ctx.call_id, %{
           result: {:error, e},
           duration_ms: duration_ms,
           routed_to: Opus.service()

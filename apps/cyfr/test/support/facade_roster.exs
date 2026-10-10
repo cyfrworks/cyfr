@@ -22,6 +22,7 @@
     "Sanctum.Consent",
     "Sanctum.DeviceCerts",
     "Sanctum.Directory",
+    "Sanctum.Gate",
     "Sanctum.InstanceEntries",
     "Sanctum.Pairing",
     "Sanctum.Passkeys",
@@ -29,13 +30,8 @@
     "Sanctum.RegistryCredentials",
     "Sanctum.TinctureAccess",
     "Sanctum.ToolGrants",
+    "Sanctum.VirtualTools",
     "Sanctum.Webhook"
-  ],
-  "Grimoire" => [
-    "Grimoire.Proxy",
-    "Grimoire.RequestLog",
-    "Grimoire.RunningTasks",
-    "Grimoire.VirtualTools"
   ],
   "Compendium" => ["Compendium.Providers.Component"],
   "Opus" => [],

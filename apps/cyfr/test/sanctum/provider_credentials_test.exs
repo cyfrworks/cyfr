@@ -230,7 +230,7 @@ defmodule Sanctum.ProviderCredentialsTest do
       # wide — does not open an outbound-credential write.
       for ctx <- [narrow_ctx([:execute]), key_ctx()] do
         assert {:error, %Prima.Refusal{stage: :admission, reason: {:consent_class_required, _}}} =
-                 Grimoire.call_external("oauth", ctx, %{
+                 Sanctum.Gate.call_external("oauth", ctx, %{
                    "action" => "set_client",
                    "provider" => "google",
                    "client_id" => "x"

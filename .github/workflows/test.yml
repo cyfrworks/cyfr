@@ -1295,7 +1295,7 @@ jobs:
       # asserts the old vocabularies — org/project, the athanor's retired
       # second name, conversation/topic subscription, the prism: PubSub
       # prefix, the keeper's retired role name, the WASM engine's retired
-      # names — cannot creep back into code,
+      # names, the gate's retired name — cannot creep back into code,
       # config, or operator-facing docs. Each retired name is matched as a
       # word or inside an identifier, never inside an English word that
       # merely contains its letters.
@@ -1346,7 +1346,7 @@ jobs:
             'Cyfr\.Test\.(SourceTree|CodeLines|Wait|AuthorityFixtures)\b' \
             'Emissary\.MCP\.VaultRef\b' \
             'Cyfr\.Ops\b' \
-            'Sanctum\.Catalog\b' \
+            '[Gg]rimoire|GRIMOIRE' \
             'Emissary\.MCP\.(RequestLog|RunningTasks|Tools\.SystemProvider)\b' \
             'Cyfr\.Execution\b' \
             'Cyfr\.Schedules\b' \

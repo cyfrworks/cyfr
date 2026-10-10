@@ -162,7 +162,7 @@ defmodule Compendium.ProviderTest do
   # the gate like any other call.
   defp read(ctx, uri),
     do:
-      Grimoire.call_external("component", ctx, %{
+      Sanctum.Gate.call_external("component", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })
@@ -365,7 +365,7 @@ defmodule Compendium.ProviderTest do
       Application.put_env(:cyfr, :registry_health_probe, false)
 
       {:ok, result} =
-        Grimoire.call_external("system", Sanctum.TestContext.local(), %{
+        Sanctum.Gate.call_external("system", Sanctum.TestContext.local(), %{
           "action" => "status",
           "scope" => "compendium"
         })
@@ -2207,7 +2207,7 @@ defmodule Compendium.ProviderTest do
     test "component.create denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error,
               %Prima.Refusal{stage: :admission, reason: {:missing_permission, :component_manage}}} =
-               Grimoire.call_external("component", restricted_ctx, %{
+               Sanctum.Gate.call_external("component", restricted_ctx, %{
                  "action" => "create",
                  "name" => "test-comp",
                  "type" => "reagent"
@@ -2217,7 +2217,7 @@ defmodule Compendium.ProviderTest do
     test "component.push denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error,
               %Prima.Refusal{stage: :admission, reason: {:missing_permission, :component_manage}}} =
-               Grimoire.call_external("component", restricted_ctx, %{
+               Sanctum.Gate.call_external("component", restricted_ctx, %{
                  "action" => "push",
                  "reference" => "reagent:local.test:0.1.0"
                })
@@ -2242,12 +2242,12 @@ defmodule Compendium.ProviderTest do
                 class: :forbidden,
                 reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
               } = refusal} =
-               Grimoire.call_external("component", key_ctx, %{
+               Sanctum.Gate.call_external("component", key_ctx, %{
                  "action" => "push",
                  "reference" => "reagent:local.test:0.1.0"
                })
 
-      assert Grimoire.render(refusal) =~ "interactive sign-in"
+      assert Sanctum.Gate.render(refusal) =~ "interactive sign-in"
 
       # Discovery agrees with dispatch: the key is not shown the push.
       refute "push" in visible_component_actions(key_ctx)
@@ -2290,7 +2290,7 @@ defmodule Compendium.ProviderTest do
                   class: :forbidden,
                   reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
                 }} =
-                 Grimoire.call_external("registry", key_ctx, Map.put(args, "action", action)),
+                 Sanctum.Gate.call_external("registry", key_ctx, Map.put(args, "action", action)),
                "registry.#{action} admitted an API key"
       end
 
@@ -2323,7 +2323,7 @@ defmodule Compendium.ProviderTest do
       # Admitted: the handler runs and answers the domain's own refusal (no
       # claimed namespace), not the gate's.
       assert {:error, msg} =
-               Grimoire.call_external("component", ctx, %{
+               Sanctum.Gate.call_external("component", ctx, %{
                  "action" => "push",
                  "reference" => "c:local.my-tool:1.0.0"
                })
@@ -2335,7 +2335,7 @@ defmodule Compendium.ProviderTest do
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error,
               %Prima.Refusal{stage: :admission, reason: {:missing_permission, :component_manage}}} =
-               Grimoire.call_external("component", restricted_ctx, %{
+               Sanctum.Gate.call_external("component", restricted_ctx, %{
                  "action" => "register"
                })
     end
@@ -2343,7 +2343,7 @@ defmodule Compendium.ProviderTest do
     test "component.delete denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error,
               %Prima.Refusal{stage: :admission, reason: {:missing_permission, :component_manage}}} =
-               Grimoire.call_external("component", restricted_ctx, %{
+               Sanctum.Gate.call_external("component", restricted_ctx, %{
                  "action" => "delete",
                  "reference" => "reagent:local.test:0.1.0"
                })
@@ -2496,7 +2496,7 @@ defmodule Compendium.ProviderTest do
   defp visible_component_actions(ctx), do: visible_actions("component", ctx)
 
   defp visible_actions(tool, ctx) do
-    {:ok, %{tools: tools}} = Grimoire.call_external("tools", ctx, %{"action" => "list"})
+    {:ok, %{tools: tools}} = Sanctum.Gate.call_external("tools", ctx, %{"action" => "list"})
 
     tools
     |> Enum.find(&(&1["name"] == tool))
@@ -2504,7 +2504,7 @@ defmodule Compendium.ProviderTest do
   end
 
   defp err_msg(reason) do
-    Grimoire.Error.render(reason) ||
+    Sanctum.Refusals.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 

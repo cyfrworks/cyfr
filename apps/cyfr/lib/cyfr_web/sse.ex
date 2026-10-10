@@ -20,7 +20,7 @@ defmodule CyfrWeb.SSE do
 
   ## Delivery under a grant
 
-  A stream the gate admitted (`Grimoire.open_stream/3`) is delivered here
+  A stream the gate admitted (`Sanctum.Gate.open_stream/3`) is delivered here
   and nowhere else on the endpoint. `deliver/4` subscribes the connection
   to the one topic the grant admits (`Cyfr.Bus.granted_topic/2`), writes
   each payload projected to the grant's fields (`Prima.StreamGrant.project/2`)
@@ -265,7 +265,7 @@ defmodule CyfrWeb.SSE do
   # refresh and its filter. A name the table does not hold delivers as a
   # stream with neither.
   defp declared(name) do
-    case Grimoire.Catalog.lookup_stream(name) do
+    case Sanctum.Catalog.lookup_stream(name) do
       {:ok, {_provider, %Prima.Provider.Stream{} = stream}} -> stream
       :miss -> nil
     end

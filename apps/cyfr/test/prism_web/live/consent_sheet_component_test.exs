@@ -1222,7 +1222,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
   end
 
   test "every verb of the walk is a registered profile action" do
-    {:ok, tool} = Grimoire.get_tool("profile")
+    {:ok, tool} = Sanctum.Gate.get_tool("profile")
 
     enum = get_in(tool, ["inputSchema", "properties", "action", "enum"]) || []
 

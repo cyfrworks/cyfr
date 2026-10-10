@@ -15,7 +15,6 @@ defmodule CyfrWeb.Endpoint do
     deps: [
       Arca,
       Sanctum,
-      Grimoire,
       Cyfr,
       Compendium,
       Aqua,

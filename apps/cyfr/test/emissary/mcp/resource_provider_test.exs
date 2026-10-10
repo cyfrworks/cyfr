@@ -12,7 +12,7 @@ defmodule Emissary.MCP.ResourceProviderTest do
 
   use ExUnit.Case, async: true
 
-  alias Grimoire.Catalog
+  alias Sanctum.Catalog
   alias Prima.{Arg, Operation, Provider}
 
   defmodule Advertiser do
@@ -73,7 +73,7 @@ defmodule Emissary.MCP.ResourceProviderTest do
 
   test "every configured provider that advertises a resource declares its reader" do
     advertisers =
-      for module <- Grimoire.configured_providers(),
+      for module <- Sanctum.Gate.configured_providers(),
           fun <- [:resources, :resource_templates],
           function_exported?(module, fun, 0),
           apply(module, fun, []) != [],
@@ -84,11 +84,11 @@ defmodule Emissary.MCP.ResourceProviderTest do
              Enum.sort([
                Compendium.Provider,
                Opus.Provider,
-               Grimoire.Provider,
+               Sanctum.Providers.System,
                Sanctum.Provider
              ])
 
-    for module <- Grimoire.configured_providers() do
+    for module <- Sanctum.Gate.configured_providers() do
       refute function_exported?(module, :read, 2) and module in advertisers,
              "#{inspect(module)} still exports a read/2 beside its declared reader"
     end

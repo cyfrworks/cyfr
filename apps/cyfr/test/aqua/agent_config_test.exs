@@ -31,7 +31,7 @@ defmodule Aqua.AgentConfigTest do
 
   defp policy(ctx, name) do
     {:ok, guide} =
-      Grimoire.call_external("aqua", ctx, %{"action" => "get", "name" => name})
+      Sanctum.Gate.call_external("aqua", ctx, %{"action" => "get", "name" => name})
 
     Aqua.AgentConfig.stringify_deep(guide)["tool_policy"]
   end

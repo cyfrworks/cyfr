@@ -220,14 +220,14 @@ defmodule Compendium.FacadeTest do
                reason: {:registry, :policy_version_mismatch, "2026-09"}
              } = refusal
 
-      assert Grimoire.render(refusal) =~ "policy version 2026-09"
+      assert Sanctum.Gate.render(refusal) =~ "policy version 2026-09"
       assert Compendium.registry_required_version(refusal) == "2026-09"
 
       assert Compendium.registry_required_version(
                Compendium.Providers.Shared.refusal(%{err | detail: nil})
              ) == nil
 
-      assert Compendium.registry_required_version(Grimoire.classify(:busy)) == nil
+      assert Compendium.registry_required_version(Sanctum.Gate.classify(:busy)) == nil
     end
   end
 
@@ -318,7 +318,7 @@ defmodule Compendium.FacadeTest do
                Compendium.accept_registry_policies(:github, "gho_access", nil, "2026-09")
 
       assert Compendium.registry_required_version(refusal) == "2026-10"
-      assert Grimoire.render(refusal) =~ "policy version 2026-10"
+      assert Sanctum.Gate.render(refusal) =~ "policy version 2026-10"
 
       Bypass.expect_once(bypass, "POST", "/v1/legal/accept", fn conn ->
         json_resp(conn, 403, %{"errors" => [%{"code" => "IDENTITY_BANNED"}]})

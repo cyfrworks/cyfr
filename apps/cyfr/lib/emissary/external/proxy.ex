@@ -8,12 +8,12 @@ defmodule Emissary.External.Proxy do
 
   They appear in `tools/list` as `server_name:tool_name` (e.g.
   `notion:create_page`) and are reachable only `:in_chain` — see
-  `Grimoire.Proxy.default_planes/0`. An upstream catalogue is unbounded and
+  `Sanctum.Proxy.default_planes/0`. An upstream catalogue is unbounded and
   changes without us, so it carries no compile-time annotation; what bounds
   it instead is the consent a chain's authority holds, which
   `consent_candidates/1` describes.
 
-  This module is the one implementation of `Grimoire.Proxy`, the port the
+  This module is the one implementation of `Sanctum.Proxy`, the port the
   operation table asks about proxied tools through; `Cyfr.Application`
   installs it at boot.
 
@@ -22,7 +22,7 @@ defmodule Emissary.External.Proxy do
   `Emissary.External.Servers`.
   """
 
-  @behaviour Grimoire.Proxy
+  @behaviour Sanctum.Proxy
 
   alias Emissary.External.Servers
   alias Sanctum.Context
@@ -31,16 +31,16 @@ defmodule Emissary.External.Proxy do
   @external_tools_cache_ttl :timer.seconds(30)
 
   # ============================================================================
-  # External Tool Discovery (called by Grimoire.Provider)
+  # External Tool Discovery (called by Sanctum.Providers.System)
   # ============================================================================
 
   @doc """
   List all tools from enabled external MCP servers for the given tenant.
 
   Returns tool definitions with names prefixed as `server_name:tool_name`.
-  Called by `Grimoire.Provider.handle("tools", ctx, %{"action" => "list"})`.
+  Called by `Sanctum.Providers.System.handle("tools", ctx, %{"action" => "list"})`.
   """
-  @impl Grimoire.Proxy
+  @impl Sanctum.Proxy
   @spec list_external_tools(Context.t()) :: [map()]
   def list_external_tools(%Context{} = ctx) do
     cache_key = Arca.Cache.Keys.external_tools(Sanctum.Context.actor(ctx))
@@ -68,7 +68,7 @@ defmodule Emissary.External.Proxy do
   The tools a server of the caller's athanor answers with now, from its
   running process; `{:error, :not_running}` when none is running.
   """
-  @impl Grimoire.Proxy
+  @impl Sanctum.Proxy
   @spec server_tools(Context.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def server_tools(%Context{} = ctx, server_name) when is_binary(server_name),
     do: Emissary.External.Server.get_tools(server_name, ctx.athanor_id)
@@ -78,7 +78,7 @@ defmodule Emissary.External.Proxy do
   and, when reachable, matched tool names and baseline descriptions.
   Unreachable servers remain grantable without a catalog baseline.
   """
-  @impl Grimoire.Proxy
+  @impl Sanctum.Proxy
   @spec consent_candidates(Context.t()) :: [map()]
   def consent_candidates(%Context{} = ctx) do
     case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
@@ -113,7 +113,7 @@ defmodule Emissary.External.Proxy do
   end
 
   @doc "The single-server candidate, used at commit to resolve a decision."
-  @impl Grimoire.Proxy
+  @impl Sanctum.Proxy
   @spec consent_candidate(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def consent_candidate(%Context{} = ctx, server_name) do
     with {:ok, server} <- Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), server_name) do
@@ -211,7 +211,7 @@ defmodule Emissary.External.Proxy do
                 #
                 # No planes entry: an upstream catalogue is unbounded and
                 # changes without us, so the whole bucket is `:in_chain`
-                # (`Grimoire.Proxy.default_planes/0`), answered by the
+                # (`Sanctum.Proxy.default_planes/0`), answered by the
                 # dispatch checks from the name shape rather than carried
                 # on the definition.
                 "annotations" => %{
@@ -257,7 +257,7 @@ defmodule Emissary.External.Proxy do
 
   `{:error, :not_external}` when the name does not match an external
   server. Every other refusal is a reason the refusal table knows
-  (`Grimoire.Error.classify/1`), never a bare sentence: a disabled
+  (`Sanctum.Refusals.classify/1`), never a bare sentence: a disabled
   server, a tool its patterns do not expose and an external-plane call to
   a chain-only server are `{:invalid_argument, _}`; a server row that
   cannot be read is the store's own refusal.
@@ -265,7 +265,7 @@ defmodule Emissary.External.Proxy do
   `plane` is the caller's plane — `:in_chain` from a running chain,
   `:external` from the console or any other direct caller. There is
   deliberately no default: proxied tools are in-chain by declaration
-  (`Grimoire.Proxy.default_planes/0`), and an external-plane call is
+  (`Sanctum.Proxy.default_planes/0`), and an external-plane call is
   refused unless the server row opts in with `"console": true` in its
   config. The console's own dispatch path is in-process, so without this
   gate one dynamic tool name on a page would reach any upstream tool. The
@@ -280,9 +280,9 @@ defmodule Emissary.External.Proxy do
   call's transition was stepped on that row's digest — and the target
   then names exactly that revision; without it the row is read here, once.
   """
-  @impl Grimoire.Proxy
+  @impl Sanctum.Proxy
   @spec resolve(String.t(), Context.t(), :in_chain | :external, keyword()) ::
-          {:ok, map()} | {:error, Grimoire.Proxy.reason()}
+          {:ok, map()} | {:error, Sanctum.Proxy.reason()}
   def resolve(tool_name, %Context{} = ctx, plane, opts \\ [])
       when plane in [:in_chain, :external] do
     case String.split(tool_name, ":", parts: 2) do
@@ -338,9 +338,9 @@ defmodule Emissary.External.Proxy do
   `opts` carries what an in-chain call is admitted under:
   `:execution_id`, `:step`, `:hold` and `:retention_class`.
   """
-  @impl Grimoire.Proxy
+  @impl Sanctum.Proxy
   @spec dispatch(map(), Context.t(), map(), :in_chain | :external, keyword()) ::
-          {:ok, map()} | {:error, Grimoire.Proxy.reason()}
+          {:ok, map()} | {:error, Sanctum.Proxy.reason()}
   def dispatch(target, ctx, args, plane, opts \\ [])
 
   def dispatch(
@@ -447,7 +447,7 @@ defmodule Emissary.External.Proxy do
       # Nothing ran: the refusal keeps the admission's own class, and says
       # which call it was.
       {:error, {:refused, reason}} ->
-        refusal = Grimoire.Error.classify(reason)
+        refusal = Sanctum.Refusals.classify(reason)
 
         {:error,
          %Prima.Refusal{
@@ -562,7 +562,7 @@ defmodule Emissary.External.Proxy do
 
             {:error,
              {:not_recorded,
-              "the call's ending could not be recorded: " <> Grimoire.render(reason)}}
+              "the call's ending could not be recorded: " <> Sanctum.Gate.render(reason)}}
         end
 
       {:error, reason} ->
@@ -574,7 +574,7 @@ defmodule Emissary.External.Proxy do
     now = DateTime.utc_now()
 
     attrs = %{
-      error_message: Grimoire.Error.render(reason),
+      error_message: Sanctum.Refusals.render(reason),
       completed_at: now,
       duration_ms: DateTime.diff(now, started_at, :millisecond)
     }
@@ -675,7 +675,7 @@ defmodule Emissary.External.Proxy do
   defp classified({:error, reason} = refused) do
     if Sanctum.Unauthorized.reason?(reason) or Prima.Refusal.reason?(reason),
       do: refused,
-      else: {:error, Grimoire.Error.classify(reason)}
+      else: {:error, Sanctum.Refusals.classify(reason)}
   end
 
   defp classified(answer), do: answer

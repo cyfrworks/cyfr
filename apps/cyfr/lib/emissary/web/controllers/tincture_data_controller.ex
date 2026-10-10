@@ -52,7 +52,7 @@ defmodule Emissary.Web.TinctureDataController do
   `invoke_public` for a public page) with the input
   `{"operation": …, "params": …}`; an action through the gate under the
   frame's context; a stream is opened through the gate's one stream entry
-  (`Grimoire.open_stream/3`) and delivered by `CyfrWeb.SSE.deliver/4`.
+  (`Sanctum.Gate.open_stream/3`) and delivered by `CyfrWeb.SSE.deliver/4`.
 
   ## A canvas
 
@@ -146,7 +146,7 @@ defmodule Emissary.Web.TinctureDataController do
   """
   @impl true
   def send(%Plug.Conn{} = conn, status, reason, _message) do
-    refusal = %{Grimoire.classify(reason) | stage: :admission}
+    refusal = %{Sanctum.Gate.classify(reason) | stage: :admission}
 
     conn
     |> CallIdentity.refused(refusal)
@@ -175,7 +175,7 @@ defmodule Emissary.Web.TinctureDataController do
 
   # A refusal the gate made and recorded.
   defp refused_by_gate(conn, reason) do
-    refusal = Grimoire.classify(reason)
+    refusal = Sanctum.Gate.classify(reason)
 
     conn
     |> CallIdentity.decided()
@@ -472,7 +472,7 @@ defmodule Emissary.Web.TinctureDataController do
   # A stream bound to its holder takes no subject from the frame: the
   # gate supplies the holder's own.
   defp holder_bound?(name) do
-    case Prima.Provider.fetch_stream(Grimoire.streams(), name) do
+    case Prima.Provider.fetch_stream(Sanctum.Gate.streams(), name) do
       {:ok, stream} -> Prima.Provider.Stream.holder_bound?(stream)
       {:error, :undeclared_stream} -> false
     end
@@ -528,7 +528,7 @@ defmodule Emissary.Web.TinctureDataController do
   # The gate authorizes, casts and records the call under the request's
   # own call id; its refusal is its row.
   defp call(conn, ctx, tool, args) do
-    case Grimoire.call_external(tool, ctx, args, call_id: ctx.call_id) do
+    case Sanctum.Gate.call_external(tool, ctx, args, call_id: ctx.call_id) do
       {:ok, result} -> json(conn, TinctureWire.result(result))
       {:error, reason} -> refused_by_gate(conn, reason)
     end
@@ -543,7 +543,7 @@ defmodule Emissary.Web.TinctureDataController do
     case claim(ctx) do
       :ok ->
         try do
-          case Grimoire.open_stream(ctx, name, subject) do
+          case Sanctum.Gate.open_stream(ctx, name, subject) do
             {:ok, grant} ->
               conn
               |> CallIdentity.decided()
@@ -603,7 +603,7 @@ defmodule Emissary.Web.TinctureDataController do
   # Another stream: the fixture of its shape, and none for a stream that
   # declares no shape.
   defp fixtures(_ctx, name, _subject) do
-    case Prima.Provider.fetch_stream(Grimoire.streams(), name) do
+    case Prima.Provider.fetch_stream(Sanctum.Gate.streams(), name) do
       {:ok, %Prima.Provider.Stream{shape: %{} = shape}} ->
         {:ok, [Prima.Canvas.Shape.fixture(shape)]}
 
@@ -706,5 +706,5 @@ defmodule Emissary.Web.TinctureDataController do
     }
   end
 
-  defp credential_refusal(reason), do: Grimoire.classify(reason)
+  defp credential_refusal(reason), do: Sanctum.Gate.classify(reason)
 end

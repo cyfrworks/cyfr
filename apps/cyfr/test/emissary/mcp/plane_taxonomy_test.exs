@@ -54,15 +54,15 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   use ExUnit.Case, async: true
 
   alias Emissary.MCP.PlaneTaxonomyTest.Probes
-  alias Grimoire.Catalog
-  alias Grimoire.Proxy
+  alias Sanctum.Catalog
+  alias Sanctum.Proxy
   alias Aqua.Hands
 
   # Sibling-app providers are unavailable when this app's suite runs alone.
   # The root suite loads all eight; assert the count so a standalone run
   # cannot quietly pass with three providers unaudited.
   defp loaded_providers do
-    :cyfr
+    :sanctum
     |> Application.get_env(:tool_providers, [])
     |> Enum.filter(&Code.ensure_loaded?/1)
   end
@@ -125,7 +125,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
       served =
         MapSet.new(
-          for tool_def <- Grimoire.list_tools(),
+          for tool_def <- Sanctum.Gate.list_tools(),
               verb <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
               do: {tool_def["name"], verb}
         )
@@ -157,7 +157,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       ctx = Sanctum.TestContext.local()
 
       listed =
-        for tool_def <- Grimoire.visible_tools(Grimoire.list_tools(), ctx),
+        for tool_def <- Sanctum.Gate.visible_tools(Sanctum.Gate.list_tools(), ctx),
             verb <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
             do: "#{tool_def["name"]}.#{verb}"
 
@@ -165,7 +165,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
       for pair <- in_chain_only do
         [tool, verb] = String.split(pair, ".")
-        {:ok, {_module, meta}} = Grimoire.lookup(tool)
+        {:ok, {_module, meta}} = Sanctum.Gate.lookup(tool)
 
         assert {:error, {:unknown_action, ^pair}} =
                  Catalog.authorize_annotated_action(tool, meta, ctx, %{"action" => verb})
@@ -258,8 +258,8 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       # The wiring backstop still holds alongside the per-call gate: the
       # router rejects any name the registered-tool cache does not hold,
       # and proxied `server:tool` names are never cached.
-      assert {:error, :not_found} = Grimoire.get_tool("someserver:sometool")
-      refute Enum.any?(Grimoire.list_tools(), &String.contains?(&1["name"], ":"))
+      assert {:error, :not_found} = Sanctum.Gate.get_tool("someserver:sometool")
+      refute Enum.any?(Sanctum.Gate.list_tools(), &String.contains?(&1["name"], ":"))
     end
 
     # The bucket default is also enforced at dispatch, not left to the
@@ -277,7 +277,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # and an assignment names the actions the catalog annotates
   # `host: :intercepted` (`Opus.Assignments`).
   test "the intercept set an assignment carries is the catalog's annotation" do
-    intercepted = Grimoire.host_intercepted_actions()
+    intercepted = Sanctum.Gate.host_intercepted_actions()
 
     assert "execution.run" in intercepted
     assert "execution.run_stream" in intercepted
@@ -287,7 +287,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
     for name <- intercepted do
       [tool, action] = String.split(name, ".", parts: 2)
-      assert Grimoire.host_intercepted?(tool, action)
+      assert Sanctum.Gate.host_intercepted?(tool, action)
     end
   end
 end

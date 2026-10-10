@@ -116,8 +116,8 @@ defmodule Sanctum.Providers.PersonTest do
   end
 
   defp request_id, do: "req_#{System.unique_integer([:positive])}"
-  defp call(ctx, args), do: Grimoire.call_external("person", ctx, args)
-  defp refusal({:error, reason}), do: Grimoire.Error.classify(reason)
+  defp call(ctx, args), do: Sanctum.Gate.call_external("person", ctx, args)
+  defp refusal({:error, reason}), do: Sanctum.Refusals.classify(reason)
 
   # A renewal's challenge for `renew`, signed by `private`: the proof its
   # second call carries.

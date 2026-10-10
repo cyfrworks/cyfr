@@ -259,13 +259,13 @@ defmodule Aqua.ToolGrantsTest do
   describe "the action's declaration through the port" do
     test "a virtual hand, a catalogued action and an upstream tool, with the resource each names" do
       assert {:ok, %{kind: :write, standing: nil, resource: {"path", :storage_path}}} =
-               Sanctum.Grimoire.action_declaration("files.write")
+               Sanctum.OperationTable.action_declaration("files.write")
 
       assert {:ok, %{kind: :read, resource: {"base_path", :storage_path}}} =
-               Sanctum.Grimoire.action_declaration("files.search")
+               Sanctum.OperationTable.action_declaration("files.search")
 
       assert {:ok, %{kind: :destructive, resource: {"path", :storage_path}}} =
-               Sanctum.Grimoire.action_declaration("files.delete")
+               Sanctum.OperationTable.action_declaration("files.delete")
 
       # The files page's own tool and a component's source name their path
       # the same way.
@@ -273,31 +273,31 @@ defmodule Aqua.ToolGrantsTest do
             ~w(file.list file.read file.write file.delete) ++
               ~w(source.tree source.read source.grep source.write source.edit source.delete) do
         assert {:ok, %{resource: {"path", :storage_path}}} =
-                 Sanctum.Grimoire.action_declaration(name),
+                 Sanctum.OperationTable.action_declaration(name),
                "#{name} names no path"
       end
 
       assert {:ok, %{kind: :write, standing: nil, resource: {"path", :storage_path}}} =
-               Sanctum.Grimoire.action_declaration("source.write")
+               Sanctum.OperationTable.action_declaration("source.write")
 
       assert {:ok, %{kind: :write, standing: :thread, resource: nil}} =
-               Sanctum.Grimoire.action_declaration("notes.keep")
+               Sanctum.OperationTable.action_declaration("notes.keep")
 
       assert {:ok, %{kind: :write, standing: false, resource: nil}} =
-               Sanctum.Grimoire.action_declaration("notes.pin")
+               Sanctum.OperationTable.action_declaration("notes.pin")
 
       assert {:ok, %{kind: :external, standing: nil, resource: nil}} =
-               Sanctum.Grimoire.action_declaration("srv:repos.list.do")
+               Sanctum.OperationTable.action_declaration("srv:repos.list.do")
 
       for name <- ["no_such_tool.go", "files.nothing", "files", "", ".write", "files."] do
-        assert {:error, :not_found} = Sanctum.Grimoire.action_declaration(name),
+        assert {:error, :not_found} = Sanctum.OperationTable.action_declaration(name),
                "#{inspect(name)} was answered"
       end
     end
 
     test "storage and http name no resource, so they take no constraint" do
       for name <- ~w(storage.write storage.read http.get http.post) do
-        assert {:ok, %{resource: nil}} = Sanctum.Grimoire.action_declaration(name)
+        assert {:ok, %{resource: nil}} = Sanctum.OperationTable.action_declaration(name)
       end
     end
   end

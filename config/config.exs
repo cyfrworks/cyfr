@@ -17,7 +17,7 @@ config :mime, :types, %{
 
 # MCP tool providers - each service registers its tools
 # Order doesn't matter, tools are indexed by name
-config :cyfr,
+config :sanctum,
   tool_providers: [
     # Each provider answers its namespace's service label (`service/0`),
     # and a namespace with several providers is one service. Identity and
@@ -59,11 +59,11 @@ config :cyfr,
     Compendium.Providers.Canvas,
     # `emissary`: external MCP server management. `Emissary.External.Proxy`
     # is not here: it owns no tool of its own — the tools it discovers are
-    # the upstream servers', reached through `Grimoire.Catalog` on a lookup
+    # the upstream servers', reached through `Sanctum.Catalog` on a lookup
     # miss.
     Emissary.External.Provider,
-    # `grimoire`: the operation table's own `system` tool.
-    Grimoire.Provider,
+    # `sanctum`: the gate's own `system` tool.
+    Sanctum.Providers.System,
     # `cyfr`: the platform settings, for the server's operators.
     Cyfr.Providers.Settings
   ]

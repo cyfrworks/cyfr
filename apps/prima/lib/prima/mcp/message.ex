@@ -126,7 +126,7 @@ defmodule Prima.MCP.Message do
   (`class_code/2`).
 
   `override` is required: the caller that classified the refusal reads
-  it from the row (`Grimoire.code_override/1`), and a row's override —
+  it from the row (`Sanctum.Gate.code_override/1`), and a row's override —
   Sanctum's `:auth_required`, for one — outranks the class.
   """
   @spec refusal_code(

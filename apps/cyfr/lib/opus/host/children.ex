@@ -61,7 +61,7 @@ defmodule Opus.Host.Children do
   ## tool_call
 
   The tool runs through the catalog's in-chain entry
-  (`Grimoire.call_in_chain/5`) under the attempt's authority and
+  (`Sanctum.Gate.call_in_chain/5`) under the attempt's authority and
   context — the context its root was admitted in, so the call carries its
   root's origin — with the header's execution as its parent, the attempt's root
   and the header's attempt as its lineage. A setup refusal is announced on
@@ -207,7 +207,7 @@ defmodule Opus.Host.Children do
           call_id: chain.call_id
         }
 
-        case Grimoire.call_in_chain(tool.name, chain.ctx, tool.args, chain.authority,
+        case Sanctum.Gate.call_in_chain(tool.name, chain.ctx, tool.args, chain.authority,
                guest_fn: tool.guest_fn,
                lineage: lineage
              ) do
@@ -221,9 +221,9 @@ defmodule Opus.Host.Children do
       # recorded here as the gate would have: on the in-chain plane, under
       # no actor (there is no context to name one), with no parent call.
       {:error, reason} = refused ->
-        Grimoire.open_decision(
+        Sanctum.Gate.open_decision(
           nil,
-          Grimoire.refused_decision(nil, reason, plane: :in_chain, tool: tool.name)
+          Sanctum.Gate.refused_decision(nil, reason, plane: :in_chain, tool: tool.name)
         )
 
         refused
@@ -424,9 +424,9 @@ defmodule Opus.Host.Children do
 
   defp guest_error(type, message), do: {:guest_error, Atom.to_string(type), message}
 
-  # A refusal's one sentence (`Grimoire.render/1`); an internal term
+  # A refusal's one sentence (`Sanctum.Gate.render/1`); an internal term
   # is never rendered.
-  defp render(reason), do: Grimoire.render(reason)
+  defp render(reason), do: Sanctum.Gate.render(reason)
 
   # A chain-authority refusal in the authority vocabulary's own words; the
   # guest branches on the error's type, never on a reason's name.

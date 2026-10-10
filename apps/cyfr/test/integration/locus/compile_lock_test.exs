@@ -87,7 +87,7 @@ defmodule Cyfr.Integration.Locus.CompileLockTest do
       )
 
     assert {:error, reason} = compile(ctx)
-    assert Grimoire.Error.render(reason) =~ "--locked"
+    assert Sanctum.Refusals.render(reason) =~ "--locked"
     assert {:ok, ^first_lock} = Arca.get(Sanctum.Context.actor(ctx), @src ++ ["Cargo.lock"])
 
     assert {:ok, %{status: "compiled"}} = compile(ctx, %{"resolve" => true})

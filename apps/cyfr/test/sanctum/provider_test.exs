@@ -99,7 +99,7 @@ defmodule Sanctum.ProviderTest do
   # gate like any other call.
   defp read(ctx, uri),
     do:
-      Grimoire.call_external("session", ctx, %{
+      Sanctum.Gate.call_external("session", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })
@@ -401,12 +401,12 @@ defmodule Sanctum.ProviderTest do
 
     test "key:list requires admin permission", %{restricted_ctx: ctx} do
       assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :admin}}} =
-               Grimoire.call_external("key", ctx, %{"action" => "list"})
+               Sanctum.Gate.call_external("key", ctx, %{"action" => "list"})
     end
 
     test "key:get requires admin permission", %{restricted_ctx: ctx} do
       assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :admin}}} =
-               Grimoire.call_external("key", ctx, %{
+               Sanctum.Gate.call_external("key", ctx, %{
                  "action" => "get",
                  "name" => "test-key"
                })
@@ -526,7 +526,7 @@ defmodule Sanctum.ProviderTest do
       Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
 
       assert {:error, {:unavailable, "Consent profiles"} = reason} = get.("vis-none")
-      assert Grimoire.Error.render(reason) == "Consent profiles is unavailable — retry shortly"
+      assert Sanctum.Refusals.render(reason) == "Consent profiles is unavailable — retry shortly"
     end
 
     test "reports public when an active public profile exists", %{ctx: ctx} do
@@ -902,7 +902,7 @@ defmodule Sanctum.ProviderTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Grimoire.Error.render(reason) ||
+    Sanctum.Refusals.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

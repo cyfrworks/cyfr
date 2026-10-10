@@ -214,7 +214,7 @@ defmodule Aqua.ApprovalsTest do
     api = Sanctum.TestContext.via(ctx, :api)
 
     assert {:ok, _resolved} =
-             Grimoire.call_external("approval", api, %{
+             Sanctum.Gate.call_external("approval", api, %{
                "action" => "resolve",
                "approval" => approval.id,
                "decision" => "approve",

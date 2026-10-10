@@ -227,8 +227,8 @@ defmodule Prima.Provider do
   @typedoc """
   Per-action access declaration — the gate, not a hint.
 
-  The gate (`Grimoire.call_external/4`, `Grimoire.call_in_chain/5`)
-  enforces these keys at dispatch and `Grimoire.Visibility` derives
+  The gate (`Sanctum.Gate.call_external/4`, `Sanctum.Gate.call_in_chain/5`)
+  enforces these keys at dispatch and `Sanctum.Visibility` derives
   discovery from the same map, so what a caller is shown and what a
   caller may invoke cannot drift apart.
 

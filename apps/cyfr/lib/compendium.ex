@@ -22,7 +22,7 @@ defmodule Compendium do
   """
 
   use Boundary,
-    deps: [Grimoire, Cyfr, Sanctum, Arca],
+    deps: [Cyfr, Sanctum, Arca],
     exports: [
       AquaPath,
       ComponentPath,

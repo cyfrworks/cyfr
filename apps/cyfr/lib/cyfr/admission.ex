@@ -70,7 +70,7 @@ defmodule Cyfr.Admission do
         {"/phoenix/live_reload/socket", "Phoenix.LiveReloader.Socket"}
       ],
       entries: [
-        "Grimoire",
+        "Sanctum.Gate",
         "Emissary.MCP.Router",
         "Emissary.Web.MCPController",
         "Emissary.Web.Plugs.MCPRequestMetadata",
@@ -98,7 +98,7 @@ defmodule Cyfr.Admission do
       built: true,
       listener: "Opus.HostListener",
       sockets: [],
-      entries: ["Opus.Host.Children", "Grimoire"],
+      entries: ["Opus.Host.Children", "Sanctum.Gate"],
       reason:
         "a runner's host call, verified by its worker service and again by the listener, " <>
           "is admitted as a child of its attempt, and its tool call enters the gate's " <>
@@ -119,7 +119,7 @@ defmodule Cyfr.Admission do
       built: true,
       listener: "CyfrWeb.Endpoint",
       sockets: [{"/device", "Emissary.Web.DeviceChannel"}],
-      entries: ["Emissary.Web.DeviceChannel", "Grimoire"],
+      entries: ["Emissary.Web.DeviceChannel", "Sanctum.Gate"],
       reason:
         "a paired glass's socket: it admits nothing until the glass proves its device " <>
           "key, then dispatches each discrete intent through the gate's external head"

@@ -809,7 +809,7 @@ defmodule PrismWeb.SystemLayerTest do
           :ok
       end
 
-      :ok = :telemetry.attach(handler, [:cyfr, :grimoire, :decision, :admitted], revoke, nil)
+      :ok = :telemetry.attach(handler, [:cyfr, :sanctum, :decision, :admitted], revoke, nil)
       on_exit(fn -> :telemetry.detach(handler) end)
 
       {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-refused", ref)
@@ -4344,7 +4344,7 @@ defmodule PrismWeb.SystemLayerTest do
     # be held still when it is sent.
     defp cancelled_fact(view, row) do
       ctx = view_context(view)
-      {:ok, grant} = Grimoire.open_stream(ctx, PrismWeb.SystemLayer.stream(), nil)
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, PrismWeb.SystemLayer.stream(), nil)
 
       fact =
         Cyfr.Bus.Confirmation.new(Context.actor(ctx), :cancelled,

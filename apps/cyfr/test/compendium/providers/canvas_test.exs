@@ -106,18 +106,19 @@ defmodule Compendium.Providers.CanvasTest do
 
     test "the provider is rostered after the layout's, so the gate serves it, and activation " <>
            "and restore never from a chain" do
-      providers = Application.fetch_env!(:cyfr, :tool_providers)
+      providers = Application.fetch_env!(:sanctum, :tool_providers)
       assert Canvas in providers
 
       assert Enum.find_index(providers, &(&1 == Canvas)) ==
                Enum.find_index(providers, &(&1 == Compendium.Providers.Layout)) + 1
 
-      assert {:ok, {Canvas, _meta}} = Grimoire.lookup("canvas")
+      assert {:ok, {Canvas, _meta}} = Sanctum.Gate.lookup("canvas")
 
       for action <- ~w(catalog versions write),
-          do: assert(Grimoire.chain_reachable?("canvas", action))
+          do: assert(Sanctum.Gate.chain_reachable?("canvas", action))
 
-      for action <- ~w(activate restore), do: assert(Grimoire.in_chain_refused?("canvas", action))
+      for action <- ~w(activate restore),
+          do: assert(Sanctum.Gate.in_chain_refused?("canvas", action))
     end
   end
 
@@ -126,8 +127,8 @@ defmodule Compendium.Providers.CanvasTest do
       assert {:ok, %{toolkit: [1], streams: streams}} = call(ctx, "catalog")
       assert call(ctx, "catalog") == Compendium.Canvas.catalog(ctx)
 
-      {:ok, {_provider, feeds}} = Grimoire.Catalog.lookup_stream("feed.results")
-      {:ok, {_provider, runs}} = Grimoire.Catalog.lookup_stream("runs.changes")
+      {:ok, {_provider, feeds}} = Sanctum.Catalog.lookup_stream("feed.results")
+      {:ok, {_provider, runs}} = Sanctum.Catalog.lookup_stream("runs.changes")
 
       assert streams == [
                %{
@@ -212,7 +213,7 @@ defmodule Compendium.Providers.CanvasTest do
     test "the gate answers the tool's refusal, classed with the sentence the tool wrote",
          %{ctx: ctx} do
       assert {:error, {:not_found, "Canvas", "absent"} = absent} =
-               Grimoire.call_external("canvas", ctx, %{
+               Sanctum.Gate.call_external("canvas", ctx, %{
                  "action" => "versions",
                  "canvas" => "absent"
                })
@@ -221,7 +222,7 @@ defmodule Compendium.Providers.CanvasTest do
                Prima.Refusal.classify(absent)
 
       assert {:error, {:invalid_argument, sentence} = unreadable} =
-               Grimoire.call_external("canvas", ctx, %{
+               Sanctum.Gate.call_external("canvas", ctx, %{
                  "action" => "write",
                  "name" => "markets",
                  "module" => "// m",

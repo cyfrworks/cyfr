@@ -1360,39 +1360,36 @@ defmodule Cyfr.BoundariesTest do
              ]
     end
 
-    test "the gate names no domain and no surface beyond its rostered reaches" do
-      named = names(Boundaries.gate_free().from)
-
-      assert Enum.sum(for {_path, names} <- named, do: length(names)) > 50,
-             "the gate's own scan found no names — it is not reading"
-
-      assert Boundaries.gate_violations(named) == []
-      assert Boundaries.stale_gate_allowances(named) == []
-
-      assert Boundaries.gate_free().allow == []
-
+    # The gate is Sanctum's, so its tree is held to Sanctum's layer: a
+    # domain or a surface it names, by an alias or a quoted name the
+    # compiler does not trace as much as by a call, is a dependency
+    # violation, and a module of its own application is not.
+    test "Sanctum's gate naming a domain or a surface is reported, however it is spelled" do
       planted = [
-        {"apps/cyfr/lib/grimoire/planted.ex",
+        {"apps/sanctum/lib/sanctum/gate/planted.ex",
          CodeLines.aliases(~S'''
-         defmodule Grimoire.Planted do
+         defmodule Sanctum.Gate.Planted do
            alias Emissary.External.Proxy
            def a(ctx), do: Proxy.list_external_tools(ctx)
            def b, do: Aqua.Runner.subscribe("ath", "t")
            def c, do: Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn -> :ok end)
            def d(ctx), do: PrismWeb.Focus.current(ctx)
-           def e, do: Grimoire.Proxy.impl!()
+           def e, do: Sanctum.Proxy.impl!()
          end
          ''')}
       ]
 
-      assert Boundaries.gate_violations(planted) == [
-               "apps/cyfr/lib/grimoire/planted.ex:2 names Emissary.External.Proxy",
-               "apps/cyfr/lib/grimoire/planted.ex:4 names Aqua.Runner",
-               "apps/cyfr/lib/grimoire/planted.ex:5 names Emissary.TaskSupervisor",
-               "apps/cyfr/lib/grimoire/planted.ex:6 names PrismWeb.Focus"
-             ]
+      may = "sanctum may name [:sanctum, :arca, :prima, :outside]"
 
-      assert Boundaries.stale_gate_allowances(planted) == []
+      assert Enum.sort(Boundaries.dependency_violations(:sanctum, planted, contracts_modules())) ==
+               [
+                 "apps/sanctum/lib/sanctum/gate/planted.ex:2 names Emissary.External.Proxy (host); " <>
+                   may,
+                 "apps/sanctum/lib/sanctum/gate/planted.ex:4 names Aqua.Runner (host); " <> may,
+                 "apps/sanctum/lib/sanctum/gate/planted.ex:5 names Emissary.TaskSupervisor (host); " <>
+                   may,
+                 "apps/sanctum/lib/sanctum/gate/planted.ex:6 names PrismWeb.Focus (host); " <> may
+               ]
     end
 
     test "a direct read of a security row in a surface is reported, however it is spelled" do
@@ -1918,20 +1915,20 @@ defmodule Cyfr.BoundariesTest do
     test "every port row names its declaring module, its implementation and the boot" do
       assert Enum.map(Boundaries.ports(), & &1.behaviour) == [
                "Prima.Caps",
-               "Sanctum.Grimoire",
+               "Sanctum.OperationTable",
                "Sanctum.Consent.Components",
-               "Grimoire.Proxy",
+               "Sanctum.Proxy",
                "Arca.Storage.UnitLocator"
              ]
 
       for port <- Boundaries.ports() do
         assert is_binary(port.what) and is_binary(port.implemented_by)
-        assert port.declared_by in [:prima, :arca, :sanctum, :cyfr]
+        assert port.declared_by in [:prima, :arca, :sanctum]
         assert port.written_at_boot_by == "Cyfr.Application"
       end
 
-      assert %{declared_by: :cyfr, implemented_by: "Emissary.External.Proxy"} =
-               Enum.find(Boundaries.ports(), &(&1.behaviour == "Grimoire.Proxy"))
+      assert %{declared_by: :sanctum, implemented_by: "Emissary.External.Proxy"} =
+               Enum.find(Boundaries.ports(), &(&1.behaviour == "Sanctum.Proxy"))
     end
 
     test "every declaring module installs, reads and refuses the one way" do
@@ -1955,9 +1952,9 @@ defmodule Cyfr.BoundariesTest do
 
       assert installed == [
                {"Prima.Caps", Sanctum.Tenancy.Caps},
-               {"Sanctum.Grimoire", Grimoire.Catalog},
+               {"Sanctum.OperationTable", Sanctum.Catalog},
                {"Sanctum.Consent.Components", Compendium.ConsentFacts},
-               {"Grimoire.Proxy", Emissary.External.Proxy},
+               {"Sanctum.Proxy", Emissary.External.Proxy},
                {"Arca.Storage.UnitLocator",
                 %{"aqua" => Compendium.AquaPath, "components" => Compendium.ComponentPath}}
              ]
@@ -2670,20 +2667,20 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
     )
   end
 
-  test "an alias of a surface module used in the gate", %{copy: copy} do
+  # The gate is Sanctum's, and Sanctum's build holds the contracts and
+  # Arca alone: a module of the host's application cannot compile there.
+  test "Sanctum's gate naming a surface", %{copy: copy} do
     assert_refused(
       copy,
-      "cyfr",
-      "grimoire/boundary_plant.ex",
+      "sanctum",
+      "sanctum/gate/boundary_plant.ex",
       """
-      defmodule Grimoire.BoundaryPlant do
-        alias Emissary.MCP.Progress
-        def plant, do: Progress
+      defmodule Sanctum.Gate.BoundaryPlant do
+        def plant(conn), do: Emissary.Web.MCPController.call(conn, [])
       end
       """,
       [
-        "forbidden reference to Emissary.MCP.Progress",
-        "references from Grimoire to Emissary are not allowed"
+        "Emissary.Web.MCPController.call/2 is undefined"
       ]
     )
   end
@@ -2691,17 +2688,16 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
   test "a struct match on a surface struct in the gate", %{copy: copy} do
     assert_refused(
       copy,
-      "cyfr",
-      "grimoire/boundary_plant.ex",
+      "sanctum",
+      "sanctum/gate/boundary_plant.ex",
       """
-      defmodule Grimoire.BoundaryPlant do
+      defmodule Sanctum.Gate.BoundaryPlant do
         def plant?(%Emissary.External.Server.State{}), do: true
         def plant?(_other), do: false
       end
       """,
       [
-        "forbidden reference to Emissary.External.Server.State",
-        "references from Grimoire to Emissary are not allowed"
+        "struct Emissary.External.Server.State is undefined"
       ]
     )
   end

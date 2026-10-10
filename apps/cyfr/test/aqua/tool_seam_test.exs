@@ -8,8 +8,8 @@ defmodule Aqua.ToolSeamTest do
 
   The assistant reads the operation table wherever it needs to
   (`Aqua.Kinds`, `Aqua.Hands`, the loop's policy); what it does not do is
-  dispatch past the seam. `Grimoire.call_external` and
-  `Grimoire.call_in_chain`, and the `Grimoire.Catalog` functions they
+  dispatch past the seam. `Sanctum.Gate.call_external` and
+  `Sanctum.Gate.call_in_chain`, and the `Sanctum.Catalog` functions they
   delegate to, are called or captured by `Aqua.Ops` alone. The compiled
   beams are the reader (`Prima.Test.Beams`), so a call through an alias
   or an import and a capture are seen and a name inside a string is not,
@@ -24,7 +24,7 @@ defmodule Aqua.ToolSeamTest do
   alias Prima.Test.Beams
 
   @seam Aqua.Ops
-  @gate [Grimoire, Grimoire.Catalog]
+  @gate [Sanctum.Gate, Sanctum.Catalog]
   @dispatch [:call_external, :call_in_chain]
 
   test "the assistant dispatches through the gate only at its seam" do
@@ -52,25 +52,25 @@ defmodule Aqua.ToolSeamTest do
     compiled =
       Code.compile_string(~S'''
       defmodule Aqua.PlantedDirect do
-        def plant(ctx, args), do: Grimoire.call_external("t", ctx, args)
+        def plant(ctx, args), do: Sanctum.Gate.call_external("t", ctx, args)
       end
 
       defmodule Aqua.PlantedAlias do
-        alias Grimoire, as: Gate
+        alias Sanctum.Gate
         def plant(ctx, args, authority), do: Gate.call_in_chain("t", ctx, args, authority)
       end
 
       defmodule Aqua.PlantedImport do
-        import Grimoire, only: [call_external: 4]
+        import Sanctum.Gate, only: [call_external: 4]
         def plant(ctx, args), do: call_external("t", ctx, args, [])
       end
 
       defmodule Aqua.PlantedCapture do
-        def plant, do: &Grimoire.Catalog.call_external/3
+        def plant, do: &Sanctum.Catalog.call_external/3
       end
 
       defmodule Aqua.PlantedString do
-        def plant, do: "Grimoire.call_external(\"t\", ctx, args)"
+        def plant, do: "Sanctum.Gate.call_external(\"t\", ctx, args)"
       end
       ''')
 
@@ -82,10 +82,10 @@ defmodule Aqua.ToolSeamTest do
     reported = for {module, beam} <- compiled, into: %{}, do: {module, dispatches(beam)}
 
     assert reported == %{
-             Aqua.PlantedDirect => [{Grimoire, :call_external, 3}],
-             Aqua.PlantedAlias => [{Grimoire, :call_in_chain, 4}],
-             Aqua.PlantedImport => [{Grimoire, :call_external, 4}],
-             Aqua.PlantedCapture => [{Grimoire.Catalog, :call_external, 3}],
+             Aqua.PlantedDirect => [{Sanctum.Gate, :call_external, 3}],
+             Aqua.PlantedAlias => [{Sanctum.Gate, :call_in_chain, 4}],
+             Aqua.PlantedImport => [{Sanctum.Gate, :call_external, 4}],
+             Aqua.PlantedCapture => [{Sanctum.Catalog, :call_external, 3}],
              Aqua.PlantedString => []
            }
   end

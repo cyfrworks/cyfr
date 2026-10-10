@@ -63,9 +63,9 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   # name}` by a name only this run used), and `expected` is the admission
   # and class the row must carry, and whether a caller had been established.
   @drivers %{
-    {Grimoire, :call_external} => :gate_external_head,
-    {Grimoire, :call_in_chain} => :gate_in_chain_head,
-    {Grimoire, :open_stream} => :gate_stream_undeclared,
+    {Sanctum.Gate, :call_external} => :gate_external_head,
+    {Sanctum.Gate, :call_in_chain} => :gate_in_chain_head,
+    {Sanctum.Gate, :open_stream} => :gate_stream_undeclared,
     {Emissary.MCP.Router, :dispatch} => :router_unknown_tool,
     {Emissary.Web.MCPController, :handle} => :mcp_batch,
     {Emissary.Web.MCPController, :method_not_allowed} => :mcp_get,
@@ -184,7 +184,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     guest = Sanctum.Context.enter_guest(%{ctx | request_id: request_id})
 
     assert {:error, %Prima.Refusal{stage: :admission, class: :forbidden}} =
-             Grimoire.call_external("system", guest, %{"action" => "status"})
+             Sanctum.Gate.call_external("system", guest, %{"action" => "status"})
 
     {{:request, request_id}, refused("forbidden", :established)}
   end
@@ -193,7 +193,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     request_id = Prima.UUID7.request_id()
 
     assert {:error, %Prima.Refusal{stage: :admission, class: :invalid_argument}} =
-             Grimoire.call_in_chain(
+             Sanctum.Gate.call_in_chain(
                "system",
                %{ctx | request_id: request_id},
                "not an object",
@@ -208,7 +208,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     request_id = Prima.UUID7.request_id()
 
     assert {:error, %Prima.Refusal{stage: :admission, class: :not_found}} =
-             Grimoire.open_stream(%{ctx | request_id: request_id}, "nobody.declares")
+             Sanctum.Gate.open_stream(%{ctx | request_id: request_id}, "nobody.declares")
 
     {{:request, request_id}, refused("not_found", :established)}
   end
@@ -521,7 +521,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
     assert reason in [:lost, :unavailable]
 
-    class = Atom.to_string(Grimoire.Error.classify(reason).class)
+    class = Atom.to_string(Sanctum.Refusals.classify(reason).class)
     {{:tool, tool}, refused(class, :none)}
   end
 

@@ -267,7 +267,7 @@ defmodule Sanctum.ContextFocusTest do
 
     # the audit ledger of B is invisible from A
     assert {:error, msg} =
-             Grimoire.call_external("record", focused, %{
+             Sanctum.Gate.call_external("record", focused, %{
                "action" => "get",
                "id" => b_exec
              })
@@ -275,7 +275,7 @@ defmodule Sanctum.ContextFocusTest do
     assert err_msg(msg) =~ "not found"
 
     assert {:ok, %{executions: listed}} =
-             Grimoire.call_external("record", focused, %{"action" => "list"})
+             Sanctum.Gate.call_external("record", focused, %{"action" => "list"})
 
     refute Enum.any?(listed, &(&1.id == b_exec))
 
@@ -283,9 +283,9 @@ defmodule Sanctum.ContextFocusTest do
     read = %{"action" => "read", "uri" => "arca://files/data/secret.txt"}
 
     assert {:error, {:not_found, "File", _}} =
-             Grimoire.call_external("resource", focused, read)
+             Sanctum.Gate.call_external("resource", focused, read)
 
-    assert {:ok, %{content: content}} = Grimoire.call_external("resource", b_ctx, read)
+    assert {:ok, %{content: content}} = Sanctum.Gate.call_external("resource", b_ctx, read)
 
     assert Base.decode64!(content) == "b's bytes"
   end
@@ -325,7 +325,7 @@ defmodule Sanctum.ContextFocusTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Grimoire.Error.render(reason) ||
+    Sanctum.Refusals.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end
