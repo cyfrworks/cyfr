@@ -25,9 +25,11 @@ defmodule Prima.Manifest.Caps do
 
   Closed vocabulary at every level; everything optional. `tools` speaks
   the `Prima.ToolPattern` grammar and is expanded at consent time. Only
-  an agent may name `feed.bind` or `feed.remove`: a manifest of any other
-  type naming either is refused (`{:agent_only_tool, tool}`), and no
-  pattern grants either at expansion. A
+  an agent may name `feed.bind`, `feed.remove` or `layout.edit`: each
+  binds or ends a feed under a profile's authority, or rearranges the
+  person's screen. A manifest of any other type naming one is refused
+  (`{:agent_only_tool, tool}`), and no pattern grants one at expansion,
+  so an agent holds one only by naming it exactly. A
   credential need's `hosts` (`Prima.Manifest.Needs`) fall within
   `egress.domains`: a need speaks only where its component asks to reach.
   `limits` carries the `Prima.Limits` field names — suggestions under
@@ -52,7 +54,7 @@ defmodule Prima.Manifest.Caps do
   """
 
   @egress_keys ~w(domains methods schemes private_ips)
-  @agent_only_tools ~w(feed.bind feed.remove)
+  @agent_only_tools ~w(feed.bind feed.remove layout.edit)
   @storage_keys ~w(paths actions)
   # String-keyed spellings of `Prima.Limits.fields/0` — the manifest is
   # JSON and this module is Apache while Limits is FSL, so the copy stays,
@@ -248,9 +250,10 @@ defmodule Prima.Manifest.Caps do
   defp validate_tools(other), do: {:error, {:invalid_caps, {:tools_not_a_list, other}}}
 
   # Binding or removing a feed binds or ends a standing conduit for a
-  # profile's authority: only an agent, every such call of which a person
-  # approves, asks for either, by its exact name. A pattern never grants
-  # one (`Sanctum.Consent.ShapeDerivation.expand_tools/1`).
+  # profile's authority, and editing the layout rearranges the person's
+  # screen: only an agent, whose tool policy and kind ceiling decide when
+  # the person is asked first, asks for one, by its exact name. A pattern
+  # never grants one (`Sanctum.Consent.ShapeDerivation.expand_tools/1`).
   defp agent_only_tools(_tools, "agent"), do: :ok
 
   defp agent_only_tools(tools, _type) when is_list(tools) do

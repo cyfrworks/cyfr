@@ -1783,8 +1783,9 @@ defmodule Cyfr.DocsDriftTest do
   # A layout is published only through the layout tool: `layout.edit`
   # (`Compendium.Providers.Layout`) is `Arca.Layouts.publish/4`'s one
   # caller, and every shell, the canvas and safe mode only read the layout.
-  # The tincture guide names that tool as how a layout is published, and no
-  # shell or console page as a writer.
+  # The tincture guide names that tool as how a layout is published, the
+  # writers the code admits, and no shell, console page, tincture or
+  # component as one.
   test "a layout is published only through the layout tool" do
     publisher = "apps/cyfr/lib/compendium/providers/layout.ex"
 
@@ -1812,9 +1813,10 @@ defmodule Cyfr.DocsDriftTest do
            "tincture-guide.md's layout paragraph names a shell or the console as a layout's " <>
              "writer; only the layout tool publishes one"
 
-    # Who reaches the tool: it runs from a chain as well as from outside,
-    # and a tincture's frame reaches it when the tincture declares it, so
-    # the paragraph names both beside the assistant, the CLI and the API.
+    # Who reaches the tool: the CLI, the API and a glass paired with the
+    # person from outside, and the assistant from a run. No tincture
+    # declares it, a manifest of any type but an agent's may not name it,
+    # and the shipped soul asks the person before it edits.
     %Prima.Operation{planes: planes} = Map.fetch!(operations("layout"), "edit")
 
     assert :external in planes and :in_chain in planes,
@@ -1826,18 +1828,49 @@ defmodule Cyfr.DocsDriftTest do
       "tincture" => %{"frame" => %{"placement" => "float"}, "actions" => ["layout.edit"]}
     }
 
-    assert {:ok, %{actions: ["layout.edit"]}} = Compendium.tincture_declaration(manifest),
-           "a tincture may no longer declare layout.edit; say so in tincture-guide.md's " <>
+    assert {:error, {:invalid_tincture, sentence}} = Compendium.tincture_declaration(manifest),
+           "a tincture may declare layout.edit again; say so in tincture-guide.md's " <>
              "layout paragraph"
 
+    assert sentence =~ "layout.edit"
+
+    for type <- ["catalyst", "reagent", "formula", "tincture"] do
+      assert Prima.Manifest.Caps.validate(
+               %{"type" => type, "caps" => %{"tools" => ["layout.edit"]}},
+               &Arca.Storage.valid_guest_path?/1
+             ) == {:error, {:invalid_caps, {:agent_only_tool, "layout.edit"}}},
+             "a #{type}'s caps may name layout.edit again; say so in tincture-guide.md's " <>
+               "layout paragraph"
+    end
+
+    assert :ok =
+             Prima.Manifest.Caps.validate(
+               %{"type" => "agent", "caps" => %{"tools" => ["layout.edit"]}},
+               &Arca.Storage.valid_guest_path?/1
+             )
+
+    {:ok, soul} =
+      Compendium.AquaAgent.parse(
+        "aqua",
+        File.read!(Path.join(@repo_root, "seed/aqua/aqua.md"))
+      )
+
+    assert soul.tool_policy["layout.edit"] == "ask",
+           "the shipped soul's policy holds layout.edit at #{inspect(soul.tool_policy["layout.edit"])}; " <>
+             "tincture-guide.md's layout paragraph says it asks the person first"
+
     for writer <- [
-          "a tincture whose declaration names `layout.edit` among its actions",
-          "a component whose grant names it, from a run"
+          "The CLI, the API and a glass paired with the person call it for the person",
+          "the assistant, whose shipped policy asks the person first",
+          "No tincture declares `layout.edit`"
         ] do
       assert paragraph =~ writer,
-             "tincture-guide.md's layout paragraph does not name #{inspect(writer)} among " <>
-               "the layout's writers"
+             "tincture-guide.md's layout paragraph does not say #{inspect(writer)}"
     end
+
+    refute paragraph =~ ~r/a tincture whose declaration names|a component whose grant names it/,
+           "tincture-guide.md's layout paragraph names a tincture or a component as a layout's " <>
+             "writer; neither reaches the layout tool"
   end
 
   test "the tincture guide states the lockfile, the invoke input, the referrer policy and the log rule" do

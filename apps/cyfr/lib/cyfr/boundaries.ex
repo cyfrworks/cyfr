@@ -1324,7 +1324,10 @@ defmodule Cyfr.Boundaries do
       authorize_interactive_in_chain: 1,
       authorize_staging: 1
     ],
-    "Sanctum.Consent.Components" => [install!: 1],
+    # The gate's stream admission reads a frame's version and its placement
+    # through the component-facts port, the one reader of a version's
+    # placement Grimoire has, since it names no Compendium.
+    "Sanctum.Consent.Components" => [get_component: 5, install!: 1, tincture_placement: 2],
     # Admission reads the loader's own-head damage through its one
     # definition, the family and the refusal each member answers.
     "Sanctum.Consent.Loader" => [
@@ -2015,7 +2018,7 @@ defmodule Cyfr.Boundaries do
     },
     %{
       behaviour: "Sanctum.Consent.Components",
-      what: "component facts for consent",
+      what: "component facts for consent and the gate's stream admission",
       declared_by: :sanctum,
       implemented_by: "Compendium.ConsentFacts",
       written_at_boot_by: @boot_writer

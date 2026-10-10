@@ -21,6 +21,18 @@ defmodule Grimoire.Streams do
   route runs, opens for a frame's context alone: any other caller is
   refused `forbidden` (`canvas_stream`).
 
+  A stream that declares a shape is what a canvas reads. A frame opens one
+  only when its version reads as a canvas: once every check above has
+  admitted the caller, the gate reads the frame's version from the
+  registry and its placement under today's frame rules, through the
+  component-facts port (`Sanctum.Consent.Components`), since the gate
+  names no domain. Only the placement `canvas` admits; any other
+  placement, a declaration today's rules refuse, a version the registry
+  does not hold and a read that fails each refuse `forbidden`
+  (`canvas_stream`). A context without a frame is no frame's read and is
+  judged by the checks above alone, so a session, an MCP key and a paired
+  device open such a stream as before.
+
   Every open is one decision (`Grimoire.Decisions`) named
   `stream:<name>`, whose request-log row's method is `streams/open`,
   appended under the log's own budget like an operation's. An admitted
@@ -36,6 +48,7 @@ defmodule Grimoire.Streams do
   """
 
   alias Grimoire.{Catalog, Decisions, Error}
+  alias Sanctum.Consent.Components
   alias Sanctum.Context
 
   @method "streams/open"
@@ -83,7 +96,9 @@ defmodule Grimoire.Streams do
   # The checks, in order: the plane and the member's slot before anything
   # is read, the declaration, a filtering stream's frame, the caller, the
   # tenant the grant is scoped to, the holder a holder-bound stream binds
-  # its subject to, the subject, and the credential's remaining life.
+  # its subject to, the subject, the credential's remaining life, and last
+  # a shaped stream's canvas: its registry read is made only for a caller
+  # every other check admitted.
   defp admit(ctx, name, tool, subject, now) do
     with :ok <- external_plane(ctx, tool),
          :ok <- control_plane(),
@@ -93,7 +108,8 @@ defmodule Grimoire.Streams do
          :ok <- tenant(ctx),
          {:ok, subject} <- bound_subject(stream, ctx, subject),
          :ok <- subject(stream, subject),
-         {:ok, deadline} <- deadline(stream, ctx, now) do
+         {:ok, deadline} <- deadline(stream, ctx, now),
+         :ok <- shaped_for_canvas(stream, ctx) do
       {:ok,
        %Prima.StreamGrant{
          topic: stream.topic,
@@ -129,13 +145,40 @@ defmodule Grimoire.Streams do
   defp filtered_for_frame(%Prima.Provider.Stream{}, %Context{frame: %{}}), do: :ok
 
   defp filtered_for_frame(%Prima.Provider.Stream{name: name}, %Context{}) do
-    {:error,
-     %Prima.Refusal{
-       class: :forbidden,
-       reason: :canvas_stream,
-       message: "The stream #{name} is read by a canvas's frame alone (canvas_stream)"
-     }}
+    canvas_stream_refusal(
+      "The stream #{name} is narrowed to its subject only in a frame's delivery, " <>
+        "so it opens for a frame alone (canvas_stream)"
+    )
   end
+
+  # A stream that declares a shape is a canvas's read. For a frame, the
+  # version it opened is read from the registry and its placement asked
+  # under today's frame rules, the verdict the public-profile refusal
+  # reads; only `canvas` admits. A placement that cannot be read is never
+  # taken for a canvas's: a refused declaration, a row the registry does
+  # not hold, an outage and any other answer refuse, so a version installed
+  # before a rules change opens nothing a canvas's frame alone may. One
+  # row read per open, made after every other check admitted the caller.
+  defp shaped_for_canvas(%Prima.Provider.Stream{shape: nil}, _ctx), do: :ok
+  defp shaped_for_canvas(%Prima.Provider.Stream{}, %Context{frame: nil}), do: :ok
+
+  defp shaped_for_canvas(%Prima.Provider.Stream{name: name}, %Context{frame: frame} = ctx) do
+    %{publisher: publisher, name: tincture, version: version} = frame.reference
+
+    with {:ok, row} <- Components.get_component(ctx, tincture, version, publisher, "tincture"),
+         {:ok, "canvas"} <- Components.tincture_placement(ctx, row) do
+      :ok
+    else
+      _not_a_canvas ->
+        canvas_stream_refusal(
+          "The stream #{name} declares a shape, and a frame opens it only when " <>
+            "the frame's version reads as a canvas (canvas_stream)"
+        )
+    end
+  end
+
+  defp canvas_stream_refusal(message),
+    do: {:error, %Prima.Refusal{class: :forbidden, reason: :canvas_stream, message: message}}
 
   # Every grantable topic is the athanor's own; a caller in none has no
   # topic to be granted.

@@ -7,13 +7,17 @@ defmodule Compendium.TinctureTest do
   outside the domain as a typed refusal and inside it as a sentence; the
   one immutable rule map the console and the HTTP adapter read; the
   publish check, a canvas version's included (its module present, no page
-  of its own, and only streams a canvas reads); and the connect-domain
-  grammar, which is the shared manifest contract's.
+  of its own, and only streams a canvas reads), and a stream that declares
+  a shape refused at the registry in any other tincture, which registers
+  nothing; and the connect-domain grammar, which is the shared manifest
+  contract's.
   """
 
-  use ExUnit.Case, async: true
+  # The registry's case points the storage root at a directory of its own
+  # and restores it when the case ends.
+  use ExUnit.Case, async: false
 
-  alias Compendium.Tincture
+  alias Compendium.{ComponentPath, Registry, Tincture}
 
   describe "the entry, through the facade" do
     test "is the manifest's tincture.entry when valid, from a row or a manifest" do
@@ -161,6 +165,58 @@ defmodule Compendium.TinctureTest do
 
         assert message =~ "#{name}: the stream does not take that subject"
       end
+    end
+  end
+
+  describe "the publish check at the registry" do
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+
+      base =
+        Path.join(System.tmp_dir!(), "tincture_publish_#{System.unique_integer([:positive])}")
+
+      prev_base = Application.fetch_env!(:arca, :base_path)
+      Application.put_env(:arca, :base_path, base)
+
+      on_exit(fn ->
+        Application.put_env(:arca, :base_path, prev_base)
+        File.rm_rf!(base)
+      end)
+
+      {:ok, ctx: Sanctum.TestContext.local()}
+    end
+
+    # A floating tincture's version laid in the athanor's tree, declaring
+    # `streams`; answers the unit the registry registers.
+    defp floating!(ctx, name, streams) do
+      manifest = %{
+        "name" => name,
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{"frame" => %{"placement" => "float"}, "streams" => streams}
+      }
+
+      Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, "1.0.0",
+        manifest: manifest,
+        files: [{"index.html", "<!doctype html><title>#{name}</title>"}]
+      )
+
+      ComponentPath.version_dir("tincture", "local", name, "1.0.0")
+    end
+
+    test "refuses a floating tincture declaring feed.results, and registers nothing", %{
+      ctx: ctx
+    } do
+      unit = floating!(ctx, "float-feeds", [%{"name" => "feed.results", "subject" => "btc"}])
+
+      assert {:error, reason} = Registry.register_from_arca(ctx, unit)
+      assert inspect(reason) =~ "feed.results, which declares a shape"
+      assert {:error, :not_found} = Registry.get(ctx, "float-feeds", "1.0.0", "local", "tincture")
+
+      # The same tincture opening a stream that declares no shape registers.
+      unit = floating!(ctx, "float-servers", [%{"name" => "mcp_servers.changes"}])
+      assert {:ok, %{name: "float-servers"}} = Registry.register_from_arca(ctx, unit)
     end
   end
 

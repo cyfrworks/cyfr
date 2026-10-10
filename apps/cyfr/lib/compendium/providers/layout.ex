@@ -26,8 +26,10 @@ defmodule Compendium.Providers.Layout do
 
   Both actions run under the caller's context, for the person the context
   names, in the athanor in focus. The console reads through
-  `Compendium.layout/2`; every edit, the console's or the assistant's,
-  is this tool's `edit` through the gate.
+  `Compendium.layout/2`; every edit is this tool's `edit` through the
+  gate, called for the person by the CLI, the API or a glass paired with
+  them, or from a run by an agent whose policy and grant name it exactly.
+  No tincture declares it, and no other component's grant holds it.
   """
 
   @behaviour Prima.Provider

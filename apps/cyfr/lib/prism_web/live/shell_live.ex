@@ -1663,9 +1663,10 @@ defmodule PrismWeb.ShellLive do
       else: {:noreply, socket}
   end
 
-  # The person's layout was published — by the assistant, a console page or
-  # another session of theirs: read it again. The change is applied only
-  # once that read succeeds (`apply_layout_change/1`).
+  # The person's layout was published — through the layout tool's edit, by
+  # the CLI, the API, a glass paired with them or the assistant: read it
+  # again. The change is applied only once that read succeeds
+  # (`apply_layout_change/1`).
   def handle_info(%Cyfr.Bus.LayoutPublished{user_id: user_id}, socket) do
     if user_id == socket.assigns.context.user_id do
       send_update(PrismWeb.CanvasLive, id: "canvas", reload: true)

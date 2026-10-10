@@ -77,9 +77,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @projection_lists %{"api_key" => :fields, "bundle" => :fields, "oauth" => :scopes}
 
   # The actions a pattern never grants: each binds or ends a standing
-  # conduit for a profile's authority, so it is granted only where it is
-  # named.
-  @exact_only ~w(feed.bind feed.remove)
+  # conduit for a profile's authority, or rearranges the person's screen,
+  # so it is granted only where it is named.
+  @exact_only ~w(feed.bind feed.remove layout.edit)
 
   @spec live_digest(Sanctum.Context.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def live_digest(ctx, source_ref) do
@@ -270,10 +270,10 @@ defmodule Sanctum.Consent.ShapeDerivation do
   rule it now breaks (a storage path spelled other than the door reaches
   it, say). Such a block is refused, never read as asking for nothing.
 
-  Only an agent asks for `#{Enum.join(@exact_only, "` or `")}`, and what a
+  Only an agent asks for `#{Enum.join(@exact_only, "`, `")}`, and what a
   node is is its registered type, read from `source_ref`, never the type
-  its manifest names: a node of any other type asks for neither, whatever
-  its manifest says.
+  its manifest names: a node of any other type asks for none of them,
+  whatever its manifest says.
   """
   @spec declared_caps(map(), String.t()) ::
           {:ok, map()} | {:error, {:corrupt, {:manifest, String.t()}}}
@@ -291,7 +291,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   # A manifest's own `type` is the publisher's word, which the registry
   # does not hold to the type the component was published as; the node's
-  # key is. A key that does not read as an agent's asks for no feed write.
+  # key is. A key that does not read as an agent's asks for no feed write
+  # and no layout edit.
   defp agent_only(caps, source_ref) do
     case Prima.ComponentRef.parse(source_ref) do
       {:ok, %Prima.ComponentRef{type: "agent"}} -> caps
@@ -321,12 +322,13 @@ defmodule Sanctum.Consent.ShapeDerivation do
   stored expanded: a pattern is not a stable capability, so an action
   added upstream later is correctly outside an existing consent.
 
-  Binding or removing a feed (`#{Enum.join(@exact_only, "`, `")}`) is
-  granted only by its exact name, never by a pattern (`*`, `feed.*` or any
-  other), whatever the component's type. A component other than an agent
-  may not name either (`Prima.Manifest.Caps`), so no component's grant
-  holds one; an agent that names one exactly keeps it, under the
-  assistant's always-ask ceiling.
+  Binding or removing a feed and editing the layout
+  (`#{Enum.join(@exact_only, "`, `")}`) are granted only by their exact
+  names, never by a pattern (`*`, `feed.*`, `layout.*` or any other),
+  whatever the component's type. A component other than an agent may not
+  name one (`Prima.Manifest.Caps`), so no other component's grant holds
+  one; an agent that names one exactly keeps it, and its tool policy and
+  the assistant's kind ceiling decide when the person is asked first.
   """
   @spec expand_tools([String.t()]) :: [String.t()]
   def expand_tools(patterns) when is_list(patterns) do

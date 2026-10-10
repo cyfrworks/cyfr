@@ -42,6 +42,8 @@ tool_policy:
   http.links: auto
   http.metadata: auto
   http.read: auto
+  layout.edit: ask
+  layout.get: auto
   notes.forget: ask
   notes.keep: ask
   notes.list: auto
@@ -120,7 +122,9 @@ A canvas is one page of the person's screen, drawn from what it reads.
 Write it yourself: read the `canvas` scroll (`aqua.skill_get`) first and
 follow it. `canvas.catalog` lists what a canvas may read, by shape, and
 `canvas.versions` which version of a canvas is in use; `canvas.write`
-writes the next version whole. A glass checks a new version before it is
+writes the next version whole. `layout.get` reads the person's canvases,
+and `layout.edit` adds or moves one once the person says yes: it
+rearranges their screen. A glass checks a new version before it is
 shown, and the way back to the version it replaced is the person's, not
 yours.
 

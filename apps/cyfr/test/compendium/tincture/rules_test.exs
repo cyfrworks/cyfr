@@ -8,12 +8,13 @@ defmodule Compendium.Tincture.RulesTest do
   token), the entry page's policy derived against the frame facts
   `tests/browser/README.md` records, the templates and the lockfile rule,
   and the declaration grammar — a capability or a placement the rules do
-  not list and a stream no provider declares each refused. A canvas is
+  not list, a stream no provider declares, and a feed's write or the
+  layout's among the system actions each refused. A canvas is
   held tighter: its policy names only its open's
   two paths, its sandbox is scripts alone, each declaration it may not
   make is refused with its own sentence, and it reads only streams that
-  declare a shape, each feed by its name. The facade answers what the
-  module answers.
+  declare a shape, each feed by its name; a stream that declares a shape
+  is a canvas's alone. The facade answers what the module answers.
   """
 
   use ExUnit.Case, async: true
@@ -304,6 +305,34 @@ defmodule Compendium.Tincture.RulesTest do
                    manifest(Map.put(@declared, "actions", ["execution.list", "feed.list"]))
                  )
       end
+    end
+
+    test "layout.edit among the system actions is refused, for every placement and for an app" do
+      sentence = "tincture.actions names layout.edit: a tincture never writes the person's layout"
+
+      for placement <- [nil | Rules.placements()] do
+        frame = if placement, do: %{"placement" => placement}, else: %{}
+        tincture = %{"frame" => frame, "actions" => ["execution.list", "layout.edit"]}
+
+        tincture =
+          if placement == "canvas",
+            do: Map.put(tincture, "canvas", %{"module" => "canvas.js", "toolkit" => 1}),
+            else: tincture
+
+        manifest = %{"type" => "tincture", "tincture" => tincture}
+
+        assert Rules.validate_declaration(manifest) == {:error, {:invalid_tincture, sentence}},
+               inspect(placement)
+
+        assert Compendium.tincture_declaration(manifest) ==
+                 {:error, {:invalid_tincture, sentence}}
+      end
+
+      # Reading the layout is not refused here.
+      assert {:ok, _} =
+               Rules.validate_declaration(
+                 manifest(Map.put(@declared, "actions", ["execution.list", "layout.get"]))
+               )
     end
 
     test "a frame may invoke a component its dependencies.static names, and no other" do
@@ -746,6 +775,69 @@ defmodule Compendium.Tincture.RulesTest do
       end
 
       assert {:error, {:invalid_tincture, _}} = Rules.canvas_module(%{})
+    end
+  end
+
+  describe "a stream that declares a shape" do
+    defp declared(frame, entries) do
+      {:ok, declaration} =
+        Rules.validate_declaration(%{
+          "type" => "tincture",
+          "tincture" => %{"frame" => frame, "streams" => entries}
+        })
+
+      declaration
+    end
+
+    defp shaped_refusal(name),
+      do:
+        {:error,
+         {:invalid_tincture,
+          "tincture.streams names #{name}, which declares a shape: " <>
+            "a stream that declares a shape is read by a canvas alone"}}
+
+    test "is refused in a floating tincture and in an app, whatever its subject" do
+      table = canvas_table()
+
+      for frame <- [%{"placement" => "float"}, %{}],
+          entry <- [
+            %{"name" => "feed.results", "subject" => "btc"},
+            %{"name" => "feed.results", "subject" => "*"},
+            %{"name" => "runs.changes"}
+          ] do
+        declaration = declared(frame, [entry])
+
+        assert Rules.check_streams(declaration, table) == shaped_refusal(entry["name"]),
+               inspect({frame, entry})
+
+        assert Compendium.tincture_check_streams(declaration, table) ==
+                 shaped_refusal(entry["name"])
+      end
+
+      # Beside a stream it may open, the shaped one is still named.
+      mixed =
+        declared(%{"placement" => "float"}, [
+          %{"name" => "executions.deltas", "subject" => "*"},
+          %{"name" => "runs.changes"}
+        ])
+
+      assert Rules.check_streams(mixed, table) == shaped_refusal("runs.changes")
+    end
+
+    test "is a canvas's to declare, and a stream without one stays any tincture's" do
+      table = canvas_table()
+
+      canvas =
+        streams_of([%{"name" => "runs.changes"}, %{"name" => "feed.results", "subject" => "btc"}])
+
+      assert Rules.check_streams(canvas, table) == :ok
+
+      for frame <- [%{"placement" => "float"}, %{}] do
+        assert Rules.check_streams(
+                 declared(frame, [%{"name" => "executions.deltas", "subject" => "*"}]),
+                 table
+               ) == :ok
+      end
     end
   end
 

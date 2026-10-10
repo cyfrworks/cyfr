@@ -11,7 +11,8 @@ defmodule Compendium.Tincture.Rules do
   grammar of its frame, canvas, streams and system actions. A
   canvas (placement `canvas`) is held tighter: its declaration reaches
   nothing of its own and reads only canvas-readable streams
-  (`check_canvas_streams/2`), its frame's sandbox is `allow-scripts` alone
+  (`check_canvas_streams/2`), which no other declaration names
+  (`check_streams/2`), its frame's sandbox is `allow-scripts` alone
   (`canvas_sandbox_tokens/0`), and its one policy, for its host page and
   its workers alike, is `canvas_page_csp/1`.
 
@@ -124,6 +125,9 @@ defmodule Compendium.Tincture.Rules do
 
   # The feed operations no tincture declares as a system action.
   @feed_actions ~w(feed.bind feed.remove feed.press)
+
+  # The layout's write, which no tincture declares as a system action.
+  @layout_actions ~w(layout.edit)
 
   @origin ~r/\Ahttps?:\/\/(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?\z/
   @nonce ~r/\A[A-Za-z0-9+\/_=-]{16,128}\z/
@@ -392,7 +396,8 @@ defmodule Compendium.Tincture.Rules do
   is one of `frame_capabilities/0` and a placement is one of
   `placements/0`. No tincture, whatever its placement, declares
   `feed.bind`, `feed.remove` or `feed.press` among its system actions:
-  those are the person's alone.
+  those are the person's alone. Nor does any declare `layout.edit`: the
+  layout is the person's arrangement, and no tincture writes it.
 
   A canvas (placement `canvas`) declares `tincture.canvas`, which no other
   placement does: its `module`, a relative path with no `..` and no
@@ -404,15 +409,16 @@ defmodule Compendium.Tincture.Rules do
   background and no system action. Each refusal says which.
 
   A manifest that declares none of the blocks answers the empty
-  declaration. Which streams exist is `check_streams/2`'s, and which a
-  canvas may read `check_canvas_streams/2`'s.
+  declaration. Which streams exist, and that only a canvas names one that
+  declares a shape, is `check_streams/2`'s; which a canvas may read is
+  `check_canvas_streams/2`'s.
   """
   @spec validate_declaration(term()) :: {:ok, Tincture.t()} | {:error, refusal()}
   def validate_declaration(manifest) do
     with {:ok, %Tincture{} = declaration} <- Tincture.from_manifest(manifest),
          :ok <- known(declaration.frame.capabilities),
          :ok <- placement(declaration.frame.placement),
-         :ok <- no_feed_action(declaration.actions),
+         :ok <- no_persons_action(declaration.actions),
          :ok <- canvas(declaration, manifest) do
       {:ok, declaration}
     end
@@ -463,13 +469,27 @@ defmodule Compendium.Tincture.Rules do
   that stream takes: none for a stream without a subject grammar or one
   bound to its holder (`bind: :holder`), whose subject the gate supplies;
   `"*"` or a literal its grammar admits for any other.
+
+  A stream whose entry carries a `shape` is what a canvas reads
+  (`check_canvas_streams/2`), and a canvas alone declares one: a
+  declaration whose placement is not `canvas` naming such a stream is
+  refused, whatever its subject.
   """
   @spec check_streams(Tincture.t(), [Prima.Provider.Stream.t()]) :: :ok | {:error, refusal()}
-  def check_streams(%Tincture{streams: declared}, streams) when is_list(streams) do
+  def check_streams(%Tincture{streams: declared} = declaration, streams) when is_list(streams) do
+    canvas? = declaration.frame.placement == "canvas"
+
     Enum.reduce_while(declared, :ok, fn %Tincture.Stream{name: name, subject: subject}, :ok ->
       case Prima.Provider.fetch_stream(streams, name) do
         {:error, :undeclared_stream} ->
           {:halt, refuse("tincture.streams names #{name}, which no provider declares")}
+
+        {:ok, %Prima.Provider.Stream{shape: shape}} when not is_nil(shape) and not canvas? ->
+          {:halt,
+           refuse(
+             "tincture.streams names #{name}, which declares a shape: " <>
+               "a stream that declares a shape is read by a canvas alone"
+           )}
 
         {:ok, stream} ->
           if subject_taken?(stream, subject),
@@ -691,18 +711,24 @@ defmodule Compendium.Tincture.Rules do
   defp present?(_value), do: true
 
   # Binding, removing or pressing a feed is the person's alone: a bind or a
-  # removal they approve, a press of a control Prism draws. A tincture's
-  # frame reaches none of them, whatever its placement.
-  defp no_feed_action(actions) do
-    case Enum.find(actions, &(&1 in @feed_actions)) do
+  # removal they approve, a press of a control Prism draws. The layout is
+  # the person's arrangement of their screen, and Prism alone places frames
+  # from it: a tincture that could write it could place itself, float
+  # itself or any other tincture, or take a canvas off the person's screen.
+  # A tincture's frame reaches none of them, whatever its placement.
+  defp no_persons_action(actions) do
+    case Enum.find(actions, &(&1 in @feed_actions or &1 in @layout_actions)) do
       nil ->
         :ok
 
-      action ->
+      action when action in @feed_actions ->
         refuse(
           "tincture.actions names #{action}: a tincture never binds, removes or presses a " <>
             "feed; the person does"
         )
+
+      action ->
+        refuse("tincture.actions names #{action}: a tincture never writes the person's layout")
     end
   end
 

@@ -237,6 +237,39 @@ defmodule Aqua.SeedContractTest do
     assert seed_body("aqua") =~ "feed.list"
   end
 
+  # The layout is the person's arrangement: the soul reads it on its own
+  # and asks before it edits it, since an edit rearranges the person's
+  # screen. The layout's write is an agent's alone and only by its exact
+  # name, so the soul's own grant names both, and no role names either.
+  test "the soul reads the layout on its own and asks to edit it" do
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
+
+    assert Map.take(soul.tool_policy, ~w(layout.get layout.edit)) == %{
+             "layout.get" => "auto",
+             "layout.edit" => "ask"
+           }
+
+    roles =
+      for {name, key, _mode} <- seed_policy(),
+          name != Compendium.AquaPath.soul_name(),
+          String.starts_with?(key, "layout."),
+          do: "#{name}: #{key}"
+
+    assert roles == []
+
+    soul_tools =
+      soul
+      |> Compendium.AgentSource.manifest(MapSet.new(seed_agents(), & &1.name))
+      |> Prima.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
+      |> Map.fetch!(:tools)
+
+    assert ~w(layout.edit layout.get) -- soul_tools == []
+    assert ~w(layout.edit layout.get) -- granted() == []
+
+    body = seed_body("aqua")
+    assert body =~ "layout.get" and body =~ "layout.edit"
+  end
+
   # ---------------------------------------------------------------------------
 
   defp problems(tool, action, granted) do

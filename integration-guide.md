@@ -1154,9 +1154,9 @@ A person's layout is their canvases in order and, over each, per posture (`hand`
 | Action | Key args | What it does |
 |--------|----------|--------------|
 | `get` | `posture` (optional, `hand` or `desk`) | The caller's document, its `revision` and `digest`, and `shipped_default`: a person who never arranged one gets the shipped layout, one canvas `home` on `tincture:local.canvas`, at revision 0. With a `posture`, also that posture's `arrangement`: every canvas in order, each with the apps and floating tinctures placed over it |
-| `edit` | `document` (the whole document), `revision` (the one `get` answered) | Publish the document, held to its shape, at that revision. A layout published since refuses the edit as a `conflict`, merging nothing; otherwise it answers the new `revision` and `digest`, and every shell the person has open reads the layout again |
+| `edit` | `document` (the whole document), `revision` (the one `get` answered) | Publish the document, held to its shape, at that revision. A layout published since refuses the edit as a `conflict`, merging nothing; otherwise it answers the new `revision` and `digest`. Every shell the person has open reads the layout again when the edit is announced, or on its next posture change or reconnect when the announcement does not go out |
 
-A layout is a person's: a caller that is not one is refused as `invalid_argument`.
+A layout is a person's: a caller that is not one is refused as `invalid_argument`. `edit` is reached by the CLI, the API and a glass paired with the person, for the person, and from a run by an agent whose policy and grant name it exactly. No tincture declares it among its actions, a manifest of any type but an agent's that names it in `caps.tools` is refused, and no pattern (`*`, `layout.*`) grants it, so no other component's grant holds it.
 
 ### Feeds (`feed` tool)
 
@@ -1171,11 +1171,11 @@ A feed is one operation of an installed catalyst or formula, run with fixed argu
 
 A canvas's code has no verb that binds, changes or refreshes a feed: it reads feeds, and from a canvas only the person's press of a declared control, which the shell forwards, reaches `press`; the CLI and the API reach `press` as any external operation.
 
-Two streams carry what a canvas reads. Each declares a shape, which `canvas.catalog` lists, and refreshes: a subscriber is handed the current state first, each item marked `"refresh": true`, and then the live events. An event published while the current state is read arrives twice, so a subscriber deduplicates by `revision` for a feed and by `{execution_id, kind}` for a run.
+Two streams carry what a canvas reads. Each declares a shape, which `canvas.catalog` lists, and only a canvas declares a stream that declares a shape: publish refuses one in any other tincture's declaration, and an open from a frame whose version is not a canvas is refused `forbidden` (`canvas_stream`). Each refreshes: a subscriber is handed the current state first, each item marked `"refresh": true`, and then the live events. An event published while the current state is read arrives twice, so a subscriber deduplicates by `revision` for a feed and by `{execution_id, kind}` for a run.
 
 | Stream | Subject | Each event |
 |--------|---------|------------|
-| `feed.results` | A feed's name. It selects which payloads are delivered on the athanor's one feeds topic, and the stream opens only on a frame's data route | `binding`, `feed`, `revision`, `at`, `result`, `label`, `actions` (`name`, `label`): an accepted result, published only after it was kept. Never the feed's arguments. The refresh is the feed's last accepted result |
+| `feed.results` | A feed's name. It selects which payloads are delivered on the athanor's one feeds topic, and only a canvas's frame opens the stream | `binding`, `feed`, `revision`, `at`, `result`, `label`, `actions` (`name`, `label`): an accepted result, published only after it was kept. Never the feed's arguments. The refresh is the feed's last accepted result |
 | `runs.changes` | — | `kind` (`started`, `completed`, `failed`, `cancelled`), `execution_id`, `parent_execution_id`, `reference`, `component_type`, `duration_ms`, `error`. The refresh is the athanor's 20 newest runs |
 
 ---

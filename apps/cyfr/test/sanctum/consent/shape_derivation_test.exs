@@ -285,10 +285,66 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     catalog = ShapeDerivation.all_tool_actions()
 
     assert ShapeDerivation.expand_tools(["*"]) ==
-             Enum.sort(Enum.uniq(catalog -- ~w(feed.bind feed.remove)))
+             Enum.sort(Enum.uniq(catalog -- ~w(feed.bind feed.remove layout.edit)))
 
     assert ShapeDerivation.expand_tools(["component.*"]) ==
              Enum.sort(Enum.filter(catalog, &String.starts_with?(&1, "component.")))
+  end
+
+  describe "the layout's write" do
+    test "is never granted by a pattern, and is by its exact name" do
+      catalog = ShapeDerivation.all_tool_actions()
+      assert "layout.edit" in catalog and "layout.get" in catalog
+
+      for patterns <- [["*"], ["layout.*"], ["layout.*", "*", "component.*"]] do
+        refute "layout.edit" in ShapeDerivation.expand_tools(patterns), inspect(patterns)
+      end
+
+      # Reading the layout follows its pattern as any tool's action does.
+      assert ShapeDerivation.expand_tools(["layout.*"]) == ["layout.get"]
+
+      # Named exactly, it is kept, beside a pattern too.
+      assert ShapeDerivation.expand_tools(["layout.edit"]) == ["layout.edit"]
+
+      assert ShapeDerivation.expand_tools(["layout.*", "layout.edit"]) ==
+               ["layout.edit", "layout.get"]
+    end
+
+    test "is asked for by no node key but an agent's, whatever its stored manifest names", %{
+      ctx: ctx
+    } do
+      # A manifest claiming to be an agent's, as a row stored before the
+      # publish held a manifest's type would keep it.
+      stored = %{"type" => "agent", "caps" => %{"tools" => ["layout.edit", "layout.get"]}}
+
+      for node <- ~w(catalyst:local.arranger reagent:local.arranger formula:local.arranger) do
+        assert {:ok, %{tools: ["layout.get"]}} = ShapeDerivation.declared_caps(stored, node),
+               node
+
+        assert {:ok, %{"tools" => ["layout.get"]}, _limits} =
+                 Sanctum.Consent.BlobBuilder.node_grant(ctx, node, stored)
+      end
+
+      # An agent's key keeps it, named exactly; a pattern grants it to none.
+      assert {:ok, %{tools: ["layout.edit", "layout.get"]}} =
+               ShapeDerivation.declared_caps(stored, "agent:local.arranger")
+
+      assert {:ok, %{"tools" => ["layout.edit", "layout.get"]}, _limits} =
+               Sanctum.Consent.BlobBuilder.node_grant(ctx, "agent:local.arranger", stored)
+
+      for {node, type} <- [
+            {"formula:local.arranger", "formula"},
+            {"agent:local.arranger", "agent"}
+          ],
+          tools <- [["*"], ["layout.*"]] do
+        manifest = %{"type" => type, "caps" => %{"tools" => tools}}
+
+        assert {:ok, %{"tools" => granted}, _limits} =
+                 Sanctum.Consent.BlobBuilder.node_grant(ctx, node, manifest)
+
+        refute "layout.edit" in granted, "#{node} #{inspect(tools)}"
+      end
+    end
   end
 
   describe "a feed write" do

@@ -7,17 +7,79 @@ defmodule Grimoire.StreamsTest do
   once, and answered with a grant bounded by the stream's declaration and
   the caller's credential; an undeclared stream, a subject its grammar
   does not admit, a credential that has ended and every caller the gate
-  refuses an operation are refused, each as one decision. The table the
-  providers declare is the only source, and the gate names no bus.
+  refuses an operation are refused, each as one decision. A filtering
+  stream opens for a frame alone, and a stream that declares a shape opens
+  for a frame only when the frame's version reads as a canvas: one
+  registry read through the component-facts port, made after every check
+  of the caller, and any other answer refuses. The table the providers
+  declare is the only source, and the gate names no bus.
   """
 
-  # Plants providers into the operation table and flips the member's slot.
+  # Plants providers into the operation table, flips the member's slot
+  # and installs component facts of its own.
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
 
   alias Grimoire.Catalog
+  alias Sanctum.Consent.Components
   alias Sanctum.Context
+
+  # The component domain's facts, each registry row read reported to the
+  # process that made it.
+  defmodule CountedFacts do
+    @moduledoc false
+    @behaviour Sanctum.Consent.Components
+
+    @impl true
+    def get_component(ctx, name, version, publisher, type) do
+      send(self(), {:component_read, {name, version, publisher, type}})
+      Compendium.ConsentFacts.get_component(ctx, name, version, publisher, type)
+    end
+
+    @impl true
+    defdelegate resolve(ctx, row), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate resolve_verified(ctx, row), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate agent_rows(ctx), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate shipped_nodes(ctx, rows), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate tincture_placement(ctx, row), to: Compendium.ConsentFacts
+  end
+
+  # The component domain's facts, but for the optional placement, which
+  # this implementation does not answer.
+  defmodule FactsWithoutPlacement do
+    @moduledoc false
+    @behaviour Sanctum.Consent.Components
+
+    @impl true
+    defdelegate resolve(ctx, row), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate resolve_verified(ctx, row), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate get_component(ctx, name, version, publisher, type), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate agent_rows(ctx), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate shipped_nodes(ctx, rows), to: Compendium.ConsentFacts
+
+    @impl true
+    defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
+  end
 
   defmodule Probe do
     @moduledoc false
@@ -134,6 +196,85 @@ defmodule Grimoire.StreamsTest do
     assert decision.refusal_class == Atom.to_string(class)
     assert decision.plane == "external"
     decision
+  end
+
+  # A frame's context, as the frame-credential path establishes one, for
+  # the version `name` 1.0.0 of the local publisher.
+  defp framed(ctx, name) do
+    %{
+      ctx
+      | auth_method: :tincture,
+        origin: :interactive,
+        frame: %{
+          id: "frc_streams",
+          frame_id: "frm_streams",
+          reference: %{publisher: "local", name: name, version: "1.0.0"},
+          version_digest: "sha256:" <> String.duplicate("a", 64),
+          grant_revision: 0,
+          mode: :live
+        }
+    }
+  end
+
+  # A tincture version written as the registry holds one, past the publish
+  # check, as a version installed before a rules change stands.
+  defp tincture_row!(ctx, name, tincture) do
+    manifest = %{
+      "name" => name,
+      "type" => "tincture",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "tincture" => tincture
+    }
+
+    digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
+    {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, _} =
+      Arca.ComponentStorage.put_component(Context.actor(ctx), %{
+        id: "cmp_#{name}_#{System.unique_integer([:positive])}",
+        name: name,
+        version: "1.0.0",
+        component_type: "tincture",
+        description: name,
+        tags: "[]",
+        digest: digest,
+        release_digest: release_digest,
+        size: 100,
+        exports: "[]",
+        manifest: Jason.encode!(manifest),
+        publisher: "local",
+        publisher_id: "local|local|testns",
+        source: Compendium.Source.filesystem(),
+        signature_verified: false,
+        inserted_at: now,
+        updated_at: now
+      })
+
+    name
+  end
+
+  # A canvas reading both canvas-readable streams, one feed by its name.
+  defp canvas_row!(ctx, name) do
+    tincture_row!(ctx, name, %{
+      "frame" => %{"placement" => "canvas"},
+      "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+      "streams" => [%{"name" => "runs.changes"}, %{"name" => "feed.results", "subject" => "btc"}]
+    })
+  end
+
+  # Runs `fun` with `facts` as the component-facts port, restoring the
+  # installed one however `fun` ends.
+  defp with_facts(facts, fun) do
+    real = Components.impl!()
+    Components.install!(facts)
+
+    try do
+      fun.()
+    after
+      Components.install!(real)
+    end
   end
 
   describe "the table" do
@@ -278,26 +419,13 @@ defmodule Grimoire.StreamsTest do
   end
 
   describe "a filtering stream" do
-    # A frame's context, as the frame-credential path establishes one.
-    defp framed(ctx) do
-      %{
-        ctx
-        | auth_method: :tincture,
-          origin: :interactive,
-          frame: %{
-            id: "frc_streams",
-            frame_id: "frm_streams",
-            reference: %{publisher: "local", name: "canvas", version: "0.1.0"},
-            version_digest: "sha256:" <> String.duplicate("a", 64),
-            grant_revision: 0,
-            mode: :live
-          }
-      }
-    end
+    test "opens for a canvas's frame, its subject on the grant and the feeds topic its key", %{
+      ctx: ctx
+    } do
+      canvas = canvas_row!(ctx, "home-canvas")
 
-    test "opens for a frame, its subject on the grant and the feeds topic its key", %{ctx: ctx} do
       assert {:ok, %Prima.StreamGrant{} = grant} =
-               Grimoire.open_stream(framed(ctx), "feed.results", "btc")
+               Grimoire.open_stream(framed(ctx, canvas), "feed.results", "btc")
 
       assert grant.topic == :feeds
       assert grant.subject == "btc"
@@ -337,13 +465,162 @@ defmodule Grimoire.StreamsTest do
         assert message =~ "(canvas_stream)"
       end
 
-      # Each refusal is one decision, and a stream that does not filter
-      # still opens for a session.
+      # Each refusal is one decision, and a stream that declares a shape
+      # but does not filter still opens for each of them, with no registry
+      # read: a context without a frame is no frame's to judge.
       assert length(decisions(ctx)) == 3
       assert Enum.all?(decisions(ctx), &(&1.refusal_class == "forbidden"))
 
+      with_facts(CountedFacts, fn ->
+        for {who, caller} <- callers do
+          assert {:ok, %{topic: :executions}} = Grimoire.open_stream(caller, "runs.changes"),
+                 "#{who} was refused runs.changes"
+        end
+      end)
+
+      refute_received {:component_read, _}
+    end
+  end
+
+  describe "a stream that declares a shape" do
+    test "opens for a canvas's frame, both streams, with one registry read each", %{ctx: ctx} do
+      canvas = canvas_row!(ctx, "home-canvas")
+
+      with_facts(CountedFacts, fn ->
+        assert {:ok, %{topic: :feeds, subject: "btc"}} =
+                 Grimoire.open_stream(framed(ctx, canvas), "feed.results", "btc")
+
+        assert_received {:component_read, {"home-canvas", "1.0.0", "local", "tincture"}}
+        refute_received {:component_read, _}
+
+        assert {:ok, %{topic: :executions}} =
+                 Grimoire.open_stream(framed(ctx, canvas), "runs.changes")
+
+        assert_received {:component_read, {"home-canvas", "1.0.0", "local", "tincture"}}
+        refute_received {:component_read, _}
+      end)
+
+      assert [%{admission: "admitted"}, %{admission: "admitted"}] = decisions(ctx)
+    end
+
+    test "is refused for a frame whose version is a floating tincture, one decision each", %{
+      ctx: ctx
+    } do
+      # Installed straight in the registry, so the rules never ran on it.
+      floating =
+        tincture_row!(ctx, "float-feeds", %{
+          "frame" => %{"placement" => "float"},
+          "entry" => "index.html",
+          "streams" => [
+            %{"name" => "feed.results", "subject" => "btc"},
+            %{"name" => "runs.changes"}
+          ]
+        })
+
+      # Its placement reads, and is not a canvas.
+      {:ok, row} = Components.get_component(ctx, floating, "1.0.0", "local", "tincture")
+      assert Components.tincture_placement(ctx, row) == {:ok, "float"}
+
+      for {name, subject} <- [{"feed.results", "btc"}, {"runs.changes", nil}] do
+        assert {:error,
+                %Prima.Refusal{
+                  class: :forbidden,
+                  reason: :canvas_stream,
+                  stage: :admission,
+                  message: message
+                }} = Grimoire.open_stream(framed(ctx, floating), name, subject),
+               "a floating tincture's frame opened #{name}"
+
+        assert message ==
+                 "The stream #{name} declares a shape, and a frame opens it only when " <>
+                   "the frame's version reads as a canvas (canvas_stream)"
+      end
+
+      assert [refused, refused_too] = decisions(ctx)
+
+      for decision <- [refused, refused_too] do
+        assert decision.admission == "refused"
+        assert decision.refusal_class == "forbidden"
+        assert decision.reason =~ "(canvas_stream)"
+      end
+
+      assert Enum.sort([refused.tool, refused_too.tool]) ==
+               ["stream:feed.results", "stream:runs.changes"]
+    end
+
+    test "is refused for a frame whose reference names no row, or a declaration the rules refuse",
+         %{ctx: ctx} do
+      # Written past the publish check: a placement the rules no longer
+      # name is no canvas, whatever it once was.
+      refused =
+        tincture_row!(ctx, "desk-dash", %{
+          "frame" => %{"placement" => "desktop"},
+          "entry" => "index.html",
+          "streams" => [%{"name" => "runs.changes"}]
+        })
+
+      {:ok, row} = Components.get_component(ctx, refused, "1.0.0", "local", "tincture")
+      assert Components.tincture_placement(ctx, row) == {:error, :refused}
+
+      assert {:error, :not_found} =
+               Components.get_component(ctx, "nobody-installed", "1.0.0", "local", "tincture")
+
+      for name <- ["nobody-installed", refused],
+          {stream, subject} <- [{"feed.results", "btc"}, {"runs.changes", nil}] do
+        assert {:error, %Prima.Refusal{class: :forbidden, reason: :canvas_stream}} =
+                 Grimoire.open_stream(framed(ctx, name), stream, subject),
+               "#{name}'s frame opened #{stream}"
+      end
+
+      assert length(decisions(ctx)) == 4
+      assert Enum.all?(decisions(ctx), &(&1.admission == "refused"))
+    end
+
+    test "is refused while the frame's placement cannot be read", %{ctx: ctx} do
+      canvas = canvas_row!(ctx, "home-canvas")
+
+      with_facts(FactsWithoutPlacement, fn ->
+        assert {:error, %Prima.Refusal{class: :forbidden, reason: :canvas_stream}} =
+                 Grimoire.open_stream(framed(ctx, canvas), "runs.changes")
+      end)
+
+      # With the placement answered again, the same frame opens it.
       assert {:ok, %{topic: :executions}} =
-               Grimoire.open_stream(callers[:session], "runs.changes")
+               Grimoire.open_stream(framed(ctx, canvas), "runs.changes")
+    end
+
+    test "reads no row for a caller refused by an earlier check", %{ctx: ctx} do
+      canvas = canvas_row!(ctx, "home-canvas")
+      frame = framed(ctx, canvas)
+
+      refused = [
+        guest: {Context.enter_guest(frame), :forbidden},
+        signed_out: {%{frame | authenticated: false}, :unauthenticated},
+        no_athanor: {%{frame | athanor_id: nil}, :unauthenticated},
+        ended:
+          {%{frame | credential_deadline: DateTime.add(DateTime.utc_now(), -1)}, :unauthenticated}
+      ]
+
+      with_facts(CountedFacts, fn ->
+        for {who, {caller, class}} <- refused do
+          assert {:error, %Prima.Refusal{class: ^class}} =
+                   Grimoire.open_stream(caller, "runs.changes"),
+                 "#{who} was not refused"
+        end
+
+        # A subject the stream does not take is refused before the read too.
+        assert {:error, %Prima.Refusal{class: :invalid_argument}} =
+                 Grimoire.open_stream(frame, "feed.results", "BTC:usd")
+
+        Arca.ControlPlane.record(:lost)
+
+        assert {:error, %Prima.Refusal{class: :not_owner}} =
+                 Grimoire.open_stream(frame, "runs.changes")
+
+        Arca.ControlPlane.record(:unclaimed)
+      end)
+
+      refute_received {:component_read, _}
     end
   end
 

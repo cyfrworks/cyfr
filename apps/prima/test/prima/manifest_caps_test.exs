@@ -175,6 +175,34 @@ defmodule Prima.ManifestCapsTest do
     end
   end
 
+  describe "the layout's write in the ask" do
+    test "is refused at declaration for a catalyst, a reagent, a formula and every other type" do
+      for type <- ["catalyst", "reagent", "formula", "tincture", nil] do
+        manifest = asking_tools(type, ["execution.run", "layout.edit"])
+
+        assert Caps.validate(manifest, &guest_path?/1) ==
+                 {:error, {:invalid_caps, {:agent_only_tool, "layout.edit"}}},
+               "#{inspect(type)} named layout.edit"
+
+        assert Manifest.validate(manifest, &guest_path?/1) ==
+                 {:error,
+                  {:invalid_manifest, [{:invalid_caps, {:agent_only_tool, "layout.edit"}}]}}
+
+        assert Caps.from_manifest(manifest, &guest_path?/1) == nil
+      end
+    end
+
+    test "is an agent's to name; reading the layout and a pattern are not refused here" do
+      assert :ok = Caps.validate(asking_tools("agent", ["layout.edit"]), &guest_path?/1)
+
+      for type <- ["catalyst", "reagent", "formula", "agent"],
+          tools <- [["layout.get"], ["layout.*"], ["*"]] do
+        assert :ok = Caps.validate(asking_tools(type, tools), &guest_path?/1),
+               "#{type} #{inspect(tools)}"
+      end
+    end
+  end
+
   describe "canonical_storage_path?/1" do
     test "is the door's spelling, and the wildcard" do
       for path <- ["data/notes/", "data/report.md", "data", "*"],
