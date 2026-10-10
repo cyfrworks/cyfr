@@ -118,9 +118,13 @@ defmodule Locus.Keeper do
 
   A spawn's argv and environment, its stdin, control and relay bytes, the
   frames a relay sent that are not yet whole and the attach tokens are
-  shown by no status and no crash report beyond their size. A call that
-  fails answers what failed, by its kind alone: the reason an exit
-  carries holds the request, and a spawn's request holds its environment.
+  shown by no status and no crash report beyond their size. A crash
+  report names the reason this server stopped by its kind alone, since a
+  reason may carry a frame, a key or an environment value: an atom as
+  itself, `{:shutdown, _}` as `:shutdown`, an exception as its module and
+  anything else as `:crashed`. A call that fails answers what failed, by
+  its kind alone: the reason an exit carries holds the request, and a
+  spawn's request holds its environment.
 
   When the channel closes, cyfr-locus has already retired every spawn and
   is exiting; this server stops, and every role it serves with it.
@@ -973,7 +977,8 @@ defmodule Locus.Keeper do
   # what its owner wrote and what it answered: an attempt's opened keys, a
   # tool's arguments and results among them. No status or crash report
   # shows more of any than its size, and the debug log, which holds them,
-  # is left out.
+  # is left out. A stop reason may hold any of them, so a crash report
+  # names it by its kind alone.
   @impl GenServer
   def format_status(status) do
     Map.new(status, fn
@@ -988,6 +993,9 @@ defmodule Locus.Keeper do
       {:message, message} ->
         {:message, redact_message(message)}
 
+      {:reason, reason} ->
+        {:reason, reason_kind(reason)}
+
       {:log, _log} ->
         {:log, []}
 
@@ -995,6 +1003,13 @@ defmodule Locus.Keeper do
         other
     end)
   end
+
+  # What stopped this server, by its kind alone: an exception as its
+  # module, with or without its stacktrace, and any other reason as
+  # `down_kind/1` names it.
+  defp reason_kind({%{__exception__: true, __struct__: module}, _stack}), do: module
+  defp reason_kind(%{__exception__: true, __struct__: module}), do: module
+  defp reason_kind(reason), do: down_kind(reason)
 
   defp redact(entry) do
     %{

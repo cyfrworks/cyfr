@@ -23,7 +23,8 @@ defmodule Locus.KeeperTest do
   `KEEPER_CHANNEL` names. No credential leaves the client: a runner's
   held assign, a frame not yet whole and every message carrying a
   payload show no key or environment value in a status or a crash
-  report, and a call to a client that is gone, or a run whose client
+  report, a crash report names the reason the client stopped by its kind
+  alone, and a call to a client that is gone, or a run whose client
   crashed, answers the failure by its kind alone. A runner's relay that
   stops reading is closed once a write to it waits out the 5 s bound, and
   its owner hears its control channel and relay closed. The spawns'
@@ -32,6 +33,8 @@ defmodule Locus.KeeperTest do
   """
 
   use ExUnit.Case, async: false
+
+  import ExUnit.CaptureLog
 
   alias Locus.Keeper
   alias Locus.Runtime.Test.ScriptedHost
@@ -509,10 +512,42 @@ defmodule Locus.KeeperTest do
         end)
 
       assert %{"type" => "spawn"} = request(c.peer)
-      :sys.terminate(c.client, {:crashed_holding, p.secret, p.assign})
+
+      # The termination is asynchronous, and the client writes its crash
+      # report before it exits, so the report is whole once it is down.
+      log =
+        capture_log(fn ->
+          down = Process.monitor(c.client)
+          :sys.terminate(c.client, {:crashed_holding, p.secret, p.assign})
+          assert_receive {:DOWN, ^down, :process, _, _}, 5_000
+        end)
 
       assert {:error, {:spawn_failed, {:keeper_down, :crashed}}} = answer = Task.await(task)
       assert clean?(p, answer)
+
+      assert log =~ "#{inspect(c.name)} terminating"
+      assert clean?(p, log), "the crash report shows its stop reason's payload:\n#{log}"
+      assert log =~ "** (stop) :crashed"
+    end
+
+    test "a crash report names the reason the client stopped by its kind alone" do
+      p = plant()
+      raised = %RuntimeError{message: p.secret <> p.assign}
+      stack = [{Keeper, :handle_info, [{:control, make_ref(), p.assign}, %{}], []}]
+
+      for {reason, kind} <- [
+            {:normal, :normal},
+            {:killed, :killed},
+            {{:shutdown, {:held, p.secret, p.assign}}, :shutdown},
+            {{raised, stack}, RuntimeError},
+            {raised, RuntimeError},
+            {{:crashed_holding, p.secret, p.assign}, :crashed},
+            {{p.secret, stack}, :crashed},
+            {p.assign, :crashed}
+          ] do
+        assert Keeper.format_status(%{reason: reason}) == %{reason: kind},
+               "#{inspect(kind)}'s form is not named by its kind"
+      end
     end
   end
 
