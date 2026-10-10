@@ -33,6 +33,7 @@ func TestIsManaged(t *testing.T) {
 		"aqua/aqua.md",
 		"aqua/roles/builder.md",
 		"aqua/roles/web.md",
+		"aqua/skills/canvas/SKILL.md",
 		"aqua/skills/capability-acquisition/SKILL.md",
 		"aqua/skills/capability-acquisition/references/notes.md",
 	}

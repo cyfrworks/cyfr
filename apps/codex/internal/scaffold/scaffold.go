@@ -64,6 +64,7 @@ var shippedRoles = map[string]bool{
 }
 
 var shippedScrolls = map[string]bool{
+	"canvas":                 true,
 	"capability-acquisition": true,
 }
 
