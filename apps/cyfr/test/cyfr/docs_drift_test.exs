@@ -1375,6 +1375,47 @@ defmodule Cyfr.DocsDriftTest do
     assert_action_table("### Canvases (`canvas` tool)", "canvas")
   end
 
+  # A feed's press is an external operation and nothing narrower: the shell
+  # sends a canvas's control to it, and the CLI and the API reach it as any
+  # external operation, never from a chain. So no guide says that only a
+  # person's press, or only Prism, reaches it, and the integration guide's
+  # press row says who does.
+  test "a feed's press is an external operation" do
+    %Prima.Operation{planes: planes} = Map.fetch!(operations("feed"), "press")
+
+    assert planes == [:external],
+           "feed.press declares the planes #{inspect(planes)}; the guides say it is external " <>
+             "only, so either declare it so or say in both guides who reaches it"
+
+    retired = [
+      "a feed's actions run only from the person's press",
+      "External only: Prism calls it",
+      "and only a person's press"
+    ]
+
+    for guide <- ["tincture-guide.md", "integration-guide.md"], phrase <- retired do
+      refute File.read!(Path.join(@repo_root, guide)) =~ phrase,
+             "#{guide} says #{inspect(phrase)}, but any external caller reaches feed.press: " <>
+               "say that from a canvas only the person's press reaches it, and the CLI and " <>
+               "the API reach it as any external operation"
+    end
+
+    press =
+      for [action | _] = row <- guide_table("### Feeds (`feed` tool)"),
+          backquoted(action) == ["press"],
+          do: row
+
+    assert File.read!(Path.join(@repo_root, "tincture-guide.md")) =~
+             "From a canvas, a feed's action runs only on the person's press of a control",
+           "tincture-guide.md does not say that from a canvas only the person's press runs " <>
+             "a feed's action"
+
+    assert [row] = press, "integration-guide.md's feed table has no single `press` row"
+
+    assert List.last(row) =~ "the CLI and the API reach it",
+           "integration-guide.md's `press` row does not say the CLI and the API reach it"
+  end
+
   # ==========================================================================
   # integration-guide's typed-errors table and the paragraph under it
   #
@@ -1704,6 +1745,99 @@ defmodule Cyfr.DocsDriftTest do
 
     assert methods == Enum.sort(wire),
            "the SDK's calls #{inspect(methods)} are not the wire's #{inspect(Enum.sort(wire))}"
+  end
+
+  # The elements a canvas's tree may name are the toolkit's `ELEMENTS`
+  # (`elements.js`), which its own tests hold to the grammar (`tree.js`).
+  # The guide lists them, one per line and in that order, in a block the
+  # Artisan role does not carry.
+  test "the tincture guide's canvas elements are the toolkit's" do
+    source = File.read!(Path.join(@repo_root, "apps/cyfr/assets/js/toolkit/elements.js"))
+
+    [_, list] =
+      Regex.run(~r/^export const ELEMENTS = Object\.freeze\(\[(.*?)\]\)/ms, source) ||
+        flunk("elements.js declares no `export const ELEMENTS = Object.freeze([…])`")
+
+    elements = ~r/"([^"]+)"/ |> Regex.scan(list, capture: :all_but_first) |> List.flatten()
+
+    assert elements != [], "elements.js's ELEMENTS names no element"
+
+    # Every entry is a double-quoted name: anything else in the list would
+    # be an element this reading drops, and the guide would pass without it.
+    assert Regex.replace(~r/"[^"]+"|,|\s/, list, "") == "",
+           "elements.js's ELEMENTS holds something other than double-quoted names"
+
+    expected = Enum.map_join(elements, "\n", &"- `#{&1}`")
+    guide = File.read!(Path.join(@repo_root, "tincture-guide.md"))
+
+    assert tincture_block(guide, "canvas-elements") == expected,
+           """
+           tincture-guide.md's canvas-elements list is not the toolkit's ELEMENTS (or it has no block). It reads:
+
+           <!-- tincture:canvas-elements -->
+           #{expected}
+           <!-- /tincture:canvas-elements -->
+           """
+  end
+
+  # A layout is published only through the layout tool: `layout.edit`
+  # (`Compendium.Providers.Layout`) is `Arca.Layouts.publish/4`'s one
+  # caller, and every shell, the canvas and safe mode only read the layout.
+  # The tincture guide names that tool as how a layout is published, and no
+  # shell or console page as a writer.
+  test "a layout is published only through the layout tool" do
+    publisher = "apps/cyfr/lib/compendium/providers/layout.ex"
+
+    callers =
+      for path <- Path.wildcard(Path.join(@repo_root, "apps/*/lib/**/*.ex")),
+          File.read!(path) =~
+            ~r/\bLayouts\.publish\b|alias Arca\.Layouts,\s*as:|import Arca\.Layouts\b/,
+          do: Path.relative_to(path, @repo_root)
+
+    assert callers == [publisher],
+           "Arca.Layouts.publish is reached from #{inspect(callers)}, not from #{publisher} " <>
+             "alone: publish a layout only through the layout tool's edit"
+
+    guide = File.read!(Path.join(@repo_root, "tincture-guide.md"))
+
+    [paragraph] =
+      Regex.run(~r/^The person's \*\*layout\*\* .*$/m, guide) ||
+        flunk("tincture-guide.md has no paragraph beginning \"The person's **layout**\"")
+
+    assert paragraph =~ "A layout is published only through the `layout` tool's `edit`",
+           "tincture-guide.md's layout paragraph does not say a layout is published only " <>
+             "through the `layout` tool's `edit`"
+
+    refute paragraph =~ ~r/another shell|by the console/,
+           "tincture-guide.md's layout paragraph names a shell or the console as a layout's " <>
+             "writer; only the layout tool publishes one"
+
+    # Who reaches the tool: it runs from a chain as well as from outside,
+    # and a tincture's frame reaches it when the tincture declares it, so
+    # the paragraph names both beside the assistant, the CLI and the API.
+    %Prima.Operation{planes: planes} = Map.fetch!(operations("layout"), "edit")
+
+    assert :external in planes and :in_chain in planes,
+           "layout.edit declares the planes #{inspect(planes)}; the guide names callers from " <>
+             "outside and from a run, so say in it who reaches the tool"
+
+    manifest = %{
+      "type" => "tincture",
+      "tincture" => %{"frame" => %{"placement" => "float"}, "actions" => ["layout.edit"]}
+    }
+
+    assert {:ok, %{actions: ["layout.edit"]}} = Compendium.tincture_declaration(manifest),
+           "a tincture may no longer declare layout.edit; say so in tincture-guide.md's " <>
+             "layout paragraph"
+
+    for writer <- [
+          "a tincture whose declaration names `layout.edit` among its actions",
+          "a component whose grant names it, from a run"
+        ] do
+      assert paragraph =~ writer,
+             "tincture-guide.md's layout paragraph does not name #{inspect(writer)} among " <>
+               "the layout's writers"
+    end
   end
 
   test "the tincture guide states the lockfile, the invoke input, the referrer policy and the log rule" do

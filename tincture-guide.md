@@ -1,6 +1,6 @@
 # Tincture Reference
 
-Build, test, and deploy tinctures for CYFR. A tincture is a browser frontend — HTML, JavaScript, CSS and whatever assets it ships, WebAssembly and audio included — that the Prism shell opens in a sandboxed frame. It reaches the server only through the Cyfr SDK (`window.cyfr`): it invokes the components it declares, runs the system actions it declares and opens the streams it declares, and CYFR resolves credentials, consent and execution server-side. A tincture never holds an API key, a session or a secret.
+Build, test, and deploy tinctures for CYFR. A tincture is a browser frontend — HTML, JavaScript, CSS and whatever assets it ships, WebAssembly and audio included — that the Prism shell opens in a sandboxed frame. It reaches the server only through the Cyfr SDK (`window.cyfr`): it invokes the components it declares, runs the system actions it declares and opens the streams it declares, and CYFR resolves credentials, consent and execution server-side. A canvas loads no SDK: CYFR's toolkit reaches the server for it, and its only data requests open the streams it declares ([The Canvas](#the-canvas)). A tincture never holds an API key, a session or a secret.
 
 The lists in this guide — served types, frame capabilities, templates, the declaration grammar, the wire's routes and the SDK's calls — are the frame's rules (`Compendium.Tincture.Rules`) and the wire (`Prima.TinctureWire`) as they stand; the docs-drift test fails when one of them differs.
 
@@ -15,13 +15,15 @@ The shell is the one place a tincture's frame is created. Launching a tincture:
 3. The shell mints a **frame credential** for this open, bound to the person, the tincture version and its release digest, the grant revision of the tincture's owner profile and a fresh frame id.
 4. On the frame's first load the shell posts it one handshake carrying a `MessagePort` and the frame id, and sends the frame credential over that port only. The SDK accepts the handshake only from its parent window, and only once.
 
+A canvas opens the same way, except that its page is the toolkit's host page and the toolkit, not the SDK, accepts the handshake, holds its end of the port and speaks the canvas's own wire (`Prima.CanvasWire`: `ready`, `tree`, `open`, `press` and `failed` to the shell; `boot`, `posture`, `covered`, `installed` and `state` from it), so the shell verbs below do not apply to it ([The Canvas](#the-canvas)).
+
 From then on the SDK sends data requests to the endpoint with the frame credential as a bearer, and the shell verbs (`open`, `close`, `title`, `ready`, `credential`) over the port. The shell listens to no window message; anything arriving on the port that is not a shell verb for that frame is dropped. A reload or a navigation inside the frame gets no second handshake: the frame is spent until the person opens the tincture again.
 
 A frame hidden behind another is **suspended** unless it declares `frame.background`, and resumed when shown: a suspended frame's requests are refused (`frame_suspended`). A resume that fails revokes the frame's credential and the frame shows the refusal in place of its page. Closing the frame, the `close` verb, the registry no longer listing the tincture and the end of the shell's session each revoke its credential. A frame credential is also refused once the tincture's version or its owner profile's grant moved since the open (`frame_moved`): open it again.
 
 ### Private and Public
 
-A tincture is private unless it has an active public consent profile. Publish one with `profile.publish` (the proof-bound consent walk) and unpublish by revoking it with `profile.revoke`; `tincture_visibility.get` reports the current answer. The manifest's `tincture.public` is a metadata hint only.
+A tincture is private unless it has an active public consent profile. Publish one with `profile.publish` (the proof-bound consent walk) and unpublish by revoking it with `profile.revoke`; `tincture_visibility.get` reports the current answer. The manifest's `tincture.public` is a metadata hint only. A canvas is never public: it is the person's own data page, so no public profile is staged for one and the public route serves none. `profile.publish` refuses to stage one (`invalid_argument`), and its address answers not found, as a private tincture's does.
 
 | | Private | Public |
 |---|---|---|
@@ -34,27 +36,117 @@ A tincture is private unless it has an active public consent profile. Publish on
 
 ## The Canvas
 
-The shell draws a person's **layout** (`layout.get`, `layout.edit`): per posture — `hand` under 768 CSS pixels wide, `desk` otherwise — one desktop tincture, the app slots and the floating tinctures. The shell opens the desktop as a frame filling the canvas, under every slot and floating frame; a person who never arranged one runs the shipped `tincture:local.desktop`, with the shipped vault (`tincture:local.vault`) as its one icon. A layout published anywhere — by the desktop, the assistant or safe mode — is read again by every shell the person has open.
+The shell — **Apps** in the console's drawer (**Tinctures** in `dev` mode), at `/a/<athanor>/tinctures` — shows the person's canvases and the tinctures opened over them. A **canvas** is a tincture whose `frame.placement` is `canvas`: one page of the person's own data, which CYFR's toolkit draws from the element trees the canvas's module answers.
+
+The person's **layout** (`layout.get`, `layout.edit`) is a version-2 document: their canvases in order, at most eight, each with an `id`, the canvas tincture it runs (each canvas its own) and, per posture — `hand` under 768 CSS pixels wide, `desk` otherwise — the tinctures placed over it. A posture a canvas does not name places nothing. The layout names tinctures, modes and places and nothing else, so editing it can only arrange, and no canvas edits it. A person who never arranged one has the shipped layout: one canvas, `home`, running the shipped `tincture:local.canvas`, which shows their recent runs and a launcher for each app they installed. A layout is published only through the `layout` tool's `edit`. The CLI and the API call it for the person, and so may the assistant, a tincture whose declaration names `layout.edit` among its actions, and a component whose grant names it, from a run. Every shell the person has open reads the layout again when an edit is announced, or on its next posture change or reconnect when the announcement does not go out; no shell, canvas or safe mode writes it.
+
+The canvas the glass shows is the **visible canvas**, the layout's first when the shell opens. With more than one canvas, the person moves between them with the switcher the shell draws, with `Ctrl+Alt+ArrowLeft` and `Ctrl+Alt+ArrowRight`, or with a horizontal swipe on the 16-pixel strip the shell keeps along the bottom edge; nothing wraps at either end. Switching is the shell's alone: no canvas has a verb for it, so a broken canvas cannot hold the screen. Only the visible canvas runs — a switch freezes the canvas it leaves, whatever it declares, with its apps and floating tinctures unless they hold the background grant — and a tincture belongs to the canvas it was opened on. A layout with no canvas, a canvas whose tincture is not installed, or a layout the shell cannot read runs no canvas, and the shell draws its picker instead; launching a tincture from the picker opens it full, above everything.
 
 ### Sizes and placements
 
-A slot holds one tincture at one of three sizes:
+A tincture's `frame.placement` says where it may stand: with none it opens as an app, `float` lets it also float over a canvas, and `canvas` makes it a canvas. Over each canvas, per posture, the layout places apps, each in one of two modes, and floating tinctures:
 
-| Size | What is drawn |
+| Placement | What is drawn |
 |---|---|
-| `icon` | the desktop draws the tincture's icon; activating it opens the tincture as a full frame |
-| `card` | the desktop draws one of the tincture's declared `cards`, as data (below) |
-| `full` | the tincture's own frame, at the slot's place |
+| a `column` app | the tincture's own frame in a column beside the canvas, by its `order`, opened with the canvas: side by side against the right edge on the desk, one above another across the width in the hand |
+| a `full` app | the tincture's own frame over the whole screen while it is shown, opened when the canvas opens it |
+| a floating tincture | the tincture's own frame at its `position` over the canvas (`x` and `y` in hundredths of a percent of the viewport), opened with the canvas, only for a tincture whose declaration names `frame.placement: "float"` |
 
-A tincture floats over the desktop only when its declaration names `frame.placement: "float"`, and only where the layout puts it. A tincture is a canvas only when it names `frame.placement: "canvas"` and declares `canvas` (its `module`, a `.js` or `.mjs` path inside the version that is its entry, and its `toolkit` major, `1`); a canvas holds no page of its own, reaches nothing of its own and runs only while it is shown, so it declares no `tincture.entry`, `tincture.connect` origin, `caps.egress`, component dependency, `tincture.build`, frame capability, `frame.background` or action, and it reads only streams that declare a shape, naming each feed it reads.
+A tincture the canvas opens that the layout does not place opens full in the hand and as the next column on the desk; nothing is written to the layout. A floating entry naming a tincture nobody installed draws a placeholder and opens nothing.
+
+### The canvas declaration
+
+A tincture is a canvas only when it names `frame.placement: "canvas"` and declares `canvas` (its `module`, a `.js` or `.mjs` path inside the version that is its entry, and its `toolkit` major, `1`); a canvas holds no page of its own, reaches nothing of its own and runs only while it is shown, so it declares no `tincture.entry`, `tincture.connect` origin, `caps.egress`, component dependency, `tincture.build`, frame capability, `frame.background` or action, and it reads only streams that declare a shape, naming each feed it reads. Its version holds no `.html` or `.htm` file: its page is CYFR's.
+
+```json
+{
+  "type": "tincture",
+  "name": "markets",
+  "version": "0.1.0",
+  "tincture": {
+    "frame": {"placement": "canvas"},
+    "canvas": {"module": "canvas.js", "toolkit": 1},
+    "streams": [{"name": "runs.changes"}, {"name": "feed.results", "subject": "btc"}]
+  }
+}
+```
+
+### The toolkit and the tree
+
+A canvas does not load the SDK. Its frame's page is the toolkit's host page, `GET /_c/v1/<asset credential>/<frame id>`, which the shell frames for one open: the toolkit's host script, admitted by a nonce fresh to each page, and the toolkit's worker code as inert data the page never executes. The host script starts two workers from that data: the **module worker**, which imports the canvas's module from the version's files and calls its default export with the `canvas` object, and the **streams worker**, the only worker that holds the frame credential, which opens only the streams the version declares. The module runs with no window, no document, no port to the shell and no credential, and reaches the screen only through the trees it answers. The page and both workers run under one policy, which names only the open's own data path (`/_f/v1/o/<frame id>/`) and the version's files, under a sandbox of `allow-scripts` alone, and nothing on those paths redirects. The page's path carries the asset credential, so no proxy may log `/_c/v1/` paths either.
+
+The module's `canvas` object:
+
+- **`canvas.render(tree)`** draws a tree; render again whenever what the canvas shows changes.
+- **`canvas.stream(name, subject, onEvent)`** opens a stream the version declares, as `cyfr.stream` does: it resolves, once the stream is open, with `{closed, close()}`, calls `onEvent({id, event, data})` per event, and rejects with the refusal's `code`. A name and subject the version does not declare is refused `forbidden` without a request.
+- **`canvas.on(kind, fn)`** calls `fn` with the shell's latest value of `posture` (`hand` or `desk`), `covered` (the rectangles the shown apps and floating tinctures cover of the canvas) or `installed` (the installed tinctures it may open, as `[{ref, name}]`), and with each one after.
+- **`canvas.surface(id)`** resolves to the `OffscreenCanvas` of a drawn `surface` element.
+
+A tree is one node, `{"type": <element>, …its fields}`. Toolkit major 1 draws these elements:
+
+<!-- tincture:canvas-elements -->
+- `stack`
+- `grid`
+- `text`
+- `number`
+- `time`
+- `list`
+- `table`
+- `chart`
+- `image`
+- `control`
+- `surface`
+- `spacer`
+<!-- /tincture:canvas-elements -->
+
+| Element | Fields |
+|---|---|
+| `stack` | `children`; `direction` `row` or `column` (the default), `gap` |
+| `grid` | `columns` (1 to 12), `children`; `gap` |
+| `text` | `value` (at most 4096 characters); `tone`, `size`, `weight` `normal` or `strong` |
+| `number` | `value`; `format` `plain`, `percent`, `compact` or `currency:<ISO 4217 code>`, `digits` (0 to 8), `tone`, `size` |
+| `time` | `value` (an ISO 8601 time with its offset); `format` `relative`, `date` or `datetime` (the default) |
+| `list` | `items` (at most 500 nodes) |
+| `table` | `columns` (1 to 16 of `{key, title}`), `rows` (at most 500 objects of strings, numbers, booleans and nulls) |
+| `chart` | `kind` `line`, `bar` or `candle`, `series` (1 to 8 of `{name, points}`, at most 2000 points each: `{x, y}` for a line or bar, `{t, o, h, l, c}` for a candle) |
+| `image` | `src` (a path inside the version, or a base64 `data:` URL of a PNG, JPEG or WebP image, the URL at most 256 KiB), `alt` |
+| `control` | `effect`; `tone`, `size` (below) |
+| `surface` | `id`, `width` and `height` (1 to 4096 pixels) |
+| `spacer` | — |
+
+`gap` is `none`, `s`, `m` (the default) or `l`; `tone` is `plain` (the default), `muted`, `accent`, `good`, `warn` or `bad`; `size` is `s`, `m` (the default), `l` or `xl`. A tree holds at most 2000 nodes, 24 levels and 1 MiB of JSON. An unknown element, field or value refuses the whole tree: there is no CSS, class, markup or URL field, the toolkit sets every value as text, a number or an attribute of its own, and no element navigates. The first tree drawn tells the shell the canvas is ready; a tree that does not hold is dropped, and the last one drawn stays.
+
+### Controls
+
+When a tree is answered, each `control` binds to exactly one effect:
+
+- `{"open": "<tincture reference>"}`, an installed tincture, which the shell opens where the canvas's layout places it;
+- `{"press": {"feed": "<feed name>", "action": "<action name>"}}`, an action of a feed the canvas declares, bound to the binding id of that feed's latest event and kept until a new tree is answered.
+
+A control's label is the declaration's — the tincture's name from `installed`, or the action's label in the feed's binding — never anything the canvas wrote: a `label`, `text` or `title` on a control refuses the tree. An effect that does not resolve draws the control disabled, labelled **Unavailable**. No element of a tree can cover a control's label. A press is one genuine activation, a trusted `click` or an Enter or Space key, consumed once and sent at once; nothing is held, queued or retried. The shell honours a press only from the visible, live canvas whose served version declares that feed, and sends it to `feed.press`: a binding removed or rebound since is refused, so a control drawn before never presses the new binding. Which controls a canvas shows is its own choice, and their labels make each one's effect visible to the person.
+
+### Streams and feeds
+
+A canvas reads only the streams it declares, and only a stream whose provider declares a shape for it; `canvas.catalog` lists them with their shapes. Each is handed its current state first, each item marked `refresh: true`, and then its live events; an event that races the current state may arrive twice, so a canvas takes a feed's result once per `revision` and a run's change once per `execution_id` and `kind`.
+
+| Stream | Subject | What a canvas reads |
+|---|---|---|
+| `runs.changes` | — | each run's `kind`, `execution_id`, `parent_execution_id`, `reference`, `component_type`, `duration_ms` and `error`, after the athanor's 20 newest runs |
+| `feed.results` | a feed's name | each accepted result of that feed as its `binding` id, `feed`, `revision`, `at`, `result`, `label` and `actions`, after its last accepted result |
+
+A canvas names every feed it reads: one `feed.results` entry per feed, the feed's name its literal subject — never `"*"` and never none — and each name once. A feed is bound with the `feed` tool, by the person or by the assistant with the person's approval (the [Integration Guide](integration-guide.md) lists it); a canvas's code has no verb that binds, changes or refreshes one. From a canvas, a feed's action runs only on the person's press of a control, which the shell sends to `feed.press`; the CLI and the API reach `feed.press` as they reach any external operation, and no chain does. The streams worker opens each stream on the canvas's own data path, `POST /_f/v1/o/<frame id>/stream`, which admits only that open's credential and has no invoke and no action route; the shared routes refuse a canvas's credential, so a canvas invokes no component and runs no operation. Each stream a canvas reads is its own open, so `frame_stream_max_concurrent` bounds how many it reads at once.
+
+### Validation and the kept version
+
+A canvas changes only as a new version: `canvas.write` creates the next version whole, a version's files are never replaced, and the publish check holds each version as it does any tincture's. When a glass is to show a canvas whose newest installed version is neither its working version, its kept version nor its last failed one, the shell first validates that version in a bounded mode. It opens the version once in a hidden, inert frame under a **validation credential**, which carries no live authority: each declared stream the candidate opens is answered once from a fixture of its shape — for a feed, of the result shape of the feed the athanor binds under that name, and nothing for a name it does not bind — and then ends, admitting nothing. The candidate must answer a tree that holds within ten seconds of its frame's open. The shell tears the frame down on the tree, the deadline, a failure or the frame's death, and reports the outcome — `tree`, `no_tree` or `died` — to `canvas.activate`, which spends the credential. Only a tree activates: the version becomes the working one once its grant is current (the grant prompt asks otherwise, and the version is validated again after it), and the version it replaces is kept. Any other outcome records the failure, and the glass opens the working version, or enters safe mode when there is none. A version written while no glass shows its canvas waits for one. The kept version is the way back, restored by `canvas.restore` under today's grant, so a kept version is never kept permission.
 
 ### Hidden, frozen and background frames
 
-The frame the person looks at is live. With a full frame shown, every other frame — the desktop among them — is hidden, and a hidden frame without `frame.background: true` is frozen: its credential is suspended before its bridge is told, its element is inert, and its requests are refused as `frame_suspended` until it is shown again. A frame that declares the background grant keeps running hidden. A frame never raises itself: no verb places, sizes or raises a frame.
+The frame the person looks at is live. With a full frame shown, every other frame — the canvas among them — is hidden, as is every canvas the glass does not show, with its apps and floating tinctures, and a hidden frame without `frame.background: true` is frozen: its credential is suspended before its bridge is told, its element is inert, and its requests are refused as `frame_suspended` until it is shown again; a validation's frame is hidden but never frozen, since its credential is never suspended. A frame that declares the background grant keeps running hidden. A hidden canvas is suspended whatever it declares, and freezing it stops its code: the toolkit terminates both its workers, and showing it again starts them anew and imports its module again. A frame never raises itself: no verb places, sizes or raises a frame.
 
 ### Safe mode
 
-A desktop that has not sent `ready` within ten seconds of its handshake, a desktop whose frame is refused at open, and the person's own ask — the shell's **Safe mode** button, or Ctrl+Alt+S on the shell's page, which a frame never hears — enter safe mode. Every frame is discarded with its credential, the picker is drawn, and the shell's prompt offers to try the current desktop again or, while some posture runs another, to use the shipped default. Choosing opens the desktop again from the layout as it then stands. The assistant's panel stays as it was.
+Safe mode is the way back, outside every canvas. The shell enters it for one of four reasons: the visible canvas has not sent `ready` within ten seconds of its handshake, or cannot be opened (`not_ready`; one refused for want of the person's grant shows its refusal and offers the grant prompt instead); the live canvas reports a failure, or its frame dies while it is shown (`crashed`); a new version failed its validation and the canvas has no working version (`not_validated`); or the person asks — the shell's **Safe mode** button, or Ctrl+Alt+S on the shell's page, which a frame never hears (`requested`). Every frame is discarded with its credential, and the system layer offers the ways out: try the canvas again as it now stands; go back to its kept version, while it keeps one, which `canvas.restore` makes the working version again under today's grant; or show the shipped canvas on this glass, while a canvas is visible, until the shell ends or the layout changes, writing no layout and no versions document. Safe mode runs no tincture at all, and the assistant's panel stays as it was.
 
 ### Secrets
 
@@ -75,7 +167,7 @@ asks for consent again. Keep private keys in the vault.
 
 ## Addresses, Credentials and Headers
 
-A public tincture is served at its address, `/t/<athanor>/<publisher>/<name>` (the athanor segment is `@<namespace>` for a person's athanor, the group's slug for a group's), with its files under it. The address follows the tincture's latest version.
+A public tincture is served at its address, `/t/<athanor>/<publisher>/<name>` (the athanor segment is `@<namespace>` for a person's athanor, the group's slug for a group's), with its files under it. The address follows the tincture's latest version. A canvas is never public: it is the person's own data page, so no public profile is staged for one and the public route serves none.
 
 A private tincture version's files are served only at `/_s/<credential>/<publisher>/<name>/<version>/<file>`. The asset credential is signed, opaque and URL-safe; it names the person, the version's release digest and a window (`asset_credential_window_s`), carries no secret, and is verified against its source's standing at every request — a session that ended, a key that was revoked, a person denied or an athanor archived refuses the next fetch. It stays one credential for one person and one version for the window, so a browser's cache holds across opens, and it opens nothing but that version's files: another version's path under it is not found.
 
@@ -324,7 +416,7 @@ An `invoke` or `action` answers `{"v", "ok": true, "result"}`, a refusal `{"v", 
 
 ## What the Frame May Do
 
-The frame's document is sandboxed without `allow-same-origin`, so its origin is `null` to every browser, and its policy is derived from its declaration:
+The frame's document is sandboxed without `allow-same-origin`, so its origin is `null` to every browser, and its policy is derived from its declaration as this table gives for every tincture but a canvas, whose one policy, for its page and its workers alike, is the one [The Canvas](#the-canvas) gives:
 
 | Directive | Value | So the tincture |
 |---|---|---|

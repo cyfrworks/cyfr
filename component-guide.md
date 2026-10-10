@@ -631,6 +631,40 @@ Behavior: `cyfr pull` and `cyfr build compile` auto-fetch missing published depe
 - **Pinned refs** (`type:ns.name:version`) are opt-in for reproducibility — use in CI pipelines, audits, or when a specific compatible version is required.
 - Pinned refs mean auto-pull fetches that exact version; unpinned resolves to latest at pull/registration time.
 
+### `results` Section
+
+`results` declares the shape of what an operation answers, so a canvas can read it through a feed. Each key is an operation name; each value is a shape, `{"type": …}` with that type's keys and, on any type, `nullable: true` to admit `null` there:
+
+```json
+"results": {
+  "quote": {
+    "type": "object",
+    "fields": {
+      "symbol": {"type": "string", "max": 16},
+      "price": {"type": "number"},
+      "at": {"type": "time"}
+    },
+    "required": ["symbol", "price", "at"]
+  }
+}
+```
+
+| Type | Keys |
+|------|------|
+| `string` | `max` code points, 1 to 4096 (default 256) |
+| `number` | — |
+| `integer` | — (a float, `1.0` included, is refused) |
+| `boolean` | — |
+| `time` | — (an ISO 8601 time with its offset) |
+| `enum` | `values`, 1 to 64 distinct strings |
+| `list` | `of`, a shape, and `max` elements, 1 to 1000 (default 100) |
+| `object` | `fields`, up to 64 names each mapped to a shape, and `required`, the names that must be present (default none); a key `fields` does not name is refused |
+| `json` | — (any JSON value) |
+
+Shapes nest at most 8 deep, and a manifest whose `results` does not hold this grammar is refused where it is registered or published.
+
+**Binding a feed.** A catalyst, reagent or formula never binds a feed (only an agent's manifest may name `feed.bind`, exactly), and no manifest declares one: a feed is bound with the `feed` tool's `bind` (see the [Integration Guide](integration-guide.md)), by the person or by the assistant with the person's approval. It names an installed catalyst or formula, one of its operations, fixed arguments, an interval and labelled actions. Binding pins the installed version and copies its `results[operation]` into the binding, and an operation that declares no shape cannot be bound; the binding keeps that copy, so a changed `results` reaches a feed only when it is bound again. Each fire runs the operation under the bound profile with the input `{"operation": …, "params": <the fixed arguments>}`. Its result is the `data` of a 2xx `{"status", "data"}` envelope, held to the copied shape and to 64 KiB of JSON; anything else changes nothing. An accepted result is what a canvas that declares the feed by name reads.
+
 ### Example: Catalyst Manifest
 
 ```json

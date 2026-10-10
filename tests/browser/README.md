@@ -23,10 +23,10 @@ image, pinned by digest, on the host's network.
 `run.sh` starts the release under the name `cyfr.test` (`browser_cell`),
 signs a person in (`tests/release-boot/fixture.exs`), publishes the two
 tinctures under `tinctures/` publicly in that person's athanor, and runs
-`frame-facts.mjs` against it. The person's layout names a desktop nobody
-installed (`browser_picker_layout`), so the shell runs no desktop and draws
-the picker the frame experiments launch from; the desktop itself is the
-canvas proof's (`tests/canvas-proof/`). The tincture, containment and
+`frame-facts.mjs` against it. The person's layout names no canvas
+(`browser_picker_layout`), so the shell runs none and draws the picker
+the frame experiments launch from; canvases are the canvas proof's
+(`tests/canvas-proof/`). The tincture, containment and
 canvas proofs (`tests/tincture-proof/`, `tests/hostile-frame-proof/`,
 `tests/canvas-proof/`) use the same shape; [The proofs](#the-proofs) lists
 every proof and its shape.
