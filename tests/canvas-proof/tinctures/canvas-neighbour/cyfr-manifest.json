@@ -1,0 +1,11 @@
+{
+  "name": "canvas-neighbour",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "The canvas proof's colluding sibling: an ordinary tincture with a connect origin and a script at a same-site path, which messages every frame beside it.",
+  "tincture": {
+    "entry": "index.html",
+    "connect": ["attacker.test"]
+  }
+}

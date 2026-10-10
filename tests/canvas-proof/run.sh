@@ -2,28 +2,42 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The canvas proof (README.md): a `cyfr` release started as the browser
-# harness starts one (tests/browser/harness.sh), holding the shipped desktop
-# and vault and the proof's tinctures (tinctures/), with a signed-in
-# person's layout placing them, driven in every browser of the harness's
-# matrix (proof.mjs). The proof asks for the release to be gone under its
-# open tabs (`stop-server` in the output directory), and this script stops it
-# and answers `server-stopped`.
+# The canvas proof (README.md), on SQLite: a `cyfr` release started as the
+# browser harness starts one (tests/browser/harness.sh), holding the shipped
+# canvas and the proof's tinctures (tinctures/), the canvases written for it
+# with `canvas.write` and the feeds bound for them, and a signed-in person's
+# layout placing them, driven in every browser of the harness's matrix at
+# one viewport (proof.mjs).
 #
-# The vault page's operations are also measured inside the server
-# (measure.exs), on this SQLite cell and, when CANVAS_PROOF_PG_URL names an
-# existing PostgreSQL database as a role that may create databases, on a
-# PostgreSQL cell of a release built for PostgreSQL, with what each burst
-# did to the member's lease renewals and to the audit's writers. On the
-# SQLite cell every renewal asked during a burst must renew and the member
-# keep its slot, and the browsers start on it straight after.
+# What the person does goes through the console's own path and the gate
+# (the release fixture's `console`): the layout, `canvas.write`, `feed.bind`,
+# `feed.remove` and `feed.press`. The feed's source, its profile and each
+# fixed result the feeds show are the proof's own fixture (fixture.exs): no
+# run executes, and no model or execution worker is started.
 #
-# Usage: tests/canvas-proof/run.sh
-# Writes canvas-proof.json and canvas-proof.md into PROOF_OUT (default: the
-# scratch directory, kept with RELEASE_BOOT_KEEP=1) and prints the table. Set
-# RELEASE_BOOT_SKIP_BUILD=1 to reuse a release a previous run built, and
-# CANVAS_PROOF_BROWSERS (e.g. `chromium`) to narrow the browsers.
+# The proof asks for its fixture actions mid-run through the output
+# directory (`ask-N.json`, each the command and its non-secret arguments),
+# and this script, which holds the session token, answers `answer-N.json`.
+# Once the proof has written its record, this script looks for every
+# credential the run held in it. The asks and the answers go on every exit
+# path, an early one included.
+#
+# Usage: CANVAS_PROOF_VIEWPORT=desktop|720x720 tests/canvas-proof/run.sh
+# `desktop` is the PC (1280x900, posture desk) and `720x720` the phone
+# (posture hand). Writes canvas-proof.json and canvas-proof.md into PROOF_OUT
+# (default: the scratch directory, kept with RELEASE_BOOT_KEEP=1) and prints
+# the table. Set RELEASE_BOOT_SKIP_BUILD=1 to reuse a release a previous run
+# built.
 set -euo pipefail
+
+VIEWPORT="${CANVAS_PROOF_VIEWPORT:-}"
+case "$VIEWPORT" in
+  desktop | 720x720) ;;
+  *)
+    echo "::error::CANVAS_PROOF_VIEWPORT is desktop or 720x720, not '$VIEWPORT'" >&2
+    exit 64
+    ;;
+esac
 
 ADAPTER=sqlite
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-canvas-proof-XXXXXX")"
@@ -33,18 +47,38 @@ source "$(cd "$(dirname "$0")" && pwd)/../release-boot/release.sh"
 source "$ROOT/tests/browser/harness.sh"
 HERE="$ROOT/tests/canvas-proof"
 OUT="${PROOF_OUT:-$WORK/out}"
-CALLS=200
-CONCURRENCY=16
 PROOF_PID=""
 
+# The proof's own container, found by the output directory only this run
+# mounts: stopping the subshell that started it leaves `docker run` and its
+# container behind.
+stop_proof_container() {
+  local ids
+  ids="$(docker ps -q --filter "volume=$OUT" 2>/dev/null || true)"
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2086
+    docker stop -t 5 $ids >/dev/null 2>&1 || true
+  fi
+}
+
+# The asks and answers this run wrote into the output directory. An answer
+# may hold a bearer the fixture minted, so they go on every exit path, a
+# kept output directory's included.
+remove_asks() {
+  rm -f "$OUT"/ask-* "$OUT"/answer-*
+}
+
 # The scratch directory holds the cell's keys and its database, so it goes
-# even when a stop fails. `server_stop` ends in `fail`, an `exit`,
-# when a listener outlives its stop, and an exit inside this trap would end
-# it before the removal, so the stop runs in a subshell, whose exit ends
-# only that subshell; the stop's failure still fails the run.
+# even when a stop fails. `server_stop` ends in `fail`, an `exit`, when a
+# listener outlives its stop, and an exit inside this trap would end it
+# before the removal, so the stop runs in a subshell, whose exit ends only
+# that subshell; the stop's failure still fails the run. The asks and
+# answers go once the proof's container is stopped and can write no more.
 cleanup() {
   local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
+  stop_proof_container
+  remove_asks
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
@@ -54,140 +88,267 @@ cleanup() {
   exit "$code"
 }
 trap cleanup EXIT
+# An interrupt or a stop (heavy-check's deadline among them) ends the run
+# through the same cleanup.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-mkdir -p "$OUT"
-rm -f "$OUT/stop-server" "$OUT/server-stopped" "$OUT"/server-measurements-*
+# The value of key `$1` of the JSON object on stdin: as text, or, with a
+# second argument, as JSON.
+json() {
+  python3 -c '
+import json, sys
+value = json.load(sys.stdin)[sys.argv[1]]
+print(json.dumps(value) if len(sys.argv) > 2 else value)' "$@"
+}
+field() { printf '%s' "$1" | json "$2"; }
 
-field() { printf '%s' "$1" | python3 -c "import json, sys; print(json.load(sys.stdin)['$2'])"; }
-
-# A person's vault: eleven entries, each holding a value no page may show,
-# seeded by the release's fixture (`vault`). Entering one through the
-# console is a sensitive change confirmed with a fresh proof, and this
-# proof is not about entering them.
-seed_vault() {
-  local cell="$1" token="$2" n answer
-  for n in $(seq -w 1 10); do
-    answer="$(server_fixture "$cell" vault "$token" "seeded-$n" API_KEY "seeded-value-$n-not-shown")"
-    printf '%s' "$answer" | grep -q '"id"' || fail "seeded-$n was not created: $answer"
+# The proof's own fixture (fixture.exs) inside the server running on CELL,
+# as `bin/cyfr rpc`: `$@` are its arguments, and its one JSON line is the
+# answer.
+# A fixture rpc that never fails the script: a raise answers nothing, and
+# the caller sees an empty answer rather than the run exiting (set -e).
+canvas_fixture() {
+  local args="" arg out
+  for arg in "$@"; do
+    args="$args\"$(printf '%s' "$arg" | sed 's/[\\"#]/\\&/g')\","
   done
-  answer="$(server_fixture "$cell" vault "$token" seeded-api API_KEY seeded-api-value-not-shown)"
-  printf '%s' "$answer" | grep -q '"id"' || fail "seeded-api was not created: $answer"
+  out="$(cell_cyfr "$CELL" rpc \
+    "{answer, _} = Code.eval_file(\"$HERE/fixture.exs\"); IO.puts(answer.([${args%,}]))" \
+    2>>"$CELL/fixture.log" | sed -n 's/^CANVAS=//p' | tail -1)" || out=""
+  printf '%s' "$out"
 }
 
-# vault.list and vault.status measured in the server running on cell `$1`
-# for the session token `$2`, written to `$3`.
-measure_in_server() {
-  local measured
-  measured="$(cell_cyfr "$1" rpc \
-    "{answer, _} = Code.eval_file(\"$HERE/measure.exs\"); IO.puts(answer.([\"$2\", \"$CALLS\", \"$CONCURRENCY\"]))" \
-    | sed -n 's/^MEASURE=//p' | tail -1)"
-  [ -n "$measured" ] || fail "the in-server measurement answered nothing"
-  printf '%s\n' "$measured" >"$3"
-}
-
-# ---------------------------------------------------------------------------
-# PostgreSQL: the in-server measurement on a cell of its own, when asked
-# ---------------------------------------------------------------------------
-
-if [ -n "${CANVAS_PROOF_PG_URL:-}" ]; then
-  step "the vault's operations on a PostgreSQL cell"
-  (
-    set -euo pipefail
-    ADAPTER=postgres
-    RELEASE_BOOT_PORT="${CANVAS_PROOF_PG_PORT:-4397}"
-    RELEASE_BOOT_HOST_API_PORT="${CANVAS_PROOF_PG_HOST_API_PORT:-4396}"
-    # shellcheck source=../release-boot/release.sh
-    source "$ROOT/tests/release-boot/release.sh"
-    pg() { docker run --rm --network host -e PGOPTIONS=--client-min-messages=warning postgres:16 "$@"; }
-    base="${CANVAS_PROOF_PG_URL%%\?*}"
-    db="canvas_proof_$$"
-    url="${base%/*}/$db"
-    pg psql -v ON_ERROR_STOP=1 -q "$CANVAS_PROOF_PG_URL" -c "DROP DATABASE IF EXISTS \"$db\"" -c "CREATE DATABASE \"$db\"" \
-      || fail "could not create $db beside the database CANVAS_PROOF_PG_URL names"
-    trap 'server_stop; pg psql -q "$CANVAS_PROOF_PG_URL" -c "DROP DATABASE IF EXISTS \"$db\"" >/dev/null 2>&1 || true' EXIT
-    release_build
-    cell_new "$WORK/pg-cell" "$url"
-    server_start "$WORK/pg-cell"
-    person="$(server_fixture "$WORK/pg-cell" person operator@example.com canvas-proof-pg)"
-    [ -n "$person" ] || fail "the fixture signed nobody in on PostgreSQL"
-    seed_vault "$WORK/pg-cell" "$(field "$person" token)"
-    measure_in_server "$WORK/pg-cell" "$(field "$person" token)" "$OUT/server-measurements-postgres.json"
-  ) || fail "the PostgreSQL measurement did not complete"
-else
-  echo "CANVAS_PROOF_PG_URL is not set: no PostgreSQL cell is started" >"$OUT/server-measurements-postgres.skipped"
-fi
-
-# ---------------------------------------------------------------------------
-# The SQLite cell the browsers drive
-# ---------------------------------------------------------------------------
+# A console call for the person, its answer as the release fixture gives it.
+console() { server_fixture "$CELL" console "$TOKEN" "$1" "$2"; }
 
 release_build
 CELL="$WORK/cell"
 browser_cell "$CELL"
-# Every measured call is a frame's request; the frame's invocation rate is
-# lifted so the measurement is not the limit's.
-echo "CYFR_FRAME_INVOCATION_MAX=100000" >>"$CELL/.env"
 
 step "starting the release on a fresh SQLite cell, as cyfr.test"
 server_start "$CELL"
 
-step "publishing the proof's tinctures, private, and the person's layout and vault"
+step "the person, the proof's tinctures and the feed's source"
 person="$(server_fixture "$CELL" person operator@example.com canvas-proof)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
 user_id="$(field "$person" user_id)"
 segment="$(field "$person" segment)"
-token="$(field "$person" token)"
-cookie="$(browser_cookie "$CELL" "$token")"
-for name in canvas-card canvas-full canvas-stall; do
-  published="$(server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/$name" "$name" private)"
-  [ -n "$published" ] || fail "$name was not published"
+TOKEN="$(field "$person" token)"
+cookie="$(browser_cookie "$CELL" "$TOKEN")"
+
+# canvas-probe's version also holds canvas-neighbour's shared.js, as the
+# sibling file its module imports statically: the same bytes load from the
+# probe's own prefix and are refused from the neighbour's.
+cp -R "$HERE/tinctures/canvas-probe" "$WORK/canvas-probe"
+cp "$HERE/tinctures/canvas-neighbour/shared.js" "$WORK/canvas-probe/shared.js"
+for published in \
+  "$HERE/tinctures/canvas-full canvas-full" \
+  "$HERE/tinctures/canvas-neighbour canvas-neighbour" \
+  "$HERE/tinctures/canvas-broken canvas-broken" \
+  "$WORK/canvas-probe canvas-probe"; do
+  read -r dir name <<<"$published"
+  answer="$(server_fixture "$CELL" tincture "$user_id" "$dir" "$name" private)"
+  printf '%s' "$answer" | grep -q '"component":"' || fail "$name was not published: $answer"
 done
 
-app() { printf '{"tincture":"%s","mode":"%s","order":%s}' "$@"; }
-posture="{\"apps\":[$(app tincture:local.vault column 0),$(app tincture:local.canvas-full full 1)],\"floating\":[]}"
-browser_layout "$CELL" "$token" \
-  "{\"version\":2,\"canvases\":[{\"id\":\"home\",\"tincture\":\"tincture:local.canvas\",\"postures\":{\"desk\":$posture,\"hand\":$posture}}]}"
-seed_vault "$CELL" "$token"
+source_answer="$(canvas_fixture source "$TOKEN" candles)"
+[ -n "$source_answer" ] || fail "the feed's source was not published"
+SOURCE="$(field "$source_answer" reference)"
+PROFILE="$(field "$source_answer" profile_id)"
 
-step "the vault's operations in the server, SQLite"
-measure_in_server "$CELL" "$token" "$OUT/server-measurements-sqlite.json"
+# The person's feeds, by name: name -> binding id. Binding ids name no
+# credential; the proof names a feed by its name, or a binding the fixture
+# answered it.
+declare -A FEEDS=()
 
-# The burst's audit writes must not cost the member its lease: every
-# renewal asked during a burst renewed, the member held its slot at every
-# sample and kept its generation, and it is ready at once.
-measured="$(cat "$OUT/server-measurements-sqlite.json")"
-[ "$(field "$measured" renewals_ok)" = True ] ||
-  fail "a renewal during the measurement's burst failed ($OUT/server-measurements-sqlite.json)"
-[ "$(field "$measured" slot_kept)" = True ] ||
-  fail "the member lost its slot under the measurement's burst ($OUT/server-measurements-sqlite.json)"
-curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$PORT/api/health/ready" ||
-  fail "the release is not ready after the measurement"
+# Bind feed `$1` of the source at interval `$2` with args `$3` and actions
+# `$4`, through the console. Answers the console's answer.
+bind_feed() {
+  console feed/bind "{\"name\":\"$1\",\"label\":\"$5\",\"reference\":\"$SOURCE\",\"profile_id\":\"$PROFILE\",\"operation\":\"quote\",\"args\":$3,\"interval_minutes\":$2,\"actions\":$4}"
+}
 
-step "the canvas proof in $PLAYWRIGHT_IMAGE"
-playwright_run canvas-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cookie" /out \
-  "${CANVAS_PROOF_BROWSERS:-}" &
+CANDLE_ACTIONS='[{"name":"buy","label":"Buy","kind":"run","operation":"order","args":{"side":"buy"}},{"name":"refresh","label":"Refresh","kind":"refresh"}]'
+
+bound() {
+  local answer="$1" name="$2"
+  printf '%s' "$answer" | grep -q '"ok"' || fail "feed $name was not bound: $answer"
+  printf '%s' "$answer" | python3 -c 'import json, sys; print(json.load(sys.stdin)["ok"]["binding"])'
+}
+
+mkdir -p "$OUT"
+rm -f "$OUT"/ask-* "$OUT"/answer-* "$OUT/canvas-proof.json" "$OUT/canvas-proof.md"
+
+step "the feeds the canvases read, bound through the console"
+FEEDS[candles]="$(bound "$(bind_feed candles 60 '{"symbol":"BTC"}' "$CANDLE_ACTIONS" Candles)" candles)"
+FEEDS[broken-die]="$(bound "$(bind_feed broken-die 60 '{"symbol":"DIE"}' '[]' 'Broken, dies')" broken-die)"
+FEEDS[broken-crash]="$(bound "$(bind_feed broken-crash 60 '{"symbol":"CRASH"}' '[]' 'Broken, crashes')" broken-crash)"
+
+# A fixed result as the proof gives one: `$1` a feed's name, `$2` its data.
+accept_fixed() {
+  canvas_fixture accept "$TOKEN" "${FEEDS[$1]}" "$2"
+}
+
+candles() {
+  python3 - "$1" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+symbol = sys.argv[1]
+now = datetime.now(timezone.utc).replace(microsecond=0)
+candles = []
+price = 42000.0
+for i in range(6):
+    o = price
+    c = price + (35.5 if i % 2 == 0 else -20.25)
+    candles.append({"t": (now - timedelta(hours=6 - i)).isoformat().replace("+00:00", "Z"),
+                    "o": o, "h": max(o, c) + 12.0, "l": min(o, c) - 9.5, "c": c})
+    price = c
+print(json.dumps({"symbol": symbol, "price": price, "change": None,
+                  "at": now.isoformat().replace("+00:00", "Z"), "candles": candles}))
+PY
+}
+
+for feed in candles broken-crash; do
+  accepted="$(accept_fixed "$feed" "$(candles BTC)")"
+  printf '%s' "$accepted" | grep -q '"revision"' || fail "no fixed result was accepted for $feed: $accepted"
+done
+
+step "the written canvases, through canvas.write"
+READS_CANDLES='[{"name":"feed.results","subject":"candles"}]'
+for written in "markets $READS_CANDLES" "labels $READS_CANDLES" "measure []"; do
+  read -r canvas streams <<<"$written"
+  answer="$(canvas_fixture write "$TOKEN" "$canvas" "$canvas" "$streams")"
+  printf '%s' "$answer" | grep -q '"ok"' || fail "canvas $canvas was not written: $answer"
+done
+
+# The person's layout, version 2, published through the console at the
+# revision this script last published; the console's answer is left in
+# LAYOUT_ANSWER. It runs in this shell, never a command substitution's, so
+# the revision it counts is the one the next publication reads. The proof
+# chooses each layout.
+LAYOUT_REVISION=0
+LAYOUT_ANSWER=""
+publish_layout() {
+  LAYOUT_ANSWER="$(console layout/edit "{\"document\":$1,\"revision\":$LAYOUT_REVISION}")"
+  if printf '%s' "$LAYOUT_ANSWER" | grep -q '"ok"'; then LAYOUT_REVISION=$((LAYOUT_REVISION + 1)); fi
+}
+
+binding_of() { python3 -c 'import json, sys; print(json.load(sys.stdin)["ok"]["binding"])'; }
+
+# Each step the proof asks for, answered once. A request carries the
+# command and its non-secret arguments; the answer is the fixture's or the
+# console's, which name no credential but the bearer `bearer` mints for the
+# exits step, which the proof keeps out of its record.
+# Answering an ask never fails the run: errexit is off for the body, so a
+# refused console call or a parse error leaves an error answer, not an exit.
+answer_asks() {
+  local ask id op answer arg binding old removed rebound fired restore
+  case $- in *e*) restore=1 ;; *) restore=0 ;; esac
+  set +e
+  for ask in "$OUT"/ask-*.json; do
+    [ -e "$ask" ] || continue
+    id="${ask##*/ask-}"
+    id="${id%.json}"
+    [ -e "$OUT/answer-$id.json" ] && continue
+    op="$(json op <"$ask")"
+    case "$op" in
+      write)
+        answer="$(canvas_fixture write "$TOKEN" "$(json canvas <"$ask")" "$(json module <"$ask")" "$(json streams - <"$ask")")"
+        ;;
+      versions)
+        answer="$(console canvas/versions "{\"canvas\":\"$(json canvas <"$ask")\"}")"
+        ;;
+      layout)
+        publish_layout "$(json document - <"$ask")"
+        answer="$LAYOUT_ANSWER"
+        ;;
+      accept)
+        answer="$(accept_fixed "$(json feed <"$ask")" "$(json data - <"$ask")")"
+        ;;
+      state)
+        answer="$(canvas_fixture state "$TOKEN" "${FEEDS[$(json feed <"$ask")]}")"
+        ;;
+      state_of)
+        answer="$(canvas_fixture state "$TOKEN" "$(json binding <"$ask")")"
+        ;;
+      press)
+        answer="$(console feed/press "{\"binding\":\"$(json binding <"$ask")\",\"action_name\":\"$(json action <"$ask")\"}")"
+        ;;
+      bearer)
+        answer="$(canvas_fixture bearer "$TOKEN" "$(json reference <"$ask")")"
+        ;;
+      rebind)
+        arg="$(json feed <"$ask")"
+        old="${FEEDS[$arg]}"
+        removed="$(console feed/remove "{\"binding\":\"$old\"}")"
+        rebound="$(bind_feed "$arg" 60 "$(json args - <"$ask")" "$CANDLE_ACTIONS" Candles)"
+        if printf '%s' "$rebound" | grep -q '"ok"'; then FEEDS[$arg]="$(printf '%s' "$rebound" | binding_of)"; fi
+        answer="{\"old\":\"$old\",\"removed\":${removed:-null},\"bound\":${rebound:-null}}"
+        ;;
+      failed_fire)
+        rebound="$(bind_feed fire-check 1 '{"symbol":"FIRE"}' '[]' 'Fire check')"
+        if printf '%s' "$rebound" | grep -q '"ok"'; then
+          binding="$(printf '%s' "$rebound" | binding_of)"
+          fired="$(canvas_fixture failed_fire "$TOKEN" "$binding")"
+          removed="$(console feed/remove "{\"binding\":\"$binding\"}")"
+          answer="{\"bound\":$rebound,\"fire\":${fired:-null},\"removed\":${removed:-null}}"
+        else
+          answer="{\"bound\":${rebound:-null}}"
+        fi
+        ;;
+      *) answer="{\"error\":\"run.sh does not do $op\"}" ;;
+    esac
+    printf '%s\n' "${answer:-null}" >"$OUT/answer-$id.part"
+    mv "$OUT/answer-$id.part" "$OUT/answer-$id.json"
+  done
+  [ "$restore" = 1 ] && set -e
+  return 0
+}
+
+step "the canvas proof at $VIEWPORT in $PLAYWRIGHT_IMAGE"
+# CANVAS_PROOF_DEV narrows a local run (browsers=…;steps=…;measure=0); its
+# record says it is narrowed and never passes. A full run leaves it unset.
+playwright_run canvas-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cookie" /out "$VIEWPORT" "${CANVAS_PROOF_DEV:-}" &
 PROOF_PID=$!
-
-# The proof's last section asks for the release to be gone under its open
-# tabs; nothing else stops it before the proof ends. It is stopped by its
-# own stop, as an operator stops it: the release closes its listener and
-# refuses every LiveView connect before it drains the sockets it holds, so
-# a tab told to reconnect meets a closed port and is drawn anew by no
-# server about to go. `server-stopped` is answered once the release has
-# exited and its listener is gone.
 while kill -0 "$PROOF_PID" 2>/dev/null; do
-  if [ -f "$OUT/stop-server" ] && [ ! -f "$OUT/server-stopped" ]; then
-    step "stopping the release under the proof's open tabs"
-    server_stop "$CELL"
-    touch "$OUT/server-stopped"
-  fi
-  sleep 1
+  answer_asks
+  sleep 0.2
 done
 set +e
 wait "$PROOF_PID"
 status=$?
 set -e
 PROOF_PID=""
+
+# The record carries no credential this run held: the session token, the
+# browser's cookie, or a bearer the fixture minted. Once the record is
+# checked the answers, the one place a minted bearer was kept, go.
+step "the record's credentials"
+bearers="$(python3 -c '
+import glob, json, sys
+for path in glob.glob(sys.argv[1] + "/answer-*.json"):
+    try:
+        answer = json.load(open(path))
+    except ValueError:
+        continue
+    if isinstance(answer, dict) and isinstance(answer.get("bearer"), str):
+        print(answer["bearer"])' "$OUT")"
+for record in "$OUT/canvas-proof.json" "$OUT/canvas-proof.md"; do
+  if [ ! -s "$record" ]; then
+    echo "::error::the proof wrote no $record" >&2
+    status=1
+    continue
+  fi
+  while IFS= read -r secret; do
+    if [ -n "$secret" ] && grep -qF -- "$secret" "$record"; then
+      echo "::error::$record carries a credential this run held" >&2
+      status=1
+    fi
+  done <<<"$TOKEN
+$cookie
+$bearers"
+done
+remove_asks
 
 echo "the record: $OUT/canvas-proof.json and $OUT/canvas-proof.md"
 exit "$status"

@@ -1,0 +1,12 @@
+{
+  "name": "canvas-probe",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "The canvas proof's probe: a canvas whose module attempts every exit and keeps a rendered counter.",
+  "tincture": {
+    "frame": {"placement": "canvas"},
+    "canvas": {"module": "canvas.js", "toolkit": 1},
+    "streams": [{"name": "feed.results", "subject": "candles"}]
+  }
+}
