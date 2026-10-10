@@ -4,7 +4,7 @@
 defmodule Crucible.ProviderTest do
   use ExUnit.Case, async: false
 
-  # Runs and cancels run on the opus worker service.
+  # Runs and cancels run on the runtime's worker service.
 
   import Ecto.Query, only: [from: 2]
 

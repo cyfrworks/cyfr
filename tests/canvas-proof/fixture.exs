@@ -17,7 +17,7 @@
 #   source TOKEN NAME
 #       The feed source `catalyst:local.NAME` at 1.0.0, published through
 #       `Compendium.Registry.publish_bytes/4` as an empty core wasm module,
-#       which registration takes and no run can execute (`Opus.Runtime`
+#       which registration takes and no run can execute (`Locus.Runtime.Engine`
 #       refuses a core module). Its manifest's `results` declares the
 #       shape of each operation's data: `quote`, a symbol's price and its
 #       candles. Beside it, its owner profile, active, whose head consent

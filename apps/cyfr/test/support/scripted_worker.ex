@@ -12,13 +12,13 @@ defmodule Cyfr.Test.ScriptedWorker do
   never answers as the real worker service. It is served over HTTP by
   `Cyfr.Test.ScriptedWorkerListener` on a loopback port of its own, so
   `Crucible.Dispatch` reaches it through
-  `Crucible.WorkerClient` exactly as it reaches Opus: `endpoint/0`
+  `Crucible.WorkerClient` exactly as it reaches the runtime: `endpoint/0`
   is where. A run of a scripted reference is admitted by CYFR and
   dispatched here; `start/3` checks the assignment is addressed to this
   worker service and this boot, its input matches its digest and its
   sealed keys open as its attempt, then starts a runner. The runner
   reaches its attempt over HTTP, through a real `Crucible.HostListener`,
-  as Opus's runners do: at the address its assignment names, or, for an
+  as the runtime's runners do: at the address its assignment names, or, for an
   assignment naming none, at the listener this worker service starts on a
   loopback port of its own (`host_url/0`). Each call's body is the
   versioned request (`Prima.WorkerWire.request_body/2`) sealed under the
@@ -538,7 +538,7 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   # A runner's exit is reported from a process of its own, over HTTP to
   # the host listener the runner reached, plain and signed with this worker
-  # service's dispatch key, as Opus's worker service reports one. It is
+  # service's dispatch key, as the runtime's worker service reports one. It is
   # watched until it ends, so `await_reports/1` and `terminate/2` can wait
   # for it.
   defp report(state, runner) do
@@ -751,7 +751,7 @@ defmodule Cyfr.Test.ScriptedWorker do
     }
   end
 
-  # One host call of the runner's attempt, as Opus's host client makes it:
+  # One host call of the runner's attempt, as the runtime's host client makes it:
   # the versioned body sealed for the call, the header signed over the
   # sealed bytes, and the answer opened as the call's. A listener's own
   # refusal crosses plain. Answers the decoded answer, or a `lost` one for

@@ -45,7 +45,7 @@ defmodule Arca.ExecutionTest do
       # No silent "reagent" default — the writer must state the type.
       refute Row.start_changeset(base).valid?
 
-      # Tinctures are browser-side and never execute through Opus.
+      # Tinctures are browser-side and never execute through the runtime.
       refute Row.start_changeset(Map.put(base, :component_type, "tincture")).valid?
 
       for type <- Prima.ComponentRef.executable_types() do

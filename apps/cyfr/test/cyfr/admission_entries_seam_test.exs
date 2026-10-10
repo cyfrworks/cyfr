@@ -506,7 +506,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
       attempt: "att_" <> unique("seam"),
       fence: 1,
       generation: 1,
-      service: "opus",
+      service: "wrk_locus",
       boot: "boot_seam",
       runner: "runner_seam",
       member: "member_seam",
