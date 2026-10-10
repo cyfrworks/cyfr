@@ -1,7 +1,8 @@
 # CYFR self-hosted stack:
 #   cyfr        — the one endpoint (:4000): Prism (chat + console), API, MCP,
-#                 tinctures; its host API (:4300, the locus-runtime network
-#                 only) takes the runtime's host calls
+#                 tinctures; its host API (:4300) takes the runtime's host
+#                 calls, signed with a runtime worker's key, on every network
+#                 cyfr joins
 #   locus-backends — runs the stdio/npx MCP servers CYFR registers with
 #                 transport `stdio`, one owner per server row, each backend
 #                 under a uid and a memory bound of its own. Every request
@@ -123,8 +124,8 @@ services:
       # (env_file above).
       - CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-http://locus-backends:4101}
       # The runtime cyfr dispatches runs to, and where it listens for the
-      # runtime's host calls: every interface, since the container is
-      # reached over the locus-runtime network alone.
+      # runtime's host calls: every interface, so every network cyfr joins
+      # reaches it; it serves only calls signed with a runtime worker's key.
       # CYFR_LOCUS_RUNTIME_ROOT, the root the runtime's key derives from,
       # comes from .env.
       - CYFR_LOCUS_RUNTIME_WORKERS=${CYFR_LOCUS_RUNTIME_WORKERS:-wrk_locus=http://locus-runtime:4200}

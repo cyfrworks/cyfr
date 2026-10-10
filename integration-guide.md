@@ -1345,7 +1345,7 @@ its settings from its own environment alone, so each is given what
 compose's `environment:` gives its service besides the settings of its env
 example (`.env.locus.example`), the entrypoint compose gives it where the
 role is not the image's builds role, and the hardening the compose file
-gives the service: `cap_drop`, `cap_add`, `security_opt`, `init`, the
+gives the service: `cap_drop`, `cap_add`, `security_opt`, `init`, `ipc: none`, the
 read-only root and its tmpfs mounts.
 
 The runtime takes `LOCUS_RUNTIME_SERVICE_ID`, `LOCUS_RUNTIME_KEY` and

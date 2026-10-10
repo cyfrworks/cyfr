@@ -88,6 +88,7 @@ Owns every shape two sides must agree on and every primitive a trust island need
 - A module lives here only if a wire shape, a vector file, a trust island, a Go, Python or JavaScript consumer, or two apps above Prima reference it.
 - The network policy is pure: URL parsing, metadata refusal, private-address policy, pinned options, origin comparison, the credential headers a cross-origin hop strips, and domain matching. Resolution and transport are Sanctum's.
 - Every protocol carries an explicit version and has one vector file consumed by a test on every side, in every language.
+- **The Locus role table**, `Prima.LocusRoles` with its vector file `locus_roles.json`, declares the release's user and directories and each role's pool, uids, isolation, port, service, container and network. Locus selects its roles from it, the image suites read it, and a drift test holds every other spelling, in the image, compose and Locus files, to it.
 
 ### Arca: persistence
 
@@ -155,7 +156,7 @@ Owns CYFR's external application protocol adapters and the proxy port's outbound
 - Tinctures' served files and their frames' data routes (§7).
 - The directory's and restore's HTTP endpoints (§9.1), the renewal of a certificate the person's home issued for a device at another home (§9.2), and the device channel (§9.3).
 
-A component's egress stays Crucible's (§5.6), the control plane's own outbound calls stay with their owner through Sanctum's transport, and each island's protocol stays between that island and its owner.
+A component's egress stays Crucible's (§5.6), the control plane's own outbound calls stay with their owner through Sanctum's transport, and each of Locus's protocols stays between Locus and its owner.
 
 ### Prism: the screen
 
@@ -437,14 +438,14 @@ Memory is an assistant capability, `Aqua.Memory`, not a process the person tends
 - **Compilation.** Layer edges are Mix dependencies and Boundary declarations, so a forbidden edge fails to compile. Sanctum's lack of Ecto is enforced the same way.
 - **`Cyfr.Boundaries`** holds the rows the compiler cannot express, each with its reason: narrower allow lists, cross-application reaches, the security-read seam, the admission entries, the bus, gate, configuration, settings, route and port rosters, and the marker groups.
 - **Seam tests** hold actor-first arguments, the unscoped and bypass markers, roster membership, the surface reads each surface may make, Sanctum-only security storage, refusal rendering, the rule that no frame reaches a facade, and the rule that no sandbox token, CSP directive or served file type is written outside the tincture rules.
-- **Drift tests** compare every derived view with its owner: the CLI catalog, discovery, telemetry rosters, protocol vectors in every language, environment variables against the shipped examples, the configuration guide against the settings roster, the guides' tables, the route map and the glossary.
+- **Drift tests** compare every derived view with its owner: the CLI catalog, discovery, telemetry rosters, protocol vectors in every language, environment variables against the shipped examples, the image and compose files against the Locus role table, the configuration guide against the settings roster, the guides' tables, the route map and the glossary.
 - **Containment suites** run the shipped image in each of its roles: runner isolation, memory and network, builder and backend isolation, and the credential canary.
 
 ### Sources of truth
 
 | Fact | Owner | Derived views, drift-checked |
 |---|---|---|
-| Wire shapes, versions, signing domains, actor, authority data, MCP codec, device, identity and confirmation shapes | Prima | vector files; Go, Python and JavaScript codecs |
+| Wire shapes, versions, signing domains, actor, authority data, MCP codec, device, identity and confirmation shapes, the Locus role table | Prima | vector files; Go, Python and JavaScript codecs; the image and compose files |
 | Schemas, transactions, revision pointers, retention kinds, the lease row | Arca | schema fingerprint, baseline migration |
 | Who may do what, consent, credential projection, the changes that need fresh confirmation, identity decisions, caps | Sanctum | surface rosters, consent golden files, the system layer's prompts |
 | Operations, arguments, planes, permissions, streams | Grimoire providers | discovery, CLI catalog, consent shapes, guide tables, the canvas catalog |
