@@ -312,22 +312,52 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
                ["feed.list", "feed.press", "feed.remove"]
     end
 
-    test "a formula published with a manifest claiming to be an agent is granted neither", %{
+    test "a formula stored with a manifest claiming to be an agent is granted neither", %{
       ctx: ctx
     } do
-      # The manifest's own type passes the declaration check; the registry
-      # keeps the type the component was published as.
+      # A publish refuses a manifest naming another type than the published
+      # one; a row stored before it did keeps its claim, and the grant reads
+      # the type the row was registered as, never the manifest's own.
       manifest = %{
         "type" => "agent",
         "caps" => %{"tools" => ["feed.bind", "feed.remove", "feed.list"]}
       }
 
-      assert {:ok, _} =
+      assert {:error, {:manifest_identity_mismatch, _}} =
                Compendium.Registry.publish_bytes(ctx, @wasm, %{
                  name: "spoof",
                  version: "1.0.0",
                  type: "formula",
                  manifest: Jason.encode!(manifest)
+               })
+
+      assert {:error, :not_found} =
+               Compendium.Registry.get(ctx, "spoof", "1.0.0", "local", "formula")
+
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      assert {:ok, _} =
+               Arca.ComponentStorage.insert_component(Sanctum.Context.actor(ctx), %{
+                 id: Ecto.UUID.generate(),
+                 name: "spoof",
+                 version: "1.0.0",
+                 component_type: "formula",
+                 description: "A formula stored with an agent's manifest",
+                 tags: "[]",
+                 category: "test",
+                 license: "MIT",
+                 digest: "sha256:" <> String.duplicate("5", 64),
+                 size: byte_size(@wasm),
+                 exports: "[]",
+                 manifest: Jason.encode!(manifest),
+                 publisher: "local",
+                 publisher_id: nil,
+                 source: Compendium.Source.filesystem(),
+                 signature_verified: false,
+                 signer_identity: nil,
+                 signer_issuer: nil,
+                 inserted_at: now,
+                 updated_at: now
                })
 
       {:ok, row} = Compendium.Registry.get(ctx, "spoof", "1.0.0", "local", "formula")

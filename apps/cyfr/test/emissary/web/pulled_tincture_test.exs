@@ -123,13 +123,13 @@ defmodule Emissary.Web.PulledTinctureTest do
     ctx: ctx
   } do
     # The archive's own manifest is a floating page; the config blob makes
-    # it a desktop that reaches an origin, which the frame's rules refuse.
+    # it a canvas that reaches an origin, which the frame's rules refuse.
     float = manifest("pulled-swap", %{"entry" => "index.html"})
 
-    desktop =
+    canvas =
       manifest("pulled-swap", %{
-        "entry" => "index.html",
-        "frame" => %{"placement" => "desktop"},
+        "frame" => %{"placement" => "canvas"},
+        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
         "connect" => ["api.example.com"]
       })
 
@@ -137,8 +137,12 @@ defmodule Emissary.Web.PulledTinctureTest do
       publish(
         ctx,
         "pulled-swap",
-        archive([{"cyfr-manifest.json", float}, {"index.html", @page}]),
-        desktop
+        archive([
+          {"cyfr-manifest.json", float},
+          {"index.html", @page},
+          {"canvas.js", "export default () => {}"}
+        ]),
+        canvas
       )
 
     served = served(result, rctx, ctx, "pulled-swap", ["index.html"])
@@ -147,7 +151,7 @@ defmodule Emissary.Web.PulledTinctureTest do
            "installed the supplied manifest unchecked; its page is served as #{inspect(served)}"
 
     {:error, message} = result
-    assert message =~ "a desktop declares no tincture.connect origin"
+    assert message =~ "a canvas declares no tincture.connect origin"
     assert {:error, :not_found} = Compendium.Registry.get(ctx, "pulled-swap", "1.0.0")
   end
 end
