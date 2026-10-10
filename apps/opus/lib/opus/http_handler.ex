@@ -178,7 +178,7 @@ defmodule Opus.HttpHandler do
     exception ->
       Logger.error(
         "[Opus.HttpHandler] #{component_ref} request raised: " <>
-          Exception.format(:error, exception, __STACKTRACE__)
+          Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
       encode_error(:invalid_request, "Malformed HTTP request.")

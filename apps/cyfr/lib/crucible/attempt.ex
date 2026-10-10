@@ -1503,7 +1503,7 @@ defmodule Crucible.Attempt do
     exception ->
       Logger.error(
         "[Crucible.Attempt] #{state.execution_id} emit raised: " <>
-          Exception.format(:error, exception, __STACKTRACE__)
+          Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
       {emit_failed(), emit}
@@ -1628,7 +1628,7 @@ defmodule Crucible.Attempt do
     exception ->
       Logger.error(
         "[Crucible.Attempt] #{state.execution_id} token dispense raised: " <>
-          Exception.format(:error, exception, __STACKTRACE__)
+          Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
       {:error, :resolver_unavailable}

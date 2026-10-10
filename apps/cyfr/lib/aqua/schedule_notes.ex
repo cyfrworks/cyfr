@@ -80,7 +80,7 @@ defmodule Aqua.ScheduleNotes do
     kind, reason ->
       Logger.warning(
         "[ScheduleNotes] note not kept for schedule #{completed.schedule_id}: " <>
-          Exception.format_banner(kind, reason)
+          Prima.LogFilter.format_exception(kind, reason)
       )
 
       :not_kept

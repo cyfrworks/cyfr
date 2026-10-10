@@ -995,7 +995,7 @@ defmodule Grimoire.Catalog do
     e ->
       Logger.warning(
         "[Grimoire.Catalog] description-drift check failed: " <>
-          Exception.format(:error, e, __STACKTRACE__)
+          Prima.LogFilter.format_exception(:error, e, __STACKTRACE__)
       )
 
       :telemetry.execute(
@@ -1728,7 +1728,7 @@ defmodule Grimoire.Catalog do
     exception ->
       Logger.error(
         "[Grimoire.Catalog] Tool #{name} crashed: " <>
-          Exception.format(:error, exception, __STACKTRACE__)
+          Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
       {:error, {:crashed, "Tool #{name} crashed"}}
@@ -1805,7 +1805,7 @@ defmodule Grimoire.Catalog do
 
         {:exit, {exception, stacktrace}} when is_exception(exception) ->
           Logger.error(
-            "[Grimoire.Catalog] Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}"
+            "[Grimoire.Catalog] Tool #{name} crashed: #{Prima.LogFilter.format_exception(:error, exception, stacktrace)}"
           )
 
           # The tuple carries only the tool's name — the exception's own

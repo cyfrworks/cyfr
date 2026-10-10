@@ -240,7 +240,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
       exception ->
         Logger.warning(
           "[CommandPalette] entries could not be built: " <>
-            Exception.format(:error, exception, __STACKTRACE__)
+            Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
         )
 
         []

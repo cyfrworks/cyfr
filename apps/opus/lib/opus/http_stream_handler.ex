@@ -157,7 +157,7 @@ defmodule Opus.HttpStreamHandler do
     exception ->
       Logger.error(
         "[Opus.HttpStreamHandler] #{component_ref} #{name} raised: " <>
-          Exception.format(:error, exception, __STACKTRACE__)
+          Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
       encode_error(:stream_error, "The streaming request could not be served.")

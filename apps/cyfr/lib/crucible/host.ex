@@ -212,7 +212,7 @@ defmodule Crucible.Host do
     exception ->
       Logger.error(
         "[Crucible.Host] host call raised: " <>
-          Exception.format(:error, exception, __STACKTRACE__)
+          Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
       encode({:error, :lost})
@@ -236,7 +236,7 @@ defmodule Crucible.Host do
     exception ->
       Logger.error(
         "[Crucible.Host] runner exit report raised: " <>
-          Exception.format(:error, exception, __STACKTRACE__)
+          Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
       encode({:error, :unavailable})

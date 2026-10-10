@@ -260,18 +260,9 @@ defmodule Opus.Attempt do
     do: "Execution error: #{message}"
 
   defp exception_message(exception, stacktrace) do
-    frames =
-      Enum.map(stacktrace, fn
-        {module, function, args, location} when is_list(args) ->
-          {module, function, length(args), location}
-
-        frame ->
-          frame
-      end)
-
     Logger.error(
       "[Opus.Attempt] execution raised #{inspect(exception.__struct__)}\n" <>
-        Exception.format_stacktrace(frames)
+        Prima.LogFilter.format_stacktrace(stacktrace)
     )
 
     "Execution error: the engine raised an internal error"

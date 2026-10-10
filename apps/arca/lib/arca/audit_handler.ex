@@ -133,7 +133,7 @@ defmodule Arca.AuditHandler do
     kind, reason ->
       Logger.error(
         "[AuditHandler] handler failed for #{inspect(event_name)}: " <>
-          Exception.format_banner(kind, reason) <>
+          Prima.LogFilter.format_exception(kind, reason) <>
           " — the event was not audited; the handler stays attached"
       )
 

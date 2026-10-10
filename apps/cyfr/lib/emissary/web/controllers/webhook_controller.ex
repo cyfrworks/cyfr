@@ -336,7 +336,7 @@ defmodule Emissary.Web.WebhookController do
     rescue
       e ->
         duration_ms = duration_ms(start_time)
-        formatted = Exception.format(:error, e, __STACKTRACE__)
+        formatted = Prima.LogFilter.format_exception(:error, e, __STACKTRACE__)
         Logger.error("[WebhookInvoke] crashed slug=#{webhook.slug}\n#{formatted}")
 
         # The crash arm obeys the same two rules as the {:error, reason}

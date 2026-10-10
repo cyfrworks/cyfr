@@ -3,8 +3,9 @@
 
 defmodule Prima.LogFilter do
   @moduledoc """
-  The primary Logger filter every node installs, so that no stack frame
-  or call in a log event carries the argument values of its call.
+  The primary Logger filter every node installs, and the formatter every
+  caller that writes an exception into text uses, so that no stack frame
+  or call in a log carries the argument values of its call.
 
   A function-clause, argument or undefined-function error records the
   failed call's arguments in the top frame of its stacktrace. OTP attaches
@@ -24,7 +25,11 @@ defmodule Prima.LogFilter do
   count. Module, function, arity and location stay. It does so wherever
   the event holds a term: in the report, in the format arguments, and in
   every metadata value, `:crash_reason` among them. An event with nothing
-  to reduce passes as it came.
+  to reduce passes as it came. `format_exception/3` and
+  `format_stacktrace/1` apply the same rule before formatting, so text a
+  caller logs, records or answers carries no argument either;
+  `Cyfr.LoggerRosterTest` holds every other `Exception` formatter out of
+  the applications' code.
 
   The filter must see the event before Elixir's translator formats the
   report into text. Logger installs its translator as a primary filter
@@ -32,12 +37,11 @@ defmodule Prima.LogFilter do
   earlier, so each node installs this one from its first application
   start, before any process of the node holds a secret: `Arca.Supervisor`
   on the control plane, `Opus.Application` in either role, and
-  `Locus.Application`.
+  `Locus.Application`. A `Cyfr.Release` task, which runs where no
+  application starts, installs it too.
 
-  It cannot reach text a caller formatted before logging, such as
-  `Exception.format/3` interpolated into a message, nor a value an
-  exception's reason carries outside a frame or a call (a `MatchError`'s
-  term).
+  Neither reaches a value an exception's reason carries outside a frame or
+  a call (a `MatchError`'s term), nor text formatted any other way.
   """
 
   @id :prima_log_filter
@@ -73,6 +77,22 @@ defmodule Prima.LogFilter do
   catch
     _kind, _reason -> :stop
   end
+
+  @doc """
+  `kind`, `reason` and `stacktrace` as `Exception.format/3` writes them,
+  every frame and every call reduced to its arity first. With no
+  stacktrace it is `Exception.format_banner/2`'s text.
+  """
+  @spec format_exception(Exception.kind(), term(), Exception.stacktrace()) :: String.t()
+  def format_exception(kind, reason, stacktrace \\ []),
+    do: Exception.format(kind, redact(reason), redact(stacktrace))
+
+  @doc """
+  `stacktrace` as `Exception.format_stacktrace/1` writes it, every frame
+  reduced to its arity first.
+  """
+  @spec format_stacktrace(Exception.stacktrace()) :: String.t()
+  def format_stacktrace(stacktrace), do: Exception.format_stacktrace(redact(stacktrace))
 
   defp message({:string, _chardata} = string), do: string
   defp message({:report, report} = msg), do: kept(msg, 2, report)

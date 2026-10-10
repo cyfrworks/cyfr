@@ -8,7 +8,8 @@ defmodule Prima.LogFilterTest do
   a server and a task that crashed on a call they made each name their
   frames and calls by arity, through Logger's own translator; every crash
   report shape OTP writes is reduced the same way, and an event with
-  nothing to reduce passes as it came.
+  nothing to reduce passes as it came. The text the formatters write of an
+  exception, an exit or a stacktrace carries no argument either.
 
   The filter is a primary filter, so this module runs alone and leaves it
   installed only if a node's boot had installed it already.
@@ -320,6 +321,55 @@ defmodule Prima.LogFilterTest do
     test "an event it cannot read is dropped" do
       assert LogFilter.filter(%{msg: {:report, %{}}}, []) == :stop
       assert LogFilter.filter(:not_an_event, []) == :stop
+    end
+  end
+
+  describe "the formatters" do
+    test "an exception's text names its frames by arity, never their arguments" do
+      {error, stacktrace} =
+        try do
+          apply(Holder, :handle_cast, [{:unexpected, @message_secret}, %{token: @state_secret}])
+        rescue
+          error -> {error, __STACKTRACE__}
+        end
+
+      # What Exception.format/3 writes of the same failure.
+      assert Exception.format(:error, error, stacktrace) =~ @message_secret
+
+      text = LogFilter.format_exception(:error, error, stacktrace)
+
+      assert text =~
+               "** (FunctionClauseError) no function clause matching in " <>
+                 "Prima.LogFilterTest.Holder.handle_cast/2"
+
+      assert text =~ ~r"log_filter_test\.exs:\d+: Prima\.LogFilterTest\.Holder\.handle_cast/2\n"
+      refute_secrets([], text)
+    end
+
+    test "an exit's text names its call by arity" do
+      reason = {:timeout, {GenServer, :call, [self(), {:put, @message_secret}, 5_000]}}
+      assert Exception.format(:exit, reason) =~ @message_secret
+
+      text = LogFilter.format_exception(:exit, reason)
+      assert text =~ "{GenServer, :call, 3}"
+      refute_secrets([], text)
+    end
+
+    test "with no stacktrace the text is the banner" do
+      error = %RuntimeError{message: "the task failed"}
+      assert LogFilter.format_exception(:error, error) == Exception.format_banner(:error, error)
+
+      assert LogFilter.format_exception(:throw, :thrown) ==
+               Exception.format_banner(:throw, :thrown)
+    end
+
+    test "a stacktrace's text names each frame by arity" do
+      assert Exception.format_stacktrace([@frame, @outer]) =~ @message_secret
+
+      text = LogFilter.format_stacktrace([@frame, @outer])
+      assert text =~ "lib/holder.ex:7: Prima.LogFilterTest.Holder.handle_cast/2\n"
+      assert text =~ ":gen_server.try_handle_cast/3"
+      refute_secrets([], text)
     end
   end
 

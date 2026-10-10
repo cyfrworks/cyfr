@@ -462,7 +462,7 @@ defmodule Compendium.ProjectionReconciler do
     e ->
       Logger.error(
         "[Compendium.ProjectionReconciler] #{what} raised: " <>
-          Exception.format(:error, e, __STACKTRACE__)
+          Prima.LogFilter.format_exception(:error, e, __STACKTRACE__)
       )
   end
 

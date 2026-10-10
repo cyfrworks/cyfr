@@ -276,6 +276,25 @@ defmodule Opus.WorkerServiceTest do
     send(held, :go)
   end
 
+  test "a crash report of a start call shows none of its token, input or keys" do
+    caller = self()
+
+    status = %{
+      state: %{credentials: :held, executions: %{}},
+      message: {:start, "token-planted-6d1a", "input-planted-0c4e", "keys-planted-93b7", caller},
+      reason: :function_clause,
+      log: []
+    }
+
+    reduced = WorkerService.format_status(status)
+    assert reduced.message == {:start, :redacted, :redacted, :redacted, caller}
+    assert reduced.state == %{executions: %{}}
+    refute inspect(reduced, limit: :infinity, printable_limit: :infinity) =~ "planted"
+
+    # A status read carries no message and gains none.
+    refute Map.has_key?(WorkerService.format_status(%{state: %{credentials: :held}}), :message)
+  end
+
   describe "what a runner's report names" do
     @describetag :scripted
 

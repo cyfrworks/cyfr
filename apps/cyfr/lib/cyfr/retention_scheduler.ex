@@ -585,7 +585,8 @@ defmodule Cyfr.RetentionScheduler do
   rescue
     e ->
       Logger.error(
-        "[RetentionScheduler] #{label} crashed: " <> Exception.format(:error, e, __STACKTRACE__)
+        "[RetentionScheduler] #{label} crashed: " <>
+          Prima.LogFilter.format_exception(:error, e, __STACKTRACE__)
       )
 
       nil

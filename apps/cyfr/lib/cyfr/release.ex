@@ -115,6 +115,12 @@ defmodule Cyfr.Release do
   defp repos, do: Application.fetch_env!(@app, :ecto_repos)
 
   defp load_app do
+    # A task runs in `bin/cyfr eval`, where no application start installs
+    # the log filter, over keys and sealed rows: Logger first, so the filter
+    # goes ahead of its translator, then the filter (`Prima.LogFilter`).
+    {:ok, _started} = Application.ensure_all_started(:logger)
+    :ok = Prima.LogFilter.install()
+
     # The repositories are the `arca` application's and the key rotation is
     # the `sanctum` application's; both are loaded so their configuration
     # is readable without starting either.

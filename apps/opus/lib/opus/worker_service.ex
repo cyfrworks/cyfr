@@ -303,10 +303,21 @@ defmodule Opus.WorkerService do
     {:noreply, state}
   end
 
-  # The credentials hold this service's keys, which no status or crash
-  # report shows.
+  # The credentials hold this service's keys, and a `:start` call carries
+  # an assignment's token, its input and its sealed keys: no status or
+  # crash report shows any of them.
   @impl true
-  def format_status(status), do: Map.update(status, :state, nil, &Map.delete(&1, :credentials))
+  def format_status(status) do
+    status
+    |> Map.update(:state, nil, &Map.delete(&1, :credentials))
+    |> Map.replace_lazy(:message, fn
+      {:start, _token, _input, _sealed_keys, caller} ->
+        {:start, :redacted, :redacted, :redacted, caller}
+
+      message ->
+        message
+    end)
+  end
 
   # ---------------------------------------------------------------------------
   # Starting

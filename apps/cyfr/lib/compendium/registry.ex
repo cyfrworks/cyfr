@@ -1071,7 +1071,7 @@ defmodule Compendium.Registry do
       e ->
         Logger.error(
           "[Compendium.Registry] tincture publish raised: " <>
-            Exception.format(:error, e, __STACKTRACE__)
+            Prima.LogFilter.format_exception(:error, e, __STACKTRACE__)
         )
 
         {:error, "Tincture publish failed unexpectedly — see the server log"}

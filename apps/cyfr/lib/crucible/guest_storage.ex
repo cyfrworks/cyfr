@@ -172,7 +172,7 @@ defmodule Crucible.GuestStorage do
     exception ->
       Logger.error(
         "[Crucible.GuestStorage] #{op} raised: " <>
-          Exception.format(:error, exception, __STACKTRACE__)
+          Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
       guest_error(:storage_error, "Internal storage error.")

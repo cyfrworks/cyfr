@@ -227,7 +227,7 @@ defmodule Crucible.Schedules.Scheduler do
       load_retry(state, Exception.message(e), level)
   catch
     :exit, reason ->
-      load_retry(state, "exited: " <> Exception.format_exit(reason), :warning)
+      load_retry(state, Prima.LogFilter.format_exception(:exit, reason), :warning)
   end
 
   defp load_retry(state, why, level \\ :error) do

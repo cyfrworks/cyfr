@@ -227,7 +227,7 @@ defmodule Opus.FormulaHandler do
     exception ->
       Logger.error(
         "[FormulaHandler] #{parent_execution_id} #{name} raised: " <>
-          Exception.format(:error, exception, __STACKTRACE__)
+          Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
       encode_error(:dispatch_error, "The #{name} call failed.")
@@ -619,7 +619,7 @@ defmodule Opus.FormulaHandler do
 
           Logger.error(
             "[Opus.FormulaHandler] spawned #{tool_action} raised: " <>
-              Exception.format(:error, e, __STACKTRACE__)
+              Prima.LogFilter.format_exception(:error, e, __STACKTRACE__)
           )
 
           {encode_error(:dispatch_error, "The call failed."), %{tool: tool, action: action}}

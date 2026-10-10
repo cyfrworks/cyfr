@@ -229,7 +229,7 @@ defmodule Crucible.Close do
   def exception_message(exception, stacktrace) do
     Logger.error(
       "[Crucible.Close] execution raised: " <>
-        Exception.format(:error, exception, stacktrace)
+        Prima.LogFilter.format_exception(:error, exception, stacktrace)
     )
 
     "Execution error: the engine raised an internal error"

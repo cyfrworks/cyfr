@@ -1234,7 +1234,8 @@ defmodule Arca.ExecutionAttempts do
       other -> crashed(intent, {:answered, other})
     end
   rescue
-    exception -> crashed(intent, Exception.format(:error, exception, __STACKTRACE__))
+    exception ->
+      crashed(intent, Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__))
   catch
     kind, _payload -> crashed(intent, "ended with a #{kind}")
   end

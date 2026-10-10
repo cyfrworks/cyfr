@@ -126,7 +126,7 @@ defmodule Cyfr.TelemetryBridge do
     kind, reason ->
       Logger.warning(
         "[Cyfr.TelemetryBridge] #{inspect(event)} not bridged: " <>
-          Exception.format_banner(kind, reason)
+          Prima.LogFilter.format_exception(kind, reason)
       )
 
       :ok
@@ -439,7 +439,7 @@ defmodule Cyfr.TelemetryBridge do
     kind, reason ->
       Logger.warning(
         "[Cyfr.TelemetryBridge] #{inspect(event)} not published: " <>
-          Exception.format_banner(kind, reason)
+          Prima.LogFilter.format_exception(kind, reason)
       )
   end
 end
