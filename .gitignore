@@ -33,6 +33,7 @@ erl_crash.dump
 *~
 .gemini
 .kilocode
+.cursor
 .claude
 AGENTS.md
 CLAUDE.md
