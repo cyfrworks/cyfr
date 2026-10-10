@@ -5,10 +5,11 @@ defmodule Locus.Runtime.CredentialsTest do
   @moduledoc """
   A worker service is what `config :locus, :runtime` says it is, and
   nothing else: its id, the worker key CYFR derived for it, where CYFR is
-  and where it listens. Each value missing or malformed refuses; the keys
-  it derives are the ones CYFR derives; and the control plane's own
-  configuration in a runtime node's environment refuses the node, through
-  the one list every role's boot reads (`Locus.Config`).
+  and where it listens. Each value missing or malformed refuses, and the
+  keys it derives are the ones CYFR derives. The control plane's own
+  configuration in a runtime node's environment refuses the node before
+  these are read, through the one list every role's boot reads, which
+  `Locus.Config`'s suite holds.
   """
 
   # The boot refusal edits the application environment the running service
@@ -90,32 +91,6 @@ defmodule Locus.Runtime.CredentialsTest do
     after
       Locus.Runtime.Test.Env.restore(previous)
     end
-  end
-
-  test "the control plane's configuration in a runtime node's environment is refused by name" do
-    env = fn map -> &Map.get(map, &1) end
-
-    key = %{
-      "LOCUS_RUNTIME_KEY" => String.duplicate("ab", 32),
-      "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
-    }
-
-    assert Locus.Config.refused_environment(env.(Map.merge(key, %{"PATH" => "/bin"}))) == []
-
-    refused =
-      Locus.Config.refused_environment(
-        env.(
-          Map.merge(key, %{
-            "CYFR_LOCUS_RUNTIME_ROOT" => "x",
-            "CYFR_DATABASE_URL" => "postgres://",
-            "CYFR_CRYPTO_KEYRING" => "y",
-            "LOCUS_RUNTIME_PORT" => "4200"
-          })
-        )
-      )
-
-    assert Enum.sort(refused) ==
-             Enum.sort(["CYFR_LOCUS_RUNTIME_ROOT", "CYFR_CRYPTO_KEYRING", "CYFR_DATABASE_URL"])
   end
 
   test "a credential's inspection shows its identity and never its keys" do

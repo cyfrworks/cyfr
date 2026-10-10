@@ -11,7 +11,7 @@ defmodule Locus.Runtime.Release do
   the credentials, the listener CYFR reaches it through, the worker service
   and its runner pool, and loads no component. A runner is an OS process
   the service started through its keeper (`Locus.Runtime.Keeper`) with the
-  environment `Locus.Runtime.Settings.runner/1` reads and nothing else: it
+  environment `Locus.Config.runner/1` reads and nothing else: it
   holds no key, opens its control channel (`open_control/1`) and runs one
   subtree at a time (`Locus.Runtime.Runner`).
 

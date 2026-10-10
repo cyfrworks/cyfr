@@ -34,8 +34,8 @@ defmodule Cyfr.Platform.Settings.Roster do
   it, which `mix cyfr.gen.configuration_guide` renders from this module.
 
   `config/runtime.exs` reads this module only on the `cyfr` boot: an island
-  release carries no host module, and `Locus.Runtime.Settings` and `Locus.Config`
-  declare their own prefixes.
+  release carries no host module, and `Locus.Config` declares its own
+  prefixes.
   """
 
   defmodule Entry do

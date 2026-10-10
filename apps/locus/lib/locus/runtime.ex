@@ -68,7 +68,7 @@ defmodule Locus.Runtime do
   @spec start_runner() :: Supervisor.on_start()
   def start_runner do
     :ok = Locus.Runtime.Release.log_to_stderr()
-    settings = Locus.Runtime.Settings.runner!()
+    settings = Locus.Config.runner!()
 
     # A runner is one job's VM: a child that fails is not restarted, the VM
     # ends instead, and the service reports what it assigned.

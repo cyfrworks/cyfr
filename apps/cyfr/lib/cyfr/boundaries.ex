@@ -2402,13 +2402,6 @@ defmodule Cyfr.Boundaries do
     "apps/cyfr/test/grimoire/error_renderers_test.exs" =>
       "the in-chain guest's renderer is the runtime's, and the one-vocabulary case is " <>
         "that the three renderers agree sentence for sentence.",
-    "apps/cyfr/test/cyfr/runtime_env_reading_test.exs" =>
-      "pins the shape of the reads in `config/runtime.exs`, and that file configures " <>
-        "the runtime a `mix` boot runs beside CYFR too: what it names, this case quotes.",
-    "apps/cyfr/test/cyfr/platform_settings_roster_test.exs" =>
-      "holds the inventory of every name a boot reads, and the runtime declares its own " <>
-        "prefix (`Locus.Runtime.Settings.variables/0`): a `mix` boot's refusal of a stray " <>
-        "`LOCUS_RUNTIME_*` name is `Locus.Runtime.Settings.unknown/1`'s, and this case quotes it.",
     "apps/cyfr/test/cyfr/wit_abi_drift_test.exs" =>
       "names `Locus.Runtime.Engine` in the sentence its failure prints, so a reader is told " <>
         "which side of the ABI to look at."

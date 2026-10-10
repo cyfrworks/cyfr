@@ -5,28 +5,17 @@ defmodule Locus.Runtime.SettingsTest do
   @moduledoc """
   The service's pool settings come from `config :locus, :runtime` with
   defaults in code, each validated, the keeper the cyfr-locus channel when
-  unset, a runner's memory bound in the keeper's own range and never none;
-  the service's `LOCUS_RUNTIME_*` environment reads into that keyword, or
-  into nothing without the runtime's key; a runner's settings come from
-  its `RUNTIME_*` environment alone, outside every prefix the keeper
-  refuses in a spawn, and a runner that can see the service's key refuses
-  to start.
+  unset, a runner's memory bound in the keeper's own range and never none,
+  and no `LOCUS_RUNTIME_*` name in the environment that `Locus.Config`
+  does not declare; the environment a runner is handed is its declared
+  `RUNTIME_*` names alone; and the module reads no variable by name.
+  `Locus.Config`'s suite holds how the environment is read.
   """
 
   # `pool!/0` reads the application environment, which one test alters.
   use ExUnit.Case, async: false
 
   alias Locus.Runtime.Settings
-
-  @runner_env %{
-    "RUNTIME_RUNNER_ID" => "runner_1",
-    "RUNTIME_SERVICE_ID" => "wrk_local",
-    "RUNTIME_BOOT_ID" => "nonode@nohost#boot_1"
-  }
-
-  @key_hex String.duplicate("ab", 32)
-
-  defp getenv(map), do: &Map.get(map, &1)
 
   describe "pool/2" do
     test "defaults: four fresh runners, a 30 s idle TTL, a 5 s watchdog grace, a 2 s release grace, a 384 MiB runner bound" do
@@ -42,6 +31,18 @@ defmodule Locus.Runtime.SettingsTest do
               }} = Settings.pool([], %{})
 
       assert {:ok, 402_653_184} = Settings.runner_memory_bytes([])
+
+      # Each default has one definition, which a runner's grace takes too.
+      for {key, value} <- [
+            pool_size: 4,
+            idle_ttl_ms: 30_000,
+            watchdog_grace_ms: 5_000,
+            release_grace_ms: 2_000,
+            attach_dir: "/run/locus",
+            runner_memory_bytes: 402_653_184
+          ] do
+        assert Settings.default(key) == value
+      end
     end
 
     test "unset, the keeper is the channel whatever the environment says; set, what the configuration names" do
@@ -61,10 +62,10 @@ defmodule Locus.Runtime.SettingsTest do
                Settings.pool([keeper: Locus.DirectLauncher.Runner], %{})
     end
 
-    # The release carries no host module, so the prefix is declared here:
-    # a `LOCUS_RUNTIME_*` name the service does not read refuses by name,
-    # whether the process or an .env file a development boot sourced sets
-    # it.
+    # The release carries no host module, so `Locus.Config` declares the
+    # prefix: a `LOCUS_RUNTIME_*` name the service does not read refuses by
+    # name, whether the process or an .env file a development boot sourced
+    # sets it.
     test "a LOCUS_RUNTIME_* name the service does not read refuses, naming it" do
       assert {:error, {:unknown, ["LOCUS_RUNTIME_POOL_SIZ"]}} =
                Settings.pool([], %{"LOCUS_RUNTIME_POOL_SIZ" => "4", "PATH" => "/bin"})
@@ -72,18 +73,18 @@ defmodule Locus.Runtime.SettingsTest do
       assert {:error, {:unknown, ["LOCUS_RUNTIME_A", "LOCUS_RUNTIME_B"]}} =
                Settings.pool([], %{"LOCUS_RUNTIME_B" => "", "LOCUS_RUNTIME_A" => "1"})
 
-      assert Settings.unknown(["LOCUS_RUNTIME_POOL_SIZ"]) =~
+      assert Locus.Config.unknown(["LOCUS_RUNTIME_POOL_SIZ"]) =~
                "LOCUS_RUNTIME_POOL_SIZ is not a variable the locus release reads"
 
       # What it reads, other roles' names and other prefixes pass.
       system =
         Map.new(
-          Settings.variables() ++ ["KEEPER_CHANNEL", "CYFR_HOST", "LOCUS_BUILDS_KEY"],
+          Locus.Config.variables() ++ ["KEEPER_CHANNEL", "CYFR_HOST", "LOCUS_BUILDS_KEY"],
           &{&1, "set"}
         )
 
-      assert Settings.unknown_names(system) == []
-      assert Settings.unknown_names(Map.keys(system)) == []
+      assert Locus.Config.unknown_names(Map.keys(system), :runtime) == []
+      assert {:ok, _pool} = Settings.pool([], system)
     end
 
     test "pool!/0 refuses a stray LOCUS_RUNTIME_* name in the process environment" do
@@ -91,7 +92,7 @@ defmodule Locus.Runtime.SettingsTest do
       on_exit(fn -> System.delete_env("LOCUS_RUNTIME_STRAY_FOR_TEST") end)
 
       assert_raise ArgumentError,
-                   ~r/LOCUS_RUNTIME_STRAY_FOR_TEST is not a variable/,
+                   ~r/\A\[Locus\.Runtime\.Settings\] LOCUS_RUNTIME_STRAY_FOR_TEST is not a variable/,
                    &Settings.pool!/0
     end
 
@@ -105,8 +106,8 @@ defmodule Locus.Runtime.SettingsTest do
           watchdog_grace_ms: 5_000
         })
 
-      assert Map.keys(env) -- Settings.variables() == []
-      assert "RUNTIME_CONTROL_FD" in Settings.variables()
+      assert Map.keys(env) -- Locus.Config.variables(:runner) == []
+      assert "RUNTIME_CONTROL_FD" in Locus.Config.variables(:runner)
     end
 
     # A subtree runs in a runner's VM of its own in every build, the test
@@ -149,7 +150,7 @@ defmodule Locus.Runtime.SettingsTest do
     end
 
     test "a runner's memory bound is a whole number of bytes in the keeper's range, never none" do
-      assert Settings.runner_memory_range() == 16_777_216..1_099_511_627_776
+      assert Locus.Config.memory_range() == 16_777_216..1_099_511_627_776
 
       for bytes <- [16_777_216, 536_870_912, 1_099_511_627_776] do
         assert {:ok, %{runner_memory_bytes: ^bytes}} =
@@ -205,246 +206,99 @@ defmodule Locus.Runtime.SettingsTest do
     end
   end
 
-  describe "from_env/2" do
-    test "without the runtime's key, nothing: the node serves no runtime" do
-      assert {:ok, nil} = Settings.from_env(getenv(%{}))
+  # `Locus.Config` declares and reads every variable of the release, and
+  # the docs drift scan reads it alone, so this module's own source is
+  # held here: it reads no variable by name, and the only names it spells
+  # are the ones it hands a runner.
+  describe "the source" do
+    @source Path.expand("../../../lib/locus/runtime/settings.ex", __DIR__)
 
-      assert {:ok, nil} =
-               Settings.from_env(getenv(%{"LOCUS_RUNTIME_PORT" => "4200"}), host_url: "http://h")
+    # The calls that read the process environment, by module and function.
+    @env_reads [{System, :get_env}, {System, :fetch_env}, {System, :fetch_env!}, {:os, :getenv}]
 
-      assert {:ok, nil} = Settings.from_env(getenv(%{"LOCUS_RUNTIME_KEY" => "  "}))
+    test "reads no variable by name, spells no LOCUS_ name, and only the RUNTIME_ names it hands a runner" do
+      ast = @source |> File.read!() |> Code.string_to_quoted!()
+
+      assert reads_by_name(ast) == [],
+             "settings.ex reads the environment by name; Locus.Config reads every variable"
+
+      literals = string_literals(ast)
+
+      assert Enum.filter(literals, &String.starts_with?(&1, "LOCUS_")) == [],
+             "settings.ex spells a LOCUS_ name; Locus.Config declares every one"
+
+      written =
+        Settings.runner_environment(%{
+          runner_id: "r",
+          service_id: "wrk_local",
+          boot: "b",
+          watchdog_grace_ms: 1
+        })
+
+      spelled =
+        literals
+        |> Enum.filter(&String.starts_with?(&1, "RUNTIME_"))
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      assert spelled == written |> Map.keys() |> Enum.sort()
+      assert spelled -- Locus.Config.variables(:runner) == []
     end
 
-    test "the service's settings from LOCUS_RUNTIME_*, in the shape the credentials and the pool read" do
-      env = %{
-        "LOCUS_RUNTIME_SERVICE_ID" => "wrk_locus",
-        "LOCUS_RUNTIME_KEY" => @key_hex,
-        "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300/",
-        "LOCUS_RUNTIME_BIND" => "0.0.0.0",
-        "LOCUS_RUNTIME_PORT" => "4200",
-        "LOCUS_RUNTIME_POOL_SIZE" => "6",
-        "LOCUS_RUNTIME_IDLE_TTL_MS" => "1000",
-        "LOCUS_RUNTIME_WATCHDOG_GRACE_MS" => "2000",
-        "LOCUS_RUNTIME_RELEASE_GRACE_MS" => "3000",
-        "LOCUS_RUNTIME_MEMORY_BYTES" => "268435456",
-        "LOCUS_RUNTIME_ATTACH_DIR" => "/run/locus"
-      }
-
-      assert {:ok, runtime} = Settings.from_env(getenv(env))
-
-      assert runtime == [
-               service_id: "wrk_locus",
-               service_key: @key_hex,
-               host_url: "http://cyfr:4300/",
-               bind: "0.0.0.0",
-               port: 4200,
-               pool_size: 6,
-               idle_ttl_ms: 1000,
-               watchdog_grace_ms: 2000,
-               release_grace_ms: 3000,
-               runner_memory_bytes: 268_435_456,
-               attach_dir: "/run/locus"
-             ]
-
-      assert {:ok, %Locus.Runtime.Credentials{port: 4200}} =
-               Locus.Runtime.Credentials.load(runtime)
-
-      assert {:ok, %{pool_size: 6, keeper: :channel}} = Settings.pool(runtime, %{})
-    end
-
-    test "unset, a setting is the fallback's, else the service's default; the pool's stay unset" do
-      assert {:ok, runtime} =
-               Settings.from_env(getenv(%{"LOCUS_RUNTIME_KEY" => @key_hex}),
-                 host_url: "http://h:1"
-               )
-
-      assert runtime == [
-               service_id: "wrk_local",
-               service_key: @key_hex,
-               host_url: "http://h:1",
-               bind: "127.0.0.1",
-               port: 4200
-             ]
-
-      # The fallback's key serves where the variable is unset; the
-      # variable wins where it is set.
-      fallback_key = String.duplicate("cd", 32)
-
-      assert {:ok, [{:service_id, "wrk_local"}, {:service_key, ^fallback_key} | _]} =
-               Settings.from_env(getenv(%{}), service_key: fallback_key, host_url: "http://h")
-
-      assert {:ok, [{:service_id, "wrk_local"}, {:service_key, @key_hex} | _]} =
-               Settings.from_env(getenv(%{"LOCUS_RUNTIME_KEY" => @key_hex}),
-                 service_key: fallback_key,
-                 host_url: "http://h"
-               )
-    end
-
-    test "a missing or malformed value refuses, naming its variable and never echoing the key" do
-      base = %{
-        "LOCUS_RUNTIME_KEY" => @key_hex,
-        "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
-      }
-
-      for {overrides, message} <- [
-            {%{"LOCUS_RUNTIME_HOST_API_URL" => nil}, "LOCUS_RUNTIME_HOST_API_URL is not set"},
-            {%{"LOCUS_RUNTIME_KEY" => "abc"}, "LOCUS_RUNTIME_KEY must be"},
-            {%{"LOCUS_RUNTIME_SERVICE_ID" => "runtime"}, "LOCUS_RUNTIME_SERVICE_ID must be"},
-            {%{"LOCUS_RUNTIME_HOST_API_URL" => "cyfr:4300"},
-             "LOCUS_RUNTIME_HOST_API_URL must be"},
-            {%{"LOCUS_RUNTIME_BIND" => "cyfr"}, "LOCUS_RUNTIME_BIND must be"},
-            {%{"LOCUS_RUNTIME_PORT" => "http"}, "LOCUS_RUNTIME_PORT must be"},
-            {%{"LOCUS_RUNTIME_PORT" => "65536"}, "LOCUS_RUNTIME_PORT must be"},
-            {%{"LOCUS_RUNTIME_POOL_SIZE" => "0"}, "LOCUS_RUNTIME_POOL_SIZE"},
-            {%{"LOCUS_RUNTIME_IDLE_TTL_MS" => "1s"}, "LOCUS_RUNTIME_IDLE_TTL_MS"},
-            {%{"LOCUS_RUNTIME_WATCHDOG_GRACE_MS" => "600001"}, "LOCUS_RUNTIME_WATCHDOG_GRACE_MS"},
-            {%{"LOCUS_RUNTIME_RELEASE_GRACE_MS" => "-1"}, "LOCUS_RUNTIME_RELEASE_GRACE_MS"},
-            {%{"LOCUS_RUNTIME_ATTACH_DIR" => "run/locus"}, "LOCUS_RUNTIME_ATTACH_DIR must be"}
+    test "the scan finds a read by name in every form, and passes the whole environment's read" do
+      for source <- [
+            ~S[System.get_env("X")],
+            ~S[System.get_env("X", "y")],
+            ~S[System.fetch_env("X")],
+            ~S[System.fetch_env!("X")],
+            ~S[:os.getenv(~c"X")],
+            ~S[:os.getenv(~c"X", ~c"y")],
+            ~S["X" |> System.get_env()],
+            ~S[f = &System.get_env/1]
           ] do
-        env = base |> Map.merge(overrides) |> Map.reject(fn {_k, v} -> is_nil(v) end)
-        assert {:error, refusal} = Settings.from_env(getenv(env)), inspect(overrides)
-        assert refusal =~ message, refusal
-        refute refusal =~ @key_hex
-      end
-    end
-
-    test "the memory bound takes the whole of the keeper's range, and nothing outside it" do
-      base = %{
-        "LOCUS_RUNTIME_KEY" => @key_hex,
-        "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
-      }
-
-      assert {:ok, runtime} = Settings.from_env(getenv(base))
-      refute Keyword.has_key?(runtime, :runner_memory_bytes)
-
-      for bytes <- ["16777216", "402653184", "1099511627776"] do
-        env = Map.put(base, "LOCUS_RUNTIME_MEMORY_BYTES", bytes)
-        assert {:ok, runtime} = Settings.from_env(getenv(env))
-        assert runtime[:runner_memory_bytes] == String.to_integer(bytes)
+        assert [_ | _] = reads_by_name(Code.string_to_quoted!(source)), source
       end
 
-      for bad <- ["16777215", "1099511627777", "384M", "402653184.5", "-1", "none"] do
-        env = Map.put(base, "LOCUS_RUNTIME_MEMORY_BYTES", bad)
-        assert {:error, refusal} = Settings.from_env(getenv(env))
-        assert refusal =~ "LOCUS_RUNTIME_MEMORY_BYTES"
-        assert refusal =~ "bytes from 16777216 to 1099511627776"
-      end
-    end
-
-    test "no keeper is read from the environment: the channel keeper is the one launcher" do
-      env = %{"LOCUS_RUNTIME_KEY" => @key_hex, "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"}
-      assert {:ok, runtime} = Settings.from_env(getenv(env))
-      refute Keyword.has_key?(runtime, :keeper)
-      assert {:ok, %{keeper: :channel}} = Settings.pool(runtime, %{})
+      assert reads_by_name(Code.string_to_quoted!(~S[System.get_env()])) == []
+      assert reads_by_name(Code.string_to_quoted!(~S[:os.getenv()])) == []
+      assert "LOCUS_" in string_literals(Code.string_to_quoted!(~S["LOCUS_" <> name]))
     end
   end
 
-  describe "runner/1" do
-    test "reads the runner's settings from its environment, with the descriptors and grace defaulted" do
-      assert {:ok,
-              %{
-                runner_id: "runner_1",
-                service_id: "wrk_local",
-                boot: "nonode@nohost#boot_1",
-                control_fd: 3,
-                relay: {:fd, 4},
-                watchdog_grace_ms: 5_000
-              } = settings} = Settings.runner(@runner_env)
+  # Every call of an environment read that names a variable: one given an
+  # argument, piped one, or captured.
+  defp reads_by_name(ast) do
+    {_ast, found} =
+      Macro.prewalk(ast, [], fn
+        {:|>, _, [_value, call]} = node, found -> {node, record(node, call, found)}
+        {:&, _, [{:/, _, [call, _arity]}]} = node, found -> {node, record(node, call, found)}
+        {_call, _, [_ | _]} = node, found -> {node, record(node, node, found)}
+        node, found -> {node, found}
+      end)
 
-      # A runner knows no address of CYFR's: it reaches CYFR through its relay.
-      refute Map.has_key?(settings, :host_url)
+    Enum.reverse(found)
+  end
 
-      assert {:ok, %{relay: {:fd, 5}}} =
-               Settings.runner(Map.put(@runner_env, "RUNTIME_RELAY_FD", "5"))
+  defp record(node, call, found),
+    do: if(env_read?(call), do: [Macro.to_string(node) | found], else: found)
 
-      assert {:ok, %{relay: {:socket, "/tmp/runner/relay.sock"}}} =
-               Settings.runner(
-                 Map.merge(@runner_env, %{
-                   "RUNTIME_RELAY_FD" => "4",
-                   "RUNTIME_RELAY_SOCKET" => "/tmp/runner/relay.sock"
-                 })
-               )
+  defp env_read?({{:., _, [module, function]}, _, args}) when is_list(args),
+    do: {module_name(module), function} in @env_reads
 
-      assert {:ok, %{control_fd: 0, watchdog_grace_ms: 250}} =
-               Settings.runner(
-                 Map.merge(@runner_env, %{
-                   "RUNTIME_CONTROL_FD" => "0",
-                   "RUNTIME_WATCHDOG_GRACE_MS" => "250"
-                 })
-               )
-    end
+  defp env_read?(_call), do: false
 
-    test "refuses to start with the service's key in sight, before anything else is read" do
-      with_key = Map.put(@runner_env, "LOCUS_RUNTIME_KEY", String.duplicate("0", 64))
-      assert {:error, {:refused, "LOCUS_RUNTIME_KEY"}} = Settings.runner(with_key)
+  defp module_name({:__aliases__, _, parts}), do: Module.concat(parts)
+  defp module_name(module) when is_atom(module), do: module
+  defp module_name(_module), do: nil
 
-      assert {:error, {:refused, "LOCUS_RUNTIME_KEY"}} =
-               Settings.runner(%{"LOCUS_RUNTIME_KEY" => "not even a key"})
-    end
+  # Every string the source spells, interpolated ones' text parts included.
+  defp string_literals(ast) do
+    {_ast, found} =
+      Macro.prewalk(ast, [], fn
+        text, found when is_binary(text) -> {text, [text | found]}
+        node, found -> {node, found}
+      end)
 
-    test "runner!/0 refuses the boot naming what is wrong: this VM is no runner" do
-      assert_raise ArgumentError, ~r/RUNTIME_RUNNER_ID is not set/, fn -> Settings.runner!() end
-    end
-
-    test "a missing or malformed variable refuses, naming it" do
-      for name <- Map.keys(@runner_env) do
-        assert {:error, {:missing, ^name}} = Settings.runner(Map.delete(@runner_env, name))
-      end
-
-      assert {:error, {:malformed, "RUNTIME_SERVICE_ID"}} =
-               Settings.runner(%{@runner_env | "RUNTIME_SERVICE_ID" => "svc"})
-
-      assert {:error, {:malformed, "RUNTIME_RUNNER_ID"}} =
-               Settings.runner(%{@runner_env | "RUNTIME_RUNNER_ID" => "has space"})
-
-      assert {:error, {:malformed, "RUNTIME_RELAY_FD"}} =
-               Settings.runner(Map.put(@runner_env, "RUNTIME_RELAY_FD", "2"))
-
-      assert {:error, {:malformed, "RUNTIME_RELAY_SOCKET"}} =
-               Settings.runner(Map.put(@runner_env, "RUNTIME_RELAY_SOCKET", "relay.sock"))
-
-      assert {:error, {:malformed, "RUNTIME_RELAY_SOCKET"}} =
-               Settings.runner(Map.put(@runner_env, "RUNTIME_RELAY_SOCKET", "/tmp/../relay.sock"))
-
-      assert {:error, {:malformed, "RUNTIME_CONTROL_FD"}} =
-               Settings.runner(Map.put(@runner_env, "RUNTIME_CONTROL_FD", "-1"))
-
-      assert {:error, {:malformed, "RUNTIME_WATCHDOG_GRACE_MS"}} =
-               Settings.runner(Map.put(@runner_env, "RUNTIME_WATCHDOG_GRACE_MS", "0"))
-    end
-
-    test "runner_environment/1 spells exactly the variables a runner reads" do
-      env =
-        Settings.runner_environment(%{
-          runner_id: "runner_1",
-          service_id: "wrk_local",
-          boot: "boot_1",
-          host_url: "http://127.0.0.1:4300",
-          watchdog_grace_ms: 5_000
-        })
-
-      # No address of CYFR's, whatever the service holds: the runner's host
-      # calls leave through its relay.
-      assert env == %{
-               "RUNTIME_ROLE" => "runner",
-               "RUNTIME_RUNNER_ID" => "runner_1",
-               "RUNTIME_SERVICE_ID" => "wrk_local",
-               "RUNTIME_BOOT_ID" => "boot_1",
-               "RUNTIME_WATCHDOG_GRACE_MS" => "5000"
-             }
-
-      # Every name is the runner's own prefix: the keeper refuses any
-      # `CYFR_`, `LOCUS_` or `KEEPER_` name in a spawn.
-      assert Enum.all?(env, fn {name, _} -> String.starts_with?(name, "RUNTIME_") end)
-
-      refute Enum.any?(env, fn {name, _} ->
-               Enum.any?(
-                 Prima.KeeperProtocol.reserved_env_prefixes(),
-                 &String.starts_with?(name, &1)
-               )
-             end)
-
-      assert {:ok, _settings} = Settings.runner(Map.put(env, "RUNTIME_CONTROL_FD", "0"))
-    end
+    found
   end
 end

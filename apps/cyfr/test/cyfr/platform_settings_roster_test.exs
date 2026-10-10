@@ -157,7 +157,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         spelled(~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex)) ++
           Roster.variables() ++
           Roster.deployment() ++
-          Locus.Runtime.Settings.variables() ++ Locus.Config.variables()
+          Locus.Config.variables()
       )
 
     interpolated |> Enum.uniq() |> Enum.reject(&MapSet.member?(read, &1)) |> Enum.sort()
@@ -587,7 +587,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
           Roster.variables() ++
             Roster.deployment() ++
             Roster.compose_only() ++
-            Locus.Runtime.Settings.variables() ++ Locus.Config.variables()
+            Locus.Config.variables()
         )
 
       undeclared = Enum.reject(documented(".env.example"), &MapSet.member?(declared, &1))
@@ -956,7 +956,8 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       # the release for what they are, so they are cleared here.
       cleared =
         Map.new(
-          ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BACKENDS_KEY),
+          ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BUILDS_KEY
+             CYFR_LOCUS_BACKENDS_KEY),
           &{&1, nil}
         )
 
@@ -974,7 +975,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end)
     end
 
-    test "a mix boot refuses a stray LOCUS_RUNTIME_* name through Locus.Runtime.Settings" do
+    test "a mix boot refuses a stray LOCUS_RUNTIME_* name through Locus.Config" do
       with_env(runtime_env(%{"RELEASE_NAME" => nil, "LOCUS_RUNTIME_POOL_SIZ" => "4"}), fn ->
         message = refusal!()
 
@@ -982,7 +983,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  "[Cyfr] FATAL: LOCUS_RUNTIME_POOL_SIZ is not a variable the locus release reads"
 
         assert message ==
-                 "[Cyfr] FATAL: " <> Locus.Runtime.Settings.unknown(["LOCUS_RUNTIME_POOL_SIZ"])
+                 "[Cyfr] FATAL: " <> Locus.Config.unknown(["LOCUS_RUNTIME_POOL_SIZ"])
       end)
     end
   end

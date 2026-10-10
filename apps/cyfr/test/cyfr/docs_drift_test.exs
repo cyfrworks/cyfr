@@ -41,12 +41,13 @@ defmodule Cyfr.DocsDriftTest do
   # configuration (the `CYFR_*` variables `config/runtime.exs` reads into
   # the operator keys of `Cyfr.Boundaries.config_key_classes/0`, the
   # resolvers it calls, and the platform settings roster whose variables it
-  # reads), the Locus release's `Locus.Config`, the runtime role's
-  # `Locus.Runtime.Settings` (its `LOCUS_RUNTIME_*` names and its runners'
-  # `RUNTIME_*`), and the keeper's own sources (`keeper_sources/0`).
+  # reads), the Locus release's one reader, `Locus.Config`, whose roster
+  # holds every role's names (the runtime's `LOCUS_RUNTIME_*` and its
+  # runners' `RUNTIME_*` among them), and the keeper's own sources
+  # (`keeper_sources/0`).
   @env_readers ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex
                   apps/cyfr/lib/cyfr/platform/settings/roster.ex
-                  apps/locus/lib/locus/config.ex apps/locus/lib/locus/runtime/settings.ex)
+                  apps/locus/lib/locus/config.ex)
 
   # The names the roster spells that no release reads: those other
   # programs own (`Roster.foreign/0`), which their owners document, and
@@ -654,22 +655,16 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
-  # The variables the locus release reads from its operator: the runtime
-  # role's LOCUS_RUNTIME_* (`Locus.Runtime.Settings`; the runner's RUNTIME_*
-  # are its service's and the keeper's, set on a runner, not an operator's)
-  # and Locus.Config's LOCUS_BUILDS_*, LOCUS_BACKENDS_* and LOCUS_LOG_*.
-  defp release_variables(runtime_settings, locus_config) do
-    runtime =
-      Regex.scan(~r/"(LOCUS_RUNTIME_[A-Z0-9_]+)"/, runtime_settings, capture: :all_but_first)
-      |> List.flatten()
-
-    locus =
-      Regex.scan(~r/"(LOCUS_(?:BUILDS|BACKENDS|LOG)_[A-Z0-9_]+)"/, locus_config,
-        capture: :all_but_first
-      )
-      |> List.flatten()
-
-    Enum.uniq(runtime ++ locus)
+  # The variables the locus release reads from its operator: the
+  # LOCUS_RUNTIME_*, LOCUS_BUILDS_*, LOCUS_BACKENDS_* and LOCUS_LOG_* rows
+  # of Locus.Config's roster (the runner's RUNTIME_* are its service's and
+  # the keeper's, set on a runner, not an operator's).
+  defp release_variables(locus_config) do
+    Regex.scan(~r/"(LOCUS_(?:RUNTIME|BUILDS|BACKENDS|LOG)_[A-Z0-9_]+)"/, locus_config,
+      capture: :all_but_first
+    )
+    |> List.flatten()
+    |> Enum.uniq()
   end
 
   # Each service's env files other than the project .env, and the names its
@@ -771,10 +766,7 @@ defmodule Cyfr.DocsDriftTest do
     compose = File.read!(Path.join(@repo_root, "docker-compose.yml"))
 
     variables =
-      release_variables(
-        File.read!(Path.join(@repo_root, "apps/locus/lib/locus/runtime/settings.ex")),
-        File.read!(Path.join(@repo_root, "apps/locus/lib/locus/config.ex"))
-      )
+      release_variables(File.read!(Path.join(@repo_root, "apps/locus/lib/locus/config.ex")))
 
     {compose, compose_services(compose), variables, homes()}
   end

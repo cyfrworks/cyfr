@@ -3,15 +3,23 @@
 
 defmodule Locus.Config do
   @moduledoc """
-  A Locus node's settings: read from the `locus` release's environment by
-  `config/locus_runtime.exs` (`from_env/1`), which writes them as the
+  Every environment variable of the `locus` release, declared, read and
+  refused in one place: one roster of rows by role (`variables/0`,
+  `variables/1`). The release carries no host module to declare its
+  prefixes, so this module declares them, and refuses a `LOCUS_*` name
+  the roster lacks (`unknown_names/1,2`, `unknown/1`).
+
+  A node's settings are read from the release's environment by
+  `config/locus_runtime.exs` (`from_env/2`), which writes them as the
   `:locus` application environment and nothing else, and read back
   through the accessors below, each with its default. The builds service
   reads the `LOCUS_BUILDS_*` rows, the backends service (`Locus.Backends`)
   the `LOCUS_BACKENDS_*` rows, and every role the `LOCUS_LOG_*` rows. The
-  runtime role's `LOCUS_RUNTIME_*` names are declared and read by
-  `Locus.Runtime.Settings` (`Locus.Runtime.Settings.from_env/2`), whose
-  answer this module writes under the `:runtime` key.
+  runtime role's `LOCUS_RUNTIME_*` rows are read into one keyword, written
+  under the `:runtime` key (`runtime_from_env/2`), which
+  `Locus.Runtime.Credentials` and `Locus.Runtime.Settings` read; a `mix`
+  boot that runs the runtime beside CYFR reads them through the same
+  function (`config/runtime.exs`).
 
   | Variable | Setting | Accepted | Default |
   |---|---|---|---|
@@ -32,33 +40,70 @@ defmodule Locus.Config do
   | `LOCUS_BACKENDS_INIT_TIMEOUT_MS` | `:backends_init_timeout_ms` | 1000..600000 | 15000 |
   | `LOCUS_BACKENDS_RPC_TIMEOUT_MS` | `:backends_rpc_timeout_ms` | 1000..600000 | 30000 |
   | `LOCUS_BACKENDS_MEMORY_BYTES` | `:backends_memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 536870912 (512 MiB) |
+  | `LOCUS_RUNTIME_SERVICE_ID` | `:runtime`, `:service_id` | `wrk_` and 1 to 64 letters, digits, `_` or `-` | `wrk_local` |
+  | `LOCUS_RUNTIME_KEY` | `:runtime`, `:service_key` | 64 hexadecimal digits, the key derived for the service's id | none: the node serves no runtime |
+  | `LOCUS_RUNTIME_HOST_API_URL` | `:runtime`, `:host_url` | an http or https URL with a host and no path | none |
+  | `LOCUS_RUNTIME_BIND` | `:runtime`, `:bind` | an IPv4 or IPv6 address | `127.0.0.1` |
+  | `LOCUS_RUNTIME_PORT` | `:runtime`, `:port` | 0..65535 | 4200 |
+  | `LOCUS_RUNTIME_POOL_SIZE` | `:runtime`, `:pool_size` | 1..1024 | 4 |
+  | `LOCUS_RUNTIME_IDLE_TTL_MS` | `:runtime`, `:idle_ttl_ms` | 1..86400000 | 30000 |
+  | `LOCUS_RUNTIME_WATCHDOG_GRACE_MS` | `:runtime`, `:watchdog_grace_ms` | 1..600000 | 5000 |
+  | `LOCUS_RUNTIME_RELEASE_GRACE_MS` | `:runtime`, `:release_grace_ms` | 1..600000 | 2000 |
+  | `LOCUS_RUNTIME_MEMORY_BYTES` | `:runtime`, `:runner_memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 402653184 (384 MiB) |
+  | `LOCUS_RUNTIME_ATTACH_DIR` | `:runtime`, `:attach_dir` | a clean absolute directory path | `/run/locus` |
+
+  An unset runtime identity or listener row takes what the caller passes
+  (a `mix` boot passes the key it derives and its own host API), else
+  the default above; a pool row is written only when its variable is set,
+  so `Locus.Runtime.Settings`' defaults stand for the rest.
+
+  A runner is no node: it reads the `RUNTIME_*` rows (`runner/1`), which
+  its service writes for it outside every prefix the keeper refuses in a
+  spawn (`Locus.Runtime.Settings.runner_environment/1`), and nothing else
+  of the release. `RUNTIME_ROLE` is `runner` for one
+  (`Locus.Runtime.Release.role/1`, `config/locus_runtime.exs`);
+  `RUNTIME_RUNNER_ID` is the id it presents in its host calls,
+  `RUNTIME_SERVICE_ID` and `RUNTIME_BOOT_ID` the worker service and boot
+  it presents from, `RUNTIME_CONTROL_FD` the file descriptor its control
+  channel is on (3 by default; 0 means the channel is its standard input
+  and output), `RUNTIME_RELAY_FD` the file descriptor its relay to the
+  service is on (4 by default, `Locus.Runtime.Relay.Runner`), or
+  `RUNTIME_RELAY_SOCKET` the unix socket the test build's direct launcher
+  gives it in its place, and `RUNTIME_WATCHDOG_GRACE_MS` how far past its
+  assignment's deadline it may live (`Locus.Runtime.Settings`' default
+  when unset). A runner is given no address of CYFR's: it has no network,
+  and every host call it makes leaves through its relay. A runner that
+  can see `LOCUS_RUNTIME_KEY` was given the service's own key, which no
+  runner holds, and refuses to start. `RUNTIME_*` names are never refused
+  as unknown.
 
   A node serves the runtime when it holds the runtime's key, the builds
   service when it holds a builds key and the backends service when it
   holds a backends key (`Locus.Application`); the release must hold at
-  least one, and a node holding the runtime's key holds no other. `:request_key` is the key build
-  requests are verified with (`Prima.BuilderProtocol.request_key/1`),
-  derived once here; the configured builds key itself is kept nowhere.
+  least one, and a node holding the runtime's key holds no other.
+  `:request_key` is the key build requests are verified with
+  (`Prima.BuilderProtocol.request_key/1`), derived once here; the
+  configured builds key itself is kept nowhere.
   `:backends_key` is the backends service key itself, decoded: every
   owner's key is derived from it per request
   (`Prima.LocusBackends.owner_key/2`). A set variable that does not parse,
   or none of the three keys, refuses the boot with a message naming the
   variable. So does the control plane's configuration in the node's
-  environment, on every boot of every role (`refused_environment/1`): the
-  database URL, the keyring, the runtime's root and the control plane's
-  copy of the backends key are CYFR's, and a node that can see them was
-  given more than it holds. And so does any `LOCUS_*` name neither the
-  table nor `Locus.Runtime.Settings.variables/0` lists (`unknown_names/1`):
-  this module declares the prefix, because the release carries no host
-  module to declare it.
+  environment, first, on every boot of every role
+  (`refused_environment/1`): the database URL, the keyring, the
+  runtime's root and the control plane's copies of the builds and
+  backends keys are CYFR's, and a node that can see them was given more
+  than it holds. And so does any `LOCUS_*` name the roster lacks.
 
   `:memory_bytes` is the bound every build's spawn asks cyfr-locus for
-  (`Locus.Keeper`), and `:backends_memory_bytes` the bound each backend's
-  process is spawned under: the memory of the processes, what they write
+  (`Locus.Keeper`), `:backends_memory_bytes` the bound each backend's
+  process is spawned under, and the runtime's `:runner_memory_bytes` the
+  bound of each runner: the memory of the processes, what they write
   to their home and the kernel memory charged to them, together. Their
-  range is the keeper's own for a spawn's `memory_bytes`, so a value
-  accepted here is one the keeper accepts. There is no value that means
-  "no bound". `:backends_max_in_flight` is the calls that may await one
+  range is the keeper's own for a spawn's `memory_bytes`
+  (`memory_range/0`, from `Prima.KeeperProtocol`), so a value accepted
+  here is one the keeper accepts. There is no value that means "no
+  bound". `:backends_max_in_flight` is the calls that may await one
   backend at a time, and the two timeouts bound a backend's handshake and
   each call to it.
 
@@ -100,22 +145,91 @@ defmodule Locus.Config do
     backends_memory_bytes: 536_870_912
   ]
 
-  # cyfr-locus's range for a spawn's `memory_bytes` (`apps/locus/keeper`'s
-  # protocol, MinMemoryBytes to MaxMemoryBytes).
-  @memory_range 16_777_216..1_099_511_627_776
+  # What the runtime falls back to when neither its environment nor the
+  # caller's fallback names a value.
+  @runtime_defaults [service_id: "wrk_local", bind: "127.0.0.1", port: 4200]
 
   @control_plane_only ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_LOCUS_RUNTIME_ROOT
-                         CYFR_LOCUS_BACKENDS_KEY)
+                         CYFR_LOCUS_BUILDS_KEY CYFR_LOCUS_BACKENDS_KEY)
 
-  # Every `LOCUS_*` name a node reads: the table above.
-  @variables ~w(LOCUS_BUILDS_KEY LOCUS_BUILDS_BIND LOCUS_BUILDS_PORT LOCUS_BUILDS_TIMEOUT_MS
-                LOCUS_BUILDS_MAX_CONCURRENT LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT
-                LOCUS_BUILDS_MEMORY_BYTES LOCUS_BUILDS_CARGO_SEED LOCUS_LOG_LEVEL
-                LOCUS_LOG_FORMAT LOCUS_BACKENDS_KEY LOCUS_BACKENDS_BIND
-                LOCUS_BACKENDS_PORT LOCUS_BACKENDS_MAX_IN_FLIGHT LOCUS_BACKENDS_INIT_TIMEOUT_MS
-                LOCUS_BACKENDS_RPC_TIMEOUT_MS LOCUS_BACKENDS_MEMORY_BYTES)
+  # Every variable of the release, `{variable, role, key}`: the key its
+  # role's reader answers it under (the flat `:locus` keys for builds,
+  # backends and the release's log setting, the `:runtime` keyword's keys
+  # for the runtime, a runner's settings for a runner). A role's rows are
+  # in its reader's order, so every answer keeps its order.
+  @roster [
+    {"LOCUS_BUILDS_KEY", :builds, :request_key},
+    {"LOCUS_BUILDS_BIND", :builds, :bind},
+    {"LOCUS_BUILDS_PORT", :builds, :port},
+    {"LOCUS_BUILDS_TIMEOUT_MS", :builds, :timeout_ms},
+    {"LOCUS_BUILDS_MAX_CONCURRENT", :builds, :max_concurrent},
+    {"LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT", :builds, :max_concurrent_per_tenant},
+    {"LOCUS_BUILDS_MEMORY_BYTES", :builds, :memory_bytes},
+    {"LOCUS_BUILDS_CARGO_SEED", :builds, :cargo_seed},
+    {"LOCUS_LOG_LEVEL", :release, :log_level},
+    {"LOCUS_LOG_FORMAT", :release, :log_format},
+    {"LOCUS_BACKENDS_KEY", :backends, :backends_key},
+    {"LOCUS_BACKENDS_BIND", :backends, :backends_bind},
+    {"LOCUS_BACKENDS_PORT", :backends, :backends_port},
+    {"LOCUS_BACKENDS_MAX_IN_FLIGHT", :backends, :backends_max_in_flight},
+    {"LOCUS_BACKENDS_INIT_TIMEOUT_MS", :backends, :backends_init_timeout_ms},
+    {"LOCUS_BACKENDS_RPC_TIMEOUT_MS", :backends, :backends_rpc_timeout_ms},
+    {"LOCUS_BACKENDS_MEMORY_BYTES", :backends, :backends_memory_bytes},
+    {"LOCUS_RUNTIME_SERVICE_ID", :runtime, :service_id},
+    {"LOCUS_RUNTIME_KEY", :runtime, :service_key},
+    {"LOCUS_RUNTIME_HOST_API_URL", :runtime, :host_url},
+    {"LOCUS_RUNTIME_BIND", :runtime, :bind},
+    {"LOCUS_RUNTIME_PORT", :runtime, :port},
+    {"LOCUS_RUNTIME_POOL_SIZE", :runtime, :pool_size},
+    {"LOCUS_RUNTIME_IDLE_TTL_MS", :runtime, :idle_ttl_ms},
+    {"LOCUS_RUNTIME_WATCHDOG_GRACE_MS", :runtime, :watchdog_grace_ms},
+    {"LOCUS_RUNTIME_RELEASE_GRACE_MS", :runtime, :release_grace_ms},
+    {"LOCUS_RUNTIME_MEMORY_BYTES", :runtime, :runner_memory_bytes},
+    {"LOCUS_RUNTIME_ATTACH_DIR", :runtime, :attach_dir},
+    {"RUNTIME_ROLE", :runner, :role},
+    {"RUNTIME_RUNNER_ID", :runner, :runner_id},
+    {"RUNTIME_SERVICE_ID", :runner, :service_id},
+    {"RUNTIME_BOOT_ID", :runner, :boot},
+    {"RUNTIME_CONTROL_FD", :runner, :control_fd},
+    {"RUNTIME_RELAY_FD", :runner, :relay_fd},
+    {"RUNTIME_RELAY_SOCKET", :runner, :relay_socket},
+    {"RUNTIME_WATCHDOG_GRACE_MS", :runner, :watchdog_grace_ms}
+  ]
 
-  @typedoc "The `:locus` application environment `from_env/1` writes."
+  # The one prefix every name of a role carries. The keeper refuses every
+  # `CYFR_`, `LOCUS_` and `KEEPER_` name in a spawn, so a runner's is none
+  # of those.
+  @prefixes %{
+    builds: "LOCUS_BUILDS_",
+    release: "LOCUS_LOG_",
+    backends: "LOCUS_BACKENDS_",
+    runtime: "LOCUS_RUNTIME_",
+    runner: "RUNTIME_"
+  }
+
+  @variables Enum.map(@roster, &elem(&1, 0))
+
+  # The variable each reader reads, by role and key.
+  @variable Map.new(@roster, fn {variable, role, key} -> {{role, key}, variable} end)
+
+  # The runner's key of each runner variable, for the sentence that
+  # refuses a malformed one.
+  @runner_keys for {variable, :runner, key} <- @roster, into: %{}, do: {variable, key}
+
+  # The runtime's settings that are the service's credentials and
+  # listener (`Locus.Runtime.Credentials`); the rest are its pool's
+  # (`Locus.Runtime.Settings`).
+  @credential_keys [:service_id, :service_key, :host_url, :bind, :port]
+
+  # A runner's ids: printable ASCII without spaces. The service's id is a
+  # worker service id besides.
+  @id ~r/\A[\x21-\x7E]{1,256}\z/
+  @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
+
+  @typedoc "A role of the release's roster: one prefix, and the rows its reader reads."
+  @type role :: :runtime | :builds | :backends | :release | :runner
+
+  @typedoc "The `:locus` application environment `from_env/2` writes."
   @type settings :: [
           request_key: binary() | nil,
           bind: :inet.ip_address(),
@@ -141,10 +255,9 @@ defmodule Locus.Config do
   The `:locus` settings the environment `getenv` spells, every one present
   with its default where unset, or the first refusal as a message naming
   the variable. `names` is every name that environment assigns, the
-  process environment's by default: a `LOCUS_*` one this node does not
-  declare refuses too. The runtime role's settings are present under
-  `:runtime` only when the runtime's key is set
-  (`Locus.Runtime.Settings.from_env/2`).
+  process environment's by default: a `LOCUS_*` one the roster lacks
+  refuses too. The runtime role's settings are present under `:runtime`
+  only when the runtime's key is set (`runtime_from_env/2`).
   """
   @spec from_env(EnvValue.getenv(), [String.t()]) :: {:ok, settings()} | {:error, String.t()}
   def from_env(getenv, names \\ Map.keys(System.get_env()))
@@ -153,7 +266,7 @@ defmodule Locus.Config do
          :ok <- no_unknown(names),
          {:ok, builds} <- builds(getenv),
          {:ok, backends} <- backends(getenv),
-         {:ok, runtime} <- Locus.Runtime.Settings.from_env(getenv, []),
+         {:ok, runtime} <- runtime_from_env(getenv, []),
          :ok <- some_key(builds, backends, runtime),
          {:ok, log_level} <- log_level(getenv),
          {:ok, log_format} <- log_format(getenv) do
@@ -168,29 +281,29 @@ defmodule Locus.Config do
       refused when is_list(refused) ->
         {:error,
          "the locus release must not see #{Enum.join(refused, ", ")}: the database, " <>
-           "the keyring, the runtime's root and the control plane's backends key " <>
-           "are CYFR's"}
+           "the keyring, the runtime's root and the control plane's builds and backends " <>
+           "keys are CYFR's"}
     end
   end
 
   defp builds(getenv) do
-    with {:ok, key} <- EnvValue.hex_key(getenv, "LOCUS_BUILDS_KEY"),
-         {:ok, bind} <- EnvValue.bind(getenv, "LOCUS_BUILDS_BIND"),
-         {:ok, port} <- EnvValue.port(getenv, "LOCUS_BUILDS_PORT"),
+    with {:ok, key} <- EnvValue.hex_key(getenv, variable(:builds, :request_key)),
+         {:ok, bind} <- EnvValue.bind(getenv, variable(:builds, :bind)),
+         {:ok, port} <- EnvValue.port(getenv, variable(:builds, :port)),
          {:ok, timeout_ms} <-
-           EnvValue.milliseconds(getenv, "LOCUS_BUILDS_TIMEOUT_MS", 1_000..600_000),
+           EnvValue.milliseconds(getenv, variable(:builds, :timeout_ms), 1_000..600_000),
          {:ok, max} <-
-           EnvValue.whole_number(getenv, "LOCUS_BUILDS_MAX_CONCURRENT", 1..1024, "builds"),
+           EnvValue.whole_number(getenv, variable(:builds, :max_concurrent), 1..1024, "builds"),
          {:ok, per_tenant} <-
            EnvValue.whole_number(
              getenv,
-             "LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT",
+             variable(:builds, :max_concurrent_per_tenant),
              1..1024,
              "builds"
            ),
          {:ok, memory_bytes} <-
-           EnvValue.bytes(getenv, "LOCUS_BUILDS_MEMORY_BYTES", @memory_range),
-         {:ok, cargo_seed} <- EnvValue.text(getenv, "LOCUS_BUILDS_CARGO_SEED") do
+           EnvValue.bytes(getenv, variable(:builds, :memory_bytes), memory_range()),
+         {:ok, cargo_seed} <- EnvValue.text(getenv, variable(:builds, :cargo_seed)) do
       {:ok,
        [
          request_key: key && Prima.BuilderProtocol.request_key(key),
@@ -206,17 +319,30 @@ defmodule Locus.Config do
   end
 
   defp backends(getenv) do
-    with {:ok, key} <- EnvValue.hex_key(getenv, "LOCUS_BACKENDS_KEY"),
-         {:ok, bind} <- EnvValue.bind(getenv, "LOCUS_BACKENDS_BIND"),
-         {:ok, port} <- EnvValue.port(getenv, "LOCUS_BACKENDS_PORT"),
+    with {:ok, key} <- EnvValue.hex_key(getenv, variable(:backends, :backends_key)),
+         {:ok, bind} <- EnvValue.bind(getenv, variable(:backends, :backends_bind)),
+         {:ok, port} <- EnvValue.port(getenv, variable(:backends, :backends_port)),
          {:ok, max_in_flight} <-
-           EnvValue.whole_number(getenv, "LOCUS_BACKENDS_MAX_IN_FLIGHT", 1..1024, "calls"),
+           EnvValue.whole_number(
+             getenv,
+             variable(:backends, :backends_max_in_flight),
+             1..1024,
+             "calls"
+           ),
          {:ok, init_timeout_ms} <-
-           EnvValue.milliseconds(getenv, "LOCUS_BACKENDS_INIT_TIMEOUT_MS", 1_000..600_000),
+           EnvValue.milliseconds(
+             getenv,
+             variable(:backends, :backends_init_timeout_ms),
+             1_000..600_000
+           ),
          {:ok, rpc_timeout_ms} <-
-           EnvValue.milliseconds(getenv, "LOCUS_BACKENDS_RPC_TIMEOUT_MS", 1_000..600_000),
+           EnvValue.milliseconds(
+             getenv,
+             variable(:backends, :backends_rpc_timeout_ms),
+             1_000..600_000
+           ),
          {:ok, memory_bytes} <-
-           EnvValue.bytes(getenv, "LOCUS_BACKENDS_MEMORY_BYTES", @memory_range) do
+           EnvValue.bytes(getenv, variable(:backends, :backends_memory_bytes), memory_range()) do
       {:ok,
        [
          backends_key: key,
@@ -245,49 +371,290 @@ defmodule Locus.Config do
   end
 
   @doc """
-  Every `LOCUS_*` name a node reads: the table above, then the runtime
-  role's (`Locus.Runtime.Settings.variables/0`, whose `RUNTIME_*` names a
-  runner reads).
+  The runtime role's `config :locus, :runtime` the environment `getenv`
+  spells over `fallback`, or `{:ok, nil}` when no service key is held:
+  `LOCUS_RUNTIME_KEY` is unset and `fallback` names no `:service_key`, so
+  the node serves no runtime.
+
+  A setting is the variable's value when set, else `fallback`'s, else the
+  service's default (`wrk_local`, `127.0.0.1`, port 4200); a pool setting
+  is present only where its variable is set, so the code's defaults stand
+  for the rest. The answer is in the shape `Locus.Runtime.Credentials` and
+  `Locus.Runtime.Settings.pool/2` read: the key as hexadecimal text, the
+  bind as a string, the port an integer. A value either refuses answers
+  `{:error, message}` naming its variable; no message echoes the key.
   """
+  @spec runtime_from_env(EnvValue.getenv(), keyword()) ::
+          {:ok, keyword() | nil} | {:error, String.t()}
+  def runtime_from_env(getenv, fallback) when is_function(getenv, 1) and is_list(fallback) do
+    {:ok, key} = EnvValue.text(getenv, variable(:runtime, :service_key))
+
+    case key || Keyword.get(fallback, :service_key) do
+      nil -> {:ok, nil}
+      key -> runtime_service(getenv, fallback, key)
+    end
+  end
+
+  defp runtime_service(getenv, fallback, key) do
+    setting = fn name ->
+      {:ok, text} = EnvValue.text(getenv, variable(:runtime, name))
+      text || Keyword.get(fallback, name) || Keyword.get(@runtime_defaults, name)
+    end
+
+    with {:ok, port} <- runtime_port(setting.(:port)),
+         credentials = [
+           service_id: setting.(:service_id),
+           service_key: key,
+           host_url: setting.(:host_url),
+           bind: setting.(:bind),
+           port: port
+         ],
+         :ok <- credentials_refusal(credentials),
+         {:ok, pool} <- runtime_pool(getenv),
+         {:ok, _pool} <- runtime_named(Locus.Runtime.Settings.pool(pool, %{})) do
+      {:ok, credentials ++ pool}
+    end
+  end
+
+  defp runtime_port(port) when is_integer(port), do: {:ok, port}
+
+  defp runtime_port(text) when is_binary(text) do
+    case Integer.parse(text) do
+      {port, ""} -> {:ok, port}
+      _ -> runtime_named({:error, {:malformed, :port}})
+    end
+  end
+
+  defp credentials_refusal(credentials) do
+    case Locus.Runtime.Credentials.load(credentials) do
+      {:ok, _credentials} -> :ok
+      {:error, refusal} -> runtime_named({:error, refusal})
+    end
+  end
+
+  # Only the set ones: each read strictly (`Prima.EnvValue`), so a value
+  # that is not a whole number in its range refuses naming its variable.
+  defp runtime_pool(getenv) do
+    reads = [
+      pool_size: &EnvValue.whole_number(&1, &2, 1..1_024, "runners"),
+      idle_ttl_ms: &EnvValue.milliseconds(&1, &2, 1..86_400_000),
+      watchdog_grace_ms: &EnvValue.milliseconds(&1, &2, 1..600_000),
+      release_grace_ms: &EnvValue.milliseconds(&1, &2, 1..600_000),
+      runner_memory_bytes: &EnvValue.bytes(&1, &2, memory_range()),
+      attach_dir: &EnvValue.text(&1, &2)
+    ]
+
+    Enum.reduce_while(reads, {:ok, []}, fn {name, read}, {:ok, pool} ->
+      case read.(getenv, variable(:runtime, name)) do
+        {:ok, nil} -> {:cont, {:ok, pool}}
+        {:ok, value} -> {:cont, {:ok, pool ++ [{name, value}]}}
+        {:error, message} -> {:halt, {:error, message}}
+      end
+    end)
+  end
+
+  # A refusal of a runtime setting, as the message naming the variable
+  # that spells it.
+  defp runtime_named({:error, {:missing, name}}),
+    do: {:error, "#{variable(:runtime, name)} is not set"}
+
+  defp runtime_named({:error, {:malformed, name}}),
+    do: {:error, "#{variable(:runtime, name)} must be #{runtime_expected(name)}"}
+
+  defp runtime_named(answer), do: answer
+
+  defp runtime_expected(name) when name in @credential_keys,
+    do: Locus.Runtime.Credentials.expected(name)
+
+  defp runtime_expected(name), do: Locus.Runtime.Settings.expected(name)
+
+  @doc """
+  The runner settings `env` (a map of environment variables, a runner's
+  process environment) spells, or the first variable that refuses: the
+  service's key in sight is refused before anything else is read.
+  """
+  @spec runner(%{optional(String.t()) => String.t()}) ::
+          {:ok, Locus.Runtime.Settings.runner()}
+          | {:error, {:missing | :malformed | :refused, String.t()}}
+  def runner(env) when is_map(env) do
+    with :ok <- no_service_key(env),
+         {:ok, runner_id} <- runner_id(env, :runner_id),
+         {:ok, service_id} <- runner_service_id(env),
+         {:ok, boot} <- runner_id(env, :boot),
+         {:ok, control_fd} <- control_fd(env),
+         {:ok, relay} <- relay(env),
+         {:ok, grace} <- grace(env) do
+      {:ok,
+       %{
+         runner_id: runner_id,
+         service_id: service_id,
+         boot: boot,
+         control_fd: control_fd,
+         relay: relay,
+         watchdog_grace_ms: grace
+       }}
+    end
+  end
+
+  @doc "`runner/1` over the process environment, raising on a variable that refuses so the runner stops there."
+  @spec runner!() :: Locus.Runtime.Settings.runner()
+  def runner! do
+    case runner(System.get_env()) do
+      {:ok, runner} ->
+        runner
+
+      {:error, {:refused, name}} ->
+        raise ArgumentError,
+              "[Locus.Config] a runner must not see #{name}: the service's key never leaves the service"
+
+      {:error, {:missing, name}} ->
+        raise ArgumentError, "[Locus.Config] #{name} is not set"
+
+      {:error, {:malformed, name}} ->
+        raise ArgumentError, "[Locus.Config] #{name} is malformed: #{runner_expected(name)}"
+    end
+  end
+
+  defp no_service_key(env) do
+    key = variable(:runtime, :service_key)
+    if is_map_key(env, key), do: {:error, {:refused, key}}, else: :ok
+  end
+
+  defp runner_id(env, key) do
+    name = variable(:runner, key)
+
+    case Map.get(env, name) do
+      nil -> {:error, {:missing, name}}
+      value -> if Regex.match?(@id, value), do: {:ok, value}, else: {:error, {:malformed, name}}
+    end
+  end
+
+  defp runner_service_id(env) do
+    with {:ok, value} <- runner_id(env, :service_id) do
+      if Regex.match?(@service_id, value),
+        do: {:ok, value},
+        else: {:error, {:malformed, variable(:runner, :service_id)}}
+    end
+  end
+
+  defp control_fd(env) do
+    name = variable(:runner, :control_fd)
+
+    case Integer.parse(Map.get(env, name, "3")) do
+      {fd, ""} when fd >= 0 -> {:ok, fd}
+      _ -> {:error, {:malformed, name}}
+    end
+  end
+
+  # The keeper's descriptor 4, or the unix socket the test build's direct
+  # launcher names in its place: an absolute path, which wins when set.
+  defp relay(env) do
+    socket = variable(:runner, :relay_socket)
+
+    case Map.fetch(env, socket) do
+      {:ok, "/" <> _ = path} ->
+        if Path.expand(path) == path,
+          do: {:ok, {:socket, path}},
+          else: {:error, {:malformed, socket}}
+
+      {:ok, _path} ->
+        {:error, {:malformed, socket}}
+
+      :error ->
+        name = variable(:runner, :relay_fd)
+
+        case Integer.parse(Map.get(env, name, "4")) do
+          {fd, ""} when fd > 2 -> {:ok, {:fd, fd}}
+          _ -> {:error, {:malformed, name}}
+        end
+    end
+  end
+
+  defp grace(env) do
+    name = variable(:runner, :watchdog_grace_ms)
+    default = Integer.to_string(Locus.Runtime.Settings.default(:watchdog_grace_ms))
+
+    case Integer.parse(Map.get(env, name, default)) do
+      {ms, ""} when ms > 0 -> {:ok, ms}
+      _ -> {:error, {:malformed, name}}
+    end
+  end
+
+  # What a well-formed value of the runner variable `name` is, for the
+  # message that refuses one.
+  defp runner_expected(name) do
+    case Map.fetch!(@runner_keys, name) do
+      key when key in [:runner_id, :boot] -> "1 to 256 bytes of printable ASCII without spaces"
+      :service_id -> Locus.Runtime.Credentials.expected(:service_id)
+      :control_fd -> "a file descriptor number, 0 for standard input and output"
+      :relay_fd -> "a file descriptor number above 2"
+      :relay_socket -> "an absolute path to a unix socket"
+      :watchdog_grace_ms -> "a positive integer of milliseconds"
+    end
+  end
+
+  @doc "Every name the release reads: the roster's, role by role."
   @spec variables() :: [String.t()]
-  def variables, do: @variables ++ Locus.Runtime.Settings.variables()
+  def variables, do: @variables
 
-  @doc "The `LOCUS_*` names in `names` that a node does not read, sorted."
+  @doc "The names `role` reads, in its reader's order: every one carries the role's prefix."
+  @spec variables(role()) :: [String.t()]
+  def variables(role) when is_map_key(@prefixes, role),
+    do: for({variable, ^role, _key} <- @roster, do: variable)
+
+  @doc "The `LOCUS_*` names in `names` that the roster lacks, sorted, each once."
   @spec unknown_names([String.t()]) :: [String.t()]
-  def unknown_names(names) when is_list(names) do
-    declared = variables()
+  def unknown_names(names) when is_list(names), do: undeclared(names, "LOCUS_", @variables)
 
+  @doc "The names in `names` under `role`'s prefix that `role` does not read, sorted, each once."
+  @spec unknown_names([String.t()], role()) :: [String.t()]
+  def unknown_names(names, role) when is_list(names) and is_map_key(@prefixes, role),
+    do: undeclared(names, Map.fetch!(@prefixes, role), variables(role))
+
+  defp undeclared(names, prefix, declared) do
     names
-    |> Enum.filter(&(String.starts_with?(&1, "LOCUS_") and &1 not in declared))
+    |> Enum.filter(&(String.starts_with?(&1, prefix) and &1 not in declared))
     |> Enum.uniq()
     |> Enum.sort()
   end
 
+  @doc "Why the undeclared names `names` refuse the boot, for the message that refuses it."
+  @spec unknown([String.t(), ...]) :: String.t()
+  def unknown([_ | _] = names) do
+    "#{Enum.join(names, ", ")} #{if match?([_], names), do: "is", else: "are"} not a " <>
+      "variable the locus release reads: remove it, or use the name .env.locus.example gives"
+  end
+
   defp no_unknown(names) do
     case unknown_names(names) do
-      [] ->
-        :ok
-
-      unknown ->
-        {:error,
-         "#{Enum.join(unknown, ", ")} #{if match?([_], unknown), do: "is", else: "are"} not " <>
-           "a variable the locus release reads: remove it, or use the name " <>
-           ".env.locus.example gives"}
+      [] -> :ok
+      unknown -> {:error, unknown(unknown)}
     end
   end
 
   @doc """
-  The names in the environment that only the control plane may hold: the
-  database URL, the keyring, the runtime's root and the control plane's
-  copy of the backends key. Empty for an environment a Locus node of any
-  role may run in.
+  The names in the environment that only the control plane may hold, in
+  the list's order: the database URL, the keyring, the runtime's root and
+  the control plane's copies of the builds and backends keys. Empty for an
+  environment a Locus node of any role may run in.
   """
   @spec refused_environment(EnvValue.getenv()) :: [String.t()]
   def refused_environment(getenv) when is_function(getenv, 1),
     do: Enum.filter(@control_plane_only, &(getenv.(&1) != nil))
 
+  @doc """
+  The least and the most a memory bound of the release may be, in bytes:
+  the keeper's own range for a spawn's `memory_bytes`, 16 MiB to 1 TiB
+  (`Prima.KeeperProtocol`).
+  """
+  @spec memory_range() :: Range.t()
+  def memory_range,
+    do: Prima.KeeperProtocol.min_memory_bytes()..Prima.KeeperProtocol.max_memory_bytes()//1
+
   defp log_level(getenv) do
-    case EnvValue.text(getenv, "LOCUS_LOG_LEVEL") do
+    name_read = variable(:release, :log_level)
+
+    case EnvValue.text(getenv, name_read) do
       {:ok, nil} ->
         {:ok, @defaults[:log_level]}
 
@@ -295,7 +662,7 @@ defmodule Locus.Config do
         case Enum.find(Logger.levels(), &(Atom.to_string(&1) == name)) do
           nil ->
             {:error,
-             "LOCUS_LOG_LEVEL=#{inspect(name)} is not a Logger level; use one of " <>
+             "#{name_read}=#{inspect(name)} is not a Logger level; use one of " <>
                Enum.join(Logger.levels(), ", ") <> "."}
 
           level ->
@@ -305,7 +672,9 @@ defmodule Locus.Config do
   end
 
   defp log_format(getenv) do
-    case EnvValue.text(getenv, "LOCUS_LOG_FORMAT") do
+    name_read = variable(:release, :log_format)
+
+    case EnvValue.text(getenv, name_read) do
       {:ok, nil} ->
         {:ok, @defaults[:log_format]}
 
@@ -316,9 +685,11 @@ defmodule Locus.Config do
         {:ok, :json}
 
       {:ok, other} ->
-        {:error, "LOCUS_LOG_FORMAT=#{inspect(other)} is not a log format; use text or json."}
+        {:error, "#{name_read}=#{inspect(other)} is not a log format; use text or json."}
     end
   end
+
+  defp variable(role, key), do: Map.fetch!(@variable, {role, key})
 
   @doc "The key build requests are verified with, or nil where none was configured."
   @spec request_key() :: binary() | nil

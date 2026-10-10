@@ -133,17 +133,17 @@ if config_env() != :test do
     end
 
   # The runtime a `mix` boot runs beside CYFR, `config :locus, :runtime`,
-  # read from the environment this file reads by the runtime's own reader
-  # (`Locus.Runtime.Settings.from_env/2`, which lists every
-  # `LOCUS_RUNTIME_*` variable with its accepted values and default): its
-  # stable id (default `wrk_local`), its key (unset, the key derived from
-  # the root above for that id), the base URL of CYFR's host API (unset,
-  # this boot's own listener), the address and port its listener binds,
-  # and its runner pool, of which only the set settings are configured so
-  # the code's defaults stand for the rest. A malformed value, or a
-  # `LOCUS_RUNTIME_*` name the runtime does not read, refuses the boot
-  # naming it; the container limits compose interpolates from the project
-  # .env are the roster's compose-only names, not stray ones.
+  # read from the environment this file reads by the release's reader of
+  # the runtime's rows (`Locus.Config.runtime_from_env/2`; `Locus.Config`
+  # lists every `LOCUS_RUNTIME_*` variable with its accepted values and
+  # default): its stable id (default `wrk_local`), its key (unset, the key
+  # derived from the root above for that id), the base URL of CYFR's host
+  # API (unset, this boot's own listener), the address and port its
+  # listener binds, and its runner pool, of which only the set settings
+  # are configured so the code's defaults stand for the rest. A malformed
+  # value, or a `LOCUS_RUNTIME_*` name the runtime does not read, refuses
+  # the boot naming it; the container limits compose interpolates from the
+  # project .env are the roster's compose-only names, not stray ones.
   if release_name == nil do
     runtime_service_id = env_str.("LOCUS_RUNTIME_SERVICE_ID", "wrk_local")
 
@@ -161,13 +161,13 @@ if config_env() != :test do
       sourced
       |> Map.keys()
       |> Kernel.--(Cyfr.Platform.Settings.Roster.compose_only())
-      |> Locus.Runtime.Settings.unknown_names()
+      |> Locus.Config.unknown_names(:runtime)
 
-    if stray != [], do: raise("[Cyfr] FATAL: " <> Locus.Runtime.Settings.unknown(stray))
+    if stray != [], do: raise("[Cyfr] FATAL: " <> Locus.Config.unknown(stray))
 
     fallback = [service_key: runtime_key, host_url: "http://127.0.0.1:#{host_api.port}"]
 
-    case Locus.Runtime.Settings.from_env(getenv, fallback) do
+    case Locus.Config.runtime_from_env(getenv, fallback) do
       {:ok, runtime} -> config :locus, :runtime, runtime
       {:error, message} -> raise "[Cyfr] FATAL: #{message}"
     end

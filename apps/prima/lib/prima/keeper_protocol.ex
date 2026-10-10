@@ -21,9 +21,11 @@ defmodule Prima.KeeperProtocol do
   among them, and refuses by raising `ArgumentError` what the keeper
   refuses as `bad_request`: a member the type does not carry, a required
   one absent, and a value outside its bound, as the keeper's
-  `ParseRequest` reads them. A refusal names the member at fault by its
-  path (`argv`, `attach.token`, `rlimits.nofile`) and never quotes a
-  value, since an environment value may be a credential.
+  `ParseRequest` reads them (a spawn's `memory_bytes` lies from
+  `min_memory_bytes/0` to `max_memory_bytes/0`). A refusal names the
+  member at fault by its path (`argv`, `attach.token`, `rlimits.nofile`)
+  and never quotes a value, since an environment value may be a
+  credential.
 
   `decode_reply/1` answers the reply or the first refusal, in this order:
   `:oversize_line`; `:malformed` (not one JSON object); `:bad_version`;
@@ -242,6 +244,18 @@ defmodule Prima.KeeperProtocol do
   @doc "The variable name prefixes no spawn's `env` may carry."
   @spec reserved_env_prefixes() :: [String.t()]
   def reserved_env_prefixes, do: @reserved_env_prefixes
+
+  @doc """
+  The least a spawn's `memory_bytes` may be, 16 MiB: the low end of the
+  keeper's range, which every memory setting of a Locus node takes as its
+  own.
+  """
+  @spec min_memory_bytes() :: pos_integer()
+  def min_memory_bytes, do: @min_memory_bytes
+
+  @doc "The most a spawn's `memory_bytes` may be, 1 TiB: the high end of the keeper's range."
+  @spec max_memory_bytes() :: pos_integer()
+  def max_memory_bytes, do: @max_memory_bytes
 
   # ============================================================================
   # Frames

@@ -10,7 +10,9 @@ defmodule Prima.KeeperProtocolTest do
   its bytes and parses back; the attach frame presents its token; every
   valid request encodes to the line its clients have always written, name
   order and all; every invalid request is refused, naming the member its
-  `why` is about; every reserved prefix is refused in a spawn's env; and
+  `why` is about; a spawn's memory bound runs over the vectors' range,
+  `min_memory_bytes/0` to `max_memory_bytes/0`; every reserved prefix is
+  refused in a spawn's env; and
   every reply decodes to its typed shape. Beyond the vectors: an
   oversized or unknown frame header, an attach frame of the wrong shape, a
   line past the bound, and a reply of another version, type, member or
@@ -230,6 +232,31 @@ defmodule Prima.KeeperProtocolTest do
 
       assert Enum.sort(Map.keys(@refused_member)) ==
                Enum.sort(Enum.map(@vectors["invalid_requests"], & &1["why"]))
+    end
+
+    test "a spawn's memory bound runs from min_memory_bytes/0 to max_memory_bytes/0, both ends, and no further" do
+      min = KeeperProtocol.min_memory_bytes()
+      max = KeeperProtocol.max_memory_bytes()
+
+      accepted =
+        for %{"type" => "spawn", "memory_bytes" => bytes} <- @vectors["valid_requests"],
+            do: bytes
+
+      assert Enum.min(accepted) == min
+      assert Enum.max(accepted) == max
+
+      refused =
+        for %{"request" => %{"type" => "spawn", "memory_bytes" => bytes}} <-
+              @vectors["invalid_requests"],
+            is_integer(bytes),
+            do: bytes
+
+      assert (min - 1) in refused
+      assert (max + 1) in refused
+
+      for bytes <- [min - 1, max + 1] do
+        assert refused(spawn_request(%{memory_bytes: bytes})) =~ ~r/\Amemory_bytes /
+      end
     end
 
     test "every reserved prefix is refused in a spawn's env, and a name without one is carried" do
