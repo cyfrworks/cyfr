@@ -49,12 +49,7 @@ defmodule Locus.Runtime.WorkerListener do
 
   @doc "Create the table of nonces seen, owned by the calling process."
   @spec init_nonces() :: :ok
-  def init_nonces do
-    if :ets.whereis(@nonces) == :undefined,
-      do: :ets.new(@nonces, [:set, :public, :named_table, write_concurrency: true])
-
-    :ok
-  end
+  def init_nonces, do: Locus.Listener.init_nonces(@nonces)
 
   post "/worker/v1/*_rest" do
     serve(conn, System.system_time(:millisecond))
@@ -100,9 +95,9 @@ defmodule Locus.Runtime.WorkerListener do
   end
 
   defp header(conn) do
-    case get_req_header(conn, WorkerWire.auth_header()) do
-      [header] -> {:ok, header}
-      _ -> {:refused, 401, :malformed}
+    case Locus.Listener.auth_header(conn) do
+      {:ok, header} -> {:ok, header}
+      :error -> {:refused, 401, :malformed}
     end
   end
 
@@ -121,20 +116,19 @@ defmodule Locus.Runtime.WorkerListener do
   # A nonce is refused for the header window on either side of its
   # timestamp, which is as long as the header itself verifies.
   defp fresh(%{nonce: nonce}, now) do
-    :ets.select_delete(@nonces, [{{:_, :"$1"}, [{:<, :"$1", now}], [true]}])
-
-    if :ets.insert_new(@nonces, {nonce, now + 2 * WorkerAuth.window_ms()}),
-      do: :ok,
-      else: {:refused, 401, :replayed}
+    case Locus.Listener.fresh(@nonces, nonce, now, WorkerAuth.window_ms()) do
+      :ok -> :ok
+      {:error, :replayed} -> {:refused, 401, :replayed}
+    end
   end
 
+  # A verified request's declared length is not refused unread: the body
+  # is read up to the bound, and one that runs past it is refused there.
   defp read(conn) do
-    max = HostAPI.max_body_bytes()
-
-    case read_body(conn, length: max, read_length: max) do
+    case Locus.Listener.read_bounded(conn, HostAPI.max_body_bytes(), false) do
       {:ok, body, conn} -> {:ok, body, conn}
-      {:more, _chunk, conn} -> {:refused, closing(conn), 413, :malformed}
-      {:error, _reason} -> {:refused, 400, :malformed}
+      {:too_large, conn, _past} -> {:refused, closing(conn), 413, :malformed}
+      {:unread, _conn} -> {:refused, 400, :malformed}
     end
   end
 

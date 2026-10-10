@@ -103,17 +103,12 @@ defmodule Locus.BuilderService do
 
   @doc "Create the table of nonces seen, owned by the calling process."
   @spec init_nonces() :: :ok
-  def init_nonces do
-    if :ets.whereis(@nonces) == :undefined,
-      do: :ets.new(@nonces, [:set, :public, :named_table, write_concurrency: true])
-
-    :ok
-  end
+  def init_nonces, do: Locus.Listener.init_nonces(@nonces)
 
   match _ do
     case {conn.method, BuilderProtocol.operation(conn.request_path)} do
       {"POST", {:ok, :build}} ->
-        build(conn, now(conn))
+        build(conn, Locus.Listener.now(conn))
 
       {"POST", {:ok, :health}} ->
         health(conn)
@@ -123,16 +118,6 @@ defmodule Locus.BuilderService do
           conn,
           {:malformed, "#{conn.method} on this path is no operation of the builds service"}
         )
-    end
-  end
-
-  # The clock a header's window and a request's deadline are read against:
-  # the system's, or the `:now` this plug was given (a test presenting the
-  # shared vectors' headers at the vectors' instant).
-  defp now(%Plug.Conn{assigns: %{service_opts: opts}}) do
-    case Keyword.fetch(opts, :now) do
-      {:ok, now} when is_function(now, 0) -> now.()
-      :error -> System.system_time(:millisecond)
     end
   end
 
@@ -184,9 +169,9 @@ defmodule Locus.BuilderService do
   end
 
   defp header(conn) do
-    case get_req_header(conn, BuilderProtocol.auth_header()) do
-      [header] -> {:ok, header}
-      _ -> {:refused, conn, {:unauthorized, :malformed}}
+    case Locus.Listener.auth_header(conn) do
+      {:ok, header} -> {:ok, header}
+      :error -> {:refused, conn, {:unauthorized, :malformed}}
     end
   end
 
@@ -201,33 +186,29 @@ defmodule Locus.BuilderService do
   # from the moment it is seen it can verify for two windows at most; its
   # nonce is refused for that long.
   defp fresh(conn, %{nonce: nonce}, now) do
-    :ets.select_delete(@nonces, [{{:_, :"$1"}, [{:<, :"$1", now}], [true]}])
-
-    if :ets.insert_new(@nonces, {nonce, now + 2 * BuilderProtocol.window_ms()}),
-      do: :ok,
-      else: {:refused, conn, {:unauthorized, :replayed}}
+    case Locus.Listener.fresh(@nonces, nonce, now, BuilderProtocol.window_ms()) do
+      :ok -> :ok
+      {:error, :replayed} -> {:refused, conn, {:unauthorized, :replayed}}
+    end
   end
 
   # The declared length first, so a body past the bound is refused without
   # a byte of it read; then the read itself, bounded for a body that
   # declares none.
   defp read(conn, max) do
-    with :ok <- declared(conn, max) do
-      case read_body(conn, length: max, read_length: max) do
-        {:ok, body, conn} -> {:ok, body, conn}
-        {:more, _head, conn} -> {:refused, closing(conn), runs_past(max)}
-        {:error, _reason} -> {:refused, conn, {:malformed, "the body could not be read"}}
-      end
-    end
-  end
+    case Locus.Listener.read_bounded(conn, max, true) do
+      {:ok, body, conn} ->
+        {:ok, body, conn}
 
-  defp declared(conn, max) do
-    with [text] <- get_req_header(conn, "content-length"),
-         {bytes, ""} when bytes > max <- Integer.parse(text) do
-      {:refused, closing(conn),
-       {:malformed, BuilderProtocol.describe({:too_large, :request, bytes, max})}}
-    else
-      _ -> :ok
+      {:too_large, conn, {:declared, bytes}} ->
+        {:refused, closing(conn),
+         {:malformed, BuilderProtocol.describe({:too_large, :request, bytes, max})}}
+
+      {:too_large, conn, :read} ->
+        {:refused, closing(conn), runs_past(max)}
+
+      {:unread, conn} ->
+        {:refused, conn, {:malformed, "the body could not be read"}}
     end
   end
 

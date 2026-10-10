@@ -82,6 +82,7 @@ defmodule Locus.Backends.Service do
   require Logger
 
   alias Locus.Backends.{Backend, Owners}
+  alias Locus.Listener
   alias Prima.LocusBackends
   alias Prima.MCP.Protocol, as: MCPProtocol
 
@@ -122,24 +123,14 @@ defmodule Locus.Backends.Service do
 
     case {conn.method, LocusBackends.operation(conn.request_path)} do
       {"POST", {:ok, :health}} -> health(conn)
-      {"POST", {:ok, :control}} -> control(conn, now(conn))
-      {"POST", {:ok, :mcp}} -> mcp(conn, now(conn))
+      {"POST", {:ok, :control}} -> control(conn, Listener.now(conn))
+      {"POST", {:ok, :mcp}} -> mcp(conn, Listener.now(conn))
       {_method, {:ok, :mcp}} -> not_allowed(conn)
       _ -> refuse(closing(conn), :bad_request)
     end
   end
 
   defp owners(%Plug.Conn{assigns: %{service_opts: opts}}), do: Keyword.get(opts, :owners, Owners)
-
-  # The clock a header's window and a nonce's expiry are read against: the
-  # system's, or the `:now` this plug was given (a test presenting the shared
-  # vectors' headers at the vectors' instant).
-  defp now(%Plug.Conn{assigns: %{service_opts: opts}}) do
-    case Keyword.fetch(opts, :now) do
-      {:ok, now} when is_function(now, 0) -> now.()
-      :error -> System.system_time(:millisecond)
-    end
-  end
 
   defp key(%Plug.Conn{assigns: %{service_opts: opts}}) do
     case Keyword.get_lazy(opts, :key, &Locus.Config.backends_key/0) do
@@ -215,7 +206,7 @@ defmodule Locus.Backends.Service do
   defp known(conn, :error), do: {:refused, closing(conn), :unauthorized}
 
   defp verified(conn, kind, key, now) do
-    with [header] <- get_req_header(conn, LocusBackends.auth_header()),
+    with {:ok, header} <- Listener.auth_header(conn),
          {:ok, fields, body_hash} <- LocusBackends.verify_header(kind, key, header, now) do
       {:ok, fields, body_hash}
     else
@@ -330,7 +321,7 @@ defmodule Locus.Backends.Service do
   end
 
   defp rpc_verified(conn, key, now) do
-    with [header] <- get_req_header(conn, LocusBackends.auth_header()),
+    with {:ok, header} <- Listener.auth_header(conn),
          {:ok, invoke, body_hash} <- LocusBackends.verify_header(:invoke, key, header, now) do
       {:ok, invoke, body_hash}
     else
@@ -661,21 +652,10 @@ defmodule Locus.Backends.Service do
   # a byte of it read; then the read itself, bounded for a body that
   # declares none.
   defp read(conn, max) do
-    with :ok <- declared(conn, max) do
-      case read_body(conn, length: max, read_length: max) do
-        {:ok, body, conn} -> {:ok, body, conn}
-        {:more, _head, conn} -> {:too_large, closing(conn)}
-        {:error, _reason} -> {:unread, closing(conn)}
-      end
-    end
-  end
-
-  defp declared(conn, max) do
-    with [text] <- get_req_header(conn, "content-length"),
-         {bytes, ""} when bytes > max <- Integer.parse(text) do
-      {:too_large, closing(conn)}
-    else
-      _ -> :ok
+    case Listener.read_bounded(conn, max, true) do
+      {:ok, body, conn} -> {:ok, body, conn}
+      {:too_large, conn, _past} -> {:too_large, closing(conn)}
+      {:unread, conn} -> {:unread, closing(conn)}
     end
   end
 
