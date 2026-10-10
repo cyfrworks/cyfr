@@ -11,6 +11,11 @@ defmodule Arca.Supervisor do
 
   @impl true
   def start(_type, _args) do
+    # The control plane's first application start: every log event's
+    # stack frames are reduced to their arity from here on, before any
+    # process of this node holds a secret (`Prima.LogFilter`).
+    :ok = Prima.LogFilter.install()
+
     # The contract structs a facade may answer are read before anything
     # starts: an unreadable `:prima` module list is a boot refusal.
     :ok = Arca.Data.load_prima!()

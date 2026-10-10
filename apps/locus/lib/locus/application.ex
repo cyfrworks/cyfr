@@ -30,6 +30,10 @@ defmodule Locus.Application do
 
   @impl true
   def start(_type, _args) do
+    # The node's first application start: every log event's stack frames
+    # are reduced to their arity from here on (`Prima.LogFilter`).
+    :ok = Prima.LogFilter.install()
+
     builds? = Locus.Config.request_key() != nil
     backends? = Locus.Config.backends_key() != nil
     keeper? = Locus.Keeper.channel_inherited?()

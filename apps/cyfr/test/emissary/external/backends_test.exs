@@ -1163,8 +1163,14 @@ defmodule Emissary.External.BackendsTest do
       assert_receive {:held, "sync", held}, 2_000
 
       keys = [@root, LocusBackends.control_key(@root), LocusBackends.seal_key(@root)]
-      assert %{inflight: {_ref, {:sync, _key}, spec}} = :sys.get_state(controller)
+      assert %{inflight: {_ref, {:sync, _key}, spec}} = state = :sys.get_state(controller)
       for key <- keys, do: refute(inspect(spec, limit: :infinity) =~ rendered(key))
+
+      # The state printed whole, spec and all, as any line that prints it
+      # does: its own Inspect leaves the root and the derived keys out.
+      printed = inspect(state, limit: :infinity, printable_limit: :infinity)
+      assert printed =~ "inflight: {"
+      for key <- keys, do: refute(printed =~ rendered(key))
 
       {:status, _pid, _module, items} = :sys.get_status(controller)
 
@@ -1178,7 +1184,9 @@ defmodule Emissary.External.BackendsTest do
       status = inspect(items, limit: :infinity, printable_limit: :infinity)
       for key <- keys, do: refute(status =~ rendered(key))
 
-      # The report of a crash prints the state its reason carries, spec and all.
+      # The report of a crash names the failed callback by its arity
+      # (`Prima.LogFilter`): the state its frame carries, spec and all, is
+      # never printed.
       log =
         capture_log(fn ->
           catch_exit(GenServer.call(controller, :no_such_call))
@@ -1188,8 +1196,7 @@ defmodule Emissary.External.BackendsTest do
       released = Process.monitor(held)
       send(held, :go)
       assert_receive {:DOWN, ^released, :process, ^held, _reason}, 5_000
-      assert log =~ "Emissary.External.Backends.handle_call(:no_such_call"
-      assert log =~ "inflight: {"
+      assert log =~ "Emissary.External.Backends.handle_call/3"
       for key <- keys, do: refute(log =~ rendered(key))
     end
 

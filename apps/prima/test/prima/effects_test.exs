@@ -12,7 +12,7 @@ defmodule Prima.EffectsTest do
   identifiers and sealing IVs — to the exact functions allowed them, and
   compile-time reads to module bodies.
 
-  The roster keeps its categories apart: the six runtime primitives (the
+  The roster keeps its categories apart: the seven runtime primitives (the
   process and state owners), identifiers, encryption IVs, compile-time
   embeds, and the one code-loading probe of an optional provider callback.
   """
@@ -28,6 +28,7 @@ defmodule Prima.EffectsTest do
     Prima.Boot => {:primitive, [:persistent_term]},
     Prima.RateLimiter => {:primitive, [:ets, :logger, :otp, :process, :system]},
     Prima.LoggerContext => {:primitive, [:logger]},
+    Prima.LogFilter => {:primitive, [:logger]},
     Prima.JsonFormatter => {:primitive, [:app_env, :persistent_term]},
     Prima.Slots => {:primitive, [:logger, :otp, :process, :system]},
     Prima.Caps => {:primitive, [:code, :persistent_term]},
@@ -45,6 +46,7 @@ defmodule Prima.EffectsTest do
     Prima.Boot,
     Prima.Caps,
     Prima.JsonFormatter,
+    Prima.LogFilter,
     Prima.LoggerContext,
     Prima.RateLimiter,
     Prima.Slots
@@ -173,8 +175,10 @@ defmodule Prima.EffectsTest do
       assert absent_rows(modules, roster) == [Cyfr.Gone]
     end
 
-    test "Logger is reached only by Slots, RateLimiter and LoggerContext", %{modules: modules} do
-      assert reaching(modules, :logger) == [Prima.LoggerContext, Prima.RateLimiter, Prima.Slots]
+    test "Logger is reached only by Slots, RateLimiter, LoggerContext and LogFilter",
+         %{modules: modules} do
+      assert reaching(modules, :logger) ==
+               [Prima.LogFilter, Prima.LoggerContext, Prima.RateLimiter, Prima.Slots]
     end
 
     test "the wall clock is read only by the identifier generator", %{modules: modules} do
@@ -239,7 +243,7 @@ defmodule Prima.EffectsTest do
   end
 
   describe "the roster" do
-    test "the six primitives are the process and state owners, and the categories stay apart" do
+    test "the seven primitives are the process and state owners, and the categories stay apart" do
       assert for({m, {:primitive, _}} <- @roster, do: m) |> Enum.sort() == @primitives
 
       categories = @roster |> Map.values() |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()

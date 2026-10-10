@@ -22,6 +22,10 @@ defmodule Opus.Application do
 
   @impl true
   def start(_type, _args) do
+    # Before the role is read, so that either role's log events have their
+    # stack frames reduced to their arity from the first (`Prima.LogFilter`).
+    :ok = Prima.LogFilter.install()
+
     case Opus.Release.role() do
       :service ->
         settings = Opus.Settings.pool!()
