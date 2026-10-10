@@ -8,12 +8,125 @@ defmodule Cyfr.StackShapeTest do
   backends service and (optionally) caddy and the Locus builds service —
   nothing else. Read the files, assert the shape; the same style as the
   ingress inventory.
+
+  Two readings of docker-compose.yml serve the tests. The tests of the
+  Locus services' hardening parse the file whole: the `x-locus-role` block
+  the services share, and each service as compose runs it, that block
+  merged under the service's own keys (`merged_services/1`). Every other
+  test reads a service's own lines (`service_block/2`, `list_entries/2`),
+  which resolve no merge.
   """
   use ExUnit.Case, async: true
 
   @root Path.expand("../../../..", __DIR__)
 
+  @locus_services ["locus-builds", "locus-runtime", "locus-backends"]
+
+  # The keys every Locus service takes from `x-locus-role`.
+  @role_keys ~w(init cap_drop cap_add security_opt read_only ipc restart logging)
+
+  # The hardening every Locus service runs under, and each service's own
+  # security options and tmpfs mounts.
+  @shared_hardening %{
+    "init" => true,
+    "cap_drop" => ["ALL"],
+    "cap_add" => ["SETUID", "SETGID", "KILL"],
+    "read_only" => true,
+    "ipc" => "none",
+    "restart" => "unless-stopped",
+    "logging" => %{
+      "driver" => "json-file",
+      "options" => %{"max-size" => "10m", "max-file" => "3"}
+    }
+  }
+
+  @service_hardening %{
+    "locus-builds" => %{
+      "security_opt" => ["no-new-privileges:true", "writable-cgroups=true"],
+      "tmpfs" => [
+        "/var/lib/locus/homes:mode=1733,exec,size=2g",
+        "/run/locus:uid=10001,gid=10001,mode=0700,size=16m"
+      ]
+    },
+    "locus-backends" => %{
+      "security_opt" => ["no-new-privileges:true", "writable-cgroups=true"],
+      "tmpfs" => [
+        "/var/lib/locus/homes:mode=1733,exec,size=2g",
+        "/run/locus:uid=10001,gid=10001,mode=0700,size=16m"
+      ]
+    },
+    "locus-runtime" => %{
+      "security_opt" => [
+        "no-new-privileges:true",
+        "writable-cgroups=true",
+        "seccomp=./keeper.seccomp.json"
+      ],
+      "tmpfs" => [
+        "/var/lib/locus/homes:mode=1733,exec,size=256m",
+        "/run/locus:uid=10001,gid=10001,mode=0700,size=16m"
+      ]
+    }
+  }
+
+  # Keys that would hand a Locus service the host's privileges, namespaces,
+  # devices or storage.
+  @forbidden_keys ~w(privileged pid userns_mode cgroup devices volumes)
+
   defp read!(rel), do: File.read!(Path.join(@root, rel))
+
+  # A merge key, as YamlElixir names it: `<<` and a counter.
+  defp merge_key?({key, _}), do: String.starts_with?(key, "<<")
+
+  # Each service of a compose text as compose runs it: the one mapping it
+  # merges, under the service's own keys, which win. A merge copies keys
+  # and never joins lists, so a list the service sets replaces the merged
+  # one whole.
+  defp merged_services(compose) do
+    for {service, definition} <- YamlElixir.read_from_string!(compose)["services"],
+        into: %{} do
+      {merges, own} = Enum.split_with(definition, &merge_key?/1)
+
+      merged =
+        case merges do
+          [] -> Map.new(own)
+          [{_, role}] -> Map.merge(role, Map.new(own))
+        end
+
+      {service, merged}
+    end
+  end
+
+  # The `{service, key}` pairs, sorted, where a Locus service of a compose
+  # text runs without its hardening: a value other than the shipped one, a
+  # key it must not have, or no memory limit.
+  defp hardening_violations(compose) do
+    services = merged_services(compose)
+
+    Enum.sort(
+      for service <- @locus_services,
+          merged = Map.get(services, service, %{}),
+          violation <-
+            service_violations(merged, Map.merge(@shared_hardening, @service_hardening[service])),
+          do: {service, violation}
+    )
+  end
+
+  defp service_violations(merged, expected) do
+    wrong = for {key, value} <- expected, Map.get(merged, key) != value, do: key
+    forbidden = for key <- @forbidden_keys, Map.has_key?(merged, key), do: key
+
+    unbounded =
+      case merged do
+        %{"deploy" => %{"resources" => %{"limits" => %{"memory" => memory}}}}
+        when memory not in [nil, ""] ->
+          []
+
+        _ ->
+          ["deploy.resources.limits.memory"]
+      end
+
+    wrong ++ forbidden ++ unbounded
+  end
 
   # One service's block of docker-compose.yml, and the entries of one of
   # its list keys.
@@ -190,38 +303,77 @@ defmodule Cyfr.StackShapeTest do
     assert backends =~ Prima.LocusBackends.route(:health)
   end
 
-  test "the Locus services keep their hardening, and can bound a spawn's memory" do
-    compose = read!("docker-compose.yml")
+  # The hardening is written once, so a role cannot miss one and a new role
+  # inherits it; the block carries the hardening alone, so no role gains a
+  # network, an environment or a mount from it.
+  test "the Locus services take their hardening from one block" do
+    compose = YamlElixir.read_from_string!(read!("docker-compose.yml"))
+    role = compose["x-locus-role"]
 
-    for {service, homes, run_dir} <- [
-          {"locus-builds", "/var/lib/locus/homes:mode=1733,exec,size=2g",
-           "/run/locus:uid=10001,gid=10001,mode=0700,size=16m"},
-          {"locus-backends", "/var/lib/locus/homes:mode=1733,exec,size=2g",
-           "/run/locus:uid=10001,gid=10001,mode=0700,size=16m"},
-          {"locus-runtime", "/var/lib/locus/homes:mode=1733,exec,size=256m",
-           "/run/locus:uid=10001,gid=10001,mode=0700,size=16m"}
-        ] do
-      block = service_block(compose, service)
+    assert for({key, _} <- compose, String.starts_with?(key, "x-"), do: key) == ["x-locus-role"]
+    assert role |> Map.keys() |> Enum.sort() == Enum.sort(@role_keys)
 
-      assert list_entries(block, "cap_drop") == ["ALL"], service
-      assert list_entries(block, "cap_add") == ["SETUID", "SETGID", "KILL"], service
+    for service <- @locus_services,
+        do: assert(Map.has_key?(compose["services"], service), service)
 
-      # cyfr-locus bounds a spawn's memory only where the container's
-      # cgroup is mounted writable; without the option every bounded spawn
-      # is refused, so the shipped services carry it. The runtime's runner
-      # pool is isolated, which takes the keeper's seccomp profile too.
-      assert list_entries(block, "security_opt") ==
-               ["no-new-privileges:true", "writable-cgroups=true"] ++
-                 if(service == "locus-runtime", do: ["seccomp=./keeper.seccomp.json"], else: []),
-             service
+    for {service, definition} <- compose["services"] do
+      {merges, own} = Enum.split_with(definition, &merge_key?/1)
 
-      assert list_entries(block, "tmpfs") == [homes, run_dir], service
-      assert block =~ ~r/^    read_only: true$/m, service
-      assert block =~ ~r/^    ipc: none$/m, service
-      assert block =~ ~r/^    init: true$/m, service
-      refute block =~ ~r/^    (privileged|pid|userns_mode|cgroup|devices|volumes):/m, service
-      assert block =~ ~r/^          memory: \S+$/m, service
+      if service in @locus_services do
+        assert Enum.map(merges, &elem(&1, 1)) == [role], "#{service} merges x-locus-role once"
+
+        # A service's own list replaces the merged one whole, so the
+        # runtime restates the block's security options before its own.
+        overlap = for {key, _} <- own, key in @role_keys, do: key
+
+        if service == "locus-runtime" do
+          assert overlap == ["security_opt"], service
+
+          assert definition["security_opt"] ==
+                   role["security_opt"] ++ ["seccomp=./keeper.seccomp.json"]
+        else
+          assert overlap == [], "#{service} sets #{inspect(overlap)} over x-locus-role"
+        end
+      else
+        assert merges == [], "#{service} merges #{inspect(merges)}"
+      end
     end
+  end
+
+  # cyfr-locus bounds a spawn's memory only where the container's cgroup is
+  # mounted writable; without the option every bounded spawn is refused, so
+  # the shipped services carry it. The runtime's runner pool is isolated,
+  # which takes the keeper's seccomp profile too.
+  test "the Locus services keep their hardening, and can bound a spawn's memory" do
+    assert hardening_violations(read!("docker-compose.yml")) == []
+  end
+
+  test "a Locus service that loses a hardening option fails" do
+    compose = read!("docker-compose.yml")
+    every = fn key -> for service <- @locus_services, do: {service, key} end
+
+    plants = [
+      {"the runtime's list without no-new-privileges:true", "\n      - no-new-privileges:true\n",
+       "\n", [{"locus-runtime", "security_opt"}]},
+      {"locus-backends without its merge", "\n  locus-backends:\n    <<: *locus-role\n",
+       "\n  locus-backends:\n", for(key <- @role_keys, do: {"locus-backends", key})},
+      {"locus-builds setting read_only: false", "\n  locus-builds:\n    <<: *locus-role\n",
+       "\n  locus-builds:\n    <<: *locus-role\n    read_only: false\n",
+       [{"locus-builds", "read_only"}]},
+      {"the block without ipc: none", "\n  ipc: none\n", "\n", every.("ipc")},
+      {"the block granting privileged: true", "\nx-locus-role: &locus-role\n",
+       "\nx-locus-role: &locus-role\n  privileged: true\n", every.("privileged")}
+    ]
+
+    # Each plant replaces one exact line; one that changes nothing answers
+    # `:unchanged`, which no plant expects.
+    outcomes =
+      for {plant, line, replacement, _} <- plants do
+        planted = String.replace(compose, line, replacement)
+        {plant, if(planted == compose, do: :unchanged, else: hardening_violations(planted))}
+      end
+
+    assert outcomes == for({plant, _, _, expected} <- plants, do: {plant, Enum.sort(expected)})
   end
 
   # The runtime's runner pool is isolated: cyfr-locus clones each runner into

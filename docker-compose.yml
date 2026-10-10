@@ -35,6 +35,56 @@
 # CYFR_LOCUS_BUILDS_KEY empty and leave the profile off. See the "Deploy to
 # a Server" section of README.md.
 
+# The hardening every Locus service runs under, written once. Each Locus
+# service merges this block (`<<: *locus-role`) beside the keys that are its
+# own: its network, environment, tmpfs mounts and limits, and, for a role
+# other than the image's builds role, its entrypoint. A key the service sets
+# itself replaces this block's whole: a merge copies keys and never joins
+# lists.
+x-locus-role: &locus-role
+  # docker-init is PID 1 and forwards stop signals to cyfr-locus, the child
+  # subreaper of every build, runner and backend process: an orphaned
+  # process is reparented to it, not to docker-init, and retired with its
+  # uid.
+  init: true
+  # cyfr-locus refuses to start with any capability other than these: it
+  # starts the locus release and each build, runner or backend under their
+  # own uids and signals their processes. The release and every process it
+  # starts run with none.
+  cap_drop:
+    - ALL
+  cap_add:
+    - SETUID
+    - SETGID
+    - KILL
+  # no-new-privileges:true: no process in the container gains a privilege
+  # by executing a setuid or file-capability binary.
+  # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
+  # mounts the container's own cgroup writable, which adds no capability:
+  # cyfr-locus gives every build, runner and backend a group of its own
+  # there, bounded at its role's LOCUS_BUILDS_MEMORY_BYTES,
+  # LOCUS_RUNTIME_MEMORY_BYTES or LOCUS_BACKENDS_MEMORY_BYTES, and refuses
+  # a spawn that asks for a bound where it cannot make one. Without the
+  # option none runs unbounded: no runner starts; the builds service
+  # answers each build `unavailable`, naming the option; and every
+  # backend's spawn is refused as `memory_unavailable`, which the backend
+  # reports as its error.
+  security_opt:
+    - no-new-privileges:true
+    - writable-cgroups=true
+  # No Locus service holds tenant state: the root is read-only, each
+  # service's tmpfs mounts are its only writable surfaces, and cyfr-locus
+  # refuses to start if any other location is writable by a pool uid.
+  # `ipc: none` leaves /dev/shm unmounted.
+  read_only: true
+  ipc: none
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
   cyfr:
     container_name: cyfr
@@ -110,6 +160,7 @@ services:
   # compose hands this service the same key as LOCUS_BUILDS_KEY. Its other
   # settings go in .env.locus.
   locus-builds:
+    <<: *locus-role
     container_name: cyfr-locus-builds
     # Pulled as published; a source checkout builds it with
     # `docker compose --profile locus-builds build locus-builds`.
@@ -141,50 +192,19 @@ services:
     # listening on it (LOCUS_BUILDS_BIND is for a builder outside compose).
     networks:
       - locus-builds
-    # docker-init is PID 1 and forwards stop signals to cyfr-locus, the
-    # child subreaper of every build process.
-    init: true
-    # cyfr-locus refuses to start with any capability other than these: it
-    # starts the locus release and each build under their own uids and
-    # signals their processes. The release and every build run with none.
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETUID
-      - SETGID
-      - KILL
-    # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
-    # mounts the container's own cgroup writable, which adds no capability:
-    # cyfr-locus gives every build a group of its own there, bounded at
-    # LOCUS_BUILDS_MEMORY_BYTES. Without the option it cannot bound a build
-    # and refuses every one: the service answers each build `unavailable`,
-    # naming the option, and none runs unbounded.
-    security_opt:
-      - no-new-privileges:true
-      - writable-cgroups=true
-    # No /data mount, read-only root: the builder holds no tenant state —
-    # sources arrive in the request, artifacts leave in the response. The
-    # tmpfs mounts below are the only writable surfaces, and cyfr-locus
-    # refuses to start if any other location is writable by a build's uid
-    # (`ipc: none` leaves /dev/shm unmounted). Build homes: each build's
-    # uid creates its own 0700 home holding its sources, Cargo home, npm
-    # cache, temporary files and target directory; mode 1733 lets it create
-    # one without listing the others, and build scripts and bundler
+    # No /data mount: the builder holds no tenant state — sources arrive in
+    # the request, artifacts leave in the response. These tmpfs mounts are
+    # the only writable surfaces under the read-only root. Build homes: each
+    # build's uid creates its own 0700 home holding its sources, Cargo home,
+    # npm cache, temporary files and target directory; mode 1733 lets it
+    # create one without listing the others, and build scripts and bundler
     # binaries run from there, so it allows exec. What a build writes to its
     # home counts against that build's memory bound, and the mount's size
     # bounds what all concurrent builds write. /run/locus holds the
     # release's temporary files and the socket builds' relays attach to.
-    read_only: true
-    ipc: none
     tmpfs:
       - /var/lib/locus/homes:mode=1733,exec,size=2g
       - /run/locus:uid=10001,gid=10001,mode=0700,size=16m
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
     deploy:
       resources:
         limits:
@@ -210,6 +230,7 @@ services:
   # its host calls and pinned fetches leave through its relay to the
   # service, which posts and connects for it.
   locus-runtime:
+    <<: *locus-role
     container_name: cyfr-locus-runtime
     # Pulled as published; a source checkout builds it with
     # `docker compose build locus-runtime`.
@@ -238,22 +259,6 @@ services:
       - LOCUS_RUNTIME_PORT=4200
     networks:
       - locus-runtime
-    # docker-init is PID 1 and forwards stop signals to cyfr-locus, the
-    # child subreaper of every runner process.
-    init: true
-    # cyfr-locus refuses to start with any capability other than these: it
-    # starts the locus release and each runner under their own uids and
-    # signals their processes. The release and every runner run with none.
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETUID
-      - SETGID
-      - KILL
-    # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
-    # mounts the container's own cgroup writable, which adds no capability:
-    # cyfr-locus bounds a spawn's memory with a group of its own there, and
-    # refuses a spawn that asks for a bound where it cannot make one.
     # cyfr-locus clones every runner into a user and network namespace of
     # its own, with no route out. Docker's default seccomp profile denies a
     # clone that makes a namespace, so the service runs under
@@ -265,35 +270,26 @@ services:
     # Ubuntu 24.04 and later), the container keeps Docker's default
     # AppArmor profile, under which the clone is allowed. Without either,
     # cyfr-locus refuses to start, naming both, and the container
-    # restart-loops.
+    # restart-loops. This list replaces x-locus-role's, since a merge does
+    # not join lists, so it restates that block's two entries first.
     security_opt:
       - no-new-privileges:true
       - writable-cgroups=true
       - seccomp=./keeper.seccomp.json
-    # The engine holds no tenant state: read-only root, and the tmpfs
-    # mounts below are the only writable surfaces; cyfr-locus refuses to
-    # start if any other location is writable by a runner's uid
-    # (`ipc: none` leaves /dev/shm unmounted). Runner homes: each runner's
-    # uid creates its own 0700 home, where its VM keeps the release's
-    # temporary files; mode 1733 lets it create one without listing the
-    # others, and the runner runs the release from there, so it allows
-    # exec. Its size counts against the memory limit below. /run/locus holds
-    # the service's temporary files and the socket runners' relays attach
-    # to.
-    read_only: true
-    ipc: none
+    # The engine holds no tenant state: these tmpfs mounts are the only
+    # writable surfaces under the read-only root. Runner homes: each
+    # runner's uid creates its own 0700 home, where its VM keeps the
+    # release's temporary files; mode 1733 lets it create one without
+    # listing the others, and the runner runs the release from there, so it
+    # allows exec. Its size counts against the memory limit below.
+    # /run/locus holds the service's temporary files and the socket
+    # runners' relays attach to.
     tmpfs:
       - /var/lib/locus/homes:mode=1733,exec,size=256m
       - /run/locus:uid=10001,gid=10001,mode=0700,size=16m
-    restart: unless-stopped
     # Running attempts close or are reported on shutdown; compose's default
     # 10s grace would SIGKILL mid-report.
     stop_grace_period: 40s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
     # Liveness: the worker listener refuses an unsigned status request with
     # 401, which it answers only once the worker service holds its
     # credentials; in place of the image's builds probe.
@@ -328,6 +324,7 @@ services:
   # from .env; compose hands this service the same key as
   # LOCUS_BACKENDS_KEY. Its other settings go in .env.locus.
   locus-backends:
+    <<: *locus-role
     container_name: cyfr-locus-backends
     # Pulled as published; a source checkout builds it with
     # `docker compose build locus-backends`.
@@ -363,53 +360,20 @@ services:
     # interface is listening on it.
     networks:
       - locus-backends
-    # docker-init is PID 1 and forwards stop signals to cyfr-locus, the
-    # child subreaper of every backend process: an orphaned backend
-    # process is reparented to it, not to docker-init, and retired with
-    # its uid.
-    init: true
-    # cyfr-locus refuses to start with any capability other than these: it
-    # starts the locus release and each backend under their own uids and
-    # signals their processes. The release and every backend run with none.
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETUID
-      - SETGID
-      - KILL
-    # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
-    # mounts the container's own cgroup writable, which adds no capability:
-    # cyfr-locus gives every backend a group of its own there, bounded at
-    # LOCUS_BACKENDS_MEMORY_BYTES. Without the option it cannot bound a
-    # backend and refuses every spawn as `memory_unavailable`: each backend
-    # reports that refusal as its error, and none runs unbounded.
-    security_opt:
-      - no-new-privileges:true
-      - writable-cgroups=true
-    # The root is read-only and the tmpfs mounts below are the only writable
-    # surfaces; cyfr-locus refuses to start if any other location is
-    # writable by a backend's uid, so a backend has no shared /tmp,
-    # /var/tmp, /run or /dev/shm (`ipc: none` leaves /dev/shm unmounted)
-    # and writes temporary files under its home. Backend homes: each
-    # backend's uid creates its own 0700 home; mode 1733 lets it create one
-    # without listing the others. Homes hold npx caches, so they allow exec,
-    # and what a backend writes there counts against its memory bound.
+    # These tmpfs mounts are the only writable surfaces under the read-only
+    # root, so a backend has no shared /tmp, /var/tmp, /run or /dev/shm and
+    # writes temporary files under its home. Backend homes: each backend's
+    # uid creates its own 0700 home; mode 1733 lets it create one without
+    # listing the others. Homes hold npx caches, so they allow exec, and
+    # what a backend writes there counts against its memory bound.
     # /run/locus holds the release's temporary files and the socket
     # backends' relays attach to.
-    read_only: true
-    ipc: none
     tmpfs:
       - /var/lib/locus/homes:mode=1733,exec,size=2g
       - /run/locus:uid=10001,gid=10001,mode=0700,size=16m
-    restart: unless-stopped
     # Shutdown retires every backend and drains in-flight requests;
     # compose's default 10s is tight when several backends are up.
     stop_grace_period: 15s
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
     # The backends wire's health operation, answered without a key
     # (Prima.LocusBackends), in place of the image's builds probe.
     healthcheck:

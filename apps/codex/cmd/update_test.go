@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -203,6 +204,70 @@ func TestUpdateEnsuresPublishedPort(t *testing.T) {
 			}
 		} else if added != nil || string(got) != compose {
 			t.Errorf("ports %s, .env %q, CYFR_PORT %q: update added %q", c.ports, c.env, c.process, added)
+		}
+	}
+}
+
+// `cyfr update` writes the whole compose file back when it adds a field to
+// cyfr, and the Locus services keep their hardening: the shared
+// x-locus-role block, each service's merge of it, and every key each
+// service runs with.
+func TestEnsureCyfrComposeFieldsKeepsTheLocusRoleBlock(t *testing.T) {
+	shipped, err := os.ReadFile(filepath.Join("..", "..", "..", "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const aqua = "      - ./aqua:/app/seed/aqua\n"
+	if n := strings.Count(string(shipped), aqua); n != 1 {
+		t.Fatalf("the shipped docker-compose.yml names cyfr's aqua volume %d times, want once", n)
+	}
+	input := strings.Replace(string(shipped), aqua, "", 1)
+
+	path := filepath.Join(t.TempDir(), "docker-compose.yml")
+	if err := os.WriteFile(path, []byte(input), 0644); err != nil {
+		t.Fatal(err)
+	}
+	added, err := ensureCyfrComposeFields(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(added, "volumes: ./aqua:/app/seed/aqua") {
+		t.Fatalf("added %v, without cyfr's aqua volume, so nothing was written", added)
+	}
+	output, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var root yaml.Node
+	if err := yaml.Unmarshal(output, &root); err != nil {
+		t.Fatalf("the written docker-compose.yml is not YAML: %v", err)
+	}
+	doc := root.Content[0]
+	role := mapValue(doc, "x-locus-role")
+	if role == nil || role.Kind != yaml.MappingNode || role.Anchor != "locus-role" {
+		t.Fatalf("the written docker-compose.yml has no x-locus-role block anchored &locus-role")
+	}
+	services := mapValue(doc, "services")
+	for _, name := range bundledServices {
+		merge := mapValue(mapValue(services, name), "<<")
+		if merge == nil || merge.Kind != yaml.AliasNode || merge.Alias != role {
+			t.Errorf("the written %s does not merge *locus-role", name)
+		}
+	}
+
+	var before, after map[string]any
+	if err := yaml.Unmarshal([]byte(input), &before); err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(output, &after); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range bundledServices {
+		was := before["services"].(map[string]any)[name]
+		is := after["services"].(map[string]any)[name]
+		if was == nil || !reflect.DeepEqual(was, is) {
+			t.Errorf("the written %s runs as\n%v\nwant\n%v", name, is, was)
 		}
 	}
 }
