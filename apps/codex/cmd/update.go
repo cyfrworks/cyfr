@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/cyfr/codex/internal/scaffold"
@@ -124,12 +126,13 @@ var requiredVolumes = []string{
 	"./aqua:/app/seed/aqua",
 }
 
-// requiredPorts must appear in the cyfr service's ports list. Bound to the
-// loopback interface: the Codex CLI and the browser talk to
-// http://127.0.0.1:4000, but the un-TLS'd endpoint is never published to the
-// internet (Caddy fronts :80/:443 and reaches cyfr over the compose network).
+// requiredPorts must appear in the cyfr service's ports list, each spelled as
+// the shipped docker-compose.yml spells it. Bound to the loopback interface:
+// the Codex CLI and the browser talk to http://127.0.0.1:${CYFR_PORT:-4000},
+// but the un-TLS'd endpoint is never published to the internet (Caddy fronts
+// :80/:443 and reaches cyfr over the compose network).
 var requiredPorts = []string{
-	"127.0.0.1:4000:4000",
+	"127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}",
 }
 
 // requiredEnvFiles must appear in the cyfr service's env_file list.
@@ -211,12 +214,16 @@ func ensureCyfrComposeFields(path string) ([]string, error) {
 		}
 	}
 
-	// ports — ensure :4000 is published. We match by container port
-	// (any host-binding form counts), so an existing "4000:4000" isn't
-	// duplicated; only a project missing the mapping entirely gets the
-	// loopback-bound entry added (existing 0.0.0.0 publishes are left alone).
+	// ports — ensure the cyfr listener's port is published. We match by
+	// container port and protocol as compose reads them, its variables taken
+	// from the environment and the project's .env (any host-binding form
+	// counts), so an existing "4000:4000" isn't duplicated; only a project
+	// publishing no tcp mapping of that port, a udp-only one included, gets
+	// the loopback-bound entry added (existing 0.0.0.0 publishes are left
+	// alone).
+	lookup := composeEnv(filepath.Join(filepath.Dir(path), ".env"))
 	for _, port := range requiredPorts {
-		if ensurePublishedPort(cyfrNode, port) {
+		if ensurePublishedPort(cyfrNode, port, lookup) {
 			added = append(added, "ports: "+port)
 		}
 	}
@@ -288,25 +295,210 @@ func setMapValue(m *yaml.Node, key string, value *yaml.Node) {
 	)
 }
 
-// containerPort returns the container-side port of a compose `ports` entry:
-// "127.0.0.1:4000:4000" → "4000", "4000:4000" → "4000", "4000" → "4000",
-// "4000:4000/tcp" → "4000".
-func containerPort(mapping string) string {
-	if i := strings.IndexByte(mapping, '/'); i >= 0 {
-		mapping = mapping[:i]
+// composeEnv returns the lookup compose expands docker-compose.yml's
+// variables with: the process environment, then the dotenv file at envPath.
+func composeEnv(envPath string) func(string) (string, bool) {
+	dotenv := parseEnvFile("")
+	if data, err := os.ReadFile(envPath); err == nil {
+		dotenv = parseEnvFile(string(data))
 	}
-	parts := strings.Split(mapping, ":")
-	return parts[len(parts)-1]
+	return func(name string) (string, bool) {
+		if value, ok := os.LookupEnv(name); ok {
+			return value, true
+		}
+		return dotenv.value(name)
+	}
 }
 
-// ensurePublishedPort makes sure the service publishes want's container port in
-// some form. If no existing `ports` entry maps that container port, want is
-// appended. Returns true if it was added.
-func ensurePublishedPort(svc *yaml.Node, want string) bool {
-	wantCP := containerPort(want)
+// interpolate expands s's variables as compose does, each value taken from
+// lookup: `$$` is a literal `$`; `$VAR` and `${VAR}` are VAR's value, empty
+// when unset; `${VAR:-word}` is word when VAR is unset or empty and
+// `${VAR-word}` when it is unset; `${VAR:+word}` is word when VAR is set and
+// non-empty and `${VAR+word}` when it is set, else empty; `${VAR:?err}` and
+// `${VAR?err}` refuse where `:-` and `-` would take the word. A word may hold
+// variables itself. ok is false where compose refuses the text.
+func interpolate(s string, lookup func(string) (string, bool)) (string, bool) {
+	var out strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '$' || i+1 == len(s) {
+			out.WriteByte(s[i])
+			continue
+		}
+		switch next := s[i+1]; {
+		case next == '$':
+			out.WriteByte('$')
+			i++
+		case next == '{':
+			end := closingBrace(s, i+1)
+			if end < 0 {
+				return "", false
+			}
+			value, ok := substitute(s[i+2:end], lookup)
+			if !ok {
+				return "", false
+			}
+			out.WriteString(value)
+			i = end
+		case isNameByte(next, true):
+			end := i + 2
+			for end < len(s) && isNameByte(s[end], false) {
+				end++
+			}
+			value, _ := lookup(s[i+1 : end])
+			out.WriteString(value)
+			i = end - 1
+		default:
+			out.WriteByte('$')
+		}
+	}
+	return out.String(), true
+}
+
+// substitute expands the body of one `${…}`.
+func substitute(body string, lookup func(string) (string, bool)) (string, bool) {
+	n := 0
+	for n < len(body) && isNameByte(body[n], n == 0) {
+		n++
+	}
+	if n == 0 {
+		return "", false
+	}
+	value, set := lookup(body[:n])
+	op := body[n:]
+	if op == "" {
+		return value, true
+	}
+	colon := op[0] == ':'
+	if colon {
+		op = op[1:]
+	}
+	if op == "" {
+		return "", false
+	}
+	word := op[1:]
+	present := set && (!colon || value != "")
+	switch op[0] {
+	case '-':
+		if present {
+			return value, true
+		}
+		return interpolate(word, lookup)
+	case '+':
+		if present {
+			return interpolate(word, lookup)
+		}
+		return "", true
+	case '?':
+		return value, present
+	}
+	return "", false
+}
+
+// closingBrace returns the index of the brace closing the one at open,
+// counting the braces between; -1 when it is unclosed.
+func closingBrace(s string, open int) int {
+	depth := 0
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			if depth--; depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// isNameByte reports whether b may stand in a variable's name, first when it
+// would begin it.
+func isNameByte(b byte, first bool) bool {
+	return b == '_' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || !first && '0' <= b && b <= '9'
+}
+
+// portSpec is the container side of a compose `ports` entry: the ports first
+// through last, and the protocol.
+type portSpec struct {
+	first, last uint64
+	protocol    string
+}
+
+// publishes reports whether p publishes want's first port under its protocol.
+func (p portSpec) publishes(want portSpec) bool {
+	return p.protocol == want.protocol && p.first <= want.first && want.first <= p.last
+}
+
+// publishedPort reads the container side of a compose `ports` entry as
+// compose does, after expanding its variables with lookup: the short syntax
+// `[[host_ip:]host_port:]container_port[/protocol]`, either port a single
+// port or a range and an IPv6 host_ip holding colons of its own, or the long
+// syntax's mapping, its `target` and `protocol`. An alias entry reads as the
+// entry it names. The protocol defaults to tcp. ok is false when the entry's
+// container port does not read as one.
+func publishedPort(entry *yaml.Node, lookup func(string) (string, bool)) (portSpec, bool) {
+	if entry.Kind == yaml.AliasNode {
+		entry = entry.Alias
+	}
+	var target, protocol string
+	switch entry.Kind {
+	case yaml.ScalarNode:
+		mapping, ok := interpolate(entry.Value, lookup)
+		if !ok {
+			return portSpec{}, false
+		}
+		target, protocol, _ = strings.Cut(mapping[strings.LastIndexByte(mapping, ':')+1:], "/")
+	case yaml.MappingNode:
+		node := mapValue(entry, "target")
+		if node == nil || node.Kind != yaml.ScalarNode {
+			return portSpec{}, false
+		}
+		var ok bool
+		if target, ok = interpolate(node.Value, lookup); !ok {
+			return portSpec{}, false
+		}
+		if node := mapValue(entry, "protocol"); node != nil {
+			if node.Kind != yaml.ScalarNode {
+				return portSpec{}, false
+			}
+			if protocol, ok = interpolate(node.Value, lookup); !ok {
+				return portSpec{}, false
+			}
+		}
+	default:
+		return portSpec{}, false
+	}
+	low, high, isRange := strings.Cut(target, "-")
+	first, err := strconv.ParseUint(low, 10, 16)
+	if err != nil {
+		return portSpec{}, false
+	}
+	last := first
+	if isRange {
+		if last, err = strconv.ParseUint(high, 10, 16); err != nil || last < first {
+			return portSpec{}, false
+		}
+	}
+	if protocol = strings.ToLower(protocol); protocol == "" {
+		protocol = "tcp"
+	}
+	return portSpec{first, last, protocol}, true
+}
+
+// ensurePublishedPort makes sure the service publishes want's container port
+// under want's protocol in some form, every entry and want read with lookup.
+// If no existing `ports` entry publishes it, want is appended. An entry whose
+// container port does not read leaves the list as it is, since it may be the
+// port itself, and so does a want that does not read. Returns true if want
+// was added.
+func ensurePublishedPort(svc *yaml.Node, want string, lookup func(string) (string, bool)) bool {
+	wantSpec, ok := publishedPort(&yaml.Node{Kind: yaml.ScalarNode, Value: want}, lookup)
+	if !ok {
+		return false
+	}
 	if seq := mapValue(svc, "ports"); seq != nil && seq.Kind == yaml.SequenceNode {
 		for _, child := range seq.Content {
-			if containerPort(child.Value) == wantCP {
+			if spec, ok := publishedPort(child, lookup); !ok || spec.publishes(wantSpec) {
 				return false
 			}
 		}

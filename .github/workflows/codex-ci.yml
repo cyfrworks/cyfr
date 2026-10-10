@@ -15,8 +15,9 @@ on:
       # to any of them must run the Go tests.
       - '.env.example'
       # TestShippedComposePullsTheLocusImageOnce reads the shipped compose
-      # file's Locus services, with the builds URL .env.example offers, and
-      # TestMissingStackServices its service roster.
+      # file's Locus services, with the builds URL .env.example offers,
+      # TestMissingStackServices its service roster, and
+      # TestUpdateLeavesShippedComposeAlone its cyfr service's fields.
       - 'docker-compose.yml'
       - 'tests/fixtures/**'
       - 'seed/aqua/**'
