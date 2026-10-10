@@ -508,7 +508,7 @@ defmodule Cyfr.Cluster.Cell do
       cyfr: [
         {:cluster, true},
         {:cell_cookie, cookie()},
-        {:opus_key, Application.fetch_env!(:cyfr, :opus_key)},
+        {:locus_runtime_root, Application.fetch_env!(:cyfr, :locus_runtime_root)},
         {:retention_scheduler_enabled, true},
         {:cron_scheduler_enabled, true},
         # The security gate runs on every member: this build carries the
@@ -530,7 +530,7 @@ defmodule Cyfr.Cluster.Cell do
         {:host_api_port, member.host_api_port},
         {:host_api_bind, {127, 0, 0, 1}},
         {:host_api_url, member.host_api},
-        {:opus_workers, []},
+        {:locus_runtime_workers, []},
         {CyfrWeb.Endpoint,
          [
            http: [ip: {127, 0, 0, 1}, port: 0],

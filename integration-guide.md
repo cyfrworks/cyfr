@@ -435,7 +435,7 @@ MCP resources follow the same rule. `resources/list` and
 `resources/templates/list` are open metadata, but a `resources/read` is
 admitted by the one operation that declares the URI's scheme, through the
 same gate as a tool call: `compendium://` by `component.read_resource`
-(`component_read`), `crucible://` by `execution.read_resource` and `arca://` by
+(`component_read`), `opus://` by `execution.read_resource` and `arca://` by
 `resource.read` (both `storage_read`), and `sanctum://identity` and
 `sanctum://permissions` by `session.read_resource`, the one resource read an
 uncredentialed caller may make. A read the gate refuses for authentication
@@ -1282,8 +1282,8 @@ What a cell changes for a client and an operator:
   work the member does not hold. Each member still lists the workers it
   dispatches to in its own `CYFR_LOCUS_RUNTIME_WORKERS`.
 - **Stdio MCP servers are not available** in a cell.
-- **Per-member ceilings multiply.** `CYFR_CRUCIBLE_MAX_CONCURRENT`,
-  `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT` and the per-credential
+- **Per-member ceilings multiply.** `CYFR_OPUS_MAX_CONCURRENT`,
+  `CYFR_OPUS_MAX_CONCURRENT_PER_TENANT` and the per-credential
   stream cap on `execution.subscribe` and `notifications/listen` are each
   member's, so N members admit N times each. The tenant's durable
   ceilings are rows and hold for the cell: its consented invocation rate,

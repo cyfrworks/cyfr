@@ -198,7 +198,7 @@ defmodule Cyfr.Bus do
       struct: Schedules,
       match: {:exact, "bus:schedules"},
       template: "tenant:<athanor_id>:bus:schedules",
-      producers: ["Crucible.Schedules.Scheduler"],
+      producers: ["Opus.Schedules.Scheduler"],
       consumers: ["PrismWeb.SchedulesLive"],
       reason: "a schedule's occurrence started or its run ended"
     },
@@ -208,7 +208,7 @@ defmodule Cyfr.Bus do
       struct: FeedPublished,
       match: {:exact, "bus:feeds"},
       template: "tenant:<athanor_id>:bus:feeds",
-      producers: ["Crucible.Feeds", "Crucible.Schedules.Scheduler"],
+      producers: ["Opus.Feeds", "Opus.Schedules.Scheduler"],
       consumers: ["stream:feed.results", "PrismWeb.SchedulesLive"],
       reason:
         "the athanor's feeds' accepted results, each after its accept committed, on one " <>
@@ -263,7 +263,7 @@ defmodule Cyfr.Bus do
       struct: ExecutionEvent,
       match: {:prefix, "execution:events:"},
       template: "tenant:<athanor_id>:execution:events:<execution_id>",
-      producers: ["Crucible.Events"],
+      producers: ["Opus.Events"],
       consumers: ["Emissary.Web.ExecutionEventsController", "Aqua.Loop.Stream"],
       reason:
         "one execution's stream: durable rows after commit, deltas before the " <>
@@ -328,7 +328,7 @@ defmodule Cyfr.Bus do
       template: "sanctum:athanor_archived",
       producers: ["Cyfr.TelemetryBridge"],
       consumers: [
-        "Crucible.ArchiveWatch",
+        "Opus.ArchiveWatch",
         "Emissary.External.Reconciler",
         "CyfrWeb.ContextGuard"
       ],
@@ -390,7 +390,7 @@ defmodule Cyfr.Bus do
       struct: ScheduleCompleted,
       match: {:exact, "cyfr:schedule_completions"},
       template: "cyfr:schedule_completions",
-      producers: ["Crucible.Schedules.Scheduler"],
+      producers: ["Opus.Schedules.Scheduler"],
       consumers: ["Aqua.ScheduleNotes"],
       reason:
         "a committed completion heard on every member; only the issuing member's " <>

@@ -44,7 +44,7 @@ defmodule Arca.ExecutionStanding do
 
   `retired_attempts/3` pages, by attempt id, through the open attempts
   whose stored generation no longer matches their athanor's active
-  standing, for the sweep that cancels them (`Crucible.Sweeper`).
+  standing, for the sweep that cancels them (`Opus.Sweeper`).
   It answers identifiers and stored stamps only.
   """
 

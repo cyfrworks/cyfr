@@ -147,7 +147,7 @@ defmodule PrismWeb.ShellLive do
   # The most tinctures `installed` names (`Prima.CanvasWire`).
   @max_installed 512
 
-  # The stream a canvas reads a feed's results on (`Crucible.Providers.Feed`).
+  # The stream a canvas reads a feed's results on (`Opus.Providers.Feed`).
   @feed_stream "feed.results"
 
   # ============================================================================
@@ -748,7 +748,7 @@ defmodule PrismWeb.ShellLive do
   # under the shell's context. A refusal is logged by its class alone, and
   # the canvas is told nothing.
   defp press(socket, frame, %{"binding" => binding, "action" => action}) do
-    with {:ok, feeds} <- Crucible.feeds(socket.assigns.context),
+    with {:ok, feeds} <- Opus.feeds(socket.assigns.context),
          %{binding: %{name: feed}} <- Enum.find(feeds, &(&1.binding_id == binding)),
          true <- reads_feed?(frame, feed) do
       case call_tool(socket, "feed/press", %{"binding" => binding, "action_name" => action}) do

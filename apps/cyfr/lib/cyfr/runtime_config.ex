@@ -206,7 +206,7 @@ defmodule Cyfr.RuntimeConfig do
   @doc """
   Whether unsigned OCI components are refused. Read at both ends of a
   component's life — `Compendium.OCI.Client` refuses the pull, and
-  `Crucible.Admission` refuses to run a row that carries no verified
+  `Opus.Admission` refuses to run a row that carries no verified
   signature (a component pulled before the knob was set).
   """
   @spec require_signed_pulls?() :: boolean()
@@ -561,7 +561,7 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Resolve where CYFR's host API listener binds (`Crucible.HostListener`)
+  Resolve where CYFR's host API listener binds (`Opus.HostListener`)
   and the address this member is reached at: `CYFR_HOST_API_BIND`, an IPv4
   or IPv6 address (default `127.0.0.1`), `CYFR_HOST_API_PORT`, a port from
   1 to 65535 (default 4300), and `CYFR_HOST_API_URL`, the base URL a

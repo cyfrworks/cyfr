@@ -98,7 +98,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       })
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       if original_base_path,
@@ -226,7 +226,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
     spawn(fn ->
       send(
         test_pid,
-        {:root, Crucible.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
+        {:root, Opus.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
       )
     end)
   end
@@ -818,7 +818,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       [child] = children(root_id)
       wait_until(fn -> Arca.Repo.get!(Arca.Schemas.Execution, child.id).status == "failed" end)
       wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
-      wait_until(fn -> Crucible.Attempt.whereis(child.id) == nil end)
+      wait_until(fn -> Opus.Attempt.whereis(child.id) == nil end)
     end
 
     test "tasks a formula leaves running end with it, and CYFR reclaims their holds", %{ctx: ctx} do
@@ -846,7 +846,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
       for child <- children(root_id) do
         wait_until(fn -> Arca.Repo.get!(Arca.Schemas.Execution, child.id).status == "failed" end)
-        wait_until(fn -> Crucible.Attempt.whereis(child.id) == nil end)
+        wait_until(fn -> Opus.Attempt.whereis(child.id) == nil end)
       end
 
       wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
@@ -893,7 +893,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       }
 
       assert {:ok, %{status: :completed, output: output}} =
-               Crucible.run_root(person, :default, app <> ":1.0.0", input)
+               Opus.run_root(person, :default, app <> ":1.0.0", input)
 
       assert %{"op" => "steps", "results" => [work, home, default, elsewhere]} = decoded(output)
 
@@ -1144,7 +1144,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
-      Crucible.Events.subscribe(execution_id, ctx)
+      Opus.Events.subscribe(execution_id, ctx)
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
@@ -1156,7 +1156,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       assert event.data["kind"] == "turn_start"
       assert event.data["turn"] == 1
 
-      Crucible.Events.unsubscribe(execution_id, ctx)
+      Opus.Events.unsubscribe(execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
@@ -1172,7 +1172,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
-      Crucible.Events.subscribe(execution_id, ctx)
+      Opus.Events.subscribe(execution_id, ctx)
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
@@ -1184,7 +1184,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       assert event.data["content"] == "key is [REDACTED]"
       refute inspect(event) =~ "sk-super-secret-value"
 
-      Crucible.Events.unsubscribe(execution_id, ctx)
+      Opus.Events.unsubscribe(execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
@@ -1202,14 +1202,14 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       emit_fn.(Jason.encode!(%{"kind" => "tool_use", "tool" => "read_file"}))
 
       # Flush pending buffer writes before reading
-      Crucible.Events.flush(execution_id)
+      Opus.Events.flush(execution_id)
 
-      events = Crucible.Events.since(execution_id, {0, 0}, ctx.athanor_id)
+      events = Opus.Events.since(execution_id, {0, 0}, ctx.athanor_id)
       assert length(events) == 3
       assert Enum.map(events, & &1.sequence) == ["0.1", "0.2", "0.3"]
       assert Enum.map(events, & &1.data["kind"]) == ["turn_start", "text_delta", "tool_use"]
 
-      events_after_1 = Crucible.Events.since(execution_id, {0, 1}, ctx.athanor_id)
+      events_after_1 = Opus.Events.since(execution_id, {0, 1}, ctx.athanor_id)
       assert length(events_after_1) == 2
       assert Enum.map(events_after_1, & &1.sequence) == ["0.2", "0.3"]
 
@@ -1262,8 +1262,8 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
-      Crucible.Events.subscribe(root_id, ctx)
-      Crucible.Events.subscribe(host.execution_id, ctx)
+      Opus.Events.subscribe(root_id, ctx)
+      Opus.Events.subscribe(host.execution_id, ctx)
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
@@ -1274,24 +1274,24 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
       refute_receive %Cyfr.Bus.ExecutionEvent{}, 100
 
-      Crucible.Events.unsubscribe(root_id, ctx)
-      Crucible.Events.unsubscribe(host.execution_id, ctx)
+      Opus.Events.unsubscribe(root_id, ctx)
+      Opus.Events.unsubscribe(host.execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
   end
 
   # ============================================================================
-  # Crucible.Events durable events
+  # Opus.Events durable events
   # ============================================================================
 
-  describe "Crucible.Events durable events" do
+  describe "Opus.Events durable events" do
     test "a published lifecycle row reaches subscribers with its number", %{ctx: ctx} do
       execution_id = "exec_terminal_#{:rand.uniform(100_000)}"
 
-      Crucible.Events.subscribe(execution_id, ctx)
+      Opus.Events.subscribe(execution_id, ctx)
 
       :ok =
-        Crucible.Events.publish(execution_id, ctx, "execution.completed", 7, %{
+        Opus.Events.publish(execution_id, ctx, "execution.completed", 7, %{
           "status" => "completed",
           "duration_ms" => 1234
         })
@@ -1304,7 +1304,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       assert event.data["status"] == "completed"
       assert event.data["duration_ms"] == 1234
 
-      Crucible.Events.unsubscribe(execution_id, ctx)
+      Opus.Events.unsubscribe(execution_id, ctx)
     end
   end
 

@@ -86,8 +86,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {CyfrWeb.Plugs.WebhookIdempotency, :call} => :webhook_missing_idempotency_key,
     {CyfrWeb.Plugs.WebhookRateLimit, :call} => :webhook_rate_limited,
     {Emissary.Web.ExecutionEventsController, :stream} => :execution_events_unknown,
-    {Crucible.Schedules.Scheduler, :handle_info} => :schedule_fire_refused,
-    {Crucible.Host.Children, :call} => :host_api_lost_attempt,
+    {Opus.Schedules.Scheduler, :handle_info} => :schedule_fire_refused,
+    {Opus.Host.Children, :call} => :host_api_lost_attempt,
     {Emissary.Web.DeviceChannel, :handle_in} => :device_channel_unproven
   }
 
@@ -485,7 +485,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
         next_run_at: DateTime.add(DateTime.utc_now(), -60, :second)
       })
 
-    start_supervised!(Crucible.Schedules.Scheduler)
+    start_supervised!(Opus.Schedules.Scheduler)
 
     # The sandbox holds this run's rows alone, so the fire's decision is
     # the one "schedule" decision there is.
@@ -514,7 +514,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     }
 
     assert {:error, reason} =
-             Crucible.Host.Children.call(
+             Opus.Host.Children.call(
                caller,
                {:tool_call, %{name: tool, args: %{}, guest_fn: :call}}
              )

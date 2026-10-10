@@ -390,7 +390,7 @@ defmodule Sanctum.Tenancy.Athanors do
   that only flipped the status would leave every member working inside
   the shut furnace until their memo aged out — and the archival is
   announced, which is what stops in-flight work
-  (`Crucible.ArchiveWatch`) and the processes serving the athanor
+  (`Opus.ArchiveWatch`) and the processes serving the athanor
   from outside any tenant topic; the status gates already refuse new work
   either way. Athanors the transition actually moved tell their members'
   open views.

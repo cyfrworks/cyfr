@@ -451,7 +451,7 @@ defmodule Sanctum.ToolGrants do
     if is_map(args), do: Map.get(args, argument)
   end
 
-  # A path is read as the storage door reads one (`Crucible.GuestStorage`):
+  # A path is read as the storage door reads one (`Opus.GuestStorage`):
   # refused whole when it is absolute or a segment is unsafe (`..`, `.`, an
   # encoded dot, a backslash), then matched as the call spells it against
   # the constraint's patterns by the door's own rule

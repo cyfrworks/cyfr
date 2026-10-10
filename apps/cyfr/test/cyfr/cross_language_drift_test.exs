@@ -172,7 +172,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # silently stops being explained (Go) or stops crossing the boundary —
     # this pins every roster.
     consent = read!("apps/sanctum/lib/sanctum/consent.ex")
-    execution_mcp = read!("apps/cyfr/lib/crucible/provider.ex")
+    execution_mcp = read!("apps/cyfr/lib/opus/provider.ex")
     profile = read!("apps/sanctum/lib/sanctum/providers/profile.ex")
     signal = read!("apps/prima/lib/prima/consent_signal.ex")
     message = read!("apps/prima/lib/prima/mcp/message.ex")
@@ -225,7 +225,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert signal =~ ~s("tag") and signal =~ ~s("payload")
     assert client_go =~ ~s(data["tag"]) and client_go =~ ~s(data["payload"])
 
-    # Crucible.Provider spells the roster once, as the guard on format_root_result/1.
+    # Opus.Provider spells the roster once, as the guard on format_root_result/1.
     [guard] =
       Regex.run(
         ~r/defp format_root_result\(\{:error, \{tag, payload\}\}\)\s+when tag in \[([^\]]*)\]/,
@@ -237,7 +237,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       guard |> String.split(",", trim: true) |> Enum.map(&(&1 |> String.trim() |> trim_colon()))
 
     assert Enum.sort(guard_tags) == Enum.sort(tags),
-           "crucible/provider.ex guard roster must be the five consent signal tags"
+           "opus/provider.ex guard roster must be the five consent signal tags"
 
     # The payload keys Consent documents as normative are the ones the CLI
     # formatter reads — a renamed key degrades every explanation to the

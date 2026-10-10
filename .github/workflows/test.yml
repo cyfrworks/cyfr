@@ -1350,7 +1350,17 @@ jobs:
             'Emissary\.MCP\.(RequestLog|RunningTasks|Tools\.SystemProvider)\b' \
             'Cyfr\.Execution\b' \
             'Cyfr\.Schedules\b' \
-            'opus://' \
+            'Crucible\.[A-Z]' \
+            'CYFR_CRUCIBLE_' \
+            'crucible_' \
+            ':crucible\b' \
+            'crucible://' \
+            'lib/crucible' \
+            'CrucibleTest' \
+            'cyfr\.crucible\.' \
+            'test/crucible' \
+            '"crucible"' \
+            '\bopus_(workers|key)\b' \
             'Emissary\.MCP\.(McpServersTool|ExternalProvider|Bridge|ExternalServer\w*|ApprovalTool|NotesTool|ThreadTool|BackendDefinition|StatusRedaction)\b' \
             'Compendium\.MCP\b' \
             'Sanctum\.MCP\b' \
@@ -1372,7 +1382,7 @@ jobs:
             'wrk_opus' \
             'OpusService' \
             'cyfr\.opus\.key' \
-            'Opus\.(Runner|RunnerPool|RunnerProcess|Relay|WorkerService|WorkerListener|HostClient|Release|Credentials|Settings|FormulaHandler|Keeper)\b' \
+            'Opus\.(Application|AsyncTracker|Cache|ComponentCache|ComponentType|Credentials|EdgeGuard|Egress|FormulaHandler|HostClient|HttpHandler|HttpRequestValidation|HttpStreamHandler|Keeper|MixProject|OAuthHandler|Relay|Release|Runner|RunnerPool|RunnerProcess|Runtime|Settings|SharedEngine|StorageHandler|Subtree|Test|WorkerListener|WorkerService)\b' \
             'LOCUS_BUILDS_LOG_' \
             'cyfr-keeper' \
             'apps/keeper/' \

@@ -499,13 +499,13 @@ defmodule Cyfr.BusTest do
     end
 
     test "refuses a stream whose refresh is not an exported function of arity 2" do
-      exported = %{stream("some.servers", :mcp_servers) | refresh: {Crucible.Feeds, :latest}}
+      exported = %{stream("some.servers", :mcp_servers) | refresh: {Opus.Feeds, :latest}}
       assert Cyfr.Application.stream_topic_findings([{Some.Provider, exported}]) == []
 
       for refresh <- [
             {Some.Missing, :latest},
-            {Crucible.Feeds, :no_such},
-            {Crucible.Feeds, :list}
+            {Opus.Feeds, :no_such},
+            {Opus.Feeds, :list}
           ] do
         missing = %{stream("some.servers", :mcp_servers) | refresh: refresh}
         assert [finding] = Cyfr.Application.stream_topic_findings([{Some.Provider, missing}])

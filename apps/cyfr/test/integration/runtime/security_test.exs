@@ -6,7 +6,7 @@ defmodule Locus.Runtime.SecurityTest do
 
   alias Locus.Runtime.ComponentType
 
-  alias Crucible.Provider
+  alias Opus.Provider
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
@@ -199,8 +199,8 @@ defmodule Locus.Runtime.SecurityTest do
 
     test "execution cancellation is tenant-scoped", %{ctx: ctx} do
       # Create a running execution record directly (no WASM needed)
-      record = Crucible.Record.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = Crucible.Record.write_started(record)
+      record = Opus.Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Opus.Record.write_started(record)
 
       # A different tenant cannot cancel (tenant boundary enforced)
       other_ctx =

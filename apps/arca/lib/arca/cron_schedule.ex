@@ -338,7 +338,7 @@ defmodule Arca.CronSchedule do
   Binds a feed in the actor's athanor: `binding` (a `Prima.Feed.Binding`),
   the pinned version the caller resolved for it (`resolved_reference`), the
   profile it fires under (`profile_id`), and `cap`, the most live feeds the
-  athanor may hold, which the caller names (`Crucible.Feeds`).
+  athanor may hold, which the caller names (`Opus.Feeds`).
 
   The row's id is a new binding id (`Prima.UUID7.generate_id("feed")`). It
   runs `Prima.Feed.input/1` on `Prima.Feed.cron/1`, never overlapping

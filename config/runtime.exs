@@ -120,7 +120,7 @@ if config_env() != :test do
         end
     end
 
-  # Where CYFR's host API listener binds (`Crucible.HostListener`):
+  # Where CYFR's host API listener binds (`Opus.HostListener`):
   # the address and port the worker services post their host calls and
   # exit reports to, and CYFR_HOST_API_URL, the address a worker reaches
   # this member at, which every assignment it issues carries. Default
@@ -289,15 +289,15 @@ if config_env() != :test do
          locus_backends_setting.(Prima.EnvValue.hex_key(getenv, "CYFR_LOCUS_BACKENDS_KEY"))
 
   # The runtime root every key CYFR issues derives from, resolved above.
-  config :cyfr, :opus_key, worker_root
+  config :cyfr, :locus_runtime_root, worker_root
 
-  # The worker services runs are dispatched to (`Crucible.Dispatch`):
+  # The worker services runs are dispatched to (`Opus.Dispatch`):
   # `CYFR_LOCUS_RUNTIME_WORKERS`, comma-separated `<service_id>=<url>` entries, each the
   # configured id of a worker service and the base URL of its listener,
   # tried in order. Default the runtime of a local boot; a malformed
   # entry or a repeated id refuses the boot.
   case Cyfr.RuntimeConfig.resolve_workers(getenv) do
-    {:ok, workers} -> config :cyfr, :opus_workers, workers
+    {:ok, workers} -> config :cyfr, :locus_runtime_workers, workers
     {:error, message} -> raise "[Cyfr] FATAL: #{message}"
   end
 
@@ -582,7 +582,7 @@ if config_env() != :test do
   #
   # It does not reach components. A guest's outbound target is pinned by
   # the control plane under the attempt's admitted authority
-  # (`Crucible.Host.Egress`), whose `egress.private_ips` is the only
+  # (`Opus.Host.Egress`), whose `egress.private_ips` is the only
   # private-address grant it reads, so a LAN device is reachable from a
   # chain only as an MCP server on this list, never as a URL the bundled
   # http catalyst fetches.

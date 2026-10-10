@@ -7,7 +7,7 @@ defmodule Mix.Tasks.Cyfr.Bench.Step do
   @moduledoc """
   Runs model steps through the real turn loop and execution path against
   a streaming stub catalyst and prints the p50, p95 and p99 of each step's
-  spans (`Crucible.StepSpans`): admission, the guest's first delta,
+  spans (`Opus.StepSpans`): admission, the guest's first delta,
   time to first delta, completion and the whole `run_child`, with the
   commit, the mode, the database and storage adapters in use and what the
   bench's upstream received. Before its first delta every step makes one

@@ -4,7 +4,7 @@ defmodule Sanctum.Attach do
   @moduledoc """
   Decide the value CYFR attaches to one request a component names a
   connection on, and hand it to the control plane's transport
-  (`Crucible.Host.AttachedFetch`), which alone holds it.
+  (`Opus.Host.AttachedFetch`), which alone holds it.
 
   `resolve/5` takes the context the run's guest calls run in, the vault
   resource of the edge the running node reached its need through, the

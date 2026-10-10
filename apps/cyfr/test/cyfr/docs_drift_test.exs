@@ -31,10 +31,10 @@ defmodule Cyfr.DocsDriftTest do
 
   # The glossary names each part once, with the environment prefixes it
   # owns. The prefixes are this roster, each named by one row.
-  @env_prefixes ~w(CYFR_ CYFR_CRUCIBLE_ CYFR_HOST_API_ CYFR_LOCUS_RUNTIME_ CYFR_LOCUS_BUILDS_
+  @env_prefixes ~w(CYFR_ CYFR_OPUS_ CYFR_HOST_API_ CYFR_LOCUS_RUNTIME_ CYFR_LOCUS_BUILDS_
                    CYFR_LOCUS_BACKENDS_ LOCUS_RUNTIME_ LOCUS_BUILDS_ LOCUS_BACKENDS_ LOCUS_LOG_
                    KEEPER_ RUNTIME_)
-  @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Crucible Emissary Prism Codex Locus
+  @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Opus Emissary Prism Codex Locus
                      actor athanor)
 
   # The files that read the releases' environment: the control plane's

@@ -357,7 +357,7 @@ defmodule Prima.Limits do
       not (is_integer(requests) and requests >= 0) ->
         {:error, "requests must be a non-negative integer, got: #{inspect(requests)}"}
 
-      # Strictly positive, not merely parseable. `Crucible.Rates`
+      # Strictly positive, not merely parseable. `Opus.Rates`
       # weighs a claim against a window of `window_ms`: at zero there is no
       # window to count in and a negative one never starts, so neither can
       # enforce anything — a limit that reads as configured and enforces

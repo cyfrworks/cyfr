@@ -32,14 +32,14 @@ defmodule Cyfr.PlatformSettingsTest do
     level = Logger.level()
     pinned = Application.get_env(:cyfr, :deployment_pinned)
     claim = Application.get_env(:arca, :control_plane_claim_enabled)
-    slots = Application.get_env(:cyfr, :crucible_max_concurrent)
+    slots = Application.get_env(:cyfr, :opus_max_concurrent)
     terms = for key <- @terms, do: {key, :persistent_term.get(key, :absent)}
 
     on_exit(fn ->
       Logger.configure(level: level)
       restore(:cyfr, :deployment_pinned, pinned)
       restore(:arca, :control_plane_claim_enabled, claim)
-      restore(:cyfr, :crucible_max_concurrent, slots)
+      restore(:cyfr, :opus_max_concurrent, slots)
       for {key, value} <- terms, do: restore(key, value)
       Store.invalidate(:all)
     end)
@@ -139,15 +139,15 @@ defmodule Cyfr.PlatformSettingsTest do
          %{ctx: ctx} do
       before = revision()
 
-      assert Settings.set(ctx, "crucible_max_concurrent", "31") ==
+      assert Settings.set(ctx, "opus_max_concurrent", "31") ==
                {:error,
-                {:invalid, "crucible_max_concurrent",
+                {:invalid, "opus_max_concurrent",
                  "must be a whole number of executions from 32 to 1000000"}}
 
       assert {:error, {:invalid, "mcp_rate_limit_max", _form}} =
                Settings.set(ctx, "mcp_rate_limit_max", "0")
 
-      assert Store.get("crucible_max_concurrent") == {:error, :not_found}
+      assert Store.get("opus_max_concurrent") == {:error, :not_found}
       assert revision() == before
     end
 
@@ -337,13 +337,13 @@ defmodule Cyfr.PlatformSettingsTest do
     end
 
     test "a restart-scoped set is answered pending and applies nothing now", %{ctx: ctx} do
-      running = Application.get_env(:cyfr, :crucible_max_concurrent)
+      running = Application.get_env(:cyfr, :opus_max_concurrent)
 
       assert {:ok, %{pending: true, value: 64}} =
-               Settings.set(ctx, "crucible_max_concurrent", "64")
+               Settings.set(ctx, "opus_max_concurrent", "64")
 
-      assert Application.get_env(:cyfr, :crucible_max_concurrent) == running
-      assert %{pending: true, desired: 64, source: "operator"} = listed("crucible_max_concurrent")
+      assert Application.get_env(:cyfr, :opus_max_concurrent) == running
+      assert %{pending: true, desired: 64, source: "operator"} = listed("opus_max_concurrent")
     end
 
     test "a store that cannot write refuses the set and leaves the running value", %{ctx: ctx} do
@@ -408,32 +408,69 @@ defmodule Cyfr.PlatformSettingsTest do
   describe "the boot's apply" do
     test "applies restart rows and the log level, keeps a pin, refuses an invalid row" do
       at = revision()
-      {:ok, at} = Store.put("crucible_max_concurrent", 64, at, "ops")
-      {:ok, at} = Store.put("crucible_max_concurrent_per_tenant", 0, at, "ops")
+      {:ok, at} = Store.put("opus_max_concurrent", 64, at, "ops")
+      {:ok, at} = Store.put("opus_max_concurrent_per_tenant", 0, at, "ops")
       {:ok, _at} = Store.put("log_level", "error", at, "ops")
-      Application.put_env(:cyfr, :deployment_pinned, [{"crucible_max_concurrent_per_tenant", 3}])
+      Application.put_env(:cyfr, :deployment_pinned, [{"opus_max_concurrent_per_tenant", 3}])
 
       assert Settings.apply() == :ok
 
-      assert Application.get_env(:cyfr, :crucible_max_concurrent) == 64
+      assert Application.get_env(:cyfr, :opus_max_concurrent) == 64
       assert Logger.level() == :error
-      assert %{value: 64, pending: false} = listed("crucible_max_concurrent")
+      assert %{value: 64, pending: false} = listed("opus_max_concurrent")
 
       assert %{value: 3, desired: 3, source: "deployment"} =
-               listed("crucible_max_concurrent_per_tenant")
+               listed("opus_max_concurrent_per_tenant")
 
       # A row the validator refuses is logged and the configured value kept.
       Application.put_env(:cyfr, :deployment_pinned, [])
-      {:ok, _} = Store.put("crucible_max_concurrent", 5, revision(), "ops")
+      {:ok, _} = Store.put("opus_max_concurrent", 5, revision(), "ops")
 
       log =
         ExUnit.CaptureLog.capture_log([level: :error], fn ->
           assert Settings.apply() == :ok
         end)
 
-      assert log =~ "crucible_max_concurrent must be a whole number"
-      assert Application.get_env(:cyfr, :crucible_max_concurrent) == 64
-      assert %{value: 64, desired: 5, pending: true} = listed("crucible_max_concurrent")
+      assert log =~ "opus_max_concurrent must be a whole number"
+      assert Application.get_env(:cyfr, :opus_max_concurrent) == 64
+      assert %{value: 64, desired: 5, pending: true} = listed("opus_max_concurrent")
+    end
+
+    test "a row stored under an execution setting's retired key is read by no setting" do
+      # Each setting's key under the name the execution domain had before,
+      # beside the key it is now, with a value its validator takes that is
+      # not its default. Spelled split so the retired names are not
+      # themselves found here.
+      retired = [
+        {"cruc" <> "ible_max_concurrent", "opus_max_concurrent", 64},
+        {"cruc" <> "ible_max_concurrent_per_tenant", "opus_max_concurrent_per_tenant", 3},
+        {"cruc" <> "ible_events_max_concurrent", "opus_events_max_concurrent", 2},
+        {"cruc" <> "ible_events_max_ms", "opus_events_max_ms", 60_000}
+      ]
+
+      slots = Application.get_env(:cyfr, :opus_max_concurrent)
+      per_tenant = Application.get_env(:cyfr, :opus_max_concurrent_per_tenant)
+      on_exit(fn -> restore(:cyfr, :opus_max_concurrent_per_tenant, per_tenant) end)
+
+      Enum.reduce(retired, revision(), fn {old, _new, value}, at ->
+        {:ok, next} = Store.put(old, value, at, "ops")
+        next
+      end)
+
+      assert Settings.apply() == :ok
+
+      for {old, new, _value} <- retired do
+        assert Store.effective(old) == {:error, :unknown_key}
+
+        assert %{default: default, desired: default, source: "default", revision: nil} =
+                 listed(new)
+
+        assert Store.effective(new) == {:ok, default}
+      end
+
+      # The boot applied no retired row to the slots it writes.
+      assert Application.get_env(:cyfr, :opus_max_concurrent) == slots
+      assert Application.get_env(:cyfr, :opus_max_concurrent_per_tenant) == per_tenant
     end
 
     test "an unreadable store refuses the boot" do

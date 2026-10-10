@@ -452,8 +452,8 @@ defmodule Cyfr.Test.ChatFixture do
       do: {:noreply, %{state | thread: [{kind, data} | state.thread]}}
 
     def handle_info(%Cyfr.Bus.Execution{kind: :started, execution_id: id} = started, state) do
-      :ok = Crucible.subscribe_events(id, state.ctx)
-      replayed = Crucible.events_since(id, {0, 0}, state.ctx.athanor_id)
+      :ok = Opus.subscribe_events(id, state.ctx)
+      replayed = Opus.events_since(id, {0, 0}, state.ctx.athanor_id)
 
       state =
         Enum.reduce(replayed, %{state | started: [started | state.started]}, &keep(&2, id, &1))

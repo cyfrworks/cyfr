@@ -375,7 +375,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert edge!(consented.resolved_policy, "agent:local.artisan", "catalyst:local.claude").vault.via.label ==
              "work"
 
-    {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
 
     {:ok, web} =
       Blob.lookup_edge(authority.policy, "agent:local.web", "catalyst:local.claude", "")
@@ -390,7 +390,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
   test "the soul's authority loads with its tools and its edge into the model", %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
 
-    assert {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
+    assert {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
     assert authority.source_ref == @soul
     assert "component.list" in authority.resources.tools
     assert "aqua.list" in authority.resources.tools
@@ -401,7 +401,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
     # The person binds the key on claude; the soul's edge resolves to it.
     entry = bind_claude!(ctx)
-    {:ok, lent} = Crucible.authority_for(ctx, :default, @soul)
+    {:ok, lent} = Opus.authority_for(ctx, :default, @soul)
     {:ok, edge} = Blob.lookup_edge(lent.policy, @soul, "catalyst:local.claude", "")
     assert edge.vault.entry_id == entry.id
 

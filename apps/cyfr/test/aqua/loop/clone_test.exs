@@ -32,7 +32,7 @@ defmodule Aqua.Loop.CloneTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "clone_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :locus_runtime_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, test_path)
     Application.put_env(:arca, :seed_path, @seed_root)
@@ -247,7 +247,7 @@ defmodule Aqua.Loop.CloneTest do
 
   test "a clone's authority is the soul's stepped to the role, and only along a consented edge",
        %{ctx: ctx} do
-    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
+    {:ok, soul} = Opus.authority_for(ctx, :default, @soul)
     {:ok, roster} = AgentSource.enabled_roster(ctx)
     {:ok, planner} = AgentIndex.snapshot(ctx, "planner")
     {:ok, web} = AgentIndex.snapshot(ctx, "web")
@@ -391,7 +391,7 @@ defmodule Aqua.Loop.CloneTest do
     :ok = Arca.put(Sanctum.Context.actor(ctx), path, bytes <> "\n\nLIVE-EDIT-MARKER\n")
     {:ok, _} = AgentIndex.sync(ctx)
 
-    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
+    {:ok, soul} = Opus.authority_for(ctx, :default, @soul)
     {:ok, roster} = AgentSource.enabled_roster(ctx)
     {:ok, live} = AgentIndex.snapshot(ctx, "planner")
     assert live.revision_digest != clone.agent_revision_digest
@@ -456,7 +456,7 @@ defmodule Aqua.Loop.CloneTest do
   @tag :capture_log
   test "a clone whose pinned consent cannot be read, or is damaged, says so; a moved one does not",
        %{ctx: ctx} do
-    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
+    {:ok, soul} = Opus.authority_for(ctx, :default, @soul)
     profile = soul.profile_id
     {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile)
     clone = fn -> clone_planner(ctx, soul) end
@@ -494,7 +494,7 @@ defmodule Aqua.Loop.CloneTest do
   test "a clone whose pinned head fails its digest says the consent is damaged, never that " <>
          "it moved",
        %{ctx: ctx} do
-    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
+    {:ok, soul} = Opus.authority_for(ctx, :default, @soul)
     profile = soul.profile_id
 
     :ok =
@@ -503,7 +503,7 @@ defmodule Aqua.Loop.CloneTest do
       )
 
     assert {:error, {:head_corrupt, ^profile}} =
-             Crucible.authority_for(ctx, {:id, profile}, @soul)
+             Opus.authority_for(ctx, {:id, profile}, @soul)
 
     assert clone_planner(ctx, soul) ==
              {:error,
@@ -515,7 +515,7 @@ defmodule Aqua.Loop.CloneTest do
   # damage the admission names, never a consent that moved.
   test "a clone whose pinned profile row is damaged says so, never that the consent moved",
        %{ctx: ctx} do
-    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
+    {:ok, soul} = Opus.authority_for(ctx, :default, @soul)
 
     {1, _} =
       Arca.Repo.update_all(

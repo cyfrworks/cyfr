@@ -741,7 +741,7 @@ What a cell gives up and what it keeps:
   several members; each member still lists the workers it dispatches to
   in its own `CYFR_LOCUS_RUNTIME_WORKERS`.
 - Stdio MCP servers are not available in a cell.
-- Per-member ceilings multiply: `CYFR_CRUCIBLE_MAX_CONCURRENT` and its
+- Per-member ceilings multiply: `CYFR_OPUS_MAX_CONCURRENT` and its
   per-tenant cap, and the per-credential stream cap, are each member's.
   The tenant's durable ceilings — its consented invocation rate and its
   budget — are rows, and hold for the cell.
@@ -988,7 +988,7 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | Cyfr | the host: boot, ownership, bus, telemetry, configuration and settings, the endpoint and every other admission path, wiring | `apps/cyfr/lib/cyfr`, `apps/cyfr/lib/cyfr_web` | the `cyfr` release, image `cyfr` | `cyfr`, and `caddy` in front of it in TLS mode | `CYFR_` | — | — | `[Cyfr…]` |
 | Compendium | components: kinds, manifests, registry, activation, provenance, builds over Locus, the tincture rules | `apps/cyfr/lib/compendium` | the `cyfr` release | — | — | — | `compendium` | `[Compendium…]` |
 | Aqua | the assistant: threads, rooms, turns, approvals, notes, attachments, memory, its providers | `apps/cyfr/lib/aqua` | the `cyfr` release | — | — | — | `aqua` | `[Aqua…]` |
-| Crucible | execution: admission, attempts, HostAPI, WorkerAPI, guest egress, schedules | `apps/cyfr/lib/crucible` | the `cyfr` release | — | `CYFR_CRUCIBLE_`, `CYFR_HOST_API_` | — | `crucible` | `[Crucible…]` |
+| Opus | execution: admission, attempts, HostAPI, WorkerAPI, guest egress, schedules | `apps/cyfr/lib/opus` | the `cyfr` release | — | `CYFR_OPUS_`, `CYFR_HOST_API_` | — | `opus` | `[Opus…]` |
 | Emissary | external application protocol adapters: MCP in both directions (external MCP servers over HTTP or through Locus), the HTTP API and its event streams, health, webhooks, the vault's OAuth callback, tinctures' files and data routes | `apps/cyfr/lib/emissary`, `apps/cyfr/lib/emissary/web` | the `cyfr` release | — | — | — | `emissary` | `[Emissary…]` |
 | Prism | the screen (the console today) | `apps/cyfr/lib/prism`, `apps/cyfr/lib/prism_web` | the `cyfr` release | — | — | — | — | `[Prism…]` |
 | Codex | the CLI | `apps/codex` | the `cyfr` binary | — | — | — | — | — |

@@ -12,7 +12,7 @@ defmodule Cyfr.Admission do
       event streams, webhooks, tinctures and their data routes, and the
       console's LiveView socket, each through the gate.
     * `:host_api` — the HostAPI listener: a running chain's host calls,
-      each admitted as a child through Crucible.
+      each admitted as a child through Opus.
     * `:scheduler` — the scheduler's fire, which listens on nothing: its
       own admission is the occurrence it claims under a held generation.
     * `:device_channel` — a paired glass's socket on the endpoint, whose
@@ -96,9 +96,9 @@ defmodule Cyfr.Admission do
     %{
       path: :host_api,
       built: true,
-      listener: "Crucible.HostListener",
+      listener: "Opus.HostListener",
       sockets: [],
-      entries: ["Crucible.Host.Children", "Grimoire"],
+      entries: ["Opus.Host.Children", "Grimoire"],
       reason:
         "a runner's host call, verified by its worker service and again by the listener, " <>
           "is admitted as a child of its attempt, and its tool call enters the gate's " <>
@@ -109,7 +109,7 @@ defmodule Cyfr.Admission do
       built: true,
       listener: nil,
       sockets: [],
-      entries: ["Crucible.Schedules.Scheduler"],
+      entries: ["Opus.Schedules.Scheduler"],
       reason:
         "a due schedule's fire is the occurrence it claims under a held generation, and " <>
           "the run it admits refused is that fire's failed completion; it listens on nothing"
@@ -200,7 +200,7 @@ defmodule Cyfr.Admission do
         do: "the endpoint's socket at #{mount} (#{name(socket)}) is on no admission path"
   end
 
-  # A module by its name, `Crucible.HostListener`; any other child id as
+  # A module by its name, `Opus.HostListener`; any other child id as
   # it reads.
   defp name(id), do: inspect(id)
 end

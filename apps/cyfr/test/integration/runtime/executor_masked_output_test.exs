@@ -62,7 +62,7 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
     ctx = Sanctum.TestContext.local(:prism)
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
 
       for {key, value} <- previous do
         if value,
@@ -89,10 +89,10 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
   test "a completed run's output, stream, payload, events and result are masked", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
     id = Prima.UUID7.execution_id()
-    :ok = Crucible.subscribe_events(id, ctx)
+    :ok = Opus.subscribe_events(id, ctx)
 
     assert {:ok, result} =
-             Crucible.run_root(ctx, :default, @stub, chat(), execution_id: id)
+             Opus.run_root(ctx, :default, @stub, chat(), execution_id: id)
 
     assert %{"data" => %{"content" => [%{"text" => text}]}} = result.output
     assert text == "The #{@redacted} #{@redacted}."
@@ -112,7 +112,7 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
     assert streamed_text(live) == text
     refute_unmasked(live, secrets)
 
-    replayed = Crucible.Events.since(id, {0, 0}, ctx.athanor_id)
+    replayed = Opus.Events.since(id, {0, 0}, ctx.athanor_id)
     assert streamed_text(replayed) == text
     refute_unmasked(replayed, secrets)
 
@@ -122,12 +122,10 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
   test "a failed run's message is masked in the row, its event and the result", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "describe")
     id = Prima.UUID7.execution_id()
-    :ok = Crucible.subscribe_events(id, ctx)
+    :ok = Opus.subscribe_events(id, ctx)
 
     assert {:error, message} =
-             Crucible.run_root(ctx, :default, @stub, %{"operation" => "unknown"},
-               execution_id: id
-             )
+             Opus.run_root(ctx, :default, @stub, %{"operation" => "unknown"}, execution_id: id)
 
     assert message == "the #{@redacted} #{@redacted}, models and chat"
 
@@ -152,7 +150,7 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
     hold_attach_past_deadline!(id)
 
     assert {:error, message} =
-             Crucible.run_root(ctx, :default, @brief, chat(), execution_id: id)
+             Opus.run_root(ctx, :default, @brief, chat(), execution_id: id)
 
     assert message =~ ~r/^#{Regex.escape(@redacted)} #{Regex.escape(@redacted)} \d+ms$/
 
@@ -178,7 +176,7 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
     # The formula calls the stub and answers what its host function handed
     # it, verbatim.
     assert {:ok, %{output: output}} =
-             Crucible.run_root(
+             Opus.run_root(
                ctx,
                :default,
                Probe.probe_ref(),
@@ -195,7 +193,7 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
 
     assert [child] = Arca.Repo.all(children_of(parent_id))
     refute_unmasked(child, secrets)
-    refute_unmasked(Crucible.Events.since(child.id, {0, 0}, ctx.athanor_id), secrets)
+    refute_unmasked(Opus.Events.since(child.id, {0, 0}, ctx.athanor_id), secrets)
     refute_unmasked(event_rows(ctx, child.id), secrets)
 
     assert {:ok, _row, payload} =
@@ -208,19 +206,19 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
   test "a run whose attempt ends mid-run records nothing unmasked", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
     id = Prima.UUID7.execution_id()
-    :ok = Crucible.subscribe_events(id, ctx)
+    :ok = Opus.subscribe_events(id, ctx)
     TwoServices.hold!(:push_deltas, id, once: true)
 
     run =
       Task.async(fn ->
-        Crucible.run_root(ctx, :default, @stub, chat(), execution_id: id)
+        Opus.run_root(ctx, :default, @stub, chat(), execution_id: id)
       end)
 
     # Held at its first delta: its guest wrote both credentials, and
     # nothing of it has reached the host yet.
     assert_receive {:held, ^id, held}, 30_000
 
-    attempt = Crucible.Attempt.whereis(id)
+    attempt = Opus.Attempt.whereis(id)
     ref = Process.monitor(attempt)
     Process.exit(attempt, :kill)
     assert_receive {:DOWN, ^ref, :process, ^attempt, :killed}

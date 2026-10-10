@@ -53,7 +53,7 @@ defmodule PrismWeb.ConnCase do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
     # The soul roots: the consent a turn pins exists, whoever minted it.
-    {:ok, _} = Crucible.authority_for(ctx, :default, Compendium.AgentSource.soul_ref())
+    {:ok, _} = Opus.authority_for(ctx, :default, Compendium.AgentSource.soul_ref())
 
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, "catalyst:local.claude", %{
       "ANTHROPIC_API_KEY" => "sk-test"
@@ -85,10 +85,10 @@ defmodule PrismWeb.ConnCase do
   scripted worker service's pid.
   """
   def script_model!(items \\ []) do
-    previous = Application.get_env(:cyfr, :opus_workers)
+    previous = Application.get_env(:cyfr, :locus_runtime_workers)
 
     ExUnit.Callbacks.on_exit(fn ->
-      Application.put_env(:cyfr, :opus_workers, previous)
+      Application.put_env(:cyfr, :locus_runtime_workers, previous)
     end)
 
     ExUnit.Callbacks.start_supervised!(

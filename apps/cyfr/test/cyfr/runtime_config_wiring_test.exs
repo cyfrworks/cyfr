@@ -91,7 +91,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
       for text <- [Base.encode16(root, case: :lower), Base.encode16(root)] do
         with_env(%{"CYFR_LOCUS_RUNTIME_ROOT" => text}, fn ->
-          assert get_in(read_prod_config!(), [:cyfr, :opus_key]) == root
+          assert get_in(read_prod_config!(), [:cyfr, :locus_runtime_root]) == root
         end)
       end
     end
@@ -99,7 +99,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     test "unset or blank configures no root" do
       for value <- [nil, ""] do
         with_env(%{"CYFR_LOCUS_RUNTIME_ROOT" => value}, fn ->
-          assert get_in(read_prod_config!(), [:cyfr, :opus_key]) == nil
+          assert get_in(read_prod_config!(), [:cyfr, :locus_runtime_root]) == nil
         end)
       end
     end
@@ -120,8 +120,8 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     # Each rate-limit maximum and window, concurrency ceiling, subscription
     # and event limit, the setting it pins and the least value it takes.
     @floors [
-      {"CYFR_CRUCIBLE_MAX_CONCURRENT", :crucible_max_concurrent, 32},
-      {"CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT", :crucible_max_concurrent_per_tenant, 1},
+      {"CYFR_OPUS_MAX_CONCURRENT", :opus_max_concurrent, 32},
+      {"CYFR_OPUS_MAX_CONCURRENT_PER_TENANT", :opus_max_concurrent_per_tenant, 1},
       {"CYFR_MCP_RATE_LIMIT_MAX", :mcp_rate_limit_max, 1},
       {"CYFR_MCP_RATE_LIMIT_WINDOW_MS", :mcp_rate_limit_window_ms, 1},
       {"CYFR_WEBHOOK_PER_IP_RATE_LIMIT_MAX", :webhook_per_ip_rate_limit_max, 1},
@@ -129,8 +129,8 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       {"CYFR_API_RATE_LIMIT_WINDOW_MS", :api_rate_limit_window_ms, 1},
       {"CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT", :mcp_subscription_max_concurrent, 1},
       {"CYFR_MCP_SUBSCRIPTION_MAX_MS", :mcp_subscription_max_ms, 1},
-      {"CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT", :crucible_events_max_concurrent, 1},
-      {"CYFR_CRUCIBLE_EVENTS_MAX_MS", :crucible_events_max_ms, 1}
+      {"CYFR_OPUS_EVENTS_MAX_CONCURRENT", :opus_events_max_concurrent, 1},
+      {"CYFR_OPUS_EVENTS_MAX_MS", :opus_events_max_ms, 1}
     ]
 
     test "unset pins nothing; set, the least value and above are pinned" do
@@ -457,13 +457,13 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     test "every boot is CYFR, and a mix boot alone runs the runtime beside it" do
       with_env(%{"RELEASE_NAME" => "cyfr"}, fn ->
         config = read_prod_config!()
-        assert Keyword.has_key?(config[:cyfr], :opus_workers)
+        assert Keyword.has_key?(config[:cyfr], :locus_runtime_workers)
         refute Keyword.has_key?(config, :locus)
       end)
 
       with_env(runtime_env(%{}), fn ->
         config = read_prod_config!()
-        assert Keyword.has_key?(config[:cyfr], :opus_workers)
+        assert Keyword.has_key?(config[:cyfr], :locus_runtime_workers)
         assert config[:locus][:runtime][:service_key] == String.duplicate("ab", 32)
       end)
     end
@@ -486,6 +486,65 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         end)
       end
     end
+  end
+
+  # The execution domain's variables under the name it had before are no
+  # variable this server reads either: each is refused by name, so a stale
+  # `.env` cannot boot cyfr with a ceiling it no longer applies.
+  describe "the execution domain's retired variables" do
+    test "each is refused by name, even holding a value its successor takes" do
+      # Spelled split so the retired names are not themselves found here.
+      for name <- [
+            "CYFR_CRU" <> "CIBLE_MAX_CONCURRENT",
+            "CYFR_CRU" <> "CIBLE_MAX_CONCURRENT_PER_TENANT",
+            "CYFR_CRU" <> "CIBLE_EVENTS_MAX_CONCURRENT",
+            "CYFR_CRU" <> "CIBLE_EVENTS_MAX_MS"
+          ] do
+        with_env(%{name => "64"}, fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+          assert message =~ "[Cyfr] FATAL: #{name} is not a variable this server reads"
+        end)
+      end
+    end
+  end
+
+  # The control plane holds the runtime's root, never a key: a worker
+  # service's key is derived from the root by `Opus.Keys.locus_runtime_key/1`
+  # alone, and every other name the control plane gives the root, its checks
+  # and its variable says root.
+  @key_name ~r/(?<![A-Za-z0-9_])((?:[A-Za-z_][A-Za-z0-9_]*\.)*)locus_runtime_key(?![A-Za-z0-9_])/
+  # Spelled split so this file does not name the variable itself.
+  @key_variable "CYFR_LOCUS_RUNTIME" <> "_KEY"
+
+  describe "the runtime's root" do
+    test "is named a key only where Opus.Keys derives a service's key from it" do
+      found =
+        for glob <- ["apps/*/lib/**/*.{ex,exs}", "config/**/*.exs"],
+            path <- Prima.Test.SourceTree.files!(Path.join(@root, glob)),
+            rel = Path.relative_to(path, @root),
+            {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
+            not root_named_as_root?(rel, line),
+            do: "#{rel}:#{n}: #{String.trim(line)}"
+
+      assert found == [],
+             """
+             The control plane names its runtime root a key outside `Opus.Keys`'
+             derivation of a service's key:
+
+             #{Enum.join(found, "\n")}
+             """
+    end
+  end
+
+  # A line names the root a key only through `Opus.Keys`: its definition of
+  # the derivation, or a call or capture of it.
+  defp root_named_as_root?(rel, line) do
+    not String.contains?(line, @key_variable) and
+      Enum.all?(Regex.scan(@key_name, line, capture: :all_but_first), fn [via] ->
+        via in ["Keys.", "Opus.Keys."] or
+          (via == "" and rel == "apps/cyfr/lib/opus/keys.ex" and
+             line =~ ~r/^\s*(def|@spec) locus_runtime_key\(/)
+      end)
   end
 
   describe "CYFR_DATABASE — the one setting `.env` cannot decide" do
@@ -545,7 +604,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         fn ->
           cyfr = read_prod_config!()[:cyfr]
 
-          assert cyfr[:opus_workers] == [
+          assert cyfr[:locus_runtime_workers] == [
                    %{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}
                  ]
 
@@ -573,7 +632,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         fn ->
           cyfr = read_prod_config!()[:cyfr]
 
-          assert cyfr[:opus_workers] == [
+          assert cyfr[:locus_runtime_workers] == [
                    %{id: "wrk_locus", url: "http://locus-runtime:4200", components: nil},
                    %{id: "wrk_b", url: "https://b.internal", components: nil}
                  ]
@@ -664,7 +723,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         },
         fn ->
           config = read_prod_config!()
-          assert config[:cyfr][:opus_key] == root
+          assert config[:cyfr][:locus_runtime_root] == root
           assert config[:locus][:runtime][:service_id] == "wrk_local"
           assert config[:locus][:runtime][:service_key] == Base.encode16(derived, case: :lower)
           assert config[:locus][:runtime][:host_url] == "http://127.0.0.1:4300"
@@ -676,7 +735,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         %{"RELEASE_NAME" => nil, "CYFR_LOCUS_RUNTIME_ROOT" => nil, "LOCUS_RUNTIME_KEY" => nil},
         fn ->
           config = read_prod_config!()
-          minted = config[:cyfr][:opus_key]
+          minted = config[:cyfr][:locus_runtime_root]
           assert byte_size(minted) == 32
           {:ok, key} = Prima.WorkerAuth.worker_key(minted, "wrk_local")
           assert config[:locus][:runtime][:service_key] == Base.encode16(key, case: :lower)

@@ -51,7 +51,7 @@ defmodule PrismWeb.ModelCatalog do
         :ok
 
       :miss ->
-        if Crucible.available?(), do: run(ctx, athanor_id, tag), else: :unavailable
+        if Opus.available?(), do: run(ctx, athanor_id, tag), else: :unavailable
     end
   end
 

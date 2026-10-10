@@ -776,8 +776,8 @@ defmodule Cyfr.BoundariesTest do
                  do: row
                )
 
-      assert "apps/cyfr/lib/crucible/**/*.ex" in row.from
-      assert row.reason =~ "`Sanctum.Attach` is `Crucible.Host.AttachedFetch`'s one resolution"
+      assert "apps/cyfr/lib/opus/**/*.ex" in row.from
+      assert row.reason =~ "`Sanctum.Attach` is `Opus.Host.AttachedFetch`'s one resolution"
 
       # The reader's seam it shares stays inside Sanctum: the host reads
       # material by consent through the disclosed dispense alone.
@@ -1153,7 +1153,7 @@ defmodule Cyfr.BoundariesTest do
       # `Arca.PlatformSettings.effective/1`, and none of its keys is set by
       # a configuration file.
       assert settings ==
-               MapSet.new([:crucible_max_concurrent, :crucible_max_concurrent_per_tenant])
+               MapSet.new([:opus_max_concurrent, :opus_max_concurrent_per_tenant])
 
       refute :caps in settings or :mcp_rate_limit_max in settings
 
@@ -1347,7 +1347,7 @@ defmodule Cyfr.BoundariesTest do
          defmodule Cyfr.Bus.Planted do
            alias Sanctum.Context
            def a(%Context{} = ctx), do: Aqua.Runner.subscribe(ctx.athanor_id, "t")
-           def b, do: Crucible.Events.flush("e")
+           def b, do: Opus.Events.flush("e")
            def c, do: Prima.Actor.system()
          end
          ''')}
@@ -1356,7 +1356,7 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.bus_violations(planted) == [
                "apps/cyfr/lib/cyfr/bus/planted.ex:2 names Sanctum.Context",
                "apps/cyfr/lib/cyfr/bus/planted.ex:3 names Aqua.Runner",
-               "apps/cyfr/lib/cyfr/bus/planted.ex:4 names Crucible.Events"
+               "apps/cyfr/lib/cyfr/bus/planted.ex:4 names Opus.Events"
              ]
     end
 
@@ -1478,16 +1478,16 @@ defmodule Cyfr.BoundariesTest do
       row =
         Enum.find(
           Boundaries.surfaces(),
-          &(&1.into == "Compendium" and "apps/cyfr/lib/crucible/**/*.ex" in &1.from)
+          &(&1.into == "Compendium" and "apps/cyfr/lib/opus/**/*.ex" in &1.from)
         ) || flunk("no surface row fences execution into the component domain's root")
 
       assert row.allow == ["Compendium"]
-      assert "apps/cyfr/lib/crucible.ex" in row.from
+      assert "apps/cyfr/lib/opus.ex" in row.from
 
       planted = [
-        {"apps/cyfr/lib/crucible/planted.ex",
+        {"apps/cyfr/lib/opus/planted.ex",
          CodeLines.aliases(~S'''
-         defmodule Crucible.Planted do
+         defmodule Opus.Planted do
            def resolve(ctx, ref), do: Compendium.resolve(ctx, ref)
            def inspect(ctx, ref), do: Compendium.Component.inspect_component(ctx, ref)
            def graph(ctx, component), do: Compendium.Activation.resolve(ctx, component)
@@ -1622,7 +1622,7 @@ defmodule Cyfr.BoundariesTest do
 
     test "the host names no domain" do
       rows =
-        for into <- ~w(Aqua Compendium Crucible Emissary),
+        for into <- ~w(Aqua Compendium Opus Emissary),
             do:
               {into,
                Enum.find(
@@ -1657,8 +1657,8 @@ defmodule Cyfr.BoundariesTest do
            def seeds, do: Compendium.sync_seeds()
            def sync, do: Compendium.Provisioning.sync_seeds()
            def roster(ctx), do: Aqua.roster(ctx)
-           def run(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
-           def admit(ctx, ref), do: Crucible.Admission.authority_for(ctx, :default, ref, [])
+           def run(ctx, ref), do: Opus.authority_for(ctx, :default, ref)
+           def admit(ctx, ref), do: Opus.Admission.authority_for(ctx, :default, ref, [])
            def proxy, do: Emissary.External.Proxy
          end
          ''')}
@@ -1667,7 +1667,7 @@ defmodule Cyfr.BoundariesTest do
       expected = %{
         "Aqua" => ["Aqua"],
         "Compendium" => ["Compendium", "Compendium.Provisioning"],
-        "Crucible" => ["Crucible", "Crucible.Admission"],
+        "Opus" => ["Opus", "Opus.Admission"],
         "Emissary" => ["Emissary.External"]
       }
 
@@ -1682,23 +1682,23 @@ defmodule Cyfr.BoundariesTest do
             do:
               Enum.find(
                 Boundaries.surfaces(),
-                &(&1.into == "Crucible" and "apps/cyfr/lib/#{tree}/**/*.ex" in &1.from)
+                &(&1.into == "Opus" and "apps/cyfr/lib/#{tree}/**/*.ex" in &1.from)
               ) || flunk("no surface row fences #{tree} into execution's root")
 
       planted = [
         {"apps/cyfr/lib/planted.ex",
          CodeLines.aliases(~S'''
          defmodule Planted do
-           def run(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
-           def admit(ctx, ref), do: Crucible.Admission.authority_for(ctx, :default, ref, [])
-           def charge(authority), do: Crucible.Charge.take(authority, [])
+           def run(ctx, ref), do: Opus.authority_for(ctx, :default, ref)
+           def admit(ctx, ref), do: Opus.Admission.authority_for(ctx, :default, ref, [])
+           def charge(authority), do: Opus.Charge.take(authority, [])
          end
          ''')}
       ]
 
       for row <- rows do
         assert Boundaries.surface_violations(row, planted) ==
-                 ["Crucible.Admission", "Crucible.Charge"]
+                 ["Opus.Admission", "Opus.Charge"]
       end
     end
 
@@ -2811,7 +2811,7 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
     )
   end
 
-  test "Crucible <- apps/cyfr/lib/compendium/**/*.ex, apps/cyfr/lib/compendium.ex", %{
+  test "Opus <- apps/cyfr/lib/compendium/**/*.ex, apps/cyfr/lib/compendium.ex", %{
     copy: copy
   } do
     assert_refused(
@@ -2820,29 +2820,29 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
       "compendium/boundary_plant.ex",
       """
       defmodule Compendium.BoundaryPlant do
-        def plant(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
+        def plant(ctx, ref), do: Opus.authority_for(ctx, :default, ref)
       end
       """,
       [
-        "forbidden reference to Crucible",
-        "references from Compendium to Crucible are not allowed"
+        "forbidden reference to Opus",
+        "references from Compendium to Opus are not allowed"
       ]
     )
   end
 
-  test "Aqua <- apps/cyfr/lib/crucible/**/*.ex, apps/cyfr/lib/crucible.ex", %{copy: copy} do
+  test "Aqua <- apps/cyfr/lib/opus/**/*.ex, apps/cyfr/lib/opus.ex", %{copy: copy} do
     assert_refused(
       copy,
       "cyfr",
-      "crucible/boundary_plant.ex",
+      "opus/boundary_plant.ex",
       """
-      defmodule Crucible.BoundaryPlant do
+      defmodule Opus.BoundaryPlant do
         def plant(tool, action), do: Aqua.tool_kind(tool, action)
       end
       """,
       [
         "forbidden reference to Aqua",
-        "references from Crucible to Aqua are not allowed"
+        "references from Opus to Aqua are not allowed"
       ]
     )
   end

@@ -55,7 +55,7 @@ defmodule Locus.Runtime.MemoryBoundTest do
     ctx = %{Sanctum.TestContext.local(:api) | athanor_id: athanor.id}
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(run_dir)
 
       case previous do
@@ -124,7 +124,7 @@ defmodule Locus.Runtime.MemoryBoundTest do
     id = Prima.UUID7.execution_id()
 
     result =
-      Crucible.Dispatch.run(ctx, node_ref(name) <> ":0.1.0", %{"hostile" => true},
+      Opus.Dispatch.run(ctx, node_ref(name) <> ":0.1.0", %{"hostile" => true},
         type: :reagent,
         authority: authority(name, max_memory_bytes),
         execution_id: id

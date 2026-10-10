@@ -134,7 +134,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   end
 
   defp edge_vault(ctx, source_ref) do
-    {:ok, authority} = Crucible.authority_for(ctx, :default, source_ref)
+    {:ok, authority} = Opus.authority_for(ctx, :default, source_ref)
     {:ok, edge} = Blob.lookup_edge(authority.policy, source_ref, @dep, "")
     edge.vault
   end
@@ -142,7 +142,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   # What a dispense under `source_ref`'s authority is made for: the profile
   # and consent it is pinned to, and a root of its own.
   defp edge_use(ctx, source_ref) do
-    {:ok, authority} = Crucible.authority_for(ctx, :default, source_ref)
+    {:ok, authority} = Opus.authority_for(ctx, :default, source_ref)
 
     %{
       root_execution_id: "exec_selection_flow",
@@ -448,7 +448,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   end
 
   defp edge_vault_of(ctx, source_ref, dep) do
-    {:ok, authority} = Crucible.authority_for(ctx, :default, source_ref)
+    {:ok, authority} = Opus.authority_for(ctx, :default, source_ref)
     {:ok, edge} = Blob.lookup_edge(authority.policy, source_ref, dep, "")
     edge.vault
   end
@@ -1139,8 +1139,8 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     on_exit(fn -> :telemetry.detach(handler) end)
   end
 
-  # The authority a run of `ref` is admitted under, as `Crucible` loads it.
-  defp run(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
+  # The authority a run of `ref` is admitted under, as `Opus` loads it.
+  defp run(ctx, ref), do: Opus.authority_for(ctx, :default, ref)
 
   defp set_profile!(ctx, id, changes) do
     {1, _} =
@@ -1410,7 +1410,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     # The loaded edge holds the named map beside its default, and a call
     # naming an account gets that account, naming none the default, and
     # naming one the edge lacks nothing.
-    {:ok, authority} = Crucible.authority_for(ctx, :default, ref)
+    {:ok, authority} = Opus.authority_for(ctx, :default, ref)
     {:ok, edge} = Blob.lookup_edge(authority.policy, ref, @dep, "")
 
     assert %{entry_id: ^home_id, named: %{"Work" => %{entry_id: ^work_id}}} = edge.vault
@@ -1471,7 +1471,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert %{entry_id: ^home_id} = root_edge_vault(ctx, @role_a)
     assert %{entry_id: ^work_id} = root_edge_vault(ctx, @role_b)
 
-    {:ok, authority} = Crucible.authority_for(ctx, :default, @root)
+    {:ok, authority} = Opus.authority_for(ctx, :default, @root)
 
     {:child, via_a} =
       authority
@@ -1592,7 +1592,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   end
 
   defp root_edge_vault(ctx, from) do
-    {:ok, authority} = Crucible.authority_for(ctx, :default, @root)
+    {:ok, authority} = Opus.authority_for(ctx, :default, @root)
     {:ok, edge} = Blob.lookup_edge(authority.policy, from, @dep, "")
     edge.vault
   end

@@ -26,7 +26,7 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
 
   use ExUnit.Case, async: false
 
-  alias Crucible.Provider
+  alias Opus.Provider
   alias Cyfr.Test.{ChatFixture, TwoServices}
   alias Prima.Manifest.Needs
   alias Sanctum.Consent.{Bootstrap, Commit, Plan}
@@ -258,10 +258,10 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
 
     input = %{"operation" => "nothing.here", "params" => %{}}
 
-    {:ok, before} = Crucible.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, before} = Opus.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{node_ref: "catalyst:local.claude:" <> _, reason: reason}}} =
-             Crucible.run_child(before, "catalyst:local.claude", nil, input, child_opts)
+             Opus.run_child(before, "catalyst:local.claude", nil, input, child_opts)
 
     assert reason == "vault_selection_unbound"
 
@@ -281,20 +281,20 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
 
     # The assistant's authority, loaded again, lends the key on its edge;
     # the child runs to its own refusal.
-    {:ok, authority} = Crucible.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, authority} = Opus.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, "Unknown operation: nothing.here"} =
-             Crucible.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
+             Opus.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
 
     # Revoking the catalyst's profile cuts the assistant off at the next load.
     {:ok, [claude_profile]} =
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.claude")
 
     :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), claude_profile.id, "revoked")
-    {:ok, revoked} = Crucible.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, revoked} = Opus.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
-             Crucible.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
+             Opus.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
   end
 
   # Copy a shipped version in as a fill copies it, then register it.

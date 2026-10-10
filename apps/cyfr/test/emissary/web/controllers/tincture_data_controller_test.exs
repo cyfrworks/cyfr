@@ -845,7 +845,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   # nothing is planted for them, and the table must name the stream as the
   # canvas declares it.
   defp with_streams(fun) do
-    feed_provider? = Code.ensure_loaded?(Crucible.Providers.Feed)
+    feed_provider? = Code.ensure_loaded?(Opus.Providers.Feed)
     planted = if feed_provider?, do: [ShapedProbe], else: [ShapedProbe, FeedProbe]
 
     Grimoire.Catalog.with_providers(planted, fn ->
@@ -1172,7 +1172,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
             binding: binding,
             resolved_reference: "catalyst:local.markets:1.0.0",
             profile_id: "prof_canvas_feed",
-            cap: Crucible.Feeds.max_per_athanor()
+            cap: Opus.Feeds.max_per_athanor()
           })
 
         bound = canvas_stream(trial.frame_id, "feed.results", "btc", bearer: trial.bearer)

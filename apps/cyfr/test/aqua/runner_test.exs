@@ -35,7 +35,7 @@ defmodule Aqua.RunnerTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "runner_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :locus_runtime_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, test_path)
     Application.put_env(:arca, :seed_path, @seed_root)
@@ -649,7 +649,7 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, first)
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, second)
     assert %{running: false, queued: 0} = Runner.state(thread.id, ctx.athanor_id)
-    assert Prima.Slots.status(Crucible.Slots).root_active == 0
+    assert Prima.Slots.status(Opus.Slots).root_active == 0
 
     ScriptedWorker.script([reply("new work")])
     {:ok, %{turn_id: fresh}} = Runner.send_message(ctx, thread.id, "@aqua again")
@@ -747,7 +747,7 @@ defmodule Aqua.RunnerTest do
       })
 
     {:ok, claim} =
-      Crucible.claim_turn_root(ctx, @soul, turn_id: turn.id, thread_id: other_thread.id)
+      Opus.claim_turn_root(ctx, @soul, turn_id: turn.id, thread_id: other_thread.id)
 
     {:ok, %{capability_digest: capability, revision_digest: revision}} =
       Compendium.AgentIndex.snapshot(ctx, "aqua")
@@ -765,7 +765,7 @@ defmodule Aqua.RunnerTest do
       })
 
     # The dead boot's slot and keeper are gone; the rows say running.
-    :ok = Crucible.release_turn_root(ctx, claim.execution_id, claim: claim)
+    :ok = Opus.release_turn_root(ctx, claim.execution_id, claim: claim)
     assert running.status == "running"
 
     {:ok, _pid} = Runner.ensure(other_thread.id, ctx.athanor_id)
@@ -1304,7 +1304,7 @@ defmodule Aqua.RunnerTest do
   # The soul's grant, granted again admitting `origins` alone.
   defp admit_only!(ctx, origins) do
     {:ok, %{profile_id: profile_id}} =
-      Crucible.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+      Opus.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
 
     _ = Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile_id, origins)
     :ok

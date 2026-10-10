@@ -41,7 +41,7 @@ defmodule Aqua.Loop do
   @launch_timeout_ms 10 * 60 * 1000
   @retry_delays_ms [2_000, 8_000, 20_000]
   # `{"operation":"chat","params":}` around the request, which is what
-  # `Crucible.Admission` encodes and weighs against the node's cap.
+  # `Opus.Admission` encodes and weighs against the node's cap.
   @envelope_bytes 30
   @resume_backoff_ms [500, 2_000, 8_000]
   # A retry opens a new step at a higher ordinal, and the refused step is
@@ -158,9 +158,9 @@ defmodule Aqua.Loop do
   end
 
   defp end_unrun(ctx, claim, turn, error) do
-    Crucible.suspend_lease_watch(claim.keeper)
+    Opus.suspend_lease_watch(claim.keeper)
     _ = Tape.finish(ctx, turn, "failed", %{error: error})
-    Crucible.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
+    Opus.release_turn_root(ctx, claim.execution_id, claim: claim, failed: error)
   end
 
   defp needs_setup({:setup_required, catalyst}), do: catalyst
@@ -353,7 +353,7 @@ defmodule Aqua.Loop do
   defp cancel_aborted_child(_ctx, nil), do: :ok
 
   defp cancel_aborted_child(ctx, id) do
-    case Crucible.cancel(ctx, id) do
+    case Opus.cancel(ctx, id) do
       {:ok, _} -> :ok
       {:error, reason} when reason in [:not_found, :not_cancellable] -> :ok
       error -> error
@@ -366,7 +366,7 @@ defmodule Aqua.Loop do
 
   defp claim_and_start(ctx, turn) do
     with {:ok, claim} <-
-           Crucible.claim_turn_root(ctx, source_ref(turn),
+           Opus.claim_turn_root(ctx, source_ref(turn),
              turn_id: turn.id,
              thread_id: turn.thread_id,
              envelope: %{"turn" => turn.id}
@@ -401,7 +401,7 @@ defmodule Aqua.Loop do
   end
 
   defp reclaim(ctx, turn, :resume) do
-    case Crucible.resume_turn_root(ctx, turn.root_execution_id,
+    case Opus.resume_turn_root(ctx, turn.root_execution_id,
            turn_id: turn.id,
            fence: turn.fence
          ) do
@@ -412,7 +412,7 @@ defmodule Aqua.Loop do
 
   defp reclaim(ctx, turn, :adopt) do
     with {:ok, claim} <-
-           Crucible.adopt_turn_root(ctx, turn.root_execution_id, attempt: turn.attempt) do
+           Opus.adopt_turn_root(ctx, turn.root_execution_id, attempt: turn.attempt) do
       {:ok, claim, turn}
     end
   end
@@ -421,9 +421,7 @@ defmodule Aqua.Loop do
   # must still be at the pinned consent, and the budget is the turn's
   # reservation.
   defp pinned_authority(ctx, %{profile_id: profile_id} = turn) when is_binary(profile_id) do
-    case Crucible.authority_for(ctx, {:id, profile_id}, source_ref(turn),
-           budget_id: turn.budget_id
-         ) do
+    case Opus.authority_for(ctx, {:id, profile_id}, source_ref(turn), budget_id: turn.budget_id) do
       {:ok, %{consent_id: consent_id} = authority} when consent_id == turn.consent_id ->
         {:ok, authority}
 
@@ -518,15 +516,15 @@ defmodule Aqua.Loop do
   defp terminal({:uncertain, reason}), do: {"uncertain", describe(reason)}
 
   defp release(%State{claim: %{execution_id: execution_id} = claim} = state) do
-    Crucible.release_turn_root(ctx(state), execution_id, claim: claim)
+    Opus.release_turn_root(ctx(state), execution_id, claim: claim)
   end
 
   defp release(_state), do: :ok
 
-  defp suspend_keeper(%State{claim: %{keeper: keeper}}), do: Crucible.suspend_lease_watch(keeper)
+  defp suspend_keeper(%State{claim: %{keeper: keeper}}), do: Opus.suspend_lease_watch(keeper)
   defp suspend_keeper(_state), do: :ok
 
-  defp resume_keeper(%State{claim: %{keeper: keeper}}), do: Crucible.resume_lease_watch(keeper)
+  defp resume_keeper(%State{claim: %{keeper: keeper}}), do: Opus.resume_lease_watch(keeper)
   defp resume_keeper(_state), do: :ok
 
   # ---------------------------------------------------------------------------
@@ -698,7 +696,7 @@ defmodule Aqua.Loop do
       try do
         worker(
           fn ->
-            Crucible.run_child(spec.authority, spec.catalyst, nil, input,
+            Opus.run_child(spec.authority, spec.catalyst, nil, input,
               ctx: guest,
               execution_id: step.child_execution_id,
               step_id: step.id,
@@ -1463,7 +1461,7 @@ defmodule Aqua.Loop do
 
       {:ok, %{dispatch_state: "dispatched"} = fresh} ->
         if fresh.child_execution_id,
-          do: Crucible.cancel(ctx(state), fresh.child_execution_id)
+          do: Opus.cancel(ctx(state), fresh.child_execution_id)
 
         why = describe(reason)
 
@@ -1531,7 +1529,7 @@ defmodule Aqua.Loop do
       content: @aborted_content
     }
 
-    case Crucible.pause_turn_root(ctx(state), id,
+    case Opus.pause_turn_root(ctx(state), id,
            claim: claim,
            turn_id: state.turn.id,
            fence: state.turn.fence,
@@ -1570,7 +1568,7 @@ defmodule Aqua.Loop do
   defp cancel_rest(%State{} = state, rest) do
     Enum.each(rest, fn %{item: %{step: step} = item, task: task} ->
       if task, do: Aqua.Loop.Worker.shutdown(task)
-      if step.child_execution_id, do: Crucible.cancel(ctx(state), step.child_execution_id)
+      if step.child_execution_id, do: Opus.cancel(ctx(state), step.child_execution_id)
       Aqua.Ops.cancel_call(handle(state, step))
       _ = settle_dead(state, item, :cancelled, :mark)
       Aqua.Ops.release_call(handle(state, step))
@@ -1657,7 +1655,7 @@ defmodule Aqua.Loop do
          reason,
          launch_step_id
        ) do
-    case Crucible.pause_turn_root(ctx(state), execution_id,
+    case Opus.pause_turn_root(ctx(state), execution_id,
            claim: claim,
            turn_id: state.turn.id,
            fence: state.turn.fence,
@@ -1682,7 +1680,7 @@ defmodule Aqua.Loop do
   end
 
   defp resume_root(%State{} = state, tries) do
-    case Crucible.resume_turn_root(ctx(state), state.turn.root_execution_id,
+    case Opus.resume_turn_root(ctx(state), state.turn.root_execution_id,
            turn_id: state.turn.id,
            fence: state.turn.fence
          ) do
@@ -1722,7 +1720,7 @@ defmodule Aqua.Loop do
         Enum.reduce(steps, [], fn
           %{dispatch_state: "dispatched"} = step, open ->
             if step.child_execution_id,
-              do: Crucible.cancel(ctx(state), step.child_execution_id)
+              do: Opus.cancel(ctx(state), step.child_execution_id)
 
             case Prima.TurnStep.unresolved(step) do
               :unanswered ->
@@ -2106,7 +2104,7 @@ defmodule Aqua.Loop do
   # branch, and a cap of nil looks exactly like a request that fits.
   # By name, without the version. The spec carries a versioned ref because
   # that is what resolved, but the consent graph keys every node by name —
-  # `Crucible.Admission` steps by name and `Authority.limits/1` matches on
+  # `Opus.Admission` steps by name and `Authority.limits/1` matches on
   # that. A versioned key finds nothing, and a cap of nil is a check that
   # never fires.
   def catalyst_request_cap(%{authority: authority, catalyst: catalyst}) do

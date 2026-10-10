@@ -40,7 +40,7 @@ const ASSET_PREFIX = "_s"
 export const STREAM_ROUTE = "stream"
 
 // The stream whose events carry a feed's binding: its subject is the feed's
-// name (`Crucible.Providers.Feed`).
+// name (`Opus.Providers.Feed`).
 export const FEED_STREAM = "feed.results"
 
 // ---- grammars ----------------------------------------------------------------

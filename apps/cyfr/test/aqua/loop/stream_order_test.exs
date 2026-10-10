@@ -4,7 +4,7 @@
 defmodule Aqua.Loop.StreamOrderTest do
   @moduledoc """
   A chat step's stream reaches the thread whole, in order and masked. Every
-  `text.delta` the catalyst emits during its `Crucible.run_child/5`
+  `text.delta` the catalyst emits during its `Opus.run_child/5`
   is forwarded to the thread in sequence order, once, before the loop
   lands the step's row — the forwarder is closed only after the call
   returns, so a delta published after that is never forwarded. A
@@ -36,7 +36,7 @@ defmodule Aqua.Loop.StreamOrderTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "stream_order_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :locus_runtime_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, test_path)
     Application.put_env(:arca, :seed_path, @seed_root)
@@ -134,7 +134,7 @@ defmodule Aqua.Loop.StreamOrderTest do
     refute Enum.any?(forwarded, &(&1 =~ secret))
 
     assert [chat_id] = chat_calls()
-    stream = Crucible.events_since(chat_id, {0, 0}, ctx.athanor_id)
+    stream = Opus.events_since(chat_id, {0, 0}, ctx.athanor_id)
     emitted = for %{type: "emit", data: data} <- stream, do: data
 
     assert [

@@ -10,7 +10,7 @@ defmodule Arca.DbRescueSeamTest do
   crept in, go wrap it", never a behavioural assertion.
 
   Value-position uses of `db_errors()` (attribute lists such as
-  `Crucible.Schedules.Scheduler`'s error rosters) are not rescue clauses and
+  `Opus.Schedules.Scheduler`'s error rosters) are not rescue clauses and
   are deliberately not matched.
   """
   use ExUnit.Case, async: true

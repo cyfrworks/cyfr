@@ -63,7 +63,7 @@
 #
 #   admit SESSION_TOKEN
 #       The real loader's answer for a run of catalyst:local.openai under
-#       the person's context (`Crucible.authority_for/3`'s path), with no
+#       the person's context (`Opus.authority_for/3`'s path), with no
 #       run started: the profile and consent it roots on and the node and
 #       activation digest it verified for the catalyst, or the refusal.
 #       The loader is asked once the person's athanor is filled, as a turn
@@ -165,7 +165,7 @@ fn args ->
   admitted = fn ctx ->
     with :filled <- filled.(ctx),
          {:ok, %{authority: authority, stamp: stamp}} <-
-           Crucible.Admission.authority_and_stamp_for(ctx, :default, openai) do
+           Opus.Admission.authority_and_stamp_for(ctx, :default, openai) do
       graph = (stamp && stamp.activation_graph) || %{}
 
       {node_ref, digest} =

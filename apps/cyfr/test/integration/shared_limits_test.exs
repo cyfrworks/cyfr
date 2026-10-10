@@ -12,10 +12,10 @@ defmodule Cyfr.SharedLimitsTest do
   two, a third refused on either.
 
   Each limit has one authority, on the host: the rate is admission's
-  (`Crucible.Rates`), the task cap is the root's budget
+  (`Opus.Rates`), the task cap is the root's budget
   (`Sanctum.Authority`) made durable by its reservation
   (`Arca.BudgetReservations`), and the execution slot is
-  `Crucible.Slots`'. A worker service counts nothing that admits.
+  `Opus.Slots`'. A worker service counts nothing that admits.
   What a task held goes back once, and only what it held: when it is
   cancelled, or its waiter is killed, while it waits for a slot, each at
   that moment and with no slot taken; when the service running it dies;
@@ -30,7 +30,7 @@ defmodule Cyfr.SharedLimitsTest do
   import Prima.Test.Wait
 
   alias Prima.Authority
-  alias Crucible.{Attempt, Keys, Rates, Sweeper}
+  alias Opus.{Attempt, Keys, Rates, Sweeper}
   alias Prima.Slots
   alias Cyfr.Test.{RuntimeService, ScriptedWorker}
   alias Cyfr.Test.TwoServices.Wire
@@ -42,7 +42,7 @@ defmodule Cyfr.SharedLimitsTest do
 
   @stub stub()
   @stub_ref "#{stub()}:#{version()}"
-  @slots Crucible.Slots
+  @slots Opus.Slots
   @rate %{requests: 10, window: "1m"}
   @tasks 2
   @lapsed "Execution terminated: runner stopped without cleanup"
@@ -54,7 +54,7 @@ defmodule Cyfr.SharedLimitsTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "shared_limits_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :locus_runtime_workers]
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
 
@@ -91,7 +91,7 @@ defmodule Cyfr.SharedLimitsTest do
     assert @stub in minted
     arm!(ctx, key: "k-#{System.unique_integer([:positive])}", token: "t-unused")
 
-    {:ok, authority} = Crucible.authority_for(ctx, :default, @stub)
+    {:ok, authority} = Opus.authority_for(ctx, :default, @stub)
     assert %{rate_limit: @rate, max_concurrent_tasks: @tasks} = Authority.limits(authority)
     assert authority.budget.cap == @tasks
 
@@ -221,7 +221,7 @@ defmodule Cyfr.SharedLimitsTest do
 
     # Cancelled as any run is. At the cancel, with every slot still held,
     # its waiter has the row's answer and the task holds nothing.
-    assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, queued)
+    assert {:ok, %{cancelled: true}} = Opus.cancel(ctx, queued)
     assert {{:error, "Execution cancelled"}, ^queued} = Task.await(waiter, 10_000)
     wait_until(fn -> Attempt.whereis(queued) == nil end, 10_000, "the queued attempt stopped")
     assert %{state: "cancelled", claimed_by: nil} = attempt(ctx, queued)
@@ -231,7 +231,7 @@ defmodule Cyfr.SharedLimitsTest do
     # The cancel again gives nothing back again, and the next slot freed
     # is nobody's: the other task's slot, and every slot the filler still
     # holds, is held.
-    assert {:error, :not_cancellable} = Crucible.cancel(ctx, queued)
+    assert {:error, :not_cancellable} = Opus.cancel(ctx, queued)
     release_slots!(filler, 1)
 
     wait_until(
@@ -401,7 +401,7 @@ defmodule Cyfr.SharedLimitsTest do
     # delivered again.
     %{attempt: cancelled, claimed_by: runner, boot_id: boot} = attempt(ctx, on_scripted.id)
     cancel!(ctx, on_scripted)
-    assert {:error, :not_cancellable} = Crucible.cancel(ctx, on_scripted.id)
+    assert {:error, :not_cancellable} = Opus.cancel(ctx, on_scripted.id)
     assert {200, %{"ok" => true}} = exit_report(@other, boot, runner, [cancelled])
     assert_held(ctx, authority, [again], before)
 
@@ -427,7 +427,7 @@ defmodule Cyfr.SharedLimitsTest do
 
   # One invocation of the consented node, as an external caller makes it.
   defp invoke(ctx, id),
-    do: Crucible.run_root(ctx, :default, @stub, chat(), execution_id: id)
+    do: Opus.run_root(ctx, :default, @stub, chat(), execution_id: id)
 
   # One task of `root`: the stub again, under the authority it runs under.
   defp spawn!(ctx, authority, root, id \\ Prima.UUID7.execution_id()),
@@ -441,8 +441,8 @@ defmodule Cyfr.SharedLimitsTest do
   defp through!(wire) do
     Application.put_env(
       :cyfr,
-      :opus_workers,
-      Enum.map(Application.get_env(:cyfr, :opus_workers), fn
+      :locus_runtime_workers,
+      Enum.map(Application.get_env(:cyfr, :locus_runtime_workers), fn
         %{id: @other} = entry -> %{entry | url: wire.url}
         entry -> entry
       end)
@@ -486,7 +486,7 @@ defmodule Cyfr.SharedLimitsTest do
   # Cancel a task held on the scripted service: its runner is killed, and
   # its service's report of the exit stops its attempt.
   defp cancel!(ctx, %{id: id, task: task}) do
-    assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, id)
+    assert {:ok, %{cancelled: true}} = Opus.cancel(ctx, id)
     assert {{:error, _cancelled}, ^id} = Task.await(task, 30_000)
     wait_until(fn -> Attempt.whereis(id) == nil end, 10_000, "the attempt of #{id} stopped")
   end
@@ -611,7 +611,7 @@ defmodule Cyfr.SharedLimitsTest do
       nonce: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
     }
 
-    {:ok, worker_key} = Keys.opus_key(service)
+    {:ok, worker_key} = Keys.locus_runtime_key(service)
     {:ok, header} = WorkerAuth.report_header(WorkerAuth.dispatch_key(worker_key), fields, body)
 
     {:ok, %Req.Response{status: status, body: answer}} =

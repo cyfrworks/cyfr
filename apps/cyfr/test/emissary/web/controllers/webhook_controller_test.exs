@@ -226,7 +226,7 @@ defmodule Emissary.Web.WebhookControllerTest do
       request_id = response["request_id"]
 
       # Sync on the spawned task so the test process doesn't exit while
-      # `Crucible.Dispatch.run/4` is still mid-query (would yank the Ecto sandbox
+      # `Opus.Dispatch.run/4` is still mid-query (would yank the Ecto sandbox
       # connection and produce noisy crash logs).
       assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _measurements,
                       %{request_id: ^request_id}},
@@ -399,12 +399,12 @@ defmodule Emissary.Web.WebhookControllerTest do
           }
         )
 
-      previous = Application.get_env(:cyfr, :opus_workers)
-      on_exit(fn -> Application.put_env(:cyfr, :opus_workers, previous) end)
+      previous = Application.get_env(:cyfr, :locus_runtime_workers)
+      on_exit(fn -> Application.put_env(:cyfr, :locus_runtime_workers, previous) end)
 
       Application.put_env(
         :cyfr,
-        :opus_workers,
+        :locus_runtime_workers,
         Cyfr.Test.ScriptedWorker.workers(reference, previous)
       )
 
@@ -482,13 +482,13 @@ defmodule Emissary.Web.WebhookControllerTest do
       watch_losses()
       %{slug: slug, secret: secret} = create_hook!(ctx, "no-engine")
 
-      previous = Application.get_env(:cyfr, :opus_workers)
-      Application.put_env(:cyfr, :opus_workers, [])
-      on_exit(fn -> Application.put_env(:cyfr, :opus_workers, previous) end)
+      previous = Application.get_env(:cyfr, :locus_runtime_workers)
+      Application.put_env(:cyfr, :locus_runtime_workers, [])
+      on_exit(fn -> Application.put_env(:cyfr, :locus_runtime_workers, previous) end)
 
       conn = post_signed(conn, slug, secret, ~s({"event":"x"}))
       assert conn.status == 503
-      Application.put_env(:cyfr, :opus_workers, previous)
+      Application.put_env(:cyfr, :locus_runtime_workers, previous)
 
       assert [decision] = Arca.Repo.all(Arca.Schemas.DecisionLog)
       assert decision.tool == "webhook"
@@ -516,11 +516,11 @@ defmodule Emissary.Web.WebhookControllerTest do
       # service does not run this component and whose rest is not a list:
       # the delivery is accepted, and the run's own lookup of a worker for
       # the component raises inside the task.
-      previous = Application.get_env(:cyfr, :opus_workers)
+      previous = Application.get_env(:cyfr, :locus_runtime_workers)
       [endpoint | _] = previous
-      on_exit(fn -> Application.put_env(:cyfr, :opus_workers, previous) end)
+      on_exit(fn -> Application.put_env(:cyfr, :locus_runtime_workers, previous) end)
 
-      Application.put_env(:cyfr, :opus_workers, [
+      Application.put_env(:cyfr, :locus_runtime_workers, [
         Map.put(endpoint, :components, ["no-such-component"]) | :not_a_worker
       ])
 
@@ -531,7 +531,7 @@ defmodule Emissary.Web.WebhookControllerTest do
                       %{request_id: ^request_id, error: "execution_crashed"}},
                      5_000
 
-      Application.put_env(:cyfr, :opus_workers, previous)
+      Application.put_env(:cyfr, :locus_runtime_workers, previous)
 
       assert [decision] = decisions_for(request_id)
       assert decision.completion == "failed"

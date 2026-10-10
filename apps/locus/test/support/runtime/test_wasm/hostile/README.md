@@ -9,7 +9,7 @@ it, what a request naming a connection may carry, or what reaches a guest
 of the credential CYFR attaches for it. Each `.wat` says what it does; the
 tests that run them are `Locus.Runtime.StoreLimitsTest` and `Locus.Runtime.VaultDenialTest`
 in this suite, `Locus.Runtime.MemoryBoundTest`, `Locus.Runtime.SecretAuditTest`,
-`Locus.Runtime.AttachedFetchTest`, `Crucible.Schedules.SchedulerTest` and
+`Locus.Runtime.AttachedFetchTest`, `Opus.Schedules.SchedulerTest` and
 `CyfrWeb.WebhookFlowIntegrationTest` in CYFR's, and the worker image's
 `tests/locus-runtime-image/runners.py` and `tests/locus-runtime-image/canary.py`.
 

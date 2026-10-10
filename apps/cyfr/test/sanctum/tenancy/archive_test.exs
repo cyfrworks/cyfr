@@ -12,7 +12,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
 
   The credentials and the memos are authorization properties and go
   synchronously. The running work is the execution domain's: the archive
-  announces and `Crucible.ArchiveWatch` reacts, so the cases that
+  announces and `Opus.ArchiveWatch` reacts, so the cases that
   assert a cancel start that watch and wait for it. It is off by default
   under test (its queries would outlive the sandbox connection its test
   owns), which is why they turn it on here rather than relying on the
@@ -41,13 +41,13 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "archive_#{System.unique_integer([:positive])}")
-    keys = [cyfr: :opus_workers, arca: :base_path]
+    keys = [cyfr: :locus_runtime_workers, arca: :base_path]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
 
     Application.put_env(
       :cyfr,
-      :opus_workers,
-      ScriptedWorker.workers(@reference, prev[{:cyfr, :opus_workers}])
+      :locus_runtime_workers,
+      ScriptedWorker.workers(@reference, prev[{:cyfr, :locus_runtime_workers}])
     )
 
     Application.put_env(:arca, :base_path, test_path)
@@ -96,7 +96,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
         else: Application.put_env(:cyfr, :execution_archive_watch_enabled, previous)
     end)
 
-    start_supervised!(Crucible.ArchiveWatch)
+    start_supervised!(Opus.ArchiveWatch)
     :ok
   end
 
@@ -129,7 +129,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
 
     {:ok, waiter} =
       Task.start(fn ->
-        Crucible.Dispatch.run(ctx, @reference, %{},
+        Opus.Dispatch.run(ctx, @reference, %{},
           authority: Prima.Authority.zero(),
           execution_id: id
         )

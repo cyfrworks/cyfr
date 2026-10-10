@@ -35,7 +35,7 @@
 #       path a fire takes once its run answered: the member slot read, the
 #       feed's next seq claimed (`Arca.CronSchedule.claim_feed_seq/2`), the
 #       envelope `{"status": 200, "data": DATA}` accepted under both
-#       (`Crucible.Feeds.accept/5`), and the envelope the committed accept
+#       (`Opus.Feeds.accept/5`), and the envelope the committed accept
 #       answered published on the athanor's feeds topic. No run executes:
 #       the result is DATA as given. Answers the accepted revision and its
 #       time, never the result.
@@ -304,7 +304,7 @@ fn args ->
     actor = Sanctum.Context.actor(ctx)
 
     {:ok, envelope} =
-      Crucible.Feeds.accept(ctx, binding, seq, %{"status" => 200, "data" => data}, slot)
+      Opus.Feeds.accept(ctx, binding, seq, %{"status" => 200, "data" => data}, slot)
 
     :ok =
       Cyfr.Bus.broadcast(actor, Cyfr.Bus.feeds(actor), Cyfr.Bus.FeedPublished.new(actor, envelope))

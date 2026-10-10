@@ -126,12 +126,12 @@ defmodule Compendium.GuideProtocolDriftTest do
   # five that are — so generated error handling matched nothing.
   # A formula's invoke errors are rendered in two places: the runner's
   # `Locus.Runtime.FormulaHandler`, and CYFR's answer to a child or catalog tool call
-  # it refuses (`Crucible.Host.Children`).
+  # it refuses (`Opus.Host.Children`).
   test "component-guide's invoke error table matches the invoke error vocabulary" do
     handler =
       [
         "apps/locus/lib/locus/runtime/formula_handler.ex",
-        "apps/cyfr/lib/crucible/host/children.ex"
+        "apps/cyfr/lib/opus/host/children.ex"
       ]
       |> Enum.map_join("\n", &File.read!(Path.join(@project_root, &1)))
 

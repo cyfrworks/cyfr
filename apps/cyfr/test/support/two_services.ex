@@ -126,7 +126,7 @@ defmodule Cyfr.Test.TwoServices do
 
     import Plug.Conn
 
-    alias Crucible.Keys
+    alias Opus.Keys
     alias Prima.{WorkerAuth, WorkerWire}
 
     @max_hold_ms 60_000
@@ -736,21 +736,26 @@ defmodule Cyfr.Test.TwoServices do
 
   @doc """
   Send the runs of `refs`, which the scripted service scripts, to
-  `:scripted` or to `:runtime` from now on: `config :cyfr, :opus_workers` with the
+  `:scripted` or to `:runtime` from now on: `config :cyfr, :locus_runtime_workers` with the
   scripted service's entry for them ahead of the rest, or without it. A run
   is routed when it is dispatched, so one already dispatched stays where it
-  is. The caller restores `:opus_workers` when its test ends.
+  is. The caller restores `:locus_runtime_workers` when its test ends.
   """
   @spec route!(:scripted | :runtime, [String.t()] | String.t()) :: :ok
   def route!(:scripted, refs) do
-    configured = Application.get_env(:cyfr, :opus_workers)
-    Application.put_env(:cyfr, :opus_workers, ScriptedWorker.workers(refs, configured))
+    configured = Application.get_env(:cyfr, :locus_runtime_workers)
+    Application.put_env(:cyfr, :locus_runtime_workers, ScriptedWorker.workers(refs, configured))
   end
 
   def route!(:runtime, _refs) do
-    configured = Application.get_env(:cyfr, :opus_workers, [])
+    configured = Application.get_env(:cyfr, :locus_runtime_workers, [])
     scripted = ScriptedWorker.service()
-    Application.put_env(:cyfr, :opus_workers, Enum.reject(configured, &(&1[:id] == scripted)))
+
+    Application.put_env(
+      :cyfr,
+      :locus_runtime_workers,
+      Enum.reject(configured, &(&1[:id] == scripted))
+    )
   end
 
   # ---------------------------------------------------------------------------
@@ -811,7 +816,7 @@ defmodule Cyfr.Test.TwoServices do
     }
 
     result =
-      Crucible.run_child(authority, reference, nil, input,
+      Opus.run_child(authority, reference, nil, input,
         ctx: ctx,
         execution_id: child_id,
         parent_execution_id: root.id,

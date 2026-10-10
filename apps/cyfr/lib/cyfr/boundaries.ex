@@ -89,7 +89,7 @@ defmodule Cyfr.Boundaries do
     top_level?: true,
     deps: [
       Grimoire,
-      Crucible,
+      Opus,
       Emissary,
       Emissary.Router,
       Emissary.Web,
@@ -136,7 +136,7 @@ defmodule Cyfr.Boundaries do
       umbrella_deps: [:arca, :prima, :sanctum],
       note:
         "the host and everything above it. It does not declare the island: " <>
-          "`Crucible` is the seam to Locus's runtime, and `Prima.BuilderProtocol` and " <>
+          "`Opus` is the seam to Locus's runtime, and `Prima.BuilderProtocol` and " <>
           "`Prima.LocusBackends` to its builds and backends"
     },
     %{
@@ -204,7 +204,7 @@ defmodule Cyfr.Boundaries do
   # from one of Elixir, OTP or a fetched dependency. Boundary knows each
   # boundary's modules, not which names are this repository's.
   @product_roots ~w(
-    Arca Sanctum Aqua Compendium Crucible Emissary Grimoire
+    Arca Sanctum Aqua Compendium Opus Emissary Grimoire
     Prism PrismWeb Cyfr CyfrWeb Locus Codex Prima
   )
 
@@ -375,8 +375,8 @@ defmodule Cyfr.Boundaries do
       from: [
         "apps/cyfr/lib/cyfr/**/*.ex",
         "apps/cyfr/lib/grimoire/**/*.ex",
-        "apps/cyfr/lib/crucible/**/*.ex",
-        "apps/cyfr/lib/crucible.ex"
+        "apps/cyfr/lib/opus/**/*.ex",
+        "apps/cyfr/lib/opus.ex"
       ],
       into: "Sanctum",
       allow: ~w(
@@ -403,7 +403,7 @@ defmodule Cyfr.Boundaries do
           "decides whether an admitted execution's grant still stands: admission, " <>
           "every host effect, the in-chain gate and the sweep ask it. `Sanctum.Egress` " <>
           "is `Grimoire.Provider`'s registry probe and `system.notify` webhook. " <>
-          "`Sanctum.Network` is `Crucible.Host.Egress`'s one resolution of a guest's " <>
+          "`Sanctum.Network` is `Opus.Host.Egress`'s one resolution of a guest's " <>
           "outbound host, which it pins under the attempt's authority. " <>
           "`Sanctum.TinctureAccess` is that invocation's reread of the tincture it " <>
           "roots at: its public-profile and private-access policy. " <>
@@ -411,7 +411,7 @@ defmodule Cyfr.Boundaries do
           "person's expired sign-in carries (`sweep/1`), which names no store. " <>
           "`Sanctum.InstanceEntries` is `Cyfr.RetentionScheduler`'s periodic sweep of " <>
           "instance-entry usage days (`sweep_usage/0`), which names no entry and no person. " <>
-          "`Sanctum.Attach` is `Crucible.Host.AttachedFetch`'s one resolution of the value " <>
+          "`Sanctum.Attach` is `Opus.Host.AttachedFetch`'s one resolution of the value " <>
           "an attached request carries (`resolve/5`): the vault decides, and the control " <>
           "plane attaches and performs. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
@@ -597,14 +597,14 @@ defmodule Cyfr.Boundaries do
     },
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
-      into: "Crucible",
-      allow: ~w(Crucible),
+      into: "Opus",
+      allow: ~w(Opus),
       reason:
         "the assistant runs what it runs through the execution domain's root facade " <>
           "alone: a turn claims, pauses, resumes and releases its root there, and a " <>
           "model listing or a consent status derives an authority there; nothing of " <>
           "admission, dispatch or the attempt's rows is the assistant's to name. " <>
-          "Boundary's exports are global, and `Crucible` exports `Host.Children`, `Keys`, " <>
+          "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
           "lists it, so no declaration can say it."
     },
@@ -621,7 +621,7 @@ defmodule Cyfr.Boundaries do
           "boundary that lists it, so no declaration can say it."
     },
     %{
-      from: ["apps/cyfr/lib/crucible/**/*.ex", "apps/cyfr/lib/crucible.ex"],
+      from: ["apps/cyfr/lib/opus/**/*.ex", "apps/cyfr/lib/opus.ex"],
       into: "Compendium",
       allow: ~w(Compendium),
       reason:
@@ -652,14 +652,14 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/emissary/**/*.ex",
         "apps/cyfr/lib/emissary.ex"
       ],
-      into: "Crucible",
-      allow: ~w(Crucible),
+      into: "Opus",
+      allow: ~w(Opus),
       reason:
         "Emissary follows executions, serves webhooks, keeps an outbound call's " <>
           "lease, reports health and reads an athanor's feeds for a canvas's " <>
-          "validation answers (`Crucible.feeds/1`) through the execution domain's " <>
+          "validation answers (`Opus.feeds/1`) through the execution domain's " <>
           "root facade. " <>
-          "Boundary's exports are global, and `Crucible` exports `Host.Children`, `Keys`, " <>
+          "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
           "lists it, so no declaration can say it."
     },
@@ -670,13 +670,13 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/prism_web/**/*.ex",
         "apps/cyfr/lib/prism_web.ex"
       ],
-      into: "Crucible",
-      allow: ~w(Crucible),
+      into: "Opus",
+      allow: ~w(Opus),
       reason:
         "the console reads executions, invokes tinctures and checks the executor " <>
           "through the execution domain's root facade under the caller's context, and " <>
           "names none of its internals. " <>
-          "Boundary's exports are global, and `Crucible` exports `Host.Children`, `Keys`, " <>
+          "Boundary's exports are global, and `Opus` exports `Host.Children`, `Keys`, " <>
           "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
           "lists it, so no declaration can say it."
     },
@@ -777,14 +777,14 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/cyfr_web.ex"
       ],
       except: ["apps/cyfr/lib/cyfr/application.ex"],
-      into: "Crucible",
+      into: "Opus",
       allow: [],
       reason:
         "the host names nothing of execution: the member slot, the bus and the web " <>
           "tier's glue sit below it. The composition root (`Cyfr.Application`) starts " <>
           "execution's trees, and is excepted. " <>
           "The composition router and the endpoint this row reads are boundaries whose deps " <>
-          "admit `Crucible`, and the shared tier's router macros expand in the first, so " <>
+          "admit `Opus`, and the shared tier's router macros expand in the first, so " <>
           "the compiler admits what this row refuses."
     },
     %{
@@ -1008,8 +1008,8 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/compendium.ex",
         "apps/cyfr/lib/aqua/**/*.ex",
         "apps/cyfr/lib/aqua.ex",
-        "apps/cyfr/lib/crucible/**/*.ex",
-        "apps/cyfr/lib/crucible.ex",
+        "apps/cyfr/lib/opus/**/*.ex",
+        "apps/cyfr/lib/opus.ex",
         "apps/cyfr/lib/emissary/**/*.ex",
         "apps/cyfr/lib/emissary.ex",
         "apps/cyfr/lib/prism/**/*.ex",
@@ -1058,7 +1058,7 @@ defmodule Cyfr.Boundaries do
       into: "Locus",
       allow: [],
       reason:
-        "`apps/cyfr/mix.exs` declares no dependency on `locus`: `Crucible` is the seam to " <>
+        "`apps/cyfr/mix.exs` declares no dependency on `locus`: `Opus` is the seam to " <>
           "the runtime, which a run reaches over `Prima.WorkerWire`, and " <>
           "`Prima.BuilderProtocol` and `Prima.LocusBackends` are the seams to builds and " <>
           "backends, which CYFR reaches over their wires. " <>
@@ -1170,8 +1170,8 @@ defmodule Cyfr.Boundaries do
   # depend on who publishes or hears it.
   @bus_free %{
     from: ["apps/cyfr/lib/cyfr/bus.ex", "apps/cyfr/lib/cyfr/bus/**/*.ex"],
-    roots: ~w(Sanctum Aqua Compendium Crucible Grimoire Emissary Prism PrismWeb CyfrWeb),
-    namespaces: ~w(Crucible Crucible.Schedules),
+    roots: ~w(Sanctum Aqua Compendium Opus Grimoire Emissary Prism PrismWeb CyfrWeb),
+    namespaces: ~w(Opus Opus.Schedules),
     reason:
       "`Cyfr.Bus` owns every topic and payload and checks every publish against the " <>
         "actor it is handed; naming the identity domain, a domain or a surface would " <>
@@ -1211,7 +1211,7 @@ defmodule Cyfr.Boundaries do
   # stale the day the gate stops making it.
   @gate_free %{
     from: ["apps/cyfr/lib/grimoire.ex", "apps/cyfr/lib/grimoire/**/*.ex"],
-    roots: ~w(Emissary Aqua Compendium Crucible Prism PrismWeb CyfrWeb),
+    roots: ~w(Emissary Aqua Compendium Opus Prism PrismWeb CyfrWeb),
     allow: [],
     reason:
       "the operation table dispatches for every domain and surface; naming one " <>
@@ -2155,14 +2155,14 @@ defmodule Cyfr.Boundaries do
     # under a held generation, and a run admission refusal is that fire's
     # failed completion.
     %{
-      module: Crucible.Schedules.Scheduler,
+      module: Opus.Schedules.Scheduler,
       site: :handle_info,
       plane: :external,
       origin: :schedule
     },
     # The HostAPI's in-chain entry: a tool call whose attempt refuses it
     # before any chain exists.
-    %{module: Crucible.Host.Children, site: :call, plane: :in_chain, origin: :inherits},
+    %{module: Opus.Host.Children, site: :call, plane: :in_chain, origin: :inherits},
     # The device channel: a paired device's connection proof and each
     # discrete intent it sends, a person acting on an interactive surface.
     %{
@@ -2279,8 +2279,8 @@ defmodule Cyfr.Boundaries do
     %{
       responsibility: "retire execution work under its stored grant",
       modules: ~w(
-        Sanctum.ExecutionStanding Crucible.Record Crucible.Lapse
-        Crucible.Cascade Crucible.Sweeper Crucible.TurnRoot
+        Sanctum.ExecutionStanding Opus.Record Opus.Lapse
+        Opus.Cascade Opus.Sweeper Opus.TurnRoot
         Emissary.External.Proxy Aqua.Tape
       ),
       check: "Sanctum.ExecutionStanding.stamp_only/1",
@@ -2396,7 +2396,7 @@ defmodule Cyfr.Boundaries do
     "apps/cyfr/test/cyfr/test_sandbox_test.exs" =>
       "the sandbox helper's own case: what it drains IS the pool, so the assertion " <>
         "has to name it.",
-    "apps/cyfr/test/crucible/start_refusal_test.exs" =>
+    "apps/cyfr/test/opus/start_refusal_test.exs" =>
       "the refusal a keeper gives is `Locus.Runtime.Keeper.Channel.refusal/1`'s shape, and this " <>
         "case holds CYFR's rendering of it to that shape.",
     "apps/cyfr/test/grimoire/error_renderers_test.exs" =>

@@ -34,8 +34,8 @@ defmodule Cyfr.Cluster.Fixtures do
               Prima.Authority.Budget,
               Prima.Boot,
               Prima.Test.AuthorityFixtures,
-              Crucible,
-              Crucible.Events,
+              Opus,
+              Opus.Events,
               Prima.UUID7,
               CyfrWeb.ContextGuard,
               Sanctum.Authority.BudgetCounter,
@@ -231,7 +231,7 @@ defmodule Cyfr.Cluster.Fixtures do
   end
 
   # A root's admission reads its athanor's standing now and checks it again
-  # in the admission transaction, as `Crucible.Record` does.
+  # in the admission transaction, as `Opus.Record` does.
   defp standing(athanor_id) do
     {:ok, grant} =
       Sanctum.ExecutionStanding.capture(
@@ -735,7 +735,7 @@ defmodule Cyfr.Cluster.Fixtures do
             data: %{"step" => "s#{i}"}
           )
 
-        :ok = Crucible.Events.publish(execution.id, execution, "step.closed", row.seq, %{})
+        :ok = Opus.Events.publish(execution.id, execution, "step.closed", row.seq, %{})
         row.seq
       end
 
@@ -753,7 +753,7 @@ defmodule Cyfr.Cluster.Fixtures do
           data: %{"more" => i}
         )
 
-      :ok = Crucible.Events.publish(execution_id, execution, "step.closed", row.seq, %{})
+      :ok = Opus.Events.publish(execution_id, execution, "step.closed", row.seq, %{})
       row.seq
     end
   end
@@ -762,7 +762,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @spec replay(String.t(), String.t(), non_neg_integer()) :: [String.t()]
   def replay(athanor_id, execution_id, after_seq) do
     execution_id
-    |> Crucible.events_since({after_seq, 0}, athanor_id)
+    |> Opus.events_since({after_seq, 0}, athanor_id)
     |> Enum.map(& &1.sequence)
   end
 

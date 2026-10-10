@@ -93,7 +93,7 @@ defmodule Cyfr.Cluster.Boot do
   def route!(references, endpoints) do
     Application.put_env(
       :cyfr,
-      :opus_workers,
+      :locus_runtime_workers,
       Enum.map(endpoints, &Map.put(&1, :components, references))
     )
 
@@ -158,7 +158,7 @@ defmodule Cyfr.Cluster.Boot do
 
     watcher =
       spawn(fn ->
-        :ok = Crucible.subscribe_events(execution_id, %{athanor_id: athanor_id})
+        :ok = Opus.subscribe_events(execution_id, %{athanor_id: athanor_id})
         send(caller, {:subscribed, self()})
         collect([])
       end)
@@ -280,10 +280,10 @@ defmodule Cyfr.Cluster.Boot do
 
   @doc """
   Run one sweep of the stale-attempt pass on this member, as its own timer
-  would (`Crucible.Sweeper.sweep/0`).
+  would (`Opus.Sweeper.sweep/0`).
   """
   @spec sweep() :: :ok
-  def sweep, do: Crucible.Sweeper.sweep()
+  def sweep, do: Opus.Sweeper.sweep()
 
   # ---------------------------------------------------------------------------
   # The worker watch
@@ -305,7 +305,7 @@ defmodule Cyfr.Cluster.Boot do
     stop_watch!()
 
     {:ok, pid} =
-      Crucible.WorkerWatch.start_link(
+      Opus.WorkerWatch.start_link(
         Keyword.merge(
           [
             name: @watch,

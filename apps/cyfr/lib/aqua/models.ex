@@ -324,7 +324,7 @@ defmodule Aqua.Models do
   defp assistant_status(ctx, catalyst_ref, resolved) do
     soul = Prima.AgentRef.soul_ref()
 
-    case Crucible.authority_for(ctx, :default, soul) do
+    case Opus.authority_for(ctx, :default, soul) do
       {:ok, authority} ->
         if lent?(authority, soul, catalyst_ref),
           do: {:ready, resolved},

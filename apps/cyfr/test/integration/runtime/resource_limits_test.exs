@@ -85,13 +85,13 @@ defmodule Locus.Runtime.ResourceLimitsTest do
       assert Authority.limits(auth).max_memory_bytes == 8 * 1024 * 1024
 
       {:error, error_msg} =
-        Crucible.Dispatch.run(ctx, ref, %{"a" => 10, "b" => 10},
+        Opus.Dispatch.run(ctx, ref, %{"a" => 10, "b" => 10},
           type: :reagent,
           authority: auth
         )
 
       assert error_msg =~ "Component"
-      {:ok, records} = Crucible.list(ctx)
+      {:ok, records} = Opus.list(ctx)
       assert Enum.any?(records, &(&1.status == :failed))
     end
 
@@ -99,7 +99,7 @@ defmodule Locus.Runtime.ResourceLimitsTest do
       auth = authority_with_limits(16 * 1024 * 1024)
 
       {:error, error_msg} =
-        Crucible.Dispatch.run(ctx, ref, %{"a" => 3, "b" => 7},
+        Opus.Dispatch.run(ctx, ref, %{"a" => 3, "b" => 7},
           type: :reagent,
           authority: auth
         )

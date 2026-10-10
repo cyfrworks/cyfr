@@ -151,13 +151,13 @@ defmodule Aqua.Loop.Clone do
   # (`intact_answer/2`).
   defp intact(ctx, %Authority{profile_id: profile_id, consent_id: consent_id, source_ref: ref}) do
     ctx
-    |> Crucible.authority_for({:id, profile_id}, ref)
+    |> Opus.authority_for({:id, profile_id}, ref)
     |> intact_answer(consent_id)
   end
 
   @doc false
   # The clone's answer to the pinned profile's reload, `result` being
-  # `Crucible.authority_for/3`'s: its head must still be the pinned
+  # `Opus.authority_for/3`'s: its head must still be the pinned
   # consent. A consent the store could not answer, or one stored damaged,
   # is no moved consent: it answers as itself, in its own sentence. A
   # damaged head (`head_corrupt`) is any the loader cannot trust: stored

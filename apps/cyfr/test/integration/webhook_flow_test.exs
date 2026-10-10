@@ -21,7 +21,7 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
   use CyfrWeb.ConnCase, async: false
 
   setup do
-    # Webhook controller dispatches `Crucible.Dispatch.run/4` async via
+    # Webhook controller dispatches `Opus.Dispatch.run/4` async via
     # `Task.Supervisor.start_child/2`. Tests must synchronize on the task
     # completing (`[:invoke, :stop]`) before exiting, otherwise the
     # ConnCase Ecto sandbox checks the connection back in while the task
@@ -44,7 +44,7 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  # Wait for the spawned `Crucible.Dispatch.run/4` task to finish so the test
+  # Wait for the spawned `Opus.Dispatch.run/4` task to finish so the test
   # process doesn't exit while the task is mid-DB-query.
   defp await_invoke_stop(request_id) do
     assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _measurements,

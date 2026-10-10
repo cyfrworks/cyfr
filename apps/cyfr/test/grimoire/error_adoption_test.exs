@@ -62,9 +62,9 @@ defmodule Grimoire.ErrorAdoptionTest do
     # The concurrency argument's own refusal is a sentence about the value
     # offered; the two that were the tool's catch-alls are typed now, so
     # the action-coverage case reads one vocabulary.
-    "apps/cyfr/lib/crucible/schedules/provider.ex" => 17,
+    "apps/cyfr/lib/opus/schedules/provider.ex" => 17,
     "apps/sanctum/lib/sanctum/providers/webhook.ex" => 18,
-    "apps/cyfr/lib/crucible/provider.ex" => 12,
+    "apps/cyfr/lib/opus/provider.ex" => 12,
     # An upstream registry's own diagnostics, which are its words and not
     # this vocabulary's.
     "apps/cyfr/lib/compendium/oci/client.ex" => 12,
@@ -72,7 +72,7 @@ defmodule Grimoire.ErrorAdoptionTest do
     "apps/sanctum/lib/sanctum/providers/key.ex" => 11,
     # What is wrong with a cron expression, said in the expression's own
     # terms.
-    "apps/cyfr/lib/crucible/schedules/cron.ex" => 10,
+    "apps/cyfr/lib/opus/schedules/cron.ex" => 10,
     "apps/cyfr/lib/compendium/scaffold.ex" => 8,
     "apps/cyfr/lib/compendium/provider.ex" => 6,
     "apps/cyfr/lib/compendium/providers/component.ex" => 6,
@@ -112,7 +112,7 @@ defmodule Grimoire.ErrorAdoptionTest do
     # A tool this provider does not define, and the validation rate a
     # caller reached, with the seconds to wait.
     "apps/cyfr/lib/compendium/builds/provider.ex" => 2,
-    "apps/cyfr/lib/crucible/record.ex" => 2,
+    "apps/cyfr/lib/opus/record.ex" => 2,
     "apps/prima/lib/prima/arg.ex" => 2,
     "apps/sanctum/lib/sanctum/provider.ex" => 1,
     "apps/cyfr/lib/compendium/pull.ex" => 1,

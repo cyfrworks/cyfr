@@ -215,7 +215,7 @@ defmodule Prima.Manifest.Caps do
 
   # A grant no runtime would honor is refused at parse: every path must
   # name a guest scope (the caller's predicate — `Arca.Storage.valid_guest_path?/1`,
-  # which `Crucible.GuestStorage` gates requests with), or be the
+  # which `Opus.GuestStorage` gates requests with), or be the
   # wildcard `"*"` (grant grammar, not a path); and every path is spelled
   # as the door reaches it.
   defp validate_storage_paths(nil, _storage_path_ok?), do: :ok

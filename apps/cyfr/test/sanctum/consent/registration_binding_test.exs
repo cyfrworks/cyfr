@@ -325,7 +325,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       # The class refuses the key: the schedule tool answers the class's
       # own refusal.
       assert {:error, {:consent_class_required, _refusal}} =
-               Crucible.Schedules.Provider.handle("schedule", key_ctx, %{
+               Opus.Schedules.Provider.handle("schedule", key_ctx, %{
                  "action" => "create",
                  "name" => "bound-sched",
                  "cron_expression" => "0 * * * *",
@@ -334,7 +334,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
                })
 
       assert {:ok, created} =
-               Crucible.Schedules.Provider.handle("schedule", ctx, %{
+               Opus.Schedules.Provider.handle("schedule", ctx, %{
                  "action" => "create",
                  "name" => "bound-sched",
                  "cron_expression" => "0 * * * *",
@@ -359,7 +359,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
         "profile binding refused: the component's profiles cannot be read right now — try again"
 
       assert {:error, {:invalid_argument, ^refused}} =
-               Crucible.Schedules.Provider.handle("schedule", ctx, %{
+               Opus.Schedules.Provider.handle("schedule", ctx, %{
                  "action" => "create",
                  "name" => "unread-sched",
                  "cron_expression" => "0 * * * *",

@@ -12,7 +12,7 @@ defmodule Cyfr.Test.StepBench do
   at once, so the time measured is the host's and not a provider's. Each
   step is one turn run by `Aqua.Loop` on a thread of its own: the loop
   claims the root, records and dispatches the chat step, and runs the
-  catalyst as a child through `Crucible.run_child/5` — the chain's
+  catalyst as a child through `Opus.run_child/5` — the chain's
   transition and invoke charge, admission with its hold and step barriers,
   the slot, the WASM runtime, the emit path and the terminal write.
 
@@ -26,14 +26,14 @@ defmodule Cyfr.Test.StepBench do
   whose destination is the upstream. The mode decides the request alone:
 
     * `:attached` names the need as its `connection`, so CYFR makes the
-      request with the key attached (`Crucible.Host.AttachedFetch`) and
+      request with the key attached (`Opus.Host.AttachedFetch`) and
       relays the answer to the runner in sealed frames;
     * `:pinned` names no connection and carries no credential, so CYFR pins
       it and the worker service makes it.
 
   The difference in first delta between the modes is the hop's own share.
 
-  The step's timings are the `Crucible.StepSpans` events of its chat
+  The step's timings are the `Opus.StepSpans` events of its chat
   step's child execution. Everything runs inside one SQL sandbox
   checkout, rolled back when the run ends, with storage and the seed tree
   in temporary directories removed with it. The upstream is the bench's:
@@ -138,7 +138,7 @@ defmodule Cyfr.Test.StepBench do
     # test's holds and reads on a wire no call crosses.
     Cyfr.Test.RuntimeService.wire!(proxy: Cyfr.Test.TwoServices.wire() != nil)
 
-    unless Crucible.available?(),
+    unless Opus.available?(),
       do:
         raise(
           "the runtime's worker service of this boot does not answer; run from the umbrella root"
@@ -418,7 +418,7 @@ defmodule Cyfr.Test.StepBench do
     :ok =
       :telemetry.attach_many(
         handler,
-        Crucible.StepSpans.events(),
+        Opus.StepSpans.events(),
         fn event, %{duration: duration}, metadata, _config ->
           send(bench_pid, {:step_span, metadata.execution_id, event, duration})
         end,
@@ -492,7 +492,7 @@ defmodule Cyfr.Test.StepBench do
   end
 
   defp spans(execution_id) do
-    Enum.reduce(Crucible.StepSpans.events(), %{}, fn event, acc ->
+    Enum.reduce(Opus.StepSpans.events(), %{}, fn event, acc ->
       receive do
         {:step_span, ^execution_id, ^event, duration} -> Map.put(acc, name(event), duration)
       after

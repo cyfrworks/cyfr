@@ -4,7 +4,7 @@
 defmodule Locus.Runtime.TimeoutTest do
   use ExUnit.Case, async: false
 
-  alias Crucible.{Dispatch, Provider}
+  alias Opus.{Dispatch, Provider}
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"

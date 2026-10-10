@@ -3,7 +3,7 @@
 
 defmodule Locus.Runtime.RetainedInputTest do
   @moduledoc """
-  A child run's `retained_input` rides the real path — `Crucible`,
+  A child run's `retained_input` rides the real path — `Opus`,
   admission, the worker service's runner, the record — to the payload
   store: the catalyst receives the input as sent, the store keeps the
   retained form, and the row's hash describes what was sent.
@@ -83,14 +83,14 @@ defmodule Locus.Runtime.RetainedInputTest do
 
   test "the store keeps the retained form of a child run's input", %{ctx: ctx} do
     :ok = bind_claude!(ctx)
-    {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
     id = Prima.UUID7.execution_id()
 
     sent = %{"operation" => "describe", "params" => %{"marker" => "SENT-ONLY"}}
     kept = %{"operation" => "describe", "params" => %{}}
 
     assert {:ok, _} =
-             Crucible.run_child(authority, "catalyst:local.claude", nil, sent,
+             Opus.run_child(authority, "catalyst:local.claude", nil, sent,
                ctx: Sanctum.Context.enter_guest(ctx),
                execution_id: id,
                parent_execution_id: Cyfr.Test.AttemptFixtures.lineage!(ctx).parent_execution_id,

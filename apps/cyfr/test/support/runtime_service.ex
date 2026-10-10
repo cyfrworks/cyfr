@@ -9,18 +9,18 @@ defmodule Cyfr.Test.RuntimeService do
   of their own (the test build's direct launcher, `config/test.exs`),
   pooled and reused across tests.
 
-  The umbrella starts CYFR's host API listener (`Crucible.HostListener`,
+  The umbrella starts CYFR's host API listener (`Opus.HostListener`,
   port 0 under `config/test.exs`) and the Locus application, whose listener
   (`Locus.Runtime.WorkerListener`) also binds port 0. Neither knows the other's port
   until both are up, so `wire!/1`, run once by `test_helper.exs` and by the
   step bench, gives the service `wrk_local` its credentials — the key CYFR
   derives for it and where its runners reach CYFR — restarting it when they
   are not the ones it holds, and puts the service's endpoint in
-  `config :cyfr, :opus_workers`, where `Crucible.Dispatch` finds it. For
+  `config :cyfr, :locus_runtime_workers`, where `Opus.Dispatch` finds it. For
   the suite, the runners reach the host listener through the suite's wire
   (`Cyfr.Test.TwoServices.Wire`), which a test watches, holds a call on or
   loses a call on without restarting the service; the bench run alone
-  (`mix cyfr.bench.step`) reaches it directly. A test that replaces `:opus_workers` restores what it found.
+  (`mix cyfr.bench.step`) reaches it directly. A test that replaces `:locus_runtime_workers` restores what it found.
 
   `status/0` and `boot/0` ask the service over the wire, `request!/3` and
   `start!/3` post a `Prima.WorkerAPI` request to the service's listener
@@ -29,7 +29,7 @@ defmodule Cyfr.Test.RuntimeService do
   restart does.
   """
 
-  alias Crucible.{HostListener, Keys, WorkerClient}
+  alias Opus.{HostListener, Keys, WorkerClient}
   alias Cyfr.Test.TwoServices
   alias Prima.{WorkerAPI, WorkerAuth, WorkerWire}
 
@@ -54,7 +54,7 @@ defmodule Cyfr.Test.RuntimeService do
       do:
         raise("the runtime's worker service is not running: run the suite from the umbrella root")
 
-    {:ok, worker_key} = Keys.opus_key(@service)
+    {:ok, worker_key} = Keys.locus_runtime_key(@service)
 
     reached =
       if Keyword.get(opts, :proxy, true),
@@ -82,7 +82,7 @@ defmodule Cyfr.Test.RuntimeService do
     end
 
     endpoint = endpoint()
-    Application.put_env(:cyfr, :opus_workers, [endpoint])
+    Application.put_env(:cyfr, :locus_runtime_workers, [endpoint])
     endpoint
   end
 
@@ -90,7 +90,7 @@ defmodule Cyfr.Test.RuntimeService do
   @spec host_url() :: String.t()
   def host_url do
     {_id, listener, _type, _modules} =
-      Crucible.Supervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0)
+      Opus.Supervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0)
 
     "http://127.0.0.1:#{HostListener.port(listener)}"
   end
@@ -152,7 +152,7 @@ defmodule Cyfr.Test.RuntimeService do
   """
   @spec request!(atom(), map(), keyword()) :: {non_neg_integer(), map()}
   def request!(callback, args, opts \\ []) do
-    {:ok, worker_key} = Keys.opus_key(@service)
+    {:ok, worker_key} = Keys.locus_runtime_key(@service)
     body = Jason.encode!(WorkerWire.request_body(callback, args))
 
     request = %{
@@ -197,7 +197,7 @@ defmodule Cyfr.Test.RuntimeService do
   def listeners do
     host =
       with {_id, listener, _type, _modules} <-
-             Crucible.Supervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0),
+             Opus.Supervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0),
            {_id, server, _type, _modules} <-
              listener |> Supervisor.which_children() |> List.keyfind(:server, 0) do
         [server]

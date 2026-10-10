@@ -41,12 +41,12 @@ config :cyfr,
     # host-side and scoped, because the files catalyst's grant is `data/`
     # and widening it would widen it for every agent.
     Compendium.Providers.Source,
-    # `crucible`: executions, schedules and a tincture's invocations.
-    Crucible.Provider,
-    Crucible.Schedules.Provider,
-    # `crucible`: an athanor's feeds, and the streams a canvas reads.
-    Crucible.Providers.Feed,
-    Crucible.Providers.Tincture,
+    # `opus`: executions, schedules and a tincture's invocations.
+    Opus.Provider,
+    Opus.Schedules.Provider,
+    # `opus`: an athanor's feeds, and the streams a canvas reads.
+    Opus.Providers.Feed,
+    Opus.Providers.Tincture,
     # `compendium`: builds and components.
     Compendium.Builds.Provider,
     Compendium.Provider,
@@ -118,15 +118,17 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# The worker services runs are dispatched to (`Crucible.Dispatch`):
+# The worker services runs are dispatched to (`Opus.Dispatch`):
 # each entry is a `Prima.WorkerAPI.endpoint/0` — the worker service's
 # configured id (the id `Prima.WorkerAuth` derives its keys over), the base
 # URL of its listener (`Prima.WorkerWire`) and the components it alone runs
 # (nil for any). A run goes to the first entry whose status answers its id,
-# over `Crucible.WorkerClient`. With none, a run is refused as
+# over `Opus.WorkerClient`. With none, a run is refused as
 # :execution_unavailable. The runtime configuration replaces this list with
 # `CYFR_LOCUS_RUNTIME_WORKERS`; the default names the runtime of a local boot.
-config :cyfr, :opus_workers, [%{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}]
+config :cyfr, :locus_runtime_workers, [
+  %{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}
+]
 
 # The runtime role's worker service: its own id, which every assignment it
 # accepts must name, where it reaches CYFR's host API, and where its

@@ -78,9 +78,9 @@ defmodule Cyfr.TelemetryBridgeTest do
        Bus.components(@actor), {Components, %{kind: :removed, name: "c"}}},
       {[:cyfr, :compendium, :component, :push], tenant, Bus.components(@actor),
        {Components, %{kind: :pushed}}},
-      {[:cyfr, :crucible, :tincture, :invoke, :start], Map.put(tenant, :request_id, "r1"),
+      {[:cyfr, :opus, :tincture, :invoke, :start], Map.put(tenant, :request_id, "r1"),
        Bus.tinctures(@actor), {Tinctures, %{kind: :invoke_started, request_id: "r1"}}},
-      {[:cyfr, :crucible, :tincture, :invoke, :stop], Map.put(tenant, :status, :error),
+      {[:cyfr, :opus, :tincture, :invoke, :stop], Map.put(tenant, :status, :error),
        Bus.tinctures(@actor), {Tinctures, %{kind: :invoke_stopped, status: :error}}},
       {[:cyfr, :sanctum, :notify], Map.merge(tenant, %{kind: :member_changed, payload: %{}}),
        Bus.notify(@actor), {Notify, %{athanor_id: @athanor, kind: :member_changed}}},
@@ -407,7 +407,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       listen(Bus.executions(@actor))
       listen(Bus.notify(@actor))
 
-      record = %Crucible.Record{
+      record = %Opus.Record{
         id: "exec_cancelled",
         athanor_id: @athanor,
         user_id: @user,
@@ -417,7 +417,7 @@ defmodule Cyfr.TelemetryBridgeTest do
         duration_ms: 7
       }
 
-      :ok = Crucible.Telemetry.execute_cancelled(record, "system")
+      :ok = Opus.Telemetry.execute_cancelled(record, "system")
 
       assert_receive %Execution{
         kind: :cancelled,
@@ -611,20 +611,20 @@ defmodule Cyfr.TelemetryBridgeTest do
 
       # Admitted nowhere: the terminal write has no running row to close.
       record =
-        Crucible.Record.new(ctx, "reagent:local.never-admitted:0.1.0", %{},
+        Opus.Record.new(ctx, "reagent:local.never-admitted:0.1.0", %{},
           component_type: :reagent,
           grant: grant
         )
 
-      close = %Crucible.Close{
+      close = %Opus.Close{
         ctx: ctx,
         record: record,
         limits: Prima.Authority.zero_limits(),
         started: true
       }
 
-      Crucible.Close.complete(close, [], %{"ok" => true}, %{})
-      Crucible.Close.fail(close, [], "it failed")
+      Opus.Close.complete(close, [], %{"ok" => true}, %{})
+      Opus.Close.fail(close, [], "it failed")
 
       id = record.id
       refute_receive %Execution{execution_id: ^id}, 200

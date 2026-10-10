@@ -144,12 +144,12 @@ defmodule Emissary.External.InChainProbeTest do
     {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
 
     root =
-      Crucible.Record.new(ctx, "formula:local.backends-e2e-chain:0.1.0", %{},
+      Opus.Record.new(ctx, "formula:local.backends-e2e-chain:0.1.0", %{},
         component_type: :formula,
         grant: grant
       )
 
-    :ok = Crucible.Record.write_started(root)
+    :ok = Opus.Record.write_started(root)
     lineage = %{"parent_execution_id" => root.id, "root_execution_id" => root.id}
 
     reply =
@@ -165,10 +165,10 @@ defmodule Emissary.External.InChainProbeTest do
     :ok =
       case reply do
         {:ok, answer} ->
-          root |> Crucible.Record.complete(answer) |> Crucible.Record.write_completed()
+          root |> Opus.Record.complete(answer) |> Opus.Record.write_completed()
 
         {:error, reason} ->
-          root |> Crucible.Record.fail(Grimoire.render(reason)) |> Crucible.Record.write_failed()
+          root |> Opus.Record.fail(Grimoire.render(reason)) |> Opus.Record.write_failed()
       end
 
     answer =

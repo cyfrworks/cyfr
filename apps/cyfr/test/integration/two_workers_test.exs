@@ -44,7 +44,7 @@ defmodule Cyfr.TwoWorkersTest do
   import Prima.Test.Wait
   import Ecto.Query, only: [from: 2]
 
-  alias Crucible.{Attempt, Keys, WorkerClient}
+  alias Opus.{Attempt, Keys, WorkerClient}
   alias Prima.Slots
   alias Cyfr.Test.{AttemptFixtures, RuntimeService, ScriptedWorker, TwoServices}
   alias Cyfr.Test.TwoServices.Wire
@@ -59,7 +59,7 @@ defmodule Cyfr.TwoWorkersTest do
   @stub TwoServices.stub()
   @scripted TwoServices.scripted()
   @soul "agent:local.aqua"
-  @slots Crucible.Slots
+  @slots Opus.Slots
   @version TwoServices.version()
   @stub_text "The stub answers at once."
   @stub_deltas ["The stub ", "answers ", "at ", "once."]
@@ -72,7 +72,7 @@ defmodule Cyfr.TwoWorkersTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "two_workers_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :locus_runtime_workers]
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
 
@@ -125,7 +125,7 @@ defmodule Cyfr.TwoWorkersTest do
 
       on_runtime =
         Task.async(fn ->
-          Crucible.run_root(ctx, :default, @stub, chat(), execution_id: runtime_id)
+          Opus.run_root(ctx, :default, @stub, chat(), execution_id: runtime_id)
         end)
 
       on_scripted = Task.async(fn -> scripted_run!(ctx) end)
@@ -150,8 +150,8 @@ defmodule Cyfr.TwoWorkersTest do
 
       # The keys differ, and each listener refuses a request under the
       # other's before reading it.
-      {:ok, local_key} = Keys.opus_key(@local)
-      {:ok, other_key} = Keys.opus_key(@other)
+      {:ok, local_key} = Keys.locus_runtime_key(@local)
+      {:ok, other_key} = Keys.locus_runtime_key(@other)
       refute local_key == other_key
 
       assert {401, %{"error" => "bad_mac"}} =
@@ -222,10 +222,10 @@ defmodule Cyfr.TwoWorkersTest do
       plan!(:complete, [:forward_then_drop])
 
       id = Prima.UUID7.execution_id()
-      :ok = Crucible.subscribe_events(id, ctx)
+      :ok = Opus.subscribe_events(id, ctx)
 
       assert {:ok, result} =
-               Crucible.run_root(ctx, :default, @stub, chat(), execution_id: id)
+               Opus.run_root(ctx, :default, @stub, chat(), execution_id: id)
 
       assert %{"data" => %{"content" => [%{"text" => @stub_text}]}} = result.output
       refute_unmasked(result, secrets)
@@ -246,7 +246,7 @@ defmodule Cyfr.TwoWorkersTest do
 
       assert List.last(live).type == "execution.completed"
 
-      replayed = Crucible.Events.since(id, {0, 0}, ctx.athanor_id)
+      replayed = Opus.Events.since(id, {0, 0}, ctx.athanor_id)
       assert delta_texts(replayed) == @stub_deltas
       assert List.last(replayed).type == "execution.completed"
       assert %{status: "completed"} = row(id)
@@ -281,7 +281,7 @@ defmodule Cyfr.TwoWorkersTest do
 
       assert Wire.seen(wire, WorkerWire.host_route(:record_denial)) == [:forward_then_drop]
 
-      {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
+      {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
 
       parent =
         Locus.Runtime.Test.FormulaHost.attached!(
@@ -322,8 +322,8 @@ defmodule Cyfr.TwoWorkersTest do
     test "an exit report signed with another key, for a boot that no longer runs or a runner holding nothing lapses nothing",
          %{ctx: ctx} do
       fixture = attached!(ctx)
-      {:ok, local_key} = Keys.opus_key(@local)
-      {:ok, other_key} = Keys.opus_key(@other)
+      {:ok, local_key} = Keys.locus_runtime_key(@local)
+      {:ok, other_key} = Keys.locus_runtime_key(@other)
       running = fn -> match?(%{status: "running"}, row(fixture.execution_id)) end
 
       # Another service's key, naming this one.
@@ -362,19 +362,19 @@ defmodule Cyfr.TwoWorkersTest do
     test "a run cancelled mid-flight releases nothing its masking set covers", %{ctx: ctx} do
       secrets = arm!(ctx, key: "stub answers", token: "at once")
       id = Prima.UUID7.execution_id()
-      :ok = Crucible.subscribe_events(id, ctx)
+      :ok = Opus.subscribe_events(id, ctx)
       hold!(:push_deltas, id, once: true)
 
       run =
         Task.async(fn ->
-          Crucible.run_root(ctx, :default, @stub, chat(), execution_id: id)
+          Opus.run_root(ctx, :default, @stub, chat(), execution_id: id)
         end)
 
       # Held at its first delta: the key is unsealed and the token dispensed
       # — both in the masking set — and its guest wrote both, but nothing of
       # it has reached the host yet.
       assert_receive {:held, ^id, guest}, 30_000
-      assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, id)
+      assert {:ok, %{cancelled: true}} = Opus.cancel(ctx, id)
       release!(guest, :forward)
 
       assert {:error, message} = Task.await(run, 60_000)
@@ -419,7 +419,7 @@ defmodule Cyfr.TwoWorkersTest do
 
       root =
         Task.async(fn ->
-          Crucible.run_root(
+          Opus.run_root(
             ctx,
             :default,
             Probe.probe_ref(),
@@ -437,7 +437,7 @@ defmodule Cyfr.TwoWorkersTest do
       runner = runner_of(ctx, root_id)
       assert Enum.all?(held, &(runner_of(ctx, &1) == runner))
       assert Slots.status(@slots).child_active == children_before + 3
-      assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, root_id)
+      assert {:ok, %{cancelled: true}} = Opus.cancel(ctx, root_id)
       assert {:error, _cancelled} = Task.await(root, 30_000)
       assert %{status: "cancelled"} = row(root_id)
 
@@ -460,7 +460,7 @@ defmodule Cyfr.TwoWorkersTest do
       # The worker watch is off in the test boot; this case runs one of its
       # own over the runtime, polling fast.
       start_supervised!(
-        {Crucible.WorkerWatch,
+        {Opus.WorkerWatch,
          workers: [RuntimeService.endpoint()], poll_ms: 50, misses: 3, name: :two_workers_watch}
       )
 
@@ -469,7 +469,7 @@ defmodule Cyfr.TwoWorkersTest do
 
       root =
         Task.async(fn ->
-          Crucible.run_root(ctx, :default, Probe.probe_ref(), %{"op" => "echo"},
+          Opus.run_root(ctx, :default, Probe.probe_ref(), %{"op" => "echo"},
             execution_id: root_id
           )
         end)
@@ -484,7 +484,7 @@ defmodule Cyfr.TwoWorkersTest do
 
       wait_until(
         fn ->
-          Crucible.WorkerWatch.fresh_boot(RuntimeService.endpoint(), :two_workers_watch) ==
+          Opus.WorkerWatch.fresh_boot(RuntimeService.endpoint(), :two_workers_watch) ==
             {:ok, old_boot}
         end,
         10_000,
@@ -554,7 +554,7 @@ defmodule Cyfr.TwoWorkersTest do
         "v" => 1,
         "op" => "runner_exited",
         "args" => %{
-          "member" => Crucible.Keys.member(),
+          "member" => Opus.Keys.member(),
           "runner" => runner,
           "attempts" => attempts
         }

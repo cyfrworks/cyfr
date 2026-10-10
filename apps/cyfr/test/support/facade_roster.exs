@@ -38,6 +38,6 @@
     "Grimoire.VirtualTools"
   ],
   "Compendium" => ["Compendium.Providers.Component"],
-  "Crucible" => [],
+  "Opus" => [],
   "Aqua" => ["Aqua.Text"]
 }

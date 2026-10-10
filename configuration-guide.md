@@ -122,8 +122,8 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_MAX_THREADS_PER_ATHANOR` | `max_threads_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | Threads one athanor may hold, each a row any member's client can mint; 0 turns the cap off. |
 | `CYFR_MINT_PER_HOUR` | `mint_per_hour` | `integer` | none | `tenancy` | live | refuse | Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no cap. |
 | `CYFR_ATHANOR_STORAGE_BYTES` | `athanor_storage_bytes` | `integer` | none | `tenancy` | live | refuse | Bytes one athanor may hold, its whole tree including its copies of the shipped bundle. Unset, no cap. |
-| `CYFR_CRUCIBLE_MAX_CONCURRENT` | `crucible_max_concurrent` | `integer` | `128` | `execution` | restart | serve | Concurrent WASM executions on each member, at least 32 so the chain children's reserve holds a chain of the full depth. |
-| `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT` | `crucible_max_concurrent_per_tenant` | `integer` | `16` | `execution` | restart | serve | Concurrent WASM executions one athanor may hold on each member. |
+| `CYFR_OPUS_MAX_CONCURRENT` | `opus_max_concurrent` | `integer` | `128` | `execution` | restart | serve | Concurrent WASM executions on each member, at least 32 so the chain children's reserve holds a chain of the full depth. |
+| `CYFR_OPUS_MAX_CONCURRENT_PER_TENANT` | `opus_max_concurrent_per_tenant` | `integer` | `16` | `execution` | restart | serve | Concurrent WASM executions one athanor may hold on each member. |
 | `CYFR_MCP_RATE_LIMIT_MAX` | `mcp_rate_limit_max` | `integer` | `120` | `rate_limits` | live | serve | Requests and stream opens per client address per window on the MCP endpoint; streams already open are unaffected. |
 | `CYFR_MCP_RATE_LIMIT_WINDOW_MS` | `mcp_rate_limit_window_ms` | `integer` | `60000` | `rate_limits` | live | serve | The MCP rate limit's window, in milliseconds. |
 | `CYFR_API_RATE_LIMIT_MAX` | `api_rate_limit_max` | `integer` | the MCP pair's | `rate_limits` | live | serve | Requests per client address per window on the API bucket (execution-event stream reconnects); unset, the MCP pair's value, counted separately. |
@@ -131,8 +131,8 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_WEBHOOK_PER_IP_RATE_LIMIT_MAX` | `webhook_per_ip_rate_limit_max` | `integer` | `6000` | `rate_limits` | live | serve | Inbound webhook deliveries per client address per minute across every slug, checked before and so capping each webhook's own limit. |
 | `CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT` | `mcp_subscription_max_concurrent` | `integer` | `8` | `streams` | live | serve | Concurrent MCP subscription streams per caller (athanor and credential). |
 | `CYFR_MCP_SUBSCRIPTION_MAX_MS` | `mcp_subscription_max_ms` | `integer` | `1800000` | `streams` | live | serve | How long one MCP subscription stream lives before the client reconnects, in milliseconds. |
-| `CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT` | `crucible_events_max_concurrent` | `integer` | `8` | `streams` | live | serve | Concurrent execution-event streams per caller (athanor and credential). |
-| `CYFR_CRUCIBLE_EVENTS_MAX_MS` | `crucible_events_max_ms` | `integer` | `1800000` | `streams` | live | serve | How long one execution-event stream lives before the client reconnects, in milliseconds. |
+| `CYFR_OPUS_EVENTS_MAX_CONCURRENT` | `opus_events_max_concurrent` | `integer` | `8` | `streams` | live | serve | Concurrent execution-event streams per caller (athanor and credential). |
+| `CYFR_OPUS_EVENTS_MAX_MS` | `opus_events_max_ms` | `integer` | `1800000` | `streams` | live | serve | How long one execution-event stream lives before the client reconnects, in milliseconds. |
 | `CYFR_FRAME_STREAM_MAX_CONCURRENT` | `frame_stream_max_concurrent` | `integer` | `8` | `streams` | live | serve | Concurrent streams one tincture frame holds open (per frame credential). |
 | `CYFR_SESSION_TTL_HOURS` | `session_ttl_hours` | `integer` | `720` | `sessions` | live | refuse | Hours a session may sit idle before it ends; 0 never ends one. |
 | `CYFR_WEBHOOK_MAX_SKEW_SECONDS` | `webhook_max_skew_seconds` | `duration_s` | `300` | `webhooks` | live | refuse | How far a delivery's timestamp may sit from now before it is refused as a replay: how long a captured delivery stays replayable. |

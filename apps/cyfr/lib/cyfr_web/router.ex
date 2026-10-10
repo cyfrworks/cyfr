@@ -23,7 +23,7 @@ defmodule CyfrWeb.Router do
       Cyfr,
       Compendium,
       Aqua,
-      Crucible,
+      Opus,
       Emissary,
       Emissary.Router,
       Emissary.Web,

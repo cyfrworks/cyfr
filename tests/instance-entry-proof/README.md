@@ -21,7 +21,7 @@ proof fails if either key, or a digest of one, reaches a page, an answer or
 the record.
 
 The harness runs no execution engine and no model, so `run.sh` never starts
-a run: an admission is the loader's answer (`Crucible.authority_for/3`'s
+a run: an admission is the loader's answer (`Opus.authority_for/3`'s
 path), asked once the person's athanor is filled, as a turn is admitted
 only then (`Sanctum.Provisioning.ready/1`), since a sign-in answers before
 the fill that mints its consent bootstrap; and a claim is
@@ -215,11 +215,11 @@ in the tree.
 ## Declared coverage limit
 
 The unchanged shipped model artifact → production
-`Crucible.Host.AttachedFetch` → local provider stand-in composition is
+`Opus.Host.AttachedFetch` → local provider stand-in composition is
 **uncovered**. The current artifacts hard-code provider HTTPS origins
 (`seed/components/catalysts/local/openai/1.3.1/src/src/lib.rs:14` and its
-peers); `Crucible.Host.Egress.pin/3` has a resolver option which the actual
-host never passes (`apps/cyfr/lib/crucible/host/egress.ex:94`). The
+peers); `Opus.Host.Egress.pin/3` has a resolver option which the actual
+host never passes (`apps/cyfr/lib/opus/host/egress.ex:94`). The
 existing suites found in `seed_model_catalysts_test.exs`,
 `model_contract_test.exs`, `TwoServices`, `tests/locus-runtime-image/` and
 `Sanctum.Test.ResolverFixture` do not provide an end-to-end local

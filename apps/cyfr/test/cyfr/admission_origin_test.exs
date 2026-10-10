@@ -89,8 +89,8 @@ defmodule Cyfr.AdmissionOriginTest do
     {Emissary.Web.TinctureDataController, :stream} => :frame_stream,
     {Emissary.Web.TinctureDataController, :canvas_stream} => :frame_canvas_stream,
     {Emissary.Web.WebhookController, :invoke} => :webhook_delivery,
-    {Crucible.Schedules.Scheduler, :handle_info} => :schedule_fire,
-    {Crucible.Host.Children, :call} => :host_tool_call,
+    {Opus.Schedules.Scheduler, :handle_info} => :schedule_fire,
+    {Opus.Host.Children, :call} => :host_tool_call,
     {Emissary.Web.DeviceChannel, :handle_in} => :device_channel
   }
 
@@ -100,12 +100,12 @@ defmodule Cyfr.AdmissionOriginTest do
     _athanor = Sanctum.TestContext.athanor!()
 
     base = Path.join(System.tmp_dir!(), "admission_origin_#{System.unique_integer([:positive])}")
-    keys = [cyfr: :opus_workers, cyfr: :cron_scheduler_enabled, arca: :base_path]
+    keys = [cyfr: :locus_runtime_workers, cyfr: :cron_scheduler_enabled, arca: :base_path]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, base)
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Crucible.Slots, Sanctum.TestContext.local().athanor_id)
+      Prima.Slots.forgive_unreaped(Opus.Slots, Sanctum.TestContext.local().athanor_id)
       Prima.RateLimiter.reset()
       File.rm_rf!(base)
 
@@ -334,7 +334,7 @@ defmodule Cyfr.AdmissionOriginTest do
         next_run_at: DateTime.add(DateTime.utc_now(), -60, :second)
       })
 
-    start_supervised!(Crucible.Schedules.Scheduler)
+    start_supervised!(Opus.Schedules.Scheduler)
 
     wait_until(
       fn -> match?([%{status: "completed"}], executions(schedule_id: schedule.id)) end,
@@ -384,17 +384,17 @@ defmodule Cyfr.AdmissionOriginTest do
   describe "the rows a run writes" do
     test "a root records its context's origin and names none of a caller's; a child records its parent's" do
       root =
-        Crucible.Record.new(scheduled(), "formula:local.origin-root:0.1.0", %{},
+        Opus.Record.new(scheduled(), "formula:local.origin-root:0.1.0", %{},
           component_type: :formula,
           origin: :interactive
         )
 
       assert root.origin == :schedule
-      :ok = Crucible.Record.write_started(root)
+      :ok = Opus.Record.write_started(root)
 
       # A child whose context says `interactive` is still its parent's.
       child =
-        Crucible.Record.new(
+        Opus.Record.new(
           %{scheduled() | origin: :interactive},
           "reagent:local.origin-child:0.1.0",
           %{},
@@ -403,7 +403,7 @@ defmodule Cyfr.AdmissionOriginTest do
         )
 
       assert is_nil(child.origin)
-      :ok = Crucible.Record.write_started(child)
+      :ok = Opus.Record.write_started(child)
 
       assert row_origin(root.id) == :schedule
       assert row_origin(child.id) == :schedule
@@ -890,7 +890,7 @@ defmodule Cyfr.AdmissionOriginTest do
   # its edge to the dependency.
   defp tincture_profile!(ctx, node, kind) do
     id = "prof_#{kind}_#{System.unique_integer([:positive])}"
-    {:ok, _ref, _type, component} = Crucible.Admission.inspect_component(ctx, node)
+    {:ok, _ref, _type, component} = Opus.Admission.inspect_component(ctx, node)
     {:ok, %{graph: activation}} = Compendium.Activation.resolve_verified(ctx, component)
 
     :ok =

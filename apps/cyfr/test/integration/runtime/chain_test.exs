@@ -3,8 +3,8 @@
 Code.require_file("support/formula_host_helper.exs", __DIR__)
 
 defmodule Locus.Runtime.ChainTest do
-  # Runs under the authority `Crucible.Admission` decides (whose own
-  # cases are `Crucible.AdmissionTest`), against the in-memory consent
+  # Runs under the authority `Opus.Admission` decides (whose own
+  # cases are `Opus.AdmissionTest`), against the in-memory consent
   # source and a real published component (math.wasm — a core module that
   # fails at component compile, which is irrelevant: every property
   # asserted here is decided before compilation). What a run entered with
@@ -224,7 +224,7 @@ defmodule Locus.Runtime.ChainTest do
       execution_id = "exec_chain_root_#{System.unique_integer([:positive])}"
 
       _result =
-        Crucible.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
+        Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
           execution_id: execution_id,
           type: :reagent
         )
@@ -275,7 +275,7 @@ defmodule Locus.Runtime.ChainTest do
       execution_id = "exec_route_row_#{System.unique_integer([:positive])}"
 
       _result =
-        Crucible.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+        Opus.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
           route: :protected,
           execution_id: execution_id
         )
@@ -293,7 +293,7 @@ defmodule Locus.Runtime.ChainTest do
       execution_id = "exec_route_pub_row_#{System.unique_integer([:positive])}"
 
       _result =
-        Crucible.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+        Opus.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
           route: :public,
           execution_id: execution_id
         )
@@ -365,7 +365,7 @@ defmodule Locus.Runtime.ChainTest do
       execution_id = "exec_chain_child_#{System.unique_integer([:positive])}"
 
       _result =
-        Crucible.run_child(
+        Opus.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -391,7 +391,7 @@ defmodule Locus.Runtime.ChainTest do
       execution_id = "exec_chain_zero_#{System.unique_integer([:positive])}"
 
       _result =
-        Crucible.run_child(
+        Opus.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -409,7 +409,7 @@ defmodule Locus.Runtime.ChainTest do
       auth = authority_with_edges(%{"reagent:local.gone" => %{}})
 
       assert {:error, {:setup_required, payload}} =
-               Crucible.run_child(
+               Opus.run_child(
                  auth,
                  "reagent:local.gone:1.0.0",
                  nil,
@@ -458,7 +458,7 @@ defmodule Locus.Runtime.ChainTest do
         })
 
       assert {:error, {:setup_required, payload}} =
-               Crucible.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
+               Opus.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
 
       assert payload.profile_id == "prof-chain"
       assert payload.node_ref == "#{@target_node}:0.1.0"
@@ -525,14 +525,14 @@ defmodule Locus.Runtime.ChainTest do
       # nothing executes, so the blob below is provably the only policy in
       # play.
       assert {:error, no_authority_error} =
-               Crucible.Dispatch.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
+               Opus.Dispatch.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
 
       assert no_authority_error =~ "without an authority is not a thing"
 
       execution_id = "exec_chain_cat_#{System.unique_integer([:positive])}"
 
       _result =
-        Crucible.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
+        Opus.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
           type: :catalyst,
           execution_id: execution_id
         )
@@ -705,7 +705,7 @@ defmodule Locus.Runtime.ChainTest do
       assert Sanctum.Authority.budget(auth).in_flight == 0
 
       _result =
-        Crucible.run_child(
+        Opus.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -744,7 +744,7 @@ defmodule Locus.Runtime.ChainTest do
       }
 
       _result =
-        Crucible.run_child(
+        Opus.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -770,7 +770,7 @@ defmodule Locus.Runtime.ChainTest do
         )
 
       assert {:error, {:invoke_denied, :invoke_budget_exhausted}} =
-               Crucible.run_child(
+               Opus.run_child(
                  auth,
                  "#{@target_node}:0.1.0",
                  nil,
@@ -820,7 +820,7 @@ defmodule Locus.Runtime.ChainTest do
         |> Arca.Repo.update_all(set: [admit_by: past])
 
       assert {:error, _} =
-               Crucible.run_child(
+               Opus.run_child(
                  auth,
                  "#{@target_node}:0.1.0",
                  nil,

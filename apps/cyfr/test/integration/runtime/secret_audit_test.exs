@@ -109,7 +109,7 @@ defmodule Locus.Runtime.SecretAuditTest do
     ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
 
       for {{app, key}, value} <- previous do
         case value do
@@ -181,13 +181,13 @@ defmodule Locus.Runtime.SecretAuditTest do
   # carried, and the log.
   defp probe!(ctx, authority) do
     id = Prima.UUID7.execution_id()
-    :ok = Crucible.subscribe_events(id, ctx)
+    :ok = Opus.subscribe_events(id, ctx)
     actor = Sanctum.Context.actor(ctx)
     :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.executions(actor))
 
     {result, log} =
       with_log(fn ->
-        Crucible.Dispatch.run(ctx, @ref, %{"operation" => "probe"},
+        Opus.Dispatch.run(ctx, @ref, %{"operation" => "probe"},
           type: :catalyst,
           authority: authority,
           execution_id: id
@@ -425,11 +425,11 @@ defmodule Locus.Runtime.SecretAuditTest do
       consent_id = consent!(person, probe, [%{need: "api_key", entry_id: entry.id}])
 
       id = Prima.UUID7.execution_id()
-      :ok = Crucible.subscribe_events(id, person)
+      :ok = Opus.subscribe_events(id, person)
 
       {result, log} =
         with_log(fn ->
-          Crucible.run_root(
+          Opus.run_root(
             person,
             :default,
             probe <> ":1.0.0",

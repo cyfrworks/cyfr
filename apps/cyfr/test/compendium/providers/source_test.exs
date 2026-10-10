@@ -17,7 +17,7 @@ defmodule Compendium.Providers.SourceTest do
   alias Aqua.Hands
   alias Aqua.Loop.{Binding, Policy}
   alias Compendium.Providers.Source
-  alias Crucible.GuestStorage
+  alias Opus.GuestStorage
   alias Prima.Authority.Blob.Edge
 
   @dir "components/catalysts/local/widget/0.1.0"

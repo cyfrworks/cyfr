@@ -54,7 +54,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   (`Prima.Network.domain_allowed?/2`); a private range the ask names, or an
   address or narrower range inside one of its ranges; a storage path the
   ask names, or a guest path the ask admits, read as
-  `Crucible.GuestStorage` enforces a grant
+  `Opus.GuestStorage` enforces a grant
   (`Prima.ComponentPath.path_granted?/2`); and exactly one of the ask's
   values for every other field.
 

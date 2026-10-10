@@ -1,0 +1,154 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Opus.LeaseWatch do
+  @moduledoc """
+  The lease keeper of an execution held outside the engine — a turn root
+  (`Opus.TurnRoot`) or an outbound tool call in flight: a
+  process that watches the holder, renews the attempt's lease every tick
+  and exits the holder when the lease is lost.
+
+  A caller blocked in a call cannot service a timer of its own, so the
+  keeper is a linked sibling with the rule the engine's watch applies
+  (`Opus.Record.renew_lease/2`): a renewal the store refuses,
+  a cancelled row's included, stops the holder at once
+  (`{:lease_lost, execution_id}`); a store that cannot answer, a renewal
+  that raises included, is tolerated only inside the lease the attempt
+  last held.
+
+  The holder is the process that starts the keeper. The keeper is linked
+  to it, so a crash of either takes the other down at once, and monitors
+  it, so a holder that ends without stopping it, normally included, ends
+  it too. It makes no link once it runs: `stop/1` drops the holder's link
+  before it kills the keeper, and a link made after that would carry the
+  kill to the holder.
+
+  A holder that moves the attempt out of `running` suspends its keeper
+  first (`suspend/1`), so no renewal races the move, and then stops it
+  (`stop/1`), or resumes it (`resume/1`) when the move did not happen. The
+  keeper keeps its pid throughout.
+  """
+
+  require Logger
+
+  alias Opus.Record
+
+  @tick_ms 60_000
+
+  @doc """
+  Start a keeper for `attempt` of `execution_id`, held by the calling
+  process. `opts`: `:tick_ms` (the renewal period), `:until` (the lease
+  the attempt holds now).
+  """
+  @spec start(String.t(), String.t(), keyword()) :: {:ok, pid()}
+  def start(execution_id, attempt, opts \\ [])
+      when is_binary(execution_id) and is_binary(attempt) do
+    holder = self()
+
+    watch = %{
+      holder: holder,
+      execution_id: execution_id,
+      attempt: attempt,
+      tick: Keyword.get(opts, :tick_ms, @tick_ms)
+    }
+
+    until = Keyword.get(opts, :until) || initial_until(execution_id)
+
+    pid = spawn_link(fn -> loop(Map.put(watch, :down, Process.monitor(holder)), until) end)
+
+    {:ok, pid}
+  end
+
+  @doc """
+  Stop renewing until `resume/1`. Answers once the keeper will renew
+  nothing more; a renewal in flight finishes first. A keeper that is gone
+  answers `:ok` too.
+  """
+  @spec suspend(pid()) :: :ok
+  def suspend(pid) when is_pid(pid) do
+    ref = Process.monitor(pid)
+    send(pid, {:suspend, self(), ref})
+
+    receive do
+      {^ref, :suspended} -> Process.demonitor(ref, [:flush])
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    end
+
+    :ok
+  end
+
+  @doc "Renew again, a tick from now, after `suspend/1`."
+  @spec resume(pid()) :: :ok
+  def resume(pid) when is_pid(pid) do
+    send(pid, :resume)
+    :ok
+  end
+
+  @doc "Stop a keeper from its holder, without touching the holder."
+  @spec stop(pid() | nil) :: :ok
+  def stop(nil), do: :ok
+
+  def stop(pid) when is_pid(pid) do
+    Process.unlink(pid)
+    Process.exit(pid, :kill)
+    :ok
+  end
+
+  # When the lease's end is not handed in, it is read from the store, which
+  # since the cell's clock landed is a database read like any other. A
+  # store that cannot answer is the same condition `renew/2` already
+  # tolerates below, and it must be tolerated here for the same reason: a
+  # keeper that refuses to start kills the run it was meant to watch over,
+  # which is a harsher answer than the outage deserves. The fallback is the
+  # local clock and the same lease length -- exactly what this read was
+  # before the clock moved -- and the first renewal that reaches the store
+  # replaces it with the authoritative expiry.
+  defp initial_until(execution_id) do
+    Record.lease_until()
+  rescue
+    e ->
+      Logger.warning(
+        "[Opus.LeaseWatch] lease start for #{execution_id} could not read the " <>
+          "store's clock (#{Prima.LogFilter.exception_message(e)}); watching on the local clock until a " <>
+          "renewal answers"
+      )
+
+      DateTime.add(DateTime.utc_now(), Arca.ExecutionAttempts.lease_seconds(), :second)
+  end
+
+  # A holder that ends ends its keeper, suspended or not.
+  defp loop(%{down: down} = watch, until) do
+    receive do
+      {:suspend, from, ref} ->
+        send(from, {ref, :suspended})
+        suspended(watch, until)
+
+      {:DOWN, ^down, :process, _, _} ->
+        :ok
+    after
+      watch.tick -> renew(watch, until)
+    end
+  end
+
+  defp suspended(%{down: down} = watch, until) do
+    receive do
+      :resume -> loop(watch, until)
+      {:DOWN, ^down, :process, _, _} -> :ok
+    end
+  end
+
+  defp renew(%{holder: holder, execution_id: execution_id} = watch, until) do
+    case Record.renew_lease(execution_id, watch.attempt) do
+      {:ok, renewed} ->
+        loop(watch, renewed)
+
+      :lost ->
+        Process.exit(holder, {:lease_lost, execution_id})
+
+      :unavailable ->
+        if DateTime.compare(DateTime.utc_now(), until) == :lt,
+          do: loop(watch, until),
+          else: Process.exit(holder, {:lease_lost, execution_id})
+    end
+  end
+end

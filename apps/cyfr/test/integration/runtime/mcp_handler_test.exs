@@ -269,7 +269,7 @@ defmodule Locus.Runtime.FormulaHandlerMcpTest do
 
   describe "host interception" do
     test "the host has an arm for exactly the actions an assignment names as intercepted" do
-      execution = Enum.find(Crucible.Provider.tools(), &(&1.name == "execution"))
+      execution = Enum.find(Opus.Provider.tools(), &(&1.name == "execution"))
       actions = execution |> Grimoire.Annotations.actions_of() |> Map.keys()
       intercepted = FormulaHost.intercepted()
 

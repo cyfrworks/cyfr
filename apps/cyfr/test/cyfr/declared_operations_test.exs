@@ -137,7 +137,7 @@ defmodule Cyfr.DeclaredOperationsTest do
                 }}
 
       # The profile is read first, so an unknown one is refused by name
-      # (`Crucible.UsageTest`).
+      # (`Opus.UsageTest`).
       assert call(ctx, "execution", "usage", %{"profile_id" => "prf_1"}) ==
                {:error, {:not_found, "Profile", "prf_1"}}
     end

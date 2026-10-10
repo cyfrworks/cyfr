@@ -11,13 +11,13 @@ defmodule Cyfr.Test.ScriptedWorker do
   its own (`service/0`) and a boot of its own, and its keys are its own: it
   never answers as the real worker service. It is served over HTTP by
   `Cyfr.Test.ScriptedWorkerListener` on a loopback port of its own, so
-  `Crucible.Dispatch` reaches it through
-  `Crucible.WorkerClient` exactly as it reaches the runtime: `endpoint/0`
+  `Opus.Dispatch` reaches it through
+  `Opus.WorkerClient` exactly as it reaches the runtime: `endpoint/0`
   is where. A run of a scripted reference is admitted by CYFR and
   dispatched here; `start/3` checks the assignment is addressed to this
   worker service and this boot, its input matches its digest and its
   sealed keys open as its attempt, then starts a runner. The runner
-  reaches its attempt over HTTP, through a real `Crucible.HostListener`,
+  reaches its attempt over HTTP, through a real `Opus.HostListener`,
   as the runtime's runners do: at the address its assignment names, or, for an
   assignment naming none, at the listener this worker service starts on a
   loopback port of its own (`host_url/0`). Each call's body is the
@@ -48,10 +48,10 @@ defmodule Cyfr.Test.ScriptedWorker do
   which CYFR counts as nothing whose native work may still run. A reference it does
   not script never reaches it: starting it puts an
   entry for its scripted references alone ahead of the configured worker
-  services in `config :cyfr, :opus_workers` (`workers/2`), so
-  `Crucible.Dispatch` routes every other reference to the worker
+  services in `config :cyfr, :locus_runtime_workers` (`workers/2`), so
+  `Opus.Dispatch` routes every other reference to the worker
   services configured after it, and stopping it removes that entry. Tests
-  that change `:opus_workers` themselves restore it on exit as they do today.
+  that change `:locus_runtime_workers` themselves restore it on exit as they do today.
   Started for a reference the routing did not name, it refuses the
   assignment `:malformed`.
 
@@ -80,7 +80,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   - `:hang` — never answer.
 
   The process waiting on a run is the one registered under its execution
-  id in `Crucible.Registry` when the run is started, as dispatch
+  id in `Opus.Registry` when the run is started, as dispatch
   registers its waiter before it starts a run.
 
   The catalyst's answers about itself are not the script's: a run's input
@@ -100,7 +100,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   require Logger
 
   alias Prima.{Assignment, HostAPI, WorkerAuth, WorkerWire}
-  alias Crucible.{HostListener, Keys}
+  alias Opus.{HostListener, Keys}
   alias Cyfr.Test.ScriptedWorkerListener
 
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
@@ -156,7 +156,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   def endpoint, do: %{id: @service, url: url(), components: nil}
 
   @doc """
-  The `config :cyfr, :opus_workers` list that routes the scripted `refs` (any
+  The `config :cyfr, :locus_runtime_workers` list that routes the scripted `refs` (any
   form `Prima.ComponentRef.to_name_ref/1` reads) to this worker service and
   every other reference to the worker services in `configured` (the list
   being replaced, with any earlier entry of this worker service dropped).
@@ -229,7 +229,7 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   @doc """
   Start the context's athanor on fresh execution limits: a fresh consented
-  rate window (`Crucible.Rates`) for the pinned releases of `refs`,
+  rate window (`Opus.Rates`) for the pinned releases of `refs`,
   and no unreaped-kill penalty (`Prima.Slots.forgive_unreaped/2`).
   Scripted runs are admitted, and their runners killed, for real, so every
   test sharing an athanor draws on the same limits.
@@ -237,10 +237,10 @@ defmodule Cyfr.Test.ScriptedWorker do
   def fresh_limits!(%Sanctum.Context{} = ctx, refs) when is_list(refs) do
     for ref <- refs do
       {:ok, pinned, _resolution} = Compendium.Resolver.resolve(ctx, ref)
-      :ok = Crucible.Rates.reset(Sanctum.Context.actor(ctx), pinned)
+      :ok = Opus.Rates.reset(Sanctum.Context.actor(ctx), pinned)
     end
 
-    :ok = Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
+    :ok = Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
   end
 
   # ---------------------------------------------------------------------------
@@ -299,8 +299,8 @@ defmodule Cyfr.Test.ScriptedWorker do
     # services configured before; `terminate/2` takes the entry out again.
     Application.put_env(
       :cyfr,
-      :opus_workers,
-      entries(refs, Application.get_env(:cyfr, :opus_workers), url)
+      :locus_runtime_workers,
+      entries(refs, Application.get_env(:cyfr, :locus_runtime_workers), url)
     )
 
     {:ok,
@@ -334,7 +334,7 @@ defmodule Cyfr.Test.ScriptedWorker do
          true <- scripted?(state, assignment.component.ref),
          true <- assignment.service == @service and assignment.boot == state.boot,
          true <- Prima.Digest.sha256(input) == assignment.input_digest,
-         {:ok, worker_key} <- Keys.opus_key(@service),
+         {:ok, worker_key} <- Keys.locus_runtime_key(@service),
          {:ok, %{attempt: attempt} = keys} <-
            WorkerAuth.open_attempt_keys(WorkerAuth.dispatch_seal_key(worker_key), sealed_keys),
          true <- attempt == assignment |> Map.take(@attempt_fields) |> Map.put(:service, @service),
@@ -486,8 +486,14 @@ defmodule Cyfr.Test.ScriptedWorker do
     # worker service is gone. The worker listener, linked, goes with this
     # process.
     stop_host_listener(state.host_listener)
-    configured = Application.get_env(:cyfr, :opus_workers, [])
-    Application.put_env(:cyfr, :opus_workers, Enum.reject(configured, &(&1[:id] == @service)))
+    configured = Application.get_env(:cyfr, :locus_runtime_workers, [])
+
+    Application.put_env(
+      :cyfr,
+      :locus_runtime_workers,
+      Enum.reject(configured, &(&1[:id] == @service))
+    )
+
     :ok
   end
 
@@ -530,7 +536,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   # The process waiting on the run: dispatch registers it under the
   # execution's id before it starts the run.
   defp waiter_of(execution_id) do
-    case Registry.lookup(Crucible.Registry, execution_id) do
+    case Registry.lookup(Opus.Registry, execution_id) do
       [{waiter, _value}] -> waiter
       [] -> nil
     end
@@ -560,7 +566,7 @@ defmodule Cyfr.Test.ScriptedWorker do
           nonce: nonce()
         }
 
-        with {:ok, worker_key} <- Keys.opus_key(@service),
+        with {:ok, worker_key} <- Keys.locus_runtime_key(@service),
              {:ok, header} <-
                WorkerAuth.report_header(WorkerAuth.dispatch_key(worker_key), fields, body),
              {:ok, 200, raw} <- post(runner.host_url, :runner_exited, header, body),

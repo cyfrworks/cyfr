@@ -42,7 +42,7 @@ defmodule Cyfr.LoggerRosterTest do
     {"apps/cyfr/lib/aqua/loop.ex", "describe/1"} =>
       "renders a reason through Grimoire.render/1; it inspects only the account " <>
         "a setup_required refusal names",
-    {"apps/cyfr/lib/crucible/attempt.ex", "reason_shape/1"} =>
+    {"apps/cyfr/lib/opus/attempt.ex", "reason_shape/1"} =>
       "keeps a reason's atom, its tag or its exception's module, and redacts the rest"
   }
 

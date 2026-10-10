@@ -58,7 +58,7 @@ func TestSettingsLines_ShowSourcePendingAndEachMember(t *testing.T) {
 	  "revision": 12,
 	  "members": [{"member": "a@h", "revision": 12}, {"member": "b@h", "revision": null}],
 	  "settings": [
-	    {"key": "crucible_max_concurrent", "value": 256, "desired": 64, "source": "operator", "pending": true},
+	    {"key": "opus_max_concurrent", "value": 256, "desired": 64, "source": "operator", "pending": true},
 	    {"key": "athanor_storage_bytes", "value": 1125899906842624, "source": "default", "pending": false},
 	    {"key": "max_athanors", "value": null, "source": "deployment", "pending": false, "divergent": true},
 	    {"key": "log_level", "value": "debug", "source": "operator", "pending": false}

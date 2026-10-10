@@ -275,7 +275,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   # A formula's host intercepts exactly the actions its assignment names,
   # and an assignment names the actions the catalog annotates
-  # `host: :intercepted` (`Crucible.Assignments`).
+  # `host: :intercepted` (`Opus.Assignments`).
   test "the intercept set an assignment carries is the catalog's annotation" do
     intercepted = Grimoire.host_intercepted_actions()
 

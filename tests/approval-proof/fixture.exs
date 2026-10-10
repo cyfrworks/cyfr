@@ -70,7 +70,7 @@
 #
 #   admit SESSION_TOKEN APP
 #       The real loader's answer for a run of APP under the person's context
-#       (`Crucible.authority_for/3`'s path), with no run started: the
+#       (`Opus.authority_for/3`'s path), with no run started: the
 #       profile and consent it roots on, the source node and the activation
 #       digest it verified for it, and the source node's edges as the loaded
 #       authority holds them; or the refusal.
@@ -167,7 +167,7 @@ fn args ->
   # The loaded root of APP under the person's context and the source
   # node's edges by key.
   loaded = fn ctx, app ->
-    case Crucible.Admission.authority_and_stamp_for(ctx, :default, app) do
+    case Opus.Admission.authority_and_stamp_for(ctx, :default, app) do
       {:ok, %{authority: authority, stamp: stamp}} ->
         graph = (stamp && stamp.activation_graph) || %{}
         {:ok, node} = Prima.Authority.Blob.node(authority.policy, app)

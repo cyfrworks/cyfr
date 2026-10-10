@@ -157,7 +157,7 @@ defmodule Prima.ComponentPath do
   @doc """
   Whether a storage grant's `paths` (`Prima.Authority.Blob.Edge.paths/1`)
   admit `path`: the one reading of a storage grant, which the storage
-  boundary enforces (`Crucible.GuestStorage`) and every reader of a grant
+  boundary enforces (`Opus.GuestStorage`) and every reader of a grant
   shares, so no reader shows a grant wider or narrower than it is.
 
   `"*"` admits every path. A grant ending in `/` is a prefix: it admits

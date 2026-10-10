@@ -69,7 +69,7 @@ fn args ->
   end
 
   admit = fn ctx, ref ->
-    case Crucible.authority_for(ctx, :default, ref) do
+    case Opus.authority_for(ctx, :default, ref) do
       {:ok, authority} -> %{admitted: true, consent_id: authority.consent_id}
       {:error, {tag, _payload}} when is_atom(tag) -> %{admitted: false, refusal: tag}
       {:error, reason} -> %{admitted: false, refusal: inspect(reason)}

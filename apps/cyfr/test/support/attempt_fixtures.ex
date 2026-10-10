@@ -4,9 +4,9 @@
 defmodule Cyfr.Test.AttemptFixtures do
   @moduledoc """
   A real execution attempt reached through host calls: an admitted row, its
-  `Crucible.Attempt` open with the calling process as its waiter, a
+  `Opus.Attempt` open with the calling process as its waiter, a
   signed assignment, and a runner attached through
-  `Crucible.Host.call/2`.
+  `Opus.Host.call/2`.
 
   The attached map carries what a runner's client needs (the attempt's
   `athanor_id`, `execution_id`, `attempt`, `fence`, `generation` and
@@ -25,7 +25,7 @@ defmodule Cyfr.Test.AttemptFixtures do
 
   alias Prima.Authority
   alias Prima.Authority.Blob.Edge
-  alias Crucible.{Assignments, Attempt, Close, Delegation, Keys, Record}
+  alias Opus.{Assignments, Attempt, Close, Delegation, Keys, Record}
 
   @doc """
   Admit, open, sign and attach. Options:
@@ -59,7 +59,7 @@ defmodule Cyfr.Test.AttemptFixtures do
     and the attempt (default the digest of the reference's own bytes);
   - `:input` — the input the row is admitted with (default
     `%{"fixture" => true}`); a formula's delegation roster is its
-    `sub_agents` (`Crucible.Delegation.roster/1`);
+    `sub_agents` (`Opus.Delegation.roster/1`);
   - `:declared_needs` and `:activation_digest` — the resolver's transition
     inputs its guest's children are stepped with (default `[]` and none);
   - `:reservation` — `true` to admit the row with the invocation
@@ -235,7 +235,7 @@ defmodule Cyfr.Test.AttemptFixtures do
   @spec call(map(), String.t(), map(), keyword()) :: map()
   def call(fixture, op, args, opts \\ []) do
     body = Keyword.get_lazy(opts, :body, fn -> body(op, args) end)
-    fixture |> header(body, opts) |> Crucible.Host.call(body) |> Jason.decode!()
+    fixture |> header(body, opts) |> Opus.Host.call(body) |> Jason.decode!()
   end
 
   @doc "The JSON body of a host call of `op` with `args`."

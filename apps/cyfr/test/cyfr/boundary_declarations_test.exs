@@ -31,7 +31,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     Cyfr,
     Compendium,
     Aqua,
-    Crucible,
+    Opus,
     Emissary,
     Prism,
     PrismWeb,
@@ -55,18 +55,18 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       (@composition -- [CyfrWeb.Endpoint]) ++ [Emissary.Router, Emissary.Web, Prism.Router],
     CyfrWeb => [Grimoire, Sanctum, Arca, Cyfr],
     Compendium => [Grimoire, Cyfr, Sanctum, Arca],
-    Crucible => [Compendium, Grimoire, Cyfr, Sanctum, Arca],
-    Aqua => [Compendium, Crucible, Grimoire, Cyfr, Sanctum, Arca],
-    Emissary => [Grimoire, Sanctum, Arca, Cyfr, Crucible, CyfrWeb],
-    Emissary.Web => [Emissary, Grimoire, Sanctum, Arca, Cyfr, Compendium, Crucible, CyfrWeb],
+    Opus => [Compendium, Grimoire, Cyfr, Sanctum, Arca],
+    Aqua => [Compendium, Opus, Grimoire, Cyfr, Sanctum, Arca],
+    Emissary => [Grimoire, Sanctum, Arca, Cyfr, Opus, CyfrWeb],
+    Emissary.Web => [Emissary, Grimoire, Sanctum, Arca, Cyfr, Compendium, Opus, CyfrWeb],
     Emissary.Router => [],
-    Prism => [Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Crucible, CyfrWeb],
+    Prism => [Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Opus, CyfrWeb],
     Prism.Router => [],
-    PrismWeb => [Prism, CyfrWeb, Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Crucible],
+    PrismWeb => [Prism, CyfrWeb, Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Opus],
     Cyfr.Mix => [Grimoire],
     Cyfr.Boundaries => [
       Grimoire,
-      Crucible,
+      Opus,
       Emissary,
       Emissary.Router,
       Emissary.Web,
@@ -158,7 +158,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
        "the port implementations the composition root installs"},
       {~w(Supervisor), "the tree the composition root starts"}
     ],
-    Crucible => [
+    Opus => [
       {~w(Keys Schedules.Scheduler Supervisor),
        "the worker root the composition root mints and the trees it starts"},
       {~w(Host.Children), "an admission entry `Cyfr.Boundaries` rosters"}
@@ -166,7 +166,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     Aqua => [{~w(Supervisor), "the tree the composition root starts"}]
   }
 
-  @manifest_rows ~w(Arca Sanctum Grimoire Compendium Crucible Aqua)
+  @manifest_rows ~w(Arca Sanctum Grimoire Compendium Opus Aqua)
   @roster_path Path.join(@root, "apps/cyfr/test/support/facade_roster.exs")
 
   defp sources(app), do: Path.wildcard(Path.join(@root, "apps/#{app}/lib/**/*.ex"))
@@ -363,9 +363,9 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   end
 
   test "a row with no roster entry fails naming the row" do
-    roster = @roster_path |> load_roster() |> Map.delete("Crucible")
+    roster = @roster_path |> load_roster() |> Map.delete("Opus")
 
-    assert_raise ExUnit.AssertionError, ~r/no entry for Crucible/, fn ->
+    assert_raise ExUnit.AssertionError, ~r/no entry for Opus/, fn ->
       check_roster(roster)
     end
   end

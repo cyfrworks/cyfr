@@ -57,7 +57,7 @@ defmodule Cyfr.Cell do
   holds its attempt's process. So the assignment it issues carries its own
   address (`CYFR_HOST_API_URL`) and its own boot, and the worker posts
   that attempt's host calls there and names that member in every header
-  (`Crucible.Assignments`, `Prima.WorkerAuth`). This is not placement
+  (`Opus.Assignments`, `Prima.WorkerAuth`). This is not placement
   — nothing decided where the work would run — but the return path of work
   already placed. A member that is not the one named refuses the call,
   including a lease renewal it could have written from the rows, so a
@@ -159,7 +159,7 @@ defmodule Cyfr.Cell do
       &tls_distribution/1,
       &cell_cookie/1,
       &topology/1,
-      &opus_key/1,
+      &locus_runtime_root/1,
       &host_api_url/1
     ]
     |> Enum.flat_map(fn check -> List.wrap(check.(facts)) end)
@@ -178,7 +178,7 @@ defmodule Cyfr.Cell do
       cell_cookie: Application.get_env(:cyfr, :cell_cookie),
       node_cookie: node_cookie(),
       topologies: Application.get_env(:libcluster, :topologies, []),
-      opus_key: Application.get_env(:cyfr, :opus_key),
+      locus_runtime_root: Application.get_env(:cyfr, :locus_runtime_root),
       host_api_url: Cyfr.RuntimeConfig.host_api_url()
     }
   end
@@ -273,9 +273,9 @@ defmodule Cyfr.Cell do
     """
   end
 
-  defp opus_key(%{opus_key: <<_::binary-size(32)>>}), do: []
+  defp locus_runtime_root(%{locus_runtime_root: <<_::binary-size(32)>>}), do: []
 
-  defp opus_key(_facts) do
+  defp locus_runtime_root(_facts) do
     """
     CYFR_CLUSTER=1 needs CYFR_LOCUS_RUNTIME_ROOT set and identical on every member. \
     Unset, the worker root is random per boot, so a worker's report to a \

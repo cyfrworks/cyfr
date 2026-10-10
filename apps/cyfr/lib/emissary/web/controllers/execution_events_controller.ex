@@ -35,7 +35,7 @@ defmodule Emissary.Web.ExecutionEventsController do
 
   def stream(conn, %{"id" => execution_id}) do
     cond do
-      not Crucible.available?() ->
+      not Opus.available?() ->
         CyfrWeb.ApiError.send(
           conn,
           503,
@@ -50,7 +50,7 @@ defmodule Emissary.Web.ExecutionEventsController do
              {:exec, %{id: _} = exec} <-
                {:exec, Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), execution_id)},
              :ok <- authorize_execution_read(ctx, exec),
-             :ok <- CyfrWeb.SSE.claim_slot(:sse_slot, ctx, :crucible_events_max_concurrent) do
+             :ok <- CyfrWeb.SSE.claim_slot(:sse_slot, ctx, :opus_events_max_concurrent) do
           cursor = parse_last_event_id(conn)
 
           conn
@@ -106,7 +106,7 @@ defmodule Emissary.Web.ExecutionEventsController do
   # athanor than the record it was authorized to read. The subscription
   # comes first and the replay once, so replay and live never overlap.
   defp stream_events(conn, ctx, execution_id, cursor, exec) do
-    Crucible.subscribe_events(execution_id, exec)
+    Opus.subscribe_events(execution_id, exec)
     watch = ContextGuard.watch(ctx)
 
     case drain(conn, execution_id, exec, cursor) do
@@ -114,13 +114,13 @@ defmodule Emissary.Web.ExecutionEventsController do
         close(conn, execution_id, exec, watch)
 
       {conn, cursor, false} ->
-        deadline = CyfrWeb.SSE.deadline(:crucible_events_max_ms)
+        deadline = CyfrWeb.SSE.deadline(:opus_events_max_ms)
         event_loop(conn, {execution_id, exec, watch}, cursor, deadline)
     end
   end
 
   defp close(conn, execution_id, exec, watch) do
-    Crucible.unsubscribe_events(execution_id, exec)
+    Opus.unsubscribe_events(execution_id, exec)
     ContextGuard.unwatch(watch)
     conn
   end
@@ -130,7 +130,7 @@ defmodule Emissary.Web.ExecutionEventsController do
   # cursor delivered to, and whether a terminal event ended the stream.
   defp drain(conn, execution_id, exec, cursor) do
     execution_id
-    |> Crucible.events_since(cursor, exec.athanor_id)
+    |> Opus.events_since(cursor, exec.athanor_id)
     |> Enum.reduce_while({conn, cursor, false}, fn event, {acc_conn, acc_cursor, _} ->
       case send_sse_event(acc_conn, event) do
         {:ok, new_conn} ->

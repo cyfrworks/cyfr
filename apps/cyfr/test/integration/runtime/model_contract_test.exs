@@ -84,7 +84,7 @@ defmodule Locus.Runtime.ModelContractTest do
     case mode do
       :disclosed ->
         ctx = Fixture.athanor!()
-        on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
+        on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id) end)
         :ok = Fixture.bind_key!(ctx, @canary)
         {:ok, ctx: ctx}
 
@@ -97,7 +97,7 @@ defmodule Locus.Runtime.ModelContractTest do
         admin = Fixture.instance_admin!()
         entry = Fixture.offer_instance_entry!(admin, port, @canary, Map.get(tags, :caps, %{}))
         ctx = Fixture.athanor!()
-        on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
+        on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id) end)
         {:ok, ctx: ctx, port: port, admin: admin, entry: entry}
     end
   end
@@ -1074,7 +1074,7 @@ defmodule Locus.Runtime.ModelContractTest do
 
         ended? and
           Enum.all?(closed, fn id ->
-            seen.streams |> Map.get(id, []) |> Enum.any?(&Crucible.Events.terminal?/1)
+            seen.streams |> Map.get(id, []) |> Enum.any?(&Opus.Events.terminal?/1)
           end)
       end,
       @settle_ms,

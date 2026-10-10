@@ -165,7 +165,7 @@ defmodule PrismWeb.ChatLiveTest do
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
-    {:ok, _} = Crucible.authority_for(ctx, :default, Compendium.AgentSource.soul_ref())
+    {:ok, _} = Opus.authority_for(ctx, :default, Compendium.AgentSource.soul_ref())
     athanor
   end
 

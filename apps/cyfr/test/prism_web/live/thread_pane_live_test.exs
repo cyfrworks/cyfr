@@ -1128,7 +1128,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     setup %{room: room, user: user} do
       ctx = connected_room!(room, user)
       soul = Prima.AgentRef.soul_ref()
-      {:ok, %{profile_id: soul_profile}} = Crucible.authority_for(ctx, :default, soul)
+      {:ok, %{profile_id: soul_profile}} = Opus.authority_for(ctx, :default, soul)
       {:ok, ctx: ctx, soul: soul, soul_profile: soul_profile}
     end
 
@@ -1137,7 +1137,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, soul_profile, scope: "sideways")
 
       assert {:error, {:head_corrupt, ^soul_profile}} =
-               Crucible.authority_for(ctx, :default, soul)
+               Opus.authority_for(ctx, :default, soul)
 
       model_consent_reads!(conn, room, @damaged)
     end
@@ -1162,7 +1162,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         )
 
       assert {:error, {:lender_corrupt, "catalyst:local.claude", "prof_claude_twin"}} =
-               Crucible.authority_for(ctx, :default, soul)
+               Opus.authority_for(ctx, :default, soul)
 
       model_consent_reads!(conn, room, @damaged)
     end
@@ -1173,7 +1173,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       head_outage!(ctx, soul_profile)
 
       assert {:error, {:head_unavailable, ^soul_profile}} =
-               Crucible.authority_for(ctx, :default, soul)
+               Opus.authority_for(ctx, :default, soul)
 
       model_consent_reads!(conn, room, @unanswered)
     end
@@ -1186,7 +1186,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         )
 
       assert {:error, {:head_corrupt, ^soul_profile}} =
-               Crucible.authority_for(ctx, :default, soul)
+               Opus.authority_for(ctx, :default, soul)
 
       model_consent_reads!(conn, room, @damaged)
     end

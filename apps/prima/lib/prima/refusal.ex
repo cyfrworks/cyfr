@@ -642,7 +642,7 @@ defmodule Prima.Refusal do
   # leaks; `:not_found` is the same answer.
   defp row(reason) when reason in [:forbidden, :not_found], do: {:not_found, "Not found"}
 
-  # A tincture invocation's outcomes (`Crucible.invoke_tincture/3`).
+  # A tincture invocation's outcomes (`Opus.invoke_tincture/3`).
   defp row(:invalid_params), do: {:invalid_argument, "The request's arguments are not valid"}
 
   defp row(:consent_required),

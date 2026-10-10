@@ -295,7 +295,7 @@ defmodule Prism.Router do
             # /activities: unified activities feed (mcp_log + execution fan-out).
             live "/activities", ActivitiesLive, :index, metadata: %{auth: :browser_authenticated}
             # /enforcements: live policy-decision feed (Arca.PolicyLog rows from
-            # Crucible.Admission + HTTP egress + tincture rate limiter). Click-through
+            # Opus.Admission + HTTP egress + tincture rate limiter). Click-through
             # to /activities?request_id=… for the request-anchored causal chain.
             live "/enforcements", EnforcementsLive, :index,
               metadata: %{auth: :browser_authenticated}

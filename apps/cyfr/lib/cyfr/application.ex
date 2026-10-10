@@ -13,7 +13,7 @@ defmodule Cyfr.Application do
       Cyfr,
       Compendium,
       Aqua,
-      Crucible,
+      Opus,
       Emissary,
       Prism,
       PrismWeb,
@@ -96,7 +96,7 @@ defmodule Cyfr.Application do
     # every assignment, worker and attempt key this boot issues derives
     # from.
     Prima.Boot.mint()
-    Crucible.Keys.mint()
+    Opus.Keys.mint()
 
     # Resolve the at-rest cipher keyring before anything seals a row. The
     # `arca` application has already opened the database and run the
@@ -158,7 +158,7 @@ defmodule Cyfr.Application do
 
     with {:ok, pid} <- Supervisor.start_link(children, opts) do
       # A listener is known by what it runs, so the tree's are read once
-      # the tree has started them, the HostAPI's once `Crucible.Supervisor`
+      # the tree has started them, the HostAPI's once `Opus.Supervisor`
       # has: each is on the admission roster, or the tree is stopped and
       # the boot refused, naming it.
       refuse_unrostered_listeners!(pid)
@@ -323,7 +323,7 @@ defmodule Cyfr.Application do
   @doc """
   The listeners running under `supervisor`: each supervisor in its tree
   that runs a socket server as a direct child, named by its own child id
-  (`Crucible.HostListener`, `CyfrWeb.Endpoint`), or by `supervisor` itself
+  (`Opus.HostListener`, `CyfrWeb.Endpoint`), or by `supervisor` itself
   for a socket server started directly under it. A server's own subtree is
   not read, and a child that is gone by the time it is asked is skipped:
   it listens on nothing.
@@ -377,7 +377,7 @@ defmodule Cyfr.Application do
   @owners [
     Grimoire.Supervisor,
     Compendium.Supervisor,
-    Crucible.Supervisor,
+    Opus.Supervisor,
     Aqua.Supervisor,
     Emissary.Supervisor
   ]
@@ -508,7 +508,7 @@ defmodule Cyfr.Application do
       # handed down: a domain's subtree reads no configuration. The
       # listener's drain is the time an open host call has to finish once
       # it stops accepting.
-      {Crucible.Supervisor,
+      {Opus.Supervisor,
        slot_caps: execution_slot_caps(),
        bind: Cyfr.RuntimeConfig.host_api_bind(),
        port: Cyfr.RuntimeConfig.host_api_port(),
@@ -520,12 +520,12 @@ defmodule Cyfr.Application do
       # tasks of their own, monitored by it. Last among the domains, so a
       # fire never reaches a tree that is not up, and the first to stop at
       # shutdown. 30 s: the longest run it lets finish.
-      Supervisor.child_spec({Task.Supervisor, name: Crucible.Schedules.TaskSupervisor},
+      Supervisor.child_spec({Task.Supervisor, name: Opus.Schedules.TaskSupervisor},
         shutdown: 30_000
       ),
       # 10 s: its terminate cancelling the timers of every schedule it
       # holds, before a fire can reach a stopping tree.
-      Supervisor.child_spec(Crucible.Schedules.Scheduler, shutdown: 10_000),
+      Supervisor.child_spec(Opus.Schedules.Scheduler, shutdown: 10_000),
       # The console's: the tincture registry, and the task supervisor its
       # pages start their asynchronous work on. 5 s: the registry's stop,
       # which holds no work in flight; 30 s: the longest page task it lets
@@ -558,9 +558,9 @@ defmodule Cyfr.Application do
 
   defp boot_work_enabled?, do: Application.get_env(:cyfr, :provisioning_boot_enabled, true)
 
-  # The execution slots (`Crucible.Slots`) boot on the caps the operator
-  # configured (`CYFR_CRUCIBLE_MAX_CONCURRENT`,
-  # `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT`), else the shipped ones. The
+  # The execution slots (`Opus.Slots`) boot on the caps the operator
+  # configured (`CYFR_OPUS_MAX_CONCURRENT`,
+  # `CYFR_OPUS_MAX_CONCURRENT_PER_TENANT`), else the shipped ones. The
   # ratio warning is said once here, at boot, where an operator can act
   # on it.
   defp warn_if_one_athanor_fills_the_slots do
@@ -581,10 +581,10 @@ defmodule Cyfr.Application do
   # which may be a value saved for the next boot and not the one running.
   @spec execution_slot_caps() :: {pos_integer(), pos_integer()}
   def execution_slot_caps do
-    {Application.get_env(:cyfr, :crucible_max_concurrent, Prima.Slots.default_max()),
+    {Application.get_env(:cyfr, :opus_max_concurrent, Prima.Slots.default_max()),
      Application.get_env(
        :cyfr,
-       :crucible_max_concurrent_per_tenant,
+       :opus_max_concurrent_per_tenant,
        Prima.Slots.default_key_max()
      )}
   end
@@ -602,12 +602,12 @@ defmodule Cyfr.Application do
 
     if footprint >= max do
       {:warn,
-       "[Crucible.Slots] one athanor can hold every slot on this node: " <>
+       "[Opus.Slots] one athanor can hold every slot on this node: " <>
          "#{key_max} roots x depth #{Prima.Authority.depth_cap()} = #{footprint} >= " <>
          "#{max} slots. Children are exempt from the per-athanor cap by design (a chain " <>
          "must be able to finish), so the cap bounds roots, not footprint. Lower " <>
-         "CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT or raise " <>
-         "CYFR_CRUCIBLE_MAX_CONCURRENT to keep one athanor off the whole pool."}
+         "CYFR_OPUS_MAX_CONCURRENT_PER_TENANT or raise " <>
+         "CYFR_OPUS_MAX_CONCURRENT to keep one athanor off the whole pool."}
     else
       :ok
     end

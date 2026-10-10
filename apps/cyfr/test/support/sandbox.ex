@@ -76,15 +76,15 @@ defmodule Cyfr.Test.Sandbox do
     Grimoire.TaskSupervisor,
     Sanctum.ProvisioningSupervisor,
     Compendium.ProvisioningSupervisor,
-    Crucible.Schedules.TaskSupervisor,
+    Opus.Schedules.TaskSupervisor,
     Sanctum.OAuth.RefreshTaskSupervisor,
     Sanctum.TaskSupervisor,
-    Crucible.TaskSupervisor,
+    Opus.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,
     Emissary.External.ServerSupervisor,
-    Crucible.Attempt.Supervisor,
+    Opus.Attempt.Supervisor,
     Locus.Runtime.RunnerPool.Runners,
-    Crucible.Events.Supervisor,
+    Opus.Events.Supervisor,
     Arca.DecisionLog.Writers
   ]
 

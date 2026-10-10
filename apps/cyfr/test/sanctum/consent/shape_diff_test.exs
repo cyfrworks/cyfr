@@ -343,7 +343,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
 
       # A run the head's origins admit, so what refuses it is the moved shape.
       assert {:error, {:consent_required, payload}} =
-               Crucible.Admission.authority_for(
+               Opus.Admission.authority_for(
                  %{ctx | origin: :interactive},
                  :default,
                  "#{@user}:1.1.0"

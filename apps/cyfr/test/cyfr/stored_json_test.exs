@@ -80,7 +80,7 @@ defmodule Cyfr.StoredJsonTest do
     assert_logged(log, "Arca.Providers.Records", "input")
   end
 
-  test "Crucible.Schedules.Provider renders a corrupt or empty column as null", %{ctx: ctx} do
+  test "Opus.Schedules.Provider renders a corrupt or empty column as null", %{ctx: ctx} do
     id = "sched_stored_#{System.unique_integer([:positive])}"
     now = DateTime.utc_now()
 
@@ -106,7 +106,7 @@ defmodule Cyfr.StoredJsonTest do
     log =
       capture_log(fn ->
         assert {:ok, schedule} =
-                 Crucible.Schedules.Provider.handle("schedule", ctx, %{
+                 Opus.Schedules.Provider.handle("schedule", ctx, %{
                    "action" => "get",
                    "schedule_id" => id
                  })
@@ -115,11 +115,11 @@ defmodule Cyfr.StoredJsonTest do
         assert schedule.metadata == nil
       end)
 
-    assert_logged(log, "Crucible.Schedules.Provider", "input")
+    assert_logged(log, "Opus.Schedules.Provider", "input")
   end
 
-  test "Crucible.Schedules.Scheduler reads corrupt schedule metadata as a run nobody asked to keep" do
-    alias Crucible.Schedules.Scheduler
+  test "Opus.Schedules.Scheduler reads corrupt schedule metadata as a run nobody asked to keep" do
+    alias Opus.Schedules.Scheduler
 
     for metadata <- [nil, "", ~s({"keep_outcome": false}), "[true]"] do
       assert Scheduler.keep_outcome(metadata) == {false, nil}
@@ -129,7 +129,7 @@ defmodule Cyfr.StoredJsonTest do
     assert Scheduler.keep_outcome(~s({"keep_outcome": true, "note_name": ""})) == {true, nil}
 
     log = capture_log(fn -> assert Scheduler.keep_outcome(@corrupt) == {false, nil} end)
-    assert_logged(log, "Crucible.Schedules.Scheduler", "metadata")
+    assert_logged(log, "Opus.Schedules.Scheduler", "metadata")
   end
 
   test "Sanctum.ApiKey lists a corrupt scope as none and a corrupt allowlist as absent" do

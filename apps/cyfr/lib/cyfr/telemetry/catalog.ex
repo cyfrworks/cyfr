@@ -300,25 +300,25 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :execution, :child, :admission] => %{
       consumers: [:operator],
       note:
-        "a child run's step span (`Crucible.StepSpans`): the call of run_child to the " <>
+        "a child run's step span (`Opus.StepSpans`): the call of run_child to the " <>
           "guest's start; `mix cyfr.bench.step` reads it for the per-step latency baseline"
     },
     [:cyfr, :execution, :child, :first_delta] => %{
       consumers: [:operator],
       note:
-        "a child run's step span (`Crucible.StepSpans`): the guest's start to its " <>
+        "a child run's step span (`Opus.StepSpans`): the guest's start to its " <>
           "first streamed delta; `mix cyfr.bench.step` reads it for time to first delta"
     },
     [:cyfr, :execution, :child, :completion] => %{
       consumers: [:operator],
       note:
-        "a child run's step span (`Crucible.StepSpans`): the guest's start to its " <>
+        "a child run's step span (`Opus.StepSpans`): the guest's start to its " <>
           "completed row; `mix cyfr.bench.step` reads it for the per-step latency baseline"
     },
     [:cyfr, :execution, :run_child] => %{
       consumers: [:operator],
       note:
-        "a child run's whole call as its caller waits on it (`Crucible.StepSpans`); " <>
+        "a child run's whole call as its caller waits on it (`Opus.StepSpans`); " <>
           "`mix cyfr.bench.step` reads it for the per-step total"
     },
     [:cyfr, :opus, :execution, :unsigned] => %{
@@ -328,10 +328,10 @@ defmodule Cyfr.Telemetry.Catalog do
           "the operator's posture made visible at the moment it is exercised, so " <>
           "'we allow unsigned pulls' does not read the same as 'we have none'"
     },
-    # A tincture invoking one of its dependencies (`Crucible.invoke_tincture/3`),
+    # A tincture invoking one of its dependencies (`Opus.invoke_tincture/3`),
     # whichever surface asked.
-    [:cyfr, :crucible, :tincture, :invoke, :start] => %{consumers: [:bridge, :metrics]},
-    [:cyfr, :crucible, :tincture, :invoke, :stop] => %{consumers: [:bridge, :metrics]},
+    [:cyfr, :opus, :tincture, :invoke, :start] => %{consumers: [:bridge, :metrics]},
+    [:cyfr, :opus, :tincture, :invoke, :stop] => %{consumers: [:bridge, :metrics]},
 
     # ——— guest activity (high-frequency observability) ———
     [:cyfr, :locus, :runtime, :http, :request] => %{

@@ -33,20 +33,20 @@ defmodule Cyfr.ApplicationTest do
     Compendium.ProvisioningSupervisor => 30_000,
     Compendium.Provisioning => 5_000,
     Compendium.ProjectionReconciler => 5_000,
-    Crucible.Slots => 5_000,
-    Crucible.Events.Sequence => 5_000,
-    Crucible.TaskSupervisor => 30_000,
-    Crucible.ArchiveWatch => 5_000,
-    Crucible.Sweeper => 5_000,
-    Crucible.WorkerWatch => 5_000,
+    Opus.Slots => 5_000,
+    Opus.Events.Sequence => 5_000,
+    Opus.TaskSupervisor => 30_000,
+    Opus.ArchiveWatch => 5_000,
+    Opus.Sweeper => 5_000,
+    Opus.WorkerWatch => 5_000,
     Aqua.ScheduleNotes => 5_000,
     Aqua.Loop.Worker => 5_000,
     Aqua.TaskSupervisor => 30_000,
     Emissary.External.Backends => 5_000,
     Emissary.External.Reconciler => 5_000,
     Emissary.TaskSupervisor => 30_000,
-    Crucible.Schedules.TaskSupervisor => 30_000,
-    Crucible.Schedules.Scheduler => 10_000,
+    Opus.Schedules.TaskSupervisor => 30_000,
+    Opus.Schedules.Scheduler => 10_000,
     Prism.TinctureRegistry => 5_000,
     Prism.TaskSupervisor => 30_000,
     Emissary.Web.TaskSupervisor => 30_000
@@ -199,11 +199,11 @@ defmodule Cyfr.ApplicationTest do
       order = [
         Grimoire.Supervisor,
         Compendium.Supervisor,
-        Crucible.Supervisor,
+        Opus.Supervisor,
         Aqua.Supervisor,
         Emissary.Supervisor,
-        Crucible.Schedules.TaskSupervisor,
-        Crucible.Schedules.Scheduler,
+        Opus.Schedules.TaskSupervisor,
+        Opus.Schedules.Scheduler,
         Prism.TinctureRegistry,
         Prism.TaskSupervisor
       ]
@@ -220,15 +220,15 @@ defmodule Cyfr.ApplicationTest do
                Compendium.Provisioning,
                Compendium.ProjectionReconciler
              ]},
-            {Crucible.Supervisor,
+            {Opus.Supervisor,
              [
-               Crucible.Slots,
-               Crucible.Tree,
-               Crucible.TaskSupervisor,
-               Crucible.ArchiveWatch,
-               Crucible.Sweeper,
-               Crucible.WorkerWatch,
-               Crucible.HostListener
+               Opus.Slots,
+               Opus.Tree,
+               Opus.TaskSupervisor,
+               Opus.ArchiveWatch,
+               Opus.Sweeper,
+               Opus.WorkerWatch,
+               Opus.HostListener
              ]},
             {Aqua.Supervisor, [Aqua.ScheduleNotes, Aqua.WorkerTree, Aqua.RunnerTree]},
             {Emissary.Supervisor, [Emissary.External.ServerTree, Emissary.TaskSupervisor]}
@@ -241,32 +241,32 @@ defmodule Cyfr.ApplicationTest do
     end
 
     test "execution slots, event streams and attempts start first in the execution subtree" do
-      started = Crucible.Supervisor |> started_ids()
+      started = Opus.Supervisor |> started_ids()
 
       # The consented rate is not among them: its window is a shared row,
       # so this boot starts nothing for it.
-      refute Crucible.Rates in started
-      assert [Crucible.Slots, Crucible.Tree | _] = started
+      refute Opus.Rates in started
+      assert [Opus.Slots, Opus.Tree | _] = started
 
       assert [
-               Crucible.Registry,
-               Crucible.Events.Registry,
-               Crucible.Events.Sequence,
-               Crucible.Events.Supervisor,
-               Crucible.Attempt.Registry,
-               Crucible.Attempt.Supervisor
-             ] = started_ids(Crucible.Tree)
+               Opus.Registry,
+               Opus.Events.Registry,
+               Opus.Events.Sequence,
+               Opus.Events.Supervisor,
+               Opus.Attempt.Registry,
+               Opus.Attempt.Supervisor
+             ] = started_ids(Opus.Tree)
     end
 
     test "background roots and the stale-execution sweeper start after the execution group" do
-      started = Crucible.Supervisor |> started_ids()
+      started = Opus.Supervisor |> started_ids()
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
 
       # The sweeper is a child even where `:execution_sweeper_enabled` is off
       # and it did not start.
-      for id <- [Crucible.TaskSupervisor, Crucible.Sweeper] do
-        assert is_integer(at.(id)) and at.(id) > at.(Crucible.Tree),
-               "#{inspect(id)} must start under the execution subtree after Crucible.Tree"
+      for id <- [Opus.TaskSupervisor, Opus.Sweeper] do
+        assert is_integer(at.(id)) and at.(id) > at.(Opus.Tree),
+               "#{inspect(id)} must start under the execution subtree after Opus.Tree"
       end
     end
 
@@ -285,24 +285,24 @@ defmodule Cyfr.ApplicationTest do
     end
 
     test "the host API listener starts under the execution subtree after the attempts it serves" do
-      started = Crucible.Supervisor |> started_ids()
+      started = Opus.Supervisor |> started_ids()
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
 
       # Shutdown is reverse start order: the listener stops taking host
       # calls before the attempt tree and the roots that wait on them go.
-      assert is_integer(at.(Crucible.HostListener))
-      assert at.(Crucible.HostListener) > at.(Crucible.Tree)
-      assert at.(Crucible.HostListener) > at.(Crucible.TaskSupervisor)
+      assert is_integer(at.(Opus.HostListener))
+      assert at.(Opus.HostListener) > at.(Opus.Tree)
+      assert at.(Opus.HostListener) > at.(Opus.TaskSupervisor)
 
       # Bound where the configuration says, on the port the suite asked for
       # (0: one of the system's choosing), and answering as the host API.
       {_, listener, :supervisor, _} =
-        Crucible.Supervisor
+        Opus.Supervisor
         |> Supervisor.which_children()
-        |> List.keyfind(Crucible.HostListener, 0)
+        |> List.keyfind(Opus.HostListener, 0)
 
       assert Cyfr.RuntimeConfig.host_api_port() == 0
-      port = Crucible.HostListener.port(listener)
+      port = Opus.HostListener.port(listener)
       assert port > 0
       assert Cyfr.Test.RuntimeService.host_url() == "http://127.0.0.1:#{port}"
 
@@ -369,7 +369,7 @@ defmodule Cyfr.ApplicationTest do
 
       for {path, id} <- [
             {[], Cyfr.RetentionScheduler},
-            {[Crucible.Supervisor], Crucible.WorkerWatch},
+            {[Opus.Supervisor], Opus.WorkerWatch},
             {[Emissary.Supervisor, Emissary.External.ServerTree], Emissary.External.Backends}
           ] do
         supervisor = child_pid(Cyfr.InfraSupervisor, path)

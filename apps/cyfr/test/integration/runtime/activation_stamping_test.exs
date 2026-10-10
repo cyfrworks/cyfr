@@ -100,7 +100,7 @@ defmodule Locus.Runtime.ActivationStampingTest do
     # stamping is exercised where it still runs: a direct execution under
     # an authority that carries no activation of its own.
     {:ok, result} =
-      Crucible.Dispatch.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
+      Opus.Dispatch.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
         type: :formula,
         authority: Prima.Authority.zero()
       )

@@ -28,8 +28,8 @@ defmodule Cyfr.GenServerCatchallTest do
     {Arca.RecordSink, "RecordSink"},
     {Arca.WriteTurn, "WriteTurn"},
     {Prima.RateLimiter, "RateLimiter"},
-    {Crucible.Slots, "Slots"},
-    {Crucible.Events.Sequence, "Events.Sequence"},
+    {Opus.Slots, "Slots"},
+    {Opus.Events.Sequence, "Events.Sequence"},
     {Compendium.Provisioning, "Provisioning"},
     {Compendium.ProjectionReconciler, "ProjectionReconciler"}
   ]
@@ -38,11 +38,11 @@ defmodule Cyfr.GenServerCatchallTest do
   # gated off (returns :ignore) or not started in the test environment.
   @not_probed %{
     Cyfr.RetentionScheduler => "gated by :retention_scheduler_enabled",
-    Crucible.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
+    Opus.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
     Cyfr.Cell => "gated by :control_plane_claim_enabled",
-    Crucible.Sweeper => "gated by :execution_sweeper_enabled",
-    Crucible.ArchiveWatch => "gated by :execution_archive_watch_enabled",
-    Crucible.WorkerWatch => "gated by :worker_watch_enabled",
+    Opus.Sweeper => "gated by :execution_sweeper_enabled",
+    Opus.ArchiveWatch => "gated by :execution_archive_watch_enabled",
+    Opus.WorkerWatch => "gated by :worker_watch_enabled",
     Emissary.External.Reconciler => "gated by :external_server_reconciler_enabled",
     Emissary.External.Backends =>
       "started only when a backends service URL and key are configured",
@@ -99,7 +99,7 @@ defmodule Cyfr.GenServerCatchallTest do
     for message <- [@unexpected_msg, {:random, "payload"}] do
       test "survives #{inspect(message)} and logs it" do
         id = "exec_catchall_#{System.unique_integer([:positive])}"
-        {:ok, pid} = GenServer.start_link(Crucible.Events, {id, "ath_catchall"}, [])
+        {:ok, pid} = GenServer.start_link(Opus.Events, {id, "ath_catchall"}, [])
 
         assert capture_log(fn ->
                  send(pid, unquote(Macro.escape(message)))
@@ -118,16 +118,16 @@ defmodule Cyfr.GenServerCatchallTest do
     for message <- [@unexpected_msg, {:random, "payload"}] do
       test "survives #{inspect(message)} and logs it" do
         ctx = Sanctum.TestContext.local()
-        record = Crucible.Record.new(ctx, "catalyst:local.catchall:0.1.0", %{})
+        record = Opus.Record.new(ctx, "catalyst:local.catchall:0.1.0", %{})
 
         {:ok, pid} =
-          Crucible.Attempt.open(
+          Opus.Attempt.open(
             execution_id: record.id,
             attempt: record.attempt,
             ctx: ctx,
             authority: Prima.Authority.zero(),
             component_ref: "catalyst:local.catchall:0.1.0",
-            close: %Crucible.Close{ctx: ctx, record: record}
+            close: %Opus.Close{ctx: ctx, record: record}
           )
 
         assert capture_log(fn ->

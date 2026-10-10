@@ -13,7 +13,7 @@ defmodule Emissary do
   """
 
   use Boundary,
-    deps: [Grimoire, Sanctum, Arca, Cyfr, Crucible, CyfrWeb],
+    deps: [Grimoire, Sanctum, Arca, Cyfr, Opus, CyfrWeb],
     exports: [
       External.Proxy,
       MCP,

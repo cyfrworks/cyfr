@@ -13,7 +13,7 @@ defmodule Emissary.Web.WebhookController do
 
   Build the invoke envelope, merge with the webhook's stored
   `input_template`, and **fire** the target component asynchronously through
-  `Crucible.run_root/5` via `Task.Supervisor.start_child/2`. The HTTP request
+  `Opus.run_root/5` via `Task.Supervisor.start_child/2`. The HTTP request
   returns `200 {"status":"accepted","request_id":...}` immediately — webhook
   senders only need a 2xx ack to consider delivery successful (Stripe /
   GitHub / Twilio / PayPal docs all converge on this). The delivery is
@@ -203,7 +203,7 @@ defmodule Emissary.Web.WebhookController do
     # machinery is up — refuse the request cleanly in that
     # window instead of accepting work that noproc-crashes in the task.
     spawn_result =
-      if Crucible.available?() do
+      if Opus.available?() do
         claim = conn.assigns[:webhook_delivery_claim]
 
         Task.Supervisor.start_child(Emissary.Web.TaskSupervisor, fn ->
@@ -230,7 +230,7 @@ defmodule Emissary.Web.WebhookController do
         Grimoire.close_decision(ctx, ctx.call_id, %{
           result: {:error, reason},
           duration_ms: duration_ms,
-          routed_to: Crucible.service()
+          routed_to: Opus.service()
         })
 
         :telemetry.execute(
@@ -251,7 +251,7 @@ defmodule Emissary.Web.WebhookController do
 
   # Task body. Wrapped in try/rescue so the audit trail (the decision's
   # completion + `:invoke, :stop` telemetry) closes whether
-  # `Crucible.run_root/5` returns `{:ok, _}`, `{:error, _}`, or raises. The
+  # `Opus.run_root/5` returns `{:ok, _}`, `{:error, _}`, or raises. The
   # supervisor would log a crash otherwise, but the decision would stay
   # without a completion.
   defp run_in_task(ctx, webhook, input, telemetry_meta, start_time, claim) do
@@ -290,7 +290,7 @@ defmodule Emissary.Web.WebhookController do
       # A webhook fires under its bound profile's consent — the binding is
       # enforced at create/update and by the NOT NULL column.
       run_result =
-        Crucible.run_root(ctx, {:id, webhook.profile_id}, webhook.target_ref, input,
+        Opus.run_root(ctx, {:id, webhook.profile_id}, webhook.target_ref, input,
           class: :background
         )
 
@@ -301,7 +301,7 @@ defmodule Emissary.Web.WebhookController do
           Grimoire.close_decision(ctx, ctx.call_id, %{
             result: {:ok, result.output},
             duration_ms: duration_ms,
-            routed_to: Crucible.service()
+            routed_to: Opus.service()
           })
 
           :telemetry.execute(
@@ -319,7 +319,7 @@ defmodule Emissary.Web.WebhookController do
           Grimoire.close_decision(ctx, ctx.call_id, %{
             result: {:error, reason},
             duration_ms: duration_ms,
-            routed_to: Crucible.service()
+            routed_to: Opus.service()
           })
 
           # A fixed slug, never the raw term: telemetry metadata fans out
@@ -347,7 +347,7 @@ defmodule Emissary.Web.WebhookController do
         Grimoire.close_decision(ctx, ctx.call_id, %{
           result: {:error, e},
           duration_ms: duration_ms,
-          routed_to: Crucible.service()
+          routed_to: Opus.service()
         })
 
         :telemetry.execute(

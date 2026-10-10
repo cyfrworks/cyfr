@@ -20,7 +20,7 @@ defmodule Sanctum.Context do
   entry's own admission) that is running now, `call_<uuid7>`. The entry
   that decides sets it, the gate sets it on the context it hands a
   handler, and an execution admitted under the context records it
-  (`Crucible.Record`). It identifies one decision in `Arca.DecisionLog`,
+  (`Opus.Record`). It identifies one decision in `Arca.DecisionLog`,
   authorizes nothing, is not projected onto the actor and survives
   `enter_guest/1` unchanged. It is nil outside any admission.
 
@@ -234,7 +234,7 @@ defmodule Sanctum.Context do
     # `Aqua.Launch.dispatch/2` sets it, on the approver's context for the
     # one `execution.run` it dispatches; nothing a caller sends can name
     # one, and `build/1` never sets it. The run's root admission
-    # (`Crucible.Admission`) refuses unless the root's binding names this
+    # (`Opus.Admission`) refuses unless the root's binding names this
     # entry under this name, and clears it from the context the run
     # carries on, so it rides that one call and is never compared again.
     :approved_entry,

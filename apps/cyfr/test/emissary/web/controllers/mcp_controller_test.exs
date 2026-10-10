@@ -829,7 +829,7 @@ defmodule Emissary.Web.MCPControllerTest do
       {"build", "toolchains", "compendium"},
       {"retention", "get", "arca"},
       {"session", "whoami", "sanctum"},
-      {"execution", "status", "crucible"}
+      {"execution", "status", "opus"}
     ]
 
     for {tool, action, expected_service} <- @tool_routing_cases do

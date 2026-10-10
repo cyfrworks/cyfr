@@ -125,7 +125,7 @@ defmodule Aqua.Runner.RecoveryTable do
   defp consent_holds(ctx, turn) do
     with {:ok, origin} <- Prima.Origin.from_wire(Map.get(turn, :origin)),
          {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id <-
-           Crucible.authority_for(
+           Opus.authority_for(
              %{ctx | origin: origin},
              {:id, turn.profile_id},
              source_ref(turn)

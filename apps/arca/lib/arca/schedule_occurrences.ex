@@ -345,7 +345,7 @@ defmodule Arca.ScheduleOccurrences do
   now. One whose claimant is a live member is `lapsed_live`: a run closes
   its execution before its task ends the occurrence, so the caller gives
   that task its grace, timed on the caller's own clock
-  (`Crucible.Schedules.Scheduler`), and no member's wall clock is read
+  (`Opus.Schedules.Scheduler`), and no member's wall clock is read
   here. Whether an execution ended is its status alone, or its row being
   gone; when it ended is never compared.
 

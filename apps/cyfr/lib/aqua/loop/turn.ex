@@ -128,7 +128,7 @@ defmodule Aqua.Loop.Turn do
   # its row once: the parent call of the calls the turn makes. It is audit
   # correlation, so a row that cannot be read names none.
   defp root_call_id(ctx, %{root_execution_id: id}) when is_binary(id) do
-    case Crucible.get(ctx, id) do
+    case Opus.get(ctx, id) do
       {:ok, %{call_id: call_id}} -> call_id
       _ -> nil
     end
@@ -299,7 +299,7 @@ defmodule Aqua.Loop.Turn do
     fn input ->
       task =
         Aqua.Loop.Worker.async(fn ->
-          Crucible.run_child(authority, catalyst, nil, input,
+          Opus.run_child(authority, catalyst, nil, input,
             ctx: guest,
             parent_execution_id: turn.root_execution_id,
             root_execution_id: turn.root_execution_id,

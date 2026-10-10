@@ -53,12 +53,12 @@ defmodule Cyfr.AdmissionTest do
 
       roster =
         Enum.map(Admission.roster(), fn
-          %{path: :scheduler} = row -> %{row | entries: ["Crucible.Planted" | row.entries]}
+          %{path: :scheduler} = row -> %{row | entries: ["Opus.Planted" | row.entries]}
           row -> row
         end)
 
       assert disagreements(entries, roster) ==
-               {["Emissary.Web.PlantedController"], ["Crucible.Planted"]}
+               {["Emissary.Web.PlantedController"], ["Opus.Planted"]}
     end
 
     test "the device channel is a built path carried by its own entry and the gate" do
@@ -120,7 +120,7 @@ defmodule Cyfr.AdmissionTest do
     test "are each on the roster, the HostAPI listener among them" do
       listeners = Cyfr.Application.listeners(Cyfr.Supervisor)
 
-      assert Crucible.HostListener in listeners
+      assert Opus.HostListener in listeners
       assert Admission.listener_findings(listeners) == []
       assert Cyfr.Application.check_listeners!(listeners) == :ok
     end
@@ -128,12 +128,12 @@ defmodule Cyfr.AdmissionTest do
     test "a listener the roster does not name refuses the boot, naming it" do
       error =
         assert_raise RuntimeError, fn ->
-          Cyfr.Application.check_listeners!([Crucible.HostListener, Planted.RogueListener])
+          Cyfr.Application.check_listeners!([Opus.HostListener, Planted.RogueListener])
         end
 
       assert error.message =~ "refusing to boot"
       assert error.message =~ "Planted.RogueListener"
-      refute error.message =~ "Crucible.HostListener"
+      refute error.message =~ "Opus.HostListener"
     end
 
     test "a listener is found by the socket server it runs, wherever it sits in the tree" do

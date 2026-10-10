@@ -31,11 +31,11 @@ defmodule Aqua.Launch do
   show is refused as a stale approval, a conflict that says to ask again.
   That check is the early refusal, not the guarantee. The run is asked
   for under the stored name and picks the named binding as its root's
-  vault (`Crucible.run_root/5`), and the account the card showed, its
+  vault (`Opus.run_root/5`), and the account the card showed, its
   entry and its stored name, rides that one call on the approver's
   context (`Sanctum.Context`'s `approved_entry`): the root is admitted
   only on a binding that names that entry under that name, judged on the
-  same read of the head that picks the binding (`Crucible.Admission`). A
+  same read of the head that picks the binding (`Opus.Admission`). A
   head that moves after the check here, binding the name to another
   entry, storing it otherwise or dropping it, refuses there,
   `:approved_entry_moved`, before anything starts, and reads as the same

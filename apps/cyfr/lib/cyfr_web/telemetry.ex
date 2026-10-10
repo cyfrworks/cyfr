@@ -95,16 +95,16 @@ defmodule CyfrWeb.Telemetry do
         event_name: [:cyfr, :emissary, :webhook, :invoke, :start],
         description: "Webhook invocations begun"
       ),
-      counter("cyfr.crucible.tincture.invoke.start.count",
-        event_name: [:cyfr, :crucible, :tincture, :invoke, :start],
+      counter("cyfr.opus.tincture.invoke.start.count",
+        event_name: [:cyfr, :opus, :tincture, :invoke, :start],
         description: "Tincture invocations begun"
       ),
       counter("cyfr.emissary.webhook.dedup_unavailable.count",
         event_name: [:cyfr, :emissary, :webhook, :dedup_unavailable],
         description: "Webhook deliveries accepted without dedup protection (store down)"
       ),
-      distribution("cyfr.crucible.tincture.invoke.stop.duration_ms",
-        event_name: [:cyfr, :crucible, :tincture, :invoke, :stop],
+      distribution("cyfr.opus.tincture.invoke.stop.duration_ms",
+        event_name: [:cyfr, :opus, :tincture, :invoke, :stop],
         measurement: :duration_ms,
         tags: [:status],
         unit: :millisecond,

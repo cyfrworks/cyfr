@@ -105,7 +105,7 @@ defmodule Locus.Runtime.AttachedFetchTest do
     {ctx, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
 
       case previous do
         {:ok, value} -> Application.put_env(:arca, :base_path, value)
@@ -299,13 +299,13 @@ defmodule Locus.Runtime.AttachedFetchTest do
   # what its stream and the executions topic carried and the log.
   defp run!(ctx, ref, input) do
     id = Prima.UUID7.execution_id()
-    :ok = Crucible.subscribe_events(id, ctx)
+    :ok = Opus.subscribe_events(id, ctx)
     actor = Sanctum.Context.actor(ctx)
     :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.executions(actor))
 
     {result, log} =
       with_log(fn ->
-        Crucible.run_root(ctx, :default, ref <> ":1.0.0", input, execution_id: id)
+        Opus.run_root(ctx, :default, ref <> ":1.0.0", input, execution_id: id)
       end)
 
     TwoServices.settled!()

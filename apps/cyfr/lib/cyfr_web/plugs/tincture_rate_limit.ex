@@ -33,7 +33,7 @@ defmodule CyfrWeb.Plugs.TinctureRateLimit do
 
   This is a transport back-stop under the policy-level limit: a tincture
   policy's `rate_limit` (when configured) throttles invokes per
-  tenant+component via `Crucible.Rates`, while this plug always bounds
+  tenant+component via `Opus.Rates`, while this plug always bounds
   per-IP request volume — including for tinctures with no policy limit.
 
   Counters live in `Prima.RateLimiter` (ETS) so the plug is single-node only; the

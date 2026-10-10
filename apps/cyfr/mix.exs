@@ -89,7 +89,7 @@ defmodule Cyfr.App.MixProject do
       # runs on. The adapters and the drivers are Arca's.
       {:ecto_sql, "~> 3.12"},
       # Req is used by the clients of the runtime's and the builds service's
-      # wires (`Crucible.WorkerClient`, `Compendium.Builds.Client`) and by
+      # wires (`Opus.WorkerClient`, `Compendium.Builds.Client`) and by
       # `Sanctum.Egress`.
       {:req, "~> 0.5"},
       # Emissary deps

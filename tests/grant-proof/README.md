@@ -17,7 +17,7 @@ session as its credential). Those reads are `fixture.exs`'s.
 
 The harness runs no execution engine and no model, so `run.sh` never starts
 a run: an admission is the loader's answer
-(`Crucible.authority_for/3`), not a dispatched execution.
+(`Opus.authority_for/3`), not a dispatched execution.
 
 The release is built by hand, as `tests/release-boot/release.sh`'s
 `release_build` builds it but without fetching dependencies
@@ -45,8 +45,8 @@ has both:
 
 | Step | Where it is shown |
 |---|---|
-| a run over the API refused, then admitted once the grant names `programmatic`, within its other bounds | `apps/cyfr/test/crucible/provider_test.exs` ("the origin a run over the API runs under") |
-| a scheduled root refused until the grant names `schedule`, its child refused with it | `apps/cyfr/test/crucible/schedules/scheduler_test.exs` ("a fire under a grant that does not name schedule invokes nothing until it does"); a child of a scheduled root carries `schedule`: `apps/cyfr/test/cyfr/admission_origin_test.exs` |
+| a run over the API refused, then admitted once the grant names `programmatic`, within its other bounds | `apps/cyfr/test/opus/provider_test.exs` ("the origin a run over the API runs under") |
+| a scheduled root refused until the grant names `schedule`, its child refused with it | `apps/cyfr/test/opus/schedules/scheduler_test.exs` ("a fire under a grant that does not name schedule invokes nothing until it does"); a child of a scheduled root carries `schedule`: `apps/cyfr/test/cyfr/admission_origin_test.exs` |
 | a programmatic turn queued, the cell restarted, the turn resumed and judged as `programmatic` | `apps/cyfr/test/aqua/runner_test.exs` ("the origin a turn resumes under", "a line under another origin") |
 | a narrowed grant refusing the domain it dropped | `apps/cyfr/test/sanctum/consent/blob_builder_test.exs` ("what is granted is what runs: the loaded edge refuses what was dropped") |
 | an approval bound to one execution and one path refusing another path, another execution and a call after its deadline | `apps/cyfr/test/aqua/approvals_test.exs` ("a bounded standing approval"), `apps/sanctum/test/sanctum/tool_grants_test.exs` (`admits?/2`) |

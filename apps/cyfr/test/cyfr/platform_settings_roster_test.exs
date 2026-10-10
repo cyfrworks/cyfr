@@ -93,7 +93,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # apply a stored one: `Arca.PlatformSettings.effective/1` answers the
   # stored row, which may be a value saved for the next boot and not the
   # one running, so these alone are read there.
-  @restart_read ~w(crucible_max_concurrent crucible_max_concurrent_per_tenant)
+  @restart_read ~w(opus_max_concurrent opus_max_concurrent_per_tenant)
 
   # The keywords a group of settings was once read under whole: the caps
   # under Sanctum and the worker watch's bounds under the host.
@@ -228,11 +228,11 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                Enum.sort(~w(
                  max_athanors max_groups_per_person max_pairs_per_person max_members_per_group
                  max_threads_per_athanor mint_per_hour athanor_storage_bytes
-                 crucible_max_concurrent crucible_max_concurrent_per_tenant
+                 opus_max_concurrent opus_max_concurrent_per_tenant
                  mcp_rate_limit_max mcp_rate_limit_window_ms api_rate_limit_max
                  api_rate_limit_window_ms webhook_per_ip_rate_limit_max
                  mcp_subscription_max_concurrent mcp_subscription_max_ms
-                 crucible_events_max_concurrent crucible_events_max_ms
+                 opus_events_max_concurrent opus_events_max_ms
                  frame_stream_max_concurrent
                  session_ttl_hours webhook_max_skew_seconds webhook_idempotency_ttl_seconds
                  device_label health_ready_cache_ms decision_retention_days
@@ -426,14 +426,14 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       reads = lib_reads()
       assert misplaced(Roster.entries(), reads) == []
 
-      {:ok, slots} = Roster.fetch("crucible_max_concurrent")
-      assert {slots.app, slots.config} == {:cyfr, [:crucible_max_concurrent]}
+      {:ok, slots} = Roster.fetch("opus_max_concurrent")
+      assert {slots.app, slots.config} == {:cyfr, [:opus_max_concurrent]}
 
       # The slots under Sanctum would be written where nothing reads them.
       wrong = %{slots | app: :sanctum}
 
       assert misplaced([wrong], reads) == [
-               {"crucible_max_concurrent", :sanctum, :crucible_max_concurrent}
+               {"opus_max_concurrent", :sanctum, :opus_max_concurrent}
              ]
     end
 
@@ -456,7 +456,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
          "Keyword.get(Application.get_env(:sanctum, :caps, []), k)"},
         {"apps/cyfr/lib/planted.ex", "Application.fetch_env!(:cyfr, :mcp_rate_limit_max)"},
         {"apps/arca/lib/planted.ex", "Application.get_env(:arca, :session_ttl_hours)"},
-        {"apps/cyfr/lib/slots.ex", "Application.get_env(:cyfr, :crucible_max_concurrent)"}
+        {"apps/cyfr/lib/slots.ex", "Application.get_env(:cyfr, :opus_max_concurrent)"}
       ]
 
       assert env_reads(planted, ~w(get_env fetch_env!?)) == [
@@ -500,18 +500,18 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       restart = for %Entry{scope: :restart, key: key} <- Roster.entries(), do: key
 
       assert Enum.sort(restart) == [
-               "crucible_max_concurrent",
-               "crucible_max_concurrent_per_tenant"
+               "opus_max_concurrent",
+               "opus_max_concurrent_per_tenant"
              ]
 
       {:ok, level} = Roster.fetch("log_level")
       assert level.apply == {Cyfr.Platform.Settings, :apply_log_level, 1}
 
-      {:ok, slots} = Roster.fetch("crucible_max_concurrent")
+      {:ok, slots} = Roster.fetch("opus_max_concurrent")
       assert slots.apply == {Cyfr.Platform.Settings, :apply_execution_slots, 1}
 
       assert apply_violations([%{slots | apply: nil}]) == [
-               {"crucible_max_concurrent", :restart_without_apply}
+               {"opus_max_concurrent", :restart_without_apply}
              ]
 
       {:ok, rate} = Roster.fetch("mcp_rate_limit_max")
@@ -543,7 +543,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  rate.validator.(bad)
       end
 
-      {:ok, slots} = Roster.fetch("crucible_max_concurrent")
+      {:ok, slots} = Roster.fetch("opus_max_concurrent")
       assert {:error, _} = slots.validator.("31")
       assert slots.validator.("32") == {:ok, 32}
 
@@ -705,14 +705,14 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         %{
           "CYFR_MCP_RATE_LIMIT_MAX" => "240",
           "CYFR_SESSION_TTL_HOURS" => "0",
-          "CYFR_CRUCIBLE_MAX_CONCURRENT" => "64"
+          "CYFR_OPUS_MAX_CONCURRENT" => "64"
         },
         fn ->
           config = read_prod_config!()
 
           assert config[:cyfr][:deployment_pinned] == [
-                   {"crucible_max_concurrent", 64},
                    {"mcp_rate_limit_max", 240},
+                   {"opus_max_concurrent", 64},
                    {"session_ttl_hours", 0}
                  ]
 
@@ -721,7 +721,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
           refute Keyword.has_key?(config[:sanctum] || [], :session_ttl_hours)
 
           # The slots are read once at boot, where the pin is written.
-          assert config[:cyfr][:crucible_max_concurrent] == 64
+          assert config[:cyfr][:opus_max_concurrent] == 64
         end
       )
     end

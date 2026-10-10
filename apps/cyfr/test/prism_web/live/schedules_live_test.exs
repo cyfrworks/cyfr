@@ -257,7 +257,7 @@ defmodule PrismWeb.SchedulesLiveTest do
         binding: binding,
         resolved_reference: "catalyst:local.markets:1.0.0",
         profile_id: "prof_schedules_page",
-        cap: Crucible.Feeds.max_per_athanor()
+        cap: Opus.Feeds.max_per_athanor()
       })
 
     {feed, binding}

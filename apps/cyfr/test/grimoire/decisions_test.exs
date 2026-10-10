@@ -323,10 +323,10 @@ defmodule Grimoire.DecisionsTest do
     test "an execution's close never records a decision's completion" do
       # The gate records the call's completion when the call returns; an
       # asynchronous run's attempt closes its own row and nothing else.
-      source = File.read!(Path.join(@root, "apps/cyfr/lib/crucible/close.ex"))
+      source = File.read!(Path.join(@root, "apps/cyfr/lib/opus/close.ex"))
 
       for name <- ["DecisionLog", "Grimoire.Decisions", "close_decision", "finish("] do
-        refute source =~ name, "Crucible.Close names #{name}"
+        refute source =~ name, "Opus.Close names #{name}"
       end
     end
   end

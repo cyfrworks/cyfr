@@ -1593,7 +1593,7 @@ func (args ExecutionLogsArgs) MarshalJSON() ([]byte, error) {
 
 // ExecutionReadResourceArgs carries arguments for execution.read_resource.
 type ExecutionReadResourceArgs struct {
-	// crucible://executions/{id} for an execution's state, or crucible://executions/{id}/logs for its logs
+	// opus://executions/{id} for an execution's state, or opus://executions/{id}/logs for its logs
 	Uri string `json:"uri"`
 }
 

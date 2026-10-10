@@ -53,7 +53,7 @@ defmodule Aqua.ApprovalsTest do
     assert @soul in minted
 
     {:ok, %{profile_id: profile_id, consent_id: consent_id}} =
-      Crucible.authority_for(ctx, :default, @soul)
+      Opus.authority_for(ctx, :default, @soul)
 
     {:ok, %{capability_digest: capability}} = Compendium.AgentIndex.snapshot(ctx, "aqua")
 

@@ -19,7 +19,7 @@ defmodule CyfrWeb.Endpoint do
       Cyfr,
       Compendium,
       Aqua,
-      Crucible,
+      Opus,
       Emissary,
       Emissary.Web,
       Prism,

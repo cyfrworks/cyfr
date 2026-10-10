@@ -9,7 +9,7 @@ defmodule CyfrWeb.SSE do
 
   Each surface uses its own subscription tag and its own platform
   settings (`mcp_subscription_*` for `subscriptions/listen`,
-  `crucible_events_*` for execution events, `frame_stream_max_concurrent`
+  `opus_events_*` for execution events, `frame_stream_max_concurrent`
   for a tincture frame's streams), read through
   `Arca.PlatformSettings.effective/1` when a stream opens: a change
   reaches the streams opened after it. Slots are counted per member, in
@@ -67,8 +67,8 @@ defmodule CyfrWeb.SSE do
 
   # The settings a surface may name: each surface's concurrent-stream cap
   # and stream lifetime.
-  @limits ~w(mcp_subscription_max_concurrent crucible_events_max_concurrent frame_stream_max_concurrent)a
-  @lifetimes ~w(mcp_subscription_max_ms crucible_events_max_ms)a
+  @limits ~w(mcp_subscription_max_concurrent opus_events_max_concurrent frame_stream_max_concurrent)a
+  @lifetimes ~w(mcp_subscription_max_ms opus_events_max_ms)a
 
   # How often a delivering stream looks at its context's age. A context is
   # re-established once it is past the session-freshness bound, so a

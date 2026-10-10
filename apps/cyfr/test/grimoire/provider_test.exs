@@ -64,7 +64,7 @@ defmodule Grimoire.ProviderTest do
       assert "grimoire" in scope_prop["enum"]
       assert "sanctum" in scope_prop["enum"]
       assert "arca" in scope_prop["enum"]
-      assert "crucible" in scope_prop["enum"]
+      assert "opus" in scope_prop["enum"]
       assert "compendium" in scope_prop["enum"]
     end
 
@@ -211,7 +211,7 @@ defmodule Grimoire.ProviderTest do
       assert Map.has_key?(result.services, :grimoire)
       assert Map.has_key?(result.services, :sanctum)
       assert Map.has_key?(result.services, :arca)
-      assert Map.has_key?(result.services, :crucible)
+      assert Map.has_key?(result.services, :opus)
       assert Map.has_key?(result.services, :compendium)
     end
 
@@ -266,14 +266,14 @@ defmodule Grimoire.ProviderTest do
       assert Map.keys(result.services) == [:arca]
     end
 
-    test "scope crucible returns only crucible status" do
+    test "scope opus returns only opus status" do
       ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
-        Provider.handle("system", ctx, %{"action" => "status", "scope" => "crucible"})
+        Provider.handle("system", ctx, %{"action" => "status", "scope" => "opus"})
 
-      assert Map.keys(result.services) == [:crucible]
-      assert result.services.crucible == "ok"
+      assert Map.keys(result.services) == [:opus]
+      assert result.services.opus == "ok"
     end
 
     test "scope compendium returns the compendium status and the registry's" do

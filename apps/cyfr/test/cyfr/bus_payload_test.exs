@@ -424,7 +424,7 @@ defmodule Cyfr.BusPayloadTest do
 
       assert {row.scope, row.template, row.struct, row.producers, row.consumers} ==
                {:tenant, "tenant:<athanor_id>:bus:feeds", FeedPublished,
-                ["Crucible.Feeds", "Crucible.Schedules.Scheduler"],
+                ["Opus.Feeds", "Opus.Schedules.Scheduler"],
                 ["stream:feed.results", "PrismWeb.SchedulesLive"]}
 
       assert "stream:runs.changes" in Enum.find(Bus.topics(), &(&1.key == :executions)).consumers

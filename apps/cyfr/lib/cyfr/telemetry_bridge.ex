@@ -216,7 +216,7 @@ defmodule Cyfr.TelemetryBridge do
     [tenant(meta, &Bus.components/1, &Components.new(&1, kind, fields))]
   end
 
-  defp messages([:cyfr, :crucible, :tincture, :invoke, stage], _measurements, meta)
+  defp messages([:cyfr, :opus, :tincture, :invoke, stage], _measurements, meta)
        when stage in [:start, :stop] do
     kind = if stage == :start, do: :invoke_started, else: :invoke_stopped
 

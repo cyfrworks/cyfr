@@ -115,7 +115,7 @@ defmodule Locus.Runtime.HttpHandlerEnforcementTest do
 
   test "a refusal reported for an attempt that is no longer held records nothing" do
     {attempt, host} = attached("catalyst:local.audited-closed:1.0.0")
-    assert {:ok, %{cancelled: true}} = Crucible.cancel(attempt.ctx, attempt.execution_id)
+    assert {:ok, %{cancelled: true}} = Opus.cancel(attempt.ctx, attempt.execution_id)
 
     assert {:error, :lost} =
              Locus.Runtime.HostClient.record_denial(host, "domain_blocked", "blocked")

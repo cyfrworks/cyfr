@@ -55,12 +55,12 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
     # fails at compile — irrelevant here: registration wraps the execution
     # window either way, and the entry must be gone afterwards.
     _result =
-      Crucible.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
+      Opus.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
         type: :reagent,
         execution_id: execution_id
       )
 
-    assert Registry.lookup(Crucible.Registry, execution_id) == []
+    assert Registry.lookup(Opus.Registry, execution_id) == []
   end
 
   test "a pre-registered owner (the run_stream shape) keeps its entry", %{ctx: ctx} do
@@ -69,13 +69,13 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
 
     owner =
       spawn_link(fn ->
-        # Mirrors Crucible.Provider run_stream / cron: the task registers itself,
+        # Mirrors Opus.Provider run_stream / cron: the task registers itself,
         # then dispatches the run from the same process.
-        {:ok, _} = Registry.register(Crucible.Registry, execution_id, :running)
+        {:ok, _} = Registry.register(Opus.Registry, execution_id, :running)
         send(parent, :registered)
 
         result =
-          Crucible.Dispatch.run(ctx, @test_ref, %{"a" => 2, "b" => 3},
+          Opus.Dispatch.run(ctx, @test_ref, %{"a" => 2, "b" => 3},
             type: :reagent,
             execution_id: execution_id
           )
@@ -92,7 +92,7 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
 
     # The dispatch's own register/unregister must not steal or clear the
     # streaming task's entry — it stays until the owner process exits.
-    assert [{^owner, _}] = Registry.lookup(Crucible.Registry, execution_id)
+    assert [{^owner, _}] = Registry.lookup(Opus.Registry, execution_id)
 
     send(owner, :stop)
   end

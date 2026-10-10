@@ -70,7 +70,7 @@ defmodule Cyfr.ApprovedEntryWritersTest do
     "apps/cyfr/lib/aqua/launch.ex" => 1,
     # `admit/4`'s clear to `nil` on the context the run carries on, and
     # `approved_root/2`'s two function heads, which read it.
-    "apps/cyfr/lib/crucible/admission.ex" => 3,
+    "apps/cyfr/lib/opus/admission.ex" => 3,
     # The field's declaration in the struct and its key in `t:t/0`.
     "apps/sanctum/lib/sanctum/context.ex" => 2
   }

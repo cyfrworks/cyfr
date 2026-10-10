@@ -18,13 +18,13 @@ defmodule Cyfr.EgressInventoryTest do
   control-plane requests, and the runtime owns the guest HTTP handlers, which
   connect to the address the control plane pinned and resolve nothing.
   A guest's request that names a connection is the one guest request the
-  control plane makes itself (`Crucible.Host.AttachedFetch`), to the
+  control plane makes itself (`Opus.Host.AttachedFetch`), to the
   address it pinned for it and resolving nothing more.
 
   Resolving an outbound name is inventoried beside sending to it: every
   site that resolves a host (`getaddr`) or pins a URL through the control
   plane's resolver (`Sanctum.Network.pin/2`) is classified. A guest's
-  outbound target is pinned by the control plane (`Crucible.Host.Egress`,
+  outbound target is pinned by the control plane (`Opus.Host.Egress`,
   the `egress_pin` host call), under the attempt's admitted authority.
 
   The Locus backends service (`Locus.Backends.Service`) is its own egress
@@ -58,11 +58,11 @@ defmodule Cyfr.EgressInventoryTest do
     # grant's egress checked, the one pin CYFR took for it connected to on
     # a connection of the request's own, never pooled, no redirect
     # followed, the answer bounded and masked as it streams.
-    "apps/cyfr/lib/crucible/host/attached_fetch.ex" => :attached_fetch,
+    "apps/cyfr/lib/opus/host/attached_fetch.ex" => :attached_fetch,
     # The worker wire, CYFR's side: `Prima.WorkerAPI` requests to the
     # operator-configured worker services (CYFR_LOCUS_RUNTIME_WORKERS), signed with each
     # service's dispatch key, bounded answers (`Prima.WorkerWire`).
-    "apps/cyfr/lib/crucible/worker_client.ex" => :worker_client,
+    "apps/cyfr/lib/opus/worker_client.ex" => :worker_client,
     # The worker wire, the runtime's side: the service posts its runners' host
     # calls, sealed and signed with the attempt's keys and verified by the
     # service before it posts them, its own rate calls and its exit reports
@@ -96,7 +96,7 @@ defmodule Cyfr.EgressInventoryTest do
     "apps/sanctum/lib/sanctum/egress.ex" => :pinned_owner,
     # A guest's outbound target, pinned by the control plane under the
     # attempt's admitted authority (`egress_pin`), through the above.
-    "apps/cyfr/lib/crucible/host/egress.ex" => :guest_pin
+    "apps/cyfr/lib/opus/host/egress.ex" => :guest_pin
   }
 
   @resolver_patterns ["getaddr(", "Sanctum.Network.pin("]
@@ -105,10 +105,10 @@ defmodule Cyfr.EgressInventoryTest do
   # control plane's own: its outbound callers reach them through
   # `Sanctum.Network` under `private_policy: :operator`. What decides a
   # guest's outbound target — the engine, and the execution domain whose
-  # `Crucible.Host.Egress` pins it under the attempt's authority — never
+  # `Opus.Host.Egress` pins it under the attempt's authority — never
   # names them.
   @operator_targets [":operator", "private_egress_targets", "private_allowed?"]
-  @guest_side ~w(apps/locus/lib/locus/runtime/**/*.ex apps/cyfr/lib/crucible/**/*.ex apps/cyfr/lib/crucible.ex)
+  @guest_side ~w(apps/locus/lib/locus/runtime/**/*.ex apps/cyfr/lib/opus/**/*.ex apps/cyfr/lib/opus.ex)
 
   defp root, do: Path.expand("../../../..", __DIR__)
 

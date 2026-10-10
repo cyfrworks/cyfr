@@ -51,7 +51,7 @@ defmodule Locus.Runtime.AuthorityExecutionCharacterizationTest do
 
   test "a pinned profile id from another athanor is not found, not rooted", %{ctx: ctx} do
     {:ok, %{profile_id: profile_id}} =
-      Crucible.authority_for(ctx, :default, @probe_node)
+      Opus.authority_for(ctx, :default, @probe_node)
 
     # The one place an agent-authored string selects an authority is the
     # approved `execution.run`/`run_stream` arm, which forwards
@@ -61,17 +61,17 @@ defmodule Locus.Runtime.AuthorityExecutionCharacterizationTest do
     elsewhere = %{ctx | athanor_id: "ath_b"}
 
     assert {:error, {:not_found, ^profile_id}} =
-             Crucible.authority_for(elsewhere, {:id, profile_id}, @probe_node)
+             Opus.authority_for(elsewhere, {:id, profile_id}, @probe_node)
 
     # At home the same id resolves: the refusal above is scoping, not the
     # id's form.
     assert {:ok, %{profile_id: ^profile_id}} =
-             Crucible.authority_for(ctx, {:id, profile_id}, @probe_node)
+             Opus.authority_for(ctx, {:id, profile_id}, @probe_node)
   end
 
   test "a self-invoking chain keeps the consented authority at every level", %{ctx: ctx} do
     {:ok, run_result} =
-      Crucible.run_root(ctx, :default, Probe.probe_ref(), %{
+      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "chain",
         "depth" => 2,
         "leaf" => nil
@@ -123,7 +123,7 @@ defmodule Locus.Runtime.AuthorityExecutionCharacterizationTest do
 
   test "guest emits are attributed: origin and emitting node in the envelope", %{ctx: ctx} do
     {:ok, run_result} =
-      Crucible.run_root(ctx, :default, Probe.probe_ref(), %{
+      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "emit",
         "events" => [%{"note" => "one"}]
       })
@@ -131,7 +131,7 @@ defmodule Locus.Runtime.AuthorityExecutionCharacterizationTest do
     assert run_result.status == :completed
 
     events =
-      Crucible.Events.since(run_result.metadata.execution_id, {0, 0}, ctx.athanor_id)
+      Opus.Events.since(run_result.metadata.execution_id, {0, 0}, ctx.athanor_id)
 
     emit = Enum.find(events, &(&1.type == "emit"))
 
@@ -150,7 +150,7 @@ defmodule Locus.Runtime.AuthorityExecutionCharacterizationTest do
     # expanded the manifest allowlist), the action is in-chain-annotated,
     # and the caller identity holds the permission — all three legs.
     {:ok, run_result} =
-      Crucible.run_root(ctx, :default, Probe.probe_ref(), %{
+      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "call",
         "request" => %{
           "tool" => "component",
@@ -171,7 +171,7 @@ defmodule Locus.Runtime.AuthorityExecutionCharacterizationTest do
     # its verdict reaches the guest as an encoded error naming the
     # authority denial.
     {:ok, run_result} =
-      Crucible.run_root(ctx, :default, Probe.probe_ref(), %{
+      Opus.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "call",
         "request" => %{"tool" => "webhook", "action" => "list", "args" => %{}}
       })

@@ -163,7 +163,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
 
     test "what is granted is what runs: the loaded edge refuses what was dropped", %{ctx: ctx} do
       walk!(ctx, @narrowing)
-      {:ok, authority} = Crucible.authority_for(ctx, :default, @ref)
+      {:ok, authority} = Opus.authority_for(ctx, :default, @ref)
       edge = authority.resources
 
       assert Prima.Network.domain_allowed?("api.b.two.example", edge.egress.domains)
@@ -190,7 +190,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
                rows[{:storage, @ref}]
 
       walk!(ctx, %{@ref => %{"egress" => %{"domains" => []}}})
-      {:ok, authority} = Crucible.authority_for(ctx, :default, @ref)
+      {:ok, authority} = Opus.authority_for(ctx, :default, @ref)
       refute Prima.Network.domain_allowed?("api.one.example", authority.resources.egress.domains)
     end
 
@@ -207,7 +207,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       end
 
       walk!(ctx, %{@ref => %{"storage" => %{"paths" => ["data"]}}})
-      {:ok, authority} = Crucible.authority_for(ctx, :default, @ref)
+      {:ok, authority} = Opus.authority_for(ctx, :default, @ref)
       granted = Blob.Edge.paths(authority.resources)
 
       assert Prima.ComponentPath.path_granted?("data", granted)
@@ -371,7 +371,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
                rows(preview)[{:egress, @dep}]
 
       walk!(ctx, subset, root)
-      {:ok, authority} = Crucible.authority_for(ctx, :default, root)
+      {:ok, authority} = Opus.authority_for(ctx, :default, root)
       {:ok, edge} = Blob.lookup_edge(authority.policy, root, @dep, "")
       assert edge.egress.domains == ["a.dep.example"]
     end

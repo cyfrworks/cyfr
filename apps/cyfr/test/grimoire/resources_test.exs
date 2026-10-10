@@ -54,7 +54,7 @@ defmodule Grimoire.ResourcesTest do
                Resources.resolve("compendium://components/r:local.x:1.0.0")
 
       assert {:ok, "execution", "read_resource"} =
-               Resources.resolve("crucible://executions/exec_1")
+               Resources.resolve("opus://executions/exec_1")
 
       assert {:ok, "resource", "read"} = Resources.resolve("arca://files/data/x")
       assert {:ok, "session", "read_resource"} = Resources.resolve("sanctum://identity")

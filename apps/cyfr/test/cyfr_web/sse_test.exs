@@ -391,14 +391,14 @@ defmodule CyfrWeb.SSETest do
         binding: binding,
         resolved_reference: "catalyst:local.markets:1.0.0",
         profile_id: "prof_sse",
-        cap: Crucible.Feeds.max_per_athanor()
+        cap: Opus.Feeds.max_per_athanor()
       })
 
     {:ok, slot} = Arca.ControlPlane.member_slot()
     {:ok, seq} = Arca.CronSchedule.claim_feed_seq(actor, row.id)
 
     {:ok, envelope} =
-      Crucible.Feeds.accept(
+      Opus.Feeds.accept(
         ctx,
         row.id,
         seq,

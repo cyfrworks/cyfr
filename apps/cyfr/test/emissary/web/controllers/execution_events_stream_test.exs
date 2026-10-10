@@ -8,7 +8,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
   import Prima.Test.Wait
 
   alias Emissary.Web.ExecutionEventsController
-  alias Crucible.Events
+  alias Opus.Events
 
   setup %{conn: conn} do
     ctx = Sanctum.TestContext.local(:api)
@@ -27,7 +27,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
       )
 
     # The stream's own deadline, short: a test that leaves it open ends.
-    Cyfr.Test.Settings.put("crucible_events_max_ms", 3_000)
+    Cyfr.Test.Settings.put("opus_events_max_ms", 3_000)
 
     {:ok, conn: conn, ctx: ctx, exec: execution}
   end

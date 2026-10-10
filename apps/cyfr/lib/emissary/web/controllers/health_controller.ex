@@ -89,7 +89,7 @@ defmodule Emissary.Web.HealthController do
       # Degrading, never failing: a control-plane node without the engine
       # still serves everything else, and the probe says so instead of
       # flapping the container.
-      execution: if(Crucible.available?(), do: :ok, else: {:degraded, "engine unavailable"})
+      execution: if(Opus.available?(), do: :ok, else: {:degraded, "engine unavailable"})
     }
   end
 

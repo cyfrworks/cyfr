@@ -1861,7 +1861,7 @@ defmodule Compendium.Registry do
   @doc false
   def invalidate_executor_caches(%Context{athanor_id: athanor_id}) do
     # Every writer keys through Arca.Cache.Keys, so the sweep matches exactly
-    # what was written: component metadata (Crucible.Admission), resolved
+    # what was written: component metadata (Opus.Admission), resolved
     # activations (Compendium.Activation) and live shape digests
     # (Sanctum.Consent.ShapeDerivation) — all functions of this athanor's
     # registry. Compiled components are keyed by digest and need no sweep: a

@@ -20,7 +20,7 @@ defmodule Prism do
   """
 
   use Boundary,
-    deps: [Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Crucible, CyfrWeb],
+    deps: [Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Opus, CyfrWeb],
     exports: [
       CanvasValidation,
       Frames,

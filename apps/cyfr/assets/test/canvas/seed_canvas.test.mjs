@@ -25,7 +25,7 @@ const INSTALLED = [
   {ref: "tincture:example.com.notes", name: "Notes"}
 ]
 
-// A change of `runs.changes`, in the shape `Crucible.Providers.Feed`
+// A change of `runs.changes`, in the shape `Opus.Providers.Feed`
 // declares for it: every field required, the nullable ones null where a
 // run has none.
 const change = (executionId, kind, fields = {}) => ({

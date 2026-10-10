@@ -11,7 +11,7 @@ defmodule Cyfr.Test.KeeperProbe do
   read from inside that write: `:suspended` or `:renewing`. A keeper still
   renewing there can renew again before its holder stops it, and that
   renewal finds the attempt ended and exits the holder `{:lease_lost, _}`
-  after its work is done (`Crucible.LeaseWatch`). A write by a process
+  after its work is done (`Opus.LeaseWatch`). A write by a process
   with no keeper races no renewal and is not reported.
 
   Every process's writes are read, so it belongs in a module that is not
@@ -49,7 +49,7 @@ defmodule Cyfr.Test.KeeperProbe do
 
   defp keeper?(pid) do
     case Process.info(pid, :current_stacktrace) do
-      {:current_stacktrace, frames} -> Enum.any?(frames, &(elem(&1, 0) == Crucible.LeaseWatch))
+      {:current_stacktrace, frames} -> Enum.any?(frames, &(elem(&1, 0) == Opus.LeaseWatch))
       nil -> false
     end
   end
@@ -59,7 +59,7 @@ defmodule Cyfr.Test.KeeperProbe do
   defp state(keeper, deadline) do
     cond do
       Process.info(keeper, :current_function) ==
-          {:current_function, {Crucible.LeaseWatch, :suspended, 2}} ->
+          {:current_function, {Opus.LeaseWatch, :suspended, 2}} ->
         :suspended
 
       System.monotonic_time(:millisecond) >= deadline ->

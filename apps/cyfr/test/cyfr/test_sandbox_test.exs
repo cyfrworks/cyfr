@@ -180,10 +180,10 @@ defmodule Cyfr.Test.SandboxTest do
       # shared connection down under the report of the runner the sweep
       # then ends.
       {:ok, _waiter} =
-        Task.Supervisor.start_child(Crucible.TaskSupervisor, fn ->
+        Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
           Process.delete(:"$callers")
 
-          Crucible.run_root(ctx, :default, Probe.probe_ref(), Probe.held_input(),
+          Opus.run_root(ctx, :default, Probe.probe_ref(), Probe.held_input(),
             execution_id: root_id
           )
         end)

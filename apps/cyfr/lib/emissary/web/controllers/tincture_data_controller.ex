@@ -72,7 +72,7 @@ defmodule Emissary.Web.TinctureDataController do
   `:validation`) is answered on its path from fixtures and admits
   nothing: no gate, no subscription and no open-stream slot. The stream
   it names is answered once and ended: for a feed's results, the envelope
-  of the feed the athanor binds under that name (`Crucible.feeds/1`), its
+  of the feed the athanor binds under that name (`Opus.feeds/1`), its
   result the fixture of the binding's result shape, and no event for a
   name the athanor does not bind; for another stream, the fixture of the
   stream's shape (`Prima.Canvas.Shape.fixture/1`), and no event for a
@@ -587,7 +587,7 @@ defmodule Emissary.Web.TinctureDataController do
   # subject's name, its result the fixture of the binding's result shape;
   # none for a name the athanor does not bind.
   defp fixtures(ctx, @feed_stream, subject) do
-    case Crucible.feeds(ctx) do
+    case Opus.feeds(ctx) do
       {:ok, feeds} ->
         {:ok,
          for %{binding_id: id, binding: %{name: ^subject} = binding} <- feeds do

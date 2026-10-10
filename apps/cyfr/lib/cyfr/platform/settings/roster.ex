@@ -302,9 +302,9 @@ defmodule Cyfr.Platform.Settings.Roster do
       "Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no cap.",
     "athanor_storage_bytes" =>
       "Bytes one athanor may hold, its whole tree including its copies of the shipped bundle. Unset, no cap.",
-    "crucible_max_concurrent" =>
+    "opus_max_concurrent" =>
       "Concurrent WASM executions on each member, at least 32 so the chain children's reserve holds a chain of the full depth.",
-    "crucible_max_concurrent_per_tenant" =>
+    "opus_max_concurrent_per_tenant" =>
       "Concurrent WASM executions one athanor may hold on each member.",
     "mcp_rate_limit_max" =>
       "Requests and stream opens per client address per window on the MCP endpoint; streams already open are unaffected.",
@@ -319,9 +319,9 @@ defmodule Cyfr.Platform.Settings.Roster do
       "Concurrent MCP subscription streams per caller (athanor and credential).",
     "mcp_subscription_max_ms" =>
       "How long one MCP subscription stream lives before the client reconnects, in milliseconds.",
-    "crucible_events_max_concurrent" =>
+    "opus_events_max_concurrent" =>
       "Concurrent execution-event streams per caller (athanor and credential).",
-    "crucible_events_max_ms" =>
+    "opus_events_max_ms" =>
       "How long one execution-event stream lives before the client reconnects, in milliseconds.",
     "frame_stream_max_concurrent" =>
       "Concurrent streams one tincture frame holds open (per frame credential).",
@@ -401,10 +401,10 @@ defmodule Cyfr.Platform.Settings.Roster do
 
       # ——— execution slots, applied once at boot ———
       %Entry{
-        key: "crucible_max_concurrent",
+        key: "opus_max_concurrent",
         app: :cyfr,
-        config: [:crucible_max_concurrent],
-        variable: "CYFR_CRUCIBLE_MAX_CONCURRENT",
+        config: [:opus_max_concurrent],
+        variable: "CYFR_OPUS_MAX_CONCURRENT",
         type: :integer,
         default: Prima.Slots.default_max(),
         # A quarter of the slots is the chain children's reserve, which must
@@ -417,10 +417,10 @@ defmodule Cyfr.Platform.Settings.Roster do
         apply: @apply_execution_slots
       },
       %Entry{
-        key: "crucible_max_concurrent_per_tenant",
+        key: "opus_max_concurrent_per_tenant",
         app: :cyfr,
-        config: [:crucible_max_concurrent_per_tenant],
-        variable: "CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT",
+        config: [:opus_max_concurrent_per_tenant],
+        variable: "CYFR_OPUS_MAX_CONCURRENT_PER_TENANT",
         type: :integer,
         default: Prima.Slots.default_key_max(),
         validator: whole(1..1_000_000, "executions"),
@@ -477,15 +477,15 @@ defmodule Cyfr.Platform.Settings.Roster do
         :streams
       ),
       limit(
-        :crucible_events_max_concurrent,
-        "CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT",
+        :opus_events_max_concurrent,
+        "CYFR_OPUS_EVENTS_MAX_CONCURRENT",
         8,
         whole(1..1_000_000, "streams"),
         :streams
       ),
       limit(
-        :crucible_events_max_ms,
-        "CYFR_CRUCIBLE_EVENTS_MAX_MS",
+        :opus_events_max_ms,
+        "CYFR_OPUS_EVENTS_MAX_MS",
         1_800_000,
         window(),
         :streams
