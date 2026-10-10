@@ -120,15 +120,17 @@ defmodule Emissary.Web.MCPController do
       # `:auth_required`, which is what a client retries on. Answering
       # every refusal `:insufficient_permissions` told an unauthenticated
       # caller their permissions were the problem.
-      refusal = Sanctum.Refusals.classify(e.reason)
+      # The sentence is chosen from the reason for the caller's credential
+      # (`Sanctum.Refusals.classify/2`) rather than taken from
+      # `Exception.message/1`: the struct bakes its prose at raise time
+      # without the auth method, and only the vocabulary can add the
+      # API-key remediation hint.
+      refusal = Sanctum.Refusals.classify(e.reason, conn.assigns.context.auth_method)
       code = Message.refusal_code(refusal, :transport, Sanctum.Refusals.code_override(refusal))
 
-      # Re-rendered from the reason rather than `Exception.message/1`: the
-      # struct bakes its prose at raise time without the auth method, and
-      # only the vocabulary can add the API-key remediation hint. Rendered
-      # through the renderer, which records it as the request's refusal;
-      # on a stream already open the refusal is its last frame.
-      message = Sanctum.Unauthorized.message(e.reason, conn.assigns.context.auth_method)
+      # Rendered through the renderer, which records it as the request's
+      # refusal; on a stream already open the refusal is its last frame.
+      message = refusal.message
 
       case conn.state do
         :chunked ->

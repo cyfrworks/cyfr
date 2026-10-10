@@ -248,6 +248,31 @@ defmodule Emissary.MCP.RouterTest do
       end)
     end
 
+    # The sentence is worded for the caller's credential on both paths: an
+    # API key's holder can change only the key's scopes, so its missing
+    # permission names the scope to recreate the key with.
+    test "an API key's missing permission names the scope to recreate it with, on both paths",
+         %{context: ctx} do
+      api_key = %{ctx | auth_method: :api_key, permissions: MapSet.new([:execute])}
+      expected = Sanctum.Unauthorized.message({:missing_permission, :admin}, :api_key)
+      assert expected =~ "--scope admin"
+
+      # The gate's refusal before the tool runs, and the tool's own
+      # permission refusal, which the router unwraps.
+      answers = [
+        gate: call(api_key, "system", %{"action" => "notify"}),
+        tool:
+          Sanctum.Catalog.with_providers([Sanctum.Gate.Probe.Refusing], fn ->
+            call(api_key, "refusing_probe", %{"action" => "forbidden"})
+          end)
+      ]
+
+      assert answers == [
+               gate: {:error, :insufficient_permissions, expected},
+               tool: {:error, :insufficient_permissions, expected}
+             ]
+    end
+
     test "a pending confirmation is a protocol error, -33505, its secret in the data alone",
          %{context: ctx} do
       Sanctum.Catalog.with_providers([Emissary.MCP.RouterTest.Confirming], fn ->

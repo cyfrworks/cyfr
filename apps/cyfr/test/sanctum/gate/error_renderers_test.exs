@@ -225,4 +225,224 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
                nil
     end
   end
+
+  # One term for each shape of `Sanctum.Unauthorized`'s `t:reason/0`,
+  # keyed by the type's own spelling of the shape. A missing permission
+  # carries two, since an API key's sentence names the permission.
+  @authorization_reasons %{
+    ":unauthenticated" => [:unauthenticated],
+    ":missing_tenant" => [:missing_tenant],
+    ":tenant_mismatch" => [:tenant_mismatch],
+    ":malformed_record" => [:malformed_record],
+    ":untagged_tenant_resource" => [:untagged_tenant_resource],
+    ":platform_admin_required" => [:platform_admin_required],
+    "{:missing_tenant, :no_membership}" => [{:missing_tenant, :no_membership}],
+    "{:missing_permission, atom()}" => [
+      {:missing_permission, :admin},
+      {:missing_permission, :vault_read}
+    ],
+    "{:guest_plane, atom()}" => [{:guest_plane, :vault_read}],
+    "{:guest_plane_call, String.t()}" => [{:guest_plane_call, "storage"}],
+    "{:tool_auth_required, String.t()}" => [{:tool_auth_required, "session"}],
+    "{:malformed_resource, :execution | :tenant}" => [
+      {:malformed_resource, :execution},
+      {:malformed_resource, :tenant}
+    ],
+    "{:consent_class_required, term()}" => [
+      {:consent_class_required, :not_authenticated},
+      {:consent_class_required, :unavailable},
+      {:consent_class_required, {:surface_not_permitted, :api_key}}
+    ],
+    "{:authorization_required, String.t()}" => [{:authorization_required, "grant expired"}],
+    "{:head_unavailable, String.t()}" => [{:head_unavailable, "prof_app"}],
+    "{:head_corrupt, String.t()}" => [{:head_corrupt, "prof_app"}],
+    "{:lender_unavailable, String.t()}" => [{:lender_unavailable, "reagent:local.dep"}],
+    "{:lender_corrupt, String.t(), String.t()}" => [
+      {:lender_corrupt, "reagent:local.dep", "prof_lender"}
+    ]
+  }
+
+  # Every member of `Sanctum.Context`'s `t:auth_method/0`, `nil` included.
+  @auth_methods [
+    :oidc,
+    :device,
+    :api_key,
+    :scheduled,
+    :webhook,
+    :tincture,
+    :system,
+    :session,
+    nil
+  ]
+
+  # Refusals outside the authorization vocabulary: a sample of the table's
+  # rows, the five consent signals, a producer's own sentence and a term
+  # nobody knows.
+  @other_reasons [
+    :busy,
+    :held_elsewhere,
+    :stale_writer,
+    :invalid_api_key,
+    {:not_found, "component", "x"},
+    {:invalid_argument, "the handler refused this argument"},
+    {:unavailable, "Storage"},
+    {:uncertain, "The outcome is unknown"},
+    {:setup_required, %{}},
+    {:consent_required, %{}},
+    {:consent_conflict, %{}},
+    {:restart_required, %{}},
+    {:confirmation_required,
+     %{id: "confirmation-7f3a", operation: "probe/change", expires_at: ~U[2026-09-29 12:05:00Z]}},
+    "a crafted sentence",
+    {:some_internal, %{"secret" => "leak"}}
+  ]
+
+  # The sentence each MCP path answers a refusal with — the router's
+  # protocol error and the controller's rescue — is chosen in one place,
+  # `Sanctum.Refusals.classify/2`; whether a refusal is one the gate knows
+  # is answered in one place, `Sanctum.Refusals.known?/1`.
+  describe "the sentence chosen for the caller's credential" do
+    test "answers what each MCP path answers, and knows what either vocabulary knows" do
+      # A term nobody knows is logged by its shape as it is classified.
+      {reasons, _log} = ExUnit.CaptureLog.with_log(&every_reason/0)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        for reason <- reasons, auth_method <- @auth_methods do
+          chosen = Sanctum.Refusals.classify(reason, auth_method)
+          classified = Sanctum.Refusals.classify(reason)
+
+          # The credential chooses the sentence alone: class, reason and
+          # stage, and so the code each path answers with, are classify/1's.
+          assert {reason, auth_method, %{chosen | message: nil}} ==
+                   {reason, auth_method, %{classified | message: nil}}
+
+          assert {reason, auth_method, chosen.message} ==
+                   {reason, auth_method, answered(reason, auth_method)}
+        end
+      end)
+
+      for reason <- reasons do
+        assert {reason, Sanctum.Refusals.known?(reason)} ==
+                 {reason, Sanctum.Unauthorized.reason?(reason) or Refusal.reason?(reason)}
+      end
+
+      # Each vocabulary knows a term the other does not, and neither knows
+      # a producer's sentence or an unknown term, so each side of the
+      # answer is held.
+      assert Enum.any?(reasons, &(Sanctum.Unauthorized.reason?(&1) and not Refusal.reason?(&1)))
+      assert Enum.any?(reasons, &(Refusal.reason?(&1) and not Sanctum.Unauthorized.reason?(&1)))
+      refute Sanctum.Refusals.known?("a crafted sentence")
+      refute Sanctum.Refusals.known?({:some_internal, %{"secret" => "leak"}})
+
+      # The credential matters: an API key's missing permission names the
+      # scope to recreate the key with, bare or wrapped, and no other
+      # credential's sentence does.
+      for reason <- [
+            {:missing_permission, :admin},
+            Sanctum.Refusals.admission({:missing_permission, :admin})
+          ] do
+        assert Sanctum.Refusals.classify(reason, :api_key).message =~ "--scope admin"
+        refute Sanctum.Refusals.classify(reason, :oidc).message =~ "--scope"
+        refute Sanctum.Refusals.classify(reason).message =~ "--scope"
+      end
+    end
+
+    # A shape added to the vocabulary, or a credential added to the
+    # context, without a term above fails here.
+    test "covers every shape of the authorization vocabulary and every credential" do
+      assert Enum.sort(Map.keys(@authorization_reasons)) ==
+               Enum.sort(Enum.map(members(Sanctum.Unauthorized, :reason), &spelled/1))
+
+      assert Enum.sort(Enum.map(@auth_methods, &inspect/1)) ==
+               Enum.sort(Enum.map(members(Sanctum.Context, :auth_method), &spelled/1))
+
+      for member <- members(Sanctum.Unauthorized, :reason),
+          reason <- Map.fetch!(@authorization_reasons, spelled(member)) do
+        assert {spelled(member), reason, of_type?(reason, member)} ==
+                 {spelled(member), reason, true}
+
+        assert {reason, Sanctum.Unauthorized.reason?(reason)} == {reason, true}
+      end
+    end
+  end
+
+  # Every authorization reason bare, as the gate's own refusal and as a
+  # refusal a provider built with its own sentence; every other reason
+  # bare and as the gate's own refusal; and a registry's refusal a
+  # provider built.
+  defp every_reason do
+    authorization = @authorization_reasons |> Map.values() |> List.flatten()
+
+    wrapped =
+      for reason <- authorization do
+        %Refusal{
+          class: Sanctum.Unauthorized.class(reason),
+          reason: reason,
+          message: "A provider's own sentence"
+        }
+      end
+
+    registry =
+      Compendium.Providers.Shared.refusal(%Compendium.OCI.Errors{
+        reason: :not_found,
+        message: "Resource not found on cyfr.run",
+        registry: "cyfr.run",
+        status: 404
+      })
+
+    admitted = Enum.map(authorization ++ @other_reasons, &Sanctum.Refusals.admission/1)
+    authorization ++ @other_reasons ++ wrapped ++ admitted ++ [registry]
+  end
+
+  # What each MCP path answers: an authorization reason, bare or inside a
+  # `%Prima.Refusal{}`, in the vocabulary's sentence for the caller's
+  # credential (`Sanctum.Unauthorized.message/2`); any other refusal in
+  # `classify/1`'s sentence.
+  defp answered(%Refusal{reason: inner} = refusal, auth_method) do
+    if Sanctum.Unauthorized.reason?(inner),
+      do: Sanctum.Unauthorized.message(inner, auth_method),
+      else: Sanctum.Refusals.classify(refusal).message
+  end
+
+  defp answered(reason, auth_method) do
+    if Sanctum.Unauthorized.reason?(reason),
+      do: Sanctum.Unauthorized.message(reason, auth_method),
+      else: Sanctum.Refusals.classify(reason).message
+  end
+
+  # The members of `module`'s union type `name`.
+  defp members(module, name) do
+    {:ok, types} = Code.Typespec.fetch_types(module)
+
+    case for {:type, {^name, body, []}} <- types, do: body do
+      [{:type, _, :union, members}] -> members
+      _ -> flunk("#{inspect(module)} declares no union type #{name}/0")
+    end
+  end
+
+  defp spelled(member) do
+    {:"::", _, [_name, quoted]} = Code.Typespec.type_to_quoted({:member, member, []})
+    Macro.to_string(quoted)
+  end
+
+  # Whether `term` is a value of the type `member` spells, for the forms
+  # the vocabulary's type uses; any other form fails.
+  defp of_type?(term, {:atom, _, atom}), do: term === atom
+  defp of_type?(term, {:type, _, :atom, []}), do: is_atom(term)
+  defp of_type?(_term, {:type, _, :term, []}), do: true
+  defp of_type?(term, {:type, _, :union, types}), do: Enum.any?(types, &of_type?(term, &1))
+
+  defp of_type?(term, {:remote_type, _, [{:atom, _, String}, {:atom, _, :t}, []]}),
+    do: is_binary(term)
+
+  defp of_type?(term, {:type, _, :tuple, types}) when is_tuple(term) do
+    tuple_size(term) == length(types) and
+      term
+      |> Tuple.to_list()
+      |> Enum.zip(types)
+      |> Enum.all?(fn {t, type} -> of_type?(t, type) end)
+  end
+
+  defp of_type?(_term, {:type, _, :tuple, _types}), do: false
+  defp of_type?(_term, form), do: flunk("an unread type form: #{inspect(form)}")
 end

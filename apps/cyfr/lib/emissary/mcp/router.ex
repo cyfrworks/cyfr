@@ -389,23 +389,16 @@ defmodule Emissary.MCP.Router do
 
   # A refusal answered as a JSON-RPC error: the code its class (or its
   # row's override, or a consent signal's tag) answers with, and its
-  # sentence — an authorization refusal's worded for the caller's
-  # credential, a consent signal's with its `error.data`.
+  # sentence as `Sanctum.Refusals.classify/2` chooses it for the caller's
+  # credential — a consent signal's with its `error.data`.
   defp protocol_error(ctx, reason, where) do
-    refusal = Sanctum.Refusals.classify(reason)
+    refusal = Sanctum.Refusals.classify(reason, ctx.auth_method)
     code = Message.refusal_code(refusal, where, Sanctum.Refusals.code_override(refusal))
     inner = refusal.reason
 
-    cond do
-      Sanctum.Unauthorized.reason?(inner) ->
-        {:error, code, Sanctum.Unauthorized.message(inner, ctx.auth_method)}
-
-      Prima.ConsentSignal.signal?(inner) ->
-        {:error, code, refusal.message, Prima.ConsentSignal.data(inner)}
-
-      true ->
-        {:error, code, refusal.message}
-    end
+    if Prima.ConsentSignal.signal?(inner),
+      do: {:error, code, refusal.message, Prima.ConsentSignal.data(inner)},
+      else: {:error, code, refusal.message}
   end
 
   defp encode_content(%{content: content}) when is_binary(content), do: content

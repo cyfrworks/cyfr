@@ -1411,7 +1411,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Proxy" => [install!: 1],
     "Sanctum.Recovery" => [reproof: 2, restore: 2, restore_challenge: 1],
-    "Sanctum.Refusals" => [classify: 1, code_override: 1, render: 1],
+    "Sanctum.Refusals" => [classify: 1, classify: 2, code_override: 1, known?: 1, render: 1],
     "Sanctum.RegistryCredentials" => [delete: 3, get: 3, list: 2, put_push_token: 6],
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
@@ -1474,7 +1474,7 @@ defmodule Cyfr.Boundaries do
       normalize_input_schema: 1,
       tool_patterns: 1
     ],
-    "Sanctum.Unauthorized" => [message: 1, message: 2, reason?: 1],
+    "Sanctum.Unauthorized" => [message: 1, reason?: 1],
     "Sanctum.Vault" => [destination_matches?: 3, disclosed?: 2],
     "Sanctum.Vault.OAuthGrant" => [complete: 3, redirect_uri: 0],
     "Sanctum.VaultReader" => [

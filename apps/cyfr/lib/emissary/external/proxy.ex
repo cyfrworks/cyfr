@@ -668,12 +668,13 @@ defmodule Emissary.External.Proxy do
 
   defp upstream_args(args), do: Map.drop(args, @host_stamped)
 
-  # An upstream call's refusal in the table's terms. A reason the table
-  # knows passes as it is — an `{:uncertain, _}` among them, which the
-  # caller reads as an unknown outcome — and anything else, the server's
-  # own sentence included, is classified here.
+  # An upstream call's refusal in the table's terms. A reason the gate
+  # knows (`Sanctum.Refusals.known?/1`) passes as it is — an
+  # `{:uncertain, _}` among them, which the caller reads as an unknown
+  # outcome — and anything else, the server's own sentence included, is
+  # classified here.
   defp classified({:error, reason} = refused) do
-    if Sanctum.Unauthorized.reason?(reason) or Prima.Refusal.reason?(reason),
+    if Sanctum.Refusals.known?(reason),
       do: refused,
       else: {:error, Sanctum.Refusals.classify(reason)}
   end
