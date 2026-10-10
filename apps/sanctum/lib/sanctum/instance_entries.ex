@@ -1122,7 +1122,10 @@ defmodule Sanctum.InstanceEntries do
     Sanctum.Cipher.encrypt(json, aad)
   rescue
     e ->
-      Logger.error("[Sanctum.InstanceEntries] sealing failed: #{Exception.message(e)}")
+      Logger.error(
+        "[Sanctum.InstanceEntries] sealing failed: #{Prima.LogFilter.exception_message(e)}"
+      )
+
       {:error, :seal_failed}
   end
 

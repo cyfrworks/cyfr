@@ -1041,7 +1041,7 @@ defmodule Crucible.Attempt do
     :exit, reason ->
       Logger.error(
         "[Crucible.Attempt] #{state.execution_id}'s charge was not given back: " <>
-          inspect(reason)
+          Prima.LogFilter.inspect_reason(reason)
       )
   end
 

@@ -264,7 +264,9 @@ defmodule Crucible.WorkerWatch do
         {:noreply, state}
 
       {id, polls} ->
-        Logger.error("[Crucible.WorkerWatch] the poll of #{id} crashed: #{inspect(reason)}")
+        Logger.error(
+          "[Crucible.WorkerWatch] the poll of #{id} crashed: #{Prima.LogFilter.inspect_reason(reason)}"
+        )
 
         {:noreply, landed(%{state | polls: polls}, id, {:error, :crashed})}
     end

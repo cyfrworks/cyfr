@@ -66,7 +66,7 @@ defmodule Arca.Health do
     # ArgumentError or a RuntimeError, and the outage the probe must report
     # would otherwise escape as a crash — answering the load balancer with
     # a 500 instead of the refusal that takes the node out of rotation.
-    e -> unavailable(Exception.message(e))
+    e -> unavailable(Prima.LogFilter.exception_message(e))
   end
 
   def check(%Prima.Actor{}), do: {:error, :not_system}

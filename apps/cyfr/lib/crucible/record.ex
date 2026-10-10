@@ -535,7 +535,7 @@ defmodule Crucible.Record do
   rescue
     e ->
       Logger.warning(
-        "[Crucible.Record] lease renewal failed for #{execution_id}: #{Exception.message(e)}"
+        "[Crucible.Record] lease renewal failed for #{execution_id}: #{Prima.LogFilter.exception_message(e)}"
       )
 
       :unavailable

@@ -431,7 +431,10 @@ defmodule Aqua.Runner do
     :ok
   rescue
     e ->
-      Logger.warning("[Aqua.Runner] boot recovery skipped: #{Exception.message(e)}")
+      Logger.warning(
+        "[Aqua.Runner] boot recovery skipped: #{Prima.LogFilter.exception_message(e)}"
+      )
+
       :ok
   end
 
@@ -1061,7 +1064,8 @@ defmodule Aqua.Runner do
   # process.
   defp crashed(%{live: live} = state, reason) do
     Logger.warning(
-      "[Aqua.Runner] turn #{live.turn_id} stopped without an answer: #{inspect(reason)}"
+      "[Aqua.Runner] turn #{live.turn_id} stopped without an answer: " <>
+        Prima.LogFilter.inspect_reason(reason)
     )
 
     case Tape.turn(state.ctx, live.turn_id) do

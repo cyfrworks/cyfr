@@ -26,7 +26,7 @@ defmodule Compendium.Archive do
       :zlib.inflateInit(z, 31)
       inflate_bounded(z, data, [], 0, max_bytes)
     rescue
-      e -> {:error, Exception.message(e)}
+      e -> {:error, Prima.LogFilter.exception_message(e)}
     after
       :zlib.close(z)
     end

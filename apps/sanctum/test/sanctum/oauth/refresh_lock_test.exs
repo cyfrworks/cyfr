@@ -23,6 +23,12 @@ defmodule Sanctum.OAuth.RefreshLockTest do
   alias Sanctum.OAuth.RefreshLock
 
   @kind "oauth_refresh"
+  @crashed "planted-refresh-argument-2b6f"
+
+  defmodule Probe do
+    @moduledoc false
+    def refresh(:never), do: :ok
+  end
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -60,6 +66,26 @@ defmodule Sanctum.OAuth.RefreshLockTest do
 
     assert {:ok, row} = JobClaims.read(@kind, claim_key)
     refute JobClaims.live?(row)
+  end
+
+  # A refresh that fails a function clause exits with the raw reason, its
+  # failing frame holding the arguments, under no key the sanitizer knows.
+  test "a refresh that fails a function clause logs its frame by arity, never its arguments",
+       %{key: key} do
+    log =
+      capture_log(fn ->
+        assert {:error, {:authorization_required, _}} =
+                 RefreshLock.run(
+                   key,
+                   fn -> apply(Probe, :refresh, [%{label: @crashed}]) end,
+                   fn -> :stale end
+                 )
+      end)
+
+    refute log =~ @crashed
+
+    assert log =~
+             "refresh exited: {:function_clause, [{Sanctum.OAuth.RefreshLockTest.Probe, :refresh, 1,"
   end
 
   test "a live peer's claim is read out, not raced: no provider call happens here", %{

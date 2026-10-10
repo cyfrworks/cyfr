@@ -152,7 +152,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
       rescue
         e ->
           Logger.error(
-            "[Authenticate] Auth provider #{inspect(auth_provider)} raised: #{Exception.message(e)}"
+            "[Authenticate] Auth provider #{inspect(auth_provider)} raised: #{Prima.LogFilter.exception_message(e)}"
           )
 
           # An auth provider crash is a server error — fail the request rather

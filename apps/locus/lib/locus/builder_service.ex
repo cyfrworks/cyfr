@@ -331,7 +331,7 @@ defmodule Locus.BuilderService do
       # terminal line, which the client reads as an answer it never got.
       {:DOWN, ^monitor, :process, _build, reason} ->
         Logger.error(
-          "[Locus.BuilderService] a build's process ended without an answer: #{inspect(reason)}"
+          "[Locus.BuilderService] a build's process ended without an answer: #{Prima.LogFilter.inspect_reason(reason)}"
         )
 
         settle(s)

@@ -555,12 +555,12 @@ defmodule Opus.AsyncTracker do
   defp format_crash_reason(:killed), do: "task was killed"
 
   defp format_crash_reason({:shutdown, reason}) do
-    Logger.warning("[Opus.AsyncTracker] task shutdown: #{inspect(reason)}")
+    Logger.warning("[Opus.AsyncTracker] task shutdown: #{Prima.LogFilter.inspect_reason(reason)}")
     "task shutdown"
   end
 
   defp format_crash_reason(reason) do
-    Logger.warning("[Opus.AsyncTracker] task crashed: #{inspect(reason)}")
+    Logger.warning("[Opus.AsyncTracker] task crashed: #{Prima.LogFilter.inspect_reason(reason)}")
     "task crashed"
   end
 end

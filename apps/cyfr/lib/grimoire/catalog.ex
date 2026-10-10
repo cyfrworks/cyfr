@@ -1734,7 +1734,10 @@ defmodule Grimoire.Catalog do
       {:error, {:crashed, "Tool #{name} crashed"}}
   catch
     :exit, reason ->
-      Logger.error("[Grimoire.Catalog] Tool #{name} exited: #{inspect(reason)}")
+      Logger.error(
+        "[Grimoire.Catalog] Tool #{name} exited: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
+
       {:error, {:exit, "Tool #{name} exited unexpectedly"}}
   end
 
@@ -1821,7 +1824,9 @@ defmodule Grimoire.Catalog do
             else: {:error, {:cancelled, "Tool #{name} was cancelled"}}
 
         {:exit, reason} ->
-          Logger.error("[Grimoire.Catalog] Tool #{name} exited: #{inspect(reason)}")
+          Logger.error(
+            "[Grimoire.Catalog] Tool #{name} exited: #{Prima.LogFilter.inspect_reason(reason)}"
+          )
 
           if uncertain?,
             do: {:error, {:uncertain, "Tool #{name} exited; its outcome is unknown"}},

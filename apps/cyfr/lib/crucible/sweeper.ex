@@ -117,7 +117,7 @@ defmodule Crucible.Sweeper do
       rescue
         e ->
           Logger.error(
-            "[Crucible.Sweeper] Failed to query stale executions: #{Exception.message(e)}"
+            "[Crucible.Sweeper] Failed to query stale executions: #{Prima.LogFilter.exception_message(e)}"
           )
 
           []
@@ -175,7 +175,7 @@ defmodule Crucible.Sweeper do
     exception ->
       Logger.error(
         "[Crucible.Sweeper] retired execution #{execution_id} was not cancelled: " <>
-          Exception.message(exception)
+          Prima.LogFilter.exception_message(exception)
       )
 
       true

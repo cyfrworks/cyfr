@@ -222,7 +222,7 @@ defmodule Cyfr.Application do
       {:DOWN, ^ref, :process, ^pid, reason} ->
         Logger.warning(
           "[Cyfr] graceful stop: #{inspect(endpoint)} could not stop accepting " <>
-            "(#{inspect(reason)}); it drains while it still accepts"
+            "(#{Prima.LogFilter.inspect_reason(reason)}); it drains while it still accepts"
         )
 
         :error

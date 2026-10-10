@@ -8,6 +8,13 @@ defmodule Opus.AsyncTrackerTest do
 
   alias Opus.AsyncTracker
 
+  @secret "planted-argument-4c9d"
+
+  defmodule Only do
+    @moduledoc false
+    def only(:expected), do: :ok
+  end
+
   # Poll until a task has a stored result (or is gone) — replaces fixed
   # sleeps that guessed at async completion.
   defp wait_completed(tracker, task_id) do
@@ -17,6 +24,26 @@ defmodule Opus.AsyncTrackerTest do
   # ============================================================================
   # start_link/1
   # ============================================================================
+
+  describe "a crashed task's log line" do
+    test "names the failed call by arity, never its arguments" do
+      {:ok, tracker} = AsyncTracker.start_link([])
+      on_exit(fn -> if Process.alive?(tracker), do: GenServer.stop(tracker) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, id} =
+            AsyncTracker.spawn_task(tracker, fn -> apply(Only, :only, [{:put, @secret}]) end, "r")
+
+          wait_completed(tracker, id)
+          assert {:error, "task crashed"} = AsyncTracker.await_task(tracker, id, 100)
+        end)
+
+      assert log =~ "[Opus.AsyncTracker] task crashed: "
+      assert log =~ "Opus.AsyncTrackerTest.Only, :only, 1,"
+      refute log =~ @secret
+    end
+  end
 
   describe "start_link/1" do
     test "starts successfully with default options" do

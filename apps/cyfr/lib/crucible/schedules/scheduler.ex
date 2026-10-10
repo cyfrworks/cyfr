@@ -260,15 +260,15 @@ defmodule Crucible.Schedules.Scheduler do
   rescue
     e ->
       Logger.warning(
-        "[Crucible.Schedules.Scheduler] failed to load schedule #{schedule.id}: #{Exception.message(e)}"
+        "[Crucible.Schedules.Scheduler] failed to load schedule #{schedule.id}: #{Prima.LogFilter.exception_message(e)}"
       )
 
-      timer_failed(schedule.id, Exception.message(e))
+      timer_failed(schedule.id, Prima.LogFilter.exception_message(e))
       acc
   catch
     :exit, reason ->
       Logger.warning(
-        "[Crucible.Schedules.Scheduler] failed to load schedule #{schedule.id}: exited #{inspect(reason)}"
+        "[Crucible.Schedules.Scheduler] failed to load schedule #{schedule.id}: exited #{Prima.LogFilter.inspect_reason(reason)}"
       )
 
       timer_failed(schedule.id, Grimoire.render(reason))
@@ -348,7 +348,7 @@ defmodule Crucible.Schedules.Scheduler do
   catch
     :exit, reason ->
       Logger.warning(
-        "[Crucible.Schedules.Scheduler] occurrence recovery exited: #{inspect(reason)}"
+        "[Crucible.Schedules.Scheduler] occurrence recovery exited: #{Prima.LogFilter.inspect_reason(reason)}"
       )
 
       state
@@ -494,7 +494,7 @@ defmodule Crucible.Schedules.Scheduler do
   catch
     :exit, reason ->
       Logger.warning(
-        "[Crucible.Schedules.Scheduler] fire_schedule #{schedule_id} exited (#{inspect(reason)}), retrying in 30s"
+        "[Crucible.Schedules.Scheduler] fire_schedule #{schedule_id} exited (#{Prima.LogFilter.inspect_reason(reason)}), retrying in 30s"
       )
 
       retry_later(schedule_id, state)
@@ -767,7 +767,8 @@ defmodule Crucible.Schedules.Scheduler do
   # what the row says — never invoked, or started with an unknown end.
   defp runner_died(schedule_id, task, reason) do
     Logger.warning(
-      "[Crucible.Schedules.Scheduler] schedule #{schedule_id} execution failed: #{inspect(reason)}"
+      "[Crucible.Schedules.Scheduler] schedule #{schedule_id} execution failed: " <>
+        Prima.LogFilter.inspect_reason(reason)
     )
 
     _ =
@@ -985,7 +986,7 @@ defmodule Crucible.Schedules.Scheduler do
   catch
     :exit, reason ->
       Logger.warning(
-        "[Crucible.Schedules.Scheduler] schedule_timer #{schedule_id} exited (#{inspect(reason)}), retrying in 30s"
+        "[Crucible.Schedules.Scheduler] schedule_timer #{schedule_id} exited (#{Prima.LogFilter.inspect_reason(reason)}), retrying in 30s"
       )
 
       retry_later(schedule_id, state)

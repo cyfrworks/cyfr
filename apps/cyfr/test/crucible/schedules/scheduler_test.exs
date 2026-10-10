@@ -19,6 +19,8 @@ defmodule Crucible.Schedules.SchedulerTest do
   @reference "reagent:local.test"
   @profile_id "prof_test"
   @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
+  @crash_email "planted-email-3f1a@example.test"
+  @crash_input "planted-input-9c2e"
 
   setup do
     Arca.Cache.init()
@@ -764,6 +766,37 @@ defmodule Crucible.Schedules.SchedulerTest do
     Process.exit(task_pid, :kill)
 
     wait_until(fn -> match?([%{state: "uncertain"}], occurrences(ctx, schedule)) end)
+  end
+
+  # A run that crashes exits with its stacktrace, whose failing frame holds
+  # the arguments `run/6` was called with: the schedule's context and input.
+  test "a runner that crashes is logged by its frames' arity, never their arguments", %{
+    ctx: ctx
+  } do
+    script!([:hang])
+    schedule = due!(create_schedule(ctx))
+    pid = scheduler!()
+
+    wait_until(fn -> map_size(:sys.get_state(pid).tasks) == 1 end)
+    wait_until(fn -> match?([_], ScriptedWorker.calls()) end, 5_000)
+
+    [task_pid] =
+      for {_, p, _, _} <- Supervisor.which_children(Crucible.Schedules.TaskSupervisor),
+          is_pid(p),
+          do: p
+
+    args = [schedule, %{id: "occ"}, %{email: @crash_email}, @reference, @crash_input, 1]
+    frame = {Scheduler, :run, args, [file: ~c"lib/crucible/schedules/scheduler.ex", line: 1]}
+
+    log =
+      capture_log(fn ->
+        Process.exit(task_pid, {:function_clause, [frame]})
+        wait_until(fn -> match?([%{state: "uncertain"}], occurrences(ctx, schedule)) end)
+      end)
+
+    refute log =~ @crash_email
+    refute log =~ @crash_input
+    assert log =~ "execution failed: {:function_clause, [{Crucible.Schedules.Scheduler, :run, 6,"
   end
 
   test "the scheduler survives an unexpected message" do

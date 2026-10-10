@@ -525,7 +525,10 @@ defmodule Crucible.Admission do
     end
   rescue
     e ->
-      Logger.debug("[Crucible.Admission] activation not recorded: #{Exception.message(e)}")
+      Logger.debug(
+        "[Crucible.Admission] activation not recorded: #{Prima.LogFilter.exception_message(e)}"
+      )
+
       record
   end
 

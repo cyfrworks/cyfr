@@ -198,7 +198,7 @@ defmodule CyfrWeb.SignInResponse do
     rescue
       e ->
         Logger.warning(
-          "[CyfrWeb.SignInResponse] failed to stash pending_probe cookie: #{Exception.message(e)}"
+          "[CyfrWeb.SignInResponse] failed to stash pending_probe cookie: #{Prima.LogFilter.exception_message(e)}"
         )
 
         conn

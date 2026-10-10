@@ -4,12 +4,14 @@
 defmodule Prima.LogFilterTest do
   @moduledoc """
   No log event carries a call's arguments (`Prima.LogFilter`): a crashed
-  server, a logged exception, a crashed task, a crashed plain process, and
-  a server and a task that crashed on a call they made each name their
-  frames and calls by arity, through Logger's own translator; every crash
-  report shape OTP writes is reduced the same way, and an event with
-  nothing to reduce passes as it came. The text the formatters write of an
-  exception, an exit or a stacktrace carries no argument either.
+  server, a logged exception, a crashed task, a crashed plain process, a
+  server and a task that crashed on a call they made, and a server that
+  applied a function to too many arguments each name their frames and
+  calls by arity, through Logger's own translator; every crash report
+  shape OTP writes is reduced the same way, and an event with nothing to
+  reduce passes as it came. The text the formatters write of an
+  exception, an exit, a stacktrace or a caught reason carries no argument
+  either.
 
   The filter is a primary filter, so this module runs alone and leaves it
   installed only if a node's boot had installed it already.
@@ -50,6 +52,12 @@ defmodule Prima.LogFilterTest do
 
     @impl true
     def handle_cast({:expected, _value}, state), do: {:noreply, state}
+
+    # A function it applies to two arguments: one of arity 1 ends it.
+    def handle_cast({:apply, fun, value}, state) do
+      fun.(value, :extra)
+      {:noreply, state}
+    end
 
     # A call it makes on a cast: a target that never answers ends it.
     def handle_cast({:relay, target, value}, state) do
@@ -148,6 +156,22 @@ defmodule Prima.LogFilterTest do
       {pid, events, log} = logged(fn -> crash(Holder, {:relay, target, @message_secret}) end)
 
       assert [{{:timeout, {GenServer, :call, 3}}, [_ | _]}] =
+               for(
+                 %{msg: {:report, %{label: {:gen_server, :terminate}, name: ^pid} = report}} <-
+                   events,
+                 do: report.reason
+               )
+
+      refute_secrets(events, log)
+    end
+
+    test "a server that applied a function to too many arguments names them by count" do
+      {pid, events, log} =
+        logged(fn -> crash(Holder, {:apply, fn value -> value end, @message_secret}) end)
+
+      assert log =~ "called with 2 arguments (:redacted, :redacted)"
+
+      assert [{{:badarity, {_fun, [:redacted, :redacted]}}, [_ | _]}] =
                for(
                  %{msg: {:report, %{label: {:gen_server, :terminate}, name: ^pid} = report}} <-
                    events,
@@ -258,6 +282,23 @@ defmodule Prima.LogFilterTest do
                filter(%{reason: reason})
     end
 
+    test "a bad arity's arguments, raw or in its exception" do
+      fun = fn _value -> :ok end
+      error = %BadArityError{function: fun, args: [@message_secret, :extra]}
+
+      event = %{
+        level: :error,
+        msg: {:report, %{reason: {{:badarity, {fun, [@message_secret, :extra]}}, [@frame]}}},
+        meta: %{crash_reason: {error, [@frame]}}
+      }
+
+      assert %{msg: {:report, %{reason: reason}}, meta: %{crash_reason: crash_reason}} =
+               LogFilter.filter(event, [])
+
+      assert reason == {{:badarity, {fun, [:redacted, :redacted]}}, [@reduced]}
+      assert crash_reason == {%{error | args: [:redacted, :redacted]}, [@reduced]}
+    end
+
     test "a frame of an anonymous function" do
       fun = fn _value -> :ok end
       reason = {:badarity, [{fun, [@message_secret], []}]}
@@ -353,6 +394,37 @@ defmodule Prima.LogFilterTest do
       text = LogFilter.format_exception(:exit, reason)
       assert text =~ "{GenServer, :call, 3}"
       refute_secrets([], text)
+    end
+
+    test "a caught reason's text names its frames and calls by arity" do
+      exit = {:timeout, {GenServer, :call, [self(), {:put, @message_secret}, 5_000]}}
+      crash = {:function_clause, [@frame, @outer]}
+
+      for reason <- [exit, crash] do
+        assert inspect(reason) =~ @message_secret
+        refute_secrets([], LogFilter.inspect_reason(reason))
+      end
+
+      assert LogFilter.inspect_reason(exit) =~ "{GenServer, :call, 3}"
+      assert LogFilter.inspect_reason(crash) =~ "Prima.LogFilterTest.Holder, :handle_cast, 2,"
+      assert LogFilter.inspect_reason(crash, limit: 1) == inspect(crash, limit: 1)
+    end
+
+    test "a bad arity's text counts its arguments" do
+      error = %BadArityError{function: fn _value -> :ok end, args: [@message_secret, :extra]}
+      assert Exception.message(error) =~ @message_secret
+
+      text = LogFilter.format_exception(:error, error)
+      assert text =~ "called with 2 arguments (:redacted, :redacted)"
+      refute_secrets([], text)
+      refute_secrets([], LogFilter.inspect_reason(error))
+
+      message = LogFilter.exception_message(error)
+      assert message =~ "called with 2 arguments (:redacted, :redacted)"
+      refute_secrets([], message)
+
+      other = %ArgumentError{message: "an argument was refused"}
+      assert LogFilter.exception_message(other) == Exception.message(other)
     end
 
     test "with no stacktrace the text is the banner" do

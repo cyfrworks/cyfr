@@ -66,7 +66,10 @@ defmodule Cyfr.OtelTenantHandler do
     # means tenant tracing is silently absent — visible at default levels,
     # not buried at :debug.
     e ->
-      Logger.warning("[OtelTenantHandler] handle_event failed: #{Exception.message(e)}")
+      Logger.warning(
+        "[OtelTenantHandler] handle_event failed: #{Prima.LogFilter.exception_message(e)}"
+      )
+
       :ok
   end
 

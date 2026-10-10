@@ -1146,7 +1146,7 @@ defmodule Arca.Execution do
       try do
         Arca.ExecutionPayloads.commit!(payload, attempt)
       rescue
-        e -> Arca.Repo.rollback({:payload_not_retained, Exception.message(e)})
+        e -> Arca.Repo.rollback({:payload_not_retained, Prima.LogFilter.exception_message(e)})
       end
     end
 

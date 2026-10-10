@@ -790,6 +790,7 @@ defmodule Emissary.External.ServerTest do
     @quoted ~S(sk-quo"te\back-0123456789)
     @hashed "sk-hash-review-0123456789#"
     @pin "pin1234"
+    @crashed "planted-message-5e8c"
 
     setup tags do
       Cyfr.Test.Sandbox.setup!(tags)
@@ -1088,6 +1089,44 @@ defmodule Emissary.External.ServerTest do
       assert log =~ "shutting down"
       refute log =~ @pin
       refute log =~ @listed
+    end
+
+    # A crash's reason holds the failing frame's arguments, the message the
+    # server was handed among them. The value sits under a key the status
+    # redaction knows, so the crash report's own last message and reason
+    # print none of it, and only the server's shutdown line could.
+    test "a crash is logged by its frames' arity, never the message the server was handed", %{
+      name: name,
+      ctx: ctx,
+      bypass: bypass,
+      url: url
+    } do
+      answering(bypass, fn request, _auth, _modern? ->
+        {:json, %{"jsonrpc" => "2.0", "id" => request["id"], "result" => %{"tools" => []}}}
+      end)
+
+      pid =
+        start_server(name, ctx.athanor_id,
+          url: url,
+          headers: %{"authorization" => "Bearer vault:listed-key"}
+        )
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+      assert {:ok, []} = GenServer.call(pid, :get_tools, 30_000)
+
+      log =
+        at_level(:info, fn ->
+          ExUnit.CaptureLog.capture_log(fn ->
+            catch_exit(GenServer.call(pid, {:no_such_call, %{owner_key: @crashed}}, 5_000))
+            wait_down(pid)
+          end)
+        end)
+
+      refute log =~ @crashed
+      refute log =~ @listed
+
+      assert log =~
+               "shutting down: {:function_clause, [{Emissary.External.Server, :handle_call, 3,"
     end
 
     # A codec that read the peer's `jsonrpc` back raised with it in the

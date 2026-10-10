@@ -233,7 +233,9 @@ defmodule Opus.FormulaHandler do
       encode_error(:dispatch_error, "The #{name} call failed.")
   catch
     :exit, reason ->
-      Logger.error("[FormulaHandler] #{parent_execution_id} #{name} exited: #{inspect(reason)}")
+      Logger.error(
+        "[FormulaHandler] #{parent_execution_id} #{name} exited: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
 
       encode_error(:dispatch_error, "The #{name} call failed.")
   end
@@ -256,7 +258,10 @@ defmodule Opus.FormulaHandler do
     :ok
   rescue
     e in [ArgumentError, RuntimeError] ->
-      Logger.warning("[FormulaHandler] cleanup_registry failed: #{inspect(e)}")
+      Logger.warning(
+        "[FormulaHandler] cleanup_registry failed: #{Prima.LogFilter.inspect_reason(e)}"
+      )
+
       :ok
   catch
     # `GenServer.stop/2` exits for a dead pid (`:noproc`), and every caller
@@ -276,7 +281,10 @@ defmodule Opus.FormulaHandler do
       :ok
 
     :exit, reason ->
-      Logger.warning("[FormulaHandler] cleanup_registry exited: #{inspect(reason)}")
+      Logger.warning(
+        "[FormulaHandler] cleanup_registry exited: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
+
       :ok
   end
 

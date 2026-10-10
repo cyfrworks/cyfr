@@ -129,7 +129,10 @@ defmodule Compendium.Provisioning do
     # A raising handler is detached by the telemetry library, and every
     # athanor on the node would stop filling with it.
     e ->
-      Logger.error("[Compendium.Provisioning] fill request raised: #{Exception.message(e)}")
+      Logger.error(
+        "[Compendium.Provisioning] fill request raised: #{Prima.LogFilter.exception_message(e)}"
+      )
+
       :ok
   end
 
@@ -627,7 +630,7 @@ defmodule Compendium.Provisioning do
 
       {:exit, reason} ->
         Logger.warning(
-          "[Provisioning] optional dependency pull exited (#{inspect(reason)}); " <>
+          "[Provisioning] optional dependency pull exited (#{Prima.LogFilter.inspect_reason(reason)}); " <>
             "the athanor provisions without them"
         )
 

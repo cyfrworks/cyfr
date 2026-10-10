@@ -189,7 +189,7 @@ defmodule PrismWeb.ComponentsLive do
                  "progress_id" => progress_id
                })
              rescue
-               e -> {:error, Exception.message(e)}
+               e -> {:error, Prima.LogFilter.exception_message(e)}
              end
 
            send(lv, {:deliver, tag, {:pull_complete, ref, result}})
@@ -332,7 +332,7 @@ defmodule PrismWeb.ComponentsLive do
                  "progress_id" => progress_id
                })
              rescue
-               e -> {:error, Exception.message(e)}
+               e -> {:error, Prima.LogFilter.exception_message(e)}
              end
 
            send(lv, {:deliver, tag, {:push_complete, ref, result}})
@@ -847,14 +847,14 @@ defmodule PrismWeb.ComponentsLive do
               rescue
                 e ->
                   Logger.warning(
-                    "[ComponentsLive] setup_plan crashed for #{ref}: #{Exception.message(e)}"
+                    "[ComponentsLive] setup_plan crashed for #{ref}: #{Prima.LogFilter.exception_message(e)}"
                   )
 
                   {:error, :crashed}
               catch
                 :exit, reason ->
                   Logger.warning(
-                    "[ComponentsLive] setup_plan exited for #{ref}: #{inspect(reason)}"
+                    "[ComponentsLive] setup_plan exited for #{ref}: #{Prima.LogFilter.inspect_reason(reason)}"
                   )
 
                   {:error, :exit}

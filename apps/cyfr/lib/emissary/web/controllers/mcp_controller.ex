@@ -556,7 +556,10 @@ defmodule Emissary.Web.MCPController do
         {conn, outcome}
 
       {:DOWN, ^ref, :process, _pid, reason} ->
-        Logger.error("[MCPController] request handler exited: #{inspect(reason)}")
+        Logger.error(
+          "[MCPController] request handler exited: #{Prima.LogFilter.inspect_reason(reason)}"
+        )
+
         {conn, {:error, :internal_error, "Request handler exited unexpectedly"}}
     after
       @keep_alive_ms ->

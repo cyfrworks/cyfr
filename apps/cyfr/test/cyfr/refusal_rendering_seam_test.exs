@@ -18,7 +18,13 @@ defmodule Cyfr.RefusalRenderingSeamTest do
   `e`, `other`, `why`), however it is wrapped (`inspect(reason)`,
   `reason |> inspect()`, `inspect(Sanitizer.sanitize(reason))`,
   `inspect(elem(reason, 0))`), wherever it sits: in an `{:error, …}`
-  return, a message interpolation, a map field. An `inspect` inside a
+  return, a message interpolation, a map field. A
+  `Prima.LogFilter.inspect_reason/2` is read as the `inspect` it is, and
+  no `lib` aliases or imports `Prima.LogFilter`, so the scan reads every
+  call by its full name. It assumes no other shortening, which it does
+  not refuse: `alias Prima, as: P` with `P.LogFilter`, a module attribute
+  holding the module, or a `defdelegate` to it would each hide a call
+  from the scan. An `inspect` inside a
   `Logger` call is a log line, which is where a term belongs; one inside
   `raise` or an `IO` write is a crash or a console line, outside this
   seam. Everything else is a finding unless listed below by file and
@@ -41,6 +47,10 @@ defmodule Cyfr.RefusalRenderingSeamTest do
     {"apps/sanctum/lib/sanctum/oauth/refresh_lock.ex", :describe_exit} =>
       "the refresh lock's exit description, interpolated only into its " <>
         "`Logger.warning`",
+    {"apps/prima/lib/prima/log_filter.ex", :inspect_reason} =>
+      "the log filter's rendering of a caught reason, frames and calls reduced; " <>
+        "each caller's `Prima.LogFilter.inspect_reason` is held to a log line here " <>
+        "as an `inspect` is",
     {"apps/cyfr/lib/emissary/external/server.ex", :log_reason} =>
       "an external server's reason as its log prints it, the injected header values " <>
         "masked in the term before it is rendered, interpolated only into its four " <>
@@ -76,6 +86,25 @@ defmodule Cyfr.RefusalRenderingSeamTest do
              inspect(Enum.sort(stale))
   end
 
+  test "no lib names Prima.LogFilter but in full" do
+    shortened =
+      for lib <- Prima.Test.SourceTree.app_libs(@root),
+          file <- Prima.Test.SourceTree.files!(Path.join([@root, lib, "**/*.ex"])),
+          path = Path.relative_to(file, @root),
+          line <- shortened(Prima.Test.SourceTree.read(file)),
+          do: "  #{path}:#{line}"
+
+    assert shortened == [],
+           """
+           These alias or import Prima.LogFilter, so a call of
+           `inspect_reason` there is not read by its full name:
+
+           #{Enum.join(shortened, "\n")}
+
+           Call it as `Prima.LogFilter.inspect_reason`.
+           """
+  end
+
   describe "the scan" do
     test "finds an inspected term in a return and in a message, and skips a log line" do
       source = """
@@ -105,13 +134,38 @@ defmodule Cyfr.RefusalRenderingSeamTest do
 
         def crashed(e), do: raise(ArgumentError, "bad: \#{inspect(e)}")
 
+        def reduced(reason), do: {:error, Prima.LogFilter.inspect_reason(reason)}
+
+        def reduced_piped(why), do: {:error, why |> Prima.LogFilter.inspect_reason()}
+
+        def reduced_logged(reason),
+          do: Logger.warning("exited: \#{Prima.LogFilter.inspect_reason(reason)}")
+
         def described(module), do: inspect(module)
       end
       """
 
       found = scan("planted.ex", source) |> Enum.map(fn {_path, function, _line} -> function end)
 
-      assert Enum.sort(found) == [:piped, :returned, :stored, :tagged, :worded, :wrapped]
+      assert Enum.sort(found) ==
+               [:piped, :reduced, :reduced_piped, :returned, :stored, :tagged, :worded, :wrapped]
+    end
+
+    test "finds each alias and import of Prima.LogFilter" do
+      source = """
+      defmodule Planted do
+        alias Prima.LogFilter
+        alias Prima.LogFilter, as: Filter
+        alias Prima.{LogFilter, Sanitizer}
+        import Prima.LogFilter
+        import Prima.LogFilter, only: [inspect_reason: 1]
+        require Prima.LogFilter, as: Required
+        require Prima.LogFilter
+        alias Prima.Sanitizer
+      end
+      """
+
+      assert shortened(source) == [2, 3, 4, 5, 6, 7]
     end
 
     test "reaches every umbrella app's lib" do
@@ -167,6 +221,23 @@ defmodule Cyfr.RefusalRenderingSeamTest do
   defp enter({:inspect, meta, [subject | _]} = node, {stack, sites}),
     do: inspected(node, meta, subject, stack, sites)
 
+  # `Prima.LogFilter.inspect_reason/2` is an `inspect`, called or piped into.
+  defp enter(
+         {:|>, meta,
+          [subject, {{:., _, [{:__aliases__, _, [:Prima, :LogFilter]}, :inspect_reason]}, _, _}]} =
+           node,
+         {stack, sites}
+       ),
+       do: inspected(node, meta, subject, stack, sites)
+
+  defp enter(
+         {{:., _, [{:__aliases__, _, [:Prima, :LogFilter]}, :inspect_reason]}, meta,
+          [subject | _]} =
+           node,
+         {stack, sites}
+       ),
+       do: inspected(node, meta, subject, stack, sites)
+
   defp enter(node, {stack, sites}), do: {node, {[:node | stack], sites}}
 
   defp leave(node, {[_ | stack], sites}), do: {node, {stack, sites}}
@@ -196,6 +267,37 @@ defmodule Cyfr.RefusalRenderingSeamTest do
 
   defp function(stack),
     do: Enum.find_value(stack, :module_body, &(match?({:function, _}, &1) && elem(&1, 1)))
+
+  # The line of each `alias` or `import` of `Prima.LogFilter`, and each
+  # `require` that names it `as:` something shorter.
+  defp shortened(source) do
+    {_ast, lines} =
+      source
+      |> Code.string_to_quoted!(columns: true)
+      |> Macro.prewalk([], fn
+        {directive, meta, [target | options]} = node, lines
+        when directive in [:alias, :import, :require] ->
+          shortened? =
+            log_filter?(target) and (directive != :require or as?(options))
+
+          {node, if(shortened?, do: [meta[:line] | lines], else: lines)}
+
+        node, lines ->
+          {node, lines}
+      end)
+
+    Enum.reverse(lines)
+  end
+
+  defp log_filter?({:__aliases__, _, [:Prima, :LogFilter]}), do: true
+
+  defp log_filter?({{:., _, [{:__aliases__, _, [:Prima]}, :{}]}, _, names}),
+    do: Enum.any?(names, &match?({:__aliases__, _, [:LogFilter]}, &1))
+
+  defp log_filter?(_target), do: false
+
+  defp as?([options]) when is_list(options), do: Keyword.has_key?(options, :as)
+  defp as?(_options), do: false
 
   defp name({:when, _, [head | _]}), do: name(head)
   defp name({name, _, _}) when is_atom(name), do: name

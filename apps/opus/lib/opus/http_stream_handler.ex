@@ -164,17 +164,19 @@ defmodule Opus.HttpStreamHandler do
   catch
     # A refusal `start_stream/4` could not answer in place — the buffer or the
     # supervised task would not start. Thrown rather than raised so the reason
-    # reaches the log intact.
+    # reaches the log whole, but for the arguments of a crashed start's frames.
     {:stream_start_failed, what, reason} ->
       Logger.error(
         "[Opus.HttpStreamHandler] #{component_ref} could not start a stream " <>
-          "(#{what}): #{inspect(reason)}"
+          "(#{what}): #{Prima.LogFilter.inspect_reason(reason)}"
       )
 
       encode_error(:stream_error, "The streaming request could not be started.")
 
     :exit, reason ->
-      Logger.error("[Opus.HttpStreamHandler] #{component_ref} #{name} exited: #{inspect(reason)}")
+      Logger.error(
+        "[Opus.HttpStreamHandler] #{component_ref} #{name} exited: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
 
       encode_error(:stream_error, "The streaming request could not be served.")
   end
@@ -291,7 +293,7 @@ defmodule Opus.HttpStreamHandler do
         rescue
           e ->
             Logger.warning(
-              "[Opus.HttpStreamHandler] Streaming request crashed: #{Exception.message(e)}"
+              "[Opus.HttpStreamHandler] Streaming request crashed: #{Prima.LogFilter.exception_message(e)}"
             )
 
             park_error(buffer, :stream_error, "The streaming request failed.")

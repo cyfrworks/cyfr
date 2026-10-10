@@ -459,7 +459,10 @@ defmodule Aqua.Approvals do
     # An approval decision's telemetry is compliance-relevant: dropping it
     # leaves a trace, and never fails the decision.
     e ->
-      Logger.warning("[Aqua.Approvals] approval telemetry dropped: " <> Exception.message(e))
+      Logger.warning(
+        "[Aqua.Approvals] approval telemetry dropped: " <> Prima.LogFilter.exception_message(e)
+      )
+
       :ok
   end
 end

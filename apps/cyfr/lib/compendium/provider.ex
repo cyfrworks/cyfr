@@ -104,7 +104,7 @@ defmodule Compendium.Provider do
   rescue
     e ->
       Logger.warning(
-        "[Compendium.Provider] Registry health check exception: #{Exception.message(e)}"
+        "[Compendium.Provider] Registry health check exception: #{Prima.LogFilter.exception_message(e)}"
       )
 
       "error"

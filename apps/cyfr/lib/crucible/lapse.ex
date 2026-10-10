@@ -73,13 +73,16 @@ defmodule Crucible.Lapse do
   rescue
     exception ->
       Logger.error(
-        "[Crucible.Lapse] #{record.id} could not be lapsed: #{Exception.message(exception)}"
+        "[Crucible.Lapse] #{record.id} could not be lapsed: #{Prima.LogFilter.exception_message(exception)}"
       )
 
       false
   catch
     :exit, reason ->
-      Logger.error("[Crucible.Lapse] #{record.id} could not be lapsed: #{inspect(reason)}")
+      Logger.error(
+        "[Crucible.Lapse] #{record.id} could not be lapsed: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
+
       false
   end
 
@@ -137,7 +140,9 @@ defmodule Crucible.Lapse do
     end
   catch
     :exit, reason ->
-      Logger.error("[Crucible.Lapse] attempts of #{boot_id} not listed: #{inspect(reason)}")
+      Logger.error(
+        "[Crucible.Lapse] attempts of #{boot_id} not listed: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
 
       {:error, :unavailable}
   end

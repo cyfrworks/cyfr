@@ -91,7 +91,7 @@ defmodule Sanctum.Policy.Enforcement do
     end
   rescue
     e ->
-      Logger.error("[Policy.Enforcement] record raised: #{Exception.message(e)}")
+      Logger.error("[Policy.Enforcement] record raised: #{Prima.LogFilter.exception_message(e)}")
       emit_audit_failure(e)
       :ok
   end
@@ -197,7 +197,9 @@ defmodule Sanctum.Policy.Enforcement do
     # A raising telemetry handler must not fail the decision — but a
     # swallowed raise here would hide a broken audit pipeline entirely.
     e ->
-      Logger.warning("[Policy.Enforcement] decision telemetry raised: " <> Exception.message(e))
+      Logger.warning(
+        "[Policy.Enforcement] decision telemetry raised: " <> Prima.LogFilter.exception_message(e)
+      )
 
       :ok
   end
@@ -220,7 +222,8 @@ defmodule Sanctum.Policy.Enforcement do
     # failure must at least reach the log.
     e ->
       Logger.warning(
-        "[Policy.Enforcement] audit-failure telemetry raised: " <> Exception.message(e)
+        "[Policy.Enforcement] audit-failure telemetry raised: " <>
+          Prima.LogFilter.exception_message(e)
       )
 
       :ok
@@ -233,7 +236,10 @@ defmodule Sanctum.Policy.Enforcement do
       # The snapshot is a FIELD of the audit record, so losing it is a gap in
       # the record — not a debug detail that disappears below the default
       # level while everything else in this module speaks at :warning.
-      Logger.warning("[Policy.Enforcement] snapshot encode failed: #{Exception.message(e)}")
+      Logger.warning(
+        "[Policy.Enforcement] snapshot encode failed: #{Prima.LogFilter.exception_message(e)}"
+      )
+
       nil
   end
 

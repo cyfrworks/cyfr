@@ -108,7 +108,7 @@ defmodule Emissary.Web.HealthController do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e -> {:error, Exception.message(e)}
+    e -> {:error, Prima.LogFilter.exception_message(e)}
   end
 
   defp check_cache do
@@ -164,7 +164,7 @@ defmodule Emissary.Web.HealthController do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    e -> {:error, Exception.message(e)}
+    e -> {:error, Prima.LogFilter.exception_message(e)}
   end
 
   defp check_pubsub do
@@ -184,7 +184,7 @@ defmodule Emissary.Web.HealthController do
     Cyfr.Bus.unsubscribe_global(topic)
     result
   rescue
-    e -> {:error, Exception.message(e)}
+    e -> {:error, Prima.LogFilter.exception_message(e)}
   end
 
   defp check_written(read) do

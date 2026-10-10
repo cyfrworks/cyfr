@@ -742,7 +742,7 @@ defmodule Sanctum.Vault do
     Sanctum.Cipher.encrypt(json, aad)
   rescue
     e ->
-      Logger.error("[Sanctum.Vault] sealing failed: #{Exception.message(e)}")
+      Logger.error("[Sanctum.Vault] sealing failed: #{Prima.LogFilter.exception_message(e)}")
       {:error, :seal_failed}
   end
 

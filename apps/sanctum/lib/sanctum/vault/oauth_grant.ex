@@ -405,7 +405,10 @@ defmodule Sanctum.Vault.OAuthGrant do
     Sanctum.Cipher.encrypt(json, aad)
   rescue
     e ->
-      Logger.error("[Vault.OAuthGrant] credential seal failed: #{Exception.message(e)}")
+      Logger.error(
+        "[Vault.OAuthGrant] credential seal failed: #{Prima.LogFilter.exception_message(e)}"
+      )
+
       {:error, "credential seal failed — check the crypto keyring"}
   end
 

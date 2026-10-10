@@ -1308,7 +1308,9 @@ defmodule Sanctum.Caller do
     end
   catch
     :exit, reason ->
-      Logger.debug("[Sanctum.Caller] session refresh task not started: #{inspect(reason)}")
+      Logger.debug(
+        "[Sanctum.Caller] session refresh task not started: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
   end
 
   # The slide swallows a store that cannot answer; a connection taken away
@@ -1317,7 +1319,9 @@ defmodule Sanctum.Caller do
     Session.refresh_if_stale(token)
   catch
     :exit, reason ->
-      Logger.debug("[Sanctum.Caller] session refresh did not run: #{inspect(reason)}")
+      Logger.debug(
+        "[Sanctum.Caller] session refresh did not run: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
   end
 
   # A stored allowlist is a security row. Valid JSON holding only strings

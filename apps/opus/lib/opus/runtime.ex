@@ -210,7 +210,7 @@ defmodule Opus.Runtime do
                   rescue
                     e ->
                       stop_instance(pid)
-                      {:error, Exception.message(e)}
+                      {:error, Prima.LogFilter.exception_message(e)}
                   end
 
                 {:error, reason} ->

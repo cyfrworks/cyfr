@@ -109,7 +109,7 @@ defmodule Crucible.LeaseWatch do
     e ->
       Logger.warning(
         "[Crucible.LeaseWatch] lease start for #{execution_id} could not read the " <>
-          "store's clock (#{Exception.message(e)}); watching on the local clock until a " <>
+          "store's clock (#{Prima.LogFilter.exception_message(e)}); watching on the local clock until a " <>
           "renewal answers"
       )
 

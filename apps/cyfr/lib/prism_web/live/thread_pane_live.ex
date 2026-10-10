@@ -1075,7 +1075,10 @@ defmodule PrismWeb.ThreadPaneLive do
     {:ok, files}
   rescue
     e ->
-      Logger.warning("[ThreadPane] consume uploads failed: #{Exception.message(e)}")
+      Logger.warning(
+        "[ThreadPane] consume uploads failed: #{Prima.LogFilter.exception_message(e)}"
+      )
+
       {:error, :attachments_unreadable}
   end
 

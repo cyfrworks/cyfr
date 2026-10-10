@@ -433,7 +433,7 @@ defmodule Grimoire.Provider do
   rescue
     e ->
       Logger.error(
-        "[Grimoire.Provider] Service #{inspect(module)} crashed: #{Exception.message(e)}"
+        "[Grimoire.Provider] Service #{inspect(module)} crashed: #{Prima.LogFilter.exception_message(e)}"
       )
 
       "crashed"

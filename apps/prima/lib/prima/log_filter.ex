@@ -14,7 +14,9 @@ defmodule Prima.LogFilter do
   handed and its whole state, and Elixir's translator prints both. An
   exit out of a call names the call, `{reason, {module, function, args}}`,
   so a process that crashed on a `GenServer.call/3` it made carries the
-  request it sent, and a task has no `format_status/1` at all.
+  request it sent, and a task has no `format_status/1` at all. A call of a
+  function with the wrong number of arguments raises with them,
+  `{:badarity, {fun, args}}`.
 
   The filter reduces every frame whose arguments are a list,
   `{module, function, args, location}` or `{fun, args, location}`, to its
@@ -22,14 +24,22 @@ defmodule Prima.LogFilter do
   `{term, {module, function, args}}` with `args` no stacktrace, to
   `{term, {module, function, arity}}`, which also covers an
   `:initial_call` or `:mfargs` entry; a crashed task's `args` become their
-  count. Module, function, arity and location stay. It does so wherever
-  the event holds a term: in the report, in the format arguments, and in
-  every metadata value, `:crash_reason` among them. An event with nothing
-  to reduce passes as it came. `format_exception/3` and
-  `format_stacktrace/1` apply the same rule before formatting, so text a
-  caller logs, records or answers carries no argument either;
+  count, and a bad arity's arguments, raw or in a `BadArityError`, become
+  as many `:redacted`, so its message still reads. Module, function, arity
+  and location stay. It does so wherever the event holds a term: in the
+  report, in the format arguments, and in every metadata value,
+  `:crash_reason` among them. An event with nothing to reduce passes as it
+  came.
+
+  `format_exception/3`, `format_stacktrace/1`, `exception_message/1` and
+  `inspect_reason/2` apply the same rule before formatting, so text a
+  caller logs, records or answers of an exception, its message, a
+  stacktrace or a caught exit or crash reason carries no argument either.
   `Cyfr.LoggerRosterTest` holds every other `Exception` formatter out of
-  the applications' code.
+  the applications' code, every `inspect/1,2` of a reason a clause binds
+  as caught, rescued, exited or terminated, there or in a function of the
+  same file it is handed to, and every `Exception.message/1` of an
+  exception a clause rescues whatever its kind.
 
   The filter must see the event before Elixir's translator formats the
   report into text. Logger installs its translator as a primary filter
@@ -40,8 +50,9 @@ defmodule Prima.LogFilter do
   `Locus.Application`. A `Cyfr.Release` task, which runs where no
   application starts, installs it too.
 
-  Neither reaches a value an exception's reason carries outside a frame or
-  a call (a `MatchError`'s term), nor text formatted any other way.
+  None of them reaches a value an exception's reason carries outside a
+  frame or a call (a `MatchError`'s term), nor text formatted any other
+  way.
   """
 
   @id :prima_log_filter
@@ -94,6 +105,21 @@ defmodule Prima.LogFilter do
   @spec format_stacktrace(Exception.stacktrace()) :: String.t()
   def format_stacktrace(stacktrace), do: Exception.format_stacktrace(redact(stacktrace))
 
+  @doc """
+  A rescued exception's message as `Exception.message/1` writes it, a bad
+  arity's arguments counted first.
+  """
+  @spec exception_message(Exception.t()) :: String.t()
+  def exception_message(exception), do: Exception.message(redact(exception))
+
+  @doc """
+  A caught exit, crash or `:DOWN` reason, or a rescued exception, as
+  `inspect/2` writes it, every frame and every call reduced to its arity
+  first.
+  """
+  @spec inspect_reason(term(), keyword()) :: String.t()
+  def inspect_reason(reason, opts \\ []), do: inspect(redact(reason), opts)
+
   defp message({:string, _chardata} = string), do: string
   defp message({:report, report} = msg), do: kept(msg, 2, report)
   defp message({_format, args} = msg) when is_list(args), do: kept(msg, 2, args)
@@ -114,7 +140,13 @@ defmodule Prima.LogFilter do
       else: {redact(term), {module, function, arity(args)}}
   end
 
+  defp redact({:badarity, {fun, args}}) when is_function(fun) and is_list(args),
+    do: {:badarity, {fun, placeholders(args)}}
+
   defp redact(tuple) when is_tuple(tuple), do: elements_of(tuple, tuple_size(tuple))
+
+  defp redact(%BadArityError{args: args} = error) when is_list(args),
+    do: %{error | args: placeholders(args)}
 
   defp redact(%{label: {Task.Supervisor, :terminating}, report: %{args: args} = report} = task)
        when is_list(args),
@@ -178,6 +210,9 @@ defmodule Prima.LogFilter do
 
   defp frame({fun, args, location}) when is_list(args), do: {fun, arity(args), location}
   defp frame(frame), do: frame
+
+  # As many `:redacted` as `args` has cells, for a message that lists them.
+  defp placeholders(args), do: List.duplicate(:redacted, arity(args))
 
   # Counted by its cells, so an improper list is counted, never raised on.
   defp arity(args), do: arity(args, 0)

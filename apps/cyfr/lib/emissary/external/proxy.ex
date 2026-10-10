@@ -100,7 +100,7 @@ defmodule Emissary.External.Proxy do
           # than one that errors.
           {:exit, reason} ->
             Logger.warning(
-              "[Emissary.External.Proxy] a server failed to describe itself: #{inspect(reason)}"
+              "[Emissary.External.Proxy] a server failed to describe itself: #{Prima.LogFilter.inspect_reason(reason)}"
             )
 
             []
@@ -231,7 +231,7 @@ defmodule Emissary.External.Proxy do
 
           {:exit, reason} ->
             Logger.warning(
-              "[Emissary.External.Proxy] Server tool fetch timed out or crashed: #{inspect(reason)}"
+              "[Emissary.External.Proxy] Server tool fetch timed out or crashed: #{Prima.LogFilter.inspect_reason(reason)}"
             )
 
             []

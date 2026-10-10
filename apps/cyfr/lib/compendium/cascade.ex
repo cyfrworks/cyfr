@@ -92,7 +92,7 @@ defmodule Compendium.Cascade do
   rescue
     error ->
       Logger.warning(
-        "[Compendium.Cascade] schedule cascade failed for #{name_ref}: #{Exception.message(error)}"
+        "[Compendium.Cascade] schedule cascade failed for #{name_ref}: #{Prima.LogFilter.exception_message(error)}"
       )
 
       :ok

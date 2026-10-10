@@ -160,7 +160,8 @@ defmodule Sanctum.OAuth.RefreshLock do
         # in the failing frame's args; a KeyError from the cipher path
         # carries the keyring, under labels no key-roster sanitizer knows).
         # An exception exit is named by type only; anything else is
-        # sanitized and bounded.
+        # sanitized, its frames and calls reduced to their arity, and
+        # bounded.
         Logger.warning("[Sanctum.OAuth.RefreshLock] refresh exited: #{describe_exit(reason)}")
         {:error, {:authorization_required, "the token refresh failed"}}
 
@@ -232,6 +233,9 @@ defmodule Sanctum.OAuth.RefreshLock do
   defp describe_exit(%{__struct__: mod}), do: inspect(mod)
   defp describe_exit(reason) when is_atom(reason), do: inspect(reason)
 
-  defp describe_exit(other),
-    do: inspect(Prima.Sanitizer.sanitize(other), limit: 20, printable_limit: 200)
+  defp describe_exit(other) do
+    other
+    |> Prima.Sanitizer.sanitize()
+    |> Prima.LogFilter.inspect_reason(limit: 20, printable_limit: 200)
+  end
 end

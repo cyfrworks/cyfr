@@ -1540,16 +1540,17 @@ defmodule Emissary.External.Server do
   defp mask_values(term, _values), do: term
 
   # A reason as the log prints it. The injected values are masked in the
-  # term's own binaries, wherever it holds them, before `inspect/1` renders
-  # it in any form (escaped, or as bytes when a binary is not printable)
-  # and cuts it to its usual bounds; the printed line is masked once more
-  # for a value the term held as a charlist.
+  # term's own binaries, wherever it holds them, before
+  # `Prima.LogFilter.inspect_reason/2` reduces its frames and calls to
+  # their arity and renders it in any form (escaped, or as bytes when a
+  # binary is not printable), cut to its usual bounds; the printed line is
+  # masked once more for a value the term held as a charlist.
   defp log_reason(reason, state) do
     values = sensitive_header_values(state)
 
     reason
     |> mask_term(values)
-    |> inspect()
+    |> Prima.LogFilter.inspect_reason()
     |> mask_values(values)
   end
 

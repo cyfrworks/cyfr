@@ -975,14 +975,17 @@ defmodule Compendium.OCI.Client do
 
       {:error, reason} ->
         Logger.warning(
-          "[Compendium.OCI.Client] Failed to extract source tarball: #{inspect(reason)}"
+          "[Compendium.OCI.Client] Failed to extract source tarball: #{Prima.LogFilter.inspect_reason(reason)}"
         )
 
         []
     end
   rescue
     e ->
-      Logger.warning("[Compendium.OCI.Client] Failed to extract source tarball: #{inspect(e)}")
+      Logger.warning(
+        "[Compendium.OCI.Client] Failed to extract source tarball: #{Prima.LogFilter.inspect_reason(e)}"
+      )
+
       []
   end
 

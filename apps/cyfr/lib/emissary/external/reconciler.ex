@@ -187,7 +187,7 @@ defmodule Emissary.External.Reconciler do
     end
   rescue
     error ->
-      {:error, Exception.message(error)}
+      {:error, Prima.LogFilter.exception_message(error)}
   end
 
   # The names a live template may spell for the changed entry: its name and,
@@ -298,7 +298,7 @@ defmodule Emissary.External.Reconciler do
       :telemetry.execute(
         [:cyfr, :emissary, :external_server, :reconcile_failed],
         %{count: 1},
-        %{athanor_id: athanor_id, entry_id: nil, reason: Exception.message(error)}
+        %{athanor_id: athanor_id, entry_id: nil, reason: Prima.LogFilter.exception_message(error)}
       )
   end
 

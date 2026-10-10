@@ -834,7 +834,10 @@ defmodule Sanctum.Consent.Loader do
   rescue
     e ->
       # Log diff-rendering failures without changing the authorization refusal.
-      Logger.warning("[Consent.Loader] shape diff failed: #{Exception.message(e)}")
+      Logger.warning(
+        "[Consent.Loader] shape diff failed: #{Prima.LogFilter.exception_message(e)}"
+      )
+
       []
   end
 

@@ -78,7 +78,9 @@ defmodule Crucible.ArchiveWatch do
     :ok
   rescue
     e ->
-      Logger.warning("[Crucible.ArchiveWatch] cancel on archive failed (#{Exception.message(e)})")
+      Logger.warning(
+        "[Crucible.ArchiveWatch] cancel on archive failed (#{Prima.LogFilter.exception_message(e)})"
+      )
 
       :ok
   catch
@@ -87,7 +89,9 @@ defmodule Crucible.ArchiveWatch do
     # status gates already refuse new work and the runs end on their own
     # lease.
     kind, reason ->
-      Logger.warning("[Crucible.ArchiveWatch] cancel on archive #{kind}: #{inspect(reason)}")
+      Logger.warning(
+        "[Crucible.ArchiveWatch] cancel on archive #{kind}: #{Prima.LogFilter.inspect_reason(reason)}"
+      )
 
       :ok
   end

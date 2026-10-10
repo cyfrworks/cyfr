@@ -28,6 +28,7 @@ defmodule Aqua.RunnerTest do
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
+  @crash_value "planted-loop-argument-7d4b"
 
   setup do
     Arca.Cache.init()
@@ -936,6 +937,30 @@ defmodule Aqua.RunnerTest do
       # And a turn that is over is not recovered at all.
       assert {:error, :not_open} = Runner.recover_turn(ctx, thread.id, turn_id)
     end
+  end
+
+  # A loop that crashes exits with its stacktrace, whose failing frame
+  # holds the arguments it was called with.
+  test "a loop that crashes is logged by its frames' arity, never their arguments", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    script!([{:probe, self()}, reply("never sent")])
+
+    {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua go")
+    pids = running!(thread)
+    frame = {Aqua.Loop, :step, [%{key: @crash_value}], [file: ~c"lib/aqua/loop.ex", line: 1]}
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        Process.exit(pids.loop, {:function_clause, [frame]})
+        wait_until(fn -> match?({:ok, %{status: "uncertain"}}, Tape.turn(ctx, turn_id)) end)
+      end)
+
+    send(pids.call, :continue)
+
+    refute log =~ @crash_value
+    assert log =~ "stopped without an answer: {:function_clause, [{Aqua.Loop, :step, 1,"
   end
 
   describe "a runner that dies" do
