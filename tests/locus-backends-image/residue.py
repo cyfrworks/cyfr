@@ -8,7 +8,7 @@ and driven only by requests signed as CYFR signs them (harness.py):
 
 - Outside its home a backend can write only into the home root, which it
   cannot list: /tmp, /var/tmp and /run are read-only, /dev/shm is absent and
-  /run/locus is the release's.
+  the release's run directory is closed to it.
 - What it does leave (tests/fixtures/residue-canary.go) — an entry in the
   home root, a directory tree it made unwritable, System V shared memory, a
   semaphore set, a message queue and a POSIX message queue — is gone, with
@@ -29,8 +29,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    HOME_ROOT, POOL_FIRST, RELEASE_USER, RUN_DIR, Stack, build_canary, eventually, expect, owner_of, probe,
-    require_docker, run,
+    HOME_ROOT, POOL_FIRST, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, Stack, build_canary, eventually,
+    expect, owner_of, probe, require_docker, run,
 )
 
 UID = POOL_FIRST
@@ -116,10 +116,11 @@ def main():
 
         settings = ["--rm", "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
                     "--security-opt", "no-new-privileges:true", "-e", f"LOCUS_BACKENDS_KEY={stack.key.hex()}",
-                    "--tmpfs", f"{HOME_ROOT}:mode=1733", "--tmpfs", f"{RUN_DIR}:uid=10001,gid=10001,mode=0700",
+                    "--tmpfs", f"{HOME_ROOT}:mode=1733",
+                    "--tmpfs", f"{RUN_DIR}:uid={RELEASE_UID},gid={RELEASE_UID},mode=0700",
                     "--entrypoint", "cyfr-locus"]
-        command = ["serve", "--pool", f"backends:{UID}-{UID}", "--home-root", HOME_ROOT, "--client-user",
-                   RELEASE_USER, "--", "/app/bin/locus", "start"]
+        command = ["serve", "--pool", f"{ROLE['pool']}:{UID}-{UID}", "--home-root", HOME_ROOT, "--client-user",
+                   RELEASE_USER, "--", RELEASE_BIN, "start"]
         for flags, refusal in [
             (["--ipc", "none"], r"the root filesystem is writable"),
             (["--read-only", "--ipc", "none", "--tmpfs", "/tmp:mode=1777"], r"mount /tmp .* is writable by pooled uids"),

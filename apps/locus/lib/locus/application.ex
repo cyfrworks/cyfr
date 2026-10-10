@@ -79,16 +79,21 @@ defmodule Locus.Application do
 
   @doc false
   # The roles a node whose `:locus` application environment is `env`
-  # serves (`roles!/1`): the runtime with the runtime's key, builds with a
-  # builds key, backends with a backends key.
+  # serves (`roles!/1`), for every role of the role table
+  # (`Prima.LocusRoles`): the runtime with the runtime's key, builds with a
+  # builds key, backends with a backends key. `serves?/2` has a clause for
+  # each role this release serves and none other, so a table that names a
+  # role it does not serve crashes every boot.
   @spec node_roles!(keyword()) :: roles()
   def node_roles!(env) when is_list(env) do
-    roles!(%{
-      runtime: get_in(env, [:runtime, :service_key]) != nil,
-      builds: Keyword.get(env, :request_key) != nil,
-      backends: Keyword.get(env, :backends_key) != nil
-    })
+    Prima.LocusRoles.names()
+    |> Map.new(&{&1, serves?(&1, env)})
+    |> roles!()
   end
+
+  defp serves?(:runtime, env), do: get_in(env, [:runtime, :service_key]) != nil
+  defp serves?(:builds, env), do: Keyword.get(env, :request_key) != nil
+  defp serves?(:backends, env), do: Keyword.get(env, :backends_key) != nil
 
   @doc false
   # The release's one log setting, applied on a release node whatever role
@@ -108,7 +113,8 @@ defmodule Locus.Application do
   @doc """
   The roles a service node serves, from which keys it holds, raising when
   it holds the runtime key and either other key: the refusal names
-  `LOCUS_RUNTIME_KEY` and each other key variable held.
+  `LOCUS_RUNTIME_KEY` and each other key variable held, and every role's
+  compose service (`Prima.LocusRoles`).
   """
   @spec roles!(roles()) :: roles()
   def roles!(%{runtime: runtime?, builds: builds?, backends: backends?} = roles)
@@ -123,10 +129,16 @@ defmodule Locus.Application do
               "this one also holds #{Enum.join(held, " and ")}: the runtime's runners have " <>
               "no network, so it shares no node, key or network with a role that has open " <>
               "egress. Give each role a container of its own (docker-compose.yml's " <>
-              "locus-runtime, locus-builds and locus-backends)."
+              "#{services()})."
     end
 
     roles
+  end
+
+  # Every role's compose service, in the table's order: `a, b and c`.
+  defp services do
+    {last, others} = Prima.LocusRoles.roles() |> Enum.map(& &1.service) |> List.pop_at(-1)
+    Enum.join(others, ", ") <> " and " <> last
   end
 
   defp served?(%{runtime: runtime?, builds: builds?, backends: backends?}),
@@ -180,11 +192,15 @@ defmodule Locus.Application do
       if(backends?, do: Locus.Backends.children(), else: [])
   end
 
+  # The `--pool` argument of each role served under the launcher, its pool
+  # named as the role table names it.
   defp pools(%{builds: builds?, backends: backends?}) do
-    [if(builds?, do: "--pool build:…"), if(backends?, do: "--pool backends:…")]
+    [if(builds?, do: pool(:builds)), if(backends?, do: pool(:backends))]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" ")
   end
+
+  defp pool(role), do: "--pool #{Prima.LocusRoles.role!(role).pool}:…"
 
   @doc """
   The build slots, `Locus.BuildSlots`: one `Prima.Slots` instance whose caps

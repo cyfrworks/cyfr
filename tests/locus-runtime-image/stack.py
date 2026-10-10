@@ -14,6 +14,11 @@ policy — is the shipped service. A Stack made with
 deployment without that security option runs it. What the container's
 processes, home root, cgroups and CPU accounting show is read as root
 inside it.
+
+The runtime role's facts and the release's (its compose service, pool,
+port, user and directories) are read from the role table's vector file,
+tests/fixtures/locus_roles.json (`Prima.LocusRoles`), when this module is
+loaded: the suites take them from here and spell none.
 """
 
 import json
@@ -37,10 +42,25 @@ PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
 # The keeper's seccomp profile and the name the locus-runtime service reads it by.
 PROFILE = os.path.join(ROOT, "apps", "locus", "keeper", "seccomp", "keeper.json")
 PROFILE_NAME = "keeper.seccomp.json"
+
+with open(os.path.join(ROOT, "tests", "fixtures", "locus_roles.json"), encoding="utf-8") as _roles:
+    _TABLE = json.load(_roles)
+
+RELEASE = _TABLE["release"]
+ROLE = next((role for role in _TABLE["roles"] if role["name"] == "runtime"), None)
+if ROLE is None:
+    sys.exit("FAIL: tests/fixtures/locus_roles.json names no runtime role")
+
+# The worker service id the scripted control plane knows the service by.
 SERVICE = "wrk_image"
-POOL_FIRST, POOL_LAST = 30101, 30108
-SERVICE_UID = 10001
-HOME_ROOT = "/var/lib/locus/homes"
+# The compose service that runs the runtime, and the port it listens on.
+COMPOSE_SERVICE = ROLE["service"]
+PORT = ROLE["port"]
+POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]
+SERVICE_UID = RELEASE["uid"]
+SERVICE_USER = RELEASE["user"]
+HOME_ROOT = RELEASE["home_root"]
+RUN_DIR = RELEASE["run_dir"]
 KEEPER_CAPS = "00000000000000e0"
 
 
@@ -117,15 +137,15 @@ class Stack:
 
     def up(self, wait_pool=True):
         """(Re)creates the service, waits for its listener and, unless told not to, for its pool to fill."""
-        self.compose("up", "--detach", "--no-build", "--force-recreate", "locus-runtime")
-        self.container = self.compose("ps", "--quiet", "locus-runtime").stdout.strip()
+        self.compose("up", "--detach", "--no-build", "--force-recreate", COMPOSE_SERVICE)
+        self.container = self.compose("ps", "--quiet", COMPOSE_SERVICE).stdout.strip()
         self.wait_listener()
         if wait_pool:
             self.wait_pool()
 
     def wait_listener(self, timeout=90):
         """The listener answers an unsigned status 401 (the image's liveness), then a signed one 200."""
-        address = self.compose("port", "locus-runtime", "4200").stdout.strip().splitlines()[0]
+        address = self.compose("port", COMPOSE_SERVICE, str(PORT)).stdout.strip().splitlines()[0]
         self.base = f"http://{address}"
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -140,7 +160,7 @@ class Stack:
             except (OSError, ValueError):
                 pass
             time.sleep(0.5)
-        sys.exit("FAIL: the locus-runtime service never answered its status\n" + self.logs())
+        sys.exit(f"FAIL: the {COMPOSE_SERVICE} service never answered its status\n" + self.logs())
 
     def wait_pool(self, timeout=90):
         """Every fresh runner of the pool is up: a runner is a VM booting from nothing."""
@@ -150,7 +170,7 @@ class Stack:
         )
 
     def logs(self):
-        return self.compose("logs", "--no-color", "locus-runtime", check=False).stdout
+        return self.compose("logs", "--no-color", COMPOSE_SERVICE, check=False).stdout
 
     def down(self):
         if os.environ.get("CI"):

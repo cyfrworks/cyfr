@@ -23,6 +23,11 @@ file: `check_vectors` runs when this module is loaded, before any container
 starts, and `python3 tests/locus-backends-image/harness.py --self-check`
 runs it alone, with no Docker.
 
+The backends role's facts and the release's (its service, pool, port, user,
+binary and directories) are read from the role table's vector file,
+tests/fixtures/locus_roles.json (`Prima.LocusRoles`), when this module is
+loaded: the suites take them from here and spell none.
+
 Prerequisites of the suites that import this module: Docker Engine 28 or
 later on a cgroup v2 host (the service bounds every backend with a cgroup of
 its own, `writable-cgroups=true`), the Compose plugin, the image under test
@@ -48,16 +53,26 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-SERVICE = "locus-backends"
-PORT = 4101
+
+with open(os.path.join(ROOT, "tests", "fixtures", "locus_roles.json"), encoding="utf-8") as _roles:
+    _TABLE = json.load(_roles)
+
+RELEASE = _TABLE["release"]
+ROLE = next((role for role in _TABLE["roles"] if role["name"] == "backends"), None)
+if ROLE is None:
+    sys.exit("FAIL: tests/fixtures/locus_roles.json names no backends role")
+
+SERVICE = ROLE["service"]
+PORT = ROLE["port"]
 # Prefixed to every compose project and container of a run, for a host that
 # tells one run's Docker objects from another's by name.
 PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
-POOL_FIRST, POOL_LAST = 20001, 20032
-RELEASE_UID = 10001
-RELEASE_USER = "locus"
-HOME_ROOT = "/var/lib/locus/homes"
-RUN_DIR = "/run/locus"
+POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]
+RELEASE_UID = RELEASE["uid"]
+RELEASE_USER = RELEASE["user"]
+RELEASE_BIN = RELEASE["bin"]
+HOME_ROOT = RELEASE["home_root"]
+RUN_DIR = RELEASE["run_dir"]
 PROBE = "node /probe/probe-backend.mjs"
 # cyfr-locus's effective, permitted and bounding sets: SETUID, SETGID and
 # KILL alone.
@@ -79,8 +94,8 @@ WINDOW_MS = WIRE["window_ms"]
 
 
 def pool_user(uid):
-    """The name the image gives a backend uid: uid 20000+N is locus-backendNN (Dockerfile.locus)."""
-    return f"locus-backend{uid - 20000:02d}"
+    """The name the image gives a backend uid: the role's user prefix and the uid's two-digit ordinal in the pool (Dockerfile.locus)."""
+    return f"{ROLE['user_prefix']}{uid - POOL_FIRST + 1:02d}"
 
 
 def run(*args, check=True, env=None, timeout=None):
@@ -600,7 +615,7 @@ class Stack:
         self.memory_bytes = memory_bytes
         self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE)
         self.container = self.compose("ps", "--quiet", SERVICE).stdout.strip()
-        expect(self.container, "compose started the locus-backends container")
+        expect(self.container, f"compose started the {SERVICE} container")
         return self.published()
 
     def published(self):

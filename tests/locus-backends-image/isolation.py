@@ -33,9 +33,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    HOME_ROOT, KEEPER_CAPS, MCP_VERSION, POOL_FIRST, POOL_LAST, PROJECT_PREFIX, RELEASE_UID, RELEASE_USER,
-    ROUTES, RUN_DIR, SERVICE, Controller, Stack, eventually, expect, owner_of, owner_key, pool_user, post, probe,
-    require_docker, run, wait_healthy, wire_json,
+    HOME_ROOT, KEEPER_CAPS, MCP_VERSION, POOL_FIRST, POOL_LAST, PORT, PROJECT_PREFIX, RELEASE_BIN, RELEASE_UID,
+    RELEASE_USER, ROLE, ROUTES, RUN_DIR, SERVICE, Controller, Stack, eventually, expect, owner_of, owner_key, pool_user,
+    post, probe, require_docker, run, wait_healthy, wire_json,
 )
 
 ALPHA, BETA = owner_of("alpha"), owner_of("beta")
@@ -202,7 +202,7 @@ def main():
         run("docker", "rm", "--force", lost, check=False)
         stack.compose("run", "--detach", "--name", lost, "--no-deps", "--service-ports", SERVICE)
         try:
-            base = "http://" + run("docker", "port", lost, "4101").stdout.strip().splitlines()[0]
+            base = "http://" + run("docker", "port", lost, str(PORT)).stdout.strip().splitlines()[0]
             wait_healthy(base)
             orphan = Controller(base, stack.key)
             expect(orphan.hello()[0] == 200, "a second service is greeted")
@@ -231,8 +231,8 @@ def main():
 
         defaults = run("docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}{stack.project}-defaults",
                        "-e", f"LOCUS_BACKENDS_KEY={stack.key.hex()}", "--entrypoint", "cyfr-locus", image,
-                       "serve", "--pool", f"backends:{POOL_FIRST}-{POOL_LAST}", "--home-root", HOME_ROOT,
-                       "--client-user", RELEASE_USER, "--", "/app/bin/locus", "start", check=False)
+                       "serve", "--pool", f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}", "--home-root", HOME_ROOT,
+                       "--client-user", RELEASE_USER, "--", RELEASE_BIN, "start", check=False)
         expect(defaults.returncode == 78 and "refusing to start: Cap" in defaults.stderr,
                "cyfr-locus refuses Docker's default capabilities", defaults.stderr[-2000:])
 

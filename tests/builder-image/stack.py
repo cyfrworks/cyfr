@@ -19,6 +19,11 @@ wire's vector file, tests/fixtures/locus_builds.json, and the signing here
 must reproduce that file's request vector: `check_signing` runs when this
 module is loaded, before any container starts, and
 `python3 tests/builder-image/stack.py` runs it alone.
+
+The builds role's facts and the release's (its service, profile, pool,
+port, user, binary and directories) are read from the role table's vector
+file, tests/fixtures/locus_roles.json (`Prima.LocusRoles`), when this
+module is loaded: the suites take them from here and spell none.
 """
 
 import base64
@@ -39,16 +44,27 @@ import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-SERVICE = "locus-builds"
-PROFILE = "locus-builds"
+
+with open(os.path.join(ROOT, "tests", "fixtures", "locus_roles.json"), encoding="utf-8") as _roles:
+    _TABLE = json.load(_roles)
+
+RELEASE = _TABLE["release"]
+ROLE = next((role for role in _TABLE["roles"] if role["name"] == "builds"), None)
+if ROLE is None:
+    sys.exit("FAIL: tests/fixtures/locus_roles.json names no builds role")
+
+SERVICE = ROLE["service"]
+PROFILE = ROLE["profile"]
 # Prefixed to every compose project and container of a run, for a host
 # that tells one run's Docker objects from another's by name.
 PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
-POOL_FIRST, POOL_LAST = 30001, 30016
-RELEASE_UID = 10001
-RELEASE_USER = "locus"
-RELEASE_BIN = "/app/bin/locus"
-HOME_ROOT = "/var/lib/locus/homes"
+POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]
+PORT = ROLE["port"]
+RELEASE_UID = RELEASE["uid"]
+RELEASE_USER = RELEASE["user"]
+RELEASE_BIN = RELEASE["bin"]
+HOME_ROOT = RELEASE["home_root"]
+RUN_DIR = RELEASE["run_dir"]
 
 with open(os.path.join(ROOT, "tests", "fixtures", "locus_builds.json"), encoding="utf-8") as _vectors:
     WIRE = json.load(_vectors)
@@ -178,7 +194,7 @@ class Stack:
         self.writable_cgroups = writable_cgroups
         self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE)
         self.container = self.compose("ps", "--quiet", SERVICE).stdout.strip()
-        address = self.compose("port", SERVICE, "4100").stdout.strip().splitlines()[0]
+        address = self.compose("port", SERVICE, str(PORT)).stdout.strip().splitlines()[0]
         self.base = f"http://{address}"
         body = json.dumps({"version": VERSION}).encode()
         for _ in range(90):

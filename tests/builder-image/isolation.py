@@ -19,7 +19,7 @@
   in the home root, a directory tree it made unwritable, System V shared
   memory, semaphores and message queues, a POSIX message queue) is gone
   before the next build runs under the same uid; /tmp, /var/tmp, /dev/shm,
-  /run and /run/locus are not writable to it.
+  /run and the release's run directory are not writable to it.
 - Started without the `writable-cgroups=true` security option, as a
   deployment that lacks it would be, the service answers every build
   `unavailable`, naming the option, and runs nothing: no build is ever run
@@ -40,13 +40,13 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stack import (  # noqa: E402
-    HOME_ROOT, POOL_FIRST, POOL_LAST, PROJECT_PREFIX, RELEASE_BIN, RELEASE_UID, RELEASE_USER, Stack, brief, build_canary,
-    expect, output_file, run, tincture,
+    HOME_ROOT, POOL_FIRST, POOL_LAST, PORT, PROJECT_PREFIX, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, Stack,
+    brief, build_canary, expect, output_file, run, tincture,
 )
 
 KEEPER_CAPS = "00000000000000e0"
 TAG = "locus-builds-residue"
-SHARED = [f"/tmp/{TAG}", f"/var/tmp/{TAG}", f"/dev/shm/{TAG}", f"/run/{TAG}", f"/run/locus/{TAG}"]
+SHARED = [f"/tmp/{TAG}", f"/var/tmp/{TAG}", f"/dev/shm/{TAG}", f"/run/{TAG}", f"{RUN_DIR}/{TAG}"]
 LEFT = [f"{HOME_ROOT}/{TAG}", f"{HOME_ROOT}/{TAG}-tree/"]
 
 PROBE = r"""
@@ -135,8 +135,8 @@ impl Guest for Daemon {
 
 
 def pool_user(uid):
-    """The name the image gives a build uid: uid 30000+N is locus-buildNN (Dockerfile.locus)."""
-    return f"locus-build{uid - 30000:02d}"
+    """The name the image gives a build uid: the role's user prefix and the uid's two-digit ordinal in the pool (Dockerfile.locus)."""
+    return f"{ROLE['user_prefix']}{uid - POOL_FIRST + 1:02d}"
 
 
 def fields(text):
@@ -150,14 +150,14 @@ def test_process_model(stack, image):
     expect(len(keeper) == 1 and keeper[0]["uids"] == [0, 0, 0, 0] and keeper[0]["cap_eff"] == KEEPER_CAPS,
            "cyfr-locus runs as root holding exactly SETUID, SETGID and KILL", procs)
     expect(len(release) == 1 and release[0]["uids"] == [RELEASE_UID] * 4 and release[0]["cap_eff"] == "0000000000000000",
-           "the release runs as locus with no capability", procs)
+           f"the release runs as {RELEASE_USER} with no capability", procs)
     expect(not any("epmd" in p["cmd"] for p in procs) and "-sname" not in release[0]["cmd"] and " -name " not in release[0]["cmd"],
            "the release starts no Erlang distribution", release)
     # Docker's embedded DNS resolver listens on 127.0.0.11 (0B00007F) in every
     # container on a user-defined network.
     listening = stack.exec("cat /proc/net/tcp /proc/net/tcp6 | awk '$4 == \"0A\" {print $2}'").stdout.split()
     ports = sorted({int(address.rsplit(":", 1)[1], 16) for address in listening if not address.startswith("0B00007F:")})
-    expect(ports == [4100], "besides Docker's resolver, the builder's only listening TCP port is 4100", listening)
+    expect(ports == [PORT], f"besides Docker's resolver, the builder's only listening TCP port is {PORT}", listening)
 
     def start_alone(name, *env):
         return run("docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}locus-builds-isolation-{name}-{os.getpid()}",
@@ -242,7 +242,7 @@ def test_residue(stack):
     expect(planted["uid"] == POOL_FIRST, "the first build runs under the pool's one uid", planted)
     expect(planted["files"] == {
         f"/tmp/{TAG}": "EROFS", f"/var/tmp/{TAG}": "EROFS", f"/dev/shm/{TAG}": "ENOENT", f"/run/{TAG}": "EROFS",
-        f"/run/locus/{TAG}": "EACCES", f"{HOME_ROOT}/{TAG}": "ok", f"{HOME_ROOT}/{TAG}-tree/": "ok",
+        f"{RUN_DIR}/{TAG}": "EACCES", f"{HOME_ROOT}/{TAG}": "ok", f"{HOME_ROOT}/{TAG}-tree/": "ok",
     }, "outside its home a build can write only into the home root", planted)
     expect(all(planted[kind] == "ok" for kind in ("shm", "sem", "msg", "mqueue")),
            "a build can create System V IPC objects and a POSIX message queue", planted)
@@ -254,7 +254,7 @@ def test_residue(stack):
     expect(probed["uid"] == POOL_FIRST, "the second build runs under the same uid", probed)
     expect(probed["files"] == {
         f"/tmp/{TAG}": "absent", f"/var/tmp/{TAG}": "absent", f"/dev/shm/{TAG}": "absent", f"/run/{TAG}": "absent",
-        f"/run/locus/{TAG}": "denied", f"{HOME_ROOT}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}-tree/": "absent",
+        f"{RUN_DIR}/{TAG}": "denied", f"{HOME_ROOT}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}-tree/": "absent",
     } and all(probed[kind] == "absent" for kind in ("shm", "sem", "msg", "mqueue")),
         "nothing the first build left reaches the second", probed)
     sysvipc = stack.exec("cat /proc/sysvipc/shm /proc/sysvipc/sem /proc/sysvipc/msg; ls -A /dev/mqueue").stdout

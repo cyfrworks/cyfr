@@ -1,0 +1,56 @@
+{
+  "comment": "The table of the locus release's roles, Prima.LocusRoles, for the readers that cannot call it: apps/prima/test/prima/locus_roles_test.exs holds this file to the module value by value, and the image suites' harnesses (tests/builder-image/stack.py, tests/locus-backends-image/harness.py, tests/locus-runtime-image/stack.py) read their role and the release here, so no suite spells a fact of either. release is what every role's service shares: the user and uid it runs as, the binary cyfr-locus starts, the root of every spawn's home, the run directory and the size of its tmpfs, and the role the image's own entrypoint serves. Each role, in the module's order, names its uid pool, the prefix of its pooled users' names, its first and last pooled uid, the isolation of its spawns (null for none), its listener's port, the size of its homes' tmpfs, and the compose service, container, network and profile (null for none) that run it.",
+  "release": {
+    "user": "locus",
+    "uid": 10001,
+    "bin": "/app/bin/locus",
+    "home_root": "/var/lib/locus/homes",
+    "run_dir": "/run/locus",
+    "run_size": "16m",
+    "image_role": "builds"
+  },
+  "roles": [
+    {
+      "name": "runtime",
+      "pool": "runner",
+      "user_prefix": "locus-runner",
+      "first_uid": 30101,
+      "last_uid": 30108,
+      "isolation": "netns",
+      "port": 4200,
+      "home_size": "256m",
+      "service": "locus-runtime",
+      "container": "cyfr-locus-runtime",
+      "network": "locus-runtime",
+      "profile": null
+    },
+    {
+      "name": "builds",
+      "pool": "build",
+      "user_prefix": "locus-build",
+      "first_uid": 30001,
+      "last_uid": 30016,
+      "isolation": null,
+      "port": 4100,
+      "home_size": "2g",
+      "service": "locus-builds",
+      "container": "cyfr-locus-builds",
+      "network": "locus-builds",
+      "profile": "locus-builds"
+    },
+    {
+      "name": "backends",
+      "pool": "backends",
+      "user_prefix": "locus-backend",
+      "first_uid": 20001,
+      "last_uid": 20032,
+      "isolation": null,
+      "port": 4101,
+      "home_size": "2g",
+      "service": "locus-backends",
+      "container": "cyfr-locus-backends",
+      "network": "locus-backends",
+      "profile": null
+    }
+  ]
+}

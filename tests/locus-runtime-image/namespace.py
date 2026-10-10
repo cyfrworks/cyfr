@@ -3,8 +3,9 @@
 # Copyright 2026 CYFR Works Inc.
 """Every runner of the Locus image runs in a user and network namespace of its own, proven on the kernel.
 
-cyfr-locus serves the image's runner pool isolated (`runner:…:netns`): it
-clones each runner's stage into a new user and network namespace, maps the
+cyfr-locus serves the image's runner pool isolated, under the pool and
+isolation the role table names (stack.py reads them): it clones each
+runner's stage into a new user and network namespace, maps the
 runner's pooled uid and gid to themselves from the parent side, places the
 stage in its cgroup, and only then releases it to drop every capability set
 and execute the runner. The clone needs the image's seccomp profile
@@ -39,7 +40,8 @@ runner's own uid, outside that namespace, may not):
   service's; its namespace has one interface, the loopback, and no route.
 - `descriptors`: a runner's standard descriptors are pipes, its fd 3 is
   its control socket and its fd 4 its relay, another socket, and none of
-  its descriptors reaches /run/locus or the service's keeper channel.
+  its descriptors reaches the release's run directory or the service's
+  keeper channel.
 - `kill`: a runner killed from outside is gone with every process of its
   uid, its home scrubbed and its group removed, and the pool refills.
 - `reuse`: runners are killed until a uid is lent again; the runner that
@@ -69,12 +71,12 @@ import tempfile
 import threading
 
 from control_plane import ControlPlane
-from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, SERVICE, SERVICE_UID, Stack, expect, run,
-                   wait_until)
+from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, ROLE, RUN_DIR, SERVICE, SERVICE_UID, SERVICE_USER, Stack,
+                   expect, run, wait_until)
 
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
 STEPS = ("refusals", "connect", "relay", "spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
-POOL = f"runner:{POOL_FIRST}-{POOL_LAST}:netns"
+POOL = f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:{ROLE['isolation']}"
 TOKEN = "0123456789abcdef" * 4
 BOOT_S = 90
 NO_CAPS = "0000000000000000"
@@ -115,21 +117,21 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=()):
     """cyfr-locus from the image under the shipped service's options, serving the isolated pool to a shell client."""
     args = ["docker", "run", "--rm", *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
             "--security-opt", "no-new-privileges:true", "--read-only", "--ipc", "none", "--init",
-            "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"/run/locus:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]
+            "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"{RUN_DIR}:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]
     if seccomp:
         args += ["--security-opt", f"seccomp={PROFILE}"]
     args += ["--entrypoint", "cyfr-locus", image, "serve", "--pool", POOL, "--home-root", HOME_ROOT,
-             "--client-user", "locus", "--", "/bin/sh", "-c", client_script]
+             "--client-user", SERVICE_USER, "--", "/bin/sh", "-c", client_script]
     return run(*args, check=False, timeout=timeout)
 
 
-def spawn_line(spawn_id, argv, isolated=True, env=None, control=False, attach="/run/locus/attach.sock"):
-    request = {"v": 1, "type": "spawn", "id": spawn_id, "pool": "runner", "argv": argv, "env": env or {},
+def spawn_line(spawn_id, argv, isolated=True, env=None, control=False, attach=f"{RUN_DIR}/attach.sock"):
+    request = {"v": 1, "type": "spawn", "id": spawn_id, "pool": ROLE["pool"], "argv": argv, "env": env or {},
                "attach": {"path": attach, "token": TOKEN}}
     if control:
         request["control"] = True
     if isolated:
-        request["isolation"] = "netns"
+        request["isolation"] = ROLE["isolation"]
     return json.dumps(request)
 
 
@@ -367,8 +369,8 @@ def test_descriptors(stack):
         expect(all(fds.get(n, "").startswith("pipe:") for n in (0, 1, 2)) and fds.get(3, "").startswith("socket:")
                and fds.get(4, "").startswith("socket:") and fds[4] != fds[3],
                f"descriptors: runner uid {runner['uid']}'s stdio are pipes, its fd 3 its control socket and its fd 4 its relay, another socket", fds)
-        expect(not [t for t in fds.values() if t.startswith("/run/locus") or t == own["channel"]],
-               f"descriptors: none of runner uid {runner['uid']}'s descriptors reaches /run/locus or the service's keeper channel", fds)
+        expect(not [t for t in fds.values() if t.startswith(RUN_DIR) or t == own["channel"]],
+               f"descriptors: none of runner uid {runner['uid']}'s descriptors reaches {RUN_DIR} or the service's keeper channel", fds)
 
 
 def kill_runner(stack, runner, label):
