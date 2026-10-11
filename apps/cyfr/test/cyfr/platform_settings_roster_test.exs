@@ -95,9 +95,10 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # one running, so these alone are read there.
   @restart_read ~w(opus_max_concurrent opus_max_concurrent_per_tenant)
 
-  # The keywords a group of settings was once read under whole: the caps
-  # under Sanctum and the worker watch's bounds under the host.
-  @keywords ~w(caps runtime_watch)
+  # The keywords a group of settings would be read under whole: the caps
+  # under Sanctum and the worker watch's bounds (`locus_runtime_watch_*`)
+  # under the host.
+  @keywords ~w(caps locus_runtime_watch)
 
   # Every use of a live setting's value in the application environment,
   # under any application, by one of `verbs`: `{path, app, key}`. The key
@@ -456,13 +457,15 @@ defmodule Cyfr.PlatformSettingsRosterTest do
          "Keyword.get(Application.get_env(:sanctum, :caps, []), k)"},
         {"apps/cyfr/lib/planted.ex", "Application.fetch_env!(:cyfr, :mcp_rate_limit_max)"},
         {"apps/arca/lib/planted.ex", "Application.get_env(:arca, :session_ttl_hours)"},
-        {"apps/cyfr/lib/slots.ex", "Application.get_env(:cyfr, :opus_max_concurrent)"}
+        {"apps/cyfr/lib/slots.ex", "Application.get_env(:cyfr, :opus_max_concurrent)"},
+        {"apps/cyfr/lib/opus/planted.ex", "Application.get_env(:cyfr, :locus_runtime_watch, [])"}
       ]
 
       assert env_reads(planted, ~w(get_env fetch_env!?)) == [
                {"apps/sanctum/lib/planted.ex", :sanctum, :caps},
                {"apps/cyfr/lib/planted.ex", :cyfr, :mcp_rate_limit_max},
-               {"apps/arca/lib/planted.ex", :arca, :session_ttl_hours}
+               {"apps/arca/lib/planted.ex", :arca, :session_ttl_hours},
+               {"apps/cyfr/lib/opus/planted.ex", :cyfr, :locus_runtime_watch}
              ]
     end
 

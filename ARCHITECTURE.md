@@ -65,7 +65,7 @@ The order describes dependencies. A request does not have to pass through every 
 |---|---|---|---|
 | Prima | Jason and its rostered runtime primitives | the repo, product modules, unclassified effects | structs, behaviours, codecs, primitives started by their owners |
 | Arca | Prima | Sanctum, Host, domains, surfaces | storage facades returning plain data; blobs; cache; leases; two providers |
-| Sanctum | Prima, Arca | Host, domains, surfaces | its Boundary export list: the decisions, the operation and stream entries, discovery, the request log, the decision record, the system provider |
+| Sanctum | Prima, Arca | Host, domains, surfaces | its Boundary export list: the decisions, the operation and stream entries, discovery, the request log, the decision record; and the system provider, which the tool roster names |
 | Cyfr (Host) | everything below; its composition modules may name domains and surfaces to wire them | — | boot, cell, bus, telemetry catalog, runtime configuration, platform settings, the admission roster |
 | Domains | Prima, foundations, other domains' facades (acyclic) | surfaces, each other's internals | one facade module, providers, storage under Arca |
 | Surfaces | Prima, foundations, domain facades for reads | other surfaces, domain internals | plugs, routers, controllers, LiveViews, the frame manager, CLI commands |

@@ -1349,9 +1349,10 @@ jobs:
             '[Gg]rimoire|GRIMOIRE' \
             'OperationTable' \
             'Emissary\.MCP\.(RequestLog|RunningTasks|Tools\.SystemProvider)\b' \
+            ':cyfr, :?tool_providers' \
             'Cyfr\.Execution\b' \
             'Cyfr\.Schedules\b' \
-            'Crucible\.[A-Z]' \
+            'Crucible\\?\.[A-Za-z_{]' \
             'CYFR_CRUCIBLE_' \
             'crucible_' \
             ':crucible\b' \
@@ -1374,19 +1375,46 @@ jobs:
             'Locus\.Spawner\b' \
             'Locus\.Test\.FakeSpawner\b' \
             '(^|[^A-Za-z])([Ss]pawners?([^a-z]|$)|SPAWNERS?([^A-Z]|$))|[a-z]Spawner' \
-            'apps/opus/' \
+            'apps/opus\b' \
+            '"apps", *"(opus|keeper)"' \
+            'apps/\{([^},]*,)*(opus|keeper)[,}]' \
             'Dockerfile\.opus' \
             '\.env\.opus' \
             'cyfr-opus([^-A-Za-z0-9_]|$)' \
-            '(^|[^A-Za-z0-9_])OPUS_' \
+            '(^|[^A-Z0-9_])OPUS_' \
+            '\bOPUS\b' \
             'CYFR_OPUS_(KEY|WORKERS|WATCH_)' \
             'wrk_opus' \
             'OpusService' \
             'cyfr\.opus\.key' \
-            'Opus\.(Application|AsyncTracker|Cache|ComponentCache|ComponentType|Credentials|EdgeGuard|Egress|FormulaHandler|HostClient|HttpHandler|HttpRequestValidation|HttpStreamHandler|Keeper|MixProject|OAuthHandler|Relay|Release|Runner|RunnerPool|RunnerProcess|Runtime|Settings|SharedEngine|StorageHandler|Subtree|Test|WorkerListener|WorkerService)\b' \
+            'Opus\\?\.(Application|AsyncTracker|Cache|ComponentCache|ComponentType|Credentials|EdgeGuard|Egress|FormulaHandler|HostClient|HttpHandler|HttpRequestValidation|HttpStreamHandler|Keeper|MixProject|OAuthHandler|Relay|Release|Runner|RunnerPool|RunnerProcess|Runtime|Settings|SharedEngine|StorageHandler|Subtree|Test|WorkerListener|WorkerService)\b' \
+            'Opus\\?\.(ActivationStamping|Application|AsyncTracker|AttachedFetch|AuthorityExecutionCharacterization|AuthorityPlumbing|BootstrapFirstRun|BudgetConcurrencyCharacterization|CancelCascadeCharacterization|Chain|ComponentCache|ComponentType|Credentials|DirectKeeper|EdgeGuard|Egress|ExecutionProvenance|ExecutorCancelPenalty|ExecutorCascade|ExecutorMaskedOutput|ExecutorRateLimit|ExecutorRegistration|FormulaHandler|FormulaHandlerMcp|FormulaHandlerRunner|GenServerCatchall|HostClient|HttpHandler|HttpHandlerEnforcement|HttpRequestValidation|HttpStreamHandler|HttpStreamHandlerBoundary|KeeperChannel|KeeperMemory|KeeperVectors|LogFilterBoot|MemoryBound|ModelContract|ModelsCatalogue|NestedProbeFixture|OAuthHandler|OrphanChildren|Relay|Release|ResourceLimits|RestartRequired|RetainedInput|Runner|RunnerBoundary|RunnerControlVectors|RunnerPool|RunnerReuse|Runtime|SecretAudit|Security|SeedModelCatalysts|Settings|StorageHandler|StoreLimits|Timeout|VaultDenial|WasiCapabilities|WorkerListener|WorkerService|WorkerServicePool|WorkerServiceWire)Test\b' \
+            'Opus\.\{ *([A-Za-z0-9_.]+ *, *)*(Application|AsyncTracker|Cache|ComponentCache|ComponentType|Credentials|EdgeGuard|Egress|FormulaHandler|HostClient|HttpHandler|HttpRequestValidation|HttpStreamHandler|Keeper|MixProject|OAuthHandler|Relay|Release|Runner|RunnerPool|RunnerProcess|Runtime|Settings|SharedEngine|StorageHandler|Subtree|Test|WorkerListener|WorkerService) *([,}]|$)' \
+            'Cyfr\.Opus\.Key\b' \
+            '\bopus_(named_by_cyfr_tests|service|watch)' \
+            'MacEnvelope\.domain\(:opus\)' \
+            'MacEnvelope\.label\(:worker\)' \
+            '\{:opus, "worker"\}' \
+            '@type service ::[^#]*:worker\b' \
+            '\{PREFIX\}/worker\b' \
+            '(\[:cyfr, :opus, :|cyfr\.opus\.)(formula|mcp_tool|storage|http|runtime)\b' \
+            'Opus\.Telemetry\.(formula|mcp_tool|storage)_' \
+            'http:\\?/\\?/opus:' \
+            '/app/bin/opus\b' \
+            '/run/opus\b' \
+            '/var/lib/opus\b' \
+            '\bopus-runner' \
+            'cyfr-opus-(canary|memory|namespace|runners|unbounded)\b' \
+            '\bintegration/opus\b' \
+            '"integration", *"opus"' \
+            '\.\./opus/(lib|test)\b' \
+            '\bworker-image\b' \
+            'compose\.worker\.yml' \
+            'opus-independence' \
             'LOCUS_BUILDS_LOG_' \
             'cyfr-keeper' \
-            'apps/keeper/' \
+            'apps/keeper\b' \
+            'github\.com/cyfr/keeper\b' \
             'CYFR_WORKER_KEY' \
             'CYFR_WORKERS\b' \
             'CYFR_EXECUTION_EVENTS_' \
