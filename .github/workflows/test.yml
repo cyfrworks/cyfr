@@ -1170,7 +1170,14 @@ jobs:
           fi
           for manifest in "${manifests[@]}"; do
             vdir="$(dirname "$manifest")"
-            entry="$(jq -r '.tincture.entry // "index.html"' "$manifest")" || { bad="$bad"$'\n'"$manifest: unreadable"; continue; }
+            # The owner's reading (Compendium.Tincture.entry_of/1): a canvas-placed
+            # tincture's entry is the module its canvas block names, every other
+            # tincture's is its declared entry or the default.
+            entry="$(jq -r 'if .tincture.frame.placement == "canvas" then (.tincture.canvas.module // empty) else (.tincture.entry // "index.html") end' "$manifest")" || { bad="$bad"$'\n'"$manifest: unreadable"; continue; }
+            if [ -z "$entry" ]; then
+              bad="$bad"$'\n'"$manifest: a canvas names no module"
+              continue
+            fi
             case "/$entry/" in
               */../*|*/./*|//*) bad="$bad"$'\n'"$manifest: entry '$entry' leaves the version directory"; continue ;;
             esac
