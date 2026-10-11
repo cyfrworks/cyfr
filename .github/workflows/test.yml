@@ -1172,8 +1172,10 @@ jobs:
             vdir="$(dirname "$manifest")"
             # The owner's reading (Compendium.Tincture.entry_of/1): a canvas-placed
             # tincture's entry is the module its canvas block names, every other
-            # tincture's is its declared entry or the default.
-            entry="$(jq -r 'if .tincture.frame.placement == "canvas" then (.tincture.canvas.module // empty) else (.tincture.entry // "index.html") end' "$manifest")" || { bad="$bad"$'\n'"$manifest: unreadable"; continue; }
+            # tincture's is its declared entry, or the default when the entry is
+            # absent or empty. A non-string entry is kept as text so it fails
+            # the tracked check, as the owner refuses it.
+            entry="$(jq -r 'if .tincture.frame.placement == "canvas" then (.tincture.canvas.module // empty) else (.tincture.entry | if . == null or . == "" then "index.html" else . end) end' "$manifest")" || { bad="$bad"$'\n'"$manifest: unreadable"; continue; }
             if [ -z "$entry" ]; then
               bad="$bad"$'\n'"$manifest: a canvas names no module"
               continue
