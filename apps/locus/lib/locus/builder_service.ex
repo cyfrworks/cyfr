@@ -35,7 +35,9 @@ defmodule Locus.BuilderService do
   3. **The bound.** A declared length past
      `Prima.BuilderProtocol.max_request_bytes/0` is refused `malformed`
      without reading; the body is then read up to that bound, and one that
-     runs past it is refused the same way.
+     runs past it is refused the same way, on a connection that closes once
+     what the client still sends of it is read and dropped
+     (`Locus.Listener.drain/2`).
   4. **The body's hash.** The bytes read must be the ones the header named
      (`verify_body/2`), or the request is `unauthorized` (`bad_mac`).
   5. **The request.** Read strictly (`read_request/1`): another version is
@@ -135,6 +137,7 @@ defmodule Locus.BuilderService do
       answer(conn, 200, line)
     else
       {:refused, conn, refusal} -> refuse(conn, refusal)
+      {:over_bound, conn, refusal, max} -> conn |> refuse(refusal) |> Locus.Listener.drain(max)
     end
   end
 
@@ -158,6 +161,7 @@ defmodule Locus.BuilderService do
       end
     else
       {:refused, conn, refusal} -> refuse(conn, refusal)
+      {:over_bound, conn, refusal, max} -> conn |> refuse(refusal) |> Locus.Listener.drain(max)
     end
   end
 
@@ -205,7 +209,7 @@ defmodule Locus.BuilderService do
          {:malformed, BuilderProtocol.describe({:too_large, :request, bytes, max})}}
 
       {:too_large, conn, :read} ->
-        {:refused, closing(conn), runs_past(max)}
+        {:over_bound, closing(conn), runs_past(max), max}
 
       {:unread, conn} ->
         {:refused, conn, {:malformed, "the body could not be read"}}
@@ -215,7 +219,8 @@ defmodule Locus.BuilderService do
   defp runs_past(max),
     do: {:malformed, "the request runs past #{max} bytes; at most #{max} are read"}
 
-  # What is left of a body past the bound is never drained: the answer
+  # A body declared past the bound is refused unread, and one that runs
+  # past it is refused before what is left of it is dropped: either answer
   # closes the connection. Every other refusal leaves the connection open,
   # so Bandit reads off the little that was sent and the client reads its
   # answer instead of a reset.

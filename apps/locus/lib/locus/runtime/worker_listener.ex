@@ -18,8 +18,11 @@ defmodule Locus.Runtime.WorkerListener do
   (`replayed`), each refused `401`. A refusal made before the body is read
   is answered on a closed connection, so the unread body is never taken
   for the next request. The body is then read up to
-  `Prima.HostAPI.max_body_bytes/0`, checked against the hash the header
-  named (`Prima.WorkerAuth.verify_body/2`), and read as the request of the
+  `Prima.HostAPI.max_body_bytes/0`; one that runs past it is refused `413`
+  `malformed`, and the connection closes once what the client still sends
+  of it is read and dropped (`Locus.Listener.drain/2`). A body within the
+  bound is checked against the hash the header named
+  (`Prima.WorkerAuth.verify_body/2`), and read as the request of the
   route's callback (`Prima.WorkerWire.read_request_body/2`): its version
   first, a missing `v` or another being `unknown_version`, then its
   callback, a body naming another than its route's being `malformed`, each
@@ -73,6 +76,9 @@ defmodule Locus.Runtime.WorkerListener do
       # A refusal after the body was read answers on the conn that read it.
       {:refused, read, status, reason} -> refuse(read, status, reason)
       {:refused, status, reason} -> refuse(closing(conn), status, reason)
+      # A body past the bound is refused first, then what is left of it
+      # dropped, so a client still writing it reads the refusal.
+      {:over_bound, read} -> read |> refuse(413, :malformed) |> drain()
     end
   end
 
@@ -127,10 +133,12 @@ defmodule Locus.Runtime.WorkerListener do
   defp read(conn) do
     case Locus.Listener.read_bounded(conn, HostAPI.max_body_bytes(), false) do
       {:ok, body, conn} -> {:ok, body, conn}
-      {:too_large, conn, _past} -> {:refused, closing(conn), 413, :malformed}
+      {:too_large, conn, _past} -> {:over_bound, closing(conn)}
       {:unread, _conn} -> {:refused, 400, :malformed}
     end
   end
+
+  defp drain(refused), do: Locus.Listener.drain(refused, HostAPI.max_body_bytes())
 
   defp read_request(read, body_hash, body, callback) do
     with :ok <- verify_body(body_hash, body),

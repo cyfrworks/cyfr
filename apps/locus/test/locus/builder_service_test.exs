@@ -51,6 +51,24 @@ defmodule Locus.BuilderServiceTest do
   defp answer(port, body, opts) when is_binary(body),
     do: Wire.post(port, @build, body, [{"x-cyfr-auth", Wire.header(body, opts)}])
 
+  # An answer read to its length on a connection left open: its status and
+  # its one line.
+  defp read_answer(socket, read \\ "") do
+    with [head, rest] <- String.split(read, "\r\n\r\n", parts: 2),
+         ["HTTP/1.1 " <> status_line | lines] <- String.split(head, "\r\n"),
+         [length] <-
+           for("content-length: " <> length <- Enum.map(lines, &String.downcase/1), do: length),
+         length = String.to_integer(length),
+         true <- byte_size(rest) >= length do
+      {status, _reason} = Integer.parse(status_line)
+      {status, String.trim_trailing(binary_part(rest, 0, length), "\n")}
+    else
+      _incomplete ->
+        {:ok, more} = :gen_tcp.recv(socket, 0, 10_000)
+        read_answer(socket, read <> more)
+    end
+  end
+
   defp alive?(os_pid) do
     {_out, status} = System.cmd("kill", ["-0", os_pid], stderr_to_stdout: true)
     status == 0
@@ -274,6 +292,44 @@ defmodule Locus.BuilderServiceTest do
       assert {{:refusal, {:malformed, sentence}, []}, conn} = Wire.line(conn)
       assert sentence =~ "runs past #{max} bytes"
       Wire.close(conn)
+      assert spawns(ctx.fake) == []
+    end
+
+    test "a client still sending a chunked body past the bound when it is refused reads the refusal, not a reset",
+         ctx do
+      max = BuilderProtocol.max_request_bytes()
+      body = String.duplicate("x", max + 65_536)
+      options = [:binary, active: false, packet: :raw, show_econnreset: true]
+      {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, ctx.port, options, 5_000)
+
+      # One chunk holding the whole body, of which the bound and a byte past
+      # it are on the connection when the refusal is made.
+      :ok =
+        :gen_tcp.send(socket, [
+          "POST #{@build} HTTP/1.1\r\nhost: locus\r\ntransfer-encoding: chunked\r\n",
+          "x-cyfr-auth: #{Wire.header(body)}\r\n\r\n",
+          Integer.to_string(byte_size(body), 16),
+          "\r\n",
+          binary_part(body, 0, max + 1)
+        ])
+
+      {status, line} = read_answer(socket)
+      assert status == 400
+
+      assert {:ok, {:refusal, {:malformed, sentence}, []}} = BuilderProtocol.read_line(line)
+      assert sentence == "the request runs past #{max} bytes; at most #{max} are read"
+
+      # The rest of the chunk and the body's end, written after the refusal
+      # was read: every write is taken, and the connection closes cleanly.
+      rest = binary_part(body, max + 1, byte_size(body) - max - 1)
+
+      for piece <- [binary_part(rest, 0, 32_768), binary_part(rest, 32_768, 32_767)] do
+        assert :gen_tcp.send(socket, piece) == :ok
+      end
+
+      assert :gen_tcp.send(socket, "\r\n0\r\n\r\n") == :ok
+      assert :gen_tcp.recv(socket, 0, 10_000) == {:error, :closed}
+      :gen_tcp.close(socket)
       assert spawns(ctx.fake) == []
     end
 

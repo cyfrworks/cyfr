@@ -60,13 +60,20 @@ defmodule Opus.HostListener do
   A body over the bound is never kept. Its refusal is sent first; then
   what the client still sends of the body is read and dropped, each read
   dropped before the next is made, so no more than the bound is held at
-  once, and the connection closes when the body ends. A client that
-  writes its whole body before it reads its answer so reads the refusal,
-  where a connection closed on unread bytes resets under it and loses the
-  answer. Only a caller whose header verified is read so far, and only
-  while the whole body is within the largest a worker service's relay
-  carries for its runner (`Prima.RunnerRelay.max_body_bytes/0`); past
-  that the connection closes with the rest unread.
+  once, and the connection closes when the body ends, or at one deadline
+  for the whole of the rest: the listener's receive timeout
+  (ThousandIsland's `read_timeout`, which its Bandit options configure),
+  counted from the drain's start. Each read waits only for what is left
+  of it, and at the deadline the connection's reading side is shut, which
+  also ends a read Bandit makes of several receives, as it reads a chunked
+  body; the shut is made by a process the drain starts, which stops with
+  the drain or with the connection's process. A client that writes its
+  whole body before it reads its answer so reads the refusal, where a
+  connection closed on unread bytes resets under it and loses the answer.
+  Only a caller whose header verified is read so far, and only while the
+  whole body is within the largest a worker service's relay carries for
+  its runner (`Prima.RunnerRelay.max_body_bytes/0`); past that the
+  connection closes with the rest unread.
 
   A host call crosses sealed: its HTTP body is
   `Prima.WorkerAuth.seal_call/5` of the `{"v", "op", "args"}` JSON in the
@@ -363,24 +370,86 @@ defmodule Opus.HostListener do
   end
 
   # What the client still sends of a refused body, read and dropped a read
-  # at a time, at most `rest` bytes of it, until the body ends or the
-  # client stops sending it. The refusal was sent first, and a connection
-  # closed with the rest unread would reset under a client still writing
-  # it before that client read the refusal.
+  # at a time, at most `rest` bytes of it, until the body ends, the client
+  # stops sending it or the listener's receive timeout has passed since
+  # the drain began. The refusal was sent first, and a connection closed
+  # with the rest unread would reset under a client still writing it
+  # before that client read the refusal. A connection that is not Bandit's
+  # HTTP/1 socket, or whose receive timeout is unbounded, closes with the
+  # rest unread.
   defp drop_rest(conn, rest) when rest > 0 do
-    max = HostAPI.max_body_bytes()
+    case receive_timeout(conn) do
+      {:ok, socket, timeout} ->
+        deadline = System.monotonic_time(:millisecond) + timeout
+        shut = spawn(__MODULE__, :shut_at, [self(), socket, deadline])
 
-    case read_dropped(conn, length: min(rest, max), read_length: max) do
-      {:more, dropped, conn} -> drop_rest(conn, rest - byte_size(dropped))
-      {:ok, _dropped, conn} -> conn
-      {:error, _reason} -> conn
+        try do
+          drop_rest(conn, rest, deadline)
+        after
+          send(shut, :stop)
+        end
+
+      :error ->
+        conn
     end
   end
 
   defp drop_rest(conn, _rest), do: conn
 
-  # Bandit raises when a read times out or the client has gone; either way
-  # nothing more of the body arrives.
+  # Each read's length is also its receive size, so a body of declared
+  # length takes one receive a read, which waits no longer than the time
+  # left; the several receives of a chunked body's read are ended by the
+  # shut at the deadline.
+  defp drop_rest(conn, rest, deadline) do
+    left = deadline - System.monotonic_time(:millisecond)
+    length = min(rest, HostAPI.max_body_bytes())
+
+    if rest > 0 and left > 0 do
+      case read_dropped(conn, length: length, read_length: length, read_timeout: left) do
+        {:more, dropped, conn} -> drop_rest(conn, rest - byte_size(dropped), deadline)
+        {:ok, _dropped, conn} -> conn
+        {:error, _reason} -> conn
+      end
+    else
+      conn
+    end
+  end
+
+  @doc false
+  # The deadline's shut, a process of its own beside the connection's,
+  # which is blocked in a receive when the deadline comes: it shuts the
+  # socket's reading side at `deadline`, a monotonic millisecond the drain
+  # computed before starting it, so a late start waits only for what is
+  # left of the one deadline; unless it is told to stop first or the
+  # connection's process `owner` ends, so no shut outlives the drain it
+  # bounds.
+  @spec shut_at(pid(), ThousandIsland.Socket.t(), integer()) :: :ok
+  def shut_at(owner, socket, deadline) do
+    watch = Process.monitor(owner)
+    left = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      :stop -> :ok
+      {:DOWN, ^watch, :process, ^owner, _reason} -> :ok
+    after
+      left ->
+        _ = ThousandIsland.Socket.shutdown(socket, :read)
+        :ok
+    end
+  end
+
+  defp receive_timeout(%Plug.Conn{
+         adapter:
+           {Bandit.Adapter,
+            %{transport: %{socket: %ThousandIsland.Socket{read_timeout: timeout} = socket}}}
+       })
+       when is_integer(timeout),
+       do: {:ok, socket, timeout}
+
+  defp receive_timeout(_conn), do: :error
+
+  # Bandit raises when a read times out, the client has gone or the
+  # reading side was shut; either way nothing more of the body arrives.
   defp read_dropped(conn, opts) do
     Plug.Conn.read_body(conn, opts)
   rescue

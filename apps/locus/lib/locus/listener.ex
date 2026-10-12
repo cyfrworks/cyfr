@@ -16,6 +16,8 @@ defmodule Locus.Listener do
     header window, for a listener that stores a verified header's nonce
     before it reads the body (the runtime's and the builds').
   - `read_bounded/3`: the body, read to a bound and no further.
+  - `drain/2`: what the client still sends of a body refused past its
+    bound, read and dropped after the refusal under one deadline.
   - `now/1`: the clock a request's header is read against.
   """
 
@@ -92,6 +94,103 @@ defmodule Locus.Listener do
     else
       _ -> :ok
     end
+  end
+
+  @doc """
+  What the client still sends of a body refused past its bound, read and
+  dropped once the refusal was sent on `conn`, which closes. A client that
+  writes its whole body before it reads its answer so reads the refusal,
+  where a connection closed on unread bytes resets under it and loses the
+  answer.
+
+  At most `max` bytes more are read in all, each read dropped before the
+  next, under one deadline for the whole of them: the listener's receive
+  timeout (ThousandIsland's `read_timeout`, which the listener's Bandit
+  options configure), counted from the drain's start. Each read waits only
+  for what is left of it, and at the deadline the connection's reading
+  side is shut, which also ends a read Bandit makes of several receives,
+  as it reads a chunked body. The shut is made by a process the drain
+  starts, which stops with the drain or with the connection's process.
+  The body's end, the bound, the deadline or the client's leaving ends
+  the drain. A connection that is not Bandit's HTTP/1 socket, or whose
+  receive timeout is unbounded, is answered as it is, with the rest
+  unread.
+  """
+  @spec drain(Plug.Conn.t(), pos_integer()) :: Plug.Conn.t()
+  def drain(conn, max) do
+    case receive_timeout(conn) do
+      {:ok, socket, timeout} ->
+        deadline = System.monotonic_time(:millisecond) + timeout
+        shut = spawn(__MODULE__, :shut_at, [self(), socket, deadline])
+
+        try do
+          drop(conn, max, deadline)
+        after
+          send(shut, :stop)
+        end
+
+      :error ->
+        conn
+    end
+  end
+
+  @doc false
+  # The deadline's shut, a process of its own beside the connection's,
+  # which is blocked in a receive when the deadline comes: it shuts the
+  # socket's reading side at `deadline`, a monotonic millisecond the drain
+  # computed before starting it, so a late start waits only for what is
+  # left of the one deadline; unless it is told to stop first or the
+  # connection's process `owner` ends, so no shut outlives the drain it
+  # bounds.
+  @spec shut_at(pid(), ThousandIsland.Socket.t(), integer()) :: :ok
+  def shut_at(owner, socket, deadline) do
+    watch = Process.monitor(owner)
+    left = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      :stop -> :ok
+      {:DOWN, ^watch, :process, ^owner, _reason} -> :ok
+    after
+      left ->
+        _ = ThousandIsland.Socket.shutdown(socket, :read)
+        :ok
+    end
+  end
+
+  defp receive_timeout(%Plug.Conn{
+         adapter:
+           {Bandit.Adapter,
+            %{transport: %{socket: %ThousandIsland.Socket{read_timeout: timeout} = socket}}}
+       })
+       when is_integer(timeout),
+       do: {:ok, socket, timeout}
+
+  defp receive_timeout(_conn), do: :error
+
+  # Each read's length is also its receive size, so a body of declared
+  # length takes one receive a read, which waits no longer than the time
+  # left; the several receives of a chunked body's read are ended by the
+  # shut at the deadline.
+  defp drop(conn, rest, deadline) do
+    left = deadline - System.monotonic_time(:millisecond)
+
+    if rest > 0 and left > 0 do
+      case read_dropped(conn, length: rest, read_length: rest, read_timeout: left) do
+        {:more, dropped, conn} -> drop(conn, rest - byte_size(dropped), deadline)
+        {:ok, _dropped, conn} -> conn
+        {:error, _reason} -> conn
+      end
+    else
+      conn
+    end
+  end
+
+  # Bandit raises when a read times out, the client has gone or the
+  # reading side was shut; either way nothing more of the body arrives.
+  defp read_dropped(conn, opts) do
+    read_body(conn, opts)
+  rescue
+    _gone in [Bandit.HTTPError, Bandit.TransportError] -> {:error, :gone}
   end
 
   @doc """

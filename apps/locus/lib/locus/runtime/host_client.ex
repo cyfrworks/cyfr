@@ -36,13 +36,17 @@ defmodule Locus.Runtime.HostClient do
   direction, read up to `Prima.HostAPI.max_answer_bytes/0` and read as an
   answer of this wire's version (`Prima.WorkerWire.read_answer/1`); an
   answer without `v`, or at another version, is no answer and is lost.
-  Any other status is the listener's refusal, and is lost, except a
-  refusal naming `unknown_version`: the host speaks another version of the
-  wire, so it is not this engine's host, and the call is answered
-  `{:error, :lost}` at once, which stops the attempt's work, rather than
-  asked again. The attempt's seal key also opens the keys of a child CYFR
-  admits for this client's runner (`admit_child/6`), whose attempt the
-  runner's relay then carries.
+  Any other status is the listener's refusal, and is lost, except two
+  that are final: a `413`, whatever its body, says the call's body is past
+  the host's bound (`Prima.HostAPI.max_body_bytes/0`), refused before the
+  host read it or acted on it, and the call is answered
+  `{:error, :too_large}` rather than asked again, since the same body is
+  refused again; and a refusal naming `unknown_version` says the host
+  speaks another version of the wire, so it is not this engine's host, and
+  the call is answered `{:error, :lost}` at once, which stops the
+  attempt's work, rather than asked again. The attempt's seal key also
+  opens the keys of a child CYFR admits for this client's runner
+  (`admit_child/6`), whose attempt the runner's relay then carries.
 
   Each function answers as the `Prima.HostAPI` callback of the same name.
   An answer that does not arrive within `Prima.HostAPI.request_timeout_ms/1`,
@@ -53,7 +57,8 @@ defmodule Locus.Runtime.HostClient do
   batch and an `admit_child` under the same `child_key` — and a `:never`
   call ends `{:error, {:uncertain, sentence}}`, since its effect may have
   happened. A second loss is `{:error, :lost}`. CYFR's own answers, `lost`
-  included, are never retried: they are answers.
+  included, are never retried: they are answers, and so are the two final
+  refusals.
 
   `egress_pin/3` asks CYFR for the address a guest's outbound URL may be
   reached at (`c:Prima.HostAPI.egress_pin/3`): the engine resolves no name
@@ -472,7 +477,7 @@ defmodule Locus.Runtime.HostClient do
   one runner holds was issued by one member, so the report names that
   member (`at`) and is posted at its address; a member that is not the one
   named lapses nothing. The report is signed with the service's dispatch
-  key. Answers `:ok`, or `{:error, :lost | :unavailable}`.
+  key. Answers `:ok`, or `{:error, :lost | :unavailable | :too_large}`.
   """
   @spec runner_exited(
           Locus.Runtime.Credentials.t(),
@@ -586,17 +591,30 @@ defmodule Locus.Runtime.HostClient do
          {:ok, json} <- read.(raw) do
       answer(json, op)
     else
-      {:refused, raw} -> refused(raw, op)
+      {:refused, 413, _raw} -> too_large(op)
+      {:refused, _status, raw} -> refused(raw, op)
       _ -> :lost
     end
   end
 
-  # A refusal by status is lost, unless it says the host speaks another
-  # version of the wire: such a host refuses every call this engine makes,
-  # so the call is answered as the refusal that stops the attempt's work
-  # instead of being asked again. The refusal is plain, since a listener
-  # that cannot read the header cannot seal to it, and is read whatever
-  # version it carries, since it is the other version's answer.
+  # A body past the host's bound is refused before the host reads it, so
+  # nothing was done, and the same body is refused again: the refusal is
+  # the call's answer, never retried, whatever its body says.
+  defp too_large(op) do
+    Logger.warning(
+      "[Locus.Runtime.HostClient] #{op} was refused: its body is past the host's bound"
+    )
+
+    {:ok, {:error, :too_large}}
+  end
+
+  # A refusal by any other status is lost, unless it says the host speaks
+  # another version of the wire: such a host refuses every call this
+  # engine makes, so the call is answered as the refusal that stops the
+  # attempt's work instead of being asked again. The refusal is plain,
+  # since a listener that cannot read the header cannot seal to it, and is
+  # read whatever version it carries, since it is the other version's
+  # answer.
   defp refused(raw, op) do
     case Jason.decode(raw) do
       {:ok, %{"error" => "unknown_version"}} -> other_version(op)
@@ -612,10 +630,11 @@ defmodule Locus.Runtime.HostClient do
     {:ok, {:error, :lost}}
   end
 
-  # The bytes of a `200` answer, `{:refused, bytes}` for the body of any
-  # other status, or `:error` for a transport failure, an answer past the
-  # bound or later than the callback's timeout, whether the worker service
-  # posted it for a runner's relay or itself. No answer body is logged.
+  # The bytes of a `200` answer, `{:refused, status, bytes}` for any other
+  # status and its body (none of a body past the bound), or `:error` for a
+  # transport failure, a `200` answer past the bound or one later than the
+  # callback's timeout, whether the worker service posted it for a runner's
+  # relay or itself. No answer body is logged.
   defp transport(via, op, header, body) do
     sent =
       case via do
@@ -635,7 +654,7 @@ defmodule Locus.Runtime.HostClient do
 
     case sent do
       {:ok, 200, raw} -> {:ok, raw}
-      {:ok, status, raw} when is_integer(status) -> {:refused, raw}
+      {:ok, status, raw} when is_integer(status) -> {:refused, status, raw}
       _lost -> :error
     end
   end
@@ -869,9 +888,11 @@ defmodule Locus.Runtime.HostClient do
   Post one host call of `op`, its signed `header` and its `body`, to the
   host API at `host_url`, once: CYFR's status and the answer's bytes, read
   up to `Prima.HostAPI.max_answer_bytes/0`, or `:error` for a transport
-  failure, an answer past the bound or later than the callback's timeout.
-  The worker service posts every host call with it, its runners' as their
-  relay hands them over and its own.
+  failure, a `200` answer past the bound or an answer later than the
+  callback's timeout. A refusal, any other status, whose body runs past
+  the bound keeps its status, with none of its body: the status is what a
+  refusal says. The worker service posts every host call with it, its
+  runners' as their relay hands them over and its own.
   """
   @spec post_call(String.t(), atom(), String.t(), binary()) ::
           {:ok, 100..599, binary()} | :error
@@ -897,7 +918,8 @@ defmodule Locus.Runtime.HostClient do
       {:ok, %Req.Response{status: status} = response} ->
         case BoundedBody.read(response, max) do
           {:ok, raw} -> {:ok, status, raw}
-          _ -> :error
+          {:error, {:response_too_large, _seen, _max}} when status != 200 -> {:ok, status, ""}
+          {:error, {:response_too_large, _seen, _max}} -> :error
         end
 
       _ ->

@@ -85,12 +85,12 @@ defmodule Locus.Runtime.WorkerListenerTest do
     header
   end
 
-  # The head of a request for `body` under `header` and only the first
-  # `sent` bytes of the body: with none sent, an answer means the refusal
-  # came before the body was read. The answer is read until the listener
-  # closes the connection, which, with nothing sent left unread on it,
-  # closes cleanly after the answer instead of resetting it.
-  defp partial(context, callback, body, header, sent \\ 0) do
+  # The head of a request for `body` under `header` and none of the body:
+  # an answer means the refusal came before the body was read. The answer
+  # is read until the listener closes the connection, which, with nothing
+  # sent left unread on it, closes cleanly after the answer instead of
+  # resetting it.
+  defp partial(context, callback, body, header) do
     %URI{port: port} = URI.parse(context.url)
 
     {:ok, socket} =
@@ -99,8 +99,7 @@ defmodule Locus.Runtime.WorkerListenerTest do
     :ok =
       :gen_tcp.send(socket, [
         "POST #{WorkerWire.worker_route(callback)} HTTP/1.1\r\nhost: 127.0.0.1\r\n",
-        "content-length: #{byte_size(body)}\r\n#{WorkerWire.auth_header()}: #{header}\r\n\r\n",
-        binary_part(body, 0, sent)
+        "content-length: #{byte_size(body)}\r\n#{WorkerWire.auth_header()}: #{header}\r\n\r\n"
       ])
 
     answer = until_closed(socket, "")
@@ -122,6 +121,78 @@ defmodule Locus.Runtime.WorkerListenerTest do
       {:ok, more} -> until_closed(socket, read <> more)
       {:error, :closed} -> read
     end
+  end
+
+  # The head of a request for `body` under a header signed over it, and
+  # its first `sent` bytes, on a connection that shows a reset as one. The
+  # answer is read to its length while the connection stays open, and is
+  # returned with the connection.
+  defp refused_mid_body(context, callback, body, sent) do
+    %URI{port: port} = URI.parse(context.url)
+    options = [:binary, active: false, packet: :raw, show_econnreset: true]
+    {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, options, 5_000)
+
+    :ok =
+      :gen_tcp.send(socket, [
+        "POST #{WorkerWire.worker_route(callback)} HTTP/1.1\r\nhost: 127.0.0.1\r\n",
+        "content-length: #{byte_size(body)}\r\n",
+        "#{WorkerWire.auth_header()}: #{signed(context, body, [])}\r\n\r\n",
+        binary_part(body, 0, sent)
+      ])
+
+    {head, rest} = read_head(socket, "")
+    ["HTTP/1.1 " <> status_line | lines] = String.split(head, "\r\n")
+    {status, _reason} = Integer.parse(status_line)
+
+    headers =
+      Map.new(lines, fn line ->
+        [name, value] = String.split(line, ":", parts: 2)
+        {String.downcase(name), String.trim(value)}
+      end)
+
+    answer = read_exactly(socket, rest, String.to_integer(headers["content-length"]))
+    {%{status: status, headers: headers, body: answer}, socket}
+  end
+
+  defp read_head(socket, read) do
+    case String.split(read, "\r\n\r\n", parts: 2) do
+      [head, rest] ->
+        {head, rest}
+
+      [_partial] ->
+        {:ok, more} = :gen_tcp.recv(socket, 0, 10_000)
+        read_head(socket, read <> more)
+    end
+  end
+
+  defp read_exactly(_socket, read, length) when byte_size(read) >= length,
+    do: binary_part(read, 0, length)
+
+  defp read_exactly(socket, read, length) do
+    {:ok, more} = :gen_tcp.recv(socket, 0, 10_000)
+    read_exactly(socket, read <> more, length)
+  end
+
+  # The rest of `body` past its first `sent` bytes, written in pieces after
+  # the answer was read: `{:sent, ending}` when every piece was taken,
+  # `ending` how the connection then ends, or `{:write_failed, failure,
+  # ending}` from the first write it refused.
+  defp rest_dropped(socket, body, sent) do
+    rest = binary_part(body, sent, byte_size(body) - sent)
+    pieces = for <<piece::binary-size(65_536) <- rest>>, do: piece
+    tail = binary_part(rest, length(pieces) * 65_536, rem(byte_size(rest), 65_536))
+
+    written =
+      Enum.reduce_while(pieces ++ [tail], :ok, fn piece, :ok ->
+        case :gen_tcp.send(socket, piece) do
+          :ok -> {:cont, :ok}
+          failed -> {:halt, failed}
+        end
+      end)
+
+    ending = :gen_tcp.recv(socket, 0, 10_000)
+    :gen_tcp.close(socket)
+    if written == :ok, do: {:sent, ending}, else: {:write_failed, written, ending}
   end
 
   defp closed?(%Req.Response{} = response),
@@ -231,14 +302,28 @@ defmodule Locus.Runtime.WorkerListenerTest do
 
   test "a body past the listener's bound is refused once the header verifies", context do
     max = Prima.HostAPI.max_body_bytes()
-    huge = String.duplicate("x", max + 1)
+    huge = String.duplicate("x", 2 * max)
 
-    # The bound's worth of the body is sent and read; the byte past it
-    # makes the refusal, and is never sent.
-    response = partial(context, :status, huge, signed(context, huge, []), max)
+    # The bound's worth of the body is sent and read, and the refusal comes
+    # before the byte past it is sent. The rest, sent after the refusal, is
+    # read and dropped, and the connection closes when the body ends.
+    {response, client} = refused_mid_body(context, :status, huge, max)
     assert response.status == 413
     assert response.body == ~s({"v":1,"error":"malformed"})
     assert response.headers["connection"] == "close"
+    assert rest_dropped(client, huge, max) == {:sent, {:error, :closed}}
+  end
+
+  test "a client still sending a body past the bound when it is refused reads the refusal, not a reset",
+       context do
+    max = Prima.HostAPI.max_body_bytes()
+    huge = String.duplicate("x", 2 * max)
+
+    # A byte past the bound is on the connection when the refusal is
+    # made; a listener that closed then would reset it.
+    {response, client} = refused_mid_body(context, :status, huge, max + 1)
+    assert {response.status, response.body} == {413, ~s({"v":1,"error":"malformed"})}
+    assert rest_dropped(client, huge, max + 1) == {:sent, {:error, :closed}}
   end
 
   test "a body naming another callback than its route, or no callback, is refused", context do

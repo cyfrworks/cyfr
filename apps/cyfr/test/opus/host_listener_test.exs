@@ -36,6 +36,13 @@ defmodule Opus.HostListenerTest do
   @external_resource @vectors_path
   @vectors @vectors_path |> File.read!() |> Jason.decode!()
 
+  # A socket whose transport reports a shut to the test instead of making
+  # one, so the deadline's helper can be observed without a connection.
+  defmodule ShutReporter do
+    @moduledoc false
+    def shutdown(test, way), do: send(test, {:shut, way})
+  end
+
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     listener = start_supervised!({HostListener, port: 0})
@@ -722,6 +729,128 @@ defmodule Opus.HostListenerTest do
     end
   end
 
+  describe "the rest of a body over the bound" do
+    # Each listener here is the test's own, its receive timeout configured
+    # short. A client trickles what is left of its body after the refusal,
+    # a piece every 20 ms, well inside the timeout, so no single receive
+    # ever times out: a body of declared length whose requested read never
+    # completes, and a chunked body of one-byte chunks, each of which
+    # completes a receive. The drain ends at one timeout in all, counted
+    # from the refusal, and the listener answers the next request.
+    @tag :capture_log
+    test "is dropped until one receive timeout of the listener in all, however it trickles" do
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      # Two timeouts far enough apart that each closing time can only be
+      # its own listener's.
+      for timeout <- [200, 2_500] do
+        {_server, port} = listener_timing_out_at(timeout)
+
+        for shape <- [:declared, :chunked] do
+          elapsed = trickled_until_closed(port, fixture, shape, timeout + 1_000)
+
+          assert elapsed >= div(timeout, 2) and elapsed <= timeout + 1_000,
+                 "#{shape} at #{timeout} ms closed after #{elapsed} ms"
+        end
+
+        assert {200, %{"v" => 1, "ok" => _renewed}} =
+                 renew("http://127.0.0.1:#{port}", fixture)
+      end
+    end
+  end
+
+  describe "the shut at the drain's deadline" do
+    @tag :capture_log
+    test "ends with the connection's process, and nothing fires after it" do
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
+      timeout = 1_000
+      events = connection_events()
+      {server, port} = listener_timing_out_at(timeout)
+      declared = Prima.HostAPI.max_body_bytes() + 1
+      fields = fields(fixture, [])
+
+      {:ok, header} =
+        WorkerAuth.host_call_header(fixture.call_key, fields, :binary.copy("x", declared))
+
+      {:ok, client} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 5_000)
+      {:ok, client_port} = :inet.port(client)
+
+      assert_receive {^events, :start,
+                      %{remote_port: ^client_port, telemetry_span_context: connection_span}},
+                     5_000
+
+      # A length over the bound, refused before the body is read; the drain
+      # then waits for a body that never comes.
+      :ok =
+        :gen_tcp.send(client, [
+          "POST ",
+          WorkerWire.host_route(:push_deltas),
+          " HTTP/1.1\r\nhost: 127.0.0.1\r\ncontent-length: #{declared}\r\n",
+          @auth,
+          ": ",
+          header,
+          "\r\n\r\n"
+        ])
+
+      assert {413, _answer} = read_answer(client, "")
+      deadline = System.monotonic_time(:millisecond) + timeout
+      {:ok, [connection]} = ThousandIsland.connection_pids(server)
+
+      helper = shut_process(connection, deadline - div(timeout, 2))
+      helper_watch = if helper, do: Process.monitor(helper)
+      watch = Process.monitor(connection)
+      Process.exit(connection, :kill)
+      assert_receive {:DOWN, ^watch, :process, ^connection, :killed}, 5_000
+
+      # Past the drain's deadline, no shut was made for the connection.
+      left = max(deadline - System.monotonic_time(:millisecond), 0)
+
+      refute_receive {^events, :socket_shutdown, %{telemetry_span_context: ^connection_span}},
+                     left + 500
+
+      # It was the drain's own process, and it ended with the connection's.
+      assert is_pid(helper), "no process of the drain's monitored the connection's"
+      assert_receive {:DOWN, ^helper_watch, :process, ^helper, _reason}, 1_000
+      :gen_tcp.close(client)
+    end
+
+    test "waits only for the time left to its one deadline" do
+      socket = reporting_socket()
+      now = System.monotonic_time(:millisecond)
+
+      # Started past its deadline (a delayed schedule), the helper shuts at
+      # once: its wait is what is left, never a fresh duration of its own.
+      late = spawn(Opus.HostListener, :shut_at, [self(), socket, now - 1])
+      assert_receive {:shut, :read}, 1_000
+      late_watch = Process.monitor(late)
+      assert_receive {:DOWN, ^late_watch, :process, ^late, _}, 1_000
+
+      # Started with time left, it shuts when the deadline comes, not before.
+      deadline = System.monotonic_time(:millisecond) + 150
+      timely = spawn(Opus.HostListener, :shut_at, [self(), socket, deadline])
+      assert_receive {:shut, :read}, 5_000
+      assert System.monotonic_time(:millisecond) >= deadline
+      timely_watch = Process.monitor(timely)
+      assert_receive {:DOWN, ^timely_watch, :process, ^timely, _}, 1_000
+
+      # Told to stop before its deadline, it shuts nothing and ends.
+      stopped =
+        spawn(Opus.HostListener, :shut_at, [
+          self(),
+          socket,
+          System.monotonic_time(:millisecond) + 60_000
+        ])
+
+      stopped_watch = Process.monitor(stopped)
+      send(stopped, :stop)
+      assert_receive {:DOWN, ^stopped_watch, :process, ^stopped, _}, 1_000
+      refute_received {:shut, _}
+    end
+  end
+
   describe "a route that is no host route" do
     test "is not found, whatever it carries", %{url: url} do
       fixture =
@@ -1025,6 +1154,179 @@ defmodule Opus.HostListenerTest do
       {:ok, more} -> read_until_closed(socket, read <> more)
       {:error, :closed} -> {:ok, read}
       {:error, :timeout} -> {:still_open, read}
+    end
+  end
+
+  # A listener of the test's own, its receive timeout `timeout` ms, and the
+  # port it is bound to.
+  defp listener_timing_out_at(timeout) do
+    server =
+      start_supervised!(
+        {Bandit,
+         plug: {HostListener, %{nonces: HostListener.Nonces.new()}},
+         scheme: :http,
+         ip: {127, 0, 0, 1},
+         port: 0,
+         startup_log: false,
+         thousand_island_options: [read_timeout: timeout]},
+        id: {:receive_timeout, timeout}
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+    {server, port}
+  end
+
+  # A push_deltas call over the bound whose header verifies, refused, then
+  # trickled until the listener closes the connection: the milliseconds
+  # from the refusal's arrival to the close, which must come within
+  # `within_ms`. `:declared` declares a length over the bound, refused
+  # before any of the body is read, and trickles one byte at a time;
+  # `:chunked` sends a chunk past the bound, refused as it is read, then
+  # one-byte chunks.
+  defp trickled_until_closed(port, fixture, shape, within_ms) do
+    max = Prima.HostAPI.max_body_bytes()
+    declared = max + 65_536
+    fields = fields(fixture, [])
+
+    {:ok, header} =
+      WorkerAuth.host_call_header(fixture.call_key, fields, :binary.copy("x", declared))
+
+    options = [:binary, active: false, show_econnreset: true]
+    {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, options, 5_000)
+
+    {framing, first, piece} =
+      case shape do
+        :declared ->
+          {"content-length: #{declared}\r\n", "", "x"}
+
+        :chunked ->
+          {"transfer-encoding: chunked\r\n",
+           [Integer.to_string(max + 1, 16), "\r\n", :binary.copy("x", max + 1), "\r\n"],
+           "1\r\nx\r\n"}
+      end
+
+    :ok =
+      :gen_tcp.send(socket, [
+        "POST ",
+        WorkerWire.host_route(:push_deltas),
+        " HTTP/1.1\r\nhost: 127.0.0.1\r\n",
+        framing,
+        @auth,
+        ": ",
+        header,
+        "\r\n\r\n",
+        first
+      ])
+
+    {status, answer} = read_answer(socket, "")
+    assert {status, Jason.decode!(answer)} == {413, %{"error" => "lost", "v" => 1}}
+    refused_at = System.monotonic_time(:millisecond)
+    trickler = spawn_link(fn -> trickle(socket, piece) end)
+    watch = Process.monitor(trickler)
+
+    try do
+      case :gen_tcp.recv(socket, 0, within_ms) do
+        {:error, reason} when reason in [:closed, :econnreset] ->
+          System.monotonic_time(:millisecond) - refused_at
+
+        other ->
+          flunk(
+            "#{shape}: the connection was still open #{within_ms} ms after the refusal: " <>
+              inspect(other)
+          )
+      end
+    after
+      send(trickler, :stop)
+      assert_receive {:DOWN, ^watch, :process, ^trickler, _reason}, 5_000
+      :gen_tcp.close(socket)
+    end
+  end
+
+  # A ref the test process is sent `{ref, :start | :socket_shutdown, span}`
+  # under as a listener connection starts, with its span the remote port
+  # the connection is from, and each time its socket is shut, as the
+  # server's telemetry reports them.
+  defp connection_events do
+    ref = make_ref()
+    handler = {__MODULE__, ref}
+
+    events = [
+      [:thousand_island, :connection, :start],
+      [:thousand_island, :connection, :socket_shutdown]
+    ]
+
+    :ok = :telemetry.attach_many(handler, events, &__MODULE__.connection_event/4, {self(), ref})
+    on_exit(fn -> :telemetry.detach(handler) end)
+    ref
+  end
+
+  @doc false
+  def connection_event(event, _measurements, metadata, {test, ref}),
+    do: send(test, {ref, List.last(event), metadata})
+
+  # The process the drain started to shut `connection`'s socket at its
+  # deadline, found among those monitoring it before `until`, or nil.
+  defp reporting_socket do
+    %ThousandIsland.Socket{
+      socket: self(),
+      transport_module: __MODULE__.ShutReporter,
+      read_timeout: 1_000,
+      silent_terminate_on_error: false,
+      span:
+        ThousandIsland.Telemetry.start_span(:connection, %{}, %{handler: __MODULE__.ShutReporter})
+    }
+  end
+
+  defp shut_process(connection, until) do
+    shut =
+      for pid <- Process.info(connection, :monitored_by) |> elem(1),
+          is_pid(pid),
+          Process.info(pid, :initial_call) == {:initial_call, {HostListener, :shut_at, 3}},
+          do: pid
+
+    cond do
+      shut != [] ->
+        hd(shut)
+
+      System.monotonic_time(:millisecond) < until ->
+        receive do
+        after
+          10 -> shut_process(connection, until)
+        end
+
+      true ->
+        nil
+    end
+  end
+
+  # One piece every 20 ms until told to stop or the connection refuses it.
+  defp trickle(socket, piece) do
+    receive do
+      :stop -> :ok
+    after
+      20 ->
+        case :gen_tcp.send(socket, piece) do
+          :ok -> trickle(socket, piece)
+          {:error, _closed} -> :ok
+        end
+    end
+  end
+
+  # An answer read to its length on a connection left open: its status and
+  # its body.
+  defp read_answer(socket, read) do
+    with [head, rest] <- String.split(read, "\r\n\r\n", parts: 2),
+         ["HTTP/1.1 " <> status_line | lines] <- String.split(head, "\r\n"),
+         [length] <-
+           for("content-length: " <> length <- Enum.map(lines, &String.downcase/1), do: length),
+         length = String.to_integer(length),
+         true <- byte_size(rest) >= length do
+      {status, _reason} = Integer.parse(status_line)
+      {status, binary_part(rest, 0, length)}
+    else
+      _incomplete ->
+        {:ok, more} = :gen_tcp.recv(socket, 0, 10_000)
+        read_answer(socket, read <> more)
     end
   end
 

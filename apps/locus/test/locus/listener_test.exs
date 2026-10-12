@@ -20,8 +20,9 @@ defmodule Locus.ListenerTest do
   `{:error, :closed}`, since Bandit raises instead of answering one.
 
   The checks the listeners share (`Locus.Listener`) are held on their own
-  too: the one header, each answer of the bounded read, and a nonce's
-  first use, its replay and its expiry.
+  too: the one header, each answer of the bounded read, a drain that
+  reads nothing of a connection that is not Bandit's, and a nonce's first
+  use, its replay and its expiry.
   """
 
   use ExUnit.Case, async: false
@@ -84,6 +85,28 @@ defmodule Locus.ListenerTest do
     defdelegate get_ssl_data(state), to: TestConn
     @impl true
     defdelegate get_http_protocol(state), to: TestConn
+  end
+
+  defmodule Refusing do
+    @moduledoc false
+    # Refuses a body past one byte on a closing connection and drains the
+    # rest, as the island's listeners do.
+    @behaviour Plug
+
+    import Plug.Conn
+
+    @impl true
+    def init(opts), do: opts
+
+    @impl true
+    def call(conn, _opts) do
+      {:too_large, conn, :read} = Locus.Listener.read_bounded(conn, 1, false)
+
+      conn
+      |> put_resp_header("connection", "close")
+      |> send_resp(413, "")
+      |> Locus.Listener.drain(65_536)
+    end
   end
 
   defmodule Launcher do
@@ -254,11 +277,76 @@ defmodule Locus.ListenerTest do
     %{status: conn.status, body: conn.resp_body, headers: %{"connection" => connection}}
   end
 
+  # A ref the test process is sent `{ref, :start | :socket_shutdown, span}`
+  # under as a listener connection starts, with its span the remote port
+  # the connection is from, and each time its socket is shut, as the
+  # server's telemetry reports them.
+  defp connection_events do
+    ref = make_ref()
+    handler = {__MODULE__, ref}
+
+    events = [
+      [:thousand_island, :connection, :start],
+      [:thousand_island, :connection, :socket_shutdown]
+    ]
+
+    :ok = :telemetry.attach_many(handler, events, &__MODULE__.connection_event/4, {self(), ref})
+    on_exit(fn -> :telemetry.detach(handler) end)
+    ref
+  end
+
+  @doc false
+  def connection_event(event, _measurements, metadata, {test, ref}),
+    do: send(test, {ref, List.last(event), metadata})
+
+  # The process `module`'s drain started to shut `connection`'s socket at
+  # its deadline, found among those monitoring it before `until`, or nil.
+
+  defp reporting_socket do
+    %ThousandIsland.Socket{
+      socket: self(),
+      transport_module: __MODULE__.ShutReporter,
+      read_timeout: 1_000,
+      silent_terminate_on_error: false,
+      span:
+        ThousandIsland.Telemetry.start_span(:connection, %{}, %{handler: __MODULE__.ShutReporter})
+    }
+  end
+
+  defp shut_process(connection, module, until) do
+    shut =
+      for pid <- Process.info(connection, :monitored_by) |> elem(1),
+          is_pid(pid),
+          Process.info(pid, :initial_call) == {:initial_call, {module, :shut_at, 3}},
+          do: pid
+
+    cond do
+      shut != [] ->
+        hd(shut)
+
+      System.monotonic_time(:millisecond) < until ->
+        receive do
+        after
+          10 -> shut_process(connection, module, until)
+        end
+
+      true ->
+        nil
+    end
+  end
+
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 
   defp system_now, do: System.system_time(:millisecond)
 
   # ————— the runtime —————
+
+  # A socket whose transport reports a shut to the test instead of making
+  # one, so the deadline's helper can be observed without a connection.
+  defmodule ShutReporter do
+    @moduledoc false
+    def shutdown(test, way), do: send(test, {:shut, way})
+  end
 
   describe "the runtime's worker listener" do
     setup do
@@ -434,7 +522,12 @@ defmodule Locus.ListenerTest do
         |> silent(500)
         |> send_bytes(binary_part(huge, 0, max))
 
-      assert_refused(client, 413, wl(:malformed), :close)
+      {answer, client} = answer(client)
+      assert_answer(answer, 413, wl(:malformed), :close)
+
+      # The byte past the bound, sent after the refusal, is read and dropped
+      # before the listener closes the connection.
+      client |> send_bytes(binary_part(huge, max, 1)) |> assert_closed()
     end
 
     test "R12: a body that cannot be read is malformed", ctx do
@@ -1382,6 +1475,96 @@ defmodule Locus.ListenerTest do
         # Read up to the bound, and no further.
         assert {:ok, "a", _conn} = Plug.Conn.read_body(conn)
       end
+    end
+
+    test "a drain on a connection that is not Bandit's socket reads nothing" do
+      conn = posted("0123456789a")
+      assert {:too_large, conn, :read} = Listener.read_bounded(conn, 10, false)
+
+      assert Listener.drain(conn, 10) == conn
+      assert {:ok, "a", _conn} = Plug.Conn.read_body(conn)
+    end
+
+    test "a drain's shut ends with the connection's process, and nothing fires after it" do
+      timeout = 1_000
+      events = connection_events()
+
+      server =
+        start_supervised!(
+          {Bandit,
+           plug: Refusing,
+           scheme: :http,
+           ip: {127, 0, 0, 1},
+           port: 0,
+           startup_log: false,
+           thousand_island_options: [read_timeout: timeout]},
+          id: :refusing
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+      {:ok, client} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 5_000)
+      {:ok, client_port} = :inet.port(client)
+
+      assert_receive {^events, :start,
+                      %{remote_port: ^client_port, telemetry_span_context: connection_span}},
+                     5_000
+
+      # One byte of a longer body: the refusal, then a drain waiting for the
+      # rest, which never comes.
+      :ok = :gen_tcp.send(client, "POST / HTTP/1.1\r\nhost: l\r\ncontent-length: 9\r\n\r\nx")
+      assert {:ok, "HTTP/1.1 413 " <> _} = :gen_tcp.recv(client, 0, 5_000)
+      deadline = System.monotonic_time(:millisecond) + timeout
+      {:ok, [connection]} = ThousandIsland.connection_pids(server)
+
+      helper = shut_process(connection, Locus.Listener, deadline - div(timeout, 2))
+      helper_watch = if helper, do: Process.monitor(helper)
+      watch = Process.monitor(connection)
+      Process.exit(connection, :kill)
+      assert_receive {:DOWN, ^watch, :process, ^connection, :killed}, 5_000
+
+      # Past the drain's deadline, no shut was made for the connection.
+      left = max(deadline - System.monotonic_time(:millisecond), 0)
+
+      refute_receive {^events, :socket_shutdown, %{telemetry_span_context: ^connection_span}},
+                     left + 500
+
+      # It was the drain's own process, and it ended with the connection's.
+      assert is_pid(helper), "no process of the drain's monitored the connection's"
+      assert_receive {:DOWN, ^helper_watch, :process, ^helper, _reason}, 1_000
+      :gen_tcp.close(client)
+    end
+
+    test "a drain's shut waits only for the time left to its one deadline" do
+      socket = reporting_socket()
+      now = System.monotonic_time(:millisecond)
+
+      # Started past its deadline (a delayed schedule), the helper shuts at
+      # once: its wait is what is left, never a fresh duration of its own.
+      late = spawn(Locus.Listener, :shut_at, [self(), socket, now - 1])
+      assert_receive {:shut, :read}, 1_000
+      late_watch = Process.monitor(late)
+      assert_receive {:DOWN, ^late_watch, :process, ^late, _}, 1_000
+
+      # Started with time left, it shuts when the deadline comes, not before.
+      deadline = System.monotonic_time(:millisecond) + 150
+      timely = spawn(Locus.Listener, :shut_at, [self(), socket, deadline])
+      assert_receive {:shut, :read}, 5_000
+      assert System.monotonic_time(:millisecond) >= deadline
+      timely_watch = Process.monitor(timely)
+      assert_receive {:DOWN, ^timely_watch, :process, ^timely, _}, 1_000
+
+      # Told to stop before its deadline, it shuts nothing and ends.
+      stopped =
+        spawn(Locus.Listener, :shut_at, [
+          self(),
+          socket,
+          System.monotonic_time(:millisecond) + 60_000
+        ])
+
+      stopped_watch = Process.monitor(stopped)
+      send(stopped, :stop)
+      assert_receive {:DOWN, ^stopped_watch, :process, ^stopped, _}, 1_000
+      refute_received {:shut, _}
     end
 
     test "a body that cannot be read is unread" do

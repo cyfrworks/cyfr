@@ -222,6 +222,72 @@ defmodule Locus.Runtime.HostClientTest do
     assert length(ScriptedHost.requests(host, "renew")) == 2
   end
 
+  describe "a body past the host's bound" do
+    test "is refused for good: posted once, whatever the call's class or the refusal's body",
+         %{host: host, client: client} do
+      # An idempotent call, one retried as a batch, and one never retried,
+      # whose refusal is final rather than uncertain.
+      ScriptedHost.script(host, "renew", {:raw, 413, ~s({"v":1,"error":"lost"})})
+      ScriptedHost.script(host, "push_deltas", {:raw, 413, "not json"})
+      ScriptedHost.script(host, "take_rate", {:raw, 413, ""})
+
+      log =
+        capture_log(fn ->
+          assert {:error, :too_large} = HostClient.renew(client, [client.attempt])
+          assert {:error, :too_large} = HostClient.push_deltas(client, [~s({"type":"note"})])
+          assert {:error, :too_large} = HostClient.take_rate(client, "http:x")
+        end)
+
+      ops = for %{op: op} <- ScriptedHost.requests(host), do: op
+      assert ops == ~w(renew push_deltas take_rate)
+      assert log =~ "renew was refused: its body is past the host's bound"
+      refute log =~ "not json"
+    end
+
+    test "with a refusal past the answer bound is refused for good, and none of that body is kept",
+         %{host: host, attempt: attempt, client: client} do
+      over = String.duplicate("x", Prima.HostAPI.max_answer_bytes() + 1)
+      ScriptedHost.script(host, "renew", {:raw, 413, over})
+
+      assert {:error, :too_large} = HostClient.renew(client, [client.attempt])
+      assert [_once] = ScriptedHost.requests(host, "renew")
+
+      # The status crosses without the body; a 200 answer past the bound is
+      # still no answer.
+      json = Jason.encode!(Prima.WorkerWire.request_body(:renew, %{"attempts" => []}))
+
+      posted = fn ->
+        fields = call_fields(attempt)
+        {:ok, sealed} = Prima.WorkerAuth.seal_call(attempt.keys.seal, :body, fields, json)
+        {:ok, header} = Prima.WorkerAuth.host_call_header(attempt.keys.call, fields, sealed)
+        HostClient.post_call(host.url, :renew, header, sealed)
+      end
+
+      assert {:ok, 413, ""} = posted.()
+      ScriptedHost.script(host, "renew", {:raw, 200, over})
+      assert :error = posted.()
+    end
+
+    test "after a lost answer is the answer of the one retry, and nothing more is posted", %{
+      host: host,
+      client: client
+    } do
+      ScriptedHost.script(host, "renew", [:drop, {:raw, 413, ~s({"v":1,"error":"lost"})}])
+
+      assert {:error, :too_large} = HostClient.renew(client, [client.attempt])
+      assert [first, second] = ScriptedHost.requests(host, "renew")
+      assert first.body == second.body
+    end
+
+    test "is refused for good through a runner's relay too", %{host: host} do
+      attempt = ScriptedHost.attempt!(host) |> Locus.Runtime.Test.ScriptedKeeper.relayed!()
+      ScriptedHost.script(host, "renew", {:raw, 413, ~s({"v":1,"error":"lost"})})
+
+      assert {:error, :too_large} = HostClient.renew(attempt.client, [attempt.attempt])
+      assert [_once] = ScriptedHost.requests(host, "renew")
+    end
+  end
+
   test "an answer past the answer bound, or not an answer, is lost", %{host: host, client: client} do
     ScriptedHost.script(
       host,
