@@ -258,6 +258,9 @@ config :locus, :runtime,
 
 config :cyfr, :host_api_port, 0
 
+# The checkout's pinned wasm-tools (scripts/wasm-tools.sh install _tools).
+config :prima, :wasm_tools, Path.expand("../_tools/wasm-tools", __DIR__)
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

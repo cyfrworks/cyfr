@@ -420,7 +420,9 @@ defmodule Locus.Runtime.Engine do
     do: Locus.Runtime.ComponentCache.get_or_compile(digest, fn -> artifact(wasm) end, store)
 
   defp compile(store, wasm, _digest) do
-    with {:ok, bytes} <- artifact(wasm), do: Wasmex.Components.Component.new(store, bytes)
+    with {:ok, bytes} <- artifact(wasm),
+         :ok <- Locus.Runtime.ComponentCache.admitted(bytes),
+         do: Wasmex.Components.Component.new(store, bytes)
   end
 
   defp artifact(bytes) when is_binary(bytes), do: {:ok, bytes}

@@ -12,7 +12,7 @@ defmodule Prima.EffectsTest do
   identifiers and sealing IVs — to the exact functions allowed them, and
   compile-time reads to module bodies.
 
-  The roster keeps its categories apart: the seven runtime primitives (the
+  The roster keeps its categories apart: the eight runtime primitives (the
   process and state owners), identifiers, encryption IVs, compile-time
   embeds, and the one code-loading probe of an optional provider callback.
   """
@@ -32,6 +32,10 @@ defmodule Prima.EffectsTest do
     Prima.JsonFormatter => {:primitive, [:app_env, :persistent_term]},
     Prima.Slots => {:primitive, [:logger, :otp, :process, :system]},
     Prima.Caps => {:primitive, [:code, :persistent_term]},
+    # The validator its owners install: its configured path held and
+    # checked, and each check's runs owned by a process of their own.
+    Prima.ComponentFeatures =>
+      {:primitive, [:app_env, :file, :logger, :persistent_term, :process, :system]},
     Prima.UUID7 => {:id, [:entropy, :wall_clock]},
     Prima.Hex => {:id, [:entropy]},
     # The credential grammar draws the random part of what it defines, so
@@ -49,6 +53,7 @@ defmodule Prima.EffectsTest do
   @primitives [
     Prima.Boot,
     Prima.Caps,
+    Prima.ComponentFeatures,
     Prima.JsonFormatter,
     Prima.LogFilter,
     Prima.LoggerContext,
@@ -183,17 +188,23 @@ defmodule Prima.EffectsTest do
       assert absent_rows(modules, roster) == [Cyfr.Gone]
     end
 
-    test "Logger is reached only by Slots, RateLimiter, LoggerContext and LogFilter",
+    test "Logger is reached only by Slots, RateLimiter, LoggerContext, LogFilter and ComponentFeatures",
          %{modules: modules} do
       assert reaching(modules, :logger) ==
-               [Prima.LogFilter, Prima.LoggerContext, Prima.RateLimiter, Prima.Slots]
+               [
+                 Prima.ComponentFeatures,
+                 Prima.LogFilter,
+                 Prima.LoggerContext,
+                 Prima.RateLimiter,
+                 Prima.Slots
+               ]
     end
 
     test "the wall clock is read only by the identifier generator", %{modules: modules} do
       assert reaching(modules, :wall_clock) == [Prima.UUID7]
     end
 
-    test "no beam reads Mix, an application spec or configuration at run time",
+    test "no beam reads Mix or an application spec at run time, and configuration only where rostered",
          %{modules: modules} do
       for module <- modules, {m, f, a} <- imports(module) do
         refute mix?(m), "#{inspect(module)} calls #{inspect(m)}.#{f}/#{a} at run time"
@@ -201,7 +212,7 @@ defmodule Prima.EffectsTest do
       end
 
       assert reaching(modules, :app_spec) == []
-      assert reaching(modules, :app_env) == [Prima.JsonFormatter]
+      assert reaching(modules, :app_env) == [Prima.ComponentFeatures, Prima.JsonFormatter]
     end
 
     test "a compile-time row's beam reaches nothing" do
@@ -251,7 +262,7 @@ defmodule Prima.EffectsTest do
   end
 
   describe "the roster" do
-    test "the seven primitives are the process and state owners, and the categories stay apart" do
+    test "the eight primitives are the process and state owners, and the categories stay apart" do
       assert for({m, {:primitive, _}} <- @roster, do: m) |> Enum.sort() == @primitives
 
       categories = @roster |> Map.values() |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()

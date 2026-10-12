@@ -65,4 +65,8 @@ end
 
 :ok = Locus.Runtime.Test.Engine.start!()
 
+# The validator the runtime and the builder check components with, as the
+# application installs it when it starts, which the suite's VM does not.
+:ok = Prima.ComponentFeatures.install!()
+
 ExUnit.start()

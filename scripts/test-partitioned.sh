@@ -337,6 +337,12 @@ END {
   return 0
 }
 
+# The pinned validator the dev and test configurations name
+# (`_tools/wasm-tools`), which the suite's applications check as they start.
+here=$(dirname "$0")
+"$here/wasm-tools.sh" install "$here/../_tools" >/dev/null ||
+  { echo "the pinned wasm-tools could not be installed (scripts/wasm-tools.sh)" >&2; exit 1; }
+
 echo "==> compiling once ($ADAPTER, $PARTITIONS partitions, $per schedulers each)"
 (load_partition_env 1 || exit 1; exec mix compile --warnings-as-errors) >"$out_dir/compile.log" 2>&1 &
 pids=($!)

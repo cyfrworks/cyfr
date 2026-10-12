@@ -534,6 +534,32 @@ defmodule Prima.Refusal do
   defp row({:corrupt, {:artifact, digest}}) when is_binary(digest),
     do: {:corrupt, "The component's bytes do not match their recorded digest; register it again."}
 
+  # A component that uses a WebAssembly feature the runtime refuses
+  # (`Prima.ComponentFeatures`), refused where it is published, registered
+  # or built and again before it is compiled; which feature is the log
+  # line's. The digest is the one `Prima.Digest.sha256/1` computed of its
+  # bytes, so nothing of the component is in the sentence.
+  defp row({:component_feature_refused, digest}) when is_binary(digest) do
+    if component_digest?(digest),
+      do:
+        {:invalid_argument,
+         "The component #{digest} uses a WebAssembly feature this runtime does not admit: " <>
+           "component-model async, GC or exception handling."}
+  end
+
+  # A component the validator refuses with every feature it knows on.
+  defp row({:component_invalid, digest}) when is_binary(digest) do
+    if component_digest?(digest),
+      do: {:invalid_argument, "The component #{digest} is not valid WebAssembly."}
+  end
+
+  # The validator could not answer (not installed, not started, killed at
+  # its deadline): the component is refused unchecked.
+  defp row(:component_validator_unavailable),
+    do:
+      {:unavailable,
+       "The component could not be checked, so it was not admitted; try again later."}
+
   # A component whose signature or attestation does not verify.
   defp row({:attestation_failed, _what}),
     do:
@@ -788,4 +814,6 @@ defmodule Prima.Refusal do
   defp signal_class(:consent_conflict), do: :conflict
   defp signal_class(:restart_required), do: :cancelled
   defp signal_class(:confirmation_required), do: :confirmation_required
+
+  defp component_digest?(digest), do: Regex.match?(~r/\Asha256:[0-9a-f]{64}\z/, digest)
 end

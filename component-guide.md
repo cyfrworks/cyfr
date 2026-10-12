@@ -1180,6 +1180,8 @@ Patterns are `"*"`, exact (`"execution.run"`), or prefix globs (`"component.*"`)
 
 **Memory and tables.** The engine gives a run one linear memory, which grows no further than the consented `max_memory_bytes` (64 MiB when unasked, at most the platform ceiling's 256 MiB), and at most ten tables of 20,000 elements each, in at most ten instances. A component that declares a second memory, more tables, or a memory or table larger than that is refused when it is instantiated, as `resource_limit`. A `memory.grow` (or `table.grow`) past the bound is refused as WebAssembly specifies: the instruction answers the guest `-1` and the run goes on, so an allocator that cannot grow fails the way its language reports an allocation failure — usually a trap — rather than with `resource_limit`.
 
+**Refused features.** A component may not use the component-model async features (async lifts and lowers, their callbacks, streams, futures and the other async builtins), GC or its reference types (`struct`, `array`, `externref` and the other GC-heap types), or exception handling (tags, `throw`, `try_table`). Each is refused when the component is published, registered or built, and again before it is compiled, with one sentence naming the component's digest. The engine's Wasmtime release has open security advisories in exactly these features, and a GC heap would sit outside the one linear memory above; the refusal lifts with a Wasmtime release that fixes them. The shipped components use none of them. Check yours with `wasm-tools validate --features=-cm-async,-cm-async-stackful,-cm-more-async-builtins,-cm-error-context,-cm-threading,-gc,-gc-types,-exceptions,-legacy-exceptions <component>.wasm`.
+
 ### Versionless by default
 
 A consent covers every release of the component line unless the operator pins a version. This is safe because the resolved capability is an allowlist: a newer release can only receive less than the consent names, never more. A release that asks for *more* triggers `consent_required` with the shape diff — the operator approves a new revision or the component doesn't run.
@@ -1328,7 +1330,7 @@ For the full tincture reference (architecture, manifest, SDK, sandbox constraint
 |-------|---------|-----|
 | `FORBIDDEN_IMPORT` | Reagent imports WASI | Check `wasm-tools print \| grep "(import"`. Causes: `std::time`, `std::net`, `std::fs`, RNG, transitive deps |
 | `MISSING_EXPORT` | Required interface not exported | Verify WIT export, `bindings::export!` macro, `Guest` trait |
-| `INVALID_WASM` | Not valid WebAssembly | Verify target is `wasm32-wasip2`, update toolchain, `wasm-tools validate` |
+| `INVALID_WASM` | Not valid WebAssembly, or uses a refused feature | Verify target is `wasm32-wasip2`, update toolchain, `wasm-tools validate` with the refused features off (**Refused features** under [Limits](#limits-capslimits)) |
 | `SIZE_EXCEEDED` | Binary > 50MB | Enable `lto = true`, `opt-level = "s"`, remove unused deps |
 | `POLICY_REQUIRED` | Catalyst has no granted capabilities | Grant it: `cyfr profile grant c:<ref>` |
 | `DOMAIN_BLOCKED` | HTTP to a domain outside the consent | Declare it in `caps.egress.domains` and re-grant |
@@ -1368,7 +1370,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 
 ## Before Committing (WASM)
 
-- [ ] `wasm-tools validate` passes (correct exports, no forbidden imports)
+- [ ] `wasm-tools validate` passes with the refused features off (correct exports, no forbidden imports, no async, GC or exceptions)
 - [ ] `cyfr-manifest.json` complete: `name`, `type`, `version`, `publisher`, `description`, `schema`, `needs`, `caps`
 - [ ] For an attached key or bundle, `needs.fields` names exactly the field CYFR attaches and requests name the need as `connection`; for a disclosed need, the fields match the names the binary passes to `cyfr:vault/read.get`
 - [ ] Tested with `cyfr run` using representative input

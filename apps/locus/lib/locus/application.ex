@@ -52,6 +52,11 @@ defmodule Locus.Application do
     # (`Prima.LogFilter`).
     :ok = Prima.LogFilter.install()
 
+    # The validator every component passes before it is compiled, and
+    # before a build's output is accepted: checked here, so a node that
+    # cannot validate does not start.
+    :ok = Prima.ComponentFeatures.install!()
+
     case Locus.Runtime.Release.role() do
       :runner -> Locus.Runtime.start_runner()
       :service -> start_node()

@@ -10,6 +10,10 @@
 # `config/locus_runtime.exs`.
 import Config
 
+# The checkout's pinned wasm-tools (scripts/wasm-tools.sh install _tools),
+# which an island run holds at its own root.
+config :prima, :wasm_tools, Path.expand("../../../_tools/wasm-tools", __DIR__)
+
 config :locus, :runtime,
   service_id: "wrk_local",
   # A development key. CYFR derives a service's key from its runtime root

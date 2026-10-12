@@ -45,5 +45,8 @@ config :sanctum,
 # Omit timestamps in development logs; retain request, user and athanor metadata.
 config :logger, :default_formatter, format: "$metadata[$level] $message\n"
 
+# The checkout's pinned wasm-tools (scripts/wasm-tools.sh install _tools).
+config :prima, :wasm_tools, Path.expand("../_tools/wasm-tools", __DIR__)
+
 # Enable telemetry console reporter in development
 config :cyfr, telemetry_console_enabled: true

@@ -27,9 +27,10 @@ defmodule Prima.MixProject do
   end
 
   # Pure contracts and the finite shared runtime primitive roster: Boot,
-  # RateLimiter, LoggerContext, LogFilter, JsonFormatter, Slots and Caps. This
-  # app starts no process; applications own process instances, install the
-  # Caps port and install the log filter.
+  # RateLimiter, LoggerContext, LogFilter, JsonFormatter, Slots, Caps and
+  # ComponentFeatures. This app starts no process; applications own process
+  # instances, install the Caps port, the log filter and the component
+  # validator.
   # Network only parses URLs, checks supplied addresses and builds options:
   # DNS/configuration and HTTP stay in the applications that own those effects.
   defp deps do

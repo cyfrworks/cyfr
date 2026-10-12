@@ -42,6 +42,11 @@ missing or wrong header fails CI.
   architectural contract. A change to a principle, a layer edge, a port or an
   invariant changes that document in the same pull request.
 - Keep changes focused and match the surrounding code style.
+- Every component is validated by the pinned `wasm-tools`, which the dev
+  and test configurations name at `_tools/wasm-tools`, and the application
+  refuses to start without it: install it once with
+  `scripts/wasm-tools.sh install _tools` (`scripts/test-partitioned.sh`
+  installs it when it is missing).
 - Run the tests for what you touched as operating-system partitions:
   `scripts/test-partitioned.sh <test paths>` on SQLite, and
   `scripts/test-partitioned.sh -a postgres <test paths>` on PostgreSQL.

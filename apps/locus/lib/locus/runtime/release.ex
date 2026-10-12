@@ -95,6 +95,7 @@ defmodule Locus.Runtime.Release do
     runner_command(
       env: System.get_env(),
       log_level: Logger.level(),
+      wasm_tools: Application.get_env(:prima, :wasm_tools),
       schedulers:
         {:erlang.system_info(:schedulers), :erlang.system_info(:schedulers_online),
          :erlang.system_info(:dirty_cpu_schedulers),
@@ -105,10 +106,11 @@ defmodule Locus.Runtime.Release do
 
   @doc """
   How a keeper starts a runner, from `opts`: `:env`, the service's process
-  environment, and, for a runner outside a release, `:log_level` and
+  environment, and, for a runner outside a release, `:log_level`,
   `:schedulers` (`{schedulers, online, dirty_cpu, dirty_cpu_online,
-  dirty_io}`), which become its emulator flags and application
-  environment. A release's
+  dirty_io}`) and `:wasm_tools` (the validator's path,
+  `Prima.ComponentFeatures`), which become its emulator flags and
+  application environment. A release's
   runner reads the release's own `vm.args` and `sys.config`, so a release
   passes none of them.
   """
@@ -163,9 +165,21 @@ defmodule Locus.Runtime.Release do
       "none"
     ]
 
-  # `-App Key Value`, the value read as an Erlang term.
+  # `-App Key Value`, the value read as an Erlang term. The validator's
+  # path goes as a binary; one that would not read back as itself is left
+  # out, and the runner's start refuses without it.
   defp application_flags(opts),
-    do: ["-logger", "level", Atom.to_string(Keyword.fetch!(opts, :log_level))]
+    do:
+      ["-logger", "level", Atom.to_string(Keyword.fetch!(opts, :log_level))] ++
+        wasm_tools_flags(Keyword.get(opts, :wasm_tools))
+
+  defp wasm_tools_flags(path) when is_binary(path) do
+    if String.printable?(path) and not String.contains?(path, ["\"", "\\"]),
+      do: ["-prima", "wasm_tools", ~s(<<"#{path}"/utf8>>)],
+      else: []
+  end
+
+  defp wasm_tools_flags(_path), do: []
 
   @doc """
   The code paths a runner of a non-release boot needs: the `ebin` of Locus

@@ -251,6 +251,8 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The reverse proxies in front of the server, comma-separated addresses or CIDRs, which take precedence over `CYFR_TRUSTED_PROXY_HOPS`; an entry that is neither refuses the boot."},
     {"CYFR_TRUSTED_PROXY_HOPS",
      "The reverse-proxy hops in front of the server when `CYFR_BEHIND_PROXY` is true (default 1, the stack's Caddy; 0 to 16). Too few resolves client addresses to a proxy, so API-key address allowlists fail closed."},
+    {"CYFR_WASM_TOOLS",
+     "The absolute path of the pinned `wasm-tools` every component is validated with before it is stored or compiled (default `/usr/local/bin/wasm-tools`, where the image installs it; `scripts/wasm-tools.sh` installs the pinned release). A path that names no executable refuses the boot."},
     {"OTEL_EXPORTER_OTLP_ENDPOINT",
      "The OTLP endpoint traces go to (default `http://localhost:4318`). Not under the prefix; listed so every name the boot reads has one home."}
   ]

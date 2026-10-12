@@ -39,7 +39,12 @@ defmodule Locus.Runtime.StoreLimitsTest do
           "vault_probe",
           "attached_header_probe",
           "credential_canary",
-          "trapper"
+          "trapper",
+          "async_lift",
+          "sync_lift",
+          "gc_alloc",
+          "exception_throw",
+          "externref_table"
         ],
         ext <- ["wat", "wasm"] do
       file = "#{name}.#{ext}"

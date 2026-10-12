@@ -7,7 +7,8 @@ defmodule Locus.Runtime.ComponentCache do
   digest, in `Locus.Runtime.Cache`.
 
   On a hit the JIT compilation is skipped. On a miss the component's bytes
-  are fetched, hashed and refused unless they are the digest's, compiled
+  are fetched, hashed and refused unless they are the digest's, refused
+  when they use a feature the runtime does not admit (`admitted/1`), compiled
   (`Wasmex.Components.Component.new/2`) and cached. Compilation is a pure
   function of the bytes and the engine, so the key is the digest alone:
   every athanor running the same bundle shares one compiled resource, and
@@ -27,7 +28,7 @@ defmodule Locus.Runtime.ComponentCache do
   engine, returns it immediately and `fetch` is not called. Otherwise
   `fetch` answers the component's bytes (`{:ok, bytes}`, or an error that
   is answered as it is), which are compiled using `store` and cached only
-  when they hash to `digest`; bytes that do not are
+  when they hash to `digest` and are admitted; bytes that are not are
   `{:error, {:artifact, message}}`.
   """
   @spec get_or_compile(
@@ -47,10 +48,26 @@ defmodule Locus.Runtime.ComponentCache do
       _ ->
         with {:ok, wasm_bytes} <- fetch.(),
              :ok <- verified(wasm_bytes, digest),
+             :ok <- admitted(wasm_bytes),
              {:ok, component} <- Wasmex.Components.Component.new(store, wasm_bytes) do
           Locus.Runtime.Cache.put(cache_key, {generation, component}, @ttl_ms)
           {:ok, component}
         end
+    end
+  end
+
+  @doc """
+  `:ok` when the component uses none of the features the runtime refuses
+  (`Prima.ComponentFeatures`), checked on the exact bytes about to be
+  compiled; otherwise `{:error, {:artifact, sentence}}`, the refusal's own
+  sentence, as admission answers it. Every compile asks it first, so the
+  cache only ever holds a compile of bytes that passed.
+  """
+  @spec admitted(binary()) :: :ok | {:error, {:artifact, String.t()}}
+  def admitted(bytes) when is_binary(bytes) do
+    case Prima.ComponentFeatures.check(bytes) do
+      :ok -> :ok
+      {:error, refusal} -> {:error, {:artifact, Prima.Refusal.message(refusal)}}
     end
   end
 

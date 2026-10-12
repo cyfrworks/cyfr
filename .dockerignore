@@ -16,6 +16,9 @@ node_modules/
 test/
 .github/
 scripts/
+# The pinned wasm-tools installer, which both images run
+!scripts/wasm-tools.sh
+_tools/
 Dockerfile*
 docker-compose*.yml
 *.md

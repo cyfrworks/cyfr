@@ -94,6 +94,12 @@ RUN mix local.hex --force && mix local.rebar --force
 # which does not exist here and which a release build has no use for:
 # the compile runs without listeners, and the release is assembled from
 # what it compiled.
+# The pinned wasm-tools every component is validated with
+# (`Prima.ComponentFeatures`), its archive checked against the pinned
+# sha256 by the one installer (scripts/wasm-tools.sh).
+COPY scripts/wasm-tools.sh scripts/wasm-tools.sh
+RUN scripts/wasm-tools.sh install /opt/wasm-tools
+
 COPY mix.exs mix.lock ./
 COPY apps/prima/mix.exs apps/prima/mix.exs
 COPY apps/locus/mix.exs apps/locus/mix.exs
@@ -223,6 +229,7 @@ WORKDIR /app
 COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 COPY --from=relbuilder /app/_build/prod/rel/locus ./
+COPY --from=relbuilder /opt/wasm-tools/wasm-tools /usr/local/bin/wasm-tools
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
 

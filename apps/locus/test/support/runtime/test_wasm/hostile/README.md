@@ -6,9 +6,12 @@
 Components written in WebAssembly text that push against what the engine
 lets one run hold (`Locus.Runtime.Engine.store_limits/1`), what its vault hands
 it, what a request naming a connection may carry, or what reaches a guest
-of the credential CYFR attaches for it, or that trap. Each `.wat` says what
-it does; the tests that run them are `Locus.Runtime.StoreLimitsTest`,
-`Locus.Runtime.TrapTest` and `Locus.Runtime.VaultDenialTest` in this suite,
+of the credential CYFR attaches for it, that trap, or that use a feature
+the runtime refuses (`Prima.ComponentFeatures`). Each `.wat` says what it
+does; the tests that run them are `Locus.Runtime.StoreLimitsTest`,
+`Locus.Runtime.TrapTest`, `Locus.Runtime.ComponentFeaturesTest` and
+`Locus.Runtime.VaultDenialTest` in this suite, `Prima.ComponentFeaturesTest`
+in Prima's,
 `Locus.Runtime.MemoryBoundTest`, `Locus.Runtime.SecretAuditTest`,
 `Locus.Runtime.AttachedFetchTest`, `Opus.Schedules.SchedulerTest` and
 `CyfrWeb.WebhookFlowIntegrationTest` in CYFR's, and the worker image's
@@ -23,13 +26,19 @@ it does; the tests that run them are `Locus.Runtime.StoreLimitsTest`,
 | `attached_header_probe` | catalyst | sends its input as its one request, naming a connection, and answers the request's answer; an input that adds an `Authorization` header is refused by shape |
 | `credential_canary` | catalyst | sends its input as its one request, naming a connection, reads `CANARY_KEY` from its vault, and writes the request's answer and the read's result to one event and to its output |
 | `trapper` | reagent | traps on the input `{"trap":true}` and answers `{"ran":true}` to any other |
+| `async_lift` | reagent | lifts `compute` async with a callback; refused for the component-model async feature |
+| `sync_lift` | reagent | `async_lift` lifted synchronously; admitted |
+| `gc_alloc` | reagent | allocates a GC struct; refused for the GC feature |
+| `exception_throw` | reagent | throws a tag and catches it with `try_table`; refused for the exception-handling feature |
+| `externref_table` | reagent | declares a table of `externref`; refused for GC's reference types |
 
 ## Rebuilding
 
 The binaries are checked in. `build.sh` builds each from its `.wat` with
 wabt `wat2wasm` 1.0.41 and `wasm-tools` 1.244.0 (the component embeds the
 latter's version, so another version gives other bytes), against the WIT
-under `wit/`; `build.sh --check` compares a fresh build with what is
+under `wit/`, or, for a `.wat` that is a whole component, with
+`wasm-tools parse` 1.244.0 alone; `build.sh --check` compares a fresh build with what is
 checked in. Rebuild whenever a `.wat` changes and record what the build
 prints below: `Locus.Runtime.StoreLimitsTest` holds each file to its digest, so a
 source changed without a rebuild fails.
@@ -54,4 +63,14 @@ credential_canary.wat      sha256:1a6454ba0eb640603d8e19e53798ab1b40f651857c2bd7
 credential_canary.wasm     sha256:bc0c6317f5c45b2463367c8a3aa458587c1de16a7f15ed469f5d3b03c3a95a92
 trapper.wat                sha256:bd87bb0835163c620f3b0b67ec482798faace66aec66781581285421392c94f9
 trapper.wasm               sha256:b42c1ec4dcff293ffb06f22e35695d4130f6bf82c24ea6ad42bf82721ceafaf4
+async_lift.wat             sha256:bb1bbaa1ae295984a1d78c3504283ef0b91a86743bbec79558723775a3552e8a
+async_lift.wasm            sha256:e1429137b0c6056577d31a5bff20be298e28a0690ef1259e393d34e345273c39
+sync_lift.wat              sha256:ff90f37864595b5009a679233a8c2953cdf047cc3342a45599443d67093a7c41
+sync_lift.wasm             sha256:a225d550f65257c943f0ee51eed2a24a5ed3266db81c122acd28daa9c84d7845
+gc_alloc.wat               sha256:184f7eca4b64af69202edb6553d4b45b593293261d28995bfd0f71b5f5e8c25e
+gc_alloc.wasm              sha256:ca09d8c97e10c7c5528d00da279debd1c5a35a064c1000666d1412af533ee0c8
+exception_throw.wat        sha256:5e556011d0548442fe7f9027e3b1471d2b69317e365a2a99aef8a1cd5cacedb2
+exception_throw.wasm       sha256:f558999c8ca27b298dae43ed58d7f7d53062a160edf399dc6168bd1ec655aaba
+externref_table.wat        sha256:d6f1c6ffaf04c91c10115ce4956565406e55da097035708c7806e493c67846ec
+externref_table.wasm       sha256:63c8f0725b2704e0ca504d9f6a69414999bb8c722b98d30a3df47d5709e09b62
 ```

@@ -88,6 +88,13 @@ if config_env() != :test do
     config :logger, :default_formatter, format: {Prima.JsonFormatter, :format}
   end
 
+  # The pinned wasm-tools every component is validated with
+  # (`Prima.ComponentFeatures`), by absolute path; the application checks
+  # it as it starts, and a path naming no executable refuses the boot.
+  if wasm_tools = env_str.("CYFR_WASM_TOOLS", nil) do
+    config :prima, :wasm_tools, wasm_tools
+  end
+
   # The root the runtime's keys derive from (`Prima.WorkerAuth`): 32
   # random bytes as 64 hexadecimal digits (`openssl rand -hex 32`), the one
   # secret `mix cyfr.locus.runtime_key <service_id>` derives a worker

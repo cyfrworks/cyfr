@@ -5,6 +5,8 @@
 _build_pg/
 /deps/
 node_modules/
+# The pinned wasm-tools a checkout's dev and test runs use (scripts/wasm-tools.sh)
+/_tools/
 
 # Generated on crash by the VM
 erl_crash.dump

@@ -267,11 +267,13 @@ defmodule Prima.WasmTest do
         @valid_component <>
           <<11, byte_size(export_section_body), export_section_body::binary>>
 
-      {:ok, result} = Wasm.validate(binary)
-      refute result.exports_complete
-
+      # The world is asked before the features, so the refusal is the
+      # world's; alone, the validator refuses the binary as no valid
+      # component (its export names an instance that does not exist).
       assert {:error, {:unverifiable_exports, message}} =
                Wasm.validate(binary, "catalyst")
+
+      assert {:error, {:component_invalid, _digest}} = Wasm.validate(binary)
 
       assert message =~ "could not be fully parsed"
     end

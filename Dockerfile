@@ -25,6 +25,12 @@ RUN mix local.hex --force && mix local.rebar --force
 # Copy dependency manifests first for layer caching. The glob picks up every
 # umbrella app's mix.exs (the set of apps varies by build). --parents
 # preserves apps/<name>/.
+# The pinned wasm-tools every component is validated with
+# (`Prima.ComponentFeatures`), its archive checked against the pinned
+# sha256 by the one installer (scripts/wasm-tools.sh).
+COPY scripts/wasm-tools.sh scripts/wasm-tools.sh
+RUN scripts/wasm-tools.sh install /opt/wasm-tools
+
 COPY mix.exs mix.lock ./
 COPY --parents apps/*/mix.exs ./
 
@@ -77,6 +83,7 @@ ENV ELIXIR_ERL_OPTIONS="+fnu"
 WORKDIR /app
 
 COPY --from=builder /app/_build/prod/rel/cyfr ./
+COPY --from=builder /opt/wasm-tools/wasm-tools /usr/local/bin/wasm-tools
 
 # License notices (Fair Source: Apache-2.0 default + FSL-1.1-Apache-2.0 on Sanctum)
 COPY LICENSE FAIR_SOURCE.md /app/

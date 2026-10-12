@@ -62,6 +62,10 @@ fi
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P) || exit 1
 cd "$ROOT" || exit 1
+# The pinned validator the dev and test configurations name
+# (`_tools/wasm-tools`), before any leg compiles or tests.
+scripts/wasm-tools.sh install _tools >/dev/null ||
+  { echo "the pinned wasm-tools could not be installed (scripts/wasm-tools.sh)" >&2; exit 1; }
 [ -n "$LOGDIR" ] || LOGDIR=$(mktemp -d /tmp/cyfr-gate.XXXXXX)
 mkdir -p "$LOGDIR"
 # A log directory used before starts without the last run's markers and
@@ -190,7 +194,7 @@ island() {
   local isl log
   isl=$(mktemp -d "$LOGDIR/island_${name}.XXXX") || return 1
   mkdir -p "$isl/apps" "$isl/config" "$isl/tests" "$isl/seed"
-  cp mix.lock "$isl/"; ln -s "$ROOT/deps" "$isl/deps"; [ -d wit ] && cp -R wit "$isl/"
+  cp mix.lock "$isl/"; ln -s "$ROOT/deps" "$isl/deps"; ln -s "$ROOT/_tools" "$isl/_tools"; [ -d wit ] && cp -R wit "$isl/"
   local a
   for a in "$@"; do
     case "$a" in

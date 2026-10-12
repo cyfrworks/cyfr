@@ -14,6 +14,9 @@ defmodule Prima.Wasm do
   3. Version check - Verify WASM binary version
   4. Export extraction - Parse and extract exported functions
   5. Content digest - Compute SHA-256 hash for deduplication
+  6. Features - A component is valid WebAssembly that uses none of the
+     features the runtime refuses (`Prima.ComponentFeatures`), checked
+     last, after `validate/2`'s world
 
   ## Component Type Detection
 
@@ -84,6 +87,14 @@ defmodule Prima.Wasm do
   - `:version` - WASM binary version
   """
   def validate(bytes) when is_binary(bytes) do
+    with {:ok, validation} <- inspect_binary(bytes) do
+      check_features(validation, bytes)
+    end
+  end
+
+  def validate(_), do: {:error, :not_binary}
+
+  defp inspect_binary(bytes) do
     with :ok <- check_size(bytes),
          :ok <- check_magic(bytes),
          {:ok, format} <- check_version(bytes) do
@@ -131,7 +142,14 @@ defmodule Prima.Wasm do
     end
   end
 
-  def validate(_), do: {:error, :not_binary}
+  # A component is held to the features the runtime admits
+  # (`Prima.ComponentFeatures`) after everything this module parses; a
+  # core module runs nowhere, so its registration stays a parse-and-store.
+  defp check_features(%{format: :component} = validation, bytes) do
+    with :ok <- Prima.ComponentFeatures.check(bytes), do: {:ok, validation}
+  end
+
+  defp check_features(validation, _bytes), do: {:ok, validation}
 
   @doc """
   `validate/1`, then assert the binary implements the world its declared
@@ -150,13 +168,16 @@ defmodule Prima.Wasm do
   whose world nothing verified.
   """
   @spec validate(binary(), String.t() | atom()) :: {:ok, map()} | {:error, term()}
-  def validate(bytes, expected_type) do
+  def validate(bytes, expected_type) when is_binary(bytes) do
     type = to_string(expected_type)
 
-    with {:ok, validation} <- validate(bytes) do
-      check_declared_world(validation, type)
+    with {:ok, validation} <- inspect_binary(bytes),
+         {:ok, validation} <- check_declared_world(validation, type) do
+      check_features(validation, bytes)
     end
   end
+
+  def validate(_bytes, _expected_type), do: {:error, :not_binary}
 
   defp check_declared_world(%{format: :core_module} = validation, _type), do: {:ok, validation}
 

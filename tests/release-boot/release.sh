@@ -89,6 +89,8 @@ release_build() {
 # PostgreSQL URL of the cell's database, ignored for SQLite.
 cell_new() {
   local cell="$1" url="${2:-}"
+  "$ROOT/scripts/wasm-tools.sh" install "$ROOT/_tools" >/dev/null ||
+    fail "the pinned wasm-tools could not be installed"
   mkdir -p "$cell/data" "$cell/home"
   cp -R "$ROOT/seed" "$cell/seed"
 
@@ -111,6 +113,9 @@ cell_new() {
     echo "CYFR_PLATFORM_ADMIN_EMAILS=operator@example.com"
     echo "CYFR_BEHIND_PROXY=false"
     echo "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends"
+    # The pinned validator, which the release checks as it starts; outside
+    # its image it is the checkout's own (scripts/wasm-tools.sh).
+    echo "CYFR_WASM_TOOLS=$ROOT/_tools/wasm-tools"
     if [ "$ADAPTER" = postgres ]; then echo "CYFR_DATABASE_URL=$url"; fi
   } >"$cell/.env"
 }

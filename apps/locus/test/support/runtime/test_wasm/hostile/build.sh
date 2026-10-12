@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Build each guest of this directory from its .wat: the core module with
-# wabt's wat2wasm, its world's WIT embedded and the component made with
-# wasm-tools, in a scratch directory. The tools and versions README.md
-# names give the same bytes on every host.
+# Build each guest of this directory from its .wat, in a scratch
+# directory: a core module with wabt's wat2wasm, its world's WIT embedded
+# and the component made with wasm-tools; or, for a guest whose `.wat` is
+# a whole component (`text`), with wasm-tools alone. The tools and
+# versions README.md names give the same bytes on every host.
 #
 # Usage, from anywhere in the repository:
 #   build.sh            build, write each .wasm, print the digests README.md
@@ -18,14 +19,18 @@ root="$(cd "$here/../../../../../../.." && pwd -P)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# Each guest and the world it is a component of.
-guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst attached_header_probe:catalyst credential_canary:catalyst trapper:reagent"
+# Each guest and the world it is a component of, or `text`.
+guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst attached_header_probe:catalyst credential_canary:catalyst trapper:reagent async_lift:text sync_lift:text gc_alloc:text exception_throw:text externref_table:text"
 
 digest() { shasum -a 256 "$1" | cut -d' ' -f1; }
 
 for entry in $guests; do
   name="${entry%%:*}"
   world="${entry##*:}"
+  if [ "$world" = text ]; then
+    wasm-tools parse "$here/$name.wat" -o "$work/$name.wasm"
+    continue
+  fi
   wat2wasm --enable-multi-memory "$here/$name.wat" -o "$work/$name.core.wasm"
   wasm-tools component embed "$root/wit/$world" --world "$world" "$work/$name.core.wasm" \
     -o "$work/$name.embedded.wasm"

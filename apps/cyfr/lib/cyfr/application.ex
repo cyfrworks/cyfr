@@ -54,6 +54,11 @@ defmodule Cyfr.Application do
       "components" => Compendium.ComponentPath
     })
 
+    # The validator every component passes before it is stored as
+    # runnable: checked here, so a member that cannot validate does not
+    # start.
+    :ok = Prima.ComponentFeatures.install!()
+
     # The platform settings, before the tree and so before the execution
     # slots' pool or any other consumer reads one, whether or not this
     # boot migrated: the roster's defaults installed into Arca's accessor,
