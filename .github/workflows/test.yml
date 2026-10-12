@@ -132,14 +132,14 @@ jobs:
       CYFR_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgres://cyfr:cyfr@localhost:5432/cyfr_test' || '' }}
       CYFR_SECRET_KEY_BASE: ${{ matrix.db == 'postgres' && 'JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk' || '' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         id: beam
         with:
           otp-version: '29'
           elixir-version: '1.20.3'
       - name: Cache deps and build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             deps
@@ -148,7 +148,7 @@ jobs:
           restore-keys: ${{ runner.os }}-mix-${{ matrix.db }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
       - name: Cache cargo-component
         id: cargo-component-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/cargo-component
           key: ${{ runner.os }}-cargo-component-0.21.1
@@ -349,14 +349,14 @@ jobs:
       CYFR_CLUSTER_DATABASE_URL: postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test
       CYFR_SECRET_KEY_BASE: JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         id: beam
         with:
           otp-version: '29'
           elixir-version: '1.20.3'
       - name: Cache deps and build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             deps
@@ -409,14 +409,14 @@ jobs:
     name: Prima compiles and tests alone
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         id: beam
         with:
           otp-version: '29'
           elixir-version: '1.20.3'
       - name: Cache deps
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: deps
           key: ${{ runner.os }}-mix-prima-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
@@ -449,14 +449,14 @@ jobs:
     env:
       CYFR_DATABASE: sqlite
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         id: beam
         with:
           otp-version: '29'
           elixir-version: '1.20.3'
       - name: Cache deps
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: deps
           key: ${{ runner.os }}-mix-arca-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
@@ -487,14 +487,14 @@ jobs:
     env:
       CYFR_DATABASE: sqlite
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         id: beam
         with:
           otp-version: '29'
           elixir-version: '1.20.3'
       - name: Cache deps
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: deps
           key: ${{ runner.os }}-mix-sanctum-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
@@ -525,14 +525,14 @@ jobs:
     name: Locus compiles and tests from its declared apps alone
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         id: beam
         with:
           otp-version: '29'
           elixir-version: '1.20.3'
       - name: Cache deps
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: deps
           key: ${{ runner.os }}-mix-locus-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
@@ -568,14 +568,14 @@ jobs:
     env:
       CYFR_DATABASE: sqlite
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         id: beam
         with:
           otp-version: '29'
           elixir-version: '1.20.3'
       - name: Cache deps and build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             deps
@@ -625,7 +625,7 @@ jobs:
     name: Builder image (lock lifecycle, isolation, memory bound, headroom)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The service bounds every build with a cgroup of its own, which needs
       # the security option writable-cgroups=true: Docker Engine 28 or later
       # on a cgroup v2 host. Without either every case below fails for a
@@ -646,9 +646,9 @@ jobs:
             fail=1
           fi
           exit "$fail"
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the builder image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.locus
@@ -717,7 +717,7 @@ jobs:
     name: Runtime image (runner kills, memory bound, settlement, cleanup, credential canary)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The service bounds every runner with a cgroup of its own, which needs
       # the security option writable-cgroups=true: Docker Engine 28 or later
       # on a cgroup v2 host. Without either every case below fails for a
@@ -742,9 +742,9 @@ jobs:
       # as the runner image sets it: the keeper clones each runner's
       # namespaces under Docker's default AppArmor profile, which allows
       # the clone (docker-compose.yml's locus-runtime service says why).
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the Locus image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.locus
@@ -812,7 +812,7 @@ jobs:
     name: Backends image (end to end, isolation, refusals, residue, memory bound)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The service bounds every backend with a cgroup of its own, which
       # needs the security option writable-cgroups=true: Docker Engine 28 or
       # later on a cgroup v2 host. Without either every case below fails for
@@ -833,9 +833,9 @@ jobs:
             fail=1
           fi
           exit "$fail"
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the Locus image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.locus
@@ -846,7 +846,7 @@ jobs:
             type=gha,scope=locus-backends
           cache-to: type=gha,scope=locus-backends,mode=max
       - name: Build the app image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -951,7 +951,7 @@ jobs:
     env:
       CYFR_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgres://cyfr:cyfr@localhost:5432/cyfr_release_boot' || '' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         id: beam
         with:
@@ -960,7 +960,7 @@ jobs:
       # A prod build of its own, per adapter: the adapter is compiled in, so
       # the two legs can share neither build nor release.
       - name: Cache deps and the prod build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             deps
@@ -997,19 +997,19 @@ jobs:
     # A hang is cut here before the runner's six-hour limit.
     timeout-minutes: 240
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         id: beam
         with:
           otp-version: '29'
           elixir-version: '1.20.3'
       # The grant proof builds the command line from apps/codex.
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
       - name: Cache deps and the prod build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             deps
@@ -1120,7 +1120,7 @@ jobs:
     name: Seed media (clean, immutable versions)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       # Install media must be clean: build droppings under seed/ would be
@@ -1267,7 +1267,7 @@ jobs:
     name: Config keys (no compile-time/runtime split)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Reject runtime reads or writes of compile-time configuration keys.
       # Intentional exceptions require `# config:compile-runtime-ok` on each
       # compile_env line.
@@ -1311,7 +1311,7 @@ jobs:
     name: No org/project fossils (one tenancy vocabulary)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The tenancy unit is the athanor and a conversation is a thread. This
       # asserts the old vocabularies — org/project, the athanor's retired
       # second name, conversation/topic subscription, the prism: PubSub
