@@ -1,6 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# The four logger-level restores (`application_test.exs`, `config_test.exs`)
+# capture the live level, not the application environment, and put it back
+# with `Logger.configure/1`, which writes the environment too. In an umbrella
+# run the live level is :debug when this suite starts, even though the
+# environment says :warning (`config/test.exs`). A locus test can precede a
+# cyfr test in one VM, so the level set here, before any test runs, is the
+# one the four restores put back.
+Logger.configure(level: :warning)
+
 # The build tests shell out to a real toolchain: `cargo component` for Rust
 # components, `npm`/`node` for tinctures and for every test that needs a
 # build to run at all. Tagged tests are excluded when the tool is not on

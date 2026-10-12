@@ -28,4 +28,10 @@ if config_env() == :test do
     port: 0,
     keeper: :direct,
     direct_keeper: Locus.DirectLauncher.Runner
+
+  # The umbrella's test level (`config/test.exs`). A test that restores the
+  # level it found writes that level into the `:logger` application
+  # environment (`Logger.configure/1` does), and a locus test can run before a
+  # cyfr test in one VM, so the level it restores must be the umbrella's.
+  config :logger, level: :warning
 end
