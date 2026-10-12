@@ -115,7 +115,7 @@ jobs:
       # below) are non-secret CI fixtures for the Postgres container, never used
       # outside CI.
       postgres:
-        image: postgres:16
+        image: postgres:18.6
         env:
           POSTGRES_USER: cyfr
           POSTGRES_PASSWORD: cyfr
@@ -331,7 +331,7 @@ jobs:
       # database with a run whose writes roll back. Credentials are
       # non-secret CI fixtures.
       postgres:
-        image: postgres:16
+        image: postgres:18.6
         env:
           POSTGRES_USER: cyfr
           POSTGRES_PASSWORD: cyfr
@@ -939,7 +939,7 @@ jobs:
       # in it. Test-only credentials, never used outside CI. The SQLite leg
       # does not reach it.
       postgres:
-        image: postgres:16
+        image: postgres:18.6
         env:
           POSTGRES_USER: cyfr
           POSTGRES_PASSWORD: cyfr

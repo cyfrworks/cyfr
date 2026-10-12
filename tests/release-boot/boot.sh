@@ -45,13 +45,13 @@
 # them when it ends; it drops no database it did not create, so runs that
 # share one server and one URL leave each other's alone. A run killed before
 # its cleanup leaves its two behind, under its own names. The dump and the
-# restore run in the postgres:16 image, with this host's network. Set
+# restore run in the postgres:18.6 image, with this host's network. Set
 # RELEASE_BOOT_SKIP_BUILD=1 to reuse the release a previous run built, and
 # RELEASE_BOOT_KEEP=1 to keep the scratch directory, its logs and the
 # databases.
 
 # The PostgreSQL client the restore case runs, the server's own major.
-PG_IMAGE="postgres:16"
+PG_IMAGE="postgres:18.6"
 CREATED_DATABASES=()
 # This run among the runs sharing a server: its process id and eight random
 # hex digits.
