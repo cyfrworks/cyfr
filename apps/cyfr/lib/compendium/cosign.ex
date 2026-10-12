@@ -209,16 +209,18 @@ defmodule Compendium.Cosign do
     flush_port(port)
   end
 
-  # `kill` is named by absolute path: one looked up through a PATH another
-  # process of this node moved would leave cosign running.
+  # The kill is the shell's builtin, run through /bin/sh by absolute path. A
+  # builtin needs no PATH, and the child's PATH is /dev/null, under which no
+  # executable resolves, so a name the builtin did not answer could not fall
+  # back to an external kill: the hang test is the proof that the builtin does
+  # the work. An empty PATH would not do, since OTP drops it and the shell then
+  # searches its default path. The pid is an argument to the script, never part
+  # of its text.
   defp kill_os_process(os_pid) do
-    case System.find_executable("/bin/kill") do
-      nil ->
-        Logger.error("[Compendium.Cosign] no kill executable; cosign pid #{os_pid} left running")
-
-      kill ->
-        System.cmd(kill, ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true)
-    end
+    System.cmd("/bin/sh", ["-c", "kill -s KILL -- \"$1\"", "sh", Integer.to_string(os_pid)],
+      env: [{"PATH", "/dev/null"}],
+      stderr_to_stdout: true
+    )
   end
 
   # Messages the port sent before it was closed stay in this process's

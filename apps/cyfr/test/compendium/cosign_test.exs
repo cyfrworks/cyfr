@@ -245,6 +245,22 @@ defmodule Compendium.CosignTest do
     end
   end
 
+  # The module has no seam for the kill's call, so the test reads the module's
+  # source: it pins the form of the kill call and the names the file uses.
+  describe "a hung cosign is killed through the shell's builtin" do
+    test "the kill runs through /bin/sh on a /dev/null PATH and names no kill binary" do
+      source = File.read!(Path.expand("../../lib/compendium/cosign.ex", __DIR__))
+
+      assert source =~ "defp kill_os_process"
+      assert [_, kill] = Regex.run(~r/defp kill_os_process\(os_pid\) do\n(.*?)\n  end\n/s, source)
+
+      assert kill =~ ~s|System.cmd("/bin/sh"|
+      assert kill =~ ~s|env: [{"PATH", "/dev/null"}]|
+      refute source =~ "/bin/kill"
+      refute source =~ ~s|find_executable("kill")|
+    end
+  end
+
   # -- Stand-in cosign -------------------------------------------------------
 
   defp use_stand_in(dir, opts) do
@@ -262,7 +278,7 @@ defmodule Compendium.CosignTest do
 
     body =
       if opts[:hang] do
-        "echo $$ > '#{dir}/pid'\nexec sleep 60\n"
+        "echo $$ > '#{dir}/pid'\nexec /bin/sleep 60\n"
       else
         answer = if Keyword.has_key?(opts, :answer), do: Jason.encode!(opts[:answer]) <> "\n"
         output = Path.join(dir, "output")
@@ -321,7 +337,7 @@ defmodule Compendium.CosignTest do
   end
 
   defp running?(pid) do
-    case System.cmd("ps", ["-o", "stat=", "-p", pid], stderr_to_stdout: true) do
+    case System.cmd("/bin/ps", ["-o", "stat=", "-p", pid], stderr_to_stdout: true) do
       {stat, 0} -> not String.starts_with?(String.trim(stat), "Z")
       {_, _} -> false
     end
