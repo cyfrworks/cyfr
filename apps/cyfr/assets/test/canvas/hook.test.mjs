@@ -10,6 +10,7 @@ import {
   CREDENTIAL_CLOSED_EVENT,
   FRAME_STATE_EVENT,
   acting,
+  bearerSignal,
   credentialSignal,
   frameSignal,
   installedSignal,
@@ -564,6 +565,82 @@ describe("a closed credential prompt", () => {
   })
 })
 
+describe("a rotated credential", () => {
+  // Wait for a condition, in bounded steps.
+  async function eventually(check) {
+    for (let i = 0; i < 100 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.ok(check(), "the condition never held")
+  }
+
+  const RENEWED = "frm.v2.cmVuZXdlZC1mcmFtZS1jcmVkZW50aWFs"
+
+  // A frame whose bridge has taken its handshake: its port's far end, and
+  // every message it hears.
+  function handshaken(id, dataset = {}, reply = {credential: "frm.v2.first"}) {
+    const el = frameElement(id, "live", dataset)
+    const transfers = []
+    el.contentWindow = {postMessage: (_data, _origin, transfer) => transfers.push(...(transfer || []))}
+    const {hook} = mountBridge(el, reply)
+    el.dispatchEvent(new Event("load"))
+    const heard = []
+    const port = transfers[0]
+    if (port) port.onmessage = (event) => heard.push(event.data)
+    return {el, hook, port, heard}
+  }
+
+  test("reaches only the frame it names: frame A's never reaches frame B's port", async () => {
+    const a = handshaken(FRAME)
+    const b = handshaken(OTHER)
+
+    try {
+      await eventually(() => a.heard.length === 1 && b.heard.length === 1)
+      const {handlers} = mountCanvas(canvasElement({frames: [a.el, b.el]}))
+
+      handlers.frame_bearer({frame: FRAME, credential: RENEWED})
+      handlers.frame_bearer({frame: FRAME, credential: ""})
+      handlers.frame_bearer({frame: "short", credential: RENEWED})
+      handlers.frame_bearer({frame: FRAME})
+      handlers.frame_bearer(null)
+
+      await eventually(() => a.heard.length === 2)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      assert.deepEqual(a.heard.slice(1), [{v: 1, type: "cyfr:credential", frame: FRAME, credential: RENEWED}])
+      assert.equal(b.heard.length, 1)
+      assert.ok(!JSON.stringify(b.heard).includes(RENEWED))
+    } finally {
+      for (const {hook, port} of [a, b]) {
+        hook.destroyed()
+        port?.close()
+      }
+    }
+  })
+
+  test("a canvas's frame is never handed one", async () => {
+    const boot = {
+      mode: "live",
+      credential: "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+      data_path: `/_f/v1/o/${FRAME}/`,
+      module_url: "/_s/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/local/canvas/0.1.0/canvas.js",
+      toolkit: 1,
+      streams: [{name: "runs.changes", subject: null}]
+    }
+    const canvas = handshaken(FRAME, {frameWire: "canvas"}, {boot})
+
+    try {
+      await eventually(() => canvas.heard.length >= 1)
+      const {handlers} = mountCanvas(canvasElement({frames: [canvas.el]}))
+      handlers.frame_bearer({frame: FRAME, credential: RENEWED})
+
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      assert.ok(canvas.heard.every((message) => message.type !== "cyfr:credential"))
+      assert.ok(!JSON.stringify(canvas.heard).includes(RENEWED))
+    } finally {
+      canvas.hook.destroyed()
+      canvas.port?.close()
+    }
+  })
+})
+
 describe("the safe mode chord", () => {
   test("Ctrl+Alt+S on the shell's page asks the shell for safe mode; nothing else does", () => {
     const pushed = []
@@ -603,6 +680,14 @@ describe("the signal grammar", () => {
     assert.equal(credentialSignal({frame: FRAME, saved: 1}), null)
     assert.equal(credentialSignal({frame: FRAME}), null)
     assert.equal(credentialSignal("saved"), null)
+  })
+
+  test("a frame_bearer payload is a frame id and a non-empty credential, and nothing else", () => {
+    assert.deepEqual(bearerSignal({frame: FRAME, credential: "x"}), {frame: FRAME, credential: "x"})
+    assert.equal(bearerSignal({frame: FRAME, credential: ""}), null)
+    assert.equal(bearerSignal({frame: FRAME, credential: 1}), null)
+    assert.equal(bearerSignal({frame: "x", credential: "y"}), null)
+    assert.equal(bearerSignal(null), null)
   })
 
   test("a frame_state payload is a frame id and live or frozen, and nothing else", () => {

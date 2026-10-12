@@ -11,27 +11,30 @@ defmodule Arca.FrameCredentials do
 
   ## States
 
-  `active`, `suspended` or `revoked`. `suspend/2` and `resume/2` move
+  `active`, `suspended` or `revoked`. `suspend/2` and `resume/3` move
   between the first two; `revoke/2` ends a row from either, and nothing
-  leaves `revoked`. A standing transition revokes rows in its own
-  transaction (`Arca.SecurityTransitions`), and a retired source's rows go
-  with `revoke_for_source/2`. Each state change raises `updated_at`, which
-  is when a revoked row was retired; `Arca.Retention.FrameCredentials`
+  leaves `revoked`. `renew/3` moves an active row's deadline and not its
+  state, and `resume/3` sets the deadline as it resumes. A standing
+  transition revokes rows in its own transaction
+  (`Arca.SecurityTransitions`), and a retired source's rows go with
+  `revoke_for_source/2`. Each write raises `updated_at`, which is when a
+  revoked row was retired; `Arca.Retention.FrameCredentials`
   removes revoked rows older than the athanor's value.
 
   ## Purposes
 
   A row's `purpose` is `live`, a frame that shows its tincture, or
   `validation`, a candidate version's hidden trial. A validation row is
-  never suspended or resumed (`:validation`); it is spent once, by
+  never suspended, resumed or renewed (`:validation`); it is spent once, by
   `consume/3`, which revokes it. A revoke treats both purposes alike.
 
   ## Ownership
 
-  A mint, a resume and a consume each run in a locking transaction that
-  checks the member still owns its slot (`Arca.ControlPlane.verify_held/1`)
-  before it writes: a stale owner dispenses no credential, re-opens none
-  and spends none, since an activation rests on the consume. A suspend
+  A mint, a resume, a renew and a consume each run in a locking
+  transaction that checks the member still owns its slot
+  (`Arca.ControlPlane.verify_held/1`) before it writes: a stale owner
+  dispenses no credential, re-opens none, lengthens none and spends none,
+  since an activation rests on the consume. A suspend
   and a revoke only narrow, and are never refused for ownership: a member
   that lost its slot may still close what it opened.
 
@@ -181,12 +184,21 @@ defmodule Arca.FrameCredentials do
   def suspend(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc """
-  Resume a suspended row, under the member's live ownership. An active row
-  answers as it is; a revoked one is `:revoked`, one past its deadline on
-  the database's clock `:expired`, and a validation row, whatever its
-  state, `:validation`, each of which resumes nothing.
+  Resume a suspended row, under the member's live ownership, with
+  `deadline` as its deadline, state and deadline in one write: the bearer
+  the resume signs is a new one, and the row lives as long as it does. A
+  suspended row is resumed whatever its old deadline, since every bearer
+  signed before carries its own. An active row before its deadline
+  answers as it is; past it, on the database's clock, it is `:expired`. A
+  revoked row is `:revoked`, a `deadline` not after the database's clock
+  `:expired`, and a validation row, whatever its state, `:validation`,
+  each of which writes nothing.
+
+  With `:keep` for `deadline` the row keeps its own: a suspended row is
+  resumed only before that deadline on the database's clock, and is
+  `:expired` past it, for a frame whose bearer is never replaced.
   """
-  @spec resume(Prima.Actor.t(), String.t()) ::
+  @spec resume(Prima.Actor.t(), String.t(), DateTime.t() | :keep) ::
           {:ok, row()}
           | {:error,
              :not_found
@@ -196,27 +208,63 @@ defmodule Arca.FrameCredentials do
              | :not_owner
              | :no_athanor
              | :database_error}
-  def resume(%Prima.Actor{athanor_id: athanor_id} = actor, id)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
+  def resume(%Prima.Actor{athanor_id: athanor_id} = actor, id, deadline)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and
+             (is_struct(deadline, DateTime) or deadline == :keep) do
     owned("Arca.FrameCredentials.resume", fn ->
+      # The row is locked before the clock is read, so a resume that waited
+      # behind another write judges the deadline as it acts.
+      row = locked_row(actor, id)
       now = Arca.ServerMetaStorage.now!()
 
-      case locked_row(actor, id) do
-        %FrameCredential{purpose: "validation"} ->
-          {:error, :validation}
-
-        %FrameCredential{deadline: deadline} = row ->
-          if DateTime.compare(deadline, now) == :gt,
-            do: set_state(row, "suspended", "active"),
-            else: {:error, :expired}
-
-        nil ->
-          {:error, :not_found}
+      case row do
+        nil -> {:error, :not_found}
+        %FrameCredential{purpose: "validation"} -> {:error, :validation}
+        %FrameCredential{state: "revoked"} -> {:error, :revoked}
+        %FrameCredential{state: "suspended"} -> reopen(row, deadline, now)
+        %FrameCredential{state: "active"} -> standing(row, now)
       end
     end)
   end
 
-  def resume(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+  def resume(%Prima.Actor{}, _id, _deadline), do: {:error, :no_athanor}
+
+  @doc """
+  Renew an active row, under the member's live ownership: its deadline
+  becomes `deadline`, and its state, version, digest and grant revision
+  stay as they are. A suspended row is `:suspended`, a revoked one
+  `:revoked`, one past its deadline on the database's clock or a
+  `deadline` not after that clock `:expired`, and a validation row,
+  whatever its state, `:validation`; none of them is written.
+  """
+  @spec renew(Prima.Actor.t(), String.t(), DateTime.t()) ::
+          {:ok, row()}
+          | {:error,
+             :not_found
+             | :suspended
+             | :revoked
+             | :expired
+             | :validation
+             | :not_owner
+             | :no_athanor
+             | :database_error}
+  def renew(%Prima.Actor{athanor_id: athanor_id} = actor, id, %DateTime{} = deadline)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
+    owned("Arca.FrameCredentials.renew", fn ->
+      row = locked_row(actor, id)
+      now = Arca.ServerMetaStorage.now!()
+
+      case row do
+        nil -> {:error, :not_found}
+        %FrameCredential{purpose: "validation"} -> {:error, :validation}
+        %FrameCredential{state: "revoked"} -> {:error, :revoked}
+        %FrameCredential{state: "suspended"} -> {:error, :suspended}
+        %FrameCredential{state: "active"} -> active_extend(row, deadline, now)
+      end
+    end)
+  end
+
+  def renew(%Prima.Actor{}, _id, _deadline), do: {:error, :no_athanor}
 
   @doc "Revoke a row, from any state; revoking a revoked row answers it as it is."
   @spec revoke(Prima.Actor.t(), String.t()) ::
@@ -415,6 +463,33 @@ defmodule Arca.FrameCredentials do
       %FrameCredential{state: ^to} = row -> {:ok, row}
       %FrameCredential{state: ^from} = row -> set_state(row, from, to)
       %FrameCredential{state: "revoked"} -> {:error, :revoked}
+    end
+  end
+
+  defp reopen(row, :keep, now) do
+    with {:ok, row} <- standing(row, now), do: set_state(row, "suspended", "active")
+  end
+
+  defp reopen(row, deadline, now), do: extend(row, "active", deadline, now)
+
+  # An active row's deadline moves only while it has not passed: a frame
+  # whose credential ran out is opened again, never renewed.
+  defp active_extend(row, deadline, now) do
+    with {:ok, row} <- standing(row, now), do: extend(row, "active", deadline, now)
+  end
+
+  defp standing(%FrameCredential{deadline: current} = row, now) do
+    if DateTime.compare(current, now) == :gt, do: {:ok, row}, else: {:error, :expired}
+  end
+
+  # arca:unscoped-ok the row was read and locked under the actor's athanor (`locked_row/2`).
+  defp extend(%FrameCredential{} = row, state, deadline, now) do
+    if DateTime.compare(deadline, now) == :gt do
+      row
+      |> Ecto.Changeset.change(state: state, deadline: deadline, updated_at: now)
+      |> Arca.Repo.update()
+    else
+      {:error, :expired}
     end
   end
 

@@ -123,6 +123,12 @@ defmodule PrismWeb.ShellLive do
   again the view pushes `frame_state`, which the canvas hook relays to the
   frame's bridge.
 
+  A live frame that is not a canvas's has its credential renewed before
+  its deadline while this view holds it (`Prism.Frames.renew/4`), and a
+  frame shown again is resumed under a new bearer: the view pushes each
+  new bearer as `frame_bearer`, which the canvas hook relays to that
+  frame's bridge alone, and keeps none. A frozen frame is not renewed.
+
   While a full frame is shown it covers everything under it, so the
   shell sets `covered`: the layout takes its chrome (the top bar, the
   sidebar and the drawer) out of reach with `inert`, and the canvas does
@@ -156,6 +162,15 @@ defmodule PrismWeb.ShellLive do
   # The stream a canvas reads a feed's results on (`Opus.Providers.Feed`).
   @feed_stream "feed.results"
 
+  # A frame credential is renewed this long before its deadline, or at
+  # half its life when that life is shorter than twice this; never sooner
+  # than the retry interval after it was armed.
+  @renew_ahead_ms 300_000
+
+  # How often a renewal the store or the member could not answer is tried
+  # again, while the deadline is further away than this.
+  @renew_retry_ms 30_000
+
   # ============================================================================
   # Mount
   # ============================================================================
@@ -167,6 +182,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:page_title, "Tinctures")
       |> assign(:active_nav, "tinctures")
       |> assign(:frames, Frames.new())
+      |> assign(:renewals, %{})
       |> assign(:covered, false)
       |> assign(:posture, "desk")
       |> assign(:arrangement, nil)
@@ -566,11 +582,20 @@ defmodule PrismWeb.ShellLive do
 
   defp put_frames(socket, later) do
     before = socket.assigns.frames
+    # A rotated bearer reaches its frame ahead of the signal that makes the
+    # frame live, and is never kept in the assigns.
+    {replacements, later} = Frames.take_replacements(later)
+
+    socket =
+      replacements
+      |> Enum.reduce(socket, &push_event(&2, "frame_bearer", &1))
+      |> assign(frames: later, covered: Frames.active(later) != nil)
+      |> arm_renewals(before, later)
 
     socket =
       Enum.reduce(
         Frames.signals(before, later),
-        assign(socket, frames: later, covered: Frames.active(later) != nil),
+        socket,
         &push_event(&2, "frame_state", &1)
       )
 
@@ -791,6 +816,74 @@ defmodule PrismWeb.ShellLive do
   defp arm_ready_deadline(socket, frame_id) do
     timer = Process.send_after(self(), {:canvas_deadline, frame_id}, @canvas_ready_ms)
     update(socket, :canvas_deadlines, &Map.put(&1, frame_id, timer))
+  end
+
+  # A renewal is armed for each frame the view renews whose deadline is new
+  # to it: a frame just opened, one shown again, or one whose renewal moved
+  # its deadline later. A renewal that answered no later deadline arms
+  # nothing more, so a credential capped by its session's end runs out. A
+  # frame the view no longer renews has its renewal cancelled.
+  defp arm_renewals(socket, before, later) do
+    socket =
+      Enum.reduce(Frames.list(later), socket, fn frame, socket ->
+        with true <- Frames.renewable?(frame),
+             true <- new_deadline?(Frames.get(before, frame.key), frame),
+             {:ok, delay} <- renewal_delay(frame.deadline) do
+          arm_renewal(socket, frame.id, frame.deadline, delay)
+        else
+          _not_armed -> socket
+        end
+      end)
+
+    renewed =
+      for frame <- Frames.list(later), Frames.renewable?(frame), into: MapSet.new(), do: frame.id
+
+    {kept, gone} =
+      Map.split_with(socket.assigns.renewals, fn {id, _} -> MapSet.member?(renewed, id) end)
+
+    Enum.each(gone, fn {_id, {timer, _token}} -> Process.cancel_timer(timer) end)
+    assign(socket, :renewals, kept)
+  end
+
+  defp new_deadline?(%{id: id, deadline: %DateTime{} = held} = before, %{
+         id: id,
+         deadline: deadline
+       }),
+       do: not Frames.renewable?(before) or DateTime.compare(deadline, held) == :gt
+
+  defp new_deadline?(_before, _frame), do: true
+
+  # Five minutes before the deadline, or half the life left when that is
+  # under ten minutes; never sooner than the retry interval, and nothing
+  # for a deadline already past.
+  defp renewal_delay(deadline) do
+    left = DateTime.diff(deadline, DateTime.utc_now(), :millisecond)
+
+    cond do
+      left <= 0 -> :none
+      left >= 2 * @renew_ahead_ms -> {:ok, left - @renew_ahead_ms}
+      true -> {:ok, max(div(left, 2), @renew_retry_ms)}
+    end
+  end
+
+  defp retry_renewal(socket, frame_id, deadline) do
+    if DateTime.diff(deadline, DateTime.utc_now(), :millisecond) > @renew_retry_ms,
+      do: arm_renewal(socket, frame_id, deadline, @renew_retry_ms),
+      else: socket
+  end
+
+  # One renewal per frame: arming one cancels the one before it, and the
+  # message carries a token the view matches, so a timer cancelled too
+  # late changes nothing.
+  defp arm_renewal(socket, frame_id, deadline, delay) do
+    case socket.assigns.renewals do
+      %{^frame_id => {timer, _token}} -> Process.cancel_timer(timer)
+      _none -> :ok
+    end
+
+    token = make_ref()
+    timer = Process.send_after(self(), {:frame_renewal, frame_id, deadline, token}, delay)
+    update(socket, :renewals, &Map.put(&1, frame_id, {timer, token}))
   end
 
   # What `installed` carries: every listed tincture that is not a canvas,
@@ -1825,6 +1918,29 @@ defmodule PrismWeb.ShellLive do
           else: {:noreply, enter_safe_mode(socket, :not_ready)}
 
       _refused_another_or_none ->
+        {:noreply, socket}
+    end
+  end
+
+  # A frame's renewal, armed for one deadline. One superseded by a later
+  # arm, or for a frame no longer held live at that deadline, changes
+  # nothing; one the store or the member could not answer is tried again
+  # while the deadline allows.
+  def handle_info({:frame_renewal, frame_id, deadline, token}, socket) do
+    case socket.assigns.renewals do
+      %{^frame_id => {_timer, ^token}} ->
+        socket = update(socket, :renewals, &Map.delete(&1, frame_id))
+
+        {outcome, later} =
+          Frames.renew(socket.assigns.context, socket.assigns.frames, frame_id, deadline)
+
+        socket = put_frames(socket, later)
+
+        if outcome == :retry,
+          do: {:noreply, retry_renewal(socket, frame_id, deadline)},
+          else: {:noreply, socket}
+
+      _superseded ->
         {:noreply, socket}
     end
   end

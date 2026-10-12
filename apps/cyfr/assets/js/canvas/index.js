@@ -6,8 +6,10 @@ import {
   CANVAS_MESSAGE_EVENT,
   CREDENTIAL_CLOSED_EVENT,
   DISCONNECTED,
+  FRAME_BEARER_EVENT,
   FRAME_STATE_EVENT,
   RECONNECTED,
+  bearerSignal,
   credentialSignal,
   frameSignal,
   installedSignal,
@@ -28,8 +30,10 @@ const COVERING = ["column", "float", "full"]
  * element the server never patches; relays the shell's `frame_state`
  * signals to each frame's bridge as a `cyfr:frame-state` event on the
  * frame's element, its `frame_credential` signals (a credential prompt a
- * frame asked for closed) as `cyfr:credential-closed`, and its
- * `canvas_installed` pushes to the canvas frame they name.
+ * frame asked for closed) as `cyfr:credential-closed`, its `frame_bearer`
+ * pushes (a frame's rotated credential) as `cyfr:frame-bearer` on the one
+ * frame they name, and its `canvas_installed` pushes to the canvas frame
+ * they name.
  *
  * Each canvas frame (`data-frame-wire="canvas"`) is told, through its
  * bridge (`cyfr:canvas-message`), the posture and what the shown apps and
@@ -92,6 +96,7 @@ const Canvas = {
 
     this.handleEvent("frame_state", (payload) => this._relay(payload))
     this.handleEvent("frame_credential", (payload) => this._credentialClosed(payload))
+    this.handleEvent("frame_bearer", (payload) => this._bearer(payload))
     this.handleEvent("canvas_installed", (payload) => this._installed(payload))
 
     this._read()
@@ -214,6 +219,13 @@ const Canvas = {
     if (!signal) return
     const frame = this._frames().find((el) => el.dataset.frameId === signal.frame)
     if (frame) frame.dispatchEvent(new CustomEvent(CREDENTIAL_CLOSED_EVENT, {detail: {saved: signal.saved}}))
+  },
+
+  _bearer(payload) {
+    const signal = bearerSignal(payload)
+    if (!signal) return
+    const frame = this._frames().find((el) => el.dataset.frameId === signal.frame)
+    if (frame) frame.dispatchEvent(new CustomEvent(FRAME_BEARER_EVENT, {detail: {credential: signal.credential}}))
   },
 
   _installed(payload) {

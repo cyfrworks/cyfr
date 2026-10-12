@@ -76,10 +76,23 @@ defmodule Prism.Frames do
   credential is suspended through Sanctum before the view signals it to
   stop, and a suspension that cannot be recorded discards the frame. A
   hidden canvas is frozen whatever its declaration says. A shown frame's
-  credential is resumed before it is signalled live; a resume that fails
-  revokes the credential and leaves the frame showing its refusal. A
-  validation frame is never frozen or thawed: its credential is never
-  suspended.
+  credential is resumed before it is signalled live, and the resume
+  rotates its bearer (`Sanctum.TinctureAuth.resume_frame/3`); a resume
+  that fails revokes the credential and leaves the frame showing its
+  refusal. A canvas is never handed a second bearer, so its resume keeps
+  its row's deadline and signs nothing, and a canvas whose deadline
+  passed while it was hidden is refused at its resume. A validation frame
+  is never frozen or thawed: its credential is never suspended.
+
+  ## Renewal
+
+  A frame remembers its credential's `deadline`. While it is live, a
+  frame that is neither a canvas's nor a validation's is renewed before
+  that deadline (`renew/4`, `Sanctum.TinctureAuth.renew_frame/2`): its
+  bearer is rotated and its deadline moves. A new bearer from a renewal
+  or a resume replaces the frame's own while its handshake has not
+  happened, and is otherwise queued for the view to hand the frame over
+  its port (`take_replacements/1`), never kept.
 
   ## Attribution and the handshake
 
@@ -87,7 +100,8 @@ defmodule Prism.Frames do
   this value holds; a frozen or refused frame acts on nothing, and any
   other message is dropped and counted (`drop_message/1`). A frame's
   bearer is handed over once (`handshake/2`): a canvas or validation
-  frame's inside its `boot`, any other frame's alone.
+  frame's inside its `boot`, any other frame's alone. A bearer that
+  replaces it later reaches the frame only as a replacement.
 
   ## Ending
 
@@ -167,6 +181,7 @@ defmodule Prism.Frames do
           refusal: refusal() | nil,
           credential_id: String.t() | nil,
           bearer: String.t() | nil,
+          deadline: DateTime.t() | nil,
           placement: placement(),
           visible: boolean(),
           background: boolean(),
@@ -181,12 +196,24 @@ defmodule Prism.Frames do
   @typedoc "What a frame's bridge is handed at its handshake."
   @type handshake :: %{credential: String.t()} | %{boot: boot()}
 
+  @typedoc "A bearer that replaces one frame's own, for the view to hand that frame."
+  @type replacement :: %{frame: String.t(), credential: String.t()}
+
+  @typedoc """
+  What a renewal did: `:renewed`, the frame's bearer rotated; `:retry`, the
+  store or the member could not answer; `:expired`, the credential ran out
+  and is left to expire; `:refused`, the frame revoked and showing its
+  refusal; `:stale`, nothing, for a frame not held live at that deadline.
+  """
+  @type renewal :: :renewed | :retry | :expired | :refused | :stale
+
   @typedoc """
   A mint of a frame credential: `Sanctum.TinctureAuth.mint_frame_credential/5`
   or `mint_validation_credential/5`, which take the same arguments.
   """
   @type mint :: (Context.t(), map(), String.t(), non_neg_integer(), String.t() ->
-                   {:ok, %{credential: String.t(), id: String.t()}} | {:error, term()})
+                   {:ok, %{credential: String.t(), id: String.t(), deadline: DateTime.t()}}
+                   | {:error, term()})
 
   @type t :: %__MODULE__{
           frames: %{key() => frame()},
@@ -194,10 +221,17 @@ defmodule Prism.Frames do
           active: key() | nil,
           minted: [String.t()],
           dropped: non_neg_integer(),
-          canvas: String.t() | nil
+          canvas: String.t() | nil,
+          replacements: [replacement()]
         }
 
-  defstruct frames: %{}, order: [], active: nil, minted: [], dropped: 0, canvas: nil
+  defstruct frames: %{},
+            order: [],
+            active: nil,
+            minted: [],
+            dropped: 0,
+            canvas: nil,
+            replacements: []
 
   # ============================================================================
   # Pure: reading
@@ -250,6 +284,24 @@ defmodule Prism.Frames do
   @doc "How many frame messages were dropped."
   @spec dropped(t()) :: non_neg_integer()
   def dropped(%__MODULE__{dropped: dropped}), do: dropped
+
+  @doc """
+  The bearers queued for frames already handed theirs, in the order they
+  were rotated, and the value without them: the view hands each to its
+  frame and keeps none.
+  """
+  @spec take_replacements(t()) :: {[replacement()], t()}
+  def take_replacements(%__MODULE__{replacements: replacements} = t),
+    do: {replacements, %{t | replacements: []}}
+
+  @doc """
+  Whether the frame is one the view renews: live, holding a deadline, and
+  neither a canvas's nor a validation's, whose wire carries no second
+  bearer.
+  """
+  @spec renewable?(frame()) :: boolean()
+  def renewable?(%{state: :live, key: key, deadline: %DateTime{}}), do: not canvas_key?(key)
+  def renewable?(_frame), do: false
 
   @doc "Whether `key` is a canvas-placement frame's: a canvas's or a validation's."
   @spec canvas_key?(term()) :: boolean()
@@ -870,8 +922,11 @@ defmodule Prism.Frames do
       {:thaw, key}, t ->
         frame = get(t, key)
 
-        case TinctureAuth.resume_frame(ctx, frame.credential_id) do
-          {:ok, _row} ->
+        case TinctureAuth.resume_frame(ctx, frame.credential_id, rotate: not canvas_key?(key)) do
+          {:ok, %{credential: _} = minted} ->
+            t |> thaw(key) |> rotated(key, minted)
+
+          {:ok, _kept} ->
             thaw(t, key)
 
           {:error, reason} ->
@@ -879,6 +934,83 @@ defmodule Prism.Frames do
             refuse(t, key, refusal(reason))
         end
     end)
+  end
+
+  @doc """
+  Renew the live frame `frame_id` whose credential's deadline is
+  `deadline` (`Sanctum.TinctureAuth.renew_frame/2`): its bearer is rotated
+  and its deadline moves. A frame not held, not live, a canvas's or a
+  validation's, or held at another deadline is `:stale` and nothing is
+  done. Otherwise the refusal decides:
+
+  | refusal | renewal |
+  |---|---|
+  | `:unavailable`, `:not_owner`, `:identity_stale` | `:retry` |
+  | `:suspended` | `:stale` |
+  | `:expired` | `:expired`, left to expire |
+  | any standing or identity refusal | `:refused`: revoked, showing it |
+  """
+  @spec renew(Context.t(), t(), String.t(), DateTime.t()) :: {renewal(), t()}
+  def renew(%Context{} = ctx, %__MODULE__{} = t, frame_id, %DateTime{} = deadline)
+      when is_binary(frame_id) do
+    case find(t, frame_id) do
+      %{key: key, deadline: held} = frame ->
+        if renewable?(frame) and DateTime.compare(held, deadline) == :eq,
+          do: renewed(ctx, t, key, frame),
+          else: {:stale, t}
+
+      nil ->
+        {:stale, t}
+    end
+  end
+
+  # The classes of a renewal's refusal: a member or a store that cannot
+  # answer now may answer later, a suspended row is a timer the freeze
+  # outran, an expired row is let go, and every standing or identity
+  # refusal (`:not_standing`, `:not_member`, `:ip_not_allowed`,
+  # `:expired_credential`, `:revoked`, `:not_found`, ...) ends the frame.
+  defp renewed(ctx, t, key, frame) do
+    case TinctureAuth.renew_frame(ctx, frame.credential_id) do
+      {:ok, minted} ->
+        {:renewed, rotated(t, key, minted)}
+
+      {:error, reason} when reason in [:unavailable, :not_owner, :identity_stale] ->
+        {:retry, t}
+
+      {:error, :suspended} ->
+        {:stale, t}
+
+      {:error, :expired} ->
+        {:expired, t}
+
+      {:error, reason} ->
+        revoke(ctx, frame.credential_id)
+        {:refused, refuse(t, key, refusal(reason))}
+    end
+  end
+
+  # A rotated bearer replaces the frame's own until its handshake hands it
+  # over, and is queued for the view after; a canvas's frame keeps its
+  # boot's bearer and its deadline.
+  defp rotated(t, key, %{credential: bearer, deadline: deadline}) do
+    case get(t, key) do
+      nil ->
+        t
+
+      %{bearer: held, id: id} = frame ->
+        cond do
+          canvas_key?(key) ->
+            t
+
+          is_nil(held) ->
+            t
+            |> put_frame(key, %{frame | deadline: deadline})
+            |> Map.update!(:replacements, &(&1 ++ [%{frame: id, credential: bearer}]))
+
+          true ->
+            put_frame(t, key, %{frame | bearer: bearer, deadline: deadline})
+        end
+    end
   end
 
   @doc """
@@ -1008,6 +1140,7 @@ defmodule Prism.Frames do
       refusal: nil,
       credential_id: nil,
       bearer: nil,
+      deadline: nil,
       placement: placement,
       visible: false,
       background: false,
@@ -1040,6 +1173,7 @@ defmodule Prism.Frames do
           actions: declaration.actions,
           credential_id: minted.id,
           bearer: minted.credential,
+          deadline: minted.deadline,
           state: :live,
           visible: true
       }
@@ -1069,6 +1203,7 @@ defmodule Prism.Frames do
           sandbox: Enum.join(Compendium.tincture_canvas_sandbox_tokens(), " "),
           credential_id: minted.id,
           bearer: minted.credential,
+          deadline: minted.deadline,
           state: :live,
           visible: kind == :canvas,
           boot: %{

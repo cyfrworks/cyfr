@@ -6,6 +6,7 @@ import {afterEach, describe, test} from "node:test"
 
 import IframeBridge from "../../js/hooks/iframe_bridge.js"
 import {createClient} from "../../js/sdk/client.js"
+import {FRAME_BEARER_EVENT} from "../../js/canvas/signals.js"
 import {CREDENTIAL, HANDSHAKE} from "../../js/sdk/wire.js"
 import {credentialOf, eventually, fixture, frameWindow} from "./support.mjs"
 
@@ -139,6 +140,53 @@ describe("what the port carries", () => {
     await eventually(() => hook.dropped === 4)
     assert.equal(el.dataset.dropped, "4")
     assert.equal(events.length, 1)
+    port.close()
+  })
+})
+
+describe("a rotated credential", () => {
+  const RENEWED = "frm.v2.cmVuZXdlZC1mcmFtZS1jcmVkZW50aWFs"
+  const rotate = (el, credential = RENEWED) =>
+    el.dispatchEvent(new CustomEvent(FRAME_BEARER_EVENT, {detail: {credential}}))
+
+  // Every message the frame's end of the port receives.
+  function heardOn(port) {
+    const heard = []
+    port.onmessage = (event) => heard.push(event.data)
+    return heard
+  }
+
+  test("goes over the port, as the handshake's credential message, and nowhere else", async () => {
+    const {el, posted, load} = mountBridge()
+    load()
+    const {port} = await frameEnd(posted)
+    const heard = heardOn(port)
+
+    rotate(el)
+    rotate(el, "")
+    rotate(el, 42)
+
+    await eventually(() => heard.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(heard, [{v: 1, type: CREDENTIAL, frame: FRAME, credential: RENEWED}])
+    assert.equal(posted.length, 1)
+    port.close()
+  })
+
+  test("one before the handshake, or after a later load, goes nowhere", async () => {
+    const {el, posted, load} = mountBridge()
+    rotate(el)
+    assert.equal(posted.length, 0)
+
+    load()
+    const {port} = await frameEnd(posted)
+    const heard = heardOn(port)
+    load()
+    rotate(el)
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(heard, [])
+    assert.equal(posted.length, 1)
     port.close()
   })
 })

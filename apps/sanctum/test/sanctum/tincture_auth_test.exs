@@ -264,8 +264,10 @@ defmodule Sanctum.TinctureAuthTest do
 
       assert {:ok, %{state: "suspended"}} = TinctureAuth.suspend_frame(ctx, id)
       assert {:error, :suspended} = TinctureAuth.verify_frame_credential(bearer)
-      assert {:ok, %{state: "active"}} = TinctureAuth.resume_frame(ctx, id)
+      assert {:ok, %{credential: resumed, id: ^id}} = TinctureAuth.resume_frame(ctx, id)
+      assert %{state: "active"} = Arca.Repo.get(Arca.Schemas.FrameCredential, id)
       assert {:ok, _} = TinctureAuth.verify_frame_credential(bearer)
+      assert {:ok, _} = TinctureAuth.verify_frame_credential(resumed)
       assert {:ok, %{state: "revoked"}} = TinctureAuth.revoke_frame(ctx, id)
       assert {:error, :revoked} = TinctureAuth.verify_frame_credential(bearer)
       assert {:error, :revoked} = TinctureAuth.resume_frame(ctx, id)
@@ -371,6 +373,233 @@ defmodule Sanctum.TinctureAuthTest do
 
       assert {:error, :invalid_credential} =
                Sanctum.Caller.establish({:frame_credential, bearer <> "x"})
+    end
+
+    test "a renew rotates the bearer, and the one it replaced ends at its own deadline", %{
+      source: ctx
+    } do
+      settings!(3_600, 2)
+
+      {:ok, %{credential: old, id: id, deadline: old_deadline}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 4, frame_id())
+
+      settings!(3_600, 900)
+
+      assert {:ok, %{credential: new, id: ^id, deadline: deadline}} =
+               TinctureAuth.renew_frame(ctx, id)
+
+      refute new == old
+      assert DateTime.compare(deadline, old_deadline) == :gt
+      assert DateTime.diff(deadline, DateTime.utc_now()) in 890..900
+      assert %{state: "active", deadline: ^deadline} = frame_row(id)
+
+      # A stream opened with the old bearer is held to the old deadline.
+      assert {:ok, %{credential_deadline: ^old_deadline}} =
+               Sanctum.Caller.establish({:frame_credential, old}, client_ip: "127.0.0.1")
+
+      assert {:ok, %{credential_deadline: ^deadline}} =
+               Sanctum.Caller.establish({:frame_credential, new}, client_ip: "127.0.0.1")
+
+      # Past the old bearer's own deadline it is refused, while the row and
+      # the new bearer stand.
+      Prima.Test.Wait.wait_until(
+        fn ->
+          TinctureAuth.verify_frame_credential(old) == {:error, :expired_credential} and
+            match?({:ok, %{id: ^id}}, TinctureAuth.verify_frame_credential(new)) and
+            DateTime.compare(frame_row(id).deadline, DateTime.utc_now()) == :gt
+        end,
+        5_000,
+        "the old bearer refused at its own deadline while the row stands"
+      )
+    end
+
+    test "a renewed bearer binds the row's own version digest and grant revision", %{
+      source: ctx
+    } do
+      frame = frame_id()
+
+      {:ok, %{id: id}} = TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 4, frame)
+      {:ok, %{credential: renewed}} = TinctureAuth.renew_frame(ctx, id)
+
+      assert {:ok,
+              %{
+                id: ^id,
+                frame_id: ^frame,
+                reference: @tincture,
+                version_digest: @digest,
+                grant_revision: 4,
+                mode: :live
+              }} = TinctureAuth.verify_frame_credential(renewed)
+
+      assert %{version_digest: @digest, grant_revision: 4} = frame_row(id)
+    end
+
+    test "a suspended, a revoked or a validation row is not renewed, and nothing is written", %{
+      source: ctx
+    } do
+      {:ok, %{id: suspended}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      {:ok, _} = TinctureAuth.suspend_frame(ctx, suspended)
+
+      {:ok, %{id: revoked}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      {:ok, _} = TinctureAuth.revoke_frame(ctx, revoked)
+
+      {:ok, %{id: validation}} =
+        TinctureAuth.mint_validation_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      before = Map.new([suspended, revoked, validation], &{&1, frame_row(&1)})
+
+      assert {:error, :suspended} = TinctureAuth.renew_frame(ctx, suspended)
+      assert {:error, :revoked} = TinctureAuth.renew_frame(ctx, revoked)
+      assert {:error, :validation} = TinctureAuth.renew_frame(ctx, validation)
+
+      for {id, row} <- before, do: assert(frame_row(id) == row)
+    end
+
+    test "a member that lost its slot renews nothing", %{source: ctx} do
+      {:ok, %{id: id}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      row = frame_row(id)
+      lose_slot!()
+
+      assert {:error, :not_owner} = TinctureAuth.renew_frame(ctx, id)
+      assert %{deadline: deadline, updated_at: updated_at} = frame_row(id)
+      assert {deadline, updated_at} == {row.deadline, row.updated_at}
+    end
+
+    test "a renew never sets a deadline past the session's own expiry", %{
+      source: ctx,
+      session: session
+    } do
+      {:ok, %{id: id}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      ends = expire_session_in!(session, 100)
+
+      assert {:ok, %{credential: renewed, deadline: deadline}} = TinctureAuth.renew_frame(ctx, id)
+      refute DateTime.compare(deadline, ends) == :gt
+      assert DateTime.diff(ends, deadline, :millisecond) < 1_000
+
+      assert {:ok, %{deadline: bound}} = TinctureAuth.verify_frame_credential(renewed)
+      refute DateTime.compare(bound, ends) == :gt
+    end
+
+    test "a renew or a resume from another source of the same person is refused", %{
+      source: ctx,
+      user: user
+    } do
+      {:ok, %{id: id}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      {_session, other} = session_ctx!(user)
+      row = frame_row(id)
+
+      assert {:error, :not_found} = TinctureAuth.renew_frame(other, id)
+      {:ok, _} = TinctureAuth.suspend_frame(ctx, id)
+      suspended = frame_row(id)
+      assert {:error, :not_found} = TinctureAuth.resume_frame(other, id)
+      assert frame_row(id) == suspended
+      assert suspended.deadline == row.deadline
+    end
+
+    test "a resume after the deadline passed while suspended rotates the bearer", %{source: ctx} do
+      settings!(3_600, 2)
+
+      {:ok, %{credential: old, id: id}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      {:ok, _} = TinctureAuth.suspend_frame(ctx, id)
+
+      Prima.Test.Wait.wait_until(
+        fn -> DateTime.compare(frame_row(id).deadline, DateTime.utc_now()) == :lt end,
+        5_000,
+        "the suspended row's deadline to pass"
+      )
+
+      settings!(3_600, 900)
+
+      assert {:ok, %{credential: new, id: ^id, deadline: deadline}} =
+               TinctureAuth.resume_frame(ctx, id)
+
+      assert DateTime.diff(deadline, DateTime.utc_now()) in 890..900
+      assert %{state: "active", deadline: ^deadline} = frame_row(id)
+      assert {:ok, %{id: ^id, deadline: ^deadline}} = TinctureAuth.verify_frame_credential(new)
+      assert {:error, :expired_credential} = TinctureAuth.verify_frame_credential(old)
+    end
+
+    test "a resume that does not rotate signs nothing and keeps the row's deadline", %{
+      source: ctx
+    } do
+      settings!(3_600, 2)
+
+      {:ok, %{credential: bearer, id: id, deadline: deadline}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      {:ok, _} = TinctureAuth.suspend_frame(ctx, id)
+      settings!(3_600, 900)
+
+      assert {:ok, answer} = TinctureAuth.resume_frame(ctx, id, rotate: false)
+      assert answer == %{id: id, deadline: deadline}
+      assert %{state: "active", deadline: ^deadline} = frame_row(id)
+      assert {:ok, %{deadline: ^deadline}} = TinctureAuth.verify_frame_credential(bearer)
+
+      {:ok, _} = TinctureAuth.suspend_frame(ctx, id)
+
+      Prima.Test.Wait.wait_until(
+        fn -> DateTime.compare(frame_row(id).deadline, DateTime.utc_now()) == :lt end,
+        5_000,
+        "the suspended row's deadline to pass"
+      )
+
+      suspended = frame_row(id)
+      assert {:error, :expired} = TinctureAuth.resume_frame(ctx, id, rotate: false)
+      assert frame_row(id) == suspended
+    end
+
+    test "a resume of a revoked row, or of one retention removed, fails", %{source: ctx} do
+      {:ok, %{id: id}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      {:ok, _} = TinctureAuth.revoke_frame(ctx, id)
+      assert {:error, :revoked} = TinctureAuth.resume_frame(ctx, id)
+
+      {:ok, swept} =
+        Arca.FrameCredentials.delete_revoked_before(DateTime.add(DateTime.utc_now(), 60),
+          athanor_id: "ath_acme"
+        )
+
+      assert swept >= 1
+      assert frame_row(id) == nil
+      assert {:error, :not_found} = TinctureAuth.resume_frame(ctx, id)
+      assert {:error, :not_found} = TinctureAuth.renew_frame(ctx, id)
+    end
+
+    test "a bearer of the earlier format opens nothing", %{source: ctx} do
+      {:ok, %{id: id}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      basis = ctx.credential_binding.focus_basis
+
+      earlier =
+        Plug.Crypto.sign(
+          TinctureAuth.signing_secret(),
+          "tincture_frame_credential_v1",
+          [
+            1,
+            id,
+            "ath_acme",
+            ctx.credential_binding.user_generation,
+            ctx.credential_binding.athanor_generation,
+            basis
+          ],
+          max_age: 600
+        )
+
+      assert {:error, :invalid_credential} = TinctureAuth.verify_frame_credential(earlier)
     end
 
     test "a bearer this server did not sign as one opens nothing", %{source: ctx} do
@@ -496,6 +725,23 @@ defmodule Sanctum.TinctureAuthTest do
         assert {:error, :not_found} = TinctureAuth.page_frame(authority, frame), frame
       end
     end
+  end
+
+  defp frame_row(id), do: Arca.Repo.get(Arca.Schemas.FrameCredential, id)
+
+  # This member loses its slot for the rest of the test, and has it back
+  # after.
+  defp lose_slot! do
+    key = {Arca.ControlPlane, :standing}
+    previous = :persistent_term.get(key, :absent)
+
+    on_exit(fn ->
+      if previous == :absent,
+        do: :persistent_term.erase(key),
+        else: :persistent_term.put(key, previous)
+    end)
+
+    Arca.ControlPlane.record(:lost)
   end
 
   defp framed_context(frame) do

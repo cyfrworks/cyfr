@@ -58,6 +58,21 @@ export function credentialSignal(payload) {
     : null
 }
 
+// A frame's credential was rotated (`frame_bearer`, pushed by
+// `PrismWeb.ShellLive` as it renews or resumes the frame), as a DOM event
+// on that frame's element alone whose detail is `{credential}`.
+export const FRAME_BEARER_EVENT = "cyfr:frame-bearer"
+
+// A `frame_bearer` payload read back: `{frame, credential}` for a frame id
+// and a credential that is a non-empty string, `null` for anything else.
+export function bearerSignal(payload) {
+  if (payload === null || typeof payload !== "object") return null
+  const {frame, credential} = payload
+  return typeof frame === "string" && FRAME_ID.test(frame) && typeof credential === "string" && credential !== ""
+    ? {frame, credential}
+    : null
+}
+
 // Whether a keydown is the safe mode chord, Ctrl+Alt+S: the shell's page
 // alone hears it, since a frame's keys stay in the frame's document.
 export function safeModeChord(event) {

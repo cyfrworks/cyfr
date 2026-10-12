@@ -355,7 +355,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "asset_credential_window_s" =>
       "How long a private tincture's asset credential stays one credential, in seconds.",
     "frame_credential_deadline_s" =>
-      "How long an unobserved frame's credential lives before it is refused, in seconds.",
+      "How long one frame credential lives before it is refused, in seconds; the shell renews a running frame's before then.",
     "frame_invocation_max" => "The invocations one tincture frame may make per window.",
     "frame_invocation_window_ms" => "The frame invocation limit's window, in milliseconds.",
     "directory_serve" =>

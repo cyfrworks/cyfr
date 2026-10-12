@@ -49,6 +49,10 @@ const unreachable = () => new CyfrError("The endpoint could not be reached.", "u
 // frame a port or a credential. Data goes to the endpoint under that
 // credential as a bearer; it never travels over the port or in a URL.
 //
+// The shell renews the credential while the frame runs and sends each new
+// one over the same port: a later request is made under the newest, and a
+// request or a stream already sent keeps the one it was sent with.
+//
 // A page that is not a frame has no shell and no credential. A public
 // tincture's page (`/t/…`) names itself in each request instead
 // (`wire.publicIdentity/1`) and sends no bearer; any other page's data
@@ -93,11 +97,11 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
       return
     }
 
-    if (credential !== null) return
     if (data.v !== VERSION || data.type !== CREDENTIAL || data.frame !== frame) return
     if (typeof data.credential !== "string" || data.credential === "") return
+    const first = credential === null
     credential = data.credential
-    settle()
+    if (first) settle()
   }
 
   function post(verb, args) {

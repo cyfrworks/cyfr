@@ -48,6 +48,7 @@ defmodule Prism.FramesTest do
         refusal: nil,
         credential_id: "fcr_" <> id,
         bearer: "bearer-" <> id,
+        deadline: DateTime.add(DateTime.utc_now(), 3_600, :second),
         placement: placement,
         visible: true,
         background: false,
@@ -412,6 +413,39 @@ defmodule Prism.FramesTest do
     test "a dropped message is counted" do
       assert Frames.new() |> Frames.drop_message() |> Frames.drop_message() |> Frames.dropped() ==
                2
+    end
+  end
+
+  describe "renewal" do
+    test "only a live frame that is neither a canvas's nor a validation's is renewed" do
+      assert Frames.renewable?(launch("a"))
+      assert Frames.renewable?(app("home", "b", {:column, 0}))
+      refute Frames.renewable?(launch("c", state: :frozen))
+      refute Frames.renewable?(launch("d", state: :refused))
+      refute Frames.renewable?(launch("e", deadline: nil))
+      refute Frames.renewable?(canvas_frame(:canvas, "home"))
+      refute Frames.renewable?(canvas_frame(:validation, "home"))
+    end
+
+    test "queued replacements are taken once, in order" do
+      t = %{
+        held([launch("a")])
+        | replacements: [
+            %{frame: "frm_first_one", credential: "one"},
+            %{frame: "frm_second_one", credential: "two"}
+          ]
+      }
+
+      assert {[%{credential: "one"}, %{credential: "two"}], t} = Frames.take_replacements(t)
+      assert {[], _t} = Frames.take_replacements(t)
+    end
+
+    test "a bearer and a replacement are redacted wherever they are logged" do
+      replacement = %{frame: "frm_redacted_1", credential: "the-bearer"}
+      frame = launch("a", bearer: "the-bearer")
+
+      refute inspect(Prima.Sanitizer.sanitize(replacement)) =~ "the-bearer"
+      refute inspect(Prima.Sanitizer.sanitize(frame)) =~ "the-bearer"
     end
   end
 

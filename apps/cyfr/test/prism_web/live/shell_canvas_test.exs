@@ -284,6 +284,24 @@ defmodule PrismWeb.ShellCanvasTest do
       )
   end
 
+  defp verify(bearer), do: Sanctum.TinctureAuth.verify_frame_credential(bearer)
+
+  # The frame credential's lifetime, installed beside whatever the run
+  # installed and restored after.
+  defp deadline_setting!(seconds) do
+    previous = Arca.PlatformSettings.installed()
+
+    on_exit(fn ->
+      if previous,
+        do: Arca.PlatformSettings.install_defaults!(previous),
+        else: Arca.PlatformSettings.uninstall()
+    end)
+
+    Arca.PlatformSettings.install_defaults!(
+      Map.put(previous || %{}, "frame_credential_deadline_s", %{default: seconds, stale: :serve})
+    )
+  end
+
   defp handshake!(view, frame_id) do
     render_hook(view, "frame_handshake", %{"frame" => frame_id})
     assert_reply(view, %{boot: boot})
@@ -1255,6 +1273,51 @@ defmodule PrismWeb.ShellCanvasTest do
       render_hook(view, "switch_canvas", %{"canvas" => "elsewhere"})
       render_hook(view, "switch_canvas", %{"direction" => "sideways"})
       assert Frames.visible_canvas(frames(view)) == "home"
+    end
+
+    test "a canvas shown again keeps its row's deadline and its boot's bearer",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
+      bearer = handshake!(view, home.id)["credential"]
+      %{deadline: deadline} = row(home.id)
+
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert row(home.id).state == "suspended"
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+
+      home_id = home.id
+      assert %{id: ^home_id, state: :live, deadline: ^deadline} = canvas(view)
+      assert %{state: "active", deadline: ^deadline} = row(home.id)
+      assert {:ok, %{frame_id: ^home_id, deadline: ^deadline}} = verify(bearer)
+      refute_push_event(view, "frame_bearer", %{frame: ^home_id})
+    end
+
+    test "a canvas shown again after its deadline passed is refused, as before",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      deadline_setting!(2)
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
+      handshake!(view, home.id)
+
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert row(home.id).state == "suspended"
+
+      wait_until(
+        fn -> DateTime.compare(row(home.id).deadline, DateTime.utc_now()) == :lt end,
+        5_000,
+        "the hidden canvas's deadline to pass"
+      )
+
+      %{deadline: deadline} = row(home.id)
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+
+      assert %{state: "revoked", deadline: ^deadline} = row(home.id)
+      refute match?(%{state: :live}, canvas(view))
+      home_id = home.id
+      refute_push_event(view, "frame_bearer", %{frame: ^home_id})
     end
 
     test "a switch during validation tears the trial down and activates nothing",

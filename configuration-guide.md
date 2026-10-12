@@ -149,7 +149,7 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_LOCUS_BACKENDS_IDLE_MS` | `locus_backends_idle_ms` | `integer` | `900000` | `backends` | live | serve | How long a stdio backend runs without a tool call before it is stopped and its slot freed, in milliseconds; its next call starts it again. |
 | `CYFR_LOG_LEVEL` | `log_level` | `atom` | `info` | `logging` | live | serve | The Logger level, `emergency` to `debug`; debug output may include unredacted dependency messages. |
 | `CYFR_ASSET_CREDENTIAL_WINDOW_S` | `asset_credential_window_s` | `duration_s` | `3600` | `tinctures` | live | serve | How long a private tincture's asset credential stays one credential, in seconds. |
-| `CYFR_FRAME_CREDENTIAL_DEADLINE_S` | `frame_credential_deadline_s` | `duration_s` | `3600` | `tinctures` | live | serve | How long an unobserved frame's credential lives before it is refused, in seconds. |
+| `CYFR_FRAME_CREDENTIAL_DEADLINE_S` | `frame_credential_deadline_s` | `duration_s` | `3600` | `tinctures` | live | serve | How long one frame credential lives before it is refused, in seconds; the shell renews a running frame's before then. |
 | `CYFR_FRAME_INVOCATION_MAX` | `frame_invocation_max` | `integer` | `120` | `tinctures` | live | serve | The invocations one tincture frame may make per window. |
 | `CYFR_FRAME_INVOCATION_WINDOW_MS` | `frame_invocation_window_ms` | `integer` | `60000` | `tinctures` | live | serve | The frame invocation limit's window, in milliseconds. |
 | `CYFR_DIRECTORY_SERVE` | `directory_serve` | `atom` | `off` | `directory` | live | refuse | Whether this node serves an identity directory: `off`, `writer` (the one writer of the identifiers it orders) or `mirror` (their history, accepting no write). |

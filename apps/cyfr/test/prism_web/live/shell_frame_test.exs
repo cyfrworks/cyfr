@@ -12,7 +12,11 @@ defmodule PrismWeb.ShellFrameTest do
   resumed when shown, a discarded one is revoked, and every path that ends
   the view revokes every credential it minted. A suspension that fails
   discards the frame; a resume that fails revokes the credential and shows
-  the refusal. The frame's messages are shell verbs for a live frame this
+  the refusal. A live frame's credential is renewed before its deadline
+  and the new bearer handed over its port, and a frame shown again gets a
+  new bearer the same way; a frozen frame is never renewed, and a store
+  that cannot answer is tried again until the deadline. The frame's
+  messages are shell verbs for a live frame this
   view holds; anything else — another frame's, a frozen frame's, one that
   would place or raise the frame — is dropped and counted.
   """
@@ -192,6 +196,63 @@ defmodule PrismWeb.ShellFrameTest do
   end
 
   defp rows, do: Arca.Repo.all(Arca.Schemas.FrameCredential)
+
+  # The renewal the view armed for `frame_id`: its timer and its token.
+  defp renewal!(view, frame_id) do
+    assert %{^frame_id => {timer, token}} = assigns(view).renewals
+    {timer, token}
+  end
+
+  # Fire the renewal now, through its timer's own message.
+  defp fire!(view, frame_id, deadline, timer, token) do
+    Process.cancel_timer(timer)
+    send(view.pid, {:frame_renewal, frame_id, deadline, token})
+    render(view)
+  end
+
+  defp past?(deadline), do: DateTime.compare(deadline, DateTime.utc_now()) == :lt
+
+  # The frame credential's lifetime, installed beside whatever the run
+  # installed and restored after.
+  defp deadline_setting!(seconds) do
+    previous = Arca.PlatformSettings.installed()
+
+    unless Process.get(:settings_restored) do
+      Process.put(:settings_restored, true)
+
+      on_exit(fn ->
+        if previous,
+          do: Arca.PlatformSettings.install_defaults!(previous),
+          else: Arca.PlatformSettings.uninstall()
+      end)
+    end
+
+    Arca.PlatformSettings.install_defaults!(
+      Map.put(previous || %{}, "frame_credential_deadline_s", %{default: seconds, stale: :serve})
+    )
+  end
+
+  # Every session of the person ends `seconds` from now.
+  defp expire_sessions_in!(user, seconds) do
+    at = DateTime.add(DateTime.utc_now(), seconds, :second)
+    sessions = from(s in Arca.Schemas.Session, where: s.user_id == ^user.user_id)
+    hashes = Arca.Repo.all(from(s in sessions, select: s.token_hash))
+    assert hashes != []
+    Arca.Repo.update_all(sessions, set: [expires_at: at])
+    Enum.each(hashes, &Sanctum.Caller.invalidate_hash/1)
+    at
+  end
+
+  # The frame credentials' table cannot be read while `fun` runs.
+  defp store_down!(fun) do
+    Arca.Repo.query!("ALTER TABLE frame_credentials RENAME TO frame_credentials_unavailable")
+
+    try do
+      fun.()
+    after
+      Arca.Repo.query!("ALTER TABLE frame_credentials_unavailable RENAME TO frame_credentials")
+    end
+  end
 
   defp shell!(conn) do
     {view, _html} = mount_athanor(conn, "/tinctures")
@@ -477,6 +538,235 @@ defmodule PrismWeb.ShellFrameTest do
       assert html =~ ~s(data-tincture-state="unavailable")
       assert row(id).state == "revoked"
       assert {:error, :revoked} = verify(bearer)
+    end
+  end
+
+  describe "renewal" do
+    setup do
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+    end
+
+    test "a live frame's credential is renewed before its deadline and handed over its port",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "long-dash")
+      view = shell!(conn)
+
+      open!(view, "long-dash")
+      id = frame_id(view, "long-dash")
+      old = bearer!(view, id)
+      %{deadline: deadline} = frame(view, "long-dash")
+
+      # Armed five minutes before the deadline.
+      {timer, token} = renewal!(view, id)
+      ahead = DateTime.diff(deadline, DateTime.utc_now(), :millisecond) - 300_000
+      assert Process.read_timer(timer) in (ahead - 5_000)..ahead
+
+      fire!(view, id, deadline, timer, token)
+
+      assert_push_event(view, "frame_bearer", %{frame: ^id, credential: new})
+      refute new == old
+      assert {:ok, %{frame_id: ^id, deadline: renewed}} = verify(new)
+      assert DateTime.compare(renewed, deadline) == :gt
+      assert row(id).deadline == renewed
+      assert %{state: :live, deadline: ^renewed, bearer: nil} = frame(view, "long-dash")
+
+      # The new bearer is not kept, and only a replacement could carry it.
+      refute inspect(assigns(view)) =~ new
+      render_hook(view, "frame_handshake", %{"frame" => id})
+      assert_reply(view, %{error: "no_credential"})
+
+      # The next renewal is armed for the new deadline; the spent one is gone.
+      {next, next_token} = renewal!(view, id)
+      refute next_token == token
+      assert is_integer(Process.read_timer(next))
+    end
+
+    test "a renewal capped by the session's end answers no later deadline and arms nothing more",
+         %{conn: conn, ctx: ctx, user: user} do
+      tincture!(ctx, "capped-dash")
+      view = shell!(conn)
+
+      open!(view, "capped-dash")
+      id = frame_id(view, "capped-dash")
+      bearer!(view, id)
+      %{deadline: deadline} = frame(view, "capped-dash")
+      {timer, token} = renewal!(view, id)
+
+      ends = expire_sessions_in!(user, 120)
+      fire!(view, id, deadline, timer, token)
+
+      assert_push_event(view, "frame_bearer", %{frame: ^id, credential: new})
+      assert {:ok, %{deadline: capped}} = verify(new)
+      refute DateTime.compare(capped, ends) == :gt
+      assert DateTime.compare(capped, deadline) == :lt
+      assert %{state: :live, deadline: ^capped} = frame(view, "capped-dash")
+      refute Map.has_key?(assigns(view).renewals, id)
+    end
+
+    test "a renewal before the handshake replaces the bearer the handshake hands",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "early-dash")
+      view = shell!(conn)
+
+      open!(view, "early-dash")
+      id = frame_id(view, "early-dash")
+      %{deadline: deadline, bearer: minted} = frame(view, "early-dash")
+      {timer, token} = renewal!(view, id)
+
+      fire!(view, id, deadline, timer, token)
+      refute_push_event(view, "frame_bearer", %{frame: ^id})
+
+      handed = bearer!(view, id)
+      refute handed == minted
+      assert {:ok, %{deadline: renewed}} = verify(handed)
+      assert DateTime.compare(renewed, deadline) == :gt
+    end
+
+    test "a renewal that fires after its frame was frozen renews and resumes nothing",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "front-dash")
+      tincture!(ctx, "other-dash")
+      view = shell!(conn)
+
+      open!(view, "front-dash")
+      front = frame_id(view, "front-dash")
+      bearer!(view, front)
+      %{deadline: deadline} = frame(view, "front-dash")
+      {timer, token} = renewal!(view, front)
+
+      open!(view, "other-dash")
+      assert frame(view, "front-dash").state == :frozen
+      suspended = row(front)
+      assert suspended.state == "suspended"
+
+      # Freezing cancelled the renewal; one that fires all the same acts on
+      # nothing.
+      assert Process.read_timer(timer) == false
+      refute Map.has_key?(assigns(view).renewals, front)
+      send(view.pid, {:frame_renewal, front, deadline, token})
+      render(view)
+
+      assert row(front) == suspended
+      assert frame(view, "front-dash").state == :frozen
+      refute_push_event(view, "frame_bearer", %{frame: ^front})
+    end
+
+    test "a frame running hidden under a background grant keeps its renewal",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "radio-dash", %{"background" => true})
+      tincture!(ctx, "other-dash")
+      view = shell!(conn)
+
+      open!(view, "radio-dash")
+      radio = frame_id(view, "radio-dash")
+      bearer!(view, radio)
+      {timer, _token} = renewal!(view, radio)
+
+      open!(view, "other-dash")
+      assert %{state: :live, visible: false} = frame(view, "radio-dash")
+      assert {^timer, _token} = renewal!(view, radio)
+      assert is_integer(Process.read_timer(timer))
+    end
+
+    test "a frame shown again after its deadline passed is resumed under a new bearer",
+         %{conn: conn, ctx: ctx} do
+      deadline_setting!(2)
+      tincture!(ctx, "late-dash")
+      tincture!(ctx, "other-dash")
+      view = shell!(conn)
+
+      open!(view, "late-dash")
+      late = frame_id(view, "late-dash")
+      old = bearer!(view, late)
+      open!(view, "other-dash")
+      assert row(late).state == "suspended"
+
+      Prima.Test.Wait.wait_until(
+        fn -> past?(row(late).deadline) and verify(old) == {:error, :expired_credential} end,
+        5_000,
+        "the hidden frame's deadline to pass"
+      )
+
+      deadline_setting!(900)
+      html = open!(view, "late-dash")
+
+      assert_push_event(view, "frame_bearer", %{frame: ^late, credential: new})
+      assert_push_event(view, "frame_state", %{frame: ^late, state: "live"})
+      assert %{state: :live, id: ^late, deadline: deadline} = frame(view, "late-dash")
+      assert attribute(iframe(html, "late-dash"), "data-frame-state") == "live"
+      assert {:ok, %{frame_id: ^late, deadline: ^deadline}} = verify(new)
+      assert {:error, :expired_credential} = verify(old)
+      assert %{state: "active", deadline: ^deadline} = row(late)
+      assert {_timer, _token} = renewal!(view, late)
+    end
+
+    test "a renewal the standing refuses revokes the frame and shows the refusal",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "gone-dash")
+      view = shell!(conn)
+
+      open!(view, "gone-dash")
+      id = frame_id(view, "gone-dash")
+      bearer = bearer!(view, id)
+      %{deadline: deadline} = frame(view, "gone-dash")
+      {timer, token} = renewal!(view, id)
+
+      {:ok, _} = Arca.FrameCredentials.revoke(Sanctum.Context.actor(ctx), row(id).id)
+      fire!(view, id, deadline, timer, token)
+
+      assert %{state: :refused, refusal: :refused} = frame(view, "gone-dash")
+      assert render(view) =~ ~s(data-tincture-state="refused")
+      assert row(id).state == "revoked"
+      assert {:error, :revoked} = verify(bearer)
+      refute Map.has_key?(assigns(view).renewals, id)
+    end
+
+    test "a store that cannot answer is tried again until the deadline, then the row expires",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "far-dash")
+      tincture!(ctx, "near-dash")
+      view = shell!(conn)
+
+      # Far from its deadline: tried again in thirty seconds.
+      deadline_setting!(3_600)
+      open!(view, "far-dash")
+      far = frame_id(view, "far-dash")
+      bearer!(view, far)
+      %{deadline: far_deadline} = frame(view, "far-dash")
+      far_row = row(far)
+      {timer, token} = renewal!(view, far)
+
+      store_down!(fn -> fire!(view, far, far_deadline, timer, token) end)
+
+      assert row(far) == far_row
+      assert %{state: :live, deadline: ^far_deadline} = frame(view, "far-dash")
+      {retry, retry_token} = renewal!(view, far)
+      refute retry_token == token
+      assert Process.read_timer(retry) in 25_000..30_000
+
+      # Within thirty seconds of its deadline: nothing more is armed, and
+      # the credential expires at its deadline.
+      render_click(view, "close_active_tincture", %{})
+      deadline_setting!(2)
+      open!(view, "near-dash")
+      near = frame_id(view, "near-dash")
+      near_bearer = bearer!(view, near)
+      %{deadline: near_deadline} = frame(view, "near-dash")
+      near_row = row(near)
+      {timer, token} = renewal!(view, near)
+
+      store_down!(fn -> fire!(view, near, near_deadline, timer, token) end)
+
+      refute Map.has_key?(assigns(view).renewals, near)
+      assert %{state: :live, deadline: ^near_deadline} = frame(view, "near-dash")
+
+      Prima.Test.Wait.wait_until(
+        fn -> verify(near_bearer) == {:error, :expired_credential} end,
+        5_000,
+        "the near frame's credential to expire at its deadline"
+      )
+
+      assert row(near) == near_row
     end
   end
 

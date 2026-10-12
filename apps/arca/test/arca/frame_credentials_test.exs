@@ -6,8 +6,10 @@ defmodule Arca.FrameCredentialsTest do
   The per-open frame credential rows: minted active, `live` unless minted
   for validation, only with a frame id and a deadline, once per frame id
   in an athanor, and only by a member that owns its slot; suspended,
-  resumed (under ownership, before the deadline) and revoked, with
-  `revoked` terminal, and a validation row never suspended or resumed;
+  resumed (under ownership, with the new deadline, a suspended row
+  whatever its old one) and revoked, with `revoked` terminal; an active
+  row renewed (under ownership, before its deadline) with only its
+  deadline moved; a validation row never suspended, resumed or renewed;
   a validation row consumed once, by its own person, before its deadline,
   for its own digest and under ownership, and nothing else consumed;
   read and written only in the actor's own athanor, and read by frame id
@@ -85,6 +87,8 @@ defmodule Arca.FrameCredentialsTest do
 
   # The actor of the person the rows are minted for.
   defp person(actor, user_id \\ "usr_frc"), do: %{actor | user_id: user_id}
+
+  defp in_s(seconds), do: DateTime.add(DateTime.utc_now(), seconds, :second)
 
   defp take_over!(slot) do
     {1, _} =
@@ -171,35 +175,69 @@ defmodule Arca.FrameCredentialsTest do
     test "suspend, resume and revoke; revoked is terminal", %{actor: actor} do
       row = mint!(actor)
 
+      later = in_s(1_200)
+
       assert {:ok, %{state: "suspended"}} = FrameCredentials.suspend(actor, row.id)
       assert {:ok, %{state: "suspended"}} = FrameCredentials.suspend(actor, row.id)
-      assert {:ok, %{state: "active"}} = FrameCredentials.resume(actor, row.id)
-      assert {:ok, %{state: "active"}} = FrameCredentials.resume(actor, row.id)
+
+      assert {:ok, %{state: "active", deadline: ^later}} =
+               FrameCredentials.resume(actor, row.id, later)
+
+      # An active row before its deadline answers as it is.
+      assert {:ok, %{state: "active", deadline: ^later}} =
+               FrameCredentials.resume(actor, row.id, in_s(1_800))
+
       assert {:ok, %{state: "revoked"} = revoked} = FrameCredentials.revoke(actor, row.id)
       assert {:ok, ^revoked} = FrameCredentials.revoke(actor, row.id)
 
       assert {:error, :revoked} = FrameCredentials.suspend(actor, row.id)
-      assert {:error, :revoked} = FrameCredentials.resume(actor, row.id)
+      assert {:error, :revoked} = FrameCredentials.resume(actor, row.id, in_s(600))
+      assert {:ok, ^revoked} = FrameCredentials.get(actor, row.id)
     end
 
-    test "a resume past the deadline, or by a stale owner, re-opens nothing", %{
-      actor: actor,
-      slot: slot
-    } do
-      past = mint!(actor, %{deadline: DateTime.add(DateTime.utc_now(), -1, :second)})
+    test "a suspended row past its deadline is resumed with the new one; an active one is not",
+         %{actor: actor} do
+      past = mint!(actor, %{deadline: in_s(-1)})
       {:ok, _} = FrameCredentials.suspend(actor, past.id)
-      assert {:error, :expired} = FrameCredentials.resume(actor, past.id)
-      assert {:ok, %{state: "suspended"}} = FrameCredentials.get(actor, past.id)
+      fresh = in_s(600)
 
+      assert {:ok, %{state: "active", deadline: ^fresh} = resumed} =
+               FrameCredentials.resume(actor, past.id, fresh)
+
+      assert {:ok, ^resumed} = FrameCredentials.get(actor, past.id)
+
+      ran_out = mint!(actor, %{deadline: in_s(-1)})
+      assert {:error, :expired} = FrameCredentials.resume(actor, ran_out.id, in_s(600))
+      assert {:ok, ^ran_out} = FrameCredentials.get(actor, ran_out.id)
+
+      # A deadline already past is no deadline to resume under.
+      suspended = mint!(actor)
+      {:ok, held} = FrameCredentials.suspend(actor, suspended.id)
+      assert {:error, :expired} = FrameCredentials.resume(actor, suspended.id, in_s(-1))
+      assert {:ok, ^held} = FrameCredentials.get(actor, suspended.id)
+    end
+
+    test "a resume that keeps the deadline re-opens a row only before it", %{actor: actor} do
       row = mint!(actor)
       {:ok, _} = FrameCredentials.suspend(actor, row.id)
+      deadline = row.deadline
 
-      {1, _} =
-        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
-          set: [owner: "someone-else", generation: slot.generation + 1]
-        )
+      assert {:ok, %{state: "active", deadline: ^deadline}} =
+               FrameCredentials.resume(actor, row.id, :keep)
 
-      assert {:error, :not_owner} = FrameCredentials.resume(actor, row.id)
+      past = mint!(actor, %{deadline: in_s(-1)})
+      {:ok, suspended} = FrameCredentials.suspend(actor, past.id)
+      assert {:error, :expired} = FrameCredentials.resume(actor, past.id, :keep)
+      assert {:ok, ^suspended} = FrameCredentials.get(actor, past.id)
+    end
+
+    test "a resume by a stale owner re-opens nothing", %{actor: actor, slot: slot} do
+      row = mint!(actor)
+      {:ok, suspended} = FrameCredentials.suspend(actor, row.id)
+      take_over!(slot)
+
+      assert {:error, :not_owner} = FrameCredentials.resume(actor, row.id, in_s(600))
+      assert {:ok, ^suspended} = FrameCredentials.get(actor, row.id)
       # A member that lost its slot may still close what it opened.
       assert {:ok, %{state: "revoked"}} = FrameCredentials.revoke(actor, row.id)
     end
@@ -208,8 +246,12 @@ defmodule Arca.FrameCredentialsTest do
       row = mint!(actor)
       other = Prima.Actor.in_athanor("ath_frc_other")
 
-      for verb <- [:get, :suspend, :resume, :revoke] do
+      for verb <- [:get, :suspend, :revoke] do
         assert {:error, :not_found} = apply(FrameCredentials, verb, [other, row.id])
+      end
+
+      for verb <- [:resume, :renew] do
+        assert {:error, :not_found} = apply(FrameCredentials, verb, [other, row.id, in_s(600)])
       end
 
       assert {:ok, %{state: "active"}} = FrameCredentials.get(actor, row.id)
@@ -222,7 +264,8 @@ defmodule Arca.FrameCredentialsTest do
       row = mint!(actor, %{purpose: "validation"})
 
       assert {:error, :validation} = FrameCredentials.suspend(actor, row.id)
-      assert {:error, :validation} = FrameCredentials.resume(actor, row.id)
+      assert {:error, :validation} = FrameCredentials.resume(actor, row.id, in_s(600))
+      assert {:error, :validation} = FrameCredentials.renew(actor, row.id, in_s(600))
       assert FrameCredentials.get(actor, row.id) == {:ok, row}
 
       assert {:ok, %{state: "revoked", purpose: "validation"} = revoked} =
@@ -230,8 +273,66 @@ defmodule Arca.FrameCredentialsTest do
 
       assert {:ok, ^revoked} = FrameCredentials.revoke(actor, row.id)
       assert {:error, :validation} = FrameCredentials.suspend(actor, row.id)
-      assert {:error, :validation} = FrameCredentials.resume(actor, row.id)
+      assert {:error, :validation} = FrameCredentials.resume(actor, row.id, in_s(600))
       assert FrameCredentials.get(actor, row.id) == {:ok, revoked}
+    end
+  end
+
+  describe "renew/3" do
+    test "moves an active row's deadline, and nothing else about it", %{actor: actor} do
+      row = mint!(actor)
+      later = in_s(1_200)
+
+      assert {:ok, renewed} = FrameCredentials.renew(actor, row.id, later)
+      assert renewed.deadline == later
+      assert DateTime.compare(renewed.deadline, row.deadline) == :gt
+
+      assert Map.drop(renewed, [:deadline, :updated_at]) ==
+               Map.drop(row, [:deadline, :updated_at])
+
+      assert {:ok, ^renewed} = FrameCredentials.get(actor, row.id)
+    end
+
+    test "a suspended, a revoked, an expired or a validation row is not renewed", %{actor: actor} do
+      suspended = mint!(actor)
+      {:ok, suspended} = FrameCredentials.suspend(actor, suspended.id)
+      revoked = mint!(actor)
+      {:ok, revoked} = FrameCredentials.revoke(actor, revoked.id)
+      expired = mint!(actor, %{deadline: in_s(-1)})
+      validation = mint!(actor, %{purpose: "validation"})
+      active = mint!(actor)
+
+      assert {:error, :suspended} = FrameCredentials.renew(actor, suspended.id, in_s(600))
+      assert {:error, :revoked} = FrameCredentials.renew(actor, revoked.id, in_s(600))
+      assert {:error, :expired} = FrameCredentials.renew(actor, expired.id, in_s(600))
+      assert {:error, :validation} = FrameCredentials.renew(actor, validation.id, in_s(600))
+      assert {:error, :expired} = FrameCredentials.renew(actor, active.id, in_s(-1))
+
+      for row <- [suspended, revoked, expired, validation, active] do
+        assert {:ok, ^row} = FrameCredentials.get(actor, row.id)
+      end
+    end
+
+    test "a stale owner renews nothing, refused inside the transaction", %{
+      actor: actor,
+      slot: slot
+    } do
+      row = mint!(actor)
+      # The member still believes it holds its slot: only the lease row,
+      # read inside the renew's transaction, says it does not.
+      take_over!(slot)
+      assert Arca.ControlPlane.held?()
+
+      assert {:error, :not_owner} = FrameCredentials.renew(actor, row.id, in_s(1_200))
+      assert {:ok, ^row} = FrameCredentials.get(actor, row.id)
+    end
+
+    test "an actor that names no athanor is refused" do
+      assert {:error, :no_athanor} =
+               FrameCredentials.renew(Prima.Actor.system(), "frc_x", in_s(60))
+
+      assert {:error, :no_athanor} =
+               FrameCredentials.resume(Prima.Actor.system(), "frc_x", in_s(60))
     end
   end
 

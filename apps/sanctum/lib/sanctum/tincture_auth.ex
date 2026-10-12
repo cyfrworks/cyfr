@@ -28,11 +28,18 @@ defmodule Sanctum.TinctureAuth do
   member, bound to the person, the tincture version (its reference and its
   digest), the grant revision and the frame id, with a deadline of its own
   (`frame_credential_deadline_s`, capped the same way). The shell
-  suspends, resumes and revokes it here; a standing transition revokes it
-  in its own transaction (`Arca.SecurityTransitions`); every use reads the
-  row and the standing again (`mint_frame_credential/5`,
+  suspends, resumes, renews and revokes it here; a standing transition
+  revokes it in its own transaction (`Arca.SecurityTransitions`); every use
+  reads the row and the standing again (`mint_frame_credential/5`,
   `verify_frame_credential/2`, `suspend_frame/2`, `resume_frame/2`,
-  `revoke_frame/2`).
+  `renew_frame/2`, `revoke_frame/2`).
+
+  A resume and a renew rotate the bearer, never extend it: each signs a
+  new bearer naming the same row, with a deadline of its own, and moves
+  the row's deadline to match. Every bearer carries the deadline it was
+  signed with and is refused past it whatever the row's, so a copy of an
+  earlier bearer gains nothing from a renewal, and a frame no shell renews
+  ends at its deadline.
 
   A candidate version's hidden trial holds a **validation credential**: a
   frame credential of the same form whose row's purpose is `validation`
@@ -114,6 +121,10 @@ defmodule Sanctum.TinctureAuth do
   @asset_credential_salt "tincture_asset_credential_v1"
   @frame_credential_salt "tincture_frame_credential_v1"
   @version 1
+
+  # The frame bearer's own format: it carries the deadline it was signed
+  # with, so a bearer of any earlier format is refused.
+  @frame_version 2
 
   # A validation credential's life, in seconds: a trial answers within
   # its own deadline, and the credential is spent at activation.
@@ -520,28 +531,35 @@ defmodule Sanctum.TinctureAuth do
                deadline: deadline
              })
            ) do
-      # The row is the standing, and the bearer only names it: the
-      # generations and the focus basis it carries are the ones the mint
-      # read, and a use whose rows no longer carry them is refused whether
-      # or not the transition that moved them reached this row first.
-      bearer =
-        Plug.Crypto.sign(
-          signing_secret(),
-          @frame_credential_salt,
-          [
-            @version,
-            row.id,
-            claims.athanor_id,
-            claims.user_generation,
-            claims.athanor_generation,
-            if(claims.focus_basis == :key, do: "key", else: claims.focus_basis)
-          ],
-          signed_at: DateTime.to_unix(now),
-          max_age: max(DateTime.diff(deadline, now), 1)
-        )
-
-      {:ok, %{credential: bearer, id: row.id, deadline: row.deadline}}
+      {:ok, signed(row, claims, now)}
     end
+  end
+
+  # A bearer naming `row`, signed for the row's deadline. The row is the
+  # standing, and the bearer only names it: the generations and the focus
+  # basis it carries are the ones the caller just read, and a use whose
+  # rows no longer carry them is refused whether or not the transition that
+  # moved them reached this row first. It carries the deadline it was
+  # signed with, which no later move of the row's lengthens.
+  defp signed(row, claims, now) do
+    bearer =
+      Plug.Crypto.sign(
+        signing_secret(),
+        @frame_credential_salt,
+        [
+          @frame_version,
+          row.id,
+          claims.athanor_id,
+          claims.user_generation,
+          claims.athanor_generation,
+          if(claims.focus_basis == :key, do: "key", else: claims.focus_basis),
+          DateTime.to_unix(row.deadline, :microsecond)
+        ],
+        signed_at: DateTime.to_unix(now),
+        max_age: max(DateTime.diff(row.deadline, now, :second), 1)
+      )
+
+    %{credential: bearer, id: row.id, deadline: row.deadline}
   end
 
   @doc """
@@ -553,14 +571,15 @@ defmodule Sanctum.TinctureAuth do
 
   Answers the frame's authority — the person, the athanor, the tincture
   version (`reference`) and its digest, the grant revision, the frame id,
-  the row's id, its mode (`:live` or `:validation`), its deadline and
-  the source binding — or `:invalid_credential` for a bearer this server
-  did not sign as one, `:suspended`, `:revoked`, `:expired_credential`
-  past its deadline, and a source's or a standing's refusal
-  (`:not_standing`, `:not_member`, `:ip_not_allowed`, and
-  `:identity_stale` while a remote person's session source cannot have
-  their identity confirmed fresh); `:unavailable` when the store cannot
-  answer.
+  the row's id, its mode (`:live` or `:validation`), its deadline (the
+  row's, or the bearer's own when that is earlier: a bearer a renewal
+  replaced keeps the deadline it was signed with) and the source binding
+  — or `:invalid_credential` for a bearer this server did not sign as one,
+  `:suspended`, `:revoked`, `:expired_credential` past either deadline,
+  and a source's or a standing's refusal (`:not_standing`, `:not_member`,
+  `:ip_not_allowed`, and `:identity_stale` while a remote person's session
+  source cannot have their identity confirmed fresh); `:unavailable` when
+  the store cannot answer.
   """
   @spec verify_frame_credential(String.t(), keyword()) ::
           {:ok, frame_authority()}
@@ -581,7 +600,9 @@ defmodule Sanctum.TinctureAuth do
          claims = frame_claims(row, bound),
          {:ok, %{now: now}} <-
            Sanctum.Caller.derived_standing(claims, client_ip: Keyword.get(opts, :client_ip)) do
-      if DateTime.compare(row.deadline, now) == :gt do
+      deadline = Enum.min([row.deadline, bound.deadline], DateTime)
+
+      if DateTime.compare(deadline, now) == :gt do
         {:ok,
          %{
            id: row.id,
@@ -592,7 +613,7 @@ defmodule Sanctum.TinctureAuth do
            version_digest: row.version_digest,
            grant_revision: row.grant_revision,
            mode: frame_mode(row.purpose),
-           deadline: row.deadline,
+           deadline: deadline,
            credential_binding: claims_binding(claims)
          }}
       else
@@ -620,23 +641,111 @@ defmodule Sanctum.TinctureAuth do
   @doc """
   Resume the suspended frame credential `id` of the context's person, on
   a member that owns its slot and while the context's own source still
-  stands. `:expired` past its deadline, `:revoked` for one revoked,
-  `:validation` for a validation credential, which is never resumed,
-  `:not_owner` on a member that lost its slot, and the standing's
-  refusals as `mint_frame_credential/5` answers them.
+  stands, and rotate its bearer: the standing is derived again as a mint
+  derives it, and the answer is a new bearer naming the same row, with a
+  new deadline (`frame_credential_deadline_s` from now, capped by the
+  source's own expiry) that the row takes as it resumes. A row whose
+  deadline passed while it was suspended is resumed all the same: every
+  bearer signed for it before is refused past its own deadline, so only
+  this one opens it. An active row before its deadline keeps its deadline,
+  and the answer is a new bearer for it.
+
+  With `rotate: false` nothing is signed and the row keeps its deadline,
+  for a frame whose bearer is never replaced (a canvas's, whose wire
+  carries no second bearer): the row is resumed only before that
+  deadline, and the answer is its id and deadline.
+
+  `:expired` for a row past its deadline (a suspended one only with
+  `rotate: false`), `:revoked` for one revoked, `:validation` for a
+  validation credential, which is never resumed, `:not_found` for a row
+  not the person's or not minted under the context's own source,
+  `:not_owner` on a member that lost its slot, and the standing's refusals
+  as `mint_frame_credential/5` answers them; none of them writes anything.
   """
-  @spec resume_frame(Context.t(), String.t()) ::
-          {:ok, frame_row()}
+  @spec resume_frame(Context.t(), String.t(), keyword()) ::
+          {:ok, %{credential: String.t(), id: String.t(), deadline: DateTime.t()}}
+          | {:ok, %{id: String.t(), deadline: DateTime.t()}}
           | {:error,
-             mint_refusal() | :not_found | :revoked | :expired | :validation | :no_athanor}
-  def resume_frame(%Context{} = ctx, id) when is_binary(id) do
+             mint_refusal()
+             | :missing_deadline
+             | :not_found
+             | :revoked
+             | :expired
+             | :validation
+             | :no_athanor}
+  def resume_frame(%Context{} = ctx, id, opts \\ []) when is_binary(id) and is_list(opts) do
+    if Keyword.get(opts, :rotate, true),
+      do: rotate(ctx, id, &Arca.FrameCredentials.resume/3),
+      else: reopen(ctx, id)
+  end
+
+  @doc """
+  Renew the active frame credential `id` of the context's person while
+  its frame runs: `resume_frame/2`'s rotation for a row that stays active.
+  The standing is derived again as a mint derives it; the row's deadline
+  becomes `frame_credential_deadline_s` from now, capped by the source's
+  own expiry, written under the member's ownership; and the answer is a
+  new bearer naming the same row, bound to the row's own version digest
+  and grant revision. The bearer it replaces keeps its own deadline.
+
+  `:suspended` for a suspended row, `:revoked` for one revoked,
+  `:validation` for a validation credential, `:expired` for one past its
+  deadline, `:not_found` for a row not the person's or not minted under
+  the context's own source, `:not_owner` on a member that lost its slot,
+  and the standing's refusals as `mint_frame_credential/5` answers them;
+  none of them writes anything.
+  """
+  @spec renew_frame(Context.t(), String.t()) ::
+          {:ok, %{credential: String.t(), id: String.t(), deadline: DateTime.t()}}
+          | {:error,
+             mint_refusal()
+             | :missing_deadline
+             | :not_found
+             | :suspended
+             | :revoked
+             | :expired
+             | :validation
+             | :no_athanor}
+  def renew_frame(%Context{} = ctx, id) when is_binary(id),
+    do: rotate(ctx, id, &Arca.FrameCredentials.renew/3)
+
+  # One rotation: the standing a mint reads, the person's own row minted
+  # under this source, the new deadline written by `write` under the row's
+  # lock and the member's slot, and a bearer signed for it.
+  defp rotate(ctx, id, write) do
+    with :ok <- owner(),
+         :ok <- primary(ctx),
+         {:ok, lifetime} <- frame_lifetime(:live),
+         {:ok, claims} <- claims(ctx),
+         {:ok, %{now: now, source_expires_at: source}} <-
+           Sanctum.Caller.derived_standing(claims, client_ip: ctx.client_ip),
+         {:ok, row} <- own_frame(ctx, id),
+         :ok <- same_source(row, claims),
+         {:ok, deadline} <- frame_deadline(now, lifetime, source),
+         {:ok, row} <- stored(write.(Context.actor(ctx), id, deadline)) do
+      {:ok, signed(row, claims, now)}
+    end
+  end
+
+  # A resume that keeps the row's deadline and signs nothing.
+  defp reopen(ctx, id) do
     with :ok <- owner(),
          :ok <- primary(ctx),
          {:ok, claims} <- claims(ctx),
          {:ok, _standing} <- Sanctum.Caller.derived_standing(claims, client_ip: ctx.client_ip),
-         {:ok, _row} <- own_frame(ctx, id) do
-      stored(Arca.FrameCredentials.resume(Context.actor(ctx), id))
+         {:ok, row} <- own_frame(ctx, id),
+         :ok <- same_source(row, claims),
+         {:ok, row} <- stored(Arca.FrameCredentials.resume(Context.actor(ctx), id, :keep)) do
+      {:ok, %{id: row.id, deadline: row.deadline}}
     end
+  end
+
+  # A bearer is signed only with the standing of the source its row was
+  # minted under.
+  defp same_source(%{source_kind: kind, source_id: source_id}, claims) do
+    if kind == Atom.to_string(claims.source_kind) and source_id == claims.source_id,
+      do: :ok,
+      else: {:error, :not_found}
   end
 
   @doc """
@@ -786,12 +895,18 @@ defmodule Sanctum.TinctureAuth do
 
   defp frame_bearer(bearer) do
     case Plug.Crypto.verify(signing_secret(), @frame_credential_salt, bearer) do
-      {:ok, [@version, id, athanor_id, user_gen, ath_gen, basis]}
-      when is_binary(id) and id != "" and is_binary(athanor_id) and athanor_id != "" ->
+      {:ok, [@frame_version, id, athanor_id, user_gen, ath_gen, basis, deadline]}
+      when is_binary(id) and id != "" and is_binary(athanor_id) and athanor_id != "" and
+             is_integer(deadline) ->
         if positive?(user_gen) and positive?(ath_gen) and (is_binary(basis) and basis != ""),
           do:
             {:ok, id, athanor_id,
-             %{user_generation: user_gen, athanor_generation: ath_gen, focus_basis: basis}},
+             %{
+               user_generation: user_gen,
+               athanor_generation: ath_gen,
+               focus_basis: basis,
+               deadline: DateTime.from_unix!(deadline, :microsecond)
+             }},
           else: {:error, :invalid_credential}
 
       {:error, :expired} ->

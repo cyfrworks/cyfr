@@ -20,11 +20,11 @@ afterEach(async () => {
 // fixture. `handshake()` plays the shell: it posts the handshake from the
 // parent window and the credential over the port, and answers the shell's
 // end of the port.
-async function frameClient({answer, framed = true, pathname, handshakeTimeoutMs} = {}) {
+async function frameClient({answer, framed = true, pathname, handshakeTimeoutMs, fetchFn = fetch} = {}) {
   const server = await stubServer(answer || fixtureAnswer)
   cleanups.push(server.close)
   const win = frameWindow({framed, pathname})
-  const {api, onWindowMessage} = createClient({win, fetchFn: fetch, base: server.base, handshakeTimeoutMs})
+  const {api, onWindowMessage} = createClient({win, fetchFn, base: server.base, handshakeTimeoutMs})
 
   const handshake = ({source = win.parent, frame = FRAME, credential = CREDENTIAL_VALUE} = {}) => {
     const channel = new MessageChannel()
@@ -190,6 +190,84 @@ describe("only the shell that created the frame hands it a port and a credential
     channel.port1.postMessage({v: 1, type: CREDENTIAL, frame: "frm_someone_else", credential: "x"})
 
     await assert.rejects(api.action("execution.list", {}), {code: "no_frame"})
+  })
+})
+
+describe("the shell replaces the credential over the port", () => {
+  const RENEWED = "frm.v2.cmVuZXdlZC1mcmFtZS1jcmVkZW50aWFs"
+  const renewal = (credential = RENEWED, frame = FRAME) => ({v: 1, type: CREDENTIAL, frame, credential})
+
+  // Everything posted on the shell's end of the port before this has been
+  // read once it resolves: a port delivers in order, and a closed prompt
+  // is the next thing the SDK answers.
+  async function settled(api, shell) {
+    const closed = api.credential("sync")
+    shell.postMessage(credentialClosed(FRAME, false))
+    await closed
+  }
+
+  const authorizations = (server) => server.requests.map((request) => credentialOf(request.headers.authorization))
+
+  test("a later request is made under the replacement", async () => {
+    const {api, handshake, server} = await frameClient()
+    const shell = handshake()
+    const [invoke] = fixture.requests.map((vector) => vector.body)
+
+    await api.invoke(invoke.ref, invoke.operation, invoke.args)
+    shell.postMessage(renewal())
+    await settled(api, shell)
+    await api.invoke(invoke.ref, invoke.operation, invoke.args)
+
+    assert.deepEqual(authorizations(server), [CREDENTIAL_VALUE, RENEWED])
+    assert.equal(server.requests[1].headers.authorization, `Bearer ${RENEWED}`)
+  })
+
+  test("one for another frame, or not on the port, is ignored; the same one addressed rightly is taken", async () => {
+    const {api, handshake, onWindowMessage, server, win} = await frameClient()
+    const shell = handshake()
+    const [invoke] = fixture.requests.map((vector) => vector.body)
+
+    shell.postMessage(renewal("frm.v2.another-frames", "frm_someone_else"))
+    shell.postMessage(renewal(""))
+    shell.postMessage({...renewal(), v: 2})
+    onWindowMessage({source: win.parent, data: renewal("frm.v2.from-the-window"), ports: []})
+    await settled(api, shell)
+    await api.invoke(invoke.ref, invoke.operation, invoke.args)
+
+    // The positive control: the same message, on the port, for this frame.
+    shell.postMessage(renewal("frm.v2.another-frames"))
+    await settled(api, shell)
+    await api.invoke(invoke.ref, invoke.operation, invoke.args)
+
+    assert.deepEqual(authorizations(server), [CREDENTIAL_VALUE, "frm.v2.another-frames"])
+  })
+
+  test("a request or a stream already sent keeps the credential it was sent with", async () => {
+    const sent = []
+    const fetchFn = (url, options) => {
+      sent.push(credentialOf(options.headers.authorization))
+      return fetch(url, options)
+    }
+    const {api, handshake, server} = await frameClient({fetchFn})
+    const shell = handshake()
+    const [invoke, , stream] = fixture.requests.map((vector) => vector.body)
+
+    const events = []
+    const opened = api.stream(stream.stream, stream.subject, (event) => events.push(event))
+    const inFlight = api.invoke(invoke.ref, invoke.operation, invoke.args)
+    await eventually(() => sent.length === 2)
+
+    shell.postMessage(renewal())
+    await settled(api, shell)
+
+    assert.deepEqual(await inFlight, {temperature: 21})
+    const handle = await opened
+    await handle.closed
+    assert.deepEqual(events, EVENTS)
+
+    await api.invoke(invoke.ref, invoke.operation, invoke.args)
+    assert.deepEqual(sent, [CREDENTIAL_VALUE, CREDENTIAL_VALUE, RENEWED])
+    assert.deepEqual(authorizations(server).sort(), [CREDENTIAL_VALUE, CREDENTIAL_VALUE, RENEWED].sort())
   })
 })
 

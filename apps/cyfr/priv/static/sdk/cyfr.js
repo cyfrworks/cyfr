@@ -196,11 +196,11 @@
         if (waiting) waiting({ saved: closed.saved });
         return;
       }
-      if (credential !== null) return;
       if (data.v !== VERSION || data.type !== CREDENTIAL || data.frame !== frame) return;
       if (typeof data.credential !== "string" || data.credential === "") return;
+      const first = credential === null;
       credential = data.credential;
-      settle();
+      if (first) settle();
     }
     function post(verb2, args) {
       port.postMessage(shellMessage(verb2, frame, args));
