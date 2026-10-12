@@ -221,15 +221,9 @@ defmodule Compendium.CosignTest do
     end
 
     test "no cosign on PATH" do
-      Application.put_env(:cyfr, :sigstore, @signer)
-      original_path = System.get_env("PATH")
-
-      try do
-        System.put_env("PATH", "/nonexistent")
-        assert {:error, :unavailable} = Cosign.verify(@reference, @digest)
-      after
-        System.put_env("PATH", original_path)
-      end
+      absent = "cosign-absent-#{System.unique_integer([:positive])}"
+      Application.put_env(:cyfr, :sigstore, @signer ++ [cosign_path: absent])
+      assert {:error, :unavailable} = Cosign.verify(@reference, @digest)
     end
 
     @tag :capture_log

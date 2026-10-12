@@ -8,7 +8,10 @@ defmodule Locus.Runtime.RunnerPoolTest do
   spawned ahead and refilled; an idle runner reused for its athanor only,
   a fresh one for another; an idle runner retired at its TTL; a clean
   completion to idle, an unclean one, an exit, a closed channel, a closed
-  relay and a kill to tainted, released and gone; every busy runner offered a
+  relay and a kill to tainted, released and gone; a runner its keeper
+  never retires, busy or idle, dropped at the retirement bound and a
+  retirement answered, one retired in time left alone by the bound's
+  timer; every busy runner offered a
   `cancel_child`; a frame from a runner already ended ignored; a keeper
   that refuses runners leaving none in the pool, tainted or otherwise,
   with the pool backing off, refusing a take with the keeper's account
@@ -18,6 +21,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
   import Locus.Runtime.Test.Wait
 
   alias Prima.RunnerControl
@@ -29,6 +33,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
   defp start_pool!(keeper, overrides) do
     {:ok, defaults} = Locus.Runtime.Settings.pool([], %{})
     {keeper_opts, overrides} = Keyword.pop(overrides, :keeper_opts, [])
+    {pool_opts, overrides} = Keyword.split(overrides, [:retire_bound_ms])
     settings = Map.merge(defaults, Map.new(overrides))
     unique = System.unique_integer([:positive])
     supervisor = :"pool_runners_#{unique}"
@@ -37,12 +42,14 @@ defmodule Locus.Runtime.RunnerPoolTest do
     # The command's env carries the keeper's name to the scripted keeper.
     start_supervised!(
       {RunnerPool,
-       name: :"pool_#{unique}",
-       settings: settings,
-       keeper: ScriptedKeeper,
-       keeper_opts: keeper_opts,
-       supervisor: supervisor,
-       command: %{argv: ["runner"], env: %{"KEEPER" => Atom.to_string(keeper)}}}
+       [
+         name: :"pool_#{unique}",
+         settings: settings,
+         keeper: ScriptedKeeper,
+         keeper_opts: keeper_opts,
+         supervisor: supervisor,
+         command: %{argv: ["runner"], env: %{"KEEPER" => Atom.to_string(keeper)}}
+       ] ++ pool_opts}
     )
   end
 
@@ -70,6 +77,21 @@ defmodule Locus.Runtime.RunnerPoolTest do
       )
 
   defp spawn_of(keeper, pid), do: Enum.find(spawns(keeper), &(&1.owner == pid))
+
+  # Run `fun` with runner `spawn`'s process suspended, so a release the
+  # keeper delivers it is never handled and the runner is never reported
+  # retired; it is resumed however `fun` ends.
+  defp never_retired(%{runner: runner}, fun) do
+    :ok = :sys.suspend(runner)
+
+    try do
+      fun.()
+    after
+      if Process.alive?(runner), do: :sys.resume(runner)
+    end
+  end
+
+  @unretired "was not retired by its keeper within the retirement bound"
 
   # The pool's status read once the keeper has refused `refused` spawns
   # and the pool has heard of every one: it holds no runner, fresh, idle,
@@ -357,7 +379,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   test "retiring the busy runners ends each at once and answers once they are gone, keeping the fresh and idle",
        %{keeper: keeper} do
-    pool = start_pool!(keeper, pool_size: 1)
+    pool = start_pool!(keeper, pool_size: 1, retire_bound_ms: 100)
     serve!(pool)
     wait_until(fn -> counts(pool).fresh == 1 end)
 
@@ -379,6 +401,72 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     # Nothing busy: answered at once.
     assert :ok = RunnerPool.retire_busy(pool)
+
+    # The bound's timers of runners retired in time change nothing. A
+    # runner killed after them with a grace well past the bound is
+    # retired by the keeper after that grace, so once it is gone their
+    # timers have fired.
+    {late_id, log} =
+      with_log(fn ->
+        {:ok, late, late_id} = RunnerPool.take(pool, "ath_d", "exec_3")
+        assert :ok = RunnerPool.taint(pool, late, 400)
+        wait_until(fn -> not Enum.any?(RunnerPool.runners(pool), &(&1.pid == late)) end)
+        late_id
+      end)
+
+    for id <- [a_id, b_id, late_id], do: refute(log =~ "runner #{id} #{@unretired}")
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 0, tainted: 0} end)
+    assert Enum.count(ScriptedKeeper.releases(keeper), &match?({_, 0}, &1)) == 2
+  end
+
+  test "a busy runner its keeper never retires is dropped at the retirement bound, and the retirement answers",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 0, retire_bound_ms: 200)
+    serve!(pool)
+    {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    spawn = spawn_of(keeper, pid)
+
+    never_retired(spawn, fn ->
+      log = capture_log(fn -> assert :ok = RunnerPool.retire_busy(pool, 5_000) end)
+
+      assert log =~ "runner #{id} #{@unretired}"
+      assert {id, 0} in ScriptedKeeper.releases(keeper)
+      refute Enum.any?(RunnerPool.runners(pool), &(&1.pid == pid))
+      refute Process.alive?(pid)
+      assert_received {RunnerPool, ^pid, {:gone, :retire_bound}}
+
+      # Nothing is left being ended: answered at once.
+      assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
+      assert :ok = RunnerPool.retire_busy(pool, 5_000)
+    end)
+  end
+
+  test "an idle runner its keeper never retires at its TTL is dropped at the retirement bound",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 0, idle_ttl_ms: 100, retire_bound_ms: 200)
+    serve!(pool)
+    {:ok, pid, id} = RunnerPool.take(pool, "ath_a", "exec_1")
+    spawn = spawn_of(keeper, pid)
+
+    # Suspended before it completes, so the release at the TTL the
+    # completion arms is never handled: the complete is the frame the
+    # runner would write, handed to its handle as the runner hands one.
+    never_retired(spawn, fn ->
+      frame = RunnerControl.encode(%{type: :complete, execution_id: "exec_1", clean: true})
+      send(spawn.owner, {ScriptedKeeper, spawn.ref, {:control, IO.iodata_to_binary(frame)}})
+      assert_receive {RunnerPool, ^pid, {:complete, "exec_1", true}}
+
+      log =
+        capture_log(fn ->
+          wait_until(fn -> RunnerPool.runners(pool) == [] end, 5_000, "the runner to be dropped")
+        end)
+
+      assert [{^id, 0}] = ScriptedKeeper.releases(keeper)
+      assert log =~ "runner #{id} #{@unretired}"
+      refute Process.alive?(pid)
+      refute_received {RunnerPool, ^pid, {:gone, _}}
+      assert :ok = RunnerPool.retire_busy(pool, 5_000)
+    end)
   end
 
   describe "a keeper that refuses runners" do

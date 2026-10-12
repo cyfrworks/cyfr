@@ -114,7 +114,8 @@ defmodule Cyfr.Test.StepBench do
   and server, and a function answering how many requests the upstream has
   received. The report's `upstream` is the server the run stopped, so a
   caller can see it is down by its process, never by probing a port
-  another process may already hold.
+  another process may already hold. `:path` is the search path git is
+  looked up on for the report's commit, this node's PATH unless named.
   """
   @spec run(keyword()) :: report()
   def run(opts) do
@@ -122,6 +123,7 @@ defmodule Cyfr.Test.StepBench do
     warmup = Keyword.fetch!(opts, :warmup)
     mode = Keyword.get(opts, :mode, :attached)
     on_step = Keyword.get(opts, :on_step, fn _step -> :ok end)
+    path = Keyword.get_lazy(opts, :path, fn -> System.get_env("PATH") end)
 
     if not (is_integer(steps) and steps > 0 and is_integer(warmup) and warmup >= 0),
       do: raise(ArgumentError, "steps must be positive and warmup non-negative")
@@ -150,7 +152,7 @@ defmodule Cyfr.Test.StepBench do
           ctx = athanor!(upstream.port)
 
           upstream
-          |> Map.merge(%{mode: mode, on_step: on_step})
+          |> Map.merge(%{mode: mode, on_step: on_step, path: path})
           |> measure(ctx, steps, warmup)
         end)
       end)
@@ -268,13 +270,15 @@ defmodule Cyfr.Test.StepBench do
 
   # The checkout the bench runs from, so every result names its code.
   # `System.cmd/3` raises when the executable is missing, so git is looked
-  # up first.
-  defp commit do
-    case System.find_executable("git") do
-      nil ->
+  # up first, on the search path the run was given.
+  defp commit(path) do
+    case :os.find_executable(~c"git", String.to_charlist(path || "")) do
+      false ->
         "unknown (no git on PATH)"
 
-      git ->
+      found ->
+        git = List.to_string(found)
+
         with {head, 0} <- System.cmd(git, ["rev-parse", "HEAD"], stderr_to_stdout: true),
              {changes, 0} <-
                System.cmd(git, ["status", "--porcelain", "--untracked-files=no"],
@@ -421,7 +425,7 @@ defmodule Cyfr.Test.StepBench do
     request = bench_request(bench)
     message = Jason.encode!(%{"bench_fetch" => request})
     fetches = fn -> :counters.get(bench.counts, 1) end
-    commit = commit()
+    commit = commit(bench.path)
 
     :ok =
       :telemetry.attach_many(

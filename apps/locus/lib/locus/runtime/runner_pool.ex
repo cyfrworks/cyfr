@@ -32,8 +32,13 @@ defmodule Locus.Runtime.RunnerPool do
   `cancel_child/2` every busy runner; one that does not run the child
   ignores it.
 
-  A tainted runner leaves the pool once the keeper reports it retired;
-  its handle is stopped then. `retire_busy/2` taints every busy runner
+  A tainted runner leaves the pool once the keeper reports it retired
+  or, failing that, at the retirement bound; its handle is stopped then.
+  A runner its keeper has not retired within its release's grace and the
+  bound is dropped as gone, with an error naming it, and its assignee, if
+  it still had one, hears `{:gone, :retire_bound}`: what is left of its
+  process is its keeper's to end, and the pool stops waiting for a report
+  that is not coming. `retire_busy/2` taints every busy runner
   with no grace and answers once none is left being ended, keeping the
   fresh and idle ones pooled. A keeper that fails takes the pool with it
   through their common supervisor, and every busy runner's assignee
@@ -61,6 +66,7 @@ defmodule Locus.Runtime.RunnerPool do
   alias Locus.Runtime.RunnerProcess
 
   @refill_backoff_ms 1_000
+  @retire_bound_ms 10_000
   @max_backoff_ms 30_000
 
   @typedoc "One runner as the pool sees it."
@@ -80,7 +86,9 @@ defmodule Locus.Runtime.RunnerPool do
   `:keeper` (the keeper module), `:keeper_opts` (the options the keeper
   was started with, default none), `:supervisor` (the `DynamicSupervisor`
   the handles run under), `:command` (`t:Locus.Runtime.Release.command/0`, default
-  this boot's), `:name` (default `#{inspect(__MODULE__)}`).
+  this boot's), `:retire_bound_ms` (how long past a release's grace the
+  pool waits for the keeper to retire the runner, default
+  #{@retire_bound_ms}), `:name` (default `#{inspect(__MODULE__)}`).
   """
   def start_link(opts),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -110,11 +118,13 @@ defmodule Locus.Runtime.RunnerPool do
 
   @doc """
   Taint every busy runner and end it at once, with no grace, and answer
-  once every runner being ended has been retired by the keeper; fresh and
-  idle runners stay pooled. For a caller that must know no runner of the
-  work it started is left, as a test's end does: a runner still running
-  a subtree could otherwise make its next host call after the caller
-  moved on. Exits if that takes longer than `timeout_ms`.
+  once every runner being ended has been retired by the keeper or dropped
+  at the retirement bound, so the answer comes within the bound of the
+  latest kill; fresh and idle runners stay pooled. For a caller that must
+  know no runner of the work it started is left, as a test's end does: a
+  runner still running a subtree could otherwise make its next host call
+  after the caller moved on. Exits if that takes longer than `timeout_ms`,
+  the caller's own.
   """
   @spec retire_busy(GenServer.server(), timeout()) :: :ok
   def retire_busy(pool, timeout_ms \\ 30_000),
@@ -164,6 +174,7 @@ defmodule Locus.Runtime.RunnerPool do
        memory_bytes: keeper.memory_bytes(Keyword.get(opts, :keeper_opts, [])),
        supervisor: Keyword.fetch!(opts, :supervisor),
        command: Keyword.get_lazy(opts, :command, &Locus.Runtime.Release.runner_command/0),
+       retire_bound_ms: Keyword.get(opts, :retire_bound_ms, @retire_bound_ms),
        service: nil,
        assignee: nil,
        runners: %{},
@@ -283,7 +294,36 @@ defmodule Locus.Runtime.RunnerPool do
     case state.runners[pid] do
       %{state: :idle, idle_timer: ^timer} = entry ->
         RunnerProcess.release(pid, 0)
-        {:noreply, refill(put_runner(state, pid, %{entry | state: :retiring, idle_timer: nil}))}
+
+        entry = %{
+          entry
+          | state: :retiring,
+            idle_timer: nil,
+            retire_timer: retire_due(state, pid, 0)
+        }
+
+        {:noreply, refill(put_runner(state, pid, entry))}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  # A runner its keeper has not retired within its release's grace and the
+  # bound is dropped. A timer of a runner retired since, or of an earlier
+  # release, names a ref no held entry carries, and is ignored.
+  def handle_info({:retire_due, pid, ref}, state) do
+    case state.runners[pid] do
+      %{state: ending, retire_timer: ^ref} = entry when ending in [:tainted, :retiring] ->
+        Logger.error(
+          "[Locus.Runtime.RunnerPool] runner #{entry.id} was not retired by its keeper " <>
+            "within the retirement bound; dropped"
+        )
+
+        state = told(state, pid, entry, {:gone, :retire_bound})
+        _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
+
+        {:noreply, retired(refill_later(%{state | runners: Map.delete(state.runners, pid)}))}
 
       _ ->
         {:noreply, state}
@@ -414,11 +454,26 @@ defmodule Locus.Runtime.RunnerPool do
 
   # An idle timer left running is harmless: its message names the timer
   # it was armed with, and a runner no longer idle on that timer ignores it.
+  # A runner already released keeps the retirement timer its first release
+  # armed: its handle releases it once, so a later taint asks the keeper
+  # for nothing and must not put its deadline off.
   defp taint(state, _pid, %{state: :tainted}, _grace_ms), do: state
 
   defp taint(state, pid, entry, grace_ms) do
     RunnerProcess.release(pid, grace_ms)
-    refill_later(put_runner(state, pid, %{entry | state: :tainted, idle_timer: nil}))
+    timer = entry.retire_timer || retire_due(state, pid, grace_ms)
+
+    refill_later(
+      put_runner(state, pid, %{entry | state: :tainted, idle_timer: nil, retire_timer: timer})
+    )
+  end
+
+  # The deadline of a release: its grace, then the bound for the keeper to
+  # report the runner retired.
+  defp retire_due(state, pid, grace_ms) do
+    ref = make_ref()
+    Process.send_after(self(), {:retire_due, pid, ref}, grace_ms + state.retire_bound_ms)
+    ref
   end
 
   # Whoever waits for the busy runners' ends is answered once no runner is
@@ -484,7 +539,16 @@ defmodule Locus.Runtime.RunnerPool do
          ) do
       {:ok, pid} ->
         Process.monitor(pid)
-        {:ok, pid, %{id: id, state: :spawning, athanor: nil, execution_id: nil, idle_timer: nil}}
+
+        {:ok, pid,
+         %{
+           id: id,
+           state: :spawning,
+           athanor: nil,
+           execution_id: nil,
+           idle_timer: nil,
+           retire_timer: nil
+         }}
 
       {:error, reason} ->
         Logger.error(

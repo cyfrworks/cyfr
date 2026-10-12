@@ -209,8 +209,10 @@ defmodule Compendium.Cosign do
     flush_port(port)
   end
 
+  # `kill` is named by absolute path: one looked up through a PATH another
+  # process of this node moved would leave cosign running.
   defp kill_os_process(os_pid) do
-    case System.find_executable("kill") do
+    case System.find_executable("/bin/kill") do
       nil ->
         Logger.error("[Compendium.Cosign] no kill executable; cosign pid #{os_pid} left running")
 

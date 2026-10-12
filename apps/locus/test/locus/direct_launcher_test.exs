@@ -24,6 +24,8 @@ defmodule Locus.DirectLauncherTest do
 
   use ExUnit.Case, async: true
 
+  import Locus.Test.ProcessFamily
+
   alias Locus.DirectLauncher
 
   defp wait_until(check, attempts \\ 200) do
@@ -286,52 +288,6 @@ defmodule Locus.DirectLauncherTest do
     setup do
       unless Process.whereis(Runner), do: start_supervised!(Runner)
       :ok
-    end
-
-    # A process that has exited is gone even while its parent has yet to
-    # reap it: a zombie holds no memory and runs nothing.
-    defp running?(os_pid) do
-      case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(os_pid)],
-             stderr_to_stdout: true
-           ) do
-        {stat, 0} -> not String.starts_with?(String.trim(stat), "Z")
-        {_none, _status} -> false
-      end
-    end
-
-    defp assert_gone(os_pids) do
-      for os_pid <- os_pids, do: wait_until(fn -> not running?(os_pid) end)
-    end
-
-    # The runtime's events of `channel`, until `done` holds of one, which is
-    # answered.
-    defp event_until(%{ref: ref} = channel, done) do
-      receive do
-        {DirectLauncher, ^ref, _event} = message ->
-          {:events, [event], _channel} = Runner.handle_message(channel, message)
-          if done.(event), do: event, else: event_until(channel, done)
-      after
-        10_000 -> flunk("the runner never sent the event awaited")
-      end
-    end
-
-    # A leader that starts a child, names it on its standard output, which
-    # is the channel the keeper hands the spawning process, and waits on
-    # it; with `ignore_term`, both ignore the term signal, which a child
-    # inherits.
-    defp spawn_family!(opts \\ []) do
-      trap = if Keyword.get(opts, :ignore_term, false), do: "trap '' TERM; ", else: ""
-
-      spec = %{
-        runner: "runner_direct_#{System.unique_integer([:positive])}",
-        argv: ["/bin/sh", "-c", trap <> "sleep 300 & echo $!; wait"],
-        env: %{}
-      }
-
-      {:ok, channel, []} = Runner.spawn(spec)
-      {:spawned, leader} = event_until(channel, &match?({:spawned, _pid}, &1))
-      {:control, line} = event_until(channel, &match?({:control, _bytes}, &1))
-      {channel, leader, line |> String.trim() |> String.to_integer()}
     end
 
     test "a release with no grace kills the leader and the child it started" do

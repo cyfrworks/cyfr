@@ -37,6 +37,11 @@ defmodule Locus.Test.FakeKeeper do
   @stream_stderr 2
   @stream_attach 3
 
+  # Named by absolute path, as the direct launcher names its tools: a test
+  # that moves this node's PATH must not lose a kill.
+  @kill "/bin/kill"
+  @mkfifo "/usr/bin/mkfifo"
+
   @doc "Starts a fake and answers `{fake, client_channel}`, the `:socket` to hand `Locus.Keeper`."
   def start do
     dir = short_tmp_dir()
@@ -212,7 +217,7 @@ defmodule Locus.Test.FakeKeeper do
   # host's procps `kill` needs to read it as a group.
   defp signal_group(os_pid, sig) when is_integer(os_pid) do
     for target <- [["--", "-#{os_pid}"], ["#{os_pid}"]],
-        do: System.cmd("kill", ["-#{sig}" | target], stderr_to_stdout: true)
+        do: System.cmd(@kill, ["-#{sig}" | target], stderr_to_stdout: true)
 
     :ok
   end
@@ -317,7 +322,7 @@ defmodule Locus.Test.FakeKeeper do
   # it writes them, and its exit ends the relay.
   defp live(fake, spawn_id, request, conn, dir) do
     log = Path.join(dir, "stderr")
-    {_, 0} = System.cmd("mkfifo", ["-m", "600", log])
+    {_, 0} = System.cmd(@mkfifo, ["-m", "600", log])
     env = Enum.map(request["env"], fn {k, v} -> "#{k}=#{v}" end)
 
     port =

@@ -30,6 +30,12 @@ defmodule Locus.DirectLauncher do
   Its stdin is read from a file and its stdout written to one, since a
   port carries one stream each way; its stderr is the port's output.
 
+  The launcher's own tools (`sh`, `env`, `cat`, `kill`, `mkfifo`) are
+  named by absolute path, never looked up through this node's PATH: a
+  test may make a toolchain absent by moving the node's PATH, and a kill
+  looked up through it would be lost, the process left running and the
+  runtime's pool waiting for a retirement that never comes.
+
   A run past its deadline, or cancelled (`Locus.Executor.cancel/1`), has
   its process group killed before `run/2` answers. A run whose caller dies
   is ended by a janitor that outlives the caller: it kills the process
@@ -71,6 +77,8 @@ defmodule Locus.DirectLauncher do
 
   alias Locus.DirectLauncher.Child
   alias Locus.Executor.Log
+
+  @kill "/bin/kill"
 
   # A well-formed spawn id, so a signal is checked as the codec checks one.
   @probe_spawn_id String.duplicate("0", 32)
@@ -308,13 +316,13 @@ defmodule Locus.DirectLauncher do
 
   def signal_group(os_pid, signal) do
     for target <- [["--", "-#{os_pid}"], ["#{os_pid}"]] do
-      System.cmd("kill", ["-#{signal}" | target], stderr_to_stdout: true)
+      System.cmd(@kill, ["-#{signal}" | target], stderr_to_stdout: true)
     end
 
     :ok
   rescue
     e ->
-      Logger.warning(
+      Logger.error(
         "[Locus.DirectLauncher] signalling process #{os_pid} failed: #{Exception.message(e)}"
       )
   end
@@ -325,7 +333,7 @@ defmodule Locus.DirectLauncher do
   # It is no process of the group it reads, so no group signal reaches it.
   @spec stop_reader(port() | nil, non_neg_integer() | nil) :: :ok
   def stop_reader(reader, os_pid) do
-    if os_pid, do: System.cmd("kill", ["-KILL", "#{os_pid}"], stderr_to_stdout: true)
+    if os_pid, do: System.cmd(@kill, ["-KILL", "#{os_pid}"], stderr_to_stdout: true)
 
     if reader do
       try do
@@ -418,6 +426,8 @@ defmodule Locus.DirectLauncher.Child do
   @drain_timeout_ms 1_000
 
   @relay_socket "relay.sock"
+
+  @mkfifo "/usr/bin/mkfifo"
 
   # A port reports a child ended by a signal as 128 and the signal's
   # number; the name is cyfr-locus's for it.
@@ -534,7 +544,7 @@ defmodule Locus.DirectLauncher.Child do
   end
 
   defp mkfifo(path) do
-    case System.cmd("mkfifo", ["-m", "600", path], stderr_to_stdout: true) do
+    case System.cmd(@mkfifo, ["-m", "600", path], stderr_to_stdout: true) do
       {_output, 0} -> :ok
       {_output, _status} -> {:error, :mkfifo}
     end

@@ -173,11 +173,10 @@ defmodule Opus.StepSpansTest do
     assert Application.get_env(:arca, :seed_path) == seed_path
   end
 
-  # PATH is the OS process's, so it is restored by the test's own exit and,
-  # should the test process be killed first, by its `on_exit`.
+  # The bench takes its search path because the node's PATH is shared with
+  # the runtime's launcher and its runners.
   test "a run with no git on PATH answers its commit as unknown and stops its upstream" do
     path = System.get_env("PATH")
-    on_exit(fn -> System.put_env("PATH", path) end)
 
     empty =
       Path.join(System.tmp_dir!(), "step_bench_no_git_#{System.unique_integer([:positive])}")
@@ -185,15 +184,9 @@ defmodule Opus.StepSpansTest do
     File.mkdir_p!(empty)
     on_exit(fn -> File.rm_rf!(empty) end)
 
-    report =
-      try do
-        System.put_env("PATH", empty)
-        assert System.find_executable("git") == nil
-        StepBench.run(steps: 1, warmup: 0, mode: :pinned)
-      after
-        System.put_env("PATH", path)
-      end
+    report = StepBench.run(steps: 1, warmup: 0, mode: :pinned, path: empty)
 
+    assert System.get_env("PATH") == path
     assert report.commit == "unknown (no git on PATH)"
     assert StepBench.render(report) =~ ~r/^commit: unknown \(no git on PATH\)$/m
     refute Process.alive?(report.upstream), "the run without git left its upstream running"
