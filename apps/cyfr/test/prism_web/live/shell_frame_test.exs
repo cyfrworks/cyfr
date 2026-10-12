@@ -556,10 +556,16 @@ defmodule PrismWeb.ShellFrameTest do
       old = bearer!(view, id)
       %{deadline: deadline} = frame(view, "long-dash")
 
-      # Armed five minutes before the deadline.
+      # Armed five minutes before the deadline. Its remaining time is read
+      # between two clock reads and each bound is held with the read on its
+      # own side, so a stall between the reads widens the bracket and never
+      # narrows it (a millisecond is allowed for the timer's rounding).
       {timer, token} = renewal!(view, id)
-      ahead = DateTime.diff(deadline, DateTime.utc_now(), :millisecond) - 300_000
-      assert Process.read_timer(timer) in (ahead - 5_000)..ahead
+      before = DateTime.utc_now()
+      left = Process.read_timer(timer)
+      after_read = DateTime.utc_now()
+      assert left <= DateTime.diff(deadline, before, :millisecond) - 300_000 + 1
+      assert left >= DateTime.diff(deadline, after_read, :millisecond) - 300_000 - 5_000
 
       fire!(view, id, deadline, timer, token)
 
