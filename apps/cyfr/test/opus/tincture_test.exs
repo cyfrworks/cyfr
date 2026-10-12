@@ -380,6 +380,44 @@ defmodule Opus.TinctureTest do
                Opus.invoke_tincture(ctx, args("tinc-unpublished", :public), :public)
     end
 
+    # One outage and one call per test: on PostgreSQL the failed read
+    # aborts the test's transaction, so a second call would meet that, not
+    # the outage.
+    for route <- [:public, :protected] do
+      test "a registry that cannot answer refuses unavailable, and nothing runs: #{route}",
+           %{ctx: ctx} do
+        node = tincture!(ctx, "tinc-facts-out")
+        _public = profile!(ctx, node, :public)
+        _owner = profile!(ctx, node, :owner)
+        worker!()
+
+        # On the public route the address and the public profile resolve
+        # first; on either route the version cannot be read.
+        Arca.Repo.query!("ALTER TABLE components RENAME TO components_unavailable")
+
+        assert {:error, %Prima.Refusal{class: :unavailable, reason: :unavailable}} =
+                 Opus.invoke_tincture(ctx, args("tinc-facts-out", unquote(route)), unquote(route))
+
+        assert ScriptedWorker.calls() == []
+      end
+    end
+
+    for name <- ["tinc-profiles-out", "tinc-missing"] do
+      test "a profile store that cannot answer refuses the public route unavailable: #{name}",
+           %{ctx: ctx} do
+        node = tincture!(ctx, "tinc-profiles-out")
+        _public = profile!(ctx, node, :public)
+        worker!()
+
+        Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+        assert {:error, %Prima.Refusal{class: :unavailable, reason: :unavailable}} =
+                 Opus.invoke_tincture(ctx, args(unquote(name), :public), :public)
+
+        assert ScriptedWorker.calls() == []
+      end
+    end
+
     test "a tincture that is gone is not found on either route", %{ctx: ctx} do
       worker!()
 

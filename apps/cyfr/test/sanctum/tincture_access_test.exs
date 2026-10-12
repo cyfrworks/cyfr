@@ -6,6 +6,53 @@ defmodule Sanctum.TinctureAccessTest do
 
   alias Sanctum.{Context, TinctureAccess}
 
+  # Component facts whose every read fails with an exception that carries
+  # storage text, the `@canary`, in its message.
+  defmodule RaisingFacts do
+    @moduledoc false
+    @behaviour Sanctum.Consent.Components
+
+    @canary "T8_RAW_STORAGE_ERROR_CANARY"
+    def canary, do: @canary
+
+    @impl true
+    def resolve(_ctx, _component), do: failed()
+    @impl true
+    def resolve_verified(_ctx, _component), do: failed()
+    @impl true
+    def get_component(_ctx, _name, _version, _publisher, _type), do: failed()
+    @impl true
+    def agent_rows(_ctx), do: failed()
+    @impl true
+    def shipped_nodes(_ctx, _rows), do: failed()
+    @impl true
+    def newer_shipped(_ctx, _row), do: failed()
+
+    defp failed, do: {:error, %RuntimeError{message: @canary}}
+  end
+
+  # Component facts whose every read fails with a map that looks like an
+  # exception but names no module: its `__struct__` is storage text.
+  defmodule MalformedFacts do
+    @moduledoc false
+    @behaviour Sanctum.Consent.Components
+
+    @impl true
+    def resolve(_ctx, _component), do: failed()
+    @impl true
+    def resolve_verified(_ctx, _component), do: failed()
+    @impl true
+    def get_component(_ctx, _name, _version, _publisher, _type), do: failed()
+    @impl true
+    def agent_rows(_ctx), do: failed()
+    @impl true
+    def shipped_nodes(_ctx, _rows), do: failed()
+    @impl true
+    def newer_shipped(_ctx, _row), do: failed()
+
+    defp failed, do: {:error, %{__exception__: true, __struct__: RaisingFacts.canary()}}
+  end
+
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
@@ -277,6 +324,126 @@ defmodule Sanctum.TinctureAccessTest do
       end
     end
   end
+
+  describe "a store that cannot answer" do
+    # One outage and one read per test: on PostgreSQL the failed read
+    # aborts the test's transaction, so a second read would meet that, not
+    # the outage.
+    for read <- [:private, :public, :lookup] do
+      test "a component-facts outage is unavailable to the #{read} read, never not found or a raise" do
+        assert {:ok, _} = read(unquote(read))
+
+        # The public read reaches the facts only past the public profile.
+        Arca.Repo.query!("ALTER TABLE components RENAME TO components_unavailable")
+        assert read(unquote(read)) == {:error, :unavailable}
+      end
+
+      test "a component-facts port nothing installed is unavailable to the #{read} read" do
+        real = Sanctum.Consent.Components.impl!()
+        on_exit(fn -> Sanctum.Consent.Components.install!(real) end)
+
+        Sanctum.Consent.Components.reset()
+
+        answer =
+          try do
+            read(unquote(read))
+          after
+            Sanctum.Consent.Components.install!(real)
+          end
+
+        assert answer == {:error, :unavailable}
+      end
+    end
+
+    test "a component-facts answer that is neither a row nor absence is unavailable, and logged" do
+      # A context that names no athanor: the facts answer `:no_athanor`,
+      # which is no outage the port names.
+      ctx = Context.build(athanor_id: nil, authenticated: false)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert TinctureAccess.lookup(ctx, "local", "public-dash") == {:error, :unavailable}
+        end)
+
+      assert log =~
+               "[TinctureAccess] component facts unreadable for local/public-dash: :no_athanor"
+
+      # An error carrying storage text: the warning names its kind alone.
+      real = Sanctum.Consent.Components.impl!()
+      on_exit(fn -> Sanctum.Consent.Components.install!(real) end)
+      Sanctum.Consent.Components.install!(RaisingFacts)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          answer =
+            try do
+              TinctureAccess.lookup(Sanctum.TestContext.local(), "local", "public-dash")
+            after
+              Sanctum.Consent.Components.install!(real)
+            end
+
+          assert answer == {:error, :unavailable}
+        end)
+
+      refute log =~ RaisingFacts.canary()
+
+      assert log =~
+               "[TinctureAccess] component facts unreadable for local/public-dash: RuntimeError"
+
+      # A map shaped like an exception whose `__struct__` is not a module:
+      # no kind can be read from it, so the warning says so and nothing else.
+      Sanctum.Consent.Components.install!(MalformedFacts)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          answer =
+            try do
+              TinctureAccess.lookup(Sanctum.TestContext.local(), "local", "public-dash")
+            after
+              Sanctum.Consent.Components.install!(real)
+            end
+
+          assert answer == {:error, :unavailable}
+        end)
+
+      refute log =~ RaisingFacts.canary()
+
+      assert log =~
+               "[TinctureAccess] component facts unreadable for local/public-dash: :unknown"
+    end
+
+    # A tincture with no public profile is refused before the facts are
+    # read: private and absent stay one answer.
+    for name <- ["private-dash", "nonexistent"] do
+      test "a component-facts outage leaves a tincture with no public profile not found: #{name}" do
+        Arca.Repo.query!("ALTER TABLE components RENAME TO components_unavailable")
+
+        assert TinctureAccess.get_public(public_ctx(), "local", unquote(name)) ==
+                 {:error, :not_found}
+      end
+    end
+
+    for name <- ["public-dash", "private-dash", "nonexistent"] do
+      test "a profiles outage is unavailable on the public read, never public or not found: #{name}" do
+        Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+        assert TinctureAccess.get_public(public_ctx(), "local", unquote(name)) ==
+                 {:error, :unavailable}
+      end
+    end
+  end
+
+  defp public_ctx,
+    do: Context.build(athanor_id: Sanctum.TestContext.local().athanor_id, authenticated: false)
+
+  # Each read of a tincture the store holds.
+  defp read(:private),
+    do: TinctureAccess.get_private(Sanctum.TestContext.local(), "local", "private-dash")
+
+  defp read(:public), do: TinctureAccess.get_public(public_ctx(), "local", "public-dash")
+
+  defp read(:lookup),
+    do: TinctureAccess.lookup(Sanctum.TestContext.local(), "local", "public-dash")
 
   describe "public_context/1" do
     defp create_athanor!(kind, slug) do

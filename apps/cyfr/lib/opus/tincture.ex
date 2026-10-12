@@ -15,9 +15,9 @@ defmodule Opus.Tincture do
   Sanctum's private-access policy admits. The tincture and its profile are
   read again on every call — a surface's cached tincture is never
   authority — and an absent tincture answers as an inaccessible one does,
-  `not_found`. The profile the route selects roots the run and its edge to
-  `reference` decides what the dependency may reach
-  (`Opus.run_root_edge/5`).
+  `not_found`; a store that cannot answer is `unavailable`. The profile
+  the route selects roots the run and its edge to `reference` decides what
+  the dependency may reach (`Opus.run_root_edge/5`).
 
   The arguments are the gate's cast of the declared operation's
   (`Opus.Providers.Tincture`); the gate is their one validator. A
@@ -76,7 +76,7 @@ defmodule Opus.Tincture do
 
   # The public route reads under the address's public context, never the
   # caller's; the protected route under the caller's own. A refusal of
-  # either reads as absence.
+  # either reads as absence; a store that cannot answer stays unavailable.
   defp reread(_ctx, :public, %{"athanor" => address}, publisher, name) do
     with {:ok, public_ctx} <- Sanctum.TinctureAccess.public_context(address),
          {:ok, tincture} <- found(Sanctum.TinctureAccess.get_public(public_ctx, publisher, name)) do
@@ -91,6 +91,7 @@ defmodule Opus.Tincture do
   end
 
   defp found({:ok, tincture}), do: {:ok, tincture}
+  defp found({:error, :unavailable}), do: {:error, :unavailable}
   defp found({:error, _refused}), do: {:error, :not_found}
 
   # `ctx` is the caller's, as the gate admitted it; `source_ctx` the one

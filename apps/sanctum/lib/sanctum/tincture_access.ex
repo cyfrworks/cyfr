@@ -17,12 +17,18 @@ defmodule Sanctum.TinctureAccess do
   `:not_found` for both missing and private tinctures (indistinguishable
   404 to avoid leaking existence).
 
+  A store that cannot answer — the profiles that make a tincture public,
+  or the component facts — is `{:error, :unavailable}`: never absence,
+  never public, and alike for a private, an absent and a public tincture
+  when it is the public check that cannot answer.
+
   Tincture lookups go through `Sanctum.Consent.Components` (the port the
   authoritative component store answers), not `Prism.TinctureRegistry` (a
   shell-only UI cache).
   """
 
   require Logger
+  require Sanctum.Consent.Components
 
   alias Prima.ComponentRef
   alias Sanctum.Consent.Components
@@ -67,14 +73,11 @@ defmodule Sanctum.TinctureAccess do
   Look up a tincture for authenticated/private access.
   """
   @spec get_private(Context.t(), String.t(), String.t()) ::
-          {:ok, map()} | {:error, :not_found | :forbidden}
+          {:ok, map()} | {:error, :not_found | :forbidden | :unavailable}
   def get_private(%Context{} = ctx, publisher, tincture_name) do
     with :ok <- Context.authorize(ctx, :storage_read),
          :ok <- validate_refs(publisher, tincture_name) do
-      case lookup_tincture(ctx, publisher, tincture_name) do
-        {:ok, tincture} -> {:ok, tincture}
-        {:error, :not_found} -> {:error, :not_found}
-      end
+      lookup_tincture(ctx, publisher, tincture_name)
     else
       # An authorization refusal is 403; a malformed ref is an
       # indistinguishable 404. Branching on the refusal vocabulary, not on
@@ -93,9 +96,11 @@ defmodule Sanctum.TinctureAccess do
   the Phoenix boundary. MUST NOT call `Context.authorize/2-3` — that
   rejects unauthenticated contexts. Public visibility comes from a published
   profile (not the manifest). Returns `:not_found` for both missing and
-  non-public tinctures (indistinguishable 404).
+  non-public tinctures (indistinguishable 404), and `:unavailable` when the
+  profiles or the component facts cannot be read.
   """
-  @spec get_public(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
+  @spec get_public(Context.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, :not_found | :unavailable}
   def get_public(%Context{} = ctx, publisher, tincture_name) do
     # The public route resolves the owning athanor before it gets here; a
     # context without one indicates a routing bug — fail closed.
@@ -108,29 +113,29 @@ defmodule Sanctum.TinctureAccess do
       {:error, :not_found}
     else
       with :ok <- validate_refs(publisher, tincture_name),
-           true <- tincture_public?(ctx, publisher, tincture_name) do
-        case lookup_tincture(ctx, publisher, tincture_name) do
-          {:ok, tincture} -> {:ok, tincture}
-          {:error, :not_found} -> {:error, :not_found}
-        end
+           {:ok, true} <- tincture_public(ctx, publisher, tincture_name) do
+        lookup_tincture(ctx, publisher, tincture_name)
       else
-        _ -> {:error, :not_found}
+        {:error, :unavailable} -> {:error, :unavailable}
+        _malformed_or_not_public -> {:error, :not_found}
       end
     end
   end
 
   # Public-ness is a published profile, not a policy bit: a tincture is
   # public exactly when an active public profile exists for it — what
-  # profile.publish mints and profile.revoke retires.
-  defp tincture_public?(ctx, publisher, tincture_name) do
+  # profile.publish mints and profile.revoke retires. A store that cannot
+  # list the profiles has not said the tincture is private: it is
+  # unavailable, and nothing is served.
+  defp tincture_public(ctx, publisher, tincture_name) do
     ref = Prima.ComponentRef.build("tincture", publisher, tincture_name)
 
     case Arca.ConsentStorage.profiles(Context.actor(ctx), ref) do
       {:ok, profiles} ->
-        Enum.any?(profiles, &(&1.kind == :public and &1.status == :active))
+        {:ok, Enum.any?(profiles, &(&1.kind == :public and &1.status == :active))}
 
-      _ ->
-        false
+      {:error, _unreadable} ->
+        {:error, :unavailable}
     end
   end
 
@@ -141,7 +146,8 @@ defmodule Sanctum.TinctureAccess do
   cannot send cookies. Validates refs and resolves through the component-facts port.
   Does NOT check visibility — callers should use `get_public/3` for that.
   """
-  @spec lookup(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
+  @spec lookup(Context.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, :not_found | :unavailable}
   def lookup(%Context{} = ctx, publisher, tincture_name) do
     with :ok <- validate_refs(publisher, tincture_name) do
       lookup_tincture(ctx, publisher, tincture_name)
@@ -158,7 +164,9 @@ defmodule Sanctum.TinctureAccess do
     do: ComponentRef.validate_ref_parts(publisher, name)
 
   # Look up the latest tincture version through the port and enrich
-  # with the Arca segments needed by controllers for asset serving.
+  # with the Arca segments needed by controllers for asset serving. Every
+  # answer but absence is a store that did not say whether the tincture
+  # exists: unavailable, never not found.
   defp lookup_tincture(ctx, publisher, tincture_name) do
     case Components.get_latest(ctx, tincture_name, publisher, "tincture") do
       {:ok, component} ->
@@ -166,8 +174,28 @@ defmodule Sanctum.TinctureAccess do
 
       {:error, :not_found} ->
         {:error, :not_found}
+
+      {:error, reason} when Components.is_outage(reason) ->
+        {:error, :unavailable}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[TinctureAccess] component facts unreadable for " <>
+            "#{publisher}/#{tincture_name}: #{inspect(error_kind(reason))}"
+        )
+
+        {:error, :unavailable}
     end
   end
+
+  # What a warning may say of an error the facts answered: its kind, never
+  # its text. An exception's message and a term's strings can carry
+  # storage detail, which redaction by field name does not remove, and a
+  # map shaped like an exception may name no module at all. The kind is an
+  # atom the log line spells, so no term of the callee's is inspected here.
+  defp error_kind(%{__exception__: true, __struct__: module}) when is_atom(module), do: module
+  defp error_kind(reason) when is_atom(reason), do: reason
+  defp error_kind(_reason), do: :unknown
 
   defp enrich_with_segments(component) do
     with {:ok, manifest} <- decode_manifest(component[:manifest] || component["manifest"]) do

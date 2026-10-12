@@ -602,7 +602,54 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       assert conn.status == 400
       assert %{class: "invalid_argument"} = refused(conn, :action)
     end
+
+    # One outage and one request per test: on PostgreSQL the failed read
+    # aborts the test's transaction, so a second request would meet that,
+    # not the outage. Every kind is admitted through the same caller.
+    for kind <- [:invoke, :action, :stream_open] do
+      test "a registry that cannot answer for it is refused unavailable at admission: #{kind}" do
+        # The athanor and the public profile resolve; the version cannot.
+        Arca.Repo.query!("ALTER TABLE components RENAME TO components_unavailable")
+
+        conn = data(unquote(kind), public_request(unquote(kind), "pub-data"))
+        assert conn.status == 503
+        assert %{class: "unavailable", stage: "admission"} = refused(conn, unquote(kind))
+      end
+
+      for name <- ["pub-data", "priv-data", "no-such-data"] do
+        test "a profile store that cannot answer is unavailable, never not found: " <>
+               "#{kind} #{name}" do
+          Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+          conn = data(unquote(kind), public_request(unquote(kind), unquote(name)))
+          assert conn.status == 503
+          assert %{class: "unavailable", stage: "admission"} = refused(conn, unquote(kind))
+        end
+      end
+    end
   end
+
+  # A request of `kind` naming the public tincture `name`.
+  defp public_request(:invoke, name),
+    do:
+      TinctureWire.request(:invoke, %{
+        ref: "reagent:local.echo:1.0.0",
+        operation: "run",
+        args: %{},
+        public: public(name)
+      })
+
+  defp public_request(:action, name),
+    do:
+      TinctureWire.request(:action, %{operation: "system.status", args: %{}, public: public(name)})
+
+  defp public_request(:stream_open, name),
+    do:
+      TinctureWire.request(:stream_open, %{
+        stream: "mcp_servers.changes",
+        subject: nil,
+        public: public(name)
+      })
 
   # ---------------------------------------------------------------------------
   # Limits

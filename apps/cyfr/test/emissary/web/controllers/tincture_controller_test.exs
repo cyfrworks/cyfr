@@ -538,6 +538,42 @@ defmodule Emissary.Web.TinctureControllerTest do
         refute refused.resp_body =~ "Public"
       end
     end
+
+    # One outage and one request per test: on PostgreSQL the failed read
+    # aborts the test's transaction, so a second request would meet that,
+    # not the outage.
+    for path <- ["/t/test/local/pub-dash", "/t/test/local/pub-dash/style.css"] do
+      test "a registry that cannot answer for a public tincture is a 503, never a 404 or a " <>
+             "crash: #{path}",
+           %{conn: conn} do
+        assert get(conn, "/t/test/local/pub-dash").status == 200
+
+        # The athanor and the public profile resolve; the version cannot.
+        Arca.Repo.query!("ALTER TABLE components RENAME TO components_unavailable")
+
+        refused = get(build_conn(), unquote(path))
+        assert json_response(refused, 503)["code"] == "unavailable"
+        assert get_resp_header(refused, "retry-after") == ["5"]
+        refute refused.resp_body =~ "Public"
+      end
+    end
+
+    for path <- [
+          "/t/test/local/pub-dash",
+          "/t/test/local/pub-dash/style.css",
+          "/t/test/local/auth-dash",
+          "/t/test/local/nonexistent"
+        ] do
+      test "a profile store that cannot answer is a 503 for a public, a private and an absent " <>
+             "tincture alike, never a 404: #{path}" do
+        Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+        refused = get(build_conn(), unquote(path))
+        assert json_response(refused, 503)["code"] == "unavailable"
+        assert get_resp_header(refused, "retry-after") == ["5"]
+        refute refused.resp_body =~ "Public"
+      end
+    end
   end
 
   # ── Assets (no auth required) ────────────────────────────────────
