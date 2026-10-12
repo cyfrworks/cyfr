@@ -112,7 +112,7 @@ defmodule Cyfr.App.MixProject do
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
       {:esbuild, "~> 0.9", runtime: Mix.env() == :dev},
       # Shared (needed by config/runtime.exs)
-      {:dotenvy, "~> 0.9"},
+      {:dotenvy, "~> 1.2"},
       # Security
       {:sobelow, "~> 0.13", only: :dev, runtime: false},
       # Test-only

@@ -18,9 +18,10 @@ if config_env() != :test do
   # The names the .env files alone assign, read without the side effect
   # the merged read below keeps: the unknown-name refusal holds a file to
   # a stricter roster than the process environment a shell exports.
-  file_names = env_files |> source!(side_effect: false) |> Map.keys()
+  # Both reads keep every value literal and run no `$(…)` (`Cyfr.EnvFiles`).
+  file_names = env_files |> Cyfr.EnvFiles.source!(side_effect: false) |> Map.keys()
 
-  sourced = source!(env_files ++ [System.get_env()])
+  sourced = Cyfr.EnvFiles.source!(env_files ++ [System.get_env()])
 
   # Runtime configuration for CYFR
   # This file is executed at runtime, not compile time

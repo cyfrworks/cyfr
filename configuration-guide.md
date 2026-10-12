@@ -17,6 +17,13 @@ file for every role. A `CYFR_*` name in the server's `.env` that no table
 below declares refuses the boot, naming it; the process environment may
 carry the names other programs own as well.
 
+Every value in a `.env` file is literal: a `$(…)` stays in the value as
+written and runs nothing, though the space just inside its brackets is
+trimmed. A `$(` closes on its own line, in a double-quoted value that
+spans lines as well, and holds something between its brackets; one that
+does not refuses the boot, naming the file and the line. A single-quoted
+value is literal throughout, an open `$(` included.
+
 ## Deployment variables
 
 | Variable | What it sets |

@@ -24,7 +24,7 @@ defmodule Cyfr.MixProject do
 
   defp deps do
     [
-      {:dotenvy, "~> 0.9"},
+      {:dotenvy, "~> 1.2"},
       {:mix_audit, "~> 2.1", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
