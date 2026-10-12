@@ -8,8 +8,9 @@ defmodule Prima.Canvas.ShapeTest do
   the `results` blocks' shapes and the result shapes of
   `tests/fixtures/feed.json`'s bindings; spellings that differ only in
   `required`'s order share one digest; every refused shape and value is
-  refused at the fixture's path for its reason; and the reasons, types and
-  depth limit are the module's. Beside them,
+  refused at the fixture's path for its reason; each of its `times` is
+  taken at its instant or refused, as the toolkit's parser reads them too;
+  and the reasons, types and depth limit are the module's. Beside them,
   the bounds the fixture would spell at length: a full enum and object, a
   list at its max and the depth limit built programmatically, and the
   terms JSON cannot spell (an improper list, a key that is not a string, a
@@ -253,18 +254,17 @@ defmodule Prima.Canvas.ShapeTest do
       assert Shape.escape(3) == "3"
     end
 
-    test "a time carries its offset" do
+    test "a time carries its offset, as the toolkit's grammar reads it" do
       time = normalized!(%{"type" => "time"})
+      %{"valid" => valid, "invalid" => invalid} = vectors()["times"]
 
-      for at <- [
-            "2026-10-04T12:00:00Z",
-            "2026-10-04T12:00:00.5-03:30",
-            "2026-10-04 12:00:00+00:00"
-          ] do
+      for %{"value" => at, "unix_ms" => unix_ms} <- valid do
         assert Shape.check(time, at) == :ok, at
+        assert {:ok, instant, _offset} = DateTime.from_iso8601(at)
+        assert DateTime.to_unix(instant, :millisecond) == unix_ms, at
       end
 
-      for at <- ["2026-10-04T12:00:00", "2026-10-04", "noon"] do
+      for at <- invalid do
         assert Shape.check(time, at) == {:error, %{path: "", reason: "time"}}, at
       end
     end

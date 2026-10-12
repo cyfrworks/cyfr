@@ -8,7 +8,7 @@ defmodule Cyfr.Cluster.RevocationTest do
   A revoked authority against a warm cache on the other member, with the
   control channel up and with it cut.
 
-  `cell-ownership.md` §5 classes the established-caller memo **shared**:
+  The established-caller memo is state **shared** across the cell:
   `invalidate_hash/1` clears only the local table, so a revoked or
   re-pointed session stays valid on a peer for the rest of its TTL. The
   answer is an invalidation over the bus with the TTL as the bound a lost
@@ -74,7 +74,7 @@ defmodule Cyfr.Cluster.RevocationTest do
       assert Cell.call(:a, Cyfr.Cluster.Fixtures, :archive!, [person.athanor_id]) == "archived"
 
       # The peer still holds the memo, because nothing reached it. That is
-      # the exposure §5 names, and its bound is the TTL — not the
+      # the exposure a shared memo carries, and its bound is the TTL — not the
       # broadcast, which is why losing the broadcast is survivable.
       assert Cell.call(:b, Cyfr.Cluster.Fixtures, :memo?, [person.hash]),
              "the peer dropped the memo without hearing anything, so the cut proves nothing"

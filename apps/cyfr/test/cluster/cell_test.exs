@@ -9,15 +9,15 @@ defmodule Cyfr.Cluster.CellTest do
   death costs a successor, what a live partition costs nobody, and which
   member proposes itself for a singleton.
 
-  Every bound here is the cell ownership design note's §4.1's, measured
-  rather than assumed, and every measurement is reported with the margin
-  it had.
+  Every bound here follows from `Cyfr.Cell`'s lease and renew interval
+  (ARCHITECTURE.md §6.1), measured rather than assumed, and every
+  measurement is reported with the margin it had.
   """
 
   use Cyfr.Cluster.Case, async: false
 
-  # §4.1: lease 15 s, renew tick 5 s, so a member that stops without
-  # releasing is taken over within lease + one tick.
+  # `Cyfr.Cell`'s lease 15 s and renew tick 5 s, so a member that stops
+  # without releasing is taken over within lease + one tick.
   @lease_ms 15_000
   @tick_ms 5_000
   @takeover_bound_ms @lease_ms + @tick_ms
@@ -48,7 +48,8 @@ defmodule Cyfr.Cluster.CellTest do
 
       # A peer leaving and coming back raises only its own slot's
       # generation: there is no cell-wide epoch, which is what lets a
-      # join invalidate nothing a peer already issued (§2.1).
+      # join invalidate nothing a peer already issued (ARCHITECTURE.md
+      # §6.1).
       Cell.stop(:b)
       Cell.start(:b)
 
@@ -64,7 +65,7 @@ defmodule Cyfr.Cluster.CellTest do
 
       Cell.partition(:a, :b)
 
-      # A partition is a failure of a link, not of a peer (§7.2). Both
+      # A partition is a failure of a link, not of a peer. Both
       # members keep their database connection, so both keep renewing,
       # and neither may infer from "I cannot see you" that the other has
       # stopped.
@@ -104,8 +105,8 @@ defmodule Cyfr.Cluster.CellTest do
       Cell.start(:b)
 
       # Process death: nothing is released and nothing is logged. The
-      # lease is the only thing a successor can wait on, and §4.1 bounds
-      # that wait at lease + one tick.
+      # lease is the only thing a successor can wait on, and the lease and
+      # renew tick bound that wait at lease + one tick.
       Cell.kill(:b)
 
       {lapsed_ms, _} =
@@ -117,7 +118,7 @@ defmodule Cyfr.Cluster.CellTest do
       Wait.report("a killed member's slot becomes takeable", lapsed_ms, @takeover_bound_ms)
 
       assert lapsed_ms <= @takeover_bound_ms,
-             "a killed member's slot took #{lapsed_ms} ms to lapse, past §4.1's #{@takeover_bound_ms} ms"
+             "a killed member's slot took #{lapsed_ms} ms to lapse, past the #{@takeover_bound_ms} ms bound"
 
       # And the peer notices from the rows alone: its roster drops the
       # dead member without anything telling it.
@@ -145,7 +146,7 @@ defmodule Cyfr.Cluster.CellTest do
       # The slot is keyed by node name and not by boot, so a successor's
       # generation carries on from its predecessor's: a member that came
       # back must never reissue a generation a worker has already retired
-      # (§2.1). Measured as a delta, never against an absolute — the row
+      # (ARCHITECTURE.md §6.1). Measured as a delta, never against an absolute — the row
       # outlives every run against this database.
       assert after_restart["generation"] == before["generation"] + 1
       assert after_restart["owner"] != before["owner"]

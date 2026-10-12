@@ -6,6 +6,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
   require Ecto.Query
 
+  alias Prima.Manifest.Caps
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Components
   alias Sanctum.Consent.Loader
@@ -285,7 +286,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     catalog = ShapeDerivation.all_tool_actions()
 
     assert ShapeDerivation.expand_tools(["*"]) ==
-             Enum.sort(Enum.uniq(catalog -- ~w(feed.bind feed.remove layout.edit)))
+             Enum.sort(Enum.uniq(catalog -- Caps.agent_only_tools()))
 
     assert ShapeDerivation.expand_tools(["component.*"]) ==
              Enum.sort(Enum.filter(catalog, &String.starts_with?(&1, "component.")))

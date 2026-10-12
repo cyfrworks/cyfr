@@ -8,8 +8,8 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
   Exercises the *full* HTTP path: router match, `RawBodyReader` body capture
   through `Plug.Parsers`, rate limiter, signature verification, idempotency
   dedup, controller invocation. Catches wiring regressions that unit-level
-  plug tests can mask — a working test here means W1 (route) + W2 (body
-  reader) + W4 (replay) + W5 (idempotency) are all live in the real
+  plug tests can mask — a working test here means the route, the body
+  reader, replay protection and idempotency are all live in the real
   endpoint.
 
   A delivery whose target names a connection runs in a real runner of the
@@ -78,7 +78,7 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
     :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode16(case: :lower)
   end
 
-  test "happy-path POST reaches controller and accepts async (proves W1 + W2 + body_reader pipeline)",
+  test "happy-path POST reaches controller and accepts async through the route and body reader",
        %{conn: conn, ctx: ctx} do
     %{slug: slug, secret: secret} = create_hook!(ctx, "happy-path")
     body = ~s({"event":"x","ts":12345})

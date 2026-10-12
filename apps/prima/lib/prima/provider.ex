@@ -132,6 +132,9 @@ defmodule Prima.Provider do
     def holder_bound?(%__MODULE__{bind: :holder}), do: true
     def holder_bound?(%__MODULE__{}), do: false
 
+    # A clause error's report would print the argument.
+    def holder_bound?(_other), do: raise(ArgumentError, "expected a Prima.Provider.Stream")
+
     @doc """
     Whether the stream admits `subject`: `nil` for a stream that takes none,
     or a string its grammar matches whole.
@@ -147,14 +150,18 @@ defmodule Prima.Provider do
     end
 
     def admits?(%__MODULE__{}, _subject), do: false
+    def admits?(_other, _subject), do: raise(ArgumentError, "expected a Prima.Provider.Stream")
 
     defp bind?(nil, _subject), do: true
     defp bind?(:holder, subject), do: is_binary(subject)
     defp bind?(_bind, _subject), do: false
 
+    # Proper before it is walked: an improper tail would fail the walk with
+    # a report that prints it.
     defp projection?(fields) when is_list(fields) and fields != [],
       do:
-        Enum.all?(fields, &(is_binary(&1) and Regex.match?(@field, &1))) and
+        not List.improper?(fields) and
+          Enum.all?(fields, &(is_binary(&1) and Regex.match?(@field, &1))) and
           Enum.uniq(fields) == fields
 
     defp projection?(_fields), do: false
@@ -393,8 +400,11 @@ defmodule Prima.Provider do
     if Code.ensure_loaded?(module) and function_exported?(module, :streams, 0) do
       declared = module.streams()
 
+      # Proper before it is walked: an improper tail would fail the walk
+      # with a report that prints it.
       cond do
-        not (is_list(declared) and Enum.all?(declared, &Prima.Provider.Stream.valid?/1)) ->
+        not (is_list(declared) and not List.improper?(declared) and
+                 Enum.all?(declared, &Prima.Provider.Stream.valid?/1)) ->
           raise ArgumentError,
                 "#{inspect(module)}.streams/0 answered #{Prima.LoggerContext.shape(declared)}; " <>
                   "a provider's streams are a list of well-formed %Prima.Provider.Stream{}"

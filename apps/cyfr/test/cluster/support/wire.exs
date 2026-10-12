@@ -5,8 +5,8 @@ defmodule Cyfr.Cluster.Wire do
   @moduledoc """
   A TCP path one member reaches something through, which a case can cut.
 
-  A partition is a failure of a link, not of a peer
-  (`cell-ownership.md` §7.2), and the three links answer differently. This
+  A partition is a failure of a link, not of a peer, and the three links
+  answer differently. This
   is how the suite cuts one link without touching either end of it: the
   member is given a loopback port of this wire's, the wire forwards to the
   real address, and `cut/1` closes every connection through it and refuses

@@ -7,8 +7,7 @@ defmodule Cyfr.Cluster.ProvisioningTest do
   @moduledoc """
   Two first touches of one athanor, and the death of the member that won.
 
-  `cell-ownership.md` §4.7 keeps provisioning's shape from F3: one row per
-  athanor, `(owner, fence)` compare-and-set, a lease on database time. An
+  Provisioning's claim is one row per athanor, `(owner, fence)` compare-and-set, a lease on database time. An
   athanor is filled once whichever member the person's first request
   reaches, and a second member is told `:provisioning_busy` rather than
   filling it again beside the first.
@@ -20,7 +19,7 @@ defmodule Cyfr.Cluster.ProvisioningTest do
 
   use Cyfr.Cluster.Case, async: false
 
-  # §4.7's lease, from `Sanctum.Provisioning`: 60 s, renewed every 20 s.
+  # The claim's lease, from `Sanctum.Provisioning`: 60 s, renewed every 20 s.
   @lease_ms 60_000
 
   # What a successor may add to the lease: its own asking interval. This
@@ -89,7 +88,7 @@ defmodule Cyfr.Cluster.ProvisioningTest do
         ]
 
       assert NaiveDateTime.diff(lease_until, Observer.now(), :millisecond) > @lease_ms - 5_000,
-             "the claim was not leased for the 60 s §4.7 states"
+             "the claim was not leased for its 60 s"
 
       # Process death. Nothing is released and nothing renews, so the only
       # thing between the peer and the athanor is that deadline.

@@ -167,6 +167,8 @@ defmodule Compendium.RegisterMintsNothingTest do
   test "Bootstrap exposes no ref-targeted mint" do
     # `run_for/2` took caller-named refs and minted owner consent for them.
     # That is the shape the hole had; a new caller would reopen it.
+    Code.ensure_loaded!(Sanctum.Consent.Bootstrap)
+
     refute function_exported?(Sanctum.Consent.Bootstrap, :run_for, 2),
            "Sanctum.Consent.Bootstrap.run_for/2 is back — see this module's doc"
   end

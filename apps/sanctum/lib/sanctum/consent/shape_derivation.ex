@@ -78,8 +78,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   # The actions a pattern never grants: each binds or ends a standing
   # conduit for a profile's authority, or rearranges the person's screen,
-  # so it is granted only where it is named.
-  @exact_only ~w(feed.bind feed.remove layout.edit)
+  # so it is granted only where it is named. Only an agent asks for one.
+  @exact_only Caps.agent_only_tools()
 
   @spec live_digest(Sanctum.Context.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def live_digest(ctx, source_ref) do

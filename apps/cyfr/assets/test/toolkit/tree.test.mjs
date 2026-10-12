@@ -9,6 +9,9 @@ import {ELEMENTS, STYLESHEET, formatNumber, formatTime} from "../../js/toolkit/e
 import {GRAMMAR_ELEMENTS, MAX_BYTES, parseTime, parseTree, validateTree} from "../../js/toolkit/tree.js"
 import {ASSET, NONCE, all, byClass, playedHost} from "./support.mjs"
 
+// The time grammar's vector, which `Prima.Canvas.Shape`'s test reads too.
+const times = JSON.parse(readFileSync(new URL("../../../../../tests/fixtures/canvas_shape.json", import.meta.url), "utf8")).times
+
 const valid = (tree) => {
   const result = validateTree(tree)
   assert.equal(result.ok, true, JSON.stringify(result.error))
@@ -191,46 +194,10 @@ describe("the tree grammar", () => {
   })
 
   test("a time is what Prima.Canvas.Shape's time takes", () => {
-    for (const [value, iso] of [
-      ["2026-10-04T12:00:00Z", "2026-10-04T12:00:00.000Z"],
-      ["2026-10-04 12:00:00Z", "2026-10-04T12:00:00.000Z"],
-      ["2026-10-04T12:00:00.250Z", "2026-10-04T12:00:00.250Z"],
-      ["2026-10-04T12:00:00,5Z", "2026-10-04T12:00:00.500Z"],
-      ["2026-10-04T12:00:00.123456789Z", "2026-10-04T12:00:00.123Z"],
-      ["2026-10-04T20:00:00+08:00", "2026-10-04T12:00:00.000Z"],
-      ["2026-10-04T20:00:00+0800", "2026-10-04T12:00:00.000Z"],
-      ["2026-10-04T20:00:00+08", "2026-10-04T12:00:00.000Z"],
-      ["2026-10-04T12:00:00-0000", "2026-10-04T12:00:00.000Z"],
-      ["2026-10-04T12:00:00-00", "2026-10-04T12:00:00.000Z"],
-      ["+2026-10-04T12:00:00Z", "2026-10-04T12:00:00.000Z"],
-      ["2024-02-29T00:00:00Z", "2024-02-29T00:00:00.000Z"],
-      ["2000-02-29T00:00:00Z", "2000-02-29T00:00:00.000Z"]
-    ]) {
-      assert.equal(new Date(parseTime(value)).toISOString(), iso, value)
+    for (const {value, unix_ms} of times.valid) {
+      assert.equal(parseTime(value), unix_ms, value)
     }
-    assert.notEqual(parseTime("-0004-02-29T00:00:00Z"), null)
-
-    for (const value of [
-      "2026-10-04T12:00:00",
-      "2026-10-04T12:00Z",
-      "20261004T120000Z",
-      "2026-10-04t12:00:00Z",
-      "2026-10-04T12:00:00z",
-      "2026-10-04T12:00:00-00:00",
-      "2026-02-30T12:00:00Z",
-      "2023-02-29T00:00:00Z",
-      "1900-02-29T00:00:00Z",
-      "-0001-02-29T00:00:00Z",
-      "2026-10-04T24:00:00Z",
-      "2026-10-04T23:59:60Z",
-      "2026-10-04T12:00:00.Z",
-      "2026-10-04T12:00:00+24:00",
-      "2026-10-04T12:00:00+08:60",
-      "2026-10-04T12:00:00+08:00:00",
-      "+12026-10-04T12:00:00Z",
-      " 2026-10-04T12:00:00Z",
-      "2026-13-04T12:00:00Z"
-    ]) {
+    for (const value of times.invalid) {
       assert.equal(parseTime(value), null, value)
     }
   })

@@ -81,6 +81,7 @@ defmodule Arca.Providers.RecordsTest do
 
   describe "the arca://files/{path} template" do
     test "is advertised by the system provider that declares its read" do
+      Code.ensure_loaded!(MCP)
       refute function_exported?(MCP, :resource_templates, 0)
       templates = Sanctum.Providers.System.resource_templates()
       assert [%{uriTemplate: "arca://files/{path}"} = template] = templates

@@ -73,6 +73,14 @@ defmodule Prima.Manifest.Caps do
   @type storage_path_check :: (String.t() -> boolean())
 
   @doc """
+  The tools only an agent asks for, each by its exact name: binding or
+  removing a feed and editing the layout. A pattern never grants one
+  (`Sanctum.Consent.ShapeDerivation.expand_tools/1`).
+  """
+  @spec agent_only_tools() :: [String.t()]
+  def agent_only_tools, do: @agent_only_tools
+
+  @doc """
   Validate a decoded manifest's `caps` block. Absent is valid.
   `storage_path_ok?` decides whether a declared storage path names a
   guest scope.

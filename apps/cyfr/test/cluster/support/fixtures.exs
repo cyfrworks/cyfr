@@ -243,7 +243,7 @@ defmodule Cyfr.Cluster.Fixtures do
 
   @doc """
   Take `thread_id`'s claim for `turn_id` against the consumed sequence
-  `turn_seq` — §4.2's statement, on its own. Two members naming one
+  `turn_seq` — the thread claim's statement, on its own. Two members naming one
   sequence is the race the statement exists for.
   """
   @spec claim_thread(String.t(), String.t(), String.t(), non_neg_integer()) ::

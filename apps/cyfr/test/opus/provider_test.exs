@@ -100,6 +100,7 @@ defmodule Opus.ProviderTest do
     test "returns the execution tool alone, action-based, and declares no stream" do
       tools = Provider.tools()
       assert Enum.map(tools, & &1.name) == ["execution"]
+      Code.ensure_loaded!(Provider)
       refute function_exported?(Provider, :streams, 0)
       assert Sanctum.Catalog.lookup("card") == :miss
     end

@@ -60,6 +60,20 @@ defmodule Prima.ProviderTest do
         )
   end
 
+  # A value no report may carry.
+  @canary "c4n4ry-provider-7d21"
+
+  # Its tail is `@canary`, spelled again: a nested module cannot read the
+  # attributes of the one around it.
+  defmodule Improper do
+    @moduledoc false
+    def streams,
+      do: [
+        %Prima.Provider.Stream{name: "a.b", topic: :x, projection: ["f"], deadline_bound: 1}
+        | "c4n4ry-provider-7d21"
+      ]
+  end
+
   defmodule Unanchored do
     @moduledoc false
     def streams,
@@ -123,6 +137,16 @@ defmodule Prima.ProviderTest do
              Provider.streams(Streaming)
   end
 
+  # The report a raise leaves, its stacktrace included, as a crash log
+  # would print it.
+  defp raised(fun) do
+    fun.()
+  rescue
+    e -> {:raised, Exception.format(:error, e, __STACKTRACE__)}
+  else
+    _answer -> :answered
+  end
+
   test "a malformed declaration raises at the read, so the boot refuses it" do
     assert_raise ArgumentError, ~r/twice/, fn -> Provider.streams(Twice) end
     assert_raise ArgumentError, ~r/well-formed/, fn -> Provider.streams(Unanchored) end
@@ -151,6 +175,24 @@ defmodule Prima.ProviderTest do
     refute ProviderStream.valid?(%{held | subject: nil})
     refute ProviderStream.valid?(%{@deltas | bind: :anyone})
     refute ProviderStream.valid?(%{@deltas | bind: "holder"})
+  end
+
+  test "a malformed argument is refused, and the report never prints it" do
+    for call <- [
+          fn -> ProviderStream.holder_bound?(%{bind: @canary}) end,
+          fn -> ProviderStream.admits?(%{subject: @canary}, @canary) end
+        ] do
+      assert {:raised, report} = raised(call)
+      refute report =~ @canary
+      assert report =~ "expected a Prima.Provider.Stream"
+    end
+
+    assert {:raised, report} = raised(fn -> Provider.streams(Improper) end)
+    refute report =~ @canary
+    assert report =~ "well-formed"
+
+    # An improper projection is refused before it is walked.
+    refute ProviderStream.valid?(%{@deltas | projection: ["seq" | @canary]})
   end
 
   describe "a canvas-readable stream" do

@@ -7,7 +7,7 @@ defmodule Cyfr.Cluster.ScheduleTest do
   @moduledoc """
   Two schedulers, one due occurrence.
 
-  `cell-ownership.md` §4.8 says firing is already safe: occurrence
+  Firing is safe in a cell by construction: occurrence
   uniqueness on `(schedule_id, scheduled_for)` plus the transactional
   cursor advance means two members racing one due schedule produce one
   occurrence. Every member arms its own timer for every active schedule,

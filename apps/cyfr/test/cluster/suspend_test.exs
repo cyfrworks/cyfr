@@ -8,7 +8,7 @@ defmodule Cyfr.Cluster.SuspendTest do
   A turn set down on one member and carried on by the other, with a
   message queued and an approval pending across the move.
 
-  `cell-ownership.md` §9 gives `turn.suspend` its one job beyond what the
+  `turn.suspend` has one job beyond what the
   approval pause already does durably: it **releases
   `threads.active_turn_id`**, so a suspended turn is resumable on another
   member. An approval pause keeps the claim; a suspend gives it up. What

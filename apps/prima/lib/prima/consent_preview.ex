@@ -266,18 +266,8 @@ defmodule Prima.ConsentPreview.Row do
   alias Prima.Identity.Encoding
   alias Prima.Manifest.Tincture
 
-  @kinds %{
-    "credential" => :credential,
-    "egress" => :egress,
-    "storage" => :storage,
-    "tools" => :tools,
-    "tool_servers" => :tool_servers,
-    "limits" => :limits,
-    "frame" => :frame,
-    "streams" => :streams,
-    "system_actions" => :system_actions
-  }
-  @narrowable [:egress, :storage, :tools, :limits]
+  @kinds Map.new(Prima.ConsentPreview.kinds(), &{Atom.to_string(&1), &1})
+  @narrowable Prima.ConsentPreview.narrowable_kinds()
   @one_per_node [:egress, :storage, :tools, :limits, :frame, :system_actions]
   @max_text 1024
   @max_set 256

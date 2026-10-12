@@ -7,10 +7,10 @@ defmodule Cyfr.Cluster.ThreadTest do
   @moduledoc """
   Which member holds a thread, and what the other one does about it.
 
-  `cell-ownership.md` §4.2 gives the thread its claim: one statement
+  A thread's claim is one statement
   naming the turn **and** the consumed sequence the claimant read, so of
   two members reading the same thread at the same moment one claim lands.
-  §6 gives the rule that makes a join harmless: a member that finds no
+  A join is harmless by one rule: a member that finds no
   local runner reads the thread row, and a turn whose `runner_id` is a
   live member's boot is a **peer's** — it does not recover it, does not
   count a recovery against it, and answers the caller that the turn is
@@ -22,8 +22,9 @@ defmodule Cyfr.Cluster.ThreadTest do
 
   use Cyfr.Cluster.Case, async: false
 
-  # §4.1's takeover bound: a member that stops without releasing is taken
-  # over within its lease plus its successor's next tick.
+  # The takeover bound, from `Cyfr.Cell`'s lease 15 s and renew tick 5 s: a
+  # member that stops without releasing is taken over within its lease
+  # plus its successor's next tick.
   @takeover_bound_ms 20_000
 
   describe "two turns competing for one thread" do
@@ -96,7 +97,7 @@ defmodule Cyfr.Cluster.ThreadTest do
     test "two members claiming one thread at one instant land one claim" do
       %{athanor: athanor, thread: thread} = athanor(:a, "instant")
 
-      # §4.2's statement on its own, which is where the race lives: both
+      # The claim's statement on its own, which is where the race lives: both
       # members name the same consumed sequence — the one the thread
       # reads — and two different turns.
       current = Cell.call(:a, Cyfr.Cluster.Fixtures, :thread, [athanor, thread])
@@ -153,8 +154,8 @@ defmodule Cyfr.Cluster.ThreadTest do
              "the peer started a runner for a thread a live member holds"
 
       # Nothing about the peer's look cost the turn a recovery, which is
-      # the fault §6 exists to close: three joins used to end a healthy
-      # turn `uncertain`.
+      # the fault the peer rule exists to close: a join must not end a
+      # healthy turn `uncertain`.
       assert Observer.turn(accepted.turn_id)["recovery_attempts"] == 0
       assert Observer.turn(accepted.turn_id)["status"] == "running"
       assert Observer.thread(thread)["active_turn_id"] == accepted.turn_id
@@ -192,7 +193,7 @@ defmodule Cyfr.Cluster.ThreadTest do
       Wait.report("a dead holder's turn becomes takeable", noticed_ms, @takeover_bound_ms)
 
       assert noticed_ms <= @takeover_bound_ms,
-             "the turn was takeable only after #{noticed_ms} ms, past §4.1's #{@takeover_bound_ms} ms"
+             "the turn was takeable only after #{noticed_ms} ms, past the #{@takeover_bound_ms} ms bound"
 
       # And now the survivor may act on the thread, which is the whole
       # point of waiting: recovery is admitted only for a turn whose

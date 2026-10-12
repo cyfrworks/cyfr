@@ -303,9 +303,9 @@ defmodule Aqua.LaunchTest do
     end
   end
 
-  # The probe of K.K2's attached-request suite, published as an app of the
-  # person's own whose need `api_key` is attached by the rule: it sends its
-  # input as its one request and answers what it got.
+  # The attached-request probe, published as an app of the person's own
+  # whose need `api_key` is attached by the rule: it sends its input as its
+  # one request and answers what it got.
   defp publish_probe!(ctx) do
     name = "launch-probe-#{System.unique_integer([:positive])}"
 

@@ -374,6 +374,39 @@ defmodule PrismWeb.FilesLiveTest do
       assert Enum.sort(Enum.map(seen_by_carol, & &1.user_id)) == Enum.sort([bob.user_id, me])
       assert {:ok, []} = Members.people_sharing(stan.user_id)
     end
+
+    test "a refused read of the people sharing an athanor is told, never shown as no one",
+         %{conn: conn, ctx: ctx} do
+      # The page's context stays fresh across the click, so the event
+      # reads nothing of the store before the people read it makes.
+      original = Application.get_env(:sanctum, :caller_memo_ttl_ms)
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:sanctum, :caller_memo_ttl_ms, original),
+          else: Application.delete_env(:sanctum, :caller_memo_ttl_ms)
+      end)
+
+      _rita = sharing_person!(ctx, name: "Rita Recipient")
+      :ok = Arca.put(actor(ctx), ["data", "a.txt"], "alpha")
+
+      {view, _html} = mount_athanor(conn, "/files?p=data")
+      view |> element(~s(#files-entries input[phx-value-path="data/a.txt"])) |> render_click()
+
+      Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_unavailable")
+
+      html =
+        try do
+          view |> element("#files-send-copy") |> render_click()
+        after
+          Arca.Repo.query!("ALTER TABLE athanors_unavailable RENAME TO athanors")
+        end
+
+      refute html =~ "You share no athanor with anyone yet."
+      refute has_element?(view, "#send-copy-form")
+      assert html =~ "Who you share an athanor with could not be read."
+    end
   end
 
   # Someone who shares a group with `ctx`'s person, working in that group

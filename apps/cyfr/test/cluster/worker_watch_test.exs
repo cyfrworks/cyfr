@@ -7,21 +7,19 @@ defmodule Cyfr.Cluster.WorkerWatchTest do
   @moduledoc """
   A member that cannot reach a worker its peer can.
 
-  This is the fault `cell-ownership.md` §4.4 exists to close: every member
+  This is the fault the worker watch's claim exists to close: every member
   used to poll every worker and lapse the attempts of whatever boot it
   stopped hearing from, **whoever claimed them**, so a member partitioned
   from a worker lapsed a healthy peer's running work. The answer is a
-  claim whose lease a **miss does not renew**, and a cascade:
-
-  > a miss does not renew, so a member that cannot reach a worker loses
-  > the watch within one lease. The next rendezvous candidate takes it,
-  > and if *it* can reach the worker it hears a status and resets `misses`
-  > to zero.
+  claim whose lease a **miss does not renew**, and a cascade: a member
+  that cannot reach a worker loses the watch within one lease, the next
+  rendezvous candidate takes it, and if *it* can reach the worker it hears
+  a status and resets `misses` to zero.
 
   Two members here have **different paths to one worker service**: one
   reaches it directly, the other through a wire this suite can cut
   (`Cyfr.Cluster.Wire`). Cutting the wire is not killing the worker, and
-  the difference is the whole of §4.4.
+  the difference is the whole of the watch's claim.
 
   The last case is the deliberately broken variant. The roster gate
   `Cyfr.Cell.mine?/1` was **not** applied to the watch, and this is why:
@@ -39,13 +37,13 @@ defmodule Cyfr.Cluster.WorkerWatchTest do
   @kind "worker_watch"
   @reference "reagent:local.cluster-watch:1.0.0"
 
-  # The case's watch: a 1 s poll, a 2 s lease (twice the poll, as §4.4
-  # says), and three misses to the threshold.
+  # The case's watch: a 1 s poll, a 2 s lease (twice the poll, so one
+  # missed poll does not lose it), and three misses to the threshold.
   @poll_ms 1_000
   @lease_ms 2_000
   @misses 3
 
-  # §4.4's bound for a genuinely dead worker: the claim rotates at most
+  # The bound for a genuinely dead worker: the claim rotates at most
   # once per miss, so `misses × (lease + poll)`.
   @detection_bound_ms @misses * (@lease_ms + @poll_ms)
 

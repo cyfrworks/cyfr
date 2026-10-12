@@ -1755,7 +1755,7 @@ defmodule Opus.Schedules.OwnershipFenceFeedsTest do
   slot over. The task ends `{:shutdown, :left_to_recovery}`, so the
   scheduler, still believing it holds its slot, asks for the pass due two
   ticks after the exit. The fires run through the real scheduler path with
-  B.B4's feed fixtures and the scripted worker service.
+  the markets catalyst's feed fixtures and the scripted worker service.
   """
 
   # Starts the scheduler, takes a slot through `Arca.ControlPlane` and
@@ -1874,7 +1874,7 @@ defmodule Opus.Schedules.OwnershipFenceFeedsTest do
 
   defp due_after(instant), do: instant + 2 * @tick_ms + Arca.ControlPlane.margin_ms()
 
-  # B.B4's feed fixtures: the markets catalyst registered, and the profile
+  # The feed fixtures: the markets catalyst registered, and the profile
   # feeds name with its head consent, admitting scheduled runs.
   defp consented!(ctx) do
     {:ok, component} =

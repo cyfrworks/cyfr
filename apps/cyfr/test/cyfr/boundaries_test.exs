@@ -635,6 +635,8 @@ defmodule Cyfr.BoundariesTest do
              """
 
       # No register of rows written ahead of their callers survives.
+      Code.ensure_loaded!(Boundaries)
+
       for register <- [:pending_sanctum_exports, :pending_public_routes] do
         refute function_exported?(Boundaries, register, 0), "Boundaries.#{register}/0 is back"
       end
@@ -2051,9 +2053,8 @@ defmodule Cyfr.BoundariesTest do
 
              #{Enum.join(unrostered, "\n")}
 
-             J1's rule was that `Sanctum.Context.actor/1` is the only way to build
-             one. There are four ways now, each defensible and in the right layer,
-             and four is how you get six. Add the path to
+             There are four ways to build one, each defensible and in the right
+             layer, and four is how you get six. Add the path to
              `Cyfr.Boundaries.actor_paths/0` with the reason it is not one of the
              four — or reach for one of them.
              """

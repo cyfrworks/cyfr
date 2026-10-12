@@ -8,15 +8,13 @@ defmodule Cyfr.Cluster.HostRoutingTest do
   Where a worker's host call lands, and what the other member does with
   one that lands on it.
 
-  `cell-ownership.md` §5 classes an attempt's host-call state **shared by
-  construction** — "an attempt has exactly one process in the cell, on the
-  member holding it" — and says so conditionally:
-
-  > This holds **only if a host call reaches that member**: the assignment
-  > carries the issuing member's own address, and a worker calls that
-  > address directly rather than the cell's balancer.
-
-  It does now, and this file is where that is true. An assignment names
+  An attempt's host-call state is **shared by construction** — an attempt
+  has exactly one process in the cell, on the member holding it
+  (ARCHITECTURE.md §6.1: host calls bind to the member that issued them)
+  — and that holds **only if a host call reaches that member**: the
+  assignment carries the issuing member's own address, and a worker calls
+  that address directly rather than the cell's balancer. This file is
+  where that is true. An assignment names
   the member that issued it and the address that member's host API is
   reached at; a runner posts that attempt's calls there and names the
   member in every header. What each case proves:
@@ -33,8 +31,8 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       made a misrouted worker silent rather than broken;
     * a member that is *gone* fails differently from a member that
       *refuses*: the post never becomes an answer at all, and the
-      surviving member settles the attempt from the rows within §4.3's
-      bound;
+      surviving member settles the attempt from the rows within the
+      attempt lease plus one sweep;
     * an address or a member rewritten in an assignment fails its MAC
       before a single call is made to it, so the address inside the signed
       envelope is not a redirect anyone but CYFR can aim.
@@ -49,7 +47,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
 
   alias Prima.{Assignment, WorkerAuth, WorkerWire}
 
-  # §4.3: the attempt lease (180 s) plus the sweeper's interval (60 s) is
+  # The attempt lease (180 s) plus the sweeper's interval (60 s) is
   # the maximum recovery for an execution whose member is gone. The case
   # expires the lease and drives the sweep rather than waiting both out;
   # what it measures is that the surviving member settles it, and that
@@ -243,8 +241,8 @@ defmodule Cyfr.Cluster.HostRoutingTest do
 
       # And the work is the cell's to settle, not the dead member's: the
       # attempt's lease runs out and the surviving member's sweep closes
-      # it. The lease is expired rather than waited out; §4.3's bound is
-      # the lease plus one sweep, and what this measures is the sweep.
+      # it. The lease is expired rather than waited out; the bound is the
+      # lease plus one sweep, and what this measures is the sweep.
       Observer.expire_attempt!(held.attempt)
       Cell.call(:b, Cyfr.Cluster.Boot, :sweep, [])
 

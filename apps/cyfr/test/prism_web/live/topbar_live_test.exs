@@ -10,6 +10,7 @@ defmodule PrismWeb.TopbarLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
   alias Sanctum.Tenancy.Athanors
@@ -285,6 +286,55 @@ defmodule PrismWeb.TopbarLiveTest do
       assert has_element?(bar, "#file-offers", "1 offer")
       refute has_element?(bar, "#file-offers", "2 offers")
     end
+  end
+
+  test "an offer past its expiry counts for nothing before the sweep removes it", %{conn: conn} do
+    rita = test_user(name: "Rita")
+    conn = log_in_user(conn, rita)
+    home = seated_athanor()
+
+    sam = test_user(name: "Sam")
+    {:ok, group} = Athanors.create_group(sam.user_id, "Pair #{sam.namespace}")
+
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure(rita.user_id, scope: "athanor", athanor_id: group.id)
+
+    sam_ctx = session(sam.user_id, group.id)
+    :ok = Arca.ensure_roots(Sanctum.Context.actor(sam_ctx))
+
+    for name <- ~w(a.txt b.txt),
+        do: :ok = Arca.put(Sanctum.Context.actor(sam_ctx), ["data", name], name)
+
+    offer = fn path ->
+      {:ok, %{offer_id: offer_id}} =
+        Sanctum.Gate.call_external("file", sam_ctx, %{
+          "action" => "offer",
+          "paths" => [path],
+          "to" => rita.user_id
+        })
+
+      offer_id
+    end
+
+    # Still `offered`, its expiry passed, and no sweep has run.
+    expired = offer.("data/a.txt")
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(o in Arca.Schemas.FileOffer, where: o.offer_id == ^expired),
+        set: [expires_at: DateTime.add(DateTime.utc_now(), -60, :second)]
+      )
+
+    {view, _html} = mount_athanor(conn, "/settings", home)
+    bar = topbar(view)
+    :sys.get_state(bar.pid)
+    refute has_element?(bar, "#file-offers")
+
+    # A live offer beside it is counted alone.
+    _live = offer.("data/b.txt")
+    :sys.get_state(bar.pid)
+    assert has_element?(bar, "#file-offers", "1 offer")
+    refute has_element?(bar, "#file-offers", "2 offers")
   end
 
   defp session(user_id, athanor_id) do

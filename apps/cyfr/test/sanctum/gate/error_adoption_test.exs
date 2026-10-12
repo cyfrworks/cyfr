@@ -136,10 +136,9 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/arca/lib/arca/storage/unit_locator.ex" => 4,
     # Table names read from the live schema.
     "apps/arca/lib/arca/tenant_tables.ex" => 2,
-    # The keyring's labels, which name keys and are not key material, and
-    # the application's boot refusals; the composition root is S5's to
-    # recut (the label prefix a too-long label prints is the one to review
-    # there).
+    # The keyring's labels, which name keys and are not key material
+    # (a too-long label prints only its prefix), and the application's
+    # boot refusals.
     "apps/cyfr/lib/cyfr/application.ex" => 5,
     # An application name from the boundary table.
     "apps/cyfr/lib/cyfr/boundaries.ex" => 1,

@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.Canvas.Shape and Prima.Manifest.Results, read by apps/prima/test/prima/canvas/shape_test.exs and apps/prima/test/prima/manifest/results_test.exs. `types`, `max_depth` and `reasons` are the module's own: every refusal names its path, an RFC 6901 pointer, and one of `reasons`. Every valid shape normalizes to `normalized` (which normalizes to itself) and its fixture is `fixture`, which the shape passes; `canonical` is the quote shape's JCS bytes and digest, and each `spellings` row's shapes normalize to one shape with one digest, `required` sorted. Every invalid shape is refused at `path` for `reason`. Each `values` shape passes its `valid` values and refuses each `invalid` one at `path` for `reason`, the first failing path, an object's keys taken in sorted order. Every valid `results` block answers its `normalized` shapes, and every invalid one is refused.",
+  "comment": "The vectors pinning Prima.Canvas.Shape and Prima.Manifest.Results, read by apps/prima/test/prima/canvas/shape_test.exs and apps/prima/test/prima/manifest/results_test.exs, and its `times` by the toolkit's apps/cyfr/assets/test/toolkit/tree.test.mjs. `types`, `max_depth` and `reasons` are the module's own: every refusal names its path, an RFC 6901 pointer, and one of `reasons`. Every valid shape normalizes to `normalized` (which normalizes to itself) and its fixture is `fixture`, which the shape passes; `canonical` is the quote shape's JCS bytes and digest, and each `spellings` row's shapes normalize to one shape with one digest, `required` sorted. Every invalid shape is refused at `path` for `reason`. Each `times` valid value is a `time` at the instant `unix_ms` (milliseconds since the epoch, the fraction cut to milliseconds), and each invalid one is refused. Each `values` shape passes its `valid` values and refuses each `invalid` one at `path` for `reason`, the first failing path, an object's keys taken in sorted order. Every valid `results` block answers its `normalized` shapes, and every invalid one is refused.",
   "types": [
     "string",
     "number",
@@ -335,6 +335,49 @@
       "digest": "sha256:408c4a248e93d772c9c9203af3559b9305f4d7f5c93e7da050ac29705fc7d9ff"
     }
   ],
+  "times": {
+    "valid": [
+      {"value": "2026-10-04T12:00:00Z", "unix_ms": 1791115200000},
+      {"value": "2026-10-04 12:00:00Z", "unix_ms": 1791115200000},
+      {"value": "2026-10-04T12:00:00.250Z", "unix_ms": 1791115200250},
+      {"value": "2026-10-04T12:00:00,5Z", "unix_ms": 1791115200500},
+      {"value": "2026-10-04T12:00:00.123456789Z", "unix_ms": 1791115200123},
+      {"value": "2026-10-04T12:00:00.5-03:30", "unix_ms": 1791127800500},
+      {"value": "2026-10-04T20:00:00+08:00", "unix_ms": 1791115200000},
+      {"value": "2026-10-04T20:00:00+0800", "unix_ms": 1791115200000},
+      {"value": "2026-10-04T20:00:00+08", "unix_ms": 1791115200000},
+      {"value": "2026-10-04 12:00:00+00:00", "unix_ms": 1791115200000},
+      {"value": "2026-10-04T12:00:00-0000", "unix_ms": 1791115200000},
+      {"value": "2026-10-04T12:00:00-00", "unix_ms": 1791115200000},
+      {"value": "+2026-10-04T12:00:00Z", "unix_ms": 1791115200000},
+      {"value": "2024-02-29T00:00:00Z", "unix_ms": 1709164800000},
+      {"value": "2000-02-29T00:00:00Z", "unix_ms": 951782400000},
+      {"value": "-0004-02-29T00:00:00Z", "unix_ms": -62288352000000}
+    ],
+    "invalid": [
+      "2026-10-04T12:00:00",
+      "2026-10-04",
+      "noon",
+      "2026-10-04T12:00Z",
+      "20261004T120000Z",
+      "2026-10-04t12:00:00Z",
+      "2026-10-04T12:00:00z",
+      "2026-10-04T12:00:00-00:00",
+      "2026-02-30T12:00:00Z",
+      "2023-02-29T00:00:00Z",
+      "1900-02-29T00:00:00Z",
+      "-0001-02-29T00:00:00Z",
+      "2026-10-04T24:00:00Z",
+      "2026-10-04T23:59:60Z",
+      "2026-10-04T12:00:00.Z",
+      "2026-10-04T12:00:00+24:00",
+      "2026-10-04T12:00:00+08:60",
+      "2026-10-04T12:00:00+08:00:00",
+      "+12026-10-04T12:00:00Z",
+      " 2026-10-04T12:00:00Z",
+      "2026-13-04T12:00:00Z"
+    ]
+  },
   "values": [
     {
       "shape": {

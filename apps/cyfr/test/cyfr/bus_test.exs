@@ -329,6 +329,7 @@ defmodule Cyfr.BusTest do
         end
       end)
 
+      Code.ensure_loaded!(Bus)
       refute function_exported?(Bus, :bounded_reason, 1)
     end
   end
@@ -642,11 +643,21 @@ defmodule Cyfr.BusTest do
   test "the retired helpers are gone" do
     refute Code.ensure_loaded?(Sanctum.PubSub)
     refute Code.ensure_loaded?(Prism.TelemetryBridge)
-    refute function_exported?(Sanctum.Notify, :topic, 1)
-    refute function_exported?(Sanctum.Notify, :platform_topic, 0)
-    refute function_exported?(Sanctum.Session, :topic, 0)
-    refute function_exported?(Sanctum.Tenancy.Members, :topic, 1)
-    refute function_exported?(Emissary.MCP.Progress, :emit, 2)
+
+    exported =
+      for {module, function, arity} <- [
+            {Sanctum.Notify, :topic, 1},
+            {Sanctum.Notify, :platform_topic, 0},
+            {Sanctum.Session, :topic, 0},
+            {Sanctum.Tenancy.Members, :topic, 1},
+            {Emissary.MCP.Progress, :emit, 2}
+          ],
+          Code.ensure_loaded!(module),
+          function_exported?(module, function, arity),
+          do: {module, function, arity}
+
+    assert exported == []
+
     refute Code.ensure_loaded?(Emissary.MCP.Progress.Registry)
   end
 end

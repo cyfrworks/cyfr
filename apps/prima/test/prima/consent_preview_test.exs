@@ -39,6 +39,26 @@ defmodule Prima.ConsentPreviewTest do
              ~w(credential egress storage tools tool_servers limits frame streams system_actions)
   end
 
+  test "every kind decodes from its row, and only a narrowable one may be narrowed" do
+    %{"kinds" => kinds, "narrowable_kinds" => narrowable, "preview" => %{"rows" => rows}} =
+      vectors()
+
+    row_of = fn name -> Enum.find(rows, &(&1["kind"] == name)) end
+
+    for name <- kinds do
+      assert {:ok, %Row{kind: kind}} = Row.decode(row_of.(name)), name
+      assert Atom.to_string(kind) == name
+    end
+
+    for name <- kinds -- narrowable do
+      assert {:error, {:not_narrowable, kind}} = Row.decode(%{row_of.(name) | "narrowed" => true})
+      assert Atom.to_string(kind) == name
+    end
+
+    assert Row.decode(%{hd(rows) | "kind" => "sentence"}) ==
+             {:error, {:unknown_kind, "sentence"}}
+  end
+
   test "the preview holds a row of every kind and writes back to itself" do
     preview = vectors()["preview"]
 

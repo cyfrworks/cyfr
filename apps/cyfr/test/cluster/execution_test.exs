@@ -8,8 +8,7 @@ defmodule Cyfr.Cluster.ExecutionTest do
   Killing the member that holds running work, at three different points,
   and what its peer does about each.
 
-  The three points are different failures and the plan names them
-  separately:
+  The three points are different failures:
 
     * **after the durable intent** — the execution's row and its attempt
       exist with a lease, and nothing has been dispatched. A successor has
@@ -21,15 +20,16 @@ defmodule Cyfr.Cluster.ExecutionTest do
       settled it anyway would be replacing a real answer with
       `uncertain`.
 
-  `cell-ownership.md` §4.3 gives the bound for the first two: the attempt
-  lease (180 s) plus the sweeper interval (60 s), **≤ 240 s**. All three
+  The first two are settled within the attempt lease (180 s) plus
+  `Opus.Sweeper`'s interval (60 s), **≤ 240 s**: a successor waits out the
+  lease, and the next sweep retires what lapsed. All three
   are killed together and measured against that once, because the wait is
   the lease and the lease is the same for all of them.
   """
 
   use Cyfr.Cluster.Case, async: false
 
-  # §4.3: attempt lease 180 s, sweeper interval 60 s.
+  # The attempt lease 180 s, the sweeper interval 60 s.
   @lease_ms 180_000
   @sweep_ms 60_000
   @recovery_bound_ms @lease_ms + @sweep_ms
@@ -64,7 +64,7 @@ defmodule Cyfr.Cluster.ExecutionTest do
       left_ms = NaiveDateTime.diff(lease_until, Observer.now(), :millisecond)
 
       assert left_ms > @lease_ms - 10_000,
-             "the attempt was leased for #{left_ms} ms, not the #{@lease_ms} ms §4.3 states"
+             "the attempt was leased for #{left_ms} ms, not the #{@lease_ms} ms lease"
 
       # Process death, with all three in that state.
       Cell.kill(:a)
@@ -85,7 +85,7 @@ defmodule Cyfr.Cluster.ExecutionTest do
       Wait.report("a dead member's running work is settled", settled_ms, @recovery_bound_ms)
 
       assert settled_ms <= @recovery_bound_ms,
-             "the peer took #{settled_ms} ms, past §4.3's #{@recovery_bound_ms} ms"
+             "the peer took #{settled_ms} ms, past the #{@recovery_bound_ms} ms bound"
 
       # Both are `uncertain`, which is the truthful answer for work whose
       # holder stopped without saying what happened.
@@ -109,7 +109,7 @@ defmodule Cyfr.Cluster.ExecutionTest do
 
       # The sweep's authority is the row: `lapse/2` matches the exact
       # `lease_until` the scan observed, so two members sweeping one
-      # attempt produce one lapse and one no-op (§4.9). The lease is put
+      # attempt produce one lapse and one no-op. The lease is put
       # in the past here rather than waited out — the case above is what
       # measures the lease; this one is about what two sweepers do to one
       # row.

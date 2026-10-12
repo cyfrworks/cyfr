@@ -8,11 +8,11 @@ defmodule Cyfr.Cluster.SharedAuthorityTest do
   The tenant's durable ceilings, claimed from two members at once: one
   consent budget and one invocation rate.
 
-  `cell-ownership.md` §5 says the invoke-budget ETS counter is advisory
-  because "the durable reservation is on the path for **every** spawn",
-  and names the case this file carries: *two members, one budget, the ETS
-  counters cold on both, and the reservation rows must still hold the
-  ceiling*. §4.6 says the same of the rate window: never more than `cap`
+  The invoke-budget ETS counter is advisory because the durable
+  reservation is on the path for **every** spawn, and this file carries
+  the case that shows it: *two members, one budget, the ETS counters cold
+  on both, and the reservation rows must still hold the ceiling*. The
+  same holds of the rate window: never more than `cap`
   admitted in any aligned window of `window_ms`, across the whole cell.
 
   Both are measured as **deltas against rows nothing else writes**: the

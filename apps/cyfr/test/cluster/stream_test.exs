@@ -7,7 +7,7 @@ defmodule Cyfr.Cluster.StreamTest do
   @moduledoc """
   A reader that fails over to the other member, and the order it sees.
 
-  `cell-ownership.md` §5 makes one thing about SSE non-optional:
+  One thing about SSE is non-optional in a cell:
   **`Last-Event-ID` replay must read the durable `execution_events` rows
   when the per-member buffer does not hold the id**, so a reader that
   fails over to another member sees the same order. The per-member buffer

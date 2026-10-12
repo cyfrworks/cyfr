@@ -45,6 +45,7 @@ defmodule Sanctum.ContextPlaneTest do
     test "is idempotent and has no inverse" do
       guest = Context.enter_guest(Context.build(%{user_id: "u"}))
       assert Context.enter_guest(guest).plane == :guest
+      Code.ensure_loaded!(Context)
       refute function_exported?(Context, :leave_guest, 1)
       refute function_exported?(Context, :exit_guest, 1)
     end

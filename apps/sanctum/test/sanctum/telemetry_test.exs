@@ -176,6 +176,7 @@ defmodule Sanctum.TelemetryTest do
                :regrant_required
              ]
 
+      Code.ensure_loaded!(Sanctum.Notify)
       refute function_exported?(Sanctum.Notify, :topic, 1)
       refute function_exported?(Sanctum.Notify, :platform_topic, 0)
     end
@@ -188,6 +189,7 @@ defmodule Sanctum.TelemetryTest do
       assert_receive {:announced, [:cyfr, :sanctum, :membership, :changed], %{count: 1},
                       %{user_id: "user_1", athanor_id: "ath_1", change: :joined}}
 
+      Code.ensure_loaded!(Sanctum.Tenancy.Members)
       refute function_exported?(Sanctum.Tenancy.Members, :topic, 1)
     end
 
@@ -203,6 +205,7 @@ defmodule Sanctum.TelemetryTest do
       assert_receive {:announced, [:cyfr, :sanctum, :sessions, :revoked], %{count: 1},
                       %{user_id: "user_1"}}
 
+      Code.ensure_loaded!(Sanctum.Session)
       refute function_exported?(Sanctum.Session, :topic, 0)
     end
 

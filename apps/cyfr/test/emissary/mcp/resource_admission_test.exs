@@ -388,6 +388,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
         refute body =~ decision, "the Router's resource read makes a decision: #{decision}"
       end
 
+      Code.ensure_loaded!(Resources)
       refute function_exported?(Resources, :read, 2)
     end
   end

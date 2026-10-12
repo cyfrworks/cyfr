@@ -4,7 +4,7 @@
 defmodule Cyfr.Cluster.Wait do
   @moduledoc """
   Bounded condition checks, and the measurements a case reports against
-  the bounds the cell ownership design note states.
+  the bounds the cell's leases and sweeps set.
 
   There are no sleeps in this suite that stand in for an event. Where a
   case needs two members to act at one instant it makes the interleaving
@@ -41,8 +41,8 @@ defmodule Cyfr.Cluster.Wait do
   milliseconds from the call to the first check that held.
 
   The clock is `System.monotonic_time/1`: what is being measured is how
-  long one observer waited, which is exactly what a monotonic clock is for
-  (`cell-ownership.md` §3).
+  long one observer waited, which is exactly what a monotonic clock is for;
+  ownership itself is decided on database time, never a member's clock.
   """
   @spec measure!((-> as_boolean(term())), String.t(), timeout()) ::
           {non_neg_integer(), term()}
