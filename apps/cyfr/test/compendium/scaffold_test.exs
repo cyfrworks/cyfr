@@ -508,7 +508,8 @@ defmodule Compendium.ScaffoldTest do
       react = read_json(tincture_base(ctx, "with-react"), "package-lock.json")["packages"]
 
       assert Map.has_key?(vite, "node_modules/vite")
-      assert Map.has_key?(vite, "node_modules/esbuild")
+      assert Map.has_key?(vite, "node_modules/rolldown")
+      refute Map.has_key?(vite, "node_modules/esbuild")
       refute Map.has_key?(vite, "node_modules/react")
       refute Map.has_key?(vite, "node_modules/typescript")
 
