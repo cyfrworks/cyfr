@@ -254,42 +254,93 @@ defmodule Locus.Runtime.SettingsTest do
             ~S[:os.getenv(~c"X")],
             ~S[:os.getenv(~c"X", ~c"y")],
             ~S["X" |> System.get_env()],
-            ~S[f = &System.get_env/1]
+            ~S[f = &System.get_env/1],
+            ~S[alias System, as: Env
+               Env.get_env("X")],
+            ~S[alias System, as: Env
+               "X" |> Env.fetch_env!()],
+            ~S[alias :os, as: OS
+               OS.getenv(~c"X")],
+            ~S|apply(System, :get_env, ["X"])|,
+            ~S|apply(System, :fetch_env!, [name])|,
+            ~S|alias System, as: Env
+               apply(Env, :get_env, ["X", "y"])|
           ] do
         assert [_ | _] = reads_by_name(Code.string_to_quoted!(source)), source
       end
 
-      assert reads_by_name(Code.string_to_quoted!(~S[System.get_env()])) == []
-      assert reads_by_name(Code.string_to_quoted!(~S[:os.getenv()])) == []
+      for source <- [
+            ~S[System.get_env()],
+            ~S[:os.getenv()],
+            ~S|apply(System, :get_env, [])|,
+            ~S[alias Other, as: Env
+               Env.get_env("X")],
+            ~S|apply(Other, :get_env, ["X"])|
+          ] do
+        assert reads_by_name(Code.string_to_quoted!(source)) == [], source
+      end
+
       assert "LOCUS_" in string_literals(Code.string_to_quoted!(~S["LOCUS_" <> name]))
     end
   end
 
   # Every call of an environment read that names a variable: one given an
-  # argument, piped one, or captured.
+  # argument, piped one, captured, or applied with a literal module and
+  # function (`apply(System, :get_env, ["X"])`), the module spelled or
+  # renamed (`alias System, as: Env`).
   defp reads_by_name(ast) do
+    aliases = renames(ast)
+
     {_ast, found} =
       Macro.prewalk(ast, [], fn
-        {:|>, _, [_value, call]} = node, found -> {node, record(node, call, found)}
-        {:&, _, [{:/, _, [call, _arity]}]} = node, found -> {node, record(node, call, found)}
-        {_call, _, [_ | _]} = node, found -> {node, record(node, node, found)}
-        node, found -> {node, found}
+        {:|>, _, [_value, call]} = node, found ->
+          {node, record(node, call, found, aliases)}
+
+        {:&, _, [{:/, _, [call, _arity]}]} = node, found ->
+          {node, record(node, call, found, aliases)}
+
+        {_call, _, [_ | _]} = node, found ->
+          {node, record(node, node, found, aliases)}
+
+        node, found ->
+          {node, found}
       end)
 
     Enum.reverse(found)
   end
 
-  defp record(node, call, found),
-    do: if(env_read?(call), do: [Macro.to_string(node) | found], else: found)
+  defp record(node, call, found, aliases),
+    do: if(env_read?(call, aliases), do: [Macro.to_string(node) | found], else: found)
 
-  defp env_read?({{:., _, [module, function]}, _, args}) when is_list(args),
-    do: {module_name(module), function} in @env_reads
+  defp env_read?({{:., _, [module, function]}, _, args}, aliases) when is_list(args),
+    do: {module_name(module, aliases), function} in @env_reads
 
-  defp env_read?(_call), do: false
+  # `apply/3` with no arguments reads the whole environment, as the call does.
+  defp env_read?({:apply, _, [module, function, arguments]}, aliases) when is_atom(function),
+    do: arguments != [] and {module_name(module, aliases), function} in @env_reads
 
-  defp module_name({:__aliases__, _, parts}), do: Module.concat(parts)
-  defp module_name(module) when is_atom(module), do: module
-  defp module_name(_module), do: nil
+  defp env_read?(_call, _aliases), do: false
+
+  # The modules the source renames, `alias Module, as: Name`, by name.
+  defp renames(ast) do
+    {_ast, renames} =
+      Macro.prewalk(ast, %{}, fn
+        {:alias, _, [module, [as: {:__aliases__, _, [name]}]]} = node, renames ->
+          {node, Map.put(renames, name, module_name(module, %{}))}
+
+        node, renames ->
+          {node, renames}
+      end)
+
+    renames
+  end
+
+  defp module_name({:__aliases__, _, [name]}, aliases),
+    do: Map.get_lazy(aliases, name, fn -> Module.concat([name]) end)
+
+  defp module_name({:__aliases__, _, parts}, _aliases), do: Module.concat(parts)
+  defp module_name(module, _aliases) when is_atom(module), do: module
+  defp module_name(_module, _aliases), do: nil
 
   # Every string the source spells, interpolated ones' text parts included.
   defp string_literals(ast) do

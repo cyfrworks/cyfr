@@ -47,10 +47,10 @@ defmodule Locus.Runtime.Settings do
   value accepted here is never refused there; a value outside it, or not
   an integer, refuses the boot. There is no value that asks for no bound.
   The test build's `:direct` keeper applies none: it has no cgroup to
-  give a runner. The default is 1.8 times the largest peak of a runner
-  under the seed components, rounded up
-  (`tests/locus-runtime-image/memory.py --measure` repeats the
-  measurement). The runner's own VM is most of that peak, so the default
+  give a runner. The default is roughly twice the largest peak of a
+  runner under the seed components, as
+  `tests/locus-runtime-image/memory.py --measure` records it. The
+  runner's own VM is most of that peak, so the default
   leaves a subtree's guests room for two or three at the default 64 MiB
   of linear memory at once, not for one at the platform ceiling's
   256 MiB: a deployment that consents to more raises this bound with it.

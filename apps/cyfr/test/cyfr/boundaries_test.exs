@@ -2173,6 +2173,39 @@ defmodule Cyfr.BoundariesTest do
       end
     end
 
+    test "a check's storage function is reached from the check's module alone" do
+      rows = for %{storage: _} = row <- Boundaries.system_responsibilities(), do: row
+      assert Enum.map(rows, & &1.storage) == ["Arca.DecisionLog.purge_global/2"]
+
+      reaches =
+        for %{app: app} <- Boundaries.applications(),
+            path <- beams(app),
+            Beams.production?(path),
+            reach <- Beams.reaches(String.to_charlist(path)),
+            uniq: true,
+            do: {module_name(path), reach}
+
+      assert storage_strangers(rows, reaches) == []
+
+      # The facade's own caller reaching past it, through an alias.
+      [{Cyfr.PlantedStoragePurge, binary}] =
+        Code.compile_string(~S'''
+        defmodule Cyfr.PlantedStoragePurge do
+          alias Arca.DecisionLog, as: Log
+          def purge(cutoff), do: Log.purge_global(Prima.Actor.system(), cutoff)
+        end
+        ''')
+
+      :code.purge(Cyfr.PlantedStoragePurge)
+      :code.delete(Cyfr.PlantedStoragePurge)
+
+      planted = for reach <- Beams.reaches(binary), do: {"Cyfr.PlantedStoragePurge", reach}
+
+      assert storage_strangers(rows, reaches ++ planted) == [
+               {"Arca.DecisionLog.purge_global/2", "Cyfr.PlantedStoragePurge"}
+             ]
+    end
+
     test "every module that passes a retirement's check is rostered with it" do
       rostered =
         for row <- Boundaries.system_responsibilities(),
@@ -2194,6 +2227,20 @@ defmodule Cyfr.BoundariesTest do
       assert passing != [], "no module passes a rostered check: the scan read nothing"
       assert Enum.reject(passing, &MapSet.member?(rostered, &1)) == []
     end
+  end
+
+  # `{storage, caller}` for each module that calls or captures a row's
+  # storage function, `reaches` as `{caller, reach}`, other than the module
+  # of the row's check and the storage function's own.
+  defp storage_strangers(rows, reaches) do
+    for %{check: check, storage: storage} <- rows,
+        [_, owner] = Regex.run(~r/^(.+)\.\w+\/\d+$/, check),
+        [_, module] = Regex.run(~r/^(.+)\.\w+\/\d+$/, storage),
+        {caller, {callee, function, arity}} <- reaches,
+        "#{inspect(callee)}.#{function}/#{arity}" == storage,
+        caller not in [owner, module],
+        uniq: true,
+        do: {storage, caller}
   end
 
   # The lines where a `%Prima.Actor{}` is BUILT — in expression position,

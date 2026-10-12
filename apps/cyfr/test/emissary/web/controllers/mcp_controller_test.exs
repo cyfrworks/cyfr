@@ -353,6 +353,99 @@ defmodule Emissary.Web.MCPControllerTest do
     end
   end
 
+  defmodule RefusingProbe do
+    @moduledoc false
+    # One resource whose description refuses as it is encoded: the
+    # controller encodes `resources/list`'s answer in the request process,
+    # so the refusal raises there, past every boundary that converts one.
+    @behaviour Prima.Provider
+
+    alias Prima.{Arg, Operation}
+
+    @impl true
+    def service, do: "refusing_probe"
+
+    @impl true
+    def tools do
+      [
+        Operation.tool([
+          Operation.new(
+            "refusing_probe",
+            "read_resource",
+            "Read a refusingprobe:// resource",
+            [Arg.new("uri", :string, required: true)],
+            kind: :read,
+            planes: [:external],
+            recovery: :replay_safe,
+            resource_schemes: ["refusingprobe"]
+          )
+        ])
+      ]
+    end
+
+    @impl true
+    def resources do
+      [
+        %{
+          uri: "refusingprobe://one",
+          name: "one",
+          description:
+            Jason.Fragment.new(fn _options ->
+              raise Sanctum.UnauthorizedError, reason: :missing_tenant
+            end)
+        }
+      ]
+    end
+
+    @impl true
+    def handle(_tool, _ctx, _args), do: {:ok, %{content: %{}}}
+  end
+
+  describe "a refusal raised in the request process" do
+    # Its one reason, :missing_tenant, reads the same for every credential,
+    # so this case cannot show the caller's credential reaching the sentence.
+    test "is answered as the auth error it is and recorded as the request's refusal", %{
+      conn: conn
+    } do
+      import Ecto.Query, only: [from: 2]
+
+      conn =
+        Sanctum.Catalog.with_providers([RefusingProbe], fn ->
+          conn
+          |> put_req_header("content-type", "application/json")
+          |> mcp_post(%{"jsonrpc" => "2.0", "id" => 9, "method" => "resources/list"})
+        end)
+
+      message = "Unauthorized: this request needs an athanor, and none is resolved"
+
+      response = json_response(conn, 403)
+      assert response["id"] == 9
+      assert response["error"]["code"] == Prima.MCP.Message.error_code(:insufficient_permissions)
+      assert response["error"]["message"] == message
+
+      assert [Prima.MCP.Protocol.version()] ==
+               get_resp_header(conn, Prima.MCP.Protocol.protocol_version_header())
+
+      [request_id] = get_resp_header(conn, "x-request-id")
+
+      assert [decision] =
+               Arca.Repo.all(
+                 from(d in Arca.Schemas.DecisionLog, where: d.request_id == ^request_id)
+               )
+
+      assert decision.admission == "refused"
+      assert decision.refusal_class == "forbidden"
+      assert decision.plane == "external"
+      assert decision.reason == message
+
+      assert [log] = rows(request_id)
+      assert log.id == decision.call_id
+      assert log.method == "resources/list"
+      assert log.status == "error"
+      assert log.refusal_class == "forbidden"
+    end
+  end
+
   # Note: Batch requests are not supported via HTTP in this revision
   # Batch request support is only available through the internal API (Emissary.MCP)
 

@@ -398,7 +398,7 @@ defmodule Sanctum.Gate.DecisionsTest do
       # asynchronous run's attempt closes its own row and nothing else.
       source = File.read!(Path.join(@root, "apps/cyfr/lib/opus/close.ex"))
 
-      for name <- ["DecisionLog", "Sanctum.Decisions", "Decisions", "finish("] do
+      for name <- ["DecisionLog", "Decisions", "finish("] do
         refute source =~ name, "Opus.Close names #{name}"
       end
     end

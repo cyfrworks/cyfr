@@ -353,14 +353,19 @@ defmodule Sanctum.Gate.CatalogTest do
   # The table's four terms erased for the block and put back after it,
   # however it ends: what a member whose boot has not loaded the table
   # reads. The module is synchronous, so no other case reads it erased.
+  # The `after` puts them back for the rest of the case; the `on_exit`,
+  # registered before the erasure, puts them back when the case's process
+  # is killed, where no `after` runs.
   defp unloaded(fun) do
     saved = for key <- @table_terms, do: {key, :persistent_term.get(key)}
+    restore = fn -> for {key, term} <- saved, do: :persistent_term.put(key, term) end
+    on_exit(restore)
     Enum.each(@table_terms, &:persistent_term.erase/1)
 
     try do
       fun.()
     after
-      for {key, term} <- saved, do: :persistent_term.put(key, term)
+      restore.()
     end
   end
 

@@ -47,8 +47,8 @@ an image (its egress denied, as the scripted plane's authority grants none);
 the chat fixture's `chat` streaming a long answer; the http and files
 catalysts; the list-models formula spawning its five catalyst children in
 the same runner; and one runner of one athanor running all of them in turn.
-It prints the service's own group peak and what 1.8 times the largest
-runner peak comes to, the margin the build bound took over the seed builds.
+It prints the service's own group peak and the largest runner peak with
+the margin the default runner bound takes over it (MARGIN), roughly twice.
 
 Usage: tests/locus-runtime-image/memory.py IMAGE [--measure [ROUNDS]] [bound|unavailable]...
 """

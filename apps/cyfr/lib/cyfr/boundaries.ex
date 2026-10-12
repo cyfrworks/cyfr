@@ -2406,6 +2406,7 @@ defmodule Cyfr.Boundaries do
       responsibility: "Host purges null-tenant decision rows under its held claim",
       modules: ~w(Cyfr.RetentionScheduler),
       check: "Sanctum.Decisions.purge_global/2",
+      storage: "Arca.DecisionLog.purge_global/2",
       reason:
         "a decision refused before any caller or tenant was established is appended " <>
           "with no athanor, so no athanor's retention reaches it and no tenant reads it: " <>
@@ -2422,9 +2423,10 @@ defmodule Cyfr.Boundaries do
   Every write the server makes on work whose standing it does not
   require, and every read it makes before any caller is known, with the
   modules that make it, the check they pass in place of the standing one,
-  and why. A new one is argued for here before it appears. Boundary admits
-  a system-scope call like any other: what it may do is the check, not the
-  edge.
+  and why. A check that reaches storage through its module names the
+  storage function (`storage`), which no other module reaches. A new one
+  is argued for here before it appears. Boundary admits a system-scope
+  call like any other: what it may do is the check, not the edge.
   """
   @spec system_responsibilities() :: [map()]
   def system_responsibilities, do: @system_responsibilities

@@ -96,7 +96,7 @@ defmodule CyfrWeb.ContextGuardTest do
     {ops, conn, token, hash}
   end
 
-  describe "the operator's door, after a revocation nobody heard (§14.7)" do
+  describe "the operator's door, after a revocation nobody heard" do
     test "a captured context and a mounted /settings are both refused, and nothing is written",
          %{conn: conn} do
       {_ops, conn, token, hash} = operator!(conn)

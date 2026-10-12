@@ -5,6 +5,7 @@ defmodule Sanctum.Gate.VisibilityTest do
   # Not async: reads the live registry cache the application owns.
   use ExUnit.Case, async: false
 
+  alias Sanctum.Annotations
   alias Sanctum.Catalog
   alias Sanctum.Visibility
   alias Sanctum.Context
@@ -77,6 +78,12 @@ defmodule Sanctum.Gate.VisibilityTest do
       auth_method: :oidc,
       authenticated: false
     )
+  end
+
+  # What the action's own annotation declares, read apart from discovery.
+  defp anonymous?(name, action) do
+    {:ok, {_module, meta}} = Catalog.lookup(name)
+    Annotations.auth(meta, action) == :anonymous
   end
 
   defp action_enum(tool_def) do
@@ -571,24 +578,12 @@ defmodule Sanctum.Gate.VisibilityTest do
   end
 
   describe "the anonymous surface is one fact" do
-    test "anonymous_action? and the auth annotation are the same answer" do
-      for tool_def <- live_tools(),
-          name = tool_def["name"],
-          action <- action_enum(tool_def) || [] do
-        {:ok, {_module, meta}} = Catalog.lookup(name)
-        declared = get_in(meta, [:annotations, :actions, action, :auth]) == :anonymous
-
-        assert Visibility.anonymous_action?(name, action) == declared,
-               "#{name}.#{action}: anonymous_action? disagrees with the annotation"
-      end
-    end
-
     test "the anonymous set is exactly session, the health check, a public tincture, a pairing's completion and a certificate's renewal" do
       anonymous =
         for tool_def <- live_tools(),
             name = tool_def["name"],
             action <- action_enum(tool_def) || [],
-            Visibility.anonymous_action?(name, action),
+            anonymous?(name, action),
             into: MapSet.new() do
           "#{name}.#{action}"
         end
@@ -608,7 +603,7 @@ defmodule Sanctum.Gate.VisibilityTest do
       filtered = Visibility.filter_for_context(live_tools(), anonymous_ctx())
 
       for tool <- filtered, action <- action_enum(tool) || [] do
-        assert Visibility.anonymous_action?(tool["name"], action),
+        assert anonymous?(tool["name"], action),
                "discovery offered #{tool["name"]}.#{action} to an anonymous caller, " <>
                  "which tools/call refuses"
       end

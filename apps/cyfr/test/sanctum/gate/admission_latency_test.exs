@@ -38,8 +38,9 @@ end
 defmodule Sanctum.Gate.AdmissionLatencyTest do
   @moduledoc """
   The admission overhead of a call to a provider that does nothing, per
-  scenario, as percentiles, written to `/tmp/a1/<phase>/<adapter>.json`
-  (`A1_PHASE`, default `current`).
+  scenario, as percentiles, written to
+  `/tmp/cyfr-admission-latency/<phase>/<adapter>.json`
+  (`ADMISSION_LATENCY_PHASE`, default `current`).
 
   Six scenarios. Four enter as a wire client does, through the MCP
   endpoint in-process (`Phoenix.ConnTest`, no network), so every plug in
@@ -117,8 +118,8 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
   # Longer than the audit budget and its scheduler allowance together, so a
   # stall the budget bounds and one it does not read apart.
   @hold_ms 1_500
-  # §14.14: an audit write's stall settles within its budget and a
-  # scheduler allowance on the documented unloaded runner. A refused call
+  # The bound asserted: on an unloaded host, an audit write's stall settles
+  # within its budget and a scheduler allowance. A refused call
   # makes one audit write (its append); an admitted call makes two (its
   # append and its finish), each under its own budget, so its stall is
   # two budgets and the allowance. On PostgreSQL the held lock is the
@@ -340,7 +341,7 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
       "throughput" => %{"memo_hit_warm_c16_admissions_per_s" => throughput}
     }
 
-    dir = Path.join("/tmp/a1", phase())
+    dir = Path.join("/tmp/cyfr-admission-latency", phase())
     File.mkdir_p!(dir)
     path = Path.join(dir, "#{adapter}.json")
     File.write!(path, Jason.encode_to_iodata!(report, pretty: true))
@@ -817,7 +818,7 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
     end
   end
 
-  defp phase, do: System.get_env("A1_PHASE", "current")
+  defp phase, do: System.get_env("ADMISSION_LATENCY_PHASE", "current")
 
   defp commit do
     case System.cmd("git", ["rev-parse", "HEAD"], stderr_to_stdout: true) do

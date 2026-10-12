@@ -144,13 +144,17 @@ defmodule Emissary.Web.HealthControllerTest do
         for name <- [:operations, :tool_list, :streams, :resources], do: {Sanctum.Gate, name}
 
       saved = for key <- terms, do: {key, :persistent_term.get(key)}
+      restore = fn -> for {key, term} <- saved, do: :persistent_term.put(key, term) end
+      # Registered before the erasure: a case killed while the table is
+      # erased runs no `after`, and every later case would read it unloaded.
+      on_exit(restore)
       Enum.each(terms, &:persistent_term.erase/1)
 
       {response, log} =
         try do
           ExUnit.CaptureLog.with_log(fn -> json_response(get(conn, "/api/health/ready"), 503) end)
         after
-          for {key, term} <- saved, do: :persistent_term.put(key, term)
+          restore.()
           Arca.Cache.invalidate({Emissary.Web.HealthController, :ready_cache})
         end
 

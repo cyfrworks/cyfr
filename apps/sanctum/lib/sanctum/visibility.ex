@@ -41,23 +41,6 @@ defmodule Sanctum.Visibility do
   alias Sanctum.Context
 
   @doc """
-  May a caller with no credential reach this tool action?
-
-  The Router's invocation gate and this module's discovery filter are the
-  same question asked at two moments, so both read the action's annotation.
-  """
-  @spec anonymous_action?(String.t(), String.t()) :: boolean()
-  def anonymous_action?(name, action) do
-    case Sanctum.Catalog.lookup(name) do
-      {:ok, {_module, meta}} ->
-        Annotations.auth(meta, action) == :anonymous
-
-      :miss ->
-        false
-    end
-  end
-
-  @doc """
   May this caller act under this access annotation? The gate's
   authorization of a declared action
   (`Sanctum.Catalog.authorize_annotated_action/5`) and of a stream open,

@@ -566,28 +566,63 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
+  # What stands in for `container_name: !reset null` while the overlay is
+  # parsed.
+  @reset_null "!reset null"
+
   # An overlay parsed whole, in the one shape the image suites write and
   # the parse reads as compose does: `{:ok, overlay}`, or `:error` for any
   # other shape. It is one document holding a `services` mapping alone,
   # with no merge key, and compose's merge tags appear only as a service's
   # `container_name: !reset null` and `security_opt: !override` over a
-  # list, read as the values they tag. YamlElixir refuses every other tag;
-  # it reads only the last of several documents and resolves no merge;
-  # compose reads `!reset` with a value, or `!override` on a mapping,
-  # otherwise than as the value; and a top-level key such as `include`
-  # brings in what no parse of this text holds.
+  # list: the first as compose reads it (`container_names/2`), the second
+  # as the list it tags. YamlElixir refuses every other tag; it reads only
+  # the last of several documents and resolves no merge; compose reads
+  # `!reset` with a value, or `!override` on a mapping, otherwise than as
+  # the value; and a top-level key such as `include` brings in what no
+  # parse of this text holds.
   defp overlay(text) do
+    resets = length(Regex.scan(~r/^    container_name: !reset null$/m, text))
+
     untagged =
       text
-      |> String.replace(~r/^(    container_name: )!reset (null)$/m, "\\1\\2")
+      |> String.replace(~r/^(    container_name: )!reset null$/m, ~s(\\1"#{@reset_null}"))
       |> String.replace(~r/^(    security_opt: )!override$/m, "\\1")
 
-    with {:ok, [%{"services" => %{}} = overlay]} <- YamlElixir.read_all_from_string(untagged),
+    with {:ok, [%{"services" => %{} = services} = overlay]} <-
+           YamlElixir.read_all_from_string(untagged),
          [] <- Map.keys(overlay) -- ["services"],
-         false <- merge_key_in?(overlay) do
-      {:ok, overlay}
+         false <- merge_key_in?(overlay),
+         {:ok, services} <- container_names(services, resets) do
+      {:ok, %{overlay | "services" => services}}
     else
       _ -> :error
+    end
+  end
+
+  # Compose reads `container_name: !reset null` as the service's name
+  # removed, and a plain null as no name written: the deployed name stays.
+  # So the reset reads as a null name and a plain null as no key. Every
+  # placeholder read must be a tagged line's, so a value that spells it is
+  # no overlay.
+  defp container_names(services, resets) do
+    placeholders =
+      Enum.count(services, &match?({_, %{"container_name" => @reset_null}}, &1))
+
+    if placeholders == resets do
+      {:ok,
+       Map.new(services, fn
+         {name, %{"container_name" => @reset_null} = service} ->
+           {name, %{service | "container_name" => nil}}
+
+         {name, %{"container_name" => nil} = service} ->
+           {name, Map.delete(service, "container_name")}
+
+         other ->
+           other
+       end)}
+    else
+      :error
     end
   end
 
@@ -1065,37 +1100,37 @@ defmodule Cyfr.StackShapeTest do
     %{first: first, last: last} = runtime.uids
 
     plants = [
-      {"1: the runtime's users counted from another base",
+      {"the runtime's users counted from another base",
        {@dockerfile, "uid=$((#{first - 1} + i))", "uid=$((#{first + 99} + i))"},
        [{@dockerfile, :users, :runtime}]},
-      {"2: the backends' pool a uid short",
+      {"the backends' pool a uid short",
        {@compose, ~s("#{pool_spec(backends)}"),
         ~s("#{backends.pool}:#{backends.uids.first}-#{backends.uids.last - 1}")},
        [{@compose, :entrypoint, :backends}]},
-      {"3: the runtime's pool not isolated",
+      {"the runtime's pool not isolated",
        {@compose, ~s("#{pool_spec(runtime)}"), ~s("#{runtime.pool}:#{first}-#{last}")},
        [{@compose, :entrypoint, :runtime}]},
-      {"4: the image's entrypoint starting the release as root",
+      {"the image's entrypoint starting the release as root",
        {@dockerfile, ~s("--client-user", "#{release.user}"), ~s("--client-user", "root")},
        [{@dockerfile, :entrypoint, :builds}]},
-      {"5: the builds service on the backends' network",
+      {"the builds service on the backends' network",
        {@compose, "    networks:\n      - #{builds.network}\n",
         "    networks:\n      - #{backends.network}\n"}, [{@compose, :network, :builds}]},
-      {"6: the runtime's homes twice as large",
-       {@compose, "size=#{runtime.home_size}", "size=512m"}, [{@compose, :tmpfs, :runtime}]},
-      {"7: the runtime's harness spelling its pool",
+      {"the runtime's homes twice as large", {@compose, "size=#{runtime.home_size}", "size=512m"},
+       [{@compose, :tmpfs, :runtime}]},
+      {"the runtime's harness spelling its pool",
        {runtime_suite, ~s(POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]),
         "POOL_FIRST, POOL_LAST = #{first}, #{last}"}, [{runtime_suite, :suite, :runtime}]},
-      {"8: the builder overlay starting the release as nobody",
+      {"the builder overlay starting the release as nobody",
        {builds_overlay, ~s("--client-user", "#{release.user}"), ~s("--client-user", "nobody")},
        [{builds_overlay, :entrypoint, :builds}]},
-      {"9: the runtime's channel asking another pool",
+      {"the runtime's channel asking another pool",
        {channel, ~s(@pool "#{runtime.pool}"), ~s(@pool "#{runtime.pool}s")},
        [{channel, :pool, :runtime}]},
-      {"10: a table with a ninth runner",
+      {"a table with a ninth runner",
        {release, with_role.(:runtime, &%{&1 | uids: first..(last + 1)//1})},
        [{@compose, :entrypoint, :runtime}, {@dockerfile, :users, :runtime}]},
-      {"11: a table moving the builds' port",
+      {"a table moving the builds' port",
        {release, with_role.(:builds, &%{&1 | port: &1.port + 2})},
        [
          {@config, :port, :builds},
@@ -1103,123 +1138,129 @@ defmodule Cyfr.StackShapeTest do
          {@dockerfile, :port, :builds},
          {builds_overlay, :port, :builds}
        ]},
-      {"12: the builds' harness reading no vector file",
+      {"the builds' harness reading no vector file",
        {builds_harness, ~s("fixtures", "locus_roles.json"), ~s("fixtures", "locus_builds.json")},
        [{builds_harness, :suite, :builds}]},
       # A site that is missing, or not in the form read, is drift too.
-      {"V1: the runtime's probe without its port",
+      {"the runtime's probe without its port",
        {@compose, "http://localhost:#{runtime.port}#{status_route}",
         "http://localhost#{status_route}"}, [{@compose, :port, :runtime}]},
-      {"V3: the backends' probe on another address and port",
+      {"the backends' probe on another address and port",
        {@compose, "http://localhost:#{backends.port}/locus",
         "http://127.0.0.1:#{backends.port + 2}/locus"}, [{@compose, :port, :backends}]},
-      {"V4: the runtime overlay publishing another port, as tcp",
+      {"the runtime overlay publishing another port, as tcp",
        {runtime_overlay, ~s("127.0.0.1::#{runtime.port}"),
         ~s("127.0.0.1::#{runtime.port + 2}/tcp")}, [{runtime_overlay, :port, :runtime}]},
-      {"V5: the backends overlay publishing another port, as tcp",
+      {"the backends overlay publishing another port, as tcp",
        {backends_overlay, ~s("127.0.0.1::#{backends.port}"),
         ~s("127.0.0.1::#{backends.port + 2}/tcp")}, [{backends_overlay, :port, :backends}]},
-      {"E4: the backends overlay starting the release as nobody, behind a comment",
+      {"the backends overlay starting the release as nobody, behind a comment",
        {backends_overlay,
         ~s("--client-user", "#{release.user}", "--", "#{release.bin}", "start"]),
         ~s("--client-user", "nobody", "--", "#{release.bin}", "start"]  # the suite's user)},
        [{backends_overlay, :entrypoint, :backends}]},
-      {"c: the builds overlay without its entrypoint line",
+      {"the builds overlay without its entrypoint line",
        {builds_overlay, "\n    entrypoint: ", "\n    # entrypoint: "},
        [{builds_overlay, :entrypoint, :builds}]},
-      {"d: the runtime keeper's remedy naming another pool",
+      {"the runtime keeper's remedy naming another pool",
        {runtime_keeper, "--pool #{runtime.pool}:", "--pool #{runtime.pool}s:"},
        [{runtime_keeper, :pool, :runtime}]},
-      {"e: the builder's last overlay layering another service",
+      {"the builder's last overlay layering another service",
        {builds_last_overlay, "\n  #{builds.service}:\n", "\n  #{backends.service}:\n"},
        [{builds_last_overlay, :service, :builds}]},
-      {"f: the documented backends port",
+      {"the documented backends port",
        {@config, "| 1..65535 | #{backends.port} |", "| 1..65535 | #{backends.port + 2} |"},
        [{@config, :port, :backends}]},
-      {"f2: the documented attach directory",
+      {"the documented attach directory",
        {@config, "| `#{release.run_dir}` |", "| `#{release.run_dir}/attach` |"},
        [{@config, :pool, :runtime}]},
       # An overlay is read whole, so no blank line, comment or spelling of
       # a key ends the reading early.
-      {"B1: the backends overlay publishing a second port after a blank line",
+      {"the backends overlay publishing a second port after a blank line",
        {backends_overlay, ~s(      - "127.0.0.1::#{backends.port}"\n),
         ~s(      - "127.0.0.1::#{backends.port}"\n\n      - "#{backends.port}"\n)},
        [{backends_overlay, :port, :backends}]},
-      {"B2: the backends overlay publishing a second port after a comment",
+      {"the backends overlay publishing a second port after a comment",
        {backends_overlay, ~s(      - "127.0.0.1::#{backends.port}"\n),
         ~s(      - "127.0.0.1::#{backends.port}"\n    # and on every interface\n      - "#{backends.port}"\n)},
        [{backends_overlay, :port, :backends}]},
-      {"C1: the runtime overlay naming an unisolated entrypoint, its key quoted",
+      {"the runtime overlay naming an unisolated entrypoint, its key quoted",
        {runtime_overlay, "    pull_policy: never\n",
         ~s(    pull_policy: never\n    "entrypoint": ["cyfr-locus", "serve", "--pool", "#{runtime.pool}:#{first}-#{last}"]\n)},
        [{runtime_overlay, :entrypoint, :runtime}]},
-      {"C2: the runtime overlay naming an unisolated entrypoint, its key spaced",
+      {"the runtime overlay naming an unisolated entrypoint, its key spaced",
        {runtime_overlay, "    pull_policy: never\n",
         ~s(    pull_policy: never\n    entrypoint : ["cyfr-locus", "serve", "--pool", "#{runtime.pool}:#{first}-#{last}"]\n)},
        [{runtime_overlay, :entrypoint, :runtime}]},
-      {"E5: the builder's last overlay layering a second service after a comment",
+      {"the builder's last overlay layering a second service after a comment",
        {builds_last_overlay, "      - no-new-privileges:true\n",
         "      - no-new-privileges:true\n# and the backends service too\n  #{backends.service}:\n    security_opt: !override\n      - no-new-privileges:true\n"},
        [{builds_last_overlay, :service, :builds}]},
       # An overlay compose reads otherwise than its parse is no overlay:
       # every reading of it is drift.
-      {"R1: the runtime overlay resetting its ports",
+      {"the runtime overlay resetting its ports",
        {runtime_overlay, "    ports:\n", "    ports: !reset\n"},
        unread.(runtime_overlay, :runtime)},
-      {"R2: the runtime overlay resetting an entrypoint it names",
+      {"the runtime overlay resetting an entrypoint it names",
        {runtime_overlay, "    pull_policy: never\n",
         ~s(    pull_policy: never\n    entrypoint: !reset #{Jason.encode!(keeper_argv(release, runtime))}\n)},
        unread.(runtime_overlay, :runtime)},
-      {"T3: the runtime overlay replacing compose's service whole",
+      {"the runtime overlay replacing compose's service whole",
        {runtime_overlay, "  #{runtime.service}:\n", "  #{runtime.service}: !override\n"},
        unread.(runtime_overlay, :runtime)},
-      {"M1: the runtime overlay merging an unisolated entrypoint",
+      {"the runtime overlay merging an unisolated entrypoint",
        {runtime_overlay, "services:\n  #{runtime.service}:\n",
         "x-unisolated: &unisolated\n  entrypoint: #{Jason.encode!(keeper_argv(release, %{runtime | isolation: nil}))}\nservices:\n  #{runtime.service}:\n    <<: *unisolated\n"},
        unread.(runtime_overlay, :runtime)},
-      {"D2: the runtime overlay behind a document naming an unisolated entrypoint",
+      {"the runtime overlay behind a document naming an unisolated entrypoint",
        {runtime_overlay, "services:\n  #{runtime.service}:\n",
         "services:\n  #{runtime.service}:\n    entrypoint: #{Jason.encode!(keeper_argv(release, %{runtime | isolation: nil}))}\n---\nservices:\n  #{runtime.service}:\n"},
        unread.(runtime_overlay, :runtime)},
-      {"X1: the runtime overlay extending a service from another file",
+      {"the runtime overlay extending a service from another file",
        {runtime_overlay, "    pull_policy: never\n",
         "    pull_policy: never\n    extends:\n      file: unisolated.yml\n      service: #{runtime.service}\n"},
        [{runtime_overlay, :service, :runtime}]},
-      {"I2: the runtime overlay including another file",
+      {"the runtime overlay including another file",
        {runtime_overlay, "services:\n  #{runtime.service}:\n",
         "include:\n  - sidecar.yml\nservices:\n  #{runtime.service}:\n"},
        unread.(runtime_overlay, :runtime)},
-      {"LAST1: the runtime's last overlay naming an unisolated entrypoint",
+      {"the runtime's last overlay naming an unisolated entrypoint",
        {runtime_last_overlay, "      - seccomp=./keeper.seccomp.json\n",
         "      - seccomp=./keeper.seccomp.json\n    entrypoint: #{Jason.encode!(keeper_argv(release, %{runtime | isolation: nil}))}\n"},
        [{runtime_last_overlay, :entrypoint, :runtime}]},
       # Every value an overlay gives is read: one the test does not expect
       # is drift, whatever key carries it.
-      {"r5-P1: the runtime overlay telling the runtime another port",
+      {"the runtime overlay telling the runtime another port",
        {runtime_overlay, release_grace,
         release_grace <> "      - LOCUS_RUNTIME_PORT=#{runtime.port + 100}\n"},
        [{runtime_overlay, :service, :runtime}]},
-      {"r5-P2: the runtime overlay moving the attach directory",
+      {"the runtime overlay moving the attach directory",
        {runtime_overlay, release_grace,
         release_grace <> "      - LOCUS_RUNTIME_ATTACH_DIR=/tmp/attach\n"},
        [{runtime_overlay, :service, :runtime}]},
-      {"r5-K1: the runtime overlay putting another cyfr-locus first on the path",
+      {"the runtime overlay putting another cyfr-locus first on the path",
        {runtime_overlay, release_grace,
         release_grace <>
           "      - PATH=/canary:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n    volumes:\n      - ./bin:/canary:ro\n"},
        [{runtime_overlay, :service, :runtime}]},
-      {"r5-V4: the runtime overlay mounting another program over the release",
+      {"the runtime overlay mounting another program over the release",
        {runtime_overlay, "    pull_policy: never\n",
         "    pull_policy: never\n    volumes:\n      - ./bin/locus:#{release.bin}:ro\n"},
        [{runtime_overlay, :service, :runtime}]},
-      {"r5-LAST4: the runtime's last overlay unconfining seccomp",
+      {"the runtime's last overlay unconfining seccomp",
        {runtime_last_overlay, "      - seccomp=./keeper.seccomp.json\n",
         "      - seccomp=./keeper.seccomp.json\n      - seccomp=unconfined\n      - systempaths=unconfined\n"},
        [{runtime_last_overlay, :service, :runtime}]},
-      {"r5-C1: the runtime overlay naming its container after the builds'",
+      {"the runtime overlay naming its container after the builds'",
        {runtime_overlay, "    container_name: !reset null\n",
         "    container_name: #{builds.container}\n"}, [{runtime_overlay, :service, :runtime}]},
-      {"A1: the builds service disabling the image's probe",
+      {"the runtime overlay keeping the deployed container name through an untagged null",
+       {runtime_overlay, "    container_name: !reset null\n", "    container_name: null\n"},
+       [{runtime_overlay, :service, :runtime}]},
+      {"the runtime overlay naming its container what stands in for the reset",
+       {runtime_overlay, "    container_name: !reset null\n",
+        ~s(    container_name: "!reset null"\n)}, unread.(runtime_overlay, :runtime)},
+      {"the builds service disabling the image's probe",
        {@compose, "  #{builds.service}:\n",
         "  #{builds.service}:\n    healthcheck:\n      disable: true\n"},
        [{@compose, :port, :builds}]}

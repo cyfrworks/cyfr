@@ -262,7 +262,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CADDY_ACME_EMAIL",
      "The address Let's Encrypt registers Caddy's certificate under, in TLS mode with a real `CYFR_HOST`; `cyfr init` asks for it."},
     {"CYFR_CPU_LIMIT",
-     "The cyfr container's CPU limit (default 4), which bounds the aggregate CPU of components that never yield."},
+     "The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in locus-runtime under `LOCUS_RUNTIME_CPU_LIMIT`."},
     {"LOCUS_BUILDS_CPU_LIMIT", "The locus-builds container's CPU limit (default 2)."},
     {"LOCUS_BUILDS_MEMORY_LIMIT",
      "The locus-builds container's memory limit (default 4G), at least `LOCUS_BUILDS_MAX_CONCURRENT` x (`LOCUS_BUILDS_MEMORY_BYTES` + 1 GiB), so each build reaches its own bound before the container reaches its limit."},

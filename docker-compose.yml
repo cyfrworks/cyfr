@@ -149,8 +149,8 @@ services:
       resources:
         limits:
           memory: 2G
-          # Caps aggregate damage from WASM components that never yield
-          # (a killed tight-loop leaks a spinning native thread).
+          # The control plane's own share of the host: components run in
+          # locus-runtime, under its limits.
           cpus: "${CYFR_CPU_LIMIT:-4}"
     # Healthcheck: inherited from the image (Dockerfile HEALTHCHECK) so the
     # port and the probed path have one author.
@@ -308,10 +308,10 @@ services:
           # linear memory, its home's tmpfs pages and the kernel memory
           # charged to it, together, and a runner that reaches it is ended
           # there alone. This limit holds every runner uid the image has (8)
-          # at that bound and the service beside them: 8 x 384 MiB + 1 GiB,
-          # where the service (cyfr-locus and the locus release) peaked at
-          # 192-206 MiB serving the seed components
-          # (tests/locus-runtime-image/memory.py --measure). Raise it with the
+          # at that bound and the service beside them: 8 x 384 MiB + 1 GiB
+          # for the service (cyfr-locus and the locus release), whose current
+          # peak serving the seed components comes from
+          # tests/locus-runtime-image/memory.py --measure. Raise it with the
           # bound (.env.example has the arithmetic).
           memory: ${LOCUS_RUNTIME_MEMORY_LIMIT:-4G}
           # Caps aggregate damage from WASM components that never yield

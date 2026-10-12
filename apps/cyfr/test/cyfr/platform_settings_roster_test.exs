@@ -100,26 +100,104 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # under the host.
   @keywords ~w(caps locus_runtime_watch)
 
+  # The worker watch's group under its name before the rename: no setting,
+  # and nothing reads or writes it.
+  @retired_keywords ~w(worker_watch)
+
   # Every use of a live setting's value in the application environment,
   # under any application, by one of `verbs`: `{path, app, key}`. The key
-  # is the setting's store key or one of `@keywords`.
-  defp env_reads(sources, verbs) do
-    names =
-      MapSet.new(
-        for(%Entry{key: key} <- Roster.entries(), key not in @restart_read, do: key) ++
-          @keywords
-      )
-
-    pattern =
-      Regex.compile!(
-        "Application\\.(?:#{Enum.join(verbs, "|")})\\(\\s*:([a-z_]+),\\s*:([a-z_0-9]+)"
-      )
+  # is one of `names`, by default the settings' store keys and
+  # `@keywords`, given as the configuration's key or inside a configuration
+  # keyed by a module (`config_keys/2`).
+  defp env_reads(sources, verbs, names \\ live_names()) do
+    names = MapSet.new(names)
 
     for {path, source} <- sources,
-        [app, key] <- Regex.scan(pattern, source, capture: :all_but_first),
+        {app, key} <- config_keys(source, verbs),
         MapSet.member?(names, key),
         do: {path, String.to_atom(app), String.to_atom(key)}
   end
+
+  defp live_names,
+    do:
+      for(%Entry{key: key} <- Roster.entries(), key not in @restart_read, do: key) ++
+        @keywords
+
+  # The `{app, key}` pairs `source` reaches through `Application` by one of
+  # `verbs` (`config_uses/2`).
+  defp config_keys(source, verbs) do
+    for {app, key, _module} <- config_uses(source, verbs), key != nil, do: {app, key}
+  end
+
+  # Every configuration `source` reaches through `Application` by one of
+  # `verbs`, as `{app, key, module}`: a literal key,
+  # `Application.get_env(:app, :key)`, is `{app, key, nil}`; a
+  # configuration keyed by a module, `config :app, Module, key: value`, is
+  # `{app, nil, Module}` whole and `{app, key, Module}` for each key read
+  # or written in it in the forms code gives them: in the call
+  # (`put_env(:app, Module, key: value)`, or a default), indexed
+  # (`get_env(:app, Module)[:key]`), piped
+  # (`get_env(:app, Module) |> Keyword.get(:key)`) or passed
+  # (`Keyword.get(get_env(:app, Module, []), :key)`). A key the caller
+  # computes, or one read later from a configuration it bound, is the
+  # boundary roster's (`Cyfr.Boundaries.config_keys_read_by_name/0`).
+  defp config_uses(source, verbs) do
+    verbs = Enum.join(verbs, "|")
+
+    literal =
+      Regex.compile!("Application\\.(?:#{verbs})\\(\\s*:([a-z_]+),\\s*:([a-z_0-9]+)")
+
+    keyed =
+      Regex.compile!(
+        "(?<passed>Keyword\\.(?:get|fetch!?)\\(\\s*)?" <>
+          "Application\\.(?:#{verbs})\\(\\s*:(?<app>[a-z_]+),\\s*" <>
+          "(?<module>__MODULE__|[A-Z]\\w*(?:\\.[A-Z]\\w*)*)\\b(?!\\.)" <>
+          "(?<args>(?:[^()]++|\\((?&args)\\))*+)\\)" <>
+          "(?:\\s*\\[\\s*:(?<index>[a-z_0-9]+)\\s*\\]" <>
+          "|\\s*\\|>\\s*Keyword\\.(?:get|fetch!?)\\(\\s*:(?<piped>[a-z_0-9]+)" <>
+          "|\\s*,\\s*:(?<argument>[a-z_0-9]+))?"
+      )
+
+    parts = [0 | ~w(app module args index piped passed argument)]
+
+    literal_uses =
+      for [app, key] <- Regex.scan(literal, source, capture: :all_but_first),
+          do: {app, key, nil}
+
+    keyed_uses =
+      for match <- Regex.scan(keyed, source, capture: parts, return: :index),
+          [_whole, app, module, args, index, piped, passed, argument] =
+            Enum.map(match, &part(source, &1)),
+          module = module_named(module, source, elem(hd(match), 0)),
+          given = if(passed == "", do: "", else: argument),
+          key <- [nil, index, piped, given | written_keys(args)],
+          key != "",
+          do: {app, key, module}
+
+    literal_uses ++ keyed_uses
+  end
+
+  defp part(_source, {-1, 0}), do: ""
+  defp part(source, {start, length}), do: binary_part(source, start, length)
+
+  # The keys a call's arguments write, `key: value`.
+  defp written_keys(args),
+    do: List.flatten(Regex.scan(~r/(?<![:\w])([a-z_]\w*):\s/, args, capture: :all_but_first))
+
+  # `__MODULE__` is the module defined last before `offset`, or itself
+  # outside any. No library nests one module in another; a nested one
+  # reads as its own short name, so a setting under it reads as misplaced
+  # rather than passing.
+  defp module_named("__MODULE__", source, offset) do
+    case Regex.scan(~r/^\s*defmodule\s+([A-Z][\w.]*)/m, binary_part(source, 0, offset),
+           capture: :all_but_first
+         ) do
+      [] -> :__MODULE__
+      names -> Module.concat([List.last(List.last(names))])
+    end
+  end
+
+  defp module_named(name, _source, _offset), do: Module.concat([name])
 
   # The island (Locus) reads none of the roster's settings: it declares its
   # own under its own prefixes, and may name a key of its own alike
@@ -133,16 +211,30 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         do: {relative, File.read!(path)}
   end
 
-  defp lib_reads do
-    for path <- Path.wildcard(Path.join(@root, "apps/*/lib/**/*.ex")),
-        [app, key] <-
-          Regex.scan(
-            ~r/Application\.(?:get_env|fetch_env!?)\(\s*:([a-z_]+),\s*:([a-z_0-9]+)/,
-            File.read!(path),
-            capture: :all_but_first
-          ),
+  # Every configuration the libraries read, islands included, as
+  # `{app, head}`: the literal key, or the module a configuration is keyed
+  # by.
+  defp lib_reads(sources \\ lib_sources()) do
+    for {_path, source} <- sources,
+        {app, key, module} <- config_uses(source, ~w(get_env fetch_env!?)),
         into: MapSet.new(),
-        do: {String.to_atom(app), String.to_atom(key)}
+        do: {String.to_atom(app), module || String.to_atom(key)}
+  end
+
+  # The suites and the configuration, less this file, whose plants name
+  # what its checks refuse.
+  defp suite_sources do
+    this = Path.relative_to(__ENV__.file, @root)
+
+    for {path, _source} = file <-
+          tree("apps/*/test/**/*.ex") ++ tree("apps/*/test/**/*.exs") ++ tree("config/*.exs"),
+        path != this,
+        do: file
+  end
+
+  defp lib_sources do
+    for path <- Path.wildcard(Path.join(@root, "apps/*/lib/**/*.ex")),
+        do: {Path.relative_to(path, @root), File.read!(path)}
   end
 
   # The names docker-compose.yml interpolates that nothing in the tree
@@ -436,6 +528,22 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       assert misplaced([wrong], reads) == [
                {"opus_max_concurrent", :sanctum, :opus_max_concurrent}
              ]
+
+      # Configured under a module, the slots are read where the module's
+      # configuration is read, under `__MODULE__` or the module's name.
+      keyed = %{slots | config: [Opus.Planted, :max]}
+      assert misplaced([keyed], reads) == [{"opus_max_concurrent", :cyfr, Opus.Planted}]
+
+      for read <- [
+            "def max, do: Application.get_env(:cyfr, __MODULE__)[:max]",
+            "def max, do: Keyword.get(Application.fetch_env!(:cyfr, Opus.Planted), :max)"
+          ] do
+        planted = [
+          {"apps/cyfr/lib/opus/planted.ex", "defmodule Opus.Planted do\n  #{read}\nend\n"}
+        ]
+
+        assert misplaced([keyed], lib_reads(planted)) == [], read
+      end
     end
 
     test "no reader takes a live setting from the application environment, under any application" do
@@ -458,21 +566,69 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         {"apps/cyfr/lib/planted.ex", "Application.fetch_env!(:cyfr, :mcp_rate_limit_max)"},
         {"apps/arca/lib/planted.ex", "Application.get_env(:arca, :session_ttl_hours)"},
         {"apps/cyfr/lib/slots.ex", "Application.get_env(:cyfr, :opus_max_concurrent)"},
-        {"apps/cyfr/lib/opus/planted.ex", "Application.get_env(:cyfr, :locus_runtime_watch, [])"}
+        {"apps/cyfr/lib/opus/planted.ex", "Application.get_env(:cyfr, :locus_runtime_watch, [])"},
+        # Keyed by a module: indexed, piped, passed, and given as a default.
+        {"apps/cyfr/lib/indexed.ex",
+         "Application.get_env(:cyfr, Cyfr.RateLimit)[:mcp_rate_limit_max]"},
+        {"apps/arca/lib/piped.ex",
+         "Application.fetch_env!(:arca, __MODULE__) |> Keyword.get(:session_ttl_hours)"},
+        {"apps/cyfr/lib/passed.ex",
+         "Keyword.get(Application.get_env(:cyfr, __MODULE__, []), :locus_runtime_watch, [])"},
+        {"apps/sanctum/lib/default.ex",
+         "Application.get_env(:sanctum, Sanctum.Planted, caps: [])"},
+        # The retired group is no live setting's.
+        {"apps/cyfr/lib/retired.ex", "Application.get_env(:cyfr, :worker_watch, [])"}
       ]
 
       assert env_reads(planted, ~w(get_env fetch_env!?)) == [
                {"apps/sanctum/lib/planted.ex", :sanctum, :caps},
                {"apps/cyfr/lib/planted.ex", :cyfr, :mcp_rate_limit_max},
                {"apps/arca/lib/planted.ex", :arca, :session_ttl_hours},
-               {"apps/cyfr/lib/opus/planted.ex", :cyfr, :locus_runtime_watch}
+               {"apps/cyfr/lib/opus/planted.ex", :cyfr, :locus_runtime_watch},
+               {"apps/cyfr/lib/indexed.ex", :cyfr, :mcp_rate_limit_max},
+               {"apps/arca/lib/piped.ex", :arca, :session_ttl_hours},
+               {"apps/cyfr/lib/passed.ex", :cyfr, :locus_runtime_watch},
+               {"apps/sanctum/lib/default.ex", :sanctum, :caps}
+             ]
+    end
+
+    test "nothing reads or writes the worker watch's group under its retired name" do
+      uses =
+        env_reads(
+          tree("apps/*/lib/**/*.ex") ++ suite_sources(),
+          ~w(get_env fetch_env!? get_all_env compile_env!? put_env),
+          @retired_keywords
+        )
+
+      assert uses == [],
+             """
+             These use the worker watch's group under its name before the rename,
+             `:worker_watch`; its bounds are `locus_runtime_watch_*` settings:
+
+             #{Enum.map_join(uses, "\n", fn {path, app, key} -> "  #{path}: #{inspect(app)}, #{inspect(key)}" end)}
+             """
+
+      planted = [
+        {"apps/cyfr/lib/get.ex", "Application.get_env(:cyfr, :worker_watch, [])"},
+        {"apps/cyfr/lib/fetch.ex", "Application.fetch_env!(:cyfr, :worker_watch)[:poll_ms]"},
+        {"apps/cyfr/test/put_test.exs", "Application.put_env(:cyfr, :worker_watch, poll_ms: 10)"},
+        {"apps/cyfr/lib/keyed.ex", "Application.get_env(:cyfr, Opus.Watch)[:worker_watch]"},
+        # The live group stays the live check's.
+        {"apps/cyfr/lib/live.ex", "Application.get_env(:cyfr, :locus_runtime_watch, [])"}
+      ]
+
+      assert env_reads(planted, ~w(get_env fetch_env!? put_env), @retired_keywords) == [
+               {"apps/cyfr/lib/get.ex", :cyfr, :worker_watch},
+               {"apps/cyfr/lib/fetch.ex", :cyfr, :worker_watch},
+               {"apps/cyfr/test/put_test.exs", :cyfr, :worker_watch},
+               {"apps/cyfr/lib/keyed.ex", :cyfr, :worker_watch}
              ]
     end
 
     test "no test sets a live setting in the application environment" do
       puts =
         env_reads(
-          tree("apps/*/test/**/*.ex") ++ tree("apps/*/test/**/*.exs") ++ tree("config/*.exs"),
+          suite_sources(),
           ~w(put_env)
         )
 
@@ -486,6 +642,17 @@ defmodule Cyfr.PlatformSettingsRosterTest do
              A test sets one through `Cyfr.Test.Settings.put/2` (the Sanctum
              suite, `Sanctum.Test.Settings.put/2`).
              """
+
+      planted = [
+        {"apps/arca/test/planted_test.exs", "Application.put_env(:arca, :session_ttl_hours, 1)"},
+        {"apps/cyfr/test/keyed_test.exs",
+         "Application.put_env(:cyfr, Cyfr.RateLimit, mcp_rate_limit_max: 1)"}
+      ]
+
+      assert env_reads(planted, ~w(put_env)) == [
+               {"apps/arca/test/planted_test.exs", :arca, :session_ttl_hours},
+               {"apps/cyfr/test/keyed_test.exs", :cyfr, :mcp_rate_limit_max}
+             ]
     end
 
     test "the Sanctum suite's declaration is the roster's, for the settings Sanctum reads" do
