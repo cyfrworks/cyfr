@@ -1088,14 +1088,26 @@ jobs:
           for viewport in desktop 720x720; do
             VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/vault-proofs/file-offer/$viewport" tests/file-offer-proof/run.sh
           done
+      # The runner is the GitHub-hosted host class, held to its own canvas
+      # budget (tests/canvas-proof/README.md).
       - name: The canvas proof (desktop and 720x720)
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
+          CANVAS_PROOF_HOST_CLASS: github-hosted
         run: |
           set -euo pipefail
           for viewport in desktop 720x720; do
             CANVAS_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/canvas-proof/$viewport" tests/canvas-proof/run.sh
           done
+      # The records, kept so a failed run's can be checked again with
+      # `node proof.mjs --check-record`.
+      - name: Upload the canvas proof's records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: canvas-proof-records
+          path: ${{ runner.temp }}/canvas-proof
+          retention-days: 14
       # The shipped Caddyfile in the Caddy image docker-compose.yml names, in
       # front of a stub upstream: HSTS, the endpoint's value, once on every
       # response over TLS for a real host and never for localhost, the

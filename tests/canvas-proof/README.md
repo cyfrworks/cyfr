@@ -29,9 +29,13 @@ page, toolkit and served versions, in Chromium, Firefox and WebKit alike.
   observation is redacted as it is noted (asset credentials in addresses,
   signed tokens, bearers and every secret the run held), and the record's
   own checks refuse one that carries any. `exits`' "another frame's
-  bearer" is shown by its refusal and never printed. `run.sh` removes the
-  answer files, the one place it was kept, on every exit path: after the
-  record is checked, and on an early exit, an interrupt or a stop.
+  bearer" is shown by its refusal and never printed. On every exit path,
+  an early exit, an interrupt or a stop included, `run.sh` looks for the
+  session token, the cookie and every bearer the fixture minted in both
+  records and removes a record that carries one, so no kept or uploaded
+  record holds it, and both records when an answer cannot be read or
+  parsed; then it removes the answer files, the one place a minted bearer
+  was kept.
 
 ## Running it
 
@@ -42,6 +46,10 @@ CANVAS_PROOF_VIEWPORT=720x720 tests/canvas-proof/run.sh
 
 `desktop` is the PC (1280×900, posture `desk`); `720x720` is the phone
 (posture `hand`). Any other value fails the run before the cell starts.
+`CANVAS_PROOF_HOST_CLASS` names the host class the measurement is held to
+(below): `reference`, the default when it is unset, or `github-hosted`, which
+CI's canvas proof step sets; any other value, an empty one included, fails
+the run before the cell starts.
 The release is built as the release proofs build it (MIX_ENV=prod,
 SQLite); `RELEASE_BOOT_SKIP_BUILD=1` reuses one a previous run built. The
 record, `canvas-proof.json` and `canvas-proof.md`, is written into
@@ -221,16 +229,25 @@ with no `ready` or `tree` within 10 s fails the run, and no sample is
 dropped from the counts. The record carries, per viewport, the date, the
 host (its name and CPU model), Chromium's version, the viewport, the
 sample counts (20 and 20), every sample, and the p50 and p95 in
-milliseconds of each number, labelled with its clock.
+milliseconds of each number, labelled with its clock. The host is its name,
+CPU model, core count (`cores`) and host class (`class`), on the record and
+on its measurement alike.
 
 **The budget.** Each number's p95 is bound to the canvas budget
-`ARCHITECTURE.md` §6.9 states: a frame open within 100 ms and a validation
-within 100 ms, at both viewports. A p95 over its budget, or a measurement
-with no p95 to hold to it, fails the record's checks, and the run exits
-non-zero naming the number, its p95, the viewport and the budget. The
-budget is the proof's own (`BUDGET_MS`); the record carries it beside the
-measurement, and its checks hold the record to the proof's budget, never
-to the record's copy.
+`ARCHITECTURE.md` §6.9 states for the run's host class, at both viewports:
+on the `reference` class, the host the budget was stated on, a frame open
+within 100 ms and a validation within 100 ms; on the `github-hosted` class,
+the GitHub-hosted runner, the same measurement on a slower host, each
+within 150 ms. A run names its class with `CANVAS_PROOF_HOST_CLASS`
+(`reference` when unset), which `run.sh` hands the proof, and the record
+carries it as `host.class`, a fact of its run as its viewport is. A p95 over
+its class's budget, or a measurement with no p95 to hold to it, fails the
+record's checks, and the run exits non-zero naming the number, its p95, the
+viewport, the class and its budget. A record naming no class, or a class
+the proof has no budget for, fails, never passing by default. The budget is
+the proof's own (`BUDGET_MS`, keyed by class); the record carries its class's
+row beside the measurement, and its checks hold the record to the proof's
+budget, never to the record's copy.
 
 ## Recorded run
 
@@ -268,12 +285,13 @@ its record, not here.
 `canvas-proof.json` fails the run if it carries a step reported without
 its observation, a browser shown other than absent where it never
 launched, a feed result reported as an executed run (or a fire that ran),
-any PostgreSQL claim, a measurement without its date, host and sample
-counts, a p95 over its budget or none to hold to it, or any credential
+any PostgreSQL claim, a measurement without its date, host (with its core
+count) and sample counts, a host class with no budget, a p95 over its
+class's budget or none to hold to it, or any credential
 value: a secret the run held, an asset credential in an address, a signed
 token or a bearer. A narrowed run's record never passes. `run.sh` then
 looks for the session token, the cookie and every bearer the fixture
-minted in both records.
+minted in both records, and removes a record that carries one.
 `node proof.mjs --check-record RECORD_JSON [SECRETS_JSON]` runs the
 record's checks over a saved record, without a browser.
 

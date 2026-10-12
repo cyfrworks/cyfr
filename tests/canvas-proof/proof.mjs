@@ -24,8 +24,8 @@
 // (INSTRUMENT) that records the click and wraps the shell's port handlers.
 // It changes no message and records nothing of a boot, bearer, argument or
 // stream payload. Each number's p95 is held to its budget (BUDGET_MS, the
-// canvas budgets ARCHITECTURE.md §6.9 states) at both viewports, and a
-// record over either fails the run.
+// canvas budgets ARCHITECTURE.md §6.9 states) for the host class the run
+// names, at both viewports, and a record over either fails the run.
 //
 // The server's part of each fixture action is run.sh's, asked for through
 // OUT_DIR (`ask-N.json`, answered `answer-N.json`); a request carries the
@@ -37,7 +37,8 @@
 // record: each observation is redacted as it is noted, and the record's own
 // checks (`recordChecks`) refuse a record that carries one.
 //
-// Usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR VIEWPORT [NARROWING]
+// Usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR VIEWPORT NARROWING HOST_CLASS
+//        (NARROWING may be empty; HOST_CLASS is a class of BUDGET_MS)
 //    or: node proof.mjs --check-record RECORD_JSON [SECRETS_JSON]
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -82,8 +83,14 @@ const VIEWPORTS = {
 
 const CLOCK = "performance.now() in the shell's document, Chromium";
 const SAMPLES = 20;
-// The p95 each number must not exceed, in milliseconds, at either viewport.
-const BUDGET_MS = { frame_open_ms: 100, validation_ms: 100 };
+// The p95 each number must not exceed, in milliseconds, at either viewport,
+// by host class: `reference` is the host the budget was stated on, and
+// `github-hosted` the GitHub-hosted runner, the same measurement on a slower
+// host. A record names its class as it names its viewport.
+const BUDGET_MS = {
+  reference: { frame_open_ms: 100, validation_ms: 100 },
+  "github-hosted": { frame_open_ms: 150, validation_ms: 150 },
+};
 // A sample with no `ready` or `tree` within this long fails the run.
 const SAMPLE_MS = 10_000;
 const FORGED = "forged-by-neighbour";
@@ -127,6 +134,11 @@ const browsersOf = (step) => (STEPS.find(([name]) => name === step) || [null, []
 
 // ---- the record's own checks ---------------------------------------------------
 
+// The budget row of a host class, or null for a class the table lacks.
+function budgetOf(hostClass) {
+  return typeof hostClass === "string" && Object.hasOwn(BUDGET_MS, hostClass) ? BUDGET_MS[hostClass] : null;
+}
+
 // Each check the record must pass, as the failure cases name them; every
 // sentence returned is a failure.
 function recordChecks(rec, knownSecrets = []) {
@@ -163,19 +175,33 @@ function recordChecks(rec, knownSecrets = []) {
   if (!rec.host || !rec.host.name || !rec.host.cpu || !m.host || !m.host.name || !m.host.cpu) {
     fails.push("the record carries no host (name and CPU)");
   }
+  if (!rec.host || !Number.isInteger(rec.host.cores) || !m.host || !Number.isInteger(m.host.cores)) {
+    fails.push("the record carries no core count");
+  }
   if (!m.counts || !Number.isInteger(m.counts.open) || !Number.isInteger(m.counts.validation)) {
     fails.push("the measurement carries no sample counts");
   }
   if (!m.clock) fails.push("the measurement names no clock");
 
-  // A p95 over its budget, or none to hold to it. The budget is this
-  // file's, never the record's own.
+  // A p95 over its class's budget, or none to hold to it. The budget is
+  // this file's, never the record's own; the class is the record's, and a
+  // record naming no class, or one the table lacks, has no budget to pass.
+  const hostClass = rec.host && rec.host.class;
+  const budget = budgetOf(hostClass);
+  if (!budget) {
+    fails.push(hostClass === undefined || hostClass === null || hostClass === ""
+      ? "the record names no host class, so no budget holds its measurement"
+      : `the record names the host class ${JSON.stringify(hostClass)}, which has no budget`);
+  } else if (!m.host || m.host.class !== hostClass) {
+    fails.push(`the measurement's host class is not the record's, ${hostClass}`);
+  }
   for (const [key, label] of [["frame_open_ms", "frame open"], ["validation_ms", "validation"]]) {
+    if (!budget) break;
     const p95 = m[key] && m[key].p95;
     if (typeof p95 !== "number" || !Number.isFinite(p95)) {
-      fails.push(`the measurement has no ${label} p95 to hold to its budget of ${BUDGET_MS[key]} ms`);
-    } else if (p95 > BUDGET_MS[key]) {
-      fails.push(`the ${label} p95 is ${p95} ms at ${m.viewport || rec.viewport}, over its budget of ${BUDGET_MS[key]} ms`);
+      fails.push(`the measurement has no ${label} p95 to hold to the ${hostClass} budget of ${budget[key]} ms`);
+    } else if (p95 > budget[key]) {
+      fails.push(`the ${label} p95 is ${p95} ms at ${m.viewport || rec.viewport} on the ${hostClass} class, over its budget of ${budget[key]} ms`);
     }
   }
 
@@ -1681,11 +1707,12 @@ function renderMd(rec) {
     return e ? e.result : "not reached";
   };
   const m = rec.measurement;
-  const row = (label, key, count) => `| ${label} | ${count} | ${m[key] ? m[key].p50 : null} | ${m[key] ? m[key].p95 : null} | ${BUDGET_MS[key]} | ${m[key] ? m[key].clock : CLOCK} |`;
+  const budget = budgetOf(rec.host.class);
+  const row = (label, key, count) => `| ${label} | ${count} | ${m[key] ? m[key].p50 : null} | ${m[key] ? m[key].p95 : null} | ${budget ? budget[key] : "none"} | ${m[key] ? m[key].clock : CLOCK} |`;
   return [
     `# The canvas proof: ${rec.viewport} (${rec.device}, posture ${rec.posture})`,
     "",
-    `Recorded on ${rec.date} on ${rec.host.name} (${rec.host.cpu}), on a SQLite cell, in the pinned Playwright image.`,
+    `Recorded on ${rec.date} on ${rec.host.name} (${rec.host.cpu}, ${rec.host.cores} cores), host class ${rec.host.class}, on a SQLite cell, in the pinned Playwright image.`,
     `Browsers: ${ALL.map((b) => `${b} ${rec.browsers[b] || "absent"}`).join(", ")}.`,
     `Feed results: fixed results the fixture accepted; no run executed (${rec.executed_runs} executed).`,
     ...(rec.narrowed ? ["", `Narrowed run (${JSON.stringify(rec.narrowed)}): not the proof's record.`] : []),
@@ -1719,10 +1746,10 @@ async function main() {
     return;
   }
 
-  const [server, segment, cookie, outDir, viewportName, narrowing] = argv;
+  const [server, segment, cookie, outDir, viewportName, narrowing, hostClass] = argv;
   const viewport = VIEWPORTS[viewportName];
-  if (!server || !segment || !cookie || !outDir || !viewport) {
-    console.error("usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR desktop|720x720 [NARROWING]");
+  if (!server || !segment || !cookie || !outDir || !viewport || !budgetOf(hostClass)) {
+    console.error(`usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR desktop|720x720 NARROWING ${Object.keys(BUDGET_MS).join("|")}`);
     process.exit(64);
   }
   lib = await import("../browser/lib.mjs");
@@ -1741,7 +1768,7 @@ async function main() {
     if (k === "measure") narrowed.measure = v !== "0";
   }
 
-  const host = { name: hostname(), cpu: (cpus()[0] || {}).model || "unknown" };
+  const host = { name: hostname(), cpu: (cpus()[0] || {}).model || "unknown", cores: cpus().length, class: hostClass };
   const date = new Date().toISOString().slice(0, 10);
   Object.assign(record, {
     proof: "canvas",
@@ -1750,7 +1777,7 @@ async function main() {
     date, host,
   });
   if (Object.keys(narrowed).length) record.narrowed = narrowed;
-  Object.assign(record.measurement, { date, host, viewport: viewportName, clock: CLOCK, counts: { open: 0, validation: 0 }, budget_ms: BUDGET_MS });
+  Object.assign(record.measurement, { date, host, viewport: viewportName, clock: CLOCK, counts: { open: 0, validation: 0 }, budget_ms: BUDGET_MS[hostClass] });
 
   const receiver = await lib.startReceiver();
   const udp = await startUdp();

@@ -19,15 +19,19 @@
 # directory (`ask-N.json`, each the command and its non-secret arguments),
 # and this script, which holds the session token, answers `answer-N.json`.
 # Once the proof has written its record, this script looks for every
-# credential the run held in it. The asks and the answers go on every exit
-# path, an early one included.
+# credential the run held in it and removes a record that carries one. The
+# scan runs, and then the asks and the answers go, on every exit path, an
+# early one included.
 #
-# Usage: CANVAS_PROOF_VIEWPORT=desktop|720x720 tests/canvas-proof/run.sh
+# Usage: CANVAS_PROOF_VIEWPORT=desktop|720x720 \
+#          [CANVAS_PROOF_HOST_CLASS=reference|github-hosted] tests/canvas-proof/run.sh
 # `desktop` is the PC (1280x900, posture desk) and `720x720` the phone
-# (posture hand). Writes canvas-proof.json and canvas-proof.md into PROOF_OUT
-# (default: the scratch directory, kept with RELEASE_BOOT_KEEP=1) and prints
-# the table. Set RELEASE_BOOT_SKIP_BUILD=1 to reuse a release a previous run
-# built.
+# (posture hand). The host class chooses the budget the measurement is held
+# to (proof.mjs BUDGET_MS); unset, it is `reference`, and any value but the
+# two, an empty one included, fails before the cell starts. Writes
+# canvas-proof.json and canvas-proof.md into PROOF_OUT (default: the scratch
+# directory, kept with RELEASE_BOOT_KEEP=1) and prints the table. Set
+# RELEASE_BOOT_SKIP_BUILD=1 to reuse a release a previous run built.
 set -euo pipefail
 
 VIEWPORT="${CANVAS_PROOF_VIEWPORT:-}"
@@ -35,6 +39,15 @@ case "$VIEWPORT" in
   desktop | 720x720) ;;
   *)
     echo "::error::CANVAS_PROOF_VIEWPORT is desktop or 720x720, not '$VIEWPORT'" >&2
+    exit 64
+    ;;
+esac
+
+HOST_CLASS="${CANVAS_PROOF_HOST_CLASS-reference}"
+case "$HOST_CLASS" in
+  reference | github-hosted) ;;
+  *)
+    echo "::error::CANVAS_PROOF_HOST_CLASS is reference or github-hosted, not '$HOST_CLASS'" >&2
     exit 64
     ;;
 esac
@@ -68,16 +81,57 @@ remove_asks() {
   rm -f "$OUT"/ask-* "$OUT"/answer-*
 }
 
+# The record carries no credential this run held: the session token, the
+# browser's cookie, or a bearer the fixture minted, read from the answers,
+# so this runs before they go. A record that carries one is removed, so
+# no kept or uploaded output directory holds it, and so is every record
+# when an answer cannot be read or parsed, since its bearer is then
+# unknown; the answer is 1 if any was removed.
+RECORDS_SCANNED=0
+scan_records() {
+  local record secret bearers found=0
+  if ! bearers="$(python3 -c '
+import glob, json, sys
+for path in glob.glob(sys.argv[1] + "/answer-*.json"):
+    answer = json.load(open(path))
+    if isinstance(answer, dict) and isinstance(answer.get("bearer"), str):
+        print(answer["bearer"])' "$OUT")"; then
+    echo "::error::an answer could not be read or parsed, so its bearer is unknown; the records are removed" >&2
+    rm -f "$OUT/canvas-proof.json" "$OUT/canvas-proof.md"
+    RECORDS_SCANNED=1
+    return 1
+  fi
+  for record in "$OUT/canvas-proof.json" "$OUT/canvas-proof.md"; do
+    [ -s "$record" ] || continue
+    while IFS= read -r secret; do
+      if [ -n "$secret" ] && grep -qF -- "$secret" "$record"; then
+        echo "::error::$record carries a credential this run held; it is removed" >&2
+        rm -f "$record"
+        found=1
+        break
+      fi
+    done <<<"${TOKEN:-}
+${cookie:-}
+$bearers"
+  done
+  RECORDS_SCANNED=1
+  return "$found"
+}
+
 # The scratch directory holds the cell's keys and its database, so it goes
 # even when a stop fails. `server_stop` ends in `fail`, an `exit`, when a
 # listener outlives its stop, and an exit inside this trap would end it
 # before the removal, so the stop runs in a subshell, whose exit ends only
-# that subshell; the stop's failure still fails the run. The asks and
-# answers go once the proof's container is stopped and can write no more.
+# that subshell; the stop's failure still fails the run. Once the proof's
+# container is stopped and can write no more, a record an early exit left
+# unscanned is scanned, and then the asks and answers go.
 cleanup() {
   local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
+  if [ "$RECORDS_SCANNED" = 0 ] && ! scan_records; then
+    [ "$code" -ne 0 ] || code=1
+  fi
   remove_asks
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
@@ -305,10 +359,10 @@ answer_asks() {
   return 0
 }
 
-step "the canvas proof at $VIEWPORT in $PLAYWRIGHT_IMAGE"
+step "the canvas proof at $VIEWPORT on the $HOST_CLASS host class in $PLAYWRIGHT_IMAGE"
 # CANVAS_PROOF_DEV narrows a local run (browsers=…;steps=…;measure=0); its
 # record says it is narrowed and never passes. A full run leaves it unset.
-playwright_run canvas-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cookie" /out "$VIEWPORT" "${CANVAS_PROOF_DEV:-}" &
+playwright_run canvas-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cookie" /out "$VIEWPORT" "${CANVAS_PROOF_DEV:-}" "$HOST_CLASS" &
 PROOF_PID=$!
 while kill -0 "$PROOF_PID" 2>/dev/null; do
   answer_asks
@@ -320,34 +374,16 @@ status=$?
 set -e
 PROOF_PID=""
 
-# The record carries no credential this run held: the session token, the
-# browser's cookie, or a bearer the fixture minted. Once the record is
-# checked the answers, the one place a minted bearer was kept, go.
+# Once the record is checked the answers, the one place a minted bearer
+# was kept, go.
 step "the record's credentials"
-bearers="$(python3 -c '
-import glob, json, sys
-for path in glob.glob(sys.argv[1] + "/answer-*.json"):
-    try:
-        answer = json.load(open(path))
-    except ValueError:
-        continue
-    if isinstance(answer, dict) and isinstance(answer.get("bearer"), str):
-        print(answer["bearer"])' "$OUT")"
 for record in "$OUT/canvas-proof.json" "$OUT/canvas-proof.md"; do
   if [ ! -s "$record" ]; then
     echo "::error::the proof wrote no $record" >&2
     status=1
-    continue
   fi
-  while IFS= read -r secret; do
-    if [ -n "$secret" ] && grep -qF -- "$secret" "$record"; then
-      echo "::error::$record carries a credential this run held" >&2
-      status=1
-    fi
-  done <<<"$TOKEN
-$cookie
-$bearers"
 done
+scan_records || status=1
 remove_asks
 
 echo "the record: $OUT/canvas-proof.json and $OUT/canvas-proof.md"
