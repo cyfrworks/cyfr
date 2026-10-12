@@ -564,6 +564,29 @@ defmodule Compendium.CanvasTest do
       assert {:error, {:invalid_argument, _}} = Canvas.restore(ctx, "../markets")
     end
 
+    test "a kept version no longer installed is not found, whether or not its grant waits, " <>
+           "and the document stays",
+         %{ctx: ctx} do
+      owner_profile!(ctx, :active)
+      v1 = write!(ctx)
+      {:ok, _} = activate(ctx, v1, trial!(ctx, v1, 1).frame)
+      v2 = write!(ctx)
+      {:ok, _} = activate(ctx, v2, trial!(ctx, v2, 1).frame)
+      {:ok, :deleted} = Compendium.Registry.delete(ctx, @name, v1, "local")
+
+      %{document: before, revision: revision} = versions!(ctx)
+      assert %{working: ^v2, kept: ^v1} = before
+
+      for status <- [:active, :needs_consent] do
+        owner_profile!(ctx, status)
+
+        assert {:error, {:not_found, "Canvas version", "markets " <> ^v1}} =
+                 Canvas.restore(ctx, @name)
+
+        assert %{document: ^before, revision: ^revision} = versions!(ctx)
+      end
+    end
+
     test "a restore racing an activation is one conflict", %{ctx: ctx} do
       v1 = write!(ctx)
       {:ok, _} = activate(ctx, v1, trial!(ctx, v1).frame)

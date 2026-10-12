@@ -19,8 +19,9 @@ defmodule Compendium.Providers.Canvas do
       validation credential, which it spends; only a tree activates, and
       only under the canvas's current grant. Prism calls it, from outside
       any chain.
-    * `restore` makes the kept version the working one again under
-      today's grant. Outside any chain, as safe mode offers it.
+    * `restore` makes the kept version the working one again, while it
+      is still installed and under today's grant. Outside any chain, as
+      safe mode offers it.
 
   Every action runs under the caller's context, in the athanor in focus.
   """

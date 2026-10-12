@@ -19,7 +19,12 @@ defmodule PrismWeb.ShellLive do
   tinctures the layout places over it. A canvas whose newest installed
   version is not its working version, its kept version or its recorded
   failure is validated first (`Prism.CanvasValidation`): only a tree
-  activates it, and the shell then opens the working version. The shell
+  activates it. When a validation ends, the shell compares again: a newer
+  version written meanwhile that needs validating is validated in its
+  turn, each such version once, and otherwise the working version opens.
+  A grant prompt the shell raised for a canvas is withdrawn once the
+  canvas is decided for another tincture or leaves the screen, and safe
+  mode withdraws every grant prompt the shell raised. The shell
   reads its listing (`Prism.TinctureRegistry`) again each time it decides
   a canvas with no frame held, and decides against that one read, so a
   tincture, a canvas or a version installed or removed while the shell is
@@ -169,6 +174,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:shipped, nil)
       |> assign(:layout_changed, false)
       |> assign(:decisions, %{})
+      |> assign(:trialled, %{})
       |> assign(:safe_mode, nil)
       |> assign(:credential_prompts, %{})
       |> assign(:grant_prompts, %{})
@@ -837,6 +843,7 @@ defmodule PrismWeb.ShellLive do
   defp show_canvas(%{assigns: %{safe_mode: %{}}} = socket), do: socket
 
   defp show_canvas(socket) do
+    socket = withdraw_hidden(socket)
     %{context: ctx, frames: frames} = socket.assigns
 
     case visible_entry(socket.assigns) do
@@ -871,9 +878,16 @@ defmodule PrismWeb.ShellLive do
   # version opens. The listing is read again first (`reread_listing/1`),
   # and every branch is decided against that one read: what is installed,
   # and as what, is the registry's now, never the listing's from when the
-  # shell mounted.
+  # shell mounted. A grant prompt the canvas raised for another tincture
+  # is withdrawn first (`withdraw_moved/3`), and what earlier trials of
+  # the canvas were started at a validation's end is forgotten.
   defp decide(socket, entry) do
-    socket = reread_listing(socket)
+    socket =
+      socket
+      |> reread_listing()
+      |> update(:trialled, &Map.delete(&1, entry.id))
+
+    socket = withdraw_moved(socket, entry.id, deciding_for(socket, entry))
 
     cond do
       socket.assigns.shipped == entry.id ->
@@ -890,6 +904,20 @@ defmodule PrismWeb.ShellLive do
       true ->
         assign(socket, :showing, :none)
     end
+  end
+
+  # The card id of the tincture `decide/2` decides canvas `entry` for:
+  # the shipped canvas's on safe mode's shipped path, the listed card the
+  # layout names, or none.
+  defp deciding_for(socket, entry) do
+    card =
+      if socket.assigns.shipped == entry.id,
+        do: %{id: "iframe_" <> shipped_name()},
+        else:
+          Frames.resolve(entry.tincture, socket.assigns.canvases) ||
+            Frames.resolve(entry.tincture, socket.assigns.tinctures)
+
+    card && card.id
   end
 
   defp versions(socket, entry, card) do
@@ -932,6 +960,7 @@ defmodule PrismWeb.ShellLive do
   # is called once, and the shell goes on as its answer says.
   defp validation_ended(socket, canvas_id, event) do
     %{context: ctx, frames: frames} = socket.assigns
+    tried = tried(frames, canvas_id)
     call = fn tool, args -> call_tool(socket, tool, args) end
     {later, next} = CanvasValidation.conclude(ctx, frames, canvas_id, event, call)
     socket = put_frames(socket, later)
@@ -941,25 +970,65 @@ defmodule PrismWeb.ShellLive do
         socket
 
       {_next, %{id: ^canvas_id} = entry} ->
-        socket |> decided(canvas_id) |> after_activation(entry, next)
+        socket |> decided(canvas_id) |> after_activation(entry, next, tried)
 
       {_next, _another} ->
         decided(socket, canvas_id)
     end
   end
 
-  defp after_activation(socket, entry, {:show_working, fallback}),
-    do: show_working(socket, entry, fallback, :ask)
+  # The version canvas `canvas_id`'s validation frame trials, while held.
+  defp tried(frames, canvas_id) do
+    case Frames.get(frames, {:validation, canvas_id}) do
+      %{reference: %{version: version}} -> version
+      nil -> nil
+    end
+  end
 
-  defp after_activation(socket, entry, :ask_grant) do
+  # The end of a validation is a moment the glass is to show the canvas,
+  # so it compares again against the listing and the versions read now: a
+  # newest version written meanwhile that needs validating
+  # (`CanvasValidation.needed?/2`), and is neither the version just tried
+  # nor one this path trialled since the canvas was last decided, is
+  # validated in its turn; otherwise the working version opens. Each
+  # version is trialled from here once per decision, so an outcome that
+  # records nothing cannot loop.
+  defp after_activation(socket, entry, {:show_working, fallback}, tried) do
+    socket = reread_listing(socket)
+
+    case Frames.resolve(entry.tincture, socket.assigns.canvases) do
+      nil ->
+        assign(socket, :showing, :none)
+
+      card ->
+        versions = Compendium.canvas_versions(socket.assigns.context, card.name)
+        trialled = Map.get(socket.assigns.trialled, entry.id, MapSet.new())
+
+        if newer?(trialled, card, tried, versions),
+          do:
+            socket
+            |> update(:trialled, &Map.put(&1, entry.id, MapSet.put(trialled, card.version)))
+            |> validate(entry, card),
+          else: working_of(socket, entry, card, versions, fallback, :ask)
+    end
+  end
+
+  defp after_activation(socket, entry, :ask_grant, _tried) do
     case Frames.resolve(entry.tincture, socket.assigns.canvases) do
       nil -> assign(socket, :showing, :none)
       card -> ask_validation_grant(socket, entry, card)
     end
   end
 
-  defp after_activation(socket, entry, {:refuse, refusal}),
+  defp after_activation(socket, entry, {:refuse, refusal}, _tried),
     do: refuse_canvas(socket, entry, refusal)
+
+  defp newer?(trialled, card, tried, {:ok, %{document: document}}) do
+    card.version != tried and not MapSet.member?(trialled, card.version) and
+      CanvasValidation.needed?(document, card.version)
+  end
+
+  defp newer?(_trialled, _card, _tried, {:error, _refused}), do: false
 
   # Read the canvas's versions again and open its working version, or,
   # without one, `fallback`: safe mode `not_validated`, or the canvas's
@@ -971,15 +1040,16 @@ defmodule PrismWeb.ShellLive do
         assign(socket, :showing, :none)
 
       card ->
-        case Compendium.canvas_versions(socket.assigns.context, card.name) do
-          {:ok, %{document: %{working: working}}} ->
-            open_working(socket, entry, card, working, fallback, ask)
-
-          {:error, _refused} ->
-            open_working(socket, entry, card, nil, fallback, ask)
-        end
+        versions = Compendium.canvas_versions(socket.assigns.context, card.name)
+        working_of(socket, entry, card, versions, fallback, ask)
     end
   end
+
+  defp working_of(socket, entry, card, {:ok, %{document: %{working: working}}}, fallback, ask),
+    do: open_working(socket, entry, card, working, fallback, ask)
+
+  defp working_of(socket, entry, card, {:error, _refused}, fallback, ask),
+    do: open_working(socket, entry, card, nil, fallback, ask)
 
   defp open_working(socket, _entry, _card, nil, :else_safe_mode, _ask),
     do: enter_safe_mode(socket, :not_validated)
@@ -1165,7 +1235,8 @@ defmodule PrismWeb.ShellLive do
   # ---- safe mode -------------------------------------------------------------
 
   # Safe mode: every frame is discarded with its credential, a validation
-  # in progress included, and the system layer offers the ways out.
+  # in progress included, every grant prompt the shell raised is withdrawn,
+  # and the system layer offers the ways out.
   defp enter_safe_mode(%{assigns: %{safe_mode: %{}}} = socket, _reason), do: socket
 
   defp enter_safe_mode(socket, reason) do
@@ -1180,6 +1251,8 @@ defmodule PrismWeb.ShellLive do
         kept: kept(socket, entry)
       })
 
+    # Withdrawn before safe mode's prompt arrives, so none stands in front.
+    socket.assigns.grant_prompts |> Map.keys() |> Enum.each(&withdraw_prompt/1)
     show_prompt(%{id: prompt_id, kind: :safe_mode, action: nil, subject: subject})
 
     socket
@@ -1190,6 +1263,7 @@ defmodule PrismWeb.ShellLive do
     |> assign(:credential_prompts, %{})
     |> assign(:grant_prompts, %{})
     |> assign(:grant_decisions, %{})
+    |> assign(:trialled, %{})
   end
 
   # The version the visible canvas's versions document keeps, read as safe
@@ -1225,6 +1299,9 @@ defmodule PrismWeb.ShellLive do
 
   defp show_prompt(prompt),
     do: send_update(PrismWeb.SystemLayer, id: "system-layer", prompt: prompt)
+
+  defp withdraw_prompt(prompt_id),
+    do: send_update(PrismWeb.SystemLayer, id: "system-layer", withdraw: prompt_id)
 
   defp next_prompt_id(socket, kind) do
     seq = socket.assigns.prompt_seq + 1
@@ -1265,12 +1342,51 @@ defmodule PrismWeb.ShellLive do
   # The grant prompt open for canvas `canvas_id` and the tincture of card
   # `tincture_id`, if any. One open for another tincture of that canvas is
   # never taken over, since it names a grant this decision does not ask
-  # for: it answers a decision since replaced, so it acts on nothing.
+  # for.
   defp asking(prompts, canvas_id, tincture_id) do
     Enum.find_value(prompts, fn
       {prompt_id, {{:activation, ^canvas_id}, ^tincture_id}} -> prompt_id
       _another -> nil
     end)
+  end
+
+  # Canvas `canvas_id` is decided for the tincture of card `tincture_id`,
+  # or for none: every grant prompt of the canvas for another tincture is
+  # withdrawn from the system layer, which reports nothing for it, and
+  # forgotten here, so the person never sees a prompt for a tincture no
+  # longer in front, and its answer never reaches `grant_closed/4`.
+  defp withdraw_moved(socket, canvas_id, tincture_id) do
+    moved =
+      for {prompt_id, {{:activation, ^canvas_id}, other}} <- socket.assigns.grant_prompts,
+          other != tincture_id,
+          do: prompt_id
+
+    withdraw_prompts(socket, moved)
+  end
+
+  # A canvas's grant prompt stands only while the glass shows that canvas:
+  # once the canvas leaves the screen — the layout drops it, or the person
+  # switches away — its prompts are withdrawn, and showing it again
+  # decides it again.
+  defp withdraw_hidden(socket) do
+    visible = Frames.visible_canvas(socket.assigns.frames)
+
+    hidden =
+      for {prompt_id, {{:activation, canvas_id}, _tincture}} <- socket.assigns.grant_prompts,
+          canvas_id != visible,
+          do: prompt_id
+
+    withdraw_prompts(socket, hidden)
+  end
+
+  # Grant prompts `prompt_ids`, withdrawn from the system layer, which
+  # reports nothing for them, and forgotten here.
+  defp withdraw_prompts(socket, prompt_ids) do
+    Enum.each(prompt_ids, &withdraw_prompt/1)
+
+    socket
+    |> update(:grant_prompts, &Map.drop(&1, prompt_ids))
+    |> update(:grant_decisions, &Map.drop(&1, prompt_ids))
   end
 
   # A canvas's grant prompt `prompt_id` answers the canvas's latest

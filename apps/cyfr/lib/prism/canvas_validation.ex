@@ -50,11 +50,12 @@ defmodule Prism.CanvasValidation do
   @typedoc """
   What the shell does once activation answered:
 
-    * `{:show_working, :else_safe_mode}` — read the versions again and
-      open the working version live, or enter safe mode `not_validated`
-      when there is none;
-    * `{:show_working, {:else_refuse, refusal}}` — the working version, or
-      the canvas's refusal as a refused frame shows it;
+    * `{:show_working, :else_safe_mode}` — read the listing and the
+      versions again and validate a newer version written meanwhile that
+      needs validating, once per version; otherwise open the working
+      version live, or enter safe mode `not_validated` when there is none;
+    * `{:show_working, {:else_refuse, refusal}}` — the same, with the
+      canvas's refusal, as a refused frame shows it, in place of safe mode;
     * `:ask_grant` — the grant prompt for the canvas's tincture, and a
       new validation once it is confirmed;
     * `{:refuse, refusal}` — nothing more: the canvas shows its refusal,
@@ -176,13 +177,15 @@ defmodule Prism.CanvasValidation do
 
   @doc """
   What the shell does once `canvas.activate` answered `answer`: an
-  activation, or the success for the version already working, and a
-  recorded `no_tree` or `died` open the working version; a conflict reads
-  the versions again once and opens the working one, never validating
-  again in the same show; either is safe mode `not_validated` without a
-  working version. `consent_required` asks for the grant. `not_owner` is
-  the canvas's refusal and nothing more. Anything else is the working
-  version, or the canvas's refusal.
+  activation, or the success for the version already working, a recorded
+  `no_tree` or `died`, and a conflict read the listing and the versions
+  again and open the working version, unless a newer version written
+  meanwhile needs validating, which the shell validates in its turn, once
+  per version and never the one just tried; any of them is safe mode
+  `not_validated` without a working version. `consent_required` asks for
+  the grant. `not_owner` is the canvas's refusal and nothing more.
+  Anything else is the same, with the canvas's refusal in place of safe
+  mode.
   """
   @spec next({:ok, term()} | {:error, term()}) :: next()
   def next({:ok, _activation}), do: {:show_working, :else_safe_mode}

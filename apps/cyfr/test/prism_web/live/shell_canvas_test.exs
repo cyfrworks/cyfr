@@ -166,6 +166,19 @@ defmodule PrismWeb.ShellCanvasTest do
     lay!(ctx, "canvas", manifest["version"], manifest["tincture"], [{"canvas.js", module}])
   end
 
+  # Version `version` of tincture `name` gone from the athanor's tree and
+  # its rows, and the registry scanned again.
+  defp unlay_version!(ctx, name, version) do
+    actor = Sanctum.Context.actor(ctx)
+
+    File.rm_rf!(
+      Arca.Adapters.Local.build_path(actor, ["components", "tinctures", "local", name, version])
+    )
+
+    :ok = Arca.ComponentStorage.delete_component(actor, name, version, "local", "tincture")
+    Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
+  end
+
   # The canvas `name`'s versions document, as a glass's validation leaves it.
   defp versions!(ctx, name, fields) do
     actor = Sanctum.Context.actor(ctx)
@@ -260,6 +273,16 @@ defmodule PrismWeb.ShellCanvasTest do
   end
 
   defp rows, do: Arca.Repo.all(Arca.Schemas.FrameCredential)
+
+  # Frame `frame_id`'s credential revoked behind the shell's back, so the
+  # activation its trial reports spends nothing and records nothing.
+  defp revoke!(frame_id) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(f in Arca.Schemas.FrameCredential, where: f.frame_id == ^frame_id),
+        set: [state: "revoked"]
+      )
+  end
 
   defp handshake!(view, frame_id) do
     render_hook(view, "frame_handshake", %{"frame" => frame_id})
@@ -736,6 +759,164 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{purpose: "validation", version: "1.0.1"} = row(trial.id)
       assert row(home.id).state == "revoked"
       assert %{working: "1.0.0"} = versions(ctx, "markets")
+    end
+
+    test "a version written during a validation is validated once that validation ends, before the working version opens",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets", "1.1.0")
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{state: :live, reference: %{version: "1.1.0"}} = first = validation(view)
+
+      # 1.2.0 is written while 1.1.0 is trialled; 1.1.0's tree activates it.
+      canvas!(ctx, "markets", "1.2.0")
+      canvas_verb!(view, first.id, :tree)
+
+      assert row(first.id).state == "revoked"
+      assert %{working: "1.1.0"} = versions(ctx, "markets")
+      assert canvas(view) == nil
+
+      assert %{state: :live, visible: false, reference: %{version: "1.2.0"}} =
+               newer = validation(view)
+
+      assert %{purpose: "validation", version: "1.2.0"} = row(newer.id)
+
+      # 1.2.0's tree activates it, and with nothing newer the working
+      # version opens: no third trial.
+      canvas_verb!(view, newer.id, :tree)
+
+      assert validation(view) == nil
+      assert %{working: "1.2.0", kept: "1.1.0"} = versions(ctx, "markets")
+      assert %{state: :live, visible: true, reference: %{version: "1.2.0"}} = canvas(view)
+      assert assigns(view).safe_mode == nil
+    end
+
+    test "a validation that ends with no newer version written opens the working version and starts no trial",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets", "1.1.0")
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{state: :live, reference: %{version: "1.1.0"}} = first = validation(view)
+
+      canvas_verb!(view, first.id, :tree)
+
+      assert validation(view) == nil
+      assert [%{purpose: "validation"}] = rows() |> Enum.filter(&(&1.purpose == "validation"))
+      assert %{working: "1.1.0"} = versions(ctx, "markets")
+      assert %{state: :live, visible: true, reference: %{version: "1.1.0"}} = canvas(view)
+    end
+
+    test "a validation that records nothing, with no newer version written, opens the working version and trials nothing again",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets", "1.0.0")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      canvas!(ctx, "markets", "1.1.0")
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{reference: %{version: "1.1.0"}} = first = validation(view)
+
+      # 1.1.0's credential is gone before its tree: the activation records
+      # nothing, and 1.1.0, the version just tried, is still the newest.
+      revoke!(first.id)
+      canvas_verb!(view, first.id, :tree)
+
+      assert validation(view) == nil
+      assert Enum.count(rows(), &(&1.purpose == "validation")) == 1
+      assert %{working: "1.0.0", failed: nil} = versions(ctx, "markets")
+      assert %{state: :live, reference: %{version: "1.0.0"}} = canvas(view)
+    end
+
+    test "a newer version whose trial records nothing is not trialled again when it stays the newest",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets", "1.0.0")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      canvas!(ctx, "markets", "1.1.0")
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{reference: %{version: "1.1.0"}} = first = validation(view)
+
+      canvas!(ctx, "markets", "1.2.0")
+      canvas_verb!(view, first.id, :tree)
+      assert %{reference: %{version: "1.2.0"}} = newer = validation(view)
+
+      # 1.2.0's credential is gone before its tree: the activation is
+      # refused and records nothing, and 1.2.0 is still the newest.
+      revoke!(newer.id)
+      canvas_verb!(view, newer.id, :tree)
+
+      assert validation(view) == nil
+      assert %{working: "1.1.0", kept: "1.0.0", failed: nil} = versions(ctx, "markets")
+      assert %{state: :live, reference: %{version: "1.1.0"}} = canvas(view)
+    end
+
+    for meanwhile <- ["activated", "recorded as failed"] do
+      @tag meanwhile: meanwhile
+      test "a newer version another glass #{meanwhile} during a validation is not trialled at its end",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, meanwhile: meanwhile} do
+        canvas!(ctx, "markets", "1.0.0")
+        versions!(ctx, "markets", %{working: "1.0.0"})
+        canvas!(ctx, "markets", "1.1.0")
+        layout!(user, athanor, [entry("home", "tincture:local.markets")])
+        view = shell!(conn)
+        assert %{reference: %{version: "1.1.0"}} = first = validation(view)
+
+        # 1.2.0 is written, and another glass decides it before 1.1.0's
+        # tree: activated, so 1.1.0's tree is a late report (conflict); or
+        # recorded as failed, with 1.1.0's credential gone so its tree
+        # records nothing over that failure.
+        canvas!(ctx, "markets", "1.2.0")
+
+        {working, document} =
+          case meanwhile do
+            "activated" ->
+              {"1.2.0", %{working: "1.2.0", kept: "1.0.0"}}
+
+            "recorded as failed" ->
+              # A tree would clear `failed`, so 1.1.0's must record nothing.
+              revoke!(first.id)
+              failure = %{version: "1.2.0", outcome: "died", at: "2026-10-12T00:00:00Z"}
+              {"1.0.0", %{working: "1.0.0", failed: failure}}
+          end
+
+        versions!(ctx, "markets", document)
+        canvas_verb!(view, first.id, :tree)
+
+        assert row(first.id).state == "revoked"
+        assert validation(view) == nil
+        assert Enum.count(rows(), &(&1.purpose == "validation")) == 1
+        assert %{state: :live, reference: %{version: ^working}} = canvas(view)
+        assert versions(ctx, "markets") == Map.merge(Arca.CanvasVersions.empty(), document)
+      end
+    end
+
+    test "a version trialled at a validation's end is trialled from there once, however the newest version moves",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets", "1.0.0")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      canvas!(ctx, "markets", "1.1.0")
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+      assert %{reference: %{version: "1.1.0"}} = first = validation(view)
+
+      # Every trial here records nothing: its credential is gone before
+      # its tree, or its version is.
+      canvas!(ctx, "markets", "1.2.0")
+      revoke!(first.id)
+      canvas_verb!(view, first.id, :tree)
+      assert %{reference: %{version: "1.2.0"}} = second = validation(view)
+
+      unlay_version!(ctx, "markets", "1.2.0")
+      canvas_verb!(view, second.id, :tree)
+      assert %{reference: %{version: "1.1.0"}} = third = validation(view)
+
+      # 1.2.0 is the newest again, and was trialled from here already.
+      canvas!(ctx, "markets", "1.2.0")
+      revoke!(third.id)
+      canvas_verb!(view, third.id, :tree)
+
+      assert validation(view) == nil
+      assert %{working: "1.0.0", failed: nil} = versions(ctx, "markets")
+      assert %{state: :live, reference: %{version: "1.0.0"}} = canvas(view)
     end
 
     test "a canvas installed while the shell is open is decided, never taken for uninstalled",
@@ -1257,11 +1438,17 @@ defmodule PrismWeb.ShellCanvasTest do
         assert [{_prompt, {{:activation, "home"}, "iframe_markets"}}] =
                  Map.to_list(assigns(view).grant_prompts)
 
-        # The person granted it another way, and the canvas shown again
-        # starts a newer trial while the first prompt is still open.
+        # The person granted it another way, and the layout published
+        # again decides the canvas, still shown, anew: a newer trial starts
+        # while the first prompt is still open.
         owner_head!(ctx, :active)
-        render_hook(view, "switch_canvas", %{"canvas" => "work"})
-        render_hook(view, "switch_canvas", %{"canvas" => "home"})
+
+        layout!(user, athanor, [
+          entry("home", "tincture:local.markets"),
+          entry("work", "tincture:local.notes-canvas")
+        ])
+
+        settle!(view, fn -> match?(%{state: :live}, validation(view)) end)
         assert %{state: :live} = newer = validation(view)
         if first, do: refute(first.id == newer.id)
 
@@ -1281,8 +1468,9 @@ defmodule PrismWeb.ShellCanvasTest do
 
   describe "a grant prompt answered once its canvas was decided again" do
     # The first trial's activation finds the grant waiting, and asks; the
-    # grant is then met another way, and a newer trial, started by a switch
-    # away and back, is refused activation for the slot this member lost.
+    # grant is then met another way, and a newer trial, started by the
+    # layout published again, is refused activation for the slot this
+    # member lost.
     # Answers the view, the first prompt and the refusal the canvas shows.
     defp decided_since!(conn, ctx, user, athanor) do
       canvas!(ctx, "markets", "1.0.0")
@@ -1308,8 +1496,13 @@ defmodule PrismWeb.ShellCanvasTest do
                Map.to_list(assigns(view).grant_prompts)
 
       owner_head!(ctx, :active)
-      render_hook(view, "switch_canvas", %{"canvas" => "work"})
-      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+
+      layout!(user, athanor, [
+        entry("home", "tincture:local.markets"),
+        entry("work", "tincture:local.notes-canvas")
+      ])
+
+      settle!(view, fn -> match?(%{state: :live}, validation(view)) end)
       assert %{state: :live} = newer = validation(view)
       take_over!(slot)
       canvas_verb!(view, newer.id, :tree)
@@ -1516,7 +1709,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert assigns(view).safe_mode == nil
     end
 
-    test "a prompt open for one tincture is not taken over when the layout gives the canvas another tincture whose grant waits: that tincture is asked for its own grant",
+    test "a prompt open for one tincture is withdrawn when the layout gives the canvas another tincture whose grant waits: that tincture is asked for its own grant, and its prompt is the one drawn",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")
       canvas!(ctx, "notes-canvas")
@@ -1532,29 +1725,141 @@ defmodule PrismWeb.ShellCanvasTest do
       assert [{markets, {{:activation, "home"}, "iframe_markets"}}] =
                Map.to_list(assigns(view).grant_prompts)
 
+      assert render(view) =~ "Grant tincture:local.markets"
+
       layout!(user, athanor, [entry("home", "tincture:local.notes-canvas")])
       settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
 
       assert %{state: :refused, refusal: :ungranted} = refused = canvas(view)
-      prompts = assigns(view).grant_prompts
 
       # notes-canvas is asked for once, under a prompt of its own; markets'
-      # prompt names markets still, and answers a decision since replaced.
-      assert [notes] =
-               for({id, {{:activation, "home"}, "iframe_notes-canvas"}} <- prompts, do: id)
+      # prompt is gone from the shell and from the system layer, and
+      # notes-canvas's is the one drawn.
+      assert [{notes, {{:activation, "home"}, "iframe_notes-canvas"}}] =
+               Map.to_list(assigns(view).grant_prompts)
 
       refute notes == markets
-      assert prompts[markets] == {{:activation, "home"}, "iframe_markets"}
+      refute Map.has_key?(assigns(view).grant_decisions, markets)
+      html = render(view)
+      assert html =~ ~s(data-prompt-id="#{notes}")
+      refute html =~ ~s(data-prompt-id="#{markets}")
+      assert html =~ "Grant tincture:local.notes-canvas"
+      refute html =~ "Grant tincture:local.markets"
 
-      # The stale markets prompt, in front and dismissed, acts on nothing:
-      # the canvas keeps notes-canvas's refusal, and notes-canvas's own
-      # prompt is the one drawn next.
+      # Dismissing the prompt drawn answers notes-canvas's own: the canvas
+      # keeps its refusal, and nothing more is asked.
       dismiss!(view)
 
       assert canvas(view) == refused
-      assert Map.keys(assigns(view).grant_prompts) == [notes]
-      assert render(view) =~ "Grant tincture:local.notes-canvas"
+      assert assigns(view).grant_prompts == %{}
+      refute render(view) =~ ~s(data-kind="grant")
       assert assigns(view).safe_mode == nil
+    end
+
+    test "a prompt open for one tincture is withdrawn when the layout gives the canvas another tincture that opens live",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      canvas!(ctx, "notes-canvas")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+      versions!(ctx, "notes-canvas", %{working: "1.0.0"})
+      owner_head!(ctx, "markets", :needs_consent)
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+
+      view = shell!(conn)
+      assert %{state: :refused, reference: %{name: "markets"}} = canvas(view)
+
+      assert [{markets, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      layout!(user, athanor, [entry("home", "tincture:local.notes-canvas")])
+      settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
+
+      assert %{state: :live} = canvas(view)
+      assert assigns(view).grant_prompts == %{}
+      refute Map.has_key?(assigns(view).grant_decisions, markets)
+      html = render(view)
+      refute html =~ ~s(data-prompt-id="#{markets}")
+      refute html =~ ~s(data-kind="grant")
+      assert assigns(view).safe_mode == nil
+    end
+  end
+
+  describe "a grant prompt whose canvas left the screen" do
+    for leaves_by <- ["a switch", "the layout dropping it"] do
+      @tag leaves_by: leaves_by
+      test "is withdrawn when its canvas leaves by #{leaves_by}, and showing the canvas again asks anew",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, leaves_by: leaves_by} do
+        two_canvases!(ctx, user, athanor)
+        owner_head!(ctx, "markets", :needs_consent)
+
+        view = shell!(conn)
+        assert %{state: :refused, refusal: :ungranted} = canvas(view)
+
+        assert [{markets, {{:activation, "home"}, "iframe_markets"}}] =
+                 Map.to_list(assigns(view).grant_prompts)
+
+        assert render(view) =~ ~s(data-prompt-id="#{markets}")
+
+        case leaves_by do
+          "a switch" ->
+            render_hook(view, "switch_canvas", %{"canvas" => "work"})
+
+          "the layout dropping it" ->
+            layout!(user, athanor, [entry("work", "tincture:local.notes-canvas")])
+            settle!(view, fn -> Frames.visible_canvas(frames(view)) == "work" end)
+        end
+
+        assert %{state: :live} = canvas(view, "work")
+        assert assigns(view).grant_prompts == %{}
+        refute Map.has_key?(assigns(view).grant_decisions, markets)
+        html = render(view)
+        refute html =~ ~s(data-prompt-id="#{markets}")
+        refute html =~ ~s(data-kind="grant")
+
+        # Shown again, markets is decided again and asks under a new prompt.
+        case leaves_by do
+          "a switch" ->
+            render_hook(view, "switch_canvas", %{"canvas" => "home"})
+
+          "the layout dropping it" ->
+            layout!(user, athanor, [
+              entry("home", "tincture:local.markets"),
+              entry("work", "tincture:local.notes-canvas")
+            ])
+
+            settle!(view, fn -> Enum.any?(assigns(view).arrangement, &(&1.id == "home")) end)
+            render_hook(view, "switch_canvas", %{"canvas" => "home"})
+        end
+
+        assert [{again, {{:activation, "home"}, "iframe_markets"}}] =
+                 Map.to_list(assigns(view).grant_prompts)
+
+        refute again == markets
+        assert render(view) =~ ~s(data-prompt-id="#{again}")
+      end
+    end
+
+    test "safe mode withdraws every grant prompt the shell raised, so safe mode's prompt is the one drawn",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      owner_head!(ctx, "markets", :needs_consent)
+
+      view = shell!(conn)
+
+      assert [{markets, {{:activation, "home"}, "iframe_markets"}}] =
+               Map.to_list(assigns(view).grant_prompts)
+
+      assert render(view) =~ ~s(data-prompt-id="#{markets}")
+
+      render_click(view, "safe_mode", %{})
+      %{id: safe_mode} = assigns(view).safe_mode
+
+      assert assigns(view).grant_prompts == %{}
+      html = render(view)
+      assert html =~ ~s(data-prompt-id="#{safe_mode}")
+      assert html =~ ~s(data-kind="safe_mode")
+      refute html =~ ~s(data-prompt-id="#{markets}")
+      refute html =~ "Grant tincture:local.markets"
     end
   end
 

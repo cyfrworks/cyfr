@@ -23,11 +23,18 @@ defmodule PrismWeb.SystemLayer do
   `send_update(PrismWeb.SystemLayer, id: id, prompt: prompt)`; `prompt:
   nil` clears the open one. A prompt that arrives while another is open
   waits behind it in arrival order; one whose id is already open or
-  waiting is the same prompt and is taken once.
+  waiting is the same prompt and is taken once. The view withdraws a
+  prompt it placed with `send_update(PrismWeb.SystemLayer, id: id,
+  withdraw: prompt_id)`: open or waiting, it ends unconfirmed, as does a
+  credential entry it raised, each letting go of what it held and
+  cancelling a request still waiting for its proof, and the prompts still
+  live keep their order. An id neither open nor waiting changes nothing.
 
   Each prompt's outcome goes to the parent LiveView as
   `{:system_layer, id, :confirmed | :dismissed | {:refused, reason}}`, and
   safe mode's confirmation as `{:confirmed, offer}`, naming its way out. A
+  withdrawn prompt, and a credential entry it raised, report nothing: the
+  view that withdrew it has let it go. A
   malformed prompt is not drawn and is `{:refused, :invalid_prompt}`. A
   refused confirmation shows its sentence, reports `{:refused, reason}`
   and stays open, so the person can dismiss it. A confirmation prompt the
@@ -742,6 +749,14 @@ defmodule PrismWeb.SystemLayer do
 
   def update(%{ask: ask}, socket) do
     {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, on_ask(&1, ask)})
+    {:ok, socket}
+  end
+
+  # The view withdrew a prompt it placed (`withdraw/2`).
+  def update(%{withdraw: prompt_id}, socket) do
+    {:noreply, socket} =
+      CyfrWeb.ContextGuard.guard(socket, &{:noreply, withdraw(&1, prompt_id)})
+
     {:ok, socket}
   end
 
@@ -1919,15 +1934,27 @@ defmodule PrismWeb.SystemLayer do
   # again; the request is cancelled where the context reaches it, and a
   # record left in the athanor it was opened in lapses at its expiry.
   defp end_moved_grants(%{assigns: %{context: %Context{athanor_id: athanor_id}}} = socket) do
-    socket = end_prompts(socket, &moved?(&1, athanor_id))
-
-    grants =
-      for %{kind: :grant, id: id} <- [socket.assigns.current | socket.assigns.queue], do: id
-
-    end_prompts(socket, &orphaned?(&1, grants))
+    socket |> end_prompts(&moved?(&1, athanor_id)) |> end_orphans()
   end
 
   defp end_moved_grants(socket), do: socket
+
+  # A prompt the view withdrew, open or waiting, ends unconfirmed, as does
+  # a credential entry it raised, and none of them is reported; the others
+  # keep their places.
+  defp withdraw(socket, prompt_id) do
+    socket
+    |> end_prompts(&match?(%{id: ^prompt_id}, &1), false)
+    |> end_orphans(false)
+  end
+
+  # Every credential entry whose grant is no longer open or waiting ends.
+  defp end_orphans(socket, report? \\ true) do
+    grants =
+      for %{kind: :grant, id: id} <- [socket.assigns.current | socket.assigns.queue], do: id
+
+    end_prompts(socket, &orphaned?(&1, grants), report?)
+  end
 
   defp moved?(%{kind: kind, subject: %{athanor_id: id}}, athanor_id)
        when kind in [:grant, :credential_entry],
@@ -1940,22 +1967,24 @@ defmodule PrismWeb.SystemLayer do
 
   defp orphaned?(_prompt, _grants), do: false
 
-  defp end_prompts(socket, ends?) do
+  # Each prompt `ends?` names ends unconfirmed, reported `:dismissed`
+  # unless `report?` is false.
+  defp end_prompts(socket, ends?, report? \\ true) do
     {gone, kept} = Enum.split_with(socket.assigns.queue, ends?)
 
     socket =
       Enum.reduce(gone, assign(socket, :queue, kept), fn prompt, socket ->
-        report(prompt.id, :dismissed)
+        if report?, do: report(prompt.id, :dismissed)
         drop_prompt_asks(socket, prompt.id, cancel: true)
       end)
 
     if ends?.(socket.assigns.current),
-      do: end_grant(socket, socket.assigns.current),
+      do: end_grant(socket, socket.assigns.current, report?),
       else: socket
   end
 
-  defp end_grant(socket, prompt) do
-    report(prompt.id, :dismissed)
+  defp end_grant(socket, prompt, report? \\ true) do
+    if report?, do: report(prompt.id, :dismissed)
     socket |> drop_prompt_asks(prompt.id, cancel: true) |> advance()
   end
 

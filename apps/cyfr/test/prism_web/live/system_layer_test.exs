@@ -1043,6 +1043,77 @@ defmodule PrismWeb.SystemLayerTest do
     end
   end
 
+  describe "a withdrawn prompt" do
+    setup [:signed_in]
+
+    test "ends where it waits and reports nothing, as does a credential entry it raised; the " <>
+           "prompts still live keep their order",
+         %{view: view, ctx: ctx} do
+      # Each withdraw, then whatever the layer reported for it, is handled
+      # before the second render answers.
+      withdraw = fn id ->
+        Phoenix.LiveView.send_update(view.pid, PrismWeb.SystemLayer,
+          id: "system-layer",
+          withdraw: id
+        )
+
+        render(view)
+        render(view)
+      end
+
+      prompt(view, grant(ctx, "g-raised"))
+
+      prompt(view, %{
+        id: "connect-raised",
+        kind: :credential_entry,
+        action: :credential_entry,
+        subject: %{
+          name: "raised.test",
+          field: "API_KEY",
+          athanor_id: ctx.athanor_id,
+          provider: "raised.test",
+          hosts: ["api.raised.example"],
+          paths: [],
+          disclose_needed: false,
+          return: %{prompt: "g-raised", need: "api_key"}
+        }
+      })
+
+      prompt(view, grant(ctx, "g-other"))
+      prompt(view, sign_in("s-last"))
+
+      assert %{
+               current: %{id: "g-raised"},
+               queue: [%{id: "connect-raised"}, %{id: "g-other"}, %{id: "s-last"}]
+             } = layer_assigns(view)
+
+      # Open, it ends, and so does the credential entry it raised; the
+      # next live prompt is drawn.
+      withdraw.("g-raised")
+      assert %{current: %{id: "g-other"}, queue: [%{id: "s-last"}]} = layer_assigns(view)
+      assert open_prompt(view) == "g-other"
+
+      # Waiting, it leaves the queue, and the open prompt stays.
+      prompt(view, grant(ctx, "g-waiting"))
+      assert %{queue: [%{id: "s-last"}, %{id: "g-waiting"}]} = layer_assigns(view)
+      withdraw.("g-waiting")
+      assert %{current: %{id: "g-other"}, queue: [%{id: "s-last"}]} = layer_assigns(view)
+
+      # An id neither open nor waiting changes nothing.
+      withdraw.("g-raised")
+      assert %{current: %{id: "g-other"}, queue: [%{id: "s-last"}]} = layer_assigns(view)
+
+      no_outcome("g-raised")
+      no_outcome("connect-raised")
+      no_outcome("g-waiting")
+
+      # A prompt that ends any other way is reported, through the same host.
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("g-other") == :dismissed
+      assert open_prompt(view) == "s-last"
+    end
+  end
+
   # A catalyst in the person's athanor with `manifest`, as `ref`.
   defp publish_catalyst!(local, name, manifest) do
     {:ok, _} =

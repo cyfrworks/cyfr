@@ -30,8 +30,9 @@ defmodule Compendium.Canvas do
       and for a version older than the working one it publishes nothing
       and answers `conflict`. Any other outcome records the failure and
       nothing else.
-    * `restore/2` makes the kept version the working one again, under
-      today's grant, and keeps the one it replaces.
+    * `restore/2` makes the kept version the working one again, while it
+      is still installed and under today's grant, and keeps the one it
+      replaces.
 
   The refusals are `Prima.Refusal`'s classes: a `forbidden` one carries
   its code at the end of its sentence (`not_validated`, `not_primary`);
@@ -178,7 +179,8 @@ defmodule Compendium.Canvas do
 
   @doc """
   Make the canvas `name`'s kept version its working one again, and keep
-  the version it replaces. A canvas with no kept version is `not_found`.
+  the version it replaces. A canvas with no kept version, or whose kept
+  version is no longer an installed canvas version, is `not_found`.
   The kept version opens under today's grant, never the grant it was
   kept under: the check is activation's, `consent_required` while the
   grant waits for the person. The document is published at the revision
@@ -191,6 +193,8 @@ defmodule Compendium.Canvas do
     with {:ok, name} <- name(name),
          {:ok, stored, revision} <- document(ctx, name),
          {:ok, kept} <- kept(stored, name),
+         {:ok, installed} <- installed(ctx, name),
+         :ok <- still_installed(installed, name, kept),
          :ok <- granted(ctx, name, "tree"),
          restored = %{stored | working: kept, kept: stored.working},
          {:ok, published} <- publish(ctx, name, restored, revision) do
@@ -390,6 +394,14 @@ defmodule Compendium.Canvas do
     if Enum.any?(installed, &(&1.placement == @placement)),
       do: :ok,
       else: {:error, {:not_found, "Canvas", name}}
+  end
+
+  # A kept version is restored only while it is an installed canvas
+  # version.
+  defp still_installed(installed, name, kept) do
+    if Enum.any?(installed, &(&1.version == kept and &1.placement == @placement)),
+      do: :ok,
+      else: not_a_canvas_version(name, kept)
   end
 
   defp shipped(name) do
