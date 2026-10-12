@@ -55,10 +55,6 @@ homebrew_casks:
     description: "CLI for the CYFR sandboxed WASM runtime"
     binaries:
       - cyfr
-    # cyfr.run homepage differs from the github.com download domain — declare it
-    # verified so `brew audit` passes.
-    url:
-      verified: "github.com/cyfrworks/cyfr"
     # Binaries are cosign-signed but not Apple-notarized, so macOS Gatekeeper
     # would quarantine them. Strip the quarantine xattr on install.
     hooks:

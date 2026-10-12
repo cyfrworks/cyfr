@@ -137,7 +137,7 @@ jobs:
         id: beam
         with:
           otp-version: '29'
-          elixir-version: '1.20.3'
+          elixir-version: '1.20.4'
       - name: Cache deps and build
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -354,7 +354,7 @@ jobs:
         id: beam
         with:
           otp-version: '29'
-          elixir-version: '1.20.3'
+          elixir-version: '1.20.4'
       - name: Cache deps and build
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -370,7 +370,7 @@ jobs:
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 \
-            pgsty/minio@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372 \
+            pgsty/silo@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46 \
             server /data
       - name: Install dependencies
         run: mix deps.get
@@ -414,7 +414,7 @@ jobs:
         id: beam
         with:
           otp-version: '29'
-          elixir-version: '1.20.3'
+          elixir-version: '1.20.4'
       - name: Cache deps
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -454,7 +454,7 @@ jobs:
         id: beam
         with:
           otp-version: '29'
-          elixir-version: '1.20.3'
+          elixir-version: '1.20.4'
       - name: Cache deps
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -492,7 +492,7 @@ jobs:
         id: beam
         with:
           otp-version: '29'
-          elixir-version: '1.20.3'
+          elixir-version: '1.20.4'
       - name: Cache deps
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -530,7 +530,7 @@ jobs:
         id: beam
         with:
           otp-version: '29'
-          elixir-version: '1.20.3'
+          elixir-version: '1.20.4'
       - name: Cache deps
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -573,7 +573,7 @@ jobs:
         id: beam
         with:
           otp-version: '29'
-          elixir-version: '1.20.3'
+          elixir-version: '1.20.4'
       - name: Cache deps and build
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -589,14 +589,14 @@ jobs:
       - name: Start MinIO
         run: |
           # MinIO Inc. stopped publishing images in October 2025 and archived
-          # the server in February 2026; pgsty/minio is the maintained
-          # community build of the same server, with the same variables and
-          # health route. Pinned by digest (RELEASE.2026-08-04T00-00-00Z,
-          # the multi-arch index) like every other image and action in these
-          # workflows.
+          # the server in February 2026; pgsty/silo (formerly pgsty/minio) is
+          # the maintained community build of the same server, with the same
+          # variables and health route. Pinned by digest
+          # (RELEASE.2026-09-16T00-00-00Z, the multi-arch index) like every
+          # other image and action in these workflows.
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 \
-            pgsty/minio@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372 \
+            pgsty/silo@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46 \
             server /data
       - name: Install dependencies
         run: mix deps.get
@@ -706,6 +706,7 @@ jobs:
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.75.0
           image-ref: cyfr-locus:smoke
           format: table
           exit-code: '1'
@@ -797,6 +798,7 @@ jobs:
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.75.0
           image-ref: cyfr-locus:runtime
           format: table
           exit-code: '1'
@@ -909,6 +911,7 @@ jobs:
       - name: Scan the app image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.75.0
           image-ref: cyfr:push
           format: table
           exit-code: '1'
@@ -956,7 +959,7 @@ jobs:
         id: beam
         with:
           otp-version: '29'
-          elixir-version: '1.20.3'
+          elixir-version: '1.20.4'
       # A prod build of its own, per adapter: the adapter is compiled in, so
       # the two legs can share neither build nor release.
       - name: Cache deps and the prod build
@@ -1002,7 +1005,7 @@ jobs:
         id: beam
         with:
           otp-version: '29'
-          elixir-version: '1.20.3'
+          elixir-version: '1.20.4'
       # The grant proof builds the command line from apps/codex.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

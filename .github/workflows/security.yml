@@ -55,7 +55,7 @@ jobs:
         id: beam
         with:
           otp-version: '29'
-          elixir-version: '1.20.3'
+          elixir-version: '1.20.4'
 
       - name: Cache deps
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -115,7 +115,7 @@ jobs:
 
       - name: Install govulncheck
         # Pinned like every other tool in CI.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
       - name: Run govulncheck
         # Every nonzero exit fails: a finding (3), a scanner panic and any
@@ -151,6 +151,7 @@ jobs:
       - name: Secret scan (enforced)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.75.0
           scan-type: fs
           scanners: secret
           format: table
@@ -160,6 +161,7 @@ jobs:
         # Report configuration findings without failing CI.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.75.0
           scan-type: fs
           scanners: misconfig
           format: table

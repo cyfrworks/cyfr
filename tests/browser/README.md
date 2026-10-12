@@ -183,15 +183,15 @@ suites ran on, and their results.
 
 ## Browser matrix
 
-The browsers `mcr.microsoft.com/playwright:v1.63.0-noble` ships, pinned as
-`mcr.microsoft.com/playwright@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27`
-in `harness.sh`, driven by `playwright-core` 1.63.0:
+The browsers `mcr.microsoft.com/playwright:v1.64.0-noble` ships, pinned as
+`mcr.microsoft.com/playwright@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f`
+in `harness.sh`, driven by `playwright-core` 1.64.0:
 
 | Browser | Version |
 |---|---|
-| Chromium | 153.0.8010.12 |
-| Firefox | 155.0 |
-| WebKit | 26.6 |
+| Chromium | 156.0.8078.4 |
+| Firefox | 157.0 |
+| WebKit | 27.2 |
 
 ## Frame facts the rules were frozen against
 

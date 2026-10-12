@@ -68,7 +68,7 @@ COPY apps/locus/keeper/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus .
 
 # ---- Stage 1: release build ----
-FROM hexpm/elixir:1.20.3-erlang-29.0.5-debian-bookworm-20260824 AS relbuilder
+FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-bookworm-20261005 AS relbuilder
 
 RUN apt-get update && apt-get install -y \
     build-essential \

@@ -87,7 +87,8 @@ are disposable writers the run starts, which prove no hosted service.
 
 Recorded on 2026-10-03 on `p1` by `run.sh`, against the SQLite `cyfr`
 release 0.5.8 built from this tree, in the harness's Playwright image
-(`v1.63.0-noble`, pinned by digest in `tests/browser/harness.sh`):
+of that day (`v1.63.0-noble`,
+`mcr.microsoft.com/playwright@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27`):
 
 | Step | Chromium 153.0.8010.12 | Firefox 155.0 | WebKit 26.6 |
 |---|---|---|---|

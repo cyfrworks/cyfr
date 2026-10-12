@@ -39,7 +39,7 @@ jobs:
         id: beam
         with:
           otp-version: '29'
-          elixir-version: '1.20.3'
+          elixir-version: '1.20.4'
       - name: Cache deps and build
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

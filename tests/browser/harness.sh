@@ -26,8 +26,8 @@
 # and nothing fetched at test time but that; the container shares this
 # host's network and reaches every server on loopback.
 
-# mcr.microsoft.com/playwright:v1.63.0-noble
-PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27"
+# mcr.microsoft.com/playwright:v1.64.0-noble
+PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f"
 BROWSER_HOME="$ROOT/tests/browser"
 
 # The run's authority (`browser_authority`), mounted at /authority, and the

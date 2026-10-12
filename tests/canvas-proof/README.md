@@ -253,9 +253,9 @@ budget, never to the record's copy.
 
 Recorded on 2026-10-10 on `p1` (AMD Ryzen 7 7700 8-Core Processor) by `run.sh`, once per
 viewport, against the SQLite `cyfr` release 0.5.8 built from this tree, in
-the harness's Playwright image (`v1.63.0-noble`, pinned by digest in
-`tests/browser/harness.sh`), with Chromium 153.0.8010.12, Firefox 155.0 and
-WebKit 26.6. No run executed: every feed result shown is a fixed one.
+the harness's Playwright image of that day (`v1.63.0-noble`,
+`mcr.microsoft.com/playwright@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27`),
+with Chromium 153.0.8010.12, Firefox 155.0 and WebKit 26.6. No run executed: every feed result shown is a fixed one.
 Each cell gives both viewports' result, desktop and 720x720, as one word where
 they agree.
 
