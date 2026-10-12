@@ -52,7 +52,7 @@ defmodule Arca.MixProject do
       {:boundary, "~> 0.11.0", runtime: false},
       {:ecto_sql, "~> 3.12"},
       {:ecto_sqlite3, "~> 0.25.0"},
-      {:exqlite, "~> 0.33.1"},
+      {:exqlite, "~> 0.42.0"},
       {:postgrex, "~> 0.21"},
       {:jason, "~> 1.4"},
       # The S3 storage adapter: its transport and its SigV4 signing.

@@ -33,26 +33,32 @@ defmodule Arca.DecisionLog do
   so a shutdown drains it before the repo goes. A worker that dies by a
   fault frees its slot at its exit, though its native call may continue;
   that surviving native work and its cleanup are bounded by the
-  connection pool, which does not lend a dead worker's connection again
-  until the driver's disconnect has finished. On SQLite each worker takes
-  its turn at the lock through `Arca.WriteTurn`, asked once it holds its
-  connection and within its deadline, so a renewal of the member's lease
-  goes ahead of every queued audit write.
+  connection pool, which disconnects a dead worker's connection and does
+  not lend it again until the driver's disconnect has finished. On
+  SQLite that disconnect cancels the call before it closes the
+  connection, so a running statement stops at its next progress check; a
+  lock wait under SQLite's own busy handler and I/O already under way
+  run to their end first (`Arca.WriteTurn`'s moduledoc). Each SQLite
+  worker takes its turn at the lock through `Arca.WriteTurn`, asked once
+  it holds its connection and within its deadline, so a renewal of the
+  member's lease goes ahead of every queued audit write.
 
   The writing process has a bound of its own. On PostgreSQL it is the
   caller's deadline: the pool closes a connection held past it, and the
-  statement's socket goes with it. On SQLite a pool that closes a
-  connection while its statement is stepping inside the driver can crash
-  the VM, and the pool counts its deadline from the checkout request, so
-  a wait for a connection eats into it. The writer's pool timeout is the
-  lock-wait bound (`Arca.Repo.busy_timeout_ms/0`) plus a 1 s margin, and
-  the transaction is told that deadline as an absolute instant: the lock
-  step in `Arca.Repo` waits for the turn and then the lock only as long
-  as still fits before the pool acts, with room for the last quantum, the
-  pause and the commit, and a writer that reaches the lock with less than
-  that left refuses at once and touches nothing. A write that lands after
-  its caller was told `:timeout` is the same row a repeat would write,
-  which idempotence makes harmless.
+  statement's socket goes with it. On SQLite the pool's disconnect
+  cancels a statement still stepping inside the driver, ending the
+  writer's transaction under it, and a connection closed under such a
+  statement can crash the VM; the pool counts its deadline from the
+  checkout request, so a wait for a connection eats into it. The
+  writer's pool timeout is the lock-wait bound
+  (`Arca.Repo.busy_timeout_ms/0`) plus a 1 s margin, and the transaction
+  is told that deadline as an absolute instant: the lock step in
+  `Arca.Repo` waits for the turn and then the lock only as long as still
+  fits before the pool acts, with room for the last quantum, the pause
+  and the commit, and a writer that reaches the lock with less than that
+  left refuses at once and touches nothing. A write that lands after its
+  caller was told `:timeout` is the same row a repeat would write, which
+  idempotence makes harmless.
 
   ## Idempotence
 
@@ -538,14 +544,15 @@ defmodule Arca.DecisionLog do
   # The writer's pool timeout. On PostgreSQL it is the caller's deadline:
   # the pool closes a connection held past it, and the statement's socket
   # goes with it. On SQLite the pool must never close a connection whose
-  # statement is still stepping inside the driver, and the pool counts its
-  # deadline from the checkout request, so a wait for the connection eats
-  # into it: the timeout is the lock-wait bound plus a margin (never
+  # statement is still stepping inside the driver: its disconnect cancels
+  # that statement, and a close under it can crash the VM. The pool counts
+  # its deadline from the checkout request, so a wait for the connection
+  # eats into it: the timeout is the lock-wait bound plus a margin (never
   # `:infinity`, which would unbound the wait for a connection as well), and
   # the transaction is told the absolute deadline (`:pool_deadline`), so
-  # `Arca.Repo`'s lock step cuts its wait to what still fits before the
-  # pool acts and refuses at once when nothing does. The caller's wait is
-  # the budget either way.
+  # `Arca.Repo`'s lock step cuts its wait to what still fits before the pool
+  # acts and refuses at once when nothing does. The caller's wait is the
+  # budget either way.
   defp db_timeout(deadline) do
     case Arca.Repo.adapter() do
       Ecto.Adapters.SQLite3 -> Arca.Repo.busy_timeout_ms() + @sqlite_margin_ms

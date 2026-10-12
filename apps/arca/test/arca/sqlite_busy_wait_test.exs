@@ -8,12 +8,11 @@ defmodule Arca.SqliteBusyWaitTest do
   quantum and the rest of it spent in Elixir.
 
   The driver waits out a busy lock inside the NIF holding its
-  connection's mutex, and a statement of that connection freed by another
-  process takes the same mutex on that process's scheduler. A holder that
-  freed a waiter's statements while the waiter sat out the whole busy
-  timeout inside the driver would starve, still holding the lock, until
-  the waiter gave up. Every case runs under real connections, outside the
-  sandbox. PostgreSQL has no such lock, so the file runs on SQLite only.
+  connection's mutex on a dirty scheduler, and finalizes a statement
+  another process frees meanwhile once the wait ends, so a holder that
+  frees a waiter's statements commits without waiting on the waiter.
+  Every case runs under real connections, outside the sandbox.
+  PostgreSQL has no such lock, so the file runs on SQLite only.
   """
 
   use ExUnit.Case, async: false
@@ -157,8 +156,9 @@ defmodule Arca.SqliteBusyWaitTest do
               released = System.monotonic_time(:millisecond)
 
               # The last reference to each goes here, as an overwritten
-              # cache row lets go of it: each statement is finalized on
-              # this process's scheduler, taking the waiter's mutex.
+              # cache row lets go of it: each statement is released on
+              # this process's scheduler, finalized at once when the
+              # waiter's mutex is free and otherwise once its wait ends.
               for i <- 1..@statements, do: :ets.update_element(statements, i, {2, nil})
 
               Arca.Repo.query!("SELECT 1")

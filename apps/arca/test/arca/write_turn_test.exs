@@ -361,13 +361,14 @@ defmodule Arca.WriteTurnLockTest do
   sandbox and with the control plane on a pool of its own: a renewal that
   asks while an audit writer holds its turn goes next once that one
   transaction is over; a writer out of time waiting for a turn raises as
-  it does waiting for the lock; a holder killed inside the driver frees
-  its turn at its exit while its native call still runs, takes the lock
-  and holds it until its connection's cleanup, and a renewal behind it
-  succeeds when that ends in time and fails when it outlasts the lease;
-  the arbiter killed while a holder's native call runs and requests wait.
+  it does waiting for the lock; a holder killed inside the driver while it
+  holds the lock frees its turn at its exit, the driver cancels its native
+  call and the renewal behind it succeeds within the lease; a live
+  holder's native call outlasting the lease makes the renewal fail and the
+  member admit nothing; the arbiter killed while a holder's native call
+  runs and requests wait.
 
-  How long a dead holder's native call held the lock, and how soon a new
+  How soon a renewal behind a killed holder landed, and how soon a new
   generation answered, are printed as they are measured. On PostgreSQL
   there is no turn: the writes go through with the arbiter held still.
   """
@@ -508,80 +509,109 @@ defmodule Arca.WriteTurnLockTest do
       assert_receive :released
     end
 
-    # Its turn is freed at its exit; its native call takes the lock after
-    # and holds it until its connection's cleanup; a renewal behind it
-    # succeeds when that ends in time.
-    test "a holder killed inside the driver: a renewal behind its native call succeeds in time",
+    # The holder holds the lock in a statement sized to outlast the lease.
+    # Its exit frees its turn; the driver cancels its native call when the
+    # pool disconnects its connection, the statement stops and its
+    # transaction rolls back, and the connection is closed. A renewal asked
+    # behind it is issued the turn ahead of the queued audit writer and
+    # takes the lock before the member's own countdown runs out.
+    test "a holder killed inside the driver: its native call is cancelled and a renewal " <>
+           "behind it succeeds within the lease",
          %{node: node} do
-      {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+      {:ok, _} = ControlPlane.take(node, "boot_a", 5_000)
+      {:held, standing} = :persistent_term.get({Arca.ControlPlane, :standing})
+      marker = -System.unique_integer([:positive])
+      on_exit(fn -> delete_marker(marker) end)
 
-      # A dead holder's lock wait alone: once the lock is free its native
-      # call takes it, and the lock goes with the connection's cleanup.
-      blocker = hold_write_lock()
-      zombie = zombie!(lock_statement())
-      Process.exit(zombie, :kill)
-      released = unlock(blocker)
-      assert_receive {:disconnected, _conn}, 10_000
-      natural = System.monotonic_time(:millisecond) - released
-      assert_receive {:connected, _conn}, 5_000
+      zombie = zombie!(long_statement(9_000), marker)
+      monitor = Process.monitor(zombie)
+      refute lock_free?()
 
-      blocker = hold_write_lock()
-      zombie = zombie!(long_statement(800))
-      renewal = waiter(:renewal, :control_plane)
+      renewal = Task.async(fn -> timed(fn -> ControlPlane.renew(60_000) end) end)
       a1 = waiter(:a1, :audit)
       await_waiting(audit: 1, control_plane: 1)
 
-      # The turn is freed at the holder's exit, while its native call still
-      # waits inside the driver: the waiting renewal is issued it at once.
       Process.exit(zombie, :kill)
-      assert_receive {:issued, :renewal}, 1_000
-      refute_received {:disconnected, _}
-      send(renewal, :release)
+      killed = System.monotonic_time(:millisecond)
+      assert_receive {:DOWN, ^monitor, :process, ^zombie, :killed}
+      # Its turn is freed at its exit, whatever its native call is doing.
+      await(fn -> not match?(%{holder: %{pid: ^zombie}}, status()) end)
+
+      # The audit writer holds what it is issued until told, so a renewal
+      # answered at all was issued its turn ahead of it; and it took the
+      # lock the dead holder's statement held, before the standing ran out.
+      assert {{:ok, _slot}, _ms, renewed} = Task.await(renewal, 15_000)
+
+      assert renewed < standing,
+             "the renewal came #{renewed - standing} ms after the member's standing ran out"
+
+      assert ControlPlane.held?()
+      assert {:ok, _slot} = ControlPlane.member_slot()
       assert_receive {:issued, :a1}, 1_000
       send(a1, :release)
 
-      # Another connection takes and releases the lock until the dead
-      # holder's native call takes it.
-      unlock(blocker)
-      seen = await_held_by_another!()
-
-      {result, _ms, done} = timed(fn -> ControlPlane.renew(60_000) end)
+      # The connection's cleanup is its own event: the pool closes it once
+      # the cancelled call has returned. The lock is free after it, and the
+      # dead holder's transaction left nothing behind.
       assert_receive {:disconnected, _conn}, 10_000
-      assert {:ok, _slot} = result
-      assert ControlPlane.held?()
-      held = done - seen
+      assert lock_free?()
+      refute marker_written?(marker)
 
       IO.puts(
-        "write turn: a dead holder's lock wait held the lock #{natural} ms after it was free; " <>
-          "a dead holder's 800 ms statement held it #{held} ms from when it was seen held"
+        "write turn: a renewal behind a holder killed inside a statement sized to outlast " <>
+          "the lease landed #{renewed - killed} ms after the kill"
       )
     end
 
-    test "a dead holder's native call outlasting the lease: the renewal fails, nothing admitted",
+    # A live holder is never killed and the driver does not cancel a live
+    # caller's call, so a native call outlasting the lease is still
+    # possible, and it is what the lease guards: the renewal behind it runs
+    # out of time, the member's own countdown lapses and it admits nothing,
+    # and once the holder is done the slot it held is gone.
+    test "a live holder's native call outlasting the lease: the renewal fails, nothing admitted",
          %{node: node} do
       {:ok, slot} = ControlPlane.take(node, "boot_a", 1_500)
-      blocker = hold_write_lock()
-      zombie = zombie!(long_statement(3_000))
+      test = self()
+      statement = long_statement(5_000)
 
-      Process.exit(zombie, :kill)
-      unlock(blocker)
-      seen = await_held_by_another!()
+      holder =
+        spawn_link(fn ->
+          {:ok, _} = WriteTurn.acquire(:audit, System.monotonic_time(:millisecond) + 10_000)
+
+          Arca.Repo.checkout(fn ->
+            Arca.Repo.query!("BEGIN IMMEDIATE", [], log: false)
+            send(test, :holding)
+            Arca.Repo.query!(statement, [], log: false, timeout: 30_000)
+            Arca.Repo.query!("ROLLBACK", [], log: false)
+          end)
+
+          WriteTurn.release()
+          send(test, :holder_released)
+        end)
+
+      assert_receive :holding, 5_000
+      await(fn -> stepping?(holder) end)
+      await(fn -> match?(%{holder: %{pid: ^holder}}, status()) end)
+      refute lock_free?()
 
       # The renewal's lock step waits a second here, not the suite's ten,
-      # and gives up only once that deadline has passed.
+      # and gives up only once that deadline has passed: it spends it
+      # waiting for the turn the holder keeps.
       busy_timeout(1_000)
       assert {{:error, :database_error}, ms, _} = timed(fn -> ControlPlane.renew(1_500) end)
       busy_timeout(:restore)
       assert ms >= 1_000
+
+      # It ran out behind a call still running for a holder still alive.
+      assert Process.alive?(holder)
+      assert stepping?(holder)
       refute ControlPlane.held?()
       assert {:error, :not_owner} = ControlPlane.member_slot()
 
-      assert_receive {:disconnected, _conn}, 15_000
-      held = System.monotonic_time(:millisecond) - seen
+      assert_receive :holder_released, 15_000
+      assert lock_free?()
       assert :lost = run(fn -> ControlPlane.check_held(slot) end)
       refute ControlPlane.held?()
-
-      IO.puts("write turn: a dead holder's 3 s statement held the lock #{held} ms")
     end
 
     # The holder keeps its turn past its own deadline, the waiters ask each
@@ -706,28 +736,14 @@ defmodule Arca.WriteTurnLockTest do
       Application.put_env(:arca, Arca.Repo, Keyword.put(config, :busy_timeout, ms))
     end
 
-    # A connection outside every pool of the repo holding SQLite's write
-    # lock, the way a writer the arbiter does not order holds it.
-    defp hold_write_lock do
-      {:ok, conn} = Exqlite.Sqlite3.open(database())
-      :ok = Exqlite.Sqlite3.execute(conn, "BEGIN IMMEDIATE")
-      conn
-    end
-
-    defp unlock(conn) do
-      :ok = Exqlite.Sqlite3.execute(conn, "ROLLBACK")
-      released = System.monotonic_time(:millisecond)
-      :ok = Exqlite.Sqlite3.close(conn)
-      released
-    end
-
     defp database, do: Arca.Repo.config()[:database]
 
     # A holder issued an audit turn whose connection, the one of a pool this
-    # case watches, is inside the driver running `statement`, which waits
-    # for the lock under a long busy timeout: one native call, so a kill
-    # lands inside it. The pool reports its connection's disconnect.
-    defp zombie!(statement) do
+    # case watches, holds SQLite's write lock with `marker` written in its
+    # transaction and is inside the driver running `statement`: one native
+    # call, so a kill lands inside it. The pool reports its connection's
+    # disconnect.
+    defp zombie!(statement, marker) do
       name = :"zombie_#{System.unique_integer([:positive])}"
       test = self()
 
@@ -751,8 +767,8 @@ defmodule Arca.WriteTurnLockTest do
 
           Arca.Repo.checkout(
             fn ->
-              Arca.Repo.query!("PRAGMA busy_timeout = 30000", [], log: false)
-              Arca.Repo.query!("BEGIN", [], log: false)
+              Arca.Repo.query!("BEGIN IMMEDIATE", [], log: false)
+              Arca.Repo.query!(insert_marker(marker), [], log: false)
               send(test, :stepping)
               Arca.Repo.query!(statement, [], log: false, timeout: :infinity)
             end,
@@ -760,8 +776,10 @@ defmodule Arca.WriteTurnLockTest do
           )
         end)
 
-      # The statement waits for a lock another connection holds, so once it
-      # is stepping inside the driver it stays there.
+      on_exit(fn -> Process.exit(pid, :kill) end)
+
+      # The statement runs well past the case's own steps, so once it is
+      # stepping inside the driver it stays there.
       assert_receive :stepping, 5_000
       await(fn -> stepping?(pid) end)
       await(fn -> match?(%{holder: %{pid: ^pid}}, status()) end)
@@ -804,34 +822,41 @@ defmodule Arca.WriteTurnLockTest do
       max(div(500_000 * 1_000, max(us, 1)), 1)
     end
 
-    # Once another connection holds the lock, a probe outside every pool
-    # finds it busy. Until then the probe takes and gives the lock back
-    # itself, which is how another connection takes and releases it
-    # before the dead holder's native call takes it.
-    defp await_held_by_another!(tries \\ 3_000) do
+    # Whether a connection outside every pool of the repo takes SQLite's
+    # write lock at once; it gives the lock straight back.
+    defp lock_free? do
       {:ok, probe} = Exqlite.Sqlite3.open(database())
-      :ok = Exqlite.Sqlite3.execute(probe, "PRAGMA busy_timeout = 0")
 
       try do
-        probe_until_held(probe, tries)
+        :ok = Exqlite.Sqlite3.execute(probe, "PRAGMA busy_timeout = 0")
+
+        case Exqlite.Sqlite3.execute(probe, "BEGIN IMMEDIATE") do
+          :ok ->
+            :ok = Exqlite.Sqlite3.execute(probe, "ROLLBACK")
+            true
+
+          {:error, "database is locked"} ->
+            false
+        end
       after
         Exqlite.Sqlite3.close(probe)
       end
     end
 
-    defp probe_until_held(_probe, 0),
-      do: flunk("the dead holder's native call never took the lock")
+    # A migration row no migration writes: the dead holder's own write.
+    defp insert_marker(marker),
+      do: ~s|INSERT INTO "schema_migrations" (version) VALUES (#{marker})|
 
-    defp probe_until_held(probe, tries) do
-      case Exqlite.Sqlite3.execute(probe, "BEGIN IMMEDIATE") do
-        :ok ->
-          :ok = Exqlite.Sqlite3.execute(probe, "ROLLBACK")
-          Process.sleep(1)
-          probe_until_held(probe, tries - 1)
+    defp marker_written?(marker) do
+      run(fn ->
+        Arca.Repo.exists?(from(m in "schema_migrations", where: m.version == ^marker))
+      end)
+    end
 
-        {:error, _busy} ->
-          System.monotonic_time(:millisecond)
-      end
+    defp delete_marker(marker) do
+      run(fn ->
+        Arca.Repo.delete_all(from(m in "schema_migrations", where: m.version == ^marker))
+      end)
     end
   else
     test "PostgreSQL asks for no turn: the writes go through with the arbiter held still",

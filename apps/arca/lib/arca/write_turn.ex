@@ -39,12 +39,23 @@ defmodule Arca.WriteTurn do
   request, and a turn issued to it just before the cancel arrived is
   released by the cancel itself, so no turn stays with a process that is
   not using it. No holder is ever killed to free a turn: an exit does not
-  stop a dirty NIF, and a killed holder's native call can still take the
-  lock after its monitor has fired. So a holder releases its own turn
-  after its transaction has returned, and that release is the only proof
-  that a turn's work has ended; a fault's exit frees the turn with the
-  native call possibly still running, bounded by the connection's cleanup
-  (`Arca.DecisionLog`'s moduledoc).
+  stop a dirty NIF, and a killed holder's native call can still hold or
+  take the lock after its monitor has fired. The pool disconnects a dead
+  holder's connection, and the driver's disconnect cancels the call
+  before it closes: a running statement stops at its next progress check,
+  a lock wait in the driver's own busy handler ends at its next poll, and
+  the close rolls the transaction back. What the cancel cannot cut short
+  runs to its end first: a lock wait under SQLite's own busy handler,
+  which the lock step's `PRAGMA busy_timeout` installs and which its
+  quantum bounds, and I/O already under way, a commit's included. So a
+  holder releases its own turn after its transaction has returned, and
+  that release is the only proof that a turn's work has ended; a fault's
+  exit frees the turn with the native call possibly still running,
+  bounded by the connection's cleanup (`Arca.DecisionLog`'s moduledoc).
+  Only its own timeout cancels a live holder's call, so a holder that is
+  alive but stalled keeps its turn and the lock until its call returns or
+  that timeout ends it: that, and a call the cancel cannot cut short, is
+  what the lease's own countdown guards against.
 
   ## Generations
 

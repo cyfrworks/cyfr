@@ -285,9 +285,10 @@ defmodule Arca.Repo do
   on PostgreSQL.
 
   SQLite's driver waits out a busy lock inside the NIF with the
-  connection's mutex held, and finalizing a statement of that connection
-  from another process parks that process's scheduler on the same mutex:
-  a waiter can starve the very holder it waits for. So a transaction that
+  connection's mutex held, on a dirty scheduler, for as long as the
+  connection's busy timeout allows; a statement of that connection freed
+  by another process meanwhile is finalized later, once the wait ends. So
+  the wait inside the driver is bounded to a quantum: a transaction that
   is neither nested nor a `read_transaction/1` opens deferred and its
   first step takes the lock with a write that touches no row, waiting
   inside the driver at most #{@quantum_ms} ms at a time and between
@@ -380,9 +381,12 @@ defmodule Arca.Repo do
   # still comes. No attempt outlasts the wait: each one's wait inside the
   # driver, and each pause between them, is cut to the time left, so the
   # step has left the driver before the pool can act. A connection closed
-  # under a statement still waiting inside the driver can crash the VM, so
-  # this is the guarantee the step keeps for any timeout that fits its own
-  # statements. Out of the
+  # under a statement still waiting inside the driver can crash the VM, and
+  # the pool's disconnect does not cut this wait short: its cancel ends a
+  # wait in the driver's own busy handler, and the `PRAGMA busy_timeout`
+  # here puts SQLite's own in its place on this connection, which sleeps
+  # out the quantum. So this is the guarantee the step keeps for any
+  # timeout that fits its own statements. Out of the
   # slack before the first attempt — a wait for the connection itself took
   # the time — the step raises at once and touches no lock. The pool's
   # deadline counts from the checkout request, so no fixed margin above the
