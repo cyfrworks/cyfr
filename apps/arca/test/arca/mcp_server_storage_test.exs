@@ -38,7 +38,7 @@ defmodule Arca.McpServerStorageTest do
 
   describe "insert/2" do
     test "creates a new server config", %{actor: actor} do
-      attrs = %{name: "notion", url: "https://mcp.notion.com/mcp"}
+      attrs = %{cap: 0, name: "notion", url: "https://mcp.notion.com/mcp"}
 
       assert {:ok, server} = McpServerStorage.insert(actor, attrs)
       assert server.name == "notion"
@@ -48,7 +48,7 @@ defmodule Arca.McpServerStorageTest do
 
     test "records the actor's user as the row's creator, whatever the attrs say",
          %{actor: actor} do
-      attrs = %{name: "created", url: "https://a.com/mcp", created_by: "usr_someone_else"}
+      attrs = %{cap: 0, name: "created", url: "https://a.com/mcp", created_by: "usr_someone_else"}
 
       assert {:ok, %{created_by: creator}} = McpServerStorage.insert(actor, attrs)
 
@@ -63,6 +63,7 @@ defmodule Arca.McpServerStorageTest do
       json = ~s({"headers":{"Authorization":"vault:GH_TOKEN"},"timeout_ms":15000})
 
       attrs = %{
+        cap: 0,
         name: "github",
         url: "https://mcp.github.com/mcp",
         config_json: json
@@ -75,14 +76,80 @@ defmodule Arca.McpServerStorageTest do
 
     test "a name the athanor already uses is refused, and the stored row is kept",
          %{actor: actor} do
-      attrs = %{name: "test-server", url: "https://old.example.com/mcp"}
+      attrs = %{cap: 0, name: "test-server", url: "https://old.example.com/mcp"}
       assert {:ok, %{id: id}} = McpServerStorage.insert(actor, attrs)
 
-      attrs2 = %{name: "test-server", url: "https://new.example.com/mcp"}
+      attrs2 = %{cap: 0, name: "test-server", url: "https://new.example.com/mcp"}
       assert {:error, :exists} = McpServerStorage.insert(actor, attrs2)
 
       assert {:ok, [%{id: ^id, url: "https://old.example.com/mcp"}]} =
                McpServerStorage.list(actor)
+    end
+
+    test "a missing or malformed cap is refused as a validation error, and nothing is written",
+         %{actor: actor} do
+      attrs = %{name: "uncapped", url: "https://x.com/mcp"}
+
+      for cap <- [:missing, nil, -1, "5", 1.5] do
+        attrs = if cap == :missing, do: attrs, else: Map.put(attrs, :cap, cap)
+
+        assert {:error, {:validation, %{cap: ["must be a non-negative integer"]}}} =
+                 McpServerStorage.insert(actor, attrs)
+      end
+
+      assert {:ok, []} = McpServerStorage.list(actor)
+    end
+
+    test "the athanor's servers stop at the caller's cap, counting no other athanor's",
+         %{actor: actor} do
+      other = Arca.Test.Actor.local(athanor_id: "ath_b", user_id: "user_b")
+
+      for name <- ~w(o1 o2 o3) do
+        assert {:ok, _} =
+                 McpServerStorage.insert(other, %{cap: 0, name: name, url: "https://o.com/mcp"})
+      end
+
+      for name <- ~w(s1 s2) do
+        assert {:ok, row} =
+                 McpServerStorage.insert(actor, %{cap: 2, name: name, url: "https://a.com/mcp"})
+
+        refute Map.has_key?(row, :cap)
+      end
+
+      assert {:error, :server_cap} =
+               McpServerStorage.insert(actor, %{cap: 2, name: "s3", url: "https://a.com/mcp"})
+
+      assert {:ok, [%{name: "s1"}, %{name: "s2"}]} = McpServerStorage.list(actor)
+
+      # A deleted server frees its place: every row the athanor holds counts.
+      assert {:ok, _} = McpServerStorage.delete(actor, "s1")
+
+      assert {:ok, _} =
+               McpServerStorage.insert(actor, %{cap: 2, name: "s3", url: "https://a.com/mcp"})
+
+      assert {:error, :server_cap} =
+               McpServerStorage.insert(actor, %{cap: 2, name: "s4", url: "https://a.com/mcp"})
+
+      # 0 is no ceiling: it admits where 2 refused.
+      assert {:ok, _} =
+               McpServerStorage.insert(actor, %{cap: 0, name: "s4", url: "https://a.com/mcp"})
+
+      assert {:ok, servers} = McpServerStorage.list(actor)
+      assert Enum.map(servers, & &1.name) == ~w(s2 s3 s4)
+    end
+
+    test "an athanor with no row is refused :not_found, and nothing is written" do
+      rowless =
+        Arca.Test.Actor.local(athanor_id: "ath_mcp_rowless_#{System.unique_integer([:positive])}")
+
+      assert {:error, :not_found} =
+               McpServerStorage.insert(rowless, %{
+                 cap: 0,
+                 name: "orphan",
+                 url: "https://x.com/mcp"
+               })
+
+      assert {:ok, []} = McpServerStorage.list(rowless)
     end
   end
 
@@ -90,6 +157,7 @@ defmodule Arca.McpServerStorageTest do
     test "returns server by name", %{actor: actor} do
       assert {:ok, _} =
                McpServerStorage.insert(actor, %{
+                 cap: 0,
                  name: "myserver",
                  url: "https://a.com/mcp"
                })
@@ -107,12 +175,14 @@ defmodule Arca.McpServerStorageTest do
     test "returns all servers for tenant", %{actor: actor} do
       assert {:ok, _} =
                McpServerStorage.insert(actor, %{
+                 cap: 0,
                  name: "s1",
                  url: "https://a.com/mcp"
                })
 
       assert {:ok, _} =
                McpServerStorage.insert(actor, %{
+                 cap: 0,
                  name: "s2",
                  url: "https://b.com/mcp"
                })
@@ -133,6 +203,7 @@ defmodule Arca.McpServerStorageTest do
     test "removes a server and answers the row it removed", %{actor: actor} do
       assert {:ok, %{id: id}} =
                McpServerStorage.insert(actor, %{
+                 cap: 0,
                  name: "deleteme",
                  url: "https://x.com/mcp"
                })
@@ -151,6 +222,7 @@ defmodule Arca.McpServerStorageTest do
     test "updates specific fields", %{actor: actor} do
       assert {:ok, _} =
                McpServerStorage.insert(actor, %{
+                 cap: 0,
                  name: "updatable",
                  url: "https://old.com/mcp"
                })
@@ -171,6 +243,7 @@ defmodule Arca.McpServerStorageTest do
          %{actor: actor} do
       assert {:ok, %{id: id, epoch: 1, revision: 0}} =
                McpServerStorage.insert(actor, %{
+                 cap: 0,
                  name: "epochal",
                  url: "https://x.com/mcp"
                })
@@ -185,7 +258,8 @@ defmodule Arca.McpServerStorageTest do
 
     test "a raise under a slot taken over after the member read it publishes nothing",
          %{actor: actor, slot: slot} do
-      {:ok, %{id: id}} = McpServerStorage.insert(actor, %{name: "held", url: "https://x.com/mcp"})
+      {:ok, %{id: id}} =
+        McpServerStorage.insert(actor, %{cap: 0, name: "held", url: "https://x.com/mcp"})
 
       # The member still believes it holds the slot; the row says otherwise.
       {1, _} =
@@ -202,7 +276,7 @@ defmodule Arca.McpServerStorageTest do
     test "a raise under a slot that ran out with no successor publishes nothing",
          %{actor: actor, slot: slot} do
       {:ok, %{id: id}} =
-        McpServerStorage.insert(actor, %{name: "lapsed", url: "https://x.com/mcp"})
+        McpServerStorage.insert(actor, %{cap: 0, name: "lapsed", url: "https://x.com/mcp"})
 
       past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
 
@@ -217,7 +291,7 @@ defmodule Arca.McpServerStorageTest do
 
     test "a member that holds no slot where a claimant runs raises nothing", %{actor: actor} do
       {:ok, %{id: id}} =
-        McpServerStorage.insert(actor, %{name: "slotless", url: "https://x.com/mcp"})
+        McpServerStorage.insert(actor, %{cap: 0, name: "slotless", url: "https://x.com/mcp"})
 
       previous = Application.get_env(:arca, :control_plane_claim_enabled)
 
@@ -238,9 +312,10 @@ defmodule Arca.McpServerStorageTest do
 
     test "another athanor's row is not found, and is not raised", %{actor: actor} do
       theirs = Arca.Test.Actor.local(athanor_id: "ath_mcp_theirs", user_id: "user_theirs")
+      Arca.Test.Actor.ensure_athanor_row(theirs.athanor_id)
 
       {:ok, %{id: id}} =
-        McpServerStorage.insert(theirs, %{name: "theirs", url: "https://x.com/mcp"})
+        McpServerStorage.insert(theirs, %{cap: 0, name: "theirs", url: "https://x.com/mcp"})
 
       assert {:error, :not_found} = McpServerStorage.bump_epoch(actor, id)
       assert {:ok, %{epoch: 1}} = McpServerStorage.get_by_id(theirs, id)
@@ -250,6 +325,7 @@ defmodule Arca.McpServerStorageTest do
          %{actor: actor} do
       assert {:ok, %{id: id}} =
                McpServerStorage.insert(actor, %{
+                 cap: 0,
                  name: "casrow",
                  url: "https://x.com/mcp"
                })
@@ -272,6 +348,7 @@ defmodule Arca.McpServerStorageTest do
 
       assert {:ok, %{transport: "stdio", url: nil}} =
                McpServerStorage.insert(actor, %{
+                 cap: 0,
                  name: "piped",
                  transport: "stdio",
                  url: nil,
@@ -279,8 +356,8 @@ defmodule Arca.McpServerStorageTest do
                })
 
       for attrs <- [
-            %{name: "bad-http", transport: "http", url: nil},
-            %{name: "bad-stdio", transport: "stdio", url: "https://x.com/mcp"}
+            %{cap: 0, name: "bad-http", transport: "http", url: nil},
+            %{cap: 0, name: "bad-stdio", transport: "stdio", url: "https://x.com/mcp"}
           ] do
         assert {:error, _} = McpServerStorage.insert(actor, attrs)
       end
@@ -292,12 +369,14 @@ defmodule Arca.McpServerStorageTest do
 
       {:ok, a} =
         McpServerStorage.insert(actor_a, %{
+          cap: 0,
           name: "fenced",
           url: "https://a.com/mcp"
         })
 
       {:ok, b} =
         McpServerStorage.insert(actor_b, %{
+          cap: 0,
           name: "fenced",
           url: "https://b.com/mcp"
         })
@@ -324,12 +403,14 @@ defmodule Arca.McpServerStorageTest do
 
       assert {:ok, _} =
                McpServerStorage.insert(actor_a, %{
+                 cap: 0,
                  name: "shared-name",
                  url: "https://a.com/mcp"
                })
 
       assert {:ok, _} =
                McpServerStorage.insert(actor_b, %{
+                 cap: 0,
                  name: "shared-name",
                  url: "https://b.com/mcp"
                })
@@ -347,12 +428,14 @@ defmodule Arca.McpServerStorageTest do
 
       assert {:ok, _} =
                McpServerStorage.insert(actor_a, %{
+                 cap: 0,
                  name: "isolated",
                  url: "https://a.com/mcp"
                })
 
       assert {:ok, _} =
                McpServerStorage.insert(actor_b, %{
+                 cap: 0,
                  name: "isolated",
                  url: "https://b.com/mcp"
                })
@@ -392,6 +475,7 @@ defmodule Arca.McpServerStorageTest do
 
       {:ok, _} =
         McpServerStorage.insert(actor, %{
+          cap: 0,
           name: "roundtrip",
           url: "https://example.test",
           config_json: Jason.encode!(config)
@@ -420,7 +504,7 @@ defmodule Arca.McpServerStorageRaceTest do
   import Ecto.Query, only: [from: 2]
 
   alias Arca.McpServerStorage
-  alias Arca.Schemas.{CellLease, McpServer}
+  alias Arca.Schemas.{Athanor, CellLease, McpServer}
   alias Ecto.Adapters.SQL.Sandbox
 
   @moduletag :postgres
@@ -437,6 +521,7 @@ defmodule Arca.McpServerStorageRaceTest do
     athanor = "ath_mcp_race_#{System.unique_integer([:positive])}"
     node = "node-mcp-race-#{System.unique_integer([:positive])}"
     saved = Map.new(@standing, &{&1, :persistent_term.get(&1, :absent)})
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor) end)
 
     on_exit(fn ->
       for {key, value} <- saved do
@@ -448,6 +533,7 @@ defmodule Arca.McpServerStorageRaceTest do
       unboxed(fn ->
         Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node))
         Arca.Repo.delete_all(from(s in McpServer, where: s.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(a in Athanor, where: a.id == ^athanor))
       end)
     end)
 
@@ -461,7 +547,7 @@ defmodule Arca.McpServerStorageRaceTest do
 
       {:ok, %{id: id}} =
         unboxed(fn ->
-          McpServerStorage.insert(actor, %{name: "raced", url: "https://x.com/mcp"})
+          McpServerStorage.insert(actor, %{cap: 0, name: "raced", url: "https://x.com/mcp"})
         end)
 
       test = self()
@@ -495,6 +581,143 @@ defmodule Arca.McpServerStorageRaceTest do
 
       assert {:ok, %{epoch: 2, revision: 1}} =
                unboxed(fn -> McpServerStorage.get_by_id(actor, id) end)
+    end
+  end
+end
+
+defmodule Arca.McpServerStorageCapRaceTest do
+  @moduledoc """
+  Creates racing for an athanor's last server places, each on a connection
+  of its own outside the sandbox: `insert/2` locks the athanor's row,
+  counts and inserts in one transaction, so exactly `cap` of them land and
+  the rest are refused `:server_cap`.
+
+  On PostgreSQL another transaction holds the athanor's row until every
+  creator is seen waiting on a lock, so all of them contend at once; on
+  SQLite the locking transaction's one write lock serializes them. The
+  case works in an athanor of its own, whose rows it deletes when it ends.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.McpServerStorage
+  alias Arca.Schemas.{Athanor, McpServer}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @cap 3
+  @creates 8
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    athanor = "ath_mcp_cap_race_#{System.unique_integer([:positive])}"
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor) end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(s in McpServer, where: s.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(a in Athanor, where: a.id == ^athanor))
+      end)
+    end)
+
+    {:ok, actor: Arca.Test.Actor.local(athanor_id: athanor, user_id: "user_cap_race")}
+  end
+
+  test "concurrent creates stop at the cap", %{actor: actor} do
+    test = self()
+
+    create = fn name ->
+      Task.async(fn ->
+        unboxed(fn ->
+          if postgres?(), do: send(test, {:backend, backend_pid()})
+
+          McpServerStorage.insert(actor, %{cap: @cap, name: name, url: "https://x.com/mcp"})
+        end)
+      end)
+    end
+
+    answers =
+      if postgres?() do
+        holder =
+          holding(fn ->
+            from(a in Athanor, where: a.id == ^actor.athanor_id)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one()
+          end)
+
+        creators = for i <- 1..@creates, do: create.("race-#{i}")
+
+        for _ <- creators do
+          assert_receive {:backend, backend}, 15_000
+          await_lock_wait(backend)
+        end
+
+        release(holder)
+        Enum.map(creators, &Task.await(&1, 30_000))
+      else
+        for(i <- 1..@creates, do: create.("race-#{i}")) |> Enum.map(&Task.await(&1, 30_000))
+      end
+
+    assert Enum.count(answers, &match?({:ok, _}, &1)) == @cap
+    assert Enum.count(answers, &(&1 == {:error, :server_cap})) == @creates - @cap
+    assert {:ok, rows} = unboxed(fn -> McpServerStorage.list(actor) end)
+    assert length(rows) == @cap
+  end
+
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
+
+  # Run `lock` in a transaction of its own and hold it open until
+  # `release/1`.
+  defp holding(lock) do
+    test = self()
+
+    task =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            result = lock.()
+            send(test, {:holding, self()})
+
+            receive do
+              :commit -> result
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:holding, _pid}, 15_000
+    task
+  end
+
+  defp release(task) do
+    send(task.pid, :commit)
+    assert {:ok, _} = Task.await(task, 30_000)
+  end
+
+  defp backend_pid do
+    %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+    pid
+  end
+
+  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
+  # by `tries`, never a timing.
+  defp await_lock_wait(pid, tries \\ 500)
+
+  defp await_lock_wait(_pid, 0), do: flunk("a create never waited on the athanor's lock")
+
+  defp await_lock_wait(pid, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
+      end)
+
+    if rows == [["Lock"]] do
+      :ok
+    else
+      Process.sleep(20)
+      await_lock_wait(pid, tries - 1)
     end
   end
 end

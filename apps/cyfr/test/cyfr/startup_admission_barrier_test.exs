@@ -959,7 +959,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     n = System.unique_integer([:positive])
 
     {:ok, schedule} =
-      Arca.CronSchedule.create(%{
+      Arca.CronSchedule.create(actor, %{
         user_id: ctx.user_id,
         athanor_id: ctx.athanor_id,
         name: "barrier-#{n}",
@@ -967,7 +967,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
         reference: "reagent:local.barrier:1.0.0",
         resolved_reference: "reagent:local.barrier:1.0.0",
         profile_id: "prof_barrier",
-        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second)
+        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second),
+        cap: 1_000
       })
 
     {:ok, thread} = Arca.ThreadStorage.create(actor)
@@ -980,6 +981,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
     {:ok, backend} =
       Arca.McpServerStorage.insert(actor, %{
+        cap: 0,
         name: "barrier-#{n}",
         url: "http://127.0.0.1:9/mcp",
         enabled: true

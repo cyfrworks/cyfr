@@ -853,14 +853,15 @@ defmodule Arca.ExecutionTest do
       actor = Arca.Test.Actor.local()
 
       {:ok, schedule} =
-        Arca.CronSchedule.create(%{
+        Arca.CronSchedule.create(actor, %{
           user_id: actor.user_id,
           athanor_id: @athanor,
           name: "start-claimant-#{System.unique_integer([:positive])}",
           cron_expression: "0 * * * *",
           reference: "reagent:local.test:1.0.0",
           resolved_reference: "reagent:local.test:1.0.0",
-          profile_id: "prof_test"
+          profile_id: "prof_test",
+          cap: 1_000
         })
 
       past = DateTime.add(DateTime.utc_now(), -60, :second)

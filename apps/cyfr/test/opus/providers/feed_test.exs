@@ -279,13 +279,40 @@ defmodule Opus.Providers.FeedTest do
       assert %Prima.Refusal{class: :conflict, message: "a live feed is named btc"} =
                refused(call(ctx, bind_args("btc")))
 
-      for i <- 2..Feeds.max_per_athanor(), do: {:ok, _} = call(ctx, bind_args("feed-#{i}"))
+      Cyfr.Test.Settings.put("max_feeds_per_athanor", 3)
+      for i <- 2..3, do: {:ok, _} = call(ctx, bind_args("feed-#{i}"))
 
       assert %Prima.Refusal{class: :forbidden, reason: :feed_cap, message: capped} =
-               refused(call(ctx, bind_args("feed-11")))
+               refused(call(ctx, bind_args("feed-4")))
 
-      assert String.ends_with?(capped, "(feed_cap)")
-      assert {:ok, 10} = CronSchedule.count_active(actor, "feed")
+      assert capped ==
+               "This athanor holds 3 live feeds, the most it may; " <>
+                 "remove one to bind another (feed_cap)"
+
+      assert {:ok, 3} = CronSchedule.count_active(actor, "feed")
+    end
+
+    test "the feed ceiling is the operator's setting: 1,000 unset, and 0 removes it",
+         %{ctx: ctx, actor: actor} do
+      assert {:ok, %{default: 1_000}} =
+               Cyfr.Platform.Settings.Roster.fetch("max_feeds_per_athanor")
+
+      assert {:ok, 1_000} = Arca.PlatformSettings.effective("max_feeds_per_athanor")
+
+      Cyfr.Test.Settings.put("max_feeds_per_athanor", 1)
+      assert {:ok, _} = call(ctx, bind_args("feed-1"))
+      assert %Prima.Refusal{reason: :feed_cap} = refused(call(ctx, bind_args("feed-2")))
+
+      Cyfr.Test.Settings.put("max_feeds_per_athanor", 0)
+      for i <- 2..3, do: assert({:ok, _} = call(ctx, bind_args("feed-#{i}")))
+      assert {:ok, 3} = CronSchedule.count_active(actor, "feed")
+    end
+
+    test "a feed ceiling the store cannot answer refuses the bind", %{ctx: ctx} do
+      Cyfr.Test.Settings.expire("max_feeds_per_athanor")
+      Cyfr.Test.Settings.break_store!()
+
+      assert %Prima.Refusal{class: :unavailable} = refused(call(ctx, bind_args("btc")))
     end
 
     # A profile list or a head the store cannot answer, and a profile row

@@ -56,6 +56,11 @@ defmodule Sanctum.Tenancy.Members do
   Insert a membership. `attrs` must carry `:scope`; an active row `:user_id`,
   an invited row `:email`; `:athanor_id` is required for the `"athanor"`
   scope and must name an existing athanor.
+
+  Opts: `birth: true` seats a frozen athanor's members at its birth;
+  `reserve:` is the closure `Arca.Members.seat/3` runs under the athanor's
+  lock before it writes the seat, which `add/3` passes to count the member
+  cap there. Without it a seat is not counted against the cap.
   """
   @spec create(map(), keyword()) :: {:ok, membership()} | {:error, term()}
   def create(attrs, opts \\ []) do
@@ -78,7 +83,7 @@ defmodule Sanctum.Tenancy.Members do
     if not Keyword.get(opts, :birth, false) and frozen?(athanor_id) do
       {:error, :frozen_roster}
     else
-      Arca.Members.seat(in_athanor(athanor_id), attrs)
+      Arca.Members.seat(in_athanor(athanor_id), attrs, Keyword.take(opts, [:reserve]))
     end
   end
 
@@ -91,9 +96,10 @@ defmodule Sanctum.Tenancy.Members do
   Idempotently ensure an active membership exists for `user_id`.
 
   Opts: `:scope` (required — the two scopes are different grants and neither
-  is a default), `:athanor_id`, `:added_by`. Safe under concurrent first
-  sign-ins — a unique-constraint conflict resolves to a re-read of the
-  existing row.
+  is a default), `:athanor_id`, `:added_by`, and `:reserve`, which reaches
+  `create/2` only when the row is written: a person already seated writes
+  nothing and is not counted. Safe under concurrent first sign-ins — a
+  unique-constraint conflict resolves to a re-read of the existing row.
   """
   @spec ensure(String.t(), keyword()) :: {:ok, membership()} | {:error, term()}
   def ensure(user_id, opts) when is_binary(user_id) do
@@ -110,12 +116,15 @@ defmodule Sanctum.Tenancy.Members do
         {:ok, membership}
 
       _ ->
-        case create(%{
-               user_id: user_id,
-               scope: scope,
-               athanor_id: athanor_id,
-               added_by: Keyword.get(opts, :added_by)
-             }) do
+        case create(
+               %{
+                 user_id: user_id,
+                 scope: scope,
+                 athanor_id: athanor_id,
+                 added_by: Keyword.get(opts, :added_by)
+               },
+               Keyword.take(opts, [:reserve])
+             ) do
           {:ok, membership} -> {:ok, membership}
           # Lost the race: re-read the existing assignment.
           {:error, :conflict} -> find(user_id, scope, athanor_id)
@@ -240,8 +249,12 @@ defmodule Sanctum.Tenancy.Members do
   request for the platform admin; whether this home can resolve the
   identifier at its directory is not asked, since only the person's own
   sign-in carries their genesis. A malformed one is `:invalid_identifier`.
-  The per-group member cap applies. A person's own athanor has exactly one
-  member — its owner — on every path, not only in the UI.
+  The per-group member cap bounds every seat this writes, counted under
+  the athanor's lock in the transaction that writes it; a person already
+  seated, or an address or identifier already invited, writes no seat and
+  so is answered `:added` or `:invited` even at the cap, and the email
+  arm's own refusals come before the cap's. A person's own athanor has
+  exactly one member — its owner — on every path, not only in the UI.
   """
   @spec add(
           Sanctum.Tenancy.Athanors.athanor(),
@@ -263,7 +276,12 @@ defmodule Sanctum.Tenancy.Members do
 
   def add(%{id: athanor_id, status: "active"} = athanor, [user_id: user_id], added_by)
       when is_binary(user_id) do
-    opts = [scope: "athanor", athanor_id: athanor_id, added_by: added_by]
+    opts = [
+      scope: "athanor",
+      athanor_id: athanor_id,
+      added_by: added_by,
+      reserve: fn -> member_cap(athanor_id) end
+    ]
 
     # A membership names a person — by their own id, or by an IdP identity
     # key that names them. An id nobody has signed in with, or one the door
@@ -271,7 +289,6 @@ defmodule Sanctum.Tenancy.Members do
     # is not required — a person admitted by a `user_id` door entry may
     # have none.)
     with {:ok, %{status: "active", id: user_id}} <- find_person(user_id),
-         :ok <- member_cap(athanor_id),
          {:ok, _} <- ensure(user_id, opts) do
       broadcast_change(user_id, athanor.id, :joined)
       Sanctum.Notify.member_changed(athanor.id)
@@ -287,8 +304,7 @@ defmodule Sanctum.Tenancy.Members do
       when is_binary(email) do
     email = String.downcase(String.trim(email))
 
-    with true <- String.contains?(email, "@") or {:error, :invalid_email},
-         :ok <- member_cap(athanor_id) do
+    with true <- String.contains?(email, "@") or {:error, :invalid_email} do
       known = Users.list_by_email(email)
 
       case Enum.filter(known, &known_and_active?/1) do
@@ -321,11 +337,10 @@ defmodule Sanctum.Tenancy.Members do
     end
   end
 
-  def add(%{id: athanor_id, status: "active"} = athanor, [identifier: identifier], added_by)
+  def add(%{id: _athanor_id, status: "active"} = athanor, [identifier: identifier], added_by)
       when is_binary(identifier) do
     with true <-
-           Prima.Identity.Encoding.identifier?(identifier) or {:error, :invalid_identifier},
-         :ok <- member_cap(athanor_id) do
+           Prima.Identity.Encoding.identifier?(identifier) or {:error, :invalid_identifier} do
       # Uniform with the email arm: a stranger's identifier and a denied
       # person's are invited alike, and the caller learns only that the
       # row is in place.
@@ -363,13 +378,16 @@ defmodule Sanctum.Tenancy.Members do
         {:ok, row}
 
       {:error, :not_found} ->
-        create(%{
-          person_identifier: identifier,
-          scope: "athanor",
-          status: "invited",
-          athanor_id: athanor_id,
-          added_by: added_by
-        })
+        create(
+          %{
+            person_identifier: identifier,
+            scope: "athanor",
+            status: "invited",
+            athanor_id: athanor_id,
+            added_by: added_by
+          },
+          reserve: fn -> member_cap(athanor_id) end
+        )
 
       {:error, _} = err ->
         err
@@ -378,7 +396,8 @@ defmodule Sanctum.Tenancy.Members do
 
   # Every seat the athanor has handed out — active members and pending
   # invitations — is what the cap bounds; an invitation is a seat someone
-  # will take.
+  # will take. It runs as `Arca.Members.seat/3`'s `reserve:`, with the
+  # athanor's row locked, so two adds cannot both take the last seat.
   defp member_cap(athanor_id) do
     Caps.check_counted(:max_members_per_group, fn ->
       Arca.Members.count_seats(in_athanor(athanor_id))
@@ -401,13 +420,16 @@ defmodule Sanctum.Tenancy.Members do
         {:ok, row}
 
       {:error, :not_found} ->
-        create(%{
-          email: email,
-          scope: "athanor",
-          status: "invited",
-          athanor_id: athanor_id,
-          added_by: added_by
-        })
+        create(
+          %{
+            email: email,
+            scope: "athanor",
+            status: "invited",
+            athanor_id: athanor_id,
+            added_by: added_by
+          },
+          reserve: fn -> member_cap(athanor_id) end
+        )
 
       {:error, _} = err ->
         err

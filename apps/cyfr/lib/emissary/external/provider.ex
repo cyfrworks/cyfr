@@ -39,6 +39,12 @@ defmodule Emissary.External.Provider do
   rules again (`Sanctum.VaultReader.unseal_for/3`, `unseal_disclosed/2`),
   so a row changed underneath sends nothing outside them.
 
+  The servers one athanor may hold is the platform setting
+  `max_external_servers_per_athanor` (0 is no ceiling), read at each
+  create and handed to `Arca.McpServerStorage.insert/2`, which counts the
+  athanor's servers and inserts in one transaction under the athanor's row
+  lock.
+
   Every write raises the row's epoch. `update` names the epoch it read and
   is refused when the row has moved on. A write that changes what runs —
   update, delete, disable, restart — stops the server's process, which
@@ -336,15 +342,23 @@ defmodule Emissary.External.Provider do
   # Action Handlers
   # ============================================================================
 
+  # The cap is read at the write and counted in the insert's own
+  # transaction. A cap the store cannot answer refuses: the setting refuses
+  # a stale value, and no fallback number stands in for it.
   defp handle_create(ctx, args) do
     with {:ok, name, attrs} <- server_args(ctx, args),
-         :ok <- under_server_cap(ctx) do
-      case Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), Map.put(attrs, :name, name)) do
+         {:ok, cap} <- server_cap() do
+      attrs = Map.merge(attrs, %{name: name, cap: cap})
+
+      case Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), attrs) do
         {:ok, server} ->
           {:ok, connect(ctx, server)}
 
         {:error, :exists} ->
           {:error, {:conflict, "Server '#{name}' already exists — change it with update"}}
+
+        {:error, :server_cap} ->
+          {:error, "Maximum server limit (#{cap}) reached"}
 
         {:error, reason} ->
           Logger.warning(
@@ -476,14 +490,10 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  defp under_server_cap(ctx) do
-    max = Application.get_env(:cyfr, :max_external_servers, 50)
-
-    case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
-      {:ok, existing} when length(existing) < max -> :ok
-      {:ok, _existing} -> {:error, "Maximum server limit (#{max}) reached"}
-      {:error, reason} when is_atom(reason) -> {:error, "Storage error: #{reason}"}
-      {:error, _reason} -> {:error, {:unavailable, "The server store"}}
+  defp server_cap do
+    case Arca.PlatformSettings.effective("max_external_servers_per_athanor") do
+      {:ok, cap} when is_integer(cap) and cap >= 0 -> {:ok, cap}
+      {:error, :unavailable} -> {:error, {:unavailable, "The server store"}}
     end
   end
 

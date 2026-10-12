@@ -795,19 +795,20 @@ defmodule Opus.FeedsTest do
 
   describe "the cap" do
     test "the schedule cap counts schedules only", %{ctx: ctx, actor: actor} do
-      for i <- 1..Feeds.max_per_athanor(), do: {:ok, _} = bind(actor, feed_binding("feed-#{i}"))
+      Cyfr.Test.Settings.put("max_schedules_per_athanor", 3)
+      for i <- 1..2, do: {:ok, _} = bind(actor, feed_binding("feed-#{i}"), 2)
 
-      for i <- 1..25 do
+      for i <- 1..3 do
         assert {:ok, _} = Provider.handle("schedule", ctx, schedule_args("cap-#{i}"))
       end
 
-      assert {:error, message} = Provider.handle("schedule", ctx, schedule_args("cap-26"))
-      assert message =~ "limit reached"
+      assert {:error, "Schedule limit reached (3 per athanor)"} =
+               Provider.handle("schedule", ctx, schedule_args("cap-4"))
 
-      # And the feeds' bound counts feeds only, beside 25 schedules.
-      assert {:error, :feed_cap} = bind(actor, feed_binding("feed-11"))
-      assert {:ok, 25} = CronSchedule.count_active(actor, "schedule")
-      assert {:ok, 10} = CronSchedule.count_active(actor, "feed")
+      # And the feeds' bound counts feeds only, beside three schedules.
+      assert {:error, :feed_cap} = bind(actor, feed_binding("feed-3"), 2)
+      assert {:ok, 3} = CronSchedule.count_active(actor, "schedule")
+      assert {:ok, 2} = CronSchedule.count_active(actor, "feed")
     end
   end
 
@@ -1080,18 +1081,18 @@ defmodule Opus.FeedsTest do
   defp error_refusal, do: %{path: "", reason: "error"}
   defp error_refusal(status), do: %{path: "", reason: "error", status: status}
 
-  defp bind(actor, binding) do
+  defp bind(actor, binding, cap \\ 1_000) do
     CronSchedule.create_feed(actor, %{
       binding: binding,
       resolved_reference: @pinned,
       profile_id: @profile_id,
-      cap: Feeds.max_per_athanor()
+      cap: cap
     })
   end
 
   defp create_schedule(ctx, name) do
     {:ok, schedule} =
-      CronSchedule.create(%{
+      CronSchedule.create(Sanctum.Context.actor(ctx), %{
         user_id: ctx.user_id,
         athanor_id: ctx.athanor_id,
         name: name,
@@ -1099,7 +1100,8 @@ defmodule Opus.FeedsTest do
         reference: @pinned,
         resolved_reference: @pinned,
         profile_id: @profile_id,
-        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second)
+        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second),
+        cap: 1_000
       })
 
     schedule
@@ -1217,6 +1219,7 @@ defmodule Opus.FeedsRaceTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   @binds 16
+  @cap 10
 
   setup do
     athanor = "ath_feeds_race_#{System.unique_integer([:positive])}"
@@ -1236,7 +1239,7 @@ defmodule Opus.FeedsRaceTest do
   end
 
   test "concurrent binds stop at the cap", %{actor: actor} do
-    cap = Opus.Feeds.max_per_athanor()
+    cap = @cap
     test = self()
 
     bind = fn name ->

@@ -11,7 +11,7 @@ defmodule Arca.Members do
   Every function states which shape it is, and the shape decides where its
   athanor comes from.
 
-    * **Inside one tenant.** `seat/2`, `find/2`, `find_invited/2`,
+    * **Inside one tenant.** `seat/3`, `find/2`, `find_invited/2`,
       `withdraw_invitation/2`, `list/2`, `count_active/1` and
       `count_seats/1` work in the athanor
       the actor's `athanor_id` names. The id comes from the actor, never
@@ -116,15 +116,34 @@ defmodule Arca.Members do
   claimed by whoever proves that identity, so it widens who may sit here:
   its transaction first proves this member still owns its slot on the
   database's clock (`{:error, :not_owner}` otherwise).
+
+  One option, `reserve:`, is the reservation a caller takes against a cap
+  it holds on this athanor's seats: a zero-arity closure answering `:ok`
+  or `{:error, reason}`, run inside the transaction once the person and
+  the athanor row are locked and before the row is written: a concurrent
+  seat in the same athanor waits for this transaction to end, so the
+  closure sees every seat committed before it. It reads and writes only
+  through Arca, makes no network call and publishes nothing.
+  `{:error, reason}` rolls the whole transaction back, writes no row and is
+  answered unchanged. An unknown option, or a `reserve:` that is not a
+  zero-arity function, raises `ArgumentError`.
   """
-  @spec seat(Prima.Actor.t(), map()) ::
-          {:ok, map()} | {:error, :no_athanor | :athanor_archived | :not_owner} | write_refusal()
-  def seat(%Prima.Actor{athanor_id: athanor_id}, attrs)
+  @spec seat(Prima.Actor.t(), map(), [{:reserve, (-> :ok | {:error, term()})}]) ::
+          {:ok, map()}
+          | {:error, :no_athanor | :athanor_archived | :not_owner}
+          | write_refusal()
+          | {:error, term()}
+  def seat(actor, attrs, opts \\ [])
+
+  def seat(%Prima.Actor{athanor_id: athanor_id}, attrs, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
+    reserve = reserve!(opts)
+
     Arca.Repo.Errors.with_db_rescue("Arca.Members.seat", fn ->
       write = fn ->
         with :ok <- hold_person(Map.get(attrs, :user_id)),
              :ok <- seatable(athanor_id),
+             :ok <- reserve.(),
              {:ok, row} <-
                attrs |> defaults() |> Map.put(:athanor_id, athanor_id) |> do_insert() do
           row
@@ -140,7 +159,24 @@ defmodule Arca.Members do
     |> Arca.Data.project()
   end
 
-  def seat(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
+  def seat(%Prima.Actor{}, _attrs, opts) do
+    _reserve = reserve!(opts)
+    {:error, :no_athanor}
+  end
+
+  # The one option `seat/3` declares; nothing else enters its transaction.
+  defp reserve!(opts) do
+    case Keyword.get(Keyword.validate!(opts, [:reserve]), :reserve) do
+      nil ->
+        fn -> :ok end
+
+      reserve when is_function(reserve, 0) ->
+        reserve
+
+      _other ->
+        raise ArgumentError, "Arca.Members.seat/3 takes reserve: as a zero-arity function"
+    end
+  end
 
   @doc "The person's ACTIVE-or-invited athanor row in the actor's athanor, if any."
   @spec find(Prima.Actor.t(), String.t()) ::
@@ -954,7 +990,7 @@ defmodule Arca.Members do
     {length(removed), session_hashes}
   end
 
-  # arca:unscoped-ok the athanor is the caller's clause's: `seat/2` takes it from the actor and
+  # arca:unscoped-ok the athanor is the caller's clause's: `seat/3` takes it from the actor and
   # `grant_platform/2` writes the row that names none, so this statement never chooses one.
   defp do_insert(attrs) do
     %Membership{}

@@ -114,29 +114,109 @@ defmodule Opus.Schedules.ProviderTest do
       assert msg =~ "Missing required"
     end
 
-    test "enforces per-user limit", %{ctx: ctx} do
-      for i <- 1..25 do
-        args = %{
-          "action" => "create",
-          "profile_id" => "prof-cron",
-          "name" => "limit-test-#{i}",
-          "cron_expression" => "0 * * * *",
-          "reference" => "reagent:local.test:1.0.0"
-        }
+    test "refuses at the configured ceiling, naming it", %{ctx: ctx} do
+      Cyfr.Test.Settings.put("max_schedules_per_athanor", 3)
 
-        assert {:ok, _} = Provider.handle("schedule", ctx, args)
+      for i <- 1..3 do
+        assert {:ok, _} = Provider.handle("schedule", ctx, schedule_args("limit-test-#{i}"))
       end
 
-      args = %{
-        "action" => "create",
-        "profile_id" => "prof-cron",
-        "name" => "limit-test-26",
-        "cron_expression" => "0 * * * *",
-        "reference" => "reagent:local.test:1.0.0"
-      }
+      assert {:error, "Schedule limit reached (3 per athanor)"} =
+               Provider.handle("schedule", ctx, schedule_args("limit-test-4"))
 
-      assert {:error, msg} = Provider.handle("schedule", ctx, args)
-      assert msg =~ "limit reached"
+      assert {:ok, 3} = Arca.CronSchedule.count_active(Context.actor(ctx), "schedule")
+    end
+
+    test "the ceiling is the operator's setting: 1,000 unset, and 0 removes it", %{ctx: ctx} do
+      assert {:ok, %{default: 1_000}} =
+               Cyfr.Platform.Settings.Roster.fetch("max_schedules_per_athanor")
+
+      assert {:ok, 1_000} = Arca.PlatformSettings.effective("max_schedules_per_athanor")
+
+      Cyfr.Test.Settings.put("max_schedules_per_athanor", 1)
+      assert {:ok, _} = Provider.handle("schedule", ctx, schedule_args("ceiling-1"))
+
+      assert {:error, "Schedule limit reached (1 per athanor)"} =
+               Provider.handle("schedule", ctx, schedule_args("ceiling-2"))
+
+      Cyfr.Test.Settings.put("max_schedules_per_athanor", 0)
+
+      for i <- 2..3 do
+        assert {:ok, _} = Provider.handle("schedule", ctx, schedule_args("ceiling-#{i}"))
+      end
+
+      assert {:ok, 3} = Arca.CronSchedule.count_active(Context.actor(ctx), "schedule")
+    end
+
+    test "a ceiling the store cannot answer refuses the create", %{ctx: ctx} do
+      Cyfr.Test.Settings.expire("max_schedules_per_athanor")
+      Cyfr.Test.Settings.break_store!()
+
+      assert {:error, "Storage unavailable — try again shortly"} =
+               Provider.handle("schedule", ctx, schedule_args("unanswered"))
+    end
+  end
+
+  describe "a member that lost its slot" do
+    # Switches the claimant on and takes a slot through `Arca.ControlPlane`,
+    # the process-wide standing record and the application environment;
+    # both are restored.
+    setup do
+      keys = [
+        {Arca.ControlPlane, :standing},
+        {Arca.ControlPlane, :generation},
+        {Arca.ControlPlane, :slot}
+      ]
+
+      saved = Map.new(keys, &{&1, :persistent_term.get(&1, :absent)})
+      claim = Application.get_env(:arca, :control_plane_claim_enabled)
+
+      on_exit(fn ->
+        for {key, value} <- saved do
+          if value == :absent,
+            do: :persistent_term.erase(key),
+            else: :persistent_term.put(key, value)
+        end
+
+        if is_nil(claim),
+          do: Application.delete_env(:arca, :control_plane_claim_enabled),
+          else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+      end)
+
+      Application.put_env(:arca, :control_plane_claim_enabled, true)
+      node = "node-schedules-#{System.unique_integer([:positive])}"
+      {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+      {:ok, slot: slot}
+    end
+
+    test "creates, changes and deletes no schedule, answered :not_owner",
+         %{ctx: ctx, slot: slot} do
+      {:ok, created} = Provider.handle("schedule", ctx, schedule_args("fenced"))
+      id = created.schedule_id
+
+      # A successor takes the slot over after this member read it.
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+          set: [owner: slot.node <> "#boot_b", generation: slot.generation + 1]
+        )
+
+      before = Arca.CronSchedule.get_for_daemon(id)
+
+      assert {:error, :not_owner} =
+               Provider.handle("schedule", ctx, schedule_args("fenced-again"))
+
+      for action <- [
+            %{"action" => "update", "schedule_id" => id, "cron_expression" => "*/5 * * * *"},
+            %{"action" => "pause", "schedule_id" => id},
+            %{"action" => "resume", "schedule_id" => id},
+            %{"action" => "delete", "schedule_id" => id}
+          ] do
+        assert {:error, :not_owner} = Provider.handle("schedule", ctx, action), inspect(action)
+      end
+
+      assert Arca.CronSchedule.get_for_daemon(id) == before
+      assert {:ok, 1} = Arca.CronSchedule.count_active(Context.actor(ctx), "schedule")
     end
   end
 
@@ -233,7 +313,9 @@ defmodule Opus.Schedules.ProviderTest do
 
     test "a paused schedule still occupies its cap slot", %{ctx: ctx} do
       # The cap counts every non-deleted row, so pause → create-another
-      # cannot mint a 26th seat — and resume therefore needs no cap check.
+      # cannot mint a seat past it — and resume therefore needs no cap check.
+      Cyfr.Test.Settings.put("max_schedules_per_athanor", 3)
+
       {:ok, first} =
         Provider.handle("schedule", ctx, %{
           "action" => "create",
@@ -243,7 +325,7 @@ defmodule Opus.Schedules.ProviderTest do
           "reference" => "reagent:local.test:1.0.0"
         })
 
-      for i <- 1..24 do
+      for i <- 1..2 do
         assert {:ok, _} =
                  Provider.handle("schedule", ctx, %{
                    "action" => "create",
@@ -264,7 +346,7 @@ defmodule Opus.Schedules.ProviderTest do
                Provider.handle("schedule", ctx, %{
                  "action" => "create",
                  "profile_id" => "prof-cron",
-                 "name" => "cap-pause-25",
+                 "name" => "cap-pause-3",
                  "cron_expression" => "0 * * * *",
                  "reference" => "reagent:local.test:1.0.0"
                })
@@ -698,16 +780,18 @@ defmodule Opus.Schedules.ProviderTest do
     end
 
     test "the schedule cap ignores feeds", %{ctx: ctx} do
-      for i <- 1..Opus.Feeds.max_per_athanor(), do: {:ok, _} = feed!(ctx, "feed-#{i}")
+      Cyfr.Test.Settings.put("max_schedules_per_athanor", 3)
+      for i <- 1..4, do: {:ok, _} = feed!(ctx, "feed-#{i}")
 
-      for i <- 1..25 do
+      for i <- 1..3 do
         assert {:ok, _} = Provider.handle("schedule", ctx, schedule_args("cap-#{i}"))
       end
 
-      assert {:error, message} = Provider.handle("schedule", ctx, schedule_args("cap-26"))
-      assert message =~ "limit reached"
-      assert {:ok, 25} = Arca.CronSchedule.count_active(Context.actor(ctx), "schedule")
-      assert {:ok, 10} = Arca.CronSchedule.count_active(Context.actor(ctx), "feed")
+      assert {:error, "Schedule limit reached (3 per athanor)"} =
+               Provider.handle("schedule", ctx, schedule_args("cap-4"))
+
+      assert {:ok, 3} = Arca.CronSchedule.count_active(Context.actor(ctx), "schedule")
+      assert {:ok, 4} = Arca.CronSchedule.count_active(Context.actor(ctx), "feed")
     end
   end
 
@@ -738,7 +822,7 @@ defmodule Opus.Schedules.ProviderTest do
       binding: binding,
       resolved_reference: "catalyst:local.markets:1.0.0",
       profile_id: "prof-cron",
-      cap: Opus.Feeds.max_per_athanor()
+      cap: 1_000
     })
   end
 end

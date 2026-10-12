@@ -459,6 +459,7 @@ defmodule Emissary.External.ServerTest do
 
       {:ok, row} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: "stop-race-srv-#{suffix}",
           url: "https://127.0.0.1:9/mcp",
           config_json:

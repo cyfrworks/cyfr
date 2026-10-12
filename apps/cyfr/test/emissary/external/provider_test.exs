@@ -83,39 +83,43 @@ defmodule Emissary.External.ProviderTest do
       assert {:error, {:invalid_argument, "Invalid URL:" <> _}} = result
     end
 
-    test "enforces server count limit", %{ctx: ctx} do
-      original = Application.get_env(:cyfr, :max_external_servers)
-      Application.put_env(:cyfr, :max_external_servers, 2)
+    test "the server ceiling is the platform setting, and the refusal names it", %{ctx: ctx} do
+      Cyfr.Test.Settings.put("max_external_servers_per_athanor", 2)
 
-      # on_exit, not a trailing statement: a failing assertion below would skip
-      # an inline restore and leave the limit at 2 for every later test in the
-      # BEAM — which is how one failure here cascades into unrelated files.
-      on_exit(fn ->
-        if original,
-          do: Application.put_env(:cyfr, :max_external_servers, original),
-          else: Application.delete_env(:cyfr, :max_external_servers)
-      end)
+      # Saved, though they fail to connect.
+      for name <- ~w(limit-s1 limit-s2) do
+        assert {:ok, %{name: ^name}} = create(ctx, name)
+      end
 
-      # Add two servers (they'll fail to connect but get saved)
-      Provider.handle("mcp_servers", ctx, %{
-        "action" => "create",
-        "name" => "limit-s1",
-        "config" => %{"url" => "https://localhost:99999/mcp"}
-      })
+      assert {:error, "Maximum server limit (2) reached"} = create(ctx, "limit-s3")
 
-      Provider.handle("mcp_servers", ctx, %{
-        "action" => "create",
-        "name" => "limit-s2",
-        "config" => %{"url" => "https://localhost:99999/mcp"}
-      })
+      assert {:ok, [%{name: "limit-s1"}, %{name: "limit-s2"}]} =
+               Arca.McpServerStorage.list(Sanctum.Context.actor(ctx))
+    end
 
-      # Third should be rejected
-      assert {:error, "Maximum server limit (2) reached"} =
-               Provider.handle("mcp_servers", ctx, %{
-                 "action" => "create",
-                 "name" => "limit-s3",
-                 "config" => %{"url" => "https://localhost:99999/mcp"}
-               })
+    test "a server ceiling of 0 is no ceiling", %{ctx: ctx} do
+      Cyfr.Test.Settings.put("max_external_servers_per_athanor", 0)
+
+      for name <- ~w(open-s1 open-s2 open-s3) do
+        assert {:ok, %{name: ^name}} = create(ctx, name)
+      end
+
+      assert {:ok, servers} = Arca.McpServerStorage.list(Sanctum.Context.actor(ctx))
+      assert length(servers) == 3
+    end
+
+    test "an unset server ceiling reads the roster's default" do
+      key = "max_external_servers_per_athanor"
+
+      assert {:ok, %{default: 1_000}} = Cyfr.Platform.Settings.Roster.fetch(key)
+      assert {:ok, 1_000} = Arca.PlatformSettings.effective(key)
+    end
+
+    test "a server ceiling the store cannot answer refuses the create", %{ctx: ctx} do
+      Cyfr.Test.Settings.expire("max_external_servers_per_athanor")
+      Cyfr.Test.Settings.break_store!()
+
+      assert {:error, {:unavailable, "The server store"}} = create(ctx, "unread-cap")
     end
 
     test "saves server config to storage and answers the row's id", %{ctx: ctx} do
@@ -195,6 +199,7 @@ defmodule Emissary.External.ProviderTest do
          %{ctx: ctx} do
       {:ok, %{epoch: epoch}} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: "kept",
           url: "https://localhost:99999/mcp"
         })
@@ -312,6 +317,7 @@ defmodule Emissary.External.ProviderTest do
       # An update is held to the same rule, and leaves the row as it was.
       {:ok, kept} =
         Arca.McpServerStorage.insert(actor, %{
+          cap: 0,
           name: "kept",
           url: "https://127.0.0.1:9/mcp",
           enabled: false,
@@ -539,11 +545,13 @@ defmodule Emissary.External.ProviderTest do
 
     test "restart is for an enabled stdio server only", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "webby",
         url: "https://x.com/mcp"
       })
 
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "sleepy",
         transport: "stdio",
         url: nil,
@@ -572,6 +580,7 @@ defmodule Emissary.External.ProviderTest do
 
     test "list names the transport and the vault entries the env reads", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "listed",
         transport: "stdio",
         url: nil,
@@ -594,6 +603,7 @@ defmodule Emissary.External.ProviderTest do
     test "deletes existing server", %{ctx: ctx} do
       {:ok, %{id: id}} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: "to-delete",
           url: "https://x.com/mcp"
         })
@@ -623,11 +633,13 @@ defmodule Emissary.External.ProviderTest do
 
     test "returns configured servers", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "s1",
         url: "https://a.com/mcp"
       })
 
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "s2",
         url: "https://b.com/mcp"
       })
@@ -643,6 +655,7 @@ defmodule Emissary.External.ProviderTest do
     test "listing starts no server processes", %{ctx: ctx} do
       # Listing servers must not start processes or open outbound connections.
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "lazy-1",
         url: "https://a.com/mcp",
         enabled: true
@@ -765,6 +778,7 @@ defmodule Emissary.External.ProviderTest do
     test "is neither tested nor refreshed by name, and a refresh of all skips it", %{ctx: ctx} do
       {:ok, _} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: "dormant",
           url: "https://127.0.0.1:9/mcp",
           enabled: false,
@@ -796,6 +810,7 @@ defmodule Emissary.External.ProviderTest do
     test "insert and update answer the row they wrote", %{ctx: ctx} do
       assert {:ok, %{id: "mcp_" <> _ = id, name: "rowsrv", enabled: true}} =
                Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+                 cap: 0,
                  name: "rowsrv",
                  url: "https://127.0.0.1:9/mcp"
                })
@@ -807,6 +822,7 @@ defmodule Emissary.External.ProviderTest do
 
       assert {:error, :exists} =
                Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+                 cap: 0,
                  name: "rowsrv",
                  url: "https://127.0.0.1:9/mcp"
                })
@@ -816,7 +832,7 @@ defmodule Emissary.External.ProviderTest do
     end
 
     test "a row deleted and recreated under its name is served by a new process", %{ctx: ctx} do
-      attrs = %{name: "reborn", url: "https://127.0.0.1:9/mcp"}
+      attrs = %{name: "reborn", url: "https://127.0.0.1:9/mcp", cap: 0}
       {:ok, first} = Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), attrs)
       config = Emissary.External.Servers.server_config(first, ctx)
       {:ok, old_pid} = Emissary.External.ServerSupervisor.ensure_started(config)
@@ -857,6 +873,7 @@ defmodule Emissary.External.ProviderTest do
 
     test "returns server details for existing server", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "get-test",
         url: "https://x.com/mcp"
       })
@@ -890,6 +907,7 @@ defmodule Emissary.External.ProviderTest do
 
     test "returns status for existing server", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "test-srv",
         url: "https://localhost:99999/mcp"
       })
@@ -930,6 +948,7 @@ defmodule Emissary.External.ProviderTest do
   describe "handle/3 - enable/disable" do
     test "disables a server", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "toggle",
         url: "https://x.com/mcp"
       })
@@ -946,6 +965,7 @@ defmodule Emissary.External.ProviderTest do
 
     test "enables a disabled server", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "toggle2",
         url: "https://x.com/mcp",
         enabled: false
@@ -974,5 +994,13 @@ defmodule Emissary.External.ProviderTest do
       assert {:error, "Unknown tool: other"} =
                Provider.handle("other", ctx, %{"action" => "list"})
     end
+  end
+
+  defp create(ctx, name) do
+    Provider.handle("mcp_servers", ctx, %{
+      "action" => "create",
+      "name" => name,
+      "config" => %{"url" => "https://localhost:99999/mcp"}
+    })
   end
 end

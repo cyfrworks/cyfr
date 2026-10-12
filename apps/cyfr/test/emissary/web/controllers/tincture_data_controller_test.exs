@@ -1222,7 +1222,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
             binding: binding,
             resolved_reference: "catalyst:local.markets:1.0.0",
             profile_id: "prof_canvas_feed",
-            cap: Opus.Feeds.max_per_athanor()
+            cap: 1_000
           })
 
         bound = canvas_stream(trial.frame_id, "feed.results", "btc", bearer: trial.bearer)

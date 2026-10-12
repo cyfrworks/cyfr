@@ -43,15 +43,22 @@ defmodule Arca.CronSchedule do
       it reads a result;
     * `remove_feed/2` soft-deletes.
 
+  ## Schedules
+
+  `create/2` writes a schedule as `create_feed/2` binds a feed: one
+  locking transaction checks the member's slot, locks the athanor's row,
+  counts its non-deleted schedules and inserts, refusing `:schedule_cap`
+  at the caller's cap. A paused schedule holds its place, so resuming one
+  needs no count.
+
+  ## The generic writers
+
   The generic writers (`update/3`, `record_run/3`, `record_error/3`,
   `soft_delete/2`) read and lock their row tenant-scoped in a transaction
   of their own, and check the member's slot in it after the lock
-  (`slot_fence/0`). The scheduler's run writers, `record_run/3` and
-  `record_error/3`, check it for every row, so a member that lost its
-  slot records no run and no error on any schedule. A person's writers
-  through a surface, `update/3` and `soft_delete/2`, check it for a feed's
-  row, so no path writes a feed for a member that lost its slot, and write
-  a schedule's row as they always did.
+  (`slot_fence/0`), whatever the row's kind: a member that lost its slot
+  writes no row, records no run and no error, and is answered
+  `:not_owner`.
 
   `list_feeds/1` and `get_feed/2` read the live feed rows and decode
   nothing.
@@ -84,41 +91,51 @@ defmodule Arca.CronSchedule do
   @spec kinds() :: [String.t()]
   def kinds, do: @kinds
 
-  @doc "Creates a new cron schedule, always of kind `schedule`."
-  @spec create(map()) ::
+  @doc """
+  Creates a schedule in the actor's athanor (kind `schedule`) from `attrs`,
+  whose `cap` is the most non-deleted schedules the athanor may hold,
+  which the caller names (`Opus.Schedules.Provider`), and 0 no ceiling. A
+  paused schedule holds its place; a deleted one and a feed hold none.
+
+  One locking transaction checks the member's slot, locks the athanor's
+  row, counts its schedules and inserts, so creates racing for the last
+  place leave one row in it. Refused with `:schedule_cap` at `cap`,
+  `:not_owner` on a member that no longer owns its slot, `:not_found` when
+  the athanor has no row, `:no_athanor` for an actor that names none,
+  `{:validation, errors}` for a malformed field or cap, and
+  `:database_error`.
+  """
+  @spec create(Prima.Actor.t(), map()) ::
           {:ok, map()}
-          | {:error, {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the athanor arrives in attrs and is validated required before the insert.
-  def create(attrs) do
-    Errors.with_db_rescue("CronSchedule.create", fn ->
-      now = DateTime.utc_now()
-
-      attrs =
-        attrs
-        |> Map.put_new(:id, Prima.UUID7.generate_id("sched"))
-        |> Map.put_new(:created_at, now)
-        |> Map.put_new(:updated_at, now)
-
-      attrs
-      |> Row.create_changeset()
-      |> Arca.Repo.insert()
-      |> mapped_validation()
-    end)
-    |> Arca.Data.project()
+          | {:error,
+             :schedule_cap
+             | :not_owner
+             | :not_found
+             | :no_athanor
+             | :database_error
+             | {:validation, %{atom() => [String.t()]}}}
+  def create(%Prima.Actor{athanor_id: athanor_id} = actor, %{} = attrs)
+      when is_binary(athanor_id) and athanor_id != "" do
+    with {:ok, row, cap} <- schedule_row(actor, attrs) do
+      fenced("CronSchedule.create", fn -> insert_schedule(actor, row, cap) end)
+    end
   end
 
+  def create(%Prima.Actor{}, %{}), do: {:error, :no_athanor}
+
   @doc """
-  Updates an existing row with tenant-scoped lookup. A feed's row is
-  written only under the member's live slot (`:not_owner` otherwise).
+  Updates an existing row with tenant-scoped lookup. Every row, whatever
+  its kind, is written only under the member's live slot (`:not_owner`
+  otherwise).
   """
   @spec update(Prima.Actor.t(), String.t(), map()) ::
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
   def update(%Prima.Actor{} = actor, id, attrs) do
     Errors.with_db_rescue("CronSchedule.update", fn ->
-      guarded(actor, id, &feed_held/1, fn schedule ->
+      guarded(actor, id, fn schedule ->
         attrs = Map.put(attrs, :updated_at, DateTime.utc_now())
 
         schedule
@@ -246,11 +263,11 @@ defmodule Arca.CronSchedule do
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
   # Increment atomically; concurrent runs must not overwrite each other’s counts.
   def record_run(%Prima.Actor{} = actor, id, execution_id) do
     Errors.with_db_rescue("CronSchedule.record_run", fn ->
-      guarded(actor, id, &slot_held/1, fn schedule ->
+      guarded(actor, id, fn schedule ->
         now = DateTime.utc_now()
 
         from(s in Row, where: s.id == ^schedule.id)
@@ -274,11 +291,11 @@ defmodule Arca.CronSchedule do
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
   # Atomic increment, for the reason spelled out at `record_run/3`.
   def record_error(%Prima.Actor{} = actor, id, _reason) do
     Errors.with_db_rescue("CronSchedule.record_error", fn ->
-      guarded(actor, id, &slot_held/1, fn schedule ->
+      guarded(actor, id, fn schedule ->
         from(s in Row, where: s.id == ^schedule.id)
         |> Arca.Repo.update_all(
           set: [updated_at: DateTime.utc_now()],
@@ -292,17 +309,18 @@ defmodule Arca.CronSchedule do
   end
 
   @doc """
-  Soft-deletes a row with tenant-scoped lookup. A feed's row is written
-  only under the member's live slot (`:not_owner` otherwise).
+  Soft-deletes a row with tenant-scoped lookup. Every row, whatever its
+  kind, is written only under the member's live slot (`:not_owner`
+  otherwise).
   """
   @spec soft_delete(Prima.Actor.t(), String.t()) ::
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
   def soft_delete(%Prima.Actor{} = actor, id) do
     Errors.with_db_rescue("CronSchedule.soft_delete", fn ->
-      guarded(actor, id, &feed_held/1, fn schedule ->
+      guarded(actor, id, fn schedule ->
         schedule
         |> Row.delete_changeset(DateTime.utc_now())
         |> Arca.Repo.update()
@@ -338,7 +356,7 @@ defmodule Arca.CronSchedule do
   Binds a feed in the actor's athanor: `binding` (a `Prima.Feed.Binding`),
   the pinned version the caller resolved for it (`resolved_reference`), the
   profile it fires under (`profile_id`), and `cap`, the most live feeds the
-  athanor may hold, which the caller names (`Opus.Feeds`).
+  athanor may hold, which the caller names (`Opus.Feeds`), and 0 no ceiling.
 
   The row's id is a new binding id (`Prima.UUID7.generate_id("feed")`). It
   runs `Prima.Feed.input/1` on `Prima.Feed.cron/1`, never overlapping
@@ -548,6 +566,46 @@ defmodule Arca.CronSchedule do
     {:error, {:validation, errors}}
   end
 
+  # ---- schedule internals -----------------------------------------------------
+
+  # The row a create writes, checked before any lock is taken, so a
+  # malformed create waits on nothing. The athanor is the actor's, whatever
+  # `attrs` names.
+  defp schedule_row(actor, attrs) do
+    with {:ok, cap} <- schedule_cap(Map.fetch(attrs, :cap)) do
+      now = DateTime.utc_now()
+
+      row =
+        attrs
+        |> Map.delete(:cap)
+        |> Map.put_new(:id, Prima.UUID7.generate_id("sched"))
+        |> Map.put_new(:created_at, now)
+        |> Map.put_new(:updated_at, now)
+
+      row = QueryHelpers.stamp_tenant!(actor, row)
+
+      case Row.create_changeset(row) do
+        %Ecto.Changeset{valid?: true} -> {:ok, row, cap}
+        changeset -> mapped_validation({:error, changeset})
+      end
+    end
+  end
+
+  defp schedule_cap({:ok, cap}), do: feed_cap(cap)
+  defp schedule_cap(:error), do: feed_cap(nil)
+
+  # In the create's transaction: the athanor's row is locked before the
+  # count, so creates in one athanor count and insert one at a time.
+  defp insert_schedule(actor, row, cap) do
+    with {:ok, _athanor} <- lock_athanor(actor),
+         :ok <- below_cap(actor, "schedule", cap) do
+      row
+      |> Row.create_changeset()
+      |> Arca.Repo.insert()
+      |> mapped_validation()
+    end
+  end
+
   # ---- feed internals ---------------------------------------------------------
 
   # The row a bind writes, but for the clock's columns, which the insert's
@@ -619,9 +677,10 @@ defmodule Arca.CronSchedule do
     end
   end
 
-  # A feed write: one locking transaction whose first step checks `slot`,
-  # the member's slot, on the database's clock, so a takeover that
-  # committed first refuses it and one that starts later waits for it.
+  # A feed write or a schedule's create: one locking transaction whose
+  # first step checks `slot`, the member's slot, on the database's clock,
+  # so a takeover that committed first refuses it and one that starts
+  # later waits for it.
   # `fenced/2` reads the slot now; `fenced/3` takes the one a claimant read
   # when it claimed the seq the write is for.
   defp fenced(tag, write) do
@@ -654,13 +713,12 @@ defmodule Arca.CronSchedule do
 
   # A generic writer's transaction (`update/3`, `record_run/3`,
   # `record_error/3`, `soft_delete/2`): the row is read and locked
-  # tenant-scoped, then `fence` decides on the locked row whether the
-  # member's slot is checked, in the same transaction and before anything
-  # is written: `slot_held/1` for every row, `feed_held/1` for a feed's.
-  defp guarded(actor, id, fence, write) do
+  # tenant-scoped, then the member's slot is checked, in the same
+  # transaction and before anything is written, whatever the row's kind.
+  defp guarded(actor, id, write) do
     Arca.Repo.locking_transaction(fn ->
       with {:ok, row} <- locked_tenant(actor, id),
-           :ok <- fence.(row) do
+           :ok <- slot_fence() do
         write.(row) |> committed()
       else
         {:error, reason} -> Arca.Repo.rollback(reason)
@@ -678,11 +736,6 @@ defmodule Arca.CronSchedule do
       row -> {:ok, row}
     end
   end
-
-  defp slot_held(%Row{}), do: slot_fence()
-
-  defp feed_held(%Row{kind: "feed"}), do: slot_fence()
-  defp feed_held(%Row{}), do: :ok
 
   @doc false
   # The fence a write passes when it carries no slot of its own, whatever
@@ -704,7 +757,7 @@ defmodule Arca.CronSchedule do
   # count, so binds into one athanor count and insert one at a time.
   defp insert_feed(actor, row, cap) do
     with {:ok, _athanor} <- lock_athanor(actor),
-         :ok <- below_cap(actor, cap) do
+         :ok <- below_cap(actor, "feed", cap) do
       now = Arca.ServerMetaStorage.now!()
 
       row
@@ -725,14 +778,22 @@ defmodule Arca.CronSchedule do
     end
   end
 
-  defp below_cap(actor, cap) do
+  # The athanor's non-deleted rows of `kind`, read under its row lock: a
+  # paused row holds its place, a deleted one holds none. A cap of 0 is no
+  # ceiling, the meaning the operator's setting gives it, and counts nothing.
+  defp below_cap(_actor, _kind, 0), do: :ok
+
+  defp below_cap(actor, kind, cap) do
     count =
-      from(s in Row, where: s.kind == "feed" and s.status != "deleted", select: count(s.id))
+      from(s in Row, where: s.kind == ^kind and s.status != "deleted", select: count(s.id))
       |> QueryHelpers.where_tenant(actor)
       |> Arca.Repo.one()
 
-    if (count || 0) < cap, do: :ok, else: {:error, :feed_cap}
+    if (count || 0) < cap, do: :ok, else: {:error, cap_refusal(kind)}
   end
+
+  defp cap_refusal("feed"), do: :feed_cap
+  defp cap_refusal("schedule"), do: :schedule_cap
 
   defp feed_inserted({:ok, row}), do: {:ok, row}
 

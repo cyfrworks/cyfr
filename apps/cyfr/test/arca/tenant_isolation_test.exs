@@ -255,23 +255,25 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
-        Arca.CronSchedule.create(%{
+        Arca.CronSchedule.create(Sanctum.Context.actor(ctx_a), %{
           user_id: ctx_a.user_id,
           name: "sched-a",
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
-          athanor_id: ctx_a.athanor_id
+          athanor_id: ctx_a.athanor_id,
+          cap: 1_000
         })
 
       {:ok, _} =
-        Arca.CronSchedule.create(%{
+        Arca.CronSchedule.create(Sanctum.Context.actor(ctx_b), %{
           user_id: ctx_b.user_id,
           name: "sched-b",
           cron_expression: "*/10 * * * *",
           reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
-          athanor_id: ctx_b.athanor_id
+          athanor_id: ctx_b.athanor_id,
+          cap: 1_000
         })
 
       {:ok, a_schedules} = Arca.CronSchedule.list(Sanctum.Context.actor(ctx_a))
@@ -287,13 +289,14 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
-        Arca.CronSchedule.create(%{
+        Arca.CronSchedule.create(Sanctum.Context.actor(ctx_a), %{
           user_id: ctx_a.user_id,
           name: "count-sched-a",
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
-          athanor_id: ctx_a.athanor_id
+          athanor_id: ctx_a.athanor_id,
+          cap: 1_000
         })
 
       assert Arca.CronSchedule.count_active(Sanctum.Context.actor(ctx_a), "schedule") == {:ok, 1}
@@ -304,13 +307,14 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, sched} =
-        Arca.CronSchedule.create(%{
+        Arca.CronSchedule.create(Sanctum.Context.actor(ctx_a), %{
           user_id: ctx_a.user_id,
           name: "get-sched-a",
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
-          athanor_id: ctx_a.athanor_id
+          athanor_id: ctx_a.athanor_id,
+          cap: 1_000
         })
 
       # A can find by name

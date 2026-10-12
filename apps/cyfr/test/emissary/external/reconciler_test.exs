@@ -61,6 +61,7 @@ defmodule Emissary.External.ReconcilerTest do
 
     {:ok, _} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "refsrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -93,6 +94,7 @@ defmodule Emissary.External.ReconcilerTest do
 
     {:ok, _} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "oldnamesrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -119,6 +121,7 @@ defmodule Emissary.External.ReconcilerTest do
 
     {:ok, _} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "bearersrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -146,6 +149,7 @@ defmodule Emissary.External.ReconcilerTest do
 
     {:ok, %{epoch: 1}} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "envsrv",
         transport: "stdio",
         url: nil,
@@ -211,6 +215,7 @@ defmodule Emissary.External.ReconcilerTest do
 
       {:ok, server} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: "slotsrv",
           url: "https://127.0.0.1:9/mcp",
           config_json:
@@ -284,6 +289,7 @@ defmodule Emissary.External.ReconcilerTest do
         ] do
       {:ok, _} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: name,
           url: "https://127.0.0.1:9/mcp",
           config_json: Jason.encode!(%{"headers" => headers, "timeout_ms" => 1_000})
@@ -333,6 +339,7 @@ defmodule Emissary.External.ReconcilerTest do
 
     {:ok, _} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "quietsrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -458,6 +465,7 @@ defmodule Emissary.External.ReconcilerTest do
     defp swept_server!(ctx, name, entry_name) do
       {:ok, _} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: name,
           url: "https://127.0.0.1:9/mcp",
           config_json:

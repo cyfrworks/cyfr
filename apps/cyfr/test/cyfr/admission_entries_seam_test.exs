@@ -474,7 +474,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     reference = "reagent:local.#{unique("seam-missing")}:1.0.0"
 
     {:ok, _schedule} =
-      Arca.CronSchedule.create(%{
+      Arca.CronSchedule.create(Sanctum.Context.actor(ctx), %{
         user_id: ctx.user_id,
         athanor_id: ctx.athanor_id,
         name: unique("seam-schedule"),
@@ -482,7 +482,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
         reference: reference,
         resolved_reference: reference,
         profile_id: "prof_seam",
-        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second)
+        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second),
+        cap: 1_000
       })
 
     start_supervised!(Opus.Schedules.Scheduler)

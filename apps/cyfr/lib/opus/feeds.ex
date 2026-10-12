@@ -10,10 +10,11 @@ defmodule Opus.Feeds do
   (`Opus.Schedules.Scheduler`), and a result is kept only when this
   module accepts it.
 
-    * `max_per_athanor/0` is the most live feeds an athanor holds, a
-      structural bound counted under the athanor's lock in the transaction
-      that inserts a feed (`Arca.CronSchedule.create_feed/2`, which takes
-      it as `cap:`), and counted apart from the schedules' own.
+    * The most live feeds an athanor holds is the platform setting
+      `max_feeds_per_athanor` (0 is no ceiling), read at each bind and
+      counted under the athanor's lock in the transaction that inserts a
+      feed (`Arca.CronSchedule.create_feed/2`, which takes it as `cap:`),
+      apart from the schedules' own.
     * `spec/1` reads a row's stored binding back.
     * `list/1` and `get/2` answer the caller's athanor's live feeds, each
       as `t:feed/0`.
@@ -77,8 +78,6 @@ defmodule Opus.Feeds do
 
   require Logger
 
-  @max_per_athanor 10
-
   # The sentence of the reason `"error"`, which is this module's and not
   # one of `Prima.Feed.reasons/0`.
   @error_sentence "the operation answered an error, or no envelope"
@@ -107,10 +106,6 @@ defmodule Opus.Feeds do
           required(:reason) => String.t(),
           optional(:status) => integer()
         }
-
-  @doc "The most live feeds one athanor holds."
-  @spec max_per_athanor() :: pos_integer()
-  def max_per_athanor, do: @max_per_athanor
 
   @doc """
   The sentence a refused result's reason reads as: `Prima.Feed.reasons/0`'s,
@@ -429,15 +424,24 @@ defmodule Opus.Feeds do
     end
   end
 
+  # The cap is read at the bind and counted in the insert's own
+  # transaction; a cap the store cannot answer refuses, with no fallback.
   defp create(ctx, binding, pinned, profile_id) do
-    attrs = %{
-      binding: binding,
-      resolved_reference: pinned,
-      profile_id: profile_id,
-      cap: @max_per_athanor
-    }
+    with {:ok, cap} <- feed_cap() do
+      attrs = %{binding: binding, resolved_reference: pinned, profile_id: profile_id, cap: cap}
+      created(CronSchedule.create_feed(Context.actor(ctx), attrs), binding, cap)
+    end
+  end
 
-    case CronSchedule.create_feed(Context.actor(ctx), attrs) do
+  defp feed_cap do
+    case Arca.PlatformSettings.effective("max_feeds_per_athanor") do
+      {:ok, cap} when is_integer(cap) and cap >= 0 -> {:ok, cap}
+      {:error, :unavailable} -> {:error, {:unavailable, "Feeds"}}
+    end
+  end
+
+  defp created(answer, binding, cap) do
+    case answer do
       {:ok, row} ->
         {:ok, row}
 
@@ -447,7 +451,7 @@ defmodule Opus.Feeds do
            class: :forbidden,
            reason: :feed_cap,
            message:
-             "This athanor holds #{@max_per_athanor} live feeds, the most it may; " <>
+             "This athanor holds #{cap} live feeds, the most it may; " <>
                "remove one to bind another (feed_cap)"
          }}
 

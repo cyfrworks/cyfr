@@ -42,6 +42,7 @@ defmodule Arca.ThreadStorage do
 
   alias Arca.QueryHelpers
   alias Arca.Repo
+  alias Arca.Schemas.Athanor
   alias Arca.Schemas.Thread
   alias Arca.Schemas.Message
 
@@ -104,33 +105,40 @@ defmodule Arca.ThreadStorage do
   @doc """
   Open a new thread in the context's athanor, attributed to its user.
 
+  A thread is a row any member's client can mint from the wire, so the
+  athanor's count is held to the operator's `max_threads_per_athanor`
+  ceiling, asked through `Prima.Caps`. One locking transaction locks the
+  athanor's row, counts every thread the athanor holds, asks the cap and
+  inserts, so creates racing for the last place leave one row in it. An
+  athanor with no row of its own has nothing to lock: its create counts
+  and inserts in the same transaction, unlocked on PostgreSQL. A refusal
+  rolls back and is the port's answer unchanged:
+  `{:limit_reached, :max_threads_per_athanor, cap}` at the ceiling,
+  `{:cap_unverifiable, :max_threads_per_athanor}` when the cap or the
+  count cannot be read.
+
   The creator starts out following it — a thread unfollowed by its own
   author would be born invisible — and everyone else follows it
   themselves. There is deliberately no subscriber list to pass: a client
-  must not follow other members.
+  must not follow other members. The follow is written after the thread
+  commits and is best effort.
   """
   @spec create(Prima.Actor.t(), map()) ::
-          {:ok, map()} | {:error, :no_athanor | {:invalid, map()} | :database_error}
+          {:ok, map()}
+          | {:error,
+             :no_athanor
+             | {:invalid, map()}
+             | {:limit_reached, :max_threads_per_athanor, pos_integer()}
+             | {:cap_unverifiable, :max_threads_per_athanor}
+             | :database_error}
   def create(actor, attrs \\ %{})
 
   def create(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.create", fn ->
-      # A thread is a row any member's client can mint from the wire, so
-      # the athanor's count is held to the operator's cap like its DMs are.
-      with :ok <-
-             Prima.Caps.check_counted(actor, :max_threads_per_athanor, fn ->
-               {:ok, count(actor)}
-             end),
-           {:ok, thread} <-
-             %Thread{}
-             |> Thread.changeset(%{
-               id: attrs[:id] || Prima.UUID7.generate_id("thread"),
-               athanor_id: actor.athanor_id,
-               title: attrs[:title] || @default_title,
-               created_by: actor.user_id || @system_author
-             })
-             |> Repo.insert() do
+      with {:ok, thread} <- Repo.locking_transaction(fn -> insert_thread(actor, attrs) end) do
+        # After the commit: a follow that fails inside the transaction
+        # would abort it on PostgreSQL and lose the thread with it.
         subscribe_creator(actor, thread)
         {:ok, thread}
       end
@@ -140,7 +148,40 @@ defmodule Arca.ThreadStorage do
 
   def create(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
 
-  # How many threads the athanor holds — read inside `create/2`'s rescue.
+  # In the create's transaction: the athanor's row is locked before the
+  # count, so creates into one athanor count and insert one at a time.
+  defp insert_thread(actor, attrs) do
+    lock_athanor(actor)
+
+    with :ok <-
+           Prima.Caps.check_counted(actor, :max_threads_per_athanor, fn ->
+             {:ok, count(actor)}
+           end),
+         {:ok, thread} <-
+           %Thread{}
+           |> Thread.changeset(%{
+             id: attrs[:id] || Prima.UUID7.generate_id("thread"),
+             athanor_id: actor.athanor_id,
+             title: attrs[:title] || @default_title,
+             created_by: actor.user_id || @system_author
+           })
+           |> Repo.insert() do
+      thread
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  # `threads.athanor_id` names no foreign key, so a create in an athanor
+  # with no row lands as it always has; only an athanor with a row has one
+  # to hold.
+  defp lock_athanor(%Prima.Actor{athanor_id: athanor_id}) do
+    from(a in Athanor, where: a.id == ^athanor_id, select: a.id)
+    |> QueryHelpers.for_update()
+    |> Repo.one()
+  end
+
+  # How many threads the athanor holds, read under its row lock.
   defp count(%Prima.Actor{} = actor) do
     Repo.aggregate(from(c in Thread, where: c.athanor_id == ^actor.athanor_id), :count)
   end

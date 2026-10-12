@@ -516,6 +516,86 @@ defmodule Sanctum.Tenancy.MembersTest do
     end
   end
 
+  describe "add/3 at the member cap" do
+    test "only a new seat is refused; a seat or an invitation already held writes nothing and stands",
+         %{athanor: athanor} do
+      Cyfr.Test.Settings.put("max_members_per_group", 3)
+
+      n = System.unique_integer([:positive])
+      seated = person(n)
+      invited = "held-#{n}@example.com"
+      held = identifier()
+
+      assert {:ok, :added} = Members.add(athanor, [user_id: seated.id], "system")
+      assert {:ok, :invited} = Members.add(athanor, [email: invited], "system")
+      assert {:ok, :invited} = Members.add(athanor, [identifier: held], "system")
+
+      full = {:error, {:limit_reached, :max_members_per_group, 3}}
+      assert ^full = Members.add(athanor, [user_id: person(n + 1).id], "system")
+      assert ^full = Members.add(athanor, [email: "new-#{n}@example.com"], "system")
+      assert ^full = Members.add(athanor, [identifier: identifier()], "system")
+
+      # The cap is counted where a seat is written, and these write none.
+      assert {:ok, :added} = Members.add(athanor, [user_id: seated.id], "system")
+      assert {:ok, :invited} = Members.add(athanor, [email: invited], "system")
+      assert {:ok, :invited} = Members.add(athanor, [identifier: held], "system")
+
+      assert {:ok, 3} = Arca.Members.count_seats(Prima.Actor.in_athanor(athanor.id))
+    end
+
+    test "the email arm answers its own refusals before the cap's", %{athanor: athanor} do
+      Cyfr.Test.Settings.put("max_members_per_group", 1)
+
+      n = System.unique_integer([:positive])
+      assert {:ok, :added} = Members.add(athanor, [user_id: person(n).id], "system")
+
+      shared = "shared-#{n}@example.com"
+
+      for i <- 1..2 do
+        {:ok, _} =
+          Sanctum.Tenancy.Users.upsert_from_provider(%{
+            id: "oidcc|https://idp.example|shared-#{n}-#{i}",
+            provider: "oidcc",
+            email: shared,
+            verified: true
+          })
+      end
+
+      unproven = "unproven-#{n}@example.com"
+
+      {:ok, _} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: "oidcc|https://idp.example|unproven-#{n}",
+          provider: "oidcc",
+          email: unproven,
+          verified: false
+        })
+
+      assert {:error, :ambiguous_email} = Members.add(athanor, [email: shared], "system")
+      assert {:error, :email_unverified} = Members.add(athanor, [email: unproven], "system")
+
+      assert {:error, {:limit_reached, :max_members_per_group, 1}} =
+               Members.add(athanor, [email: "stranger-#{n}@example.com"], "system")
+
+      assert {:ok, 1} = Arca.Members.count_seats(Prima.Actor.in_athanor(athanor.id))
+    end
+
+    test "a seat written by another path is not counted against the cap", %{athanor: athanor} do
+      Cyfr.Test.Settings.put("max_members_per_group", 1)
+
+      assert {:ok, _} = Members.create(attrs(athanor.id))
+      assert {:ok, _} = Members.create(attrs(athanor.id))
+
+      assert {:ok, _} =
+               Members.ensure("user_" <> Ecto.UUID.generate(),
+                 scope: "athanor",
+                 athanor_id: athanor.id
+               )
+
+      assert {:ok, 3} = Arca.Members.count_seats(Prima.Actor.in_athanor(athanor.id))
+    end
+  end
+
   describe "activate_invited/1" do
     test "activates every invitation for the verified email in one pass and consumes the email",
          %{athanor: athanor} do
@@ -1118,6 +1198,200 @@ defmodule Sanctum.Tenancy.MembersTest do
       _postgres ->
         Arca.Repo.query!("DROP TRIGGER #{name} ON #{table}")
         Arca.Repo.query!("DROP FUNCTION #{name}()")
+    end
+  end
+end
+
+defmodule Sanctum.Tenancy.MembersCapRaceTest do
+  @moduledoc """
+  Invitations racing for a group's last seats under `max_members_per_group`,
+  each `Sanctum.Tenancy.Members.add/3` on a connection of its own: inside
+  the sandbox one shared connection would serialize them. On PostgreSQL
+  every add is held behind a transaction that locks the athanor's row
+  until each is seen waiting on it, so all of them race for the row when
+  it is let go; SQLite's one write lock admits one transaction at a time,
+  so there they run as concurrent processes.
+
+  The cap is a committed setting row, because a row written inside a
+  test's sandbox transaction is invisible to the adds' own connections and
+  the accessor's cache would expire under them; the case restores the row
+  it found and drops the cached value when it ends. It works in an athanor
+  of its own, whose rows, and the door requests its invitations queued, it
+  deletes when it ends.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.PlatformSettings, as: Store
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @key "max_members_per_group"
+  @seats 5
+  @extra 7
+
+  setup do
+    n = System.unique_integer([:positive])
+    athanor_id = "ath_members_race_#{n}"
+    emails = for i <- 1..(@seats + @extra), do: "race-#{n}-#{i}@example.com"
+
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor_id) end)
+
+    # A seat the group already holds, as a group's birth seat is: the cap
+    # counts it, so @seats more fit under a cap of @seats + 1.
+    {:ok, _} =
+      unboxed(fn ->
+        Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{
+          email: "held-#{n}@example.com",
+          status: "invited",
+          added_by: "system"
+        })
+      end)
+
+    prior =
+      unboxed(fn ->
+        case Store.get(@key) do
+          {:ok, %{value: value}} -> {:set, value}
+          {:error, :not_found} -> :unset
+        end
+      end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        {:ok, %{revision: revision}} = Store.all()
+
+        {:ok, _} =
+          case prior do
+            {:set, value} -> Store.put(@key, value, revision, "test")
+            :unset -> Store.delete(@key, revision)
+          end
+
+        Arca.Repo.delete_all(
+          from(m in Arca.Schemas.Membership, where: m.athanor_id == ^athanor_id)
+        )
+
+        Arca.Repo.delete_all(
+          from(e in Arca.Schemas.ServerAllowlistEntry,
+            where: e.kind == "email" and e.value in ^emails
+          )
+        )
+
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id))
+      end)
+
+      Store.invalidate(@key)
+    end)
+
+    {:ok, athanor_id: athanor_id, emails: emails}
+  end
+
+  test "concurrent adds stop at the member cap", %{athanor_id: athanor_id, emails: emails} do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    {:ok, held} = unboxed(fn -> Arca.Members.count_seats(actor) end)
+    cap = held + @seats
+
+    unboxed(fn ->
+      {:ok, %{revision: revision}} = Store.all()
+      {:ok, _} = Store.put(@key, cap, revision, "test")
+    end)
+
+    Store.invalidate(@key)
+    {:ok, athanor} = unboxed(fn -> Sanctum.Tenancy.Athanors.get(athanor_id) end)
+    test = self()
+
+    add = fn email ->
+      Task.async(fn ->
+        unboxed(fn ->
+          if postgres?(), do: send(test, {:backend, backend_pid()})
+          Sanctum.Tenancy.Members.add(athanor, [email: email], "system")
+        end)
+      end)
+    end
+
+    answers =
+      if postgres?() do
+        holder =
+          holding(fn ->
+            from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one()
+          end)
+
+        adders = Enum.map(emails, add)
+
+        for _ <- adders do
+          assert_receive {:backend, backend}, 15_000
+          await_lock_wait(backend)
+        end
+
+        release(holder)
+        Enum.map(adders, &Task.await(&1, 30_000))
+      else
+        emails |> Enum.map(add) |> Enum.map(&Task.await(&1, 30_000))
+      end
+
+    assert Enum.count(answers, &(&1 == {:ok, :invited})) == @seats
+
+    assert Enum.count(answers, &(&1 == {:error, {:limit_reached, :max_members_per_group, cap}})) ==
+             @extra
+
+    assert {:ok, ^cap} = unboxed(fn -> Arca.Members.count_seats(actor) end)
+  end
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
+
+  # Run `lock` in a transaction of its own and hold it open until
+  # `release/1`.
+  defp holding(lock) do
+    test = self()
+
+    task = Task.async(fn -> unboxed(fn -> hold(lock, test) end) end)
+    assert_receive {:holding, _pid}, 15_000
+    task
+  end
+
+  defp hold(lock, test) do
+    Arca.Repo.transaction(fn ->
+      result = lock.()
+      send(test, {:holding, self()})
+
+      receive do
+        :commit -> result
+      end
+    end)
+  end
+
+  defp release(task) do
+    send(task.pid, :commit)
+    Task.await(task, 30_000)
+  end
+
+  # The backend of the current connection, so another can watch it wait.
+  defp backend_pid do
+    %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+    pid
+  end
+
+  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
+  # by `tries`, never a timing.
+  defp await_lock_wait(pid, tries \\ 500)
+
+  defp await_lock_wait(_pid, 0), do: flunk("the waiting backend never waited on a lock")
+
+  defp await_lock_wait(pid, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
+      end)
+
+    if rows == [["Lock"]] do
+      :ok
+    else
+      Process.sleep(20)
+      await_lock_wait(pid, tries - 1)
     end
   end
 end

@@ -13,6 +13,11 @@ defmodule Opus.Schedules.Provider do
   Every action reads rows of kind `schedule` only: a feed shares the
   table (`Opus.Feeds`), but its id or name is `not_found` here, `list`
   omits it, and the schedules' cap counts schedules alone.
+
+  The cap is the platform setting `max_schedules_per_athanor` (0 is no
+  ceiling), read at each create and handed to `Arca.CronSchedule.create/2`,
+  which counts the athanor's non-deleted schedules, a paused one included,
+  and inserts in one transaction under the athanor's row lock.
   """
 
   # The one kind of row this tool reads and writes.
@@ -30,8 +35,6 @@ defmodule Opus.Schedules.Provider do
   alias Sanctum.{Context, Refusals}
 
   require Logger
-
-  @max_schedules_per_athanor 25
 
   def resources, do: []
   def resource_templates, do: []
@@ -224,7 +227,6 @@ defmodule Opus.Schedules.Provider do
     with :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
          :ok <- validate_cron(args["cron_expression"]),
          :ok <- validate_concurrency(args["concurrency"]),
-         :ok <- validate_limit(ctx),
          {:ok, reference, resolved_reference} <-
            resolve_for_schedule(ctx, args["reference"], "create schedule"),
          :ok <- verify_component_exists(ctx, resolved_reference),
@@ -246,20 +248,12 @@ defmodule Opus.Schedules.Provider do
         resolved_reference: resolved_reference,
         input: input_json,
         metadata: metadata_json,
-        athanor_id: ctx.athanor_id,
         next_run_at: next_run,
         profile_id: args["profile_id"],
         concurrency: args["concurrency"] || "forbid"
       }
 
-      case Arca.CronSchedule.create(attrs) do
-        {:ok, schedule} ->
-          Opus.Schedules.Scheduler.add(schedule.id)
-          {:ok, format_schedule(schedule)}
-
-        {:error, reason} ->
-          {:error, format_store_error(reason)}
-      end
+      insert(ctx, attrs)
     end
   end
 
@@ -351,7 +345,7 @@ defmodule Opus.Schedules.Provider do
             {:ok, format_schedule(updated)}
 
           {:error, reason} ->
-            {:error, format_store_error(reason, id)}
+            store_refusal(reason, id)
         end
       end
     else
@@ -377,7 +371,7 @@ defmodule Opus.Schedules.Provider do
             {:ok, format_schedule(updated)}
 
           {:error, reason} ->
-            {:error, format_store_error(reason, id)}
+            store_refusal(reason, id)
         end
     end
   end
@@ -410,7 +404,7 @@ defmodule Opus.Schedules.Provider do
             {:ok, format_schedule(updated)}
 
           {:error, reason} ->
-            {:error, format_store_error(reason, id)}
+            store_refusal(reason, id)
         end
     end
   end
@@ -432,7 +426,7 @@ defmodule Opus.Schedules.Provider do
             {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
 
           {:error, reason} ->
-            {:error, format_store_error(reason, id)}
+            store_refusal(reason, id)
         end
     end
   end
@@ -518,18 +512,29 @@ defmodule Opus.Schedules.Provider do
   defp validate_concurrency(value) when value in ["forbid", "allow"], do: :ok
   defp validate_concurrency(_), do: {:error, "concurrency must be forbid or allow"}
 
-  defp validate_limit(ctx) do
-    # A cap check the store cannot answer refuses — a default of zero
-    # would wave every create through during an outage.
-    case Arca.CronSchedule.count_active(Sanctum.Context.actor(ctx), @kind) do
-      {:ok, count} when count >= @max_schedules_per_athanor ->
-        {:error, "Schedule limit reached (#{@max_schedules_per_athanor} per athanor)"}
+  # The cap is read at the write and counted in the insert's own
+  # transaction. A cap the store cannot answer refuses: the setting refuses
+  # a stale value, and no fallback number stands in for it.
+  defp insert(ctx, attrs) do
+    with {:ok, cap} <- schedule_cap() do
+      case Arca.CronSchedule.create(Sanctum.Context.actor(ctx), Map.put(attrs, :cap, cap)) do
+        {:ok, schedule} ->
+          Opus.Schedules.Scheduler.add(schedule.id)
+          {:ok, format_schedule(schedule)}
 
-      {:ok, _count} ->
-        :ok
+        {:error, :schedule_cap} ->
+          {:error, "Schedule limit reached (#{cap} per athanor)"}
 
-      {:error, reason} ->
-        {:error, format_store_error(reason)}
+        {:error, reason} ->
+          store_refusal(reason, nil)
+      end
+    end
+  end
+
+  defp schedule_cap do
+    case Arca.PlatformSettings.effective("max_schedules_per_athanor") do
+      {:ok, cap} when is_integer(cap) and cap >= 0 -> {:ok, cap}
+      {:error, :unavailable} -> {:error, format_store_error(:database_error)}
     end
   end
 
@@ -583,6 +588,11 @@ defmodule Opus.Schedules.Provider do
   end
 
   # The storage layer answers typed reasons; this seam renders them.
+  # A write's refusal: a member that lost its slot is answered in the
+  # refusal vocabulary, as a feed's write is; the rest as sentences.
+  defp store_refusal(reason, _id) when reason in [:not_owner, :no_athanor], do: {:error, reason}
+  defp store_refusal(reason, id), do: {:error, format_store_error(reason, id)}
+
   defp format_store_error(reason, id \\ nil)
   defp format_store_error(:not_found, nil), do: "Schedule not found"
   defp format_store_error(:not_found, id), do: "Schedule not found: #{id}"
@@ -620,7 +630,7 @@ defmodule Opus.Schedules.Provider do
       {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, {tag, _detail}} = refused when tag in @binding_refusals -> refused
       {:error, %Prima.Refusal{}} = refused -> refused
-      {:error, reason} -> {:error, format_store_error(reason, id)}
+      {:error, reason} -> store_refusal(reason, id)
     end
   end
 

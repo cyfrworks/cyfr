@@ -348,3 +348,175 @@ defmodule Arca.ThreadStorageTest do
     assert {:ok, _} = Threads.create(other, %{title: "Theirs"})
   end
 end
+
+defmodule Arca.ThreadStorageRaceTest do
+  @moduledoc """
+  Creates racing for an athanor's last thread places, on connections of
+  their own: inside the sandbox one shared connection would serialize
+  them. On PostgreSQL every create is held behind a transaction that locks
+  the athanor's row until each is seen waiting, so all of them race when
+  it is let go; SQLite's one write lock admits one transaction at a time,
+  so there they run as concurrent processes. The case works in an athanor
+  of its own, whose rows it deletes when it ends.
+
+  The ceiling is a stored setting, and a row written in a test's sandbox
+  transaction is invisible to the creates' own connections, so it is
+  written outside the sandbox too, with the node's cached value dropped
+  so the creates read it, and deleted again when the case ends.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.PlatformSettings, as: Store
+  alias Arca.QueryHelpers
+  alias Arca.Schemas.{Athanor, Thread, ThreadSubscription}
+  alias Arca.Test.Actor
+  alias Arca.ThreadStorage, as: Threads
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @key "max_threads_per_athanor"
+  @cap 4
+  @creates 12
+
+  setup do
+    athanor = "ath_threads_race_#{System.unique_integer([:positive])}"
+
+    unboxed(fn ->
+      Actor.ensure_athanor_row(athanor)
+      # The case owns the setting's row outright: it stores one and
+      # deletes it, so there must be none to restore.
+      {:error, :not_found} = Store.get(@key)
+      {:ok, %{revision: revision}} = Store.all()
+      {:ok, _} = Store.put(@key, @cap, revision, "test")
+    end)
+
+    Store.invalidate(@key)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        {:ok, %{revision: revision}} = Store.all()
+        {:ok, _} = Store.delete(@key, revision)
+
+        Arca.Repo.delete_all(from(s in ThreadSubscription, where: s.athanor_id == ^athanor))
+
+        Arca.Repo.delete_all(from(t in Thread, where: t.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(a in Athanor, where: a.id == ^athanor))
+      end)
+
+      Store.invalidate(@key)
+    end)
+
+    {:ok, actor: Actor.local(athanor_id: athanor)}
+  end
+
+  test "concurrent creates stop at the athanor's thread cap", %{actor: actor} do
+    test = self()
+
+    create = fn i ->
+      Task.async(fn ->
+        unboxed(fn ->
+          if postgres?(), do: send(test, {:backend, backend_pid()})
+          Threads.create(actor, %{title: "Race #{i}"})
+        end)
+      end)
+    end
+
+    answers =
+      if postgres?() do
+        # The holder also holds the threads table against inserts, so a
+        # create that counted without waiting for the athanor's row still
+        # waits before its row lands: every create is held, whichever
+        # statement holds it, until all of them are.
+        holder =
+          holding(fn ->
+            from(a in Athanor, where: a.id == ^actor.athanor_id)
+            |> QueryHelpers.for_update()
+            |> Arca.Repo.one()
+
+            Arca.Repo.query!("LOCK TABLE threads IN SHARE MODE")
+          end)
+
+        creators = for i <- 1..@creates, do: create.(i)
+
+        for _ <- creators do
+          assert_receive {:backend, backend}, 15_000
+          await_lock_wait(backend)
+        end
+
+        release(holder)
+        Enum.map(creators, &Task.await(&1, 30_000))
+      else
+        for(i <- 1..@creates, do: create.(i)) |> Enum.map(&Task.await(&1, 30_000))
+      end
+
+    refused = {:error, {:limit_reached, :max_threads_per_athanor, @cap}}
+    assert Enum.count(answers, &match?({:ok, _}, &1)) == @cap
+    assert Enum.count(answers, &(&1 == refused)) == @creates - @cap
+
+    assert unboxed(fn ->
+             Arca.Repo.aggregate(
+               from(t in Thread, where: t.athanor_id == ^actor.athanor_id),
+               :count
+             )
+           end) == @cap
+  end
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
+
+  # Run `lock` in a transaction of its own and hold it open until
+  # `release/1`.
+  defp holding(lock) do
+    test = self()
+
+    task = Task.async(fn -> unboxed(fn -> hold(test, lock) end) end)
+
+    assert_receive {:holding, _pid}, 15_000
+    task
+  end
+
+  defp hold(test, lock) do
+    Arca.Repo.transaction(fn ->
+      result = lock.()
+      send(test, {:holding, self()})
+
+      receive do
+        :commit -> result
+      end
+    end)
+  end
+
+  defp release(task) do
+    send(task.pid, :commit)
+    Task.await(task, 30_000)
+  end
+
+  # The backend of the current connection, so another can watch it wait.
+  defp backend_pid do
+    %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+    pid
+  end
+
+  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
+  # by `tries`, never a timing.
+  defp await_lock_wait(pid, tries \\ 500)
+
+  defp await_lock_wait(_pid, 0), do: flunk("the waiting backend never waited on a lock")
+
+  defp await_lock_wait(pid, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
+      end)
+
+    if rows == [["Lock"]] do
+      :ok
+    else
+      Process.sleep(20)
+      await_lock_wait(pid, tries - 1)
+    end
+  end
+end

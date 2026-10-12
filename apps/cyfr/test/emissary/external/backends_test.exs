@@ -173,6 +173,7 @@ defmodule Emissary.External.BackendsTest do
   defp stdio_row(ctx, name, env \\ %{"GITHUB_TOKEN" => "vault:gh-token"}) do
     {:ok, row} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: name,
         transport: "stdio",
         url: nil,

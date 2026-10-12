@@ -453,7 +453,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @spec due_schedule!(String.t(), pos_integer()) :: map()
   def due_schedule!(athanor_id, seconds_ago) do
     {:ok, schedule} =
-      Arca.CronSchedule.create(%{
+      Arca.CronSchedule.create(actor(athanor_id), %{
         user_id: "usr_cluster",
         athanor_id: athanor_id,
         name: "cluster-#{System.unique_integer([:positive])}",
@@ -461,7 +461,8 @@ defmodule Cyfr.Cluster.Fixtures do
         reference: "reagent:local.cluster:1.0.0",
         resolved_reference: "reagent:local.cluster:1.0.0",
         profile_id: "prof_cluster",
-        next_run_at: DateTime.add(DateTime.utc_now(), -seconds_ago, :second)
+        next_run_at: DateTime.add(DateTime.utc_now(), -seconds_ago, :second),
+        cap: 1_000
       })
 
     %{id: schedule.id, next_run_at: schedule.next_run_at}

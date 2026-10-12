@@ -1249,10 +1249,11 @@ defmodule Opus.Schedules.OwnershipFenceTest do
         reference: "reagent:local.test:1.0.0",
         resolved_reference: "reagent:local.test:1.0.0",
         profile_id: @profile_id,
-        next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second)
+        next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second),
+        cap: 1_000
       }
       |> Map.merge(attrs)
-      |> CronSchedule.create()
+      |> then(&CronSchedule.create(Sanctum.Context.actor(ctx), &1))
 
     schedule
   end
@@ -1944,7 +1945,7 @@ defmodule Opus.Schedules.OwnershipFenceFeedsTest do
       binding: binding,
       resolved_reference: @pinned,
       profile_id: @profile_id,
-      cap: Opus.Feeds.max_per_athanor()
+      cap: 1_000
     })
   end
 

@@ -63,15 +63,16 @@ defmodule Arca.CronScheduleTest do
         name: "test-schedule-#{:rand.uniform(100_000)}",
         cron_expression: "*/5 * * * *",
         reference: "reagent:local.test:1.0.0",
-        profile_id: "prof_test"
+        profile_id: "prof_test",
+        cap: 1_000
       },
       overrides
     )
   end
 
-  describe "create/1" do
-    test "creates a schedule with valid attrs" do
-      assert {:ok, schedule} = CronSchedule.create(valid_attrs())
+  describe "create/2" do
+    test "creates a schedule with valid attrs", %{actor: actor} do
+      assert {:ok, schedule} = CronSchedule.create(actor, valid_attrs())
       assert schedule.user_id == "test_user"
       assert schedule.status == "active"
       assert schedule.run_count == 0
@@ -79,42 +80,95 @@ defmodule Arca.CronScheduleTest do
       assert String.starts_with?(schedule.id, "sched_")
     end
 
-    test "requires name" do
-      assert {:error, _} = CronSchedule.create(valid_attrs(%{name: nil}))
+    test "requires name", %{actor: actor} do
+      assert {:error, _} = CronSchedule.create(actor, valid_attrs(%{name: nil}))
     end
 
-    test "requires cron_expression" do
-      assert {:error, _} = CronSchedule.create(valid_attrs(%{cron_expression: nil}))
+    test "requires cron_expression", %{actor: actor} do
+      assert {:error, _} = CronSchedule.create(actor, valid_attrs(%{cron_expression: nil}))
     end
 
-    test "requires reference" do
-      assert {:error, _} = CronSchedule.create(valid_attrs(%{reference: nil}))
+    test "requires reference", %{actor: actor} do
+      assert {:error, _} = CronSchedule.create(actor, valid_attrs(%{reference: nil}))
+    end
+
+    test "refuses at the cap it is given, counting non-deleted schedules and no feed", %{
+      actor: actor
+    } do
+      for i <- 1..3, do: {:ok, _} = feed!(actor, "f#{i}")
+      {:ok, a} = CronSchedule.create(actor, valid_attrs(%{name: "a", cap: 2}))
+      {:ok, b} = CronSchedule.create(actor, valid_attrs(%{name: "b", cap: 2}))
+
+      # A paused schedule holds its place.
+      {:ok, _} = CronSchedule.update(actor, b.id, %{status: "paused"})
+
+      assert {:error, :schedule_cap} =
+               CronSchedule.create(actor, valid_attrs(%{name: "c", cap: 2}))
+
+      assert CronSchedule.count_active(actor, "schedule") == {:ok, 2}
+
+      # A deleted one holds none.
+      {:ok, _} = CronSchedule.soft_delete(actor, a.id)
+      assert {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "c", cap: 2}))
+
+      # A cap of 0 is no ceiling, as the operator's setting reads.
+      assert {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "d", cap: 0}))
+      assert CronSchedule.count_active(actor, "schedule") == {:ok, 3}
+    end
+
+    test "refuses a missing or malformed cap, writing nothing", %{actor: actor} do
+      for attrs <- [
+            Map.delete(valid_attrs(), :cap),
+            valid_attrs(%{cap: -1}),
+            valid_attrs(%{cap: "5"}),
+            valid_attrs(%{cap: nil})
+          ] do
+        assert {:error, {:validation, %{cap: [_]}}} = CronSchedule.create(actor, attrs),
+               inspect(Map.get(attrs, :cap))
+      end
+
+      assert CronSchedule.count_active(actor, "schedule") == {:ok, 0}
+    end
+
+    test "writes into the actor's athanor, whatever the attributes name", %{actor: actor} do
+      assert {:ok, row} = CronSchedule.create(actor, valid_attrs(%{athanor_id: "ath_other"}))
+      assert row.athanor_id == @athanor
+    end
+
+    test "refuses an actor with no athanor, and an athanor with no row", %{actor: actor} do
+      assert {:error, :no_athanor} =
+               CronSchedule.create(%{actor | athanor_id: nil}, valid_attrs())
+
+      homeless = %{actor | athanor_id: "ath_cron_rowless_#{System.unique_integer([:positive])}"}
+      assert {:error, :not_found} = CronSchedule.create(homeless, valid_attrs())
+      assert CronSchedule.count_active(homeless, "schedule") == {:ok, 0}
     end
   end
 
   describe "get_by_id_or_name/2" do
     test "finds by name", %{actor: actor} do
-      {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "find-me"}))
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "find-me"}))
       {:ok, found} = CronSchedule.get_by_id_or_name(actor, "find-me")
       assert found.id == schedule.id
     end
 
     test "finds by id", %{actor: actor} do
-      {:ok, schedule} = CronSchedule.create(valid_attrs())
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs())
       {:ok, found} = CronSchedule.get_by_id_or_name(actor, schedule.id)
       assert found.id == schedule.id
     end
 
     test "does not find deleted schedules", %{actor: actor} do
-      {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "deleted-one"}))
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "deleted-one"}))
       CronSchedule.soft_delete(actor, schedule.id)
 
       assert CronSchedule.get_by_id_or_name(actor, "deleted-one") ==
                {:error, :not_found}
     end
 
-    test "finds a fellow member's schedule in the same athanor (interchangeable)" do
-      {:ok, created} = CronSchedule.create(valid_attrs(%{name: "private", user_id: "other_user"}))
+    test "finds a fellow member's schedule in the same athanor (interchangeable)", %{actor: actor} do
+      {:ok, created} =
+        CronSchedule.create(actor, valid_attrs(%{name: "private", user_id: "other_user"}))
 
       actor = %Prima.Actor{
         athanor_id: @athanor,
@@ -133,9 +187,9 @@ defmodule Arca.CronScheduleTest do
 
   describe "list/2" do
     test "lists all non-deleted schedules in the athanor regardless of creator", %{actor: actor} do
-      {:ok, _} = CronSchedule.create(valid_attrs(%{name: "s1"}))
-      {:ok, s2} = CronSchedule.create(valid_attrs(%{name: "s2"}))
-      {:ok, _} = CronSchedule.create(valid_attrs(%{name: "other", user_id: "other_user"}))
+      {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "s1"}))
+      {:ok, s2} = CronSchedule.create(actor, valid_attrs(%{name: "s2"}))
+      {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "other", user_id: "other_user"}))
       CronSchedule.soft_delete(actor, s2.id)
 
       {:ok, schedules} = CronSchedule.list(actor)
@@ -150,8 +204,8 @@ defmodule Arca.CronScheduleTest do
 
   describe "active_schedules/0" do
     test "returns only active schedules", %{actor: actor} do
-      {:ok, _} = CronSchedule.create(valid_attrs(%{name: "active1"}))
-      {:ok, paused} = CronSchedule.create(valid_attrs(%{name: "paused1"}))
+      {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "active1"}))
+      {:ok, paused} = CronSchedule.create(actor, valid_attrs(%{name: "paused1"}))
       CronSchedule.update(actor, paused.id, %{status: "paused"})
 
       {:ok, active} = CronSchedule.active_schedules()
@@ -163,7 +217,7 @@ defmodule Arca.CronScheduleTest do
 
   describe "record_run/3" do
     test "increments run_count and sets last_run_at", %{actor: actor} do
-      {:ok, schedule} = CronSchedule.create(valid_attrs())
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs())
 
       assert {:ok, updated} =
                CronSchedule.record_run(actor, schedule.id, "exec_123")
@@ -176,7 +230,7 @@ defmodule Arca.CronScheduleTest do
 
   describe "record_error/3" do
     test "increments error_count", %{actor: actor} do
-      {:ok, schedule} = CronSchedule.create(valid_attrs())
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs())
 
       assert {:ok, updated} =
                CronSchedule.record_error(actor, schedule.id, "boom")
@@ -187,15 +241,15 @@ defmodule Arca.CronScheduleTest do
 
   describe "count_active/2" do
     test "counts non-deleted schedules", %{actor: actor} do
-      {:ok, _} = CronSchedule.create(valid_attrs(%{name: "c1"}))
-      {:ok, s2} = CronSchedule.create(valid_attrs(%{name: "c2"}))
+      {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "c1"}))
+      {:ok, s2} = CronSchedule.create(actor, valid_attrs(%{name: "c2"}))
       CronSchedule.soft_delete(actor, s2.id)
 
       assert CronSchedule.count_active(actor, "schedule") == {:ok, 1}
     end
 
     test "counts one kind: a feed is not a schedule", %{actor: actor} do
-      {:ok, _} = CronSchedule.create(valid_attrs(%{name: "c1"}))
+      {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "c1"}))
       {:ok, _} = feed!(actor, "c1")
       {:ok, removed} = feed!(actor, "c2")
       {:ok, _} = CronSchedule.remove_feed(actor, removed.id)
@@ -206,9 +260,10 @@ defmodule Arca.CronScheduleTest do
   end
 
   describe "kinds" do
-    test "create/1 always writes a schedule, whatever the attributes name", %{actor: actor} do
+    test "create/2 always writes a schedule, whatever the attributes name", %{actor: actor} do
       {:ok, row} =
         CronSchedule.create(
+          actor,
           valid_attrs(%{name: "not-a-feed", kind: "feed", feed_spec: "{}", feed_fire_seq: 9})
         )
 
@@ -219,7 +274,7 @@ defmodule Arca.CronScheduleTest do
     test "a feed may share a schedule's name, and a kind-scoped read tells them apart", %{
       actor: actor
     } do
-      {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "btc"}))
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "btc"}))
       assert {:ok, feed} = feed!(actor, "btc")
 
       assert {:ok, %{id: id}} = CronSchedule.get_by_id_or_name(actor, "btc", kind: "schedule")
@@ -291,7 +346,7 @@ defmodule Arca.CronScheduleTest do
     end
 
     test "refuses at the cap it is given, counting live feeds and no schedule", %{actor: actor} do
-      for i <- 1..3, do: {:ok, _} = CronSchedule.create(valid_attrs(%{name: "s#{i}"}))
+      for i <- 1..3, do: {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "s#{i}"}))
       {:ok, a} = feed!(actor, "a", 2)
       {:ok, _} = feed!(actor, "b", 2)
 
@@ -300,7 +355,8 @@ defmodule Arca.CronScheduleTest do
 
       {:ok, _} = CronSchedule.remove_feed(actor, a.id)
       assert {:ok, _} = feed!(actor, "c", 2)
-      assert {:error, :feed_cap} = feed!(actor, "d", 0)
+      # A cap of 0 is no ceiling, as the operator's setting reads.
+      assert {:ok, _} = feed!(actor, "d", 0)
     end
 
     test "refuses what it cannot write as a feed, before any row", %{actor: actor} do
@@ -381,7 +437,7 @@ defmodule Arca.CronScheduleTest do
       actor: actor,
       slot: slot
     } do
-      {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "btc"}))
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "btc"}))
       {:ok, removed} = feed!(actor, "gone")
       {:ok, 1} = CronSchedule.claim_feed_seq(actor, removed.id)
       {:ok, _} = CronSchedule.remove_feed(actor, removed.id)
@@ -398,7 +454,7 @@ defmodule Arca.CronScheduleTest do
     end
 
     test "list_feeds/1 answers the live feeds by name, undecoded", %{actor: actor} do
-      {:ok, _} = CronSchedule.create(valid_attrs(%{name: "a-schedule"}))
+      {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "a-schedule"}))
       {:ok, _} = feed!(actor, "zeta")
       {:ok, _} = feed!(actor, "alpha")
       {:ok, removed} = feed!(actor, "mid")
@@ -452,32 +508,20 @@ defmodule Arca.CronScheduleTest do
       assert id == feed.id
     end
 
-    # A person's writers through a surface, one case each: a feed's row is
-    # fenced on every path, an uninstall's included; a schedule's is not.
-    for writer <- [:update, :soft_delete] do
-      test "#{writer} writes no feed's row, and still writes a schedule's", %{
-        actor: actor,
-        slot: slot
-      } do
-        {:ok, feed} = feed!(actor, "btc")
-        {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "btc"}))
-        take_over!(slot)
+    test "creates no schedule", %{actor: actor, slot: slot} do
+      take_over!(slot)
 
-        before = CronSchedule.get_for_daemon(feed.id)
-        assert {:error, :not_owner} = write(unquote(writer), actor, feed.id)
-        assert CronSchedule.get_for_daemon(feed.id) == before
-
-        id = schedule.id
-        assert {:ok, %{id: ^id}} = write(unquote(writer), actor, id)
-      end
+      assert {:error, :not_owner} = CronSchedule.create(actor, valid_attrs(%{name: "late"}))
+      assert CronSchedule.count_active(actor, "schedule") == {:ok, 0}
     end
 
-    # The scheduler's run writers, one case each: every row is fenced,
-    # whatever its kind.
-    for writer <- [:record_run, :record_error] do
+    # Every generic writer, one case each: a person's through a surface, an
+    # uninstall's included, and the scheduler's run writers. Every row is
+    # fenced, whatever its kind.
+    for writer <- [:update, :soft_delete, :record_run, :record_error] do
       test "#{writer} writes no feed's row and no schedule's", %{actor: actor, slot: slot} do
         {:ok, feed} = feed!(actor, "btc")
-        {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "btc"}))
+        {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "btc"}))
         take_over!(slot)
 
         for id <- [feed.id, schedule.id] do
@@ -490,7 +534,7 @@ defmodule Arca.CronScheduleTest do
 
     test "every row is written by the generic writers while the slot holds", %{actor: actor} do
       {:ok, feed} = feed!(actor, "btc")
-      {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "btc"}))
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "btc"}))
 
       for id <- [feed.id, schedule.id] do
         assert {:ok, %{run_count: 1, last_execution_id: "exec_1"}} =
@@ -509,7 +553,7 @@ defmodule Arca.CronScheduleTest do
       slot: slot
     } do
       {:ok, feed} = feed!(actor, "btc")
-      {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "btc"}))
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "btc"}))
       {:ok, 1} = CronSchedule.claim_feed_seq(actor, feed.id)
       {:ok, 2} = CronSchedule.claim_feed_seq(actor, feed.id)
       {:ok, _} = accept(actor, feed.id, 2, ~s({"price":2}), slot)
@@ -681,7 +725,7 @@ defmodule Arca.CronScheduleTakeoverTest do
     {:ok, actor: Arca.Test.Actor.local(athanor_id: athanor), slot: slot}
   end
 
-  for writer <- [:record_run, :record_error] do
+  for writer <- [:record_run, :record_error, :update, :soft_delete] do
     test "#{writer} on an ordinary schedule's row after ownership loss is refused :not_owner, the row unmoved",
          %{actor: actor, slot: slot} do
       schedule = unboxed(fn -> schedule!(actor) end)
@@ -704,18 +748,21 @@ defmodule Arca.CronScheduleTakeoverTest do
 
   defp write(:record_run, actor, id), do: CronSchedule.record_run(actor, id, "exec_stale")
   defp write(:record_error, actor, id), do: CronSchedule.record_error(actor, id, "stale")
+  defp write(:update, actor, id), do: CronSchedule.update(actor, id, %{status: "paused"})
+  defp write(:soft_delete, actor, id), do: CronSchedule.soft_delete(actor, id)
 
   # An ordinary schedule with one run and one error on record, so a stale
   # write would move every column it writes.
   defp schedule!(actor) do
     {:ok, schedule} =
-      CronSchedule.create(%{
+      CronSchedule.create(actor, %{
         user_id: actor.user_id,
         athanor_id: actor.athanor_id,
         name: "cron-fence-#{System.unique_integer([:positive])}",
         cron_expression: "*/5 * * * *",
         reference: "reagent:local.test:1.0.0",
-        profile_id: "prof_test"
+        profile_id: "prof_test",
+        cap: 1_000
       })
 
     {:ok, _} = CronSchedule.record_run(actor, schedule.id, "exec_before")
@@ -852,6 +899,158 @@ defmodule Arca.CronScheduleTakeoverTest do
   defp await_lock_wait(pid, tries \\ 500)
 
   defp await_lock_wait(_pid, 0), do: flunk("the stale write never waited on a lock")
+
+  defp await_lock_wait(pid, tries) do
+    %{rows: rows} =
+      unboxed(fn ->
+        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
+      end)
+
+    if rows == [["Lock"]] do
+      :ok
+    else
+      Process.sleep(20)
+      await_lock_wait(pid, tries - 1)
+    end
+  end
+end
+
+defmodule Arca.CronScheduleRaceTest do
+  @moduledoc """
+  Creates racing for an athanor's last schedule places, on connections of
+  their own: inside the sandbox one shared connection would serialize
+  them. On PostgreSQL every create is held behind a transaction that
+  locks the athanor's row until each is seen waiting on it, so all of
+  them race for the row when it is let go; SQLite's one write lock admits
+  one transaction at a time, so there they run as concurrent processes.
+  The case works in an athanor of its own, whose rows it deletes when it
+  ends.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.CronSchedule
+  alias Arca.Schemas.CronSchedule, as: ScheduleRow
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @cap 5
+  @creates 12
+
+  setup do
+    athanor = "ath_cron_race_#{System.unique_integer([:positive])}"
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor) end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(s in ScheduleRow, where: s.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor))
+      end)
+    end)
+
+    {:ok, actor: Arca.Test.Actor.local(athanor_id: athanor)}
+  end
+
+  test "concurrent creates stop at the cap", %{actor: actor} do
+    test = self()
+
+    create = fn name ->
+      Task.async(fn ->
+        unboxed(fn ->
+          if postgres?(), do: send(test, {:backend, backend_pid()})
+          create(actor, name, @cap)
+        end)
+      end)
+    end
+
+    answers =
+      if postgres?() do
+        holder =
+          holding(fn ->
+            from(a in Arca.Schemas.Athanor, where: a.id == ^actor.athanor_id)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one()
+          end)
+
+        creators = for i <- 1..@creates, do: create.("race-#{i}")
+
+        for _ <- creators do
+          assert_receive {:backend, backend}, 15_000
+          await_lock_wait(backend)
+        end
+
+        release(holder)
+        Enum.map(creators, &Task.await(&1, 30_000))
+      else
+        for(i <- 1..@creates, do: create.("race-#{i}")) |> Enum.map(&Task.await(&1, 30_000))
+      end
+
+    assert Enum.count(answers, &match?({:ok, _}, &1)) == @cap
+    assert Enum.count(answers, &(&1 == {:error, :schedule_cap})) == @creates - @cap
+
+    assert @cap ==
+             unboxed(fn ->
+               Arca.Repo.aggregate(
+                 from(s in ScheduleRow, where: s.athanor_id == ^actor.athanor_id),
+                 :count
+               )
+             end)
+  end
+
+  defp create(actor, name, cap) do
+    CronSchedule.create(actor, %{
+      user_id: actor.user_id,
+      name: name,
+      cron_expression: "*/5 * * * *",
+      reference: "reagent:local.test:1.0.0",
+      profile_id: "prof_test",
+      cap: cap
+    })
+  end
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
+
+  defp backend_pid do
+    %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+    pid
+  end
+
+  # Run `lock` in a transaction of its own and hold it open until
+  # `release/1`.
+  defp holding(lock) do
+    test = self()
+
+    task =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            lock.()
+            send(test, {:holding, self()})
+
+            receive do
+              :commit -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:holding, _pid}, 15_000
+    task
+  end
+
+  defp release(task) do
+    send(task.pid, :commit)
+    assert {:ok, _} = Task.await(task, 30_000)
+  end
+
+  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
+  # by `tries`, never a timing.
+  defp await_lock_wait(pid, tries \\ 500)
+
+  defp await_lock_wait(_pid, 0), do: flunk("the create never waited on a lock")
 
   defp await_lock_wait(pid, tries) do
     %{rows: rows} =

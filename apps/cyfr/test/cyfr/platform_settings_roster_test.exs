@@ -60,7 +60,8 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # mode and quotas refuse a stale value; rate limits, stream limits and
   # cache bounds serve one.
   @refuse ~w(max_athanors max_groups_per_person max_pairs_per_person max_members_per_group
-             max_threads_per_athanor mint_per_hour athanor_storage_bytes session_ttl_hours
+             max_threads_per_athanor max_schedules_per_athanor max_feeds_per_athanor
+             max_external_servers_per_athanor mint_per_hour athanor_storage_bytes session_ttl_hours
              webhook_max_skew_seconds webhook_idempotency_ttl_seconds
              directory_serve directory_max_identities directory_log_bytes
              directory_recovery_reserve_bytes identity_freshness_seconds device_cert_seconds
@@ -320,7 +321,8 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       assert Enum.sort(Enum.map(Roster.entries(), & &1.key)) ==
                Enum.sort(~w(
                  max_athanors max_groups_per_person max_pairs_per_person max_members_per_group
-                 max_threads_per_athanor mint_per_hour athanor_storage_bytes
+                 max_threads_per_athanor max_schedules_per_athanor max_feeds_per_athanor
+                 max_external_servers_per_athanor mint_per_hour athanor_storage_bytes
                  opus_max_concurrent opus_max_concurrent_per_tenant
                  mcp_rate_limit_max mcp_rate_limit_window_ms api_rate_limit_max
                  api_rate_limit_window_ms webhook_per_ip_rate_limit_max
@@ -372,6 +374,29 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  {:sanctum, :live, :refuse, nil}
 
         assert entry.variable == "CYFR_" <> String.upcase(key)
+      end
+    end
+
+    # A domain's capacity ceilings: read by the domain that counts the rows
+    # at the write, refused stale, 1,000 unset, and 0 removes the ceiling,
+    # as the other `max_*` caps read it.
+    test "the domains' capacity ceilings are 1,000 unset and 0 removes them" do
+      for key <- ~w(max_schedules_per_athanor max_feeds_per_athanor
+                    max_external_servers_per_athanor) do
+        {:ok, entry} = Roster.fetch(key)
+
+        assert {entry.type, entry.default, entry.group} == {:integer, 1_000, :tenancy}
+        assert {entry.app, entry.scope, entry.stale, entry.config} == {:cyfr, :live, :refuse, nil}
+        assert entry.variable == "CYFR_" <> String.upcase(key)
+        assert entry.doc =~ "unset, 1,000, and 0 removes the ceiling"
+
+        assert entry.validator.(0) == {:ok, 0}
+        assert entry.validator.("0") == {:ok, 0}
+        assert entry.validator.(1_000_000_000) == {:ok, 1_000_000_000}
+
+        for refused <- [-1, "-1", 1_000_000_001, "many", "1.5", 1.5] do
+          assert {:error, "must be" <> _} = entry.validator.(refused), inspect(refused)
+        end
       end
     end
 

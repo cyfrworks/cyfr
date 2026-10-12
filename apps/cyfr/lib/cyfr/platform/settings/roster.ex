@@ -298,6 +298,12 @@ defmodule Cyfr.Platform.Settings.Roster do
     "max_members_per_group" => "Seats in one group, invitations included. Unset, no cap.",
     "max_threads_per_athanor" =>
       "Threads one athanor may hold, each a row any member's client can mint; 0 turns the cap off.",
+    "max_schedules_per_athanor" =>
+      "Schedules one athanor may hold, a paused one included and a deleted one or a feed not; unset, 1,000, and 0 removes the ceiling.",
+    "max_feeds_per_athanor" =>
+      "Live feeds one athanor may hold, a deleted one or a schedule not; unset, 1,000, and 0 removes the ceiling.",
+    "max_external_servers_per_athanor" =>
+      "External MCP servers one athanor may register; unset, 1,000, and 0 removes the ceiling.",
     "mint_per_hour" =>
       "Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no cap.",
     "athanor_storage_bytes" =>
@@ -386,6 +392,21 @@ defmodule Cyfr.Platform.Settings.Roster do
       cap(:max_pairs_per_person, "CYFR_MAX_PAIRS_PER_PERSON", 200, "pairs"),
       cap(:max_members_per_group, "CYFR_MAX_MEMBERS_PER_GROUP", nil, "members"),
       cap(:max_threads_per_athanor, "CYFR_MAX_THREADS_PER_ATHANOR", 1000, "threads"),
+      cap(
+        :max_schedules_per_athanor,
+        "CYFR_MAX_SCHEDULES_PER_ATHANOR",
+        1_000,
+        "schedules",
+        :cyfr
+      ),
+      cap(:max_feeds_per_athanor, "CYFR_MAX_FEEDS_PER_ATHANOR", 1_000, "feeds", :cyfr),
+      cap(
+        :max_external_servers_per_athanor,
+        "CYFR_MAX_EXTERNAL_SERVERS_PER_ATHANOR",
+        1_000,
+        "servers",
+        :cyfr
+      ),
       cap(:mint_per_hour, "CYFR_MINT_PER_HOUR", nil, "athanors"),
       %Entry{
         key: "athanor_storage_bytes",
@@ -694,10 +715,13 @@ defmodule Cyfr.Platform.Settings.Roster do
     |> Enum.map(&%{&1 | doc: Map.fetch!(@setting_docs, &1.key)})
   end
 
-  defp cap(key, variable, default, unit) do
+  # A capacity cap: how many of one kind an owner may hold. `app` is the
+  # reader's: Sanctum's caps, or the domain that counts the rows in the
+  # transaction that writes one.
+  defp cap(key, variable, default, unit, app \\ :sanctum) do
     %Entry{
       key: Atom.to_string(key),
-      app: :sanctum,
+      app: app,
       variable: variable,
       type: :integer,
       # 0 disables a defaulted cap, so it is a value, not "unset".

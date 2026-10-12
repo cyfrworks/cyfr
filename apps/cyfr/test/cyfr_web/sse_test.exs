@@ -391,7 +391,7 @@ defmodule CyfrWeb.SSETest do
         binding: binding,
         resolved_reference: "catalyst:local.markets:1.0.0",
         profile_id: "prof_sse",
-        cap: Opus.Feeds.max_per_athanor()
+        cap: 1_000
       })
 
     {:ok, slot} = Arca.ControlPlane.member_slot()

@@ -45,6 +45,7 @@ defmodule Emissary.External.ProxyTest do
     test "a resolvable name answers the target dispatch speaks to", %{ctx: ctx} do
       {:ok, stored} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: "resolvable",
           url: "https://x.com/mcp"
         })
@@ -74,6 +75,7 @@ defmodule Emissary.External.ProxyTest do
 
     test "returns error for disabled server", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "disabled-srv",
         url: "https://x.com/mcp",
         enabled: false
@@ -85,6 +87,7 @@ defmodule Emissary.External.ProxyTest do
 
     test "refuses a tool the server's patterns do not expose, in the table's words", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "narrow",
         url: "https://x.com/mcp",
         config_json: Jason.encode!(%{"tool_patterns" => ["read_*"]})
@@ -97,6 +100,7 @@ defmodule Emissary.External.ProxyTest do
     test "a row handed in is the revision dispatch speaks to, not a second read", %{ctx: ctx} do
       {:ok, stored} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: "one-rev",
           url: "https://x.com/mcp",
           enabled: true
@@ -121,6 +125,7 @@ defmodule Emissary.External.ProxyTest do
 
     test "refuses an external-plane call unless the server opts in", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "chain-only",
         url: "https://x.com/mcp"
       })
@@ -138,6 +143,7 @@ defmodule Emissary.External.ProxyTest do
 
     test "console opt-in admits the external plane", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "console-ok",
         url: "https://localhost:99999/mcp",
         config_json: Jason.encode!(%{"console" => true})
@@ -155,6 +161,7 @@ defmodule Emissary.External.ProxyTest do
     test "the console flag is not part of the consent digest", %{ctx: ctx} do
       {:ok, without_flag} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: "digest-check",
           url: "https://x.com/mcp",
           enabled: true
@@ -181,6 +188,7 @@ defmodule Emissary.External.ProxyTest do
       # dispatch, not left to the HTTP router's cache wiring. It is the
       # admission's refusal: the call is resolved before it is admitted.
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "plane-pin",
         url: "https://localhost:99999/mcp"
       })
@@ -199,6 +207,7 @@ defmodule Emissary.External.ProxyTest do
 
     test "auto-starts server process on dispatch", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "autostart",
         url: "https://localhost:99999/mcp"
       })
@@ -237,6 +246,7 @@ defmodule Emissary.External.ProxyTest do
 
     test "dispatches to running server", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "dispatch-test",
         url: "https://localhost:99999/mcp"
       })
@@ -271,6 +281,7 @@ defmodule Emissary.External.ProxyTest do
     test "an in-chain call is admitted as a tool_call under the caller's lineage and closed after",
          %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "rowed",
         url: "https://localhost:99999/mcp"
       })
@@ -312,6 +323,7 @@ defmodule Emissary.External.ProxyTest do
 
     test "a console call writes no row", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "console-rowless",
         url: "https://localhost:99999/mcp",
         config_json: Jason.encode!(%{"console" => true})
@@ -340,7 +352,11 @@ defmodule Emissary.External.ProxyTest do
       url: url
     } do
       {:ok, _} =
-        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{name: "upstream", url: url})
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: "upstream",
+          url: url
+        })
 
       test = self()
 
@@ -391,6 +407,7 @@ defmodule Emissary.External.ProxyTest do
 
     test "skips disabled servers", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
         name: "disabled",
         url: "https://x.com/mcp",
         enabled: false
@@ -467,6 +484,7 @@ defmodule Emissary.External.ProxyTest do
 
       {:ok, server} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: "kept",
           url: "https://localhost:99999/mcp"
         })

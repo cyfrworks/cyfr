@@ -225,6 +225,85 @@ defmodule Arca.MembersTest do
                Members.find_invited(in_athanor(athanor.id), "invitee@example.com")
     end
 
+    test "a reserve: closure counts the seats before the row is written, and its refusal writes nothing" do
+      athanor = group!()
+      actor = in_athanor(athanor.id)
+
+      {:ok, _} =
+        Members.seat(actor, %{email: "held@example.com", status: "invited", added_by: "x"})
+
+      test = self()
+      refused = person_id()
+
+      full = fn ->
+        send(test, {:counted, Members.count_seats(actor)})
+        {:error, {:full, 1}}
+      end
+
+      assert {:error, {:full, 1}} =
+               Members.seat(actor, %{user_id: refused, added_by: "x"}, reserve: full)
+
+      assert_received {:counted, {:ok, 1}}
+      assert {:error, :not_found} = Members.find(actor, refused)
+      assert {:ok, 1} = Members.count_seats(actor)
+
+      # The same refusal through an invitation's write, and an admitting
+      # closure seats as `seat/2` does.
+      assert {:error, {:full, 1}} =
+               Members.seat(actor, %{email: "full@example.com", status: "invited"}, reserve: full)
+
+      assert {:error, :not_found} = Members.find_invited(actor, "full@example.com")
+      admitted = person_id()
+
+      assert {:ok, %{user_id: ^admitted}} =
+               Members.seat(actor, %{user_id: admitted, added_by: "x"}, reserve: fn -> :ok end)
+
+      assert {:ok, 2} = Members.count_seats(actor)
+    end
+
+    test "a reserve: closure runs only once the athanor is found seatable" do
+      archived = group!()
+
+      {:ok, _} =
+        Arca.SecurityTransitions.archive_athanor(server(), archived.id, verify: fn _ -> :ok end)
+
+      test = self()
+
+      reserve = fn ->
+        send(test, :reserved)
+        :ok
+      end
+
+      assert {:error, :unknown_athanor} =
+               Members.seat(in_athanor("ath_missing"), %{user_id: person_id()}, reserve: reserve)
+
+      assert {:error, :athanor_archived} =
+               Members.seat(in_athanor(archived.id), %{user_id: person_id()}, reserve: reserve)
+
+      refute_received :reserved
+    end
+
+    test "seat/3 declares reserve: alone, as a zero-arity function, and raises on anything else" do
+      athanor = group!()
+      actor = in_athanor(athanor.id)
+      attrs = %{user_id: person_id(), added_by: "x"}
+
+      for opts <- [
+            [verify: fn -> :ok end],
+            [reserve: :ok],
+            [reserve: fn _ -> :ok end],
+            [reserve: fn -> :ok end, also: fn -> :ok end]
+          ] do
+        assert_raise ArgumentError, fn -> Members.seat(actor, attrs, opts) end
+
+        assert_raise ArgumentError, fn ->
+          Members.seat(%Prima.Actor{athanor_id: nil}, attrs, opts)
+        end
+      end
+
+      assert {:ok, 0} = Members.count_seats(actor)
+    end
+
     test "an invitation is withdrawn by id while it is one; a seat, a grant, another athanor's row or no row is not found and stays" do
       a = group!()
       b = group!()
@@ -1165,6 +1244,66 @@ defmodule Arca.MembersLockTest do
 
       assert Enum.sort(seats) == Enum.sort([nil | ids])
     end)
+  end
+
+  # SQLite takes its one write lock as the transaction starts, before the
+  # closure, so there is no row lock to observe.
+  if Arca.Repo.adapter() != Ecto.Adapters.Postgres do
+    @tag skip: "PostgreSQL row locks"
+  end
+
+  test "a reserve: closure runs with the person's and the athanor's rows locked", %{user: user} do
+    n = System.unique_integer([:positive])
+
+    {:ok, athanor} =
+      unboxed(fn ->
+        Arca.Athanors.insert(server(), %{
+          kind: "group",
+          name: "R#{n}",
+          slug: "mem-reserve-#{n}",
+          created_by: "system"
+        })
+      end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(m in Membership, where: m.athanor_id == ^athanor.id))
+        Arca.Repo.delete_all(from(a in Athanor, where: a.id == ^athanor.id))
+      end)
+    end)
+
+    test = self()
+
+    reserve = fn ->
+      send(test, {:reserving, self()})
+
+      receive do
+        :go -> :ok
+      end
+    end
+
+    seat =
+      Task.async(fn ->
+        unboxed(fn ->
+          Members.seat(in_athanor(athanor.id), %{user_id: user.id, added_by: "x"},
+            reserve: reserve
+          )
+        end)
+      end)
+
+    assert_receive {:reserving, seating}, 15_000
+
+    for {table, id} <- [{"users", user.id}, {"athanors", athanor.id}] do
+      assert {:error, %Postgrex.Error{postgres: %{code: :lock_not_available}}} =
+               unboxed(fn ->
+                 Arca.Repo.query("SELECT id FROM #{table} WHERE id = $1 FOR UPDATE NOWAIT", [id])
+               end),
+             "the #{table} row was not locked while the closure ran"
+    end
+
+    send(seating, :go)
+    assert {:ok, %{user_id: user_id}} = Task.await(seat, 25_000)
+    assert user_id == user.id
   end
 
   defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}

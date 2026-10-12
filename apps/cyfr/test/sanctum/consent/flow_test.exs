@@ -453,6 +453,7 @@ defmodule Sanctum.Consent.FlowTest do
 
       {:ok, server} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
           name: "flowsrv",
           url: "https://127.0.0.1:9/mcp",
           config_json: Jason.encode!(%{"headers" => %{}, "timeout_ms" => 1_000})

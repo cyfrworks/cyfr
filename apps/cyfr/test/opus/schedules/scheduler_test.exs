@@ -117,6 +117,7 @@ defmodule Opus.Schedules.SchedulerTest do
   defp create_schedule(ctx, attrs \\ %{}) do
     {:ok, schedule} =
       CronSchedule.create(
+        Sanctum.Context.actor(ctx),
         Map.merge(
           %{
             user_id: ctx.user_id,
@@ -126,7 +127,8 @@ defmodule Opus.Schedules.SchedulerTest do
             reference: "reagent:local.test:1.0.0",
             resolved_reference: "reagent:local.test:1.0.0",
             profile_id: @profile_id,
-            next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second)
+            next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second),
+            cap: 1_000
           },
           attrs
         )
@@ -526,11 +528,12 @@ defmodule Opus.Schedules.SchedulerTest do
 
   test "a boot that does not own the control plane claims no occurrence, and fires once it does",
        %{ctx: ctx} do
-    Arca.ControlPlane.record(:lost)
-    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
-
+    # The row is written while this boot may write it; it then loses the
+    # control plane before its scheduler starts.
     script!([%{"ran" => true}])
     schedule = due!(create_schedule(ctx))
+    Arca.ControlPlane.record(:lost)
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
     pid = scheduler!()
 
     # The due timer fired on load and was deferred to the recheck.

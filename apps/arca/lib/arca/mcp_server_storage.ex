@@ -31,6 +31,9 @@ defmodule Arca.McpServerStorage do
   this member's live ownership of its slot and the revision it read
   (`Arca.FencedPublication`); the others answer the written row as the
   database returned it.
+
+  `insert/2` counts the athanor's servers against the caller's cap and
+  inserts in one locking transaction under the athanor's row lock.
   """
 
   import Ecto.Query
@@ -130,16 +133,33 @@ defmodule Arca.McpServerStorage do
   (`"http"` when absent). `:config_json` is the raw JSON string (the caller
   serializes; Arca stores it verbatim). Optional: `:enabled`. The row's
   `created_by` is the context's user.
+
+  Attrs must also include `:cap`, the most servers the athanor may hold,
+  which the caller names (`Emissary.External.Provider`), and 0 no ceiling;
+  it is not stored. One locking transaction locks the athanor's row,
+  counts its servers and inserts, so creates racing for the last place
+  leave one row in it. Refused with `:server_cap` at `cap`, `:not_found`
+  when the athanor has no row, `:no_athanor` for an actor that names none,
+  `{:validation, errors}` for a missing or malformed cap, and
+  `:database_error`.
   """
-  @spec insert(Prima.Actor.t(), map()) :: {:ok, map()} | {:error, :no_athanor | term()}
-  # arca:unscoped-ok the actor's athanor is stamped onto the row below before the write.
+  @spec insert(Prima.Actor.t(), map()) ::
+          {:ok, map()}
+          | {:error,
+             :exists
+             | :server_cap
+             | :not_found
+             | :no_athanor
+             | :database_error
+             | {:validation, %{atom() => [String.t()]}}}
   def insert(%Prima.Actor{athanor_id: athanor_id, user_id: user_id} = actor, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.insert", fn ->
+    with {:ok, cap} <- server_cap(Map.get(attrs, :cap)) do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-      attrs =
+      row =
         attrs
+        |> Map.delete(:cap)
         |> Map.put_new(:id, Prima.UUID7.generate_id("mcp"))
         |> Map.put_new(:transport, "http")
         |> Map.put_new(:enabled, true)
@@ -151,16 +171,11 @@ defmodule Arca.McpServerStorage do
         |> Map.put_new(:inserted_at, now)
         |> Map.put(:updated_at, now)
 
-      case Arca.Repo.insert_all(McpServer, [attrs],
-             on_conflict: :nothing,
-             conflict_target: [:athanor_id, :name],
-             returning: true
-           ) do
-        {1, [server]} -> {:ok, server}
-        {0, _} -> {:error, :exists}
-      end
-    end)
-    |> Arca.Data.project()
+      Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.insert", fn ->
+        capped_insert(actor, row, cap)
+      end)
+      |> Arca.Data.project()
+    end
   end
 
   def insert(%Prima.Actor{}, attrs) when is_map(attrs), do: {:error, :no_athanor}
@@ -345,6 +360,58 @@ defmodule Arca.McpServerStorage do
           {:error, :database_error} = error -> error
           _ -> {:error, :not_found}
         end
+    end
+  end
+
+  defp server_cap(cap) when is_integer(cap) and cap >= 0, do: {:ok, cap}
+  defp server_cap(_cap), do: {:error, {:validation, %{cap: ["must be a non-negative integer"]}}}
+
+  # One locking transaction: the athanor's row is locked before the count,
+  # so creates in one athanor count and insert one at a time.
+  defp capped_insert(actor, row, cap) do
+    Arca.Repo.locking_transaction(fn ->
+      with {:ok, _athanor} <- lock_athanor(actor),
+           :ok <- below_cap(actor, cap),
+           {:ok, server} <- insert_row(row) do
+        server
+      else
+        {:error, reason} -> Arca.Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp lock_athanor(%Prima.Actor{athanor_id: athanor_id}) do
+    case from(a in Athanor, where: a.id == ^athanor_id)
+         |> Arca.QueryHelpers.for_update()
+         |> Arca.Repo.one() do
+      nil -> {:error, :not_found}
+      athanor -> {:ok, athanor}
+    end
+  end
+
+  # Every server row of the athanor, read under its row lock. A cap of 0
+  # is no ceiling, the meaning the operator's setting gives it, and counts
+  # nothing.
+  defp below_cap(_actor, 0), do: :ok
+
+  defp below_cap(actor, cap) do
+    count =
+      from(s in McpServer, select: count(s.id))
+      |> where_tenant(actor)
+      |> Arca.Repo.one()
+
+    if (count || 0) < cap, do: :ok, else: {:error, :server_cap}
+  end
+
+  # arca:unscoped-ok insert/2 stamped the actor's athanor onto the row before the transaction.
+  defp insert_row(row) do
+    case Arca.Repo.insert_all(McpServer, [row],
+           on_conflict: :nothing,
+           conflict_target: [:athanor_id, :name],
+           returning: true
+         ) do
+      {1, [server]} -> {:ok, server}
+      {0, _} -> {:error, :exists}
     end
   end
 

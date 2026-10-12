@@ -81,7 +81,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/cyfr/lib/compendium/tincture.ex" => 7,
     "apps/sanctum/lib/sanctum/providers/profile.ex" => 8,
     "apps/sanctum/lib/sanctum/webhook.ex" => 6,
-    "apps/cyfr/lib/emissary/external/provider.ex" => 6,
+    "apps/cyfr/lib/emissary/external/provider.ex" => 5,
     "apps/cyfr/lib/compendium/fork.ex" => 5,
     "apps/cyfr/lib/compendium/oci/reference.ex" => 5,
     "apps/prima/lib/prima/limits.ex" => 7,

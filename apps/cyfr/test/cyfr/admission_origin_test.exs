@@ -324,7 +324,7 @@ defmodule Cyfr.AdmissionOriginTest do
     Application.put_env(:cyfr, :cron_scheduler_enabled, true)
 
     {:ok, schedule} =
-      Arca.CronSchedule.create(%{
+      Arca.CronSchedule.create(Sanctum.Context.actor(ctx), %{
         user_id: ctx.user_id,
         athanor_id: ctx.athanor_id,
         name: "origin-#{System.unique_integer([:positive])}",
@@ -332,7 +332,8 @@ defmodule Cyfr.AdmissionOriginTest do
         reference: "#{@dep}:0.1.0",
         resolved_reference: @dep_ref,
         profile_id: "prof_origin_dep",
-        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second)
+        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second),
+        cap: 1_000
       })
 
     start_supervised!(Opus.Schedules.Scheduler)

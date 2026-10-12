@@ -60,6 +60,7 @@ defmodule Emissary.External.InChainProbeTest do
 
     {:ok, server} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(issuer), %{
+        cap: 0,
         name: "leak",
         transport: "stdio",
         url: nil,

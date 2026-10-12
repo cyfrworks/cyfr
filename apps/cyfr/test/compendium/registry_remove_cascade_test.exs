@@ -206,7 +206,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
         binding: binding,
         resolved_reference: "catalyst:local.#{name}:1.0.0",
         profile_id: "prof_cascade",
-        cap: Opus.Feeds.max_per_athanor()
+        cap: 1_000
       })
 
     feed

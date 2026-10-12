@@ -37,6 +37,7 @@ defmodule Arca.ScheduleOccurrencesTest do
   defp due!(actor, attrs \\ %{}) do
     {:ok, schedule} =
       CronSchedule.create(
+        actor,
         Map.merge(
           %{
             user_id: actor.user_id,
@@ -45,7 +46,8 @@ defmodule Arca.ScheduleOccurrencesTest do
             cron_expression: "0 * * * *",
             reference: "reagent:local.test:1.0.0",
             resolved_reference: "reagent:local.test:1.0.0",
-            profile_id: "prof_test"
+            profile_id: "prof_test",
+            cap: 1_000
           },
           attrs
         )
@@ -789,14 +791,15 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
 
   defp due!(actor) do
     {:ok, schedule} =
-      CronSchedule.create(%{
+      CronSchedule.create(actor, %{
         user_id: actor.user_id,
         athanor_id: actor.athanor_id,
         name: "occ-fence-#{System.unique_integer([:positive])}",
         cron_expression: "0 * * * *",
         reference: "reagent:local.test:1.0.0",
         resolved_reference: "reagent:local.test:1.0.0",
-        profile_id: "prof_test"
+        profile_id: "prof_test",
+        cap: 1_000
       })
 
     past = DateTime.add(DateTime.utc_now(), -60, :second)

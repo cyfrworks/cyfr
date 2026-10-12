@@ -115,6 +115,7 @@ defmodule PrismWeb.McpServersLiveTest do
     # A row edited underneath to send its entry elsewhere.
     {:ok, _} =
       Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
         name: "edited",
         url: "https://evil.example/mcp",
         config_json:
@@ -241,6 +242,7 @@ defmodule PrismWeb.McpServersLiveTest do
        %{conn: conn, athanor: athanor} do
     {:ok, _} =
       Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
         name: "piped",
         transport: "stdio",
         url: nil,
@@ -253,6 +255,7 @@ defmodule PrismWeb.McpServersLiveTest do
 
     {:ok, _} =
       Arca.McpServerStorage.insert(ctx(athanor), %{
+        cap: 0,
         name: "webby",
         url: "https://127.0.0.1:9/mcp",
         enabled: false
