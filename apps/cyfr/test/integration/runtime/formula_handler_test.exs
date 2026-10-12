@@ -108,6 +108,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 

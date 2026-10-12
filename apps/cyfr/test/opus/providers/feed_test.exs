@@ -80,6 +80,7 @@ defmodule Opus.Providers.FeedTest do
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     consented!(ctx, published!(ctx))
     {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
   end
@@ -285,6 +286,69 @@ defmodule Opus.Providers.FeedTest do
 
       assert String.ends_with?(capped, "(feed_cap)")
       assert {:ok, 10} = CronSchedule.count_active(actor, "feed")
+    end
+
+    # A profile list or a head the store cannot answer, and a profile row
+    # or a head stored damaged: each in the binding's own class and
+    # sentence (`Sanctum.Consent.RegistrationBinding.refusal/1`), the class
+    # the gate records, and nothing bound.
+    @tag :capture_log
+    test "a profile list the store cannot answer refuses unavailable", %{ctx: ctx, actor: actor} do
+      Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+      binding_refused!(
+        ctx,
+        :unavailable,
+        "the component's profiles cannot be read right now — try again"
+      )
+
+      Arca.Repo.query!("ALTER TABLE profiles_unavailable RENAME TO profiles")
+      assert {:ok, []} = CronSchedule.list_feeds(actor)
+    end
+
+    @tag :capture_log
+    test "a head the store cannot answer refuses unavailable", %{ctx: ctx, actor: actor} do
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+      binding_refused!(
+        ctx,
+        :unavailable,
+        "the profile's consent cannot be read right now — try again"
+      )
+
+      Arca.Repo.query!("ALTER TABLE consents_unavailable RENAME TO consents")
+      assert {:ok, []} = CronSchedule.list_feeds(actor)
+    end
+
+    test "a profile row stored damaged refuses corrupt", %{ctx: ctx, actor: actor} do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(p in Arca.Schemas.Profile,
+            where: p.athanor_id == ^ctx.athanor_id and p.id == @profile_id
+          ),
+          set: [kind: "sideways"]
+        )
+
+      binding_refused!(
+        ctx,
+        :corrupt,
+        "the profile is damaged and cannot be used — revoke profile #{@profile_id} and grant it again"
+      )
+
+      assert {:ok, []} = CronSchedule.list_feeds(actor)
+    end
+
+    test "a head stored damaged refuses corrupt", %{ctx: ctx, actor: actor} do
+      :ok = ConsentFixtures.hand_edit_head!(ctx, @profile_id, scope: "sideways")
+
+      binding_refused!(
+        ctx,
+        :corrupt,
+        "the profile's consent is damaged and cannot be used — " <>
+          "revoke profile #{@profile_id} and grant it again"
+      )
+
+      assert {:ok, []} = CronSchedule.list_feeds(actor)
     end
 
     test "refuses a member that lost its slot, creating nothing", %{ctx: ctx, actor: actor} do
@@ -731,6 +795,27 @@ defmodule Opus.Providers.FeedTest do
 
   defp press(ctx, binding, action),
     do: call(ctx, %{"action" => "press", "binding" => binding, "action_name" => action})
+
+  # A bind through the gate refused in `class` with the binding's
+  # `sentence`, and the gate's one record of it failed in that class.
+  defp binding_refused!(ctx, class, sentence) do
+    assert bind_decisions(ctx) == []
+
+    assert %Prima.Refusal{class: ^class, message: message} =
+             refused(call(ctx, bind_args("btc")))
+
+    assert message == "profile binding refused: " <> sentence
+    assert bind_decisions(ctx) == [{"admitted", "failed", Atom.to_string(class)}]
+  end
+
+  defp bind_decisions(ctx) do
+    Arca.Repo.all(
+      from(d in Arca.Schemas.DecisionLog,
+        where: d.athanor_id == ^ctx.athanor_id and d.tool == "feed" and d.action == "bind",
+        select: {d.admission, d.completion, d.completion_class}
+      )
+    )
+  end
 
   # A refused answer as every surface renders it: its class and sentence
   # (`Sanctum.Refusals.classify/1`).

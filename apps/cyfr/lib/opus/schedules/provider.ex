@@ -18,7 +18,9 @@ defmodule Opus.Schedules.Provider do
   # The one kind of row this tool reads and writes.
   @kind "schedule"
 
-  # The refusals a profile binding answers besides its sentences.
+  # The refusals a profile binding answers besides its sentences
+  # (`Sanctum.Consent.RegistrationBinding.refusal/1`): an outage or a damaged
+  # row is answered as a classed `Prima.Refusal`.
   @binding_refusals [:invalid_argument, :consent_class_required]
 
   @behaviour Prima.Provider
@@ -617,6 +619,7 @@ defmodule Opus.Schedules.Provider do
     else
       {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, {tag, _detail}} = refused when tag in @binding_refusals -> refused
+      {:error, %Prima.Refusal{}} = refused -> refused
       {:error, reason} -> {:error, format_store_error(reason, id)}
     end
   end
@@ -659,18 +662,8 @@ defmodule Opus.Schedules.Provider do
 
   defp authorize_profile_binding(ctx, target_ref, profile_id) when is_binary(profile_id) do
     case Sanctum.Consent.RegistrationBinding.authorize(ctx, target_ref, profile_id) do
-      :ok ->
-        :ok
-
-      # A caller the consent class refused is refused by the class; any
-      # other failed check is the binding's own argument refusal.
-      {:error, {:consent_refused, refusal}} ->
-        {:error, {:consent_class_required, refusal}}
-
-      {:error, reason} ->
-        {:error,
-         {:invalid_argument,
-          "profile binding refused: " <> Sanctum.Consent.RegistrationBinding.message(reason)}}
+      :ok -> :ok
+      {:error, reason} -> {:error, Sanctum.Consent.RegistrationBinding.refusal(reason)}
     end
   end
 

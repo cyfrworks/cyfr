@@ -4,6 +4,8 @@
 defmodule Opus.Schedules.ProviderTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Opus.Schedules.Provider
   alias Sanctum.Context
 
@@ -394,6 +396,126 @@ defmodule Opus.Schedules.ProviderTest do
                })
 
       assert updated.resolved_reference == "reagent:local.test:1.0.0"
+    end
+  end
+
+  describe "a profile binding the store cannot read, or reads damaged" do
+    # The binding's own class is the class the gate answers and records:
+    # an outage is `unavailable` and a damaged head `corrupt`, each in the
+    # binding's sentence, never the caller's argument; and the schedule is
+    # as it was.
+    @outage "profile binding refused: the profile's consent cannot be read right now — try again"
+    @damaged "profile binding refused: the profile's consent is damaged and cannot be used — " <>
+               "revoke profile prof-cron and grant it again"
+
+    @create %{
+      "action" => "create",
+      "profile_id" => "prof-cron",
+      "name" => "refused-bind",
+      "cron_expression" => "*/5 * * * *",
+      "reference" => "reagent:local.test:1.0.0"
+    }
+
+    @tag :capture_log
+    test "a create over a consent outage is unavailable, and no schedule is written",
+         %{ctx: ctx} do
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+      refused!(ctx, "create", @create, @outage, "unavailable")
+      assert names(ctx) == []
+    end
+
+    test "a create over a damaged head is corrupt, and no schedule is written", %{ctx: ctx} do
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, "prof-cron", scope: "sideways")
+
+      refused!(ctx, "create", @create, @damaged, "corrupt")
+      assert names(ctx) == []
+    end
+
+    @tag :capture_log
+    test "a repointing update over a consent outage is unavailable, and the schedule stands",
+         %{ctx: ctx} do
+      {:ok, created} = Provider.handle("schedule", ctx, Map.put(@create, "name", "repointed"))
+      before = stored(ctx, created.schedule_id)
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+
+      refused!(ctx, "update", repoint(created), @outage, "unavailable")
+      Arca.Repo.query!("ALTER TABLE consents_unavailable RENAME TO consents")
+      assert stored(ctx, created.schedule_id) == before
+    end
+
+    test "a repointing update over a damaged head is corrupt, and the schedule stands",
+         %{ctx: ctx} do
+      {:ok, created} = Provider.handle("schedule", ctx, Map.put(@create, "name", "repointed"))
+      before = stored(ctx, created.schedule_id)
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, "prof-cron", scope: "sideways")
+
+      refused!(ctx, "update", repoint(created), @damaged, "corrupt")
+      assert stored(ctx, created.schedule_id) == before
+    end
+
+    # An update that re-points the schedule's reference and binding, and
+    # changes its timing beside them.
+    defp repoint(created) do
+      %{
+        "action" => "update",
+        "schedule_id" => created.schedule_id,
+        "reference" => "reagent:local.test:1.0.0",
+        "profile_id" => "prof-cron",
+        "cron_expression" => "*/7 * * * *"
+      }
+    end
+
+    # `action` over MCP answers a failed tool result whose one text block is
+    # `sentence`, as every refusal the tool returns is answered; the gate
+    # classes it `class` and records its one call admitted and failed in
+    # that class.
+    defp refused!(ctx, action, args, sentence, class) do
+      assert decided(ctx) == []
+      answer = over_mcp(ctx, args)
+
+      refute Map.has_key?(answer, "error")
+
+      assert {answer["result"]["isError"], answer["result"]["content"]} ==
+               {true, [%{"type" => "text", "text" => sentence}]}
+
+      assert decided(ctx) == [{action, "admitted", "failed", class}]
+    end
+
+    defp over_mcp(ctx, args) do
+      message = %Prima.MCP.Message{
+        type: :request,
+        id: 1,
+        method: "tools/call",
+        params: %{"name" => "schedule", "arguments" => args}
+      }
+
+      case Emissary.MCP.Router.dispatch(ctx, message) do
+        {:ok, result} -> Prima.MCP.Message.encode_result(1, result)
+        {:error, code, text} -> Prima.MCP.Message.encode_error(1, code, text)
+        {:error, code, text, data} -> Prima.MCP.Message.encode_error(1, code, text, data)
+      end
+    end
+
+    # The gate's records of the schedule tool in the context's athanor.
+    defp decided(ctx) do
+      Arca.Repo.all(
+        Ecto.Query.from(d in Arca.Schemas.DecisionLog,
+          where: d.athanor_id == ^ctx.athanor_id and d.tool == "schedule",
+          select: {d.action, d.admission, d.completion, d.completion_class}
+        )
+      )
+    end
+
+    # The whole stored row of a schedule.
+    defp stored(ctx, id) do
+      {:ok, row} = Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id)
+      row
+    end
+
+    defp names(ctx) do
+      {:ok, rows} = Arca.CronSchedule.list(Sanctum.Context.actor(ctx))
+      for row <- rows, row.name == "refused-bind", do: row.name
     end
   end
 

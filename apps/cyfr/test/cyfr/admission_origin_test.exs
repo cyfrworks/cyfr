@@ -98,6 +98,7 @@ defmodule Cyfr.AdmissionOriginTest do
     Arca.Cache.init()
     Prima.RateLimiter.reset()
     _athanor = Sanctum.TestContext.athanor!()
+    Sanctum.TestContext.ready!(Sanctum.TestContext.athanor_id())
 
     base = Path.join(System.tmp_dir!(), "admission_origin_#{System.unique_integer([:positive])}")
     keys = [cyfr: :locus_runtime_workers, cyfr: :cron_scheduler_enabled, arca: :base_path]

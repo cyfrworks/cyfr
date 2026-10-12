@@ -398,21 +398,9 @@ defmodule Opus.Feeds do
   defp authorize_profile(ctx, pinned, profile_id) do
     case RegistrationBinding.authorize(ctx, pinned, profile_id) do
       :ok -> :ok
-      {:error, reason} -> {:error, binding_refusal(reason)}
+      {:error, reason} -> {:error, RegistrationBinding.refusal(reason)}
     end
   end
-
-  defp binding_refusal({:consent_refused, refusal}), do: {:consent_class_required, refusal}
-
-  defp binding_refusal({unread, _subject})
-       when unread in [:head_unavailable, :profiles_unavailable],
-       do: {:unavailable, "Consent"}
-
-  defp binding_refusal({:head_corrupt, _profile_id}), do: {:corrupt, {:digest, "Consent"}}
-  defp binding_refusal({:profile_corrupt, profile_id}), do: {:corrupt, {:profile, profile_id}}
-
-  defp binding_refusal(reason),
-    do: {:invalid_argument, "profile binding refused: " <> RegistrationBinding.message(reason)}
 
   # A feed fires with the `schedule` origin: a profile whose head consent
   # does not admit it is asked to grant again, as the loader asks.
@@ -428,13 +416,13 @@ defmodule Opus.Feeds do
         end
 
       {:error, :not_found} ->
-        {:error, binding_refusal({:no_head_consent, profile_id})}
+        {:error, RegistrationBinding.refusal({:no_head_consent, profile_id})}
 
       {:error, :corrupt} ->
-        {:error, binding_refusal({:head_corrupt, profile_id})}
+        {:error, RegistrationBinding.refusal({:head_corrupt, profile_id})}
 
       {:error, :unavailable} ->
-        {:error, binding_refusal({:head_unavailable, profile_id})}
+        {:error, RegistrationBinding.refusal({:head_unavailable, profile_id})}
 
       {:error, :no_athanor} ->
         {:error, :no_athanor}

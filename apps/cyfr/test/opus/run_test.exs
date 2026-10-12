@@ -39,6 +39,8 @@ defmodule Opus.RunTest do
       )
       |> Sanctum.TestContext.via(:prism)
 
+    Sanctum.TestContext.ready!(ctx.athanor_id)
+
     # Register the test WASM in Compendium so string references resolve
     wasm_bytes = File.read!(@math_wasm_path)
 

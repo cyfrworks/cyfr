@@ -98,9 +98,12 @@ defmodule Opus do
   @spec run_root(Context.t(), RootSelect.selector(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def run_root(%Context{} = ctx, profile_selector, reference, input, opts \\ []) do
-    # An unavailable executor refuses before any consent is resolved or any
-    # row is written; dispatch checks the worker again when it runs.
-    with {:ok, _worker} <- Dispatch.worker(reference),
+    # An athanor still being filled refuses as a turn does, with the fill
+    # asked for, and an unavailable executor refuses: both before any
+    # consent is resolved or any row is written. Dispatch checks the worker
+    # again when it runs.
+    with :ok <- Sanctum.Provisioning.ready(ctx),
+         {:ok, _worker} <- Dispatch.worker(reference),
          {:ok, %{authority: authority, stamp: stamp, profile: profile}} <-
            Admission.authority_and_stamp_for(ctx, profile_selector, reference, opts) do
       exec_opts =

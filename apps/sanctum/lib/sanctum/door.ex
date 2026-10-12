@@ -189,22 +189,34 @@ defmodule Sanctum.Door do
   """
   @spec reconcile() :: {:ok, non_neg_integer()}
   def reconcile do
-    {:ok, eject_refused(0, 0)}
+    {:ok, eject_refused(nil, 0)}
   end
 
-  defp eject_refused(offset, ejected) do
-    case Sanctum.Tenancy.Users.list(limit: @page, offset: offset) do
-      [] ->
+  # In id order, each page after the last person the previous one visited,
+  # ejected or not: a sign-in during the walk changes no one's place in it.
+  defp eject_refused(after_id, ejected) do
+    case Sanctum.Tenancy.Users.list_by_id(limit: @page, after: after_id) do
+      {:ok, []} ->
         ejected
 
-      users ->
+      {:ok, users} ->
         ejected = ejected + Enum.count(users, &eject_if_refused/1)
 
         # A page short of the limit is the last one; anything else and the
         # walk continues, because ejecting does not remove the rows.
         if length(users) < @page,
           do: ejected,
-          else: eject_refused(offset + @page, ejected)
+          else: eject_refused(List.last(users).id, ejected)
+
+      # An outage is not a refusal: the people not yet asked about stay
+      # admitted, and the next reconcile asks again.
+      {:error, _unanswered} ->
+        Logger.warning(
+          "[Sanctum.Door] the people after #{inspect(after_id)} could not be read " <>
+            "(the store did not answer) — leaving them admitted"
+        )
+
+        ejected
     end
   end
 

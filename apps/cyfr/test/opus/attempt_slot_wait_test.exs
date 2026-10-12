@@ -127,6 +127,7 @@ defmodule Opus.AttemptSlotWaitTest do
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, run_dir)
     ctx = Sanctum.TestContext.local(:prism)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
 
     on_exit(fn ->
       Slots.forgive_unreaped(@slots, ctx.athanor_id)

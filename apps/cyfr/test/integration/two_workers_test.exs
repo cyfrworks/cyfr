@@ -91,6 +91,7 @@ defmodule Cyfr.TwoWorkersTest do
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     {:ok, ctx: ctx, run_dir: run_dir}
   end
 

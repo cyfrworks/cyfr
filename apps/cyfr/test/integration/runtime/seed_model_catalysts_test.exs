@@ -64,6 +64,7 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
       end
     end)
 
+    Sanctum.TestContext.ready!(Sanctum.TestContext.athanor_id())
     {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 

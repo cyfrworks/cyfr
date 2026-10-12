@@ -81,6 +81,7 @@ defmodule Opus.Schedules.OwnershipFenceTest do
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
     consented!(ctx)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
   end
 
@@ -1816,6 +1817,7 @@ defmodule Opus.Schedules.OwnershipFenceFeedsTest do
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
     consented!(ctx)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
   end
 

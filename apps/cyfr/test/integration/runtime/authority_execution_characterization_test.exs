@@ -34,6 +34,8 @@ defmodule Locus.Runtime.AuthorityExecutionCharacterizationTest do
     ctx = Sanctum.TestContext.local(:api)
     :ok = Probe.publish_probe!(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
+
     assert @probe_node in minted
 
     on_exit(fn ->

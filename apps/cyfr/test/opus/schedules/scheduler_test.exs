@@ -53,6 +53,7 @@ defmodule Opus.Schedules.SchedulerTest do
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     component = consented!(ctx)
     {:ok, ctx: ctx, component: component}
   end

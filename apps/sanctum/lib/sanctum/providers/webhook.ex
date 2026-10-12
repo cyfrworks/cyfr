@@ -254,6 +254,11 @@ defmodule Sanctum.Providers.Webhook do
       {:error, reason} when Sanctum.Issuance.standing_refusal?(reason) ->
         {:error, Sanctum.Issuance.standing_refusal(reason)}
 
+      # A profile binding the store could not read, or read damaged, in its
+      # own class and sentence (`Sanctum.Consent.RegistrationBinding.refusal/1`).
+      {:error, %Prima.Refusal{}} = refused ->
+        refused
+
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Webhook] Failed to create webhook: #{inspect(reason)}")
         {:error, "Failed to create webhook"}
@@ -287,6 +292,9 @@ defmodule Sanctum.Providers.Webhook do
 
       {:error, :invalid_input_template} ->
         {:error, "input_template is invalid"}
+
+      {:error, %Prima.Refusal{}} = refused ->
+        refused
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Webhook] Failed to update webhook: #{inspect(reason)}")

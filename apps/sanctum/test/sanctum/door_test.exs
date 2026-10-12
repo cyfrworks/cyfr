@@ -4,6 +4,8 @@
 defmodule Sanctum.DoorTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Door
   alias Sanctum.Door.Store
 
@@ -324,6 +326,101 @@ defmodule Sanctum.DoorTest do
       assert after_eject.status == "active"
       assert after_eject.denied_at == nil
     end
+  end
+
+  describe "reconcile/0 — past the first page" do
+    # More people than one page, with a refused person on the second: a
+    # sign-in that moves them up the recency order while the walk reads the
+    # first page must not let them through the walk.
+    test "a refused person whose last sign-in moves between pages is still ejected" do
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+      now = DateTime.utc_now()
+
+      people =
+        for i <- 1..600 do
+          seen = DateTime.add(now, -i, :second)
+
+          %{
+            id: "door-page-#{String.pad_leading(Integer.to_string(i), 4, "0")}",
+            email: "page#{i}@example.com",
+            email_verified: true,
+            provider: "github",
+            status: "active",
+            security_generation: 1,
+            first_seen_at: seen,
+            last_seen_at: seen,
+            created_at: seen,
+            updated_at: seen
+          }
+        end
+
+      {600, _} = Arca.Repo.insert_all(Arca.Schemas.User, people)
+
+      {:ok, refused} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: uid(30),
+          provider: "github",
+          email: "late@example.com",
+          verified: true,
+          name: nil
+        })
+
+      session = session_for(refused)
+      tenant = Sanctum.TestContext.local()
+
+      {:ok, key} =
+        Sanctum.TestContext.create_key(%{tenant | user_id: refused.id, email: refused.email}, %{
+          name: "late"
+        })
+
+      {:ok, _} = Store.deny("user_id", uid(30), "ops")
+
+      # Seen longest ago, so the most recently seen first puts them on the
+      # second page; their id sorts after every filler's, so id order does.
+      set_last_seen!(refused.id, DateTime.add(now, -86_400, :second))
+
+      test = self()
+      handler = "door-page-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          &__MODULE__.sign_in_after_first_page/4,
+          %{test: test, user_id: refused.id, at: DateTime.add(now, 3_600, :second)}
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, 1} = Door.reconcile()
+      assert_received :signed_in_between_pages
+
+      assert {:error, :invalid_session} = Sanctum.Session.get(session.token)
+      assert {:error, _} = Sanctum.ApiKey.validate(key.api_key)
+    end
+  end
+
+  # The refused person signs in once the walk's first page of people has
+  # been read in the walking process: their last sign-in moves to now.
+  @doc false
+  def sign_in_after_first_page(_event, _measurements, %{source: "users", query: query}, config) do
+    if self() == config.test and query =~ "LIMIT" and not Process.get(:signed_in?, false) do
+      Process.put(:signed_in?, true)
+      set_last_seen!(config.user_id, config.at)
+      send(config.test, :signed_in_between_pages)
+    end
+  end
+
+  def sign_in_after_first_page(_event, _measurements, _metadata, _config), do: :ok
+
+  defp set_last_seen!(user_id, at) do
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(u in Arca.Schemas.User, where: u.id == ^user_id),
+        set: [last_seen_at: at]
+      )
+
+    :ok
   end
 
   describe "admit_identity/2 — a refusal the operator can act on" do

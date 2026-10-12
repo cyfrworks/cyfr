@@ -45,6 +45,7 @@ defmodule Locus.Runtime.TimeoutTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 

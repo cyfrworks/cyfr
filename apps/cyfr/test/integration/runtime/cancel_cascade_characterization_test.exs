@@ -49,6 +49,7 @@ defmodule Locus.Runtime.CancelCascadeCharacterizationTest do
     Application.put_env(:arca, :base_path, test_path)
 
     ctx = Sanctum.TestContext.local(:api)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)

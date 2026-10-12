@@ -69,6 +69,7 @@ defmodule Locus.Runtime.ExecutorCancelPenaltyTest do
     :ok = :telemetry.attach(handler, @unreaped_kill, &__MODULE__.forward_unreaped/4, self())
     on_exit(fn -> :telemetry.detach(handler) end)
 
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     Slots.forgive_unreaped(@slots, ctx.athanor_id)
     {:ok, ctx: ctx}
   end

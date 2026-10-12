@@ -59,6 +59,7 @@ defmodule Cyfr.SharedLimitsTest do
     Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
 
     ctx = Sanctum.TestContext.local(:prism)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
 
     on_exit(fn ->
       fresh_limits!(ctx)

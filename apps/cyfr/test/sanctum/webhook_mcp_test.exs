@@ -4,6 +4,8 @@
 defmodule Sanctum.WebhookMCPTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Provider
 
   setup tags do
@@ -307,6 +309,134 @@ defmodule Sanctum.WebhookMCPTest do
     test "returns informative error", %{ctx: ctx} do
       {:error, msg} = handle(ctx, %{"action" => "nonsense"})
       assert msg =~ "Invalid webhook action"
+    end
+  end
+
+  describe "a profile binding the store cannot read, or reads damaged" do
+    # The binding's own class is the class the gate answers and records: an
+    # outage is `unavailable` and a damaged head `corrupt`, each in the
+    # binding's sentence, never a webhook that failed for no said reason;
+    # and the webhook is as it was.
+    @outage "profile binding refused: the profile's consent cannot be read right now — try again"
+    @damaged "profile binding refused: the profile's consent is damaged and cannot be used — " <>
+               "revoke profile prof-handler and grant it again"
+
+    @create %{
+      "action" => "create",
+      "name" => "refused-hook",
+      "replay_protection" => "none",
+      "target_ref" => "f:local.handler",
+      "profile_id" => "prof-handler"
+    }
+
+    @repoint %{
+      "action" => "update",
+      "name" => "bound-hook",
+      "target_ref" => "f:local.handler",
+      "profile_id" => "prof-handler"
+    }
+
+    @tag :capture_log
+    test "a create over a consent outage is unavailable, and no webhook is written", %{ctx: ctx} do
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+      refused!(ctx, "create", @create, @outage, "unavailable")
+      Arca.Repo.query!("ALTER TABLE consents_unavailable RENAME TO consents")
+      assert {:error, :not_found} = stored(ctx, "refused-hook")
+    end
+
+    test "a create over a damaged head is corrupt, and no webhook is written", %{ctx: ctx} do
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, "prof-handler", scope: "sideways")
+      refused!(ctx, "create", @create, @damaged, "corrupt")
+      assert {:error, :not_found} = stored(ctx, "refused-hook")
+    end
+
+    @tag :capture_log
+    test "a repointing update over a consent outage is unavailable, and the webhook stands", %{
+      ctx: ctx
+    } do
+      before = bound!(ctx)
+      Arca.Repo.query!("ALTER TABLE consents RENAME TO consents_unavailable")
+      refused!(ctx, "update", @repoint, @outage, "unavailable")
+      Arca.Repo.query!("ALTER TABLE consents_unavailable RENAME TO consents")
+      assert stored(ctx, "bound-hook") == before
+    end
+
+    test "a repointing update over a damaged head is corrupt, and the webhook stands", %{
+      ctx: ctx
+    } do
+      before = bound!(ctx)
+      :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, "prof-handler", scope: "sideways")
+      refused!(ctx, "update", @repoint, @damaged, "corrupt")
+      assert stored(ctx, "bound-hook") == before
+    end
+
+    # A caller the consent class refuses is answered as the webhook surface
+    # has always answered it: the binding's sentence for the class's refusal.
+    test "a caller the consent class refuses keeps its sentence", %{ctx: ctx} do
+      key_ctx = %{ctx | auth_method: :api_key}
+
+      assert {:error, refused} = Provider.handle("webhook", key_ctx, @create)
+      assert is_binary(refused)
+      assert String.starts_with?(refused, "profile binding refused: ")
+      assert {:error, :not_found} = stored(ctx, "refused-hook")
+    end
+
+    # A webhook bound to the handler's profile, as stored.
+    defp bound!(ctx) do
+      {:ok, _} =
+        handle(ctx, %{
+          "action" => "create",
+          "name" => "bound-hook",
+          "replay_protection" => "none",
+          "target_ref" => "f:local.handler",
+          "profile_id" => "prof-handler"
+        })
+
+      {:ok, row} = stored(ctx, "bound-hook")
+      {:ok, row}
+    end
+
+    defp stored(ctx, name),
+      do: Arca.WebhookStorage.get_by_name(Sanctum.Context.actor(ctx), name)
+
+    # `action` over MCP answers a failed tool result whose one text block is
+    # `sentence`, and the gate's one record of the call is admitted and
+    # failed in `class`.
+    defp refused!(ctx, action, args, sentence, class) do
+      assert decided(ctx) == []
+      answer = over_mcp(ctx, args)
+
+      refute Map.has_key?(answer, "error")
+
+      assert {answer["result"]["isError"], answer["result"]["content"]} ==
+               {true, [%{"type" => "text", "text" => sentence}]}
+
+      assert decided(ctx) == [{action, "admitted", "failed", class}]
+    end
+
+    defp over_mcp(ctx, args) do
+      message = %Prima.MCP.Message{
+        type: :request,
+        id: 1,
+        method: "tools/call",
+        params: %{"name" => "webhook", "arguments" => args}
+      }
+
+      case Emissary.MCP.Router.dispatch(ctx, message) do
+        {:ok, result} -> Prima.MCP.Message.encode_result(1, result)
+        {:error, code, text} -> Prima.MCP.Message.encode_error(1, code, text)
+        {:error, code, text, data} -> Prima.MCP.Message.encode_error(1, code, text, data)
+      end
+    end
+
+    # The gate's records of the webhook tool in the context's athanor.
+    defp decided(ctx) do
+      Arca.Repo.all(
+        Ecto.Query.from(d in Arca.Schemas.DecisionLog,
+          where: d.athanor_id == ^ctx.athanor_id and d.tool == "webhook",
+          select: {d.action, d.admission, d.completion, d.completion_class}
+        )
+      )
     end
   end
 end

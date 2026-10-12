@@ -484,6 +484,7 @@ defmodule Arca.DecisionLog do
       case write.(deadline) do
         {:ok, :ok} = ok -> ok
         {:error, kind} when kind in [:conflict, :not_found] -> {:error, kind}
+        {:error, :rollback} -> rolled_back(stage, deadline)
       end
     end
   rescue
@@ -512,6 +513,16 @@ defmodule Arca.DecisionLog do
 
   defp timed_out?(%DBConnection.ConnectionError{}, deadline),
     do: System.monotonic_time(:millisecond) >= deadline
+
+  # The write asks for no rollback but these two, so `{:error, :rollback}` is
+  # the transaction's own: the pool took the connection back after the
+  # statements answered and before the commit, and nothing committed. Past
+  # the deadline it is the deadline's, as a connection error is.
+  defp rolled_back(stage, deadline) do
+    kind = if System.monotonic_time(:millisecond) >= deadline, do: :timeout, else: :unavailable
+    Logger.warning("[Arca.DecisionLog] #{stage} #{kind}: the transaction rolled back")
+    {:error, kind}
+  end
 
   # The exception's module only: a driver's message can carry a statement.
   defp logged(stage, kind, exception) do

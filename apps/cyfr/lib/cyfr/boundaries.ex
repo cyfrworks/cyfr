@@ -397,8 +397,8 @@ defmodule Cyfr.Boundaries do
         Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.Door Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries
-        Sanctum.Network Sanctum.Policy Sanctum.Proxy Sanctum.Refusals Sanctum.Session
-        Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
+        Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
+        Sanctum.Session Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
       ),
       reason:
         "the glue and application namespace: boot wiring, the operation table, " <>
@@ -422,6 +422,9 @@ defmodule Cyfr.Boundaries do
           "names its heads, execution's in-chain calls pass it, and the root starts its " <>
           "supervisor. `Sanctum.Refusals` classifies and renders a refusal for execution " <>
           "and for the bridge's announcements. " <>
+          "`Sanctum.Provisioning` is the run gate's readiness question: `Opus.run_root/5` " <>
+          "asks whether the athanor is filled before it admits a run, as a turn does, " <>
+          "and the fill is asked for when it is not. " <>
           "`Sanctum.Network` is `Opus.Host.Egress`'s one resolution of a guest's " <>
           "outbound host, which it pins under the attempt's authority. " <>
           "`Sanctum.TinctureAccess` is that invocation's reread of the tincture it " <>
@@ -1342,7 +1345,7 @@ defmodule Cyfr.Boundaries do
       pinned_intact?: 2
     ],
     "Sanctum.Consent.Proof" => [store: 0],
-    "Sanctum.Consent.RegistrationBinding" => [authorize: 3, message: 1],
+    "Sanctum.Consent.RegistrationBinding" => [authorize: 3, refusal: 1],
     "Sanctum.Consent.ShapeDerivation" => [expand_tools: 1, live_digest: 2, manifest_blocks: 2],
     "Sanctum.Consent.ShapeDiff" => [compute: 3],
     "Sanctum.Context" => [

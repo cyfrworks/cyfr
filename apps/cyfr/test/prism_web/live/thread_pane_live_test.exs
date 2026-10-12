@@ -1060,6 +1060,34 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # Before its socket connects the pane has read no model: its first render
+  # says the status is pending, never that a ready room has no model, and
+  # the connected mount reads it.
+  test "the disconnected render of a ready room is pending, and offers no model to connect",
+       %{room: room, user: user, conn: conn} do
+    connected_room!(room, user)
+
+    html =
+      conn
+      |> Plug.Conn.put_private(:phoenix_endpoint, @endpoint)
+      |> Plug.Test.init_test_session(%{})
+      |> Phoenix.LiveView.Router.fetch_live_flash([])
+      |> Phoenix.LiveView.Controller.live_render(PrismWeb.ThreadPaneLive,
+        session: %{"athanor_id" => room.id}
+      )
+      |> html_response(200)
+
+    refute html =~ "has no model yet"
+    refute html =~ "Connect a model"
+    assert html =~ ~s(data-test="model-pending")
+
+    pane = empty_pane(conn, room)
+    assert render(pane) =~ "anything."
+    refute has_element?(pane, ~s([data-test="model-pending"]))
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   @damaged "A consent this model runs under is damaged and cannot be used — " <>
              "revoke the damaged profile and grant it again."
   @unanswered "A consent this model runs under cannot be read right now — try again."

@@ -80,6 +80,7 @@ defmodule Opus.FeedsTest do
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     consented!(ctx)
     {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
   end

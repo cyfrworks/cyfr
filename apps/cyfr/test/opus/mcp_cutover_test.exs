@@ -56,6 +56,7 @@ defmodule Opus.MCPCutoverTest do
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     {:ok, ctx: ctx, component: component}
   end
 

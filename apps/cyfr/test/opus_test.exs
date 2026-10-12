@@ -49,6 +49,7 @@ defmodule OpusTest do
     previous = Application.get_env(:cyfr, :locus_runtime_workers)
     on_exit(fn -> Application.put_env(:cyfr, :locus_runtime_workers, previous) end)
 
+    Sanctum.TestContext.ready!(Sanctum.TestContext.athanor_id())
     {:ok, ctx: Sanctum.TestContext.local(), configured: previous}
   end
 

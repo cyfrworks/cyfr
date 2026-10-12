@@ -81,6 +81,7 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
     :ok = Probe.publish_probe!(ctx, isolate: false, dependencies: ["#{@stub}:#{@version}"])
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted and @stub in minted and @brief in minted
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     assert @probe_node in minted
 
     {:ok, ctx: ctx}

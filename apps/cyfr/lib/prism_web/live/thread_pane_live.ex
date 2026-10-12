@@ -120,7 +120,12 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:members, member_labels(ctx))
       |> assign(:roster, roster)
       |> assign(:preparing?, preparing?)
-      |> assign(:model_ready, model_ready(ctx, if(connected?(socket), do: agents(ctx), else: [])))
+      # Before the socket connects the model's status is not read, and is
+      # pending: no status is made up from agents never asked for.
+      |> assign(
+        :model_ready,
+        if(connected?(socket), do: model_ready(ctx, agents(ctx)), else: :pending)
+      )
       |> assign(:solo_human, Sanctum.Tenancy.Members.solo?(ctx.athanor_id))
       |> assign(:own?, Users.own_athanor?(ctx.user_id, ctx.athanor_id))
       |> assign(:links, [])
@@ -1525,6 +1530,8 @@ defmodule PrismWeb.ThreadPaneLive do
             <span class="text-gray-600">Its agents and components are being installed.</span>
           <% else %>
             <%= cond do %>
+              <% @model_ready == :pending -> %>
+                <span data-test="model-pending">Reading the model…</span>
               <% @model_ready in [:no_model, :no_key] -> %>
                 <span>{athanor_label(@athanor, @context)} has no model yet.</span>
                 <%!-- From the panel a navigate would leave the room being read. --%>

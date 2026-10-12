@@ -56,6 +56,7 @@ defmodule Locus.Runtime.RunnerReuseTest do
       })
 
     ctx = %{Sanctum.TestContext.local(:api) | athanor_id: athanor.id}
+    Sanctum.TestContext.ready!(ctx.athanor_id)
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)

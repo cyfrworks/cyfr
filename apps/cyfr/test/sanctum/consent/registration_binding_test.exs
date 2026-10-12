@@ -348,8 +348,9 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       assert schedule.profile_id == "prof-bind"
     end
 
-    # As the schedule tool and the webhook surface word the binding's
-    # refusal: an outage to retry, never another component's profile.
+    # As the schedule tool and the webhook surface answer the binding's
+    # refusal: an outage to retry, in its own class, never another
+    # component's profile.
     @tag :capture_log
     test "a profile list the store cannot answer refuses a schedule and a webhook as an outage",
          %{ctx: ctx} do
@@ -358,7 +359,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       refused =
         "profile binding refused: the component's profiles cannot be read right now — try again"
 
-      assert {:error, {:invalid_argument, ^refused}} =
+      assert {:error, %Prima.Refusal{class: :unavailable, message: ^refused}} =
                Opus.Schedules.Provider.handle("schedule", ctx, %{
                  "action" => "create",
                  "name" => "unread-sched",
@@ -367,7 +368,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
                  "profile_id" => "prof-bind"
                })
 
-      assert {:error, ^refused} =
+      assert {:error, %Prima.Refusal{class: :unavailable, message: ^refused}} =
                Sanctum.Webhook.create(ctx, %{
                  name: "unread-hook",
                  replay_protection: "none",

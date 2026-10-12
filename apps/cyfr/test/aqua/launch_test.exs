@@ -45,6 +45,7 @@ defmodule Aqua.LaunchTest do
     end)
 
     ctx = Sanctum.TestContext.local(:prism)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)

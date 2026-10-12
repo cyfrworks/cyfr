@@ -415,6 +415,9 @@ defmodule Arca.DecisionLogBudgetTest do
   alias Arca.DecisionLog
   alias Arca.DecisionLog.AuditFailure
 
+  # The longest the rollback test holds its writer.
+  @hold_ms 30_000
+
   setup do
     call_id = "call_budget_#{System.unique_integer([:positive])}"
 
@@ -573,6 +576,83 @@ defmodule Arca.DecisionLogBudgetTest do
              Task.async(fn -> DecisionLog.append(actor, decision) end) |> Task.await(:infinity)
 
     assert rows(call_id) == 1
+  end
+
+  # The writer, not its caller: a caller answered `:timeout` at its budget
+  # says nothing about how the write it left behind ended. Here the insert
+  # answers and the writer is held, before its commit, until the pool has
+  # taken its connection back at the pool deadline, so the transaction
+  # answers `{:error, :rollback}`: the loss is the writer's to log, never a
+  # crash, and nothing was committed.
+  test "a write the pool rolls back after its deadline is logged, and the writer exits normally",
+       %{call_id: call_id, actor: actor} do
+    test = self()
+    handler = "decision-log-hold-#{call_id}"
+
+    :ok =
+      :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.hold_after_insert/4, test)
+
+    # A test that dies holding the writer frees it (the hold ends with its
+    # owner), and the writer has finished before the shared state is put
+    # back.
+    on_exit(fn ->
+      :telemetry.detach(handler)
+      await(fn -> DecisionLog.writers() == 0 end, @hold_ms + 5_000)
+    end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        caller = Task.async(fn -> DecisionLog.append(actor, decision(call_id)) end)
+        assert_receive {:held, writer}, 5_000
+        ref = Process.monitor(writer)
+
+        assert {:error, %AuditFailure{kind: :timeout, stage: :append}} =
+                 Task.await(caller, :infinity)
+
+        send(writer, :go)
+        assert_receive {:DOWN, ^ref, :process, ^writer, reason}, 30_000
+        assert reason == :normal
+      end)
+
+    :ok = :telemetry.detach(handler)
+
+    assert log =~ "[Arca.DecisionLog] append timeout: the transaction rolled back"
+    assert rows(call_id) == 0
+  end
+
+  # Holds the writer of this test's decision once, after its insert has
+  # answered and before its commit, until the test lets it go and the pool
+  # has taken its connection back. The hold ends as well when the test
+  # dies or the bound passes, so a test that fails never leaves the writer
+  # held: the writer then goes on with its write, as one whose caller died.
+  @doc false
+  def hold_after_insert(_event, _measurements, %{source: "decision_logs", query: query}, test) do
+    if query =~ "INSERT" and test in List.wrap(Process.get(:"$callers")) and
+         not Process.get(:held?, false) do
+      Process.put(:held?, true)
+      owner = Process.monitor(test)
+      send(test, {:held, self()})
+
+      receive do
+        :go -> await(fn -> closed?(connections()) end, @hold_ms)
+        {:DOWN, ^owner, :process, ^test, _reason} -> :ok
+      after
+        @hold_ms -> :ok
+      end
+
+      Process.demonitor(owner, [:flush])
+    end
+  end
+
+  def hold_after_insert(_event, _measurements, _metadata, _test), do: :ok
+
+  # Every connection the writer holds has been taken back by the pool; a
+  # writer holding none would leave nothing to wait for.
+  defp closed?([_ | _] = conns), do: Enum.all?(conns, &(DBConnection.status(&1) == :error))
+
+  # The connections this process holds through Ecto.
+  defp connections do
+    for {{Ecto.Adapters.SQL, _pool}, %DBConnection{} = conn} <- Process.get(), do: conn
   end
 
   test "a write past the writer cap is refused at once, and an overload runs no more than the cap",

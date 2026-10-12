@@ -107,6 +107,7 @@ defmodule Locus.Runtime.SecretAuditTest do
     on_exit(fn -> :telemetry.detach(attach_id) end)
 
     ctx = Sanctum.TestContext.local(:api)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)

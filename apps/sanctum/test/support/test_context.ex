@@ -75,6 +75,27 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
+  Mark `athanor_id` filled, as a fill's last write marks it, and nothing
+  more — what a test says when it roots a run, which `Opus.run_root/5`
+  admits only in a ready athanor (`Sanctum.Provisioning.ready/1`). The
+  row is made first when the test named an athanor no fixture made.
+  Unlike `provisioned!/1` it copies no shipped tree in.
+  """
+  def ready!(athanor_id) when is_binary(athanor_id) do
+    Arca.Test.Actor.ensure_athanor_row(athanor_id)
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
+
+    case athanor.provisioned_at do
+      nil ->
+        {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+        filled
+
+      _ ->
+        athanor
+    end
+  end
+
+  @doc """
   Copy every shipped unit the athanor lacks into `athanor_id` — the
   shipped AQUA tree and the bundle — without marking it provisioned.
   """

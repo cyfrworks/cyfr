@@ -43,6 +43,7 @@ defmodule Locus.Runtime.SecurityTest do
 
     # A run is admitted only in an athanor that stands: the test's own has a row.
     Arca.Test.Actor.athanor!(ctx.athanor_id)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
 
     # Plant the test WASM in a private seed so bootstrap can mint it.
     Cyfr.Test.SeedBundle.isolate!()

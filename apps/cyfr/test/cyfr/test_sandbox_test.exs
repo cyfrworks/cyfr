@@ -163,6 +163,7 @@ defmodule Cyfr.Test.SandboxTest do
       Sandbox.stop_work_on_exit()
 
       ctx = Sanctum.TestContext.local(:api)
+      Sanctum.TestContext.ready!(ctx.athanor_id)
       :ok = Probe.publish_probe!(ctx)
       {:ok, _minted} = Bootstrap.run(ctx)
       {:ok, ctx: ctx, seen: seen}

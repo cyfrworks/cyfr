@@ -45,6 +45,7 @@ defmodule Locus.Runtime.ChainTest do
       origin: :interactive
     }
 
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     admin_ctx = Sanctum.TestContext.local()
     wasm_bytes = File.read!(@math_wasm_path)
 

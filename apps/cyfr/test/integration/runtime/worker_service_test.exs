@@ -61,6 +61,7 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
     Application.put_env(:arca, :base_path, test_path)
 
     ctx = Sanctum.TestContext.local(:api)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
 
     on_exit(fn ->
       Slots.forgive_unreaped(@slots, ctx.athanor_id)

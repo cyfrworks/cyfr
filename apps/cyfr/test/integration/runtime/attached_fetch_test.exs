@@ -116,6 +116,7 @@ defmodule Locus.Runtime.AttachedFetchTest do
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     {:ok, ctx: ctx, port: port}
   end
 

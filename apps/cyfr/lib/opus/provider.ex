@@ -800,6 +800,10 @@ defmodule Opus.Provider do
     {:error, "profile_unavailable: #{status}"}
   end
 
+  # An athanor still being filled stays typed, so the run is answered as a
+  # turn is: unavailable, in the sentence that says it is being prepared.
+  defp format_root_result({:error, :not_provisioned} = refused), do: refused
+
   # An account the root's ingress does not bind stays typed: the gate
   # classes it setup required, in its own sentence (`Prima.Refusal`).
   defp format_root_result({:error, :connection_not_granted} = refused), do: refused

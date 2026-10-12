@@ -43,8 +43,10 @@ defmodule Opus.ProviderTest do
       )
       |> Sanctum.TestContext.via(:api)
 
-    # A run is admitted only in an athanor that stands: the test's own has a row.
+    # A run is admitted only in an athanor that stands and is filled: the
+    # test's own has a row, marked filled.
     Arca.Test.Actor.athanor!(ctx.athanor_id)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
 
     # Plant the test WASM in a private seed so bootstrap can mint it.
     Cyfr.Test.SeedBundle.isolate!()
@@ -250,6 +252,7 @@ defmodule Opus.ProviderTest do
       person = Sanctum.TestContext.local(:prism)
       caller = Sanctum.TestContext.local(:api)
       ref = named_app!(person)
+      Sanctum.TestContext.ready!(caller.athanor_id)
 
       run = fn connection ->
         Provider.handle("execution", caller, %{
@@ -685,6 +688,114 @@ defmodule Opus.ProviderTest do
                Opus.authority_for(ctx, :default, soul)
     end
   end
+
+  # The run gate asks for readiness first, as a turn does: an athanor still
+  # being filled is refused, its fill asked for, and nothing is admitted,
+  # reserved or written. The same run in the same athanor, once filled,
+  # starts, so nothing else refused it.
+  describe "an athanor still being filled" do
+    setup %{ctx: ctx} do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(a in Arca.Schemas.Athanor, where: a.id == ^ctx.athanor_id),
+          set: [provisioned_at: nil]
+        )
+
+      handler = "fill-#{ctx.athanor_id}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          Sanctum.Provisioning.fill_event(),
+          &__MODULE__.fill_requested/4,
+          {self(), ctx.athanor_id}
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    test "execution.run answers not_provisioned, asks for the fill and starts nothing",
+         %{ctx: ctx, ref: ref} do
+      {executions, _attempts} = before = started(ctx)
+      slots = slots(ctx)
+
+      assert {:error, :not_provisioned} =
+               Provider.handle("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => ref,
+                 "input" => %{"a" => 1, "b" => 2}
+               })
+
+      assert_receive {:fill_requested, _athanor_id}
+      assert {started(ctx), slots(ctx)} == {before, slots}
+
+      Sanctum.TestContext.ready!(ctx.athanor_id)
+
+      Provider.handle("execution", ctx, %{
+        "action" => "run",
+        "reference" => ref,
+        "input" => %{"a" => 1, "b" => 2}
+      })
+
+      assert elem(started(ctx), 0) == executions + 1
+    end
+
+    test "over MCP the run is unavailable in the turn's sentence, recorded so", %{
+      ctx: ctx,
+      ref: ref
+    } do
+      failed_tool!(
+        ctx,
+        fn -> over_mcp(ctx, %{"reference" => ref, "input" => %{}}) end,
+        "This athanor is still being prepared — retry shortly",
+        "unavailable"
+      )
+
+      assert_receive {:fill_requested, _athanor_id}
+    end
+
+    # `run_stream` answers before its background run is admitted, so a
+    # refusal before any row reaches its caller as every such refusal
+    # does: the run is acknowledged, no execution exists, and its events
+    # route answers not found.
+    test "execution.run_stream acknowledges, asks for the fill, and writes no execution", %{
+      ctx: ctx,
+      ref: ref
+    } do
+      before = {started(ctx), slots(ctx)}
+
+      assert {:ok, %{execution_id: id, stream_url: url}} =
+               Provider.handle("execution", ctx, %{
+                 "action" => "run_stream",
+                 "reference" => ref,
+                 "input" => %{"a" => 1, "b" => 2}
+               })
+
+      assert_receive {:fill_requested, _athanor_id}, 5_000
+
+      # The background run registered under the id before it asked for the
+      # fill, and its entry goes when it ends.
+      Prima.Test.Wait.wait_until(fn -> Registry.lookup(Opus.Registry, id) == [] end)
+      assert {started(ctx), slots(ctx)} == before
+
+      conn =
+        Plug.Test.conn(:get, url)
+        |> Plug.Conn.assign(:context, ctx)
+        |> Emissary.Web.ExecutionEventsController.stream(%{"id" => id})
+
+      assert conn.status == 404
+    end
+  end
+
+  @doc false
+  def fill_requested(_event, _measurements, %{athanor_id: id}, {test, id}),
+    do: send(test, {:fill_requested, id})
+
+  def fill_requested(_event, _measurements, _metadata, _config), do: :ok
+
+  # The execution slots the context's athanor holds.
+  defp slots(ctx), do: Map.get(Prima.Slots.status(Opus.Slots).keys, ctx.athanor_id, 0)
 
   # What an MCP client receives for `tools/call` of `execution.run` with
   # `args`: the JSON-RPC body the transport writes for the router's answer.

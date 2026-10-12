@@ -41,6 +41,7 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
 
     on_exit(fn -> :telemetry.detach(handler_id) end)
 
+    Sanctum.TestContext.ready!(Sanctum.TestContext.athanor_id())
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 

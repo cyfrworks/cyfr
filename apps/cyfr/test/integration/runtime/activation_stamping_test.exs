@@ -34,6 +34,8 @@ defmodule Locus.Runtime.ActivationStampingTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
+    Sanctum.TestContext.ready!(ctx.athanor_id)
+
     {:ok, ctx: ctx}
   end
 

@@ -100,6 +100,40 @@ defmodule Sanctum.Consent.RegistrationBinding do
 
   def message(reason), do: Prima.Refusal.message(reason)
 
+  @doc """
+  The refusal a registration answers for a refusal of `authorize/3`, in
+  the class it belongs to: the consent class's own refusal for a caller
+  the class refused; `unavailable` for a profile list or a head the store
+  could not answer, and `corrupt` for a profile row or a head stored
+  damaged, each in its `message/1` sentence; and the caller's argument
+  refusal for everything else.
+  """
+  @spec refusal(error()) ::
+          {:consent_class_required, Authz.refusal()}
+          | Prima.Refusal.t()
+          | {:invalid_argument, String.t()}
+  def refusal({:consent_refused, refusal}), do: {:consent_class_required, refusal}
+
+  def refusal({unread, _subject} = reason)
+      when unread in [:profiles_unavailable, :head_unavailable],
+      do: classed(:unavailable, reason)
+
+  def refusal({damaged, _profile_id} = reason) when damaged in [:profile_corrupt, :head_corrupt],
+    do: classed(:corrupt, reason)
+
+  def refusal(reason), do: {:invalid_argument, sentence(reason)}
+
+  # Wrapped, so the binding's sentence stands: a head refusal bare is the
+  # loader's, which `Sanctum.Refusals.classify/2` words as a run's.
+  defp classed(class, reason),
+    do: %Prima.Refusal{
+      class: class,
+      reason: {:profile_binding, reason},
+      message: sentence(reason)
+    }
+
+  defp sentence(reason), do: "profile binding refused: " <> message(reason)
+
   defp name_level(target_ref) do
     case Prima.ComponentRef.to_name_ref(target_ref) do
       {:ok, name_ref} -> {:ok, name_ref}

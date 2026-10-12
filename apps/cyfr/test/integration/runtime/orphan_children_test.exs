@@ -76,6 +76,7 @@ defmodule Locus.Runtime.OrphanChildrenTest do
     :ok = Probe.publish_probe!(ctx, name: "brief-probe", limits: brief_limits())
     :ok = Probe.publish_probe!(ctx, isolate: false, dependencies: [@brief])
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
+    Sanctum.TestContext.ready!(ctx.athanor_id)
     assert @probe_node in minted
 
     {:ok, ctx: ctx}

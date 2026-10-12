@@ -700,9 +700,18 @@ defmodule Sanctum.Webhook do
       :ok ->
         :ok
 
+      # A profile list or head the store could not answer, or one stored
+      # damaged, is refused in its own class; every other refusal keeps the
+      # binding's sentence as the webhook surface has always answered it.
       {:error, reason} ->
-        {:error,
-         "profile binding refused: #{Sanctum.Consent.RegistrationBinding.message(reason)}"}
+        case Sanctum.Consent.RegistrationBinding.refusal(reason) do
+          %Prima.Refusal{} = classed ->
+            {:error, classed}
+
+          _consent_or_argument ->
+            {:error,
+             "profile binding refused: #{Sanctum.Consent.RegistrationBinding.message(reason)}"}
+        end
     end
   end
 
