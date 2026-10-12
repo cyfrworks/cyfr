@@ -14,12 +14,12 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd -P)"
-root="$(cd "$here/../../../../../.." && pwd -P)"
+root="$(cd "$here/../../../../../../.." && pwd -P)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 # Each guest and the world it is a component of.
-guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst attached_header_probe:catalyst credential_canary:catalyst"
+guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst attached_header_probe:catalyst credential_canary:catalyst trapper:reagent"
 
 digest() { shasum -a 256 "$1" | cut -d' ' -f1; }
 

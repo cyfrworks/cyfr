@@ -23,16 +23,18 @@ defmodule Locus.Runtime.SharedEngine do
 
   ## CPU-Time Limitation
 
-  Wasmex also exposes no epoch interruption, and component calls run on a
-  detached native thread (wasmex spawns the call and drops the JoinHandle),
-  so the wall-clock timeout kill in `Locus.Runtime.Runner` cannot preempt a
-  component that never yields (e.g. a tight compute loop). Killing the
-  waiting BEAM process frees the execution slot, but the native thread
-  keeps spinning one CPU core until the worker service restarts.
-  Mitigations: CYFR's per-tenant execution slots bound how many such loops
-  one tenant can start, and the container CPU quota (docker-compose
-  `cpus:`) bounds aggregate damage. A real fix needs epoch interruption
-  support in wasmex.
+  Wasmex runs each store's calls as tasks on its own pool of native
+  threads, and its engine turns on epoch interruption only so that a call
+  yields its thread every tick: it interrupts a core module's call at the
+  call's timeout and never a component's, whose call outlives its caller
+  and finishes in the background. So the wall-clock timeout kill in
+  `Locus.Runtime.Runner` cannot preempt a component that never returns
+  (e.g. a tight compute loop). Killing the waiting BEAM process frees the
+  execution slot, but the call keeps one CPU core busy until the runner's
+  VM ends: a killed call leaves its runner unclean, and its service ends
+  it. Mitigations: CYFR's per-tenant execution slots bound how many such
+  loops one tenant can start, and the container CPU quota (docker-compose
+  `cpus:`) bounds aggregate damage.
   """
 
   use Agent

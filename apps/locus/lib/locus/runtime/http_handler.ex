@@ -172,9 +172,9 @@ defmodule Locus.Runtime.HttpHandler do
   def execute(json_request, edge, %Limits{} = limits, %HostClient{} = host, component_ref) do
     do_execute(json_request, edge, limits, host, component_ref)
   rescue
-    # The guest controls this JSON; a raise below here would take the
-    # Wasmex process with it. The message stays generic and the exception
-    # goes to the host log.
+    # The guest controls this JSON; a raise below here would fail the
+    # guest's call instead of answering it an error it can act on. The
+    # message stays generic and the exception goes to the host log.
     exception ->
       Logger.error(
         "[Locus.Runtime.HttpHandler] #{component_ref} request raised: " <>

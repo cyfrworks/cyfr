@@ -102,7 +102,7 @@ defmodule Locus.Runtime.Engine do
 
   ## Examples
 
-      iex> {:ok, result} =
+      iex> {:ok, result, _metadata} =
       ...>   Locus.Runtime.Engine.execute_component(wasm_bytes, %{"a" => 5, "b" => 3},
       ...>     authority: authority
       ...>   )
@@ -113,7 +113,7 @@ defmodule Locus.Runtime.Engine do
           binary() | (-> {:ok, binary()} | {:error, {:artifact, String.t()}}),
           map(),
           keyword()
-        ) :: {:ok, map()} | {:ok, map(), map()} | {:error, term()}
+        ) :: {:ok, map(), map()} | {:error, term()}
   def execute_component(wasm, input, opts \\ [])
       when (is_binary(wasm) or is_function(wasm, 0)) and is_map(input) do
     component_type = Keyword.get(opts, :component_type, :reagent)
@@ -543,6 +543,13 @@ defmodule Locus.Runtime.Engine do
 
             {:error, "Component call failed for #{inspect(call_name)}: #{message}"}
 
+          {:failed, message} ->
+            Logger.warning(
+              "[Locus.Runtime.Engine] the call of #{inspect(call_name)} failed as it ran: #{message}"
+            )
+
+            {:error, "Component call failed for #{inspect(call_name)}: #{message}"}
+
           :instance_ended ->
             Logger.warning(
               "[Locus.Runtime.Engine] the instance ended under #{inspect(call_name)}"
@@ -583,26 +590,33 @@ defmodule Locus.Runtime.Engine do
     end
   end
 
-  # A guest's trap ends the instance's server with the trap as its exception,
-  # and the exit of the call waiting on it carries that call beside the
-  # reason: `{reason, {GenServer, :call, [pid, {:call_function, name,
-  # [json_input]}, timeout]}}`. The guest's input is never part of the run's
-  # error, so only the trap's own message leaves here, and an exit of any
-  # other shape leaves as the fact that the instance ended.
+  # The instance's server answers a call that failed as it ran, a trap or
+  # anything else (an import that failed, a result it could not convert),
+  # as one sentence and no structure: the library's words, "Error during
+  # function excecution", then the trap in parentheses when it trapped,
+  # then wasmtime's message and the guest's backtrace (function names and
+  # offsets). Either is the call's failure in those words; any other
+  # error, a missing export or a parameter the interface does not take, is
+  # the component's interface. The server outlives all of them, and
+  # `Locus.Runtime.TrapTest` holds the match to the library's exact words.
+  # An exit of the call is the server ending under it (a kill, a crash);
+  # it carries the call beside the reason, the guest's input with it, so
+  # it leaves only as the fact that the instance ended.
   defp call_function(pid, call_name, json_input) do
     # Components (especially Catalysts) can make HTTP calls that take much longer
     # than the default 5s GenServer.call timeout. The runner enforces its own
     # wall-clock timeout, so we use :infinity here to avoid double-timeout races.
-    Wasmex.Components.call_function(pid, call_name, [json_input], :infinity)
+    case Wasmex.Components.call_function(pid, call_name, [json_input], :infinity) do
+      {:error, "Error during function excecution (" <> _ = message} -> {:trapped, message}
+      {:error, "Error during function excecution: " <> _ = message} -> {:failed, message}
+      answer -> answer
+    end
   catch
-    :exit, {{%RuntimeError{message: message}, _stacktrace}, _call} when is_binary(message) ->
-      {:trapped, message}
-
     :exit, _reason ->
       :instance_ended
   end
 
-  # The instance's server is gone already when the call it ran trapped.
+  # The instance's server is gone already when it ended under its call.
   defp stop_instance(pid) do
     GenServer.stop(pid, :normal)
   catch

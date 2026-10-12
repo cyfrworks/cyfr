@@ -762,10 +762,11 @@ defmodule Locus.Runtime.ModelContractTest do
              }
            ] = played.steps
 
-    # The error is the trap. The exit of the call that trapped also names the
-    # call's arguments, the whole request: none of it is the run's error,
-    # which the rows below, the thread and the log all carry.
+    # The error is the trap, never the component's interface, and nothing of
+    # the call's arguments, the whole request: none of it is the run's
+    # error, which the rows below, the thread and the log all carry.
     assert error =~ ~r/^Component call failed for .*wasm trap/
+    refute error =~ "Ensure the component exports"
     assert %{status: "failed", error_message: ^error} = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert %{error: turn_error} = played.turn
     told = Enum.find(played.rows, &(&1.content =~ "The model could not be reached"))
@@ -778,8 +779,8 @@ defmodule Locus.Runtime.ModelContractTest do
         part <- request ++ ["GenServer", "#PID"],
         do: refute(said =~ part)
 
-    # What the engine and the host said of the trap, the crash report among
-    # it; the queries' own lines carry the person's line as the row it is.
+    # What the engine and the host said of the trap; the queries' own lines
+    # carry the person's line as the row it is.
     said_of_it = logged(played.log, ["warning", "error"])
     assert said_of_it =~ "wasm trap"
     for part <- request, do: refute(said_of_it =~ part)
