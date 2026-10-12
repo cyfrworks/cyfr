@@ -2687,9 +2687,14 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
 
   Each case is a forced compile, so the module is tagged `:boundary_plant`
   and runs only when asked for (`--include boundary_plant`). The copy is
-  the checkout's tracked and unignored files with `deps` linked in; its
-  build is `_build/boundary_plant` of the checkout, so the first run
-  compiles the dependencies once and no other build is touched.
+  the checkout's tracked and unignored files, and its dependencies are the
+  checkout's own. Its build is `_build/boundary_plant` of the checkout, so
+  the first run compiles the dependencies once and no other build is
+  touched. That build outlives the run, so the paths Mix records in it
+  must stay valid across runs: `MIX_DEPS_PATH` names the checkout's `deps`,
+  which every run shares, where a copy's `deps` would be removed with the
+  copy and leave the recorded links dangling. A test checks that every such
+  link resolves after the unplanted compile.
   """
 
   use ExUnit.Case, async: false
@@ -2711,6 +2716,17 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
     status == 0 || flunk("the unplanted copy does not compile:\n#{output}")
 
     %{copy: copy}
+  end
+
+  # Mix links the `include` and `src` of each rebar3 dependency into the
+  # reused build, and a link left by an earlier run dangles once that run's
+  # copy is removed: the next compile that reads a header through it fails.
+  test "every dependency link in the reused build resolves" do
+    links = dependency_links(Path.join(@root, "_build/boundary_plant"))
+    assert links != [], "the walk found no dependency links under the reused build"
+
+    dangling = for {link, target} <- links, not File.exists?(target), do: "#{link} -> #{target}"
+    assert dangling == [], "dangling dependency links:\n" <> Enum.join(dangling, "\n")
   end
 
   test "a domain naming another domain", %{copy: copy} do
@@ -2933,13 +2949,16 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
       env: [
         {"MIX_ENV", "dev"},
         {"CYFR_DATABASE", "sqlite"},
-        {"MIX_BUILD_PATH", Path.join(@root, "_build/boundary_plant")}
+        {"MIX_BUILD_PATH", Path.join(@root, "_build/boundary_plant")},
+        # Recorded in the reused build, which outlives this copy.
+        {"MIX_DEPS_PATH", Mix.Project.deps_path()}
       ]
     )
   end
 
   # The checkout as a commit of it would hold it, uncommitted changes
-  # included, with the fetched dependencies linked rather than copied.
+  # included. Dependencies are neither copied nor linked: compile/3 points
+  # Mix at the checkout's own through MIX_DEPS_PATH.
   defp copy_tree!(copy) do
     {files, 0} =
       System.cmd("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
@@ -2953,7 +2972,15 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
       File.mkdir_p!(Path.dirname(target))
       File.cp!(source, target)
     end
+  end
 
-    File.ln_s!(Path.join(@root, "deps"), Path.join(copy, "deps"))
+  # A dangling link is still a link: it is listed with lstat and its target
+  # is resolved here, so the existence check follows it.
+  defp dependency_links(build) do
+    for dep <- File.ls!(Path.join(build, "lib")),
+        entry <- ["include", "src"],
+        link = Path.join([build, "lib", dep, entry]),
+        match?({:ok, %File.Stat{type: :symlink}}, File.lstat(link)),
+        do: {link, Path.expand(File.read_link!(link), Path.dirname(link))}
   end
 end
