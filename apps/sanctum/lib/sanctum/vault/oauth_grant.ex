@@ -31,6 +31,11 @@ defmodule Sanctum.Vault.OAuthGrant do
       moves and every profile whose head consent references the entry
       flips to `needs_consent`.
 
+  The scopes an entry binds are the ones the provider answered it was
+  granted, when its token response names them, and the requested set
+  when it names none; an answer naming a scope the grant did not ask for
+  writes nothing.
+
   `complete/3` runs with no browser Context:
   proof-of-initiation is the single-use 256-bit `state`
   (delete-on-read, 2-minute TTL) plus the server-held PKCE verifier, and
@@ -155,7 +160,9 @@ defmodule Sanctum.Vault.OAuthGrant do
   the exchange and again before anything is written: `{:error,
   :unauthenticated}` when it does not — the presented `state` opens
   nothing — and `{:error, :unavailable}` when the store cannot say, or
-  when a remote person's identity cannot be confirmed fresh.
+  when a remote person's identity cannot be confirmed fresh. A token
+  response naming a scope outside the request is `{:error,
+  :scopes_not_requested}` and stores nothing.
   """
   @spec complete(String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def complete(state, code, redirect_uri) do
@@ -167,6 +174,7 @@ defmodule Sanctum.Vault.OAuthGrant do
          {:ok, _before} <- still_standing(pending),
          {:ok, creds} <- provider_creds(pending.actor.athanor_id, pending.target.provider),
          {:ok, response} <- exchange(pending, creds, code, redirect_uri),
+         {:ok, scopes} <- granted_scopes(pending.target.scopes, response),
          {:ok, standing} <- still_standing(pending),
          {:ok, hold} <- write_hold(standing) do
       bundle = %{
@@ -174,10 +182,10 @@ defmodule Sanctum.Vault.OAuthGrant do
         "refresh_token" => response["refresh_token"],
         "expires_at" => VaultOAuth.compute_expires_at(response["expires_in"]),
         "token_type" => response["token_type"] || "bearer",
-        "scopes" => pending.target.scopes
+        "scopes" => scopes
       }
 
-      pending |> apply_grant(bundle, hold) |> unheld()
+      pending |> put_in([:target, :scopes], scopes) |> apply_grant(bundle, hold) |> unheld()
     end
   end
 
@@ -381,14 +389,49 @@ defmodule Sanctum.Vault.OAuthGrant do
            URI.encode_query(body_params),
            :auth_code
          ) do
-      {:ok, %{"access_token" => token} = response} when is_binary(token) ->
-        {:ok, response}
-
-      {:ok, _} ->
-        {:error, "token endpoint returned no access_token"}
+      {:ok, response} ->
+        token_response(response)
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # A token response carries an access token; its `scope` is read by
+  # `granted_scopes/2`, before anything is written.
+  defp token_response(%{"access_token" => token} = response) when is_binary(token),
+    do: {:ok, response}
+
+  defp token_response(_response), do: malformed_response()
+
+  defp malformed_response,
+    do: {:error, "token endpoint returned no access_token or a malformed scope"}
+
+  # The scopes the token was granted for: the provider's answer when it
+  # names one (`Sanctum.Vault.OAuth.answered_scope/1`), else the requested
+  # set, which an answer that is absent or names no scope leaves unchanged
+  # (RFC 6749 §5.1). They are what the entry
+  # binds, so consent and every dispense reason about the scopes the token
+  # reaches, never the ones only asked for. An answer naming a scope
+  # outside the request is refused `:scopes_not_requested`, and one whose
+  # scope is malformed as a malformed response; nothing is written either
+  # way: a token wider than its grant is not one to hold.
+  defp granted_scopes(requested, response) do
+    sent = requested |> Enum.flat_map(&String.split/1) |> Enum.uniq()
+
+    case VaultOAuth.answered_scope(response) do
+      :malformed ->
+        malformed_response()
+
+      {:ok, []} ->
+        {:ok, requested}
+
+      {:ok, answered} ->
+        cond do
+          answered -- sent != [] -> {:error, :scopes_not_requested}
+          sent -- answered == [] -> {:ok, requested}
+          true -> {:ok, Enum.filter(sent, &(&1 in answered))}
+        end
     end
   end
 

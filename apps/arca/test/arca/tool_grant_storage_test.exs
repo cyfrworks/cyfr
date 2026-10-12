@@ -145,39 +145,40 @@ defmodule Arca.ToolGrantStorageTest do
       assert [%{constraint: %{kind: "egress_domain"}}] = listed(row)
     end
 
-    test "a vault_entry constraint's patterns are entry ids, and a deny carries none",
-         %{thread: row} do
-      assert ToolGrantStorage.constraint_errors("vault_entry", ["vlt_x"]) == []
-      assert "vault_entry" in Arca.Schemas.ToolGrant.constraint_kinds()
+    test "a constraint names a resource kind an action may declare, and no other" do
+      assert Arca.Schemas.ToolGrant.constraint_kinds() ==
+               Enum.map(Prima.Operation.resource_kinds(), &Atom.to_string/1)
 
-      for patterns <- [["*"], ["vlt_*"], ["Supabase 1"], ["vlt_a/b"], [""], ["vlt_a", "vlt_a"]] do
+      assert Arca.Schemas.ToolGrant.constraint_kinds() == ["storage_path", "egress_domain"]
+    end
+
+    test "a vault entry takes no constraint, and one stored before reads as corrupt",
+         %{thread: row} do
+      entry_id = "vlt_01a10337-1f70-7297-b4ba-7812de692b02"
+
+      assert ToolGrantStorage.constraint_errors("vault_entry", [entry_id]) ==
+               ["names no resource kind a constraint may carry"]
+
+      for kind <- ["vault_entry", :vault_entry] do
         assert {:error, {:invalid, %{constraint: _}}} =
                  ToolGrantStorage.put(
-                   Map.put(row, :constraint, %{kind: "vault_entry", patterns: patterns})
+                   Map.put(row, :constraint, %{kind: kind, patterns: [entry_id]})
                  )
       end
 
-      entry_id = "vlt_01a10337-1f70-7297-b4ba-7812de692b02"
+      # A row written while the grammar still took the kind is answered
+      # with no constraint a caller may admit under, never as unbounded.
+      {:ok, stored} = ToolGrantStorage.put(row)
 
-      # A standing deny never takes a bound, a vault entry included.
-      assert {:error, {:invalid, %{constraint: _}}} =
-               ToolGrantStorage.put(
-                 Map.merge(row, %{
-                   effect: "deny",
-                   constraint: %{kind: "vault_entry", patterns: [entry_id]}
-                 })
-               )
+      {1, _} =
+        Arca.Repo.update_all(
+          from(g in Arca.Schemas.ToolGrant, where: g.id == ^stored.id),
+          set: [
+            constraint: Jason.encode!(%{"kind" => "vault_entry", "patterns" => [entry_id]})
+          ]
+        )
 
-      assert {:ok, stored} =
-               ToolGrantStorage.put(
-                 Map.put(row, :constraint, %{
-                   kind: :vault_entry,
-                   patterns: [entry_id, "ine_01a10337-0000-7000-8000-000000000000"]
-                 })
-               )
-
-      assert stored.constraint.kind == "vault_entry"
-      assert entry_id in stored.constraint.patterns
+      assert [%{constraint: :corrupt}] = listed(row)
     end
 
     test "an allow past its deadline is not answered; a deny always is", %{thread: row} do

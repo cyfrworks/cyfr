@@ -399,7 +399,15 @@ defmodule Sanctum.Vault.OAuth do
 
       case token_post(entry, endpoints, creds, token_url, body_params) do
         {:ok, response} ->
-          write_back(actor, entry, apply_refresh_response(payload, oauth, response), oauth)
+          case refreshed_scopes(entry, response) do
+            :ok ->
+              write_back(actor, entry, apply_refresh_response(payload, oauth, response), oauth)
+
+            {:error, _} = refused ->
+              emit_telemetry(entry, entry.provider_hint, :error)
+              keep_rotated(actor, entry, payload, oauth, response)
+              refused
+          end
 
         {:error, reason} ->
           emit_telemetry(entry, entry.provider_hint, :error)
@@ -407,6 +415,35 @@ defmodule Sanctum.Vault.OAuth do
           {:error,
            {:authorization_required, "the refresh failed for entry #{entry.id}: #{reason}"}}
       end
+    end
+  end
+
+  # A full refresh asks for no scope, so its token is for the entry's own
+  # scopes. An answer naming another set, wider or narrower, is a token the
+  # entry's binding does not describe: it is neither held nor dispensed,
+  # since an entry's scopes move only by re-authorization
+  # (`Sanctum.Vault.OAuthGrant`), but a refresh token it rotated is kept,
+  # as a refused narrower answer keeps one, and so is one whose scope is
+  # malformed (`answered_scope/1`). An answer naming no scope is the
+  # entry's own (RFC 6749 §5.1).
+  defp refreshed_scopes(entry, response) do
+    held = entry |> entry_scopes() |> Enum.flat_map(&String.split/1) |> Enum.uniq() |> Enum.sort()
+
+    case answered_scope(response) do
+      :malformed ->
+        {:error, malformed_scope()}
+
+      {:ok, []} ->
+        :ok
+
+      {:ok, answered} ->
+        if Enum.sort(answered) == held,
+          do: :ok,
+          else:
+            {:error,
+             {:authorization_required,
+              "the provider refreshed this connection for other scopes than it holds; " <>
+                "re-authorize it"}}
     end
   end
 
@@ -529,11 +566,14 @@ defmodule Sanctum.Vault.OAuth do
   defp attenuated_token(response, requested) do
     sent = Enum.flat_map(requested, &String.split/1)
 
-    case answered_scopes(response["scope"]) do
-      [] ->
+    case answered_scope(response) do
+      :malformed ->
+        {:error, malformed_scope()}
+
+      {:ok, []} ->
         {:error, :scope_not_attenuable}
 
-      answered ->
+      {:ok, answered} ->
         cond do
           answered -- sent != [] ->
             {:error, :scope_not_attenuable}
@@ -549,17 +589,26 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
-  # RFC 6749 spells an answer's scope as one space-delimited string; a JSON
-  # array of strings says the same. Anything else names no scope.
-  defp answered_scopes(scope) when is_binary(scope), do: scope |> String.split() |> Enum.uniq()
-
-  defp answered_scopes(scope) when is_list(scope) do
-    if Enum.all?(scope, &is_binary/1),
-      do: scope |> Enum.flat_map(&String.split/1) |> Enum.uniq(),
-      else: []
+  @doc false
+  # The one reading of a token response's `scope`, shared with
+  # `Sanctum.Vault.OAuthGrant`'s code exchange. RFC 6749 §3.3 spells it as
+  # one space-delimited string, split and deduplicated here; absent, nil
+  # or naming no scope is `{:ok, []}`, an answer that names none; any
+  # other value is `:malformed`, which every caller refuses before
+  # anything of the answer is written.
+  @spec answered_scope(term()) :: {:ok, [String.t()]} | :malformed
+  def answered_scope(%{} = response) do
+    case Map.get(response, "scope") do
+      nil -> {:ok, []}
+      scope when is_binary(scope) -> {:ok, scope |> String.split() |> Enum.uniq()}
+      _other -> :malformed
+    end
   end
 
-  defp answered_scopes(_scope), do: []
+  def answered_scope(_response), do: :malformed
+
+  defp malformed_scope,
+    do: {:authorization_required, "the token endpoint answered a malformed scope"}
 
   defp put_rotated(bundle, %{"refresh_token" => rotated})
        when is_binary(rotated) and rotated != "",

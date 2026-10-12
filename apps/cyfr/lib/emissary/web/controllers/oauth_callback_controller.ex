@@ -45,6 +45,13 @@ defmodule Emissary.Web.OAuthCallbackController do
       {:error, :unavailable} ->
         error_page(conn, 503, "Authorization failed", "Try again shortly")
 
+      {:error, :scopes_not_requested} ->
+        error_page(
+          conn,
+          "Authorization failed",
+          "The provider granted scopes this connection did not ask for; nothing was stored."
+        )
+
       {:error, reason} ->
         error_page(conn, "Authorization failed", fmt_reason(reason))
     end

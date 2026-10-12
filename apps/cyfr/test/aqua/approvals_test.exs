@@ -714,7 +714,7 @@ defmodule Aqua.ApprovalsTest do
             %{},
             %{"lifecycle" => "turn"},
             %{"until" => until},
-            %{"constraint" => %{"kind" => "vault_entry", "patterns" => ["vlt_work-1"]}}
+            %{"constraint" => %{"kind" => "storage_path", "patterns" => ["data/"]}}
           ] do
         assert {:error, {:invalid_argument, ^sentence}} =
                  Aqua.Providers.Approval.handle(

@@ -46,10 +46,7 @@ defmodule Sanctum.ToolGrantsTest do
           )
         ]),
         Operation.tool([
-          op("probe_execution", "run", [Arg.new("connection", :string)],
-            kind: :execute,
-            resource: {"connection", :vault_entry}
-          )
+          op("probe_execution", "run", [Arg.new("connection", :string)], kind: :execute)
         ])
       ]
     end
@@ -737,45 +734,43 @@ defmodule Sanctum.ToolGrantsTest do
       refute ToolGrants.admits?(ctx, fetch.("*.example.com"))
     end
 
-    test "an entry constraint covers a call by the entry its account resolved to, never by a name",
+    test "an action that names an account takes no constraint, a vault entry's or another's",
          %{ctx: ctx, thread: thread, a: a} do
-      allow!(
-        ctx,
-        thread,
-        %{
-          lifecycle_kind: "execution",
-          lifecycle_id: a,
-          constraint: %{kind: "vault_entry", patterns: ["vlt_work-1"]}
-        },
-        %{tool: "probe_execution", action: "run"}
-      )
+      run = %{tool: "probe_execution", action: "run"}
+      bounds = %{lifecycle_kind: "execution", lifecycle_id: a}
 
-      run = fn over ->
-        call(
-          thread,
-          Map.merge(
-            %{
-              tool: "probe_execution",
-              action: "run",
-              execution_id: a,
-              args: %{"reference" => "catalyst:local.mail:1.0.0", "connection" => "Work"}
-            },
-            over
-          )
-        )
+      for constraint <- [
+            %{kind: "vault_entry", patterns: ["vlt_work-1"]},
+            %{kind: "storage_path", patterns: ["data/"]}
+          ] do
+        assert {:error, {:scope_not_permitted, :no_resource}} =
+                 ToolGrants.check_standing(
+                   decision(Map.merge(run, Map.put(bounds, :constraint, constraint))),
+                   DateTime.utc_now()
+                 )
+
+        assert {:error, {:scope_not_permitted, :no_resource}} =
+                 ToolGrants.put(
+                   ctx,
+                   decision(
+                     Map.merge(
+                       run,
+                       Map.merge(bounds, %{thread_id: thread, constraint: constraint})
+                     )
+                   )
+                 )
       end
 
-      assert ToolGrants.admits?(ctx, run.(%{vault_entry: "vlt_work-1"}))
-
-      # Another entry, a longer id, or none resolved asks.
-      refute ToolGrants.admits?(ctx, run.(%{vault_entry: "vlt_home-1"}))
-      refute ToolGrants.admits?(ctx, run.(%{vault_entry: "vlt_work-10"}))
-      refute ToolGrants.admits?(ctx, run.(%{vault_entry: nil}))
-      refute ToolGrants.admits?(ctx, run.(%{}))
-
-      # The argument names an account, never an entry, and is not read: one
-      # spelling the constraint's id covers nothing.
-      refute ToolGrants.admits?(ctx, run.(%{args: %{"connection" => "vlt_work-1"}}))
+      # On an action that declares a resource, a vault entry is another kind.
+      assert {:error, {:scope_not_permitted, :resource_kind}} =
+               ToolGrants.check_standing(
+                 decision(%{
+                   tool: "files",
+                   action: "write",
+                   constraint: %{kind: "vault_entry", patterns: ["vlt_work-1"]}
+                 }),
+                 DateTime.utc_now()
+               )
     end
   end
 end

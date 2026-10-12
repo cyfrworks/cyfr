@@ -263,7 +263,7 @@ defmodule Prima.OperationTest do
   describe "resource" do
     test "defaults to none: an action that declares none takes no standing constraint" do
       assert write_file([]).resource == nil
-      assert Operation.resource_kinds() == [:storage_path, :egress_domain, :vault_entry]
+      assert Operation.resource_kinds() == [:storage_path, :egress_domain]
     end
 
     test "names one of the action's string arguments and its kind" do
@@ -277,16 +277,16 @@ defmodule Prima.OperationTest do
         )
 
       assert fetch.resource == {"domain", :egress_domain}
+    end
 
-      # A call naming an account the caller's edge binds.
-      run =
+    test "an account a call names is no resource kind" do
+      assert_raise ArgumentError, ~r/a resource is/, fn ->
         Operation.new("execution", "run", "Run a component", [Arg.new("connection", :string)],
           kind: :execute,
           planes: [:external, :in_chain],
           resource: {"connection", :vault_entry}
         )
-
-      assert run.resource == {"connection", :vault_entry}
+      end
     end
 
     test "naming an argument the action lacks is refused at declaration" do

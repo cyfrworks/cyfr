@@ -777,6 +777,137 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     end
   end
 
+  describe "complete/3 — the scopes the provider answered" do
+    @send "https://www.googleapis.com/auth/gmail.send"
+
+    # A new entry's grant for `requested`, answered `answer`, and the entry
+    # it stored with its unsealed payload, or the refusal.
+    defp grant_new(ctx, name, requested, answer) do
+      bypass = Bypass.open()
+
+      stub_token_endpoint(
+        bypass,
+        Map.merge(%{"access_token" => "at-#{name}", "refresh_token" => "rt-#{name}"}, answer)
+      )
+
+      {state, pending} =
+        mint_pending!(ctx, %{new_target(name, bypass) | scopes: requested})
+
+      case OAuthGrant.complete(state, "code-#{name}", pending.redirect_uri) do
+        {:ok, %{entry_id: id}} -> {:ok, unseal!(id, ctx.athanor_id), {state, pending}}
+        {:error, _} = refused -> {refused, {state, pending}}
+      end
+    end
+
+    defp stored_scopes({entry, payload}),
+      do: {Jason.decode!(entry.oauth_scopes), payload["oauth"]["scopes"]}
+
+    defp entries_named(ctx, name) do
+      {:ok, entries} = Arca.VaultStorage.list(Sanctum.Context.actor(ctx))
+      Enum.filter(entries, &(&1.name == name))
+    end
+
+    test "a narrower answer is what the entry binds, and a dispense for the request reads it",
+         %{ctx: ctx} do
+      requested = @scopes ++ [@send]
+
+      assert {:ok, {entry, _payload} = stored, _} =
+               grant_new(ctx, "G-narrow", requested, %{"scope" => "#{@send} #{@send}"})
+
+      assert stored_scopes(stored) == {[@send], [@send]}
+      assert {:ok, entry.binding_digest} == VaultReader.binding_digest(entry)
+
+      missing = @scopes
+
+      assert {:error, {:scope_projection_unsatisfiable, ^missing}} =
+               VaultReader.oauth_token(ctx, edge(entry, requested), @provider, @dispense)
+
+      assert {:ok, "at-G-narrow"} =
+               VaultReader.oauth_token(ctx, edge(entry, [@send]), @provider, @dispense)
+    end
+
+    test "a narrower answer to a re-authorization rebinds the entry to it", %{ctx: ctx} do
+      bypass = Bypass.open()
+      requested = @scopes ++ [@send]
+      view = stored_entry!(ctx, "G-renarrow", bypass_endpoints(bypass))
+      {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
+
+      stub_token_endpoint(bypass, %{"access_token" => "at-renarrow", "scope" => @send})
+      {state, pending} = mint_pending!(ctx, existing_target(entry, bypass, requested))
+
+      assert {:ok, %{rebound: true}} = OAuthGrant.complete(state, "code", pending.redirect_uri)
+
+      {after_entry, _payload} = stored = unseal!(view.id, ctx.athanor_id)
+      assert stored_scopes(stored) == {[@send], [@send]}
+      assert after_entry.binding_digest != entry.binding_digest
+    end
+
+    test "a wider answer is refused and stores no token, for a new entry and a re-authorization",
+         %{ctx: ctx} do
+      assert {{:error, :scopes_not_requested}, {state, pending}} =
+               grant_new(ctx, "G-wide", @scopes, %{"scope" => Enum.join(@scopes ++ [@send], " ")})
+
+      assert entries_named(ctx, "G-wide") == []
+
+      # The pending grant was spent as every refused exchange spends it.
+      assert {:error, :unknown_state} = OAuthGrant.complete(state, "code", pending.redirect_uri)
+
+      bypass = Bypass.open()
+      view = stored_entry!(ctx, "G-rewide", bypass_endpoints(bypass), %{"note" => "kept"})
+      :ok = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), view.id, "needs_reauth")
+      {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
+
+      stub_token_endpoint(bypass, %{"access_token" => "at-rewide", "scope" => "#{@send}"})
+      {state, pending} = mint_pending!(ctx, existing_target(entry, bypass, @scopes))
+
+      assert {:error, :scopes_not_requested} =
+               OAuthGrant.complete(state, "code", pending.redirect_uri)
+
+      {after_entry, payload} = unseal!(view.id, ctx.athanor_id)
+      assert after_entry.payload_rev == entry.payload_rev
+      assert after_entry.sealed_payload == entry.sealed_payload
+      assert after_entry.binding_digest == entry.binding_digest
+      assert after_entry.oauth_scopes == entry.oauth_scopes
+      assert after_entry.status == "needs_reauth"
+      assert payload["oauth"]["access_token"] == "at-0"
+    end
+
+    test "a scope that is not a string is a malformed answer and stores no token", %{ctx: ctx} do
+      for {answer, n} <- Enum.with_index([@scopes, 7, %{"granted" => @scopes}]) do
+        name = "G-malformed-#{n}"
+
+        assert {{:error, "token endpoint returned no access_token or a malformed scope"}, _} =
+                 grant_new(ctx, name, @scopes, %{"scope" => answer})
+
+        assert entries_named(ctx, name) == []
+      end
+    end
+  end
+
+  # Controls: the answers the requested set already stood for before the
+  # provider's answer was read.
+  describe "complete/3 — answers that name the request or no scope" do
+    test "an answer naming exactly the request stores it", %{ctx: ctx} do
+      requested = @scopes ++ ["https://www.googleapis.com/auth/gmail.send"]
+      answer = requested |> Enum.reverse() |> Enum.join(" ")
+
+      assert {:ok, stored, _} = grant_new(ctx, "G-exact", requested, %{"scope" => answer})
+      assert stored_scopes(stored) == {requested, requested}
+    end
+
+    test "an answer naming no scope, absent or blank, stores the request", %{ctx: ctx} do
+      for {answer, n} <-
+            Enum.with_index([%{}, %{"scope" => nil}, %{"scope" => ""}, %{"scope" => "  "}]) do
+        assert {:ok, {_entry, payload} = stored, _} =
+                 grant_new(ctx, "G-omitted-#{n}", @scopes, answer)
+
+        assert stored_scopes(stored) == {@scopes, @scopes}
+        assert payload["oauth"]["access_token"] == "at-G-omitted-#{n}"
+        assert payload["oauth"]["refresh_token"] == "rt-G-omitted-#{n}"
+      end
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # A dispense fenced on the binding it was validated at
   # ---------------------------------------------------------------------------
@@ -1067,6 +1198,99 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       # Only the refresh token: the refused refresh's access token is not.
       assert kept["access_token"] == "at-old"
       refute Map.has_key?(kept, "tokens")
+    end
+
+    test "a full refresh answered for other scopes than the entry's is refused and keeps only the rotated token",
+         %{ctx: ctx} do
+      for {held, answered} <- [{[@a, @b], @a}, {[@a], "#{@a} #{@c}"}] do
+        entry = race_entry!(ctx, held, expired_bundle("at-old", "rt-1"))
+
+        script!([
+          {:ok,
+           %{
+             "access_token" => "at-refreshed",
+             "refresh_token" => "rt-2",
+             "scope" => answered,
+             "expires_in" => 3600
+           }}
+        ])
+
+        assert {:error, {:authorization_required, sentence}} =
+                 VaultReader.oauth_token(ctx, edge(entry, held), RaceIdp.hint(), @dispense)
+
+        assert sentence ==
+                 "the provider refreshed this connection for other scopes than it holds; " <>
+                   "re-authorize it"
+
+        assert_received {:token_request, %{"refresh_token" => "rt-1"}}
+        row = row!(ctx, entry)
+        assert Jason.decode!(row.oauth_scopes) == held
+        assert row.binding_digest == entry.binding_digest
+        kept = bundle!(ctx, entry)
+        assert kept["refresh_token"] == "rt-2"
+        assert kept["access_token"] == "at-old"
+        refute Map.has_key?(kept, "tokens")
+        stop_supervised!(RaceIdp)
+      end
+    end
+
+    # The scope the code exchange refuses as malformed, read by the one
+    # parser both paths share.
+    for {path, requested} <- [whole: [@a, @b], narrower: [@a]],
+        {shape, scope} <- [
+          number: 7,
+          object: %{"granted" => [@a, @b]},
+          string_array: [@a, @b],
+          mixed_array: [@a, 7]
+        ] do
+      test "a #{path} refresh answered with a #{shape} scope is refused and keeps only the rotated token",
+           %{ctx: ctx} do
+        held = [@a, @b]
+        requested = unquote(requested)
+        entry = race_entry!(ctx, held, expired_bundle("at-old", "rt-1"))
+
+        script!([
+          {:ok,
+           %{
+             "access_token" => "at-invalid",
+             "refresh_token" => "rt-2",
+             "scope" => unquote(Macro.escape(scope)),
+             "expires_in" => 3600
+           }}
+        ])
+
+        assert {:error,
+                {:authorization_required, "the token endpoint answered a malformed scope"}} =
+                 VaultReader.oauth_token(ctx, edge(entry, requested), RaceIdp.hint(), @dispense)
+
+        kept = bundle!(ctx, entry)
+        assert kept["access_token"] == "at-old"
+        assert kept["refresh_token"] == "rt-2"
+        refute Map.has_key?(kept, "tokens")
+        assert Jason.decode!(row!(ctx, entry).oauth_scopes) == held
+      end
+    end
+
+    # Control: an answer naming the entry's own scopes, or none, refreshes.
+    test "a full refresh answered for the entry's own scopes, or none, is held", %{ctx: ctx} do
+      for answer <- [%{"scope" => "#{@b} #{@a}"}, %{}, %{"scope" => " "}] do
+        entry = race_entry!(ctx, [@a, @b], expired_bundle("at-old", "rt-1"))
+
+        script!([
+          {:ok,
+           Map.merge(
+             %{"access_token" => "at-refreshed", "refresh_token" => "rt-2", "expires_in" => 3600},
+             answer
+           )}
+        ])
+
+        assert {:ok, "at-refreshed"} =
+                 VaultReader.oauth_token(ctx, edge(entry, [@a, @b]), RaceIdp.hint(), @dispense)
+
+        assert Jason.decode!(row!(ctx, entry).oauth_scopes) == [@a, @b]
+        assert bundle!(ctx, entry)["refresh_token"] == "rt-2"
+        stop_supervised!(RaceIdp)
+      end
     end
 
     test "a narrower refresh refused for a moved binding keeps the rotated token and holds nothing",

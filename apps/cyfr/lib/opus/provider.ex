@@ -322,7 +322,6 @@ defmodule Opus.Provider do
             kind: :execute,
             planes: [:external],
             permission: :execute,
-            resource: {"connection", :vault_entry},
             # A run started outside a chain is an external act: each one is
             # decided when it is asked, and no standing answer stands for it.
             standing: false

@@ -153,6 +153,20 @@ defmodule Cyfr.DocsDriftTest do
              "Cyfr.Boundaries.ports/0 rosters #{inspect(rostered)}"
   end
 
+  # A standing approval's constraint is a resource kind the grant store's
+  # grammar spells patterns for, and the architecture promises no other.
+  test "ARCHITECTURE.md's bounded standing approval names no constraint the grammar lacks" do
+    [bullet] =
+      Regex.run(~r/^- \*\*A standing approval is bounded\.\*\*.*$/m, File.read!(@architecture)) ||
+        flunk("ARCHITECTURE.md has no bullet beginning \"**A standing approval is bounded.**\"")
+
+    refute "vault_entry" in Arca.Schemas.ToolGrant.constraint_kinds()
+
+    refute bullet =~ ~r/vault entry|one entry|named account/,
+           "ARCHITECTURE.md's bounded standing approval binds one to a vault entry, a " <>
+             "constraint the grant store's grammar does not spell"
+  end
+
   defp read_variables do
     not_read = spelled_not_read()
 

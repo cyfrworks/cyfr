@@ -541,10 +541,9 @@ defmodule Locus.Runtime.FormulaHandlerTest do
     test "a run naming an account its profile's ingress lacks is refused setup required " <>
            "before anything runs, and one with no profile is asked for its consent",
          %{ctx: ctx, ref: ref} do
-      # The argument is declared as the account a call names, an entry for
-      # a standing approval's constraint.
-      assert {:ok, %{resource: {"connection", :vault_entry}}} =
-               Sanctum.Catalog.action_declaration("execution.run")
+      # The account a call names is no resource a standing approval's
+      # constraint may name.
+      assert {:ok, %{resource: nil}} = Sanctum.Catalog.action_declaration("execution.run")
 
       before = Arca.Repo.aggregate(Arca.Schemas.Execution, :count)
       named = %{"reference" => ref, "input" => %{"a" => 1}, "connection" => "Work"}

@@ -70,13 +70,16 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
     state
   end
 
-  defp token_endpoint(bypass, before_answer) do
+  defp token_endpoint(bypass, before_answer, answer \\ %{}) do
     Bypass.expect_once(bypass, "POST", "/token", fn conn ->
       before_answer.()
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(200, Jason.encode!(%{"access_token" => "at-1", "expires_in" => 3600}))
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(Map.merge(%{"access_token" => "at-1", "expires_in" => 3600}, answer))
+      )
     end)
   end
 
@@ -97,6 +100,30 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
 
     assert conn.status == 200
     assert entry_named?(ctx, name)
+  end
+
+  test "a grant answered for scopes it did not ask for says so and writes nothing", %{
+    conn: conn,
+    bypass: bypass,
+    ctx: ctx
+  } do
+    name = "Mail #{System.unique_integer([:positive])}"
+    state = pending!(ctx, bypass, name)
+
+    token_endpoint(bypass, fn -> :ok end, %{
+      "scope" =>
+        "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send"
+    })
+
+    conn = get(conn, "/auth/oauth/callback", %{"code" => "code-3", "state" => state})
+
+    assert conn.status == 400
+
+    assert conn.resp_body =~
+             "The provider granted scopes this connection did not ask for; nothing was stored."
+
+    refute conn.resp_body =~ "at-1"
+    refute entry_named?(ctx, name)
   end
 
   test "a session revoked while the code was exchanged writes nothing", %{
