@@ -341,6 +341,5 @@ and must fail.
 | browser: `run.sh` | pass, every attempt observed in every browser |
 | tincture proof: `tests/tincture-proof/run.sh`, with a Locus image built from this tree | pass in every browser |
 | containment proof: `tests/hostile-frame-proof/run.sh` | pass, every attempt held its column in every browser |
-| canvas proof: `tests/canvas-proof/run.sh` | pass, every assertion held in every browser; no PostgreSQL cell (`CANVAS_PROOF_PG_URL` unset) |
 | release-boot: `boot.sh sqlite`, with the backup round trip | pass |
 | release-boot: `boot.sh postgres`, with the backup round trip | pass |

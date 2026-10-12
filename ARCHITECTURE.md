@@ -324,7 +324,7 @@ Configuration is parsed explicitly and an invalid security-relevant value is ref
 
 - A cell's backup is the database, the storage root, the keyring and the deployment file, copied while the cell is stopped, and a scripted round trip proves a restore.
 - Arca and Sanctum start before Cyfr. Host's infrastructure tier restarts in order, so a restart before the gate reruns security reconciliation first; every long-running child states its shutdown; shutdown drains ingress, stops dependents in order, releases claims while Arca is available, except the cell-wide `regrant_notice` claim, which a member keeps through its shutdown as the retention sweep's is kept and a peer takes over when it lapses, and stops the repo last.
-- Each workload has a stated latency and overload budget with its measurement: an admission at concurrency, a first token, a frame open, a canvas validation, a feed fire, a device intent, a console page whose reads are operations.
+- Each workload has a stated latency and overload budget with its measurement: an admission at concurrency, a first token, a frame open, a canvas validation, a feed fire, a device intent, a console page whose reads are operations. A frame open, from the switch to the shell's receipt of the canvas frame's `ready`, and a canvas validation, from the switch to the shell's receipt of the validation frame's `tree`, each answer within 100 ms at the 95th percentile, at the desktop and 720×720 viewports alike; the canvas proof measures both and fails a run over either.
 - The endpoint, the root router and the shared helpers are Host's; every error body renders through one renderer per surface.
 
 ## 7. The screen and tinctures

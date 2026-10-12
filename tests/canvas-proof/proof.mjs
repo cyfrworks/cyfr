@@ -23,7 +23,9 @@
 // `performance.now()` in the shell's document, read through an init script
 // (INSTRUMENT) that records the click and wraps the shell's port handlers.
 // It changes no message and records nothing of a boot, bearer, argument or
-// stream payload.
+// stream payload. Each number's p95 is held to its budget (BUDGET_MS, the
+// canvas budgets ARCHITECTURE.md §6.9 states) at both viewports, and a
+// record over either fails the run.
 //
 // The server's part of each fixture action is run.sh's, asked for through
 // OUT_DIR (`ask-N.json`, answered `answer-N.json`); a request carries the
@@ -80,6 +82,8 @@ const VIEWPORTS = {
 
 const CLOCK = "performance.now() in the shell's document, Chromium";
 const SAMPLES = 20;
+// The p95 each number must not exceed, in milliseconds, at either viewport.
+const BUDGET_MS = { frame_open_ms: 100, validation_ms: 100 };
 // A sample with no `ready` or `tree` within this long fails the run.
 const SAMPLE_MS = 10_000;
 const FORGED = "forged-by-neighbour";
@@ -163,6 +167,17 @@ function recordChecks(rec, knownSecrets = []) {
     fails.push("the measurement carries no sample counts");
   }
   if (!m.clock) fails.push("the measurement names no clock");
+
+  // A p95 over its budget, or none to hold to it. The budget is this
+  // file's, never the record's own.
+  for (const [key, label] of [["frame_open_ms", "frame open"], ["validation_ms", "validation"]]) {
+    const p95 = m[key] && m[key].p95;
+    if (typeof p95 !== "number" || !Number.isFinite(p95)) {
+      fails.push(`the measurement has no ${label} p95 to hold to its budget of ${BUDGET_MS[key]} ms`);
+    } else if (p95 > BUDGET_MS[key]) {
+      fails.push(`the ${label} p95 is ${p95} ms at ${m.viewport || rec.viewport}, over its budget of ${BUDGET_MS[key]} ms`);
+    }
+  }
 
   // A PostgreSQL claim.
   if (/postgres/i.test(text)) fails.push("the record carries a PostgreSQL claim");
@@ -1666,7 +1681,7 @@ function renderMd(rec) {
     return e ? e.result : "not reached";
   };
   const m = rec.measurement;
-  const row = (label, key, count) => `| ${label} | ${count} | ${m[key] ? m[key].p50 : null} | ${m[key] ? m[key].p95 : null} | ${m[key] ? m[key].clock : CLOCK} |`;
+  const row = (label, key, count) => `| ${label} | ${count} | ${m[key] ? m[key].p50 : null} | ${m[key] ? m[key].p95 : null} | ${BUDGET_MS[key]} | ${m[key] ? m[key].clock : CLOCK} |`;
   return [
     `# The canvas proof: ${rec.viewport} (${rec.device}, posture ${rec.posture})`,
     "",
@@ -1681,8 +1696,8 @@ function renderMd(rec) {
     "",
     `## Measurement (Chromium ${rec.browsers.chromium || "absent"}, ${rec.viewport})`,
     "",
-    `| number | samples | p50 (ms) | p95 (ms) | clock |`,
-    `|---|---|---|---|---|`,
+    `| number | samples | p50 (ms) | p95 (ms) | p95 budget (ms) | clock |`,
+    `|---|---|---|---|---|---|`,
     row("frame open: switch click to the shell's receipt of ready", "frame_open_ms", m.counts ? m.counts.open : 0),
     row("validation: switch click to the shell's receipt of tree", "validation_ms", m.counts ? m.counts.validation : 0),
     ...(m.error ? ["", `The measurement did not finish: ${m.error}`] : []),
@@ -1735,7 +1750,7 @@ async function main() {
     date, host,
   });
   if (Object.keys(narrowed).length) record.narrowed = narrowed;
-  Object.assign(record.measurement, { date, host, viewport: viewportName, clock: CLOCK, counts: { open: 0, validation: 0 } });
+  Object.assign(record.measurement, { date, host, viewport: viewportName, clock: CLOCK, counts: { open: 0, validation: 0 }, budget_ms: BUDGET_MS });
 
   const receiver = await lib.startReceiver();
   const udp = await startUdp();
@@ -1778,7 +1793,7 @@ async function main() {
     console.error("FAIL: the canvas proof did not hold");
     process.exit(1);
   }
-  console.log("ok: every step held, the measurement has its samples and the record passes its checks");
+  console.log("ok: every step held, the measurement has its samples within their budgets and the record passes its checks");
 }
 
 main().catch((error) => {

@@ -223,6 +223,15 @@ host (its name and CPU model), Chromium's version, the viewport, the
 sample counts (20 and 20), every sample, and the p50 and p95 in
 milliseconds of each number, labelled with its clock.
 
+**The budget.** Each number's p95 is bound to the canvas budget
+`ARCHITECTURE.md` §6.9 states: a frame open within 100 ms and a validation
+within 100 ms, at both viewports. A p95 over its budget, or a measurement
+with no p95 to hold to it, fails the record's checks, and the run exits
+non-zero naming the number, its p95, the viewport and the budget. The
+budget is the proof's own (`BUDGET_MS`); the record carries it beside the
+measurement, and its checks hold the record to the proof's budget, never
+to the record's copy.
+
 ## Recorded run
 
 Recorded on 2026-10-10 on `p1` (AMD Ryzen 7 7700 8-Core Processor) by `run.sh`, once per
@@ -251,13 +260,8 @@ they agree.
 | `disconnect` | held | Chromium only | Chromium only |
 | `failed_fire` | held | Chromium only | Chromium only |
 
-The measurement, on `p1` (AMD Ryzen 7 7700 8-Core Processor) on 2026-10-10, both
-numbers on one clock, `performance.now()` in the shell's document, in Chromium 153.0.8010.12:
-
-| Viewport | Frame opens | p50 (ms) | p95 (ms) | Validations | p50 (ms) | p95 (ms) |
-|---|---|---|---|---|---|---|
-| desktop (the PC, posture `desk`) | 20 | 49 | 49.9 | 20 | 44.2 | 46.2 |
-| 720x720 (the phone, posture `hand`) | 20 | 49.1 | 50.1 | 20 | 43 | 47.4 |
+Both viewports' measurements held their budgets; a run's figures are in
+its record, not here.
 
 ## The record's own checks
 
@@ -265,10 +269,11 @@ numbers on one clock, `performance.now()` in the shell's document, in Chromium 1
 its observation, a browser shown other than absent where it never
 launched, a feed result reported as an executed run (or a fire that ran),
 any PostgreSQL claim, a measurement without its date, host and sample
-counts, or any credential value: a secret the run held, an asset
-credential in an address, a signed token or a bearer. A narrowed run's
-record never passes. `run.sh` then looks for the session token, the
-cookie and every bearer the fixture minted in both records.
+counts, a p95 over its budget or none to hold to it, or any credential
+value: a secret the run held, an asset credential in an address, a signed
+token or a bearer. A narrowed run's record never passes. `run.sh` then
+looks for the session token, the cookie and every bearer the fixture
+minted in both records.
 `node proof.mjs --check-record RECORD_JSON [SECRETS_JSON]` runs the
 record's checks over a saved record, without a browser.
 

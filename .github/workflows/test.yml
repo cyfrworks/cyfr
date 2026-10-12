@@ -1304,10 +1304,11 @@ jobs:
       # asserts the old vocabularies — org/project, the athanor's retired
       # second name, conversation/topic subscription, the prism: PubSub
       # prefix, the keeper's retired role name, the WASM engine's retired
-      # names, the gate's retired name — cannot creep back into code,
-      # config, or operator-facing docs. Each retired name is matched as a
-      # word or inside an identifier, never inside an English word that
-      # merely contains its letters.
+      # names, the gate's retired name, the desktop and card names the
+      # canvas replaced and its retired measurement script — cannot creep
+      # back into code, config, or operator-facing docs. Each retired name
+      # is matched as a word or inside an identifier, never inside an
+      # English word that merely contains its letters.
       # Free-word "org"/"project" is deliberately not gated (OCI annotations,
       # Mix.Project, Go module paths, "project directory" prose are legitimate).
       - name: Tier A/B fossil patterns must be absent
@@ -1430,6 +1431,12 @@ jobs:
             'CYFR_MAX_CONCURRENT_EXECUTIONS' \
             'CYFR_WORKER_WATCH_' \
             '(^|[^A-Za-z])([Ee]states?([^a-z]|$)|ESTATES?([^A-Z]|$))|[a-z]Estate' \
+            'Prima\.Card\b' \
+            'Prism\.Desktop\b' \
+            'shell_desktop|DesktopLive' \
+            'tincture\.cards' \
+            'canvas-(card|stall)\b' \
+            'measure\.exs' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"
             if [ -n "$hits" ]; then
