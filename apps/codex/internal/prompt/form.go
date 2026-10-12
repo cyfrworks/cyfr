@@ -4,7 +4,7 @@
 package prompt
 
 import (
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 )
 
 // KeyCreateForm holds the collected values for key creation.

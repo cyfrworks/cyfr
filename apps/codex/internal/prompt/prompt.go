@@ -7,7 +7,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 	"golang.org/x/term"
 )
 

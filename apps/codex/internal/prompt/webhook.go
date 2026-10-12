@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/ref"

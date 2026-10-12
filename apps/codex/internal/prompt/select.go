@@ -4,7 +4,7 @@
 package prompt
 
 import (
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 )
 
 // Option represents a selectable item with a display label and underlying value.
