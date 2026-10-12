@@ -162,6 +162,27 @@ defmodule Cyfr.StackShapeTest do
     block
   end
 
+  # The networks a service of a parsed compose file joins, whether it lists
+  # them or maps each to its attachment.
+  defp network_names(networks) when is_map(networks), do: Map.keys(networks)
+  defp network_names(networks), do: List.wrap(networks)
+
+  # An IPv4 subnet as its first address and prefix length, the address as
+  # an integer.
+  defp cidr(text) do
+    [address, bits] = String.split(text, "/")
+    {:ok, {a, b, c, d}} = :inet.parse_ipv4strict_address(String.to_charlist(address))
+    <<value::32>> = <<a, b, c, d>>
+    {value, String.to_integer(bits)}
+  end
+
+  # Whether two subnets share an address: one holds the other's first
+  # address at the shorter prefix.
+  defp overlaps?({a, a_bits}, {b, b_bits}) do
+    shift = 32 - min(a_bits, b_bits)
+    Bitwise.bsr(a, shift) == Bitwise.bsr(b, shift)
+  end
+
   defp list_entries(block, key) do
     [_, list | _] = Regex.split(~r/^    #{key}:\s*$/m, block)
     [list | _] = Regex.split(~r/^    [a-z]/m, list)
@@ -335,7 +356,7 @@ defmodule Cyfr.StackShapeTest do
 
   defp network_drift(compose, services, roles) do
     declared = Map.keys(YamlElixir.read_from_string!(compose)["networks"] || %{})
-    cyfr = List.wrap(get_in(services, ["cyfr", "networks"]))
+    cyfr = network_names(get_in(services, ["cyfr", "networks"]))
 
     for role <- roles,
         get_in(services, [role.service, "networks"]) != [role.network] or
@@ -809,10 +830,11 @@ defmodule Cyfr.StackShapeTest do
     assert cyfr_block =~
              ~r/^\s*- CYFR_LOCUS_RUNTIME_WORKERS=\$\{CYFR_LOCUS_RUNTIME_WORKERS:-#{Regex.escape(workers)}\}$/m
 
-    assert cyfr_block =~ ~r/^\s*- CYFR_HOST_API_BIND=0\.0\.0\.0$/m
+    cyfr_networks =
+      network_names(YamlElixir.read_from_string!(compose)["services"]["cyfr"]["networks"])
 
     for role <- LocusRoles.roles() do
-      assert cyfr_block =~ ~r/^\s*- #{Regex.escape(role.network)}$/m
+      assert role.network in cyfr_networks
     end
 
     backends_url = "http://#{backends.service}:#{backends.port}"
@@ -840,24 +862,85 @@ defmodule Cyfr.StackShapeTest do
   # upstream API, and the runtime's network for a guest's consented egress.
   test "the builds, backends and runtime networks carry cyfr to each service and the service out" do
     compose = read!("docker-compose.yml")
+    parsed = YamlElixir.read_from_string!(compose)
     [_, networks] = Regex.split(~r/^networks:\s*$/m, compose)
     [networks | _] = Regex.split(~r/^[a-z]/m, networks)
+    runtime = LocusRoles.role!(:runtime)
 
-    for network <- Enum.map(LocusRoles.roles(), & &1.network) do
-      assert networks =~ ~r/^  #{Regex.escape(network)}: \{\}$/m,
-             "#{network} must be declared plain"
+    for role <- LocusRoles.roles() do
+      # Declared plain: no driver, option or `internal` flag. The runtime's
+      # network fixes its addresses as well (the next test reads them).
+      own = if role.network == runtime.network, do: ["ipam"], else: []
+
+      assert Map.keys(Map.fetch!(parsed["networks"], role.network)) == own,
+             "#{role.network} must be declared plain"
 
       attached =
-        for service <- ["caddy", "cyfr" | @locus_services],
-            block = service_block(compose, service),
-            block =~ ~r/^    networks:\s*$/m,
-            network in list_entries(block, "networks"),
+        for {service, definition} <- parsed["services"],
+            role.network in network_names(definition["networks"]),
             do: service
 
-      assert attached == ["cyfr", network], "#{network} joins #{inspect(attached)}"
+      assert Enum.sort(attached) == Enum.sort(["cyfr", role.service]),
+             "#{role.network} joins #{inspect(attached)}"
     end
 
     refute networks =~ ~r/internal:\s*true/
+  end
+
+  # The host API is reachable from the runtime's network alone: cyfr holds
+  # a fixed address on that network and the host API binds that address,
+  # never an interface wildcard, so no other network cyfr joins reaches it.
+  # The address lies in the network's subnet, outside the range Docker hands
+  # the network's other containers, and is neither the subnet's network,
+  # gateway nor broadcast address; the subnet is private and outside the
+  # pools Docker draws the other networks' subnets from by default.
+  test "the host API binds cyfr's own fixed address on the runtime's network" do
+    parsed = YamlElixir.read_from_string!(read!("docker-compose.yml"))
+    runtime = LocusRoles.role!(:runtime)
+    cyfr = parsed["services"]["cyfr"]
+
+    assert parsed["networks"][runtime.network] == %{
+             "ipam" => %{
+               "config" => [%{"subnet" => "172.16.231.0/24", "ip_range" => "172.16.231.128/25"}]
+             }
+           }
+
+    assert cyfr["networks"][runtime.network] == %{"ipv4_address" => "172.16.231.2"}
+
+    binds = for "CYFR_HOST_API_BIND=" <> bind <- cyfr["environment"], do: bind
+    refute "0.0.0.0" in binds
+    refute "::" in binds
+    assert binds == ["172.16.231.2"]
+
+    # Only the runtime's network fixes cyfr's address.
+    for {network, attachment} <- cyfr["networks"], network != runtime.network do
+      assert attachment == %{}, "cyfr's attachment to #{network} is #{inspect(attachment)}"
+    end
+
+    [%{"subnet" => subnet, "ip_range" => range}] =
+      parsed["networks"][runtime.network]["ipam"]["config"]
+
+    [bind] = binds
+    {base, bits} = cidr(subnet)
+    address = cidr(bind <> "/32")
+    last = base + Bitwise.bsl(1, 32 - bits) - 1
+
+    assert overlaps?(address, {base, bits})
+    refute overlaps?(address, cidr(range))
+    assert overlaps?(cidr(range), {base, bits})
+    refute elem(address, 0) in [base, base + 1, last]
+
+    assert Enum.any?(
+             ~w(10.0.0.0/8 172.16.0.0/12 192.168.0.0/16),
+             &overlaps?({base, bits}, cidr(&1))
+           ),
+           "#{subnet} is not a private subnet"
+
+    default_pools = ["192.168.0.0/16" | for(octet <- 17..31, do: "172.#{octet}.0.0/16")]
+
+    for pool <- default_pools do
+      refute overlaps?({base, bits}, cidr(pool)), "#{subnet} overlaps Docker's pool #{pool}"
+    end
   end
 
   test "the builds service is the locus image under the shipped names, holding only its own settings" do

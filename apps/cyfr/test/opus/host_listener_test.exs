@@ -43,6 +43,20 @@ defmodule Opus.HostListenerTest do
     def shutdown(test, way), do: send(test, {:shut, way})
   end
 
+  # A second loopback address: Linux answers the whole of 127.0.0.0/8 on
+  # its loopback. A host that refuses to bind it as an unavailable address
+  # cannot show a listener bound to one address alone; any other answer
+  # leaves the test to run and fail on it.
+  @second_loopback {127, 0, 0, 2}
+  @second_loopback_unavailable (case :gen_tcp.listen(0, ip: @second_loopback) do
+                                  {:ok, socket} ->
+                                    :ok = :gen_tcp.close(socket)
+                                    false
+
+                                  {:error, reason} ->
+                                    reason == :eaddrnotavail
+                                end)
+
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     listener = start_supervised!({HostListener, port: 0})
@@ -888,6 +902,30 @@ defmodule Opus.HostListenerTest do
 
       assert drain(listener) == 5_000
       assert drain(drained) == 1_234
+    end
+  end
+
+  describe "the bind" do
+    # The socket is bound to the address the supervisor names and to no
+    # other: another loopback address on the same port has no listener, so
+    # the kernel refuses the connection while the listener answers on its
+    # own address.
+    @tag skip: @second_loopback_unavailable && "this host cannot bind 127.0.0.2"
+    test "is the address the supervisor names, and no other address answers on its port" do
+      bound = start_supervised!({HostListener, bind: @second_loopback, port: 0}, id: :bound)
+      port = HostListener.port(bound)
+
+      assert {404, _} = post("http://127.0.0.2:#{port}", "/nowhere", [], "", raw: true)
+
+      assert {:error, :econnrefused} =
+               :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 1_000)
+
+      # Still listening on its own address after the refusal.
+      assert {:ok, socket} =
+               :gen_tcp.connect(@second_loopback, port, [:binary, active: false], 1_000)
+
+      :ok = :gen_tcp.close(socket)
+      assert Process.alive?(bound)
     end
   end
 

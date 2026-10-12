@@ -49,7 +49,7 @@ carry the names other programs own as well.
 | `CYFR_GOOGLE_CLIENT_SECRET` | The Google OAuth client secret, set in `.env` alone and never in a tracked file. |
 | `CYFR_HEADLESS` | A Codex-only node (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_AUTH_PROVIDER=oidc`. |
 | `CYFR_HOST` | The hostname clients reach the server at (default `localhost`); in TLS mode Caddy's certificate names it. |
-| `CYFR_HOST_API_BIND` | The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1`; compose binds every interface of the locus-runtime network). |
+| `CYFR_HOST_API_BIND` | The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1` for a bare member; compose binds the member's own address on the locus-runtime network, so the host API is reachable from that network alone). |
 | `CYFR_HOST_API_PORT` | The host API's port (default 4300). |
 | `CYFR_HOST_API_URL` | The address a worker service reaches this member's host API at, carried by every assignment the member issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cell refuses to boot without it. |
 | `CYFR_LIVE_SALT` | The LiveView socket's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation. |

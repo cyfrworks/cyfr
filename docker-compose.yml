@@ -1,8 +1,8 @@
 # CYFR self-hosted stack:
 #   cyfr        — the one endpoint (:4000): Prism (chat + console), API, MCP,
 #                 tinctures; its host API (:4300) takes the runtime's host
-#                 calls, signed with a runtime worker's key, on every network
-#                 cyfr joins
+#                 calls, signed with a runtime worker's key, on cyfr's own
+#                 address of the locus-runtime network alone
 #   locus-backends — runs the stdio/npx MCP servers CYFR registers with
 #                 transport `stdio`, one owner per server row, each backend
 #                 under a uid and a memory bound of its own. Every request
@@ -124,18 +124,22 @@ services:
       # (env_file above).
       - CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-http://locus-backends:4101}
       # The runtime cyfr dispatches runs to, and where it listens for the
-      # runtime's host calls: every interface, so every network cyfr joins
-      # reaches it; it serves only calls signed with a runtime worker's key.
-      # CYFR_LOCUS_RUNTIME_ROOT, the root the runtime's key derives from,
-      # comes from .env.
+      # runtime's host calls: cyfr's own address on the locus-runtime
+      # network (below), so the host API is reachable from that network
+      # alone, and serves there only calls signed with a runtime worker's
+      # key. CYFR_LOCUS_RUNTIME_ROOT, the root the runtime's key derives
+      # from, comes from .env.
       - CYFR_LOCUS_RUNTIME_WORKERS=${CYFR_LOCUS_RUNTIME_WORKERS:-wrk_locus=http://locus-runtime:4200}
-      - CYFR_HOST_API_BIND=0.0.0.0
+      - CYFR_HOST_API_BIND=172.16.231.2
       - CYFR_HOST_API_PORT=${CYFR_HOST_API_PORT:-4300}
     networks:
-      - default
-      - locus-backends
-      - locus-builds
-      - locus-runtime
+      default: {}
+      locus-backends: {}
+      locus-builds: {}
+      # A fixed address, the one CYFR_HOST_API_BIND names: outside the
+      # network's ip_range, so no container started first can take it.
+      locus-runtime:
+        ipv4_address: 172.16.231.2
     restart: unless-stopped
     # The endpoints drain connections for up to 30s on shutdown; compose's
     # default 10s grace would SIGKILL mid-drain.
@@ -445,8 +449,16 @@ networks:
   # see port 4200, and no runner is on it (see the locus-runtime service).
   # The network is not `internal` — a guest's consented HTTP egress leaves
   # from the worker service, which connects to the pinned address for it —
-  # so the isolation is who is attached.
-  locus-runtime: {}
+  # so the isolation is who is attached. Its subnet is fixed so cyfr can
+  # hold the fixed address its host API binds. It lies outside the pools
+  # Docker draws the other networks' subnets from by default (172.17.0.0/16
+  # to 172.31.0.0/16, and 192.168.0.0/16), and the other containers on it
+  # take addresses from its ip_range alone.
+  locus-runtime:
+    ipam:
+      config:
+        - subnet: 172.16.231.0/24
+          ip_range: 172.16.231.128/25
 
 volumes:
   caddy_data:

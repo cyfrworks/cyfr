@@ -42,6 +42,13 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
+  # The child specs under `id` in a census of `Cyfr.Application.tiers/0`.
+  defp specs({_id, _strategy, _intensity, children}, id),
+    do: Enum.flat_map(children, &specs(&1, id))
+
+  defp specs(%{id: id} = spec, id), do: [spec]
+  defp specs(_spec, _id), do: []
+
   defp read_prod_config! do
     Config.Reader.read!(Path.join(@root, "config/runtime.exs"),
       env: :prod,
@@ -642,6 +649,31 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           assert cyfr[:host_api_url] == "http://cyfr-1:4301"
         end
       )
+    end
+
+    # The address runtime.exs parses is the one the boot hands the host
+    # API's listener: read through the census of the tree `start/2` starts,
+    # down through `Opus.Supervisor`'s own `init/1`, to the listener's spec.
+    test "the parsed CYFR_HOST_API_BIND is the host API listener's bind" do
+      with_env(%{"CYFR_HOST_API_BIND" => "127.0.0.2"}, fn ->
+        bind = read_prod_config!()[:cyfr][:host_api_bind]
+        assert bind == {127, 0, 0, 2}
+
+        previous = Application.fetch_env(:cyfr, :host_api_bind)
+        Application.put_env(:cyfr, :host_api_bind, bind)
+
+        try do
+          specs = Enum.flat_map(Cyfr.Application.tiers(), &specs(&1, Opus.HostListener))
+
+          assert [%{start: {Opus.HostListener.Supervisor, :start_link, [opts]}}] = specs
+          assert opts[:bind] == {127, 0, 0, 2}
+        after
+          case previous do
+            {:ok, value} -> Application.put_env(:cyfr, :host_api_bind, value)
+            :error -> Application.delete_env(:cyfr, :host_api_bind)
+          end
+        end
+      end)
     end
 
     test "a malformed worker entry, address or port refuses the boot by name" do
