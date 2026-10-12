@@ -761,14 +761,17 @@ if config_env() != :test do
   # OpenTelemetry Configuration
   # Set CYFR_OTEL_ENABLED=on to enable distributed tracing.
   # Traces are exported via OTLP to the endpoint specified by OTEL_EXPORTER_OTLP_ENDPOINT
-  # (defaults to http://localhost:4318 for HTTP/protobuf).
+  # (defaults to http://localhost:4318 for HTTP/protobuf). Every span leaves
+  # through the credential scrub, which wraps the OTLP exporter
+  # (`CyfrWeb.ScrubSpanCredentials`); `Cyfr.Application` refuses a boot whose
+  # environment replaces it.
   if env_bool.("CYFR_OTEL_ENABLED", false) do
     config :cyfr, :opentelemetry_enabled, true
 
     config :opentelemetry,
       resource: %{service: %{name: "cyfr"}},
       span_processor: :batch,
-      traces_exporter: :otlp
+      traces_exporter: {CyfrWeb.ScrubSpanCredentials, {:opentelemetry_exporter, %{}}}
 
     config :opentelemetry_exporter,
       otlp_protocol: :http_protobuf,

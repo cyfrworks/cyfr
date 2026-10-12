@@ -212,7 +212,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_LOCUS_RUNTIME_WORKERS",
      "The worker services runs are dispatched to, comma-separated `<service_id>=<url>` entries tried in order; compose sets `wrk_locus=http://locus-runtime:4200`, and outside compose the default is a worker on this machine."},
     {"CYFR_OTEL_ENABLED",
-     "OpenTelemetry traces over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default off)."},
+     "OpenTelemetry traces over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default off). Each span is scrubbed of tincture credentials before export, and the boot refuses an `OTEL_TRACES_EXPORTER` that would replace the scrubbing exporter."},
     {"CYFR_PLATFORM_ADMIN_EMAILS",
      "The server's operators, comma-separated emails: each is always let in and holds the platform-admin capability, reconciled at every boot. Unset, no one can sign in."},
     {"CYFR_PORT", "The one endpoint's port (default 4000)."},

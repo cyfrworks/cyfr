@@ -108,8 +108,10 @@ defmodule Cyfr.Application do
     # set an explicit keyring.
     resolve_crypto_keyring!()
 
-    # Emissary: Initialize OpenTelemetry instrumentation for Phoenix/Bandit
+    # Emissary: Initialize OpenTelemetry instrumentation for Phoenix/Bandit,
+    # once the SDK is known to export through the configured exporter.
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do
+      ensure_configured_traces_exporter!()
       OpentelemetryBandit.setup()
       OpentelemetryPhoenix.setup(adapter: :bandit)
     end
@@ -313,6 +315,46 @@ defmodule Cyfr.Application do
                 Enum.map_join(findings, "\n", &("  - " <> &1))
     end
   end
+
+  @doc """
+  Refuse the boot when a span processor of the SDK's effective
+  configuration (`app_env`, the `:opentelemetry` application environment,
+  merged with the operating-system environment as the SDK merges it)
+  exports through anything but the `traces_exporter` the runtime
+  configuration names. That exporter is the credential scrub wrapping
+  OTLP's, and the SDK lets `OTEL_TRACES_EXPORTER` replace it: a replaced
+  exporter sends every span as recorded, request paths and all.
+  """
+  @spec ensure_configured_traces_exporter!(keyword()) :: :ok
+  def ensure_configured_traces_exporter!(app_env \\ Application.get_all_env(:opentelemetry)) do
+    configured = Keyword.get(app_env, :traces_exporter)
+
+    case :otel_configuration.merge_with_os(app_env) do
+      %{sdk_disabled: true} ->
+        :ok
+
+      %{processors: processors} ->
+        stray =
+          for {processor, opts} <- processors,
+              not (is_map(opts) and Map.get(opts, :exporter) == configured),
+              do: processor
+
+        # The refusal names modules alone: an exporter's options can carry
+        # the collector's headers, which a crash report must not print.
+        if stray != [] do
+          raise "OpenTelemetry is enabled but span processors #{inspect(stray)} do not " <>
+                  "export through the configured traces exporter " <>
+                  "#{inspect(exporter_module(configured))} " <>
+                  "(is OTEL_TRACES_EXPORTER set?); refusing to boot"
+        end
+
+        :ok
+    end
+  end
+
+  defp exporter_module({module, _opts}) when is_atom(module), do: module
+  defp exporter_module(module) when is_atom(module), do: module
+  defp exporter_module(_other), do: :unknown
 
   # The socket servers a listener runs: a Bandit server, or a bare
   # ThousandIsland one.

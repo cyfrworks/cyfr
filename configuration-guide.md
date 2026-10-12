@@ -66,7 +66,7 @@ carry the names other programs own as well.
 | `CYFR_OIDC_ISSUER` | The OIDC issuer's URL (Okta, Auth0, Keycloak, Azure AD and the like), with `CYFR_AUTH_PROVIDER=oidc`. |
 | `CYFR_LOCUS_RUNTIME_ROOT` | The worker root, 32 random bytes as 64 hexadecimal digits, read by cyfr alone; every worker service's key derives from it. `cyfr init` mints it, every member of a cell holds the same one, and without it no component runs. |
 | `CYFR_LOCUS_RUNTIME_WORKERS` | The worker services runs are dispatched to, comma-separated `<service_id>=<url>` entries tried in order; compose sets `wrk_locus=http://locus-runtime:4200`, and outside compose the default is a worker on this machine. |
-| `CYFR_OTEL_ENABLED` | OpenTelemetry traces over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default off). |
+| `CYFR_OTEL_ENABLED` | OpenTelemetry traces over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default off). Each span is scrubbed of tincture credentials before export, and the boot refuses an `OTEL_TRACES_EXPORTER` that would replace the scrubbing exporter. |
 | `CYFR_PLATFORM_ADMIN_EMAILS` | The server's operators, comma-separated emails: each is always let in and holds the platform-admin capability, reconciled at every boot. Unset, no one can sign in. |
 | `CYFR_PORT` | The one endpoint's port (default 4000). |
 | `CYFR_PRIVATE_EGRESS_TARGETS` | The private hosts, addresses or CIDRs the server's own outbound calls may reach (MCP servers, OAuth token endpoints, registry pulls), comma-separated; the stack names `locus-backends`. Link-local addresses are always refused, and a run's egress never uses this list. |

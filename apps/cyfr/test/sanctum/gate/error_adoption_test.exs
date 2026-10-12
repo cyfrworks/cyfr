@@ -138,8 +138,9 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/arca/lib/arca/tenant_tables.ex" => 2,
     # The keyring's labels, which name keys and are not key material
     # (a too-long label prints only its prefix), and the application's
-    # boot refusals.
-    "apps/cyfr/lib/cyfr/application.ex" => 5,
+    # boot refusals, among them the OpenTelemetry one, which names the
+    # span processor and exporter modules that bypass the scrub.
+    "apps/cyfr/lib/cyfr/application.ex" => 7,
     # An application name from the boundary table.
     "apps/cyfr/lib/cyfr/boundaries.ex" => 1,
     # The payload module a topic row declares and the one it was handed.
