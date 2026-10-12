@@ -787,8 +787,8 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           athanor={@athanor}
         />
       </div>
-      
-    <!-- Prompt editor modal — shared by the soul and the roles -->
+
+      <!-- Prompt editor modal — shared by the soul and the roles -->
       <.modal
         id="prompt-editor"
         show={not is_nil(@editor_editing_prompt)}

@@ -329,7 +329,7 @@ config :cyfr, :prometheus_metrics_enabled, false
 
 # Prism esbuild configuration
 config :esbuild,
-  version: "0.25.0",
+  version: "0.28.2",
   prism: [
     args:
       ~w(js/app.js --bundle --target=es2017 --outdir=../priv/static/assets --external:/fonts/* --external:/images/*),
@@ -372,7 +372,7 @@ config :esbuild,
 
 # Prism tailwind configuration
 config :tailwind,
-  version: "4.1.12",
+  version: "4.3.3",
   prism: [
     args: ~w(
       --input=css/app.css

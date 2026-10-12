@@ -40,12 +40,22 @@ defmodule Prima.Network do
           req_opts: keyword()
         }
 
-  @doc "Parse an HTTP(S) URL with a hostname before its caller resolves it."
+  @doc """
+  Parse an HTTP(S) URL with a hostname before its caller resolves it.
+
+  A URL carrying credentials (any userinfo, even `:` alone) is refused:
+  the HTTP client sends a URL's userinfo as Basic authorization, so a
+  credential in a URL is a credential on the wire. The sentence names
+  none of it.
+  """
   @spec parse_url(String.t()) :: {:ok, URI.t()} | {:error, :invalid_url, String.t()}
   def parse_url(url) when is_binary(url) do
     uri = URI.parse(url)
 
-    with :ok <- check_scheme(uri.scheme), :ok <- check_host(uri.host), do: {:ok, uri}
+    with :ok <- check_scheme(uri.scheme),
+         :ok <- check_host(uri.host),
+         :ok <- check_userinfo(uri.userinfo),
+         do: {:ok, uri}
   rescue
     ArgumentError -> {:error, :invalid_url, "invalid URL"}
   end
@@ -97,6 +107,9 @@ defmodule Prima.Network do
   defp check_host(nil), do: {:error, :invalid_url, "missing hostname"}
   defp check_host(""), do: {:error, :invalid_url, "missing hostname"}
   defp check_host(_), do: :ok
+
+  defp check_userinfo(nil), do: :ok
+  defp check_userinfo(_), do: {:error, :invalid_url, "URL credentials are refused"}
 
   # A metadata address is refused before the private classification or any
   # policy is consulted.

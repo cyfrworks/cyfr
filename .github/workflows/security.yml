@@ -73,14 +73,14 @@ jobs:
         run: mix compile
 
       - name: Check retired packages
-        # Suppress the two cowlib advisories, which have no fixed release:
-        # 2.20.0 is the newest and still carries them. cowlib is test-only
-        # here — it arrives through `bypass` (`only: :test`) and the server
-        # speaks HTTP through Bandit, so no cowboy code ships. Remove the
+        # Suppress the cowlib advisory that has no fixed release: 2.21.0 is
+        # the newest and still carries it. cowlib is test-only here — it
+        # arrives through `bypass` (`only: :test`) and the server speaks
+        # HTTP through Bandit, so no cowboy code ships. Remove the
         # suppression when cowlib publishes a fix, or when `bypass` no
         # longer pulls it.
         env:
-          HEX_IGNORE_ADVISORIES: "CVE-2026-43966,CVE-2026-43969"
+          HEX_IGNORE_ADVISORIES: "CVE-2026-43966"
         run: mix hex.audit
 
       - name: Check vulnerable dependencies

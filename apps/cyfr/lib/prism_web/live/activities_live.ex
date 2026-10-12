@@ -418,8 +418,8 @@ defmodule PrismWeb.ActivitiesLive do
           <.button size="sm" variant="secondary" phx-click="refresh">Refresh</.button>
         </:actions>
       </.page_header>
-      
-    <!-- Filters -->
+
+      <!-- Filters -->
       <div class="flex items-center gap-3 flex-wrap">
         <form phx-change="filter" class="flex gap-3">
           <select
@@ -661,8 +661,8 @@ defmodule PrismWeb.ActivitiesLive do
         <span class="text-gray-500 uppercase">Reason</span>
         <span class="ml-2">{@decision.reason}</span>
       </p>
-      
-    <!-- The request's decisions: every call of its chain -->
+
+      <!-- The request's decisions: every call of its chain -->
       <section :if={Map.get(@tree, :decisions) not in [nil, []]}>
         <h4 class="text-xs font-medium uppercase tracking-wider text-gray-500 mb-2">
           Decisions ({length(@tree.decisions)})
@@ -685,8 +685,8 @@ defmodule PrismWeb.ActivitiesLive do
           <% end %>
         </div>
       </section>
-      
-    <!-- Execution tree — same visual idiom as the /executions main table -->
+
+      <!-- Execution tree — same visual idiom as the /executions main table -->
       <section :if={Map.get(@tree, :executions) not in [nil, []]}>
         <h4 class="text-xs font-medium uppercase tracking-wider text-gray-500 mb-2">
           Executions ({length(@tree.executions)})
@@ -717,8 +717,8 @@ defmodule PrismWeb.ActivitiesLive do
           <% end %>
         </div>
       </section>
-      
-    <!-- Policy decisions -->
+
+      <!-- Policy decisions -->
       <section :if={Map.get(@tree, :policy_logs) not in [nil, []]}>
         <h4 class="text-xs font-medium uppercase tracking-wider text-gray-500 mb-2">
           Policy decisions ({length(@tree.policy_logs)})
@@ -738,8 +738,8 @@ defmodule PrismWeb.ActivitiesLive do
           <% end %>
         </div>
       </section>
-      
-    <!-- Input + Output/Error side-by-side -->
+
+      <!-- Input + Output/Error side-by-side -->
       <div :if={@has_input or @has_right} class="grid gap-4 md:grid-cols-2">
         <section :if={@has_input} class={if !@has_right, do: "md:col-span-2", else: ""}>
           <div class="flex items-center justify-between mb-1">

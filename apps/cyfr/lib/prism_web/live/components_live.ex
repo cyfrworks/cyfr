@@ -1110,8 +1110,8 @@ defmodule PrismWeb.ComponentsLive do
           </.button>
         </form>
       </div>
-      
-    <!-- Search Results -->
+
+      <!-- Search Results -->
       <div :if={@search_searching} class="text-center text-gray-500 py-8">
         Searching registry...
       </div>
@@ -1269,11 +1269,11 @@ defmodule PrismWeb.ComponentsLive do
           </div>
         </.card>
       </div>
-      
-    <!-- Divider -->
+
+      <!-- Divider -->
       <div class="border-t border-gray-800"></div>
-      
-    <!-- Installed Components -->
+
+      <!-- Installed Components -->
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
           <button
@@ -1322,8 +1322,8 @@ defmodule PrismWeb.ComponentsLive do
       <div :if={!@loading && @components == []} class="py-8">
         <.empty_state message="No components found" />
       </div>
-      
-    <!-- Grouped component tables -->
+
+      <!-- Grouped component tables -->
       <div :if={!@loading && @components != []} class="space-y-6">
         <section :for={{type, groups} <- @sorted_groups}>
           <div class="flex items-center gap-2 mb-3">
@@ -1400,8 +1400,8 @@ defmodule PrismWeb.ComponentsLive do
                               {comp_field(@expanded_detail, :description)}
                             </p>
                           </div>
-                          
-    <!-- Tags -->
+
+                          <!-- Tags -->
                           <div :if={
                             is_list(comp_field(@expanded_detail, :tags)) &&
                               comp_field(@expanded_detail, :tags) != []
@@ -1415,8 +1415,8 @@ defmodule PrismWeb.ComponentsLive do
                               </span>
                             </div>
                           </div>
-                          
-    <!-- Versions table -->
+
+                          <!-- Versions table -->
                           <div>
                             <h4 class="text-xs font-semibold text-gray-400 uppercase mb-2">
                               Installed Versions
@@ -1567,8 +1567,8 @@ defmodule PrismWeb.ComponentsLive do
                               </div>
                             </div>
                           </div>
-                          
-    <!-- Consent section -->
+
+                          <!-- Consent section -->
                           <div class="border-t border-gray-800 pt-4">
                             <div class="flex items-center justify-between mb-3">
                               <div class="flex items-center gap-2">
@@ -1608,8 +1608,8 @@ defmodule PrismWeb.ComponentsLive do
                                 Grant access
                               </.button>
                             </div>
-                            
-    <!-- A plan that could not be read -->
+
+                            <!-- A plan that could not be read -->
                             <div
                               :if={@expanded_plan_refusal}
                               data-test="setup-plan-refused"
@@ -1617,16 +1617,16 @@ defmodule PrismWeb.ComponentsLive do
                             >
                               {error_message(@expanded_plan_refusal)}
                             </div>
-                            
-    <!-- No plan -->
+
+                            <!-- No plan -->
                             <div
                               :if={!@expanded_plan && !@expanded_plan_refusal}
                               class="text-sm text-gray-500 p-4"
                             >
                               No setup plan available for this component.
                             </div>
-                            
-    <!-- Declared needs -->
+
+                            <!-- Declared needs -->
                             <div :if={@expanded_plan} class="px-4 pb-4">
                               <p
                                 :if={(plan_field(@expanded_plan, :needs) || []) == []}
@@ -1660,8 +1660,8 @@ defmodule PrismWeb.ComponentsLive do
                                 </div>
                               </dl>
                             </div>
-                            
-    <!-- Dependencies -->
+
+                            <!-- Dependencies -->
                             <div
                               :if={
                                 @expanded_plan &&

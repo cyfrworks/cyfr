@@ -273,8 +273,8 @@ defmodule PrismWeb.BuildsLive do
             </form>
           </div>
         </.card>
-        
-    <!-- Build output -->
+
+        <!-- Build output -->
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">Output</h3>
           <div :if={@build_log == [] and !@build_output} class="py-8">
@@ -304,8 +304,8 @@ defmodule PrismWeb.BuildsLive do
           </div>
         </.card>
       </div>
-      
-    <!-- Toolchains list -->
+
+      <!-- Toolchains list -->
       <.card :if={!@loading}>
         <h3 class="text-sm font-medium text-gray-400 mb-4">Available Toolchains</h3>
         <div :if={@toolchains == []} class="py-4">

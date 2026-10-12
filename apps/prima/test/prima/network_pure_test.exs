@@ -16,6 +16,22 @@ defmodule Prima.NetworkPureTest do
     end
   end
 
+  test "URL parsing refuses a URL that carries credentials, naming none of them" do
+    for url <- [
+          "https://user:secret@example.test/x",
+          "https://user@example.test/",
+          "https://:@example.test/",
+          "http://user:secret@10.0.0.5:8080/"
+        ] do
+      assert {:error, :invalid_url, message} = Network.parse_url(url), url
+      assert message == "URL credentials are refused"
+    end
+
+    # An @ in the path or query is no credential.
+    assert {:ok, %URI{host: "example.test", userinfo: nil}} =
+             Network.parse_url("https://example.test/a@b?c=d@e")
+  end
+
   test "pinning uses the supplied address and retains URL and TLS identity" do
     {:ok, uri} = Network.parse_url("https://example.test:8443/path?q=1")
     ip = {0x2001, 0xDB8, 0, 0, 0, 0, 0, 1}

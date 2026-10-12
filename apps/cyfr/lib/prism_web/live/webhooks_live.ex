@@ -489,8 +489,8 @@ defmodule PrismWeb.WebhooksLive do
           </.button>
         </:actions>
       </.page_header>
-      
-    <!-- New / rotated secret reveal -->
+
+      <!-- New / rotated secret reveal -->
       <.card :if={@new_secret}>
         <div class="space-y-2">
           <p class="text-sm text-yellow-400 font-medium">
@@ -523,8 +523,8 @@ defmodule PrismWeb.WebhooksLive do
           </div>
         </div>
       </.card>
-      
-    <!-- Create / Edit form -->
+
+      <!-- Create / Edit form -->
       <.card :if={@show_form}>
         <form phx-submit="submit" phx-change="form_changed" class="space-y-4">
           <div :if={@form_error} class="text-sm text-red-400">{@form_error}</div>
@@ -647,8 +647,8 @@ defmodule PrismWeb.WebhooksLive do
           </.button>
         </form>
       </.card>
-      
-    <!-- List -->
+
+      <!-- List -->
       <.card>
         <div :if={@loading} class="py-8 text-center text-gray-500">Loading...</div>
         <div :if={!@loading && @webhooks == []} class="py-8">

@@ -64,7 +64,7 @@ defmodule Sanctum.MixProject do
       # Contexts are established at the authentication boundary, which is
       # a `Plug.Conn`, and the identity providers are Ueberauth strategies.
       {:plug, "~> 1.14"},
-      {:ueberauth, "~> 0.10.8"},
+      {:ueberauth, "~> 0.11.0"},
       {:ueberauth_oidcc, "~> 0.4.2"},
       # The auth sliver's own HTTP: the device-flow pool
       # (`Sanctum.Auth.Finch`) and the OAuth token exchange.

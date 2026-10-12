@@ -84,7 +84,7 @@ defmodule Cyfr.App.MixProject do
       # The Ueberauth route table the web face builds from the configured
       # providers (`CyfrWeb.Plugs.ConfiguredUeberauth`); the strategies
       # themselves are Sanctum's.
-      {:ueberauth, "~> 0.10.8"},
+      {:ueberauth, "~> 0.11.0"},
       # Ecto, for the errors the surfaces rescue and the sandbox the suite
       # runs on. The adapters and the drivers are Arca's.
       {:ecto_sql, "~> 3.12"},
@@ -107,7 +107,7 @@ defmodule Cyfr.App.MixProject do
       {:finch, "~> 0.19"},
       # Prism deps
       {:phoenix_html, "~> 4.2"},
-      {:phoenix_live_view, "~> 1.1.33"},
+      {:phoenix_live_view, "~> 1.2.12"},
       {:phoenix_live_reload, "~> 1.6", only: :dev},
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
       {:esbuild, "~> 0.9", runtime: Mix.env() == :dev},

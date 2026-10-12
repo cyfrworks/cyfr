@@ -13,6 +13,9 @@ defmodule Locus.Runtime.HttpRequestValidation do
       parse → method → scheme → domain → body decode → request size →
       pin → method atom
 
+  The parse refuses a URL that carries credentials (userinfo), as
+  `Prima.Network.parse_url/1` does.
+
   Every check before the pin is the engine's own, made from the
   assignment's edge and limits (`Locus.Runtime.EdgeGuard`). The pin is CYFR's: the
   address the URL may be reached at under the attempt's authority,
@@ -243,6 +246,11 @@ defmodule Locus.Runtime.HttpRequestValidation do
         cond do
           is_nil(hostname) or hostname == "" ->
             {:error, :invalid_request, "Invalid URL: missing hostname"}
+
+          # A URL's userinfo would reach the wire as Basic authorization:
+          # refused here as `Prima.Network.parse_url/1` refuses it.
+          uri.userinfo != nil ->
+            {:error, :invalid_request, "Invalid URL: URL credentials are refused"}
 
           # Body and multipart are mutually exclusive
           multipart != nil and body != "" ->

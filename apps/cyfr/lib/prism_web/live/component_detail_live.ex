@@ -161,16 +161,16 @@ defmodule PrismWeb.ComponentDetailLive do
             </div>
           </dl>
         </.card>
-        
-    <!-- Description -->
+
+        <!-- Description -->
         <.card :if={@component[:description] || @component["description"]}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">Description</h3>
           <p class="text-sm text-gray-300">
             {@component[:description] || @component["description"]}
           </p>
         </.card>
-        
-    <!-- Execute -->
+
+        <!-- Execute -->
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-3">Execute Component</h3>
           <form phx-submit="execute" class="flex gap-3">
@@ -183,16 +183,16 @@ defmodule PrismWeb.ComponentDetailLive do
             <.button type="submit">Execute</.button>
           </form>
         </.card>
-        
-    <!-- README -->
+
+        <!-- README -->
         <.card :if={@readme}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">README</h3>
           <div class="prose prose-invert prose-sm max-w-none">
             <pre class="text-xs text-gray-300 whitespace-pre-wrap">{@readme}</pre>
           </div>
         </.card>
-        
-    <!-- Dependencies -->
+
+        <!-- Dependencies -->
         <.card :if={@component[:dependencies] || @component["dependencies"]}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">Dependencies</h3>
           <ul class="space-y-1">
@@ -209,8 +209,8 @@ defmodule PrismWeb.ComponentDetailLive do
       <div :if={!@loading && !@component}>
         <.empty_state message="Component not found" />
       </div>
-      
-    <!-- Report modal — the shared component owns taxonomy, validation and submit -->
+
+      <!-- Report modal — the shared component owns taxonomy, validation and submit -->
       <.live_component
         module={PrismWeb.ReportComponent}
         id="report"

@@ -240,8 +240,8 @@ defmodule PrismWeb.ApiKeysLive do
           </.button>
         </:actions>
       </.page_header>
-      
-    <!-- New key display -->
+
+      <!-- New key display -->
       <.card :if={@new_key}>
         <div class="space-y-2">
           <p class="text-sm text-yellow-400 font-medium">
@@ -264,8 +264,8 @@ defmodule PrismWeb.ApiKeysLive do
           </div>
         </div>
       </.card>
-      
-    <!-- Create form -->
+
+      <!-- Create form -->
       <.card :if={@show_create}>
         <form phx-submit="create" phx-change="form_changed" class="space-y-4">
           <div class="grid grid-cols-2 gap-4">
@@ -287,8 +287,8 @@ defmodule PrismWeb.ApiKeysLive do
               </select>
             </div>
           </div>
-          
-    <!-- Scope selection -->
+
+          <!-- Scope selection -->
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-2">Scopes</label>
             <div class="space-y-2">
@@ -330,8 +330,8 @@ defmodule PrismWeb.ApiKeysLive do
           <.button type="submit">Create API Key</.button>
         </form>
       </.card>
-      
-    <!-- Keys list -->
+
+      <!-- Keys list -->
       <.card>
         <div :if={@loading} class="py-8 text-center text-gray-500">Loading...</div>
         <div :if={!@loading && @keys == []} class="py-8">

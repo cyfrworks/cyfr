@@ -123,6 +123,18 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
                )
     end
 
+    test "rejects a URL that carries credentials, naming none of them" do
+      for url <- [
+            "http://user:secret@localhost/x",
+            "http://user@localhost/x",
+            "http://:@localhost/x"
+          ] do
+        assert {:error, :invalid_request, "Invalid URL: URL credentials are refused"} =
+                 validate(encode(%{"url" => url}), localhost_edge(), EdgeFixtures.limits()),
+               url
+      end
+    end
+
     test "method allowlist is checked before the domain" do
       edge = EdgeFixtures.edge(domains: ["api.example.com"], methods: ["GET"])
 

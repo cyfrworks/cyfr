@@ -769,8 +769,8 @@ defmodule PrismWeb.TopbarLive do
               </.link>
             </:popover>
           </.indicator>
-          
-    <!-- Tinctures (only when recent activity) -->
+
+          <!-- Tinctures (only when recent activity) -->
           <.indicator
             :if={@tincture_count > 0}
             name="tinctures"
@@ -798,8 +798,8 @@ defmodule PrismWeb.TopbarLive do
               </.link>
             </:popover>
           </.indicator>
-          
-    <!-- Schedules -->
+
+          <!-- Schedules -->
           <.indicator
             :if={@next_schedule}
             name="schedules"
@@ -827,8 +827,8 @@ defmodule PrismWeb.TopbarLive do
               </.link>
             </:popover>
           </.indicator>
-          
-    <!-- Rate -->
+
+          <!-- Rate -->
           <.indicator
             name="rate"
             open={@open_popover == "rate"}
@@ -863,8 +863,8 @@ defmodule PrismWeb.TopbarLive do
               </.link>
             </:popover>
           </.indicator>
-          
-    <!-- Executions -->
+
+          <!-- Executions -->
           <.indicator
             name="executions"
             open={@open_popover == "executions"}
@@ -897,8 +897,8 @@ defmodule PrismWeb.TopbarLive do
               </.link>
             </:popover>
           </.indicator>
-          
-    <!-- Activity -->
+
+          <!-- Activity -->
           <.indicator
             name="activity"
             open={@open_popover == "activity"}
@@ -936,8 +936,8 @@ defmodule PrismWeb.TopbarLive do
               </.link>
             </:popover>
           </.indicator>
-          
-    <!-- Health -->
+
+          <!-- Health -->
           <.indicator
             name="health"
             open={@open_popover == "health"}
@@ -969,8 +969,8 @@ defmodule PrismWeb.TopbarLive do
             </:popover>
           </.indicator>
         </div>
-        
-    <!-- User -->
+
+        <!-- User -->
         <.indicator
           :if={@context}
           name="user"

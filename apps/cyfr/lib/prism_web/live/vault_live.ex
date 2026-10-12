@@ -849,8 +849,8 @@ defmodule PrismWeb.VaultLive do
           </div>
         </div>
       </.card>
-      
-    <!-- Add: sealed fields, for a key a component here needs -->
+
+      <!-- Add: sealed fields, for a key a component here needs -->
       <.card :if={@show_add == "fields"}>
         <p
           :if={not is_map(@key_needs)}
@@ -921,8 +921,8 @@ defmodule PrismWeb.VaultLive do
           <.button type="submit">Create entry</.button>
         </form>
       </.card>
-      
-    <!-- Add: OAuth grant -->
+
+      <!-- Add: OAuth grant -->
       <.card :if={@show_add == "oauth"}>
         <form phx-submit="authorize_new" class="space-y-4">
           <div class="grid grid-cols-2 gap-4">
@@ -967,8 +967,8 @@ defmodule PrismWeb.VaultLive do
           <.button type="submit">Start authorization</.button>
         </form>
       </.card>
-      
-    <!-- Entries list -->
+
+      <!-- Entries list -->
       <.card>
         <div :if={@loading} class="py-8 text-center text-gray-500">Loading...</div>
         <div :if={!@loading && @entries == []} class="py-8">
@@ -1133,8 +1133,8 @@ defmodule PrismWeb.VaultLive do
           </ul>
         </section>
       </.card>
-      
-    <!-- Rotate form -->
+
+      <!-- Rotate form -->
       <.card :if={@rotating}>
         <% entry = Enum.find(@entries, &(&1.id == @rotating)) %>
         <form
@@ -1164,8 +1164,8 @@ defmodule PrismWeb.VaultLive do
           <.button type="submit">Rotate material</.button>
         </form>
       </.card>
-      
-    <!-- OAuth client credentials: the operator's app per provider -->
+
+      <!-- OAuth client credentials: the operator's app per provider -->
       <.card>
         <div class="flex items-center justify-between mb-2">
           <h3 class="text-sm font-medium text-gray-400">OAuth client credentials</h3>

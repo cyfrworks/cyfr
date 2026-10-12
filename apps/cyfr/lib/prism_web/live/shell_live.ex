@@ -2363,8 +2363,7 @@ defmodule PrismWeb.ShellLive do
               do: "h-1.5 w-6 bg-accent-primary",
               else: "h-1.5 w-1.5 bg-text-muted/30 hover:bg-text-muted/50"
             )
-          ]}>
-          </span>
+          ]}></span>
         </button>
       <% end %>
     </div>

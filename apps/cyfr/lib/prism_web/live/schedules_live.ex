@@ -425,8 +425,8 @@ defmodule PrismWeb.SchedulesLive do
           </.button>
         </:actions>
       </.page_header>
-      
-    <!-- Create form -->
+
+      <!-- Create form -->
       <div :if={@show_create}>
         <.card>
           <.form for={@form} phx-submit="create" class="space-y-4 p-4">

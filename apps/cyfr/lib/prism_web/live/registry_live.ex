@@ -506,8 +506,8 @@ defmodule PrismWeb.RegistryLive do
           </table>
         </.card>
       </div>
-      
-    <!-- Yank modal -->
+
+      <!-- Yank modal -->
       <.modal
         id="yank-modal"
         show={@yank_pending != nil}
@@ -556,8 +556,8 @@ defmodule PrismWeb.RegistryLive do
           </form>
         </div>
       </.modal>
-      
-    <!-- Appeal modal -->
+
+      <!-- Appeal modal -->
       <.modal
         id="appeal-modal"
         show={@appeal_pending != nil}
@@ -660,8 +660,8 @@ defmodule PrismWeb.RegistryLive do
           </div>
         </div>
       </.modal>
-      
-    <!-- Deprecate modal -->
+
+      <!-- Deprecate modal -->
       <.modal
         id="deprecate-modal"
         show={@deprecate_pending != nil}
