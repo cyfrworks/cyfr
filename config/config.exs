@@ -55,8 +55,9 @@ config :sanctum,
     Compendium.Builds.Provider,
     Compendium.Provider,
     # `compendium`: a person's layout document, which Prism reads to place
-    # the canvases and every edit, the console's or the assistant's,
-    # arranges through.
+    # the canvases. Its `edit` is the layout's one publisher, called for the
+    # person by the CLI, the API, a paired glass or an agent whose policy
+    # and grant name it; no Prism page calls it.
     Compendium.Providers.Layout,
     # `compendium`: a person's canvases, their versions and what a canvas
     # may read, beside the declaration a canvas version is held to.

@@ -78,7 +78,7 @@ before.
 
 | Browser | How it trusts the run's authority |
 |---|---|
-| Chromium | its full build (`launchBrowser` launches `channel: "chromium"`) reads the managed policy `CACertificates` from `/etc/opt/chrome_for_testing/policies/managed/`; its headless shell, which the one-cell proofs launch, reads no policy |
+| Chromium | its full build (`launchBrowser` launches `channel: "chromium"`) reads the managed policy `CACertificates` from `/etc/opt/chrome_for_testing/policies/managed/`; its headless shell, which the frame-facts, tincture and containment proofs launch, reads no policy; the canvas proof launches the full build |
 | Firefox | Playwright's build reads the policies file `PLAYWRIGHT_FIREFOX_POLICIES_JSON` names, whose `Certificates.Install` holds the authority |
 | WebKit | it verifies against `/etc/ssl/certs/ca-certificates.crt`, which the container mounts as the authority alone, so WebKit trusts nothing else |
 
@@ -164,7 +164,7 @@ own README holds its steps and its record.
 | instance entries | `tests/instance-entry-proof/` | one home, `home.test`; SQLite release decisions, claims and administrator boundary | Chromium, desktop (1280×900) and 720×720 |
 | approvals | `tests/approval-proof/` | one home, `home.test`; SQLite grant rows, binding lifetimes and named-account prompt | Chromium, desktop (1280×900) and 720×720 |
 | file offers | `tests/file-offer-proof/` | one home, `home.test`; offers, recipient acceptance and actual snapshot readback | Chromium, desktop (1280×900) and 720×720 |
-| canvas | `tests/canvas-proof/` | one cell, `cyfr.test`, and a PostgreSQL cell when `CANVAS_PROOF_PG_URL` names a database | Chromium, Firefox and WebKit; the vault entry's passkey confirmation in Chromium's full build alone |
+| canvas | `tests/canvas-proof/` | one cell, `cyfr.test`; SQLite only, no passkey step | Chromium, Firefox and WebKit, desktop (1280×900) and 720×720 |
 
 The three vault proofs retain distinct records under
 `$RUNNER_TEMP/vault-proofs/<proof>/<viewport>` and fail the job when any
@@ -307,15 +307,15 @@ The Trivy scans of those jobs were not run here.
 | Suite | Result |
 |---|---|
 | builder-image: `scripts/builder-smoke.py` | pass, 22 |
-| builder-image: `isolation.py` (A1's V1 renames) | pass, 34 |
+| builder-image: `isolation.py` (the pooled uids named for their service) | pass, 34 |
 | builder-image: `memory.py` | pass, 41 |
 | builder-image: `headroom.py` | pass, 11 |
 | locus-backends-image: `e2e.py`, the scripted controller and `cyfr` as the controller | pass, 83 |
-| locus-backends-image: `isolation.py` (A1's V1 renames) | pass, 92 |
+| locus-backends-image: `isolation.py` (the pooled uids named for their service) | pass, 92 |
 | locus-backends-image: `refusals.py` | pass, 35 |
 | locus-backends-image: `residue.py` | pass, 29 |
 | locus-backends-image: `memory.py` | pass, 25 and 26 in two runs (its status polls print a line each) |
-| locus-runtime-image: `runners.py` (A1's E1 egress cases), on `p1` | fail after 8: the pinned-egress case's guest cannot reach the harness's listener (the ufw row above) |
+| locus-runtime-image: `runners.py` (the egress enforcement cases), on `p1` | fail after 8: the pinned-egress case's guest cannot reach the harness's listener (the ufw row above) |
 | locus-runtime-image: `runners.py`, on the Docker-in-Docker host | 86 pass, including every pinned-egress, kill, taint, stream, late-child and control-plane-cut case; then fail: after the case that kills the service's VM, the restarted container's cyfr-locus reports "memory bounds are unavailable … processes remain in /sys/fs/cgroup" and starts no runner, so the pool never refills and the memory cases after it do not run. A harness artefact: the case polled the container with `docker exec` while it restarted in place, and runc's processes entering it for the exec sat in the reused cgroup root, in the host's pid namespace, when the new keeper drained it, listed there as pid 0. The case now lists processes from the host (`docker top`) across the restart, and the keeper's drain skips an entry of another pid namespace and waits between its passes |
 | locus-runtime-image: `runners.py` and `namespace.py`, native engine, harness in a container on a shared network | pass: 172 and 28, the service-death case and the restart step among them |
 | browser: `run.sh` | pass, every attempt observed in every browser |

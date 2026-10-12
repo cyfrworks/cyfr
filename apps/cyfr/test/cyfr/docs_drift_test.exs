@@ -1866,6 +1866,50 @@ defmodule Cyfr.DocsDriftTest do
              "writer; neither reaches the layout tool"
   end
 
+  # A layout is one fenced document per person per athanor: its key names
+  # the person alone, and the athanor is the document's own.
+  test "the tincture guide says a person has one layout in each athanor" do
+    assert Arca.Layouts.key("usr_1") == "layouts/usr_1",
+           "a layout's document key names more than the person; say in tincture-guide.md's " <>
+             "layout paragraph how many layouts a person has"
+
+    [paragraph] =
+      Regex.run(~r/^The person's \*\*layout\*\* .*$/m, tincture_guide()) ||
+        flunk("tincture-guide.md has no paragraph beginning \"The person's **layout**\"")
+
+    assert paragraph =~ "A person has one layout in each athanor.",
+           "tincture-guide.md's layout paragraph does not say a person has one layout in each " <>
+             "athanor"
+  end
+
+  # The toolkit's module worker fails the canvas on an error the module
+  # throws or a rejection nothing handles, and the shell takes that failure
+  # as safe mode `crashed`. The guide's toolkit section says so, so a canvas
+  # author catches a refused stream rather than losing the canvas to it.
+  test "the tincture guide says an uncaught error in a canvas module fails the canvas" do
+    worker = File.read!(Path.join(@repo_root, "apps/cyfr/assets/js/toolkit/worker.js"))
+
+    for event <- ["error", "unhandledrejection"] do
+      assert worker =~ ~s{listen("#{event}", () => fail("runtime"))},
+             "the toolkit's module worker no longer fails the canvas on #{event}; say what it " <>
+               "does in tincture-guide.md's toolkit section"
+    end
+
+    [_, after_heading] =
+      String.split(tincture_guide(), "### The toolkit and the tree\n", parts: 2)
+
+    [section | _] = String.split(after_heading, "\n### ", parts: 2)
+
+    assert section =~
+             "An error the module does not catch fails the canvas: a throw out of its code, " <>
+               "or a rejection nothing handles, such as a refused `canvas.stream` without a " <>
+               "`catch`, puts the shell into safe mode (`crashed`).",
+           "tincture-guide.md's toolkit section does not say an uncaught error in the module " <>
+             "fails the canvas into safe mode"
+  end
+
+  defp tincture_guide, do: File.read!(Path.join(@repo_root, "tincture-guide.md"))
+
   test "the tincture guide states the lockfile, the invoke input, the referrer policy and the log rule" do
     guide = File.read!(Path.join(@repo_root, "tincture-guide.md"))
 

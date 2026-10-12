@@ -140,7 +140,9 @@ defmodule Compendium do
 
   @doc """
   Whether every stream a declaration opens is one a provider declares, with
-  a subject it takes (`Compendium.Tincture.Rules.check_streams/2`).
+  a subject it takes (`Compendium.Tincture.Rules.check_streams/2`). A
+  stream with a shape is a canvas's alone: a declaration of another
+  placement naming one is refused.
   """
   @spec tincture_check_streams(Prima.Manifest.Tincture.t(), [Prima.Provider.Stream.t()]) ::
           :ok | {:error, Rules.refusal()}

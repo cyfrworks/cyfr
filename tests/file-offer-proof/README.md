@@ -96,9 +96,9 @@ before the run, and the result lists them with the line found.
 
 | Claim | Test file | Test name | Owner |
 |---|---|---|---|
-| race: a completer paused past its lease and a successor publish the transfer once, and the stale one, refused at its next row write, publishes and releases nothing | `apps/arca/test/arca/file_offers_test.exs` | `a stale completer cannot publish or release another claimant's custody` | N.N1 |
-| crash and uncertain publication: a kill at each of the four points between the acceptance's commit and `completed` is finished by the receipts sweep from the recorded path, the offered snapshot landing once and the custody copy released | `apps/cyfr/test/arca/providers/files_test.exs` | `acceptance publishes the offered snapshot once across a crash and retry` | F.F0 |
-| custody: the sender's athanor purged between the commit and publication, the transfer completes from the recipient's custody copy, beside a file of the recipient's own and never over it | `apps/cyfr/test/cyfr/files_test.exs` | `accepted custody survives sender purge without overwriting recipient bytes` | F.F0 |
+| race: a completer paused past its lease and a successor publish the transfer once, and the stale one, refused at its next row write, publishes and releases nothing | `apps/arca/test/arca/file_offers_test.exs` | `a stale completer cannot publish or release another claimant's custody` | `Arca.FileOffers` |
+| crash and uncertain publication: a kill at each of the four points between the acceptance's commit and `completed` is finished by the receipts sweep from the recorded path, the offered snapshot landing once and the custody copy released | `apps/cyfr/test/arca/providers/files_test.exs` | `acceptance publishes the offered snapshot once across a crash and retry` | `Arca.FileOffers` |
+| custody: the sender's athanor purged between the commit and publication, the transfer completes from the recipient's custody copy, beside a file of the recipient's own and never over it | `apps/cyfr/test/cyfr/files_test.exs` | `accepted custody survives sender purge without overwriting recipient bytes` | `Arca.FileOffers` |
 
 None of the three is a case of the storage cap, whose own cases are
 `apps/cyfr/test/arca/providers/files_test.exs`'s "an acceptance past the
@@ -108,6 +108,27 @@ frees", and `apps/arca/test/arca/file_offers_test.exs`'s "copies each file
 into the sender's snapshot, under the sender's cap, until it ends". This
 proof's cell sets no storage cap, so it shows what the cap counts, never a
 refusal.
+
+## Declared coverage limit
+
+The unchanged shipped model artifact → production
+`Opus.Host.AttachedFetch` → local provider stand-in composition is
+**uncovered**. The current artifacts hard-code provider HTTPS origins
+(`seed/components/catalysts/local/openai/1.3.1/src/src/lib.rs:14` and its
+peers); `Opus.Host.Egress.pin/3` has a resolver option which the actual
+host never passes (`apps/cyfr/lib/opus/host/egress.ex:94`). The
+existing suites found in `seed_model_catalysts_test.exs`,
+`model_contract_test.exs`, `TwoServices`, `tests/locus-runtime-image/` and
+`Sanctum.Test.Resolver` do not provide an end-to-end local
+replacement for that production path. `tests/locus-runtime-image/runners.py`'s
+scenario `shipped_model_attached_request` exercises the shipped artifact
+with a scripted host; `attached_fetch_test.exs` and `model_contract_test.exs`
+exercise production attachment with controlled fixture guests. Neither is
+reported as the full composition, and this proof starts no runner and
+sends no request to a provider. No live provider account or credentials,
+TLS bypass, endpoint parameter or new resolver/transport override is used.
+This is an explicit test-coverage limitation, not a claim that the
+composition passed.
 
 ## Record
 

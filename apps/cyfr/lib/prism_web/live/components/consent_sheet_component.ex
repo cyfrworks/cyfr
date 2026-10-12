@@ -59,18 +59,18 @@ defmodule PrismWeb.ConsentSheetComponent do
   An edge whose default is an entry, the app's own calls or a
   dependency's, may bind further accounts beside it, each under a name of
   its own: "Add another account" adds a row with a name to give (an
-  account name, distinct from the edge's others, compared case-folded),
-  the need's candidates with none pressed, and the five lifetimes,
-  standing pressed. A dependency's default a profile lends is first
-  switched to the entry that profile lends, pressed, and the row says it
-  is now chosen here; where the dependency's need for that entry cannot
-  be told, no account is added and the row says why. Each account the
-  head binds reopens as its own row, its name fixed, its entry pressed and
-  its lifetime as a re-grant's is: a `once` stays `once`, an `until` still
-  ahead keeps its time, and one that has passed opens with nothing
-  pressed. "Remove" drops a row. A row whose name is missing, invalid or
-  taken, or with no entry or no lifetime pressed, is no decision, so the
-  grant is narrower than the head, never wider.
+  account name, distinct from the edge's others, compared by Unicode's
+  full lowercase mapping), the need's candidates with none pressed, and
+  the five lifetimes, standing pressed. A dependency's default a profile
+  lends is first switched to the entry that profile lends, pressed, and
+  the row says it is now chosen here; where the dependency's need for that
+  entry cannot be told, no account is added and the row says why. Each
+  account the head binds reopens as its own row, its name fixed, its entry
+  pressed and its lifetime as a re-grant's is: a `once` stays `once`, an
+  `until` still ahead keeps its time, and one that has passed opens with
+  nothing pressed. "Remove" drops a row. A row whose name is missing,
+  invalid or taken, or with no entry or no lifetime pressed, is no
+  decision, so the grant is narrower than the head, never wider.
 
   A grant opened for an account (the walk's `account`, which
   `PrismWeb.SystemLayer.grant_prompt/4` places) opens with that account's
@@ -675,7 +675,8 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   # Why an account's name keeps its row out of the grant, or nil: a name
   # to give, one the binding key can carry, and one no earlier row of its
-  # edge holds, compared case-folded as the home compares them.
+  # edge holds, compared by Unicode's full lowercase mapping as the home
+  # compares them (`Prima.Authority.Blob.same_account_name?/2`).
   defp account_problem({:account, edge, _ref} = slot, choices) do
     name = Map.fetch!(choices, slot).name
 
@@ -1267,12 +1268,12 @@ defmodule PrismWeb.ConsentSheetComponent do
   (`%{name, dep, from, need}`, as `PrismWeb.SystemLayer.grant_prompt/4`
   passes it: `dep` nil for the app's own calls, `from` nil for the
   grant's source, `need` nil for the edge's one credential need): as held
-  when its edge already holds an account of that name, compared
-  case-folded; otherwise a new row of that fixed name, no entry pressed
-  and standing pressed, beside the edge's default as the grant otherwise
-  opens it, a default a profile lends first switched to the entry it
-  lends. `{:error, sentence}` when the plan has no edge or need for it,
-  or the lent default cannot be switched.
+  when its edge already holds an account of that name, compared by
+  Unicode's full lowercase mapping; otherwise a new row of that fixed
+  name, no entry pressed and standing pressed, beside the edge's default
+  as the grant otherwise opens it, a default a profile lends first
+  switched to the entry it lends. `{:error, sentence}` when the plan has
+  no edge or need for it, or the lent default cannot be switched.
   """
   @spec open_account(map(), %{slot() => choice()}, map()) ::
           {:ok, %{slot() => choice()}} | {:error, String.t()}

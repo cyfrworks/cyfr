@@ -97,11 +97,11 @@ the proof stops at the first row a later one rests on.
 | `b_observes_again` | B, its head verified just before C3's restore, serves C3's head within its bound of that verification, give or take the one poll that saw it, with A gone |
 | `directory_down` | with the directory down, B serves the head it verified within its bound and pauses past it (`identity_stale`) |
 
-What this proof does not cover is J.J3's: admitting the person at another
-home through the CYFR door, and retiring the sessions a relying home
-minted. An externally operated directory is not provided: the directory
-here is a disposable writer the run starts, which proves no hosted
-service.
+What this proof does not cover is the join proof's (`tests/join-proof/`):
+admitting the person at another home through the CYFR door, and retiring
+the sessions a relying home minted. An externally operated directory is
+not provided: the directory here is a disposable writer the run starts,
+which proves no hosted service.
 
 ## Record
 

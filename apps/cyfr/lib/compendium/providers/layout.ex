@@ -16,7 +16,9 @@ defmodule Compendium.Providers.Layout do
       document published since the revision was read refuses the edit, and
       nothing is merged. Once the publish commits it is announced on the
       person's own topic (`Cyfr.Bus.layouts/2`, `Cyfr.Bus.LayoutPublished`),
-      so every shell the person has open reads the layout again.
+      so every shell the person has open reads the layout again. An
+      announcement that does not go out leaves the edit made, and each
+      shell reads the layout again on its next posture change or reconnect.
 
   A layout can only arrange: the shape names tinctures, modes and places
   and nothing else, so an edit never references an operation or a stream

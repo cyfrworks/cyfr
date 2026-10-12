@@ -64,8 +64,8 @@ browser_cookie() {
 }
 
 # Publish, for the person whose session token is `$2` on cell `$1`, the
-# layout document `$3` (version 2) over revision `${4:-0}`, as the console
-# publishes it (`layout.edit` through the gate).
+# layout document `$3` (version 2) over revision `${4:-0}`: `layout.edit`
+# under that session, through the gate. No console page publishes a layout.
 browser_layout() {
   local answer
   answer="$(server_fixture "$1" console "$2" layout/edit "{\"document\":$3,\"revision\":${4:-0}}")"
