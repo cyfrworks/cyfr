@@ -68,3 +68,25 @@ jobs:
 
       - name: go build
         run: go build ./...
+
+  test-macos:
+    # The CLI ships for macOS; this runs its checks on the platform's own
+    # filesystem, process and trust-store behavior.
+    name: vet + test (macOS)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/codex
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -count=1 ./...
