@@ -58,6 +58,20 @@ defmodule Prima.ManifestTinctureTest do
     assert Tincture.declared?(manifest(%{"actions" => []}))
   end
 
+  # The seed's immutable versions still declare `window` hints, which
+  # nothing reads: an extra of any shape, never a refusal.
+  test "a declared window is an ignored extra, whatever its shape" do
+    for window <- [%{"width" => 800, "height" => 600}, "800x600", 800, ["w"], true] do
+      tincture = Map.put(@declared, "window", window)
+
+      assert Manifest.validate(manifest(tincture), fn _ -> true end) == :ok, inspect(window)
+
+      assert Tincture.from_manifest(manifest(tincture)) ==
+               Tincture.from_manifest(manifest(@declared)),
+             inspect(window)
+    end
+  end
+
   test "each malformed block is refused at every manifest write, with a sentence" do
     refused(%{"frame" => "yes"})
     refused(%{"frame" => %{"capabilities" => "pointer_lock"}})

@@ -203,6 +203,43 @@ defmodule Prima.ManifestCapsTest do
     end
   end
 
+  describe "a schedule write in the ask" do
+    test "is refused at declaration for every type but an agent, by its exact name" do
+      for type <- ["catalyst", "reagent", "formula", "tincture", nil],
+          tool <- ["schedule.create", "schedule.update"] do
+        manifest = asking_tools(type, ["execution.run", tool])
+
+        assert Caps.validate(manifest, &guest_path?/1) ==
+                 {:error, {:invalid_caps, {:agent_only_tool, tool}}},
+               "#{inspect(type)} named #{tool}"
+
+        assert Manifest.validate(manifest, &guest_path?/1) ==
+                 {:error, {:invalid_manifest, [{:invalid_caps, {:agent_only_tool, tool}}]}}
+
+        assert Caps.from_manifest(manifest, &guest_path?/1) == nil
+      end
+    end
+
+    test "is an agent's to name; the schedule's reads, its removal and a pattern are not refused here" do
+      assert :ok =
+               Caps.validate(
+                 asking_tools("agent", ["schedule.create", "schedule.update"]),
+                 &guest_path?/1
+               )
+
+      for type <- ["catalyst", "reagent", "formula", "agent"],
+          tools <- [["schedule.list"], ["schedule.delete"], ["schedule.*"], ["*"]] do
+        assert :ok = Caps.validate(asking_tools(type, tools), &guest_path?/1),
+               "#{type} #{inspect(tools)}"
+      end
+    end
+
+    test "joins the agent-only tools as exact names, and nothing else does" do
+      assert Caps.agent_only_tools() ==
+               ~w(feed.bind feed.remove layout.edit schedule.create schedule.update)
+    end
+  end
+
   describe "canonical_storage_path?/1" do
     test "is the door's spelling, and the wildcard" do
       for path <- ["data/notes/", "data/report.md", "data", "*"],

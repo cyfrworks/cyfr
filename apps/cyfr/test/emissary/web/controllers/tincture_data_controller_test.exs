@@ -468,6 +468,47 @@ defmodule Emissary.Web.TinctureDataControllerTest do
                Arca.Repo.all(Arca.Schemas.DecisionLog)
     end
 
+    # A stored version whose declaration names a tool only an agent asks
+    # for never reached its row through publish; read at the request, its
+    # declaration does not read, and nothing of it is dispatched.
+    for tool <- ["layout.edit", "schedule.create", "schedule.update"] do
+      test "a declared #{tool} is refused before dispatch, and so is the rest of its declaration",
+           %{source: source} do
+        tool = unquote(tool)
+        name = "agent-only-#{String.replace(tool, ".", "-")}"
+
+        digest =
+          tincture!(source, name, %{"actions" => ["system.status", tool]}, [])
+
+        frame = frame!(source, name, digest)
+
+        for operation <- [tool, "system.status"] do
+          conn = action(frame.bearer, operation)
+
+          assert conn.status == 403, operation
+
+          assert %{class: "forbidden", stage: "admission", message: message} =
+                   refused(conn, :action)
+
+          assert message =~ "declares nothing it can reach: its declaration does not read",
+                 operation
+        end
+
+        # Each decision is this route's refusal: the gate never saw either.
+        assert [_, _] = rows = Arca.Repo.all(Arca.Schemas.DecisionLog)
+
+        assert Enum.all?(
+                 rows,
+                 &match?(
+                   %{tool: "tincture", action: "system_action", refusal_class: "forbidden"},
+                   &1
+                 )
+               )
+
+        assert Arca.Repo.all(Arca.Schemas.CronSchedule) == []
+      end
+    end
+
     test "a declared component is invoked through the tincture operation with operation and params",
          %{source: source} do
       frame = frame!(source, "inv-dash", declared!(source, "inv-dash"))

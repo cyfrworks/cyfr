@@ -77,8 +77,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @projection_lists %{"api_key" => :fields, "bundle" => :fields, "oauth" => :scopes}
 
   # The actions a pattern never grants: each binds or ends a standing
-  # conduit for a profile's authority, or rearranges the person's screen,
-  # so it is granted only where it is named. Only an agent asks for one.
+  # conduit for a profile's authority, sets runs firing on their own under
+  # one, or rearranges the person's screen, so it is granted only where it
+  # is named. Only an agent asks for one.
   @exact_only Caps.agent_only_tools()
 
   @spec live_digest(Sanctum.Context.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
@@ -291,8 +292,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   # A manifest's own `type` is the publisher's word, which the registry
   # does not hold to the type the component was published as; the node's
-  # key is. A key that does not read as an agent's asks for no feed write
-  # and no layout edit.
+  # key is. A key that does not read as an agent's asks for no tool only
+  # an agent asks for (`Prima.Manifest.Caps.agent_only_tools/0`).
   defp agent_only(caps, source_ref) do
     case Prima.ComponentRef.parse(source_ref) do
       {:ok, %Prima.ComponentRef{type: "agent"}} -> caps

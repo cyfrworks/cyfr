@@ -382,7 +382,6 @@ defmodule Prism.TinctureRegistry do
 
       entry_result = Compendium.tincture_entry(manifest)
       icon = tincture_block["icon"] || "palette"
-      window = tincture_block["window"] || %{}
       tagline = tincture_block["tagline"]
 
       # Convention auto-discovery via Arca.exists? (works for both Local and
@@ -427,7 +426,6 @@ defmodule Prism.TinctureRegistry do
               media_previews: media_previews,
               entry: entry,
               frame: declared_frame(manifest, manifest_segs),
-              window: window,
               segments: version_segs,
               manifest: manifest
             }

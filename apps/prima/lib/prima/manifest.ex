@@ -335,9 +335,6 @@ defmodule Prima.Manifest do
       not (is_nil(tincture["media"]) or is_map(tincture["media"])) ->
         {:error, {:invalid_tincture, "tincture.media must be an object"}}
 
-      not (is_nil(tincture["window"]) or is_map(tincture["window"])) ->
-        {:error, {:invalid_tincture, "tincture.window must be an object"}}
-
       true ->
         declaration(manifest)
     end

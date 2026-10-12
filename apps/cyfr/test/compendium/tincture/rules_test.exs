@@ -335,6 +335,51 @@ defmodule Compendium.Tincture.RulesTest do
                )
     end
 
+    for action <- ["schedule.create", "schedule.update"] do
+      test "#{action} among the system actions is refused, for every placement and for an app" do
+        action = unquote(action)
+
+        sentence =
+          "tincture.actions names #{action}: a tincture never creates or changes a schedule"
+
+        for placement <- [nil | Rules.placements()] do
+          frame = if placement, do: %{"placement" => placement}, else: %{}
+          tincture = %{"frame" => frame, "actions" => ["execution.list", action]}
+
+          tincture =
+            if placement == "canvas",
+              do: Map.put(tincture, "canvas", %{"module" => "canvas.js", "toolkit" => 1}),
+              else: tincture
+
+          manifest = %{"type" => "tincture", "tincture" => tincture}
+
+          assert Rules.validate_declaration(manifest) == {:error, {:invalid_tincture, sentence}},
+                 inspect(placement)
+
+          assert Compendium.tincture_declaration(manifest) ==
+                   {:error, {:invalid_tincture, sentence}}
+        end
+      end
+    end
+
+    test "every tool only an agent asks for is refused among the system actions; a schedule's other actions are not" do
+      for tool <- Prima.Manifest.Caps.agent_only_tools() do
+        assert {:error, {:invalid_tincture, "tincture.actions names " <> _}} =
+                 Rules.validate_declaration(
+                   manifest(Map.put(@declared, "actions", ["execution.list", tool]))
+                 ),
+               tool
+      end
+
+      for action <- ["schedule.list", "schedule.get", "schedule.delete", "schedule.pause"] do
+        assert {:ok, _} =
+                 Rules.validate_declaration(
+                   manifest(Map.put(@declared, "actions", ["execution.list", action]))
+                 ),
+               action
+      end
+    end
+
     test "a frame may invoke a component its dependencies.static names, and no other" do
       declared = manifest(@declared)
 

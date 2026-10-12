@@ -2203,6 +2203,51 @@ defmodule PrismWeb.ShellCanvasTest do
       assert render(view) =~ "Your canvas did not start."
     end
 
+    test "a canvas whose frame opens and never handshakes is safe mode not_ready at its deadline",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      render_click(view, "safe_mode", %{})
+
+      view |> element(~s(#system-layer-dialog button[phx-value-offer="retry"])) |> render_click()
+      settle!(view, fn -> canvas(view) != nil end)
+
+      # Its deadline is armed at its open, with no handshake: the page never
+      # took its credential.
+      assert %{id: id, state: :live} = canvas(view)
+      assert row(id).state == "active"
+      assert %{^id => timer} = assigns(view).canvas_deadlines
+      assert is_integer(Process.read_timer(timer))
+      refute MapSet.member?(assigns(view).canvas_ready, id)
+
+      # The deadline fires: its timer's own message reaches the shell.
+      wait_until(fn -> assigns(view).safe_mode != nil end, 30_000, "the ready deadline")
+      assert Process.read_timer(timer) == false
+      assert %{reason: :not_ready} = assigns(view).safe_mode
+      assert opened(view) == []
+      assert row(id).state == "revoked"
+      refute Map.has_key?(assigns(view).canvas_deadlines, id)
+    end
+
+    test "a handshake arms no second deadline", %{
+      conn: conn,
+      ctx: ctx,
+      user: user,
+      athanor: athanor
+    } do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      id = canvas(view).id
+      assert %{^id => timer} = deadlines = assigns(view).canvas_deadlines
+      assert map_size(deadlines) == 1
+
+      handshake!(view, id)
+
+      # The timer armed at the open runs on, the only one.
+      assert assigns(view).canvas_deadlines == deadlines
+      assert is_integer(Process.read_timer(timer))
+    end
+
     test "a stale deadline, for a canvas no longer held, changes nothing", %{
       conn: conn,
       ctx: ctx,

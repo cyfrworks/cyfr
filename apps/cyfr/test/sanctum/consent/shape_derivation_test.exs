@@ -348,6 +348,63 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     end
   end
 
+  describe "a schedule write" do
+    test "is never granted by a pattern, and is by its exact name; the schedule's other actions follow their pattern" do
+      catalog = ShapeDerivation.all_tool_actions()
+      writes = ["schedule.create", "schedule.update"]
+      assert writes -- catalog == []
+
+      for patterns <- [["*"], ["schedule.*"], ["schedule.*", "*", "component.*"]] do
+        expanded = ShapeDerivation.expand_tools(patterns)
+        for write <- writes, do: refute(write in expanded, "#{write} #{inspect(patterns)}")
+      end
+
+      assert ShapeDerivation.expand_tools(["schedule.*"]) ==
+               Enum.sort(
+                 for action <- catalog,
+                     String.starts_with?(action, "schedule."),
+                     action not in writes,
+                     do: action
+               )
+
+      assert "schedule.list" in ShapeDerivation.expand_tools(["schedule.*"])
+
+      assert ShapeDerivation.expand_tools(["schedule.create"]) == ["schedule.create"]
+
+      assert ShapeDerivation.expand_tools(["schedule.update", "schedule.list"]) ==
+               ["schedule.list", "schedule.update"]
+    end
+
+    test "is asked for by no node key but an agent's, whatever its stored manifest names", %{
+      ctx: ctx
+    } do
+      stored = %{
+        "type" => "agent",
+        "caps" => %{"tools" => ["schedule.create", "schedule.update", "schedule.list"]}
+      }
+
+      for node <-
+            ~w(catalyst:local.timer reagent:local.timer formula:local.timer tincture:local.timer) do
+        assert {:ok, %{tools: ["schedule.list"]}} = ShapeDerivation.declared_caps(stored, node),
+               node
+      end
+
+      assert {:ok, %{tools: tools}} = ShapeDerivation.declared_caps(stored, "agent:local.timer")
+      assert Enum.sort(tools) == ["schedule.create", "schedule.list", "schedule.update"]
+
+      for {node, type} <- [{"formula:local.timer", "formula"}, {"agent:local.timer", "agent"}],
+          tools <- [["*"], ["schedule.*"]] do
+        manifest = %{"type" => type, "caps" => %{"tools" => tools}}
+
+        assert {:ok, %{"tools" => granted}, _limits} =
+                 Sanctum.Consent.BlobBuilder.node_grant(ctx, node, manifest)
+
+        refute "schedule.create" in granted, "#{node} #{inspect(tools)}"
+        refute "schedule.update" in granted, "#{node} #{inspect(tools)}"
+      end
+    end
+  end
+
   describe "a feed write" do
     test "is never granted by a pattern, and is by its exact name" do
       catalog = ShapeDerivation.all_tool_actions()

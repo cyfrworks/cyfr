@@ -148,7 +148,7 @@ The frame the person looks at is live. With a full frame shown, every other fram
 
 ### Safe mode
 
-Safe mode is the way back, outside every canvas. The shell enters it for one of four reasons: the visible canvas has not sent `ready` within ten seconds of its handshake, or cannot be opened (`not_ready`; one refused for want of the person's grant shows its refusal and offers the grant prompt instead); the live canvas reports a failure, or its frame dies while it is shown (`crashed`); a new version failed its validation and the canvas has no working version (`not_validated`); or the person asks — the shell's **Safe mode** button, or Ctrl+Alt+S on the shell's page, which a frame never hears (`requested`). Every frame is discarded with its credential, and the system layer offers the ways out: try the canvas again as it now stands; go back to its kept version, while it keeps one, which `canvas.restore` makes the working version again under today's grant; or show the shipped canvas on this glass, while a canvas is visible, until the shell ends or the layout changes, writing no layout and no versions document. Safe mode runs no tincture at all, and the assistant's panel stays as it was.
+Safe mode is the way back, outside every canvas. The shell enters it for one of four reasons: the visible canvas has not sent `ready` within ten seconds of its frame's open, or cannot be opened (`not_ready`; one refused for want of the person's grant shows its refusal and offers the grant prompt instead); the live canvas reports a failure, or its frame dies while it is shown (`crashed`); a new version failed its validation and the canvas has no working version (`not_validated`); or the person asks — the shell's **Safe mode** button, or Ctrl+Alt+S on the shell's page, which a frame never hears (`requested`). Every frame is discarded with its credential, and the system layer offers the ways out: try the canvas again as it now stands; go back to its kept version, while it keeps one, which `canvas.restore` makes the working version again under today's grant; or show the shipped canvas on this glass, while a canvas is visible, until the shell ends or the layout changes, writing no layout and no versions document. Safe mode runs no tincture at all, and the assistant's panel stays as it was.
 
 ### Secrets
 
@@ -239,7 +239,6 @@ data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
     "build": {"tool": "vite"},
     "icon": "🎮",
     "tagline": "Knock the tower down",
-    "window": {"width": 1280, "height": 720, "resizable": true},
     "frame": {"capabilities": ["pointer_lock", "fullscreen", "audio_autoplay"]},
     "actions": [],
     "streams": []
@@ -261,7 +260,6 @@ data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
 | `icon` | string | `"palette"` | Glyph fallback for the picker when no `public/media/icon.{svg,png}` exists: an emoji or a Lucide icon name |
 | `tagline` | string | — | One line under the title in the picker |
 | `public` | boolean | `false` | Metadata hint. Public access is an active public consent profile (`profile.publish`) |
-| `window` | object | `{}` | Shell window hints: `width`, `height`, `resizable`, `singleton` |
 | `connect` | string[] | `[]` | Bare external domains added to the page's `connect-src` over `https` (e.g. `["api.example.com"]`) |
 | `media` | object | — | Overrides for the auto-discovered media; the `public/media/` convention needs none |
 | `frame` | object | — | The frame's capabilities, placement and background flag (below) |
@@ -285,7 +283,7 @@ data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
 - `frame.capabilities` names capabilities from the table below; `frame.background: true` keeps the frame active while hidden.
 - A stream's `name` is a stream a provider declares (two or more dotted names, such as `mcp_servers.changes`); its `subject` is a literal, `"*"` for any subject that stream's grammar admits, or absent for a stream that takes none.
 - A stream that declares a shape (`runs.changes`, `feed.results`, each one `canvas.catalog` lists) is a canvas's alone: publish refuses it in any other declaration, whatever its subject, and an open from any other tincture's frame is refused `forbidden` (`canvas_stream`) ([Streams and feeds](#streams-and-feeds)).
-- An action is an operation name, `tool.action`. No tincture declares `feed.bind`, `feed.remove` or `feed.press`, which are the person's, or `layout.edit`: the layout is the person's arrangement, and no tincture writes it ([The Canvas](#the-canvas)).
+- An action is an operation name, `tool.action`. No tincture declares `feed.bind`, `feed.remove` or `feed.press`, which are the person's, or `layout.edit`: the layout is the person's arrangement, and no tincture writes it ([The Canvas](#the-canvas)). Nor does any declare `schedule.create` or `schedule.update`: no tincture schedules itself or anything else.
 
 ### Frame capabilities
 

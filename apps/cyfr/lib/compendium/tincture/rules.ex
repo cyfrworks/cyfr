@@ -43,6 +43,7 @@ defmodule Compendium.Tincture.Rules do
   capabilities to tokens is checked when this module compiles.
   """
 
+  alias Prima.Manifest.Caps
   alias Prima.Manifest.Tincture
 
   # The served file types: extension to the MIME type a file is served
@@ -123,11 +124,10 @@ defmodule Compendium.Tincture.Rules do
 
   @lockfile "package-lock.json"
 
-  # The feed operations no tincture declares as a system action.
-  @feed_actions ~w(feed.bind feed.remove feed.press)
-
-  # The layout's write, which no tincture declares as a system action.
-  @layout_actions ~w(layout.edit)
+  # The system actions no tincture declares: every tool only an agent asks
+  # for (`Prima.Manifest.Caps.agent_only_tools/0`) and a feed's press,
+  # which the person makes.
+  @persons_actions Enum.uniq(Caps.agent_only_tools() ++ ["feed.press"])
 
   @origin ~r/\Ahttps?:\/\/(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?\z/
   @nonce ~r/\A[A-Za-z0-9+\/_=-]{16,128}\z/
@@ -397,7 +397,10 @@ defmodule Compendium.Tincture.Rules do
   `placements/0`. No tincture, whatever its placement, declares
   `feed.bind`, `feed.remove` or `feed.press` among its system actions:
   those are the person's alone. Nor does any declare `layout.edit`: the
-  layout is the person's arrangement, and no tincture writes it.
+  layout is the person's arrangement, and no tincture writes it. Nor
+  `schedule.create` or `schedule.update`: no tincture schedules itself.
+  Each tool only an agent asks for (`Prima.Manifest.Caps.agent_only_tools/0`)
+  is refused here by its exact name.
 
   A canvas (placement `canvas`) declares `tincture.canvas`, which no other
   placement does: its `module`, a relative path with no `..` and no
@@ -715,20 +718,28 @@ defmodule Compendium.Tincture.Rules do
   # the person's arrangement of their screen, and Prism alone places frames
   # from it: a tincture that could write it could place itself, float
   # itself or any other tincture, or take a canvas off the person's screen.
-  # A tincture's frame reaches none of them, whatever its placement.
+  # A schedule fires runs on its own under a profile's authority: a
+  # tincture that could create or change one could schedule itself. A
+  # tincture's frame reaches none of them, whatever its placement.
   defp no_persons_action(actions) do
-    case Enum.find(actions, &(&1 in @feed_actions or &1 in @layout_actions)) do
+    case Enum.find(actions, &(&1 in @persons_actions)) do
       nil ->
         :ok
 
-      action when action in @feed_actions ->
+      "feed." <> _ = action ->
         refuse(
           "tincture.actions names #{action}: a tincture never binds, removes or presses a " <>
             "feed; the person does"
         )
 
-      action ->
+      "layout." <> _ = action ->
         refuse("tincture.actions names #{action}: a tincture never writes the person's layout")
+
+      "schedule." <> _ = action ->
+        refuse("tincture.actions names #{action}: a tincture never creates or changes a schedule")
+
+      action ->
+        refuse("tincture.actions names #{action}: only an agent asks for it")
     end
   end
 

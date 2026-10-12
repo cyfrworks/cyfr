@@ -1856,6 +1856,58 @@ defmodule Cyfr.DocsDriftTest do
                &Arca.Storage.valid_guest_path?/1
              )
 
+    # A schedule's writes are an agent's alone too, as the tincture guide's
+    # refused actions and the component guide's `caps.tools` row say.
+    for tool <- ["schedule.create", "schedule.update"] do
+      manifest = %{
+        "type" => "tincture",
+        "tincture" => %{"frame" => %{"placement" => "float"}, "actions" => [tool]}
+      }
+
+      assert {:error, {:invalid_tincture, sentence}} = Compendium.tincture_declaration(manifest),
+             "a tincture may declare #{tool} again; say so in tincture-guide.md's actions"
+
+      assert sentence =~ tool
+
+      for type <- ["catalyst", "reagent", "formula", "tincture"] do
+        assert Prima.Manifest.Caps.validate(
+                 %{"type" => type, "caps" => %{"tools" => [tool]}},
+                 &Arca.Storage.valid_guest_path?/1
+               ) == {:error, {:invalid_caps, {:agent_only_tool, tool}}},
+               "a #{type}'s caps may name #{tool} again; say so in component-guide.md"
+      end
+
+      assert :ok =
+               Prima.Manifest.Caps.validate(
+                 %{"type" => "agent", "caps" => %{"tools" => [tool]}},
+                 &Arca.Storage.valid_guest_path?/1
+               )
+    end
+
+    # Both guides state the whole agent-only set, from its one list.
+    component_guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+
+    [tools_row] =
+      Regex.run(~r/^\| `tools` \|.*$/m, component_guide) ||
+        flunk("component-guide.md has no `tools` row")
+
+    [feed_paragraph] =
+      Regex.run(~r/^\*\*Binding a feed\.\*\*.*$/m, component_guide) ||
+        flunk("component-guide.md has no paragraph beginning \"**Binding a feed.**\"")
+
+    [refused_actions] =
+      Regex.run(~r/^- An action is an operation name.*$/m, guide) ||
+        flunk("tincture-guide.md has no line beginning \"- An action is an operation name\"")
+
+    for tool <- Prima.Manifest.Caps.agent_only_tools(),
+        {text, where} <- [
+          {tools_row, "component-guide.md's `tools` row"},
+          {feed_paragraph, "component-guide.md's feed-binding paragraph"},
+          {refused_actions, "tincture-guide.md's actions line"}
+        ] do
+      assert text =~ "`#{tool}`", "#{where} does not name the agent-only tool #{tool}"
+    end
+
     {:ok, soul} =
       Compendium.AquaAgent.parse(
         "aqua",

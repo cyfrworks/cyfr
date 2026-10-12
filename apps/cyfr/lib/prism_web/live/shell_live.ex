@@ -57,7 +57,7 @@ defmodule PrismWeb.ShellLive do
   ## Safe mode
 
   A live canvas that has not sent `ready` within ten seconds of its
-  handshake, or that was refused at its open, is safe mode `not_ready`; one
+  frame's open, or that was refused at its open, is safe mode `not_ready`; one
   that reports a failure, or whose frame dies while the glass shows it, is
   `crashed` (a hidden canvas whose frame dies is discarded, and opens anew
   once shown); a validation that leaves no working
@@ -145,8 +145,9 @@ defmodule PrismWeb.ShellLive do
   alias Prism.SafeMode
   alias Sanctum.TinctureAuth
 
-  # How long a live canvas has, from its handshake, to send `ready` before
-  # the shell enters safe mode.
+  # How long a live canvas has, from its frame's open, to send `ready`
+  # before the shell enters safe mode: a page that never loads, and so
+  # never handshakes, falls to safe mode as one that loads and dies.
   @canvas_ready_ms 10_000
 
   # The most tinctures `installed` names (`Prima.CanvasWire`).
@@ -171,6 +172,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:arrangement, nil)
       |> assign(:showing, :pending)
       |> assign(:canvas_ready, MapSet.new())
+      |> assign(:canvas_deadlines, %{})
       |> assign(:shipped, nil)
       |> assign(:layout_changed, false)
       |> assign(:decisions, %{})
@@ -776,18 +778,20 @@ defmodule PrismWeb.ShellLive do
 
   defp reads_feed?(_frame, _feed), do: false
 
-  # A frame took its credential: a live canvas's ready deadline starts, the
-  # moment its page can first speak; a canvas or validation frame is sent
-  # the tinctures it may open.
-  defp handshaken(socket, %{key: {:canvas, _}, id: frame_id}) do
-    Process.send_after(self(), {:canvas_deadline, frame_id}, @canvas_ready_ms)
-    push_installed(socket, [frame_id])
-  end
-
-  defp handshaken(socket, %{key: {:validation, _}, id: frame_id}),
+  # A frame took its credential: a canvas or validation frame is sent the
+  # tinctures it may open.
+  defp handshaken(socket, %{key: {kind, _}, id: frame_id}) when kind in [:canvas, :validation],
     do: push_installed(socket, [frame_id])
 
   defp handshaken(socket, _frame), do: socket
+
+  # A live canvas's ready deadline, one timer per frame at a time: armed
+  # at its open and again when it fires on a hidden canvas. Each timer is
+  # held until it fires, so the timers in flight are the ones held.
+  defp arm_ready_deadline(socket, frame_id) do
+    timer = Process.send_after(self(), {:canvas_deadline, frame_id}, @canvas_ready_ms)
+    update(socket, :canvas_deadlines, &Map.put(&1, frame_id, timer))
+  end
 
   # What `installed` carries: every listed tincture that is not a canvas,
   # as a versionless reference and its name, sorted by name.
@@ -1094,7 +1098,13 @@ defmodule PrismWeb.ShellLive do
         %{state: :refused} ->
           enter_safe_mode(socket, :not_ready)
 
-        _live ->
+        %{id: frame_id} ->
+          socket |> arm_ready_deadline(frame_id) |> assign(:showing, :canvas)
+
+        # Opened frozen behind a full frame, and dropped when its suspension
+        # could not be recorded: no frame is held, and the canvas is drawn
+        # empty.
+        nil ->
           assign(socket, :showing, :canvas)
       end
     end
@@ -1792,10 +1802,12 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # A live canvas took its credential this long ago. Without its `ready` the
-  # shell enters safe mode; a canvas hidden meanwhile, whose bridge holds
-  # its verbs, has the time again once it is shown.
+  # A live canvas's frame opened this long ago. Without its `ready` the
+  # shell enters safe mode. A deadline that fires on a canvas hidden
+  # meanwhile, whose bridge holds its verbs, starts the timer again, so
+  # once shown the canvas has what is left of that new period.
   def handle_info({:canvas_deadline, frame_id}, socket) do
+    socket = update(socket, :canvas_deadlines, &Map.delete(&1, frame_id))
     %{frames: frames, canvas_ready: ready, safe_mode: safe_mode} = socket.assigns
 
     case Enum.find(Frames.list(frames), &match?(%{key: {:canvas, _}, id: ^frame_id}, &1)) do
@@ -1803,10 +1815,9 @@ defmodule PrismWeb.ShellLive do
         {:noreply, socket}
 
       %{state: :frozen} ->
-        unless MapSet.member?(ready, frame_id),
-          do: Process.send_after(self(), {:canvas_deadline, frame_id}, @canvas_ready_ms)
-
-        {:noreply, socket}
+        if MapSet.member?(ready, frame_id),
+          do: {:noreply, socket},
+          else: {:noreply, arm_ready_deadline(socket, frame_id)}
 
       %{state: :live} ->
         if MapSet.member?(ready, frame_id),

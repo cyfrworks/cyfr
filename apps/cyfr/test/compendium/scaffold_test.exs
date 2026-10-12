@@ -339,6 +339,24 @@ defmodule Compendium.ScaffoldTest do
       assert get_in(manifest, ["tincture", "entry"]) == "dist/index.html"
     end
 
+    test "a tincture's manifest declares no window hints, and holds", %{ctx: ctx} do
+      for {name, template} <- [{"plain-dash", "vanilla"}, {"hinted-dash", "react"}] do
+        assert {:ok, _} = Scaffold.create(ctx, name, "tincture", "0.1.0", template: template)
+
+        base =
+          Arca.Adapters.Local.build_path(
+            Sanctum.Context.actor(ctx),
+            ["components", "tinctures", "local", name, "0.1.0"]
+          )
+
+        manifest = Jason.decode!(File.read!(Path.join(base, "cyfr-manifest.json")))
+
+        assert %{"entry" => _, "icon" => "palette"} = block = manifest["tincture"]
+        refute Map.has_key?(block, "window"), template
+        assert :ok = Prima.Manifest.validate(manifest, &Arca.Storage.valid_guest_path?/1)
+      end
+    end
+
     test "package.json has correct dependencies", %{ctx: ctx} do
       assert {:ok, _} =
                Scaffold.create(ctx, "pkg-dash", "tincture", "0.1.0", template: "react")

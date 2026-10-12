@@ -424,11 +424,7 @@ defmodule Compendium.Scaffold do
   # The template names the entry and, for a built tincture, the build tool.
   defp tincture_manifest_for(name, version, template) do
     tincture =
-      %{
-        entry: template.entry,
-        icon: "palette",
-        window: %{width: 800, height: 600, resizable: true}
-      }
+      %{entry: template.entry, icon: "palette"}
       |> then(&if template.build, do: Map.put(&1, :build, %{tool: template.build}), else: &1)
 
     safe_encode_pretty(%{

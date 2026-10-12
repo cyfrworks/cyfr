@@ -103,6 +103,76 @@ defmodule Prism.TinctureRegistryTest do
       GenServer.stop(pid)
     end
 
+    # The setup's manifest declares `tincture.window`, as the shipped seed
+    # versions still do: an extra nothing reads, registered without it.
+    test "a manifest declaring window hints registers, and its entry carries none", %{
+      tincture_dir: tincture_dir
+    } do
+      manifest = Jason.decode!(File.read!(Path.join(tincture_dir, "cyfr-manifest.json")))
+      assert %{"window" => %{"width" => 800}} = manifest["tincture"]
+
+      name = :test_window_extra
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, pid} = TinctureRegistry.start_link(name: name)
+          # The initial scan runs in handle_continue; a call synchronizes with it.
+          :sys.get_state(pid)
+          send(self(), {:listed, TinctureRegistry.list_tinctures(name, lookup("ath_test"))})
+          GenServer.stop(pid)
+        end)
+
+      assert_received {:listed, [entry]}
+      assert {entry.name, entry.version} == {"test-dash", "1.0.0"}
+      refute Map.has_key?(entry, :window)
+      assert entry.manifest["tincture"]["window"] == manifest["tincture"]["window"]
+      refute log =~ "TinctureRegistry"
+    end
+
+    test "a window hint of any shape registers, ignored and unrefused", %{
+      athanor: athanor,
+      tincture_dir: tincture_dir
+    } do
+      for {window, n} <- Enum.with_index(["800x600", 800]) do
+        name = "hinted-#{n}"
+        dir = fixture_dir(athanor.id, "local", name, "1.0.0")
+        File.mkdir_p!(dir)
+        File.cp!(Path.join(tincture_dir, "index.html"), Path.join(dir, "index.html"))
+
+        manifest = %{
+          "name" => name,
+          "type" => "tincture",
+          "version" => "1.0.0",
+          "publisher" => "local",
+          "tincture" => %{"entry" => "index.html", "window" => window}
+        }
+
+        File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      end
+
+      name = :test_window_any_shape
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, pid} = TinctureRegistry.start_link(name: name)
+          # The initial scan runs in handle_continue; a call synchronizes with it.
+          :sys.get_state(pid)
+          send(self(), {:listed, TinctureRegistry.list_tinctures(name, lookup("ath_test"))})
+          GenServer.stop(pid)
+        end)
+
+      assert_received {:listed, listed}
+      hinted = Enum.filter(listed, &String.starts_with?(&1.name, "hinted-"))
+      assert Enum.sort(Enum.map(hinted, & &1.name)) == ["hinted-0", "hinted-1"]
+
+      for entry <- hinted do
+        refute Map.has_key?(entry, :window)
+        assert entry.manifest["tincture"]["window"] in ["800x600", 800]
+      end
+
+      refute log =~ "TinctureRegistry"
+    end
+
     test "returns empty for a non-matching athanor" do
       name = :test_empty_athanor
       {:ok, pid} = TinctureRegistry.start_link(name: name)
